@@ -64,7 +64,7 @@ jankHunter {
         executors = true
         methodCounters = false
         allowEmptyIncludePackages = false
-        includePackages.add("com.example.app")
+        includePackages("com.example.app")
     }
 }
 ```
@@ -375,8 +375,11 @@ jankHunter {
         coroutines = true
         methodCounters = true
         allowEmptyIncludePackages = false
-        includePackages.add("com.myapp")
-        excludePackages.add("com.myapp.generated")
+        includePackages("com.myapp")
+        excludePackages(
+            "com.myapp.generated",
+            "com.myapp.di",
+        )
     }
 }
 ```

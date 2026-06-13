@@ -24,5 +24,25 @@ open class JankHunterExtension {
         var allowEmptyIncludePackages: Boolean = false
         val includePackages: MutableSet<String> = linkedSetOf()
         val excludePackages: MutableSet<String> = linkedSetOf()
+
+        fun includePackages(vararg values: String) {
+            includePackages(values.asIterable())
+        }
+
+        fun includePackages(values: Iterable<String>) {
+            addPackages(includePackages, values)
+        }
+
+        fun excludePackages(vararg values: String) {
+            excludePackages(values.asIterable())
+        }
+
+        fun excludePackages(values: Iterable<String>) {
+            addPackages(excludePackages, values)
+        }
+
+        private fun addPackages(target: MutableSet<String>, values: Iterable<String>) {
+            values.mapNotNullTo(target) { it.trim().takeIf(String::isNotEmpty) }
+        }
     }
 }
