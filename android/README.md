@@ -473,6 +473,17 @@ cd android
 ./gradlew :sample-app:connectedDebugAndroidTest --no-daemon
 ```
 
+Для ручного dogfooding можно поставить debug build и нажать кнопки sample app:
+
+```bash
+cd android
+./gradlew :sample-app:installDebug --no-daemon
+adb shell am start -n io.jankhunter.sample/.MainActivity
+adb logcat | grep JankHunter
+```
+
+Sample app пишет локальные UI/background/leak-события и HTTP-события через optional `jankhunter-okhttp3` integration. Кнопки `Fetch JSONPlaceholder` и `Fetch HTTP 503` делают запросы к публичным test API и помогают увидеть в `.jhlog` успешный `2xx` и ошибочный `5xx` network path.
+
 Полный host-side smoke из корня репозитория:
 
 ```bash
