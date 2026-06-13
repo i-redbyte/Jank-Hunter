@@ -13,6 +13,7 @@ CLI не требует backend, базы данных или браузерны
 - compare-отчет baseline vs candidate;
 - streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
 - фильтры `--route`, `--screen`, `--owner`;
+- owner-map import через `--owner-map path.json`;
 - экспорт событий в JSONL;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - top suspects по owner/class/stack hint.
@@ -67,6 +68,14 @@ go run ./cmd/jankhunter inspect logs/*.jhlog --out report.html
 go run ./cmd/jankhunter inspect logs/*.jhlog --route /feed --screen Feed --owner FeedRepository
 ```
 
+С owner-map из Gradle plugin:
+
+```bash
+go run ./cmd/jankhunter inspect logs/*.jhlog \
+  --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
+  --out report.html
+```
+
 ### compare
 
 Сравнить baseline и candidate:
@@ -75,6 +84,7 @@ go run ./cmd/jankhunter inspect logs/*.jhlog --route /feed --screen Feed --owner
 go run ./cmd/jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
+  --owner-map owner-map.json \
   --out compare.html \
   --owner FeedRepository
 ```
@@ -129,6 +139,44 @@ id -> "FeedScreen"
 ```
 
 Runtime пишет короткие ID, CLI раскрывает их в имена.
+
+## Owner map
+
+Gradle plugin пишет seed-файл:
+
+```text
+android/<app>/build/generated/jankhunter/<variant>/owner-map.json
+```
+
+CLI принимает его в `inspect` и `compare`:
+
+```bash
+go run ./cmd/jankhunter inspect logs/*.jhlog --owner-map owner-map.json
+go run ./cmd/jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --owner-map owner-map.json
+```
+
+Поддерживаются две формы:
+
+```json
+{
+  "owners": {
+    "FeedRepository.refresh": "Feed team / refresh",
+    "com.example.FeedPresenter.bind#abcd1234": "FeedPresenter.bind"
+  }
+}
+```
+
+и:
+
+```json
+{
+  "entries": [
+    {"id": "abcd1234", "owner": "FeedPresenter.bind"}
+  ]
+}
+```
+
+Если owner-map не содержит matching entry, CLI показывает owner label из `.jhlog` как есть.
 
 ## UI/FPS
 
@@ -218,6 +266,5 @@ go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ## Дальнейшее развитие
 
 - device tier / cohort normalization;
-- owner map import из Gradle plugin;
 - более строгая статистическая модель с confidence intervals;
 - интерактивные drill-down графики без CDN.

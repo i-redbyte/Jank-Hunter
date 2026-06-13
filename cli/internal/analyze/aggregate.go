@@ -1,7 +1,9 @@
 package analyze
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -13,7 +15,7 @@ func Inspect(title string, logs []jhlog.Log) Summary {
 }
 
 func InspectWithFilter(title string, logs []jhlog.Log, filter Filter) Summary {
-	collector := newCollector(title, len(logs), filter)
+	collector := newCollector(title, len(logs), Options{Filter: filter})
 	for _, log := range logs {
 		collector.summary.Dictionary += len(log.Dict)
 		for _, event := range log.Events {
@@ -28,7 +30,11 @@ func InspectFiles(title string, paths []string) (Summary, error) {
 }
 
 func InspectFilesWithFilter(title string, paths []string, filter Filter) (Summary, error) {
-	collector := newCollector(title, len(paths), filter)
+	return InspectFilesWithOptions(title, paths, Options{Filter: filter})
+}
+
+func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
+	collector := newCollector(title, len(paths), options)
 	for _, path := range paths {
 		lastDictSize := 0
 		err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
@@ -46,9 +52,49 @@ func InspectFilesWithFilter(title string, paths []string, filter Filter) (Summar
 	return collector.finish(), nil
 }
 
+func LoadOwnerMap(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Owners  map[string]string `json:"owners"`
+		Entries []struct {
+			ID    string `json:"id"`
+			Owner string `json:"owner"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(raw.Owners)+len(raw.Entries))
+	for id, owner := range raw.Owners {
+		if id == "" || owner == "" {
+			continue
+		}
+		out[id] = owner
+		out["jh:"+id] = owner
+	}
+	for _, entry := range raw.Entries {
+		name := firstNonEmpty(entry.Owner, entry.Name, entry.Value)
+		if entry.ID == "" || name == "" {
+			continue
+		}
+		out[entry.ID] = name
+		out["jh:"+entry.ID] = name
+	}
+	return out, nil
+}
+
 type collector struct {
-	summary Summary
-	filter  Filter
+	summary  Summary
+	filter   Filter
+	ownerMap map[string]string
 
 	routeDurations []namedDuration
 	routeFailures  map[string]int
@@ -70,10 +116,11 @@ type namedDuration struct {
 	duration uint64
 }
 
-func newCollector(title string, logCount int, filter Filter) *collector {
+func newCollector(title string, logCount int, options Options) *collector {
 	return &collector{
 		summary:        Summary{Title: title, LogCount: logCount},
-		filter:         normalizeFilter(filter),
+		filter:         normalizeFilter(options.Filter),
+		ownerMap:       options.OwnerMap,
 		routeFailures:  map[string]int{},
 		routeRx:        map[string]uint64{},
 		routeTx:        map[string]uint64{},
@@ -111,7 +158,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	switch {
 	case event.HTTP != nil:
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
-		owner := jhlog.Resolve(dict, event.HTTP.OwnerID)
+		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
 		if !containsFilter(route, c.filter.RouteContains) || !containsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -160,7 +207,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.summary.UIMinFPS = windowFPS
 		}
 	case event.Stall != nil:
-		owner := jhlog.Resolve(dict, event.Stall.OwnerID)
+		owner := c.resolveOwner(dict, event.Stall.OwnerID)
 		stack := jhlog.Resolve(dict, event.Stall.StackID)
 		if !containsFilter(owner, c.filter.OwnerContains) {
 			return
@@ -208,6 +255,48 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.counterValues[name] += event.Metric.Value
 		}
 	}
+}
+
+func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
+	owner := jhlog.Resolve(dict, id)
+	if len(c.ownerMap) == 0 {
+		return owner
+	}
+	if mapped, ok := c.ownerMap[owner]; ok {
+		return mapped
+	}
+	if hash, ok := ownerHash(owner); ok {
+		if mapped, ok := c.ownerMap[hash]; ok {
+			return mapped
+		}
+		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
+			return mapped
+		}
+	}
+	return owner
+}
+
+func ownerHash(owner string) (string, bool) {
+	if owner == "" {
+		return "", false
+	}
+	if strings.HasPrefix(owner, "jh:") {
+		return strings.TrimPrefix(owner, "jh:"), true
+	}
+	hashIndex := strings.LastIndex(owner, "#")
+	if hashIndex < 0 || hashIndex == len(owner)-1 {
+		return "", false
+	}
+	return owner[hashIndex+1:], true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *collector) finish() Summary {

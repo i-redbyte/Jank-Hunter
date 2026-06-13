@@ -43,8 +43,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--route text] [--screen text] [--owner text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--route text] [--screen text] [--owner text]
+  jankhunter inspect <logs...> --out report.html [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
 `)
 }
@@ -66,6 +66,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -74,7 +78,15 @@ func runInspect(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
-	summary, err := analyze.InspectFilesWithFilter(strings.Join(paths, ", "), paths, filter)
+	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
+	if err != nil {
+		return err
+	}
+	summary, err := analyze.InspectFilesWithOptions(
+		strings.Join(paths, ", "),
+		paths,
+		analyze.Options{Filter: filter, OwnerMap: ownerMap},
+	)
 	if err != nil {
 		return err
 	}
@@ -101,6 +113,10 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return err
+	}
 	out, _, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -110,11 +126,16 @@ func runCompare(args []string) error {
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("compare needs --baseline and --candidate")
 	}
-	baseline, err := analyze.InspectFilesWithFilter("baseline", baselinePaths, filter)
+	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
 	if err != nil {
 		return err
 	}
-	candidate, err := analyze.InspectFilesWithFilter("candidate", candidatePaths, filter)
+	options := analyze.Options{Filter: filter, OwnerMap: ownerMap}
+	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, options)
+	if err != nil {
+		return err
+	}
+	candidate, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, options)
 	if err != nil {
 		return err
 	}

@@ -16,6 +16,18 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val methodCounters: Property<Boolean>
 
     @get:Input
+    abstract val okhttp: Property<Boolean>
+
+    @get:Input
+    abstract val webSockets: Property<Boolean>
+
+    @get:Input
+    abstract val handlers: Property<Boolean>
+
+    @get:Input
+    abstract val executors: Property<Boolean>
+
+    @get:Input
     abstract val includePackages: ListProperty<String>
 
     @get:Input
@@ -33,9 +45,17 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
                 appendLine("{")
                 appendLine("  \"format\": 1,")
                 appendLine("  \"variant\": \"${escape(variantName.get())}\",")
-                appendLine("  \"methodCounters\": ${methodCounters.getOrElse(false)},")
+                appendLine("  \"idAlgorithm\": \"fnv1a64(class.method+descriptor)\",")
+                appendLine("  \"hooks\": {")
+                appendLine("    \"methodCounters\": ${methodCounters.getOrElse(false)},")
+                appendLine("    \"okhttp\": ${okhttp.getOrElse(false)},")
+                appendLine("    \"webSockets\": ${webSockets.getOrElse(false)},")
+                appendLine("    \"handlers\": ${handlers.getOrElse(false)},")
+                appendLine("    \"executors\": ${executors.getOrElse(false)}")
+                appendLine("  },")
                 appendLine("  \"includePackages\": ${array(includePackages.getOrElse(emptyList()))},")
-                appendLine("  \"excludePackages\": ${array(excludePackages.getOrElse(emptyList()))}")
+                appendLine("  \"excludePackages\": ${array(excludePackages.getOrElse(emptyList()))},")
+                appendLine("  \"owners\": {}")
                 appendLine("}")
             },
         )

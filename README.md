@@ -6,8 +6,8 @@ It is designed for large legacy Android applications where performance regressio
 
 The repository is intentionally split into two main parts:
 
-- `cli/` - Go command-line utility for parsing `.jhlog` files, comparing builds, exporting data, and producing standalone HTML reports.
-- `android/` - Android runtime SDK, optional integrations, sample app, and Gradle plugin for debug/QA instrumentation.
+- `cli/` - Go command-line utility for parsing `.jhlog` files, importing owner maps, comparing builds, exporting data, and producing standalone HTML reports.
+- `android/` - Android runtime SDK, optional integrations, sample app, and Gradle plugin for debug/QA bytecode instrumentation.
 
 ## Current State
 
@@ -23,7 +23,9 @@ The implementation currently includes:
 - Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
 - optional OkHttp/WebSocket integrations;
 - optional reflection bridge for AndroidX JankStats;
-- Gradle plugin with variant-aware ASM method counter instrumentation and owner-map seed generation;
+- Gradle plugin with variant-aware ASM hooks for method counters, OkHttp builder factories, WebSocket listeners, Handler callbacks, Executor/ExecutorService work, and owner-map seed generation;
+- runtime `Runnable`/`Callable` owner wrappers that preserve thrown exceptions and Future cancellation behavior;
+- CLI owner-map import for resolving generated owner labels in inspect/compare reports;
 - Kotlin-only Android sources.
 
 ## Checks
@@ -46,6 +48,7 @@ go test ./...
 go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/jankhunter-report.html
 go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
+go run ./cmd/jankhunter inspect /tmp/sample.jhlog --owner-map android/sample-app/build/generated/jankhunter/debug/owner-map.json
 ```
 
 ## Product principles

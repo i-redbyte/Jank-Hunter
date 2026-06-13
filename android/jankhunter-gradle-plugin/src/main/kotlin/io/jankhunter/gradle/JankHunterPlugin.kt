@@ -35,6 +35,10 @@ class JankHunterPlugin : Plugin<Project> {
             ) {
                 it.variantName.set(variant.name)
                 it.methodCounters.set(extension.instrument.methodCounters)
+                it.okhttp.set(extension.instrument.okhttp)
+                it.webSockets.set(extension.instrument.webSockets)
+                it.handlers.set(extension.instrument.handlers)
+                it.executors.set(extension.instrument.executors)
                 it.includePackages.set(extension.instrument.includePackages.toList())
                 it.excludePackages.set(extension.instrument.excludePackages.toList())
                 it.outputFile.set(
@@ -47,15 +51,23 @@ class JankHunterPlugin : Plugin<Project> {
                 InstrumentationScope.ALL,
             ) { params ->
                 params.methodCounters.set(extension.instrument.methodCounters)
+                params.okhttp.set(extension.instrument.okhttp)
+                params.webSockets.set(extension.instrument.webSockets)
+                params.handlers.set(extension.instrument.handlers)
+                params.executors.set(extension.instrument.executors)
                 params.includePackages.set(extension.instrument.includePackages.toList())
                 params.excludePackages.set(extension.instrument.excludePackages.toList())
             }
             variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
 
             project.logger.lifecycle(
-                "Jank Hunter variant {} configured. methodCounters={} ownerMapTask={}",
+                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
+                extension.instrument.okhttp,
+                extension.instrument.webSockets,
+                extension.instrument.handlers,
+                extension.instrument.executors,
                 ownerMap.name,
             )
         }

@@ -14,6 +14,7 @@ import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
+import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicBoolean
 
 object JankHunter {
@@ -134,22 +135,44 @@ object JankHunter {
 
     @JvmStatic
     fun withOwner(ownerName: String?, runnable: Runnable) {
-        val previous = owner.get()
-        owner.set(ownerName)
         val start = nowMs()
         try {
-            runnable.run()
+            callWithOwner(ownerName) {
+                runnable.run()
+            }
         } finally {
             val duration = nowMs() - start
             if (duration >= 250) {
                 recordStall(ownerName, "explicit_owner_block", duration)
             }
-            if (previous == null) {
-                owner.remove()
-            } else {
-                owner.set(previous)
+        }
+    }
+
+    @JvmStatic
+    fun <T> withOwner(ownerName: String?, callable: Callable<T>): T {
+        val start = nowMs()
+        try {
+            return callWithOwner(ownerName) {
+                callable.call()
+            }
+        } finally {
+            val duration = nowMs() - start
+            if (duration >= 250) {
+                recordStall(ownerName, "explicit_owner_block", duration)
             }
         }
+    }
+
+    @JvmStatic
+    fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
+        if (runnable == null || runnable is JankHunterRunnable) return runnable
+        return JankHunterRunnable(runnable, ownerName)
+    }
+
+    @JvmStatic
+    fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
+        if (callable == null || callable is JankHunterCallable<*>) return callable
+        return JankHunterCallable(callable, ownerName)
     }
 
     @JvmStatic
@@ -266,7 +289,38 @@ object JankHunter {
         writer?.gauge(name, value)
     }
 
+    internal fun <T> callWithOwner(ownerName: String?, block: () -> T): T {
+        val previous = owner.get()
+        owner.set(ownerName)
+        try {
+            return block()
+        } finally {
+            if (previous == null) {
+                owner.remove()
+            } else {
+                owner.set(previous)
+            }
+        }
+    }
+
+    internal fun recordWrappedWork(ownerName: String?, kind: String, durationMs: Long, failed: Boolean) {
+        val owner = metricOwner(ownerName)
+        if (failed) {
+            recordCounter("owner.$owner.$kind.failure.count", 1)
+        }
+        if (durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS) {
+            recordGauge("owner.$owner.$kind.duration_ms", durationMs)
+        }
+    }
+
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun metricOwner(ownerName: String?): String {
+        return ownerName
+            ?.takeIf { it.isNotBlank() }
+            ?.replace(Regex("\\s+"), "_")
+            ?: "unknown"
+    }
 
     private fun appIdentity(context: Context): AppIdentity {
         return try {
@@ -288,4 +342,6 @@ object JankHunter {
         val versionName: String,
         val versionCode: String,
     )
+
+    private const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L
 }

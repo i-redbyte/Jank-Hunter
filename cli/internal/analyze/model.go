@@ -12,6 +12,11 @@ type Filter struct {
 	OwnerContains  string
 }
 
+type Options struct {
+	Filter   Filter
+	OwnerMap map[string]string
+}
+
 type RouteStats struct {
 	Route       string
 	Count       int

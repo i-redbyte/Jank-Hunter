@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +30,36 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	}
 	if summary.HTTPCount != 3 {
 		t.Fatalf("HTTPCount = %d, want 3", summary.HTTPCount)
+	}
+}
+
+func TestInspectFilesAppliesOwnerMap(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "sample.jhlog")
+	if err := jhlog.WriteSample(logPath); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+	mapPath := filepath.Join(dir, "owner-map.json")
+	if err := os.WriteFile(mapPath, []byte(`{"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	ownerMap, err := LoadOwnerMap(mapPath)
+	if err != nil {
+		t.Fatalf("LoadOwnerMap() error = %v", err)
+	}
+
+	summary, err := InspectFilesWithOptions("sample", []string{logPath}, Options{OwnerMap: ownerMap})
+	if err != nil {
+		t.Fatalf("InspectFilesWithOptions() error = %v", err)
+	}
+	found := false
+	for _, owner := range summary.Owners {
+		if owner.Owner == "feed owner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("owner map was not applied: %+v", summary.Owners)
 	}
 }
 

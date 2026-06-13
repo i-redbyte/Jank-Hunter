@@ -14,7 +14,7 @@ The CLI side can do heavier analysis because it runs after the fact.
 
 ```text
 cli/      Go CLI and report generator.
-android/  Runtime SDK, optional integrations, Gradle plugin scaffold.
+android/  Runtime SDK, optional integrations, sample app, and Gradle plugin.
 docs/     Format and architecture notes.
 ```
 
@@ -25,7 +25,7 @@ docs/     Format and architecture notes.
 Optional integrations are separate artifacts:
 
 - `jankhunter-okhttp3` for OkHttp EventListener integration.
-- future `jankhunter-rxjava2`, `jankhunter-rxjava3`, `jankhunter-compose`, etc.
+- Additional integration artifacts can be added for RxJava, Compose, coroutines, or host-specific frameworks without changing core runtime dependencies.
 
 This avoids forcing host apps to upgrade libraries.
 
@@ -49,13 +49,25 @@ Jank Hunter should not claim perfect blame. It should surface likely suspects:
 - sampled stack signatures for slow/error paths;
 - top offenders grouped by route, screen, class, owner, and stack.
 
-## Future instrumentation
+## Gradle Instrumentation
 
-The Gradle plugin will eventually use Android Gradle Plugin ASM APIs to weave debug/QA builds:
+The Gradle plugin uses Android Gradle Plugin ASM APIs to weave enabled debug/QA variants after include/exclude package filtering.
 
-- OkHttp builder/listener wrapping;
-- Handler/Executor/Runnable/Callable timing;
-- coroutine and RxJava hook setup;
-- owner map generation.
+- `methodCounters` records method-entry counters with deterministic owner labels.
+- `okhttp` wraps `OkHttpClient.Builder.eventListenerFactory(...)` with `JankHunterEventListenerFactory`.
+- `webSockets` wraps `OkHttpClient.newWebSocket(...)` listeners with `JankHunterWebSocketListener`.
+- `handlers` wraps a safe subset of `Handler` Runnable scheduling and counts `sendMessage*` call sites.
+- `executors` wraps JDK Executor/ExecutorService Runnable and Callable work while preserving return/exception behavior.
+- Each enabled variant emits `build/generated/jankhunter/<variant>/owner-map.json` with hook policy and an `owners` schema for downstream enrichment.
 
 Release builds should receive either a noop runtime or a deliberately lightweight opt-in runtime.
+
+```mermaid
+flowchart LR
+    A["App bytecode"] --> B["AGP ASM transform"]
+    B --> C["Call-site owner label"]
+    C --> D["Runtime wrapper or counter"]
+    D --> E[".jhlog dictionary/event"]
+    E --> F["CLI inspect/compare"]
+    G["owner-map.json"] --> F
+```

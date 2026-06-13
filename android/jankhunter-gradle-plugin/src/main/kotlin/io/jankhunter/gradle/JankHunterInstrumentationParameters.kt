@@ -6,6 +6,10 @@ import org.gradle.api.provider.Property
 
 interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val methodCounters: Property<Boolean>
+    val okhttp: Property<Boolean>
+    val webSockets: Property<Boolean>
+    val handlers: Property<Boolean>
+    val executors: Property<Boolean>
     val includePackages: ListProperty<String>
     val excludePackages: ListProperty<String>
 }
