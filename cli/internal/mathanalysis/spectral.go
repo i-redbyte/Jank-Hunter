@@ -460,7 +460,7 @@ func comparePeriodicSummary(baseline, candidate []PeriodicSignal) string {
 	if len(baseline) == 0 || len(candidate) == 0 {
 		return "Недостаточно периодических сигналов для честного сравнения."
 	}
-	return fmt.Sprintf("База: %d сигналов, кандидат: %d сигналов. Сравнение периодов будет усилено детектором сетевых циклов на следующем этапе.", len(baseline), len(candidate))
+	return fmt.Sprintf("База: %d сигналов, кандидат: %d сигналов. Сетевые периоды дополнительно сопоставляются в разделе сетевых циклов.", len(baseline), len(candidate))
 }
 
 func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {

@@ -653,6 +653,25 @@ const mathInspectTemplate = `<!doctype html>
           {{else}}<tr><td colspan="8" class="muted">Недостаточно данных для периодического анализа.</td></tr>{{end}}
         </table>
         {{end}}
+        {{if eq .ID "network-loops"}}
+        <h3>Кандидаты циклов</h3>
+        <table class="timeline-table">
+          <tr><th>Маршрут</th><th>Источник</th><th>Период</th><th>Доверие</th><th>Выгорание</th><th>Окно</th><th>Паттерн</th><th>Вероятная причина</th><th>Путь</th></tr>
+          {{range $math.NetworkLoops}}
+          <tr>
+            <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{printf "%.1fs" (seconds .PeriodMS)}}</td>
+            <td>{{printf "%.2f" .Confidence}}</td>
+            <td>{{printf "%.1f" .BurnScore}}</td>
+            <td>{{printf "%.1fs" (seconds .FirstMS)}}..{{printf "%.1fs" (seconds .LastMS)}}</td>
+            <td>{{motifText .Motif}}</td>
+            <td>{{.ProbableCause}}</td>
+            <td>{{if .Path.Nodes}}{{pathText .Path}}<div class="muted">стоимость {{printf "%.2f" .Path.Cost}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">Сетевые циклы с достаточным доверием не найдены.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -795,6 +814,26 @@ const mathCompareTemplate = `<!doctype html>
           {{range $math.Candidate.Periodic}}
           <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Недостаточно данных кандидата.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "network-loops"}}
+        <h3>Дельты сетевых циклов</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Маршрут</th><th>Источник</th><th>Период базы</th><th>Период кандидата</th><th>Выгорание базы</th><th>Выгорание кандидата</th><th>Δ выгорания</th><th>Δ доверия</th><th>Вывод</th></tr>
+          {{range $math.NetworkLoopDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td>
+            <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .BaselinePeriodMS}}{{printf "%.1fs" (seconds .BaselinePeriodMS)}}{{else}}-{{end}}</td>
+            <td>{{if .CandidatePeriodMS}}{{printf "%.1fs" (seconds .CandidatePeriodMS)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.1f" .BaselineBurn}}</td>
+            <td>{{printf "%.1f" .CandidateBurn}}</td>
+            <td>{{printf "%+.1f" .BurnDelta}}</td>
+            <td>{{printf "%+.2f" .ConfidenceDelta}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Заметных изменений сетевых циклов не найдено.</td></tr>{{end}}
         </table>
         {{end}}
       </div>

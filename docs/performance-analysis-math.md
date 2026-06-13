@@ -416,6 +416,17 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 
 Вердикт: делать раньше HMM/UMAP, потому что это практично, объяснимо и напрямую отвечает на реальные production/debug боли.
 
+Текущее внедрение в CLI:
+
+- inspect строит раздел `Сетевые циклы` по HTTP events и compact metric events без загрузки полного event list;
+- Android-side counters `network.route.*.dns.lookup.count`, `network.route.*.connect.attempt.count`,
+  `network.request.retry_or_reconnect.count`, `network.route.*.retry_or_reconnect.count`,
+  `websocket.*.reconnect.count` и `websocket.*.failure.count` автоматически попадают в detector;
+- route/owner request storms считаются тем же pipeline: MAD burst candidates -> autocorrelation -> DFT peak -> motif mining;
+- canonical tokens остаются внутренним компактным представлением, а HTML показывает русские подписи вроде
+  `DNS-всплеск`, `retry/reconnect-всплеск`, `маршрут: GET /config`;
+- compare показывает `появился`, `исчез`, `изменился` или `усилился`, а также period, burn score delta и confidence delta.
+
 ## Практический roadmap
 
 ### Stage 1: Heuristic Verdict
@@ -462,10 +473,18 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - FFT top periods;
 - spectral entropy;
 - periodic jank warnings;
-- network DNS/reconnect loop detector;
-- motif mining для повторяющихся route/owner sequences.
+- общий периодический сигнал для HTTP/DNS/connect/route counts.
 
-### Stage 6: Advanced / Research
+### Stage 6: Network Loop Detector
+
+Добавлено поверх spectral foundation:
+
+- DNS/connect/retry/websocket loop detector;
+- motif mining для повторяющихся route/owner sequences;
+- loop burn score и compare delta;
+- вероятная причина и начальный graph path для найденного цикла.
+
+### Stage 7: Advanced / Research
 
 Добавить при наличии истории:
 
@@ -474,7 +493,7 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - PCA/UMAP run clustering;
 - queueing metrics при расширении runtime events.
 
-### Stage 7: Causal Graph
+### Stage 8: Causal Graph
 
 Добавить после timeline/spectral foundation:
 
@@ -484,7 +503,7 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - PageRank-like owner blame score;
 - compare graph delta: new edges, stronger edges, broken recovery paths.
 
-### Stage 8: Math Analysis Report Page
+### Stage 9: Math Analysis Report Page
 
 Отдельная HTML-страница рядом с основным отчетом:
 

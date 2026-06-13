@@ -165,6 +165,15 @@ func execute(path, source string, data any) error {
 			}
 			return float64(jankyFrames) * 100 / float64(frames)
 		},
+		"motifText": func(tokens []string) string {
+			return mathanalysis.NetworkLoopMotifText(tokens)
+		},
+		"pathText": func(path mathanalysis.GraphPath) string {
+			if len(path.Nodes) == 0 {
+				return ""
+			}
+			return strings.Join(path.Nodes, " -> ")
+		},
 		"notOK": func(value string) bool {
 			return value != "" && value != "ok"
 		},
