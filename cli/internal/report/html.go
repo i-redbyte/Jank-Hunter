@@ -7,10 +7,12 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
 
 type LogReport struct {
@@ -22,9 +24,10 @@ type LogReport struct {
 func WriteInspect(path string, summary analyze.Summary) error {
 	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
-		"GeneratedAt": time.Now().Format(time.RFC3339),
-		"Summary":     summary,
-		"Analysis":    inspectAnalysis(summary, lang),
+		"GeneratedAt":    time.Now().Format(time.RFC3339),
+		"Summary":        summary,
+		"Analysis":       inspectAnalysis(summary, lang),
+		"MathReportHref": MathReportHref(path),
 	})
 }
 
@@ -35,12 +38,39 @@ func WriteCompare(path string, comparison analyze.Comparison) error {
 func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
 	lang := reportLanguage()
 	return execute(path, compareTemplate, map[string]any{
-		"GeneratedAt":   time.Now().Format(time.RFC3339),
-		"Comparison":    comparison,
-		"BaselineLogs":  baselineLogs,
-		"CandidateLogs": candidateLogs,
-		"Analysis":      compareAnalysis(comparison, lang),
+		"GeneratedAt":    time.Now().Format(time.RFC3339),
+		"Comparison":     comparison,
+		"BaselineLogs":   baselineLogs,
+		"CandidateLogs":  candidateLogs,
+		"Analysis":       compareAnalysis(comparison, lang),
+		"MathReportHref": MathReportHref(path),
 	})
+}
+
+func WriteMathInspect(path string, mathReport mathanalysis.MathReport) error {
+	return execute(path, mathInspectTemplate, map[string]any{
+		"GeneratedAt": time.Now().Format(time.RFC3339),
+		"Math":        mathReport,
+	})
+}
+
+func WriteMathCompare(path string, mathReport mathanalysis.CompareMathReport) error {
+	return execute(path, mathCompareTemplate, map[string]any{
+		"GeneratedAt": time.Now().Format(time.RFC3339),
+		"Math":        mathReport,
+	})
+}
+
+func MathReportPath(path string) string {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + "-math.html"
+	}
+	return strings.TrimSuffix(path, ext) + "-math" + ext
+}
+
+func MathReportHref(path string) string {
+	return filepath.Base(MathReportPath(path))
 }
 
 func execute(path, source string, data any) error {
@@ -88,6 +118,20 @@ func execute(path, source string, data any) error {
 				return "sev-medium"
 			default:
 				return "sev-ok"
+			}
+		},
+		"statusLabel": func(value string) string {
+			switch value {
+			case "high":
+				return "критично"
+			case "medium":
+				return "предупреждение"
+			case "ok":
+				return "готово"
+			case "pending":
+				return "ожидает данных"
+			default:
+				return "каркас"
 			}
 		},
 		"notOK": func(value string) bool {

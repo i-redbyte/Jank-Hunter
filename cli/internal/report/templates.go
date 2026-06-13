@@ -67,6 +67,10 @@ body::after {
   0%, 100% { box-shadow: 0 0 0 rgba(111,247,255,0); }
   50% { box-shadow: 0 0 34px rgba(111,247,255,0.16); }
 }
+@keyframes mathGlow {
+  0%, 100% { box-shadow: 0 0 0 rgba(98,255,168,0.05), 0 0 16px rgba(98,255,168,0.18); }
+  50% { box-shadow: 0 0 0 4px rgba(98,255,168,0.08), 0 0 34px rgba(98,255,168,0.48); }
+}
 a { color: var(--cyan); text-decoration: none; }
 a:hover { color: white; }
 .hero {
@@ -107,6 +111,31 @@ h1 {
 h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: 0; }
 h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0.04em; text-transform: uppercase; }
 .subhead { max-width: 880px; color: var(--muted); font-size: 15px; }
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.math-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid rgba(98,255,168,0.74);
+  border-radius: 999px;
+  color: #03130a;
+  background: linear-gradient(135deg, #62ffa8, #c9ff7a);
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  animation: mathGlow 2.7s ease-in-out infinite;
+}
+.math-link:hover {
+  color: #03130a;
+  filter: brightness(1.08);
+}
 .hero-side { display: grid; gap: 10px; width: min(420px, 38vw); }
 .hero-meta { display: grid; gap: 8px; }
 .env-card {
@@ -404,6 +433,200 @@ details.log-card summary::-webkit-details-marker { display: none; }
 }
 `
 
+const mathCSS = `
+.math-page .fold > summary::after { content: "открыть"; }
+.math-page .fold[open] > summary::after { content: "закрыть"; }
+.math-page .section-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+  font-weight: 850;
+}
+.math-page .section-status.sev-high { border-color: rgba(255,91,124,0.48); color: var(--bad); }
+.math-page .section-status.sev-medium { border-color: rgba(255,209,102,0.48); color: var(--warn); }
+.math-page .section-status.sev-ok { border-color: rgba(98,255,168,0.38); color: var(--ok); }
+.math-page .source-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+.math-page .source-list code { display: block; }
+.math-page .math-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 16px;
+}
+@media (max-width: 820px) {
+  .math-page .math-summary { grid-template-columns: 1fr; }
+}
+`
+
+const mathInspectTemplate = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: математический анализ</title>
+  <style>` + baseCSS + mathCSS + `</style>
+</head>
+<body class="math-page">
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · математика</div>
+      <h1>Математический анализ</h1>
+      <div class="subhead">{{.Math.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Состояние данных</div>
+        <strong class="env-device">{{.Math.Summary.EventCount}} событий</strong>
+        <div class="env-subtitle">{{.Math.Summary.LogCount}} логов · {{.Math.Summary.DurationMS}} ms · {{.Math.Summary.HTTPCount}} HTTP</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">UI-кадры</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">jank {{.Math.Summary.UIJank}}</div></div>
+          <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">сэмплы памяти/сети</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+</nav>
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Обзор качества данных</h2>
+        <div class="panel-kicker">Каркас математического отчета подключен к существующей inspect-сводке.</div>
+      </div>
+      <span class="pill">математический отчет</span>
+    </div>
+    <div class="math-summary">
+      <div class="grid">
+        <div class="metric"><div class="label">События</div><div class="value">{{.Math.Summary.EventCount}}</div><div class="hint">{{.Math.Summary.LogCount}} логов</div></div>
+        <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
+        <div class="metric"><div class="label">UI jank</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
+        <div class="metric"><div class="label">Память</div><div class="value">{{.Math.Summary.MemoryMaxKB}} KB</div><div class="hint">макс. PSS</div></div>
+      </div>
+      <div>
+        <h3>Исходные логи</h3>
+        <div class="source-list">{{range .Math.SourcePaths}}<code>{{.}}</code>{{else}}<span class="muted">Исходные логи не указаны.</span>{{end}}</div>
+      </div>
+    </div>
+    <h3>Находки</h3>
+    <div class="finding-list">
+      {{range .Math.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+      {{else}}<div class="muted">Нет находок качества данных.</div>{{end}}
+    </div>
+  </section>
+
+  {{range .Math.Sections}}
+  <section id="{{.ID}}" class="panel">
+    <div class="panel-head">
+      <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
+      <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
+    </div>
+    <details class="fold" open>
+      <summary>Детали раздела</summary>
+      <div class="fold-body">
+        <div class="finding-list">
+          {{range .Findings}}
+          <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+          {{else}}<div class="muted">Подробные находки появятся после реализации вычислений этого раздела.</div>{{end}}
+        </div>
+      </div>
+    </details>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>`
+
+const mathCompareTemplate = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: математическое сравнение</title>
+  <style>` + baseCSS + mathCSS + `</style>
+</head>
+<body class="math-page">
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · математическое сравнение</div>
+      <h1>Математический анализ сравнения</h1>
+      <div class="subhead">{{.Math.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Сравнение</div>
+        <strong class="env-device">{{.Math.Baseline.Summary.LogCount}} → {{.Math.Candidate.Summary.LogCount}} логов</strong>
+        <div class="env-subtitle">база {{.Math.Baseline.Summary.EventCount}} событий · кандидат {{.Math.Candidate.Summary.EventCount}} событий</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">HTTP базы</div><div class="env-value">{{.Math.Baseline.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Baseline.Summary.HTTPP95MS}} ms</div></div>
+          <div class="env-item"><div class="env-label">HTTP кандидата</div><div class="env-value">{{.Math.Candidate.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Candidate.Summary.HTTPP95MS}} ms</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+</nav>
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Обзор сравнения</h2>
+        <div class="panel-kicker">Каркас математического отчета сравнения подключен к сводкам базы и кандидата.</div>
+      </div>
+      <span class="pill">математическое сравнение</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">События базы</div><div class="value">{{.Math.Baseline.Summary.EventCount}}</div><div class="hint">{{.Math.Baseline.Summary.LogCount}} логов</div></div>
+      <div class="metric"><div class="label">События кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">{{.Math.Candidate.Summary.LogCount}} логов</div></div>
+      <div class="metric"><div class="label">Jank базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">Jank кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
+    </div>
+    <h3>Находки</h3>
+    <div class="finding-list">
+      {{range .Math.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+      {{else}}<div class="muted">Нет находок качества сравнения.</div>{{end}}
+    </div>
+  </section>
+
+  {{range .Math.Sections}}
+  <section id="{{.ID}}" class="panel">
+    <div class="panel-head">
+      <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
+      <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
+    </div>
+    <details class="fold" open>
+      <summary>Детали раздела</summary>
+      <div class="fold-body">
+        <div class="finding-list">
+          {{range .Findings}}
+          <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+          {{else}}<div class="muted">Подробные находки сравнения появятся после реализации вычислений этого раздела.</div>{{end}}
+        </div>
+      </div>
+    </details>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>`
+
 const inspectTemplate = `<!doctype html>
 <html lang="en">
 <head>
@@ -419,6 +642,7 @@ const inspectTemplate = `<!doctype html>
       <div class="eyebrow">Jank Hunter Inspect</div>
       <h1>Runtime Signal Report</h1>
       <div class="subhead">{{.Summary.Title}} · generated {{.GeneratedAt}} · standalone offline HTML</div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
     </div>
     <div class="hero-side">
       <div class="env-card">
@@ -659,6 +883,7 @@ const compareTemplate = `<!doctype html>
       <div class="eyebrow">Jank Hunter Compare</div>
       <h1>Regression Control Deck</h1>
       <div class="subhead">generated {{.GeneratedAt}} · compare first, then drill into every baseline and candidate log</div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
     </div>
     <div class="hero-side">
       <div class="env-card">

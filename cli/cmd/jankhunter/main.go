@@ -9,6 +9,7 @@ import (
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
+	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
@@ -95,10 +96,11 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	options := analyze.Options{Filter: filter, OwnerMap: ownerMap}
 	summary, err := analyze.InspectFilesWithOptions(
 		strings.Join(paths, ", "),
 		paths,
-		analyze.Options{Filter: filter, OwnerMap: ownerMap},
+		options,
 	)
 	if err != nil {
 		return err
@@ -111,6 +113,13 @@ func runInspect(args []string) error {
 		printSummary(summary)
 	}
 	if out != "" {
+		mathReport, err := mathanalysis.AnalyzeInspect(paths, options)
+		if err != nil {
+			return err
+		}
+		if err := report.WriteMathInspect(report.MathReportPath(out), mathReport); err != nil {
+			return err
+		}
 		if err := report.WriteInspect(out, summary); err != nil {
 			return err
 		}
@@ -196,6 +205,13 @@ func runCompare(args []string) error {
 		}
 		candidateReports, err := buildLogReports("candidate", candidatePaths, options)
 		if err != nil {
+			return err
+		}
+		mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, options)
+		if err != nil {
+			return err
+		}
+		if err := report.WriteMathCompare(report.MathReportPath(out), mathReport); err != nil {
 			return err
 		}
 		if err := report.WriteCompareReport(out, comparison, baselineReports, candidateReports); err != nil {

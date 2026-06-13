@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
 
 func TestWriteReports(t *testing.T) {
@@ -49,7 +50,13 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Device Context", "Pixel 8", "Network Routes", "Heuristic Verdict", "GET /feed")
+	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Device Context", "Pixel 8", "Network Routes", "Heuristic Verdict", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+
+	mathInspectPath := filepath.Join(dir, "inspect-math.html")
+	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
+		t.Fatalf("WriteMathInspect() error = %v", err)
+	}
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Детали раздела")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -61,7 +68,13 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Regression Control Deck", "Candidate Device Context", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog")
+	assertHTMLContains(t, comparePath, "Regression Control Deck", "Candidate Device Context", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+
+	mathComparePath := filepath.Join(dir, "compare-math.html")
+	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
+		t.Fatalf("WriteMathCompare() error = %v", err)
+	}
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -93,7 +106,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог", "λ Анализ")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReport(
@@ -104,7 +117,57 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Эвристический итог", "Baseline-логи")
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Эвристический итог", "Baseline-логи", "λ Анализ")
+}
+
+func TestMathReportPath(t *testing.T) {
+	tests := map[string]string{
+		"report.html":               "report-math.html",
+		"/tmp/report.html":          "/tmp/report-math.html",
+		"/tmp/report":               "/tmp/report-math.html",
+		"/tmp/report.with.dots.htm": "/tmp/report.with.dots-math.htm",
+	}
+	for input, want := range tests {
+		if got := MathReportPath(input); got != want {
+			t.Fatalf("MathReportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
+	return mathanalysis.MathReport{
+		Title:       "sample.jhlog",
+		SourcePaths: []string{"sample.jhlog"},
+		Summary:     summary,
+		Findings: []mathanalysis.Finding{{
+			Severity: "ok",
+			Title:    "Данных достаточно",
+			Detail:   "Каркас математического отчета готов.",
+		}},
+		Sections: []mathanalysis.MathSection{
+			{ID: "quality", Title: "Качество данных", Status: "ok", Summary: "Сводка качества данных."},
+			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас детектора сетевых циклов."},
+		},
+	}
+}
+
+func sampleCompareMathReport(comparison analyze.Comparison, summary analyze.Summary) mathanalysis.CompareMathReport {
+	inspectMath := sampleMathReport(summary)
+	return mathanalysis.CompareMathReport{
+		Title:      "база против кандидата",
+		Baseline:   inspectMath,
+		Candidate:  inspectMath,
+		Comparison: comparison,
+		Findings: []mathanalysis.Finding{{
+			Severity: "ok",
+			Title:    "Сравнение готово",
+			Detail:   "Каркас математического сравнения готов.",
+		}},
+		Sections: []mathanalysis.MathSection{
+			{ID: "quality", Title: "Качество сравнения", Status: "ok", Summary: "Сводка качества сравнения."},
+			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас compare-детектора сетевых циклов."},
+		},
+	}
 }
 
 func assertHTMLContains(t *testing.T, path string, needles ...string) {
