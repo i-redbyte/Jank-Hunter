@@ -228,6 +228,13 @@ object JankHunter {
     }
 
     @JvmStatic
+    fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
+        if (block == null || block is JankHunterCoroutineFunction2) return block
+        @Suppress("UNCHECKED_CAST")
+        return JankHunterCoroutineFunction2(block as Function2<Any?, Any?, Any?>, ownerName)
+    }
+
+    @JvmStatic
     fun wrapExecutor(executor: Executor?, name: String?, ownerName: String? = name): Executor? {
         if (executor == null || executor is JankHunterExecutor || executor is JankHunterExecutorService) return executor
         return if (executor is ExecutorService) {

@@ -366,7 +366,7 @@ jankHunter {
         handlers = true
         executors = true
         rxJava = true
-        coroutines = false
+        coroutines = true
         methodCounters = true
         includePackages.add("com.myapp")
         excludePackages.add("com.myapp.generated")
@@ -384,6 +384,7 @@ Plugin регистрирует ASM transform через Android Components API 
 - `webSockets`: перед `OkHttpClient.newWebSocket(...)` оборачивает `WebSocketListener` в `JankHunterWebSocketListener` и сохраняет delegate. Требует optional artifact `jankhunter-okhttp3`.
 - `handlers`: safe subset для `Handler.post`, `postDelayed`, `postAtTime`, `postAtFrontOfQueue` оборачивает `Runnable` в `JankHunterRunnable`; `sendMessage*` пишет lightweight counter по call-site.
 - `executors`: safe subset для `Executor.execute`, `ExecutorService.submit`, `ScheduledExecutorService.schedule`, `scheduleAtFixedRate`, `scheduleWithFixedDelay` оборачивает `Runnable`/`Callable` в Jank Hunter wrappers.
+- `coroutines`: safe subset для `kotlinx.coroutines` builders (`launch`, `async`, `runBlocking`, `withContext`, `coroutineScope`, `supervisorScope`, `withTimeout`, `withTimeoutOrNull`) оборачивает suspend block (`Function2`) без compile-time зависимости от kotlinx-coroutines в runtime. По умолчанию выключен; включайте явно после smoke-сборки приложения.
 
 Runtime wrappers сохраняют delegate semantics: исключения пробрасываются как раньше, `Callable` возвращает исходный результат, а Future cancellation остается на стороне executor. Чтобы не раздувать поток событий, wrappers пишут duration gauge только для slow work и failure counter только при исключениях.
 

@@ -118,6 +118,49 @@ class InstrumentationHooksTest {
     }
 
     @Test
+    fun classifiesCoroutineBuilderSubset() {
+        assertEquals(
+            CoroutineBlockKind.TOP_FUNCTION2,
+            InstrumentationHooks.coroutineBlockKind(
+                "kotlinx/coroutines/BuildersKt",
+                "launch",
+                "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Lkotlinx/coroutines/Job;",
+            ),
+        )
+        assertEquals(
+            CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT,
+            InstrumentationHooks.coroutineBlockKind(
+                "kotlinx/coroutines/BuildersKt",
+                "async\$default",
+                "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lkotlinx/coroutines/Deferred;",
+            ),
+        )
+        assertEquals(
+            CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION,
+            InstrumentationHooks.coroutineBlockKind(
+                "kotlinx/coroutines/BuildersKt",
+                "withContext",
+                "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+            ),
+        )
+        assertEquals(
+            CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION,
+            InstrumentationHooks.coroutineBlockKind(
+                "kotlinx/coroutines/TimeoutKt",
+                "withTimeout",
+                "(JLkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+            ),
+        )
+        assertFalse(
+            InstrumentationHooks.coroutineBlockKind(
+                "kotlinx/coroutines/DelayKt",
+                "delay",
+                "(JLkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+            ) != null,
+        )
+    }
+
+    @Test
     fun ownerLabelsAreStableAndReadable() {
         val first = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")
         val second = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")

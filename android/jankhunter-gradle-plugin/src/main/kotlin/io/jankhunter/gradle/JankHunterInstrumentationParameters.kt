@@ -10,6 +10,7 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val webSockets: Property<Boolean>
     val handlers: Property<Boolean>
     val executors: Property<Boolean>
+    val coroutines: Property<Boolean>
     val includePackages: ListProperty<String>
     val excludePackages: ListProperty<String>
 }

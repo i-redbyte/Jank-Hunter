@@ -28,6 +28,9 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val executors: Property<Boolean>
 
     @get:Input
+    abstract val coroutines: Property<Boolean>
+
+    @get:Input
     abstract val includePackages: ListProperty<String>
 
     @get:Input
@@ -51,7 +54,8 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
                 appendLine("    \"okhttp\": ${okhttp.getOrElse(false)},")
                 appendLine("    \"webSockets\": ${webSockets.getOrElse(false)},")
                 appendLine("    \"handlers\": ${handlers.getOrElse(false)},")
-                appendLine("    \"executors\": ${executors.getOrElse(false)}")
+                appendLine("    \"executors\": ${executors.getOrElse(false)},")
+                appendLine("    \"coroutines\": ${coroutines.getOrElse(false)}")
                 appendLine("  },")
                 appendLine("  \"includePackages\": ${array(includePackages.getOrElse(emptyList()))},")
                 appendLine("  \"excludePackages\": ${array(excludePackages.getOrElse(emptyList()))},")

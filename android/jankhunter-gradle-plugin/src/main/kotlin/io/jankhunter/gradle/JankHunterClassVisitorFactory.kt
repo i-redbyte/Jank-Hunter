@@ -24,6 +24,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
                 webSockets = params.webSockets.getOrElse(false),
                 handlers = params.handlers.getOrElse(false),
                 executors = params.executors.getOrElse(false),
+                coroutines = params.coroutines.getOrElse(false),
             ),
         )
     }
@@ -34,7 +35,8 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.okhttp.getOrElse(false) ||
             params.webSockets.getOrElse(false) ||
             params.handlers.getOrElse(false) ||
-            params.executors.getOrElse(false)
+            params.executors.getOrElse(false) ||
+            params.coroutines.getOrElse(false)
         if (!hooksEnabled) return false
         return InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
@@ -49,6 +51,7 @@ private data class HookConfig(
     val webSockets: Boolean,
     val handlers: Boolean,
     val executors: Boolean,
+    val coroutines: Boolean,
 )
 
 private class JankHunterClassVisitor(
@@ -150,6 +153,18 @@ private class JankHunterMethodVisitor(
             config.executors && InstrumentationHooks.executorCallableKind(owner, name, descriptor) == ExecutorCallableKind.CALLABLE_LONG_OBJECT -> {
                 wrapCallableBeforeLongAndObject()
             }
+
+            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.TOP_FUNCTION2 -> {
+                wrapTopCoroutineBlock()
+            }
+
+            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION -> {
+                wrapCoroutineBlockBeforeContinuation()
+            }
+
+            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> {
+                wrapCoroutineBlockBeforeIntAndObject()
+            }
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
@@ -197,6 +212,17 @@ private class JankHunterMethodVisitor(
             JANK_HUNTER,
             "wrapCallable",
             "(Ljava/util/concurrent/Callable;Ljava/lang/String;)Ljava/util/concurrent/Callable;",
+            false,
+        )
+    }
+
+    private fun wrapTopCoroutineBlock() {
+        visitLdcInsn(ownerLabel)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "wrapCoroutineBlock",
+            "(Lkotlin/jvm/functions/Function2;Ljava/lang/String;)Lkotlin/jvm/functions/Function2;",
             false,
         )
     }
@@ -255,6 +281,23 @@ private class JankHunterMethodVisitor(
         storeLocal(delayLocal)
         wrapTopCallable()
         loadLocal(delayLocal)
+        loadLocal(objectLocal)
+    }
+
+    private fun wrapCoroutineBlockBeforeContinuation() {
+        val continuationLocal = newLocal(OBJECT_TYPE)
+        storeLocal(continuationLocal)
+        wrapTopCoroutineBlock()
+        loadLocal(continuationLocal)
+    }
+
+    private fun wrapCoroutineBlockBeforeIntAndObject() {
+        val objectLocal = newLocal(OBJECT_TYPE)
+        val maskLocal = newLocal(Type.INT_TYPE)
+        storeLocal(objectLocal)
+        storeLocal(maskLocal)
+        wrapTopCoroutineBlock()
+        loadLocal(maskLocal)
         loadLocal(objectLocal)
     }
 
@@ -336,6 +379,34 @@ internal object InstrumentationHooks {
         }
     }
 
+    fun coroutineBlockKind(owner: String, name: String, descriptor: String): CoroutineBlockKind? {
+        if (owner !in coroutineBuilderOwners) return null
+        return when {
+            name in coroutineBuildersWithTopBlock && descriptor.endsWith("Lkotlin/jvm/functions/Function2;)${returnDescriptor(owner, name)}") -> {
+                CoroutineBlockKind.TOP_FUNCTION2
+            }
+
+            name in coroutineBuildersWithDefaultBlock && descriptor.endsWith("Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)${returnDescriptor(owner, name.removeSuffix("\$default"))}") -> {
+                CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT
+            }
+
+            name in coroutineSuspendBuilders && descriptor.endsWith("Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;") -> {
+                CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION
+            }
+
+            else -> null
+        }
+    }
+
+    private fun returnDescriptor(owner: String, name: String): String {
+        return when {
+            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("launch") -> "Lkotlinx/coroutines/Job;"
+            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("async") -> "Lkotlinx/coroutines/Deferred;"
+            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("runBlocking") -> "Ljava/lang/Object;"
+            else -> "Ljava/lang/Object;"
+        }
+    }
+
     private fun isExecutorOwner(owner: String): Boolean {
         return owner in executorOwners
     }
@@ -348,6 +419,33 @@ internal object InstrumentationHooks {
         "java/util/concurrent/ThreadPoolExecutor",
         "java/util/concurrent/ScheduledThreadPoolExecutor",
         "java/util/concurrent/ForkJoinPool",
+    )
+
+    private val coroutineBuilderOwners = setOf(
+        "kotlinx/coroutines/BuildersKt",
+        "kotlinx/coroutines/CoroutineScopeKt",
+        "kotlinx/coroutines/SupervisorKt",
+        "kotlinx/coroutines/TimeoutKt",
+    )
+
+    private val coroutineBuildersWithTopBlock = setOf(
+        "launch",
+        "async",
+        "runBlocking",
+    )
+
+    private val coroutineBuildersWithDefaultBlock = setOf(
+        "launch\$default",
+        "async\$default",
+        "runBlocking\$default",
+    )
+
+    private val coroutineSuspendBuilders = setOf(
+        "withContext",
+        "coroutineScope",
+        "supervisorScope",
+        "withTimeout",
+        "withTimeoutOrNull",
     )
 }
 
@@ -367,6 +465,12 @@ internal enum class ExecutorRunnableKind {
 internal enum class ExecutorCallableKind {
     SINGLE_CALLABLE,
     CALLABLE_LONG_OBJECT,
+}
+
+internal enum class CoroutineBlockKind {
+    TOP_FUNCTION2,
+    FUNCTION2_BEFORE_CONTINUATION,
+    FUNCTION2_BEFORE_INT_OBJECT,
 }
 
 internal object OwnerIds {
