@@ -623,7 +623,7 @@ const mathInspectTemplate = `<!doctype html>
         {{if eq .ID "change-points"}}
         <h3>Сдвиги сигналов</h3>
         <table class="timeline-table">
-          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>Score</th><th>Контекст</th><th>Рекомендация</th></tr>
+          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>Оценка</th><th>Контекст</th><th>Рекомендация</th></tr>
           {{range $math.ChangePoints}}
           <tr>
             <td>{{.Signal}}</td><td>{{printf "%.1fs" (seconds .TimeMS)}}</td><td>{{.Direction}}</td>
@@ -671,6 +671,22 @@ const mathInspectTemplate = `<!doctype html>
           </tr>
           {{else}}<tr><td colspan="9" class="muted">Сетевые циклы с достаточным доверием не найдены.</td></tr>{{end}}
         </table>
+        {{end}}
+        {{if eq .ID "integral"}}
+        <h3>Площади под сигналами</h3>
+        <table class="timeline-table">
+          <tr><th>Оценка</th><th>Значение</th><th>Формула</th><th>Объяснение</th><th>Вывод</th></tr>
+          {{range $math.IntegralScores}}
+          <tr>
+            <td>{{.Title}}</td>
+            <td><span class="section-status {{severityClass .Severity}}">{{printf "%.1f" .Value}} {{.Unit}}</span></td>
+            <td><code>{{.Formula}}</code></td>
+            <td>{{.Explanation}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для интегральных оценок.</td></tr>{{end}}
+        </table>
+        <p class="muted">Интегрирование прямоугольное: для каждого бакета берется значение сигнала и умножается на длительность бакета Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
         {{end}}
       </div>
     </details>
@@ -788,7 +804,7 @@ const mathCompareTemplate = `<!doctype html>
         {{if eq .ID "change-points"}}
         <h3>Изменения точек изменения</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>Score базы</th><th>Score кандидата</th><th>Вывод</th></tr>
+          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>Оценка базы</th><th>Оценка кандидата</th><th>Вывод</th></tr>
           {{range $math.ChangeDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td><td>{{.Signal}}</td>
@@ -834,6 +850,24 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{.Summary}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Заметных изменений сетевых циклов не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "integral"}}
+        <h3>Дельты интегральных оценок</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Оценка</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Δ%</th><th>Формула</th><th>Вывод</th></tr>
+          {{range $math.IntegralDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Title}}</td>
+            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td><code>{{.Formula}}</code></td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
         </table>
         {{end}}
       </div>

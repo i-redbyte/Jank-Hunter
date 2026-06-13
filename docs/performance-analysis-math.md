@@ -259,6 +259,17 @@ EVT полезна для tail latency и редких freezes.
 - `memory_pressure_area`: интеграл дефицита free RAM или роста PSS;
 - `recovery_debt`: площадь между degradation onset и return-to-healthy.
 
+Текущее внедрение в CLI:
+
+- `jank_pressure_area = Σ ((janky_frames / frames) * 100) * Δt`;
+- `latency_pain_area = Σ max(0, HTTP p95 - 300ms) * Δt`;
+- `network_failure_burn = Σ (HTTP_ошибки + 0.25*DNS + 0.25*connect) * Δt + Σ выгорание_цикла`;
+- `memory_pressure_area = Σ max(0, PSS - min(PSS)) * Δt + Σ max(0, 256MB - свободная_RAM) * Δt`;
+- `recovery_debt = Σ длительность_плохой_серии * Δt`.
+
+Все оценки считаются прямоугольным интегрированием по timeline buckets. В compare-отчете показываются база,
+кандидат, абсолютная дельта, процентная дельта, формула и инженерное объяснение на русском.
+
 Практический вывод:
 
 ```text
@@ -425,7 +436,7 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - route/owner request storms считаются тем же pipeline: MAD burst candidates -> autocorrelation -> DFT peak -> motif mining;
 - canonical tokens остаются внутренним компактным представлением, а HTML показывает русские подписи вроде
   `DNS-всплеск`, `retry/reconnect-всплеск`, `маршрут: GET /config`;
-- compare показывает `появился`, `исчез`, `изменился` или `усилился`, а также period, burn score delta и confidence delta.
+- compare показывает `появился`, `исчез`, `изменился` или `усилился`, а также период, дельту выгорания и дельту доверия.
 
 ## Практический roadmap
 
@@ -481,10 +492,21 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 
 - DNS/connect/retry/websocket loop detector;
 - motif mining для повторяющихся route/owner sequences;
-- loop burn score и compare delta;
+- оценка выгорания цикла и дельта сравнения;
 - вероятная причина и начальный graph path для найденного цикла.
 
-### Stage 7: Advanced / Research
+### Stage 7: Интегральные оценки боли
+
+Добавлено поверх timeline и network loop detector:
+
+- площадь давления jank;
+- площадь сетевой задержки;
+- сетевое выгорание с вкладом loop burn;
+- площадь давления памяти;
+- долг восстановления;
+- compare delta и русские формулы в math HTML.
+
+### Stage 8: Advanced / Research
 
 Добавить при наличии истории:
 
@@ -493,7 +515,7 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - PCA/UMAP run clustering;
 - queueing metrics при расширении runtime events.
 
-### Stage 8: Causal Graph
+### Stage 9: Causal Graph
 
 Добавить после timeline/spectral foundation:
 
@@ -503,7 +525,7 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - PageRank-like owner blame score;
 - compare graph delta: new edges, stronger edges, broken recovery paths.
 
-### Stage 9: Math Analysis Report Page
+### Stage 10: Math Analysis Report Page
 
 Отдельная HTML-страница рядом с основным отчетом:
 

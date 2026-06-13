@@ -8,19 +8,20 @@ import (
 )
 
 type MathReport struct {
-	Title        string
-	SourcePaths  []string
-	Summary      analyze.Summary
-	Sections     []MathSection
-	Findings     []Finding
-	Timeline     []TimelineBucket
-	Series       []Series
-	RobustStats  []RobustStat
-	ChangePoints []ChangePoint
-	Periodic     []PeriodicSignal
-	Spectral     []SpectralPeak
-	NetworkLoops []NetworkLoopFinding
-	GraphPaths   []GraphPath
+	Title          string
+	SourcePaths    []string
+	Summary        analyze.Summary
+	Sections       []MathSection
+	Findings       []Finding
+	Timeline       []TimelineBucket
+	Series         []Series
+	RobustStats    []RobustStat
+	ChangePoints   []ChangePoint
+	Periodic       []PeriodicSignal
+	Spectral       []SpectralPeak
+	NetworkLoops   []NetworkLoopFinding
+	IntegralScores []IntegralScore
+	GraphPaths     []GraphPath
 }
 
 type CompareMathReport struct {
@@ -35,6 +36,7 @@ type CompareMathReport struct {
 	RobustDeltas      []RobustDelta
 	ChangeDeltas      []ChangePointDelta
 	NetworkLoopDeltas []NetworkLoopDelta
+	IntegralDeltas    []IntegralDelta
 }
 
 type MathSection struct {
@@ -214,6 +216,30 @@ type NetworkLoopDelta struct {
 	Summary           string
 }
 
+type IntegralScore struct {
+	ID          string
+	Title       string
+	Formula     string
+	Explanation string
+	Unit        string
+	Value       float64
+	Severity    string
+	Summary     string
+}
+
+type IntegralDelta struct {
+	ID             string
+	Title          string
+	Formula        string
+	Unit           string
+	BaselineValue  float64
+	CandidateValue float64
+	Delta          float64
+	DeltaPct       float64
+	Severity       string
+	Summary        string
+}
+
 type GraphPath struct {
 	From       string
 	To         string
@@ -245,7 +271,8 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	if err != nil {
 		return MathReport{}, err
 	}
-	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral, networkLoops), nil
+	integralScores := computeIntegralScores(timeline, networkLoops)
+	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral, networkLoops, integralScores), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -298,8 +325,11 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		return CompareMathReport{}, err
 	}
 	networkLoopDeltas := compareNetworkLoops(baselineNetworkLoops, candidateNetworkLoops)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineNetworkLoops)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateNetworkLoops)
+	baselineIntegralScores := computeIntegralScores(baselineTimeline, baselineNetworkLoops)
+	candidateIntegralScores := computeIntegralScores(candidateTimeline, candidateNetworkLoops)
+	integralDeltas := compareIntegralScores(baselineIntegralScores, candidateIntegralScores)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineNetworkLoops, baselineIntegralScores)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateNetworkLoops, candidateIntegralScores)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -311,28 +341,30 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:         candidate,
 		Comparison:        comparison,
 		Findings:          findings,
-		Sections:          compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas),
+		Sections:          compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas, integralDeltas),
 		RobustDeltas:      robustDeltas,
 		ChangeDeltas:      changeDeltas,
 		NetworkLoopDeltas: networkLoopDeltas,
+		IntegralDeltas:    integralDeltas,
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
-		Title:        titleFromPaths(paths),
-		SourcePaths:  append([]string(nil), paths...),
-		Summary:      summary,
-		Findings:     findings,
-		Timeline:     timeline,
-		Series:       series,
-		RobustStats:  robustStats,
-		ChangePoints: changePoints,
-		Periodic:     periodic,
-		Spectral:     spectral,
-		NetworkLoops: networkLoops,
-		Sections:     inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops),
+		Title:          titleFromPaths(paths),
+		SourcePaths:    append([]string(nil), paths...),
+		Summary:        summary,
+		Findings:       findings,
+		Timeline:       timeline,
+		Series:         series,
+		RobustStats:    robustStats,
+		ChangePoints:   changePoints,
+		Periodic:       periodic,
+		Spectral:       spectral,
+		NetworkLoops:   networkLoops,
+		IntegralScores: integralScores,
+		Sections:       inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops, integralScores),
 	}
 }
 
@@ -388,7 +420,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, networkLoops []NetworkLoopFinding) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, networkLoops []NetworkLoopFinding, integralScores []IntegralScore) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -433,6 +465,13 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			Findings: networkLoopFindings(networkLoops),
 		},
 		{
+			ID:       "integral",
+			Title:    "Интегральная оценка боли",
+			Status:   integralStatus(integralScores),
+			Summary:  integralSummary(integralScores),
+			Findings: integralFindings(integralScores),
+		},
+		{
 			ID:      "markov",
 			Title:   "Марковская модель состояний",
 			Status:  "pending",
@@ -447,7 +486,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta, baselinePeriodic, candidatePeriodic []PeriodicSignal, networkLoopDeltas []NetworkLoopDelta) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta, baselinePeriodic, candidatePeriodic []PeriodicSignal, networkLoopDeltas []NetworkLoopDelta, integralDeltas []IntegralDelta) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -490,6 +529,13 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			Status:   compareNetworkLoopStatus(networkLoopDeltas),
 			Summary:  compareNetworkLoopSummary(networkLoopDeltas),
 			Findings: compareNetworkLoopFindings(networkLoopDeltas),
+		},
+		{
+			ID:       "integral",
+			Title:    "Интегральная оценка боли",
+			Status:   compareIntegralStatus(integralDeltas),
+			Summary:  compareIntegralSummary(integralDeltas),
+			Findings: compareIntegralFindings(integralDeltas),
 		},
 		{
 			ID:      "markov",
