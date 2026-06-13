@@ -13,6 +13,7 @@ EMULATOR="${EMULATOR:-emulator}"
 AVD_NAME="${AVD_NAME:-}"
 DEVICE_SERIAL="${DEVICE_SERIAL:-}"
 KEEP_EMULATOR="${KEEP_EMULATOR:-0}"
+UI_LANG="${JH_LANG:-}"
 
 STARTED_EMULATOR_PID=""
 REPORT_PATH=""
@@ -26,6 +27,28 @@ log() {
 fail() {
   printf '[jankhunter] error: %s\n' "$*" >&2
   exit 1
+}
+
+detect_ui_language() {
+  local lang="$UI_LANG"
+
+  if [[ -z "$lang" ]] && command -v defaults >/dev/null 2>&1; then
+    lang="$(defaults read -g AppleLanguages 2>/dev/null | awk -F\" '/"/ { print $2; exit }' || true)"
+  fi
+
+  if [[ -z "$lang" ]]; then
+    lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  fi
+
+  lang="$(printf '%s' "$lang" | tr '[:upper:]' '[:lower:]')"
+  case "$lang" in
+    ru | ru_* | ru-* )
+      UI_LANG="ru"
+      ;;
+    * )
+      UI_LANG="en"
+      ;;
+  esac
 }
 
 resolve_android_tools() {
@@ -144,6 +167,25 @@ install_and_launch() {
 }
 
 print_help() {
+  if [[ "$UI_LANG" == "ru" ]]; then
+    cat <<EOF
+
+Команды:
+  log      выгрузить текущие .jhlog и сгенерировать HTML-отчет, приложение продолжит работать
+  report   то же самое, что log
+  stop     выгрузить логи, сгенерировать отчет, остановить приложение и выйти
+  стоп     то же самое, что stop
+  open     открыть последний сгенерированный отчет на macOS
+  help     показать эту подсказку
+  quit     выйти без выгрузки логов
+
+Директория вывода:
+  $OUT_DIR
+
+EOF
+    return
+  fi
+
   cat <<EOF
 
 Commands:
@@ -227,6 +269,7 @@ cleanup_emulator() {
 main() {
   trap cleanup_emulator EXIT
   mkdir -p "$OUT_DIR"
+  detect_ui_language
   resolve_android_tools
   ensure_device
   install_and_launch
@@ -263,5 +306,11 @@ main() {
     esac
   done
 }
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  detect_ui_language
+  print_help
+  exit 0
+fi
 
 main "$@"
