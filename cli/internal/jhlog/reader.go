@@ -275,7 +275,7 @@ func decodePayload(payload []byte, event *Event) error {
 		if err != nil {
 			return err
 		}
-		value, err := readString(reader)
+		value, err := readDictionaryValue(reader)
 		if err != nil {
 			return err
 		}
@@ -330,46 +330,24 @@ func decodePayload(payload []byte, event *Event) error {
 		if err != nil {
 			return err
 		}
-		if len(values) < 3 {
-			return fmt.Errorf("context payload has %d values, expected at least 3", len(values))
+		if len(values) < 10 {
+			return fmt.Errorf("context payload has %d values, expected at least 10", len(values))
 		}
 		context := &ContextEvent{
-			Network:       NetworkKind(values[0]),
-			BatteryPct:    values[1],
-			AvailMemoryKB: values[2],
-		}
-		if len(values) > 3 {
-			context.BatteryState = values[3]
-		}
-		if len(values) > 4 {
-			context.BatteryTempDeciC = values[4]
-		}
-		if len(values) > 5 {
-			context.LowMemory = values[5] != 0
-		}
-		if len(values) > 6 {
-			context.NetworkMetered = values[6] != 0
-		}
-		if len(values) > 7 {
-			context.NetworkValidated = values[7] != 0
-		}
-		if len(values) > 8 {
-			context.RxBytes = values[8]
-		}
-		if len(values) > 9 {
-			context.TxBytes = values[9]
-		}
-		if len(values) > 10 {
-			context.TotalMemoryKB = values[10]
-		}
-		if len(values) > 11 {
-			context.FreeStorageKB = values[11]
-		}
-		if len(values) > 12 {
-			context.TotalStorageKB = values[12]
-		}
-		if len(values) > 13 {
-			context.NetworkVPN = values[13] != 0
+			Network:          NetworkKind(values[0]),
+			BatteryPct:       values[1],
+			AvailMemoryKB:    values[2],
+			BatteryState:     values[3],
+			BatteryTempDeciC: values[4],
+			RxBytes:          values[5],
+			TxBytes:          values[6],
+			TotalMemoryKB:    values[7],
+			FreeStorageKB:    values[8],
+			TotalStorageKB:   values[9],
+			LowMemory:        event.Flags&uint64(FlagContextLowMemory) != 0,
+			NetworkMetered:   event.Flags&uint64(FlagNetworkMetered) != 0,
+			NetworkValidated: event.Flags&uint64(FlagNetworkValidated) != 0,
+			NetworkVPN:       event.Flags&uint64(FlagNetworkVPN) != 0,
 		}
 		event.Context = context
 	case EventHTTP:
@@ -445,11 +423,80 @@ func readRemaining(reader *bytes.Reader) ([]uint64, error) {
 	return values, nil
 }
 
-func readString(reader io.ByteReader) (string, error) {
+func readDictionaryValue(reader io.ByteReader) (string, error) {
 	length, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return "", err
 	}
+	if length == 0 {
+		codec, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return "", err
+		}
+		return readEncodedDictionaryValue(reader, codec)
+	}
+	return readRawString(reader, length)
+}
+
+func readEncodedDictionaryValue(reader io.ByteReader, codec uint64) (string, error) {
+	switch codec {
+	case dictValueCodecUTF8:
+		length, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return "", err
+		}
+		return readRawString(reader, length)
+	case dictValueCodecBCDDecimal:
+		digits, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return "", err
+		}
+		return readBCDDigits(reader, int(digits))
+	case dictValueCodecBCDISODate:
+		value, err := readBCDDigits(reader, 8)
+		if err != nil {
+			return "", err
+		}
+		if len(value) != 8 {
+			return "", fmt.Errorf("invalid bcd date length %d", len(value))
+		}
+		return value[:4] + "-" + value[4:6] + "-" + value[6:8], nil
+	default:
+		return "", fmt.Errorf("unsupported dictionary value codec %d", codec)
+	}
+}
+
+func readBCDDigits(reader io.ByteReader, digits int) (string, error) {
+	if digits < 0 || digits > 1024*1024 {
+		return "", fmt.Errorf("invalid bcd digit count %d", digits)
+	}
+	buf := make([]byte, 0, digits)
+	for len(buf) < digits {
+		raw, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		hi := raw >> 4
+		lo := raw & 0x0f
+		if hi > 9 {
+			return "", fmt.Errorf("invalid bcd high nibble %x", hi)
+		}
+		buf = append(buf, '0'+hi)
+		if len(buf) == digits {
+			if lo != 0x0f {
+				return "", fmt.Errorf("invalid bcd padding nibble %x", lo)
+			}
+			break
+		}
+		if lo > 9 {
+			return "", fmt.Errorf("invalid bcd low nibble %x", lo)
+		}
+		buf = append(buf, '0'+lo)
+	}
+	return string(buf), nil
+}
+
+func readRawString(reader io.ByteReader, length uint64) (string, error) {
 	if length > 1024*1024 {
 		return "", fmt.Errorf("string too large: %d", length)
 	}
@@ -458,9 +505,15 @@ func readString(reader io.ByteReader) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("reader cannot read bytes")
 	}
-	_, err = io.ReadFull(fullReader, buf)
+	_, err := io.ReadFull(fullReader, buf)
 	return string(buf), err
 }
+
+const (
+	dictValueCodecUTF8       uint64 = 0
+	dictValueCodecBCDDecimal uint64 = 1
+	dictValueCodecBCDISODate uint64 = 2
+)
 
 func readJSONL(r io.Reader, source string) (Log, error) {
 	log := Log{

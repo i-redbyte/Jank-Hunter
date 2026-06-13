@@ -257,7 +257,7 @@ record:
   payload: event-specific bytes
 ```
 
-Время хранится как монотонный delta-ms, а не как полная дата на каждое событие. Частые события обычно занимают 1-3 байта на timestamp часть. До явной фиксации формата `.jhlog` считается pre-release unstable: CLI читает только текущую схему.
+Время хранится как монотонный delta-ms, а не как полная дата на каждое событие. Частые события обычно занимают 1-3 байта на timestamp часть. До явной фиксации формата `.jhlog` считается pre-release unstable: CLI читает только текущую схему `FormatVersion=2`, без legacy-совместимости с предыдущими pre-release версиями.
 
 Строки пишутся через dictionary records:
 
@@ -268,7 +268,15 @@ id -> "FeedScreen"
 ```
 
 Runtime пишет короткие ID, CLI раскрывает их в имена.
-Новые session events также могут содержать `process_id`; старые `.jhlog` без process metadata читаются как `unknown`.
+Текст хранится только в dictionary records. Обычные значения пишутся как `length + UTF-8 bytes`, а специальные компактные значения используют sentinel `length=0`, `codec`, затем payload:
+
+```text
+codec 0: UTF-8 fallback, используется для пустой строки
+codec 1: BCD decimal string, digit_count + packed BCD bytes
+codec 2: BCD ISO date YYYY-MM-DD, fixed 4 BCD bytes для 8 цифр
+```
+
+BCD применяется только если итоговая запись меньше UTF-8. Поэтому имена классов, routes, owners и stack hints остаются читаемым UTF-8 в словаре, а длинные числовые строки и даты могут занимать меньше места. Context booleans (`low_memory`, `network_metered`, `network_validated`, `network_vpn`) лежат в event flags/bitmask, не дублируясь в payload.
 
 ## Owner map
 

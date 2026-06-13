@@ -77,10 +77,10 @@ record:
   timestamp_delta_ms: 0 bytes, uint8, uint16le, or uvarint
   flags: uvarint, only when the header bit is set
   payload_len: uvarint, only for variable-length payloads
-  payload: event-specific uvarints/strings
+  payload: event-specific uvarints and dictionary ids
 ```
 
-The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, and gauges omit payload length; variable and append-friendly events keep it.
+The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, gauges, and context samples omit payload length; variable and append-friendly events keep it. Context booleans such as low-memory, metered, validated, and VPN are stored in the event flags bitmask instead of being duplicated as payload uvarints.
 
 String-heavy values are dictionary encoded:
 
@@ -92,6 +92,15 @@ String-heavy values are dictionary encoded:
 - metrics;
 - app version/build/device/process metadata;
 - static device snapshot values such as Android release, security patch, CPU ABI and hardware identifiers.
+
+Dictionary values keep the log binary but still preserve text when it is needed for reports:
+
+- ordinary text is `length + UTF-8 bytes`;
+- special compact values use sentinel `length=0`, then `codec`, then a codec-specific payload;
+- `codec=1` stores decimal-only strings as digit count plus packed BCD bytes;
+- `codec=2` stores ISO dates in `YYYY-MM-DD` form as four fixed BCD bytes.
+
+The writer chooses BCD only when it is smaller than UTF-8, so class names, routes, owners, and stack hints remain plain UTF-8 dictionary values while numeric identifiers and dates can be tighter.
 
 Pre-release format policy:
 

@@ -1,6 +1,7 @@
 package jhlog
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,5 +103,106 @@ func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported jhlog version") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDictionaryValueCodecsDecodeBCD(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bcd.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	entries := []DictionaryEntry{
+		{Kind: DictBuild, ID: 1, Value: "1234567890123"},
+		{Kind: DictGeneric, ID: 2, Value: "2026-06-13"},
+		{Kind: DictClass, ID: 3, Value: "com.myapp.feature.FeedRepository"},
+	}
+	for _, entry := range entries {
+		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(%q) error = %v", entry.Value, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(raw) error = %v", err)
+	}
+	if bytes.Contains(raw, []byte("1234567890123")) {
+		t.Fatalf("decimal dictionary value was written as raw UTF-8")
+	}
+	if bytes.Contains(raw, []byte("2026-06-13")) {
+		t.Fatalf("ISO date dictionary value was written as raw UTF-8")
+	}
+	if !bytes.Contains(raw, []byte("com.myapp.feature.FeedRepository")) {
+		t.Fatalf("ordinary text dictionary value should remain UTF-8")
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := log.Dict[1]; got != "1234567890123" {
+		t.Fatalf("dict[1] = %q", got)
+	}
+	if got := log.Dict[2]; got != "2026-06-13" {
+		t.Fatalf("dict[2] = %q", got)
+	}
+	if got := log.Dict[3]; got != "com.myapp.feature.FeedRepository" {
+		t.Fatalf("dict[3] = %q", got)
+	}
+}
+
+func TestContextBooleansUseFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context-flags.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{
+		Type:   EventContext,
+		TimeMS: 100,
+		Flags:  uint64(FlagAppForeground),
+		Context: &ContextEvent{
+			Network:          NetworkVPN,
+			BatteryPct:       50,
+			AvailMemoryKB:    1024,
+			BatteryState:     3,
+			BatteryTempDeciC: 301,
+			LowMemory:        true,
+			NetworkMetered:   true,
+			NetworkValidated: true,
+			NetworkVPN:       true,
+			RxBytes:          1000,
+			TxBytes:          2000,
+			TotalMemoryKB:    4096,
+			FreeStorageKB:    8192,
+			TotalStorageKB:   16384,
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(log.Events) != 1 || log.Events[0].Context == nil {
+		t.Fatalf("expected one context event, got %#v", log.Events)
+	}
+	event := log.Events[0]
+	for _, flag := range []Flag{FlagContextLowMemory, FlagNetworkMetered, FlagNetworkValidated, FlagNetworkVPN} {
+		if event.Flags&uint64(flag) == 0 {
+			t.Fatalf("expected flag %d in %08b", flag, event.Flags)
+		}
+	}
+	context := event.Context
+	if !context.LowMemory || !context.NetworkMetered || !context.NetworkValidated || !context.NetworkVPN {
+		t.Fatalf("context booleans did not round-trip from flags: %+v", context)
 	}
 }

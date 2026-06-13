@@ -103,23 +103,23 @@ class BinaryLogWriter(
         totalStorageKb: Long,
         networkVpn: Boolean,
     ) {
-        val flags = if (networkMetered) FLAG_NETWORK_METERED else 0L
+        var flags = FLAG_APP_FOREGROUND
+        if (lowMemory) flags = flags or FLAG_CONTEXT_LOW_MEMORY
+        if (networkMetered) flags = flags or FLAG_NETWORK_METERED
+        if (networkValidated) flags = flags or FLAG_NETWORK_VALIDATED
+        if (networkVpn) flags = flags or FLAG_NETWORK_VPN
         val payload = Payload()
             .uvarint(networkKind.toLong())
             .uvarint(batteryPct.toLong())
             .uvarint(availMemoryKb)
             .uvarint(batteryState.toLong())
             .uvarint(batteryTempDeciC.toLong())
-            .uvarint(boolean(lowMemory))
-            .uvarint(boolean(networkMetered))
-            .uvarint(boolean(networkValidated))
             .uvarint(rxBytes)
             .uvarint(txBytes)
             .uvarint(totalMemoryKb)
             .uvarint(freeStorageKb)
             .uvarint(totalStorageKb)
-            .uvarint(boolean(networkVpn))
-        record(EVENT_CONTEXT, flags or FLAG_APP_FOREGROUND, payload)
+        record(EVENT_CONTEXT, flags, payload)
     }
 
     @Synchronized
@@ -215,7 +215,7 @@ class BinaryLogWriter(
             val payload = Payload()
                 .uvarint(definition.kind.toLong())
                 .uvarint(definition.id)
-                .string(definition.value)
+                .dictionaryValue(definition.value)
             record(EVENT_DICTIONARY, 0L, payload)
         }
         return result.id
@@ -259,9 +259,40 @@ class BinaryLogWriter(
             return this
         }
 
-        fun string(value: String): Payload {
-            val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        fun dictionaryValue(value: String): Payload {
+            if (value.isEmpty()) {
+                uvarint(0)
+                uvarint(DICTIONARY_VALUE_UTF8.toLong())
+                return string(value)
+            }
+
+            val utf8Bytes = value.toByteArray(StandardCharsets.UTF_8)
+            val encoded = encodedDictionaryValue(value)
+            if (encoded != null) {
+                val utf8Size = uvarintSize(utf8Bytes.size.toLong()) + utf8Bytes.size
+                val encodedSize = 1 + uvarintSize(encoded.codec.toLong()) + encoded.bytes.size
+                if (encodedSize < utf8Size) {
+                    uvarint(0)
+                    uvarint(encoded.codec.toLong())
+                    bytes(encoded.bytes)
+                    return this
+                }
+            }
+            return stringBytes(utf8Bytes)
+        }
+
+        private fun string(value: String): Payload {
+            return stringBytes(value.toByteArray(StandardCharsets.UTF_8))
+        }
+
+        private fun stringBytes(bytes: ByteArray): Payload {
             uvarint(bytes.size.toLong())
+            bytes(bytes)
+            return this
+        }
+
+        private fun bytes(bytes: ByteArray): Payload {
+            if (bytes.isEmpty()) return this
             ensure(bytes.size)
             System.arraycopy(bytes, 0, data, size, bytes.size)
             size += bytes.size
@@ -287,6 +318,67 @@ class BinaryLogWriter(
             }
             data = data.copyOf(newSize)
         }
+
+        private data class EncodedValue(
+            val codec: Int,
+            val bytes: ByteArray,
+        )
+
+        private companion object {
+            private fun encodedDictionaryValue(value: String): EncodedValue? {
+                if (isIsoDate(value)) {
+                    return EncodedValue(
+                        DICTIONARY_VALUE_BCD_ISO_DATE,
+                        packBcdDigits(value.substring(0, 4) + value.substring(5, 7) + value.substring(8, 10)),
+                    )
+                }
+                if (isDecimalString(value)) {
+                    val packed = packBcdDigits(value)
+                    val payload = Payload().uvarint(value.length.toLong()).bytes(packed)
+                    return EncodedValue(DICTIONARY_VALUE_BCD_DECIMAL, payload.copyBytes())
+                }
+                return null
+            }
+
+            private fun isDecimalString(value: String): Boolean {
+                if (value.isEmpty()) return false
+                return value.all { it in '0'..'9' }
+            }
+
+            private fun isIsoDate(value: String): Boolean {
+                if (value.length != 10 || value[4] != '-' || value[7] != '-') return false
+                val digitIndexes = intArrayOf(0, 1, 2, 3, 5, 6, 8, 9)
+                return digitIndexes.all { value[it] in '0'..'9' }
+            }
+
+            private fun packBcdDigits(value: String): ByteArray {
+                val out = ByteArray((value.length + 1) / 2)
+                for (index in out.indices) {
+                    val high = value[index * 2].code - '0'.code
+                    val low = if (index * 2 + 1 < value.length) {
+                        value[index * 2 + 1].code - '0'.code
+                    } else {
+                        0x0f
+                    }
+                    out[index] = ((high shl 4) or low).toByte()
+                }
+                return out
+            }
+
+            private fun uvarintSize(rawValue: Long): Int {
+                var value = rawValue
+                var count = 1
+                while (value and 0x7FL.inv() != 0L) {
+                    value = value ushr 7
+                    count++
+                }
+                return count
+            }
+        }
+
+        private fun copyBytes(): ByteArray {
+            return data.copyOf(size)
+        }
     }
 
     companion object {
@@ -296,6 +388,9 @@ class BinaryLogWriter(
         const val FLAG_THREAD_MAIN: Long = 1L shl 3
         const val FLAG_APP_FOREGROUND: Long = 1L shl 4
         const val FLAG_NETWORK_METERED: Long = 1L shl 5
+        const val FLAG_CONTEXT_LOW_MEMORY: Long = 1L shl 6
+        const val FLAG_NETWORK_VALIDATED: Long = 1L shl 7
+        const val FLAG_NETWORK_VPN: Long = 1L shl 8
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 
@@ -321,6 +416,10 @@ class BinaryLogWriter(
         private const val DICT_APP_VERSION = 8
         private const val DICT_BUILD = 9
         private const val DICT_PROCESS = 10
+
+        private const val DICTIONARY_VALUE_UTF8 = 0
+        private const val DICTIONARY_VALUE_BCD_DECIMAL = 1
+        private const val DICTIONARY_VALUE_BCD_ISO_DATE = 2
 
         private fun writeUvarint(out: BufferedOutputStream, rawValue: Long): Int {
             var value = rawValue
@@ -397,9 +496,7 @@ class BinaryLogWriter(
             }
         }
 
-        private fun boolean(value: Boolean): Long = if (value) 1L else 0L
-
-        private const val FORMAT_VERSION = 1
+        private const val FORMAT_VERSION = 2
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
         private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5

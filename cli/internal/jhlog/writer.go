@@ -45,11 +45,31 @@ func (w *Writer) WriteEvent(event Event) error {
 	}
 	w.lastMS = event.TimeMS
 
-	if err := writeCompactHeader(w.w, event.Type, delta, event.Flags, needsPayloadLength(event.Type), uint64(payload.Len())); err != nil {
+	flags := compactEventFlags(event)
+	if err := writeCompactHeader(w.w, event.Type, delta, flags, needsPayloadLength(event.Type), uint64(payload.Len())); err != nil {
 		return err
 	}
 	_, err := w.w.Write(payload.Bytes())
 	return err
+}
+
+func compactEventFlags(event Event) uint64 {
+	flags := event.Flags
+	if event.Type == EventContext && event.Context != nil {
+		if event.Context.LowMemory {
+			flags |= uint64(FlagContextLowMemory)
+		}
+		if event.Context.NetworkMetered {
+			flags |= uint64(FlagNetworkMetered)
+		}
+		if event.Context.NetworkValidated {
+			flags |= uint64(FlagNetworkValidated)
+		}
+		if event.Context.NetworkVPN {
+			flags |= uint64(FlagNetworkVPN)
+		}
+	}
+	return flags
 }
 
 func encodePayload(w io.Writer, event Event) error {
@@ -64,7 +84,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if err := writeUvarint(w, event.Dictionary.ID); err != nil {
 			return err
 		}
-		if err := writeString(w, event.Dictionary.Value); err != nil {
+		if err := writeDictionaryValue(w, event.Dictionary.Value); err != nil {
 			return err
 		}
 	case EventSession:
@@ -107,15 +127,11 @@ func encodePayload(w io.Writer, event Event) error {
 			p.AvailMemoryKB,
 			p.BatteryState,
 			p.BatteryTempDeciC,
-			boolUint(p.LowMemory),
-			boolUint(p.NetworkMetered),
-			boolUint(p.NetworkValidated),
 			p.RxBytes,
 			p.TxBytes,
 			p.TotalMemoryKB,
 			p.FreeStorageKB,
 			p.TotalStorageKB,
-			boolUint(p.NetworkVPN),
 		} {
 			if err := writeUvarint(w, value); err != nil {
 				return err
@@ -192,13 +208,6 @@ func encodePayload(w io.Writer, event Event) error {
 	return nil
 }
 
-func boolUint(value bool) uint64 {
-	if value {
-		return 1
-	}
-	return 0
-}
-
 func hasNonZero(values []uint64) bool {
 	for _, value := range values {
 		if value != 0 {
@@ -208,12 +217,96 @@ func hasNonZero(values []uint64) bool {
 	return false
 }
 
-func writeString(w io.Writer, value string) error {
+func writeDictionaryValue(w io.Writer, value string) error {
+	if value == "" {
+		if err := writeUvarint(w, 0); err != nil {
+			return err
+		}
+		if err := writeUvarint(w, dictValueCodecUTF8); err != nil {
+			return err
+		}
+		return writeRawString(w, value)
+	}
+	if payload, codec, ok := encodedDictionaryValue(value); ok {
+		utf8Size := uvarintSize(uint64(len(value))) + len(value)
+		encodedSize := 1 + uvarintSize(codec) + len(payload)
+		if encodedSize < utf8Size {
+			if err := writeUvarint(w, 0); err != nil {
+				return err
+			}
+			if err := writeUvarint(w, codec); err != nil {
+				return err
+			}
+			_, err := w.Write(payload)
+			return err
+		}
+	}
+	return writeRawString(w, value)
+}
+
+func writeRawString(w io.Writer, value string) error {
 	if err := writeUvarint(w, uint64(len(value))); err != nil {
 		return err
 	}
 	_, err := io.WriteString(w, value)
 	return err
+}
+
+func encodedDictionaryValue(value string) ([]byte, uint64, bool) {
+	if isISODate(value) {
+		return packBCDString(value[:4] + value[5:7] + value[8:10]), dictValueCodecBCDISODate, true
+	}
+	if isDecimalString(value) {
+		var payload bytes.Buffer
+		if err := writeUvarint(&payload, uint64(len(value))); err != nil {
+			return nil, 0, false
+		}
+		payload.Write(packBCDString(value))
+		return payload.Bytes(), dictValueCodecBCDDecimal, true
+	}
+	return nil, 0, false
+}
+
+func isDecimalString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isISODate(value string) bool {
+	if len(value) != len("2000-01-01") || value[4] != '-' || value[7] != '-' {
+		return false
+	}
+	for _, index := range []int{0, 1, 2, 3, 5, 6, 8, 9} {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func packBCDString(value string) []byte {
+	out := make([]byte, (len(value)+1)/2)
+	for i := range out {
+		hi := value[i*2] - '0'
+		lo := byte(0x0f)
+		if i*2+1 < len(value) {
+			lo = value[i*2+1] - '0'
+		}
+		out[i] = hi<<4 | lo
+	}
+	return out
+}
+
+func uvarintSize(value uint64) int {
+	var buf [binary.MaxVarintLen64]byte
+	return binary.PutUvarint(buf[:], value)
 }
 
 func writeUvarint(w io.Writer, value uint64) error {
@@ -340,7 +433,7 @@ func WriteSample(path string) error {
 
 	events := []Event{
 		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, ProcessID: 4, AndroidReleaseID: 70, SecurityPatchID: 71, PrimaryABIID: 72, SupportedABIsID: 73, ManufacturerID: 74, BrandID: 75, HardwareID: 76, BoardID: 77, ProductID: 78}},
-		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkMetered), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, TotalMemoryKB: 8032000, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000, FreeStorageKB: 48_000_000, TotalStorageKB: 118_000_000, NetworkVPN: false}},
+		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkValidated), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, TotalMemoryKB: 8032000, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000, FreeStorageKB: 48_000_000, TotalStorageKB: 118_000_000, NetworkVPN: false}},
 		{Type: EventHTTP, TimeMS: 1200, Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 184, DNSMS: 7, ConnectMS: 0, TTFBMS: 91, Status: Status2xx, RxBytes: 42120, TxBytes: 740}},
 		{Type: EventHTTP, TimeMS: 2400, Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38900, TxBytes: 730}},
 		{Type: EventUIWindow, TimeMS: 10000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 30, WindowMS: 10000, FrameCount: 580, JankCount: 28, P50MS: 12, P95MS: 33, P99MS: 72}},
