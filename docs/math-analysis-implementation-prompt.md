@@ -26,7 +26,7 @@
 Общие инженерные правила:
 - Сначала изучи `docs/performance-analysis-math.md`, `cli/internal/analyze`, `cli/internal/jhlog`, `cli/internal/report`, `cli/cmd/jankhunter/main.go`.
 - Не ломай существующий `inspect`, `compare`, `export`, `sample`.
-- Не меняй бинарный `.jhlog` формат без append-only совместимости и тестов.
+- До явной фиксации версии `.jhlog` формат можно менять без legacy-совместимости, но Android runtime и CLI должны оставаться синхронизированы, а тесты должны покрывать текущий формат. После отдельной команды "фиксируем версию" вернуться к append-only совместимости.
 - Для анализа больших логов предпочитай streaming / compact aggregation.
 - Для structured data не парси HTML строками; добавляй модели в Go.
 - Не добавляй heavy dependencies без крайней необходимости. Для FFT сначала можно сделать простую DFT/FFT на Go stdlib или radix-2 helper внутри CLI.
@@ -293,4 +293,3 @@ Important constraints:
 - Do not silently drop features. If a method is approximated, document the approximation in the report and in docs.
 - Keep generated reports useful first and beautiful second; the visual style should support diagnosis.
 ```
-

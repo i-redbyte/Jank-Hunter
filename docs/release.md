@@ -142,7 +142,14 @@ CLI output intended for humans can evolve between minor versions. `--json` outpu
 
 The binary header version is `FormatVersion` in `cli/internal/jhlog/format.go`.
 
-Rules:
+Pre-release policy:
+
+- `.jhlog` is not frozen yet.
+- Runtime and CLI only need to agree on the current in-repo format.
+- Old pre-release logs may become unreadable after format changes.
+- Do not keep compatibility branches only for pre-release formats.
+
+Rules after explicit format freeze:
 
 - Do not change existing event payload order.
 - Add new optional fields at the end of payloads.

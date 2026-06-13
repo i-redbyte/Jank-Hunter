@@ -1,7 +1,6 @@
 package jhlog
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,33 +60,6 @@ func TestWriteSampleReadFile(t *testing.T) {
 	}
 }
 
-func TestReadLegacyVersionOneBinary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.jhlog")
-	var file bytes.Buffer
-	legacyMagic := append([]byte{}, Magic...)
-	legacyMagic[7] = 1
-	file.Write(legacyMagic)
-	writeLegacyV1Event(t, &file, Event{Type: EventSession, TimeMS: 3, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35}})
-	writeLegacyV1Event(t, &file, Event{Type: EventGauge, TimeMS: 5, Metric: &MetricEvent{MetricID: 10, Value: 42}})
-	if err := os.WriteFile(path, file.Bytes(), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	log, err := ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if log.Version != 1 {
-		t.Fatalf("version = %d, want legacy v1", log.Version)
-	}
-	if len(log.Events) != 2 {
-		t.Fatalf("events = %d, want 2", len(log.Events))
-	}
-	if got := log.Events[1].Metric.Value; got != 42 {
-		t.Fatalf("metric value = %d, want 42", got)
-	}
-}
-
 func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.jhlog")
 	if err := WriteSample(path); err != nil {
@@ -130,28 +102,5 @@ func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported jhlog version") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func writeLegacyV1Event(t *testing.T, out *bytes.Buffer, event Event) {
-	t.Helper()
-	var payload bytes.Buffer
-	if err := encodePayload(&payload, event); err != nil {
-		t.Fatalf("encodePayload() error = %v", err)
-	}
-	if err := writeUvarint(out, uint64(event.Type)); err != nil {
-		t.Fatalf("write type: %v", err)
-	}
-	if err := writeUvarint(out, event.TimeMS); err != nil {
-		t.Fatalf("write delta: %v", err)
-	}
-	if err := writeUvarint(out, event.Flags); err != nil {
-		t.Fatalf("write flags: %v", err)
-	}
-	if err := writeUvarint(out, uint64(payload.Len())); err != nil {
-		t.Fatalf("write payload length: %v", err)
-	}
-	if _, err := out.Write(payload.Bytes()); err != nil {
-		t.Fatalf("write payload: %v", err)
 	}
 }

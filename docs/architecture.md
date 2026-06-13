@@ -62,13 +62,13 @@ High-frequency sources aggregate before enqueueing. UI frames become `ui_window`
 
 ## Event Format
 
-`.jhlog` is a compact append-only binary format:
+`.jhlog` is a compact pre-release binary format:
 
 ```text
 magic/version
 record*
 
-v2 record:
+record:
   header: byte
     bits 0..3: event_type
     bit 4: flags follow
@@ -93,13 +93,11 @@ String-heavy values are dictionary encoded:
 - app version/build/device/process metadata;
 - static device snapshot values such as Android release, security patch, CPU ABI and hardware identifiers.
 
-Compatibility rules:
+Pre-release format policy:
 
-- CLI readers still accept legacy v1 records with `event_type`, `timestamp_delta_ms`, `flags`, and `payload_len` as uvarints;
-- readers tolerate old session payloads without process metadata;
-- new optional payload fields are appended to preserve old data;
-- existing field order is not changed;
-- format version is bumped only when old readers cannot safely skip the change.
+- until the project explicitly freezes the log format, `.jhlog` is allowed to change without backward-compatible readers;
+- CLI readers target only the current pre-release `FormatVersion`;
+- once the format is frozen, compatibility rules will switch to append-only payload changes and backward-compatible readers for released versions.
 
 ## Threading Model
 

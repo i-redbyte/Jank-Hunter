@@ -399,7 +399,7 @@ class BinaryLogWriter(
 
         private fun boolean(value: Boolean): Long = if (value) 1L else 0L
 
-        private const val FORMAT_VERSION = 2
+        private const val FORMAT_VERSION = 1
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
         private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5

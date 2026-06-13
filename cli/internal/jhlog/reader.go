@@ -25,8 +25,8 @@ func ReadFile(path string) (Log, error) {
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
 		version := prefix[7]
-		if version > FormatVersion {
-			return Log{}, fmt.Errorf("%s: unsupported jhlog version %d, cli supports up to %d", path, version, FormatVersion)
+		if version != FormatVersion {
+			return Log{}, fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
 		return readBinary(file, path, version)
 	}
@@ -51,8 +51,8 @@ func StreamFile(path string, handle func(Event, map[uint64]string) error) error 
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
 		version := prefix[7]
-		if version > FormatVersion {
-			return fmt.Errorf("%s: unsupported jhlog version %d, cli supports up to %d", path, version, FormatVersion)
+		if version != FormatVersion {
+			return fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
 		_, err := streamBinary(file, path, version, handle)
 		return err
@@ -65,152 +65,6 @@ func StreamFile(path string, handle func(Event, map[uint64]string) error) error 
 }
 
 func readBinary(r io.Reader, source string, version uint8) (Log, error) {
-	if version >= 2 {
-		return readBinaryV2(r, source, version)
-	}
-	return readBinaryV1(r, source, version)
-}
-
-func readBinaryV1(r io.Reader, source string, version uint8) (Log, error) {
-	reader := bufio.NewReader(r)
-	log := Log{
-		Source:  source,
-		Version: version,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]DictKind{},
-	}
-	var currentMS uint64
-	for {
-		eventType, err := binary.ReadUvarint(reader)
-		if errors.Is(err, io.EOF) {
-			return log, nil
-		}
-		if err != nil {
-			return toleratePartial(log, source, "event type", err)
-		}
-
-		deltaMS, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "timestamp delta", err)
-		}
-		flags, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "flags", err)
-		}
-		payloadLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "payload length", err)
-		}
-		if payloadLen > 4*1024*1024 {
-			return log, fmt.Errorf("%s: suspicious payload length %d", source, payloadLen)
-		}
-
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			return toleratePartial(log, source, "payload", err)
-		}
-
-		currentMS += deltaMS
-		event := Event{
-			Type:    EventType(eventType),
-			TimeMS:  currentMS,
-			DeltaMS: deltaMS,
-			Flags:   flags,
-			Source:  source,
-		}
-		if err := decodePayload(payload, &event); err != nil {
-			warning := err.Error()
-			event.Warnings = append(event.Warnings, warning)
-			log.Warnings = append(log.Warnings, fmt.Sprintf("event at %dms: %s", event.TimeMS, warning))
-		}
-		if event.Dictionary != nil {
-			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
-			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
-		}
-		log.Events = append(log.Events, event)
-	}
-}
-
-func streamBinary(
-	r io.Reader,
-	source string,
-	version uint8,
-	handle func(Event, map[uint64]string) error,
-) (Log, error) {
-	if version >= 2 {
-		return streamBinaryV2(r, source, version, handle)
-	}
-	return streamBinaryV1(r, source, version, handle)
-}
-
-func streamBinaryV1(
-	r io.Reader,
-	source string,
-	version uint8,
-	handle func(Event, map[uint64]string) error,
-) (Log, error) {
-	log := Log{
-		Source:  source,
-		Version: version,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]DictKind{},
-	}
-	reader := bufio.NewReader(r)
-	var currentMS uint64
-	for {
-		eventType, err := binary.ReadUvarint(reader)
-		if errors.Is(err, io.EOF) {
-			return log, nil
-		}
-		if err != nil {
-			return toleratePartial(log, source, "event type", err)
-		}
-
-		deltaMS, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "timestamp delta", err)
-		}
-		flags, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "flags", err)
-		}
-		payloadLen, err := binary.ReadUvarint(reader)
-		if err != nil {
-			return toleratePartial(log, source, "payload length", err)
-		}
-		if payloadLen > 4*1024*1024 {
-			return log, fmt.Errorf("%s: suspicious payload length %d", source, payloadLen)
-		}
-
-		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(reader, payload); err != nil {
-			return toleratePartial(log, source, "payload", err)
-		}
-
-		currentMS += deltaMS
-		event := Event{
-			Type:    EventType(eventType),
-			TimeMS:  currentMS,
-			DeltaMS: deltaMS,
-			Flags:   flags,
-			Source:  source,
-		}
-		if err := decodePayload(payload, &event); err != nil {
-			warning := err.Error()
-			event.Warnings = append(event.Warnings, warning)
-			log.Warnings = append(log.Warnings, fmt.Sprintf("event at %dms: %s", event.TimeMS, warning))
-		}
-		if event.Dictionary != nil {
-			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
-			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
-		}
-		if err := handle(event, log.Dict); err != nil {
-			return log, err
-		}
-	}
-}
-
-func readBinaryV2(r io.Reader, source string, version uint8) (Log, error) {
 	reader := bufio.NewReader(r)
 	log := Log{
 		Source:  source,
@@ -239,19 +93,19 @@ func readBinaryV2(r io.Reader, source string, version uint8) (Log, error) {
 	}
 }
 
-func streamBinaryV2(
+func streamBinary(
 	r io.Reader,
 	source string,
 	version uint8,
 	handle func(Event, map[uint64]string) error,
 ) (Log, error) {
-	reader := bufio.NewReader(r)
 	log := Log{
 		Source:  source,
 		Version: version,
 		Dict:    map[uint64]string{},
 		Kinds:   map[uint64]DictKind{},
 	}
+	reader := bufio.NewReader(r)
 	var currentMS uint64
 	for {
 		event, deltaMS, err := readCompactEvent(reader, source)
