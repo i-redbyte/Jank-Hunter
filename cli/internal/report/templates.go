@@ -54,6 +54,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .sev-high { color: var(--bad); font-weight: 700; }
 .sev-medium { color: var(--warn); font-weight: 700; }
 .sev-ok { color: var(--ok); font-weight: 700; }
+.warning { border-left: 4px solid var(--warn); padding-left: 12px; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 `
 
@@ -82,6 +83,29 @@ const inspectTemplate = `<!doctype html>
     <div class="metric"><div class="label">UID RX max</div><div class="value">{{.Summary.TrafficRxMax}}</div></div>
     <div class="metric"><div class="label">Max PSS</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div></div>
   </div>
+
+  <section>
+    <h2>Cohorts</h2>
+    <div class="grid">
+      <div>
+        <h2>App Versions</h2>
+        <table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table>
+      </div>
+      <div>
+        <h2>SDKs</h2>
+        <table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table>
+      </div>
+      <div>
+        <h2>Devices</h2>
+        <table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table>
+      </div>
+    </div>
+    <h2>Combined Cohorts</h2>
+    <table>
+      <tr><th>Cohort</th><th>Events</th></tr>
+      {{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}
+    </table>
+  </section>
 
   <section>
     <h2>Charts</h2>
@@ -132,7 +156,7 @@ const inspectTemplate = `<!doctype html>
   </section>
 
   <section>
-    <h2>Top Suspects</h2>
+    <h2>Top Owners</h2>
     <table>
       <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
       {{range .Summary.Owners}}
@@ -213,10 +237,11 @@ const compareTemplate = `<!doctype html>
 <main>
   <section>
     <h2>Regression Summary</h2>
+    {{range .Comparison.Warnings}}<p class="warning">{{.}}</p>{{end}}
     <table>
-      <tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Severity</th><th>Confidence</th></tr>
+      <tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Severity</th><th>Confidence</th><th>Sample</th><th>Interval</th></tr>
       {{range .Comparison.Deltas}}
-      <tr><td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Confidence}}</td></tr>
+      <tr><td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Confidence}}</td><td>{{.SampleSize}}</td><td>{{.Interval}}</td></tr>
       {{end}}
     </table>
   </section>
@@ -233,7 +258,37 @@ const compareTemplate = `<!doctype html>
   </div>
 
   <section>
-    <h2>Candidate Top Suspects</h2>
+    <h2>Worst Regression Cards</h2>
+    <table>
+      <tr><th>Metric</th><th>Severity</th><th>Regression</th><th>Confidence</th><th>Sample</th></tr>
+      {{range .Comparison.Deltas}}
+      {{if notOK .Severity}}<tr><td>{{.Name}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Change}}</td><td>{{.Confidence}}</td><td>{{.SampleSize}}</td></tr>{{end}}
+      {{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Candidate Routes</h2>
+    <table>
+      <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Owner</th></tr>
+      {{range .Comparison.Candidate.Routes}}
+      <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.OwnerSample}}</code></td></tr>
+      {{else}}<tr><td colspan="7" class="muted">No HTTP events.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Candidate Screens</h2>
+    <table>
+      <tr><th>Screen</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>Min FPS</th><th>p95 frame</th></tr>
+      {{range .Comparison.Candidate.Screens}}
+      <tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} ms</td></tr>
+      {{else}}<tr><td colspan="7" class="muted">No UI window events.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Candidate Top Owners</h2>
     <table>
       <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
       {{range .Comparison.Candidate.Owners}}
@@ -267,6 +322,19 @@ const compareTemplate = `<!doctype html>
         <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
         <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
         <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+      </tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Cohort Breakdown</h2>
+    <table>
+      <tr><th>Baseline cohort</th><th>Events</th><th>Candidate cohort</th><th>Events</th></tr>
+      <tr>
+        <td>{{range .Comparison.Baseline.Cohorts}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+        <td>{{range .Comparison.Baseline.Cohorts}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+        <td>{{range .Comparison.Candidate.Cohorts}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+        <td>{{range .Comparison.Candidate.Cohorts}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
       </tr>
     </table>
   </section>

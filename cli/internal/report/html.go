@@ -54,6 +54,9 @@ func execute(path, source string, data any) error {
 				return "sev-ok"
 			}
 		},
+		"notOK": func(value string) bool {
+			return value != "" && value != "ok"
+		},
 	}).Parse(source)
 	if err != nil {
 		return err

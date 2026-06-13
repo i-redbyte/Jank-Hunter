@@ -3,6 +3,7 @@ package analyze
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -108,10 +109,22 @@ type collector struct {
 	ownerStats         map[string]*OwnerStats
 	counterValues      map[string]uint64
 	gaugeValues        map[string][]uint64
+	appVersions        map[string]uint64
+	builds             map[string]uint64
+	devices            map[string]uint64
+	sdks               map[string]uint64
+	cohortSamples      map[string]uint64
 	networkSamples     map[string]uint64
 	processSamples     map[string]uint64
 	retainedClasses    map[string]*retainedClassStats
 	retainedAgeBuckets map[string]uint64
+
+	currentAppVersion string
+	currentBuild      string
+	currentDevice     string
+	currentSDK        string
+	currentProcess    string
+	currentNetwork    string
 }
 
 type namedDuration struct {
@@ -134,10 +147,21 @@ func newCollector(title string, logCount int, options Options) *collector {
 		ownerStats:         map[string]*OwnerStats{},
 		counterValues:      map[string]uint64{},
 		gaugeValues:        map[string][]uint64{},
+		appVersions:        map[string]uint64{},
+		builds:             map[string]uint64{},
+		devices:            map[string]uint64{},
+		sdks:               map[string]uint64{},
+		cohortSamples:      map[string]uint64{},
 		networkSamples:     map[string]uint64{},
 		processSamples:     map[string]uint64{},
 		retainedClasses:    map[string]*retainedClassStats{},
 		retainedAgeBuckets: map[string]uint64{},
+		currentAppVersion:  "unknown",
+		currentBuild:       "unknown",
+		currentDevice:      "unknown",
+		currentSDK:         "unknown",
+		currentProcess:     "unknown",
+		currentNetwork:     "unknown",
 	}
 }
 
@@ -168,9 +192,18 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	}
 	switch {
 	case event.Session != nil:
-		processName := jhlog.Resolve(dict, event.Session.ProcessID)
-		c.processSamples[processName]++
+		c.currentAppVersion = jhlog.Resolve(dict, event.Session.AppVersionID)
+		c.currentBuild = jhlog.Resolve(dict, event.Session.BuildID)
+		c.currentDevice = jhlog.Resolve(dict, event.Session.DeviceID)
+		c.currentSDK = fmt.Sprintf("api-%d", event.Session.SDKInt)
+		c.currentProcess = jhlog.Resolve(dict, event.Session.ProcessID)
+		c.appVersions[c.currentAppVersion]++
+		c.builds[c.currentBuild]++
+		c.devices[c.currentDevice]++
+		c.sdks[c.currentSDK]++
+		c.processSamples[c.currentProcess]++
 	case event.HTTP != nil:
+		c.markCohort()
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
 		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
 		if !containsFilter(route, c.filter.RouteContains) || !containsFilter(owner, c.filter.OwnerContains) {
@@ -191,6 +224,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 		addOwner(c.ownerStats, owner, "http", event.HTTP.DurationMS, "")
 	case event.UIWindow != nil:
+		c.markCohort()
 		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
 		if !containsFilter(screen, c.filter.ScreenContains) {
 			return
@@ -221,6 +255,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.summary.UIMinFPS = windowFPS
 		}
 	case event.Stall != nil:
+		c.markCohort()
 		owner := c.resolveOwner(dict, event.Stall.OwnerID)
 		stack := jhlog.Resolve(dict, event.Stall.StackID)
 		if !containsFilter(owner, c.filter.OwnerContains) {
@@ -233,6 +268,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
 	case event.Context != nil:
 		c.summary.ContextCount++
+		c.currentNetwork = jhlog.NetworkName(event.Context.Network)
+		c.markCohort()
 		c.summary.BatteryLastPct = event.Context.BatteryPct
 		if c.summary.BatteryMinPct == 0 || event.Context.BatteryPct < c.summary.BatteryMinPct {
 			c.summary.BatteryMinPct = event.Context.BatteryPct
@@ -249,12 +286,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Context.TxBytes > c.summary.TrafficTxMax {
 			c.summary.TrafficTxMax = event.Context.TxBytes
 		}
-		c.networkSamples[jhlog.NetworkName(event.Context.Network)]++
+		c.networkSamples[c.currentNetwork]++
 	case event.Memory != nil:
+		c.markCohort()
 		if event.Memory.PSSKB > c.summary.MemoryMaxKB {
 			c.summary.MemoryMaxKB = event.Memory.PSSKB
 		}
 	case event.Retained != nil:
+		c.markCohort()
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
 		if !containsFilter(className, c.filter.OwnerContains) {
 			return
@@ -272,6 +311,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.retainedAgeBuckets[retainedAgeBucket(event.Retained.AgeMS)] += event.Retained.Count
 		addOwner(c.ownerStats, className, "retained_object", event.Retained.AgeMS, "")
 	case event.Metric != nil:
+		c.markCohort()
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
 		if event.Type == jhlog.EventGauge {
 			c.gaugeValues[name] = append(c.gaugeValues[name], event.Metric.Value)
@@ -279,6 +319,18 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.counterValues[name] += event.Metric.Value
 		}
 	}
+}
+
+func (c *collector) markCohort() {
+	c.cohortSamples[fmt.Sprintf(
+		"app=%s build=%s sdk=%s device=%s process=%s network=%s",
+		c.currentAppVersion,
+		c.currentBuild,
+		c.currentSDK,
+		c.currentDevice,
+		c.currentProcess,
+		c.currentNetwork,
+	)]++
 }
 
 func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
@@ -397,6 +449,21 @@ func (c *collector) finish() Summary {
 	for name, value := range c.networkSamples {
 		summary.Network = append(summary.Network, NamedValue{Name: name, Value: value})
 	}
+	for name, value := range c.appVersions {
+		summary.AppVersions = append(summary.AppVersions, NamedValue{Name: name, Value: value})
+	}
+	for name, value := range c.builds {
+		summary.Builds = append(summary.Builds, NamedValue{Name: name, Value: value})
+	}
+	for name, value := range c.devices {
+		summary.Devices = append(summary.Devices, NamedValue{Name: name, Value: value})
+	}
+	for name, value := range c.sdks {
+		summary.SDKs = append(summary.SDKs, NamedValue{Name: name, Value: value})
+	}
+	for name, value := range c.cohortSamples {
+		summary.Cohorts = append(summary.Cohorts, NamedValue{Name: name, Value: value})
+	}
 	for name, value := range c.processSamples {
 		summary.Processes = append(summary.Processes, NamedValue{Name: name, Value: value})
 	}
@@ -421,6 +488,11 @@ func (c *collector) finish() Summary {
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
+	sortNamed(summary.AppVersions)
+	sortNamed(summary.Builds)
+	sortNamed(summary.Devices)
+	sortNamed(summary.SDKs)
+	sortNamed(summary.Cohorts)
 	sortNamed(summary.Processes)
 	sortNamed(summary.Network)
 	sortNamed(summary.RetainedClasses)
@@ -433,27 +505,38 @@ func (c *collector) finish() Summary {
 
 func Compare(baseline, candidate Summary) Comparison {
 	comparison := Comparison{Baseline: baseline, Candidate: candidate}
-	comparison.Deltas = append(comparison.Deltas,
-		delta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "ms", true),
-		delta("HTTP failures", uint64(baseline.HTTPFailed), uint64(candidate.HTTPFailed), "count", true),
-		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "pp", true),
-		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "fps", false),
-		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "ms", true),
-		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "kb", true),
-		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "kb", false),
-		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true),
-		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true),
-		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true),
-		processMixDelta(baseline.Processes, candidate.Processes),
-	)
 	confidence := confidence(baseline, candidate)
+	comparison.Deltas = append(comparison.Deltas,
+		delta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "ms", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
+		delta("HTTP failures", uint64(baseline.HTTPFailed), uint64(candidate.HTTPFailed), "count", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
+		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "pp", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
+		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "fps", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
+		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "ms", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
+		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "kb", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "kb", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true, minUint64(baseline.Retained, candidate.Retained)),
+		mixDelta("Process mix", baseline.Processes, candidate.Processes, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
+		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
+		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
+		mixDelta("Device mix", baseline.Devices, candidate.Devices, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
+		mixDelta("Network mix", baseline.Network, candidate.Network, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		mixDelta("Cohort mix", baseline.Cohorts, candidate.Cohorts, minUint64(uint64(baseline.EventCount), uint64(candidate.EventCount))),
+	)
 	for i := range comparison.Deltas {
 		comparison.Deltas[i].Confidence = confidence
+		comparison.Deltas[i].Severity = adjustedSeverity(
+			comparison.Deltas[i].Severity,
+			confidence,
+			comparison.Deltas[i].SampleSize,
+		)
 	}
+	comparison.Warnings = cohortWarnings(baseline, candidate)
 	return comparison
 }
 
-func processMixDelta(baseline, candidate []NamedValue) Delta {
+func mixDelta(name string, baseline, candidate []NamedValue, sampleSize uint64) Delta {
 	before := namedSummary(baseline)
 	after := namedSummary(candidate)
 	severity := "ok"
@@ -463,12 +546,37 @@ func processMixDelta(baseline, candidate []NamedValue) Delta {
 		change = "changed"
 	}
 	return Delta{
-		Name:      "Process mix",
-		Baseline:  before,
-		Candidate: after,
-		Change:    change,
-		Severity:  severity,
+		Name:       name,
+		Baseline:   before,
+		Candidate:  after,
+		Change:     change,
+		Severity:   severity,
+		SampleSize: sampleSize,
 	}
+}
+
+func cohortWarnings(baseline, candidate Summary) []string {
+	checks := []struct {
+		name      string
+		baseline  []NamedValue
+		candidate []NamedValue
+	}{
+		{name: "app version", baseline: baseline.AppVersions, candidate: candidate.AppVersions},
+		{name: "SDK", baseline: baseline.SDKs, candidate: candidate.SDKs},
+		{name: "device", baseline: baseline.Devices, candidate: candidate.Devices},
+		{name: "process", baseline: baseline.Processes, candidate: candidate.Processes},
+		{name: "network", baseline: baseline.Network, candidate: candidate.Network},
+		{name: "cohort", baseline: baseline.Cohorts, candidate: candidate.Cohorts},
+	}
+	var warnings []string
+	for _, check := range checks {
+		before := namedSummary(check.baseline)
+		after := namedSummary(check.candidate)
+		if before != after {
+			warnings = append(warnings, fmt.Sprintf("%s mix differs: baseline [%s], candidate [%s]", check.name, before, after))
+		}
+	}
+	return warnings
 }
 
 func confidence(baseline, candidate Summary) string {
@@ -590,49 +698,88 @@ func retainedAgeBucket(ageMs uint64) string {
 	}
 }
 
-func delta(name string, before, after uint64, unit string, higherIsWorse bool) Delta {
+func delta(name string, before, after uint64, unit string, higherIsWorse bool, sampleSize uint64) Delta {
 	change := "0"
 	severity := "ok"
+	changePct := 0.0
+	changeAbs := float64(int64(after) - int64(before))
+	regressionAbs := 0.0
+	regressionPct := 0.0
 	if before == 0 && after > 0 {
 		change = "+new"
-		severity = "medium"
+		if higherIsWorse {
+			severity = "medium"
+			regressionAbs = float64(after)
+			regressionPct = 100
+		}
 	} else if before > 0 {
 		diff := int64(after) - int64(before)
-		pct := float64(diff) * 100 / float64(before)
-		change = fmt.Sprintf("%+.1f%%", pct)
+		changePct = float64(diff) * 100 / float64(before)
+		change = fmt.Sprintf("%+.1f%%", changePct)
 		if higherIsWorse {
-			if pct >= 25 {
+			if changePct > 0 {
+				regressionAbs = float64(diff)
+				regressionPct = changePct
+			}
+			if changePct >= 25 {
 				severity = "high"
-			} else if pct >= 10 {
+			} else if changePct >= 10 {
 				severity = "medium"
 			}
 		} else {
-			if pct <= -25 {
+			if changePct < 0 {
+				regressionAbs = math.Abs(float64(diff))
+				regressionPct = math.Abs(changePct)
+			}
+			if changePct <= -25 {
 				severity = "high"
-			} else if pct <= -10 {
+			} else if changePct <= -10 {
 				severity = "medium"
 			}
 		}
 	}
 	return Delta{
-		Name:      name,
-		Baseline:  fmt.Sprintf("%d %s", before, unit),
-		Candidate: fmt.Sprintf("%d %s", after, unit),
-		Change:    change,
-		Severity:  severity,
+		Name:           name,
+		Baseline:       fmt.Sprintf("%d %s", before, unit),
+		Candidate:      fmt.Sprintf("%d %s", after, unit),
+		Change:         change,
+		Severity:       severity,
+		Interval:       interval(float64(after), unit, sampleSize),
+		Unit:           unit,
+		BaselineValue:  float64(before),
+		CandidateValue: float64(after),
+		ChangeAbs:      changeAbs,
+		ChangePct:      changePct,
+		RegressionAbs:  regressionAbs,
+		RegressionPct:  regressionPct,
+		SampleSize:     sampleSize,
 	}
 }
 
-func deltaFloat(name string, before, after float64, unit string, higherIsWorse bool) Delta {
+func deltaFloat(name string, before, after float64, unit string, higherIsWorse bool, sampleSize uint64) Delta {
 	diff := after - before
 	severity := "ok"
+	regressionAbs := 0.0
+	regressionPct := 0.0
+	changePct := 0.0
+	if before != 0 {
+		changePct = diff * 100 / before
+	}
 	if higherIsWorse {
+		if diff > 0 {
+			regressionAbs = diff
+			regressionPct = math.Abs(changePct)
+		}
 		if diff >= 3.0 {
 			severity = "high"
 		} else if diff >= 1.0 {
 			severity = "medium"
 		}
 	} else {
+		if diff < 0 {
+			regressionAbs = math.Abs(diff)
+			regressionPct = math.Abs(changePct)
+		}
 		if diff <= -5.0 {
 			severity = "high"
 		} else if diff <= -2.0 {
@@ -640,12 +787,53 @@ func deltaFloat(name string, before, after float64, unit string, higherIsWorse b
 		}
 	}
 	return Delta{
-		Name:      name,
-		Baseline:  fmt.Sprintf("%.2f %s", before, unit),
-		Candidate: fmt.Sprintf("%.2f %s", after, unit),
-		Change:    fmt.Sprintf("%+.2f %s", diff, unit),
-		Severity:  severity,
+		Name:           name,
+		Baseline:       fmt.Sprintf("%.2f %s", before, unit),
+		Candidate:      fmt.Sprintf("%.2f %s", after, unit),
+		Change:         fmt.Sprintf("%+.2f %s", diff, unit),
+		Severity:       severity,
+		Interval:       interval(after, unit, sampleSize),
+		Unit:           unit,
+		BaselineValue:  before,
+		CandidateValue: after,
+		ChangeAbs:      diff,
+		ChangePct:      changePct,
+		RegressionAbs:  regressionAbs,
+		RegressionPct:  regressionPct,
+		SampleSize:     sampleSize,
 	}
+}
+
+func adjustedSeverity(effectSeverity, confidence string, sampleSize uint64) string {
+	if effectSeverity == "ok" {
+		return "ok"
+	}
+	if confidence == "low" || sampleSize < 3 {
+		if effectSeverity == "high" {
+			return "medium"
+		}
+	}
+	return effectSeverity
+}
+
+func interval(value float64, unit string, sampleSize uint64) string {
+	if sampleSize < 2 || value <= 0 {
+		return fmt.Sprintf("n=%d", sampleSize)
+	}
+	margin := value / math.Sqrt(float64(sampleSize))
+	low := value - margin
+	if low < 0 {
+		low = 0
+	}
+	high := value + margin
+	return fmt.Sprintf("approx %.2f..%.2f %s, n=%d", low, high, unit, sampleSize)
+}
+
+func minUint64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func formatMB(kb uint64) string {

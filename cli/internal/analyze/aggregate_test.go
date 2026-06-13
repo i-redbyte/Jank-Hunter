@@ -88,6 +88,15 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.RetainedAgeBuckets) != 1 || summary.RetainedAgeBuckets[0].Name != "10s-30s" {
 		t.Fatalf("unexpected retained age buckets: %+v", summary.RetainedAgeBuckets)
 	}
+	if len(summary.AppVersions) != 1 || summary.AppVersions[0].Name != "0.1.0-debug" {
+		t.Fatalf("unexpected app versions: %+v", summary.AppVersions)
+	}
+	if len(summary.SDKs) != 1 || summary.SDKs[0].Name != "api-35" {
+		t.Fatalf("unexpected SDKs: %+v", summary.SDKs)
+	}
+	if len(summary.Cohorts) == 0 {
+		t.Fatalf("expected cohorts")
+	}
 }
 
 func TestInspectFilesAppliesRouteFilter(t *testing.T) {
@@ -124,5 +133,82 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 	summary := Inspect("jankstats", []jhlog.Log{log})
 	if len(summary.JankStats) != 2 {
 		t.Fatalf("unexpected jankstats metrics: %+v", summary.JankStats)
+	}
+}
+
+func TestCompareWarnsOnCohortMismatch(t *testing.T) {
+	baseline := Summary{
+		LogCount:    5,
+		EventCount:  500,
+		AppVersions: []NamedValue{{Name: "1.0.0", Value: 5}},
+		SDKs:        []NamedValue{{Name: "api-34", Value: 5}},
+		Devices:     []NamedValue{{Name: "Pixel 7", Value: 5}},
+		Processes:   []NamedValue{{Name: "main", Value: 5}},
+		Network:     []NamedValue{{Name: "wifi", Value: 10}},
+		Cohorts:     []NamedValue{{Name: "app=1.0.0 build=100 sdk=api-34 device=Pixel 7 process=main network=wifi", Value: 100}},
+	}
+	candidate := Summary{
+		LogCount:    5,
+		EventCount:  500,
+		AppVersions: []NamedValue{{Name: "1.1.0", Value: 5}},
+		SDKs:        []NamedValue{{Name: "api-35", Value: 5}},
+		Devices:     []NamedValue{{Name: "Pixel 8", Value: 5}},
+		Processes:   []NamedValue{{Name: "main", Value: 5}},
+		Network:     []NamedValue{{Name: "cellular", Value: 10}},
+		Cohorts:     []NamedValue{{Name: "app=1.1.0 build=101 sdk=api-35 device=Pixel 8 process=main network=cellular", Value: 100}},
+	}
+
+	comparison := Compare(baseline, candidate)
+	if len(comparison.Warnings) == 0 {
+		t.Fatalf("expected cohort warnings")
+	}
+	found := false
+	for _, delta := range comparison.Deltas {
+		if delta.Name == "Cohort mix" && delta.Severity != "ok" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected Cohort mix delta: %+v", comparison.Deltas)
+	}
+}
+
+func TestEvaluateGateFailsOnSeverity(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 5, EventCount: 500, HTTPCount: 100, HTTPP95MS: 100},
+		Summary{LogCount: 5, EventCount: 500, HTTPCount: 100, HTTPP95MS: 150},
+	)
+
+	result := EvaluateGate(comparison, ThresholdConfig{MaxSeverity: "medium"})
+	if !result.Failed {
+		t.Fatalf("expected gate failure")
+	}
+}
+
+func TestEvaluateGateFailsOnMetricRegression(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 5, EventCount: 500, HTTPCount: 100, HTTPP95MS: 100},
+		Summary{LogCount: 5, EventCount: 500, HTTPCount: 100, HTTPP95MS: 112},
+	)
+
+	result := EvaluateGate(comparison, ThresholdConfig{
+		Metrics: map[string]MetricThreshold{
+			"HTTP p95": {MaxRegressionPct: 10},
+		},
+	})
+	if !result.Failed {
+		t.Fatalf("expected metric gate failure")
+	}
+}
+
+func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 1, EventCount: 10, HTTPCount: 3, HTTPP95MS: 100},
+		Summary{LogCount: 1, EventCount: 10, HTTPCount: 3, HTTPP95MS: 100},
+	)
+
+	result := EvaluateGate(comparison, ThresholdConfig{MinConfidence: "medium"})
+	if !result.Failed {
+		t.Fatalf("expected confidence gate failure")
 	}
 }

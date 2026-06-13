@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,9 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jankhunter:", err)
+		if exit, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(exit.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
@@ -43,8 +47,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
+  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
 `)
 }
@@ -70,6 +74,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -90,12 +98,18 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	printSummary(summary)
+	if jsonOut {
+		if err := printJSON(summary); err != nil {
+			return err
+		}
+	} else {
+		printSummary(summary)
+	}
 	if out != "" {
 		if err := report.WriteInspect(out, summary); err != nil {
 			return err
 		}
-		fmt.Printf("report: %s\n", out)
+		printReportPath(jsonOut, out)
 	}
 	return nil
 }
@@ -114,6 +128,14 @@ func runCompare(args []string) error {
 		return err
 	}
 	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return err
+	}
+	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
+	if err != nil {
+		return err
+	}
+	thresholdsPath, remaining, err := takeStringFlag(remaining, "thresholds", "")
 	if err != nil {
 		return err
 	}
@@ -140,14 +162,43 @@ func runCompare(args []string) error {
 		return err
 	}
 	comparison := analyze.Compare(baseline, candidate)
-	for _, delta := range comparison.Deltas {
-		fmt.Printf("%-24s %12s -> %-12s %8s %s confidence=%s\n", delta.Name, delta.Baseline, delta.Candidate, delta.Change, delta.Severity, delta.Confidence)
+	if jsonOut {
+		if err := printJSON(comparison); err != nil {
+			return err
+		}
+	} else {
+		for _, warning := range comparison.Warnings {
+			fmt.Printf("warning: %s\n", warning)
+		}
+		for _, delta := range comparison.Deltas {
+			fmt.Printf(
+				"%-24s %12s -> %-12s %8s %s confidence=%s sample=%d %s\n",
+				delta.Name,
+				delta.Baseline,
+				delta.Candidate,
+				delta.Change,
+				delta.Severity,
+				delta.Confidence,
+				delta.SampleSize,
+				delta.Interval,
+			)
+		}
 	}
 	if out != "" {
 		if err := report.WriteCompare(out, comparison); err != nil {
 			return err
 		}
-		fmt.Printf("report: %s\n", out)
+		printReportPath(jsonOut, out)
+	}
+	if thresholdsPath != "" {
+		config, err := analyze.LoadThresholdConfig(thresholdsPath)
+		if err != nil {
+			return err
+		}
+		result := analyze.EvaluateGate(comparison, config)
+		if result.Failed {
+			return gateError{failures: result.Failures}
+		}
 	}
 	return nil
 }
@@ -230,6 +281,46 @@ func takeStringFlag(args []string, name, fallback string) (string, []string, err
 	return fallback, args, nil
 }
 
+func takeBoolFlag(args []string, name string) (bool, []string, error) {
+	long := "--" + name
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == long {
+			remaining := append([]string{}, args[:i]...)
+			remaining = append(remaining, args[i+1:]...)
+			return true, remaining, nil
+		}
+		if strings.HasPrefix(arg, long+"=") {
+			value := strings.TrimPrefix(arg, long+"=")
+			remaining := append([]string{}, args[:i]...)
+			remaining = append(remaining, args[i+1:]...)
+			switch value {
+			case "1", "true", "yes":
+				return true, remaining, nil
+			case "0", "false", "no":
+				return false, remaining, nil
+			default:
+				return false, nil, fmt.Errorf("%s expects true or false", long)
+			}
+		}
+	}
+	return false, args, nil
+}
+
+func printJSON(value any) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
+func printReportPath(jsonOut bool, path string) {
+	if jsonOut {
+		fmt.Fprintf(os.Stderr, "report: %s\n", path)
+		return
+	}
+	fmt.Printf("report: %s\n", path)
+}
+
 func readLogs(paths []string) ([]jhlog.Log, error) {
 	logs := make([]jhlog.Log, 0, len(paths))
 	for _, path := range paths {
@@ -274,6 +365,21 @@ func printSummary(summary analyze.Summary) {
 	fmt.Printf("logs: %d events: %d duration: %dms\n", summary.LogCount, summary.EventCount, summary.DurationMS)
 	fmt.Printf("http: count=%d failed=%d p95=%dms\n", summary.HTTPCount, summary.HTTPFailed, summary.HTTPP95MS)
 	fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
+	if len(summary.AppVersions) > 0 {
+		fmt.Printf("app_versions: %s\n", namedValues(summary.AppVersions))
+	}
+	if len(summary.SDKs) > 0 {
+		fmt.Printf("sdks: %s\n", namedValues(summary.SDKs))
+	}
+	if len(summary.Devices) > 0 {
+		fmt.Printf("devices: %s\n", namedValues(summary.Devices))
+	}
+	if len(summary.Cohorts) > 0 {
+		fmt.Printf("cohorts: %s\n", namedValues(summary.Cohorts))
+	}
+	if len(summary.Network) > 0 {
+		fmt.Printf("network: %s\n", namedValues(summary.Network))
+	}
 	if len(summary.JankStats) > 0 {
 		fmt.Printf("jankstats: %s\n", namedValues(summary.JankStats))
 	}
@@ -286,6 +392,9 @@ func printSummary(summary analyze.Summary) {
 	if len(summary.RetainedClasses) > 0 {
 		fmt.Printf("retained_classes: %s\n", namedValues(summary.RetainedClasses))
 	}
+	if len(summary.Owners) > 0 {
+		fmt.Printf("top_owners: %s\n", ownerValues(summary.Owners, 5))
+	}
 }
 
 func namedValues(values []analyze.NamedValue) string {
@@ -294,4 +403,27 @@ func namedValues(values []analyze.NamedValue) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", value.Name, value.Value))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func ownerValues(values []analyze.OwnerStats, limit int) string {
+	if len(values) < limit {
+		limit = len(values)
+	}
+	parts := make([]string, 0, limit)
+	for _, value := range values[:limit] {
+		parts = append(parts, fmt.Sprintf("%s=%d max=%dms", value.Owner, value.Count, value.MaxMS))
+	}
+	return strings.Join(parts, ", ")
+}
+
+type gateError struct {
+	failures []string
+}
+
+func (e gateError) Error() string {
+	return "regression gate failed: " + strings.Join(e.failures, "; ")
+}
+
+func (e gateError) ExitCode() int {
+	return 1
 }

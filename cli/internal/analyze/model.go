@@ -82,6 +82,11 @@ type Summary struct {
 	Routes             []RouteStats
 	Screens            []ScreenStats
 	Owners             []OwnerStats
+	AppVersions        []NamedValue
+	Builds             []NamedValue
+	Devices            []NamedValue
+	SDKs               []NamedValue
+	Cohorts            []NamedValue
 	Processes          []NamedValue
 	Network            []NamedValue
 	Memory             []NamedValue
@@ -93,16 +98,43 @@ type Summary struct {
 }
 
 type Delta struct {
-	Name       string
-	Baseline   string
-	Candidate  string
-	Change     string
-	Severity   string
-	Confidence string
+	Name           string
+	Baseline       string
+	Candidate      string
+	Change         string
+	Severity       string
+	Confidence     string
+	Interval       string
+	Unit           string
+	BaselineValue  float64
+	CandidateValue float64
+	ChangeAbs      float64
+	ChangePct      float64
+	RegressionAbs  float64
+	RegressionPct  float64
+	SampleSize     uint64
 }
 
 type Comparison struct {
 	Baseline  Summary
 	Candidate Summary
 	Deltas    []Delta
+	Warnings  []string
+}
+
+type ThresholdConfig struct {
+	MaxSeverity   string                     `json:"max_severity"`
+	MinConfidence string                     `json:"min_confidence"`
+	Metrics       map[string]MetricThreshold `json:"metrics"`
+}
+
+type MetricThreshold struct {
+	MaxSeverity      string  `json:"max_severity"`
+	MaxRegressionAbs float64 `json:"max_regression_abs"`
+	MaxRegressionPct float64 `json:"max_regression_pct"`
+}
+
+type GateResult struct {
+	Failed   bool     `json:"failed"`
+	Failures []string `json:"failures"`
 }

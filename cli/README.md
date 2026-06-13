@@ -14,12 +14,18 @@ CLI не требует backend, базы данных или браузерны
 - streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
 - фильтры `--route`, `--screen`, `--owner`;
 - owner-map import через `--owner-map path.json`;
+- JSON output для `inspect` и `compare`;
+- threshold config для CI regression gate;
 - экспорт событий в JSONL;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - process breakdown из session metadata;
+- cohort breakdown по app version/build/SDK/device/process/network;
+- warnings, если baseline/candidate собраны на несопоставимых cohort;
+- severity с учетом effect size, confidence и sample size;
+- approximate confidence interval по ключевым deltas, когда есть выборка;
 - retained-object section с top retained classes и age buckets;
 - separate JankStats metrics section для `jankstats.*` counters/gauges;
-- top suspects по owner/class/stack hint.
+- Top Owners по owner/class/stack hint.
 
 ## Сборка
 
@@ -57,6 +63,12 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog
 
 ```bash
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
+```
+
+Получить machine-readable JSON:
+
+```bash
+go run ./cmd/jankhunter inspect /tmp/sample.jhlog --json
 ```
 
 Можно передать несколько файлов:
@@ -105,9 +117,55 @@ Min available memory
 UID RX max
 UID TX max
 Retained objects
+Process mix
+App version mix
+SDK mix
+Device mix
+Network mix
+Cohort mix
 ```
 
-Каждая delta получает `confidence=low|medium|high`, рассчитанный из размера выборки. Это не заменяет полноценную статистику, но не дает отчету притворяться уверенным на слишком маленьком наборе логов.
+Каждая delta получает:
+
+- `confidence=low|medium|high`, рассчитанный из размера выборки;
+- `sample=<n>`;
+- approximate interval вроде `approx 120.00..150.00 ms, n=25`, когда это разумно;
+- severity, которая учитывает effect size, confidence и sample size.
+
+JSON:
+
+```bash
+go run ./cmd/jankhunter compare \
+  --baseline "old/*.jhlog" \
+  --candidate "new/*.jhlog" \
+  --json > compare.json
+```
+
+CI gate через thresholds:
+
+```json
+{
+  "max_severity": "medium",
+  "min_confidence": "medium",
+  "metrics": {
+    "HTTP p95": {"max_regression_pct": 12},
+    "UI jank rate": {"max_regression_abs": 1.5},
+    "Retained objects": {"max_severity": "ok"}
+  }
+}
+```
+
+Запуск:
+
+```bash
+go run ./cmd/jankhunter compare \
+  --baseline "old/*.jhlog" \
+  --candidate "new/*.jhlog" \
+  --thresholds thresholds.json \
+  --out compare.html
+```
+
+Если gate падает, CLI возвращает exit code `1`, но HTML успевает сохраниться.
 
 ### export
 
@@ -231,6 +289,21 @@ uid rx/tx bytes
 
 В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети.
 
+## Cohorts
+
+CLI группирует session/context metadata:
+
+```text
+app_versions: 1.4.0=8
+sdks: api-35=5, api-34=3
+devices: Pixel 8 / API 35=5
+processes: main=8
+network: wifi=20, cellular=4
+cohorts: app=1.4.0 build=420 sdk=api-35 device=Pixel 8 / API 35 process=main network=wifi=120
+```
+
+`compare` добавляет warnings, если baseline/candidate собраны на разных app versions, SDK, devices, process mix, network mix или combined cohorts. Это не запрещает сравнение, но явно помечает риск ложного вывода.
+
 ## Process breakdown
 
 Если runtime пишет process metadata, `inspect` показывает session count по process:
@@ -263,6 +336,17 @@ memory.heap_pressure
 
 `compare` генерирует отчет по регрессиям между baseline и candidate.
 
+HTML содержит:
+
+- route details;
+- screen details;
+- Top Owners;
+- retained-object drill-down;
+- JankStats section;
+- process/device/network/cohort breakdown;
+- worst regression cards;
+- compare warnings.
+
 Отчет самодостаточный:
 
 - HTML;
@@ -281,8 +365,6 @@ go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sa
 go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
 
-## Дальнейшее развитие
+## Ограничения статистики
 
-- device tier / cohort normalization;
-- более строгая статистическая модель с confidence intervals;
-- интерактивные drill-down графики без CDN.
+CLI работает локально и streaming-first. Confidence interval сейчас approximate и основан на агрегатах, а не на полноценном bootstrap по всем raw events. Для CI gate это достаточно, чтобы не игнорировать sample size, но окончательные релизные выводы всё равно стоит подтверждать на сопоставимых cohorts.
