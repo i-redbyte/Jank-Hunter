@@ -64,6 +64,7 @@ jankHunter {
         executors = true
         methodCounters = false
         allowEmptyIncludePackages = false
+        asmProgressLog = false
         includePackages("com.example.app.feature", "com.example.app.data")
     }
 }
@@ -375,6 +376,7 @@ jankHunter {
         coroutines = true
         methodCounters = true
         allowEmptyIncludePackages = false
+        asmProgressLog = false
         includePackages("com.myapp.feature", "com.myapp.data")
         includeWholeApplication = false
         excludePackages(
@@ -401,6 +403,8 @@ jankHunter {
 ```
 
 `includeWholeApplication = true` добавляет Android `namespace` variant в итоговый include-list, поэтому не нужно перечислять десятки или сотни модулей с общим корнем `com.myapp`. `excludePackages` продолжает применяться поверх широкого include. Пустой include-list по умолчанию ничего не инструментирует; старое поведение "все, кроме встроенных exclude" можно включить только явно через `allowEmptyIncludePackages = true`.
+
+`asmProgressLog = true` включает build-time прогресс ASM в Gradle-консоли. Строка обновляется через carriage return, без новой строки на каждый класс, и показывает `скан`, `готово`, `очередь`, скорость, примерную ETA по уже найденной очереди и последний класс, куда внедрился ASM. По умолчанию опция выключена, чтобы не добавлять лишний вывод и синхронизацию на больших сборках.
 
 Реализованные hooks:
 

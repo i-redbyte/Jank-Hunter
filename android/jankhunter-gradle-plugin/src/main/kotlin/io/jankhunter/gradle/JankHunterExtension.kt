@@ -23,6 +23,7 @@ open class JankHunterExtension {
         var methodCounters: Boolean = false
         var allowEmptyIncludePackages: Boolean = false
         var includeWholeApplication: Boolean = false
+        var asmProgressLog: Boolean = false
         val includePackages: MutableSet<String> = linkedSetOf()
         val excludePackages: MutableSet<String> = linkedSetOf()
 

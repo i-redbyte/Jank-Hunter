@@ -71,13 +71,15 @@ class JankHunterPlugin : Plugin<Project> {
                 params.executors.set(extension.instrument.executors)
                 params.coroutines.set(extension.instrument.coroutines)
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
+                params.asmProgressLog.set(extension.instrument.asmProgressLog)
+                params.progressLabel.set(project.progressLabel(variant.name))
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(extension.instrument.excludePackages.toList())
             }
             variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
 
             project.logger.lifecycle(
-                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} allowEmptyIncludePackages={} includeWholeApplication={} ownerMapTask={}",
+                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -87,6 +89,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.coroutines,
                 extension.instrument.allowEmptyIncludePackages,
                 extension.instrument.includeWholeApplication,
+                extension.instrument.asmProgressLog,
                 ownerMap.name,
             )
         }
@@ -102,5 +105,9 @@ class JankHunterPlugin : Plugin<Project> {
         return replaceFirstChar {
             if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
         }
+    }
+
+    private fun Project.progressLabel(variantName: String): String {
+        return if (path == ":") ":$variantName" else "$path:$variantName"
     }
 }

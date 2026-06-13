@@ -13,6 +13,7 @@ class JankHunterExtensionTest {
         instrumentation.excludePackages("com.myapp.generated", "com.myapp.di")
         instrumentation.excludePackages(listOf("com.myapp.legacy"))
         instrumentation.includeWholeApplication = true
+        instrumentation.asmProgressLog = true
 
         assertEquals(
             linkedSetOf("com.myapp", "com.myapp.feature", "com.myapp.data"),
@@ -23,6 +24,7 @@ class JankHunterExtensionTest {
             instrumentation.excludePackages,
         )
         assertEquals(true, instrumentation.includeWholeApplication)
+        assertEquals(true, instrumentation.asmProgressLog)
     }
 
     @Test
@@ -30,5 +32,6 @@ class JankHunterExtensionTest {
         val instrumentation = JankHunterExtension.Instrumentation()
 
         assertEquals(false, instrumentation.includeWholeApplication)
+        assertEquals(false, instrumentation.asmProgressLog)
     }
 }

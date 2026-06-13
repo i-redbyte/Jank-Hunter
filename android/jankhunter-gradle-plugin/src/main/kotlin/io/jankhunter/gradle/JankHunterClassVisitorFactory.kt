@@ -15,17 +15,25 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         nextClassVisitor: ClassVisitor,
     ): ClassVisitor {
         val params = parameters.get()
+        val hookConfig = HookConfig(
+            methodCounters = params.methodCounters.getOrElse(false),
+            okhttp = params.okhttp.getOrElse(false),
+            webSockets = params.webSockets.getOrElse(false),
+            handlers = params.handlers.getOrElse(false),
+            executors = params.executors.getOrElse(false),
+            coroutines = params.coroutines.getOrElse(false),
+        )
+        if (params.asmProgressLog.getOrElse(false)) {
+            AsmProgressReporter.recordInstrumented(
+                params.progressLabel.getOrElse("unknown"),
+                classContext.currentClassData.className,
+                hookConfig.progressLabel(),
+            )
+        }
         return JankHunterClassVisitor(
             nextClassVisitor,
             classContext.currentClassData.className,
-            HookConfig(
-                methodCounters = params.methodCounters.getOrElse(false),
-                okhttp = params.okhttp.getOrElse(false),
-                webSockets = params.webSockets.getOrElse(false),
-                handlers = params.handlers.getOrElse(false),
-                executors = params.executors.getOrElse(false),
-                coroutines = params.coroutines.getOrElse(false),
-            ),
+            hookConfig,
         )
     }
 
@@ -37,12 +45,19 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.handlers.getOrElse(false) ||
             params.executors.getOrElse(false) ||
             params.coroutines.getOrElse(false)
-        if (!hooksEnabled) return false
-        return InstrumentationMatcher(
+        val matched = hooksEnabled && InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
             params.excludePackages.getOrElse(emptyList()),
             params.allowEmptyIncludePackages.getOrElse(false),
         ).matches(classData.className)
+        if (params.asmProgressLog.getOrElse(false)) {
+            AsmProgressReporter.recordScanned(
+                params.progressLabel.getOrElse("unknown"),
+                classData.className,
+                matched,
+            )
+        }
+        return matched
     }
 }
 
@@ -53,7 +68,18 @@ private data class HookConfig(
     val handlers: Boolean,
     val executors: Boolean,
     val coroutines: Boolean,
-)
+) {
+    fun progressLabel(): String {
+        return buildList {
+            if (methodCounters) add("methods")
+            if (okhttp) add("okhttp")
+            if (webSockets) add("websocket")
+            if (handlers) add("handler")
+            if (executors) add("executor")
+            if (coroutines) add("coroutine")
+        }.joinToString("+").ifEmpty { "none" }
+    }
+}
 
 private class JankHunterClassVisitor(
     next: ClassVisitor,
