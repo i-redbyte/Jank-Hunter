@@ -17,6 +17,9 @@ import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 import java.util.concurrent.Callable
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.atomic.AtomicBoolean
 
 object JankHunter {
@@ -202,6 +205,22 @@ object JankHunter {
     }
 
     @JvmStatic
+    fun wrapExecutor(executor: Executor?, name: String?, ownerName: String? = name): Executor? {
+        if (executor == null || executor is JankHunterExecutor || executor is JankHunterExecutorService) return executor
+        return if (executor is ExecutorService) {
+            JankHunterExecutorService(executor, name, ownerName)
+        } else {
+            JankHunterExecutor(executor, name, ownerName)
+        }
+    }
+
+    @JvmStatic
+    fun wrapExecutorService(executor: ExecutorService?, name: String?, ownerName: String? = name): ExecutorService? {
+        if (executor == null || executor is JankHunterExecutorService) return executor
+        return JankHunterExecutorService(executor, name, ownerName)
+    }
+
+    @JvmStatic
     fun currentOwner(): String = owner.get() ?: "unknown"
 
     @JvmStatic
@@ -359,6 +378,53 @@ object JankHunter {
         }
         if (durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS) {
             recordGauge("owner.$owner.$kind.duration_ms", durationMs)
+        }
+    }
+
+    internal fun recordExecutorWait(name: String?, ownerName: String?, waitMs: Long) {
+        val executorName = metricExecutorName(name)
+        if (waitMs > 0) {
+            recordGauge("executor.$executorName.wait_ms", waitMs)
+        }
+        recordCounter("executor.$executorName.started.count", 1)
+        ownerName?.takeIf { it.isNotBlank() }?.let {
+            recordCounter("owner.${metricOwner(it)}.executor.started.count", 1)
+        }
+    }
+
+    internal fun recordExecutorSnapshot(name: String?, executor: Executor, queued: Int) {
+        val executorName = metricExecutorName(name)
+        recordGauge("executor.$executorName.queue_depth", queued.toLong())
+        if (executor is ThreadPoolExecutor) {
+            recordGauge("executor.$executorName.active_count", executor.snapshotActiveCount().toLong())
+            recordGauge("executor.$executorName.pool_size", executor.poolSize.toLong())
+            recordGauge("executor.$executorName.completed_task_count", executor.completedTaskCount)
+        }
+    }
+
+    internal fun runExecutorTask(
+        name: String?,
+        ownerName: String?,
+        command: Runnable,
+        clock: () -> Long = ::nowMs,
+    ) {
+        val start = clock()
+        var failed = false
+        try {
+            callWithOwner(ownerName) {
+                command.run()
+            }
+        } catch (throwable: Throwable) {
+            failed = true
+            throw throwable
+        } finally {
+            val executorName = metricExecutorName(name)
+            val durationMs = clock() - start
+            recordGauge("executor.$executorName.service_ms", durationMs)
+            if (failed) {
+                recordCounter("executor.$executorName.failure.count", 1)
+            }
+            recordWrappedWork(ownerName, "executor", durationMs, failed)
         }
     }
 
