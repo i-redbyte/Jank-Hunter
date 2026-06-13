@@ -1,7 +1,11 @@
 package io.jankhunter.gradle
 
+import com.android.build.api.instrumentation.FramesComputationMode
+import com.android.build.api.instrumentation.InstrumentationScope
+import com.android.build.api.variant.AndroidComponentsExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import java.util.Locale
 
 class JankHunterPlugin : Plugin<Project> {
     override fun apply(project: Project) {
@@ -16,9 +20,56 @@ class JankHunterPlugin : Plugin<Project> {
     }
 
     private fun configureAndroidProject(project: Project, extension: JankHunterExtension) {
-        project.logger.lifecycle(
-            "Jank Hunter configured for build types {}. ASM instrumentation hooks will be added in the next implementation phase.",
-            extension.enabledBuildTypes,
-        )
+        val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
+        if (androidComponents == null) {
+            project.logger.warn("Jank Hunter could not find AndroidComponentsExtension.")
+            return
+        }
+
+        androidComponents.onVariants { variant ->
+            if (!extension.isVariantEnabled(variant.name)) return@onVariants
+
+            val ownerMap = project.tasks.register(
+                "generate${variant.name.capitalized()}JankHunterOwnerMap",
+                GenerateJankHunterOwnerMapTask::class.java,
+            ) {
+                it.variantName.set(variant.name)
+                it.methodCounters.set(extension.instrument.methodCounters)
+                it.includePackages.set(extension.instrument.includePackages.toList())
+                it.excludePackages.set(extension.instrument.excludePackages.toList())
+                it.outputFile.set(
+                    project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/owner-map.json"),
+                )
+            }
+
+            variant.instrumentation.transformClassesWith(
+                JankHunterClassVisitorFactory::class.java,
+                InstrumentationScope.ALL,
+            ) { params ->
+                params.methodCounters.set(extension.instrument.methodCounters)
+                params.includePackages.set(extension.instrument.includePackages.toList())
+                params.excludePackages.set(extension.instrument.excludePackages.toList())
+            }
+            variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
+
+            project.logger.lifecycle(
+                "Jank Hunter variant {} configured. methodCounters={} ownerMapTask={}",
+                variant.name,
+                extension.instrument.methodCounters,
+                ownerMap.name,
+            )
+        }
+    }
+
+    private fun JankHunterExtension.isVariantEnabled(variantName: String): Boolean {
+        return enabledBuildTypes.any { enabled ->
+            variantName.lowercase(Locale.US).contains(enabled.lowercase(Locale.US))
+        }
+    }
+
+    private fun String.capitalized(): String {
+        return replaceFirstChar {
+            if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString()
+        }
     }
 }

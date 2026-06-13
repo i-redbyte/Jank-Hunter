@@ -225,13 +225,23 @@ jankHunter {
         executors = true
         rxJava = true
         coroutines = false
+        methodCounters = true
         includePackages.add("com.myapp")
         excludePackages.add("com.myapp.generated")
     }
 }
 ```
 
-Следующий этап для plugin - ASM-инструментация OkHttp, Handler, Executor, Runnable/Callable и owner-map generation.
+Plugin регистрирует ASM transform через Android Components API только для `enabledBuildTypes`.
+`methodCounters` по умолчанию выключен: при включении visitor добавляет легкий `JankHunter.recordCounter("owner.<class>.<method>", 1)` на входе методов классов, прошедших include/exclude-фильтры.
+
+Для каждого enabled variant создается owner-map seed:
+
+```text
+build/generated/jankhunter/<variant>/owner-map.json
+```
+
+Следующий этап для plugin - более специализированная ASM-инструментация OkHttp builder/newWebSocket, Handler, Executor, Runnable/Callable, RxJava и coroutine continuation points.
 
 ## Где лежат логи
 
