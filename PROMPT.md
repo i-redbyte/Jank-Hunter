@@ -1,249 +1,135 @@
-# Подробный промт для Codex / GPT 5.5: Jank Hunter
+# Jank Hunter Maintainer Prompt
 
 Ты работаешь над проектом **Jank Hunter** в репозитории `github.com/i-redbyte/Jank-Hunter`.
 
-Jank Hunter - это набор инструментов для Android-приложений, который помогает находить, измерять и сравнивать performance-регрессии: UI jank/FPS, ANR, зависания main thread, сетевые задержки, DNS/connect/TTFB, websocket reconnect storms, memory pressure, GC, утечки памяти, log/request/error spam, системный контекст устройства и сети.
+Jank Hunter - это Android performance SDK + Go CLI для локального сбора `.jhlog`, анализа performance-регрессий, HTML-отчетов и debug/QA-инструментации больших Android-приложений.
 
-## Главная цель
+## Жесткие правила
 
-Сделать систему, которую можно подключить к большому старому Android-приложению с Activity, Fragment, Jetpack Compose, Kotlin coroutines, RxJava, Java concurrency и OkHttp, желательно без ручной инициализации в `Application`.
+- Android SDK и Gradle plugin пишутся только на Kotlin.
+- Java-файлов в `android/` быть не должно.
+- Core runtime не должен тянуть AndroidX, OkHttp, RxJava, Compose или другие конфликтные runtime-зависимости.
+- Конфликтные интеграции живут в optional modules.
+- CLI пишется на Go.
+- `.jhlog` reader должен оставаться backward-compatible.
+- После крупного этапа: проверки, commit, push в `master`.
 
-Система должна:
-
-1. Аккуратно собирать performance-события и агрегаты в файл.
-2. Минимизировать overhead в приложении.
-3. Не тащить лишние runtime-зависимости и не конфликтовать со старыми библиотеками host-приложения.
-4. Уметь связывать деградации с вероятными владельцами: класс, метод, owner-id, route, screen, stack signature.
-5. Давать CLI-утилиту, которая анализирует один лог или сравнивает несколько логов/пулы логов.
-6. Генерировать красивый standalone HTML+CSS+JS отчет с графиками, summary, regression table и top suspects.
-
-## Выбранный стек
-
-- Android runtime SDK: только Kotlin-исходники и минимум зависимостей.
-- Gradle plugin / ASM instrumentation: только Kotlin-исходники, build-time only.
-- CLI: Go, без VM, допускается GC.
-- Формат логов: бинарный `.jhlog`, оптимизированный под machine parsing, varint, bit flags, dictionary encoding.
-- Debug/export формат: JSONL, генерируется CLI, не является основным runtime-форматом.
-
-## Структура репозитория
-
-```text
-Jank-Hunter/
-  cli/
-    cmd/jankhunter/
-    internal/jhlog/
-    internal/analyze/
-    internal/report/
-  android/
-    jankhunter-runtime/
-    jankhunter-okhttp3/
-    jankhunter-gradle-plugin/
-  docs/
-```
-
-## CLI требования
-
-CLI называется `jankhunter`.
-
-Базовые команды:
+Минимальные проверки:
 
 ```bash
-jankhunter inspect app.jhlog --out report.html
-jankhunter inspect logs/*.jhlog --out report.html
-jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --out compare.html
-jankhunter export app.jhlog --format jsonl --out app.jhlog.jsonl
-jankhunter sample --out sample.jhlog
+cd cli
+GOCACHE=/private/tmp/jh-go-cache go test ./...
+
+cd ../android
+./gradlew test assemble --no-daemon
+
+cd ..
+rg --files -g '*.java' .
 ```
 
-CLI должен:
+Если менялась publishing/Gradle-логика:
 
-- читать `.jhlog`;
-- поддерживать streaming parser, чтобы большие логи не требовали загрузки всего файла в память;
-- агрегировать основные метрики;
-- сравнивать baseline/candidate;
-- показывать p50/p95/p99, rate/min, count/session, deltas;
-- группировать по screen, route, owner, stack signature, network type, device tier;
-- генерировать standalone HTML report без внешних CDN;
-- уметь экспортировать события в JSONL для отладки.
+```bash
+cd android
+./gradlew publishToMavenLocal --no-daemon
+```
 
-## `.jhlog` формат
+## Текущий статус
 
-Основной формат бинарный.
+Реализовано:
 
-Идея:
+- binary `.jhlog` writer/reader;
+- tolerant parser для частично оборванных файлов;
+- streaming aggregation в CLI;
+- JSONL export;
+- `sample`, `inspect`, `compare`, `export`, `version`;
+- standalone HTML reports без CDN;
+- JSON output для `inspect` и `compare`;
+- threshold config и CI regression gate;
+- owner-map import и Top Owners;
+- cohort warnings по app version/build/SDK/device/process/network;
+- Android runtime collectors: session, screen, system context, FPS, main-thread stalls, memory, process exit info, retained objects, counters, gauges;
+- multi-process policy и per-process log files;
+- retained-object grouping, age buckets и debug/QA forced-GC option;
+- optional OkHttp/WebSocket module;
+- reflection-only JankStats bridge без AndroidX dependency в core;
+- Gradle plugin ASM hooks for method counters, OkHttp factories, WebSocket listeners, Handler scheduling, Executor/ExecutorService work;
+- runtime `Runnable`/`Callable` owner wrappers;
+- owner-map seed generation;
+- Maven Local publishing, Maven/GitHub Packages metadata, signing placeholders;
+- CLI Makefile for macOS/Linux archives and checksums;
+- split GitHub Actions CI.
+
+## Репозиторий
 
 ```text
-magic/version
-record*
-
-record:
-  event_type: uvarint
-  timestamp_delta_ms: uvarint
-  flags: uvarint
-  payload_len: uvarint
-  payload: event-specific bytes
+android/
+  jankhunter-runtime/
+  jankhunter-okhttp3/
+  jankhunter-gradle-plugin/
+  sample-app/
+cli/
+  cmd/jankhunter/
+  internal/jhlog/
+  internal/analyze/
+  internal/report/
+docs/
+  architecture.md
+  release.md
 ```
 
-Высокочастотные события нельзя писать по одному без нужды. UI frames, counters и memory samples должны агрегироваться окнами.
+## Runtime principles
 
-Строки нельзя писать постоянно. Использовать словари:
+- Host app stability beats metric completeness.
+- High-frequency signals must be aggregated before writing.
+- Blocking the app because diagnostics are busy is unacceptable.
+- Release usage must remain explicit and lightweight.
+- Debug/QA builds can enable richer instrumentation.
+- Privacy defaults matter: no URL query, headers, bodies, tokens, object fields, or `toString()`.
 
-```text
-id -> "FeedRepository.refresh"
-id -> "GET /feed"
-id -> "FeedScreen"
-id -> "com.app.checkout.CheckoutActivity"
+## CLI principles
+
+- Keep parsing streaming-first.
+- Do not require a backend or external browser assets.
+- Prefer valid JSON output for automation.
+- In compare mode, call out sample size, confidence and cohort mismatch before claiming a regression.
+- Threshold gates should fail CI only after producing useful artifacts where possible.
+
+## Useful commands
+
+```bash
+cd cli
+go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
+go run ./cmd/jankhunter inspect /tmp/sample.jhlog --json --out /tmp/report.html
+go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
+make release VERSION=ci
+
+cd ../android
+./gradlew test assemble --no-daemon
+./gradlew publishToMavenLocal --no-daemon
 ```
 
-Runtime пишет `owner_id`, `route_id`, `screen_id`, `class_id`, `stack_sig_id`.
-CLI раскрывает ID в человекочитаемые имена.
+## Known limitations
 
-Bit flags использовать для дешевых булевых признаков:
+- Confidence intervals are approximate and based on available aggregates, not full bootstrap statistics over raw events.
+- Handler instrumentation covers a safe subset of common scheduling APIs.
+- Executor instrumentation targets JDK `Executor`, `ExecutorService`, and `ScheduledExecutorService` signatures.
+- OkHttp/WebSocket ASM hooks require the optional `jankhunter-okhttp3` artifact in the host app.
+- Retained-object watcher is an early signal and not a heap dump or LeakCanary replacement.
+- JankStats auto-install only produces data when the host app already has AndroidX JankStats on the classpath.
+- Large legacy app validation requires an external target application and should produce a separate validation report.
 
-```text
-HTTP_REUSED_CONNECTION
-HTTP_FAILED
-HTTP_TLS
-THREAD_MAIN
-APP_FOREGROUND
-NETWORK_METERED
-```
+## Next maintainer tasks
 
-## Android SDK требования
+- Add reproducible Android instrumented end-to-end log tests for the sample app.
+- Add a host-side script/task to pull `.jhlog` from a connected device/emulator and run CLI inspect.
+- Keep docs synchronized with code after each stage.
+- Run large-app validation once a target application is available.
 
-Модули:
+## Reference docs
 
-1. `jankhunter-runtime`
-   - Kotlin-only Android library.
-   - Не тянуть AndroidX/OkHttp/RxJava/Compose в core runtime.
-   - Auto-init через manifest `ContentProvider`, без AndroidX App Startup.
-   - Event queue + background writer.
-   - Binary log writer.
-   - Activity lifecycle tracking.
-   - Main thread watchdog.
-   - Memory sampler.
-   - Public API для owner attribution:
-
-```kotlin
-JankHunter.withOwner("FeedRepository.refresh") {
-    // measured block
-}
-```
-
-2. `jankhunter-okhttp3`
-   - Optional integration module.
-   - Не должен приносить OkHttp в host-приложение как runtime-зависимость.
-   - Должен использовать compileOnly/provided-подход.
-   - EventListener.Factory должен быть composite-friendly и не затирать существующий listener.
-
-3. `jankhunter-gradle-plugin`
-   - Build-time plugin.
-   - DSL:
-
-```kotlin
-plugins {
-    id("io.jankhunter.android")
-}
-
-jankHunter {
-    enabledBuildTypes.set(setOf("debug", "qa"))
-    autoInit.set(true)
-
-    instrument {
-        activities.set(true)
-        fragments.set(true)
-        okhttp.set(true)
-        webSockets.set(true)
-        handlers.set(true)
-        executors.set(true)
-        rxJava.set(true)
-        coroutines.set(false)
-
-        includePackages.set(listOf("com.myapp"))
-        excludePackages.set(listOf("com.myapp.generated"))
-    }
-}
-```
-
-Gradle plugin должен в будущем использовать Android Gradle Plugin ASM APIs и генерировать owner map:
-
-```json
-{
-  "1842": "com.myapp.feed.FeedRepository.refresh(FeedRepository.kt:47)"
-}
-```
-
-Runtime должен писать только короткие owner IDs, а CLI должен раскрывать их через map.
-
-## Attribution / поиск виновников
-
-Нужно стремиться к модели:
-
-1. Explicit owner: разработчик явно вызывает `withOwner`.
-2. Generated owner: Gradle/ASM вставляет owner-id в call-site.
-3. Sampled stack: SDK редко снимает stack trace только для slow/error events.
-4. Triggered profiling: тяжелая диагностика включается только при симптомах.
-
-Главные output-секции отчета:
-
-- Top slow routes.
-- Top janky screens.
-- Top main thread stall owners.
-- Top memory growth / retained classes.
-- Top websocket reconnect sources.
-- Top changed metrics between baseline/candidate.
-- Top suspects.
-
-## Ограничения и стиль реализации
-
-- Минимизировать внешние зависимости.
-- Runtime SDK пишется только на Kotlin и должен избегать лишних сторонних runtime-зависимостей.
-- Runtime SDK не должен зависеть от AndroidX в core-модуле.
-- Optional integrations должны быть отдельными модулями.
-- Стабильность host-приложения важнее полноты метрик.
-- Все тяжелые операции должны быть sampled, rate-limited или debug/QA-only.
-- Нельзя логировать PII: URL query, headers, body, user id, tokens.
-- Логи должны быть append-only и устойчивы к обрыву записи.
-- CLI должен терпимо читать частично поврежденный файл и показывать предупреждения.
-
-## Приоритет MVP
-
-1. Go CLI:
-   - `.jhlog` reader/writer;
-   - sample generator;
-   - inspect;
-   - compare;
-   - export JSONL;
-   - HTML report.
-
-2. Android runtime:
-   - auto-init provider;
-   - config;
-   - event queue;
-   - binary writer;
-   - activity lifecycle;
-   - main thread watchdog;
-   - memory sampler;
-   - public owner API.
-
-3. Optional OkHttp:
-   - EventListener.Factory scaffold;
-   - DNS/connect/TLS/request/response/failure timings.
-
-4. Gradle plugin:
-   - DSL scaffold;
-   - variant enable/disable;
-   - future ASM hook points;
-   - owner map design.
-
-## Критерии качества
-
-- `go test ./...` проходит в `cli/`.
-- `jankhunter sample` создает валидный `.jhlog`.
-- `jankhunter inspect` генерирует HTML-отчет.
-- `jankhunter compare` генерирует HTML-сравнение.
-- Android core module не содержит third-party runtime dependencies.
-- Публичные API маленькие и стабильные.
-- README объясняет запуск и архитектуру.
-
-Когда работаешь над проектом, сначала проверяй существующие файлы и не ломай структуру. Если меняешь формат `.jhlog`, обновляй документацию и sample/export. Если добавляешь Android-зависимость, объясняй, почему она не конфликтует с host-приложением.
+- [README.md](README.md)
+- [android/README.md](android/README.md)
+- [cli/README.md](cli/README.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/release.md](docs/release.md)

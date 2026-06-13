@@ -40,6 +40,34 @@ cd android
 
 Gradle publishing metadata уже содержит artifact name/description, license, SCM и developer fields. Signing и remote repositories настраиваются через env vars; подробности в [release docs](../docs/release.md).
 
+## Подключение debug-only
+
+Для большого host-приложения базовый вариант лучше подключать только в debug/QA variants:
+
+```kotlin
+dependencies {
+    debugImplementation("io.jankhunter:jankhunter-runtime:0.1.0-SNAPSHOT")
+    debugImplementation("io.jankhunter:jankhunter-okhttp3:0.1.0-SNAPSHOT")
+}
+```
+
+Gradle plugin тоже обычно включают только для debug/QA build types через DSL:
+
+```kotlin
+jankHunter {
+    enabledBuildTypes.add("debug")
+    enabledBuildTypes.add("qa")
+    instrument {
+        okhttp = true
+        webSockets = true
+        handlers = true
+        executors = true
+        methodCounters = false
+        includePackages.add("com.example.app")
+    }
+}
+```
+
 ## Что уже собирает runtime
 
 - старт сессии: версия приложения, build, модель устройства, SDK API;
@@ -385,6 +413,23 @@ context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 JankHunterConfig.builder()
     .logDirectory(customDir)
     .build()
+```
+
+Для debuggable-приложения логи можно вытащить через `run-as`:
+
+```bash
+APP_ID=com.example.app
+mkdir -p logs
+adb shell run-as "$APP_ID" ls files/jankhunter
+adb exec-out run-as "$APP_ID" tar -C files/jankhunter -cf - . | tar -xf - -C logs
+```
+
+Дальше:
+
+```bash
+cd ../cli
+go run ./cmd/jankhunter inspect ../android/logs/*.jhlog --out /tmp/jankhunter-report.html
+go run ./cmd/jankhunter compare --baseline "old/*.jhlog" --candidate "new/*.jhlog" --out /tmp/jankhunter-compare.html
 ```
 
 ## Важные ограничения
