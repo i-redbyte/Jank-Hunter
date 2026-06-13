@@ -34,6 +34,16 @@ func execute(path, source string, data any) error {
 			}
 			return fmt.Sprintf("width:%.2f%%", value)
 		},
+		"msWidth": func(value uint64) string {
+			width := float64(value) * 100 / 2000
+			if width > 100 {
+				width = 100
+			}
+			if width < 1 && value > 0 {
+				width = 1
+			}
+			return fmt.Sprintf("width:%.2f%%", width)
+		},
 		"severityClass": func(value string) string {
 			switch value {
 			case "high":

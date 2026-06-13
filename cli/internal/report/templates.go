@@ -46,6 +46,11 @@ th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: le
 th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .bar { height: 8px; background: #e9edf2; border-radius: 99px; overflow: hidden; min-width: 90px; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
+.chart-list { display: grid; gap: 10px; }
+.chart-row { display: grid; grid-template-columns: minmax(160px, 1fr) 4fr 90px; gap: 12px; align-items: center; }
+.chart-track { height: 12px; background: #e9edf2; border-radius: 99px; overflow: hidden; }
+.chart-track > i { display: block; height: 100%; background: var(--accent-2); }
+.chart-track.warn > i { background: var(--warn); }
 .sev-high { color: var(--bad); font-weight: 700; }
 .sev-medium { color: var(--warn); font-weight: 700; }
 .sev-ok { color: var(--ok); font-weight: 700; }
@@ -77,6 +82,22 @@ const inspectTemplate = `<!doctype html>
     <div class="metric"><div class="label">UID RX max</div><div class="value">{{.Summary.TrafficRxMax}}</div></div>
     <div class="metric"><div class="label">Max PSS</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div></div>
   </div>
+
+  <section>
+    <h2>Charts</h2>
+    <h2>Route p95 Latency</h2>
+    <div class="chart-list">
+      {{range .Summary.Routes}}
+      <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} ms</strong></div>
+      {{else}}<div class="muted">No HTTP events.</div>{{end}}
+    </div>
+    <h2>Screen Jank Rate</h2>
+    <div class="chart-list">
+      {{range .Summary.Screens}}
+      <div class="chart-row"><code>{{.Screen}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
+      {{else}}<div class="muted">No UI window events.</div>{{end}}
+    </div>
+  </section>
 
   <section>
     <h2>Slow Routes</h2>
@@ -167,9 +188,9 @@ const compareTemplate = `<!doctype html>
   <section>
     <h2>Regression Summary</h2>
     <table>
-      <tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Severity</th></tr>
+      <tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Severity</th><th>Confidence</th></tr>
       {{range .Comparison.Deltas}}
-      <tr><td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td></tr>
+      <tr><td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Confidence}}</td></tr>
       {{end}}
     </table>
   </section>

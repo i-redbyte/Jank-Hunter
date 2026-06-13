@@ -43,8 +43,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html
+  jankhunter inspect <logs...> --out report.html [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
 `)
 }
@@ -62,7 +62,11 @@ func runSample(args []string) error {
 }
 
 func runInspect(args []string) error {
-	out, remaining, err := takeStringFlag(args, "out", "")
+	filter, remaining, err := takeFilterFlags(args)
+	if err != nil {
+		return err
+	}
+	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
 	}
@@ -70,11 +74,10 @@ func runInspect(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
-	logs, err := readLogs(paths)
+	summary, err := analyze.InspectFilesWithFilter(strings.Join(paths, ", "), paths, filter)
 	if err != nil {
 		return err
 	}
-	summary := analyze.Inspect(strings.Join(paths, ", "), logs)
 	printSummary(summary)
 	if out != "" {
 		if err := report.WriteInspect(out, summary); err != nil {
@@ -86,7 +89,11 @@ func runInspect(args []string) error {
 }
 
 func runCompare(args []string) error {
-	baselineRaw, remaining, err := takeStringFlag(args, "baseline", "")
+	filter, remaining, err := takeFilterFlags(args)
+	if err != nil {
+		return err
+	}
+	baselineRaw, remaining, err := takeStringFlag(remaining, "baseline", "")
 	if err != nil {
 		return err
 	}
@@ -103,20 +110,17 @@ func runCompare(args []string) error {
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("compare needs --baseline and --candidate")
 	}
-	baselineLogs, err := readLogs(baselinePaths)
+	baseline, err := analyze.InspectFilesWithFilter("baseline", baselinePaths, filter)
 	if err != nil {
 		return err
 	}
-	candidateLogs, err := readLogs(candidatePaths)
+	candidate, err := analyze.InspectFilesWithFilter("candidate", candidatePaths, filter)
 	if err != nil {
 		return err
 	}
-	comparison := analyze.Compare(
-		analyze.Inspect("baseline", baselineLogs),
-		analyze.Inspect("candidate", candidateLogs),
-	)
+	comparison := analyze.Compare(baseline, candidate)
 	for _, delta := range comparison.Deltas {
-		fmt.Printf("%-24s %12s -> %-12s %8s %s\n", delta.Name, delta.Baseline, delta.Candidate, delta.Change, delta.Severity)
+		fmt.Printf("%-24s %12s -> %-12s %8s %s confidence=%s\n", delta.Name, delta.Baseline, delta.Candidate, delta.Change, delta.Severity, delta.Confidence)
 	}
 	if out != "" {
 		if err := report.WriteCompare(out, comparison); err != nil {
@@ -125,6 +129,22 @@ func runCompare(args []string) error {
 		fmt.Printf("report: %s\n", out)
 	}
 	return nil
+}
+
+func takeFilterFlags(args []string) (analyze.Filter, []string, error) {
+	route, remaining, err := takeStringFlag(args, "route", "")
+	if err != nil {
+		return analyze.Filter{}, nil, err
+	}
+	screen, remaining, err := takeStringFlag(remaining, "screen", "")
+	if err != nil {
+		return analyze.Filter{}, nil, err
+	}
+	owner, remaining, err := takeStringFlag(remaining, "owner", "")
+	if err != nil {
+		return analyze.Filter{}, nil, err
+	}
+	return analyze.Filter{RouteContains: route, ScreenContains: screen, OwnerContains: owner}, remaining, nil
 }
 
 func runExport(args []string) error {

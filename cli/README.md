@@ -11,6 +11,8 @@ CLI не требует backend, базы данных или браузерны
 - генерация sample-лога;
 - inspect-отчет по одному файлу или пулу файлов;
 - compare-отчет baseline vs candidate;
+- streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
+- фильтры `--route`, `--screen`, `--owner`;
 - экспорт событий в JSONL;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - top suspects по owner/class/stack hint.
@@ -59,6 +61,12 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 go run ./cmd/jankhunter inspect logs/*.jhlog --out report.html
 ```
 
+Фильтры:
+
+```bash
+go run ./cmd/jankhunter inspect logs/*.jhlog --route /feed --screen Feed --owner FeedRepository
+```
+
 ### compare
 
 Сравнить baseline и candidate:
@@ -67,7 +75,8 @@ go run ./cmd/jankhunter inspect logs/*.jhlog --out report.html
 go run ./cmd/jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
-  --out compare.html
+  --out compare.html \
+  --owner FeedRepository
 ```
 
 CLI покажет deltas:
@@ -84,6 +93,8 @@ UID RX max
 UID TX max
 Retained objects
 ```
+
+Каждая delta получает `confidence=low|medium|high`, рассчитанный из размера выборки. Это не заменяет полноценную статистику, но не дает отчету притворяться уверенным на слишком маленьком наборе логов.
 
 ### export
 
@@ -144,6 +155,7 @@ jank_rate = jank_count / frame_count
 
 - общий Avg FPS;
 - jank rate;
+- встроенные chart-блоки без CDN;
 - top janky screens;
 - Avg FPS и Min FPS по каждому screen;
 - p95/p99 frame duration.

@@ -6,6 +6,12 @@ type NamedValue struct {
 	Extra string
 }
 
+type Filter struct {
+	RouteContains  string
+	ScreenContains string
+	OwnerContains  string
+}
+
 type RouteStats struct {
 	Route       string
 	Count       int
@@ -78,11 +84,12 @@ type Summary struct {
 }
 
 type Delta struct {
-	Name      string
-	Baseline  string
-	Candidate string
-	Change    string
-	Severity  string
+	Name       string
+	Baseline   string
+	Candidate  string
+	Change     string
+	Severity   string
+	Confidence string
 }
 
 type Comparison struct {
