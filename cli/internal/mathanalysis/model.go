@@ -17,6 +17,7 @@ type MathReport struct {
 	Series       []Series
 	RobustStats  []RobustStat
 	ChangePoints []ChangePoint
+	Periodic     []PeriodicSignal
 	Spectral     []SpectralPeak
 	NetworkLoops []NetworkLoopFinding
 	GraphPaths   []GraphPath
@@ -155,12 +156,34 @@ type ChangePointDelta struct {
 	Summary        string
 }
 
+type PeriodicSignal struct {
+	Signal                string
+	Unit                  string
+	BucketMS              uint64
+	SampleCount           int
+	Status                string
+	Summary               string
+	FirstSignificantLagMS uint64
+	DecayHalfLifeMS       uint64
+	SpectralEntropy       float64
+	Approximated          bool
+	TopLags               []AutocorrelationLag
+	Peaks                 []SpectralPeak
+}
+
+type AutocorrelationLag struct {
+	LagMS       uint64
+	Correlation float64
+}
+
 type SpectralPeak struct {
-	Signal      string
-	PeriodMS    uint64
-	FrequencyHz float64
-	Power       float64
-	Confidence  float64
+	Signal           string
+	PeriodMS         uint64
+	FrequencyHz      float64
+	Power            float64
+	PeakToBackground float64
+	SpectralEntropy  float64
+	Confidence       float64
 }
 
 type NetworkLoopFinding struct {
@@ -199,7 +222,11 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	}
 	robustStats := summarizeRobustSamples(robustSamples)
 	changePoints := detectChangePoints(timeline)
-	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints), nil
+	periodic, spectral, err := buildPeriodicAnalysis(paths, options, timeline)
+	if err != nil {
+		return MathReport{}, err
+	}
+	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -235,8 +262,16 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	baselineChangePoints := detectChangePoints(baselineTimeline)
 	candidateChangePoints := detectChangePoints(candidateTimeline)
 	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints)
+	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, options, baselineTimeline)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
+	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, options, candidateTimeline)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -248,13 +283,13 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:      candidate,
 		Comparison:     comparison,
 		Findings:       findings,
-		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas),
+		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic),
 		RobustDeltas:   robustDeltas,
 		ChangeDeltas:   changeDeltas,
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
 		Title:        titleFromPaths(paths),
@@ -265,7 +300,9 @@ func buildInspectReport(summary analyze.Summary, paths []string, timeline []Time
 		Series:       series,
 		RobustStats:  robustStats,
 		ChangePoints: changePoints,
-		Sections:     inspectSections(summary, findings, timeline, series, robustStats, changePoints),
+		Periodic:     periodic,
+		Spectral:     spectral,
+		Sections:     inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic),
 	}
 }
 
@@ -321,7 +358,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -352,10 +389,11 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			Findings: changePointFindings(timeline, changePoints),
 		},
 		{
-			ID:      "periodic",
-			Title:   "Периодические сигналы",
-			Status:  "pending",
-			Summary: "Раздел подготовлен для автокорреляции, FFT/DFT, спектральных пиков и предупреждений о периодичности.",
+			ID:       "periodic",
+			Title:    "Периодические сигналы",
+			Status:   periodicStatus(periodic),
+			Summary:  periodicSummary(periodic),
+			Findings: periodicFindings(periodic),
 		},
 		{
 			ID:      "network-loops",
@@ -378,7 +416,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta, baselinePeriodic, candidatePeriodic []PeriodicSignal) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -409,10 +447,11 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			Findings: compareChangePointFindings(changeDeltas),
 		},
 		{
-			ID:      "periodic",
-			Title:   "Периодические сигналы",
-			Status:  "pending",
-			Summary: "Раздел зарезервирован под дельту периодов, спектральную энтропию и отношение пика к фону.",
+			ID:       "periodic",
+			Title:    "Периодические сигналы",
+			Status:   comparePeriodicStatus(baselinePeriodic, candidatePeriodic),
+			Summary:  comparePeriodicSummary(baselinePeriodic, candidatePeriodic),
+			Findings: comparePeriodicFindings(baselinePeriodic, candidatePeriodic),
 		},
 		{
 			ID:      "network-loops",

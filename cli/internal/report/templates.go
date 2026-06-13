@@ -636,6 +636,23 @@ const mathInspectTemplate = `<!doctype html>
           {{else}}<tr><td colspan="11" class="muted">Сильных точек изменения не найдено.</td></tr>{{end}}
         </table>
         {{end}}
+        {{if eq .ID "periodic"}}
+        <h3>Автокорреляция и спектр</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый значимый лаг</th><th>Полураспад</th><th>Энтропия</th><th>Главные лаги</th><th>Спектральные пики</th><th>Вывод</th></tr>
+          {{range $math.Periodic}}
+          <tr>
+            <td>{{.Signal}}</td><td>{{.SampleCount}}</td>
+            <td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td>
+            <td>{{if .DecayHalfLifeMS}}{{printf "%.1fs" (seconds .DecayHalfLifeMS)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.2f" .SpectralEntropy}}</td>
+            <td>{{range .TopLags}}<div>{{printf "%.1fs" (seconds .LagMS)}} · r={{printf "%.2f" .Correlation}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · пик/фон {{printf "%.2f" .PeakToBackground}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Недостаточно данных для периодического анализа.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -762,6 +779,22 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{.Summary}}</td>
           </tr>
           {{else}}<tr><td colspan="7" class="muted">Новых, исчезнувших или усилившихся точек изменения не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "periodic"}}
+        <h3>База</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          {{range $math.Baseline.Periodic}}
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных базы.</td></tr>{{end}}
+        </table>
+        <h3>Кандидат</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          {{range $math.Candidate.Periodic}}
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных кандидата.</td></tr>{{end}}
         </table>
         {{end}}
       </div>
