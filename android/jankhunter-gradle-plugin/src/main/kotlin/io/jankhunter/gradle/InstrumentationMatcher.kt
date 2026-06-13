@@ -11,6 +11,7 @@ class InstrumentationMatcher(
     fun matches(className: String): Boolean {
         val normalized = normalize(className)
         if (excludes.any { normalized.startsWith(it) }) return false
+        if (isGeneratedAndroidClass(normalized)) return false
         if (includes.isEmpty() && !allowEmptyIncludes) return false
         if (includes.isEmpty()) return true
         return includes.any { normalized.startsWith(it) }
@@ -18,6 +19,16 @@ class InstrumentationMatcher(
 
     private fun normalize(value: String): String {
         return value.replace('/', '.').trim().removeSuffix(".")
+    }
+
+    private fun isGeneratedAndroidClass(value: String): Boolean {
+        val simpleName = value.substringAfterLast('.')
+        return simpleName == "R" ||
+            simpleName.startsWith("R$") ||
+            simpleName == "BuildConfig" ||
+            simpleName == "Manifest" ||
+            simpleName.startsWith("Manifest$") ||
+            simpleName == "BR"
     }
 
     private companion object {

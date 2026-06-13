@@ -248,7 +248,8 @@ Default guidance:
 - use runtime collectors broadly in debug/QA;
 - enable OkHttp/WebSocket hooks when the optional artifact is present;
 - enable Handler/Executor hooks for investigation windows;
-- enable method counters only with narrow `includePackages`;
+- enable method counters first with narrow `includePackages`; for very large apps use explicit `includeWholeApplication`
+  only in debug/QA and keep noisy packages in `excludePackages`;
 - keep release usage explicit and limited.
 
 ## Privacy Model

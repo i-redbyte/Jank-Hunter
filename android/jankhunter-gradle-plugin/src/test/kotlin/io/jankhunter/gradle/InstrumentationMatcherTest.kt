@@ -39,4 +39,19 @@ class InstrumentationMatcherTest {
         assertFalse(matcher.matches("com.example.generated.R"))
         assertFalse(matcher.matches("com.other.Feature"))
     }
+
+    @Test
+    fun skipsGeneratedAndroidClassesEvenWhenPackageMatches() {
+        val matcher = InstrumentationMatcher(
+            includePackages = listOf("com.example"),
+            excludePackages = emptyList(),
+        )
+
+        assertFalse(matcher.matches("com.example.R"))
+        assertFalse(matcher.matches("com.example.R\$string"))
+        assertFalse(matcher.matches("com.example.BuildConfig"))
+        assertFalse(matcher.matches("com.example.Manifest\$permission"))
+        assertFalse(matcher.matches("com.example.BR"))
+        assertTrue(matcher.matches("com.example.feature.CheckoutPresenter"))
+    }
 }

@@ -28,6 +28,16 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) return@onVariants
+            val includeWholeApplication = extension.instrument.includeWholeApplication
+            val manualIncludes = extension.instrument.includePackages.toList()
+            val androidNamespace = variant.namespace.orElse("")
+            val effectiveIncludePackages = androidNamespace.map { namespace ->
+                InstrumentationPackages.effectiveIncludes(
+                    manualIncludes,
+                    includeWholeApplication,
+                    namespace,
+                )
+            }
 
             val ownerMap = project.tasks.register(
                 "generate${variant.name.capitalized()}JankHunterOwnerMap",
@@ -41,7 +51,9 @@ class JankHunterPlugin : Plugin<Project> {
                 it.executors.set(extension.instrument.executors)
                 it.coroutines.set(extension.instrument.coroutines)
                 it.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
-                it.includePackages.set(extension.instrument.includePackages.toList())
+                it.includeWholeApplication.set(includeWholeApplication)
+                it.androidNamespace.set(androidNamespace)
+                it.includePackages.set(effectiveIncludePackages)
                 it.excludePackages.set(extension.instrument.excludePackages.toList())
                 it.outputFile.set(
                     project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/owner-map.json"),
@@ -59,13 +71,13 @@ class JankHunterPlugin : Plugin<Project> {
                 params.executors.set(extension.instrument.executors)
                 params.coroutines.set(extension.instrument.coroutines)
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
-                params.includePackages.set(extension.instrument.includePackages.toList())
+                params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(extension.instrument.excludePackages.toList())
             }
             variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
 
             project.logger.lifecycle(
-                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} allowEmptyIncludePackages={} ownerMapTask={}",
+                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} allowEmptyIncludePackages={} includeWholeApplication={} ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -74,6 +86,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.executors,
                 extension.instrument.coroutines,
                 extension.instrument.allowEmptyIncludePackages,
+                extension.instrument.includeWholeApplication,
                 ownerMap.name,
             )
         }

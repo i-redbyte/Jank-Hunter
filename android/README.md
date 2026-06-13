@@ -64,7 +64,7 @@ jankHunter {
         executors = true
         methodCounters = false
         allowEmptyIncludePackages = false
-        includePackages("com.example.app")
+        includePackages("com.example.app.feature", "com.example.app.data")
     }
 }
 ```
@@ -375,7 +375,8 @@ jankHunter {
         coroutines = true
         methodCounters = true
         allowEmptyIncludePackages = false
-        includePackages("com.myapp")
+        includePackages("com.myapp.feature", "com.myapp.data")
+        includeWholeApplication = false
         excludePackages(
             "com.myapp.generated",
             "com.myapp.di",
@@ -385,7 +386,21 @@ jankHunter {
 ```
 
 Plugin регистрирует ASM transform через Android Components API только для `enabledBuildTypes`.
-Классы проходят include/exclude-фильтры; platform, Kotlin, OkHttp и сам Jank Hunter исключены встроенно. Для больших приложений `includePackages` должен быть задан явно. Пустой include-list по умолчанию ничего не инструментирует; старое поведение "все, кроме встроенных exclude" можно включить только явно через `allowEmptyIncludePackages = true`.
+Классы проходят include/exclude-фильтры; platform, Kotlin, OkHttp, сам Jank Hunter и Android generated classes (`R`, `R$*`, `BuildConfig`, `Manifest`, `BR`) исключены встроенно. Для точечного режима задавайте `includePackages("com.myapp.feature", "com.myapp.data")`. Для большого приложения можно явно включить весь namespace модуля:
+
+```kotlin
+jankHunter {
+    instrument {
+        includeWholeApplication = true
+        excludePackages(
+            "com.myapp.generated",
+            "com.myapp.di",
+        )
+    }
+}
+```
+
+`includeWholeApplication = true` добавляет Android `namespace` variant в итоговый include-list, поэтому не нужно перечислять десятки или сотни модулей с общим корнем `com.myapp`. `excludePackages` продолжает применяться поверх широкого include. Пустой include-list по умолчанию ничего не инструментирует; старое поведение "все, кроме встроенных exclude" можно включить только явно через `allowEmptyIncludePackages = true`.
 
 Реализованные hooks:
 

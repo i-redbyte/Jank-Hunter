@@ -12,6 +12,7 @@ class JankHunterExtensionTest {
         instrumentation.includePackages(listOf("com.myapp.data", ""))
         instrumentation.excludePackages("com.myapp.generated", "com.myapp.di")
         instrumentation.excludePackages(listOf("com.myapp.legacy"))
+        instrumentation.includeWholeApplication = true
 
         assertEquals(
             linkedSetOf("com.myapp", "com.myapp.feature", "com.myapp.data"),
@@ -21,5 +22,13 @@ class JankHunterExtensionTest {
             linkedSetOf("com.myapp.generated", "com.myapp.di", "com.myapp.legacy"),
             instrumentation.excludePackages,
         )
+        assertEquals(true, instrumentation.includeWholeApplication)
+    }
+
+    @Test
+    fun wholeApplicationIncludeIsOptIn() {
+        val instrumentation = JankHunterExtension.Instrumentation()
+
+        assertEquals(false, instrumentation.includeWholeApplication)
     }
 }

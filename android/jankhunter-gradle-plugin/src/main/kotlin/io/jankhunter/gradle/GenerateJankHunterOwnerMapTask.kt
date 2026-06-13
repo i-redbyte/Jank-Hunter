@@ -34,6 +34,12 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val allowEmptyIncludePackages: Property<Boolean>
 
     @get:Input
+    abstract val includeWholeApplication: Property<Boolean>
+
+    @get:Input
+    abstract val androidNamespace: Property<String>
+
+    @get:Input
     abstract val includePackages: ListProperty<String>
 
     @get:Input
@@ -61,6 +67,8 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
                 appendLine("    \"coroutines\": ${coroutines.getOrElse(false)}")
                 appendLine("  },")
                 appendLine("  \"allowEmptyIncludePackages\": ${allowEmptyIncludePackages.getOrElse(false)},")
+                appendLine("  \"includeWholeApplication\": ${includeWholeApplication.getOrElse(false)},")
+                appendLine("  \"androidNamespace\": \"${escape(androidNamespace.getOrElse(""))}\",")
                 appendLine("  \"includePackages\": ${array(includePackages.getOrElse(emptyList()))},")
                 appendLine("  \"excludePackages\": ${array(excludePackages.getOrElse(emptyList()))},")
                 appendLine("  \"owners\": {}")
