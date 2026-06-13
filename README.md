@@ -65,6 +65,7 @@ The script starts or reuses an emulator, installs `io.jankhunter.sample`, waits 
 Release and publishing instructions live in [docs/release.md](docs/release.md).
 Large-app validation runbook lives in [docs/large-app-validation.md](docs/large-app-validation.md).
 Mathematical analysis ideas live in [docs/performance-analysis-math.md](docs/performance-analysis-math.md).
+Step-by-step Codex implementation prompt lives in [docs/math-analysis-implementation-prompt.md](docs/math-analysis-implementation-prompt.md).
 
 Quick local dry runs:
 

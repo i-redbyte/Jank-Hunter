@@ -16,6 +16,7 @@
 - анализ временных рядов;
 - вероятностные модели состояний;
 - robust statistics для шумных latency/FPS распределений;
+- спектральный и графовый анализ network loops;
 - многомерная нормализация и сравнение когорт.
 
 ## Fourier / Spectral Analysis
@@ -26,6 +27,7 @@
 
 - найти периодические jank spikes: например, GC/bitmap cache cleanup каждые N секунд;
 - обнаружить регулярный polling, reconnect storm или timer-driven work;
+- обнаружить циклические DNS resolve / reconnect bursts, когда route или owner повторяет один и тот же network motif;
 - понять, совпадает ли периодическая просадка FPS с network/system sampler cadence;
 - отделить случайный шум от повторяющегося паттерна.
 
@@ -48,6 +50,9 @@
 
 - секцию `Periodic Signals`;
 - для UI jank/FPS: top periods вроде `every 5.0s` или `every 16.7s`;
+- для network: top periods по `dns_count`, `connect_count`, `http_failures`, `route_request_count`, `reconnect_count`;
+- warning: `DNS/reconnect loop detected around 2.0s period for route GET /config`;
+- probable owner attribution: route/owner рядом с периодическим burst и shortest path в causal graph;
 - warning: `periodic jank detected around 10s period`;
 - correlation с owner counters, если период совпадает с custom metric или network burst.
 
@@ -58,6 +63,16 @@
 - Fourier плохо ловит редкие single spikes; для этого лучше change point / EVT.
 
 Вердикт: полезно как Stage 2 для длинных manual/soak прогонов, не как базовый smoke-test.
+
+Для network-heavy приложений это один из самых практичных spectral use cases. Irregular HTTP events надо bin-ить по времени, например 1s buckets:
+
+```text
+t=0s: dns=14 connect=12 fail=8 route=/config owner=NetworkClient
+t=1s: dns=2  connect=1  fail=0
+t=2s: dns=13 connect=12 fail=8 route=/config owner=NetworkClient
+```
+
+Если autocorrelation и FFT показывают один и тот же период, а motif mining видит повторяющуюся последовательность `dns -> connect_fail -> reconnect`, отчет должен показывать это как loop finding, а не просто как latency regression.
 
 ## Wavelets
 
@@ -228,6 +243,26 @@ EVT полезна для tail latency и редких freezes.
 
 Вердикт: очень сильный аппарат, но требует новых runtime-событий.
 
+## Euler-Style Integrals
+
+Методы Эйлера в смысле численного интегрирования полезны не как “поиск причины”, а как оценка суммарной боли сценария. Performance часто плох не только из-за пика, а из-за площади под кривой деградации.
+
+Что считать:
+
+- `jank_pressure_area`: интеграл jank rate выше healthy threshold по timeline;
+- `latency_pain_area`: интеграл route p95 или rolling median latency выше baseline/threshold;
+- `network_failure_burn`: интеграл failure/reconnect/DNS rate over time;
+- `memory_pressure_area`: интеграл дефицита free RAM или роста PSS;
+- `recovery_debt`: площадь между degradation onset и return-to-healthy.
+
+Практический вывод:
+
+```text
+Candidate p95 improved by 8%, but network_failure_burn grew 3.2x because reconnect loops lasted longer.
+```
+
+Вердикт: полезно для сравнения сценариев и для composite health score. Это объяснимее, чем один “магический” score, если отчет показывает формулу и вклад метрик.
+
 ## Affine Transformations
 
 Аффинные преобразования сами по себе не анализируют performance, но полезны для нормализации и сравнения векторных признаков.
@@ -283,6 +318,100 @@ screen -> owner -> route/stall/metric -> symptom
 
 Вердикт: очень подходящий аппарат для Jank Hunter, потому что owner attribution уже есть.
 
+### Dijkstra
+
+Дейкстра хорошо ложится на causal graph. Узлы:
+
+```text
+screen, owner, route, network phase, failure class, state, symptom
+```
+
+Ребра:
+
+```text
+screen -> owner
+owner -> route
+route -> dns_burst
+route -> reconnect
+dns_burst -> http_failure
+http_failure -> network_loop_symptom
+```
+
+Вес ребра должен быть “стоимостью объяснения”: временная близость, частота, severity, confidence, owner attribution и совпадение route/screen/cohort. Shortest path от symptom к owner/route дает понятное объяснение:
+
+```text
+network_loop -> route GET /config -> owner ConfigRepository.refresh -> screen Launch
+```
+
+Вердикт: must-have для “где и почему”.
+
+### Floyd-Warshall
+
+Floyd-Warshall полезен после агрегации графа, когда узлов уже мало. Он считает shortest paths между всеми парами и помогает найти:
+
+- owners, которые являются мостами между разными симптомами;
+- routes, которые связывают network loops и UI degradation;
+- baseline/candidate изменение связности;
+- скрытые пересечения проблем, например `AuthInterceptor` связан и с DNS burst, и с UI stalls.
+
+Не запускать на сырых event-level графах: сложность `O(V^3)`. Сначала сжать события в route/owner/screen/state graph.
+
+### Floyd Cycle Finding
+
+Floyd tortoise/hare на сырых performance логах слишком строгий, потому что события шумные и нерегулярные. Но после канонизации sequence он может быть полезен как быстрый детектор точных циклов:
+
+```text
+dns -> connect_fail -> reconnect -> dns -> connect_fail -> reconnect
+```
+
+Для реальных логов лучше связка:
+
+- canonical event tokens;
+- n-gram/motif mining;
+- autocorrelation по binned counts;
+- FFT top periods;
+- graph cycle detection.
+
+Вердикт: использовать как часть `Network Loop Detector`, но не как единственный метод.
+
+## Network Loop Detector
+
+Это отдельный killer-feature слой для приложений с большим числом сетевых запросов.
+
+Сигналы:
+
+- route request count per bucket;
+- failure count per bucket;
+- DNS duration/count per bucket;
+- connect duration/count per bucket;
+- TLS/TTFB burst;
+- reconnect/websocket events;
+- owner labels around network call sites;
+- screen/process/network cohort.
+
+Pipeline:
+
+1. Bin HTTP/network events в равномерные окна.
+2. Построить route/owner buckets.
+3. Найти bursts через rolling median/MAD.
+4. Найти periodicity через autocorrelation и FFT.
+5. Найти repeated motifs в canonical event sequence.
+6. Построить causal graph.
+7. Запустить Dijkstra от loop symptom к вероятным owners/routes.
+8. В compare-режиме показать, появился ли loop, исчез ли loop, изменился ли period, burn area и confidence.
+
+Пример вывода:
+
+```text
+High-confidence network loop:
+route=GET /config, owner=ConfigRepository.refresh, period=2.1s, confidence=0.88
+motif=dns -> connect_fail -> reconnect
+candidate loop burn +320% vs baseline
+probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_burst -> reconnect_loop
+```
+
+Вердикт: делать раньше HMM/UMAP, потому что это практично, объяснимо и напрямую отвечает на реальные production/debug боли.
+
 ## Практический roadmap
 
 ### Stage 1: Heuristic Verdict
@@ -328,7 +457,9 @@ screen -> owner -> route/stall/metric -> symptom
 - autocorrelation;
 - FFT top periods;
 - spectral entropy;
-- periodic jank warnings.
+- periodic jank warnings;
+- network DNS/reconnect loop detector;
+- motif mining для повторяющихся route/owner sequences.
 
 ### Stage 6: Advanced / Research
 
@@ -338,6 +469,26 @@ screen -> owner -> route/stall/metric -> symptom
 - graph-based blame ranking;
 - PCA/UMAP run clustering;
 - queueing metrics при расширении runtime events.
+
+### Stage 7: Causal Graph
+
+Добавить после timeline/spectral foundation:
+
+- route/owner/screen/symptom graph;
+- Dijkstra shortest explanation path;
+- Floyd-Warshall all-pairs influence map on aggregated graph;
+- PageRank-like owner blame score;
+- compare graph delta: new edges, stronger edges, broken recovery paths.
+
+### Stage 8: Math Analysis Report Page
+
+Отдельная HTML-страница рядом с основным отчетом:
+
+- основная кнопка в report hero: зеленая futuristic кнопка `λ Анализ`;
+- inspect math page: timeline, robust stats, change points, FFT/autocorrelation, network loop detector, graph blame;
+- compare math page: baseline/candidate deltas по periodicity, loop burn, transition matrix, graph paths;
+- все тексты на русском, без внешних CDN;
+- разделы раскрываемые, потому что данных может быть много.
 
 ## Главный вывод
 
