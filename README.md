@@ -20,6 +20,7 @@ The implementation currently includes:
 - `jankhunter compare` to compare baseline and candidate logs;
 - filters by route/screen/owner;
 - standalone cyber-styled HTML reports with charts, gauges, subtle animation and no external CDN dependencies;
+- bottom-of-report heuristic verdict with findings and recommendations;
 - compare HTML reports with baseline/candidate scoreboard plus per-log drill-down sections;
 - JSON output and threshold-based CI regression gates in the CLI;
 - Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
@@ -63,6 +64,7 @@ The script starts or reuses an emulator, installs `io.jankhunter.sample`, waits 
 
 Release and publishing instructions live in [docs/release.md](docs/release.md).
 Large-app validation runbook lives in [docs/large-app-validation.md](docs/large-app-validation.md).
+Mathematical analysis ideas live in [docs/performance-analysis-math.md](docs/performance-analysis-math.md).
 
 Quick local dry runs:
 

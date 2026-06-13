@@ -41,7 +41,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Network Routes", "GET /feed")
+	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Network Routes", "Heuristic Verdict", "GET /feed")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -53,7 +53,7 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Regression Control Deck", "Per-log Drill-down", "old/sample.jhlog", "new/sample.jhlog")
+	assertHTMLContains(t, comparePath, "Regression Control Deck", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -78,7 +78,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Сетевые маршруты")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Сетевые маршруты", "Эвристический итог")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReport(
@@ -89,7 +89,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Baseline-логи")
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Эвристический итог", "Baseline-логи")
 }
 
 func assertHTMLContains(t *testing.T, path string, needles ...string) {

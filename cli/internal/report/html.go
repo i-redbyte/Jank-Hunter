@@ -20,9 +20,11 @@ type LogReport struct {
 }
 
 func WriteInspect(path string, summary analyze.Summary) error {
+	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
 		"GeneratedAt": time.Now().Format(time.RFC3339),
 		"Summary":     summary,
+		"Analysis":    inspectAnalysis(summary, lang),
 	})
 }
 
@@ -31,11 +33,13 @@ func WriteCompare(path string, comparison analyze.Comparison) error {
 }
 
 func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
+	lang := reportLanguage()
 	return execute(path, compareTemplate, map[string]any{
 		"GeneratedAt":   time.Now().Format(time.RFC3339),
 		"Comparison":    comparison,
 		"BaselineLogs":  baselineLogs,
 		"CandidateLogs": candidateLogs,
+		"Analysis":      compareAnalysis(comparison, lang),
 	})
 }
 
@@ -180,6 +184,7 @@ func localizeRussianHTML(html string) string {
 		`>Memory<`, `>Память<`,
 		`>Metrics<`, `>Метрики<`,
 		`>Context<`, `>Контекст<`,
+		`>Verdict<`, `>Итог<`,
 		`>Comparison<`, `>Сравнение<`,
 		`>Regressions<`, `>Регрессии<`,
 		`>Candidate Detail<`, `>Детали candidate<`,
@@ -219,6 +224,14 @@ func localizeRussianHTML(html string) string {
 		`Cohorts keep comparisons honest: app, build, SDK, device, process and network.`, `Когорты помогают честно сравнивать app, build, SDK, device, process и network.`,
 		`Health Gauges`, `Индикаторы здоровья`,
 		`Signal Rings`, `Кольцевые индикаторы`,
+		`Heuristic Verdict`, `Эвристический итог`,
+		`Rule-based triage over all collected signals. Treat it as a review checklist, not as a mathematical proof.`, `Эвристический разбор всех собранных сигналов. Это проверочный список для ревью, а не математическое доказательство.`,
+		`Rule-based triage over all comparison deltas and cohort warnings. Treat it as a review checklist, not as a mathematical proof.`, `Эвристический разбор изменений и предупреждений по когортам. Это проверочный список для ревью, а не математическое доказательство.`,
+		`Overall status`, `Общий статус`,
+		`Findings`, `Находки`,
+		`Recommendations`, `Рекомендации`,
+		`No heuristic findings.`, `Нет эвристических находок.`,
+		`No extra recommendations.`, `Нет дополнительных рекомендаций.`,
 		`>Routes<`, `>Маршруты<`,
 		`>Route<`, `>Маршрут<`,
 		`>Count<`, `>Количество<`,

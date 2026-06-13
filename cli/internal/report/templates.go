@@ -267,6 +267,35 @@ code {
   color: #ffe3a3;
   background: rgba(255,209,102,0.08);
 }
+.analysis-banner {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: linear-gradient(120deg, rgba(111,247,255,0.10), rgba(255,79,216,0.08));
+}
+.analysis-banner.sev-high { border-color: rgba(255,91,124,0.55); }
+.analysis-banner.sev-medium { border-color: rgba(255,209,102,0.55); }
+.analysis-banner.sev-ok { border-color: rgba(98,255,168,0.45); }
+.analysis-status {
+  font-size: 24px;
+  font-weight: 850;
+}
+.finding-list { display: grid; gap: 10px; margin-top: 14px; }
+.finding {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--cyan);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.035);
+}
+.finding.sev-high { border-left-color: var(--bad); }
+.finding.sev-medium { border-left-color: var(--warn); }
+.finding.sev-ok { border-left-color: var(--ok); }
+.finding strong { display: block; margin-bottom: 4px; }
+.recommendations { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+.recommendations li { margin: 6px 0; }
 .pill {
   display: inline-flex;
   align-items: center;
@@ -335,6 +364,7 @@ const inspectTemplate = `<!doctype html>
   <a href="#memory">Memory</a>
   <a href="#custom">Metrics</a>
   <a href="#context">Context</a>
+  <a href="#analysis">Verdict</a>
 </nav>
 <main>
   <section id="overview" class="panel">
@@ -476,6 +506,27 @@ const inspectTemplate = `<!doctype html>
     <h3>Combined Cohorts</h3>
     <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
   </section>
+
+  <section id="analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Heuristic Verdict</h2><div class="panel-kicker">Rule-based triage over all collected signals. Treat it as a review checklist, not as a mathematical proof.</div></div>
+    </div>
+    <div class="analysis-banner {{severityClass .Analysis.Severity}}">
+      <div class="eyebrow">Overall status</div>
+      <div class="analysis-status">{{.Analysis.Status}}</div>
+      <div class="muted">{{.Analysis.Summary}}</div>
+    </div>
+    <h3>Findings</h3>
+    <div class="finding-list">
+      {{range .Analysis.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{else}}<div class="muted">No heuristic findings.</div>{{end}}
+    </div>
+    <h3>Recommendations</h3>
+    <ul class="recommendations">
+      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>No extra recommendations.</li>{{end}}
+    </ul>
+  </section>
 </main>
 </body>
 </html>`
@@ -509,6 +560,7 @@ const compareTemplate = `<!doctype html>
   <a href="#candidate">Candidate Detail</a>
   <a href="#drilldown">Per-log Drill-down</a>
   <a href="#cohorts">Cohorts</a>
+  <a href="#analysis">Verdict</a>
 </nav>
 <main>
   <section id="compare" class="panel">
@@ -656,6 +708,27 @@ const compareTemplate = `<!doctype html>
         <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
       </tr>
     </table>
+  </section>
+
+  <section id="analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Heuristic Verdict</h2><div class="panel-kicker">Rule-based triage over all comparison deltas and cohort warnings. Treat it as a review checklist, not as a mathematical proof.</div></div>
+    </div>
+    <div class="analysis-banner {{severityClass .Analysis.Severity}}">
+      <div class="eyebrow">Overall status</div>
+      <div class="analysis-status">{{.Analysis.Status}}</div>
+      <div class="muted">{{.Analysis.Summary}}</div>
+    </div>
+    <h3>Findings</h3>
+    <div class="finding-list">
+      {{range .Analysis.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{else}}<div class="muted">No heuristic findings.</div>{{end}}
+    </div>
+    <h3>Recommendations</h3>
+    <ul class="recommendations">
+      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>No extra recommendations.</li>{{end}}
+    </ul>
   </section>
 </main>
 </body>

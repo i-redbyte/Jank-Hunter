@@ -18,6 +18,7 @@ CLI не требует backend, базы данных или браузерны
 - threshold config для CI regression gate;
 - экспорт событий в JSONL;
 - красивый standalone HTML без CDN: sticky navigation, gauges, animated bars, detailed tables;
+- итоговый эвристический блок внизу HTML: status, findings и recommendations;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - process breakdown из session metadata;
 - cohort breakdown по app version/build/SDK/device/process/network;
@@ -81,6 +82,7 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 ```
 
 Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown.
+Внизу отчета есть `Heuristic Verdict`: краткое итоговое заключение, список находок и рекомендации по следующим шагам.
 
 Получить machine-readable JSON:
 
