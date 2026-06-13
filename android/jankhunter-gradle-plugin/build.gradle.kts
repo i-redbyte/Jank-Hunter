@@ -1,5 +1,6 @@
 plugins {
     `java-gradle-plugin`
+    id("org.jetbrains.kotlin.jvm")
 }
 
 gradlePlugin {

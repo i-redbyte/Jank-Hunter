@@ -19,8 +19,8 @@ Jank Hunter - это набор инструментов для Android-прил
 
 ## Выбранный стек
 
-- Android runtime SDK: Kotlin-first, с Java-compatible public API и минимумом зависимостей.
-- Gradle plugin / ASM instrumentation: Kotlin или Java, build-time only.
+- Android runtime SDK: только Kotlin-исходники и минимум зависимостей.
+- Gradle plugin / ASM instrumentation: только Kotlin-исходники, build-time only.
 - CLI: Go, без VM, допускается GC.
 - Формат логов: бинарный `.jhlog`, оптимизированный под machine parsing, varint, bit flags, dictionary encoding.
 - Debug/export формат: JSONL, генерируется CLI, не является основным runtime-форматом.
@@ -114,7 +114,7 @@ NETWORK_METERED
 Модули:
 
 1. `jankhunter-runtime`
-   - Kotlin-first Android library with Java-compatible public API.
+   - Kotlin-only Android library.
    - Не тянуть AndroidX/OkHttp/RxJava/Compose в core runtime.
    - Auto-init через manifest `ContentProvider`, без AndroidX App Startup.
    - Event queue + background writer.
@@ -124,10 +124,10 @@ NETWORK_METERED
    - Memory sampler.
    - Public API для owner attribution:
 
-```java
-JankHunter.withOwner("FeedRepository.refresh", () -> {
+```kotlin
+JankHunter.withOwner("FeedRepository.refresh") {
     // measured block
-});
+}
 ```
 
 2. `jankhunter-okhttp3`
@@ -197,7 +197,7 @@ Runtime должен писать только короткие owner IDs, а CL
 ## Ограничения и стиль реализации
 
 - Минимизировать внешние зависимости.
-- Runtime SDK пишется на Kotlin, но должен избегать лишних сторонних runtime-зависимостей и держать публичный API удобным для Java/Kotlin host-приложений.
+- Runtime SDK пишется только на Kotlin и должен избегать лишних сторонних runtime-зависимостей.
 - Runtime SDK не должен зависеть от AndroidX в core-модуле.
 - Optional integrations должны быть отдельными модулями.
 - Стабильность host-приложения важнее полноты метрик.

@@ -20,7 +20,7 @@ docs/     Format and architecture notes.
 
 ## Android module strategy
 
-`jankhunter-runtime` is the dependency-safe core. It is Kotlin-first, keeps Java-compatible public APIs, and avoids AndroidX/OkHttp/RxJava/Compose in the core artifact.
+`jankhunter-runtime` is the dependency-safe core. Android source is Kotlin-only and avoids AndroidX/OkHttp/RxJava/Compose in the core artifact.
 
 Optional integrations are separate artifacts:
 

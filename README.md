@@ -19,7 +19,7 @@ The first implementation focuses on:
 - `jankhunter inspect` to summarize one or more logs;
 - `jankhunter compare` to compare baseline and candidate logs;
 - standalone HTML reports with no external CDN dependencies;
-- minimal Android runtime scaffold with Kotlin-first collectors, Java-compatible public API, and optional integrations split into separate modules.
+- minimal Android runtime scaffold with Kotlin-only Android source and optional integrations split into separate modules.
 
 ## CLI quick start
 
