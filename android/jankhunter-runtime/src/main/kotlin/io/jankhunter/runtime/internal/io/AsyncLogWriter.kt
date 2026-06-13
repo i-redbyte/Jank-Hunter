@@ -1,5 +1,6 @@
 package io.jankhunter.runtime.internal.io
 
+import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterConfig
 import java.io.File
 import java.io.IOException
@@ -9,19 +10,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 class AsyncLogWriter private constructor(
-    file: File,
-    config: JankHunterConfig,
+    private val directory: File,
+    private val config: JankHunterConfig,
 ) {
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val running = AtomicBoolean(true)
     private val dropped = AtomicLong()
-    private val writer = BinaryLogWriter(file)
+    private var nextSegmentId = 1L
+    private var writer = openSegment()
+    private var lastFlushAtMs = SystemClock.elapsedRealtime()
+    @Volatile
+    private var bootstrap: SessionBootstrap? = null
     private val worker = Thread({ loop() }, "JankHunterWriter").apply {
         isDaemon = true
         start()
     }
 
     fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int) {
+        bootstrap = SessionBootstrap(appVersion, build, device, sdkInt)
         offer { it.session(appVersion, build, device, sdkInt) }
     }
 
@@ -74,11 +80,18 @@ class AsyncLogWriter private constructor(
 
     fun close() {
         running.set(false)
-        worker.interrupt()
         try {
-            worker.join(1000)
+            worker.join(maxOf(1000L, config.flushIntervalMs() + 500L))
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
+        }
+        if (worker.isAlive) {
+            worker.interrupt()
+            try {
+                worker.join(500)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
         }
         try {
             writer.close()
@@ -87,6 +100,7 @@ class AsyncLogWriter private constructor(
     }
 
     private fun offer(action: Action) {
+        if (!running.get()) return
         if (!queue.offer(action)) {
             dropped.incrementAndGet()
         }
@@ -95,15 +109,61 @@ class AsyncLogWriter private constructor(
     private fun loop() {
         while (running.get() || queue.isNotEmpty()) {
             try {
-                queue.poll(250, TimeUnit.MILLISECONDS)?.write(writer)
+                queue.poll(250, TimeUnit.MILLISECONDS)?.let {
+                    it.write(writer)
+                    rotateIfNeeded()
+                }
                 val lost = dropped.getAndSet(0)
                 if (lost > 0) {
                     writer.counter("jankhunter.events_dropped.count", lost)
+                    rotateIfNeeded()
                 }
+                flushIfNeeded(force = false)
             } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
+                if (!running.get() && queue.isEmpty()) {
+                    break
+                }
             } catch (_: IOException) {
             }
+        }
+        flushIfNeeded(force = true)
+    }
+
+    private fun rotateIfNeeded() {
+        val maxLogBytes = config.maxLogBytes()
+        if (maxLogBytes <= 0 || writer.bytesWritten() < maxLogBytes) return
+
+        writer.close()
+        writer = openSegment()
+        lastFlushAtMs = SystemClock.elapsedRealtime()
+        bootstrap?.write(writer)
+    }
+
+    private fun flushIfNeeded(force: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        val interval = config.flushIntervalMs()
+        if (!force && (interval <= 0 || now - lastFlushAtMs < interval)) return
+
+        try {
+            writer.flush()
+            lastFlushAtMs = now
+        } catch (_: IOException) {
+        }
+    }
+
+    private fun openSegment(): BinaryLogWriter {
+        val file = File(directory, "session-${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
+        return BinaryLogWriter(file)
+    }
+
+    private data class SessionBootstrap(
+        val appVersion: String?,
+        val build: String?,
+        val device: String?,
+        val sdkInt: Int,
+    ) {
+        fun write(writer: BinaryLogWriter) {
+            writer.session(appVersion, build, device, sdkInt)
         }
     }
 
@@ -117,9 +177,8 @@ class AsyncLogWriter private constructor(
             if (!directory.exists() && !directory.mkdirs()) {
                 error("Cannot create Jank Hunter log directory: $directory")
             }
-            val file = File(directory, "session-${System.currentTimeMillis()}.jhlog")
             return try {
-                AsyncLogWriter(file, config)
+                AsyncLogWriter(directory, config)
             } catch (e: IOException) {
                 throw IllegalStateException("Cannot open Jank Hunter log file", e)
             }

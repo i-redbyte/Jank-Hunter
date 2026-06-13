@@ -23,8 +23,12 @@ func ReadFile(path string) (Log, error) {
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return Log{}, err
 	}
-	if n == len(Magic) && bytes.Equal(prefix[:], Magic) {
-		return readBinary(file, path)
+	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
+		version := prefix[7]
+		if version > FormatVersion {
+			return Log{}, fmt.Errorf("%s: unsupported jhlog version %d, cli supports up to %d", path, version, FormatVersion)
+		}
+		return readBinary(file, path, version)
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -33,12 +37,13 @@ func ReadFile(path string) (Log, error) {
 	return readJSONL(file, path)
 }
 
-func readBinary(r io.Reader, source string) (Log, error) {
+func readBinary(r io.Reader, source string, version uint8) (Log, error) {
 	reader := bufio.NewReader(r)
 	log := Log{
-		Source: source,
-		Dict:   map[uint64]string{},
-		Kinds:  map[uint64]DictKind{},
+		Source:  source,
+		Version: version,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]DictKind{},
 	}
 	var currentMS uint64
 	for {
@@ -47,20 +52,20 @@ func readBinary(r io.Reader, source string) (Log, error) {
 			return log, nil
 		}
 		if err != nil {
-			return log, fmt.Errorf("%s: read event type: %w", source, err)
+			return toleratePartial(log, source, "event type", err)
 		}
 
 		deltaMS, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return log, fmt.Errorf("%s: read timestamp delta: %w", source, err)
+			return toleratePartial(log, source, "timestamp delta", err)
 		}
 		flags, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return log, fmt.Errorf("%s: read flags: %w", source, err)
+			return toleratePartial(log, source, "flags", err)
 		}
 		payloadLen, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return log, fmt.Errorf("%s: read payload length: %w", source, err)
+			return toleratePartial(log, source, "payload length", err)
 		}
 		if payloadLen > 4*1024*1024 {
 			return log, fmt.Errorf("%s: suspicious payload length %d", source, payloadLen)
@@ -68,7 +73,7 @@ func readBinary(r io.Reader, source string) (Log, error) {
 
 		payload := make([]byte, payloadLen)
 		if _, err := io.ReadFull(reader, payload); err != nil {
-			return log, fmt.Errorf("%s: read payload: %w", source, err)
+			return toleratePartial(log, source, "payload", err)
 		}
 
 		currentMS += deltaMS
@@ -80,7 +85,9 @@ func readBinary(r io.Reader, source string) (Log, error) {
 			Source:  source,
 		}
 		if err := decodePayload(payload, &event); err != nil {
-			event.Warnings = append(event.Warnings, err.Error())
+			warning := err.Error()
+			event.Warnings = append(event.Warnings, warning)
+			log.Warnings = append(log.Warnings, fmt.Sprintf("event at %dms: %s", event.TimeMS, warning))
 		}
 		if event.Dictionary != nil {
 			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
@@ -88,6 +95,14 @@ func readBinary(r io.Reader, source string) (Log, error) {
 		}
 		log.Events = append(log.Events, event)
 	}
+}
+
+func toleratePartial(log Log, source, stage string, err error) (Log, error) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		log.Warnings = append(log.Warnings, fmt.Sprintf("%s: ignored partial trailing %s", source, stage))
+		return log, nil
+	}
+	return log, fmt.Errorf("%s: read %s: %w", source, stage, err)
 }
 
 func decodePayload(payload []byte, event *Event) error {
@@ -222,9 +237,10 @@ func readString(reader io.ByteReader) (string, error) {
 
 func readJSONL(r io.Reader, source string) (Log, error) {
 	log := Log{
-		Source: source,
-		Dict:   map[uint64]string{},
-		Kinds:  map[uint64]DictKind{},
+		Source:  source,
+		Version: FormatVersion,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]DictKind{},
 	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024), 8*1024*1024)

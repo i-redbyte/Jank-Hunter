@@ -151,10 +151,12 @@ type MetricEvent struct {
 }
 
 type Log struct {
-	Source string
-	Events []Event
-	Dict   map[uint64]string
-	Kinds  map[uint64]DictKind
+	Source   string
+	Version  uint8
+	Events   []Event
+	Dict     map[uint64]string
+	Kinds    map[uint64]DictKind
+	Warnings []string
 }
 
 func TypeName(t EventType) string {

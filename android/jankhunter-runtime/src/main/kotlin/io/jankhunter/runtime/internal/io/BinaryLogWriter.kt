@@ -13,11 +13,21 @@ class BinaryLogWriter(file: File) : Closeable {
     private val dictionary = LinkedHashMap<String, Long>()
     private var nextDictionaryId = 1L
     private var lastTimestampMs = 0L
+    private var logicalBytesWritten = file.length()
 
     init {
         if (file.length() == 0L) {
             out.write(MAGIC)
+            logicalBytesWritten += MAGIC.size
         }
+    }
+
+    @Synchronized
+    fun bytesWritten(): Long = logicalBytesWritten
+
+    @Synchronized
+    fun flush() {
+        out.flush()
     }
 
     @Synchronized
@@ -136,11 +146,13 @@ class BinaryLogWriter(file: File) : Closeable {
         val delta = if (lastTimestampMs == 0L) now else max(0L, now - lastTimestampMs)
         lastTimestampMs = now
 
-        writeUvarint(out, eventType.toLong())
-        writeUvarint(out, delta)
-        writeUvarint(out, flags)
-        writeUvarint(out, payload.size.toLong())
+        var written = 0
+        written += writeUvarint(out, eventType.toLong())
+        written += writeUvarint(out, delta)
+        written += writeUvarint(out, flags)
+        written += writeUvarint(out, payload.size.toLong())
         payload.writeTo(out)
+        logicalBytesWritten += written + payload.size
     }
 
     @Synchronized
@@ -221,13 +233,16 @@ class BinaryLogWriter(file: File) : Closeable {
         private const val DICT_APP_VERSION = 8
         private const val DICT_BUILD = 9
 
-        private fun writeUvarint(out: BufferedOutputStream, rawValue: Long) {
+        private fun writeUvarint(out: BufferedOutputStream, rawValue: Long): Int {
             var value = rawValue
+            var count = 0
             while (value and 0x7FL.inv() != 0L) {
                 out.write(((value and 0x7F) or 0x80).toInt())
                 value = value ushr 7
+                count++
             }
             out.write(value.toInt())
+            return count + 1
         }
     }
 }

@@ -12,6 +12,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
     private val maxQueueSize = builder.maxQueueSize
     private val maxLogBytes = builder.maxLogBytes
+    private val flushIntervalMs = builder.flushIntervalMs
     private val logDirectory = builder.logDirectory
 
     fun enabled(): Boolean = enabled
@@ -32,6 +33,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxLogBytes(): Long = maxLogBytes
 
+    fun flushIntervalMs(): Long = flushIntervalMs
+
     fun logDirectory(): File? = logDirectory
 
     class Builder {
@@ -44,6 +47,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var jankFrameThresholdMs = 32L
         internal var maxQueueSize = 2048
         internal var maxLogBytes = 5L * 1024L * 1024L
+        internal var flushIntervalMs = 5_000L
         internal var logDirectory: File? = null
 
         fun enabled(value: Boolean) = apply { enabled = value }
@@ -63,6 +67,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun maxQueueSize(value: Int) = apply { maxQueueSize = value }
 
         fun maxLogBytes(value: Long) = apply { maxLogBytes = value }
+
+        fun flushIntervalMs(value: Long) = apply { flushIntervalMs = value }
 
         fun logDirectory(value: File?) = apply { logDirectory = value }
 

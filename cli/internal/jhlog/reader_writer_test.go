@@ -1,7 +1,9 @@
 package jhlog
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -23,5 +25,50 @@ func TestWriteSampleReadFile(t *testing.T) {
 	}
 	if log.Events[len(log.Events)-1].TimeMS == 0 {
 		t.Fatalf("expected monotonic event timestamps")
+	}
+}
+
+func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.jhlog")
+	if err := WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := file.Write([]byte{byte(EventHTTP), 0x80}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(log.Events) == 0 {
+		t.Fatalf("expected preserved events")
+	}
+	if len(log.Warnings) == 0 {
+		t.Fatalf("expected partial-tail warning")
+	}
+}
+
+func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.jhlog")
+	future := append([]byte{}, Magic...)
+	future[7] = byte(FormatVersion + 1)
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := ReadFile(path)
+	if err == nil {
+		t.Fatalf("expected future version error")
+	}
+	if !strings.Contains(err.Error(), "unsupported jhlog version") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
