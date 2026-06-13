@@ -458,6 +458,36 @@ cd android
 
 CLI-часть уже умеет читать `.jhlog`, который пишет runtime, потому что формат событий синхронизирован между `android/jankhunter-runtime` и `cli/internal/jhlog`.
 
+## End-to-end проверка
+
+Instrumented test sample app проверяет путь:
+
+```text
+sample app -> runtime collectors -> .jhlog -> host pull -> CLI inspect -> HTML/JSON report
+```
+
+Локально с подключенным emulator/device:
+
+```bash
+cd android
+./gradlew :sample-app:connectedDebugAndroidTest --no-daemon
+```
+
+Полный host-side smoke из корня репозитория:
+
+```bash
+./scripts/android-e2e.sh
+```
+
+Script запускает `connectedDebugAndroidTest`, вытаскивает `files/jankhunter-e2e/*.jhlog` через `run-as`, затем генерирует:
+
+```text
+reports/android-e2e/report.html
+reports/android-e2e/inspect.json
+```
+
+В GitHub Actions этот путь вынесен в manual workflow `Android E2E`, чтобы обычный CI не зависел от emulator startup time.
+
 ## Публикация
 
 Локальная публикация:

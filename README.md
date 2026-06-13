@@ -42,6 +42,14 @@ cd ../android
 
 CI runs the same core checks on `master`.
 
+Optional connected-device smoke:
+
+```bash
+./scripts/android-e2e.sh
+```
+
+It runs the sample app instrumented test, pulls `.jhlog`, and generates `reports/android-e2e/report.html`.
+
 ## Release
 
 Release and publishing instructions live in [docs/release.md](docs/release.md).

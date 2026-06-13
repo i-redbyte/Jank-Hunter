@@ -1,0 +1,28 @@
+name: Android E2E
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sample-app-e2e:
+    name: Sample app log pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: ./scripts/android-e2e.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-report
+          path: reports/android-e2e
