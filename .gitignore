@@ -27,3 +27,4 @@ android/local.properties
 *.jhlog.jsonl
 *-report.html
 reports/
+tmp/

@@ -51,6 +51,14 @@ Optional connected-device smoke:
 
 It runs the sample app instrumented test, pulls `.jhlog`, and generates `reports/android-e2e/report.html`.
 
+Manual sample-app dogfooding:
+
+```bash
+./run-sample-app.sh
+```
+
+The script starts or reuses an emulator, installs `io.jankhunter.sample`, waits for interactive commands, then pulls `.jhlog` files into `tmp/` and generates a CLI HTML report when you type `log` or `stop`.
+
 ## Release
 
 Release and publishing instructions live in [docs/release.md](docs/release.md).
