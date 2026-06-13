@@ -25,6 +25,7 @@ android {
 dependencies {
     api(project(":jankhunter-runtime"))
     compileOnly("com.squareup.okhttp3:okhttp:3.12.13")
+    testImplementation("junit:junit:4.13.2")
 }
 
 afterEvaluate {
