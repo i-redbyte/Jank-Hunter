@@ -604,6 +604,22 @@ const mathInspectTemplate = `<!doctype html>
           {{else}}<tr><td colspan="17" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
         </table>
         {{end}}
+        {{if eq .ID "robust"}}
+        <h3>Распределения</h3>
+        <table class="timeline-table">
+          <tr><th>Слой</th><th>Имя</th><th>Метрика</th><th>N</th><th>Медиана</th><th>p90</th><th>p95</th><th>p99</th><th>MAD</th><th>Усеченное среднее</th><th>Мин.</th><th>Макс.</th><th>Интервал p95</th><th>Качество</th></tr>
+          {{range $math.RobustStats}}
+          <tr>
+            <td>{{.Dimension}}</td><td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.Count}}</td>
+            <td>{{printf "%.1f" .Median}} {{.Unit}}</td><td>{{printf "%.1f" .P90}} {{.Unit}}</td><td>{{printf "%.1f" .P95}} {{.Unit}}</td><td>{{printf "%.1f" .P99}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .MAD}} {{.Unit}}</td><td>{{printf "%.1f" .TrimmedMean}} {{.Unit}}</td><td>{{printf "%.1f" .Min}} {{.Unit}}</td><td>{{printf "%.1f" .Max}} {{.Unit}}</td>
+            <td>{{if .HasP95Confidence}}{{printf "%.1f" .P95ConfidenceLow}}..{{printf "%.1f" .P95ConfidenceHigh}} {{.Unit}}{{else}}мало данных{{end}}</td>
+            <td><span class="section-status {{severityClass .SampleQualitySeverity}}">{{.SampleQuality}}</span><div class="muted">{{.SampleDetail}}</div></td>
+          </tr>
+          {{else}}<tr><td colspan="14" class="muted">Недостаточно данных для робастной статистики.</td></tr>{{end}}
+        </table>
+        <p class="muted">MAD — медиана абсолютных отклонений от медианы. Усеченное среднее считается после отсечения 10% нижнего и верхнего хвоста. Интервал p95 — детерминированный bootstrap-интервал; на очень больших сигналах считается по ограниченной детерминированной выборке.</p>
+        {{end}}
       </div>
     </details>
   </section>
@@ -701,6 +717,21 @@ const mathCompareTemplate = `<!doctype html>
           </div>
           {{else}}<div class="muted">Нет ненулевых рядов кандидата для отображения.</div>{{end}}
         </div>
+        {{end}}
+        {{if eq .ID "robust"}}
+        <h3>Робастные дельты</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Слой</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>Доверие</th><th>Вывод</th></tr>
+          {{range $math.RobustDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Dimension}}</td><td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+            <td>{{printf "%.1f" .BaselineP95}} {{.Unit}}</td><td>{{printf "%.1f" .CandidateP95}} {{.Unit}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .P95DeltaPct}}%</td>
+            <td>{{printf "%.3f" .CliffDelta}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="14" class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</td></tr>{{end}}
+        </table>
+        <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, jank, памяти и очередей это обычно ухудшение.</p>
         {{end}}
       </div>
     </details>

@@ -10,6 +10,8 @@
 - point events: HTTP calls, stalls, retained objects, counters;
 - категориальные состояния: screen, route, owner, process, network, SDK, device, app/build cohort;
 - сравнение выборок: baseline/candidate summaries и deltas.
+- Android-side diagnostic gauges: executor queue/active count, GC/heap pressure, main dispatch latency,
+  reconnect/retry counters, lifecycle timings, CPU/power/thermal/battery metrics.
 
 Это значит, что самые полезные методы будут лежать в четырех группах:
 
@@ -207,6 +209,8 @@ Performance данные шумные и heavy-tailed. Среднее часто
 - confidence bands для p95/FPS/jank;
 - effect size рядом с severity;
 - warning, когда sample size слишком мал.
+- generic gauge distributions, чтобы новые Android метрики автоматически получали median/p95/MAD
+  без ручной ветки на каждый сигнал.
 
 Вердикт: must-have. Это полезнее почти любой “экзотики”.
 

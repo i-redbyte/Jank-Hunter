@@ -15,6 +15,7 @@ type MathReport struct {
 	Findings     []Finding
 	Timeline     []TimelineBucket
 	Series       []Series
+	RobustStats  []RobustStat
 	Spectral     []SpectralPeak
 	NetworkLoops []NetworkLoopFinding
 	GraphPaths   []GraphPath
@@ -29,6 +30,7 @@ type CompareMathReport struct {
 	Comparison     analyze.Comparison
 	Sections       []MathSection
 	Findings       []Finding
+	RobustDeltas   []RobustDelta
 }
 
 type MathSection struct {
@@ -74,6 +76,47 @@ type Series struct {
 	Points   []float64
 }
 
+type RobustStat struct {
+	Dimension             string
+	Name                  string
+	Metric                string
+	Unit                  string
+	Count                 int
+	Median                float64
+	P90                   float64
+	P95                   float64
+	P99                   float64
+	MAD                   float64
+	TrimmedMean           float64
+	Min                   float64
+	Max                   float64
+	P95ConfidenceLow      float64
+	P95ConfidenceHigh     float64
+	HasP95Confidence      bool
+	SampleQuality         string
+	SampleQualitySeverity string
+	SampleDetail          string
+}
+
+type RobustDelta struct {
+	Dimension      string
+	Name           string
+	Metric         string
+	Unit           string
+	BaselineCount  int
+	CandidateCount int
+	BaselineP95    float64
+	CandidateP95   float64
+	P95Delta       float64
+	P95DeltaPct    float64
+	CliffDelta     float64
+	EffectSize     string
+	Confidence     string
+	Severity       string
+	Summary        string
+	Recommendation string
+}
+
 type SpectralPeak struct {
 	Signal      string
 	PeriodMS    uint64
@@ -112,7 +155,12 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	if err != nil {
 		return MathReport{}, err
 	}
-	return buildInspectReport(summary, paths, timeline, series), nil
+	robustSamples, err := collectRobustSamples(paths, options)
+	if err != nil {
+		return MathReport{}, err
+	}
+	robustStats := summarizeRobustSamples(robustSamples)
+	return buildInspectReport(summary, paths, timeline, series, robustStats), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -133,9 +181,20 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	if err != nil {
 		return CompareMathReport{}, err
 	}
+	baselineRobustSamples, err := collectRobustSamples(baselinePaths, options)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
+	candidateRobustSamples, err := collectRobustSamples(candidatePaths, options)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
 
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries)
+	baselineRobustStats := summarizeRobustSamples(baselineRobustSamples)
+	candidateRobustStats := summarizeRobustSamples(candidateRobustSamples)
+	robustDeltas := compareRobustSamples(baselineRobustSamples, candidateRobustSamples)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -147,11 +206,12 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:      candidate,
 		Comparison:     comparison,
 		Findings:       findings,
-		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline),
+		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas),
+		RobustDeltas:   robustDeltas,
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
 		Title:       titleFromPaths(paths),
@@ -160,7 +220,8 @@ func buildInspectReport(summary analyze.Summary, paths []string, timeline []Time
 		Findings:    findings,
 		Timeline:    timeline,
 		Series:      series,
-		Sections:    inspectSections(summary, findings, timeline, series),
+		RobustStats: robustStats,
+		Sections:    inspectSections(summary, findings, timeline, series, robustStats),
 	}
 }
 
@@ -216,7 +277,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -233,10 +294,11 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			Findings: timelineFindings(timeline),
 		},
 		{
-			ID:      "robust",
-			Title:   "Робастная статистика",
-			Status:  "pending",
-			Summary: "Раздел зарезервирован под медиану, p90/p95/p99, MAD, усеченное среднее и интервалы доверия.",
+			ID:       "robust",
+			Title:    "Робастная статистика",
+			Status:   robustStatus(robustStats),
+			Summary:  robustSummary(robustStats),
+			Findings: robustFindings(robustStats),
 		},
 		{
 			ID:      "change-points",
@@ -271,7 +333,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -288,10 +350,11 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			Findings: compareTimelineFindings(baselineTimeline, candidateTimeline),
 		},
 		{
-			ID:      "robust",
-			Title:   "Робастная статистика",
-			Status:  "pending",
-			Summary: "Раздел подготовлен для размера эффекта, Cliff's delta и доверительных меток базы и кандидата.",
+			ID:       "robust",
+			Title:    "Робастная статистика",
+			Status:   compareRobustStatus(robustDeltas),
+			Summary:  compareRobustSummary(robustDeltas),
+			Findings: compareRobustFindings(robustDeltas),
 		},
 		{
 			ID:      "change-points",
