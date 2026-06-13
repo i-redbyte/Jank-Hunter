@@ -9,6 +9,7 @@ import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.FpsMonitor
+import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
 import io.jankhunter.runtime.internal.system.MemoryTrimReporter
@@ -35,6 +36,9 @@ object JankHunter {
 
     @Volatile
     private var watchdog: MainThreadWatchdog? = null
+
+    @Volatile
+    private var dispatchMonitor: MainLooperDispatchMonitor? = null
 
     @Volatile
     private var memorySampler: MemorySampler? = null
@@ -118,6 +122,7 @@ object JankHunter {
                 }
             }
             watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
+            dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
             memoryTrimReporter = MemoryTrimReporter().also {
                 appContext.registerComponentCallbacks(it)
                 componentCallbackContext = appContext
@@ -157,6 +162,7 @@ object JankHunter {
             tracker.close()
         }
         watchdog?.stop()
+        dispatchMonitor?.stop()
         memoryTrimReporter?.let { reporter ->
             componentCallbackContext?.unregisterComponentCallbacks(reporter)
         }
@@ -168,6 +174,7 @@ object JankHunter {
         activityTracker = null
         application = null
         watchdog = null
+        dispatchMonitor = null
         memoryTrimReporter = null
         componentCallbackContext = null
         memorySampler = null
@@ -441,6 +448,17 @@ object JankHunter {
                 recordCounter("executor.$executorName.failure.count", 1)
             }
             recordWrappedWork(ownerName, "executor", durationMs, failed)
+        }
+    }
+
+    internal fun recordMainThreadDispatch(durationMs: Long, thresholdMs: Long, source: String?) {
+        recordGauge("main_thread.dispatch.duration_ms", durationMs)
+        if (durationMs >= thresholdMs) {
+            val overThresholdMs = durationMs - thresholdMs
+            recordCounter("main_thread.dispatch.slow.count", 1)
+            recordGauge("main_thread.dispatch.over_threshold_ms", overThresholdMs)
+            recordCounter("screen.${metricOwner(currentScreen())}.main_thread.slow_dispatch.count", 1)
+            recordCounter("main_thread.dispatch.source.${metricOwner(source)}.slow.count", 1)
         }
     }
 

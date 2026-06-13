@@ -23,6 +23,9 @@ class FpsMonitor(
     private var lastFrameTimeNanos = 0L
     private var frameCount = 0L
     private var jankCount = 0L
+    private var deadlineMissCount = 0L
+    private var maxFrameOverrunMs = 0L
+    private var maxFrameDurationMs = 0L
     private var frameDurationsMs = LongArray(180)
     private var durationCount = 0
 
@@ -58,7 +61,10 @@ class FpsMonitor(
         frameCount++
         if (frameDurationMs >= jankFrameThresholdMs) {
             jankCount++
+            deadlineMissCount++
+            maxFrameOverrunMs = max(maxFrameOverrunMs, frameDurationMs - jankFrameThresholdMs)
         }
+        maxFrameDurationMs = max(maxFrameDurationMs, frameDurationMs)
         recordDuration(frameDurationMs)
 
         val elapsedNanos = frameTimeNanos - windowStartNanos
@@ -74,6 +80,9 @@ class FpsMonitor(
                 percentile(99),
             )
             JankHunter.recordGauge("ui.fps_x100", (frameCount * 100_000L) / windowMs)
+            JankHunter.recordGauge("ui.frame_deadline_miss.count", deadlineMissCount)
+            JankHunter.recordGauge("ui.frame_overrun.max_ms", maxFrameOverrunMs)
+            JankHunter.recordGauge("ui.frame_duration.max_ms", maxFrameDurationMs)
             resetWindow(frameTimeNanos)
         }
 
@@ -92,6 +101,9 @@ class FpsMonitor(
         lastFrameTimeNanos = 0L
         frameCount = 0L
         jankCount = 0L
+        deadlineMissCount = 0L
+        maxFrameOverrunMs = 0L
+        maxFrameDurationMs = 0L
         durationCount = 0
     }
 
@@ -99,6 +111,9 @@ class FpsMonitor(
         windowStartNanos = frameTimeNanos
         frameCount = 0L
         jankCount = 0L
+        deadlineMissCount = 0L
+        maxFrameOverrunMs = 0L
+        maxFrameDurationMs = 0L
         durationCount = 0
     }
 
