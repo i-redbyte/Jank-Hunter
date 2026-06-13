@@ -122,12 +122,12 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   align-items: center;
   justify-content: center;
   min-height: 38px;
-  padding: 8px 14px;
+  padding: 9px 16px;
   border: 1px solid rgba(98,255,168,0.74);
   border-radius: 999px;
   color: #03130a;
   background: linear-gradient(135deg, #62ffa8, #c9ff7a);
-  font-weight: 900;
+  font-weight: 950;
   letter-spacing: 0.02em;
   text-transform: none;
   animation: mathGlow 2.7s ease-in-out infinite;
@@ -436,6 +436,13 @@ details.log-card summary::-webkit-details-marker { display: none; }
 const mathCSS = `
 .math-page .fold > summary::after { content: "открыть"; }
 .math-page .fold[open] > summary::after { content: "закрыть"; }
+.math-page .nav {
+  box-shadow: 0 14px 36px rgba(0,0,0,0.22);
+}
+.math-page .nav a[href="#method-reference"] {
+  border-color: rgba(98,255,168,0.45);
+  color: var(--ok);
+}
 .math-page .section-status {
   display: inline-flex;
   align-items: center;
@@ -461,6 +468,38 @@ const mathCSS = `
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 16px;
+}
+.section-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.section-overview-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--cyan);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.032);
+}
+.section-overview-card.sev-high { border-left-color: var(--bad); }
+.section-overview-card.sev-medium { border-left-color: var(--warn); }
+.section-overview-card.sev-ok { border-left-color: var(--ok); }
+.section-overview-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: start;
+  color: var(--ink);
+  font-weight: 850;
+}
+.section-overview-summary {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .timeline-grid {
   display: grid;
@@ -505,6 +544,10 @@ const mathCSS = `
   filter: drop-shadow(0 0 7px rgba(98,255,168,0.45));
 }
 .timeline-table th, .timeline-table td { white-space: nowrap; }
+.timeline-table {
+  display: block;
+  overflow-x: auto;
+}
 .method-reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -541,6 +584,9 @@ const mathCSS = `
 }
 @media (max-width: 820px) {
   .math-page .math-summary { grid-template-columns: 1fr; }
+  .section-overview-grid { grid-template-columns: 1fr; }
+  .timeline-chart-head { display: block; }
+  .timeline-chart-value { margin-top: 3px; white-space: normal; }
 }
 `
 
@@ -604,6 +650,15 @@ const mathInspectTemplate = `<!doctype html>
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
       {{else}}<div class="muted">Нет находок качества данных.</div>{{end}}
     </div>
+    <h3>Сводка разделов</h3>
+    <div class="section-overview-grid">
+      {{range .Math.Sections}}
+      <a class="section-overview-card {{severityClass .Status}}" href="#{{.ID}}">
+        <div class="section-overview-title"><span>{{.Title}}</span><span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span></div>
+        <div class="section-overview-summary">{{.Summary}}</div>
+      </a>
+      {{end}}
+    </div>
   </section>
 
   {{$math := .Math}}
@@ -613,7 +668,7 @@ const mathInspectTemplate = `<!doctype html>
       <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
       <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
     </div>
-    <details class="fold" open>
+    <details class="fold">
       <summary>Детали раздела</summary>
       <div class="fold-body">
         <div class="finding-list">
@@ -870,6 +925,15 @@ const mathCompareTemplate = `<!doctype html>
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
       {{else}}<div class="muted">Нет находок качества сравнения.</div>{{end}}
     </div>
+    <h3>Сводка разделов</h3>
+    <div class="section-overview-grid">
+      {{range .Math.Sections}}
+      <a class="section-overview-card {{severityClass .Status}}" href="#{{.ID}}">
+        <div class="section-overview-title"><span>{{.Title}}</span><span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span></div>
+        <div class="section-overview-summary">{{.Summary}}</div>
+      </a>
+      {{end}}
+    </div>
   </section>
 
   {{$math := .Math}}
@@ -879,7 +943,7 @@ const mathCompareTemplate = `<!doctype html>
       <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
       <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
     </div>
-    <details class="fold" open>
+    <details class="fold">
       <summary>Детали раздела</summary>
       <div class="fold-body">
         <div class="finding-list">

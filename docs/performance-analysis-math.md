@@ -548,23 +548,26 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - PageRank-like owner blame score;
 - compare graph delta: новые ребра, усиленные ребра, измененные пути, рост вклада источников.
 
-### Stage 10: Advanced / Research
+### Stage 10: Math Analysis Report Page и UX
 
-Добавить при наличии истории:
-
-- Bayesian hierarchical compare;
-- PCA/UMAP run clustering;
-- queueing metrics при расширении runtime events.
-
-### Stage 11: Math Analysis Report Page
-
-Отдельная HTML-страница рядом с основным отчетом:
+Добавлено как отдельная HTML-страница рядом с основным отчетом:
 
 - основная кнопка в report hero: зеленая futuristic кнопка `λ Анализ`;
 - inspect math page: timeline, robust stats, change points, FFT/autocorrelation, network loop detector, graph blame;
 - compare math page: baseline/candidate deltas по periodicity, loop burn, transition matrix, graph paths;
 - все тексты на русском, без внешних CDN;
-- разделы раскрываемые, потому что данных может быть много.
+- верхняя сводка качества/сравнения и карточки статуса всех математических разделов;
+- разделы раскрываемые и закрыты по умолчанию, потому что данных может быть много;
+- встроенная справка по каждому методу: что измеряет, как считается, как читать результат и какие есть ограничения.
+
+### Stage 11: Advanced / Research
+
+Добавить при наличии истории:
+
+- Bayesian hierarchical compare;
+- PCA/UMAP run clustering;
+- queueing metrics при расширении runtime events;
+- калибровка интегральных порогов на реальных QA/production прогонах.
 
 ## Главный вывод
 
@@ -577,4 +580,4 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 5. Spectral/Fourier analysis for long runs.
 6. Graph blame ranking.
 
-Fourier analysis действительно может пригодиться, но только для периодических или длинных временных рядов. Для ежедневного performance triage быстрее окупятся robust statistics, change points и Markov-state модель.
+Fourier analysis действительно может пригодиться, но только для периодических или длинных временных рядов. Для ежедневного performance triage быстрее окупаются robust statistics, change points, Markov-state модель и граф причинности, потому что они сразу дают инженерную гипотезу и следующий шаг расследования.

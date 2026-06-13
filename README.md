@@ -20,6 +20,8 @@ The implementation currently includes:
 - `jankhunter compare` to compare baseline and candidate logs;
 - filters by route/screen/owner;
 - standalone cyber-styled HTML reports with charts, gauges, subtle animation and no external CDN dependencies;
+- separate mathematical HTML reports next to inspect/compare outputs, opened from the green `λ Анализ` button;
+- math analysis for timeline buckets, robust distributions, change points, autocorrelation/DFT peaks, network loops, integral pain scores, Markov states, causal graph paths, and compare deltas;
 - bottom-of-report heuristic verdict with findings and recommendations;
 - compare HTML reports with baseline/candidate scoreboard plus per-log drill-down sections;
 - JSON output and threshold-based CI regression gates in the CLI;
@@ -36,10 +38,10 @@ The implementation currently includes:
 
 ```bash
 cd cli
-go test ./...
+GOCACHE=/private/tmp/jh-go-cache go test ./...
 
 cd ../android
-./gradlew test assemble --no-daemon
+./gradlew :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
 CI runs the same core checks on `master`.
@@ -88,7 +90,9 @@ go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sa
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --owner-map android/sample-app/build/generated/jankhunter/debug/owner-map.json
 ```
 
-The generated HTML files are self-contained dashboards. `inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. Long route/screen/owner/context tables are collapsed behind expandable sections, so large logs stay readable. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log.
+The generated HTML files are self-contained dashboards. `inspect --out /tmp/jankhunter-report.html` also writes `/tmp/jankhunter-report-math.html`; `compare --out /tmp/jankhunter-compare.html` writes `/tmp/jankhunter-compare-math.html`. The main reports contain a green `λ Анализ` button that opens the math page.
+
+`inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. Long route/screen/owner/context tables are collapsed behind expandable sections, so large logs stay readable. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log. The math pages add Russian engineering findings, method reference notes, compact SVG sparklines, and collapsible sections for heavier tables.
 
 ## Product principles
 

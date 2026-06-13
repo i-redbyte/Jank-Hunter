@@ -56,7 +56,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Детали раздела", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -74,7 +74,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Справка по методам", "Марковская модель состояний")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
 }
 
 func TestWriteReportsRussian(t *testing.T) {

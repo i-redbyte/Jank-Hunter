@@ -11,6 +11,9 @@ CLI не требует backend, базы данных или браузерны
 - генерация sample-лога;
 - inspect-отчет по одному файлу или пулу файлов;
 - compare-отчет baseline vs candidate с per-log drill-down внутри того же HTML;
+- отдельный математический HTML-отчет рядом с inspect/compare и зеленая кнопка `λ Анализ` в основном отчете;
+- математические разделы: timeline buckets, robust statistics, change points, autocorrelation/DFT, network loop detector, integral pain scores, Markov states, causal graph и compare deltas;
+- справка по каждому математическому методу прямо в math HTML;
 - streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
 - фильтры `--route`, `--screen`, `--owner`;
 - owner-map import через `--owner-map path.json`;
@@ -81,7 +84,9 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 ```
 
-Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown. Потенциально длинные таблицы маршрутов, экранов, owners, памяти, метрик и контекста спрятаны в раскрывающиеся блоки, чтобы большие логи не превращали первый экран отчета в бесконечную простыню.
+Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown. Рядом автоматически создается `/tmp/report-math.html` с математическим анализом; основной отчет открывает его кнопкой `λ Анализ`.
+
+Потенциально длинные таблицы маршрутов, экранов, owners, памяти, метрик и контекста спрятаны в раскрывающиеся блоки, чтобы большие логи не превращали первый экран отчета в бесконечную простыню.
 Внизу отчета есть `Heuristic Verdict`: краткое итоговое заключение, список находок и рекомендации по следующим шагам.
 
 Получить machine-readable JSON:
@@ -127,6 +132,8 @@ HTML compare состоит из двух основных уровней:
 
 - первый экран показывает scoreboard, regression matrix, cohort warnings и candidate summary;
 - секция `Per-log Drill-down` раскрывает каждый baseline/candidate `.jhlog` отдельно с routes, screens, owners, memory и gauges; содержимое раскрытого лога ограничено по высоте и скроллится внутри карточки.
+
+При `--out compare.html` рядом создается `compare-math.html`. В нем показаны baseline/candidate deltas для робастной статистики, точек изменения, сетевых циклов, интегральных оценок, Markov-переходов и графа причинности.
 
 CLI покажет deltas:
 
@@ -198,6 +205,37 @@ go run ./cmd/jankhunter compare \
 ```bash
 go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
+
+## Математический HTML
+
+Каждый `inspect --out report.html` создает пару файлов:
+
+```text
+report.html
+report-math.html
+```
+
+Каждый `compare --out compare.html` создает:
+
+```text
+compare.html
+compare-math.html
+```
+
+Основной HTML содержит кнопку `λ Анализ`. Math page полностью автономная, на русском языке и без CDN. Верхняя часть показывает сводку качества/сравнения и быстрые карточки всех разделов. Подробные таблицы закрыты по умолчанию и скроллятся внутри секций, поэтому большие логи остаются читаемыми.
+
+Разделы math page:
+
+- `Качество данных` или `Качество сравнения`: sample-size и честность сравнения;
+- `Таймлайн сигналов`: временные бакеты и SVG sparklines;
+- `Робастная статистика`: медиана, p95/p99, MAD, bootstrap-интервал и дельта Клиффа;
+- `Точки изменения`: rolling median/MAD с ближайшим route/owner/screen/network context;
+- `Периодические сигналы`: автокорреляция, DFT peaks, spectral entropy;
+- `Сетевые циклы`: DNS/connect/retry/websocket-like loops, motif, confidence и burn score;
+- `Интегральная оценка боли`: площади jank/latency/stall/memory/recovery debt;
+- `Марковская модель состояний`: state sequence, transition matrix, sticky states и recovery probability;
+- `Граф причинности`: Dijkstra paths, Floyd-Warshall all-pairs для компактного графа и owner blame score;
+- `Справка по методам`: что измеряет каждый метод, как считается, как читать и какие есть ограничения.
 
 ## `.jhlog`
 
@@ -376,7 +414,8 @@ HTML содержит:
 - JankStats section;
 - process/device/network/cohort breakdown;
 - worst regression cards;
-- compare warnings.
+- compare warnings;
+- зеленую кнопку `λ Анализ` и соседнюю math page при генерации через `--out`.
 
 Отчет самодостаточный:
 
@@ -395,6 +434,8 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
 go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
+
+После inspect/compare должны появиться `/tmp/report-math.html` и `/tmp/compare-math.html`; в них должны быть `Математический анализ`, `Сетевые циклы`, `Граф причинности` и `Справка по методам`.
 
 ## Ограничения статистики
 
