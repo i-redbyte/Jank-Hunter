@@ -1,5 +1,8 @@
 package io.jankhunter.runtime
 
+import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.os.Bundle
 import java.io.File
 
 class JankHunterConfig private constructor(builder: Builder) {
@@ -76,7 +79,51 @@ class JankHunterConfig private constructor(builder: Builder) {
     }
 
     companion object {
+        const val META_ENABLED = "io.jankhunter.enabled"
+        const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
+        const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
+        const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
+        const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
+        const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
+        const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
+        const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
+        const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
+        const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
+
         @JvmStatic
         fun builder(): Builder = Builder()
+
+        @JvmStatic
+        fun fromManifest(context: Context): JankHunterConfig {
+            val metadata = metadata(context)
+            return builder()
+                .enabled(metadata?.getBoolean(META_ENABLED, isDebuggable(context)) ?: isDebuggable(context))
+                .autoStartCollectors(metadata?.getBoolean(META_AUTO_START_COLLECTORS, true) ?: true)
+                .mainThreadStallThresholdMs(metadata?.getLong(META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L) ?: 700L)
+                .memorySampleIntervalMs(metadata?.getLong(META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L) ?: 10_000L)
+                .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
+                .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)
+                .jankFrameThresholdMs(metadata?.getLong(META_JANK_FRAME_THRESHOLD_MS, 32L) ?: 32L)
+                .maxQueueSize(metadata?.getInt(META_MAX_QUEUE_SIZE, 2048) ?: 2048)
+                .maxLogBytes(metadata?.getLong(META_MAX_LOG_BYTES, 5L * 1024L * 1024L) ?: 5L * 1024L * 1024L)
+                .flushIntervalMs(metadata?.getLong(META_FLUSH_INTERVAL_MS, 5_000L) ?: 5_000L)
+                .build()
+        }
+
+        private fun metadata(context: Context): Bundle? {
+            return try {
+                @Suppress("DEPRECATION")
+                context.packageManager
+                    .getApplicationInfo(context.packageName, android.content.pm.PackageManager.GET_META_DATA)
+                    .metaData
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun isDebuggable(context: Context): Boolean {
+            val flags = context.applicationInfo?.flags ?: 0
+            return flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        }
     }
 }

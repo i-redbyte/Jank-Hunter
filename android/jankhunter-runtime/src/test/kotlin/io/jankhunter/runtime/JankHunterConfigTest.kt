@@ -1,0 +1,45 @@
+package io.jankhunter.runtime
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class JankHunterConfigTest {
+    @Test
+    fun builderKeepsExplicitRuntimePolicy() {
+        val config = JankHunterConfig.builder()
+            .enabled(false)
+            .autoStartCollectors(false)
+            .mainThreadStallThresholdMs(123)
+            .memorySampleIntervalMs(456)
+            .fpsMonitorEnabled(false)
+            .fpsWindowMs(789)
+            .jankFrameThresholdMs(11)
+            .maxQueueSize(99)
+            .maxLogBytes(1024)
+            .flushIntervalMs(12)
+            .build()
+
+        assertFalse(config.enabled())
+        assertFalse(config.autoStartCollectors())
+        assertEquals(123, config.mainThreadStallThresholdMs())
+        assertEquals(456, config.memorySampleIntervalMs())
+        assertFalse(config.fpsMonitorEnabled())
+        assertEquals(789, config.fpsWindowMs())
+        assertEquals(11, config.jankFrameThresholdMs())
+        assertEquals(99, config.maxQueueSize())
+        assertEquals(1024, config.maxLogBytes())
+        assertEquals(12, config.flushIntervalMs())
+    }
+
+    @Test
+    fun defaultsAreDebugCollectorFriendly() {
+        val config = JankHunterConfig.builder().build()
+
+        assertTrue(config.enabled())
+        assertTrue(config.autoStartCollectors())
+        assertTrue(config.fpsMonitorEnabled())
+        assertEquals(2048, config.maxQueueSize())
+    }
+}

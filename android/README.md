@@ -20,6 +20,7 @@ android/
   jankhunter-runtime/        Core SDK без внешних runtime-зависимостей
   jankhunter-okhttp3/        Optional OkHttp EventListener integration
   jankhunter-gradle-plugin/  Gradle plugin DSL и будущая ASM-инструментация
+  sample-app/                Маленькое приложение для dogfooding runtime
 ```
 
 ## Что уже собирает runtime
@@ -56,7 +57,8 @@ p99_ms
 
 ## Настройка runtime
 
-По умолчанию SDK стартует сам через provider:
+По умолчанию SDK стартует сам через provider. Auto-init читает manifest `meta-data`.
+Если `io.jankhunter.enabled` не задан, runtime включается только когда host-приложение debuggable.
 
 ```xml
 <provider
@@ -64,6 +66,21 @@ p99_ms
     android:authorities="${applicationId}.jankhunter-init"
     android:exported="false"
     android:initOrder="100" />
+```
+
+Полезные manifest-настройки:
+
+```xml
+<meta-data android:name="io.jankhunter.enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.auto_start_collectors" android:value="true" />
+<meta-data android:name="io.jankhunter.main_thread_stall_threshold_ms" android:value="700" />
+<meta-data android:name="io.jankhunter.memory_sample_interval_ms" android:value="10000" />
+<meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.fps_window_ms" android:value="1000" />
+<meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
+<meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
+<meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
+<meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 ```
 
 Если нужна ручная настройка:
@@ -78,9 +95,18 @@ val config = JankHunterConfig.builder()
     .fpsWindowMs(1_000)
     .jankFrameThresholdMs(32)
     .maxQueueSize(2048)
+    .maxLogBytes(5 * 1024 * 1024)
+    .flushIntervalMs(5_000)
     .build()
 
 JankHunter.init(context, config)
+```
+
+При уходе приложения в background runtime пишет lifecycle counter и делает best-effort flush.
+Для ручного сброса буфера можно вызвать:
+
+```kotlin
+JankHunter.flush()
 ```
 
 ## Owner attribution
@@ -187,14 +213,15 @@ JankHunterConfig.builder()
 
 ```bash
 cd android
-./gradlew assemble --no-daemon
+./gradlew test assemble --no-daemon
 ```
 
 Проверенные команды:
 
 ```bash
 ./gradlew :jankhunter-runtime:assemble --no-daemon
-./gradlew assemble --no-daemon
+./gradlew :sample-app:assembleDebug --no-daemon
+./gradlew test assemble --no-daemon
 ```
 
 CLI-часть уже умеет читать `.jhlog`, который пишет runtime, потому что формат событий синхронизирован между `android/jankhunter-runtime` и `cli/internal/jhlog`.

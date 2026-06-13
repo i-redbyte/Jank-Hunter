@@ -7,7 +7,7 @@ import android.net.Uri
 
 class AutoInitProvider : ContentProvider() {
     override fun onCreate(): Boolean {
-        context?.let(JankHunter::init)
+        context?.let { JankHunter.init(it, JankHunterConfig.fromManifest(it)) }
         return true
     }
 

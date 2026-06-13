@@ -78,6 +78,10 @@ class AsyncLogWriter private constructor(
         offer { it.gauge(name, value) }
     }
 
+    fun flush() {
+        offer { it.flush() }
+    }
+
     fun close() {
         running.set(false)
         try {

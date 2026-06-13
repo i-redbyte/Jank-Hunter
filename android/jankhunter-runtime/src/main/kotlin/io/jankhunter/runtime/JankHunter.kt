@@ -33,6 +33,12 @@ object JankHunter {
     private var fpsMonitor: FpsMonitor? = null
 
     @Volatile
+    private var application: Application? = null
+
+    @Volatile
+    private var activityTracker: ActivityTracker? = null
+
+    @Volatile
     private var screen = "unknown"
 
     @JvmStatic
@@ -62,7 +68,10 @@ object JankHunter {
 
         if (providedConfig.autoStartCollectors()) {
             if (appContext is Application) {
-                appContext.registerActivityLifecycleCallbacks(ActivityTracker())
+                application = appContext
+                activityTracker = ActivityTracker().also {
+                    appContext.registerActivityLifecycleCallbacks(it)
+                }
             }
             watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
             memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
@@ -80,10 +89,15 @@ object JankHunter {
 
     @JvmStatic
     fun shutdown() {
+        activityTracker?.let { tracker ->
+            application?.unregisterActivityLifecycleCallbacks(tracker)
+        }
         watchdog?.stop()
         memorySampler?.stop()
         fpsMonitor?.stop()
         writer?.close()
+        activityTracker = null
+        application = null
         watchdog = null
         memorySampler = null
         fpsMonitor = null
@@ -121,6 +135,11 @@ object JankHunter {
     fun setScreen(screenName: String?) {
         screen = screenName?.takeIf { it.isNotEmpty() } ?: "unknown"
         writer?.screen(screen)
+    }
+
+    @JvmStatic
+    fun flush() {
+        writer?.flush()
     }
 
     @JvmStatic
