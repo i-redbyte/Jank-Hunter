@@ -84,6 +84,7 @@ p99_ms
 <meta-data android:name="io.jankhunter.process_exit_info_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.object_watcher_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.retained_object_delay_ms" android:value="5000" />
+<meta-data android:name="io.jankhunter.retained_object_force_gc_enabled" android:value="false" />
 <meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.fps_window_ms" android:value="1000" />
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
@@ -107,6 +108,7 @@ val config = JankHunterConfig.builder()
     .processExitInfoEnabled(true)
     .objectWatcherEnabled(true)
     .retainedObjectDelayMs(5_000)
+    .retainedObjectForceGcEnabled(false)
     .fpsMonitorEnabled(true)
     .fpsWindowMs(1_000)
     .jankFrameThresholdMs(32)
@@ -248,9 +250,14 @@ Core runtime содержит легкий retained-object watcher без heap d
 
 ```kotlin
 JankHunter.watchObject(fragment, "FeedFragment")
+JankHunter.watchActivity(activity)
+JankHunter.watchFragment(fragment, "FeedFragment")
+JankHunter.watchCloseable(closeableOwner, "FeedRepository")
 ```
 
-Если объект остается достижимым дольше `retainedObjectDelayMs`, SDK пишет `retained_object` event. Это ранний сигнал, а не полноценная замена LeakCanary.
+Если объект остается достижимым дольше `retainedObjectDelayMs`, SDK делает повторную проверку перед report. При `retainedObjectForceGcEnabled(true)` watcher перед повторной проверкой просит lightweight GC; этот режим предназначен для debug/QA, а не для release.
+
+Watcher группирует retained objects по class/safe owner name и пишет один `retained_object` event с `count` и максимальным age внутри группы. Он не пишет `object.toString()`, fields, heap dump или пользовательские данные. Это ранний сигнал, а не полноценная замена LeakCanary.
 
 ## JankStats
 
@@ -346,7 +353,7 @@ JankHunterConfig.builder()
 
 - Core SDK сейчас не содержит JankStats, чтобы не тянуть AndroidX.
 - FPS через `Choreographer` дает универсальный lightweight-сигнал, но не заменяет будущую точную интеграцию с JankStats.
-- Heap dump и LeakCanary пока не включены в core, чтобы не утяжелять host-приложение.
+- Heap dump и LeakCanary не включены в core, чтобы не утяжелять host-приложение.
 - Release-режим должен быть opt-in и сильно ограничен по sampling/rate limit.
 
 ## Проверка

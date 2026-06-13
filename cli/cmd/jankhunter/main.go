@@ -280,6 +280,9 @@ func printSummary(summary analyze.Summary) {
 	}
 	fmt.Printf("context: samples=%d battery_min=%d%% avail_mem_min=%dKB low_mem=%d rx_max=%d tx_max=%d\n", summary.ContextCount, summary.BatteryMinPct, summary.AvailMemoryMinKB, summary.LowMemoryCount, summary.TrafficRxMax, summary.TrafficTxMax)
 	fmt.Printf("memory: max_pss=%dKB retained=%d\n", summary.MemoryMaxKB, summary.Retained)
+	if len(summary.RetainedClasses) > 0 {
+		fmt.Printf("retained_classes: %s\n", namedValues(summary.RetainedClasses))
+	}
 }
 
 func namedValues(values []analyze.NamedValue) string {

@@ -110,6 +110,7 @@ object JankHunter {
             if (providedConfig.objectWatcherEnabled()) {
                 objectRetentionWatcher = ObjectRetentionWatcher(
                     providedConfig.retainedObjectDelayMs(),
+                    providedConfig.retainedObjectForceGcEnabled(),
                 ).also { it.start() }
             }
             if (providedConfig.fpsMonitorEnabled()) {
@@ -250,6 +251,21 @@ object JankHunter {
     @JvmStatic
     fun watchObject(instance: Any?, description: String? = null) {
         objectRetentionWatcher?.watch(instance, description)
+    }
+
+    @JvmStatic
+    fun watchActivity(activity: android.app.Activity?) {
+        watchObject(activity, activity?.javaClass?.name)
+    }
+
+    @JvmStatic
+    fun watchFragment(fragmentLike: Any?, name: String? = null) {
+        watchObject(fragmentLike, name ?: fragmentLike?.javaClass?.name)
+    }
+
+    @JvmStatic
+    fun watchCloseable(closeable: java.io.Closeable?, name: String? = null) {
+        watchObject(closeable, name ?: closeable?.javaClass?.name)
     }
 
     @JvmStatic

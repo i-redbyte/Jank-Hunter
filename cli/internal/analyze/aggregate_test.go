@@ -82,6 +82,12 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.Processes) != 1 || summary.Processes[0].Name != "main" {
 		t.Fatalf("unexpected processes: %+v", summary.Processes)
 	}
+	if len(summary.RetainedClasses) != 1 || summary.RetainedClasses[0].Name != "com.app.checkout.CheckoutActivity" {
+		t.Fatalf("unexpected retained classes: %+v", summary.RetainedClasses)
+	}
+	if len(summary.RetainedAgeBuckets) != 1 || summary.RetainedAgeBuckets[0].Name != "10s-30s" {
+		t.Fatalf("unexpected retained age buckets: %+v", summary.RetainedAgeBuckets)
+	}
 }
 
 func TestInspectFilesAppliesRouteFilter(t *testing.T) {

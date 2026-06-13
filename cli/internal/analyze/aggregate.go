@@ -104,12 +104,14 @@ type collector struct {
 	routeTTFBCount map[string]uint64
 	routeOwner     map[string]string
 
-	screenStats    map[string]*ScreenStats
-	ownerStats     map[string]*OwnerStats
-	counterValues  map[string]uint64
-	gaugeValues    map[string][]uint64
-	networkSamples map[string]uint64
-	processSamples map[string]uint64
+	screenStats        map[string]*ScreenStats
+	ownerStats         map[string]*OwnerStats
+	counterValues      map[string]uint64
+	gaugeValues        map[string][]uint64
+	networkSamples     map[string]uint64
+	processSamples     map[string]uint64
+	retainedClasses    map[string]*retainedClassStats
+	retainedAgeBuckets map[string]uint64
 }
 
 type namedDuration struct {
@@ -119,22 +121,29 @@ type namedDuration struct {
 
 func newCollector(title string, logCount int, options Options) *collector {
 	return &collector{
-		summary:        Summary{Title: title, LogCount: logCount},
-		filter:         normalizeFilter(options.Filter),
-		ownerMap:       options.OwnerMap,
-		routeFailures:  map[string]int{},
-		routeRx:        map[string]uint64{},
-		routeTx:        map[string]uint64{},
-		routeTTFB:      map[string]uint64{},
-		routeTTFBCount: map[string]uint64{},
-		routeOwner:     map[string]string{},
-		screenStats:    map[string]*ScreenStats{},
-		ownerStats:     map[string]*OwnerStats{},
-		counterValues:  map[string]uint64{},
-		gaugeValues:    map[string][]uint64{},
-		networkSamples: map[string]uint64{},
-		processSamples: map[string]uint64{},
+		summary:            Summary{Title: title, LogCount: logCount},
+		filter:             normalizeFilter(options.Filter),
+		ownerMap:           options.OwnerMap,
+		routeFailures:      map[string]int{},
+		routeRx:            map[string]uint64{},
+		routeTx:            map[string]uint64{},
+		routeTTFB:          map[string]uint64{},
+		routeTTFBCount:     map[string]uint64{},
+		routeOwner:         map[string]string{},
+		screenStats:        map[string]*ScreenStats{},
+		ownerStats:         map[string]*OwnerStats{},
+		counterValues:      map[string]uint64{},
+		gaugeValues:        map[string][]uint64{},
+		networkSamples:     map[string]uint64{},
+		processSamples:     map[string]uint64{},
+		retainedClasses:    map[string]*retainedClassStats{},
+		retainedAgeBuckets: map[string]uint64{},
 	}
+}
+
+type retainedClassStats struct {
+	count    uint64
+	maxAgeMs uint64
 }
 
 func normalizeFilter(filter Filter) Filter {
@@ -251,6 +260,16 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			return
 		}
 		c.summary.Retained += event.Retained.Count
+		stats := c.retainedClasses[className]
+		if stats == nil {
+			stats = &retainedClassStats{}
+			c.retainedClasses[className] = stats
+		}
+		stats.count += event.Retained.Count
+		if event.Retained.AgeMS > stats.maxAgeMs {
+			stats.maxAgeMs = event.Retained.AgeMS
+		}
+		c.retainedAgeBuckets[retainedAgeBucket(event.Retained.AgeMS)] += event.Retained.Count
 		addOwner(c.ownerStats, className, "retained_object", event.Retained.AgeMS, "")
 	case event.Metric != nil:
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
@@ -375,6 +394,16 @@ func (c *collector) finish() Summary {
 	for name, value := range c.processSamples {
 		summary.Processes = append(summary.Processes, NamedValue{Name: name, Value: value})
 	}
+	for name, stats := range c.retainedClasses {
+		summary.RetainedClasses = append(summary.RetainedClasses, NamedValue{
+			Name:  name,
+			Value: stats.count,
+			Extra: fmt.Sprintf("max_age_ms=%d", stats.maxAgeMs),
+		})
+	}
+	for bucket, value := range c.retainedAgeBuckets {
+		summary.RetainedAgeBuckets = append(summary.RetainedAgeBuckets, NamedValue{Name: bucket, Value: value})
+	}
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})
@@ -388,6 +417,8 @@ func (c *collector) finish() Summary {
 	sortOwners(summary.Owners)
 	sortNamed(summary.Processes)
 	sortNamed(summary.Network)
+	sortNamed(summary.RetainedClasses)
+	sortNamed(summary.RetainedAgeBuckets)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	return summary
@@ -537,6 +568,19 @@ func namedSummary(values []NamedValue) string {
 		parts = append(parts, fmt.Sprintf("%s:%d", value.Name, value.Value))
 	}
 	return strings.Join(parts, ",")
+}
+
+func retainedAgeBucket(ageMs uint64) string {
+	switch {
+	case ageMs < 10_000:
+		return "<10s"
+	case ageMs < 30_000:
+		return "10s-30s"
+	case ageMs < 60_000:
+		return "30s-60s"
+	default:
+		return ">=60s"
+	}
 }
 
 func delta(name string, before, after uint64, unit string, higherIsWorse bool) Delta {

@@ -17,6 +17,7 @@ CLI не требует backend, базы данных или браузерны
 - экспорт событий в JSONL;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - process breakdown из session metadata;
+- retained-object section с top retained classes и age buckets;
 - top suspects по owner/class/stack hint.
 
 ## Сборка

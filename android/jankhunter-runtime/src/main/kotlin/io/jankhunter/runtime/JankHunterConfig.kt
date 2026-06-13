@@ -15,6 +15,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val processExitInfoEnabled = builder.processExitInfoEnabled
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
+    private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
     private val fpsMonitorEnabled = builder.fpsMonitorEnabled
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
@@ -44,6 +45,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
 
     fun retainedObjectDelayMs(): Long = retainedObjectDelayMs
+
+    fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
     fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
 
@@ -83,6 +86,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var processExitInfoEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
+        internal var retainedObjectForceGcEnabled = false
         internal var fpsMonitorEnabled = true
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
@@ -112,6 +116,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun objectWatcherEnabled(value: Boolean) = apply { objectWatcherEnabled = value }
 
         fun retainedObjectDelayMs(value: Long) = apply { retainedObjectDelayMs = value }
+
+        fun retainedObjectForceGcEnabled(value: Boolean) = apply { retainedObjectForceGcEnabled = value }
 
         fun fpsMonitorEnabled(value: Boolean) = apply { fpsMonitorEnabled = value }
 
@@ -152,6 +158,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_PROCESS_EXIT_INFO_ENABLED = "io.jankhunter.process_exit_info_enabled"
         const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
+        const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
         const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
@@ -177,6 +184,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .processExitInfoEnabled(metadata?.getBoolean(META_PROCESS_EXIT_INFO_ENABLED, true) ?: true)
                 .objectWatcherEnabled(metadata?.getBoolean(META_OBJECT_WATCHER_ENABLED, true) ?: true)
                 .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
+                .retainedObjectForceGcEnabled(metadata?.getBoolean(META_RETAINED_OBJECT_FORCE_GC_ENABLED, false) ?: false)
                 .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
                 .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)
                 .jankFrameThresholdMs(metadata?.getLong(META_JANK_FRAME_THRESHOLD_MS, 32L) ?: 32L)

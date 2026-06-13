@@ -134,6 +134,19 @@ const inspectTemplate = `<!doctype html>
   </section>
 
   <section>
+    <h2>Retained Objects</h2>
+    <table>
+      <tr><th>Class / Owner</th><th>Count</th><th>Details</th></tr>
+      {{range .Summary.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No retained-object events.</td></tr>{{end}}
+    </table>
+    <h2>Retained Age Buckets</h2>
+    <table>
+      <tr><th>Age</th><th>Count</th></tr>
+      {{range .Summary.RetainedAgeBuckets}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No retained-object events.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
     <h2>System Context</h2>
     <h2>Process Breakdown</h2>
     <table>
@@ -218,6 +231,14 @@ const compareTemplate = `<!doctype html>
       {{range .Comparison.Candidate.Owners}}
       <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
       {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Candidate Retained Objects</h2>
+    <table>
+      <tr><th>Class / Owner</th><th>Count</th><th>Details</th></tr>
+      {{range .Comparison.Candidate.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No retained-object events.</td></tr>{{end}}
     </table>
   </section>
 

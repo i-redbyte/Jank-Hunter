@@ -67,6 +67,16 @@ Jank Hunter should not claim perfect blame. It should surface likely suspects:
 - sampled stack signatures for slow/error paths;
 - top offenders grouped by route, screen, class, owner, and stack.
 
+## Retained-object diagnostics
+
+Core retained diagnostics intentionally avoid heap dumps and LeakCanary dependencies. Runtime stores only weak references plus safe class/owner labels, then performs a two-step retained check:
+
+- first pass marks objects that survived `retainedObjectDelayMs`;
+- optional debug/QA forced GC can run before the second pass;
+- second pass groups still-retained references by class/owner and writes one `retained_object` event per group.
+
+The event contains class/owner dictionary id, max retained age, and count. It never records `object.toString()`, field values, headers, bodies, tokens, or heap contents. CLI reports top retained classes and retained age buckets.
+
 ## Gradle Instrumentation
 
 The Gradle plugin uses Android Gradle Plugin ASM APIs to weave enabled debug/QA variants after include/exclude package filtering.
