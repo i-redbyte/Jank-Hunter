@@ -119,6 +119,13 @@ class BinaryLogWriter(file: File) : Closeable {
     }
 
     @Synchronized
+    fun retained(className: String?, ageMs: Long, count: Long) {
+        val classId = idFor(DICT_CLASS, className)
+        val payload = Payload().uvarint(classId).uvarint(ageMs).uvarint(count)
+        record(EVENT_RETAINED, FLAG_APP_FOREGROUND, payload)
+    }
+
+    @Synchronized
     fun uiWindow(
         screen: String?,
         windowMs: Long,
@@ -251,12 +258,14 @@ class BinaryLogWriter(file: File) : Closeable {
         private const val EVENT_UI_WINDOW = 5
         private const val EVENT_STALL = 6
         private const val EVENT_MEMORY = 7
+        private const val EVENT_RETAINED = 8
         private const val EVENT_COUNTER = 9
         private const val EVENT_GAUGE = 10
 
         private const val DICT_OWNER = 1
         private const val DICT_ROUTE = 2
         private const val DICT_SCREEN = 3
+        private const val DICT_CLASS = 4
         private const val DICT_STACK = 5
         private const val DICT_METRIC = 6
         private const val DICT_DEVICE = 7

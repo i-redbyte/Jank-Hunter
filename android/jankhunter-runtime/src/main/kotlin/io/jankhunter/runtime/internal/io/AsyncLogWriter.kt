@@ -86,6 +86,10 @@ class AsyncLogWriter private constructor(
         offer { it.memory(pssKb, javaHeapKb, nativeHeapKb) }
     }
 
+    fun retained(className: String?, ageMs: Long, count: Long) {
+        offer { it.retained(className, ageMs, count) }
+    }
+
     fun uiWindow(
         screen: String?,
         windowMs: Long,

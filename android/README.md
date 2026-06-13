@@ -34,6 +34,7 @@ android/
 - main-thread stalls через watchdog;
 - memory snapshots: PSS, Java heap, native heap;
 - previous process exit summary через `ApplicationExitInfo` на Android 11+;
+- retained object watcher без внешних зависимостей;
 - counters/gauges;
 - explicit owner attribution через `JankHunter.withOwner(...)`.
 
@@ -80,6 +81,8 @@ p99_ms
 <meta-data android:name="io.jankhunter.system_sampler_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.system_sample_interval_ms" android:value="15000" />
 <meta-data android:name="io.jankhunter.process_exit_info_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.object_watcher_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.retained_object_delay_ms" android:value="5000" />
 <meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.fps_window_ms" android:value="1000" />
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
@@ -99,6 +102,8 @@ val config = JankHunterConfig.builder()
     .systemSamplerEnabled(true)
     .systemSampleIntervalMs(15_000)
     .processExitInfoEnabled(true)
+    .objectWatcherEnabled(true)
+    .retainedObjectDelayMs(5_000)
     .fpsMonitorEnabled(true)
     .fpsWindowMs(1_000)
     .jankFrameThresholdMs(32)
@@ -142,6 +147,9 @@ JankHunter.withOwner("FeedRepository.refresh") {
 - connect duration;
 - TTFB;
 - status class;
+- request/response body bytes, если OkHttp отдал byte count;
+- reused connection flag;
+- TLS flag по secure connect / connection handshake;
 - failure flag;
 - route в виде `METHOD /path`;
 - owner из текущего `JankHunter.currentOwner()`.
@@ -153,6 +161,39 @@ val client = OkHttpClient.Builder()
     .eventListenerFactory(JankHunterEventListenerFactory())
     .build()
 ```
+
+WebSocket:
+
+```kotlin
+client.newWebSocket(
+    request,
+    JankHunterWebSocketListener(
+        owner = "RealtimeFeed",
+        route = "wss /feed",
+        delegate = existingListener,
+    ),
+)
+```
+
+## Object watcher
+
+Core runtime содержит легкий retained-object watcher без heap dump:
+
+```kotlin
+JankHunter.watchObject(fragment, "FeedFragment")
+```
+
+Если объект остается достижимым дольше `retainedObjectDelayMs`, SDK пишет `retained_object` event. Это ранний сигнал, а не полноценная замена LeakCanary.
+
+## JankStats
+
+Core не тянет AndroidX, но содержит reflection bridge. Если host-приложение само подключило `androidx.metrics:metrics-performance`, можно включить точный JankStats-сигнал:
+
+```kotlin
+JankHunterJankStats.install(window)
+```
+
+Если класса JankStats нет в classpath, метод вернет `null` и ничего не сломает.
 
 Если у приложения уже есть свой `EventListener.Factory`, передайте его как delegate:
 

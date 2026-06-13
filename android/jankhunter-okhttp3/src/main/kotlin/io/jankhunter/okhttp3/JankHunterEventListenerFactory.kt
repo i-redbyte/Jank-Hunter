@@ -4,6 +4,7 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import okhttp3.Call
+import okhttp3.Connection
 import okhttp3.EventListener
 import okhttp3.Protocol
 import okhttp3.Request
@@ -34,6 +35,10 @@ class JankHunterEventListenerFactory(
         private var ttfbMs = 0L
         private var statusClass = 0
         private var flags = 0L
+        private var connectionAcquired = false
+        private var connectStarted = false
+        private var requestBodyBytes = 0L
+        private var responseBodyBytes = 0L
 
         override fun callStart(call: Call) {
             startedAt = now()
@@ -51,8 +56,14 @@ class JankHunterEventListenerFactory(
         }
 
         override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) {
+            connectStarted = true
             connectStartedAt = now()
             delegate.connectStart(call, inetSocketAddress, proxy)
+        }
+
+        override fun secureConnectStart(call: Call) {
+            flags = flags or BinaryLogWriter.FLAG_HTTP_TLS
+            delegate.secureConnectStart(call)
         }
 
         override fun connectEnd(
@@ -62,8 +73,28 @@ class JankHunterEventListenerFactory(
             protocol: Protocol?,
         ) {
             connectMs = elapsed(connectStartedAt)
-            flags = flags or BinaryLogWriter.FLAG_HTTP_TLS
             delegate.connectEnd(call, inetSocketAddress, proxy, protocol)
+        }
+
+        override fun connectionAcquired(call: Call, connection: Connection) {
+            connectionAcquired = true
+            if (!connectStarted) {
+                flags = flags or BinaryLogWriter.FLAG_HTTP_REUSED_CONNECTION
+            }
+            if (connection.handshake() != null) {
+                flags = flags or BinaryLogWriter.FLAG_HTTP_TLS
+            }
+            delegate.connectionAcquired(call, connection)
+        }
+
+        override fun requestBodyEnd(call: Call, byteCount: Long) {
+            requestBodyBytes = max(0L, byteCount)
+            delegate.requestBodyEnd(call, byteCount)
+        }
+
+        override fun responseBodyEnd(call: Call, byteCount: Long) {
+            responseBodyBytes = max(0L, byteCount)
+            delegate.responseBodyEnd(call, byteCount)
         }
 
         override fun responseHeadersStart(call: Call) {
@@ -90,6 +121,9 @@ class JankHunterEventListenerFactory(
         private fun record(call: Call, failed: Boolean) {
             val request: Request = call.request()
             var localFlags = flags or BinaryLogWriter.FLAG_APP_FOREGROUND
+            if (connectionAcquired && !connectStarted) {
+                localFlags = localFlags or BinaryLogWriter.FLAG_HTTP_REUSED_CONNECTION
+            }
             if (failed) {
                 localFlags = localFlags or BinaryLogWriter.FLAG_HTTP_FAILED
             }
@@ -101,8 +135,8 @@ class JankHunterEventListenerFactory(
                 connectMs,
                 ttfbMs,
                 statusClass,
-                0,
-                0,
+                responseBodyBytes,
+                requestBodyBytes,
                 localFlags,
             )
         }

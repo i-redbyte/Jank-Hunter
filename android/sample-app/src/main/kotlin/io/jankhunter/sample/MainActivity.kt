@@ -17,6 +17,7 @@ class MainActivity : Activity() {
         Thread(runnable, "JankHunterSampleWorker")
     }
     private val clicks = AtomicInteger()
+    private val retainedSamples = mutableListOf<Any>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +64,15 @@ class MainActivity : Activity() {
                 }
             }
         }
+        val watchButton = Button(this).apply {
+            text = "Watch Retained Object"
+            setOnClickListener {
+                val sample = RetainedSample(clicks.get())
+                retainedSamples += sample
+                JankHunter.watchObject(sample, "io.jankhunter.sample.RetainedSample")
+                JankHunter.recordCounter("sample.retained.watch.count", 1)
+            }
+        }
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -72,6 +82,9 @@ class MainActivity : Activity() {
             addView(status, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(jankButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(workerButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(watchButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }
+
+    private data class RetainedSample(val id: Int)
 }

@@ -13,6 +13,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val systemSamplerEnabled = builder.systemSamplerEnabled
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
     private val processExitInfoEnabled = builder.processExitInfoEnabled
+    private val objectWatcherEnabled = builder.objectWatcherEnabled
+    private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val fpsMonitorEnabled = builder.fpsMonitorEnabled
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
@@ -34,6 +36,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun systemSampleIntervalMs(): Long = systemSampleIntervalMs
 
     fun processExitInfoEnabled(): Boolean = processExitInfoEnabled
+
+    fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
+
+    fun retainedObjectDelayMs(): Long = retainedObjectDelayMs
 
     fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
 
@@ -57,6 +63,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var systemSamplerEnabled = true
         internal var systemSampleIntervalMs = 15_000L
         internal var processExitInfoEnabled = true
+        internal var objectWatcherEnabled = true
+        internal var retainedObjectDelayMs = 5_000L
         internal var fpsMonitorEnabled = true
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
@@ -78,6 +86,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun systemSampleIntervalMs(value: Long) = apply { systemSampleIntervalMs = value }
 
         fun processExitInfoEnabled(value: Boolean) = apply { processExitInfoEnabled = value }
+
+        fun objectWatcherEnabled(value: Boolean) = apply { objectWatcherEnabled = value }
+
+        fun retainedObjectDelayMs(value: Long) = apply { retainedObjectDelayMs = value }
 
         fun fpsMonitorEnabled(value: Boolean) = apply { fpsMonitorEnabled = value }
 
@@ -104,6 +116,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_SYSTEM_SAMPLER_ENABLED = "io.jankhunter.system_sampler_enabled"
         const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
         const val META_PROCESS_EXIT_INFO_ENABLED = "io.jankhunter.process_exit_info_enabled"
+        const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
+        const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
         const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
@@ -125,6 +139,8 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .systemSamplerEnabled(metadata?.getBoolean(META_SYSTEM_SAMPLER_ENABLED, true) ?: true)
                 .systemSampleIntervalMs(metadata?.getLong(META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L) ?: 15_000L)
                 .processExitInfoEnabled(metadata?.getBoolean(META_PROCESS_EXIT_INFO_ENABLED, true) ?: true)
+                .objectWatcherEnabled(metadata?.getBoolean(META_OBJECT_WATCHER_ENABLED, true) ?: true)
+                .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
                 .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
                 .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)
                 .jankFrameThresholdMs(metadata?.getLong(META_JANK_FRAME_THRESHOLD_MS, 32L) ?: 32L)

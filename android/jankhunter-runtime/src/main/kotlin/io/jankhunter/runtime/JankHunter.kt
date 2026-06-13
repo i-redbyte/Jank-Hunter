@@ -10,6 +10,7 @@ import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
+import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
@@ -33,6 +34,9 @@ object JankHunter {
 
     @Volatile
     private var systemContextSampler: SystemContextSampler? = null
+
+    @Volatile
+    private var objectRetentionWatcher: ObjectRetentionWatcher? = null
 
     @Volatile
     private var fpsMonitor: FpsMonitor? = null
@@ -89,6 +93,11 @@ object JankHunter {
             if (providedConfig.processExitInfoEnabled()) {
                 ProcessExitReporter.report(appContext)
             }
+            if (providedConfig.objectWatcherEnabled()) {
+                objectRetentionWatcher = ObjectRetentionWatcher(
+                    providedConfig.retainedObjectDelayMs(),
+                ).also { it.start() }
+            }
             if (providedConfig.fpsMonitorEnabled()) {
                 fpsMonitor = FpsMonitor(
                     providedConfig.fpsWindowMs(),
@@ -109,6 +118,7 @@ object JankHunter {
         watchdog?.stop()
         memorySampler?.stop()
         systemContextSampler?.stop()
+        objectRetentionWatcher?.stop()
         fpsMonitor?.stop()
         writer?.close()
         activityTracker = null
@@ -116,6 +126,7 @@ object JankHunter {
         watchdog = null
         memorySampler = null
         systemContextSampler = null
+        objectRetentionWatcher = null
         fpsMonitor = null
         writer = null
         started.set(false)
@@ -182,6 +193,16 @@ object JankHunter {
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
         writer?.memory(pssKb, javaHeapKb, nativeHeapKb)
+    }
+
+    @JvmStatic
+    fun recordRetained(className: String?, ageMs: Long, count: Long) {
+        writer?.retained(className, ageMs, count)
+    }
+
+    @JvmStatic
+    fun watchObject(instance: Any?, description: String? = null) {
+        objectRetentionWatcher?.watch(instance, description)
     }
 
     @JvmStatic
