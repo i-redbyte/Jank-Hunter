@@ -134,6 +134,24 @@ func execute(path, source string, data any) error {
 				return "каркас"
 			}
 		},
+		"sparkline": func(series mathanalysis.Series) template.HTML {
+			return sparklineSVG(series)
+		},
+		"seriesMax": func(series mathanalysis.Series) float64 {
+			return seriesMax(series)
+		},
+		"seriesLast": func(series mathanalysis.Series) float64 {
+			return seriesLast(series)
+		},
+		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
+			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
+		},
+		"jankPct": func(jankyFrames uint64, frames uint64) float64 {
+			if frames == 0 {
+				return 0
+			}
+			return float64(jankyFrames) * 100 / float64(frames)
+		},
 		"notOK": func(value string) bool {
 			return value != "" && value != "ok"
 		},
@@ -166,6 +184,92 @@ func clampPct(value float64) float64 {
 		return 100
 	}
 	return value
+}
+
+func sparklineSVG(series mathanalysis.Series) template.HTML {
+	const (
+		width  = 360.0
+		height = 86.0
+		pad    = 5.0
+	)
+	if len(series.Points) == 0 {
+		return template.HTML(`<svg class="sparkline" viewBox="0 0 360 86" role="img" aria-label="нет данных"></svg>`)
+	}
+	maxValue := seriesMax(series)
+	minValue := series.Points[0]
+	for _, point := range series.Points {
+		if point < minValue {
+			minValue = point
+		}
+	}
+	if maxValue == minValue {
+		minValue = 0
+	}
+	if maxValue == minValue {
+		maxValue = minValue + 1
+	}
+	scaleY := func(value float64) float64 {
+		return height - pad - ((value - minValue) * (height - 2*pad) / (maxValue - minValue))
+	}
+	step := width - 2*pad
+	if len(series.Points) > 1 {
+		step = (width - 2*pad) / float64(len(series.Points)-1)
+	}
+	barWidth := step * 0.62
+	if barWidth < 1.2 {
+		barWidth = 1.2
+	}
+	if barWidth > 11 {
+		barWidth = 11
+	}
+
+	var bars strings.Builder
+	var line strings.Builder
+	for i, point := range series.Points {
+		x := pad
+		if len(series.Points) > 1 {
+			x += float64(i) * step
+		}
+		y := scaleY(point)
+		barHeight := height - pad - y
+		if barHeight < 1 && point > 0 {
+			barHeight = 1
+		}
+		if point > 0 {
+			fmt.Fprintf(&bars, `<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="1.4"></rect>`, x-barWidth/2, height-pad-barHeight, barWidth, barHeight)
+		}
+		if i > 0 {
+			line.WriteByte(' ')
+		}
+		fmt.Fprintf(&line, "%.2f,%.2f", x, y)
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, `<svg class="sparkline" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(series.Name))
+	out.WriteString(`<line class="spark-axis" x1="5" y1="81" x2="355" y2="81"></line>`)
+	out.WriteString(`<g class="spark-bars">`)
+	out.WriteString(bars.String())
+	out.WriteString(`</g><polyline class="spark-line" points="`)
+	out.WriteString(line.String())
+	out.WriteString(`"></polyline></svg>`)
+	return template.HTML(out.String())
+}
+
+func seriesMax(series mathanalysis.Series) float64 {
+	var maxValue float64
+	for _, point := range series.Points {
+		if point > maxValue {
+			maxValue = point
+		}
+	}
+	return maxValue
+}
+
+func seriesLast(series mathanalysis.Series) float64 {
+	if len(series.Points) == 0 {
+		return 0
+	}
+	return series.Points[len(series.Points)-1]
 }
 
 func reportLanguage() string {

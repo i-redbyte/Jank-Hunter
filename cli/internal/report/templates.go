@@ -462,6 +462,49 @@ const mathCSS = `
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 16px;
 }
+.timeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 10px 0 16px;
+}
+.timeline-chart {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255,255,255,0.032);
+}
+.timeline-chart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.timeline-chart-title { font-weight: 850; overflow-wrap: anywhere; }
+.timeline-chart-value { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sparkline {
+  width: 100%;
+  height: 86px;
+  display: block;
+  overflow: visible;
+}
+.spark-axis {
+  stroke: rgba(255,255,255,0.12);
+  stroke-width: 1;
+}
+.spark-bars rect {
+  fill: rgba(98,255,168,0.22);
+}
+.spark-line {
+  fill: none;
+  stroke: var(--ok);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 7px rgba(98,255,168,0.45));
+}
+.timeline-table th, .timeline-table td { white-space: nowrap; }
 @media (max-width: 820px) {
   .math-page .math-summary { grid-template-columns: 1fr; }
 }
@@ -528,6 +571,7 @@ const mathInspectTemplate = `<!doctype html>
     </div>
   </section>
 
+  {{$math := .Math}}
   {{range .Math.Sections}}
   <section id="{{.ID}}" class="panel">
     <div class="panel-head">
@@ -542,6 +586,24 @@ const mathInspectTemplate = `<!doctype html>
           <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
           {{else}}<div class="muted">Подробные находки появятся после реализации вычислений этого раздела.</div>{{end}}
         </div>
+        {{if eq .ID "timeline"}}
+        <h3>Ряды сигналов</h3>
+        <div class="timeline-grid">
+          {{range $math.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}} · последн. {{printf "%.1f" (seriesLast .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов для отображения.</div>{{end}}
+        </div>
+        <h3>Бакеты</h3>
+        <table class="timeline-table">
+          <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th><th>UI кадры</th><th>Jank кадры</th><th>Доля jank</th><th>PSS</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
+          {{range $math.Timeline}}
+          <tr><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} ms</td><td>{{.HTTPP95DurationMS}} ms</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} ms</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} ms</td><td>{{.TTFBMS}} ms</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
+          {{else}}<tr><td colspan="17" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -605,6 +667,7 @@ const mathCompareTemplate = `<!doctype html>
     </div>
   </section>
 
+  {{$math := .Math}}
   {{range .Math.Sections}}
   <section id="{{.ID}}" class="panel">
     <div class="panel-head">
@@ -619,6 +682,26 @@ const mathCompareTemplate = `<!doctype html>
           <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
           {{else}}<div class="muted">Подробные находки сравнения появятся после реализации вычислений этого раздела.</div>{{end}}
         </div>
+        {{if eq .ID "timeline"}}
+        <h3>База</h3>
+        <div class="timeline-grid">
+          {{range $math.Baseline.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов базы для отображения.</div>{{end}}
+        </div>
+        <h3>Кандидат</h3>
+        <div class="timeline-grid">
+          {{range $math.Candidate.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов кандидата для отображения.</div>{{end}}
+        </div>
+        {{end}}
       </div>
     </details>
   </section>

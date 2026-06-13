@@ -108,7 +108,11 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	if err != nil {
 		return MathReport{}, err
 	}
-	return buildInspectReport(summary, paths), nil
+	timeline, series, err := buildTimeline(paths, options)
+	if err != nil {
+		return MathReport{}, err
+	}
+	return buildInspectReport(summary, paths, timeline, series), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -121,8 +125,17 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		return CompareMathReport{}, err
 	}
 
-	baseline := buildInspectReport(baselineSummary, baselinePaths)
-	candidate := buildInspectReport(candidateSummary, candidatePaths)
+	baselineTimeline, baselineSeries, err := buildTimeline(baselinePaths, options)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
+	candidateTimeline, candidateSeries, err := buildTimeline(candidatePaths, options)
+	if err != nil {
+		return CompareMathReport{}, err
+	}
+
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -134,18 +147,20 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:      candidate,
 		Comparison:     comparison,
 		Findings:       findings,
-		Sections:       compareSections(comparison, findings),
+		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline),
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
 		Title:       titleFromPaths(paths),
 		SourcePaths: append([]string(nil), paths...),
 		Summary:     summary,
 		Findings:    findings,
-		Sections:    inspectSections(summary, findings),
+		Timeline:    timeline,
+		Series:      series,
+		Sections:    inspectSections(summary, findings, timeline, series),
 	}
 }
 
@@ -201,7 +216,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -211,10 +226,11 @@ func inspectSections(summary analyze.Summary, findings []Finding) []MathSection 
 			Findings: findings,
 		},
 		{
-			ID:      "timeline",
-			Title:   "Таймлайн сигналов",
-			Status:  "pending",
-			Summary: "Каркас секции подключен. Движок временных бакетов по HTTP, UI, памяти и трафику будет заполнен следующим этапом.",
+			ID:       "timeline",
+			Title:    "Таймлайн сигналов",
+			Status:   timelineStatus(timeline),
+			Summary:  timelineSummary(timeline, series),
+			Findings: timelineFindings(timeline),
 		},
 		{
 			ID:      "robust",
@@ -244,7 +260,7 @@ func inspectSections(summary analyze.Summary, findings []Finding) []MathSection 
 			ID:      "markov",
 			Title:   "Марковская модель состояний",
 			Status:  "pending",
-			Summary: "Раздел готов для состояний Healthy, NetworkSlow, Janky, Stalled, MemoryPressure и Recovering.",
+			Summary: "Раздел готов для состояний: здоровое, медленная сеть, jank, stall, давление памяти и восстановление.",
 		},
 		{
 			ID:      "graph",
@@ -255,7 +271,7 @@ func inspectSections(summary analyze.Summary, findings []Finding) []MathSection 
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -265,10 +281,11 @@ func compareSections(comparison analyze.Comparison, findings []Finding) []MathSe
 			Findings: findings,
 		},
 		{
-			ID:      "timeline",
-			Title:   "Таймлайн сигналов",
-			Status:  "pending",
-			Summary: "Сравнение таймлайнов по временным бакетам будет добавлено после реализации движка таймлайна.",
+			ID:       "timeline",
+			Title:    "Таймлайн сигналов",
+			Status:   compareTimelineStatus(baselineTimeline, candidateTimeline),
+			Summary:  compareTimelineSummary(baselineTimeline, candidateTimeline),
+			Findings: compareTimelineFindings(baselineTimeline, candidateTimeline),
 		},
 		{
 			ID:      "robust",
@@ -292,7 +309,7 @@ func compareSections(comparison analyze.Comparison, findings []Finding) []MathSe
 			ID:      "network-loops",
 			Title:   "Сетевые циклы",
 			Status:  "pending",
-			Summary: "Здесь появятся признаки появления или исчезновения цикла, изменение периода, burn score и доверие.",
+			Summary: "Здесь появятся признаки появления или исчезновения цикла, изменение периода, оценка сетевого выгорания и доверие.",
 		},
 		{
 			ID:      "markov",
