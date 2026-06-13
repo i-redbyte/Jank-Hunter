@@ -1,0 +1,1 @@
+-keep class io.jankhunter.okhttp3.** { *; }

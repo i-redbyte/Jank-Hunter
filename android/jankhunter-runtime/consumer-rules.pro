@@ -1,0 +1,2 @@
+-keep class io.jankhunter.runtime.JankHunter { *; }
+-keep class io.jankhunter.runtime.AutoInitProvider { *; }

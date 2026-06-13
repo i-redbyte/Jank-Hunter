@@ -1,0 +1,29 @@
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.swp
+*.tmp
+
+# Go
+cli/bin/
+cli/dist/
+cli/coverage.out
+*.test
+*.prof
+
+# Android / Gradle
+android/.kotlin/
+android/.gradle/
+android/build/
+android/**/build/
+android/**/.cxx/
+android/**/.externalNativeBuild/
+android/**/captures/
+android/local.properties
+
+# Jank Hunter artifacts
+*.jhlog
+*.jhlog.jsonl
+*-report.html
+reports/
