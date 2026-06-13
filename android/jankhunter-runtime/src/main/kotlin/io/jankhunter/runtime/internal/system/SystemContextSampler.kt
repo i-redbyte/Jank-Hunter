@@ -8,9 +8,12 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.TrafficStats
 import android.os.BatteryManager
+import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
 import io.jankhunter.runtime.JankHunter
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
@@ -21,6 +24,11 @@ class SystemContextSampler(
     private val appContext = context.applicationContext
     private val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
     private val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    private val cpuSampler = ProcCpuSampler(
+        readProcessStat = { readTextFile(PROC_SELF_STAT) },
+        readSystemStat = { readFirstLine(PROC_STAT) },
+    )
     private val running = AtomicBoolean(false)
     private var thread: Thread? = null
 
@@ -54,6 +62,7 @@ class SystemContextSampler(
         val network = readNetwork()
         val traffic = readTraffic()
         val storage = readStorage()
+        val cpu = cpuSampler.sample()
 
         JankHunter.recordContext(
             network.kind,
@@ -71,6 +80,8 @@ class SystemContextSampler(
             storage.totalKb,
             network.vpn,
         )
+        recordBatteryPowerMetrics(battery)
+        recordCpuMetrics(cpu)
     }
 
     private fun readMemory(): MemorySnapshot {
@@ -97,6 +108,10 @@ class SystemContextSampler(
             state = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
                 ?: BatteryManager.BATTERY_STATUS_UNKNOWN,
             temperatureDeciC = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0,
+            plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0,
+            voltageMv = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0,
+            health = intent?.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)
+                ?: BatteryManager.BATTERY_HEALTH_UNKNOWN,
         )
     }
 
@@ -151,6 +166,52 @@ class SystemContextSampler(
         }
     }
 
+    private fun recordBatteryPowerMetrics(battery: BatterySnapshot) {
+        JankHunter.recordGauge("battery.level_pct", battery.percent.toLong())
+        JankHunter.recordGauge("battery.temperature_deci_c", battery.temperatureDeciC.toLong())
+        JankHunter.recordGauge("battery.status", battery.state.toLong())
+        JankHunter.recordGauge("battery.plugged", battery.plugged.toLong())
+        JankHunter.recordGauge("battery.voltage_mv", battery.voltageMv.toLong())
+        JankHunter.recordGauge("battery.health", battery.health.toLong())
+        val charging = battery.state == BatteryManager.BATTERY_STATUS_CHARGING ||
+            battery.state == BatteryManager.BATTERY_STATUS_FULL
+        JankHunter.recordGauge("battery.charging", if (charging) 1L else 0L)
+
+        val power = powerManager ?: return
+        JankHunter.recordGauge("device.power_save_mode", if (power.isPowerSaveMode) 1L else 0L)
+        JankHunter.recordGauge("device.interactive", if (power.isInteractive) 1L else 0L)
+        if (Build.VERSION.SDK_INT >= 23) {
+            JankHunter.recordGauge("device.idle_mode", if (power.isDeviceIdleMode) 1L else 0L)
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            JankHunter.recordGauge("device.thermal.status", power.currentThermalStatus.toLong())
+        }
+    }
+
+    private fun recordCpuMetrics(cpu: ProcCpuSampler.CpuSample?) {
+        if (cpu == null) return
+        JankHunter.recordGauge("process.cpu.device_percent_x100", cpu.processDevicePercentX100)
+        JankHunter.recordGauge("process.cpu.core_percent_x100", cpu.processCorePercentX100)
+        JankHunter.recordGauge("device.cpu.busy_percent_x100", cpu.deviceBusyPercentX100)
+        JankHunter.recordGauge("device.cpu.core_count", cpu.coreCount.toLong())
+    }
+
+    private fun readTextFile(path: String): String? {
+        return try {
+            File(path).readText()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun readFirstLine(path: String): String? {
+        return try {
+            File(path).bufferedReader().use { it.readLine() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private data class MemorySnapshot(
         val availKb: Long,
         val totalKb: Long,
@@ -161,6 +222,9 @@ class SystemContextSampler(
         val percent: Int,
         val state: Int,
         val temperatureDeciC: Int,
+        val plugged: Int,
+        val voltageMv: Int,
+        val health: Int,
     )
 
     private data class NetworkSnapshot(
@@ -187,5 +251,7 @@ class SystemContextSampler(
         const val NETWORK_CELLULAR = 3
         const val NETWORK_ETHERNET = 4
         const val NETWORK_VPN = 5
+        private const val PROC_SELF_STAT = "/proc/self/stat"
+        private const val PROC_STAT = "/proc/stat"
     }
 }
