@@ -109,6 +109,7 @@ type collector struct {
 	counterValues  map[string]uint64
 	gaugeValues    map[string][]uint64
 	networkSamples map[string]uint64
+	processSamples map[string]uint64
 }
 
 type namedDuration struct {
@@ -132,6 +133,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		counterValues:  map[string]uint64{},
 		gaugeValues:    map[string][]uint64{},
 		networkSamples: map[string]uint64{},
+		processSamples: map[string]uint64{},
 	}
 }
 
@@ -156,6 +158,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.summary.DurationMS = event.TimeMS
 	}
 	switch {
+	case event.Session != nil:
+		processName := jhlog.Resolve(dict, event.Session.ProcessID)
+		c.processSamples[processName]++
 	case event.HTTP != nil:
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
 		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
@@ -367,6 +372,9 @@ func (c *collector) finish() Summary {
 	for name, value := range c.networkSamples {
 		summary.Network = append(summary.Network, NamedValue{Name: name, Value: value})
 	}
+	for name, value := range c.processSamples {
+		summary.Processes = append(summary.Processes, NamedValue{Name: name, Value: value})
+	}
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})
@@ -378,6 +386,7 @@ func (c *collector) finish() Summary {
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
+	sortNamed(summary.Processes)
 	sortNamed(summary.Network)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
@@ -397,12 +406,31 @@ func Compare(baseline, candidate Summary) Comparison {
 		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true),
 		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true),
+		processMixDelta(baseline.Processes, candidate.Processes),
 	)
 	confidence := confidence(baseline, candidate)
 	for i := range comparison.Deltas {
 		comparison.Deltas[i].Confidence = confidence
 	}
 	return comparison
+}
+
+func processMixDelta(baseline, candidate []NamedValue) Delta {
+	before := namedSummary(baseline)
+	after := namedSummary(candidate)
+	severity := "ok"
+	change := "same"
+	if before != after {
+		severity = "medium"
+		change = "changed"
+	}
+	return Delta{
+		Name:      "Process mix",
+		Baseline:  before,
+		Candidate: after,
+		Change:    change,
+		Severity:  severity,
+	}
 }
 
 func confidence(baseline, candidate Summary) string {
@@ -498,6 +526,17 @@ func sortNamed(values []NamedValue) {
 		}
 		return values[i].Value > values[j].Value
 	})
+}
+
+func namedSummary(values []NamedValue) string {
+	if len(values) == 0 {
+		return "unknown"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprintf("%s:%d", value.Name, value.Value))
+	}
+	return strings.Join(parts, ",")
 }
 
 func delta(name string, before, after uint64, unit string, higherIsWorse bool) Delta {

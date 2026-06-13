@@ -135,6 +135,11 @@ const inspectTemplate = `<!doctype html>
 
   <section>
     <h2>System Context</h2>
+    <h2>Process Breakdown</h2>
+    <table>
+      <tr><th>Process</th><th>Sessions</th></tr>
+      {{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No process metadata.</td></tr>{{end}}
+    </table>
     <table>
       <tr><th>Metric</th><th>Value</th></tr>
       <tr><td>Samples</td><td>{{.Summary.ContextCount}}</td></tr>
@@ -213,6 +218,19 @@ const compareTemplate = `<!doctype html>
       {{range .Comparison.Candidate.Owners}}
       <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
       {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Process Breakdown</h2>
+    <table>
+      <tr><th>Baseline process</th><th>Sessions</th><th>Candidate process</th><th>Sessions</th></tr>
+      <tr>
+        <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+        <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+        <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+        <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+      </tr>
     </table>
   </section>
 </main>

@@ -26,6 +26,7 @@ android/
 ## Что уже собирает runtime
 
 - старт сессии: версия приложения, build, модель устройства, SDK API;
+- process name в session metadata;
 - текущий screen по `ActivityLifecycleCallbacks`;
 - system context: battery, available memory, low-memory flag, network kind, metered/validated state, UID traffic;
 - FPS и UI frame windows через `Choreographer`;
@@ -89,6 +90,8 @@ p99_ms
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
+<meta-data android:name="io.jankhunter.main_process_only" android:value="false" />
+<meta-data android:name="io.jankhunter.allowed_processes" android:value="com.example.app,com.example.app:remote" />
 ```
 
 Если нужна ручная настройка:
@@ -110,6 +113,9 @@ val config = JankHunterConfig.builder()
     .maxQueueSize(2048)
     .maxLogBytes(5 * 1024 * 1024)
     .flushIntervalMs(5_000)
+    .mainProcessOnly(false)
+    .allowedProcesses(listOf("com.example.app", "com.example.app:remote"))
+    .processNameRedactor { processName -> processName?.replace("private", "redacted") }
     .build()
 
 JankHunter.init(context, config)
@@ -139,6 +145,41 @@ JankHunterConfig.builder()
     .routeRedactor(JankHunterRedactor.none())
     .build()
 ```
+
+Process name тоже можно отредактировать программно через `processNameRedactor`. Это влияет на session metadata и suffix имени файла. Policy checks (`mainProcessOnly`, `allowedProcesses`) выполняются по raw process name до redaction.
+
+## Multi-process policy
+
+Runtime определяет process name так:
+
+- API 28+: `Application.getProcessName()`;
+- fallback: `ActivityManager.runningAppProcesses` по текущему PID;
+- последний fallback: `context.packageName`.
+
+По умолчанию SDK может стартовать в любом process, но каждый process пишет отдельный файл:
+
+```text
+context.filesDir/jankhunter/session-main-<timestamp>-1.jhlog
+context.filesDir/jankhunter/session-remote-<timestamp>-1.jhlog
+```
+
+Для больших приложений можно ограничить запуск:
+
+```kotlin
+JankHunterConfig.builder()
+    .mainProcessOnly(true)
+    .build()
+```
+
+или разрешить конкретный список:
+
+```kotlin
+JankHunterConfig.builder()
+    .allowedProcesses(listOf("com.example.app", "com.example.app:sync"))
+    .build()
+```
+
+`AutoInitProvider` не открывает writer и не стартует collectors в запрещенных process.
 
 или:
 
@@ -290,7 +331,7 @@ Owner-map seed фиксирует variant, hook flags, include/exclude policy и
 По умолчанию:
 
 ```text
-context.filesDir/jankhunter/session-<timestamp>.jhlog
+context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 ```
 
 Путь можно изменить через:

@@ -23,6 +23,9 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val flushIntervalMs = builder.flushIntervalMs
     private val routeRedactor = builder.routeRedactor
     private val logDirectory = builder.logDirectory
+    private val mainProcessOnly = builder.mainProcessOnly
+    private val allowedProcesses = builder.allowedProcesses.toSet()
+    private val processNameRedactor = builder.processNameRedactor
 
     fun enabled(): Boolean = enabled
 
@@ -58,6 +61,18 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun logDirectory(): File? = logDirectory
 
+    fun mainProcessOnly(): Boolean = mainProcessOnly
+
+    fun allowedProcesses(): Set<String> = allowedProcesses
+
+    fun redactProcessName(processName: String?): String? = processNameRedactor.redact(processName)
+
+    fun isProcessAllowed(processName: String, mainProcessName: String): Boolean {
+        if (mainProcessOnly && processName != mainProcessName) return false
+        if (allowedProcesses.isNotEmpty() && processName !in allowedProcesses) return false
+        return true
+    }
+
     class Builder {
         internal var enabled = true
         internal var autoStartCollectors = true
@@ -76,6 +91,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var flushIntervalMs = 5_000L
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
+        internal var mainProcessOnly = false
+        internal var allowedProcesses: List<String> = emptyList()
+        internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
 
         fun enabled(value: Boolean) = apply { enabled = value }
 
@@ -111,6 +129,16 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun logDirectory(value: File?) = apply { logDirectory = value }
 
+        fun mainProcessOnly(value: Boolean) = apply { mainProcessOnly = value }
+
+        fun allowedProcesses(values: Collection<String>) = apply {
+            allowedProcesses = values.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+        }
+
+        fun processNameRedactor(value: JankHunterProcessNameRedactor) = apply {
+            processNameRedactor = value
+        }
+
         fun build(): JankHunterConfig = JankHunterConfig(this)
     }
 
@@ -130,6 +158,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
         const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
+        const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
+        const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
 
         @JvmStatic
         fun builder(): Builder = Builder()
@@ -153,7 +183,16 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .maxQueueSize(metadata?.getInt(META_MAX_QUEUE_SIZE, 2048) ?: 2048)
                 .maxLogBytes(metadata?.getLong(META_MAX_LOG_BYTES, 5L * 1024L * 1024L) ?: 5L * 1024L * 1024L)
                 .flushIntervalMs(metadata?.getLong(META_FLUSH_INTERVAL_MS, 5_000L) ?: 5_000L)
+                .mainProcessOnly(metadata?.getBoolean(META_MAIN_PROCESS_ONLY, false) ?: false)
+                .allowedProcesses(parseProcessList(metadata?.getString(META_ALLOWED_PROCESSES)))
                 .build()
+        }
+
+        private fun parseProcessList(raw: String?): List<String> {
+            return raw
+                ?.split(',')
+                ?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                ?: emptyList()
         }
 
         private fun metadata(context: Context): Bundle? {

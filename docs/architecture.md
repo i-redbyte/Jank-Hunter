@@ -37,8 +37,26 @@ Runtime writes compact binary `.jhlog` records:
 - bit flags for common booleans;
 - dictionary IDs for names;
 - windowed aggregates for high-frequency metrics.
+- process metadata in session records, with backward-compatible decoding for older four-field sessions.
 
 The CLI owns human-readable rendering.
+
+## Multi-process strategy
+
+Runtime resolves process name through `Application.getProcessName()` on API 28+, then `ActivityManager` by PID, then package name as a final fallback. Policy is evaluated before writer startup:
+
+- `mainProcessOnly` allows only `context.packageName`;
+- `allowedProcesses` allows an explicit raw process list;
+- `processNameRedactor` changes persisted process metadata and file suffixes, not policy matching.
+
+Each process writes a separate segment namespace:
+
+```text
+session-main-<timestamp>-<segment>.jhlog
+session-remote-<timestamp>-<segment>.jhlog
+```
+
+The CLI groups sessions by process and includes process mix in compare output.
 
 ## Attribution strategy
 

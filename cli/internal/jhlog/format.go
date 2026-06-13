@@ -43,6 +43,7 @@ const (
 	DictDevice
 	DictAppVersion
 	DictBuild
+	DictProcess
 )
 
 type NetworkKind uint64
@@ -97,6 +98,7 @@ type SessionEvent struct {
 	BuildID      uint64 `json:"build_id"`
 	DeviceID     uint64 `json:"device_id"`
 	SDKInt       uint64 `json:"sdk_int"`
+	ProcessID    uint64 `json:"process_id,omitempty"`
 }
 
 type ContextEvent struct {

@@ -31,15 +31,17 @@ class BinaryLogWriter(file: File) : Closeable {
     }
 
     @Synchronized
-    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int) {
+    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int, processName: String?) {
         val appVersionId = idFor(DICT_APP_VERSION, appVersion)
         val buildId = idFor(DICT_BUILD, build)
         val deviceId = idFor(DICT_DEVICE, device)
+        val processId = idFor(DICT_PROCESS, processName)
         val payload = Payload()
             .uvarint(appVersionId)
             .uvarint(buildId)
             .uvarint(deviceId)
             .uvarint(sdkInt.toLong())
+            .uvarint(processId)
         record(EVENT_SESSION, FLAG_APP_FOREGROUND, payload)
     }
 
@@ -271,6 +273,7 @@ class BinaryLogWriter(file: File) : Closeable {
         private const val DICT_DEVICE = 7
         private const val DICT_APP_VERSION = 8
         private const val DICT_BUILD = 9
+        private const val DICT_PROCESS = 10
 
         private fun writeUvarint(out: BufferedOutputStream, rawValue: Long): Int {
             var value = rawValue

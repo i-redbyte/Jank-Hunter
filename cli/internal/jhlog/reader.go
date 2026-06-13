@@ -220,23 +220,23 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		event.Dictionary = &DictionaryEntry{Kind: DictKind(kind), ID: id, Value: value}
 	case EventSession:
-		app, err := read()
+		values, err := readRemaining(reader)
 		if err != nil {
 			return err
 		}
-		build, err := read()
-		if err != nil {
-			return err
+		if len(values) < 4 {
+			return fmt.Errorf("session payload has %d values, expected at least 4", len(values))
 		}
-		device, err := read()
-		if err != nil {
-			return err
+		session := &SessionEvent{
+			AppVersionID: values[0],
+			BuildID:      values[1],
+			DeviceID:     values[2],
+			SDKInt:       values[3],
 		}
-		sdk, err := read()
-		if err != nil {
-			return err
+		if len(values) > 4 {
+			session.ProcessID = values[4]
 		}
-		event.Session = &SessionEvent{AppVersionID: app, BuildID: build, DeviceID: device, SDKInt: sdk}
+		event.Session = session
 	case EventContext:
 		values, err := readRemaining(reader)
 		if err != nil {

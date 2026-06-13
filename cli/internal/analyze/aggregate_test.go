@@ -79,6 +79,9 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if summary.Dictionary == 0 {
 		t.Fatalf("expected dictionary count")
 	}
+	if len(summary.Processes) != 1 || summary.Processes[0].Name != "main" {
+		t.Fatalf("unexpected processes: %+v", summary.Processes)
+	}
 }
 
 func TestInspectFilesAppliesRouteFilter(t *testing.T) {

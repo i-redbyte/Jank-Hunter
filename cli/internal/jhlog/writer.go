@@ -86,6 +86,11 @@ func encodePayload(w io.Writer, event Event) error {
 				return err
 			}
 		}
+		if p.ProcessID > 0 {
+			if err := writeUvarint(w, p.ProcessID); err != nil {
+				return err
+			}
+		}
 	case EventContext:
 		p := event.Context
 		if p == nil {
@@ -211,6 +216,7 @@ func WriteSample(path string) error {
 		{Kind: DictAppVersion, ID: 1, Value: "0.1.0-debug"},
 		{Kind: DictBuild, ID: 2, Value: "100"},
 		{Kind: DictDevice, ID: 3, Value: "Pixel 8 / API 35"},
+		{Kind: DictProcess, ID: 4, Value: "main"},
 		{Kind: DictOwner, ID: 10, Value: "FeedRepository.refresh"},
 		{Kind: DictOwner, ID: 11, Value: "CheckoutPresenter.render"},
 		{Kind: DictRoute, ID: 20, Value: "GET /feed"},
@@ -229,7 +235,7 @@ func WriteSample(path string) error {
 	}
 
 	events := []Event{
-		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35}},
+		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, ProcessID: 4}},
 		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkMetered), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000}},
 		{Type: EventHTTP, TimeMS: 1200, Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 184, DNSMS: 7, ConnectMS: 0, TTFBMS: 91, Status: Status2xx, RxBytes: 42120, TxBytes: 740}},
 		{Type: EventHTTP, TimeMS: 2400, Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38900, TxBytes: 730}},

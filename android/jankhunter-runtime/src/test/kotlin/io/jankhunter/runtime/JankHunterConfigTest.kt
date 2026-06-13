@@ -24,6 +24,9 @@ class JankHunterConfigTest {
             .maxQueueSize(99)
             .maxLogBytes(1024)
             .flushIntervalMs(12)
+            .mainProcessOnly(true)
+            .allowedProcesses(listOf("com.example", "com.example:remote"))
+            .processNameRedactor { "redacted.$it" }
             .build()
 
         assertFalse(config.enabled())
@@ -41,6 +44,9 @@ class JankHunterConfigTest {
         assertEquals(99, config.maxQueueSize())
         assertEquals(1024, config.maxLogBytes())
         assertEquals(12, config.flushIntervalMs())
+        assertTrue(config.mainProcessOnly())
+        assertEquals(setOf("com.example", "com.example:remote"), config.allowedProcesses())
+        assertEquals("redacted.com.example", config.redactProcessName("com.example"))
     }
 
     @Test
@@ -53,7 +59,26 @@ class JankHunterConfigTest {
         assertTrue(config.processExitInfoEnabled())
         assertTrue(config.objectWatcherEnabled())
         assertTrue(config.fpsMonitorEnabled())
+        assertFalse(config.mainProcessOnly())
+        assertTrue(config.allowedProcesses().isEmpty())
         assertEquals(2048, config.maxQueueSize())
+    }
+
+    @Test
+    fun processPolicyHonorsMainProcessAndAllowList() {
+        val mainOnly = JankHunterConfig.builder()
+            .mainProcessOnly(true)
+            .build()
+
+        assertTrue(mainOnly.isProcessAllowed("com.example", "com.example"))
+        assertFalse(mainOnly.isProcessAllowed("com.example:remote", "com.example"))
+
+        val allowList = JankHunterConfig.builder()
+            .allowedProcesses(listOf("com.example:sync"))
+            .build()
+
+        assertFalse(allowList.isProcessAllowed("com.example", "com.example"))
+        assertTrue(allowList.isProcessAllowed("com.example:sync", "com.example"))
     }
 
     @Test

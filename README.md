@@ -21,6 +21,7 @@ The implementation currently includes:
 - filters by route/screen/owner;
 - standalone HTML reports with charts and no external CDN dependencies;
 - Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
+- multi-process runtime policy with per-process `.jhlog` files and process breakdown in CLI reports;
 - optional OkHttp/WebSocket integrations;
 - optional reflection bridge for AndroidX JankStats;
 - Gradle plugin with variant-aware ASM hooks for method counters, OkHttp builder factories, WebSocket listeners, Handler callbacks, Executor/ExecutorService work, and owner-map seed generation;

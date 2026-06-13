@@ -26,12 +26,22 @@ func TestWriteSampleReadFile(t *testing.T) {
 	if log.Events[len(log.Events)-1].TimeMS == 0 {
 		t.Fatalf("expected monotonic event timestamps")
 	}
+	if got := log.Dict[4]; got != "main" {
+		t.Fatalf("dict[4] = %q, want process name", got)
+	}
 	var context *ContextEvent
+	var session *SessionEvent
 	for _, event := range log.Events {
+		if event.Session != nil {
+			session = event.Session
+		}
 		if event.Context != nil {
 			context = event.Context
 			break
 		}
+	}
+	if session == nil || session.ProcessID != 4 {
+		t.Fatalf("expected session process id, got %+v", session)
 	}
 	if context == nil {
 		t.Fatalf("expected context event")

@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicLong
 class AsyncLogWriter private constructor(
     private val directory: File,
     private val config: JankHunterConfig,
+    private val processFileSuffix: String,
 ) {
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val running = AtomicBoolean(true)
@@ -26,9 +27,9 @@ class AsyncLogWriter private constructor(
         start()
     }
 
-    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int) {
-        bootstrap = SessionBootstrap(appVersion, build, device, sdkInt)
-        offer { it.session(appVersion, build, device, sdkInt) }
+    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int, processName: String?) {
+        bootstrap = SessionBootstrap(appVersion, build, device, sdkInt, processName)
+        offer { it.session(appVersion, build, device, sdkInt, processName) }
     }
 
     fun screen(screen: String?) {
@@ -188,7 +189,7 @@ class AsyncLogWriter private constructor(
     }
 
     private fun openSegment(): BinaryLogWriter {
-        val file = File(directory, "session-${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
+        val file = File(directory, "session-$processFileSuffix-${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
         return BinaryLogWriter(file)
     }
 
@@ -197,9 +198,10 @@ class AsyncLogWriter private constructor(
         val build: String?,
         val device: String?,
         val sdkInt: Int,
+        val processName: String?,
     ) {
         fun write(writer: BinaryLogWriter) {
-            writer.session(appVersion, build, device, sdkInt)
+            writer.session(appVersion, build, device, sdkInt, processName)
         }
     }
 
@@ -209,12 +211,12 @@ class AsyncLogWriter private constructor(
     }
 
     companion object {
-        fun open(directory: File, config: JankHunterConfig): AsyncLogWriter {
+        fun open(directory: File, config: JankHunterConfig, processFileSuffix: String): AsyncLogWriter {
             if (!directory.exists() && !directory.mkdirs()) {
                 error("Cannot create Jank Hunter log directory: $directory")
             }
             return try {
-                AsyncLogWriter(directory, config)
+                AsyncLogWriter(directory, config, processFileSuffix)
             } catch (e: IOException) {
                 throw IllegalStateException("Cannot open Jank Hunter log file", e)
             }

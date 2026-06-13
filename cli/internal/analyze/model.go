@@ -79,13 +79,14 @@ type Summary struct {
 	MemoryMaxKB      uint64
 	Retained         uint64
 
-	Routes   []RouteStats
-	Screens  []ScreenStats
-	Owners   []OwnerStats
-	Network  []NamedValue
-	Memory   []NamedValue
-	Counters []NamedValue
-	Gauges   []NamedValue
+	Routes    []RouteStats
+	Screens   []ScreenStats
+	Owners    []OwnerStats
+	Processes []NamedValue
+	Network   []NamedValue
+	Memory    []NamedValue
+	Counters  []NamedValue
+	Gauges    []NamedValue
 }
 
 type Delta struct {

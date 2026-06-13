@@ -16,6 +16,7 @@ CLI не требует backend, базы данных или браузерны
 - owner-map import через `--owner-map path.json`;
 - экспорт событий в JSONL;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
+- process breakdown из session metadata;
 - top suspects по owner/class/stack hint.
 
 ## Сборка
@@ -139,6 +140,7 @@ id -> "FeedScreen"
 ```
 
 Runtime пишет короткие ID, CLI раскрывает их в имена.
+Новые session events также могут содержать `process_id`; старые `.jhlog` без process metadata читаются как `unknown`.
 
 ## Owner map
 
@@ -222,6 +224,16 @@ uid rx/tx bytes
 ```
 
 В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети.
+
+## Process breakdown
+
+Если runtime пишет process metadata, `inspect` показывает session count по process:
+
+```text
+processes: main=1, remote=1
+```
+
+HTML-отчеты содержат отдельную process table. `compare` добавляет delta “Process mix”, чтобы не сравнивать baseline только из main process с candidate, где появились remote-process логи, без явного сигнала.
 
 ## Counters и gauges
 

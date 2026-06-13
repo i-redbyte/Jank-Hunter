@@ -11,6 +11,7 @@ import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
+import io.jankhunter.runtime.internal.system.ProcessNames
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
@@ -59,13 +60,24 @@ object JankHunter {
     @JvmStatic
     fun init(context: Context?, providedConfig: JankHunterConfig?) {
         if (context == null || providedConfig == null || !providedConfig.enabled()) return
+
+        val appContext = context.applicationContext ?: context
+        val processName = ProcessNames.current(appContext)
+        val mainProcessName = appContext.packageName
+        if (!providedConfig.isProcessAllowed(processName, mainProcessName)) return
         if (!started.compareAndSet(false, true)) return
 
-        val appContext = context.applicationContext
         config = providedConfig
 
         val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
-        val asyncWriter = AsyncLogWriter.open(directory, providedConfig)
+        val redactedProcessName = providedConfig.redactProcessName(processName)
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+        val asyncWriter = AsyncLogWriter.open(
+            directory,
+            providedConfig,
+            ProcessNames.safeFileSuffix(redactedProcessName, mainProcessName),
+        )
         writer = asyncWriter
 
         val identity = appIdentity(appContext)
@@ -74,6 +86,7 @@ object JankHunter {
             identity.versionCode,
             "${Build.MANUFACTURER} ${Build.MODEL}",
             Build.VERSION.SDK_INT,
+            redactedProcessName,
         )
 
         if (providedConfig.autoStartCollectors()) {
