@@ -60,6 +60,9 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	if got, want := bucket1.UIJankyFrames, uint64(6); got != want {
 		t.Fatalf("bucket1 UIJankyFrames = %d, want %d", got, want)
 	}
+	if bucket1.RouteSample != "GET /feed" || bucket1.OwnerSample != "FeedRepository.refresh" || bucket1.ScreenSample != "FeedScreen" {
+		t.Fatalf("bucket1 context = route %q owner %q screen %q", bucket1.RouteSample, bucket1.OwnerSample, bucket1.ScreenSample)
+	}
 
 	bucket2 := report.Timeline[2]
 	if got, want := bucket2.MemoryPSSKB, uint64(123000); got != want {
@@ -75,6 +78,9 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	}
 	if got, want := bucket3.TrafficTxBytes, uint64(60); got != want {
 		t.Fatalf("bucket3 TrafficTxBytes = %d, want %d", got, want)
+	}
+	if got, want := bucket3.NetworkSample, "wifi"; got != want {
+		t.Fatalf("bucket3 NetworkSample = %q, want %q", got, want)
 	}
 	if got, want := bucket3.UIFrames, uint64(30); got != want {
 		t.Fatalf("bucket3 UIFrames = %d, want %d", got, want)

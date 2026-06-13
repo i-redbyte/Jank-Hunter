@@ -16,6 +16,7 @@ type MathReport struct {
 	Timeline     []TimelineBucket
 	Series       []Series
 	RobustStats  []RobustStat
+	ChangePoints []ChangePoint
 	Spectral     []SpectralPeak
 	NetworkLoops []NetworkLoopFinding
 	GraphPaths   []GraphPath
@@ -31,6 +32,7 @@ type CompareMathReport struct {
 	Sections       []MathSection
 	Findings       []Finding
 	RobustDeltas   []RobustDelta
+	ChangeDeltas   []ChangePointDelta
 }
 
 type MathSection struct {
@@ -67,6 +69,10 @@ type TimelineBucket struct {
 	AvailableMemoryKB uint64
 	TrafficRxBytes    uint64
 	TrafficTxBytes    uint64
+	RouteSample       string
+	OwnerSample       string
+	ScreenSample      string
+	NetworkSample     string
 }
 
 type Series struct {
@@ -117,6 +123,38 @@ type RobustDelta struct {
 	Recommendation string
 }
 
+type ChangePoint struct {
+	Signal         string
+	Unit           string
+	TimeMS         uint64
+	BeforeMedian   float64
+	AfterMedian    float64
+	BeforeMAD      float64
+	AfterMAD       float64
+	Delta          float64
+	DeltaPct       float64
+	Score          float64
+	Direction      string
+	Severity       string
+	NearbyRoute    string
+	NearbyOwner    string
+	NearbyScreen   string
+	NearbyNetwork  string
+	Recommendation string
+}
+
+type ChangePointDelta struct {
+	Signal         string
+	Status         string
+	TimeMS         uint64
+	BaselineTime   uint64
+	CandidateTime  uint64
+	BaselineScore  float64
+	CandidateScore float64
+	Severity       string
+	Summary        string
+}
+
 type SpectralPeak struct {
 	Signal      string
 	PeriodMS    uint64
@@ -160,7 +198,8 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 		return MathReport{}, err
 	}
 	robustStats := summarizeRobustSamples(robustSamples)
-	return buildInspectReport(summary, paths, timeline, series, robustStats), nil
+	changePoints := detectChangePoints(timeline)
+	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -193,8 +232,11 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	baselineRobustStats := summarizeRobustSamples(baselineRobustSamples)
 	candidateRobustStats := summarizeRobustSamples(candidateRobustSamples)
 	robustDeltas := compareRobustSamples(baselineRobustSamples, candidateRobustSamples)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats)
+	baselineChangePoints := detectChangePoints(baselineTimeline)
+	candidateChangePoints := detectChangePoints(candidateTimeline)
+	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -206,22 +248,24 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:      candidate,
 		Comparison:     comparison,
 		Findings:       findings,
-		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas),
+		Sections:       compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas),
 		RobustDeltas:   robustDeltas,
+		ChangeDeltas:   changeDeltas,
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
-		Title:       titleFromPaths(paths),
-		SourcePaths: append([]string(nil), paths...),
-		Summary:     summary,
-		Findings:    findings,
-		Timeline:    timeline,
-		Series:      series,
-		RobustStats: robustStats,
-		Sections:    inspectSections(summary, findings, timeline, series, robustStats),
+		Title:        titleFromPaths(paths),
+		SourcePaths:  append([]string(nil), paths...),
+		Summary:      summary,
+		Findings:     findings,
+		Timeline:     timeline,
+		Series:       series,
+		RobustStats:  robustStats,
+		ChangePoints: changePoints,
+		Sections:     inspectSections(summary, findings, timeline, series, robustStats, changePoints),
 	}
 }
 
@@ -277,7 +321,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -301,10 +345,11 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			Findings: robustFindings(robustStats),
 		},
 		{
-			ID:      "change-points",
-			Title:   "Точки изменения",
-			Status:  "pending",
-			Summary: "Здесь появятся сдвиги задержки, jank, базовой памяти и сетевых ошибок с ближайшими событиями.",
+			ID:       "change-points",
+			Title:    "Точки изменения",
+			Status:   changePointStatus(timeline, changePoints),
+			Summary:  changePointSummary(timeline, changePoints),
+			Findings: changePointFindings(timeline, changePoints),
 		},
 		{
 			ID:      "periodic",
@@ -333,7 +378,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -357,10 +402,11 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			Findings: compareRobustFindings(robustDeltas),
 		},
 		{
-			ID:      "change-points",
-			Title:   "Точки изменения",
-			Status:  "pending",
-			Summary: "Здесь появятся новые, исчезнувшие и усилившиеся точки изменения кандидата относительно базы.",
+			ID:       "change-points",
+			Title:    "Точки изменения",
+			Status:   compareChangePointStatus(baselineTimeline, candidateTimeline, changeDeltas),
+			Summary:  compareChangePointSummary(baselineTimeline, candidateTimeline, changeDeltas),
+			Findings: compareChangePointFindings(changeDeltas),
 		},
 		{
 			ID:      "periodic",

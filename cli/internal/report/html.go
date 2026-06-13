@@ -98,6 +98,16 @@ func execute(path, source string, data any) error {
 			}
 			return template.CSS(fmt.Sprintf("width:%.2f%%", width))
 		},
+		"scoreWidth": func(value float64) template.CSS {
+			width := value * 12.5
+			if width > 100 {
+				width = 100
+			}
+			if width < 1 && value > 0 {
+				width = 1
+			}
+			return template.CSS(fmt.Sprintf("width:%.2f%%", width))
+		},
 		"ringStyle": func(value float64) template.CSS {
 			return template.CSS(fmt.Sprintf("--value:%.2f", clampPct(value)))
 		},
@@ -145,6 +155,9 @@ func execute(path, source string, data any) error {
 		},
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
+		},
+		"seconds": func(ms uint64) float64 {
+			return float64(ms) / 1000
 		},
 		"jankPct": func(jankyFrames uint64, frames uint64) float64 {
 			if frames == 0 {

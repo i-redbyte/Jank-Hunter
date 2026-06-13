@@ -34,12 +34,18 @@ type timelineBucketAgg struct {
 
 	hasMemoryPSS       bool
 	hasAvailableMemory bool
+
+	routes   map[string]int
+	owners   map[string]int
+	screens  map[string]int
+	networks map[string]int
 }
 
 type timelineStreamState struct {
-	lastRx  uint64
-	lastTx  uint64
-	hasRxTx bool
+	lastRx         uint64
+	lastTx         uint64
+	hasRxTx        bool
+	currentNetwork string
 }
 
 func buildTimeline(paths []string, options analyze.Options) ([]TimelineBucket, []Series, error) {
@@ -79,6 +85,8 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg := c.bucket(event.TimeMS)
+		agg.addSample(agg.routes, route)
+		agg.addSample(agg.owners, owner)
 		agg.bucket.HTTPCount++
 		agg.httpDurations = append(agg.httpDurations, event.HTTP.DurationMS)
 		agg.httpTotalMS += event.HTTP.DurationMS
@@ -103,6 +111,7 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg := c.bucket(event.TimeMS)
+		agg.addSample(agg.screens, screen)
 		agg.bucket.UIFrames += event.UIWindow.FrameCount
 		agg.bucket.UIJankyFrames += event.UIWindow.JankCount
 	case event.Memory != nil:
@@ -113,6 +122,8 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		}
 	case event.Context != nil:
 		agg := c.bucket(event.TimeMS)
+		state.currentNetwork = jhlog.NetworkName(event.Context.Network)
+		agg.addSample(agg.networks, state.currentNetwork)
 		if !agg.hasAvailableMemory || event.Context.AvailMemoryKB < agg.bucket.AvailableMemoryKB {
 			agg.bucket.AvailableMemoryKB = event.Context.AvailMemoryKB
 			agg.hasAvailableMemory = true
@@ -141,6 +152,10 @@ func (c *timelineCollector) bucket(timeMS uint64) *timelineBucketAgg {
 				StartMS: startMS,
 				EndMS:   startMS + c.bucketMS,
 			},
+			routes:   map[string]int{},
+			owners:   map[string]int{},
+			screens:  map[string]int{},
+			networks: map[string]int{},
 		}
 		c.buckets[index] = agg
 	}
@@ -175,10 +190,32 @@ func (c *timelineCollector) finish() []TimelineBucket {
 			if agg.ttfbCount > 0 {
 				bucket.TTFBMS = agg.ttfbTotalMS / agg.ttfbCount
 			}
+			bucket.RouteSample = topSample(agg.routes)
+			bucket.OwnerSample = topSample(agg.owners)
+			bucket.ScreenSample = topSample(agg.screens)
+			bucket.NetworkSample = topSample(agg.networks)
 		}
 		out = append(out, bucket)
 	}
 	return out
+}
+
+func (b *timelineBucketAgg) addSample(samples map[string]int, value string) {
+	if value != "" {
+		samples[value]++
+	}
+}
+
+func topSample(samples map[string]int) string {
+	var best string
+	var bestCount int
+	for value, count := range samples {
+		if count > bestCount || (count == bestCount && value < best) {
+			best = value
+			bestCount = count
+		}
+	}
+	return best
 }
 
 func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {

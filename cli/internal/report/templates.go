@@ -620,6 +620,22 @@ const mathInspectTemplate = `<!doctype html>
         </table>
         <p class="muted">MAD — медиана абсолютных отклонений от медианы. Усеченное среднее считается после отсечения 10% нижнего и верхнего хвоста. Интервал p95 — детерминированный bootstrap-интервал; на очень больших сигналах считается по ограниченной детерминированной выборке.</p>
         {{end}}
+        {{if eq .ID "change-points"}}
+        <h3>Сдвиги сигналов</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>Score</th><th>Контекст</th><th>Рекомендация</th></tr>
+          {{range $math.ChangePoints}}
+          <tr>
+            <td>{{.Signal}}</td><td>{{printf "%.1fs" (seconds .TimeMS)}}</td><td>{{.Direction}}</td>
+            <td>{{printf "%.1f" .BeforeMedian}} {{.Unit}}</td><td>{{printf "%.1f" .AfterMedian}} {{.Unit}}</td><td>{{printf "%+.1f" .Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td>{{printf "%.1f" .BeforeMAD}} / {{printf "%.1f" .AfterMAD}}</td>
+            <td><div>{{printf "%.2f" .Score}}</div><div class="bar"><i style="{{scoreWidth .Score}}"></i></div></td>
+            <td>{{if .NearbyScreen}}экран <code>{{.NearbyScreen}}</code><br>{{end}}{{if .NearbyRoute}}маршрут <code>{{.NearbyRoute}}</code><br>{{end}}{{if .NearbyOwner}}источник <code>{{.NearbyOwner}}</code><br>{{end}}{{if .NearbyNetwork}}сеть <code>{{.NearbyNetwork}}</code>{{end}}</td>
+            <td>{{.Recommendation}}</td>
+          </tr>
+          {{else}}<tr><td colspan="11" class="muted">Сильных точек изменения не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -732,6 +748,21 @@ const mathCompareTemplate = `<!doctype html>
           {{else}}<tr><td colspan="14" class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</td></tr>{{end}}
         </table>
         <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, jank, памяти и очередей это обычно ухудшение.</p>
+        {{end}}
+        {{if eq .ID "change-points"}}
+        <h3>Изменения точек изменения</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>Score базы</th><th>Score кандидата</th><th>Вывод</th></tr>
+          {{range $math.ChangeDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td><td>{{.Signal}}</td>
+            <td>{{if .BaselineTime}}{{printf "%.1fs" (seconds .BaselineTime)}}{{else}}-{{end}}</td>
+            <td>{{if .CandidateTime}}{{printf "%.1fs" (seconds .CandidateTime)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.2f" .BaselineScore}}</td><td><div>{{printf "%.2f" .CandidateScore}}</div><div class="bar"><i style="{{scoreWidth .CandidateScore}}"></i></div></td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="7" class="muted">Новых, исчезнувших или усилившихся точек изменения не найдено.</td></tr>{{end}}
+        </table>
         {{end}}
       </div>
     </details>
