@@ -53,6 +53,7 @@ It runs the sample app instrumented test, pulls `.jhlog`, and generates `reports
 ## Release
 
 Release and publishing instructions live in [docs/release.md](docs/release.md).
+Large-app validation runbook lives in [docs/large-app-validation.md](docs/large-app-validation.md).
 
 Quick local dry runs:
 

@@ -133,3 +133,4 @@ cd ../android
 - [cli/README.md](cli/README.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/release.md](docs/release.md)
+- [docs/large-app-validation.md](docs/large-app-validation.md)
