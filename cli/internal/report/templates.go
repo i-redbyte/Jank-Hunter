@@ -124,6 +124,14 @@ const inspectTemplate = `<!doctype html>
   </section>
 
   <section>
+    <h2>JankStats</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th><th>Details</th></tr>
+      {{range .Summary.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No JankStats metrics.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
     <h2>Top Suspects</h2>
     <table>
       <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
@@ -231,6 +239,14 @@ const compareTemplate = `<!doctype html>
       {{range .Comparison.Candidate.Owners}}
       <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
       {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>Candidate JankStats</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th><th>Details</th></tr>
+      {{range .Comparison.Candidate.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No JankStats metrics.</td></tr>{{end}}
     </table>
   </section>
 

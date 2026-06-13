@@ -107,3 +107,22 @@ func TestInspectFilesAppliesRouteFilter(t *testing.T) {
 		t.Fatalf("unexpected routes: %+v", summary.Routes)
 	}
 }
+
+func TestInspectGroupsJankStatsMetrics(t *testing.T) {
+	log := jhlog.Log{
+		Dict: map[uint64]string{
+			1: "jankstats.frame.count",
+			2: "jankstats.frame.duration_ms",
+		},
+		Events: []jhlog.Event{
+			{Type: jhlog.EventCounter, Metric: &jhlog.MetricEvent{MetricID: 1, Value: 3}},
+			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricID: 2, Value: 18}},
+			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricID: 2, Value: 22}},
+		},
+	}
+
+	summary := Inspect("jankstats", []jhlog.Log{log})
+	if len(summary.JankStats) != 2 {
+		t.Fatalf("unexpected jankstats metrics: %+v", summary.JankStats)
+	}
+}

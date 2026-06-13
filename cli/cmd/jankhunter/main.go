@@ -274,6 +274,9 @@ func printSummary(summary analyze.Summary) {
 	fmt.Printf("logs: %d events: %d duration: %dms\n", summary.LogCount, summary.EventCount, summary.DurationMS)
 	fmt.Printf("http: count=%d failed=%d p95=%dms\n", summary.HTTPCount, summary.HTTPFailed, summary.HTTPP95MS)
 	fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
+	if len(summary.JankStats) > 0 {
+		fmt.Printf("jankstats: %s\n", namedValues(summary.JankStats))
+	}
 	fmt.Printf("stalls: count=%d max=%dms\n", summary.StallCount, summary.StallMaxMS)
 	if len(summary.Processes) > 0 {
 		fmt.Printf("processes: %s\n", namedValues(summary.Processes))

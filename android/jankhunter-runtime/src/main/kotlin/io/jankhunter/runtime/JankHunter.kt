@@ -92,7 +92,7 @@ object JankHunter {
         if (providedConfig.autoStartCollectors()) {
             if (appContext is Application) {
                 application = appContext
-                activityTracker = ActivityTracker().also {
+                activityTracker = ActivityTracker(providedConfig.jankStatsEnabled()).also {
                     appContext.registerActivityLifecycleCallbacks(it)
                 }
             }
@@ -129,6 +129,7 @@ object JankHunter {
     fun shutdown() {
         activityTracker?.let { tracker ->
             application?.unregisterActivityLifecycleCallbacks(tracker)
+            tracker.close()
         }
         watchdog?.stop()
         memorySampler?.stop()

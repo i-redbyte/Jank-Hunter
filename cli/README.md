@@ -18,6 +18,7 @@ CLI не требует backend, базы данных или браузерны
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - process breakdown из session metadata;
 - retained-object section с top retained classes и age buckets;
+- separate JankStats metrics section для `jankstats.*` counters/gauges;
 - top suspects по owner/class/stack hint.
 
 ## Сборка
@@ -210,6 +211,10 @@ jank_rate = jank_count / frame_count
 - top janky screens;
 - Avg FPS и Min FPS по каждому screen;
 - p95/p99 frame duration.
+
+## JankStats
+
+Если Android runtime пишет `jankstats.*` metrics, CLI показывает отдельную секцию JankStats в text/HTML отчетах. Эти метрики не смешиваются с Choreographer `ui_window`: `ui_window` остается fallback FPS/jank signal, а JankStats показывает richer frame/state counters и duration gauges.
 
 ## System context
 

@@ -77,6 +77,15 @@ Core retained diagnostics intentionally avoid heap dumps and LeakCanary dependen
 
 The event contains class/owner dictionary id, max retained age, and count. It never records `object.toString()`, field values, headers, bodies, tokens, or heap contents. CLI reports top retained classes and retained age buckets.
 
+## UI and JankStats strategy
+
+`FpsMonitor` uses `Choreographer` as the dependency-free fallback and writes `ui_window` aggregates. The optional JankStats bridge is reflection-only inside core:
+
+- no AndroidX dependency is declared by `jankhunter-runtime`;
+- `jankStatsEnabled` lets Activity lifecycle callbacks attempt auto-install when AndroidX JankStats is already present;
+- manual install returns a handle that can add/remove state when supported and disable tracking on uninstall;
+- JankStats output is recorded as `jankstats.*` counters/gauges, separate from `ui_window`, so reports can show both signals without double-counting frames.
+
 ## Gradle Instrumentation
 
 The Gradle plugin uses Android Gradle Plugin ASM APIs to weave enabled debug/QA variants after include/exclude package filtering.

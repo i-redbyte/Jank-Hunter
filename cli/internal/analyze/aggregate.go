@@ -371,6 +371,9 @@ func (c *collector) finish() Summary {
 	}
 	for name, value := range c.counterValues {
 		summary.Counters = append(summary.Counters, NamedValue{Name: name, Value: value})
+		if strings.HasPrefix(name, "jankstats.") {
+			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value})
+		}
 	}
 	for name, values := range c.gaugeValues {
 		var total uint64
@@ -386,6 +389,9 @@ func (c *collector) finish() Summary {
 			avg = total / uint64(len(values))
 		}
 		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, max, len(values))})
+		if strings.HasPrefix(name, "jankstats.") {
+			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, max, len(values))})
+		}
 	}
 
 	for name, value := range c.networkSamples {
@@ -419,6 +425,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Network)
 	sortNamed(summary.RetainedClasses)
 	sortNamed(summary.RetainedAgeBuckets)
+	sortNamed(summary.JankStats)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	return summary

@@ -86,6 +86,7 @@ p99_ms
 <meta-data android:name="io.jankhunter.retained_object_delay_ms" android:value="5000" />
 <meta-data android:name="io.jankhunter.retained_object_force_gc_enabled" android:value="false" />
 <meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.jankstats_enabled" android:value="false" />
 <meta-data android:name="io.jankhunter.fps_window_ms" android:value="1000" />
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
@@ -110,6 +111,7 @@ val config = JankHunterConfig.builder()
     .retainedObjectDelayMs(5_000)
     .retainedObjectForceGcEnabled(false)
     .fpsMonitorEnabled(true)
+    .jankStatsEnabled(false)
     .fpsWindowMs(1_000)
     .jankFrameThresholdMs(32)
     .maxQueueSize(2048)
@@ -261,13 +263,32 @@ Watcher группирует retained objects по class/safe owner name и пи
 
 ## JankStats
 
-Core не тянет AndroidX, но содержит reflection bridge. Если host-приложение само подключило `androidx.metrics:metrics-performance`, можно включить точный JankStats-сигнал:
+Core не тянет AndroidX, но содержит reflection bridge. Если host-приложение само подключило `androidx.metrics:metrics-performance`, можно включить точный JankStats-сигнал вручную:
 
 ```kotlin
-JankHunterJankStats.install(window)
+val handle = JankHunterJankStats.install(window, "CheckoutActivity")
+handle?.addState("screen", "Checkout")
+handle?.uninstall()
 ```
 
 Если класса JankStats нет в classpath, метод вернет `null` и ничего не сломает.
+
+Для Activity auto-install без AndroidX dependency в core:
+
+```kotlin
+JankHunterConfig.builder()
+    .jankStatsEnabled(true)
+    .build()
+```
+
+Auto-install работает через `ActivityLifecycleCallbacks`: при start/resume SDK пытается вызвать `JankStats.createAndTrack(...)` через reflection, а при destroy/shutdown отключает tracking. Choreographer FPS остается включенным как fallback и пишет `ui_window`; JankStats пишет отдельные `jankstats.*` counters/gauges, чтобы CLI мог показать richer section без смешивания двух источников.
+
+JankStats bridge собирает:
+
+- frame count и janky frame count;
+- frame duration gauge;
+- screen-scoped counters/gauges;
+- state tags из `FrameData.states`, если они доступны в подключенной версии AndroidX.
 
 Если у приложения уже есть свой `EventListener.Factory`, передайте его как delegate:
 
@@ -351,8 +372,8 @@ JankHunterConfig.builder()
 
 ## Важные ограничения
 
-- Core SDK сейчас не содержит JankStats, чтобы не тянуть AndroidX.
-- FPS через `Choreographer` дает универсальный lightweight-сигнал, но не заменяет будущую точную интеграцию с JankStats.
+- Core SDK не содержит AndroidX JankStats dependency, чтобы не тянуть AndroidX.
+- FPS через `Choreographer` дает универсальный lightweight-сигнал; JankStats bridge добавляет отдельный richer signal, когда AndroidX уже есть в host app.
 - Heap dump и LeakCanary не включены в core, чтобы не утяжелять host-приложение.
 - Release-режим должен быть opt-in и сильно ограничен по sampling/rate limit.
 

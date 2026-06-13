@@ -87,6 +87,7 @@ type Summary struct {
 	Memory             []NamedValue
 	RetainedClasses    []NamedValue
 	RetainedAgeBuckets []NamedValue
+	JankStats          []NamedValue
 	Counters           []NamedValue
 	Gauges             []NamedValue
 }

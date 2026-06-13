@@ -17,6 +17,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
     private val fpsMonitorEnabled = builder.fpsMonitorEnabled
+    private val jankStatsEnabled = builder.jankStatsEnabled
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
     private val maxQueueSize = builder.maxQueueSize
@@ -49,6 +50,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
     fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
+
+    fun jankStatsEnabled(): Boolean = jankStatsEnabled
 
     fun fpsWindowMs(): Long = fpsWindowMs
 
@@ -88,6 +91,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
         internal var fpsMonitorEnabled = true
+        internal var jankStatsEnabled = false
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
         internal var maxQueueSize = 2048
@@ -120,6 +124,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun retainedObjectForceGcEnabled(value: Boolean) = apply { retainedObjectForceGcEnabled = value }
 
         fun fpsMonitorEnabled(value: Boolean) = apply { fpsMonitorEnabled = value }
+
+        fun jankStatsEnabled(value: Boolean) = apply { jankStatsEnabled = value }
 
         fun fpsWindowMs(value: Long) = apply { fpsWindowMs = value }
 
@@ -160,6 +166,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
         const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
         const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
+        const val META_JANKSTATS_ENABLED = "io.jankhunter.jankstats_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
@@ -186,6 +193,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
                 .retainedObjectForceGcEnabled(metadata?.getBoolean(META_RETAINED_OBJECT_FORCE_GC_ENABLED, false) ?: false)
                 .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
+                .jankStatsEnabled(metadata?.getBoolean(META_JANKSTATS_ENABLED, false) ?: false)
                 .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)
                 .jankFrameThresholdMs(metadata?.getLong(META_JANK_FRAME_THRESHOLD_MS, 32L) ?: 32L)
                 .maxQueueSize(metadata?.getInt(META_MAX_QUEUE_SIZE, 2048) ?: 2048)
