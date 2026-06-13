@@ -505,6 +505,40 @@ const mathCSS = `
   filter: drop-shadow(0 0 7px rgba(98,255,168,0.45));
 }
 .timeline-table th, .timeline-table td { white-space: nowrap; }
+.method-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+.method-reference-card { margin: 0; }
+.method-reference-card .fold-body { max-height: none; }
+.method-reference-card summary span:first-child { overflow-wrap: anywhere; }
+.method-kind { color: var(--ok); }
+.reference-block {
+  margin: 12px 0;
+  padding: 11px;
+  border: 1px solid rgba(126,247,255,0.13);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.026);
+}
+.reference-block strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--cyan);
+}
+.reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.reference-list code {
+  display: inline-flex;
+  padding: 3px 7px;
+  border: 1px solid rgba(126,247,255,0.15);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+}
 @media (max-width: 820px) {
   .math-page .math-summary { grid-template-columns: 1fr; }
 }
@@ -541,6 +575,7 @@ const mathInspectTemplate = `<!doctype html>
 </header>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
   <section class="panel">
@@ -753,6 +788,30 @@ const mathInspectTemplate = `<!doctype html>
     </details>
   </section>
   {{end}}
+  <section id="method-reference" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Справка по методам</h2>
+        <div class="panel-kicker">Что именно измеряет каждый математический метод, как считается результат и где границы применимости.</div>
+      </div>
+      <span class="pill">объяснимость</span>
+    </div>
+    <div class="method-reference-grid">
+      {{range .MethodReferences}}
+      <details class="fold method-reference-card" id="method-{{.ID}}">
+        <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
+        <div class="fold-body">
+          <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
+          <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
+          <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
+          <div class="reference-block"><strong>Поля в inspect</strong><div class="reference-list">{{range .InspectFields}}<code>{{.}}</code>{{end}}</div></div>
+          <div class="reference-block"><strong>Поля в compare</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+  </section>
 </main>
 </body>
 </html>`
@@ -788,6 +847,7 @@ const mathCompareTemplate = `<!doctype html>
 </header>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
   <section class="panel">
@@ -981,6 +1041,30 @@ const mathCompareTemplate = `<!doctype html>
     </details>
   </section>
   {{end}}
+  <section id="method-reference" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Справка по методам</h2>
+        <div class="panel-kicker">Что именно измеряет каждый математический метод, как считается результат и как читать дельты между базой и кандидатом.</div>
+      </div>
+      <span class="pill">объяснимость</span>
+    </div>
+    <div class="method-reference-grid">
+      {{range .MethodReferences}}
+      <details class="fold method-reference-card" id="method-{{.ID}}">
+        <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
+        <div class="fold-body">
+          <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
+          <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
+          <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
+          <div class="reference-block"><strong>Поля в inspect</strong><div class="reference-list">{{range .InspectFields}}<code>{{.}}</code>{{end}}</div></div>
+          <div class="reference-block"><strong>Поля в compare</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+  </section>
 </main>
 </body>
 </html>`

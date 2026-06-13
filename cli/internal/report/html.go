@@ -49,15 +49,17 @@ func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs
 
 func WriteMathInspect(path string, mathReport mathanalysis.MathReport) error {
 	return execute(path, mathInspectTemplate, map[string]any{
-		"GeneratedAt": time.Now().Format(time.RFC3339),
-		"Math":        mathReport,
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"Math":             mathReport,
+		"MethodReferences": mathanalysis.MethodReferences(),
 	})
 }
 
 func WriteMathCompare(path string, mathReport mathanalysis.CompareMathReport) error {
 	return execute(path, mathCompareTemplate, map[string]any{
-		"GeneratedAt": time.Now().Format(time.RFC3339),
-		"Math":        mathReport,
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"Math":             mathReport,
+		"MethodReferences": mathanalysis.MethodReferences(),
 	})
 }
 
