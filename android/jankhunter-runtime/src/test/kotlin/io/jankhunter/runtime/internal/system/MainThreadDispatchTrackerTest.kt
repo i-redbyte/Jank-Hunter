@@ -8,7 +8,7 @@ class MainThreadDispatchTrackerTest {
     @Test
     fun emitsDurationAndSourceAfterDispatchEnd() {
         var now = 1_000L
-        val tracker = MainThreadDispatchTracker { now }
+        val tracker = MainThreadDispatchTracker(clockMs = { now })
 
         assertNull(
             tracker.onMessage(
@@ -28,7 +28,21 @@ class MainThreadDispatchTrackerTest {
 
     @Test
     fun ignoresFinishWithoutStart() {
-        val tracker = MainThreadDispatchTracker { 1_000L }
+        val tracker = MainThreadDispatchTracker(clockMs = { 1_000L })
+
+        assertNull(tracker.onMessage("<<<<< Finished to Handler (x) {abc} callback"))
+    }
+
+    @Test
+    fun ignoresDispatchBelowMinimumDuration() {
+        var now = 1_000L
+        val tracker = MainThreadDispatchTracker(
+            clockMs = { now },
+            minDurationMs = 10,
+        )
+
+        assertNull(tracker.onMessage(">>>>> Dispatching to Handler (x) {abc} callback"))
+        now = 1_009L
 
         assertNull(tracker.onMessage("<<<<< Finished to Handler (x) {abc} callback"))
     }

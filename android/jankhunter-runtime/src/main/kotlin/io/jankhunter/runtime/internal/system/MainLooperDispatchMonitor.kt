@@ -12,7 +12,10 @@ class MainLooperDispatchMonitor(
 ) {
     private val running = AtomicBoolean(false)
     private val thresholdMs = max(1L, thresholdMs)
-    private val tracker = MainThreadDispatchTracker { SystemClock.elapsedRealtime() }
+    private val tracker = MainThreadDispatchTracker(
+        clockMs = { SystemClock.elapsedRealtime() },
+        minDurationMs = this.thresholdMs,
+    )
     private val printer = Printer { line ->
         tracker.onMessage(line)?.let { sample ->
             JankHunter.recordMainThreadDispatch(sample.durationMs, thresholdMs, sample.source)

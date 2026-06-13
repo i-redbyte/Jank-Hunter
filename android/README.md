@@ -79,6 +79,7 @@ jankHunter {
 - jank count по порогу длительности кадра;
 - p50/p95/p99 длительности кадров внутри окна;
 - main-thread stalls через watchdog;
+- optional Looper dispatch monitor, выключен по умолчанию, потому что `Looper.setMessageLogging(...)` вызывается на каждом main-thread message;
 - memory snapshots: PSS, Java heap, native heap;
 - previous process exit summary через `ApplicationExitInfo` на Android 11+;
 - retained object watcher без внешних зависимостей;
@@ -127,6 +128,7 @@ p99_ms
 <meta-data android:name="io.jankhunter.memory_sample_interval_ms" android:value="10000" />
 <meta-data android:name="io.jankhunter.system_sampler_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.system_sample_interval_ms" android:value="15000" />
+<meta-data android:name="io.jankhunter.main_looper_dispatch_monitor_enabled" android:value="false" />
 <meta-data android:name="io.jankhunter.process_exit_info_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.object_watcher_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.retained_object_delay_ms" android:value="5000" />
@@ -155,6 +157,7 @@ val config = JankHunterConfig.builder()
     .memorySampleIntervalMs(10_000)
     .systemSamplerEnabled(true)
     .systemSampleIntervalMs(15_000)
+    .mainLooperDispatchMonitorEnabled(false)
     .processExitInfoEnabled(true)
     .objectWatcherEnabled(true)
     .retainedObjectDelayMs(5_000)

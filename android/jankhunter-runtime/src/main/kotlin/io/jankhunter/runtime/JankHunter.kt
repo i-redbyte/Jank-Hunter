@@ -122,7 +122,11 @@ object JankHunter {
                 }
             }
             watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
-            dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
+            if (providedConfig.mainLooperDispatchMonitorEnabled()) {
+                dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also {
+                    it.start()
+                }
+            }
             memoryTrimReporter = MemoryTrimReporter().also {
                 appContext.registerComponentCallbacks(it)
                 componentCallbackContext = appContext
@@ -459,14 +463,13 @@ object JankHunter {
     }
 
     internal fun recordMainThreadDispatch(durationMs: Long, thresholdMs: Long, source: String?) {
+        if (durationMs < thresholdMs) return
         recordGauge("main_thread.dispatch.duration_ms", durationMs)
-        if (durationMs >= thresholdMs) {
-            val overThresholdMs = durationMs - thresholdMs
-            recordCounter("main_thread.dispatch.slow.count", 1)
-            recordGauge("main_thread.dispatch.over_threshold_ms", overThresholdMs)
-            recordCounter("screen.${metricOwner(currentScreen())}.main_thread.slow_dispatch.count", 1)
-            recordCounter("main_thread.dispatch.source.${metricOwner(source)}.slow.count", 1)
-        }
+        val overThresholdMs = durationMs - thresholdMs
+        recordCounter("main_thread.dispatch.slow.count", 1)
+        recordGauge("main_thread.dispatch.over_threshold_ms", overThresholdMs)
+        recordCounter("screen.${metricOwner(currentScreen())}.main_thread.slow_dispatch.count", 1)
+        recordCounter("main_thread.dispatch.source.${metricOwner(source)}.slow.count", 1)
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()

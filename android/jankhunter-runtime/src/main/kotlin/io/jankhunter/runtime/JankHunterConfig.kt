@@ -12,6 +12,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val memorySampleIntervalMs = builder.memorySampleIntervalMs
     private val systemSamplerEnabled = builder.systemSamplerEnabled
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
+    private val mainLooperDispatchMonitorEnabled = builder.mainLooperDispatchMonitorEnabled
     private val processExitInfoEnabled = builder.processExitInfoEnabled
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
@@ -43,6 +44,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun systemSamplerEnabled(): Boolean = systemSamplerEnabled
 
     fun systemSampleIntervalMs(): Long = systemSampleIntervalMs
+
+    fun mainLooperDispatchMonitorEnabled(): Boolean = mainLooperDispatchMonitorEnabled
 
     fun processExitInfoEnabled(): Boolean = processExitInfoEnabled
 
@@ -95,6 +98,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var memorySampleIntervalMs = 10_000L
         internal var systemSamplerEnabled = true
         internal var systemSampleIntervalMs = 15_000L
+        internal var mainLooperDispatchMonitorEnabled = false
         internal var processExitInfoEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
@@ -126,6 +130,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun systemSamplerEnabled(value: Boolean) = apply { systemSamplerEnabled = value }
 
         fun systemSampleIntervalMs(value: Long) = apply { systemSampleIntervalMs = value }
+
+        fun mainLooperDispatchMonitorEnabled(value: Boolean) = apply { mainLooperDispatchMonitorEnabled = value }
 
         fun processExitInfoEnabled(value: Boolean) = apply { processExitInfoEnabled = value }
 
@@ -179,6 +185,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
         const val META_SYSTEM_SAMPLER_ENABLED = "io.jankhunter.system_sampler_enabled"
         const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
+        const val META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED = "io.jankhunter.main_looper_dispatch_monitor_enabled"
         const val META_PROCESS_EXIT_INFO_ENABLED = "io.jankhunter.process_exit_info_enabled"
         const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
@@ -209,6 +216,9 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .memorySampleIntervalMs(metadata?.getLong(META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L) ?: 10_000L)
                 .systemSamplerEnabled(metadata?.getBoolean(META_SYSTEM_SAMPLER_ENABLED, true) ?: true)
                 .systemSampleIntervalMs(metadata?.getLong(META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L) ?: 15_000L)
+                .mainLooperDispatchMonitorEnabled(
+                    metadata?.getBoolean(META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false) ?: false,
+                )
                 .processExitInfoEnabled(metadata?.getBoolean(META_PROCESS_EXIT_INFO_ENABLED, true) ?: true)
                 .objectWatcherEnabled(metadata?.getBoolean(META_OBJECT_WATCHER_ENABLED, true) ?: true)
                 .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
