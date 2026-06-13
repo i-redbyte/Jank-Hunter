@@ -10,6 +10,8 @@ import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
+import io.jankhunter.runtime.internal.system.ProcessExitReporter
+import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -28,6 +30,9 @@ object JankHunter {
 
     @Volatile
     private var memorySampler: MemorySampler? = null
+
+    @Volatile
+    private var systemContextSampler: SystemContextSampler? = null
 
     @Volatile
     private var fpsMonitor: FpsMonitor? = null
@@ -75,6 +80,15 @@ object JankHunter {
             }
             watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
             memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
+            if (providedConfig.systemSamplerEnabled()) {
+                systemContextSampler = SystemContextSampler(
+                    appContext,
+                    providedConfig.systemSampleIntervalMs(),
+                ).also { it.start() }
+            }
+            if (providedConfig.processExitInfoEnabled()) {
+                ProcessExitReporter.report(appContext)
+            }
             if (providedConfig.fpsMonitorEnabled()) {
                 fpsMonitor = FpsMonitor(
                     providedConfig.fpsWindowMs(),
@@ -94,12 +108,14 @@ object JankHunter {
         }
         watchdog?.stop()
         memorySampler?.stop()
+        systemContextSampler?.stop()
         fpsMonitor?.stop()
         writer?.close()
         activityTracker = null
         application = null
         watchdog = null
         memorySampler = null
+        systemContextSampler = null
         fpsMonitor = null
         writer = null
         started.set(false)
@@ -166,6 +182,33 @@ object JankHunter {
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
         writer?.memory(pssKb, javaHeapKb, nativeHeapKb)
+    }
+
+    @JvmStatic
+    fun recordContext(
+        networkKind: Int,
+        batteryPct: Int,
+        availMemoryKb: Long,
+        batteryState: Int,
+        batteryTempDeciC: Int,
+        lowMemory: Boolean,
+        networkMetered: Boolean,
+        networkValidated: Boolean,
+        rxBytes: Long,
+        txBytes: Long,
+    ) {
+        writer?.context(
+            networkKind,
+            batteryPct,
+            availMemoryKb,
+            batteryState,
+            batteryTempDeciC,
+            lowMemory,
+            networkMetered,
+            networkValidated,
+            rxBytes,
+            txBytes,
+        )
     }
 
     @JvmStatic

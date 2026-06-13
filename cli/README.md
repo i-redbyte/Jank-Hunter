@@ -12,7 +12,7 @@ CLI не требует backend, базы данных или браузерны
 - inspect-отчет по одному файлу или пулу файлов;
 - compare-отчет baseline vs candidate;
 - экспорт событий в JSONL;
-- сводка по HTTP, UI/FPS/jank, stalls, memory, retained objects, counters, gauges;
+- сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - top suspects по owner/class/stack hint.
 
 ## Сборка
@@ -79,6 +79,9 @@ UI jank rate
 UI avg FPS
 Main-thread stall max
 Max PSS
+Min available memory
+UID RX max
+UID TX max
 Retained objects
 ```
 
@@ -144,6 +147,21 @@ jank_rate = jank_count / frame_count
 - top janky screens;
 - Avg FPS и Min FPS по каждому screen;
 - p95/p99 frame duration.
+
+## System context
+
+Context-события помогают понять условия замера:
+
+```text
+network kind
+battery pct
+available memory
+low-memory flag
+network metered/validated
+uid rx/tx bytes
+```
+
+В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети.
 
 ## Counters и gauges
 

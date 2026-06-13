@@ -49,6 +49,34 @@ class BinaryLogWriter(file: File) : Closeable {
     }
 
     @Synchronized
+    fun context(
+        networkKind: Int,
+        batteryPct: Int,
+        availMemoryKb: Long,
+        batteryState: Int,
+        batteryTempDeciC: Int,
+        lowMemory: Boolean,
+        networkMetered: Boolean,
+        networkValidated: Boolean,
+        rxBytes: Long,
+        txBytes: Long,
+    ) {
+        val flags = if (networkMetered) FLAG_NETWORK_METERED else 0L
+        val payload = Payload()
+            .uvarint(networkKind.toLong())
+            .uvarint(batteryPct.toLong())
+            .uvarint(availMemoryKb)
+            .uvarint(batteryState.toLong())
+            .uvarint(batteryTempDeciC.toLong())
+            .uvarint(boolean(lowMemory))
+            .uvarint(boolean(networkMetered))
+            .uvarint(boolean(networkValidated))
+            .uvarint(rxBytes)
+            .uvarint(txBytes)
+        record(EVENT_CONTEXT, flags or FLAG_APP_FOREGROUND, payload)
+    }
+
+    @Synchronized
     fun http(
         owner: String?,
         route: String?,
@@ -212,11 +240,13 @@ class BinaryLogWriter(file: File) : Closeable {
         const val FLAG_HTTP_TLS: Long = 1L shl 2
         const val FLAG_THREAD_MAIN: Long = 1L shl 3
         const val FLAG_APP_FOREGROUND: Long = 1L shl 4
+        const val FLAG_NETWORK_METERED: Long = 1L shl 5
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), 1)
 
         private const val EVENT_DICTIONARY = 1
         private const val EVENT_SESSION = 2
+        private const val EVENT_CONTEXT = 3
         private const val EVENT_HTTP = 4
         private const val EVENT_UI_WINDOW = 5
         private const val EVENT_STALL = 6
@@ -244,5 +274,7 @@ class BinaryLogWriter(file: File) : Closeable {
             out.write(value.toInt())
             return count + 1
         }
+
+        private fun boolean(value: Boolean): Long = if (value) 1L else 0L
     }
 }

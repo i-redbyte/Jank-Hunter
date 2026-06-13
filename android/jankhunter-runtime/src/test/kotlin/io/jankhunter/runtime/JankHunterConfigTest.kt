@@ -13,6 +13,9 @@ class JankHunterConfigTest {
             .autoStartCollectors(false)
             .mainThreadStallThresholdMs(123)
             .memorySampleIntervalMs(456)
+            .systemSamplerEnabled(false)
+            .systemSampleIntervalMs(654)
+            .processExitInfoEnabled(false)
             .fpsMonitorEnabled(false)
             .fpsWindowMs(789)
             .jankFrameThresholdMs(11)
@@ -25,6 +28,9 @@ class JankHunterConfigTest {
         assertFalse(config.autoStartCollectors())
         assertEquals(123, config.mainThreadStallThresholdMs())
         assertEquals(456, config.memorySampleIntervalMs())
+        assertFalse(config.systemSamplerEnabled())
+        assertEquals(654, config.systemSampleIntervalMs())
+        assertFalse(config.processExitInfoEnabled())
         assertFalse(config.fpsMonitorEnabled())
         assertEquals(789, config.fpsWindowMs())
         assertEquals(11, config.jankFrameThresholdMs())
@@ -39,6 +45,8 @@ class JankHunterConfigTest {
 
         assertTrue(config.enabled())
         assertTrue(config.autoStartCollectors())
+        assertTrue(config.systemSamplerEnabled())
+        assertTrue(config.processExitInfoEnabled())
         assertTrue(config.fpsMonitorEnabled())
         assertEquals(2048, config.maxQueueSize())
     }

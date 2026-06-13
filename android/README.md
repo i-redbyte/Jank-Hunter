@@ -27,11 +27,13 @@ android/
 
 - старт сессии: версия приложения, build, модель устройства, SDK API;
 - текущий screen по `ActivityLifecycleCallbacks`;
+- system context: battery, available memory, low-memory flag, network kind, metered/validated state, UID traffic;
 - FPS и UI frame windows через `Choreographer`;
 - jank count по порогу длительности кадра;
 - p50/p95/p99 длительности кадров внутри окна;
 - main-thread stalls через watchdog;
 - memory snapshots: PSS, Java heap, native heap;
+- previous process exit summary через `ApplicationExitInfo` на Android 11+;
 - counters/gauges;
 - explicit owner attribution через `JankHunter.withOwner(...)`.
 
@@ -75,6 +77,9 @@ p99_ms
 <meta-data android:name="io.jankhunter.auto_start_collectors" android:value="true" />
 <meta-data android:name="io.jankhunter.main_thread_stall_threshold_ms" android:value="700" />
 <meta-data android:name="io.jankhunter.memory_sample_interval_ms" android:value="10000" />
+<meta-data android:name="io.jankhunter.system_sampler_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.system_sample_interval_ms" android:value="15000" />
+<meta-data android:name="io.jankhunter.process_exit_info_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.fps_window_ms" android:value="1000" />
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
@@ -91,6 +96,9 @@ val config = JankHunterConfig.builder()
     .autoStartCollectors(true)
     .mainThreadStallThresholdMs(700)
     .memorySampleIntervalMs(10_000)
+    .systemSamplerEnabled(true)
+    .systemSampleIntervalMs(15_000)
+    .processExitInfoEnabled(true)
     .fpsMonitorEnabled(true)
     .fpsWindowMs(1_000)
     .jankFrameThresholdMs(32)

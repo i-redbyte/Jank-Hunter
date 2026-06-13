@@ -22,6 +22,7 @@ func Inspect(title string, logs []jhlog.Log) Summary {
 	ownerStats := map[string]*OwnerStats{}
 	counterValues := map[string]uint64{}
 	gaugeValues := map[string][]uint64{}
+	networkSamples := map[string]uint64{}
 
 	for _, log := range logs {
 		summary.Dictionary += len(log.Dict)
@@ -83,6 +84,25 @@ func Inspect(title string, logs []jhlog.Log) Summary {
 				owner := jhlog.Resolve(log.Dict, event.Stall.OwnerID)
 				stack := jhlog.Resolve(log.Dict, event.Stall.StackID)
 				addOwner(ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
+			case event.Context != nil:
+				summary.ContextCount++
+				summary.BatteryLastPct = event.Context.BatteryPct
+				if summary.BatteryMinPct == 0 || event.Context.BatteryPct < summary.BatteryMinPct {
+					summary.BatteryMinPct = event.Context.BatteryPct
+				}
+				if summary.AvailMemoryMinKB == 0 || event.Context.AvailMemoryKB < summary.AvailMemoryMinKB {
+					summary.AvailMemoryMinKB = event.Context.AvailMemoryKB
+				}
+				if event.Context.LowMemory {
+					summary.LowMemoryCount++
+				}
+				if event.Context.RxBytes > summary.TrafficRxMax {
+					summary.TrafficRxMax = event.Context.RxBytes
+				}
+				if event.Context.TxBytes > summary.TrafficTxMax {
+					summary.TrafficTxMax = event.Context.TxBytes
+				}
+				networkSamples[jhlog.NetworkName(event.Context.Network)]++
 			case event.Memory != nil:
 				if event.Memory.PSSKB > summary.MemoryMaxKB {
 					summary.MemoryMaxKB = event.Memory.PSSKB
@@ -160,11 +180,21 @@ func Inspect(title string, logs []jhlog.Log) Summary {
 		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, max, len(values))})
 	}
 
+	for name, value := range networkSamples {
+		summary.Network = append(summary.Network, NamedValue{Name: name, Value: value})
+	}
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
+	if summary.AvailMemoryMinKB > 0 {
+		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})
+	}
+	if summary.ContextCount > 0 {
+		summary.Memory = append(summary.Memory, NamedValue{Name: "low_memory_samples", Value: uint64(summary.LowMemoryCount)})
+	}
 
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
+	sortNamed(summary.Network)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	return summary
@@ -179,6 +209,9 @@ func Compare(baseline, candidate Summary) Comparison {
 		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "fps", false),
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "ms", true),
 		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "kb", true),
+		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "kb", false),
+		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true),
+		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true),
 	)
 	return comparison
@@ -270,10 +303,18 @@ func delta(name string, before, after uint64, unit string, higherIsWorse bool) D
 		diff := int64(after) - int64(before)
 		pct := float64(diff) * 100 / float64(before)
 		change = fmt.Sprintf("%+.1f%%", pct)
-		if higherIsWorse && pct >= 25 {
-			severity = "high"
-		} else if higherIsWorse && pct >= 10 {
-			severity = "medium"
+		if higherIsWorse {
+			if pct >= 25 {
+				severity = "high"
+			} else if pct >= 10 {
+				severity = "medium"
+			}
+		} else {
+			if pct <= -25 {
+				severity = "high"
+			} else if pct <= -10 {
+				severity = "medium"
+			}
 		}
 	}
 	return Delta{

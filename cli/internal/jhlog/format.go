@@ -100,9 +100,16 @@ type SessionEvent struct {
 }
 
 type ContextEvent struct {
-	Network       NetworkKind `json:"network"`
-	BatteryPct    uint64      `json:"battery_pct"`
-	AvailMemoryKB uint64      `json:"avail_memory_kb"`
+	Network          NetworkKind `json:"network"`
+	BatteryPct       uint64      `json:"battery_pct"`
+	AvailMemoryKB    uint64      `json:"avail_memory_kb"`
+	BatteryState     uint64      `json:"battery_state,omitempty"`
+	BatteryTempDeciC uint64      `json:"battery_temp_deci_c,omitempty"`
+	LowMemory        bool        `json:"low_memory,omitempty"`
+	NetworkMetered   bool        `json:"network_metered,omitempty"`
+	NetworkValidated bool        `json:"network_validated,omitempty"`
+	RxBytes          uint64      `json:"rx_bytes,omitempty"`
+	TxBytes          uint64      `json:"tx_bytes,omitempty"`
 }
 
 type HTTPEvent struct {

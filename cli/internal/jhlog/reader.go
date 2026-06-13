@@ -144,19 +144,40 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		event.Session = &SessionEvent{AppVersionID: app, BuildID: build, DeviceID: device, SDKInt: sdk}
 	case EventContext:
-		network, err := read()
+		values, err := readRemaining(reader)
 		if err != nil {
 			return err
 		}
-		battery, err := read()
-		if err != nil {
-			return err
+		if len(values) < 3 {
+			return fmt.Errorf("context payload has %d values, expected at least 3", len(values))
 		}
-		mem, err := read()
-		if err != nil {
-			return err
+		context := &ContextEvent{
+			Network:       NetworkKind(values[0]),
+			BatteryPct:    values[1],
+			AvailMemoryKB: values[2],
 		}
-		event.Context = &ContextEvent{Network: NetworkKind(network), BatteryPct: battery, AvailMemoryKB: mem}
+		if len(values) > 3 {
+			context.BatteryState = values[3]
+		}
+		if len(values) > 4 {
+			context.BatteryTempDeciC = values[4]
+		}
+		if len(values) > 5 {
+			context.LowMemory = values[5] != 0
+		}
+		if len(values) > 6 {
+			context.NetworkMetered = values[6] != 0
+		}
+		if len(values) > 7 {
+			context.NetworkValidated = values[7] != 0
+		}
+		if len(values) > 8 {
+			context.RxBytes = values[8]
+		}
+		if len(values) > 9 {
+			context.TxBytes = values[9]
+		}
+		event.Context = context
 	case EventHTTP:
 		values, err := readN(read, 9)
 		if err != nil {
@@ -214,6 +235,18 @@ func readN(read func() (uint64, error), count int) ([]uint64, error) {
 			return nil, err
 		}
 		values[i] = value
+	}
+	return values, nil
+}
+
+func readRemaining(reader *bytes.Reader) ([]uint64, error) {
+	var values []uint64
+	for reader.Len() > 0 {
+		value, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
 	}
 	return values, nil
 }

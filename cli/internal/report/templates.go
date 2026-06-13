@@ -73,6 +73,8 @@ const inspectTemplate = `<!doctype html>
     <div class="metric"><div class="label">UI jank</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div></div>
     <div class="metric"><div class="label">Avg FPS</div><div class="value">{{printf "%.1f" .Summary.UIAvgFPS}}</div></div>
     <div class="metric"><div class="label">Max stall</div><div class="value">{{.Summary.StallMaxMS}} ms</div></div>
+    <div class="metric"><div class="label">Battery min</div><div class="value">{{.Summary.BatteryMinPct}}%</div></div>
+    <div class="metric"><div class="label">UID RX max</div><div class="value">{{.Summary.TrafficRxMax}}</div></div>
     <div class="metric"><div class="label">Max PSS</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div></div>
   </div>
 
@@ -107,6 +109,25 @@ const inspectTemplate = `<!doctype html>
       {{range .Summary.Owners}}
       <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
       {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section>
+    <h2>System Context</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th></tr>
+      <tr><td>Samples</td><td>{{.Summary.ContextCount}}</td></tr>
+      <tr><td>Battery min</td><td>{{.Summary.BatteryMinPct}}%</td></tr>
+      <tr><td>Battery last</td><td>{{.Summary.BatteryLastPct}}%</td></tr>
+      <tr><td>Available memory min</td><td>{{.Summary.AvailMemoryMinKB}} KB</td></tr>
+      <tr><td>Low-memory samples</td><td>{{.Summary.LowMemoryCount}}</td></tr>
+      <tr><td>UID RX max</td><td>{{.Summary.TrafficRxMax}} bytes</td></tr>
+      <tr><td>UID TX max</td><td>{{.Summary.TrafficTxMax}} bytes</td></tr>
+    </table>
+    <h2>Network Samples</h2>
+    <table>
+      <tr><th>Network</th><th>Samples</th></tr>
+      {{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No context events.</td></tr>{{end}}
     </table>
   </section>
 
@@ -160,6 +181,8 @@ const compareTemplate = `<!doctype html>
     <div class="metric"><div class="label">Candidate UI jank</div><div class="value">{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div></div>
     <div class="metric"><div class="label">Baseline Avg FPS</div><div class="value">{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}</div></div>
     <div class="metric"><div class="label">Candidate Avg FPS</div><div class="value">{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div></div>
+    <div class="metric"><div class="label">Baseline RX max</div><div class="value">{{.Comparison.Baseline.TrafficRxMax}}</div></div>
+    <div class="metric"><div class="label">Candidate RX max</div><div class="value">{{.Comparison.Candidate.TrafficRxMax}}</div></div>
   </div>
 
   <section>

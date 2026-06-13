@@ -35,6 +35,34 @@ class AsyncLogWriter private constructor(
         offer { it.screen(screen) }
     }
 
+    fun context(
+        networkKind: Int,
+        batteryPct: Int,
+        availMemoryKb: Long,
+        batteryState: Int,
+        batteryTempDeciC: Int,
+        lowMemory: Boolean,
+        networkMetered: Boolean,
+        networkValidated: Boolean,
+        rxBytes: Long,
+        txBytes: Long,
+    ) {
+        offer {
+            it.context(
+                networkKind,
+                batteryPct,
+                availMemoryKb,
+                batteryState,
+                batteryTempDeciC,
+                lowMemory,
+                networkMetered,
+                networkValidated,
+                rxBytes,
+                txBytes,
+            )
+        }
+    }
+
     fun http(
         owner: String?,
         route: String?,

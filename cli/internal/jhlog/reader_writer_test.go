@@ -26,6 +26,19 @@ func TestWriteSampleReadFile(t *testing.T) {
 	if log.Events[len(log.Events)-1].TimeMS == 0 {
 		t.Fatalf("expected monotonic event timestamps")
 	}
+	var context *ContextEvent
+	for _, event := range log.Events {
+		if event.Context != nil {
+			context = event.Context
+			break
+		}
+	}
+	if context == nil {
+		t.Fatalf("expected context event")
+	}
+	if context.Network != NetworkWiFi || context.BatteryPct != 82 || !context.NetworkValidated {
+		t.Fatalf("unexpected context event: %+v", context)
+	}
 }
 
 func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
