@@ -63,6 +63,7 @@ jankHunter {
         handlers = true
         executors = true
         methodCounters = false
+        allowEmptyIncludePackages = false
         includePackages.add("com.example.app")
     }
 }
@@ -137,6 +138,8 @@ p99_ms
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
 <meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
+<meta-data android:name="io.jankhunter.max_dictionary_entries" android:value="8192" />
+<meta-data android:name="io.jankhunter.max_dictionary_value_bytes" android:value="256" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 <meta-data android:name="io.jankhunter.main_process_only" android:value="false" />
 <meta-data android:name="io.jankhunter.allowed_processes" android:value="com.example.app,com.example.app:remote" />
@@ -368,6 +371,7 @@ jankHunter {
         rxJava = true
         coroutines = true
         methodCounters = true
+        allowEmptyIncludePackages = false
         includePackages.add("com.myapp")
         excludePackages.add("com.myapp.generated")
     }
@@ -375,7 +379,7 @@ jankHunter {
 ```
 
 Plugin регистрирует ASM transform через Android Components API только для `enabledBuildTypes`.
-Классы проходят include/exclude-фильтры; platform, Kotlin, OkHttp и сам Jank Hunter исключены встроенно.
+Классы проходят include/exclude-фильтры; platform, Kotlin, OkHttp и сам Jank Hunter исключены встроенно. Для больших приложений `includePackages` должен быть задан явно. Пустой include-list по умолчанию ничего не инструментирует; старое поведение "все, кроме встроенных exclude" можно включить только явно через `allowEmptyIncludePackages = true`.
 
 Реализованные hooks:
 
@@ -411,6 +415,8 @@ context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 ```
 
 По умолчанию writer ротирует сегмент при `io.jankhunter.max_log_bytes=5242880` (5 МБ) и хранит последние сегменты текущего процесса в пределах `io.jankhunter.max_log_directory_bytes=26214400` (25 МБ). Это кольцевое хранение: при превышении общего бюджета самые старые `session-<process>-*.jhlog` удаляются, а активный файл записи не трогается. Если общий бюджет меньше одного сегмента, текущий сегмент может временно быть больше бюджета; для больших приложений держите directory budget как минимум в несколько раз больше segment budget.
+
+Словарь `.jhlog` тоже ограничен: по умолчанию максимум `io.jankhunter.max_dictionary_entries=8192` новых строковых значений и `io.jankhunter.max_dictionary_value_bytes=256` байт на значение. Если приложение генерирует слишком много уникальных owner/route/metric имен, writer схлопывает новые значения в `__jh_dictionary_overflow__`; приложение продолжает работать, а лог остается компактным.
 
 Путь можно изменить через:
 

@@ -3,6 +3,7 @@ package io.jankhunter.gradle
 class InstrumentationMatcher(
     includePackages: Iterable<String>,
     excludePackages: Iterable<String>,
+    private val allowEmptyIncludes: Boolean = false,
 ) {
     private val includes = includePackages.map(::normalize).filter { it.isNotEmpty() }
     private val excludes = (excludePackages.map(::normalize) + builtinExcludes).filter { it.isNotEmpty() }
@@ -10,6 +11,7 @@ class InstrumentationMatcher(
     fun matches(className: String): Boolean {
         val normalized = normalize(className)
         if (excludes.any { normalized.startsWith(it) }) return false
+        if (includes.isEmpty() && !allowEmptyIncludes) return false
         if (includes.isEmpty()) return true
         return includes.any { normalized.startsWith(it) }
     }

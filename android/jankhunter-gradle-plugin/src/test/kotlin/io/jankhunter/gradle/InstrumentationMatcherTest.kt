@@ -6,8 +6,15 @@ import org.junit.Test
 
 class InstrumentationMatcherTest {
     @Test
-    fun includesApplicationClassesWhenIncludeListIsEmpty() {
+    fun skipsApplicationClassesWhenIncludeListIsEmptyByDefault() {
         val matcher = InstrumentationMatcher(emptyList(), emptyList())
+
+        assertFalse(matcher.matches("com.example.FeedPresenter"))
+    }
+
+    @Test
+    fun canAllowEmptyIncludeListExplicitly() {
+        val matcher = InstrumentationMatcher(emptyList(), emptyList(), allowEmptyIncludes = true)
 
         assertTrue(matcher.matches("com.example.FeedPresenter"))
     }

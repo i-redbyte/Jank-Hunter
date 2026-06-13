@@ -21,6 +21,7 @@ open class JankHunterExtension {
         var rxJava: Boolean = true
         var coroutines: Boolean = false
         var methodCounters: Boolean = false
+        var allowEmptyIncludePackages: Boolean = false
         val includePackages: MutableSet<String> = linkedSetOf()
         val excludePackages: MutableSet<String> = linkedSetOf()
     }

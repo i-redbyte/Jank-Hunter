@@ -23,6 +23,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxQueueSize = builder.maxQueueSize
     private val maxLogBytes = builder.maxLogBytes
     private val maxLogDirectoryBytes = builder.maxLogDirectoryBytes
+    private val maxDictionaryEntries = builder.maxDictionaryEntries
+    private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
     private val routeRedactor = builder.routeRedactor
     private val logDirectory = builder.logDirectory
@@ -64,6 +66,10 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxLogDirectoryBytes(): Long = maxLogDirectoryBytes
 
+    fun maxDictionaryEntries(): Int = maxDictionaryEntries
+
+    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes
+
     fun flushIntervalMs(): Long = flushIntervalMs
 
     fun redactRoute(route: String?): String? = routeRedactor.redact(route)
@@ -100,6 +106,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxQueueSize = 2048
         internal var maxLogBytes = 5L * 1024L * 1024L
         internal var maxLogDirectoryBytes = 25L * 1024L * 1024L
+        internal var maxDictionaryEntries = 8192
+        internal var maxDictionaryValueBytes = 256
         internal var flushIntervalMs = 5_000L
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
@@ -141,6 +149,10 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun maxLogDirectoryBytes(value: Long) = apply { maxLogDirectoryBytes = value }
 
+        fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
+
+        fun maxDictionaryValueBytes(value: Int) = apply { maxDictionaryValueBytes = value }
+
         fun flushIntervalMs(value: Long) = apply { flushIntervalMs = value }
 
         fun routeRedactor(value: JankHunterRedactor) = apply { routeRedactor = value }
@@ -178,6 +190,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
         const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
         const val META_MAX_LOG_DIRECTORY_BYTES = "io.jankhunter.max_log_directory_bytes"
+        const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
+        const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
@@ -209,6 +223,8 @@ class JankHunterConfig private constructor(builder: Builder) {
                     metadata?.getLong(META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L)
                         ?: 25L * 1024L * 1024L,
                 )
+                .maxDictionaryEntries(metadata?.getInt(META_MAX_DICTIONARY_ENTRIES, 8192) ?: 8192)
+                .maxDictionaryValueBytes(metadata?.getInt(META_MAX_DICTIONARY_VALUE_BYTES, 256) ?: 256)
                 .flushIntervalMs(metadata?.getLong(META_FLUSH_INTERVAL_MS, 5_000L) ?: 5_000L)
                 .mainProcessOnly(metadata?.getBoolean(META_MAIN_PROCESS_ONLY, false) ?: false)
                 .allowedProcesses(parseProcessList(metadata?.getString(META_ALLOWED_PROCESSES)))

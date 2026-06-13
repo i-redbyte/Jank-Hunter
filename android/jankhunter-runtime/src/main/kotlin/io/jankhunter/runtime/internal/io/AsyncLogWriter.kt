@@ -251,7 +251,11 @@ class AsyncLogWriter private constructor(
 
     private fun openSegment(): BinaryLogWriter {
         val file = File(directory, "$filePrefix${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
-        return BinaryLogWriter(file)
+        return BinaryLogWriter(
+            file,
+            config.maxDictionaryEntries(),
+            config.maxDictionaryValueBytes(),
+        )
     }
 
     private fun enforceRetention() {

@@ -31,6 +31,9 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val coroutines: Property<Boolean>
 
     @get:Input
+    abstract val allowEmptyIncludePackages: Property<Boolean>
+
+    @get:Input
     abstract val includePackages: ListProperty<String>
 
     @get:Input
@@ -57,6 +60,7 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
                 appendLine("    \"executors\": ${executors.getOrElse(false)},")
                 appendLine("    \"coroutines\": ${coroutines.getOrElse(false)}")
                 appendLine("  },")
+                appendLine("  \"allowEmptyIncludePackages\": ${allowEmptyIncludePackages.getOrElse(false)},")
                 appendLine("  \"includePackages\": ${array(includePackages.getOrElse(emptyList()))},")
                 appendLine("  \"excludePackages\": ${array(excludePackages.getOrElse(emptyList()))},")
                 appendLine("  \"owners\": {}")

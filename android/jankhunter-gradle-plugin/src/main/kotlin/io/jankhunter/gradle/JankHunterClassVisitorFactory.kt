@@ -41,6 +41,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         return InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
             params.excludePackages.getOrElse(emptyList()),
+            params.allowEmptyIncludePackages.getOrElse(false),
         ).matches(classData.className)
     }
 }

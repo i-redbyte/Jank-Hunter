@@ -26,6 +26,8 @@ class JankHunterConfigTest {
             .maxQueueSize(99)
             .maxLogBytes(1024)
             .maxLogDirectoryBytes(4096)
+            .maxDictionaryEntries(1234)
+            .maxDictionaryValueBytes(64)
             .flushIntervalMs(12)
             .mainProcessOnly(true)
             .allowedProcesses(listOf("com.example", "com.example:remote"))
@@ -49,6 +51,8 @@ class JankHunterConfigTest {
         assertEquals(99, config.maxQueueSize())
         assertEquals(1024, config.maxLogBytes())
         assertEquals(4096, config.maxLogDirectoryBytes())
+        assertEquals(1234, config.maxDictionaryEntries())
+        assertEquals(64, config.maxDictionaryValueBytes())
         assertEquals(12, config.flushIntervalMs())
         assertTrue(config.mainProcessOnly())
         assertEquals(setOf("com.example", "com.example:remote"), config.allowedProcesses())
@@ -72,6 +76,8 @@ class JankHunterConfigTest {
         assertEquals(2048, config.maxQueueSize())
         assertEquals(5L * 1024L * 1024L, config.maxLogBytes())
         assertEquals(25L * 1024L * 1024L, config.maxLogDirectoryBytes())
+        assertEquals(8192, config.maxDictionaryEntries())
+        assertEquals(256, config.maxDictionaryValueBytes())
     }
 
     @Test

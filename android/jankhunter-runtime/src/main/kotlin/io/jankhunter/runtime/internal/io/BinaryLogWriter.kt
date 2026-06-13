@@ -8,10 +8,13 @@ import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import kotlin.math.max
 
-class BinaryLogWriter(internal val file: File) : Closeable {
+class BinaryLogWriter(
+    internal val file: File,
+    maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
+    maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
+) : Closeable {
     private val out = BufferedOutputStream(FileOutputStream(file, true), 32 * 1024)
-    private val dictionary = LinkedHashMap<String, Long>()
-    private var nextDictionaryId = 1L
+    private val dictionary = DictionaryIds(maxDictionaryEntries, maxDictionaryValueBytes)
     private var lastTimestampMs = 0L
     private var logicalBytesWritten = file.length()
 
@@ -207,16 +210,15 @@ class BinaryLogWriter(internal val file: File) : Closeable {
     }
 
     private fun idFor(kind: Int, rawValue: String?): Long {
-        val value = rawValue?.takeIf { it.isNotEmpty() } ?: "unknown"
-        val key = "$kind:$value"
-        dictionary[key]?.let { return it }
-
-        val id = nextDictionaryId++
-        dictionary[key] = id
-
-        val payload = Payload().uvarint(kind.toLong()).uvarint(id).string(value)
-        record(EVENT_DICTIONARY, 0L, payload)
-        return id
+        val result = dictionary.idFor(kind, rawValue)
+        result.definition?.let { definition ->
+            val payload = Payload()
+                .uvarint(definition.kind.toLong())
+                .uvarint(definition.id)
+                .string(definition.value)
+            record(EVENT_DICTIONARY, 0L, payload)
+        }
+        return result.id
     }
 
     private fun record(eventType: Int, flags: Long, payload: Payload) {
