@@ -19,7 +19,7 @@ Jank Hunter - это набор инструментов для Android-прил
 
 ## Выбранный стек
 
-- Android runtime SDK: Java-first, минимум зависимостей.
+- Android runtime SDK: Kotlin-first, с Java-compatible public API и минимумом зависимостей.
 - Gradle plugin / ASM instrumentation: Kotlin или Java, build-time only.
 - CLI: Go, без VM, допускается GC.
 - Формат логов: бинарный `.jhlog`, оптимизированный под machine parsing, varint, bit flags, dictionary encoding.
@@ -114,8 +114,8 @@ NETWORK_METERED
 Модули:
 
 1. `jankhunter-runtime`
-   - Java-only Android library.
-   - Никаких third-party runtime dependencies.
+   - Kotlin-first Android library with Java-compatible public API.
+   - Не тянуть AndroidX/OkHttp/RxJava/Compose в core runtime.
    - Auto-init через manifest `ContentProvider`, без AndroidX App Startup.
    - Event queue + background writer.
    - Binary log writer.
@@ -197,7 +197,7 @@ Runtime должен писать только короткие owner IDs, а CL
 ## Ограничения и стиль реализации
 
 - Минимизировать внешние зависимости.
-- Runtime SDK не должен зависеть от Kotlin stdlib.
+- Runtime SDK пишется на Kotlin, но должен избегать лишних сторонних runtime-зависимостей и держать публичный API удобным для Java/Kotlin host-приложений.
 - Runtime SDK не должен зависеть от AndroidX в core-модуле.
 - Optional integrations должны быть отдельными модулями.
 - Стабильность host-приложения важнее полноты метрик.
