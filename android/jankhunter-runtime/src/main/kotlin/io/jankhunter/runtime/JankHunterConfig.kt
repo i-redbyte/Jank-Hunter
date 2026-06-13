@@ -21,6 +21,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxQueueSize = builder.maxQueueSize
     private val maxLogBytes = builder.maxLogBytes
     private val flushIntervalMs = builder.flushIntervalMs
+    private val routeRedactor = builder.routeRedactor
     private val logDirectory = builder.logDirectory
 
     fun enabled(): Boolean = enabled
@@ -53,6 +54,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun flushIntervalMs(): Long = flushIntervalMs
 
+    fun redactRoute(route: String?): String? = routeRedactor.redact(route)
+
     fun logDirectory(): File? = logDirectory
 
     class Builder {
@@ -71,6 +74,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxQueueSize = 2048
         internal var maxLogBytes = 5L * 1024L * 1024L
         internal var flushIntervalMs = 5_000L
+        internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
 
         fun enabled(value: Boolean) = apply { enabled = value }
@@ -102,6 +106,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun maxLogBytes(value: Long) = apply { maxLogBytes = value }
 
         fun flushIntervalMs(value: Long) = apply { flushIntervalMs = value }
+
+        fun routeRedactor(value: JankHunterRedactor) = apply { routeRedactor = value }
 
         fun logDirectory(value: File?) = apply { logDirectory = value }
 

@@ -217,9 +217,7 @@ go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 
 ## Дальнейшее развитие
 
-- streaming aggregation без хранения всех событий в памяти;
-- SVG/canvas-графики внутри HTML;
-- фильтры по route/screen/owner/device tier;
+- device tier / cohort normalization;
 - owner map import из Gradle plugin;
-- чтение частично поврежденных `.jhlog`;
-- severity model с confidence и sample size.
+- более строгая статистическая модель с confidence intervals;
+- интерактивные drill-down графики без CDN.

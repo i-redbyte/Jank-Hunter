@@ -182,7 +182,18 @@ object JankHunter {
         txBytes: Long,
         flags: Long,
     ) {
-        writer?.http(owner, route, durationMs, dnsMs, connectMs, ttfbMs, statusClass, rxBytes, txBytes, flags)
+        writer?.http(
+            owner,
+            config?.redactRoute(route) ?: route,
+            durationMs,
+            dnsMs,
+            connectMs,
+            ttfbMs,
+            statusClass,
+            rxBytes,
+            txBytes,
+            flags,
+        )
     }
 
     @JvmStatic

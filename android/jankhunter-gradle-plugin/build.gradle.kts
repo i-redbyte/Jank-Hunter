@@ -1,6 +1,7 @@
 plugins {
     `java-gradle-plugin`
     id("org.jetbrains.kotlin.jvm")
+    id("maven-publish")
 }
 
 gradlePlugin {

@@ -4,22 +4,39 @@ Jank Hunter is an Android performance diagnostics toolkit and offline report gen
 
 It is designed for large legacy Android applications where performance regressions are hard to prove after a release: jank, ANR, slow networking, memory pressure, log/request storms, websocket reconnect loops, and suspected leaks.
 
-The repository is intentionally split into two parts:
+The repository is intentionally split into two main parts:
 
 - `cli/` - Go command-line utility for parsing `.jhlog` files, comparing builds, exporting data, and producing standalone HTML reports.
-- `android/` - Android runtime SDK, optional integrations, and Gradle plugin scaffolding for debug/QA instrumentation.
+- `android/` - Android runtime SDK, optional integrations, sample app, and Gradle plugin for debug/QA instrumentation.
 
-## Current MVP
+## Current State
 
-The first implementation focuses on:
+The implementation currently includes:
 
 - compact binary `.jhlog` format with varint records and bit flags;
-- streaming-friendly Go parser/writer;
+- tolerant streaming Go parser/writer;
 - `jankhunter sample` to generate demo logs;
 - `jankhunter inspect` to summarize one or more logs;
 - `jankhunter compare` to compare baseline and candidate logs;
-- standalone HTML reports with no external CDN dependencies;
-- minimal Android runtime scaffold with Kotlin-only Android source and optional integrations split into separate modules.
+- filters by route/screen/owner;
+- standalone HTML reports with charts and no external CDN dependencies;
+- Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
+- optional OkHttp/WebSocket integrations;
+- optional reflection bridge for AndroidX JankStats;
+- Gradle plugin with variant-aware ASM method counter instrumentation and owner-map seed generation;
+- Kotlin-only Android sources.
+
+## Checks
+
+```bash
+cd cli
+go test ./...
+
+cd ../android
+./gradlew test assemble --no-daemon
+```
+
+CI runs the same core checks on `master`.
 
 ## CLI quick start
 

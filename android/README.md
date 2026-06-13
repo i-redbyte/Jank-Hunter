@@ -122,6 +122,32 @@ JankHunter.init(context, config)
 JankHunter.flush()
 ```
 
+## Privacy и redaction
+
+По умолчанию HTTP route проходит через `JankHunterRedactor.default()`:
+
+- query string не собирается в OkHttp-интеграции;
+- numeric path segments заменяются на `{id}`;
+- UUID заменяются на `{uuid}`;
+- email-like значения заменяются на `{email}`;
+- длинные hex-токены заменяются на `{hex}`.
+
+Можно отключить или заменить redactor:
+
+```kotlin
+JankHunterConfig.builder()
+    .routeRedactor(JankHunterRedactor.none())
+    .build()
+```
+
+или:
+
+```kotlin
+JankHunterConfig.builder()
+    .routeRedactor { route -> route?.replace(Regex("/private/[^/]+"), "/private/{value}") }
+    .build()
+```
+
 ## Owner attribution
 
 Для старого большого приложения важно понимать не только “что стало хуже”, но и “кто вероятный источник”.
@@ -284,3 +310,21 @@ cd android
 ```
 
 CLI-часть уже умеет читать `.jhlog`, который пишет runtime, потому что формат событий синхронизирован между `android/jankhunter-runtime` и `cli/internal/jhlog`.
+
+## Публикация
+
+Локальная публикация:
+
+```bash
+cd android
+./gradlew publishToMavenLocal --no-daemon
+```
+
+Координаты snapshot-артефактов:
+
+```text
+io.jankhunter:jankhunter-runtime:0.1.0-SNAPSHOT
+io.jankhunter:jankhunter-okhttp3:0.1.0-SNAPSHOT
+io.jankhunter:jankhunter-gradle-plugin:0.1.0-SNAPSHOT
+io.jankhunter.android:io.jankhunter.android.gradle.plugin:0.1.0-SNAPSHOT
+```

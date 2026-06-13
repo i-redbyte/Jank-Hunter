@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  cli:
+    name: Go CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+      - name: Test
+        working-directory: cli
+        run: go test ./...
+      - name: Smoke
+        working-directory: cli
+        run: |
+          go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
+          go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
+          go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
+
+  android:
+    name: Android SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Check Kotlin-only Android sources
+        run: |
+          if find android -name '*.java' -print -quit | grep -q .; then
+            echo "Java sources are not allowed in android modules"
+            find android -name '*.java' -print
+            exit 1
+          fi
+      - name: Test and assemble
+        working-directory: android
+        run: ./gradlew test assemble --no-daemon --stacktrace
