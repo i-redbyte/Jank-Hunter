@@ -224,11 +224,14 @@ class BinaryLogWriter(internal val file: File) : Closeable {
         val delta = if (lastTimestampMs == 0L) now else max(0L, now - lastTimestampMs)
         lastTimestampMs = now
 
-        var written = 0
-        written += writeUvarint(out, eventType.toLong())
-        written += writeUvarint(out, delta)
-        written += writeUvarint(out, flags)
-        written += writeUvarint(out, payload.size.toLong())
+        val written = writeCompactHeader(
+            out,
+            eventType,
+            delta,
+            flags,
+            needsPayloadLength(eventType),
+            payload.size,
+        )
         payload.writeTo(out)
         logicalBytesWritten += written + payload.size
     }
@@ -292,7 +295,7 @@ class BinaryLogWriter(internal val file: File) : Closeable {
         const val FLAG_APP_FOREGROUND: Long = 1L shl 4
         const val FLAG_NETWORK_METERED: Long = 1L shl 5
 
-        private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), 1)
+        private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 
         private const val EVENT_DICTIONARY = 1
         private const val EVENT_SESSION = 2
@@ -329,6 +332,79 @@ class BinaryLogWriter(internal val file: File) : Closeable {
             return count + 1
         }
 
+        private fun writeCompactHeader(
+            out: BufferedOutputStream,
+            eventType: Int,
+            deltaMs: Long,
+            flags: Long,
+            payloadLength: Boolean,
+            payloadSize: Int,
+        ): Int {
+            val deltaCode = compactDeltaCode(deltaMs)
+            var header = eventType and COMPACT_EVENT_TYPE_MASK
+            if (flags != 0L) {
+                header = header or COMPACT_HEADER_HAS_FLAGS
+            }
+            if (payloadLength) {
+                header = header or COMPACT_HEADER_HAS_PAYLOAD_LEN
+            }
+            header = header or (deltaCode shl COMPACT_HEADER_DELTA_SHIFT)
+            out.write(header)
+            var written = 1
+            written += writeCompactDelta(out, deltaCode, deltaMs)
+            if (flags != 0L) {
+                written += writeUvarint(out, flags)
+            }
+            if (payloadLength) {
+                written += writeUvarint(out, payloadSize.toLong())
+            }
+            return written
+        }
+
+        private fun compactDeltaCode(deltaMs: Long): Int {
+            return when {
+                deltaMs == 0L -> COMPACT_DELTA_ZERO
+                deltaMs <= 0xffL -> COMPACT_DELTA_UINT8
+                deltaMs <= 0xffffL -> COMPACT_DELTA_UINT16
+                else -> COMPACT_DELTA_UVARINT
+            }
+        }
+
+        private fun writeCompactDelta(out: BufferedOutputStream, code: Int, deltaMs: Long): Int {
+            return when (code) {
+                COMPACT_DELTA_ZERO -> 0
+                COMPACT_DELTA_UINT8 -> {
+                    out.write(deltaMs.toInt() and 0xff)
+                    1
+                }
+                COMPACT_DELTA_UINT16 -> {
+                    out.write(deltaMs.toInt() and 0xff)
+                    out.write((deltaMs.toInt() ushr 8) and 0xff)
+                    2
+                }
+                else -> writeUvarint(out, deltaMs)
+            }
+        }
+
+        private fun needsPayloadLength(eventType: Int): Boolean {
+            return when (eventType) {
+                EVENT_DICTIONARY,
+                EVENT_SESSION,
+                EVENT_CONTEXT -> true
+                else -> false
+            }
+        }
+
         private fun boolean(value: Boolean): Long = if (value) 1L else 0L
+
+        private const val FORMAT_VERSION = 2
+        private const val COMPACT_EVENT_TYPE_MASK = 0x0f
+        private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
+        private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5
+        private const val COMPACT_HEADER_DELTA_SHIFT = 6
+        private const val COMPACT_DELTA_ZERO = 0
+        private const val COMPACT_DELTA_UINT8 = 1
+        private const val COMPACT_DELTA_UINT16 = 2
+        private const val COMPACT_DELTA_UVARINT = 3
     }
 }

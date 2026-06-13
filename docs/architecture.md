@@ -68,13 +68,19 @@ High-frequency sources aggregate before enqueueing. UI frames become `ui_window`
 magic/version
 record*
 
-record:
-  event_type: uvarint
-  timestamp_delta_ms: uvarint
-  flags: uvarint
-  payload_len: uvarint
+v2 record:
+  header: byte
+    bits 0..3: event_type
+    bit 4: flags follow
+    bit 5: payload_len follows
+    bits 6..7: timestamp_delta_ms encoding
+  timestamp_delta_ms: 0 bytes, uint8, uint16le, or uvarint
+  flags: uvarint, only when the header bit is set
+  payload_len: uvarint, only for variable-length payloads
   payload: event-specific uvarints/strings
 ```
+
+The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, and gauges omit payload length; variable and append-friendly events keep it.
 
 String-heavy values are dictionary encoded:
 
@@ -89,6 +95,7 @@ String-heavy values are dictionary encoded:
 
 Compatibility rules:
 
+- CLI readers still accept legacy v1 records with `event_type`, `timestamp_delta_ms`, `flags`, and `payload_len` as uvarints;
 - readers tolerate old session payloads without process metadata;
 - new optional payload fields are appended to preserve old data;
 - existing field order is not changed;

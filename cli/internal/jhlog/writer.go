@@ -45,16 +45,7 @@ func (w *Writer) WriteEvent(event Event) error {
 	}
 	w.lastMS = event.TimeMS
 
-	if err := writeUvarint(w.w, uint64(event.Type)); err != nil {
-		return err
-	}
-	if err := writeUvarint(w.w, delta); err != nil {
-		return err
-	}
-	if err := writeUvarint(w.w, event.Flags); err != nil {
-		return err
-	}
-	if err := writeUvarint(w.w, uint64(payload.Len())); err != nil {
+	if err := writeCompactHeader(w.w, event.Type, delta, event.Flags, needsPayloadLength(event.Type), uint64(payload.Len())); err != nil {
 		return err
 	}
 	_, err := w.w.Write(payload.Bytes())
@@ -231,6 +222,83 @@ func writeUvarint(w io.Writer, value uint64) error {
 	_, err := w.Write(buf[:n])
 	return err
 }
+
+func writeCompactHeader(w io.Writer, eventType EventType, deltaMS, flags uint64, payloadLength bool, payloadSize uint64) error {
+	deltaCode := compactDeltaCode(deltaMS)
+	header := byte(eventType & compactEventTypeMask)
+	if flags != 0 {
+		header |= compactHeaderHasFlags
+	}
+	if payloadLength {
+		header |= compactHeaderHasPayloadLen
+	}
+	header |= byte(deltaCode << compactHeaderDeltaShift)
+	if _, err := w.Write([]byte{header}); err != nil {
+		return err
+	}
+	if err := writeCompactDelta(w, deltaCode, deltaMS); err != nil {
+		return err
+	}
+	if flags != 0 {
+		if err := writeUvarint(w, flags); err != nil {
+			return err
+		}
+	}
+	if payloadLength {
+		if err := writeUvarint(w, payloadSize); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func compactDeltaCode(deltaMS uint64) byte {
+	switch {
+	case deltaMS == 0:
+		return compactDeltaZero
+	case deltaMS <= 0xff:
+		return compactDeltaUint8
+	case deltaMS <= 0xffff:
+		return compactDeltaUint16
+	default:
+		return compactDeltaUvarint
+	}
+}
+
+func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
+	switch code {
+	case compactDeltaZero:
+		return nil
+	case compactDeltaUint8:
+		_, err := w.Write([]byte{byte(deltaMS)})
+		return err
+	case compactDeltaUint16:
+		_, err := w.Write([]byte{byte(deltaMS), byte(deltaMS >> 8)})
+		return err
+	default:
+		return writeUvarint(w, deltaMS)
+	}
+}
+
+func needsPayloadLength(eventType EventType) bool {
+	switch eventType {
+	case EventDictionary, EventSession, EventContext:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	compactEventTypeMask       EventType = 0x0f
+	compactHeaderHasFlags                = 1 << 4
+	compactHeaderHasPayloadLen           = 1 << 5
+	compactHeaderDeltaShift              = 6
+	compactDeltaZero           byte      = 0
+	compactDeltaUint8          byte      = 1
+	compactDeltaUint16         byte      = 2
+	compactDeltaUvarint        byte      = 3
+)
 
 func WriteSample(path string) error {
 	file, writer, err := Create(path)

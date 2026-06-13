@@ -207,13 +207,19 @@ go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 magic/version
 record*
 
-record:
-  event_type: uvarint
-  timestamp_delta_ms: uvarint
-  flags: uvarint
-  payload_len: uvarint
+v2 record:
+  header: byte
+    bits 0..3: event_type
+    bit 4: flags follow
+    bit 5: payload_len follows
+    bits 6..7: timestamp_delta_ms encoding
+  timestamp_delta_ms: 0 bytes, uint8, uint16le, or uvarint
+  flags: uvarint, only when present
+  payload_len: uvarint, only for variable-length payloads
   payload: event-specific bytes
 ```
+
+Время хранится как монотонный delta-ms, а не как полная дата на каждое событие. Частые события обычно занимают 1-3 байта на timestamp часть. CLI продолжает читать legacy v1 `.jhlog`, где `event_type`, `timestamp_delta_ms`, `flags` и `payload_len` были отдельными uvarint-полями.
 
 Строки пишутся через dictionary records:
 

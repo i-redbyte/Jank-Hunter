@@ -1,8 +1,8 @@
 package jhlog
 
-const FormatVersion = 1
+const FormatVersion = 2
 
-var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 1}
+var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 
 type EventType uint64
 

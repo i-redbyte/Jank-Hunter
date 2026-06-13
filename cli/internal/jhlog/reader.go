@@ -65,6 +65,13 @@ func StreamFile(path string, handle func(Event, map[uint64]string) error) error 
 }
 
 func readBinary(r io.Reader, source string, version uint8) (Log, error) {
+	if version >= 2 {
+		return readBinaryV2(r, source, version)
+	}
+	return readBinaryV1(r, source, version)
+}
+
+func readBinaryV1(r io.Reader, source string, version uint8) (Log, error) {
 	reader := bufio.NewReader(r)
 	log := Log{
 		Source:  source,
@@ -130,6 +137,18 @@ func streamBinary(
 	version uint8,
 	handle func(Event, map[uint64]string) error,
 ) (Log, error) {
+	if version >= 2 {
+		return streamBinaryV2(r, source, version, handle)
+	}
+	return streamBinaryV1(r, source, version, handle)
+}
+
+func streamBinaryV1(
+	r io.Reader,
+	source string,
+	version uint8,
+	handle func(Event, map[uint64]string) error,
+) (Log, error) {
 	log := Log{
 		Source:  source,
 		Version: version,
@@ -189,6 +208,194 @@ func streamBinary(
 			return log, err
 		}
 	}
+}
+
+func readBinaryV2(r io.Reader, source string, version uint8) (Log, error) {
+	reader := bufio.NewReader(r)
+	log := Log{
+		Source:  source,
+		Version: version,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]DictKind{},
+	}
+	var currentMS uint64
+	for {
+		event, deltaMS, err := readCompactEvent(reader, source)
+		if errors.Is(err, io.EOF) {
+			return log, nil
+		}
+		if err != nil {
+			return toleratePartial(log, source, "compact event", err)
+		}
+		currentMS += deltaMS
+		event.TimeMS = currentMS
+		event.DeltaMS = deltaMS
+		event.Source = source
+		if event.Dictionary != nil {
+			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
+			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+		}
+		log.Events = append(log.Events, event)
+	}
+}
+
+func streamBinaryV2(
+	r io.Reader,
+	source string,
+	version uint8,
+	handle func(Event, map[uint64]string) error,
+) (Log, error) {
+	reader := bufio.NewReader(r)
+	log := Log{
+		Source:  source,
+		Version: version,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]DictKind{},
+	}
+	var currentMS uint64
+	for {
+		event, deltaMS, err := readCompactEvent(reader, source)
+		if errors.Is(err, io.EOF) {
+			return log, nil
+		}
+		if err != nil {
+			return toleratePartial(log, source, "compact event", err)
+		}
+		currentMS += deltaMS
+		event.TimeMS = currentMS
+		event.DeltaMS = deltaMS
+		event.Source = source
+		if event.Dictionary != nil {
+			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
+			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+		}
+		if err := handle(event, log.Dict); err != nil {
+			return log, err
+		}
+	}
+}
+
+func readCompactEvent(reader *bufio.Reader, source string) (Event, uint64, error) {
+	header, err := reader.ReadByte()
+	if err != nil {
+		return Event{}, 0, err
+	}
+	eventType := EventType(header) & compactEventTypeMask
+	deltaCode := (header >> compactHeaderDeltaShift) & 0x03
+	deltaMS, err := readCompactDelta(reader, deltaCode)
+	if err != nil {
+		return Event{}, 0, fmt.Errorf("timestamp delta: %w", err)
+	}
+	flags := uint64(0)
+	if header&compactHeaderHasFlags != 0 {
+		flags, err = binary.ReadUvarint(reader)
+		if err != nil {
+			return Event{}, 0, fmt.Errorf("flags: %w", err)
+		}
+	}
+	event := Event{
+		Type:   eventType,
+		Flags:  flags,
+		Source: source,
+	}
+	if header&compactHeaderHasPayloadLen != 0 {
+		payloadLen, err := binary.ReadUvarint(reader)
+		if err != nil {
+			return Event{}, 0, fmt.Errorf("payload length: %w", err)
+		}
+		if payloadLen > 4*1024*1024 {
+			return Event{}, 0, fmt.Errorf("suspicious payload length %d", payloadLen)
+		}
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(reader, payload); err != nil {
+			return Event{}, 0, fmt.Errorf("payload: %w", err)
+		}
+		if err := decodePayload(payload, &event); err != nil {
+			warning := err.Error()
+			event.Warnings = append(event.Warnings, warning)
+		}
+		return event, deltaMS, nil
+	}
+	if err := decodeFixedCompactPayload(reader, &event); err != nil {
+		return Event{}, 0, fmt.Errorf("payload: %w", err)
+	}
+	return event, deltaMS, nil
+}
+
+func readCompactDelta(reader io.ByteReader, code byte) (uint64, error) {
+	switch code {
+	case compactDeltaZero:
+		return 0, nil
+	case compactDeltaUint8:
+		b, err := reader.ReadByte()
+		return uint64(b), err
+	case compactDeltaUint16:
+		lo, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		hi, err := reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		return uint64(lo) | uint64(hi)<<8, nil
+	default:
+		return binary.ReadUvarint(reader)
+	}
+}
+
+func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
+	read := func() (uint64, error) {
+		return binary.ReadUvarint(reader)
+	}
+	switch event.Type {
+	case EventHTTP:
+		values, err := readN(read, 9)
+		if err != nil {
+			return err
+		}
+		event.HTTP = &HTTPEvent{
+			OwnerID: values[0], RouteID: values[1], DurationMS: values[2], DNSMS: values[3],
+			ConnectMS: values[4], TTFBMS: values[5], Status: StatusClass(values[6]),
+			RxBytes: values[7], TxBytes: values[8],
+		}
+	case EventUIWindow:
+		values, err := readN(read, 7)
+		if err != nil {
+			return err
+		}
+		event.UIWindow = &UIWindowEvent{
+			ScreenID: values[0], WindowMS: values[1], FrameCount: values[2], JankCount: values[3],
+			P50MS: values[4], P95MS: values[5], P99MS: values[6],
+		}
+	case EventStall:
+		values, err := readN(read, 3)
+		if err != nil {
+			return err
+		}
+		event.Stall = &StallEvent{OwnerID: values[0], StackID: values[1], DurationMS: values[2]}
+	case EventMemory:
+		values, err := readN(read, 3)
+		if err != nil {
+			return err
+		}
+		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
+	case EventRetained:
+		values, err := readN(read, 3)
+		if err != nil {
+			return err
+		}
+		event.Retained = &RetainedEvent{ClassID: values[0], AgeMS: values[1], Count: values[2]}
+	case EventCounter, EventGauge:
+		values, err := readN(read, 2)
+		if err != nil {
+			return err
+		}
+		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
+	default:
+		return fmt.Errorf("compact event type %d requires payload length", event.Type)
+	}
+	return nil
 }
 
 func toleratePartial(log Log, source, stage string, err error) (Log, error) {
