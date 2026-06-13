@@ -12,6 +12,8 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -28,6 +30,8 @@ func main() {
 		err = runCompare(os.Args[2:])
 	case "export":
 		err = runExport(os.Args[2:])
+	case "version":
+		fmt.Println(version)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -50,6 +54,7 @@ Usage:
   jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
+  jankhunter version
 `)
 }
 

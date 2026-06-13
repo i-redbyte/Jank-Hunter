@@ -20,6 +20,7 @@ The implementation currently includes:
 - `jankhunter compare` to compare baseline and candidate logs;
 - filters by route/screen/owner;
 - standalone HTML reports with charts and no external CDN dependencies;
+- JSON output and threshold-based CI regression gates in the CLI;
 - Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
 - multi-process runtime policy with per-process `.jhlog` files and process breakdown in CLI reports;
 - optional OkHttp/WebSocket integrations;
@@ -40,6 +41,20 @@ cd ../android
 ```
 
 CI runs the same core checks on `master`.
+
+## Release
+
+Release and publishing instructions live in [docs/release.md](docs/release.md).
+
+Quick local dry runs:
+
+```bash
+cd cli
+make release VERSION=0.1.0
+
+cd ../android
+./gradlew publishToMavenLocal --no-daemon
+```
 
 ## CLI quick start
 

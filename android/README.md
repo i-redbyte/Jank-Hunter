@@ -23,6 +23,23 @@ android/
   sample-app/                Маленькое приложение для dogfooding runtime
 ```
 
+## Publishing
+
+Версия Android artifacts задается в `android/gradle.properties`:
+
+```properties
+jankHunterVersion=0.1.0-SNAPSHOT
+```
+
+Local publish dry run:
+
+```bash
+cd android
+./gradlew publishToMavenLocal --no-daemon
+```
+
+Gradle publishing metadata уже содержит artifact name/description, license, SCM и developer fields. Signing и remote repositories настраиваются через env vars; подробности в [release docs](../docs/release.md).
+
 ## Что уже собирает runtime
 
 - старт сессии: версия приложения, build, модель устройства, SDK API;

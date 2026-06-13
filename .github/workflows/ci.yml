@@ -6,8 +6,21 @@ on:
   pull_request:
 
 jobs:
-  cli:
-    name: Go CLI
+  kotlin-only:
+    name: Kotlin-only Android sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Java sources
+        run: |
+          if find android -name '*.java' -print -quit | grep -q .; then
+            echo "Java sources are not allowed in android modules"
+            find android -name '*.java' -print
+            exit 1
+          fi
+
+  go-test:
+    name: Go test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,15 +31,9 @@ jobs:
       - name: Test
         working-directory: cli
         run: go test ./...
-      - name: Smoke
-        working-directory: cli
-        run: |
-          go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
-          go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
-          go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
 
-  android:
-    name: Android SDK
+  android-test-assemble:
+    name: Android test and assemble
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,13 +41,49 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: Check Kotlin-only Android sources
-        run: |
-          if find android -name '*.java' -print -quit | grep -q .; then
-            echo "Java sources are not allowed in android modules"
-            find android -name '*.java' -print
-            exit 1
-          fi
       - name: Test and assemble
         working-directory: android
         run: ./gradlew test assemble --no-daemon --stacktrace
+
+  publish-dry-run:
+    name: Publish dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Publish to Maven Local
+        working-directory: android
+        run: ./gradlew publishToMavenLocal --no-daemon --stacktrace
+
+  cli-report-artifact:
+    name: CLI report artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+      - name: Build release archives
+        working-directory: cli
+        run: make release VERSION=ci
+      - name: Generate sample reports
+        working-directory: cli
+        run: |
+          go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
+          go run ./cmd/jankhunter inspect /tmp/sample.jhlog --json --out /tmp/report.html > /tmp/inspect.json
+          go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --json --out /tmp/compare.html > /tmp/compare.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jankhunter-cli-artifacts
+          path: |
+            /tmp/sample.jhlog
+            /tmp/report.html
+            /tmp/compare.html
+            /tmp/inspect.json
+            /tmp/compare.json
+            cli/dist/*.tar.gz
+            cli/dist/checksums.txt

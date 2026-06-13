@@ -35,6 +35,20 @@ go test ./...
 go build -o bin/jankhunter ./cmd/jankhunter
 ```
 
+Release archives для macOS/Linux и checksum-файл:
+
+```bash
+cd cli
+make release VERSION=0.1.0
+```
+
+Проверить embedded version:
+
+```bash
+make build VERSION=0.1.0
+./bin/jankhunter version
+```
+
 Запуск без сборки:
 
 ```bash
