@@ -19,7 +19,8 @@ The implementation currently includes:
 - `jankhunter inspect` to summarize one or more logs;
 - `jankhunter compare` to compare baseline and candidate logs;
 - filters by route/screen/owner;
-- standalone HTML reports with charts and no external CDN dependencies;
+- standalone cyber-styled HTML reports with charts, gauges, subtle animation and no external CDN dependencies;
+- compare HTML reports with baseline/candidate scoreboard plus per-log drill-down sections;
 - JSON output and threshold-based CI regression gates in the CLI;
 - Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
 - multi-process runtime policy with per-process `.jhlog` files and process breakdown in CLI reports;
@@ -75,6 +76,8 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/jankhunter-report.h
 go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --owner-map android/sample-app/build/generated/jankhunter/debug/owner-map.json
 ```
+
+The generated HTML files are self-contained dashboards. `inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log.
 
 ## Product principles
 

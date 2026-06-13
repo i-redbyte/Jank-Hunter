@@ -190,7 +190,15 @@ func runCompare(args []string) error {
 		}
 	}
 	if out != "" {
-		if err := report.WriteCompare(out, comparison); err != nil {
+		baselineReports, err := buildLogReports("baseline", baselinePaths, options)
+		if err != nil {
+			return err
+		}
+		candidateReports, err := buildLogReports("candidate", candidatePaths, options)
+		if err != nil {
+			return err
+		}
+		if err := report.WriteCompareReport(out, comparison, baselineReports, candidateReports); err != nil {
 			return err
 		}
 		printReportPath(jsonOut, out)
@@ -206,6 +214,22 @@ func runCompare(args []string) error {
 		}
 	}
 	return nil
+}
+
+func buildLogReports(group string, paths []string, options analyze.Options) ([]report.LogReport, error) {
+	reports := make([]report.LogReport, 0, len(paths))
+	for i, path := range paths {
+		summary, err := analyze.InspectFilesWithOptions(path, []string{path}, options)
+		if err != nil {
+			return nil, err
+		}
+		reports = append(reports, report.LogReport{
+			Name:    path,
+			Anchor:  fmt.Sprintf("%s-log-%d", group, i+1),
+			Summary: summary,
+		})
+	}
+	return reports, nil
 }
 
 func takeFilterFlags(args []string) (analyze.Filter, []string, error) {

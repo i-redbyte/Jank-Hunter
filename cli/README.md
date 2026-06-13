@@ -1,6 +1,6 @@
 # Jank Hunter CLI
 
-`jankhunter` - это Go CLI для чтения `.jhlog`, анализа одного или нескольких логов, сравнения baseline/candidate и генерации standalone HTML-отчетов.
+`jankhunter` - это Go CLI для чтения `.jhlog`, анализа одного или нескольких логов, сравнения baseline/candidate и генерации standalone HTML-отчетов в технологичном темном стиле.
 
 CLI не требует backend, базы данных или браузерных CDN. Отчет - обычный HTML-файл с CSS внутри.
 
@@ -10,13 +10,14 @@ CLI не требует backend, базы данных или браузерны
 - чтение debug/export JSONL;
 - генерация sample-лога;
 - inspect-отчет по одному файлу или пулу файлов;
-- compare-отчет baseline vs candidate;
+- compare-отчет baseline vs candidate с per-log drill-down внутри того же HTML;
 - streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
 - фильтры `--route`, `--screen`, `--owner`;
 - owner-map import через `--owner-map path.json`;
 - JSON output для `inspect` и `compare`;
 - threshold config для CI regression gate;
 - экспорт событий в JSONL;
+- красивый standalone HTML без CDN: sticky navigation, gauges, animated bars, detailed tables;
 - сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
 - process breakdown из session metadata;
 - cohort breakdown по app version/build/SDK/device/process/network;
@@ -73,11 +74,13 @@ go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog
 ```
 
-Сгенерировать HTML-отчет:
+Сгенерировать красивый standalone HTML-отчет:
 
 ```bash
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 ```
+
+Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown.
 
 Получить machine-readable JSON:
 
@@ -117,6 +120,11 @@ go run ./cmd/jankhunter compare \
   --out compare.html \
   --owner FeedRepository
 ```
+
+HTML compare состоит из двух основных уровней:
+
+- первый экран показывает scoreboard, regression matrix, cohort warnings и candidate summary;
+- секция `Per-log Drill-down` раскрывает каждый baseline/candidate `.jhlog` отдельно с routes, screens, owners, memory и gauges.
 
 CLI покажет deltas:
 
