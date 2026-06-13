@@ -9,6 +9,7 @@ import android.net.NetworkCapabilities
 import android.net.TrafficStats
 import android.os.BatteryManager
 import android.os.Process
+import android.os.StatFs
 import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
@@ -52,6 +53,7 @@ class SystemContextSampler(
         val battery = readBattery()
         val network = readNetwork()
         val traffic = readTraffic()
+        val storage = readStorage()
 
         JankHunter.recordContext(
             network.kind,
@@ -64,6 +66,10 @@ class SystemContextSampler(
             network.validated,
             traffic.rxBytes,
             traffic.txBytes,
+            memory.totalKb,
+            storage.freeKb,
+            storage.totalKb,
+            network.vpn,
         )
     }
 
@@ -73,10 +79,11 @@ class SystemContextSampler(
             activityManager?.getMemoryInfo(info)
             MemorySnapshot(
                 availKb = max(0L, info.availMem / 1024L),
+                totalKb = max(0L, info.totalMem / 1024L),
                 lowMemory = info.lowMemory,
             )
         } catch (_: Exception) {
-            MemorySnapshot(0, false)
+            MemorySnapshot(0, 0, false)
         }
     }
 
@@ -96,25 +103,27 @@ class SystemContextSampler(
     private fun readNetwork(): NetworkSnapshot {
         return try {
             val network = connectivityManager?.activeNetwork
-                ?: return NetworkSnapshot(NETWORK_OFFLINE, metered = false, validated = false)
+                ?: return NetworkSnapshot(NETWORK_OFFLINE, metered = false, validated = false, vpn = false)
             val capabilities = connectivityManager.getNetworkCapabilities(network)
+            val vpn = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
             val kind = when {
                 capabilities == null -> NETWORK_UNKNOWN
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NETWORK_WIFI
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NETWORK_CELLULAR
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NETWORK_ETHERNET
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> NETWORK_VPN
+                vpn -> NETWORK_VPN
                 else -> NETWORK_UNKNOWN
             }
             NetworkSnapshot(
                 kind = kind,
                 metered = connectivityManager.isActiveNetworkMetered,
                 validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
+                vpn = vpn,
             )
         } catch (_: SecurityException) {
-            NetworkSnapshot(NETWORK_UNKNOWN, metered = false, validated = false)
+            NetworkSnapshot(NETWORK_UNKNOWN, metered = false, validated = false, vpn = false)
         } catch (_: Exception) {
-            NetworkSnapshot(NETWORK_UNKNOWN, metered = false, validated = false)
+            NetworkSnapshot(NETWORK_UNKNOWN, metered = false, validated = false, vpn = false)
         }
     }
 
@@ -130,8 +139,21 @@ class SystemContextSampler(
         return if (value == TrafficStats.UNSUPPORTED.toLong() || value < 0L) 0L else value
     }
 
+    private fun readStorage(): StorageSnapshot {
+        return try {
+            val statFs = StatFs(appContext.filesDir.absolutePath)
+            StorageSnapshot(
+                freeKb = max(0L, statFs.availableBytes / 1024L),
+                totalKb = max(0L, statFs.totalBytes / 1024L),
+            )
+        } catch (_: Exception) {
+            StorageSnapshot(0, 0)
+        }
+    }
+
     private data class MemorySnapshot(
         val availKb: Long,
+        val totalKb: Long,
         val lowMemory: Boolean,
     )
 
@@ -145,11 +167,17 @@ class SystemContextSampler(
         val kind: Int,
         val metered: Boolean,
         val validated: Boolean,
+        val vpn: Boolean,
     )
 
     private data class TrafficSnapshot(
         val rxBytes: Long,
         val txBytes: Long,
+    )
+
+    private data class StorageSnapshot(
+        val freeKb: Long,
+        val totalKb: Long,
     )
 
     companion object {

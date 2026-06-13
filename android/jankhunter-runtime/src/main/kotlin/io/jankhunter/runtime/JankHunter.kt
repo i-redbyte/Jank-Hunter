@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.SystemClock
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.system.ActivityTracker
+import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
@@ -81,12 +82,22 @@ object JankHunter {
         writer = asyncWriter
 
         val identity = appIdentity(appContext)
+        val device = DeviceSnapshots.current()
         asyncWriter.session(
             identity.versionName,
             identity.versionCode,
-            "${Build.MANUFACTURER} ${Build.MODEL}",
+            device.displayName,
             Build.VERSION.SDK_INT,
             redactedProcessName,
+            device.androidRelease,
+            device.securityPatch,
+            device.primaryAbi,
+            device.supportedAbis,
+            device.manufacturer,
+            device.brand,
+            device.hardware,
+            device.board,
+            device.product,
         )
 
         if (providedConfig.autoStartCollectors()) {
@@ -281,6 +292,10 @@ object JankHunter {
         networkValidated: Boolean,
         rxBytes: Long,
         txBytes: Long,
+        totalMemoryKb: Long,
+        freeStorageKb: Long,
+        totalStorageKb: Long,
+        networkVpn: Boolean,
     ) {
         writer?.context(
             networkKind,
@@ -293,6 +308,10 @@ object JankHunter {
             networkValidated,
             rxBytes,
             txBytes,
+            totalMemoryKb,
+            freeStorageKb,
+            totalStorageKb,
+            networkVpn,
         )
     }
 

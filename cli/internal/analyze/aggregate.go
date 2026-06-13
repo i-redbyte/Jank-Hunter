@@ -125,6 +125,15 @@ type collector struct {
 	currentSDK        string
 	currentProcess    string
 	currentNetwork    string
+	currentAndroid    string
+	currentPatch      string
+	currentPrimaryABI string
+	currentABIs       string
+	currentMaker      string
+	currentBrand      string
+	currentHardware   string
+	currentBoard      string
+	currentProduct    string
 }
 
 type namedDuration struct {
@@ -162,6 +171,15 @@ func newCollector(title string, logCount int, options Options) *collector {
 		currentSDK:         "unknown",
 		currentProcess:     "unknown",
 		currentNetwork:     "unknown",
+		currentAndroid:     "unknown",
+		currentPatch:       "unknown",
+		currentPrimaryABI:  "unknown",
+		currentABIs:        "unknown",
+		currentMaker:       "unknown",
+		currentBrand:       "unknown",
+		currentHardware:    "unknown",
+		currentBoard:       "unknown",
+		currentProduct:     "unknown",
 	}
 }
 
@@ -197,6 +215,15 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentDevice = jhlog.Resolve(dict, event.Session.DeviceID)
 		c.currentSDK = fmt.Sprintf("api-%d", event.Session.SDKInt)
 		c.currentProcess = jhlog.Resolve(dict, event.Session.ProcessID)
+		c.currentAndroid = jhlog.Resolve(dict, event.Session.AndroidReleaseID)
+		c.currentPatch = jhlog.Resolve(dict, event.Session.SecurityPatchID)
+		c.currentPrimaryABI = jhlog.Resolve(dict, event.Session.PrimaryABIID)
+		c.currentABIs = jhlog.Resolve(dict, event.Session.SupportedABIsID)
+		c.currentMaker = jhlog.Resolve(dict, event.Session.ManufacturerID)
+		c.currentBrand = jhlog.Resolve(dict, event.Session.BrandID)
+		c.currentHardware = jhlog.Resolve(dict, event.Session.HardwareID)
+		c.currentBoard = jhlog.Resolve(dict, event.Session.BoardID)
+		c.currentProduct = jhlog.Resolve(dict, event.Session.ProductID)
 		c.appVersions[c.currentAppVersion]++
 		c.builds[c.currentBuild]++
 		c.devices[c.currentDevice]++
@@ -271,6 +298,15 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentNetwork = jhlog.NetworkName(event.Context.Network)
 		c.markCohort()
 		c.summary.BatteryLastPct = event.Context.BatteryPct
+		c.summary.BatteryStateLast = event.Context.BatteryState
+		c.summary.BatteryTempDeciC = event.Context.BatteryTempDeciC
+		c.summary.AvailMemoryLastKB = event.Context.AvailMemoryKB
+		c.summary.TotalMemoryKB = event.Context.TotalMemoryKB
+		c.summary.FreeStorageKB = event.Context.FreeStorageKB
+		c.summary.TotalStorageKB = event.Context.TotalStorageKB
+		c.summary.NetworkMetered = event.Context.NetworkMetered
+		c.summary.NetworkValidated = event.Context.NetworkValidated
+		c.summary.NetworkVPN = event.Context.NetworkVPN
 		if c.summary.BatteryMinPct == 0 || event.Context.BatteryPct < c.summary.BatteryMinPct {
 			c.summary.BatteryMinPct = event.Context.BatteryPct
 		}
@@ -484,6 +520,7 @@ func (c *collector) finish() Summary {
 	if summary.ContextCount > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "low_memory_samples", Value: uint64(summary.LowMemoryCount)})
 	}
+	summary.Environment = c.runEnvironment(summary)
 
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
@@ -501,6 +538,36 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	return summary
+}
+
+func (c *collector) runEnvironment(summary Summary) RunEnvironment {
+	device := unknownIfEmpty(c.currentDevice)
+	manufacturer := unknownIfEmpty(c.currentMaker)
+	brand := unknownIfEmpty(c.currentBrand)
+	hardware := unknownIfEmpty(c.currentHardware)
+	board := unknownIfEmpty(c.currentBoard)
+	product := unknownIfEmpty(c.currentProduct)
+	abi := unknownIfEmpty(c.currentPrimaryABI)
+	abis := unknownIfEmpty(c.currentABIs)
+	network := unknownIfEmpty(c.currentNetwork)
+	app := unknownIfEmpty(c.currentAppVersion)
+	build := unknownIfEmpty(c.currentBuild)
+	process := unknownIfEmpty(c.currentProcess)
+
+	return RunEnvironment{
+		Title:    device,
+		Subtitle: fmt.Sprintf("%s · %s · process %s", osValue(c.currentAndroid, c.currentSDK), appBuildValue(app, build), process),
+		Items: []InfoItem{
+			{Label: "Battery", Value: batteryValue(summary.BatteryLastPct), Detail: batteryDetail(summary)},
+			{Label: "Network", Value: network, Detail: networkDetail(summary)},
+			{Label: "Free RAM", Value: formatDataSize(summary.AvailMemoryLastKB), Detail: memoryDetail(summary)},
+			{Label: "Free storage", Value: formatDataSize(summary.FreeStorageKB), Detail: storageDetail(summary)},
+			{Label: "Android", Value: osValue(c.currentAndroid, c.currentSDK), Detail: androidDetail(c.currentSDK, c.currentPatch)},
+			{Label: "CPU ABI", Value: abi, Detail: fmt.Sprintf("supported %s", abis)},
+			{Label: "Hardware", Value: hardware, Detail: fmt.Sprintf("board %s · product %s", board, product)},
+			{Label: "Brand", Value: manufacturer, Detail: fmt.Sprintf("brand %s", brand)},
+		},
+	}
 }
 
 func Compare(baseline, candidate Summary) Comparison {
@@ -838,4 +905,126 @@ func minUint64(a, b uint64) uint64 {
 
 func formatMB(kb uint64) string {
 	return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+}
+
+func formatDataSize(kb uint64) string {
+	if kb == 0 {
+		return "unknown"
+	}
+	if kb >= 1024*1024 {
+		return fmt.Sprintf("%.1f GB", float64(kb)/(1024*1024))
+	}
+	return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+}
+
+func unknownIfEmpty(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func osValue(release string, sdk string) string {
+	release = unknownIfEmpty(release)
+	sdk = unknownIfEmpty(sdk)
+	if release == "unknown" {
+		return sdk
+	}
+	return fmt.Sprintf("Android %s", release)
+}
+
+func appBuildValue(app string, build string) string {
+	if app == "unknown" && build == "unknown" {
+		return "unknown build"
+	}
+	if build == "unknown" {
+		return app
+	}
+	return fmt.Sprintf("%s (%s)", app, build)
+}
+
+func batteryValue(pct uint64) string {
+	if pct == 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("%d%%", pct)
+}
+
+func batteryDetail(summary Summary) string {
+	parts := []string{batteryStateName(summary.BatteryStateLast)}
+	if summary.BatteryTempDeciC > 0 {
+		parts = append(parts, fmt.Sprintf("%.1f C", float64(summary.BatteryTempDeciC)/10))
+	}
+	if summary.BatteryMinPct > 0 {
+		parts = append(parts, fmt.Sprintf("min %d%%", summary.BatteryMinPct))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func batteryStateName(state uint64) string {
+	switch state {
+	case 2:
+		return "charging"
+	case 3:
+		return "discharging"
+	case 4:
+		return "not charging"
+	case 5:
+		return "full"
+	default:
+		return "unknown"
+	}
+}
+
+func networkDetail(summary Summary) string {
+	return fmt.Sprintf(
+		"validated %s · metered %s · VPN %s",
+		yesNo(summary.NetworkValidated),
+		yesNo(summary.NetworkMetered),
+		yesNo(summary.NetworkVPN),
+	)
+}
+
+func memoryDetail(summary Summary) string {
+	parts := []string{}
+	if summary.TotalMemoryKB > 0 {
+		parts = append(parts, fmt.Sprintf("total %s", formatDataSize(summary.TotalMemoryKB)))
+	}
+	if summary.AvailMemoryMinKB > 0 {
+		parts = append(parts, fmt.Sprintf("min free %s", formatDataSize(summary.AvailMemoryMinKB)))
+	}
+	if summary.LowMemoryCount > 0 {
+		parts = append(parts, fmt.Sprintf("low-memory samples %d", summary.LowMemoryCount))
+	}
+	if len(parts) == 0 {
+		return "no memory context"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func storageDetail(summary Summary) string {
+	if summary.TotalStorageKB == 0 {
+		return "app data partition"
+	}
+	return fmt.Sprintf("of %s app data partition", formatDataSize(summary.TotalStorageKB))
+}
+
+func androidDetail(sdk string, patch string) string {
+	patch = unknownIfEmpty(patch)
+	sdk = unknownIfEmpty(sdk)
+	if patch == "unknown" {
+		return fmt.Sprintf("API %s · security patch unknown", apiNumber(sdk))
+	}
+	return fmt.Sprintf("API %s · security patch %s", apiNumber(sdk), patch)
+}
+
+func apiNumber(sdk string) string {
+	return strings.TrimPrefix(sdk, "api-")
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }

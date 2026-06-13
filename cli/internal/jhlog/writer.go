@@ -86,9 +86,23 @@ func encodePayload(w io.Writer, event Event) error {
 				return err
 			}
 		}
-		if p.ProcessID > 0 {
-			if err := writeUvarint(w, p.ProcessID); err != nil {
-				return err
+		extra := []uint64{
+			p.ProcessID,
+			p.AndroidReleaseID,
+			p.SecurityPatchID,
+			p.PrimaryABIID,
+			p.SupportedABIsID,
+			p.ManufacturerID,
+			p.BrandID,
+			p.HardwareID,
+			p.BoardID,
+			p.ProductID,
+		}
+		if hasNonZero(extra) {
+			for _, value := range extra {
+				if err := writeUvarint(w, value); err != nil {
+					return err
+				}
 			}
 		}
 	case EventContext:
@@ -107,6 +121,10 @@ func encodePayload(w io.Writer, event Event) error {
 			boolUint(p.NetworkValidated),
 			p.RxBytes,
 			p.TxBytes,
+			p.TotalMemoryKB,
+			p.FreeStorageKB,
+			p.TotalStorageKB,
+			boolUint(p.NetworkVPN),
 		} {
 			if err := writeUvarint(w, value); err != nil {
 				return err
@@ -190,6 +208,15 @@ func boolUint(value bool) uint64 {
 	return 0
 }
 
+func hasNonZero(values []uint64) bool {
+	for _, value := range values {
+		if value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func writeString(w io.Writer, value string) error {
 	if err := writeUvarint(w, uint64(len(value))); err != nil {
 		return err
@@ -227,6 +254,15 @@ func WriteSample(path string) error {
 		{Kind: DictStack, ID: 50, Value: "CheckoutPresenter.renderItems"},
 		{Kind: DictMetric, ID: 60, Value: "logs.warn.count"},
 		{Kind: DictMetric, ID: 61, Value: "ui.fps_x100"},
+		{Kind: DictGeneric, ID: 70, Value: "15"},
+		{Kind: DictGeneric, ID: 71, Value: "2025-05-05"},
+		{Kind: DictGeneric, ID: 72, Value: "arm64-v8a"},
+		{Kind: DictGeneric, ID: 73, Value: "arm64-v8a,armeabi-v7a,armeabi"},
+		{Kind: DictGeneric, ID: 74, Value: "Google"},
+		{Kind: DictGeneric, ID: 75, Value: "google"},
+		{Kind: DictGeneric, ID: 76, Value: "shiba"},
+		{Kind: DictGeneric, ID: 77, Value: "shiba"},
+		{Kind: DictGeneric, ID: 78, Value: "shiba"},
 	}
 	for _, entry := range entries {
 		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
@@ -235,8 +271,8 @@ func WriteSample(path string) error {
 	}
 
 	events := []Event{
-		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, ProcessID: 4}},
-		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkMetered), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000}},
+		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, ProcessID: 4, AndroidReleaseID: 70, SecurityPatchID: 71, PrimaryABIID: 72, SupportedABIsID: 73, ManufacturerID: 74, BrandID: 75, HardwareID: 76, BoardID: 77, ProductID: 78}},
+		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkMetered), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, TotalMemoryKB: 8032000, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000, FreeStorageKB: 48_000_000, TotalStorageKB: 118_000_000, NetworkVPN: false}},
 		{Type: EventHTTP, TimeMS: 1200, Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 184, DNSMS: 7, ConnectMS: 0, TTFBMS: 91, Status: Status2xx, RxBytes: 42120, TxBytes: 740}},
 		{Type: EventHTTP, TimeMS: 2400, Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38900, TxBytes: 730}},
 		{Type: EventUIWindow, TimeMS: 10000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 30, WindowMS: 10000, FrameCount: 580, JankCount: 28, P50MS: 12, P95MS: 33, P99MS: 72}},

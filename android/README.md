@@ -70,10 +70,10 @@ jankHunter {
 
 ## Что уже собирает runtime
 
-- старт сессии: версия приложения, build, модель устройства, SDK API;
+- старт сессии: версия приложения, build, модель устройства, SDK API, Android release/security patch, ABI, manufacturer/brand/hardware/board/product;
 - process name в session metadata;
 - текущий screen по `ActivityLifecycleCallbacks`;
-- system context: battery, available memory, low-memory flag, network kind, metered/validated state, UID traffic;
+- system context: battery, available/total memory, low-memory flag, network kind, metered/validated/VPN state, UID traffic, free/total app data storage;
 - FPS и UI frame windows через `Choreographer`;
 - jank count по порогу длительности кадра;
 - p50/p95/p99 длительности кадров внутри окна;

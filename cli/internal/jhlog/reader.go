@@ -236,6 +236,33 @@ func decodePayload(payload []byte, event *Event) error {
 		if len(values) > 4 {
 			session.ProcessID = values[4]
 		}
+		if len(values) > 5 {
+			session.AndroidReleaseID = values[5]
+		}
+		if len(values) > 6 {
+			session.SecurityPatchID = values[6]
+		}
+		if len(values) > 7 {
+			session.PrimaryABIID = values[7]
+		}
+		if len(values) > 8 {
+			session.SupportedABIsID = values[8]
+		}
+		if len(values) > 9 {
+			session.ManufacturerID = values[9]
+		}
+		if len(values) > 10 {
+			session.BrandID = values[10]
+		}
+		if len(values) > 11 {
+			session.HardwareID = values[11]
+		}
+		if len(values) > 12 {
+			session.BoardID = values[12]
+		}
+		if len(values) > 13 {
+			session.ProductID = values[13]
+		}
 		event.Session = session
 	case EventContext:
 		values, err := readRemaining(reader)
@@ -270,6 +297,18 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		if len(values) > 9 {
 			context.TxBytes = values[9]
+		}
+		if len(values) > 10 {
+			context.TotalMemoryKB = values[10]
+		}
+		if len(values) > 11 {
+			context.FreeStorageKB = values[11]
+		}
+		if len(values) > 12 {
+			context.TotalStorageKB = values[12]
+		}
+		if len(values) > 13 {
+			context.NetworkVPN = values[13] != 0
 		}
 		event.Context = context
 	case EventHTTP:

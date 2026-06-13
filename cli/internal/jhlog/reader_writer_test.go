@@ -43,11 +43,17 @@ func TestWriteSampleReadFile(t *testing.T) {
 	if session == nil || session.ProcessID != 4 {
 		t.Fatalf("expected session process id, got %+v", session)
 	}
+	if session.PrimaryABIID != 72 || session.SecurityPatchID != 71 {
+		t.Fatalf("expected extended session device metadata, got %+v", session)
+	}
 	if context == nil {
 		t.Fatalf("expected context event")
 	}
 	if context.Network != NetworkWiFi || context.BatteryPct != 82 || !context.NetworkValidated {
 		t.Fatalf("unexpected context event: %+v", context)
+	}
+	if context.TotalMemoryKB == 0 || context.FreeStorageKB == 0 {
+		t.Fatalf("expected extended context memory/storage metadata: %+v", context)
 	}
 }
 

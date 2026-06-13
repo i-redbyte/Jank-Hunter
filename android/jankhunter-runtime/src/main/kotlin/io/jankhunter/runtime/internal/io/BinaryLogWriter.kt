@@ -31,17 +31,50 @@ class BinaryLogWriter(internal val file: File) : Closeable {
     }
 
     @Synchronized
-    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int, processName: String?) {
+    fun session(
+        appVersion: String?,
+        build: String?,
+        device: String?,
+        sdkInt: Int,
+        processName: String?,
+        androidRelease: String?,
+        securityPatch: String?,
+        primaryAbi: String?,
+        supportedAbis: String?,
+        manufacturer: String?,
+        brand: String?,
+        hardware: String?,
+        board: String?,
+        product: String?,
+    ) {
         val appVersionId = idFor(DICT_APP_VERSION, appVersion)
         val buildId = idFor(DICT_BUILD, build)
         val deviceId = idFor(DICT_DEVICE, device)
         val processId = idFor(DICT_PROCESS, processName)
+        val androidReleaseId = idFor(DICT_GENERIC, androidRelease)
+        val securityPatchId = idFor(DICT_GENERIC, securityPatch)
+        val primaryAbiId = idFor(DICT_GENERIC, primaryAbi)
+        val supportedAbisId = idFor(DICT_GENERIC, supportedAbis)
+        val manufacturerId = idFor(DICT_GENERIC, manufacturer)
+        val brandId = idFor(DICT_GENERIC, brand)
+        val hardwareId = idFor(DICT_GENERIC, hardware)
+        val boardId = idFor(DICT_GENERIC, board)
+        val productId = idFor(DICT_GENERIC, product)
         val payload = Payload()
             .uvarint(appVersionId)
             .uvarint(buildId)
             .uvarint(deviceId)
             .uvarint(sdkInt.toLong())
             .uvarint(processId)
+            .uvarint(androidReleaseId)
+            .uvarint(securityPatchId)
+            .uvarint(primaryAbiId)
+            .uvarint(supportedAbisId)
+            .uvarint(manufacturerId)
+            .uvarint(brandId)
+            .uvarint(hardwareId)
+            .uvarint(boardId)
+            .uvarint(productId)
         record(EVENT_SESSION, FLAG_APP_FOREGROUND, payload)
     }
 
@@ -62,6 +95,10 @@ class BinaryLogWriter(internal val file: File) : Closeable {
         networkValidated: Boolean,
         rxBytes: Long,
         txBytes: Long,
+        totalMemoryKb: Long,
+        freeStorageKb: Long,
+        totalStorageKb: Long,
+        networkVpn: Boolean,
     ) {
         val flags = if (networkMetered) FLAG_NETWORK_METERED else 0L
         val payload = Payload()
@@ -75,6 +112,10 @@ class BinaryLogWriter(internal val file: File) : Closeable {
             .uvarint(boolean(networkValidated))
             .uvarint(rxBytes)
             .uvarint(txBytes)
+            .uvarint(totalMemoryKb)
+            .uvarint(freeStorageKb)
+            .uvarint(totalStorageKb)
+            .uvarint(boolean(networkVpn))
         record(EVENT_CONTEXT, flags or FLAG_APP_FOREGROUND, payload)
     }
 
@@ -264,6 +305,7 @@ class BinaryLogWriter(internal val file: File) : Closeable {
         private const val EVENT_COUNTER = 9
         private const val EVENT_GAUGE = 10
 
+        private const val DICT_GENERIC = 0
         private const val DICT_OWNER = 1
         private const val DICT_ROUTE = 2
         private const val DICT_SCREEN = 3

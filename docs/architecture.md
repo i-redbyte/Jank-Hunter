@@ -84,7 +84,8 @@ String-heavy values are dictionary encoded:
 - class names;
 - stack hints;
 - metrics;
-- app version/build/device/process metadata.
+- app version/build/device/process metadata;
+- static device snapshot values such as Android release, security patch, CPU ABI and hardware identifiers.
 
 Compatibility rules:
 

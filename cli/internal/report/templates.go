@@ -87,7 +87,7 @@ a:hover { color: white; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 24px;
-  align-items: end;
+  align-items: start;
   max-width: 1280px;
   margin: 0 auto;
 }
@@ -107,7 +107,43 @@ h1 {
 h2 { margin: 0 0 14px; font-size: 18px; letter-spacing: 0; }
 h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0.04em; text-transform: uppercase; }
 .subhead { max-width: 880px; color: var(--muted); font-size: 15px; }
-.hero-meta { display: grid; gap: 8px; min-width: 220px; }
+.hero-side { display: grid; gap: 10px; width: min(420px, 38vw); }
+.hero-meta { display: grid; gap: 8px; }
+.env-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(111,247,255,0.10), rgba(255,79,216,0.07)),
+    rgba(7,10,18,0.78);
+  box-shadow: 0 18px 54px rgba(0,0,0,0.34), inset 0 0 0 1px rgba(255,255,255,0.04);
+  animation: rise 520ms ease both, glow 5.4s ease-in-out infinite;
+}
+.env-card::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), var(--magenta), transparent);
+}
+.env-title { font-size: 12px; color: var(--cyan); font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
+.env-device { display: block; margin-top: 6px; font-size: 18px; line-height: 1.2; overflow-wrap: anywhere; }
+.env-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.env-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.env-item {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(126,247,255,0.13);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.035);
+}
+.env-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.env-value { margin-top: 2px; font-weight: 850; overflow-wrap: anywhere; }
+.env-detail { margin-top: 1px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .chip, .nav a {
   display: inline-flex;
   align-items: center;
@@ -358,6 +394,8 @@ details.log-card summary::-webkit-details-marker { display: none; }
 @media (max-width: 820px) {
   .hero { padding: 28px 18px 18px; }
   .hero-grid, .split, .triad, .detail-grid { grid-template-columns: 1fr; }
+  .hero-side { width: 100%; }
+  .env-grid { grid-template-columns: 1fr; }
   main { padding: 18px; }
   .panel-head { display: block; }
   .chart-row { grid-template-columns: 1fr; }
@@ -382,10 +420,22 @@ const inspectTemplate = `<!doctype html>
       <h1>Runtime Signal Report</h1>
       <div class="subhead">{{.Summary.Title}} · generated {{.GeneratedAt}} · standalone offline HTML</div>
     </div>
-    <div class="hero-meta">
-      <div class="chip">Logs <strong>{{.Summary.LogCount}}</strong></div>
-      <div class="chip">Events <strong>{{.Summary.EventCount}}</strong></div>
-      <div class="chip">Duration <strong>{{.Summary.DurationMS}} ms</strong></div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Device Context</div>
+        <strong class="env-device">{{fallback .Summary.Environment.Title "unknown device"}}</strong>
+        <div class="env-subtitle">{{fallback .Summary.Environment.Subtitle "runtime context unavailable"}}</div>
+        <div class="env-grid">
+          {{range .Summary.Environment.Items}}
+          <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
+          {{else}}<div class="env-item"><div class="env-label">Context</div><div class="env-value">unknown</div><div class="env-detail">No session/context metadata.</div></div>{{end}}
+        </div>
+      </div>
+      <div class="hero-meta">
+        <div class="chip">Logs <strong>{{.Summary.LogCount}}</strong></div>
+        <div class="chip">Events <strong>{{.Summary.EventCount}}</strong></div>
+        <div class="chip">Duration <strong>{{.Summary.DurationMS}} ms</strong></div>
+      </div>
     </div>
   </div>
 </header>
@@ -610,10 +660,22 @@ const compareTemplate = `<!doctype html>
       <h1>Regression Control Deck</h1>
       <div class="subhead">generated {{.GeneratedAt}} · compare first, then drill into every baseline and candidate log</div>
     </div>
-    <div class="hero-meta">
-      <div class="chip">Baseline logs <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
-      <div class="chip">Candidate logs <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
-      <div class="chip">Deltas <strong>{{len .Comparison.Deltas}}</strong></div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Candidate Device Context</div>
+        <strong class="env-device">{{fallback .Comparison.Candidate.Environment.Title "unknown device"}}</strong>
+        <div class="env-subtitle">{{fallback .Comparison.Candidate.Environment.Subtitle "runtime context unavailable"}}</div>
+        <div class="env-grid">
+          {{range .Comparison.Candidate.Environment.Items}}
+          <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
+          {{else}}<div class="env-item"><div class="env-label">Context</div><div class="env-value">unknown</div><div class="env-detail">No session/context metadata.</div></div>{{end}}
+        </div>
+      </div>
+      <div class="hero-meta">
+        <div class="chip">Baseline logs <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
+        <div class="chip">Candidate logs <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
+        <div class="chip">Deltas <strong>{{len .Comparison.Deltas}}</strong></div>
+      </div>
     </div>
   </div>
 </header>

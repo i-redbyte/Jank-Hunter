@@ -93,6 +93,12 @@ func execute(path, source string, data any) error {
 		"notOK": func(value string) bool {
 			return value != "" && value != "ok"
 		},
+		"fallback": func(value string, fallback string) string {
+			if value == "" {
+				return fallback
+			}
+			return value
+		},
 	}).Parse(source)
 	if err != nil {
 		return err
@@ -169,6 +175,11 @@ func localizeRussianHTML(html string) string {
 		`<title>Jank Hunter Compare</title>`, `<title>Jank Hunter: сравнение</title>`,
 		`Runtime Signal Report`, `Отчет по runtime-сигналам`,
 		`Regression Control Deck`, `Панель контроля регрессий`,
+		`Candidate Device Context`, `Контекст устройства candidate`,
+		`Device Context`, `Контекст устройства`,
+		`runtime context unavailable`, `контекст runtime недоступен`,
+		`unknown device`, `неизвестное устройство`,
+		`No session/context metadata.`, `Нет session/context metadata.`,
 		`generated `, `создан `,
 		`standalone offline HTML`, `автономный offline HTML`,
 		`compare first, then drill into every baseline and candidate log`, `сначала сравнение, затем детальный просмотр каждого baseline и candidate лога`,
@@ -224,6 +235,13 @@ func localizeRussianHTML(html string) string {
 		`Cohorts keep comparisons honest: app, build, SDK, device, process and network.`, `Когорты помогают честно сравнивать app, build, SDK, device, process и network.`,
 		`Health Gauges`, `Индикаторы здоровья`,
 		`Signal Rings`, `Кольцевые индикаторы`,
+		`>Battery<`, `>Батарея<`,
+		`>Free RAM<`, `>Свободная RAM<`,
+		`>Free storage<`, `>Свободное хранилище<`,
+		`>Android<`, `>Android<`,
+		`>CPU ABI<`, `>CPU ABI<`,
+		`>Hardware<`, `>Железо<`,
+		`>Brand<`, `>Бренд<`,
 		`Route Details`, `Детали маршрутов`,
 		`Screen Details`, `Детали экранов`,
 		`Owner Details`, `Детали owners`,
@@ -310,10 +328,30 @@ func localizeRussianHTML(html string) string {
 		` requests<`, ` запросов<`,
 		` failed`, ` ошибок`,
 		` frames`, ` кадров`,
+		`min free`, `мин. свободно`,
 		`min `, `мин. `,
 		` stall events`, ` stall-событий`,
 		`retained `, `retained `,
 		`TX max `, `макс. TX `,
+		`validated yes`, `проверена: да`,
+		`validated no`, `проверена: нет`,
+		`metered yes`, `лимитная: да`,
+		`metered no`, `лимитная: нет`,
+		`VPN yes`, `VPN да`,
+		`VPN no`, `VPN нет`,
+		`not charging`, `не заряжается`,
+		`charging`, `заряжается`,
+		`discharging`, `разряжается`,
+		`full`, `полная`,
+		`total`, `всего`,
+		`supported`, `поддерживаются`,
+		`security patch unknown`, `патч безопасности неизвестен`,
+		`security patch`, `патч безопасности`,
+		`app data partition`, `раздел данных приложения`,
+		`board `, `плата `,
+		`product `, `продукт `,
+		`brand `, `бренд `,
+		`process `, `процесс `,
 		`avg FPS`, `средний FPS`,
 		`candidate jank`, `candidate jank`,
 		`candidate fail`, `candidate ошибки`,

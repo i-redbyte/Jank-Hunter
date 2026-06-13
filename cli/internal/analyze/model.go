@@ -6,6 +6,18 @@ type NamedValue struct {
 	Extra string
 }
 
+type InfoItem struct {
+	Label  string
+	Value  string
+	Detail string
+}
+
+type RunEnvironment struct {
+	Title    string
+	Subtitle string
+	Items    []InfoItem
+}
+
 type Filter struct {
 	RouteContains  string
 	ScreenContains string
@@ -53,31 +65,41 @@ type OwnerStats struct {
 }
 
 type Summary struct {
-	Title            string
-	LogCount         int
-	EventCount       int
-	DurationMS       uint64
-	Dictionary       int
-	HTTPCount        int
-	HTTPFailed       int
-	HTTPP95MS        uint64
-	UIFrames         uint64
-	UIJank           uint64
-	UIWindowMS       uint64
-	UIJankPct        float64
-	UIAvgFPS         float64
-	UIMinFPS         float64
-	StallCount       int
-	StallMaxMS       uint64
-	ContextCount     int
-	BatteryMinPct    uint64
-	BatteryLastPct   uint64
-	AvailMemoryMinKB uint64
-	LowMemoryCount   int
-	TrafficRxMax     uint64
-	TrafficTxMax     uint64
-	MemoryMaxKB      uint64
-	Retained         uint64
+	Title             string
+	LogCount          int
+	EventCount        int
+	DurationMS        uint64
+	Dictionary        int
+	HTTPCount         int
+	HTTPFailed        int
+	HTTPP95MS         uint64
+	UIFrames          uint64
+	UIJank            uint64
+	UIWindowMS        uint64
+	UIJankPct         float64
+	UIAvgFPS          float64
+	UIMinFPS          float64
+	StallCount        int
+	StallMaxMS        uint64
+	ContextCount      int
+	BatteryMinPct     uint64
+	BatteryLastPct    uint64
+	AvailMemoryMinKB  uint64
+	LowMemoryCount    int
+	TrafficRxMax      uint64
+	TrafficTxMax      uint64
+	BatteryStateLast  uint64
+	BatteryTempDeciC  uint64
+	AvailMemoryLastKB uint64
+	TotalMemoryKB     uint64
+	FreeStorageKB     uint64
+	TotalStorageKB    uint64
+	NetworkMetered    bool
+	NetworkValidated  bool
+	NetworkVPN        bool
+	MemoryMaxKB       uint64
+	Retained          uint64
+	Environment       RunEnvironment
 
 	Routes             []RouteStats
 	Screens            []ScreenStats

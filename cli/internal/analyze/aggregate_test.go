@@ -94,6 +94,12 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.SDKs) != 1 || summary.SDKs[0].Name != "api-35" {
 		t.Fatalf("unexpected SDKs: %+v", summary.SDKs)
 	}
+	if summary.Environment.Title != "Pixel 8 / API 35" {
+		t.Fatalf("unexpected environment title: %+v", summary.Environment)
+	}
+	if summary.TotalMemoryKB == 0 || summary.FreeStorageKB == 0 {
+		t.Fatalf("expected memory/storage context: %+v", summary)
+	}
 	if len(summary.Cohorts) == 0 {
 		t.Fatalf("expected cohorts")
 	}

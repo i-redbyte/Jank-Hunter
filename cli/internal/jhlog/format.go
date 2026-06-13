@@ -94,24 +94,37 @@ type Event struct {
 }
 
 type SessionEvent struct {
-	AppVersionID uint64 `json:"app_version_id"`
-	BuildID      uint64 `json:"build_id"`
-	DeviceID     uint64 `json:"device_id"`
-	SDKInt       uint64 `json:"sdk_int"`
-	ProcessID    uint64 `json:"process_id,omitempty"`
+	AppVersionID     uint64 `json:"app_version_id"`
+	BuildID          uint64 `json:"build_id"`
+	DeviceID         uint64 `json:"device_id"`
+	SDKInt           uint64 `json:"sdk_int"`
+	ProcessID        uint64 `json:"process_id,omitempty"`
+	AndroidReleaseID uint64 `json:"android_release_id,omitempty"`
+	SecurityPatchID  uint64 `json:"security_patch_id,omitempty"`
+	PrimaryABIID     uint64 `json:"primary_abi_id,omitempty"`
+	SupportedABIsID  uint64 `json:"supported_abis_id,omitempty"`
+	ManufacturerID   uint64 `json:"manufacturer_id,omitempty"`
+	BrandID          uint64 `json:"brand_id,omitempty"`
+	HardwareID       uint64 `json:"hardware_id,omitempty"`
+	BoardID          uint64 `json:"board_id,omitempty"`
+	ProductID        uint64 `json:"product_id,omitempty"`
 }
 
 type ContextEvent struct {
 	Network          NetworkKind `json:"network"`
 	BatteryPct       uint64      `json:"battery_pct"`
 	AvailMemoryKB    uint64      `json:"avail_memory_kb"`
+	TotalMemoryKB    uint64      `json:"total_memory_kb,omitempty"`
 	BatteryState     uint64      `json:"battery_state,omitempty"`
 	BatteryTempDeciC uint64      `json:"battery_temp_deci_c,omitempty"`
 	LowMemory        bool        `json:"low_memory,omitempty"`
 	NetworkMetered   bool        `json:"network_metered,omitempty"`
 	NetworkValidated bool        `json:"network_validated,omitempty"`
+	NetworkVPN       bool        `json:"network_vpn,omitempty"`
 	RxBytes          uint64      `json:"rx_bytes,omitempty"`
 	TxBytes          uint64      `json:"tx_bytes,omitempty"`
+	FreeStorageKB    uint64      `json:"free_storage_kb,omitempty"`
+	TotalStorageKB   uint64      `json:"total_storage_kb,omitempty"`
 }
 
 type HTTPEvent struct {

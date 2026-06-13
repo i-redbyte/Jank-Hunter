@@ -25,6 +25,14 @@ func TestWriteReports(t *testing.T) {
 		StallCount:  1,
 		StallMaxMS:  1240,
 		MemoryMaxKB: 188240,
+		Environment: analyze.RunEnvironment{
+			Title:    "Pixel 8",
+			Subtitle: "Android 15 · 0.1.0-debug (100) · process main",
+			Items: []analyze.InfoItem{
+				{Label: "Battery", Value: "82%", Detail: "charging · 32.0 C"},
+				{Label: "Network", Value: "wifi", Detail: "validated yes · metered no · VPN no"},
+			},
+		},
 		Routes: []analyze.RouteStats{
 			{Route: "GET /feed", Count: 2, Failures: 0, P95MS: 612, MaxMS: 612, OwnerSample: "FeedRepository.refresh"},
 		},
@@ -41,7 +49,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Network Routes", "Heuristic Verdict", "GET /feed")
+	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Device Context", "Pixel 8", "Network Routes", "Heuristic Verdict", "GET /feed")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -53,7 +61,7 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Regression Control Deck", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog")
+	assertHTMLContains(t, comparePath, "Regression Control Deck", "Candidate Device Context", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -68,6 +76,13 @@ func TestWriteReportsRussian(t *testing.T) {
 		UIFrames:   1122,
 		UIJankPct:  8.02,
 		UIAvgFPS:   56.1,
+		Environment: analyze.RunEnvironment{
+			Title:    "Pixel 8",
+			Subtitle: "Android 15 · 0.1.0-debug (100) · process main",
+			Items: []analyze.InfoItem{
+				{Label: "Battery", Value: "82%", Detail: "charging · 32.0 C"},
+			},
+		},
 		Routes: []analyze.RouteStats{
 			{Route: "GET /feed", Count: 2, P95MS: 612},
 		},
@@ -78,7 +93,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Сетевые маршруты", "Эвристический итог")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReport(

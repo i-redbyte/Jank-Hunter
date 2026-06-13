@@ -305,13 +305,14 @@ Context-события помогают понять условия замера
 ```text
 network kind
 battery pct
-available memory
+available/total memory
 low-memory flag
-network metered/validated
+network metered/validated/VPN
 uid rx/tx bytes
+free/total app data storage
 ```
 
-В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети.
+В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети. В верхней части HTML есть отдельная `Device Context` плашка с моделью устройства, Android/API/security patch, CPU ABI, батареей, сетью/VPN, свободной RAM и свободным storage на момент context sample.
 
 ## Cohorts
 

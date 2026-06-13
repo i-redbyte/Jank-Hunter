@@ -32,9 +32,56 @@ class AsyncLogWriter private constructor(
         enforceRetention()
     }
 
-    fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int, processName: String?) {
-        bootstrap = SessionBootstrap(appVersion, build, device, sdkInt, processName)
-        offer { it.session(appVersion, build, device, sdkInt, processName) }
+    fun session(
+        appVersion: String?,
+        build: String?,
+        device: String?,
+        sdkInt: Int,
+        processName: String?,
+        androidRelease: String?,
+        securityPatch: String?,
+        primaryAbi: String?,
+        supportedAbis: String?,
+        manufacturer: String?,
+        brand: String?,
+        hardware: String?,
+        board: String?,
+        product: String?,
+    ) {
+        bootstrap = SessionBootstrap(
+            appVersion,
+            build,
+            device,
+            sdkInt,
+            processName,
+            androidRelease,
+            securityPatch,
+            primaryAbi,
+            supportedAbis,
+            manufacturer,
+            brand,
+            hardware,
+            board,
+            product,
+        )
+        offer {
+            it.session(
+                appVersion,
+                build,
+                device,
+                sdkInt,
+                processName,
+                androidRelease,
+                securityPatch,
+                primaryAbi,
+                supportedAbis,
+                manufacturer,
+                brand,
+                hardware,
+                board,
+                product,
+            )
+        }
     }
 
     fun screen(screen: String?) {
@@ -52,6 +99,10 @@ class AsyncLogWriter private constructor(
         networkValidated: Boolean,
         rxBytes: Long,
         txBytes: Long,
+        totalMemoryKb: Long,
+        freeStorageKb: Long,
+        totalStorageKb: Long,
+        networkVpn: Boolean,
     ) {
         offer {
             it.context(
@@ -65,6 +116,10 @@ class AsyncLogWriter private constructor(
                 networkValidated,
                 rxBytes,
                 txBytes,
+                totalMemoryKb,
+                freeStorageKb,
+                totalStorageKb,
+                networkVpn,
             )
         }
     }
@@ -209,9 +264,33 @@ class AsyncLogWriter private constructor(
         val device: String?,
         val sdkInt: Int,
         val processName: String?,
+        val androidRelease: String?,
+        val securityPatch: String?,
+        val primaryAbi: String?,
+        val supportedAbis: String?,
+        val manufacturer: String?,
+        val brand: String?,
+        val hardware: String?,
+        val board: String?,
+        val product: String?,
     ) {
         fun write(writer: BinaryLogWriter) {
-            writer.session(appVersion, build, device, sdkInt, processName)
+            writer.session(
+                appVersion,
+                build,
+                device,
+                sdkInt,
+                processName,
+                androidRelease,
+                securityPatch,
+                primaryAbi,
+                supportedAbis,
+                manufacturer,
+                brand,
+                hardware,
+                board,
+                product,
+            )
         }
     }
 
