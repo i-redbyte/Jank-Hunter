@@ -98,7 +98,7 @@ Compatibility rules:
 Android runtime components use a small number of clear ownership rules:
 
 - public API calls are cheap and enqueue events into a bounded queue;
-- `AsyncLogWriter` owns file IO and rotation on a background executor;
+- `AsyncLogWriter` owns file IO, size-based segment rotation and cyclic retention on a background executor;
 - main-thread watchdog and `Choreographer` callbacks observe UI latency but write aggregates;
 - samplers run on background scheduling and avoid blocking the main thread;
 - `flush()` is best-effort and intended for QA/test boundaries;
@@ -234,7 +234,8 @@ Runtime overhead is controlled by:
 - slow-path gauges for wrapped work;
 - sampled/limited stack hints;
 - local file IO on a background thread;
-- log rotation by byte size.
+- log rotation by segment byte size;
+- cyclic log retention by per-process directory byte budget.
 
 Default guidance:
 

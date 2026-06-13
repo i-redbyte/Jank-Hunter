@@ -308,6 +308,39 @@ code {
   font-size: 12px;
 }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; }
+.fold {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.026);
+  overflow: hidden;
+}
+.fold > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  color: #d8fcff;
+  font-weight: 800;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after {
+  content: "open";
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.fold[open] > summary::after { content: "close"; }
+.fold-body {
+  max-height: 72vh;
+  overflow: auto;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--line);
+}
 details.log-card { padding: 0; }
 details.log-card summary {
   cursor: pointer;
@@ -319,7 +352,7 @@ details.log-card summary {
   padding: 16px 18px;
 }
 details.log-card summary::-webkit-details-marker { display: none; }
-.log-body { padding: 0 18px 18px; border-top: 1px solid var(--line); }
+.log-body { max-height: 72vh; overflow: auto; padding: 0 18px 18px; border-top: 1px solid var(--line); }
 .summary-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .mono-block { overflow-wrap: anywhere; }
 @media (max-width: 820px) {
@@ -395,116 +428,146 @@ const inspectTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Network Routes</h2><div class="panel-kicker">Slowest routes by p95 latency, failures, bytes and owner attribution.</div></div>
     </div>
-    <div class="chart-list">
-      {{range .Summary.Routes}}
-      <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} ms</strong></div>
-      {{else}}<div class="muted">No HTTP events.</div>{{end}}
-    </div>
-    <h3>Route Table</h3>
-    <table>
-      <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Avg TTFB</th><th>RX</th><th>TX</th><th>Owner</th></tr>
-      {{range .Summary.Routes}}
-      <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td>{{.AvgTTFBMS}} ms</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
-      {{else}}<tr><td colspan="10" class="muted">No HTTP events.</td></tr>{{end}}
-    </table>
+    <details class="fold">
+      <summary>Route Details</summary>
+      <div class="fold-body">
+        <div class="chart-list">
+          {{range .Summary.Routes}}
+          <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} ms</strong></div>
+          {{else}}<div class="muted">No HTTP events.</div>{{end}}
+        </div>
+        <h3>Route Table</h3>
+        <table>
+          <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Avg TTFB</th><th>RX</th><th>TX</th><th>Owner</th></tr>
+          {{range .Summary.Routes}}
+          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td>{{.AvgTTFBMS}} ms</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
+          {{else}}<tr><td colspan="10" class="muted">No HTTP events.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
   </section>
 
   <section id="ui" class="panel">
     <div class="panel-head">
       <div><h2>UI Smoothness</h2><div class="panel-kicker">Screens ranked by jank rate and frame latency.</div></div>
     </div>
-    <div class="chart-list">
-      {{range .Summary.Screens}}
-      <div class="chart-row"><code>{{.Screen}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
-      {{else}}<div class="muted">No UI window events.</div>{{end}}
-    </div>
-    <h3>Screen Table</h3>
-    <table>
-      <tr><th>Screen</th><th>Windows</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>Min FPS</th><th>p95 frame</th><th>max p99</th></tr>
-      {{range .Summary.Screens}}
-      <tr>
-        <td><code>{{.Screen}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
-        <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
-        <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} ms</td><td>{{.MaxP99MS}} ms</td>
-      </tr>
-      {{else}}<tr><td colspan="9" class="muted">No UI window events.</td></tr>{{end}}
-    </table>
+    <details class="fold">
+      <summary>Screen Details</summary>
+      <div class="fold-body">
+        <div class="chart-list">
+          {{range .Summary.Screens}}
+          <div class="chart-row"><code>{{.Screen}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
+          {{else}}<div class="muted">No UI window events.</div>{{end}}
+        </div>
+        <h3>Screen Table</h3>
+        <table>
+          <tr><th>Screen</th><th>Windows</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>Min FPS</th><th>p95 frame</th><th>max p99</th></tr>
+          {{range .Summary.Screens}}
+          <tr>
+            <td><code>{{.Screen}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
+            <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
+            <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} ms</td><td>{{.MaxP99MS}} ms</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">No UI window events.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
   </section>
 
   <section id="owners" class="panel">
     <div class="panel-head">
       <div><h2>Attribution Hotspots</h2><div class="panel-kicker">Owners, classes and stack hints with the largest measured impact.</div></div>
     </div>
-    <table>
-      <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
-      {{range .Summary.Owners}}
-      <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
-      {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
-    </table>
+    <details class="fold">
+      <summary>Owner Details</summary>
+      <div class="fold-body">
+        <table>
+          <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
+          {{range .Summary.Owners}}
+          <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
+          {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
   </section>
 
   <section id="memory" class="panel">
     <div class="panel-head">
       <div><h2>Memory And Retention</h2><div class="panel-kicker">PSS, available memory, low-memory samples and retained object age buckets.</div></div>
     </div>
-    <div class="split">
-      <div>
-        <h3>Memory</h3>
+    <details class="fold">
+      <summary>Memory Details</summary>
+      <div class="fold-body">
+        <div class="split">
+          <div>
+            <h3>Memory</h3>
+            <table>
+              <tr><th>Metric</th><th>Value</th><th>Details</th></tr>
+              {{range .Summary.Memory}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No memory events.</td></tr>{{end}}
+            </table>
+          </div>
+          <div>
+            <h3>Retained Classes</h3>
+            <table>
+              <tr><th>Class / Owner</th><th>Count</th><th>Details</th></tr>
+              {{range .Summary.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No retained-object events.</td></tr>{{end}}
+            </table>
+          </div>
+        </div>
+        <h3>Retained Age Buckets</h3>
         <table>
-          <tr><th>Metric</th><th>Value</th><th>Details</th></tr>
-          {{range .Summary.Memory}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No memory events.</td></tr>{{end}}
+          <tr><th>Age</th><th>Count</th></tr>
+          {{range .Summary.RetainedAgeBuckets}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No retained-object events.</td></tr>{{end}}
         </table>
       </div>
-      <div>
-        <h3>Retained Classes</h3>
-        <table>
-          <tr><th>Class / Owner</th><th>Count</th><th>Details</th></tr>
-          {{range .Summary.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No retained-object events.</td></tr>{{end}}
-        </table>
-      </div>
-    </div>
-    <h3>Retained Age Buckets</h3>
-    <table>
-      <tr><th>Age</th><th>Count</th></tr>
-      {{range .Summary.RetainedAgeBuckets}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No retained-object events.</td></tr>{{end}}
-    </table>
+    </details>
   </section>
 
   <section id="custom" class="panel">
     <div class="panel-head">
       <div><h2>Custom Metrics</h2><div class="panel-kicker">Counters, gauges and AndroidX JankStats bridge metrics when available.</div></div>
     </div>
-    <div class="triad">
-      <div>
-        <h3>Counters</h3>
-        <table><tr><th>Name</th><th>Value</th></tr>{{range .Summary.Counters}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No counters.</td></tr>{{end}}</table>
+    <details class="fold">
+      <summary>Metric Details</summary>
+      <div class="fold-body">
+        <div class="triad">
+          <div>
+            <h3>Counters</h3>
+            <table><tr><th>Name</th><th>Value</th></tr>{{range .Summary.Counters}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No counters.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Gauges</h3>
+            <table><tr><th>Name</th><th>Average</th><th>Details</th></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No gauges.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>JankStats</h3>
+            <table><tr><th>Metric</th><th>Value</th><th>Details</th></tr>{{range .Summary.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No JankStats metrics.</td></tr>{{end}}</table>
+          </div>
+        </div>
       </div>
-      <div>
-        <h3>Gauges</h3>
-        <table><tr><th>Name</th><th>Average</th><th>Details</th></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No gauges.</td></tr>{{end}}</table>
-      </div>
-      <div>
-        <h3>JankStats</h3>
-        <table><tr><th>Metric</th><th>Value</th><th>Details</th></tr>{{range .Summary.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No JankStats metrics.</td></tr>{{end}}</table>
-      </div>
-    </div>
+    </details>
   </section>
 
   <section id="context" class="panel">
     <div class="panel-head">
       <div><h2>Run Context</h2><div class="panel-kicker">Cohorts keep comparisons honest: app, build, SDK, device, process and network.</div></div>
     </div>
-    <div class="triad">
-      <div><h3>App Versions</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
-      <div><h3>SDKs</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
-      <div><h3>Devices</h3><table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
-    </div>
-    <h3>Process Breakdown</h3>
-    <table><tr><th>Process</th><th>Sessions</th></tr>{{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No process metadata.</td></tr>{{end}}</table>
-    <h3>Network Samples</h3>
-    <table><tr><th>Network</th><th>Samples</th></tr>{{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No context events.</td></tr>{{end}}</table>
-    <h3>Combined Cohorts</h3>
-    <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+    <details class="fold">
+      <summary>Context Details</summary>
+      <div class="fold-body">
+        <div class="triad">
+          <div><h3>App Versions</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>SDKs</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Devices</h3><table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
+        </div>
+        <h3>Process Breakdown</h3>
+        <table><tr><th>Process</th><th>Sessions</th></tr>{{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No process metadata.</td></tr>{{end}}</table>
+        <h3>Network Samples</h3>
+        <table><tr><th>Network</th><th>Samples</th></tr>{{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No context events.</td></tr>{{end}}</table>
+        <h3>Combined Cohorts</h3>
+        <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+      </div>
+    </details>
   </section>
 
   <section id="analysis" class="panel">
@@ -615,33 +678,38 @@ const compareTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Candidate Deep Summary</h2><div class="panel-kicker">The aggregate candidate profile after all filters.</div></div>
     </div>
-    <div class="split">
-      <div>
-        <h3>Candidate Routes</h3>
+    <details class="fold">
+      <summary>Candidate Route, Screen And Owner Details</summary>
+      <div class="fold-body">
+        <div class="split">
+          <div>
+            <h3>Candidate Routes</h3>
+            <table>
+              <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Owner</th></tr>
+              {{range .Comparison.Candidate.Routes}}
+              <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.OwnerSample}}</code></td></tr>
+              {{else}}<tr><td colspan="7" class="muted">No HTTP events.</td></tr>{{end}}
+            </table>
+          </div>
+          <div>
+            <h3>Candidate Screens</h3>
+            <table>
+              <tr><th>Screen</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>p95</th></tr>
+              {{range .Comparison.Candidate.Screens}}
+              <tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>
+              {{else}}<tr><td colspan="6" class="muted">No UI window events.</td></tr>{{end}}
+            </table>
+          </div>
+        </div>
+        <h3>Candidate Owners</h3>
         <table>
-          <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Owner</th></tr>
-          {{range .Comparison.Candidate.Routes}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.OwnerSample}}</code></td></tr>
-          {{else}}<tr><td colspan="7" class="muted">No HTTP events.</td></tr>{{end}}
+          <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
+          {{range .Comparison.Candidate.Owners}}
+          <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
+          {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
         </table>
       </div>
-      <div>
-        <h3>Candidate Screens</h3>
-        <table>
-          <tr><th>Screen</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>p95</th></tr>
-          {{range .Comparison.Candidate.Screens}}
-          <tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>
-          {{else}}<tr><td colspan="6" class="muted">No UI window events.</td></tr>{{end}}
-        </table>
-      </div>
-    </div>
-    <h3>Candidate Owners</h3>
-    <table>
-      <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
-      {{range .Comparison.Candidate.Owners}}
-      <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
-      {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
-    </table>
+    </details>
   </section>
 
   <section id="drilldown" class="panel">
@@ -688,26 +756,31 @@ const compareTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Cohort Breakdown</h2><div class="panel-kicker">Use this to check whether the comparison is fair across app version, SDK, device, process and network.</div></div>
     </div>
-    <div class="split">
-      <div>
-        <h3>Baseline</h3>
-        <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+    <details class="fold">
+      <summary>Cohort Details</summary>
+      <div class="fold-body">
+        <div class="split">
+          <div>
+            <h3>Baseline</h3>
+            <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Candidate</h3>
+            <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Process Mix</h3>
+        <table>
+          <tr><th>Baseline process</th><th>Sessions</th><th>Candidate process</th><th>Sessions</th></tr>
+          <tr>
+            <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+            <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+            <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+            <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+          </tr>
+        </table>
       </div>
-      <div>
-        <h3>Candidate</h3>
-        <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
-      </div>
-    </div>
-    <h3>Process Mix</h3>
-    <table>
-      <tr><th>Baseline process</th><th>Sessions</th><th>Candidate process</th><th>Sessions</th></tr>
-      <tr>
-        <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
-        <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
-        <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
-        <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
-      </tr>
-    </table>
+    </details>
   </section>
 
   <section id="analysis" class="panel">

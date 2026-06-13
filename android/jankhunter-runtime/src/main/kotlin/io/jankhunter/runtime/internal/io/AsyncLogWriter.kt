@@ -17,6 +17,7 @@ class AsyncLogWriter private constructor(
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val running = AtomicBoolean(true)
     private val dropped = AtomicLong()
+    private val filePrefix = "session-$processFileSuffix-"
     private var nextSegmentId = 1L
     private var writer = openSegment()
     private var lastFlushAtMs = SystemClock.elapsedRealtime()
@@ -25,6 +26,10 @@ class AsyncLogWriter private constructor(
     private val worker = Thread({ loop() }, "JankHunterWriter").apply {
         isDaemon = true
         start()
+    }
+
+    init {
+        enforceRetention()
     }
 
     fun session(appVersion: String?, build: String?, device: String?, sdkInt: Int, processName: String?) {
@@ -174,6 +179,7 @@ class AsyncLogWriter private constructor(
         writer = openSegment()
         lastFlushAtMs = SystemClock.elapsedRealtime()
         bootstrap?.write(writer)
+        enforceRetention()
     }
 
     private fun flushIfNeeded(force: Boolean) {
@@ -189,8 +195,12 @@ class AsyncLogWriter private constructor(
     }
 
     private fun openSegment(): BinaryLogWriter {
-        val file = File(directory, "session-$processFileSuffix-${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
+        val file = File(directory, "$filePrefix${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
         return BinaryLogWriter(file)
+    }
+
+    private fun enforceRetention() {
+        LogRetention.enforce(directory, filePrefix, writer.file, config.maxLogDirectoryBytes())
     }
 
     private data class SessionBootstrap(
@@ -221,5 +231,35 @@ class AsyncLogWriter private constructor(
                 throw IllegalStateException("Cannot open Jank Hunter log file", e)
             }
         }
+    }
+}
+
+internal object LogRetention {
+    fun enforce(directory: File, filePrefix: String, currentFile: File, maxDirectoryBytes: Long) {
+        if (maxDirectoryBytes <= 0) return
+
+        val currentPath = currentFile.absolutePath
+        val files = directory
+            .listFiles { file ->
+                file.isFile &&
+                    file.name.startsWith(filePrefix) &&
+                    file.name.endsWith(".jhlog")
+            }
+            ?.toList()
+            ?: return
+
+        var totalBytes = files.sumOf { it.length() }
+        if (totalBytes <= maxDirectoryBytes) return
+
+        files
+            .filterNot { it.absolutePath == currentPath }
+            .sortedWith(compareBy<File> { it.lastModified() }.thenBy { it.name })
+            .forEach { file ->
+                if (totalBytes <= maxDirectoryBytes) return
+                val fileBytes = file.length()
+                if (file.delete()) {
+                    totalBytes -= fileBytes
+                }
+            }
     }
 }

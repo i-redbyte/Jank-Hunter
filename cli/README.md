@@ -81,7 +81,7 @@ go run ./cmd/jankhunter inspect /tmp/sample.jhlog
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 ```
 
-Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown.
+Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown. Потенциально длинные таблицы маршрутов, экранов, owners, памяти, метрик и контекста спрятаны в раскрывающиеся блоки, чтобы большие логи не превращали первый экран отчета в бесконечную простыню.
 Внизу отчета есть `Heuristic Verdict`: краткое итоговое заключение, список находок и рекомендации по следующим шагам.
 
 Получить machine-readable JSON:
@@ -126,7 +126,7 @@ go run ./cmd/jankhunter compare \
 HTML compare состоит из двух основных уровней:
 
 - первый экран показывает scoreboard, regression matrix, cohort warnings и candidate summary;
-- секция `Per-log Drill-down` раскрывает каждый baseline/candidate `.jhlog` отдельно с routes, screens, owners, memory и gauges.
+- секция `Per-log Drill-down` раскрывает каждый baseline/candidate `.jhlog` отдельно с routes, screens, owners, memory и gauges; содержимое раскрытого лога ограничено по высоте и скроллится внутри карточки.
 
 CLI покажет deltas:
 

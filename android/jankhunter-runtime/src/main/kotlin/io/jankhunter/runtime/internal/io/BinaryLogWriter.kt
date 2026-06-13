@@ -8,7 +8,7 @@ import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import kotlin.math.max
 
-class BinaryLogWriter(file: File) : Closeable {
+class BinaryLogWriter(internal val file: File) : Closeable {
     private val out = BufferedOutputStream(FileOutputStream(file, true), 32 * 1024)
     private val dictionary = LinkedHashMap<String, Long>()
     private var nextDictionaryId = 1L

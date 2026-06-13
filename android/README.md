@@ -136,6 +136,7 @@ p99_ms
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
+<meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 <meta-data android:name="io.jankhunter.main_process_only" android:value="false" />
 <meta-data android:name="io.jankhunter.allowed_processes" android:value="com.example.app,com.example.app:remote" />
@@ -161,6 +162,7 @@ val config = JankHunterConfig.builder()
     .jankFrameThresholdMs(32)
     .maxQueueSize(2048)
     .maxLogBytes(5 * 1024 * 1024)
+    .maxLogDirectoryBytes(25 * 1024 * 1024)
     .flushIntervalMs(5_000)
     .mainProcessOnly(false)
     .allowedProcesses(listOf("com.example.app", "com.example.app:remote"))
@@ -406,6 +408,8 @@ Owner-map seed фиксирует variant, hook flags, include/exclude policy и
 ```text
 context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 ```
+
+По умолчанию writer ротирует сегмент при `io.jankhunter.max_log_bytes=5242880` (5 МБ) и хранит последние сегменты текущего процесса в пределах `io.jankhunter.max_log_directory_bytes=26214400` (25 МБ). Это кольцевое хранение: при превышении общего бюджета самые старые `session-<process>-*.jhlog` удаляются, а активный файл записи не трогается. Если общий бюджет меньше одного сегмента, текущий сегмент может временно быть больше бюджета; для больших приложений держите directory budget как минимум в несколько раз больше segment budget.
 
 Путь можно изменить через:
 

@@ -87,7 +87,7 @@ go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sa
 go run ./cmd/jankhunter inspect /tmp/sample.jhlog --owner-map android/sample-app/build/generated/jankhunter/debug/owner-map.json
 ```
 
-The generated HTML files are self-contained dashboards. `inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log.
+The generated HTML files are self-contained dashboards. `inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. Long route/screen/owner/context tables are collapsed behind expandable sections, so large logs stay readable. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log.
 
 ## Product principles
 

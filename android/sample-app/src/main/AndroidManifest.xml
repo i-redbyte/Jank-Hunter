@@ -12,7 +12,10 @@
             android:value="1000" />
         <meta-data
             android:name="io.jankhunter.max_log_bytes"
-            android:value="262144" />
+            android:value="5242880" />
+        <meta-data
+            android:name="io.jankhunter.max_log_directory_bytes"
+            android:value="26214400" />
 
         <activity
             android:name=".MainActivity"
