@@ -235,7 +235,7 @@ pull_and_report() {
 
   log "generating CLI report"
   command -v go >/dev/null 2>&1 || fail "go not found. Install Go or add it to PATH before generating the report."
-  (cd "$ROOT_DIR/cli" && go run ./cmd/jankhunter inspect "${logs[@]}" --json --out "$report" >"$json")
+  (cd "$ROOT_DIR/cli" && JH_LANG="$UI_LANG" go run ./cmd/jankhunter inspect "${logs[@]}" --json --out "$report" >"$json")
 
   REPORT_PATH="$report"
   log "logs: $log_dir"
