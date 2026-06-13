@@ -11,6 +11,7 @@ import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
+import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessNames
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
@@ -37,6 +38,12 @@ object JankHunter {
 
     @Volatile
     private var memorySampler: MemorySampler? = null
+
+    @Volatile
+    private var memoryTrimReporter: MemoryTrimReporter? = null
+
+    @Volatile
+    private var componentCallbackContext: Context? = null
 
     @Volatile
     private var systemContextSampler: SystemContextSampler? = null
@@ -111,6 +118,10 @@ object JankHunter {
                 }
             }
             watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
+            memoryTrimReporter = MemoryTrimReporter().also {
+                appContext.registerComponentCallbacks(it)
+                componentCallbackContext = appContext
+            }
             memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
             if (providedConfig.systemSamplerEnabled()) {
                 systemContextSampler = SystemContextSampler(
@@ -146,6 +157,9 @@ object JankHunter {
             tracker.close()
         }
         watchdog?.stop()
+        memoryTrimReporter?.let { reporter ->
+            componentCallbackContext?.unregisterComponentCallbacks(reporter)
+        }
         memorySampler?.stop()
         systemContextSampler?.stop()
         objectRetentionWatcher?.stop()
@@ -154,6 +168,8 @@ object JankHunter {
         activityTracker = null
         application = null
         watchdog = null
+        memoryTrimReporter = null
+        componentCallbackContext = null
         memorySampler = null
         systemContextSampler = null
         objectRetentionWatcher = null
