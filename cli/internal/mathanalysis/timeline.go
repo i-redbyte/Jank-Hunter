@@ -114,6 +114,17 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		agg.addSample(agg.screens, screen)
 		agg.bucket.UIFrames += event.UIWindow.FrameCount
 		agg.bucket.UIJankyFrames += event.UIWindow.JankCount
+	case event.Stall != nil:
+		owner := c.resolveOwner(dict, event.Stall.OwnerID)
+		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
+			return
+		}
+		agg := c.bucket(event.TimeMS)
+		agg.addSample(agg.owners, owner)
+		agg.bucket.StallCount++
+		if event.Stall.DurationMS > agg.bucket.StallMaxMS {
+			agg.bucket.StallMaxMS = event.Stall.DurationMS
+		}
 	case event.Memory != nil:
 		agg := c.bucket(event.TimeMS)
 		if !agg.hasMemoryPSS || event.Memory.PSSKB > agg.bucket.MemoryPSSKB {
@@ -235,6 +246,8 @@ func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 		{name: "TTFB среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
 		{name: "Доля UI jank", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
 		{name: "UI кадры", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.UIFrames) }},
+		{name: "Задержки main thread", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.StallCount) }},
+		{name: "Макс. stall", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
 		{name: "PSS", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }},
 		{name: "Свободная RAM", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }},
 		{name: "Дельта RX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficRxBytes) }},

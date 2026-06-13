@@ -174,6 +174,12 @@ func execute(path, source string, data any) error {
 			}
 			return strings.Join(path.Nodes, " -> ")
 		},
+		"markovState": func(state string) string {
+			return mathanalysis.MarkovStateLabel(state)
+		},
+		"percent01": func(value float64) float64 {
+			return value * 100
+		},
 		"notOK": func(value string) bool {
 			return value != "" && value != "ok"
 		},

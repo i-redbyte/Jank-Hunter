@@ -688,6 +688,37 @@ const mathInspectTemplate = `<!doctype html>
         </table>
         <p class="muted">Интегрирование прямоугольное: для каждого бакета берется значение сигнала и умножается на длительность бакета Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
         {{end}}
+        {{if eq .ID "markov"}}
+        <h3>Сводка состояний</h3>
+        <table class="timeline-table">
+          <tr><th>Здоровые -> плохие</th><th>Восстановление</th><th>Ожидаемое восстановление</th><th>Липкие состояния</th></tr>
+          <tr>
+            <td>{{$math.Markov.HealthyToBadCount}}</td>
+            <td>{{printf "%.1f" (percent01 $math.Markov.BadToHealthyProbability)}}%</td>
+            <td>{{printf "%.1f" $math.Markov.ExpectedRecoveryWindows}} бакетов</td>
+            <td>{{range $math.Markov.StickyStates}}<div>{{markovState .State}} · {{printf "%.1f" (percent01 .Probability)}}% · {{.Count}} переходов</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+          </tr>
+        </table>
+        <h3>Последовательность бакетов</h3>
+        <table class="timeline-table">
+          <tr><th>Время</th><th>Состояние</th><th>Причина</th><th>Контекст</th></tr>
+          {{range $math.Markov.States}}
+          <tr>
+            <td>{{printf "%.1fs" (seconds .TimeMS)}}</td>
+            <td>{{markovState .State}}</td>
+            <td>{{.Reason}}</td>
+            <td>{{if .Screen}}экран <code>{{.Screen}}</code><br>{{end}}{{if .Route}}маршрут <code>{{.Route}}</code><br>{{end}}{{if .Owner}}источник <code>{{.Owner}}</code><br>{{end}}{{if .Network}}сеть <code>{{.Network}}</code>{{end}}</td>
+          </tr>
+          {{else}}<tr><td colspan="4" class="muted">Недостаточно бакетов для Markov-модели.</td></tr>{{end}}
+        </table>
+        <h3>Матрица переходов</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
+          {{range $math.Markov.Transitions}}
+          <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Переходы недоступны.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -868,6 +899,29 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{.Summary}}</td>
           </tr>
           {{else}}<tr><td colspan="8" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "markov"}}
+        <h3>Дельты Markov-метрик</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Метрика</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          {{range $math.MarkovDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Metric}}</td>
+            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Markov-дельты недоступны.</td></tr>{{end}}
+        </table>
+        <h3>Переходы кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
+          {{range $math.Candidate.Markov.Transitions}}
+          <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Переходы кандидата недоступны.</td></tr>{{end}}
         </table>
         {{end}}
       </div>
