@@ -22,6 +22,7 @@ type MathReport struct {
 	NetworkLoops   []NetworkLoopFinding
 	IntegralScores []IntegralScore
 	Markov         MarkovModel
+	CausalGraph    CausalGraph
 	GraphPaths     []GraphPath
 }
 
@@ -39,6 +40,7 @@ type CompareMathReport struct {
 	NetworkLoopDeltas []NetworkLoopDelta
 	IntegralDeltas    []IntegralDelta
 	MarkovDeltas      []MarkovDelta
+	CausalDeltas      []CausalDelta
 }
 
 type MathSection struct {
@@ -286,6 +288,47 @@ type MarkovDelta struct {
 	Summary        string
 }
 
+type CausalGraph struct {
+	Nodes       []CausalNode
+	Edges       []CausalEdge
+	Paths       []GraphPath
+	AllPairs    []GraphPath
+	OwnerScores []OwnerBlameScore
+}
+
+type CausalNode struct {
+	ID    string
+	Label string
+	Kind  string
+}
+
+type CausalEdge struct {
+	From        string
+	To          string
+	FromLabel   string
+	ToLabel     string
+	Kind        string
+	Count       int
+	Weight      float64
+	Confidence  float64
+	Description string
+}
+
+type OwnerBlameScore struct {
+	Owner string
+	Score float64
+	Rank  int
+}
+
+type CausalDelta struct {
+	Kind           string
+	Severity       string
+	Summary        string
+	BaselineValue  float64
+	CandidateValue float64
+	Delta          float64
+}
+
 type GraphPath struct {
 	From       string
 	To         string
@@ -319,7 +362,8 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	}
 	integralScores := computeIntegralScores(timeline, networkLoops)
 	markov := buildMarkovModel(timeline, networkLoops)
-	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral, networkLoops, integralScores, markov), nil
+	causalGraph := buildCausalGraph(timeline, networkLoops, markov)
+	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral, networkLoops, integralScores, markov, causalGraph), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -378,8 +422,11 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	baselineMarkov := buildMarkovModel(baselineTimeline, baselineNetworkLoops)
 	candidateMarkov := buildMarkovModel(candidateTimeline, candidateNetworkLoops)
 	markovDeltas := compareMarkovModels(baselineMarkov, candidateMarkov)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineNetworkLoops, baselineIntegralScores, baselineMarkov)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateNetworkLoops, candidateIntegralScores, candidateMarkov)
+	baselineCausalGraph := buildCausalGraph(baselineTimeline, baselineNetworkLoops, baselineMarkov)
+	candidateCausalGraph := buildCausalGraph(candidateTimeline, candidateNetworkLoops, candidateMarkov)
+	causalDeltas := compareCausalGraphs(baselineCausalGraph, candidateCausalGraph)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineNetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateNetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -391,16 +438,17 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		Candidate:         candidate,
 		Comparison:        comparison,
 		Findings:          findings,
-		Sections:          compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas, integralDeltas, markovDeltas),
+		Sections:          compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas, integralDeltas, markovDeltas, causalDeltas),
 		RobustDeltas:      robustDeltas,
 		ChangeDeltas:      changeDeltas,
 		NetworkLoopDeltas: networkLoopDeltas,
 		IntegralDeltas:    integralDeltas,
 		MarkovDeltas:      markovDeltas,
+		CausalDeltas:      causalDeltas,
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel) MathReport {
+func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) MathReport {
 	findings := dataQualityFindings(summary)
 	return MathReport{
 		Title:          titleFromPaths(paths),
@@ -416,7 +464,9 @@ func buildInspectReport(summary analyze.Summary, paths []string, timeline []Time
 		NetworkLoops:   networkLoops,
 		IntegralScores: integralScores,
 		Markov:         markov,
-		Sections:       inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops, integralScores, markov),
+		CausalGraph:    causalGraph,
+		GraphPaths:     causalGraph.Paths,
+		Sections:       inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops, integralScores, markov, causalGraph),
 	}
 }
 
@@ -472,7 +522,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	return findings
 }
 
-func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel) []MathSection {
+func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -531,15 +581,16 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			Findings: markovFindings(markov),
 		},
 		{
-			ID:      "graph",
-			Title:   "Граф причинности",
-			Status:  "pending",
-			Summary: "Здесь будут кратчайшие объясняющие пути от симптомов к screen, owner и route.",
+			ID:       "graph",
+			Title:    "Граф причинности",
+			Status:   causalGraphStatus(causalGraph),
+			Summary:  causalGraphSummary(causalGraph),
+			Findings: causalGraphFindings(causalGraph),
 		},
 	}
 }
 
-func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta, baselinePeriodic, candidatePeriodic []PeriodicSignal, networkLoopDeltas []NetworkLoopDelta, integralDeltas []IntegralDelta, markovDeltas []MarkovDelta) []MathSection {
+func compareSections(comparison analyze.Comparison, findings []Finding, baselineTimeline, candidateTimeline []TimelineBucket, robustDeltas []RobustDelta, changeDeltas []ChangePointDelta, baselinePeriodic, candidatePeriodic []PeriodicSignal, networkLoopDeltas []NetworkLoopDelta, integralDeltas []IntegralDelta, markovDeltas []MarkovDelta, causalDeltas []CausalDelta) []MathSection {
 	return []MathSection{
 		{
 			ID:       "quality",
@@ -598,10 +649,11 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			Findings: compareMarkovFindings(markovDeltas),
 		},
 		{
-			ID:      "graph",
-			Title:   "Граф причинности",
-			Status:  "pending",
-			Summary: "Сюда будет выведена дельта причинных ребер и кратчайшие объясняющие пути.",
+			ID:       "graph",
+			Title:    "Граф причинности",
+			Status:   compareCausalGraphStatus(causalDeltas),
+			Summary:  compareCausalGraphSummary(causalDeltas),
+			Findings: compareCausalGraphFindings(causalDeltas),
 		},
 	}
 }

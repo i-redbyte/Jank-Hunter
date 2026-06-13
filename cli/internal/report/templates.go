@@ -719,6 +719,36 @@ const mathInspectTemplate = `<!doctype html>
           {{else}}<tr><td colspan="4" class="muted">Переходы недоступны.</td></tr>{{end}}
         </table>
         {{end}}
+        {{if eq .ID "graph"}}
+        <h3>Кратчайшие объясняющие пути</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th><th>Доверие</th></tr>
+          {{range $math.CausalGraph.Paths}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
+          {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути от симптомов к источникам/маршрутам не найдены.</td></tr>{{end}}
+        </table>
+        <h3>Вклад источников</h3>
+        <table class="timeline-table">
+          <tr><th>Ранг</th><th>Источник</th><th>Оценка</th></tr>
+          {{range $math.CausalGraph.OwnerScores}}
+          <tr><td>{{.Rank}}</td><td><code>{{.Owner}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
+          {{else}}<tr><td colspan="3" class="muted">Источники не выделены.</td></tr>{{end}}
+        </table>
+        <h3>Ребра графа</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Тип</th><th>Наблюдения</th><th>Вес</th><th>Доверие</th><th>Описание</th></tr>
+          {{range $math.CausalGraph.Edges}}
+          <tr><td>{{.FromLabel}}</td><td>{{.ToLabel}}</td><td>{{causalKind .Kind}}</td><td>{{.Count}}</td><td>{{printf "%.2f" .Weight}}</td><td>{{printf "%.2f" .Confidence}}</td><td>{{.Description}}</td></tr>
+          {{else}}<tr><td colspan="7" class="muted">Ребра недоступны.</td></tr>{{end}}
+        </table>
+        <h3>Все кратчайшие пары Floyd-Warshall</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th></tr>
+          {{range $math.CausalGraph.AllPairs}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Пути между всеми парами не рассчитаны: граф пустой или слишком большой для компактного HTML.</td></tr>{{end}}
+        </table>
+        {{end}}
       </div>
     </details>
   </section>
@@ -922,6 +952,29 @@ const mathCompareTemplate = `<!doctype html>
           {{range $math.Candidate.Markov.Transitions}}
           <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
           {{else}}<tr><td colspan="4" class="muted">Переходы кандидата недоступны.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "graph"}}
+        <h3>Дельты графа причинности</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Тип</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          {{range $math.CausalDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Kind}}</td>
+            <td>{{printf "%.2f" .BaselineValue}}</td>
+            <td>{{printf "%.2f" .CandidateValue}}</td>
+            <td>{{printf "%+.2f" .Delta}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Заметных изменений графа не найдено.</td></tr>{{end}}
+        </table>
+        <h3>Кратчайшие пути кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th><th>Доверие</th></tr>
+          {{range $math.Candidate.CausalGraph.Paths}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
+          {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути кандидата не найдены.</td></tr>{{end}}
         </table>
         {{end}}
       </div>

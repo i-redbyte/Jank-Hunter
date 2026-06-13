@@ -177,6 +177,9 @@ func execute(path, source string, data any) error {
 		"markovState": func(state string) string {
 			return mathanalysis.MarkovStateLabel(state)
 		},
+		"causalKind": func(kind string) string {
+			return mathanalysis.CausalKindLabel(kind)
+		},
 		"percent01": func(value float64) float64 {
 			return value * 100
 		},

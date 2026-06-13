@@ -372,6 +372,15 @@ network_loop -> route GET /config -> owner ConfigRepository.refresh -> screen La
 
 Вердикт: must-have для “где и почему”.
 
+Текущее внедрение в CLI:
+
+- граф строится только на агрегированных узлах `screen`, `owner`, `route`, `network phase`, `state`, `symptom`;
+- ребра агрегируют совпадение в timeline bucket, owner-route связь, state-symptom связь и network loop motif;
+- Dijkstra считает кратчайшие объясняющие пути от симптомов к источникам/маршрутам;
+- Floyd-Warshall считается только для компактного агрегированного графа, чтобы не запускать `O(V^3)` на сырых событиях;
+- вклад источников считается как PageRank-like blame score по уверенным ребрам и найденным сетевым циклам;
+- compare показывает новые/усиленные ребра, измененный кратчайший путь и рост вклада источников.
+
 ### Floyd-Warshall
 
 Floyd-Warshall полезен после агрегации графа, когда узлов уже мало. Он считает shortest paths между всеми парами и помогает найти:
@@ -529,24 +538,23 @@ probable path: LaunchScreen -> ConfigRepository.refresh -> GET /config -> dns_bu
 - expected recovery windows;
 - sticky states и compare deltas.
 
-### Stage 9: Advanced / Research
+### Stage 9: Causal Graph
+
+Добавлено после timeline/spectral/Markov foundation:
+
+- route/owner/screen/symptom graph;
+- Dijkstra shortest explanation path;
+- Floyd-Warshall all-pairs paths on aggregated graph;
+- PageRank-like owner blame score;
+- compare graph delta: новые ребра, усиленные ребра, измененные пути, рост вклада источников.
+
+### Stage 10: Advanced / Research
 
 Добавить при наличии истории:
 
 - Bayesian hierarchical compare;
-- graph-based blame ranking;
 - PCA/UMAP run clustering;
 - queueing metrics при расширении runtime events.
-
-### Stage 10: Causal Graph
-
-Добавить после timeline/spectral foundation:
-
-- route/owner/screen/symptom graph;
-- Dijkstra shortest explanation path;
-- Floyd-Warshall all-pairs influence map on aggregated graph;
-- PageRank-like owner blame score;
-- compare graph delta: new edges, stronger edges, broken recovery paths.
 
 ### Stage 11: Math Analysis Report Page
 
