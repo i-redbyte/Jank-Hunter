@@ -95,6 +95,43 @@ a:hover { color: white; }
   max-width: 1280px;
   margin: 0 auto;
 }
+.report-hero-grid {
+  display: grid;
+  gap: 24px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+.report-hero-title {
+  max-width: 920px;
+}
+.report-hero-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
+  gap: 24px;
+  align-items: stretch;
+}
+.report-hero-context .env-card {
+  min-height: 100%;
+}
+.report-hero-control {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 12px;
+}
+.report-hero-control .hero-meta {
+  grid-template-columns: 1fr;
+}
+.report-hero-control .hero-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 12px;
+  margin-top: 0;
+}
+.report-hero-control .math-link {
+  min-height: 62px;
+}
 .eyebrow {
   color: var(--cyan);
   font-size: 12px;
@@ -564,9 +601,10 @@ details.log-card summary::-webkit-details-marker { display: none; }
 }
 @media (max-width: 820px) {
   .hero { padding: 28px 18px 18px; }
-  .hero-grid, .split, .triad, .detail-grid { grid-template-columns: 1fr; }
+  .hero-grid, .report-hero-lower, .split, .triad, .detail-grid { grid-template-columns: 1fr; }
   .hero-side { width: 100%; }
   .hero-meta { grid-template-columns: 1fr; }
+  .report-hero-control { grid-template-rows: auto; }
   .env-grid { grid-template-columns: 1fr; }
   main { padding: 18px; }
   .panel-head { display: block; }
@@ -1691,13 +1729,14 @@ const inspectTemplate = `<!doctype html>
 </head>
 <body>
 <header class="hero">
-  <div class="hero-grid">
-    <div>
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
       <div class="eyebrow">Jank Hunter · обзор</div>
       <h1>Отчет по сигналам выполнения</h1>
       <div class="subhead">{{.Summary.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
     </div>
-    <div class="hero-side">
+    <div class="report-hero-lower">
+      <div class="report-hero-context">
       <div class="env-card">
         <div class="env-title">Контекст устройства</div>
         <strong class="env-device">{{fallback .Summary.Environment.Title "неизвестное устройство"}}</strong>
@@ -1708,12 +1747,15 @@ const inspectTemplate = `<!doctype html>
           {{else}}<div class="env-item"><div class="env-label">Контекст</div><div class="env-value">неизвестно</div><div class="env-detail">Нет метаданных сессии и контекста.</div></div>{{end}}
         </div>
       </div>
+      </div>
+      <div class="report-hero-control">
       <div class="hero-meta">
         <div class="chip">Логи <strong>{{.Summary.LogCount}}</strong></div>
         <div class="chip">События <strong>{{.Summary.EventCount}}</strong></div>
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
       <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
+      </div>
     </div>
   </div>
 </header>
@@ -2011,13 +2053,14 @@ const compareTemplate = `<!doctype html>
 </head>
 <body>
 <header class="hero">
-  <div class="hero-grid">
-    <div>
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
       <div class="eyebrow">Jank Hunter · сравнение</div>
       <h1>Панель контроля регрессий</h1>
       <div class="subhead">создан {{.GeneratedAt}} · база против кандидата · автономный HTML</div>
     </div>
-    <div class="hero-side">
+    <div class="report-hero-lower">
+      <div class="report-hero-context">
       <div class="env-card">
         <div class="env-title">Контекст сравнения</div>
         <strong class="env-device">{{fallback .Comparison.Baseline.Environment.Title "неизвестная база"}} → {{fallback .Comparison.Candidate.Environment.Title "неизвестный кандидат"}}</strong>
@@ -2029,12 +2072,15 @@ const compareTemplate = `<!doctype html>
           <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}% → {{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="env-detail">FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div></div>
         </div>
       </div>
+      </div>
+      <div class="report-hero-control">
       <div class="hero-meta">
         <div class="chip">Логи базы <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
         <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
         <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
       </div>
       <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
+      </div>
     </div>
   </div>
 </header>
