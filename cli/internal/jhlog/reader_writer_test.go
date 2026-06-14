@@ -2,6 +2,7 @@ package jhlog
 
 import (
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,58 @@ func TestWriteSampleReadFile(t *testing.T) {
 	}
 	if context.TotalMemoryKB == 0 || context.FreeStorageKB == 0 {
 		t.Fatalf("expected extended context memory/storage metadata: %+v", context)
+	}
+}
+
+func TestReadFileSupportsCompressedBinaryBody(t *testing.T) {
+	rawPath := filepath.Join(t.TempDir(), "raw.jhlog")
+	if err := WriteSample(rawPath); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("ReadFile(raw) error = %v", err)
+	}
+	if len(raw) <= len(Magic) {
+		t.Fatalf("expected sample body")
+	}
+
+	compressedPath := filepath.Join(t.TempDir(), "compressed.jhlog")
+	file, err := os.Create(compressedPath)
+	if err != nil {
+		t.Fatalf("Create(compressed) error = %v", err)
+	}
+	if _, err := file.Write(Magic); err != nil {
+		t.Fatalf("Write(magic) error = %v", err)
+	}
+	gzipWriter := gzip.NewWriter(file)
+	if _, err := gzipWriter.Write(raw[len(Magic):]); err != nil {
+		t.Fatalf("Write(gzip body) error = %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("Close(gzip) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(file) error = %v", err)
+	}
+
+	log, err := ReadFile(compressedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(compressed) error = %v", err)
+	}
+	if len(log.Events) == 0 || log.Dict[20] != "GET /feed" {
+		t.Fatalf("compressed body did not decode sample log: events=%d dict[20]=%q", len(log.Events), log.Dict[20])
+	}
+
+	streamed := 0
+	if err := StreamFile(compressedPath, func(Event, map[uint64]string) error {
+		streamed++
+		return nil
+	}); err != nil {
+		t.Fatalf("StreamFile(compressed) error = %v", err)
+	}
+	if streamed != len(log.Events) {
+		t.Fatalf("streamed events = %d, want %d", streamed, len(log.Events))
 	}
 }
 

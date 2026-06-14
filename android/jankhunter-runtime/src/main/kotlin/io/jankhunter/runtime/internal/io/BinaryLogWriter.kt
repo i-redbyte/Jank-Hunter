@@ -5,24 +5,37 @@ import java.io.BufferedOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.util.zip.GZIPOutputStream
 import kotlin.math.max
 
 class BinaryLogWriter(
     internal val file: File,
     maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
     maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
+    compressionEnabled: Boolean = false,
 ) : Closeable {
-    private val out = BufferedOutputStream(FileOutputStream(file, true), 32 * 1024)
+    private val fileOut = FileOutputStream(file, true)
+    private val bufferedOut = BufferedOutputStream(fileOut, 32 * 1024)
+    private val compressedOut: GZIPOutputStream?
+    private val out: OutputStream
     private val dictionary = DictionaryIds(maxDictionaryEntries, maxDictionaryValueBytes)
     private var lastTimestampMs = 0L
     private var logicalBytesWritten = file.length()
 
     init {
         if (file.length() == 0L) {
-            out.write(MAGIC)
+            bufferedOut.write(MAGIC)
+            bufferedOut.flush()
             logicalBytesWritten += MAGIC.size
         }
+        compressedOut = if (compressionEnabled) {
+            GZIPOutputStream(bufferedOut, IO_BUFFER_BYTES, true)
+        } else {
+            null
+        }
+        out = compressedOut ?: bufferedOut
     }
 
     @Synchronized
@@ -31,6 +44,7 @@ class BinaryLogWriter(
     @Synchronized
     fun flush() {
         out.flush()
+        bufferedOut.flush()
     }
 
     @Synchronized
@@ -331,8 +345,12 @@ class BinaryLogWriter(
 
     @Synchronized
     override fun close() {
-        out.flush()
-        out.close()
+        try {
+            compressedOut?.finish()
+            out.flush()
+        } finally {
+            out.close()
+        }
     }
 
     private class Payload {
@@ -398,7 +416,7 @@ class BinaryLogWriter(
             return this
         }
 
-        fun writeTo(out: BufferedOutputStream) {
+        fun writeTo(out: OutputStream) {
             out.write(data, 0, size)
         }
 
@@ -532,7 +550,7 @@ class BinaryLogWriter(
         private const val DICTIONARY_VALUE_BCD_DECIMAL = 1
         private const val DICTIONARY_VALUE_BCD_ISO_DATE = 2
 
-        private fun writeUvarint(out: BufferedOutputStream, rawValue: Long): Int {
+        private fun writeUvarint(out: OutputStream, rawValue: Long): Int {
             var value = rawValue
             var count = 0
             while (value and 0x7FL.inv() != 0L) {
@@ -545,7 +563,7 @@ class BinaryLogWriter(
         }
 
         private fun writeCompactHeader(
-            out: BufferedOutputStream,
+            out: OutputStream,
             eventType: Int,
             deltaMs: Long,
             flags: Long,
@@ -582,7 +600,7 @@ class BinaryLogWriter(
             }
         }
 
-        private fun writeCompactDelta(out: BufferedOutputStream, code: Int, deltaMs: Long): Int {
+        private fun writeCompactDelta(out: OutputStream, code: Int, deltaMs: Long): Int {
             return when (code) {
                 COMPACT_DELTA_ZERO -> 0
                 COMPACT_DELTA_UINT8 -> {
@@ -621,6 +639,7 @@ class BinaryLogWriter(
         }
 
         private const val FORMAT_VERSION = 4
+        private const val IO_BUFFER_BYTES = 32 * 1024
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
         private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5

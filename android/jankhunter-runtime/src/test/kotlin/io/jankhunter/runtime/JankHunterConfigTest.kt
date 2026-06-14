@@ -27,6 +27,7 @@ class JankHunterConfigTest {
             .maxQueueSize(99)
             .maxLogBytes(1024)
             .maxLogDirectoryBytes(4096)
+            .logCompressionEnabled(false)
             .maxDictionaryEntries(1234)
             .maxDictionaryValueBytes(64)
             .flushIntervalMs(12)
@@ -53,6 +54,7 @@ class JankHunterConfigTest {
         assertEquals(99, config.maxQueueSize())
         assertEquals(1024, config.maxLogBytes())
         assertEquals(4096, config.maxLogDirectoryBytes())
+        assertFalse(config.logCompressionEnabled())
         assertEquals(1234, config.maxDictionaryEntries())
         assertEquals(64, config.maxDictionaryValueBytes())
         assertEquals(12, config.flushIntervalMs())
@@ -79,6 +81,7 @@ class JankHunterConfigTest {
         assertEquals(2048, config.maxQueueSize())
         assertEquals(5L * 1024L * 1024L, config.maxLogBytes())
         assertEquals(25L * 1024L * 1024L, config.maxLogDirectoryBytes())
+        assertTrue(config.logCompressionEnabled())
         assertEquals(8192, config.maxDictionaryEntries())
         assertEquals(256, config.maxDictionaryValueBytes())
     }

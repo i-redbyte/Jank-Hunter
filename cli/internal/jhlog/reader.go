@@ -3,6 +3,7 @@ package jhlog
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -28,7 +29,14 @@ func ReadFile(path string) (Log, error) {
 		if version != FormatVersion {
 			return Log{}, fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
-		return readBinary(file, path, version)
+		body, closeBody, err := compressedBinaryBody(file)
+		if err != nil {
+			return Log{}, fmt.Errorf("%s: compressed jhlog body: %w", path, err)
+		}
+		if closeBody != nil {
+			defer closeBody.Close()
+		}
+		return readBinary(body, path, version)
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -54,7 +62,14 @@ func StreamFile(path string, handle func(Event, map[uint64]string) error) error 
 		if version != FormatVersion {
 			return fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
-		_, err := streamBinary(file, path, version, handle)
+		body, closeBody, err := compressedBinaryBody(file)
+		if err != nil {
+			return fmt.Errorf("%s: compressed jhlog body: %w", path, err)
+		}
+		if closeBody != nil {
+			defer closeBody.Close()
+		}
+		_, err = streamBinary(body, path, version, handle)
 		return err
 	}
 
@@ -62,6 +77,22 @@ func StreamFile(path string, handle func(Event, map[uint64]string) error) error 
 		return err
 	}
 	return streamJSONL(file, path, handle)
+}
+
+func compressedBinaryBody(r io.Reader) (io.Reader, io.Closer, error) {
+	reader := bufio.NewReader(r)
+	probe, err := reader.Peek(2)
+	if err == nil && len(probe) == 2 && probe[0] == 0x1f && probe[1] == 0x8b {
+		gzipReader, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		return gzipReader, gzipReader, nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, nil, err
+	}
+	return reader, nil, nil
 }
 
 func readBinary(r io.Reader, source string, version uint8) (Log, error) {

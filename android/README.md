@@ -37,6 +37,7 @@ Runtime стартует через `ContentProvider`. Если приложен
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
 <meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
+<meta-data android:name="io.jankhunter.log_compression_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 ```
 
@@ -55,6 +56,7 @@ val config = JankHunterConfig.builder()
     .maxQueueSize(2048)
     .maxLogBytes(5 * 1024 * 1024)
     .maxLogDirectoryBytes(25 * 1024 * 1024)
+    .logCompressionEnabled(true)
     .flushIntervalMs(5_000)
     .build()
 
@@ -116,7 +118,7 @@ context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 /data/data/com.myapp/files/jankhunter/session-remote-1781410978146-1.jhlog
 ```
 
-Runtime ротирует файлы по `max_log_bytes` и держит общий бюджет папки по `max_log_directory_bytes`. Если приложение много пишет, старые сегменты удаляются, активный файл не трогается.
+Runtime ротирует файлы по `max_log_bytes` и держит общий бюджет папки по `max_log_directory_bytes`. Если приложение много пишет, старые сегменты удаляются, активный файл не трогается. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
 
 Путь можно поменять:
 
