@@ -559,10 +559,14 @@ module_has_application_class() {
   local source
   while IFS= read -r source; do
     if awk '
-      /class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[^{;]*(extends[[:space:]]+[A-Za-z0-9_.]*Application|:[^{;]*[A-Za-z0-9_.]*Application[[:space:]]*\()/ {
-        found = 1
+      {
+        text = text " " $0
       }
-      END { exit found ? 0 : 1 }
+      END {
+        gsub(/[[:space:]]+/, " ", text)
+        found = text ~ /class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[^{};]*(extends[[:space:]]+[A-Za-z0-9_.]*Application|:[^{};]*[A-Za-z0-9_.]*Application[[:space:]]*\()/
+        exit found ? 0 : 1
+      }
     ' "$source"; then
       return 0
     fi
