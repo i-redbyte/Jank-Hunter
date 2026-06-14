@@ -185,24 +185,26 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 		switch delta.Severity {
 		case "high":
 			high++
-			builder.add("high", textf(lang, "High regression: %s", "Высокая регрессия: %s", delta.Name), textf(lang,
+			name := compareDeltaLabel(delta.Name)
+			builder.add("high", textf(lang, "High regression: %s", "Высокая регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s -> %s (%s), доверие=%s, выборка=%d.",
-				delta.Baseline,
-				delta.Candidate,
-				delta.Change,
-				delta.Confidence,
+				"%s → %s (%s), доверие: %s, выборка: %d.",
+				compareDeltaValue(delta.Baseline),
+				compareDeltaValue(delta.Candidate),
+				compareDeltaChange(delta.Change),
+				confidenceLabel(delta.Confidence),
 				delta.SampleSize,
 			))
 		case "medium":
 			medium++
-			builder.add("medium", textf(lang, "Medium regression: %s", "Средняя регрессия: %s", delta.Name), textf(lang,
+			name := compareDeltaLabel(delta.Name)
+			builder.add("medium", textf(lang, "Medium regression: %s", "Средняя регрессия: %s", name), textf(lang,
 				"%s -> %s (%s), confidence=%s, sample=%d.",
-				"%s -> %s (%s), доверие=%s, выборка=%d.",
-				delta.Baseline,
-				delta.Candidate,
-				delta.Change,
-				delta.Confidence,
+				"%s → %s (%s), доверие: %s, выборка: %d.",
+				compareDeltaValue(delta.Baseline),
+				compareDeltaValue(delta.Candidate),
+				compareDeltaChange(delta.Change),
+				confidenceLabel(delta.Confidence),
 				delta.SampleSize,
 			))
 		}

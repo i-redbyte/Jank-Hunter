@@ -636,19 +636,19 @@ func cohortWarnings(baseline, candidate Summary) []string {
 		baseline  []NamedValue
 		candidate []NamedValue
 	}{
-		{name: "app version", baseline: baseline.AppVersions, candidate: candidate.AppVersions},
+		{name: "версий приложения", baseline: baseline.AppVersions, candidate: candidate.AppVersions},
 		{name: "SDK", baseline: baseline.SDKs, candidate: candidate.SDKs},
-		{name: "device", baseline: baseline.Devices, candidate: candidate.Devices},
-		{name: "process", baseline: baseline.Processes, candidate: candidate.Processes},
-		{name: "network", baseline: baseline.Network, candidate: candidate.Network},
-		{name: "cohort", baseline: baseline.Cohorts, candidate: candidate.Cohorts},
+		{name: "устройств", baseline: baseline.Devices, candidate: candidate.Devices},
+		{name: "процессов", baseline: baseline.Processes, candidate: candidate.Processes},
+		{name: "сетей", baseline: baseline.Network, candidate: candidate.Network},
+		{name: "когорт", baseline: baseline.Cohorts, candidate: candidate.Cohorts},
 	}
 	var warnings []string
 	for _, check := range checks {
 		before := namedSummary(check.baseline)
 		after := namedSummary(check.candidate)
 		if before != after {
-			warnings = append(warnings, fmt.Sprintf("%s mix differs: baseline [%s], candidate [%s]", check.name, before, after))
+			warnings = append(warnings, fmt.Sprintf("Состав %s отличается: база [%s], кандидат [%s].", check.name, before, after))
 		}
 	}
 	return warnings
@@ -1012,9 +1012,9 @@ func memoryDetail(summary Summary) string {
 
 func storageDetail(summary Summary) string {
 	if summary.TotalStorageKB == 0 {
-		return "app data partition"
+		return "раздел данных приложения"
 	}
-	return fmt.Sprintf("of %s app data partition", formatDataSize(summary.TotalStorageKB))
+	return fmt.Sprintf("из %s раздел данных приложения", formatDataSize(summary.TotalStorageKB))
 }
 
 func androidDetail(sdk string, patch string) string {

@@ -164,6 +164,22 @@ func execute(path, source string, data any) error {
 		"memoryHelp":    memoryMetricHelp,
 		"integralHelp":  integralHelp,
 		"ownerKind":     ownerKindLabel,
+		"deltaGroups":   compareDeltaGroups,
+		"deltaLabel":    compareDeltaLabel,
+		"deltaHelp":     compareDeltaHelp,
+		"deltaValue":    compareDeltaValue,
+		"deltaChange":   compareDeltaChange,
+		"deltaInterval": compareDeltaInterval,
+		"problemDeltas": problemDeltas,
+		"severityLabel": severityLabel,
+		"confidenceLabel": func(value string) string {
+			return confidenceLabel(value)
+		},
+		"routeCompareRows":  routeCompareRows,
+		"screenCompareRows": screenCompareRows,
+		"ownerCompareRows":  ownerCompareRows,
+		"signedMS":          signedMS,
+		"signedFloat":       signedFloat,
 		"bucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroTimelineBucket(bucket) {
 				return "bucket-zero"
@@ -433,6 +449,428 @@ func ownerKindLabel(kind string) string {
 	default:
 		return strings.ReplaceAll(kind, "_", " ")
 	}
+}
+
+type compareDeltaGroup struct {
+	Title  string
+	Detail string
+	Items  []analyze.Delta
+}
+
+func compareDeltaGroups(deltas []analyze.Delta) []compareDeltaGroup {
+	order := []string{"network", "ui", "memory", "context", "other"}
+	titles := map[string]string{
+		"network": "Сеть и трафик",
+		"ui":      "UI и главный поток",
+		"memory":  "Память и удержания",
+		"context": "Контекст и когорты",
+		"other":   "Остальные сигналы",
+	}
+	details := map[string]string{
+		"network": "HTTP-задержки, ошибки и UID-трафик.",
+		"ui":      "Плавность интерфейса, FPS и максимальные паузы главного потока.",
+		"memory":  "PSS, свободная RAM и удержанные объекты.",
+		"context": "Версия приложения, SDK, устройство, процесс, сеть и рут-доступ.",
+		"other":   "Сигналы без отдельной категории.",
+	}
+	byCategory := map[string][]analyze.Delta{}
+	for _, delta := range deltas {
+		category := compareDeltaCategory(delta.Name)
+		byCategory[category] = append(byCategory[category], delta)
+	}
+	var groups []compareDeltaGroup
+	for _, category := range order {
+		items := byCategory[category]
+		if len(items) == 0 {
+			continue
+		}
+		groups = append(groups, compareDeltaGroup{
+			Title:  titles[category],
+			Detail: details[category],
+			Items:  items,
+		})
+	}
+	return groups
+}
+
+func problemDeltas(deltas []analyze.Delta) []analyze.Delta {
+	var out []analyze.Delta
+	for _, delta := range deltas {
+		if delta.Severity != "" && delta.Severity != "ok" {
+			out = append(out, delta)
+		}
+	}
+	return out
+}
+
+func compareDeltaCategory(name string) string {
+	switch name {
+	case "HTTP p95", "HTTP failures", "UID RX max", "UID TX max", "Network mix":
+		return "network"
+	case "UI jank rate", "UI avg FPS", "Main-thread stall max":
+		return "ui"
+	case "Max PSS", "Min available memory", "Retained objects":
+		return "memory"
+	case "Process mix", "App version mix", "SDK mix", "Device mix", "Cohort mix":
+		return "context"
+	default:
+		return "other"
+	}
+}
+
+func compareDeltaLabel(name string) string {
+	switch name {
+	case "HTTP p95":
+		return "HTTP p95-задержка"
+	case "HTTP failures":
+		return "HTTP-ошибки"
+	case "UI jank rate":
+		return "Доля подтормаживаний UI"
+	case "UI avg FPS":
+		return "Средний FPS UI"
+	case "Main-thread stall max":
+		return "Макс. пауза главного потока"
+	case "Max PSS":
+		return "Макс. PSS"
+	case "Min available memory":
+		return "Мин. свободная память"
+	case "UID RX max":
+		return "Макс. входящий трафик приложения"
+	case "UID TX max":
+		return "Макс. исходящий трафик приложения"
+	case "Retained objects":
+		return "Удержанные объекты"
+	case "Process mix":
+		return "Состав процессов"
+	case "App version mix":
+		return "Состав версий приложения"
+	case "SDK mix":
+		return "Состав SDK"
+	case "Device mix":
+		return "Состав устройств"
+	case "Network mix":
+		return "Состав сети"
+	case "Cohort mix":
+		return "Состав когорт"
+	default:
+		return strings.ReplaceAll(name, "_", " ")
+	}
+}
+
+func compareDeltaHelp(name string) string {
+	switch name {
+	case "HTTP p95":
+		return "95-й процентиль длительности HTTP-запросов. Рост обычно означает, что хвост сетевых задержек стал хуже."
+	case "HTTP failures":
+		return "Количество HTTP-вызовов с ошибкой или статусом 5xx. Рост почти всегда ухудшает пользовательский сценарий."
+	case "UI jank rate":
+		return "Доля медленных UI-кадров. Рост в процентных пунктах показывает, что интерфейс стал чаще дергаться."
+	case "UI avg FPS":
+		return "Средняя частота кадров. Для FPS ухудшением считается падение значения."
+	case "Main-thread stall max":
+		return "Самая длинная зафиксированная пауза главного потока. Даже один большой пик может быть причиной ANR-рискa."
+	case "Max PSS":
+		return "Максимальный PSS процесса. Рост показывает больший вклад приложения в потребление RAM."
+	case "Min available memory":
+		return "Минимум свободной RAM. Здесь ухудшением считается падение, потому что запас памяти стал меньше."
+	case "UID RX max", "UID TX max":
+		return "Максимальный трафик UID приложения. Рост сам по себе не всегда плох, но важен рядом с сетевой задержкой и ошибками."
+	case "Retained objects":
+		return "Количество удержанных объектов. Рост может указывать на утечки или слишком долгие ссылки."
+	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
+		return "Проверка честности сравнения: база и кандидат должны быть собраны в сопоставимых условиях."
+	default:
+		return "Сравнительная метрика: смотрите направление изменения, доверие и размер выборки."
+	}
+}
+
+func compareDeltaValue(value string) string {
+	replacer := strings.NewReplacer(
+		" ms", " мс",
+		" count", " шт",
+		" bytes", " байт",
+		" kb", " KB",
+		" fps", " FPS",
+		" pp", " п.п.",
+		"same", "без изменений",
+		"changed", "изменилось",
+		"+new", "появилось",
+	)
+	return replacer.Replace(value)
+}
+
+func compareDeltaChange(value string) string {
+	return compareDeltaValue(value)
+}
+
+func compareDeltaInterval(value string) string {
+	if value == "" {
+		return "нет интервала"
+	}
+	replacer := strings.NewReplacer(
+		"approx", "примерно",
+		" ms", " мс",
+		" count", " шт",
+		" bytes", " байт",
+		" kb", " KB",
+		" fps", " FPS",
+		" pp", " п.п.",
+	)
+	return replacer.Replace(value)
+}
+
+func severityLabel(value string) string {
+	switch value {
+	case "high":
+		return "критично"
+	case "medium":
+		return "предупреждение"
+	case "ok":
+		return "норма"
+	default:
+		return "норма"
+	}
+}
+
+func confidenceLabel(value string) string {
+	switch value {
+	case "high":
+		return "высокое"
+	case "medium":
+		return "среднее"
+	case "low":
+		return "низкое"
+	default:
+		return "неизвестно"
+	}
+}
+
+type routeCompareRow struct {
+	Route             string
+	BaselineCount     int
+	CandidateCount    int
+	BaselineFailures  int
+	CandidateFailures int
+	BaselineP95MS     uint64
+	CandidateP95MS    uint64
+	DeltaP95MS        int64
+	BaselineOwner     string
+	CandidateOwner    string
+	Severity          string
+}
+
+func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
+	base := map[string]analyze.RouteStats{}
+	cand := map[string]analyze.RouteStats{}
+	names := map[string]struct{}{}
+	for _, route := range baseline.Routes {
+		base[route.Route] = route
+		names[route.Route] = struct{}{}
+	}
+	for _, route := range candidate.Routes {
+		cand[route.Route] = route
+		names[route.Route] = struct{}{}
+	}
+	rows := make([]routeCompareRow, 0, len(names))
+	for name := range names {
+		b := base[name]
+		c := cand[name]
+		delta := int64(c.P95MS) - int64(b.P95MS)
+		rows = append(rows, routeCompareRow{
+			Route:             name,
+			BaselineCount:     b.Count,
+			CandidateCount:    c.Count,
+			BaselineFailures:  b.Failures,
+			CandidateFailures: c.Failures,
+			BaselineP95MS:     b.P95MS,
+			CandidateP95MS:    c.P95MS,
+			DeltaP95MS:        delta,
+			BaselineOwner:     b.OwnerSample,
+			CandidateOwner:    c.OwnerSample,
+			Severity:          latencyDeltaSeverity(b.P95MS, c.P95MS),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
+			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
+		}
+		if absInt64(rows[i].DeltaP95MS) != absInt64(rows[j].DeltaP95MS) {
+			return absInt64(rows[i].DeltaP95MS) > absInt64(rows[j].DeltaP95MS)
+		}
+		return rows[i].Route < rows[j].Route
+	})
+	return rows
+}
+
+type screenCompareRow struct {
+	Screen           string
+	BaselineFrames   uint64
+	CandidateFrames  uint64
+	BaselineJankPct  float64
+	CandidateJankPct float64
+	DeltaJankPct     float64
+	BaselineAvgFPS   float64
+	CandidateAvgFPS  float64
+	DeltaFPS         float64
+	BaselineP95MS    uint64
+	CandidateP95MS   uint64
+	Severity         string
+}
+
+func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
+	base := map[string]analyze.ScreenStats{}
+	cand := map[string]analyze.ScreenStats{}
+	names := map[string]struct{}{}
+	for _, screen := range baseline.Screens {
+		base[screen.Screen] = screen
+		names[screen.Screen] = struct{}{}
+	}
+	for _, screen := range candidate.Screens {
+		cand[screen.Screen] = screen
+		names[screen.Screen] = struct{}{}
+	}
+	rows := make([]screenCompareRow, 0, len(names))
+	for name := range names {
+		b := base[name]
+		c := cand[name]
+		deltaJank := c.JankRatePct - b.JankRatePct
+		deltaFPS := c.AvgFPS - b.AvgFPS
+		rows = append(rows, screenCompareRow{
+			Screen:           name,
+			BaselineFrames:   b.Frames,
+			CandidateFrames:  c.Frames,
+			BaselineJankPct:  b.JankRatePct,
+			CandidateJankPct: c.JankRatePct,
+			DeltaJankPct:     deltaJank,
+			BaselineAvgFPS:   b.AvgFPS,
+			CandidateAvgFPS:  c.AvgFPS,
+			DeltaFPS:         deltaFPS,
+			BaselineP95MS:    b.P95MS,
+			CandidateP95MS:   c.P95MS,
+			Severity:         screenDeltaSeverity(deltaJank, deltaFPS),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
+			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
+		}
+		if math.Abs(rows[i].DeltaJankPct) != math.Abs(rows[j].DeltaJankPct) {
+			return math.Abs(rows[i].DeltaJankPct) > math.Abs(rows[j].DeltaJankPct)
+		}
+		return rows[i].Screen < rows[j].Screen
+	})
+	return rows
+}
+
+type ownerCompareRow struct {
+	Owner            string
+	Kind             string
+	BaselineCount    int
+	CandidateCount   int
+	BaselineMaxMS    uint64
+	CandidateMaxMS   uint64
+	DeltaMaxMS       int64
+	BaselineTotalMS  uint64
+	CandidateTotalMS uint64
+	Severity         string
+}
+
+func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
+	base := map[string]analyze.OwnerStats{}
+	cand := map[string]analyze.OwnerStats{}
+	names := map[string]struct{}{}
+	for _, owner := range baseline.Owners {
+		base[owner.Owner] = owner
+		names[owner.Owner] = struct{}{}
+	}
+	for _, owner := range candidate.Owners {
+		cand[owner.Owner] = owner
+		names[owner.Owner] = struct{}{}
+	}
+	rows := make([]ownerCompareRow, 0, len(names))
+	for name := range names {
+		b := base[name]
+		c := cand[name]
+		kind := firstNonEmpty(c.Kind, b.Kind)
+		delta := int64(c.MaxMS) - int64(b.MaxMS)
+		rows = append(rows, ownerCompareRow{
+			Owner:            name,
+			Kind:             kind,
+			BaselineCount:    b.Count,
+			CandidateCount:   c.Count,
+			BaselineMaxMS:    b.MaxMS,
+			CandidateMaxMS:   c.MaxMS,
+			DeltaMaxMS:       delta,
+			BaselineTotalMS:  b.TotalMS,
+			CandidateTotalMS: c.TotalMS,
+			Severity:         latencyDeltaSeverity(b.MaxMS, c.MaxMS),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
+			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
+		}
+		if absInt64(rows[i].DeltaMaxMS) != absInt64(rows[j].DeltaMaxMS) {
+			return absInt64(rows[i].DeltaMaxMS) > absInt64(rows[j].DeltaMaxMS)
+		}
+		return rows[i].Owner < rows[j].Owner
+	})
+	return rows
+}
+
+func latencyDeltaSeverity(baseline, candidate uint64) string {
+	if baseline == 0 && candidate > 0 {
+		if candidate >= 1000 {
+			return "high"
+		}
+		return "medium"
+	}
+	if candidate <= baseline {
+		return "ok"
+	}
+	delta := candidate - baseline
+	pct := 0.0
+	if baseline > 0 {
+		pct = float64(delta) * 100 / float64(baseline)
+	}
+	if delta >= 500 || pct >= 50 {
+		return "high"
+	}
+	if delta >= 100 || pct >= 15 {
+		return "medium"
+	}
+	return "ok"
+}
+
+func screenDeltaSeverity(deltaJankPct, deltaFPS float64) string {
+	if deltaJankPct >= 3 || deltaFPS <= -5 {
+		return "high"
+	}
+	if deltaJankPct >= 1 || deltaFPS <= -2 {
+		return "medium"
+	}
+	return "ok"
+}
+
+func signedMS(value int64) string {
+	if value == 0 {
+		return "0 мс"
+	}
+	return fmt.Sprintf("%+d мс", value)
+}
+
+func signedFloat(value float64, unit string) string {
+	if value == 0 {
+		return "0 " + unit
+	}
+	return fmt.Sprintf("%+.2f %s", value, unit)
+}
+
+func absInt64(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 type heuristicCard struct {
@@ -782,7 +1220,7 @@ func localizeRussianHTML(html string) string {
 		`<title>Jank Hunter Compare</title>`, `<title>Jank Hunter: сравнение</title>`,
 		`Runtime Signal Report`, `Отчет по сигналам выполнения`,
 		`Regression Control Deck`, `Панель контроля регрессий`,
-		`Candidate Device Context`, `Контекст устройства кандидата`,
+		`Candidate Device Context`, `Контекст сравнения`,
 		`Device Context`, `Контекст устройства`,
 		`runtime context unavailable`, `контекст выполнения недоступен`,
 		`unknown device`, `неизвестное устройство`,
@@ -805,7 +1243,7 @@ func localizeRussianHTML(html string) string {
 		`>Verdict<`, `>Итог<`,
 		`>Comparison<`, `>Сравнение<`,
 		`>Regressions<`, `>Регрессии<`,
-		`>Candidate Detail<`, `>Детали кандидата<`,
+		`>Candidate Detail<`, `>Где изменилось<`,
 		`>Per-log Drill-down<`, `>Детали логов<`,
 		`>Cohorts<`, `>Когорты<`,
 		`Executive Signal Matrix`, `Матрица ключевых сигналов`,
@@ -817,7 +1255,7 @@ func localizeRussianHTML(html string) string {
 		`Regression Matrix`, `Матрица регрессий`,
 		`Severity is adjusted for confidence and sample size. Bars show regression magnitude capped at 100%.`, `Серьезность учитывает доверие и размер выборки. Полосы показывают величину регрессии с ограничением в 100%.`,
 		`Worst Regression Cards`, `Худшие регрессии`,
-		`Candidate Deep Summary`, `Подробная сводка кандидата`,
+		`Candidate Deep Summary`, `Где изменилось`,
 		`The aggregate candidate profile after all filters.`, `Агрегированный профиль кандидата после всех фильтров.`,
 		`Per-log Drill-down`, `Детали по каждому логу`,
 		`Open any source log to inspect its own network, UI, memory, metrics and attribution profile.`, `Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.`,
@@ -921,6 +1359,7 @@ func localizeRussianHTML(html string) string {
 		`Min available memory`, `Мин. доступная память`,
 		`UID RX max`, `Макс. UID RX`,
 		`UID TX max`, `Макс. UID TX`,
+		` ms`, ` мс`,
 		`Retained objects`, `Удержанные объекты`,
 		`Process mix`, `Состав процессов`,
 		`App version mix`, `Состав версий приложения`,

@@ -486,6 +486,82 @@ details.log-card summary::-webkit-details-marker { display: none; }
 .log-body { max-height: 72vh; overflow: auto; padding: 0 18px 18px; border-top: 1px solid var(--line); }
 .summary-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .mono-block { overflow-wrap: break-word; word-break: normal; }
+.compare-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+.compare-pair {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.032);
+}
+.compare-pair-title {
+  color: var(--cyan);
+  font-weight: 850;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.compare-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.compare-value {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(126,247,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.028);
+}
+.compare-value span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.compare-value strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 18px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.compare-delta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.compare-table .metric-name {
+  min-width: 170px;
+  font-weight: 800;
+}
+.compare-table {
+  min-width: 980px;
+}
+.compare-table th,
+#changes table th,
+#cohorts table th {
+  white-space: nowrap;
+}
+#changes table {
+  min-width: 1180px;
+}
+#cohorts table {
+  min-width: 640px;
+}
+.compare-table td,
+#changes table td,
+#cohorts table td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
 @media (max-width: 820px) {
   .hero { padding: 28px 18px 18px; }
   .hero-grid, .split, .triad, .detail-grid { grid-template-columns: 1fr; }
@@ -508,6 +584,7 @@ details.log-card summary::-webkit-details-marker { display: none; }
   .panel, .log-card { padding: 14px; }
   .hero { padding: 22px 14px 16px; }
   .grid { grid-template-columns: 1fr; }
+  .compare-values { grid-template-columns: 1fr; }
   h1 { font-size: clamp(32px, 9vw, 40px); line-height: 1; }
 }
 `
@@ -1658,17 +1735,18 @@ const compareTemplate = `<!doctype html>
     <div>
       <div class="eyebrow">Jank Hunter · сравнение</div>
       <h1>Панель контроля регрессий</h1>
-      <div class="subhead">создан {{.GeneratedAt}} · сначала сравнение, затем детальный просмотр логов базы и кандидата</div>
+      <div class="subhead">создан {{.GeneratedAt}} · база против кандидата · автономный HTML</div>
     </div>
     <div class="hero-side">
       <div class="env-card">
-        <div class="env-title">Контекст устройства кандидата</div>
-        <strong class="env-device">{{fallback .Comparison.Candidate.Environment.Title "неизвестное устройство"}}</strong>
-        <div class="env-subtitle">{{fallback .Comparison.Candidate.Environment.Subtitle "контекст выполнения недоступен"}}</div>
+        <div class="env-title">Контекст сравнения</div>
+        <strong class="env-device">{{fallback .Comparison.Baseline.Environment.Title "неизвестная база"}} → {{fallback .Comparison.Candidate.Environment.Title "неизвестный кандидат"}}</strong>
+        <div class="env-subtitle">база {{humanDuration .Comparison.Baseline.DurationMS}} · кандидат {{humanDuration .Comparison.Candidate.DurationMS}}</div>
         <div class="env-grid">
-          {{range .Comparison.Candidate.Environment.Items}}
-          <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
-          {{else}}<div class="env-item"><div class="env-label">Контекст</div><div class="env-value">неизвестно</div><div class="env-detail">Нет метаданных сессии и контекста.</div></div>{{end}}
+          <div class="env-item"><div class="env-label">База</div><div class="env-value">{{fallback .Comparison.Baseline.Environment.Title "неизвестно"}}</div><div class="env-detail">{{fallback .Comparison.Baseline.Environment.Subtitle "контекст недоступен"}}</div></div>
+          <div class="env-item"><div class="env-label">Кандидат</div><div class="env-value">{{fallback .Comparison.Candidate.Environment.Title "неизвестно"}}</div><div class="env-detail">{{fallback .Comparison.Candidate.Environment.Subtitle "контекст недоступен"}}</div></div>
+          <div class="env-item"><div class="env-label">HTTP p95</div><div class="env-value">{{.Comparison.Baseline.HTTPP95MS}} → {{.Comparison.Candidate.HTTPP95MS}} мс</div><div class="env-detail">ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
+          <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}% → {{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="env-detail">FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div></div>
         </div>
       </div>
       <div class="hero-meta">
@@ -1683,7 +1761,7 @@ const compareTemplate = `<!doctype html>
 <nav class="nav">
   <a href="#compare">Сравнение</a>
   <a href="#regressions">Регрессии</a>
-  <a href="#candidate">Детали кандидата</a>
+  <a href="#changes">Где изменилось</a>
   <a href="#drilldown">Детали логов</a>
   <a href="#cohorts">Когорты</a>
   <a href="#analysis">Итог</a>
@@ -1698,13 +1776,27 @@ const compareTemplate = `<!doctype html>
       <span class="pill">автономный HTML</span>
     </div>
     {{range .Comparison.Warnings}}<p class="warning">{{.}}</p>{{end}}
-    <div class="grid">
-      <div class="metric"><div class="label">HTTP p95 базы</div><div class="value">{{.Comparison.Baseline.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Baseline.HTTPCount}} запросов</div></div>
-      <div class="metric"><div class="label">HTTP p95 кандидата</div><div class="value">{{.Comparison.Candidate.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Candidate.HTTPCount}} запросов</div></div>
-      <div class="metric"><div class="label">Подтормаживания UI базы</div><div class="value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} средний FPS</div></div>
-      <div class="metric"><div class="label">Подтормаживания UI кандидата</div><div class="value">{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}} средний FPS</div></div>
-      <div class="metric"><div class="label">Макс. PSS базы</div><div class="value">{{.Comparison.Baseline.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Comparison.Baseline.Retained}}</div></div>
-      <div class="metric"><div class="label">Макс. PSS кандидата</div><div class="value">{{.Comparison.Candidate.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Comparison.Candidate.Retained}}</div></div>
+    <div class="compare-pair-grid">
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "HTTP p95" "95-й процентиль HTTP-задержки. Рост показывает ухудшение хвоста сетевых запросов."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.HTTPP95MS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.HTTPP95MS}} мс</strong></div></div>
+        <div class="compare-delta">Запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше значение у кандидата, тем заметнее просадка интерфейса."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</strong></div></div>
+        <div class="compare-delta">Средний FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.MemoryMaxKB}} KB</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.MemoryMaxKB}} KB</strong></div></div>
+        <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 ms ANR-watch такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.StallMaxMS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.StallMaxMS}} мс</strong></div></div>
+        <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
+      </div>
     </div>
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
@@ -1718,58 +1810,87 @@ const compareTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Матрица регрессий</h2><div class="panel-kicker">Серьезность учитывает доверие и размер выборки. Полосы показывают величину регрессии с ограничением до 100%.</div></div>
     </div>
-    <table>
-      <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>Доверие</th><th>Выборка</th><th>Интервал</th></tr>
-      {{range .Comparison.Deltas}}
-      <tr>
-        <td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td>
-        <td><div class="delta-track"><i class="{{severityClass .Severity}}" style="{{deltaWidth .RegressionPct}}"></i></div></td>
-        <td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Confidence}}</td><td>{{.SampleSize}}</td><td>{{.Interval}}</td>
-      </tr>
-      {{end}}
-    </table>
+    {{range deltaGroups .Comparison.Deltas}}
+    <div class="category-block">
+      <h3>{{.Title}}</h3>
+      <p class="help-text">{{.Detail}}</p>
+      <table class="compare-table">
+        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>Доверие</th><th>Выборка</th><th>Интервал</th></tr>
+        {{range .Items}}
+        <tr>
+          <td class="metric-name">{{tip (deltaLabel .Name) (deltaHelp .Name)}}</td>
+          <td>{{deltaValue .Baseline}}</td>
+          <td>{{deltaValue .Candidate}}</td>
+          <td>{{deltaChange .Change}}</td>
+          <td><div class="delta-track"><i class="{{severityClass .Severity}}" style="{{deltaWidth .RegressionPct}}"></i></div></td>
+          <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          <td>{{confidenceLabel .Confidence}}</td>
+          <td>{{.SampleSize}}</td>
+          <td>{{deltaInterval .Interval}}</td>
+        </tr>
+        {{end}}
+      </table>
+    </div>
+    {{end}}
     <h3>Худшие регрессии</h3>
     <table>
       <tr><th>Метрика</th><th>Серьезность</th><th>Регрессия</th><th>Доверие</th><th>Выборка</th></tr>
-      {{range .Comparison.Deltas}}
-      {{if notOK .Severity}}<tr><td>{{.Name}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Change}}</td><td>{{.Confidence}}</td><td>{{.SampleSize}}</td></tr>{{end}}
-      {{end}}
+      {{range problemDeltas .Comparison.Deltas}}
+      <tr><td>{{deltaLabel .Name}}</td><td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td><td>{{deltaChange .Change}}</td><td>{{confidenceLabel .Confidence}}</td><td>{{.SampleSize}}</td></tr>
+      {{else}}<tr><td colspan="5" class="muted">Регрессий высокой или средней серьезности не найдено.</td></tr>{{end}}
     </table>
   </section>
 
-  <section id="candidate" class="panel">
+  <section id="changes" class="panel">
     <div class="panel-head">
-      <div><h2>Подробная сводка кандидата</h2><div class="panel-kicker">Агрегированный профиль кандидата после всех фильтров.</div></div>
+      <div><h2>Где изменилось</h2><div class="panel-kicker">Парные таблицы показывают конкретные маршруты, экраны и источники, где кандидат отличается от базы.</div></div>
     </div>
     <details class="fold">
-      <summary>Детали маршрутов, экранов и источников кандидата</summary>
+      <summary>Сравнение маршрутов, экранов и источников</summary>
       <div class="fold-body">
-        <div class="split">
-          <div>
-            <h3>Маршруты кандидата</h3>
-            <table>
-              <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Источник</th></tr>
-              {{range .Comparison.Candidate.Routes}}
-              <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.OwnerSample}}</code></td></tr>
-              {{else}}<tr><td colspan="7" class="muted">Нет HTTP-событий.</td></tr>{{end}}
-            </table>
-          </div>
-          <div>
-            <h3>Экраны кандидата</h3>
-            <table>
-              <tr><th>Экран</th><th>Кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Средний FPS</th><th>p95</th></tr>
-              {{range .Comparison.Candidate.Screens}}
-              <tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>
-              {{else}}<tr><td colspan="6" class="muted">Нет событий UI-окон.</td></tr>{{end}}
-            </table>
-          </div>
-        </div>
-        <h3>Источники кандидата</h3>
+        <h3>Маршруты</h3>
         <table>
-          <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
-          {{range .Comparison.Candidate.Owners}}
-          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
-          {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
+          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>p95 базы</th><th>p95 кандидата</th><th>Дельта p95</th><th>Серьезность</th><th>Источник</th></tr>
+          {{range routeCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Route}}</code></td>
+            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+            <td>{{.BaselineFailures}}</td><td>{{.CandidateFailures}}</td>
+            <td>{{.BaselineP95MS}} мс</td><td>{{.CandidateP95MS}} мс</td>
+            <td>{{signedMS .DeltaP95MS}}</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td><code>{{fallback .CandidateOwner .BaselineOwner}}</code></td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий для сравнения.</td></tr>{{end}}
+        </table>
+        <h3>Экраны</h3>
+        <table>
+          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>Дельта</th><th>FPS базы</th><th>FPS кандидата</th><th>Дельта FPS</th><th>Серьезность</th></tr>
+          {{range screenCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Screen}}</code></td>
+            <td>{{.BaselineFrames}}</td><td>{{.CandidateFrames}}</td>
+            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+            <td>{{signedFloat .DeltaJankPct "п.п."}}</td>
+            <td>{{printf "%.1f" .BaselineAvgFPS}}</td><td>{{printf "%.1f" .CandidateAvgFPS}}</td>
+            <td>{{signedFloat .DeltaFPS "FPS"}}</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Нет UI-окон для сравнения.</td></tr>{{end}}
+        </table>
+        <h3>Источники</h3>
+        <table>
+          <tr><th>Источник / класс</th><th>Тип</th><th>Количество базы</th><th>Количество кандидата</th><th>Макс. базы</th><th>Макс. кандидата</th><th>Дельта макс.</th><th>Итого базы</th><th>Итого кандидата</th><th>Серьезность</th></tr>
+          {{range ownerCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td>
+            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+            <td>{{.BaselineMaxMS}} мс</td><td>{{.CandidateMaxMS}} мс</td>
+            <td>{{signedMS .DeltaMaxMS}}</td>
+            <td>{{.BaselineTotalMS}} мс</td><td>{{.CandidateTotalMS}} мс</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1788,9 +1909,9 @@ const compareTemplate = `<!doctype html>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
-          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
-          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
-          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
         </div>
       </div>
@@ -1805,9 +1926,9 @@ const compareTemplate = `<!doctype html>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
-          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
-          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
-          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
         </div>
       </div>
@@ -1830,6 +1951,17 @@ const compareTemplate = `<!doctype html>
           <div>
             <h3>Кандидат</h3>
             <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Контекст устройств</h3>
+        <div class="split">
+          <div>
+            <h3>База</h3>
+            <table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr>{{range .Comparison.Baseline.Environment.Items}}<tr><td>{{.Label}}</td><td>{{.Value}}</td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Контекст устройства базы недоступен.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Кандидат</h3>
+            <table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr>{{range .Comparison.Candidate.Environment.Items}}<tr><td>{{.Label}}</td><td>{{.Value}}</td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Контекст устройства кандидата недоступен.</td></tr>{{end}}</table>
           </div>
         </div>
         <h3>Состав процессов</h3>
