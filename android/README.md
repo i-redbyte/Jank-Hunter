@@ -442,6 +442,13 @@ cd android
 
 `detekt` настроен как Kotlin/ktlint formatting-check с official code style. Отчеты лежат в `build/reports/detekt` каждого Android-модуля.
 
+Проверка Gradle plugin как внешнего потребителя через локальный Maven:
+
+```bash
+cd ..
+./scripts/gradle-plugin-smoke.sh
+```
+
 End-to-end:
 
 ```bash

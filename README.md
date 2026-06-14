@@ -136,6 +136,12 @@ cd android
 ./gradlew detekt :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
+Gradle plugin как внешний потребитель через локальный Maven:
+
+```bash
+scripts/gradle-plugin-smoke.sh
+```
+
 End-to-end через emulator/device:
 
 ```bash

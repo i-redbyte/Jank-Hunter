@@ -68,6 +68,7 @@ class JankHunterPlugin : Plugin<Project> {
                 "generated/jankhunter/${variant.name}/class-graph.jsonl",
             )
             project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
+                it.dependsOn(ownerMap)
                 it.doFirst {
                     classGraphOutput.get().asFile.delete()
                 }
