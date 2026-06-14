@@ -5,12 +5,12 @@ const baseCSS = `
   color-scheme: dark;
   --bg: #070a12;
   --bg-2: #0b1020;
-  --panel: rgba(12, 18, 34, 0.82);
-  --panel-strong: rgba(17, 28, 52, 0.94);
-  --line: rgba(126, 247, 255, 0.18);
-  --line-strong: rgba(126, 247, 255, 0.36);
+  --panel: rgba(12, 18, 34, 0.90);
+  --panel-strong: rgba(17, 28, 52, 0.98);
+  --line: rgba(126, 247, 255, 0.23);
+  --line-strong: rgba(126, 247, 255, 0.42);
   --ink: #eef8ff;
-  --muted: #90a7bb;
+  --muted: #a4b7c9;
   --cyan: #6ff7ff;
   --blue: #6a8cff;
   --magenta: #ff4fd8;
@@ -295,6 +295,7 @@ main {
   margin: 18px 0;
   padding: 18px;
   overflow-x: auto;
+  overflow-y: visible;
   animation: rise 520ms ease both;
 }
 .panel-head {
@@ -322,41 +323,38 @@ main {
   color: inherit;
   cursor: help;
 }
-.explain::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 10px);
-  z-index: 20;
-  width: min(340px, 78vw);
+.metric .explain {
+  color: var(--muted);
+}
+.jh-tooltip {
+  position: fixed;
+  z-index: 9999;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 24px));
   padding: 10px 12px;
   border: 1px solid rgba(111,247,255,0.45);
   border-radius: 8px;
   color: var(--ink);
   background:
-    linear-gradient(135deg, rgba(111,247,255,0.12), rgba(255,79,216,0.10)),
-    rgba(7,10,18,0.96);
-  box-shadow: 0 18px 54px rgba(0,0,0,0.42), 0 0 22px rgba(111,247,255,0.16);
+    linear-gradient(135deg, rgba(111,247,255,0.14), rgba(255,79,216,0.11)),
+    rgba(7,10,18,0.98);
+  box-shadow: 0 18px 54px rgba(0,0,0,0.48), 0 0 22px rgba(111,247,255,0.18);
   font-size: 12px;
+  font-weight: 650;
   line-height: 1.45;
-  text-transform: none;
-  letter-spacing: 0;
   white-space: normal;
+  pointer-events: none;
   opacity: 0;
   transform: translateY(4px);
-  pointer-events: none;
-  transition: opacity 140ms ease, transform 140ms ease;
+  transition: opacity 120ms ease, transform 120ms ease;
 }
-.explain:hover::after,
-.explain:focus::after {
+.jh-tooltip.is-visible {
   opacity: 1;
   transform: translateY(0);
 }
-.metric .explain {
-  color: var(--muted);
-}
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .triad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.split > *, .triad > *, .detail-grid > * { min-width: 0; }
 .ring-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: start; }
 .gauge-card {
   width: 170px;
@@ -410,23 +408,27 @@ main {
   hyphens: none;
 }
 table {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 840px;
   max-width: none;
-  border-collapse: collapse;
-  table-layout: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
   overflow: hidden;
 }
 th, td {
-  min-width: 76px;
-  max-width: 360px;
+  min-width: 0;
+  max-width: none;
   padding: 10px 11px;
   border-bottom: 1px solid rgba(126,247,255,0.12);
   text-align: left;
   vertical-align: top;
+  overflow: hidden;
+  text-overflow: ellipsis;
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
+  white-space: nowrap;
 }
 th {
   color: var(--muted);
@@ -436,17 +438,78 @@ th {
   white-space: nowrap;
 }
 td:first-child, th:first-child {
-  min-width: 160px;
+  width: 18%;
+}
+td:last-child {
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 tr:hover td { background: rgba(111,247,255,0.035); }
 .muted { color: var(--muted); }
 code {
+  display: inline-block;
+  max-width: 100%;
   color: #d8fcff;
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
+  line-height: 1.35;
+  vertical-align: bottom;
+  overflow: hidden;
+  text-overflow: ellipsis;
   overflow-wrap: normal;
   word-break: normal;
   white-space: nowrap;
+}
+.muted,
+.help-text,
+.panel-kicker,
+.finding,
+.analysis-banner,
+.section-overview-summary,
+.heuristic-card,
+.table-metric,
+.reference-block {
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
+}
+.cell-stack {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.score-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.035);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.score-note.sev-high { color: var(--bad); border-color: rgba(255,91,124,0.46); }
+.score-note.sev-medium { color: var(--warn); border-color: rgba(255,209,102,0.46); }
+.score-note.sev-ok { color: var(--ok); border-color: rgba(98,255,168,0.36); }
+.report-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin: 14px 0 2px;
+}
+.guide-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(126,247,255,0.14);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+}
+.guide-card strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--cyan);
 }
 .bar, .chart-track, .delta-track {
   height: 10px;
@@ -574,6 +637,16 @@ details.log-card summary::-webkit-details-marker { display: none; }
 .log-body { max-height: 72vh; overflow: auto; padding: 0 18px 18px; border-top: 1px solid var(--line); }
 .summary-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .mono-block { overflow-wrap: break-word; word-break: normal; }
+.fold-body .split,
+.fold-body .triad,
+.log-body .split,
+.log-body .triad {
+  grid-template-columns: 1fr;
+}
+.panel .split:has(table),
+.panel .triad:has(table) {
+  grid-template-columns: 1fr;
+}
 .compare-pair-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -684,7 +757,7 @@ details.log-card summary::-webkit-details-marker { display: none; }
 }
 .influence-node-table {
   width: 100%;
-  min-width: 0;
+  min-width: 1120px;
   table-layout: fixed;
 }
 .influence-node-table th:nth-child(1),
@@ -719,10 +792,7 @@ details.log-card summary::-webkit-details-marker { display: none; }
   min-width: 0;
   max-width: none;
 }
-.influence-node-table td:nth-child(1) code {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
+.influence-node-table td:nth-child(1) code { max-width: 100%; }
 .influence-edge-table {
   min-width: 980px;
 }
@@ -774,6 +844,74 @@ details.log-card summary::-webkit-details-marker { display: none; }
   .compare-values { grid-template-columns: 1fr; }
   h1 { font-size: clamp(32px, 9vw, 40px); line-height: 1; }
 }
+`
+
+const reportJS = `
+(() => {
+  document.querySelectorAll('code').forEach((node) => {
+    const text = node.textContent.trim();
+    if (text && !node.title) node.title = text;
+  });
+
+  const tooltip = document.createElement('div');
+  tooltip.className = 'jh-tooltip';
+  document.body.appendChild(tooltip);
+  let activeTarget = null;
+
+  const placeTooltip = (target) => {
+    const text = target.dataset.tip || target.getAttribute('aria-label') || target.title || '';
+    if (!text) return;
+    tooltip.textContent = text;
+    tooltip.classList.add('is-visible');
+    const rect = target.getBoundingClientRect();
+    const tipRect = tooltip.getBoundingClientRect();
+    let left = rect.left;
+    if (left + tipRect.width > window.innerWidth - 12) {
+      left = window.innerWidth - tipRect.width - 12;
+    }
+    left = Math.max(12, left);
+    let top = rect.top - tipRect.height - 10;
+    if (top < 12) {
+      top = rect.bottom + 10;
+    }
+    if (top + tipRect.height > window.innerHeight - 12) {
+      top = Math.max(12, window.innerHeight - tipRect.height - 12);
+    }
+    tooltip.style.left = left + 'px';
+    tooltip.style.top = top + 'px';
+  };
+
+  const showTooltip = (target) => {
+    activeTarget = target;
+    placeTooltip(target);
+  };
+
+  const hideTooltip = () => {
+    activeTarget = null;
+    tooltip.classList.remove('is-visible');
+  };
+
+  document.addEventListener('pointerover', (event) => {
+    const target = event.target.closest('[data-tip]');
+    if (target) showTooltip(target);
+  });
+  document.addEventListener('pointermove', () => {
+    if (activeTarget) placeTooltip(activeTarget);
+  });
+  document.addEventListener('pointerout', (event) => {
+    if (activeTarget && activeTarget.contains(event.target) && !activeTarget.contains(event.relatedTarget)) {
+      hideTooltip();
+    }
+  });
+  document.addEventListener('focusin', (event) => {
+    const target = event.target.closest('[data-tip]');
+    if (target) showTooltip(target);
+  });
+  document.addEventListener('focusout', hideTooltip);
+  window.addEventListener('scroll', () => {
+    if (activeTarget) placeTooltip(activeTarget);
+  }, { passive: true });
+})();
 `
 
 const mathCSS = `
@@ -885,11 +1023,17 @@ const mathCSS = `
   stroke-linejoin: round;
   filter: drop-shadow(0 0 7px rgba(98,255,168,0.45));
 }
-.timeline-table th, .timeline-table td { white-space: nowrap; }
 .timeline-table {
-  display: block;
+  min-width: 980px;
+  display: table;
   overflow-x: auto;
 }
+.timeline-table th, .timeline-table td { white-space: nowrap; }
+.timeline-table td:last-child {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.timeline-table td:last-child code { white-space: nowrap; }
 .method-reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -1143,6 +1287,8 @@ const mathCSS = `
   gap: 10px;
 }
 .heuristic-card {
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-left: 4px solid var(--ok);
   border-radius: 8px;
@@ -1152,6 +1298,7 @@ const mathCSS = `
 .heuristic-card.sev-high { border-left-color: var(--bad); }
 .heuristic-card.sev-medium { border-left-color: var(--warn); }
 .heuristic-card strong { display: block; margin-bottom: 4px; }
+.heuristic-card .muted { overflow-wrap: break-word; }
 .reference-block {
   margin: 12px 0;
   padding: 11px;
@@ -1240,6 +1387,11 @@ const mathInspectTemplate = `<!doctype html>
         <div class="source-list">{{range .Math.SourcePaths}}<code>{{.}}</code>{{else}}<span class="muted">Исходные логи не указаны.</span>{{end}}</div>
       </div>
     </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать оценки</strong>Числа вроде 28.04 или 4.86 — не абсолютная “оценка приложения”, а приоритет расследования внутри текущего прогона. Больше обычно важнее, если речь о задержках, памяти, подтормаживаниях или сетевых циклах.</div>
+      <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
+      <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
+    </div>
     <h3>Атрибуция флоу и причин</h3>
     <table class="timeline-table">
       <tr><th>Экран / флоу / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
@@ -1268,7 +1420,7 @@ const mathInspectTemplate = `<!doctype html>
     <h3>Граф влияния кода</h3>
     <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
     <table class="timeline-table">
-      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
       {{range topInfluenceNodes .Math.Summary.Influence 8}}
       <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
       {{end}}
@@ -1371,7 +1523,7 @@ const mathInspectTemplate = `<!doctype html>
         {{if eq .ID "change-points"}}
         <h3>Сдвиги сигналов</h3>
         <table class="timeline-table">
-          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>Оценка</th><th>Контекст</th><th>Рекомендация</th></tr>
+          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>{{tip "Оценка" (scoreHelp "change")}}</th><th>Контекст</th><th>Рекомендация</th></tr>
           {{range $math.ChangePoints}}
           <tr>
             <td>{{.Signal}}</td><td>{{printf "%.1fs" (seconds .TimeMS)}}</td><td>{{.Direction}}</td>
@@ -1404,7 +1556,7 @@ const mathInspectTemplate = `<!doctype html>
         {{if eq .ID "network-loops"}}
         <h3>Кандидаты циклов</h3>
         <table class="timeline-table">
-          <tr><th>Маршрут</th><th>Источник</th><th>Период</th><th>Доверие</th><th>Выгорание</th><th>Окно</th><th>Паттерн</th><th>Вероятная причина</th><th>Путь</th></tr>
+          <tr><th>Маршрут</th><th>Источник</th><th>Период</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>{{tip "Выгорание" (scoreHelp "network_burn")}}</th><th>Окно</th><th>Паттерн</th><th>Вероятная причина</th><th>Путь</th></tr>
           {{range $math.NetworkLoops}}
           <tr>
             <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
@@ -1423,16 +1575,17 @@ const mathInspectTemplate = `<!doctype html>
         {{if eq .ID "integral"}}
         <h3>Площади под сигналами</h3>
         <table class="timeline-table">
-          <tr><th>Оценка</th><th>Значение</th><th>Формула</th><th>Объяснение</th><th>Вывод</th></tr>
+          <tr><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>Значение</th><th>Критерии</th><th>Формула</th><th>Что измеряет</th><th>Как читать</th></tr>
           {{range $math.IntegralScores}}
           <tr>
             <td>{{.Title}}</td>
             <td><span class="section-status {{severityClass .Severity}}">{{printf "%.1f" .Value}} {{.Unit}}</span></td>
+            <td>{{integralCriteria .ID}}</td>
             <td><code>{{.Formula}}</code></td>
             <td>{{.Explanation}}</td>
-            <td>{{.Summary}}</td>
+            <td>{{integralHelp .ID}}</td>
           </tr>
-          {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для интегральных оценок.</td></tr>{{end}}
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для интегральных оценок.</td></tr>{{end}}
         </table>
         <p class="muted">Интегрирование прямоугольное: для каждого временного интервала берется значение сигнала и умножается на длительность интервала Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
         {{end}}
@@ -1475,28 +1628,28 @@ const mathInspectTemplate = `<!doctype html>
         {{causalGraphSVG $math.CausalGraph}}
         <h3>Кратчайшие объясняющие пути</h3>
         <table class="timeline-table">
-          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th><th>Доверие</th></tr>
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th></tr>
           {{range $math.CausalGraph.Paths}}
           <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
           {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути от симптомов к источникам/маршрутам не найдены.</td></tr>{{end}}
         </table>
         <h3>Вклад источников</h3>
         <table class="timeline-table">
-          <tr><th>Ранг</th><th>Источник</th><th>Оценка</th></tr>
+          <tr><th>Ранг</th><th>Источник</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th></tr>
           {{range $math.CausalGraph.OwnerScores}}
           <tr><td>{{.Rank}}</td><td><code>{{.Owner}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
           {{else}}<tr><td colspan="3" class="muted">Источники не выделены.</td></tr>{{end}}
         </table>
         <h3>Ребра графа</h3>
         <table class="timeline-table">
-          <tr><th>Из</th><th>В</th><th>Тип</th><th>Наблюдения</th><th>Вес</th><th>Доверие</th><th>Описание</th></tr>
+          <tr><th>Из</th><th>В</th><th>Тип</th><th>Наблюдения</th><th>Вес</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Описание</th></tr>
           {{range $math.CausalGraph.Edges}}
           <tr><td>{{.FromLabel}}</td><td>{{.ToLabel}}</td><td>{{causalKind .Kind}}</td><td>{{.Count}}</td><td>{{printf "%.2f" .Weight}}</td><td>{{printf "%.2f" .Confidence}}</td><td>{{.Description}}</td></tr>
           {{else}}<tr><td colspan="7" class="muted">Ребра недоступны.</td></tr>{{end}}
         </table>
         <h3>Все кратчайшие пары Floyd-Warshall</h3>
         <table class="timeline-table">
-          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th></tr>
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th></tr>
           {{range $math.CausalGraph.AllPairs}}
           <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td></tr>
           {{else}}<tr><td colspan="4" class="muted">Пути между всеми парами не рассчитаны: граф пустой или слишком большой для компактного HTML.</td></tr>{{end}}
@@ -1553,7 +1706,7 @@ const mathInspectTemplate = `<!doctype html>
   </section>
   {{end}}
 </main>
-<script>
+<script>` + reportJS + `
 (() => {
   const links = Array.from(document.querySelectorAll('.math-page .nav a'));
   const setActive = (hash) => {
@@ -1627,11 +1780,16 @@ const mathCompareTemplate = `<!doctype html>
       <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">{{tip "Проблемные окна" "Агрегированные окна причин: медленный HTTP, пауза главного потока, UI-подтормаживания, удержания или спам логами."}}</div><div class="value">{{summaryProblems .Math.Baseline.Summary}} → {{summaryProblems .Math.Candidate.Summary}}</div><div class="hint">спам {{summaryLogSpam .Math.Baseline.Summary}} → {{summaryLogSpam .Math.Candidate.Summary}}</div></div>
     </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать сравнение</strong>Положительная дельта у задержек, памяти, подтормаживаний, ошибок и спама обычно означает ухудшение кандидата. Смотрите серьезность вместе с доверием и размером выборки.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Флоу и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
+      <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
+    </div>
     {{if .Math.Candidate.Summary.Influence.Available}}
     <h3>Граф влияния кандидата</h3>
     <p class="help-text">Встроенный срез показывает верхние классы кандидата, а полный граф вынесен в отдельный HTML.</p>
     <table class="timeline-table">
-      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Причины</th></tr>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th></tr>
       {{range topInfluenceNodes .Math.Candidate.Summary.Influence 8}}
       <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td></tr>
       {{end}}
@@ -1710,7 +1868,7 @@ const mathCompareTemplate = `<!doctype html>
         <div class="category-block">
           <h4>{{.Title}}</h4>
           <table class="timeline-table">
-            <tr><th>Статус</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>Доверие</th><th>Вывод</th></tr>
+            <tr><th>Статус</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
             {{range .Items}}
             <tr>
               <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
@@ -1727,7 +1885,7 @@ const mathCompareTemplate = `<!doctype html>
         {{if eq .ID "change-points"}}
         <h3>Изменения точек изменения</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>Оценка базы</th><th>Оценка кандидата</th><th>Вывод</th></tr>
+          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>{{tip "Оценка базы" (scoreHelp "change")}}</th><th>{{tip "Оценка кандидата" (scoreHelp "change")}}</th><th>Вывод</th></tr>
           {{range $math.ChangeDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td><td>{{.Signal}}</td>
@@ -1758,7 +1916,7 @@ const mathCompareTemplate = `<!doctype html>
         {{if eq .ID "network-loops"}}
         <h3>Дельты сетевых циклов</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Маршрут</th><th>Источник</th><th>Период базы</th><th>Период кандидата</th><th>Выгорание базы</th><th>Выгорание кандидата</th><th>Δ выгорания</th><th>Δ доверия</th><th>Вывод</th></tr>
+          <tr><th>Статус</th><th>Маршрут</th><th>Источник</th><th>Период базы</th><th>Период кандидата</th><th>{{tip "Выгорание базы" (scoreHelp "network_burn")}}</th><th>{{tip "Выгорание кандидата" (scoreHelp "network_burn")}}</th><th>Δ выгорания</th><th>{{tip "Δ доверия" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
           {{range $math.NetworkLoopDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td>
@@ -1778,7 +1936,7 @@ const mathCompareTemplate = `<!doctype html>
         {{if eq .ID "integral"}}
         <h3>Дельты интегральных оценок</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Оценка</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Δ%</th><th>Формула</th><th>Вывод</th></tr>
+          <tr><th>Статус</th><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Δ%</th><th>Критерии</th><th>Формула</th><th>Вывод</th></tr>
           {{range $math.IntegralDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
@@ -1787,10 +1945,11 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
             <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
             <td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td>{{integralCriteria .ID}}</td>
             <td><code>{{.Formula}}</code></td>
             <td>{{.Summary}}</td>
           </tr>
-          {{else}}<tr><td colspan="8" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
+          {{else}}<tr><td colspan="9" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "markov"}}
@@ -1838,7 +1997,7 @@ const mathCompareTemplate = `<!doctype html>
         </table>
         <h3>Кратчайшие пути кандидата</h3>
         <table class="timeline-table">
-          <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th><th>Доверие</th></tr>
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th></tr>
           {{range $math.Candidate.CausalGraph.Paths}}
           <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
           {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути кандидата не найдены.</td></tr>{{end}}
@@ -1895,7 +2054,7 @@ const mathCompareTemplate = `<!doctype html>
   </section>
   {{end}}
 </main>
-<script>
+<script>` + reportJS + `
 (() => {
   const links = Array.from(document.querySelectorAll('.math-page .nav a'));
   const setActive = (hash) => {
@@ -1971,7 +2130,7 @@ const influenceTemplate = `<!doctype html>
       <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
     </div>
     <table class="influence-table influence-node-table">
-      <tr><th>Класс</th><th>Оценка</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
       {{range .Influence.TopNodes}}
       <tr>
         <td><code>{{.ClassName}}</code></td>
@@ -2018,7 +2177,7 @@ const influenceTemplate = `<!doctype html>
     <p class="help-text">Статический узел без доказательств выполнения означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
   </section>
 </main>
-<script>
+<script>` + reportJS + `
 (() => {
   const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
@@ -2268,6 +2427,11 @@ const inspectTemplate = `<!doctype html>
       <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{.Summary.StallMaxMS}} мс</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. RX UID" "Максимальный принятый сетевой трафик UID приложения по снимкам контекста. Помогает увидеть тяжелую сетевую активность."}}</div><div class="value">{{.Summary.TrafficRxMax}}</div><div class="hint">макс. TX {{.Summary.TrafficTxMax}}</div></div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать отчет</strong>Сначала смотрите общий статус и красные/желтые находки, затем открывайте разделы флоу, источников и граф влияния. Так проще перейти от симптома к коду.</div>
+      <div class="guide-card"><strong>Что важно</strong>Один показатель редко объясняет проблему. Ищите совпадение во времени: UI-подтормаживания, паузы главного потока, сетевые хвосты, память и спам логами.</div>
+      <div class="guide-card"><strong>Что исправлять</strong>Начинайте с источников с высоким вкладом и понятным контекстом: экран, флоу, шаг, маршрут или класс. Неочевидные пики лучше подтвердить профилировщиком.</div>
     </div>
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
@@ -2522,6 +2686,7 @@ const inspectTemplate = `<!doctype html>
     </ul>
   </section>
 </main>
+<script>` + reportJS + `</script>
 </body>
 </html>`
 
@@ -2612,6 +2777,11 @@ const compareTemplate = `<!doctype html>
         <div class="compare-delta">Флоу {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
       </div>
     </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать сравнение</strong>Рост задержек, ошибок, памяти, подтормаживаний и спама логами обычно означает ухудшение кандидата. Доверие и выборка показывают, насколько этому можно верить.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Флоу”: там видно конкретный маршрут, экран или источник, который изменился.</div>
+      <div class="guide-card"><strong>Когда эскалировать</strong>Критичные регрессии с повторяемостью, сетевые циклы или рост интегральной нагрузки лучше сразу превращать в задачу на исправление.</div>
+    </div>
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
       <div class="gauge-card"><div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
@@ -2621,7 +2791,7 @@ const compareTemplate = `<!doctype html>
     {{if .Comparison.Candidate.Influence.Available}}
     <h3>Граф влияния кандидата</h3>
     <table>
-      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Причины</th></tr>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Причины</th></tr>
       {{range topInfluenceNodes .Comparison.Candidate.Influence 6}}
       <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{join .Reasons ", "}}</td></tr>
       {{end}}
@@ -2639,7 +2809,7 @@ const compareTemplate = `<!doctype html>
       <h3>{{.Title}}</h3>
       <p class="help-text">{{.Detail}}</p>
       <table class="compare-table">
-        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>Доверие</th><th>Выборка</th><th>Интервал</th></tr>
+        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th><th>Интервал</th></tr>
         {{range .Items}}
         <tr>
           <td class="metric-name">{{tip (deltaLabel .Name) (deltaHelp .Name)}}</td>
@@ -2658,7 +2828,7 @@ const compareTemplate = `<!doctype html>
     {{end}}
     <h3>Худшие регрессии</h3>
     <table>
-      <tr><th>Метрика</th><th>Серьезность</th><th>Регрессия</th><th>Доверие</th><th>Выборка</th></tr>
+      <tr><th>Метрика</th><th>Серьезность</th><th>Регрессия</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th></tr>
       {{range problemDeltas .Comparison.Deltas}}
       <tr><td>{{deltaLabel .Name}}</td><td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td><td>{{deltaChange .Change}}</td><td>{{confidenceLabel .Confidence}}</td><td>{{.SampleSize}}</td></tr>
       {{else}}<tr><td colspan="5" class="muted">Регрессий высокой или средней серьезности не найдено.</td></tr>{{end}}
@@ -2852,5 +3022,6 @@ const compareTemplate = `<!doctype html>
     </ul>
   </section>
 </main>
+<script>` + reportJS + `</script>
 </body>
 </html>`

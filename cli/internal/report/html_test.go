@@ -63,13 +63,13 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Вызовы выполнения", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -81,19 +81,19 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Где изменилось", "Сравнение флоу и причин", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -218,6 +218,19 @@ func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
 		Sections: []mathanalysis.MathSection{
 			{ID: "quality", Title: "Качество данных", Status: "ok", Summary: "Сводка качества данных."},
 			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас детектора сетевых циклов."},
+			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Каркас интегральных оценок."},
+		},
+		IntegralScores: []mathanalysis.IntegralScore{
+			{
+				ID:          "latency_pain_area",
+				Title:       "Площадь сетевой задержки",
+				Formula:     "Σ max(0, HTTP p95 - 300ms) * Δt",
+				Explanation: "Интегрирует хвост задержки выше порога.",
+				Unit:        "ms*с",
+				Value:       620,
+				Severity:    "medium",
+				Summary:     "Площадь сетевой задержки: 620 ms*с.",
+			},
 		},
 	}
 }
@@ -237,6 +250,21 @@ func sampleCompareMathReport(comparison analyze.Comparison, summary analyze.Summ
 		Sections: []mathanalysis.MathSection{
 			{ID: "quality", Title: "Качество сравнения", Status: "ok", Summary: "Сводка качества сравнения."},
 			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас compare-детектора сетевых циклов."},
+			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Каркас интегральных дельт."},
+		},
+		IntegralDeltas: []mathanalysis.IntegralDelta{
+			{
+				ID:             "latency_pain_area",
+				Title:          "Площадь сетевой задержки",
+				Formula:        "Σ max(0, HTTP p95 - 300ms) * Δt",
+				Unit:           "ms*с",
+				BaselineValue:  100,
+				CandidateValue: 620,
+				Delta:          520,
+				DeltaPct:       520,
+				Severity:       "medium",
+				Summary:        "Площадь сетевой задержки выросла.",
+			},
 		},
 	}
 }

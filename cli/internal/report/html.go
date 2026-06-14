@@ -190,21 +190,23 @@ func execute(path, source string, data any) error {
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
-		"humanDuration": humanDuration,
-		"tip":           tooltipHTML,
-		"metricHelp":    metricHelp,
-		"memoryHelp":    memoryMetricHelp,
-		"integralHelp":  integralHelp,
-		"ownerKind":     ownerKindLabel,
-		"problemKind":   problemKindLabel,
-		"deltaGroups":   compareDeltaGroups,
-		"deltaLabel":    compareDeltaLabel,
-		"deltaHelp":     compareDeltaHelp,
-		"deltaValue":    compareDeltaValue,
-		"deltaChange":   compareDeltaChange,
-		"deltaInterval": compareDeltaInterval,
-		"problemDeltas": problemDeltas,
-		"severityLabel": severityLabel,
+		"humanDuration":    humanDuration,
+		"tip":              tooltipHTML,
+		"metricHelp":       metricHelp,
+		"memoryHelp":       memoryMetricHelp,
+		"integralHelp":     integralHelp,
+		"scoreHelp":        scoreHelp,
+		"integralCriteria": integralCriteria,
+		"ownerKind":        ownerKindLabel,
+		"problemKind":      problemKindLabel,
+		"deltaGroups":      compareDeltaGroups,
+		"deltaLabel":       compareDeltaLabel,
+		"deltaHelp":        compareDeltaHelp,
+		"deltaValue":       compareDeltaValue,
+		"deltaChange":      compareDeltaChange,
+		"deltaInterval":    compareDeltaInterval,
+		"problemDeltas":    problemDeltas,
+		"severityLabel":    severityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
@@ -571,6 +573,42 @@ func integralHelp(id string) string {
 		return "Накопленная доля подтормаживающих UI-кадров во времени. Длинная умеренная просадка может быть важнее короткого пика."
 	default:
 		return "Интегральная оценка: значение сигнала умножается на длительность временного интервала и суммируется по сценарию."
+	}
+}
+
+func integralCriteria(id string) string {
+	switch id {
+	case "jank_pressure_area":
+		return "Норма до 60 %*с, предупреждение от 60, критично от 180. Больше означает, что медленные кадры длились дольше или занимали большую долю времени."
+	case "latency_pain_area":
+		return "Норма до 500 мс*с, предупреждение от 500, критично от 2000. Считается только хвост HTTP p95 выше инженерного порога 300 мс."
+	case "network_failure_burn":
+		return "Норма до 5 усл.ед., предупреждение от 5, критично от 20. Больше означает повторяемые сетевые ошибки, DNS/connect всплески или цикл запросов."
+	case "memory_pressure_area":
+		return "Норма до 128 MB*с, предупреждение от 128, критично от 1024. Больше означает длительный рост PSS или долгий период низкой свободной RAM."
+	case "recovery_debt":
+		return "Норма до 8 с^2, предупреждение от 8, критично от 30. Больше означает, что плохие окна шли сериями и пользователь дольше оставался в деградации."
+	default:
+		return "Чем выше значение, тем выше накопленная нагрузка. Порог для этой оценки не задан."
+	}
+}
+
+func scoreHelp(kind string) string {
+	switch kind {
+	case "change":
+		return "Оценка точки изменения показывает, насколько сильный сдвиг сигнала виден на фоне локального шума. Примерно до 3 — слабый сигнал, 3–6 — заметный, выше 6 — сильный. Для задержек, памяти и подтормаживаний больше обычно хуже."
+	case "influence":
+		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей флоу. 0–5 низкий риск, 5–15 средний, выше 15 высокий."
+	case "network_burn":
+		return "Выгорание — условная накопленная стоимость сетевого цикла: учитывает периодичность, повторяемость, ошибки, DNS/connect и длительность окна. До 5 обычно терпимо, 5–20 требует проверки, выше 20 критично для сценария."
+	case "confidence":
+		return "Доверие лежит в диапазоне 0..1. Чем ближе к 1, тем лучше сигнал подтвержден повторяемостью, количеством наблюдений или совпадением нескольких методов."
+	case "path_cost":
+		return "Стоимость пути в графе причинности: меньше значит более прямое и сильное объяснение. 1.00 — очень прямая связь, значения выше 2 обычно слабее и требуют подтверждения."
+	case "integral":
+		return "Интегральная оценка — площадь симптома по времени: значение сигнала умножается на длительность окна и суммируется. Она помогает отличить короткий пик от долгой деградации."
+	default:
+		return "Оценка — относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и связанный контекст."
 	}
 }
 
