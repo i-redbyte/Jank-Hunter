@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without leading v, for example 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    name: Build and publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            raw_version="${{ inputs.version }}"
+          else
+            raw_version="${GITHUB_REF_NAME}"
+          fi
+
+          version="${raw_version#v}"
+          tag="v${version}"
+
+          if [[ -z "$version" || "$version" == "$raw_version" && "$raw_version" == v ]]; then
+            echo "Release version is empty" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release version: $version"
+          echo "Release tag: $tag"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Build macOS CLI archives
+        working-directory: cli
+        run: |
+          make release \
+            VERSION="${{ steps.meta.outputs.version }}" \
+            PLATFORMS="darwin/amd64 darwin/arm64"
+
+      - name: Build Android SDK Maven repository
+        working-directory: android
+        run: |
+          rm -rf "$HOME/.m2/repository/io/jankhunter"
+          ./gradlew detekt test publishToMavenLocal \
+            -PjankHunterVersion="${{ steps.meta.outputs.version }}" \
+            --no-daemon \
+            --stacktrace
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.meta.outputs.version }}"
+          group_path="io/jankhunter"
+          maven_root="$HOME/.m2/repository"
+          sdk_dir="$RUNNER_TEMP/jankhunter-android-sdk-$version"
+          release_dir="$GITHUB_WORKSPACE/release"
+
+          rm -rf "$sdk_dir" "$release_dir"
+          mkdir -p "$sdk_dir/maven/io" "$release_dir"
+
+          cp -R "$maven_root/$group_path" "$sdk_dir/maven/io/"
+
+          cat > "$sdk_dir/README.txt" <<EOF
+          Jank Hunter Android SDK $version
+
+          В архиве лежит локальный Maven-репозиторий с артефактами:
+          - io.jankhunter:jankhunter-runtime:$version
+          - io.jankhunter:jankhunter-okhttp3:$version
+          - io.jankhunter:jankhunter-gradle-plugin:$version
+          - io.jankhunter.android:io.jankhunter.android.gradle.plugin:$version
+
+          Добавьте путь к папке maven в pluginManagement и dependencyResolutionManagement,
+          затем подключите Gradle plugin id io.jankhunter.android и debugImplementation-зависимости.
+          EOF
+
+          (cd "$RUNNER_TEMP" && zip -qr "$release_dir/jankhunter-android-sdk-$version-maven.zip" "jankhunter-android-sdk-$version")
+          cp cli/dist/*.tar.gz "$release_dir/"
+
+          (
+            cd "$release_dir"
+            sha256sum ./* > checksums.txt
+          )
+
+          cat > "$release_dir/RELEASE_NOTES.md" <<EOF
+          # Jank Hunter $version
+
+          В релиз вложены:
+
+          - Android SDK как локальный Maven-репозиторий: \`jankhunter-android-sdk-$version-maven.zip\`;
+          - CLI для macOS Intel: \`jankhunter_${version}_darwin_amd64.tar.gz\`;
+          - CLI для macOS Apple Silicon: \`jankhunter_${version}_darwin_arm64.tar.gz\`;
+          - SHA-256 суммы: \`checksums.txt\`.
+
+          Android SDK архив содержит runtime, OkHttp-интеграцию, Gradle plugin и маркер Gradle-плагина.
+          EOF
+
+          ls -lh "$release_dir"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          title="Jank Hunter ${{ steps.meta.outputs.version }}"
+          assets=(
+            release/jankhunter-android-sdk-${{ steps.meta.outputs.version }}-maven.zip
+            release/jankhunter_${{ steps.meta.outputs.version }}_darwin_amd64.tar.gz
+            release/jankhunter_${{ steps.meta.outputs.version }}_darwin_arm64.tar.gz
+            release/checksums.txt
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" --title "$title" --notes-file release/RELEASE_NOTES.md
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes-file release/RELEASE_NOTES.md
+          fi

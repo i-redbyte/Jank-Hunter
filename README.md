@@ -169,6 +169,24 @@ CLI строит два основных режима:
 
 Рядом с основным HTML создается математический отчет: `report-math.html` или `compare-math.html`. Он открывается из зеленой кнопки `λ Анализ`. Если есть owner/flow-сигналы, CLI также создает `report-influence.html` или `compare-influence.html` с графом влияния кода.
 
+## Релизы
+
+GitHub Actions собирает релиз по тегу `v*` или вручную из workflow `Release`.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+В GitHub Release попадают:
+
+- `jankhunter-android-sdk-<version>-maven.zip` - локальный Maven-репозиторий с runtime, OkHttp-интеграцией, Gradle plugin и plugin marker;
+- `jankhunter_<version>_darwin_amd64.tar.gz` - CLI для macOS Intel;
+- `jankhunter_<version>_darwin_arm64.tar.gz` - CLI для macOS Apple Silicon;
+- `checksums.txt` - SHA-256 суммы релизных файлов.
+
+Для ручного релиза откройте `Actions -> Release -> Run workflow` и укажите версию без `v`, например `0.1.0`.
+
 ## Проверки
 
 CLI:
