@@ -357,7 +357,13 @@ main {
 }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .triad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.ring-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+.ring-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: start; }
+.gauge-card {
+  width: 170px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
 .gauge {
   --value: 0;
   --color: var(--cyan);
@@ -383,7 +389,26 @@ main {
   border: 1px solid var(--line);
 }
 .gauge-core strong { display: block; font-size: 23px; line-height: 1; }
-.gauge-core span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+.gauge-core span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.gauge-label {
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
 table {
   width: max-content;
   min-width: 100%;
@@ -2074,9 +2099,9 @@ const inspectTemplate = `<!doctype html>
     </div>
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      <div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI-подтормаживания</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP ошибки</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>средний FPS</span></div></div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI-подтормаживания</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
     </div>
     {{if .Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
@@ -2417,9 +2442,9 @@ const compareTemplate = `<!doctype html>
     </div>
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
-      <div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>подтормаживания кандидата</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>ошибки кандидата</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS кандидата</span></div></div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">Ошибки кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">FPS кандидата</div></div>
     </div>
     {{if .Comparison.Candidate.Influence.Available}}
     <h3>Граф влияния кандидата</h3>
