@@ -41,8 +41,8 @@ Required:
 Common options:
   --jankhunter PATH             Path to Jank Hunter clone. Defaults to current directory when it
                                 contains cli/ and android/, otherwise to this script's repository.
-  --module :app                 Android module to patch. Can be repeated. If omitted, an
-                                application module is detected with :app preferred over test modules.
+  --module :app                 Android module to patch. Can be repeated. If omitted, the script
+                                ranks application modules and prefers the real launchable app.
   --include-package com.myapp   ASM include package. Can be repeated.
   --include-packages a,b,c      Comma-separated ASM include packages.
   --exclude-package com.myapp.generated
@@ -319,28 +319,19 @@ module_build_file() {
 }
 
 detect_app_module() {
-  local file rel dir module base total=0
-  local preferred=()
-  local regular=()
-  local suspicious=()
+  local file rel dir module total=0
+  local candidates=""
   while IFS= read -r file; do
-    if grep -Eq 'com\.android\.application' "$file"; then
-      rel="${file#$TARGET_ROOT/}"
-      dir="$(dirname "$rel")"
-      if [[ "$dir" == "." ]]; then
-        module=":"
-      else
-        module=":${dir//\//:}"
-      fi
+    rel="${file#$TARGET_ROOT/}"
+    dir="$(dirname "$rel")"
+    if [[ "$dir" == "." ]]; then
+      module=":"
+    else
+      module=":${dir//\//:}"
+    fi
+    if is_android_application_candidate "$module" "$file"; then
       total=$((total + 1))
-      base="${module##*:}"
-      if [[ "$module" == ":app" || "$base" == "app" ]]; then
-        preferred+=("$module")
-      elif is_suspicious_app_module "$module"; then
-        suspicious+=("$module")
-      else
-        regular+=("$module")
-      fi
+      candidates+="$(score_app_module "$module" "$file")"$'\n'
     fi
   done < <(
     find "$TARGET_ROOT" \
@@ -348,24 +339,142 @@ detect_app_module() {
       -o \( -name build.gradle.kts -o -name build.gradle \) -type f -print | sort
   )
 
+  [[ "$total" -gt 0 ]] || fail "could not detect Android application module. Pass --module :app"
+
+  local ranked top_line selected score rest reason
+  ranked="$(printf '%s' "$candidates" | sed '/^[[:space:]]*$/d' | sort -t '|' -k1,1nr -k2,2)"
+  top_line="$(printf '%s\n' "$ranked" | head -n 1)"
+  score="${top_line%%|*}"
+  rest="${top_line#*|}"
+  selected="${rest%%|*}"
+  reason="${rest#*|}"
+
   if [[ "$total" -gt 1 ]]; then
-    printf '[jankhunter-integrate] application module candidates: %s %s %s\n' "${preferred[*]-}" "${regular[*]-}" "${suspicious[*]-}" >&2
-    printf '[jankhunter-integrate] use --module :your-app if auto-detection picks the wrong module\n' >&2
+    printf '[jankhunter-integrate] application module candidates ranked by auto-detection:\n' >&2
+    while IFS='|' read -r candidate_score candidate_module candidate_reason; do
+      [[ -n "$candidate_module" ]] || continue
+      printf '[jankhunter-integrate]   %s score=%s %s\n' "$candidate_module" "$candidate_score" "$candidate_reason" >&2
+    done <<< "$ranked"
   fi
-  if [[ "${#preferred[@]}" -gt 0 ]]; then
-    printf '%s\n' "${preferred[0]}"
-    return
+  if is_suspicious_app_module "$selected"; then
+    printf '[jankhunter-integrate] warning: selected module looks test-like: %s\n' "$selected" >&2
   fi
-  if [[ "${#regular[@]}" -gt 0 ]]; then
-    printf '%s\n' "${regular[0]}"
-    return
+  printf '[jankhunter-integrate] selected Android application module: %s score=%s %s\n' "$selected" "$score" "$reason" >&2
+  printf '%s\n' "$selected"
+}
+
+is_android_application_candidate() {
+  local module="$1"
+  local build_file="$2"
+  local module_dir
+  module_dir="$(dirname "$build_file")"
+  if has_android_application_plugin_marker "$build_file"; then
+    if grep -Eq 'android[[:space:]]*\{' "$build_file" || ! grep -Eq 'apply[[:space:]]+false' "$build_file"; then
+      return 0
+    fi
   fi
-  if [[ "${#suspicious[@]}" -gt 0 ]]; then
-    printf '[jankhunter-integrate] warning: only test-like application modules were found\n' >&2
-    printf '%s\n' "${suspicious[0]}"
-    return
+  if grep -Eq 'applicationId[[:space:]]*(=|[[:space:]])' "$build_file"; then
+    return 0
   fi
-  fail "could not detect com.android.application module. Pass --module :app"
+  if module_has_launcher_manifest "$module_dir"; then
+    return 0
+  fi
+  if module_name_is_app_like "$module" && grep -Eq 'android[[:space:]]*\{' "$build_file"; then
+    return 0
+  fi
+  return 1
+}
+
+module_name_is_app_like() {
+  local module="$1"
+  local lower base
+  lower="$(printf '%s' "$module" | tr '[:upper:]' '[:lower:]')"
+  base="${lower##*:}"
+  case "$lower" in
+    :app|*:app|*:application|*:mobile|*:main|*:prod|*:production|*:client|*:shell|*:android|*:phone|*app)
+      return 0
+      ;;
+  esac
+  case "$base" in
+    app|application|mobile|main|prod|production|client|shell|android|phone|*-app|android-*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+has_android_application_plugin_marker() {
+  local build_file="$1"
+  if grep -Eq 'com\.android\.application|android[._-]?application|androidApplication|android_application' "$build_file"; then
+    return 0
+  fi
+  return 1
+}
+
+score_app_module() {
+  local module="$1"
+  local build_file="$2"
+  local module_dir
+  module_dir="$(dirname "$build_file")"
+  local base="${module##*:}"
+  local lower
+  lower="$(printf '%s' "$module" | tr '[:upper:]' '[:lower:]')"
+  local score=0
+  local reason=""
+
+  if module_has_launcher_manifest "$module_dir"; then
+    score=$((score + 140))
+    reason+=", launcher"
+  fi
+  if grep -Eq 'com\.android\.application' "$build_file"; then
+    score=$((score + 45))
+    reason+=", android application plugin"
+  elif has_android_application_plugin_marker "$build_file"; then
+    score=$((score + 30))
+    reason+=", android application alias"
+  fi
+  if grep -Eq 'applicationId[[:space:]]*(=|[[:space:]])' "$build_file"; then
+    score=$((score + 55))
+    reason+=", applicationId"
+  fi
+  if [[ "$module" == ":app" || "$base" == "app" ]]; then
+    score=$((score + 90))
+    reason+=", app name"
+  elif module_name_is_app_like "$module"; then
+    score=$((score + 35))
+    reason+=", app-like name"
+  else
+    score=$((score + 10))
+    reason+=", regular app module"
+  fi
+  if find "$module_dir" -maxdepth 3 -name google-services.json -type f -print -quit | grep -q .; then
+    score=$((score + 20))
+    reason+=", google-services"
+  fi
+  if grep -Eq 'release[[:space:]]*\{' "$build_file"; then
+    score=$((score + 10))
+    reason+=", release buildType"
+  fi
+  if is_suspicious_app_module "$module"; then
+    score=$((score - 180))
+    reason+=", test/benchmark/sample penalty"
+  fi
+
+  reason="${reason#, }"
+  printf '%s|%s|(%s)\n' "$score" "$module" "$reason"
+}
+
+module_has_launcher_manifest() {
+  local module_dir="$1"
+  local manifest
+  while IFS= read -r manifest; do
+    if grep -q 'android.intent.action.MAIN' "$manifest" && grep -q 'android.intent.category.LAUNCHER' "$manifest"; then
+      return 0
+    fi
+  done < <(
+    find "$module_dir/src" -path '*/AndroidManifest.xml' -type f 2>/dev/null | sort
+  )
+  return 1
 }
 
 is_suspicious_app_module() {
@@ -373,7 +482,7 @@ is_suspicious_app_module() {
   local lower
   lower="$(printf '%s' "$module" | tr '[:upper:]' '[:lower:]')"
   case "$lower" in
-    *test*|*tests*|*benchmark*|*benchmarks*|*fixture*|*fixtures*|*uitest*|*androidtest*)
+    *test*|*tests*|*benchmark*|*benchmarks*|*fixture*|*fixtures*|*uitest*|*androidtest*|*sample*|*demo*|*playground*|*sandbox*)
       return 0
       ;;
   esac
