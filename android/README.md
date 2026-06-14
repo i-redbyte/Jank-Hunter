@@ -1,10 +1,8 @@
 # Jank Hunter Android
 
-Android-часть Jank Hunter нужна, чтобы приложение само писало компактный `.jhlog` с performance-сигналами. Потом этот файл разбирает CLI и делает HTML-отчет.
+Android-часть Jank Hunter нужна, чтобы приложение само писало компактный `.jhlog` с сигналами производительности. Потом этот файл разбирает CLI и делает HTML-отчет.
 
-SDK ничего не отправляет в сеть. Логи лежат внутри sandbox приложения, пока вы сами их не заберете.
-
-Можно говорить “Jank Hunter SDK”, когда речь про Android-интеграцию: runtime, OkHttp-интеграцию и Gradle plugin. Если речь про весь набор целиком, точнее писать “Jank Hunter Android SDK + CLI”, потому что отчеты строит отдельная консольная утилита.
+Jank Hunter ничего не отправляет в сеть. Логи лежат внутри песочницы приложения, пока вы сами их не заберете.
 
 ## Как подключить
 
@@ -17,7 +15,7 @@ dependencies {
 }
 ```
 
-Runtime стартует через `ContentProvider`. Если приложение debuggable, SDK включится сам, даже без правок `Application.onCreate()`.
+Runtime стартует через `ContentProvider`. Если приложение debuggable, Jank Hunter включится сам, даже без правок `Application.onCreate()`.
 
 Минимальная manifest-настройка:
 
@@ -118,7 +116,7 @@ context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 /data/data/com.myapp/files/jankhunter/session-remote-1781410978146-1.jhlog
 ```
 
-Runtime ротирует файлы по `max_log_bytes` и держит общий бюджет папки по `max_log_directory_bytes`. Если приложение много пишет, старые сегменты удаляются, активный файл не трогается. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
+Каждый сегмент `.jhlog` ограничен `max_log_bytes`. Когда суммарный размер папки становится больше `max_log_directory_bytes`, Jank Hunter удаляет самые старые завершенные сегменты и продолжает писать в текущий файл. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
 
 Путь можно поменять:
 
@@ -165,7 +163,7 @@ jankhunter compare \
 
 ## Как отдать лог через FileProvider
 
-Если неудобно использовать `adb run-as`, можно добавить FileProvider в само приложение и расшарить `.jhlog` через системный share sheet. Это уже код host-приложения, не обязательная часть SDK.
+Если неудобно использовать `adb run-as`, можно добавить FileProvider в само приложение и расшарить `.jhlog` через системный share sheet. Это уже код host-приложения, не обязательная часть Jank Hunter.
 
 Зависимость, если AndroidX Core еще нет:
 
@@ -240,6 +238,10 @@ startActivity(Intent.createChooser(intent, "Share Jank Hunter log"))
 Высокочастотные события пишутся агрегатами. Это важно для больших приложений и особенно для проектов, где ANR-watch реагирует даже на задержки около 2 мс.
 
 ## OkHttp
+
+Если включен ASM-перехватчик `okhttp = true`, отдельный вызов `eventListenerFactory(...)` обычно не нужен: plugin перехватывает `OkHttpClient.Builder.build()`, читает текущую фабрику слушателей, оборачивает ее слушателем Jank Hunter и возвращает тот же builder. Если фабрика уже была обернута, повторной обертки не будет.
+
+Ручное подключение остается полезным, когда ASM выключен или вы хотите явно контролировать конкретный клиент:
 
 Подключение:
 
@@ -366,13 +368,13 @@ jankHunter {
 
 `includeWholeApplication = true` берет Android `namespace` variant и добавляет его в include-list. Это удобно, когда в проекте 200+ модулей и руками перечислять пакеты бессмысленно.
 
-`asmProgressLog = true` печатает build-time прогресс ASM в одну строку: сколько классов просканировано, сколько обработано, примерная ETA и последний класс. По умолчанию выключено.
+`asmProgressLog = true` печатает build-time прогресс ASM в одну строку: сколько классов просканировано, сколько обработано, примерная ETA и последний класс. При ручной настройке по умолчанию выключено. Скрипт автоподключения включает прогресс в сгенерированном конфиге; если это мешает, запускайте его с `--no-asm-progress-log`.
 
-Что умеют hooks:
+Что умеют ASM-перехватчики:
 
-- `okhttp` - подмешивает `JankHunterEventListenerFactory`;
+- `okhttp` - подмешивает `JankHunterEventListenerFactory`: перехватывает явный `eventListenerFactory(...)` и финальный `OkHttpClient.Builder.build()`;
 - `webSockets` - оборачивает `WebSocketListener`;
-- `handlers` - оборачивает основные `Handler.post*`;
+- `handlers` - оборачивает `Handler.post`, `postAtFrontOfQueue`, `postDelayed` и `postAtTime`; runtime ведет слабый реестр оберток, поэтому `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks` продолжают работать с исходным `Runnable`;
 - `executors` - оборачивает `Runnable`/`Callable` в `Executor`/`ExecutorService`;
 - `coroutines` - оборачивает основные `kotlinx.coroutines` builders без compile-time зависимости runtime от coroutines;
 - `flowInteractions` - оборачивает `View.setOnClickListener` и создает flow для клика, если явный flow еще не задан;

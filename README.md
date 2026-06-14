@@ -6,7 +6,7 @@ Jank Hunter помогает поймать то, что обычно сложн
 
 ## Что внутри
 
-- `android/` - runtime SDK, OkHttp-интеграция, Gradle plugin с ASM-инструментацией и sample app.
+- `android/` - Android runtime, OkHttp-интеграция, Gradle plugin с ASM-инструментацией и sample app.
 - `cli/` - утилита `jankhunter`, которая читает `.jhlog`, строит inspect/compare отчеты, экспортирует JSONL и умеет работать в CI.
 
 Отчеты автономные: обычный HTML с CSS внутри. Их можно открыть локально, приложить к задаче, положить в CI artifacts или отправить команде.
@@ -66,7 +66,7 @@ dependencies {
 }
 ```
 
-Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`.
+Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`. ASM умеет автоматически подключать слушатель OkHttp при `OkHttpClient.Builder.build()` и оборачивать `Handler.post*` так, чтобы `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks` продолжали работать с исходным `Runnable`.
 
 Подробности по Android лежат в [android/README.md](android/README.md), по CLI - в [cli/README.md](cli/README.md).
 
@@ -112,6 +112,7 @@ scripts/integrate-android-project.sh ~/work/MyApp --android-build-tools 35.0.0
 - Пользовательские counters/gauges.
 - Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.
 - Граф влияния кода: классы, флоу, проблемные окна, лог-спам, runtime-вызовы и build-time ASM-связи между классами.
+- ASM-интеграция: OkHttp/WebSocket, Handler, Executor, builders корутин, click-flow, log spam и статический class graph.
 
 CLI строит два основных режима:
 
@@ -133,7 +134,7 @@ Android:
 
 ```bash
 cd android
-./gradlew detekt :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
 Gradle plugin как внешний потребитель через локальный Maven:
