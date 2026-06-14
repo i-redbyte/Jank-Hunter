@@ -291,12 +291,14 @@ object JankHunter {
     @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         if (runnable == null || runnable is JankHunterRunnable) return runnable
+        if (hasAdditionalTypeContract(runnable, Runnable::class.java)) return runnable
         return JankHunterRunnable(runnable, ownerName)
     }
 
     @JvmStatic
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
         if (callable == null || callable is JankHunterCallable<*>) return callable
+        if (hasAdditionalTypeContract(callable, Callable::class.java)) return callable
         return JankHunterCallable(callable, ownerName)
     }
 
@@ -785,6 +787,19 @@ object JankHunter {
             ?.takeIf { it.isNotBlank() }
             ?.replace(Regex("\\s+"), "_")
             ?: "unknown"
+    }
+
+    private fun hasAdditionalTypeContract(value: Any, plainType: Class<*>): Boolean {
+        val valueType = value.javaClass
+        if (valueType.interfaces.any { it != plainType }) return true
+
+        var current = valueType.superclass
+        while (current != null && current != Any::class.java) {
+            if (plainType.isAssignableFrom(current)) return true
+            current = current.superclass
+        }
+
+        return false
     }
 
     private fun appIdentity(context: Context): AppIdentity {
