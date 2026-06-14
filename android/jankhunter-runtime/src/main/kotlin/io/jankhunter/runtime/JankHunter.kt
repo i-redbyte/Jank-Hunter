@@ -112,6 +112,7 @@ object JankHunter {
             device.hardware,
             device.board,
             device.product,
+            device.rooted,
         )
 
         if (providedConfig.autoStartCollectors()) {

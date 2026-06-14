@@ -293,6 +293,7 @@ func decodePayload(payload []byte, event *Event) error {
 			BuildID:      values[1],
 			DeviceID:     values[2],
 			SDKInt:       values[3],
+			DeviceRooted: event.Flags&uint64(FlagDeviceRooted) != 0,
 		}
 		if len(values) > 4 {
 			session.ProcessID = values[4]

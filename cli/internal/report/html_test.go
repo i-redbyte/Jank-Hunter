@@ -32,6 +32,7 @@ func TestWriteReports(t *testing.T) {
 			Items: []analyze.InfoItem{
 				{Label: "Battery", Value: "82%", Detail: "charging · 32.0 C"},
 				{Label: "Network", Value: "wifi", Detail: "validated yes · metered no · VPN no"},
+				{Label: "Рут-доступ", Value: "нет", Detail: "признаки рут-доступа не найдены"},
 			},
 		},
 		Routes: []analyze.RouteStats{
@@ -50,7 +51,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Сетевые маршруты", "Эвристический итог", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Эвристический итог", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {

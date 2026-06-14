@@ -69,6 +69,9 @@ func compactEventFlags(event Event) uint64 {
 			flags |= uint64(FlagNetworkVPN)
 		}
 	}
+	if event.Type == EventSession && event.Session != nil && event.Session.DeviceRooted {
+		flags |= uint64(FlagDeviceRooted)
+	}
 	return flags
 }
 

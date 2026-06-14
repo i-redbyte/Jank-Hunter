@@ -49,6 +49,7 @@ class BinaryLogWriter(
         hardware: String?,
         board: String?,
         product: String?,
+        deviceRooted: Boolean,
     ) {
         val appVersionId = idFor(DICT_APP_VERSION, appVersion)
         val buildId = idFor(DICT_BUILD, build)
@@ -78,7 +79,9 @@ class BinaryLogWriter(
             .uvarint(hardwareId)
             .uvarint(boardId)
             .uvarint(productId)
-        record(EVENT_SESSION, FLAG_APP_FOREGROUND, payload)
+        var flags = FLAG_APP_FOREGROUND
+        if (deviceRooted) flags = flags or FLAG_DEVICE_ROOTED
+        record(EVENT_SESSION, flags, payload)
     }
 
     @Synchronized
@@ -391,6 +394,7 @@ class BinaryLogWriter(
         const val FLAG_CONTEXT_LOW_MEMORY: Long = 1L shl 6
         const val FLAG_NETWORK_VALIDATED: Long = 1L shl 7
         const val FLAG_NETWORK_VPN: Long = 1L shl 8
+        const val FLAG_DEVICE_ROOTED: Long = 1L shl 9
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 

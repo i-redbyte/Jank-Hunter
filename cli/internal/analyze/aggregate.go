@@ -134,6 +134,8 @@ type collector struct {
 	currentHardware   string
 	currentBoard      string
 	currentProduct    string
+	currentRootKnown  bool
+	currentRooted     bool
 }
 
 type namedDuration struct {
@@ -224,6 +226,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentHardware = jhlog.Resolve(dict, event.Session.HardwareID)
 		c.currentBoard = jhlog.Resolve(dict, event.Session.BoardID)
 		c.currentProduct = jhlog.Resolve(dict, event.Session.ProductID)
+		c.currentRootKnown = true
+		c.currentRooted = event.Session.DeviceRooted
+		c.summary.DeviceRootKnown = true
+		c.summary.DeviceRooted = event.Session.DeviceRooted
 		c.appVersions[c.currentAppVersion]++
 		c.builds[c.currentBuild]++
 		c.devices[c.currentDevice]++
@@ -359,13 +365,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 
 func (c *collector) markCohort() {
 	c.cohortSamples[fmt.Sprintf(
-		"app=%s build=%s sdk=%s device=%s process=%s network=%s",
+		"app=%s build=%s sdk=%s device=%s process=%s network=%s root=%s",
 		c.currentAppVersion,
 		c.currentBuild,
 		c.currentSDK,
 		c.currentDevice,
 		c.currentProcess,
 		c.currentNetwork,
+		rootCohortValue(c.currentRootKnown, c.currentRooted),
 	)]++
 }
 
@@ -563,6 +570,7 @@ func (c *collector) runEnvironment(summary Summary) RunEnvironment {
 			{Label: "Free RAM", Value: formatDataSize(summary.AvailMemoryLastKB), Detail: memoryDetail(summary)},
 			{Label: "Free storage", Value: formatDataSize(summary.FreeStorageKB), Detail: storageDetail(summary)},
 			{Label: "Android", Value: osValue(c.currentAndroid, c.currentSDK), Detail: androidDetail(c.currentSDK, c.currentPatch)},
+			{Label: "Рут-доступ", Value: rootValue(summary.DeviceRootKnown, summary.DeviceRooted), Detail: rootDetail(summary.DeviceRootKnown, summary.DeviceRooted)},
 			{Label: "CPU ABI", Value: abi, Detail: fmt.Sprintf("supported %s", abis)},
 			{Label: "Hardware", Value: hardware, Detail: fmt.Sprintf("board %s · product %s", board, product)},
 			{Label: "Brand", Value: manufacturer, Detail: fmt.Sprintf("brand %s", brand)},
@@ -1027,4 +1035,34 @@ func yesNo(value bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func rootCohortValue(known bool, rooted bool) string {
+	if !known {
+		return "unknown"
+	}
+	if rooted {
+		return "yes"
+	}
+	return "no"
+}
+
+func rootValue(known bool, rooted bool) string {
+	if !known {
+		return "неизвестно"
+	}
+	if rooted {
+		return "да"
+	}
+	return "нет"
+}
+
+func rootDetail(known bool, rooted bool) string {
+	if !known {
+		return "нет сигнала о рут-доступе в метаданных сессии"
+	}
+	if rooted {
+		return "обнаружены признаки рут-доступа"
+	}
+	return "признаки рут-доступа не найдены"
 }

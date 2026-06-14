@@ -50,6 +50,9 @@ func TestWriteSampleReadFile(t *testing.T) {
 	if session.PrimaryABIID != 72 || session.SecurityPatchID != 71 {
 		t.Fatalf("expected extended session device metadata, got %+v", session)
 	}
+	if session.DeviceRooted {
+		t.Fatalf("sample session should be non-rooted: %+v", session)
+	}
 	if context == nil {
 		t.Fatalf("expected context event")
 	}
@@ -58,6 +61,45 @@ func TestWriteSampleReadFile(t *testing.T) {
 	}
 	if context.TotalMemoryKB == 0 || context.FreeStorageKB == 0 {
 		t.Fatalf("expected extended context memory/storage metadata: %+v", context)
+	}
+}
+
+func TestSessionRootedUsesFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-rooted.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{
+		Type:   EventSession,
+		TimeMS: 1,
+		Session: &SessionEvent{
+			AppVersionID: 1,
+			BuildID:      2,
+			DeviceID:     3,
+			SDKInt:       35,
+			DeviceRooted: true,
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(log.Events) != 1 || log.Events[0].Session == nil {
+		t.Fatalf("expected one session event, got %#v", log.Events)
+	}
+	event := log.Events[0]
+	if event.Flags&uint64(FlagDeviceRooted) == 0 {
+		t.Fatalf("expected rooted flag in %08b", event.Flags)
+	}
+	if !event.Session.DeviceRooted {
+		t.Fatalf("session rooted flag did not round-trip: %+v", event.Session)
 	}
 }
 

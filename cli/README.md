@@ -276,7 +276,7 @@ codec 1: BCD decimal string, digit_count + packed BCD bytes
 codec 2: BCD ISO date YYYY-MM-DD, fixed 4 BCD bytes для 8 цифр
 ```
 
-BCD применяется только если итоговая запись меньше UTF-8. Поэтому имена классов, routes, owners и stack hints остаются читаемым UTF-8 в словаре, а длинные числовые строки и даты могут занимать меньше места. Context booleans (`low_memory`, `network_metered`, `network_validated`, `network_vpn`) лежат в event flags/bitmask, не дублируясь в payload.
+BCD применяется только если итоговая запись меньше UTF-8. Поэтому имена классов, routes, owners и stack hints остаются читаемым UTF-8 в словаре, а длинные числовые строки и даты могут занимать меньше места. Context booleans (`low_memory`, `network_metered`, `network_validated`, `network_vpn`) и session boolean `device_rooted` лежат в event flags/bitmask, не дублируясь в payload.
 
 ## Owner map
 
@@ -362,9 +362,10 @@ low-memory flag
 network metered/validated/VPN
 uid rx/tx bytes
 free/total app data storage
+device rooted flag from session metadata
 ```
 
-В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети. В верхней части HTML есть отдельная `Device Context` плашка с моделью устройства, Android/API/security patch, CPU ABI, батареей, сетью/VPN, свободной RAM и свободным storage на момент context sample.
+В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети. В верхней части HTML есть отдельная `Device Context` плашка с моделью устройства, Android/API/security patch, CPU ABI, признаком рут-доступа, батареей, сетью/VPN, свободной RAM и свободным storage на момент context sample.
 
 ## Cohorts
 

@@ -97,6 +97,8 @@ type Summary struct {
 	NetworkMetered    bool
 	NetworkValidated  bool
 	NetworkVPN        bool
+	DeviceRootKnown   bool
+	DeviceRooted      bool
 	MemoryMaxKB       uint64
 	Retained          uint64
 	Environment       RunEnvironment

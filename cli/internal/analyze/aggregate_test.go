@@ -97,12 +97,27 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if summary.Environment.Title != "Pixel 8 / API 35" {
 		t.Fatalf("unexpected environment title: %+v", summary.Environment)
 	}
+	if !summary.DeviceRootKnown || summary.DeviceRooted {
+		t.Fatalf("unexpected root state: known=%v rooted=%v", summary.DeviceRootKnown, summary.DeviceRooted)
+	}
+	if !environmentHasItem(summary.Environment, "Рут-доступ", "нет") {
+		t.Fatalf("root state is missing from environment: %+v", summary.Environment)
+	}
 	if summary.TotalMemoryKB == 0 || summary.FreeStorageKB == 0 {
 		t.Fatalf("expected memory/storage context: %+v", summary)
 	}
 	if len(summary.Cohorts) == 0 {
 		t.Fatalf("expected cohorts")
 	}
+}
+
+func environmentHasItem(environment RunEnvironment, label string, value string) bool {
+	for _, item := range environment.Items {
+		if item.Label == label && item.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestInspectFilesAppliesRouteFilter(t *testing.T) {

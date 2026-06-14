@@ -47,6 +47,7 @@ class AsyncLogWriter private constructor(
         hardware: String?,
         board: String?,
         product: String?,
+        deviceRooted: Boolean,
     ) {
         bootstrap = SessionBootstrap(
             appVersion,
@@ -63,6 +64,7 @@ class AsyncLogWriter private constructor(
             hardware,
             board,
             product,
+            deviceRooted,
         )
         offer {
             it.session(
@@ -80,6 +82,7 @@ class AsyncLogWriter private constructor(
                 hardware,
                 board,
                 product,
+                deviceRooted,
             )
         }
     }
@@ -277,6 +280,7 @@ class AsyncLogWriter private constructor(
         val hardware: String?,
         val board: String?,
         val product: String?,
+        val deviceRooted: Boolean,
     ) {
         fun write(writer: BinaryLogWriter) {
             writer.session(
@@ -294,6 +298,7 @@ class AsyncLogWriter private constructor(
                 hardware,
                 board,
                 product,
+                deviceRooted,
             )
         }
     }

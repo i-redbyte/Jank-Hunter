@@ -31,6 +31,7 @@ const (
 	FlagContextLowMemory     Flag = 1 << 6
 	FlagNetworkValidated     Flag = 1 << 7
 	FlagNetworkVPN           Flag = 1 << 8
+	FlagDeviceRooted         Flag = 1 << 9
 )
 
 type DictKind uint64
@@ -111,6 +112,7 @@ type SessionEvent struct {
 	HardwareID       uint64 `json:"hardware_id,omitempty"`
 	BoardID          uint64 `json:"board_id,omitempty"`
 	ProductID        uint64 `json:"product_id,omitempty"`
+	DeviceRooted     bool   `json:"device_rooted,omitempty"`
 }
 
 type ContextEvent struct {

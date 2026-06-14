@@ -1600,7 +1600,7 @@ const inspectTemplate = `<!doctype html>
 
   <section id="context" class="panel">
     <div class="panel-head">
-      <div><h2>Контекст прогона</h2><div class="panel-kicker">Когорты помогают честно сравнивать версию приложения, сборку, SDK, устройство, процесс и сеть.</div></div>
+      <div><h2>Контекст прогона</h2><div class="panel-kicker">Когорты помогают честно сравнивать версию приложения, сборку, SDK, устройство, процесс, сеть и рут-доступ.</div></div>
     </div>
     <details class="fold">
       <summary>Детали контекста</summary>
@@ -1817,7 +1817,7 @@ const compareTemplate = `<!doctype html>
 
   <section id="cohorts" class="panel">
     <div class="panel-head">
-      <div><h2>Разбивка по когортам</h2><div class="panel-kicker">Используйте это, чтобы проверить честность сравнения по версии приложения, SDK, устройству, процессу и сети.</div></div>
+      <div><h2>Разбивка по когортам</h2><div class="panel-kicker">Используйте это, чтобы проверить честность сравнения по версии приложения, SDK, устройству, процессу, сети и рут-доступу.</div></div>
     </div>
     <details class="fold">
       <summary>Детали когорт</summary>

@@ -72,7 +72,7 @@ jankHunter {
 
 ## Что уже собирает runtime
 
-- старт сессии: версия приложения, build, модель устройства, SDK API, Android release/security patch, ABI, manufacturer/brand/hardware/board/product;
+- старт сессии: версия приложения, build, модель устройства, SDK API, Android release/security patch, ABI, manufacturer/brand/hardware/board/product, признак рут-доступа;
 - process name в session metadata;
 - текущий screen по `ActivityLifecycleCallbacks`;
 - system context: battery, available/total memory, low-memory flag, network kind, metered/validated/VPN state, UID traffic, free/total app data storage;
@@ -441,7 +441,7 @@ context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
 
 По умолчанию writer ротирует сегмент при `io.jankhunter.max_log_bytes=5242880` (5 МБ) и хранит последние сегменты текущего процесса в пределах `io.jankhunter.max_log_directory_bytes=26214400` (25 МБ). Это кольцевое хранение: при превышении общего бюджета самые старые `session-<process>-*.jhlog` удаляются, а активный файл записи не трогается. Если общий бюджет меньше одного сегмента, текущий сегмент может временно быть больше бюджета; для больших приложений держите directory budget как минимум в несколько раз больше segment budget.
 
-Словарь `.jhlog` тоже ограничен: по умолчанию максимум `io.jankhunter.max_dictionary_entries=8192` новых строковых значений и `io.jankhunter.max_dictionary_value_bytes=256` байт на значение. Если приложение генерирует слишком много уникальных owner/route/metric имен, writer схлопывает новые значения в `__jh_dictionary_overflow__`; приложение продолжает работать, а лог остается компактным. Обычный текст хранится как `length + UTF-8` только в dictionary records, длинные числовые строки и даты `YYYY-MM-DD` могут BCD-паковаться, а события дальше пишут только короткие ID. Context boolean-сигналы (`lowMemory`, `networkMetered`, `networkValidated`, `networkVpn`) лежат в flags/bitmask события, а не в payload.
+Словарь `.jhlog` тоже ограничен: по умолчанию максимум `io.jankhunter.max_dictionary_entries=8192` новых строковых значений и `io.jankhunter.max_dictionary_value_bytes=256` байт на значение. Если приложение генерирует слишком много уникальных owner/route/metric имен, writer схлопывает новые значения в `__jh_dictionary_overflow__`; приложение продолжает работать, а лог остается компактным. Обычный текст хранится как `length + UTF-8` только в dictionary records, длинные числовые строки и даты `YYYY-MM-DD` могут BCD-паковаться, а события дальше пишут только короткие ID. Context boolean-сигналы (`lowMemory`, `networkMetered`, `networkValidated`, `networkVpn`) и session-сигнал рут-доступа лежат в flags/bitmask события, а не в payload.
 
 Путь можно изменить через:
 

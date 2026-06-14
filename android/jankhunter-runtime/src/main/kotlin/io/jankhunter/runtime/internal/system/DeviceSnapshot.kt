@@ -13,6 +13,7 @@ internal data class DeviceSnapshot(
     val hardware: String,
     val board: String,
     val product: String,
+    val rooted: Boolean,
 )
 
 internal object DeviceSnapshots {
@@ -48,6 +49,7 @@ internal object DeviceSnapshots {
             hardware = Build.HARDWARE.clean(),
             board = Build.BOARD.clean(),
             product = Build.PRODUCT.clean(),
+            rooted = RootDetector.isLikelyRooted(),
         )
     }
 
