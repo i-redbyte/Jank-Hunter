@@ -290,7 +290,14 @@ main {
   font-weight: 850;
   letter-spacing: 0;
 }
-.metric .hint { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.metric .hint {
+  margin-top: 4px;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .influence-grid {
   align-items: stretch;
 }
@@ -305,8 +312,10 @@ main {
 }
 .influence-tile-body {
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-right: 6px;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(111,247,255,0.34) rgba(255,255,255,0.04);
 }
@@ -327,10 +336,13 @@ main {
   border-radius: 6px;
 }
 .influence-tile-body code {
-  max-width: none;
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .influence-tile-reasons {
+  line-height: 1.35;
   overflow-wrap: break-word;
   word-break: normal;
 }
@@ -371,9 +383,12 @@ main {
 }
 .jh-tooltip {
   position: fixed;
-  z-index: 9999;
+  z-index: 2147483647;
   width: max-content;
-  max-width: min(440px, calc(100vw - 24px));
+  min-width: min(220px, calc(100vw - 24px));
+  max-width: min(520px, calc(100vw - 24px));
+  max-height: min(42vh, 360px);
+  overflow: auto;
   padding: 10px 12px;
   border: 1px solid rgba(111,247,255,0.45);
   border-radius: 8px;
@@ -386,14 +401,16 @@ main {
   font-weight: 650;
   line-height: 1.45;
   white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
   pointer-events: none;
   opacity: 0;
-  transform: translateY(4px);
+  transform: translate3d(0, 4px, 0);
   transition: opacity 120ms ease, transform 120ms ease;
 }
 .jh-tooltip.is-visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate3d(0, 0, 0);
 }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .triad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -902,32 +919,63 @@ const reportJS = `
   document.querySelectorAll('code').forEach((node) => {
     const text = node.textContent.trim();
     if (text && !node.title) node.title = text;
+    if (text && node.closest('.metric') && !node.dataset.tip) {
+      node.dataset.tip = text;
+    }
   });
 
   const tooltip = document.createElement('div');
   tooltip.className = 'jh-tooltip';
   document.body.appendChild(tooltip);
   let activeTarget = null;
+  const gap = 10;
+  const margin = 12;
+
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+  const viewportBox = () => {
+    const viewport = window.visualViewport;
+    if (!viewport) {
+      return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    }
+    return {
+      left: viewport.offsetLeft,
+      top: viewport.offsetTop,
+      right: viewport.offsetLeft + viewport.width,
+      bottom: viewport.offsetTop + viewport.height,
+    };
+  };
 
   const placeTooltip = (target) => {
     const text = target.dataset.tip || target.getAttribute('aria-label') || target.title || '';
-    if (!text) return;
+    if (!text) {
+      hideTooltip();
+      return;
+    }
     tooltip.textContent = text;
     tooltip.classList.add('is-visible');
     const rect = target.getBoundingClientRect();
     const tipRect = tooltip.getBoundingClientRect();
-    let left = rect.left;
-    if (left + tipRect.width > window.innerWidth - 12) {
-      left = window.innerWidth - tipRect.width - 12;
-    }
-    left = Math.max(12, left);
-    let top = rect.top - tipRect.height - 10;
-    if (top < 12) {
-      top = rect.bottom + 10;
-    }
-    if (top + tipRect.height > window.innerHeight - 12) {
-      top = Math.max(12, window.innerHeight - tipRect.height - 12);
-    }
+    const viewport = viewportBox();
+    const centerLeft = rect.left + rect.width / 2 - tipRect.width / 2;
+    const middleTop = rect.top + rect.height / 2 - tipRect.height / 2;
+    const placements = [
+      { name: 'top', left: centerLeft, top: rect.top - tipRect.height - gap },
+      { name: 'right', left: rect.right + gap, top: middleTop },
+      { name: 'bottom', left: centerLeft, top: rect.bottom + gap },
+      { name: 'left', left: rect.left - tipRect.width - gap, top: middleTop },
+    ];
+    const fits = (placement) =>
+      placement.left >= viewport.left + margin &&
+      placement.top >= viewport.top + margin &&
+      placement.left + tipRect.width <= viewport.right - margin &&
+      placement.top + tipRect.height <= viewport.bottom - margin;
+    const placement = placements.find(fits) || placements[2];
+    const maxLeft = Math.max(viewport.left + margin, viewport.right - tipRect.width - margin);
+    const maxTop = Math.max(viewport.top + margin, viewport.bottom - tipRect.height - margin);
+    const left = clamp(placement.left, viewport.left + margin, maxLeft);
+    const top = clamp(placement.top, viewport.top + margin, maxTop);
+    tooltip.dataset.placement = placement.name;
     tooltip.style.left = left + 'px';
     tooltip.style.top = top + 'px';
   };
@@ -962,6 +1010,14 @@ const reportJS = `
   window.addEventListener('scroll', () => {
     if (activeTarget) placeTooltip(activeTarget);
   }, { passive: true });
+  window.addEventListener('resize', () => {
+    if (activeTarget) placeTooltip(activeTarget);
+  }, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      if (activeTarget) placeTooltip(activeTarget);
+    }, { passive: true });
+  }
 })();
 `
 

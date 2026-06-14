@@ -65,6 +65,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "overflow-wrap: anywhere", "viewportBox", "node.closest('.metric')")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
