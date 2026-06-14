@@ -14,6 +14,8 @@ MAVEN_DIR=".jankhunter/maven"
 CLI_DIR=".jankhunter/bin"
 ANDROID_SDK_DIR=""
 RESOLVED_ANDROID_SDK_DIR=""
+ANDROID_BUILD_TOOLS_VERSION=""
+RESOLVED_ANDROID_BUILD_TOOLS_VERSION=""
 DRY_RUN=0
 SKIP_PUBLISH=0
 SKIP_CLI_BUILD=0
@@ -55,6 +57,8 @@ Common options:
   --cli-dir PATH                Target directory for CLI binary. Default: .jankhunter/bin.
   --android-sdk PATH            Android SDK path for target local.properties. If omitted, the
                                 script uses ANDROID_HOME, ANDROID_SDK_ROOT, or ~/Library/Android/sdk.
+  --android-build-tools VERSION Android Build Tools version to use while publishing Jank Hunter.
+                                If omitted, the highest installed SDK build-tools version is used.
   --verify                      Run target Gradle task resolution after patching.
   --dry-run                     Print what would be changed without writing files.
 
@@ -170,6 +174,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --android-sdk|--android-sdk-dir)
       ANDROID_SDK_DIR="${2:-}"
+      shift 2
+      ;;
+    --android-build-tools|--android-build-tools-version)
+      ANDROID_BUILD_TOOLS_VERSION="${2:-}"
       shift 2
       ;;
     --verify)
@@ -758,6 +766,29 @@ resolve_android_sdk_dir() {
   printf '%s\n' "$RESOLVED_ANDROID_SDK_DIR"
 }
 
+resolve_android_build_tools_version() {
+  if [[ -n "$RESOLVED_ANDROID_BUILD_TOOLS_VERSION" ]]; then
+    printf '%s\n' "$RESOLVED_ANDROID_BUILD_TOOLS_VERSION"
+    return 0
+  fi
+
+  local sdk_dir
+  sdk_dir="$(resolve_android_sdk_dir "$(local_properties_sdk_dir || true)")"
+  local build_tools_dir="$sdk_dir/build-tools"
+  local version=""
+  [[ -d "$build_tools_dir" ]] || fail "Android Build Tools directory was not found: $build_tools_dir. Install Build Tools with: \"$sdk_dir/cmdline-tools/latest/bin/sdkmanager\" \"build-tools;36.0.0\""
+  if [[ -n "$ANDROID_BUILD_TOOLS_VERSION" ]]; then
+    version="$ANDROID_BUILD_TOOLS_VERSION"
+    [[ -d "$build_tools_dir/$version" ]] || fail "Android Build Tools $version was not found in $build_tools_dir. Install it with: \"$sdk_dir/cmdline-tools/latest/bin/sdkmanager\" \"build-tools;$version\""
+  else
+    version="$(find "$build_tools_dir" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sed -nE '/^[0-9]+([.][0-9]+){1,2}$/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+    [[ -n "$version" ]] || fail "Android Build Tools were not found in $build_tools_dir. Install them with: \"$sdk_dir/cmdline-tools/latest/bin/sdkmanager\" \"build-tools;36.0.0\""
+  fi
+
+  RESOLVED_ANDROID_BUILD_TOOLS_VERSION="$version"
+  printf '%s\n' "$RESOLVED_ANDROID_BUILD_TOOLS_VERSION"
+}
+
 write_sdk_local_properties() {
   local file="$1"
   local label="$2"
@@ -800,7 +831,9 @@ write_sdk_local_properties() {
 
 prepare_jankhunter_android_sdk() {
   resolve_android_sdk_dir "$(local_properties_sdk_dir || true)" >/dev/null
+  resolve_android_build_tools_version >/dev/null
   log "Android SDK: $RESOLVED_ANDROID_SDK_DIR"
+  log "Android Build Tools: $RESOLVED_ANDROID_BUILD_TOOLS_VERSION"
 }
 
 patch_target_local_properties() {
@@ -922,11 +955,11 @@ publish_artifacts_if_needed() {
   log "publishing Jank Hunter artifacts into $MAVEN_REPO_ABS"
   run_cmd mkdir -p "$MAVEN_REPO_ABS"
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew publishToMavenLocal -Dmaven.repo.local="$MAVEN_REPO_ABS" --no-daemon --stacktrace); then
-      fail "failed to publish Jank Hunter artifacts. Android SDK: $RESOLVED_ANDROID_SDK_DIR"
+    if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew publishToMavenLocal -PjankHunterBuildToolsVersion="$RESOLVED_ANDROID_BUILD_TOOLS_VERSION" -Dmaven.repo.local="$MAVEN_REPO_ABS" --no-daemon --stacktrace); then
+      fail "failed to publish Jank Hunter artifacts. Android SDK: $RESOLVED_ANDROID_SDK_DIR, Build Tools: $RESOLVED_ANDROID_BUILD_TOOLS_VERSION"
     fi
   else
-    log "would run: cd $JANKHUNTER_ROOT/android && ANDROID_HOME=$RESOLVED_ANDROID_SDK_DIR ./gradlew publishToMavenLocal -Dmaven.repo.local=$MAVEN_REPO_ABS --no-daemon --stacktrace"
+    log "would run: cd $JANKHUNTER_ROOT/android && ANDROID_HOME=$RESOLVED_ANDROID_SDK_DIR ./gradlew publishToMavenLocal -PjankHunterBuildToolsVersion=$RESOLVED_ANDROID_BUILD_TOOLS_VERSION -Dmaven.repo.local=$MAVEN_REPO_ABS --no-daemon --stacktrace"
   fi
 }
 

@@ -9,6 +9,9 @@ plugins {
 android {
     namespace = "io.jankhunter.okhttp3"
     compileSdk = 35
+    providers.gradleProperty("jankHunterBuildToolsVersion").orNull?.let {
+        buildToolsVersion = it
+    }
 
     defaultConfig {
         minSdk = 23

@@ -7,6 +7,9 @@ val jankHunterVersion = providers.gradleProperty("jankHunterVersion").get()
 android {
     namespace = "io.jankhunter.sample"
     compileSdk = 35
+    providers.gradleProperty("jankHunterBuildToolsVersion").orNull?.let {
+        buildToolsVersion = it
+    }
 
     defaultConfig {
         applicationId = "io.jankhunter.sample"

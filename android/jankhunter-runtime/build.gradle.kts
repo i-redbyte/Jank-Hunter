@@ -10,6 +10,9 @@ plugins {
 android {
     namespace = "io.jankhunter.runtime"
     compileSdk = 35
+    providers.gradleProperty("jankHunterBuildToolsVersion").orNull?.let {
+        buildToolsVersion = it
+    }
 
     defaultConfig {
         minSdk = 23
