@@ -32,11 +32,11 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	if summary.EventCount < 50 {
 		builder.add("medium", text(lang, "Low sample size", "Малая выборка"), text(lang,
 			"The run is small, so the verdict is useful as smoke-test feedback but not as a release-quality performance conclusion.",
-			"Прогон небольшой, поэтому вердикт полезен как smoke-test, но не как финальное performance-заключение для релиза.",
+			"Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное перфоманс-заключение для релиза.",
 		))
 		builder.recommend(text(lang,
 			"Collect several runs per scenario before trusting small deltas.",
-			"Собери несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.",
+			"Соберите несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.",
 		))
 	}
 
@@ -52,7 +52,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		))
 		builder.recommend(text(lang,
 			"Inspect failing routes first: transport failures and 5xx responses often dominate user-visible performance.",
-			"Сначала проверь проблемные маршруты: transport failures и 5xx часто сильнее всего портят пользовательский сценарий.",
+			"Сначала проверьте проблемные маршруты: транспортные ошибки и ответы 5xx часто сильнее всего портят пользовательский сценарий.",
 		))
 	case summary.HTTPCount > 0 && summary.HTTPFailed > 0:
 		builder.add("medium", text(lang, "HTTP failures detected", "Обнаружены HTTP-ошибки"), textf(lang,
@@ -73,7 +73,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		))
 		builder.recommend(text(lang,
 			"Sort routes by p95 and TTFB; separate backend latency from DNS/connect/TLS overhead.",
-			"Отсортируй маршруты по p95 и TTFB; отдели backend latency от DNS/connect/TLS overhead.",
+			"Отсортируйте маршруты по p95 и TTFB; отделите задержку сервера от накладных расходов DNS, соединения и TLS.",
 		))
 	case summary.HTTPP95MS >= 700:
 		builder.add("medium", text(lang, "HTTP p95 needs attention", "HTTP p95 требует внимания"), textf(lang,
@@ -85,19 +85,19 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 
 	switch {
 	case summary.UIJankPct >= 10:
-		builder.add("high", text(lang, "UI jank is high", "Высокий UI jank"), textf(lang,
+		builder.add("high", text(lang, "UI jank is high", "Высокая доля подтормаживаний UI"), textf(lang,
 			"Janky frames are %.2f%% of all observed frames.",
-			"Janky frames составляют %.2f%% всех наблюдаемых кадров.",
+			"Медленные UI-кадры составляют %.2f%% всех наблюдаемых кадров.",
 			summary.UIJankPct,
 		))
 		builder.recommend(text(lang,
 			"Open the UI and owner sections together: main-thread stalls often explain the worst screen jank.",
-			"Смотри UI и owner-секции вместе: main-thread stalls часто объясняют худший jank на экранах.",
+			"Смотрите разделы UI и источников вместе: паузы главного потока часто объясняют худшие подтормаживания экранов.",
 		))
 	case summary.UIJankPct >= 3:
-		builder.add("medium", text(lang, "UI jank is noticeable", "UI jank заметен"), textf(lang,
+		builder.add("medium", text(lang, "UI jank is noticeable", "Подтормаживания UI заметны"), textf(lang,
 			"Janky frames are %.2f%% of all observed frames.",
-			"Janky frames составляют %.2f%% всех наблюдаемых кадров.",
+			"Медленные UI-кадры составляют %.2f%% всех наблюдаемых кадров.",
 			summary.UIJankPct,
 		))
 	}
@@ -119,32 +119,32 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 
 	switch {
 	case summary.StallMaxMS >= 1000:
-		builder.add("high", text(lang, "Long main-thread stall", "Длинный main-thread stall"), textf(lang,
+		builder.add("high", text(lang, "Long main-thread stall", "Длинная пауза главного потока"), textf(lang,
 			"Max observed stall is %d ms.",
-			"Максимальный stall = %d мс.",
+			"Максимальная пауза главного потока = %d мс.",
 			summary.StallMaxMS,
 		))
 		builder.recommend(text(lang,
 			"Treat stalls above one second as release blockers for the affected flow.",
-			"Stalls больше одной секунды стоит считать релизным блокером для затронутого сценария.",
+			"Паузы больше одной секунды стоит считать релизным блокером для затронутого сценария.",
 		))
 	case summary.StallMaxMS >= 250:
-		builder.add("medium", text(lang, "Main-thread stall detected", "Обнаружен main-thread stall"), textf(lang,
+		builder.add("medium", text(lang, "Main-thread stall detected", "Обнаружена пауза главного потока"), textf(lang,
 			"Max observed stall is %d ms.",
-			"Максимальный stall = %d мс.",
+			"Максимальная пауза главного потока = %d мс.",
 			summary.StallMaxMS,
 		))
 	}
 
 	if summary.LowMemoryCount > 0 {
-		builder.add("high", text(lang, "Low-memory samples present", "Есть low-memory samples"), textf(lang,
+		builder.add("high", text(lang, "Low-memory samples present", "Есть сигналы низкой памяти"), textf(lang,
 			"%d context samples reported low-memory state.",
-			"%d context samples сообщили low-memory state.",
+			"%d снимков контекста сообщили состояние низкой памяти.",
 			summary.LowMemoryCount,
 		))
 		builder.recommend(text(lang,
 			"Correlate low-memory samples with PSS growth and retained objects.",
-			"Сопоставь low-memory samples с ростом PSS и retained objects.",
+			"Сопоставьте сигналы низкой памяти с ростом PSS и удержанными объектами.",
 		))
 	}
 	if summary.Retained > 0 {
@@ -152,25 +152,25 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		if summary.Retained >= 10 {
 			severity = "high"
 		}
-		builder.add(severity, text(lang, "Retained objects detected", "Обнаружены retained objects"), textf(lang,
+		builder.add(severity, text(lang, "Retained objects detected", "Обнаружены удержанные объекты"), textf(lang,
 			"Retained object count is %d.",
-			"Количество retained objects: %d.",
+			"Количество удержанных объектов: %d.",
 			summary.Retained,
 		))
 		builder.recommend(text(lang,
 			"Inspect retained classes and age buckets; old retained objects deserve priority.",
-			"Проверь retained classes и age buckets; старые retained objects приоритетнее.",
+			"Проверьте удержанные классы и возрастные группы; старые удержанные объекты приоритетнее.",
 		))
 	}
 
 	if len(builder.findingsWithoutCoverage()) == 0 {
 		builder.add("ok", text(lang, "No serious issues detected", "Серьезных проблем не найдено"), text(lang,
 			"Heuristic thresholds did not find critical regressions or obvious runtime health problems.",
-			"Эвристические пороги не нашли критичных регрессий или явных проблем runtime health.",
+			"Эвристические пороги не нашли критичных регрессий или явных проблем состояния выполнения приложения.",
 		))
 		builder.recommend(text(lang,
 			"Use this report as a baseline and compare future runs against it.",
-			"Используй этот отчет как baseline и сравнивай с ним будущие прогоны.",
+			"Используйте этот отчет как базу и сравнивайте с ним будущие прогоны.",
 		))
 	}
 
@@ -216,21 +216,21 @@ func compareAnalysis(comparison analyze.Comparison, lang string) ReportAnalysis 
 	case high > 0:
 		builder.recommend(text(lang,
 			"Do not merge/release before investigating high-severity deltas.",
-			"Не мержить и не релизить до разбора high-severity deltas.",
+			"Не выполняйте слияние или релиз до разбора изменений высокой серьезности.",
 		))
 	case medium > 0:
 		builder.recommend(text(lang,
 			"Review medium regressions and rerun the scenario to confirm stability.",
-			"Проверь средние регрессии и перезапусти сценарий, чтобы подтвердить стабильность.",
+			"Проверьте средние регрессии и перезапустите сценарий, чтобы подтвердить стабильность.",
 		))
 	default:
 		builder.add("ok", text(lang, "No regressions detected", "Регрессии не обнаружены"), text(lang,
 			"No high or medium severity deltas were found by the current heuristic gate.",
-			"Текущий эвристический gate не нашел high или medium severity deltas.",
+			"Текущий эвристический порог не нашел изменений высокой или средней серьезности.",
 		))
 		builder.recommend(text(lang,
 			"Keep the generated report with the build artifacts for future comparison.",
-			"Сохрани отчет вместе с build artifacts для будущих сравнений.",
+			"Сохраните отчет вместе с артефактами сборки для будущих сравнений.",
 		))
 	}
 
@@ -274,20 +274,20 @@ func (b analysisBuilder) finish() ReportAnalysis {
 	status := text(b.lang, "Healthy", "Все хорошо")
 	summary := text(b.lang,
 		"No serious performance problems were detected by the current heuristic thresholds.",
-		"Текущие эвристические пороги не нашли серьезных performance-проблем.",
+		"Текущие эвристические пороги не нашли серьезных перфоманс-проблем.",
 	)
 	switch b.severity {
 	case "high":
 		status = text(b.lang, "Serious issues detected", "Есть серьезные проблемы")
 		summary = text(b.lang,
 			"The report contains high-severity signals that should be investigated before treating this run as healthy.",
-			"В отчете есть high-severity сигналы; их нужно разобрать, прежде чем считать прогон здоровым.",
+			"В отчете есть сигналы высокой серьезности; их нужно разобрать, прежде чем считать прогон здоровым.",
 		)
 	case "medium":
 		status = text(b.lang, "Needs attention", "Требует внимания")
 		summary = text(b.lang,
 			"The report contains warning-level signals. The run may be acceptable for smoke testing, but it deserves review.",
-			"В отчете есть warning-level сигналы. Для smoke-test это может быть приемлемо, но прогон стоит разобрать.",
+			"В отчете есть предупреждающие сигналы. Для дымового теста это может быть приемлемо, но прогон стоит разобрать.",
 		)
 	}
 	return ReportAnalysis{

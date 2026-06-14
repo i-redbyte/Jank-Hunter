@@ -66,15 +66,15 @@ func classifyMarkovStates(timeline []TimelineBucket, loops []NetworkLoopFinding)
 func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pssFloor uint64) (string, string) {
 	switch {
 	case bucketInsideNetworkLoop(bucket, loops):
-		return markovNetworkLoop, "бакет попадает в окно найденного сетевого цикла"
+		return markovNetworkLoop, "временный интервал попадает в окно найденного сетевого цикла"
 	case bucket.StallCount > 0:
-		return markovStalled, fmt.Sprintf("main-thread задержек: %d, максимум %d ms", bucket.StallCount, bucket.StallMaxMS)
+		return markovStalled, fmt.Sprintf("пауз главного потока: %d, максимум %d ms", bucket.StallCount, bucket.StallMaxMS)
 	case pssFloor > 0 && bucket.MemoryPSSKB >= pssFloor+memoryGrowthFloorKB:
 		return markovMemoryPressure, fmt.Sprintf("PSS выше нижней полки на %.1f MB", float64(bucket.MemoryPSSKB-pssFloor)/1024)
 	case bucket.AvailableMemoryKB > 0 && bucket.AvailableMemoryKB < lowMemoryTargetKB:
 		return markovMemoryPressure, fmt.Sprintf("свободная память ниже 256 MB: %.1f MB", float64(bucket.AvailableMemoryKB)/1024)
 	case bucket.UIFrames > 0 && jankRate(bucket.UIJankyFrames, bucket.UIFrames) >= 5:
-		return markovJanky, fmt.Sprintf("доля jank %.1f%%", jankRate(bucket.UIJankyFrames, bucket.UIFrames))
+		return markovJanky, fmt.Sprintf("доля подтормаживаний %.1f%%", jankRate(bucket.UIJankyFrames, bucket.UIFrames))
 	case bucket.HTTPFailed > 0:
 		return markovNetworkSlow, fmt.Sprintf("HTTP ошибок: %d", bucket.HTTPFailed)
 	case bucket.HTTPCount > 0 && bucket.HTTPP95DurationMS >= 500:
@@ -82,7 +82,7 @@ func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pss
 	case bucket.DNSDurationMS >= 100:
 		return markovNetworkSlow, fmt.Sprintf("DNS среднее %d ms", bucket.DNSDurationMS)
 	case bucket.ConnectDurationMS >= 150:
-		return markovNetworkSlow, fmt.Sprintf("connect среднее %d ms", bucket.ConnectDurationMS)
+		return markovNetworkSlow, fmt.Sprintf("среднее время соединения %d ms", bucket.ConnectDurationMS)
 	default:
 		return markovHealthy, "нет выраженной деградации"
 	}
@@ -218,7 +218,7 @@ func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
 	deltas := []MarkovDelta{
 		markovDeltaCount("Здоровые -> плохие состояния", "шт", float64(baseline.HealthyToBadCount), float64(candidate.HealthyToBadCount), true),
 		markovDeltaProbability("Вероятность восстановления", baseline.BadToHealthyProbability, candidate.BadToHealthyProbability, false),
-		markovDeltaCount("Ожидаемое восстановление", "бакетов", baseline.ExpectedRecoveryWindows, candidate.ExpectedRecoveryWindows, true),
+		markovDeltaCount("Ожидаемое восстановление", "интервалов", baseline.ExpectedRecoveryWindows, candidate.ExpectedRecoveryWindows, true),
 	}
 	states := markovStickyStateUnion(baseline.StickyStates, candidate.StickyStates)
 	for _, state := range states {
@@ -347,18 +347,18 @@ func markovStatus(model MarkovModel) string {
 
 func markovSummary(model MarkovModel) string {
 	if len(model.States) < 2 {
-		return "Недостаточно бакетов для матрицы переходов состояний."
+		return "Недостаточно временных интервалов для матрицы переходов состояний."
 	}
-	return fmt.Sprintf("Состояний=%d, переходов=%d, здоровые -> плохие=%d, восстановление %.1f%%, ожидание восстановления %.1f бакетов.", len(model.States), len(model.Transitions), model.HealthyToBadCount, model.BadToHealthyProbability*100, model.ExpectedRecoveryWindows)
+	return fmt.Sprintf("Состояний=%d, переходов=%d, здоровые -> плохие=%d, восстановление %.1f%%, ожидание восстановления %.1f временных интервалов.", len(model.States), len(model.Transitions), model.HealthyToBadCount, model.BadToHealthyProbability*100, model.ExpectedRecoveryWindows)
 }
 
 func markovFindings(model MarkovModel) []Finding {
 	if len(model.States) < 2 {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Недостаточно данных для Markov-модели",
+			Title:          "Недостаточно данных для марковской модели",
 			Detail:         markovSummary(model),
-			Recommendation: "Нужны хотя бы два временных бакета сценария.",
+			Recommendation: "Нужны хотя бы два временных интервала сценария.",
 		}}
 	}
 	if model.HealthyToBadCount > 0 && model.BadToHealthyProbability < 0.5 {
@@ -366,7 +366,7 @@ func markovFindings(model MarkovModel) []Finding {
 			Severity:       markovStatus(model),
 			Title:          "Слабое восстановление после плохих состояний",
 			Detail:         markovSummary(model),
-			Recommendation: "Проверь причины плохих окон: сетевые циклы, точки изменения, интегральную боль и владельцев работ.",
+			Recommendation: "Проверьте причины плохих окон: сетевые циклы, точки изменения, интегральную нагрузку и источники работ.",
 		}}
 	}
 	for _, sticky := range model.StickyStates {
@@ -375,13 +375,13 @@ func markovFindings(model MarkovModel) []Finding {
 				Severity:       markovStatus(model),
 				Title:          "Найдено липкое плохое состояние",
 				Detail:         fmt.Sprintf("%s повторяется само в себя с вероятностью %.1f%%.", MarkovStateLabel(sticky.State), sticky.Probability*100),
-				Recommendation: "Смотри соседние бакеты и owner/route контекст: липкость обычно означает повторяющуюся работу или отсутствие backoff.",
+				Recommendation: "Посмотрите соседние временные интервалы и контекст источника/маршрута: липкость обычно означает повторяющуюся работу или отсутствие backoff.",
 			}}
 		}
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Markov-модель не показывает опасных переходов",
+		Title:    "Марковская модель не показывает опасных переходов",
 		Detail:   markovSummary(model),
 	}}
 }
@@ -404,7 +404,7 @@ func compareMarkovStatus(deltas []MarkovDelta) string {
 
 func compareMarkovSummary(deltas []MarkovDelta) string {
 	if len(deltas) == 0 {
-		return "Недостаточно Markov-метрик для сравнения."
+		return "Недостаточно марковских метрик для сравнения."
 	}
 	var worse int
 	for _, delta := range deltas {
@@ -415,14 +415,14 @@ func compareMarkovSummary(deltas []MarkovDelta) string {
 	if worse == 0 {
 		return "Кандидат не ухудшил переходы между состояниями."
 	}
-	return fmt.Sprintf("Кандидат ухудшил %d Markov-метрик из %d.", worse, len(deltas))
+	return fmt.Sprintf("Кандидат ухудшил %d марковских метрик из %d.", worse, len(deltas))
 }
 
 func compareMarkovFindings(deltas []MarkovDelta) []Finding {
 	if len(deltas) == 0 {
 		return []Finding{{
 			Severity: "medium",
-			Title:    "Markov-сравнение недоступно",
+			Title:    "Марковское сравнение недоступно",
 			Detail:   compareMarkovSummary(deltas),
 		}}
 	}
@@ -432,13 +432,13 @@ func compareMarkovFindings(deltas []MarkovDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменились переходы состояний",
 				Detail:         delta.Summary,
-				Recommendation: "Сравни state sequence кандидата с таймлайном, сетевыми циклами и интегральной болью.",
+				Recommendation: "Сравните последовательность состояний кандидата с таймлайном, сетевыми циклами и интегральной нагрузкой.",
 			}}
 		}
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Регрессий Markov-переходов не найдено",
+		Title:    "Регрессий марковских переходов не найдено",
 		Detail:   compareMarkovSummary(deltas),
 	}}
 }
@@ -452,9 +452,9 @@ func MarkovStateLabel(state string) string {
 	case markovNetworkSlow:
 		return "Медленная сеть"
 	case markovJanky:
-		return "Jank"
+		return "Подтормаживание UI"
 	case markovStalled:
-		return "Зависание main thread"
+		return "Пауза главного потока"
 	case markovMemoryPressure:
 		return "Давление памяти"
 	case markovRecovering:

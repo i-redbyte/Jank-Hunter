@@ -70,7 +70,7 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 			b.addNode(ownerID, "источник: "+bucket.OwnerSample, "owner")
 			b.addUndirectedEdge(ownerID, stateID, "owner-state", strength, "источник активен рядом с состоянием")
 			if bucket.ScreenSample != "" {
-				b.addUndirectedEdge(causalNodeID("screen", bucket.ScreenSample), ownerID, "screen-owner", strength*0.8, "экран и источник совпали в бакете")
+				b.addUndirectedEdge(causalNodeID("screen", bucket.ScreenSample), ownerID, "screen-owner", strength*0.8, "экран и источник совпали во временном интервале")
 			}
 		}
 		if bucket.RouteSample != "" {
@@ -85,7 +85,7 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 		if bucket.NetworkSample != "" {
 			networkID := causalNodeID("network", bucket.NetworkSample)
 			b.addNode(networkID, "сеть: "+bucket.NetworkSample, "network")
-			b.addUndirectedEdge(networkID, stateID, "network-state", strength*0.7, "сетевой cohort совпал с состоянием")
+			b.addUndirectedEdge(networkID, stateID, "network-state", strength*0.7, "сетевая когорта совпала с состоянием")
 		}
 	}
 }
@@ -583,7 +583,7 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 			Severity:       "medium",
 			Title:          "Граф причинности пуст",
 			Detail:         causalGraphSummary(graph),
-			Recommendation: "Нужны timeline buckets с route, owner, screen или state контекстом.",
+			Recommendation: "Нужны временные интервалы с контекстом маршрута, источника, экрана или состояния.",
 		}}
 	}
 	if len(graph.Paths) > 0 {
@@ -592,7 +592,7 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 			Severity:       "ok",
 			Title:          "Найден объясняющий путь",
 			Detail:         fmt.Sprintf("%s; стоимость %.2f, доверие %.2f.", strings.Join(best.Nodes, " -> "), best.Cost, best.Confidence),
-			Recommendation: "Используй путь как гипотезу: проверь источник, маршрут и состояние рядом с соответствующим симптомом.",
+			Recommendation: "Используйте путь как гипотезу: проверьте источник, маршрут и состояние рядом с соответствующим симптомом.",
 		}}
 	}
 	return []Finding{{
@@ -632,7 +632,7 @@ func compareCausalGraphFindings(deltas []CausalDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменился граф причинности",
 				Detail:         delta.Summary,
-				Recommendation: "Сравни изменившееся ребро или путь с Markov-состояниями, сетевыми циклами и вкладом источников.",
+				Recommendation: "Сравните изменившееся ребро или путь с марковскими состояниями, сетевыми циклами и вкладом источников.",
 			}}
 		}
 	}
@@ -669,6 +669,22 @@ func CausalKindLabel(kind string) string {
 		return "цикл -> маршрут"
 	case "loop-phase":
 		return "цикл -> фаза"
+	case "state":
+		return "состояние"
+	case "symptom":
+		return "симптом"
+	case "network":
+		return "сеть"
+	case "phase":
+		return "фаза"
+	case "loop":
+		return "цикл"
+	case "route":
+		return "маршрут"
+	case "owner":
+		return "источник"
+	case "screen":
+		return "экран"
 	default:
 		return kind
 	}
@@ -757,9 +773,9 @@ func causalFallbackLabel(kind, value string) string {
 		case "network_slow":
 			return "симптом: медленная сеть"
 		case "jank":
-			return "симптом: jank"
+			return "симптом: подтормаживание UI"
 		case "stall":
-			return "симптом: зависание main thread"
+			return "симптом: пауза главного потока"
 		case "memory_pressure":
 			return "симптом: давление памяти"
 		}

@@ -78,7 +78,7 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 		t.Fatalf("unexpected screen stat: %+v", *screen)
 	}
 
-	owner := findRobustStat(report.RobustStats, "Источник", "FeedRepository.refresh", "Задержка main thread")
+	owner := findRobustStat(report.RobustStats, "Источник", "FeedRepository.refresh", "Пауза главного потока")
 	if owner == nil {
 		t.Fatalf("owner robust stat not found: %#v", report.RobustStats)
 	}

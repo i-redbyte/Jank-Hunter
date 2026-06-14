@@ -76,20 +76,20 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 			c.addValue("Экран", screen, "UI p95 кадра", "ms", float64(event.UIWindow.P95MS))
 		}
 		if event.UIWindow.FrameCount > 0 {
-			c.addValue("Экран", screen, "UI доля jank", "%", jankRate(event.UIWindow.JankCount, event.UIWindow.FrameCount))
+			c.addValue("Экран", screen, "Доля подтормаживаний UI", "%", jankRate(event.UIWindow.JankCount, event.UIWindow.FrameCount))
 		}
 	case event.Stall != nil:
 		owner := c.resolveOwner(dict, event.Stall.OwnerID)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
-		c.addValue("Источник", owner, "Задержка main thread", "ms", float64(event.Stall.DurationMS))
+		c.addValue("Источник", owner, "Пауза главного потока", "ms", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
 		if !timelineContainsFilter(className, c.filter.OwnerContains) {
 			return
 		}
-		c.addValue("Источник", className, "Возраст retained object", "ms", float64(event.Retained.AgeMS))
+		c.addValue("Источник", className, "Возраст удержанного объекта", "ms", float64(event.Retained.AgeMS))
 	case event.Memory != nil:
 		c.addValue("Память", "процесс", "PSS", "KB", float64(event.Memory.PSSKB))
 		c.addValue("Память", "процесс", "Куча Java", "KB", float64(event.Memory.JavaHeapKB))
@@ -287,7 +287,7 @@ func robustStatus(stats []RobustStat) string {
 
 func robustSummary(stats []RobustStat) string {
 	if len(stats) == 0 {
-		return "Недостаточно данных для робастной статистики: нет распределений по маршрутам, экранам, источникам или gauge-метрикам."
+		return "Недостаточно данных для робастной статистики: нет распределений по маршрутам, экранам, источникам или пользовательским gauge-метрикам."
 	}
 	withCI := 0
 	approximated := 0
@@ -307,8 +307,8 @@ func robustFindings(stats []RobustStat) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для робастной статистики",
-			Detail:         "В логах нет достаточных распределений по маршрутам, экранам, источникам или gauge-метрикам.",
-			Recommendation: "Собери прогон с HTTP/UI событиями или включенными Android gauge-метриками.",
+			Detail:         "В логах нет достаточных распределений по маршрутам, экранам, источникам или пользовательским gauge-метрикам.",
+			Recommendation: "Соберите прогон с HTTP/UI событиями или включенными Android gauge-метриками.",
 		}}
 	}
 	findings := []Finding{{
@@ -327,7 +327,7 @@ func robustFindings(stats []RobustStat) []Finding {
 			Severity:       "medium",
 			Title:          "Есть распределения с малым размером выборки",
 			Detail:         fmt.Sprintf("%d сигналов имеют ограниченную выборку. Для них p95/p99 и дельта Клиффа менее устойчивы.", lowSample),
-			Recommendation: "Собери несколько повторов сценария или более длинный QA-прогон перед выводом о регрессии.",
+			Recommendation: "Соберите несколько повторов сценария или более длинный тестовый прогон перед выводом о регрессии.",
 		})
 	}
 	return findings
@@ -361,8 +361,8 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Нет распределений для робастного сравнения",
-			Detail:         "База и кандидат не имеют сопоставимых выборок по маршрутам, экранам, источникам или gauge-метрикам.",
-			Recommendation: "Проверь, что сценарии базы и кандидата проходят одни и те же экраны, маршруты и источники.",
+			Detail:         "База и кандидат не имеют сопоставимых выборок по маршрутам, экранам, источникам или пользовательским gauge-метрикам.",
+			Recommendation: "Проверьте, что сценарии базы и кандидата проходят одни и те же экраны, маршруты и источники.",
 		}}
 	}
 	for _, delta := range deltas {
@@ -453,9 +453,9 @@ func robustDeltaSummary(key robustKey, baseCount, candidateCount int, baseP95, c
 func robustDeltaRecommendation(severity string) string {
 	switch severity {
 	case "high":
-		return "Проверь источник и маршрут вокруг этого сигнала в основном отчете и в таймлайне; эффект крупный и похож на реальную регрессию."
+		return "Проверьте источник и маршрут вокруг этого сигнала в основном отчете и в таймлайне; эффект крупный и похож на реальную регрессию."
 	case "medium":
-		return "Проверь повторяемость на еще одном прогоне; эффект заметный, но зависит от размера выборки и шума сценария."
+		return "Проверьте повторяемость на еще одном прогоне; эффект заметный, но зависит от размера выборки и шума сценария."
 	default:
 		return ""
 	}

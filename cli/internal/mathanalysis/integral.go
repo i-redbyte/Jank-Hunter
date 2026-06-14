@@ -25,9 +25,9 @@ func computeIntegralScores(timeline []TimelineBucket, loops []NetworkLoopFinding
 	definitions := []integralDefinition{
 		{
 			id:          "jank_pressure_area",
-			title:       "Площадь давления jank",
+			title:       "Площадь подтормаживаний UI",
 			formula:     "Σ ((janky_frames / frames) * 100) * Δt",
-			explanation: "Суммирует долю jank по времени: короткий пик и длинная умеренная деградация получают разный вес.",
+			explanation: "Суммирует долю медленных UI-кадров по времени: короткий пик и длинная умеренная деградация получают разный вес.",
 			unit:        "%*с",
 			value:       jankPressureArea,
 		},
@@ -51,7 +51,7 @@ func computeIntegralScores(timeline []TimelineBucket, loops []NetworkLoopFinding
 			id:          "memory_pressure_area",
 			title:       "Площадь давления памяти",
 			formula:     "Σ max(0, PSS - min(PSS)) * Δt + Σ max(0, 256MB - свободная_RAM) * Δt",
-			explanation: "Показывает рост PSS относительно нижней полки и долг низкой свободной памяти.",
+			explanation: "Показывает рост PSS относительно нижней полки, то есть минимального устойчивого уровня PSS в прогоне, и долг низкой свободной памяти — сколько времени система жила с малым запасом RAM.",
 			unit:        "MB*с",
 			value:       memoryPressureArea,
 		},
@@ -292,9 +292,9 @@ func integralStatus(scores []IntegralScore) string {
 
 func integralSummary(scores []IntegralScore) string {
 	if len(scores) == 0 {
-		return "Недостаточно бакетов для интегральной оценки боли."
+		return "Недостаточно временных интервалов для интегральной оценки."
 	}
-	return fmt.Sprintf("Посчитано %d интегральных оценок: jank, задержка, сетевое выгорание, память и долг восстановления.", len(scores))
+	return fmt.Sprintf("Посчитано %d интегральных оценок: подтормаживания UI, задержка, сетевое выгорание, память и долг восстановления.", len(scores))
 }
 
 func integralFindings(scores []IntegralScore) []Finding {
@@ -302,8 +302,8 @@ func integralFindings(scores []IntegralScore) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для интегральной оценки",
-			Detail:         "Нужен хотя бы один временной бакет с UI, HTTP, memory или context сигналами.",
-			Recommendation: "Собери более длинный прогон сценария.",
+			Detail:         "Нужен хотя бы один временной интервал с UI, HTTP, памятью или контекстными сигналами.",
+			Recommendation: "Соберите более длинный прогон сценария.",
 		}}
 	}
 	worst := worstIntegralScore(scores)
@@ -316,9 +316,9 @@ func integralFindings(scores []IntegralScore) []Finding {
 	}
 	return []Finding{{
 		Severity:       worst.Severity,
-		Title:          "Накопленная боль заметна",
+		Title:          "Накопленная нагрузка заметна",
 		Detail:         worst.Summary,
-		Recommendation: "Смотри соседние разделы: таймлайн показывает где накопилась площадь, а robust/change/network разделы объясняют источник.",
+		Recommendation: "Посмотрите соседние разделы: таймлайн показывает, где накопилась площадь, а робастная статистика, точки изменения и сетевые циклы объясняют источник.",
 	}}
 }
 
@@ -349,9 +349,9 @@ func compareIntegralSummary(deltas []IntegralDelta) string {
 		}
 	}
 	if worse == 0 {
-		return "Кандидат не увеличил интегральную боль относительно базы."
+		return "Кандидат не увеличил интегральную нагрузку относительно базы."
 	}
-	return fmt.Sprintf("Кандидат увеличил %d из %d интегральных оценок боли.", worse, len(deltas))
+	return fmt.Sprintf("Кандидат увеличил %d из %d интегральных оценок нагрузки.", worse, len(deltas))
 }
 
 func compareIntegralFindings(deltas []IntegralDelta) []Finding {
@@ -359,22 +359,22 @@ func compareIntegralFindings(deltas []IntegralDelta) []Finding {
 		return []Finding{{
 			Severity: "medium",
 			Title:    "Интегральные дельты недоступны",
-			Detail:   "Один из прогонов не дал временных бакетов.",
+			Detail:   "Один из прогонов не дал временных интервалов.",
 		}}
 	}
 	worst := worstIntegralDelta(deltas)
 	if worst.Severity == "ok" {
 		return []Finding{{
 			Severity: "ok",
-			Title:    "Интегральная боль не выросла",
+			Title:    "Интегральная нагрузка не выросла",
 			Detail:   compareIntegralSummary(deltas),
 		}}
 	}
 	return []Finding{{
 		Severity:       worst.Severity,
-		Title:          "Интегральная боль выросла",
+		Title:          "Интегральная нагрузка выросла",
 		Detail:         worst.Summary,
-		Recommendation: "Сравни этот score с change points и сетевыми циклами: интеграл показывает накопленный эффект, а соседние разделы дают причину.",
+		Recommendation: "Сравните эту оценку с точками изменения и сетевыми циклами: интеграл показывает накопленный эффект, а соседние разделы дают причину.",
 	}}
 }
 

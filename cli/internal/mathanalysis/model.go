@@ -484,14 +484,14 @@ func dataQualityFindings(summary analyze.Summary) []Finding {
 			Severity:       "high",
 			Title:          "Нет событий для математического анализа",
 			Detail:         "Лог не содержит событий, поэтому отчет показывает только структуру будущих разделов.",
-			Recommendation: "Проверь, что рантайм писал .jhlog во время сценария, и повтори команду inspect с непустым логом.",
+			Recommendation: "Проверьте, что runtime писал .jhlog во время сценария, и повторите команду inspect с непустым логом.",
 		}}
 	case summary.HTTPCount < 5 && summary.UIFrames < 300 && summary.ContextCount < 3:
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
 			Detail:         fmt.Sprintf("Собрано %d событий, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d. Этого мало для устойчивых выводов.", summary.EventCount, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
-			Recommendation: "Собери более длинный прогон или несколько повторов того же сценария.",
+			Recommendation: "Соберите более длинный прогон или несколько повторов того же сценария.",
 		}}
 	default:
 		return []Finding{{
@@ -509,7 +509,7 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 			Severity:       "medium",
 			Title:          "Предупреждение о честности сравнения",
 			Detail:         warning,
-			Recommendation: "Проверь, что база и кандидат собраны на сопоставимых устройствах, версиях и сетях.",
+			Recommendation: "Проверьте, что база и кандидат собраны на сопоставимых устройствах, версиях и сетях.",
 		})
 	}
 	if len(findings) == 0 {
@@ -568,7 +568,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 		},
 		{
 			ID:       "integral",
-			Title:    "Интегральная оценка боли",
+			Title:    "Интегральная нагрузка",
 			Status:   integralStatus(integralScores),
 			Summary:  integralSummary(integralScores),
 			Findings: integralFindings(integralScores),
@@ -636,7 +636,7 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 		},
 		{
 			ID:       "integral",
-			Title:    "Интегральная оценка боли",
+			Title:    "Интегральная нагрузка",
 			Status:   compareIntegralStatus(integralDeltas),
 			Summary:  compareIntegralSummary(integralDeltas),
 			Findings: compareIntegralFindings(integralDeltas),

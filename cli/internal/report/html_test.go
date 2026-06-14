@@ -50,7 +50,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Runtime Signal Report", "Device Context", "Pixel 8", "Network Routes", "Heuristic Verdict", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Сетевые маршруты", "Эвристический итог", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
@@ -68,7 +68,7 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Regression Control Deck", "Candidate Device Context", "Per-log Drill-down", "Heuristic Verdict", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст устройства кандидата", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
@@ -106,7 +106,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по runtime-сигналам", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог", "λ Анализ")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог", "λ Анализ")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReport(
@@ -117,7 +117,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Эвристический итог", "Baseline-логи", "λ Анализ")
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Детали по каждому логу", "Эвристический итог", "Логи базы", "λ Анализ")
 }
 
 func TestMathReportPath(t *testing.T) {

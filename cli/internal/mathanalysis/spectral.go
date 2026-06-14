@@ -58,13 +58,13 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 		unit  string
 		value func(TimelineBucket) float64
 	}{
-		{name: "UI доля jank", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
+		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
 		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
 		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
 		{name: "DNS среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
-		{name: "Connect количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Connect среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
+		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
+		{name: "Среднее время соединения", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
 	}
 	out := make([]periodicDefinition, 0, len(defs))
 	for _, def := range defs {
@@ -181,7 +181,7 @@ func analyzePeriodicSignal(name string, unit string, bucketMS uint64, points []f
 	}
 	if len(points) < minPeriodicPoints {
 		signal.Status = "medium"
-		signal.Summary = fmt.Sprintf("Недостаточно данных: нужно хотя бы %d бакетов, сейчас %d.", minPeriodicPoints, len(points))
+		signal.Summary = fmt.Sprintf("Недостаточно данных: нужно хотя бы %d временных интервалов, сейчас %d.", minPeriodicPoints, len(points))
 		return signal
 	}
 	analysisPoints := downsampleFloat(points, maxSpectralPoints)
@@ -429,8 +429,8 @@ func periodicFindings(signals []PeriodicSignal) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для периодического анализа",
-			Detail:         "Нужна запись хотя бы из нескольких десятков бакетов; короткий smoke-прогон почти не дает устойчивого спектра.",
-			Recommendation: "Собери более длинный ручной или soak-прогон для поиска периодического jank или сетевых циклов.",
+			Detail:         "Нужна запись хотя бы из нескольких десятков временных интервалов; короткий smoke-прогон почти не дает устойчивого спектра.",
+			Recommendation: "Соберите более длинный ручной или длительный прогон для поиска периодических подтормаживаний UI или сетевых циклов.",
 		}}
 	}
 	best := signals[0]
@@ -438,8 +438,8 @@ func periodicFindings(signals []PeriodicSignal) []Finding {
 		return []Finding{{
 			Severity:       "ok",
 			Title:          "Найден периодический кандидат",
-			Detail:         fmt.Sprintf("%s: главный период %.1fs, peak/background %.2f, entropy %.2f.", best.Signal, seconds(best.Peaks[0].PeriodMS), best.Peaks[0].PeakToBackground, best.SpectralEntropy),
-			Recommendation: "Сопоставь период с таймлайном, запросами конкретного маршрута, GC/dispatch/executor gauge-метриками и сетевыми retry.",
+			Detail:         fmt.Sprintf("%s: главный период %.1fs, пик/фон %.2f, энтропия %.2f.", best.Signal, seconds(best.Peaks[0].PeriodMS), best.Peaks[0].PeakToBackground, best.SpectralEntropy),
+			Recommendation: "Сопоставьте период с таймлайном, запросами конкретного маршрута, GC, диспетчером, исполнителем задач, gauge-метриками и сетевыми повторами.",
 		}}
 	}
 	return []Finding{{
@@ -469,7 +469,7 @@ func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
 			Severity:       "medium",
 			Title:          "Недостаточно периодических сигналов для сравнения",
 			Detail:         comparePeriodicSummary(baseline, candidate),
-			Recommendation: "Собери более длинные прогоны базы и кандидата.",
+			Recommendation: "Соберите более длинные прогоны базы и кандидата.",
 		}}
 	}
 	return []Finding{{

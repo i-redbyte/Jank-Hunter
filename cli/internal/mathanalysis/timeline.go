@@ -241,13 +241,13 @@ func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 		{name: "HTTP среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.HTTPAvgDurationMS) }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
 		{name: "DNS среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
-		{name: "Connect количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Средний connect", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
-		{name: "TTFB среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
-		{name: "Доля UI jank", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
+		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
+		{name: "Среднее время соединения", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
+		{name: "Средний TTFB", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
+		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
 		{name: "UI кадры", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.UIFrames) }},
-		{name: "Задержки main thread", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.StallCount) }},
-		{name: "Макс. stall", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
+		{name: "Паузы главного потока", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.StallCount) }},
+		{name: "Макс. пауза", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
 		{name: "PSS", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }},
 		{name: "Свободная RAM", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }},
 		{name: "Дельта RX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficRxBytes) }},
@@ -286,9 +286,9 @@ func timelineStatus(timeline []TimelineBucket) string {
 
 func timelineSummary(timeline []TimelineBucket, series []Series) string {
 	if len(timeline) < 3 {
-		return "Недостаточно данных для надежного анализа: нужно хотя бы несколько временных бакетов одного сценария."
+		return "Недостаточно данных для надежного анализа: нужно хотя бы несколько временных интервалов одного сценария."
 	}
-	return fmt.Sprintf("Построено %d временных бакетов по %d ms и %d рядов сигналов.", len(timeline), DefaultBucketMS, len(series))
+	return fmt.Sprintf("Построено %d временных интервалов по %d ms и %d рядов сигналов.", len(timeline), DefaultBucketMS, len(series))
 }
 
 func timelineFindings(timeline []TimelineBucket) []Finding {
@@ -296,14 +296,14 @@ func timelineFindings(timeline []TimelineBucket) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("В таймлайне только %d бакетов. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline)),
-			Recommendation: "Собери более длинный прогон или несколько повторов сценария.",
+			Detail:         fmt.Sprintf("В таймлайне только %d временных интервалов. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline)),
+			Recommendation: "Соберите более длинный прогон или несколько повторов сценария.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Таймлайн сигналов построен",
-		Detail:   fmt.Sprintf("Бакеты по %d ms готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и FFT.", DefaultBucketMS),
+		Detail:   fmt.Sprintf("Временные интервалы по %d ms готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и FFT.", DefaultBucketMS),
 	}}
 }
 
@@ -316,9 +316,9 @@ func compareTimelineStatus(baselineTimeline, candidateTimeline []TimelineBucket)
 
 func compareTimelineSummary(baselineTimeline, candidateTimeline []TimelineBucket) string {
 	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
-		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных бакетов."
+		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных интервалов."
 	}
-	return fmt.Sprintf("База: %d бакетов, кандидат: %d бакетов, размер бакета: %d ms.", len(baselineTimeline), len(candidateTimeline), DefaultBucketMS)
+	return fmt.Sprintf("База: %d временных интервалов, кандидат: %d временных интервалов, размер интервала: %d ms.", len(baselineTimeline), len(candidateTimeline), DefaultBucketMS)
 }
 
 func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucket) []Finding {
@@ -326,14 +326,14 @@ func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucke
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("База содержит %d бакетов, кандидат содержит %d бакетов. Этого мало для надежного сравнения формы таймлайна.", len(baselineTimeline), len(candidateTimeline)),
-			Recommendation: "Собери более длинные прогоны базы и кандидата или несколько повторов каждого сценария.",
+			Detail:         fmt.Sprintf("База содержит %d временных интервалов, кандидат содержит %d временных интервалов. Этого мало для надежного сравнения формы таймлайна.", len(baselineTimeline), len(candidateTimeline)),
+			Recommendation: "Соберите более длинные прогоны базы и кандидата или несколько повторов каждого сценария.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Таймлайны базы и кандидата построены",
-		Detail:   "Равномерные бакеты готовы для сравнения точек изменения, периодичности, сетевых циклов и интегральных оценок.",
+		Detail:   "Равномерные временные интервалы готовы для сравнения точек изменения, периодичности, сетевых циклов и интегральных оценок.",
 	}}
 }
 

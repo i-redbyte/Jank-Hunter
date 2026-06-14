@@ -663,7 +663,7 @@ func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменился сетевой цикл",
 				Detail:         delta.Summary,
-				Recommendation: "Проверь route/owner, DNS/connect/retry и websocket события с тем же периодом; для Android смотри OkHttp EventListener и владельца coroutine/refresh.",
+				Recommendation: "Проверьте маршрут, источник, DNS/connect/retry и WebSocket-события с тем же периодом; для Android смотрите OkHttp EventListener и владельца coroutine/refresh.",
 			}}
 		}
 	}
@@ -810,19 +810,19 @@ func networkMetricTitle(kind, route, owner string) string {
 	}
 	switch kind {
 	case "dns":
-		return "DNS metric" + target
+		return "DNS-метрика" + target
 	case "connect":
-		return "Connect metric" + target
+		return "Метрика соединения" + target
 	case "retry":
-		return "Retry/reconnect metric" + target
+		return "Метрика retry/reconnect" + target
 	case "websocket":
-		return "WebSocket metric" + target
+		return "WebSocket-метрика" + target
 	case "failure":
-		return "Сетевая ошибка metric" + target
+		return "Метрика сетевой ошибки" + target
 	case "route":
-		return "Маршрут metric" + target
+		return "Метрика маршрута" + target
 	default:
-		return "Сетевая metric" + target
+		return "Сетевая метрика" + target
 	}
 }
 
@@ -847,19 +847,19 @@ func networkLoopProbableCause(kind, route, owner string) string {
 	target := networkLoopTarget(route, owner)
 	switch kind {
 	case "dns":
-		return "Вероятная причина: периодический DNS resolve или потеря DNS cache" + target + ". Проверь TTL/cache, OkHttp DNS и сетевой слой."
+		return "Вероятная причина: периодический DNS resolve или потеря DNS cache" + target + ". Проверьте TTL/cache, OkHttp DNS и сетевой слой."
 	case "connect":
-		return "Вероятная причина: повторные connect/TLS попытки" + target + ". Проверь connection pool, прокси/VPN, TLS и reachability."
+		return "Вероятная причина: повторные connect/TLS попытки" + target + ". Проверьте connection pool, прокси/VPN, TLS и reachability."
 	case "retry":
-		return "Вероятная причина: retry/reconnect контур" + target + ". Проверь backoff, cancellation и владельца refresh."
+		return "Вероятная причина: retry/reconnect контур" + target + ". Проверьте backoff, cancellation и владельца refresh."
 	case "websocket":
-		return "Вероятная причина: шторм websocket-переподключений" + target + ". Проверь lifecycle, heartbeat и backoff переподключения."
+		return "Вероятная причина: шторм WebSocket-переподключений" + target + ". Проверьте lifecycle, heartbeat и backoff переподключения."
 	case "failure":
-		return "Вероятная причина: повторяющиеся сетевые ошибки" + target + ". Проверь backend status, обработку IOException и retry policy."
+		return "Вероятная причина: повторяющиеся сетевые ошибки" + target + ". Проверьте статус backend, обработку IOException и retry policy."
 	case "owner":
-		return "Вероятная причина: источник регулярно запускает сетевую работу" + target + ". Проверь coroutine/job scheduling и debounce."
+		return "Вероятная причина: источник регулярно запускает сетевую работу" + target + ". Проверьте coroutine/job scheduling и debounce."
 	case "route":
-		return "Вероятная причина: периодический polling или шквал запросов" + target + ". Проверь таймеры, refresh и cache policy."
+		return "Вероятная причина: периодический polling или шквал запросов" + target + ". Проверьте таймеры, refresh и cache policy."
 	default:
 		return "Вероятная причина: повторяющийся сетевой паттерн" + target + "."
 	}

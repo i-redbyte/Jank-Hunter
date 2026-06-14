@@ -38,7 +38,7 @@ func detectChangePoints(timeline []TimelineBucket) []ChangePoint {
 			},
 		},
 		{
-			name:       "UI доля jank",
+			name:       "Доля подтормаживаний UI",
 			unit:       "%",
 			minDelta:   5,
 			noiseFloor: 2,
@@ -244,7 +244,7 @@ func appearedChangeDelta(point ChangePoint) ChangePointDelta {
 		CandidateTime:  point.TimeMS,
 		CandidateScore: point.Score,
 		Severity:       point.Severity,
-		Summary:        fmt.Sprintf("У кандидата появилась точка изменения %s на %.1fs: %s %.1f %s, score %.2f.", point.Signal, seconds(point.TimeMS), point.Direction, point.Delta, point.Unit, point.Score),
+		Summary:        fmt.Sprintf("У кандидата появилась точка изменения %s на %.1fs: %s %.1f %s, оценка %.2f.", point.Signal, seconds(point.TimeMS), point.Direction, point.Delta, point.Unit, point.Score),
 	}
 }
 
@@ -256,7 +256,7 @@ func disappearedChangeDelta(point ChangePoint) ChangePointDelta {
 		BaselineTime:  point.TimeMS,
 		BaselineScore: point.Score,
 		Severity:      "ok",
-		Summary:       fmt.Sprintf("У кандидата исчезла точка изменения %s, которая была в базе на %.1fs со score %.2f.", point.Signal, seconds(point.TimeMS), point.Score),
+		Summary:       fmt.Sprintf("У кандидата исчезла точка изменения %s, которая была в базе на %.1fs с оценкой %.2f.", point.Signal, seconds(point.TimeMS), point.Score),
 	}
 }
 
@@ -274,7 +274,7 @@ func strengthenedChangeDelta(baseline, candidate ChangePoint) ChangePointDelta {
 		BaselineScore:  baseline.Score,
 		CandidateScore: candidate.Score,
 		Severity:       severity,
-		Summary:        fmt.Sprintf("Точка изменения %s усилилась: score %.2f -> %.2f, время %.1fs -> %.1fs.", candidate.Signal, baseline.Score, candidate.Score, seconds(baseline.TimeMS), seconds(candidate.TimeMS)),
+		Summary:        fmt.Sprintf("Точка изменения %s усилилась: оценка %.2f -> %.2f, время %.1fs -> %.1fs.", candidate.Signal, baseline.Score, candidate.Score, seconds(baseline.TimeMS), seconds(candidate.TimeMS)),
 	}
 }
 
@@ -295,12 +295,12 @@ func changePointStatus(timeline []TimelineBucket, points []ChangePoint) string {
 
 func changePointSummary(timeline []TimelineBucket, points []ChangePoint) string {
 	if len(timeline) < changeWindowBuckets*2 {
-		return fmt.Sprintf("Недостаточно данных: нужно хотя бы %d бакетов, сейчас %d.", changeWindowBuckets*2, len(timeline))
+		return fmt.Sprintf("Недостаточно данных: нужно хотя бы %d временных интервалов, сейчас %d.", changeWindowBuckets*2, len(timeline))
 	}
 	if len(points) == 0 {
-		return "Сильных сдвигов распределения по HTTP p95, UI jank, памяти и сетевым ошибкам не найдено."
+		return "Сильных сдвигов распределения по HTTP p95, подтормаживаниям UI, памяти и сетевым ошибкам не найдено."
 	}
-	return fmt.Sprintf("Найдено %d точек изменения по скользящей медиане/MAD для задержек, jank, памяти и сетевых ошибок.", len(points))
+	return fmt.Sprintf("Найдено %d точек изменения по скользящей медиане/MAD для задержек, подтормаживаний UI, памяти и сетевых ошибок.", len(points))
 }
 
 func changePointFindings(timeline []TimelineBucket, points []ChangePoint) []Finding {
@@ -309,7 +309,7 @@ func changePointFindings(timeline []TimelineBucket, points []ChangePoint) []Find
 			Severity:       "medium",
 			Title:          "Недостаточно данных для точек изменения",
 			Detail:         changePointSummary(timeline, points),
-			Recommendation: "Собери более длинный прогон: detector сравнивает окна до и после потенциального сдвига.",
+			Recommendation: "Соберите более длинный прогон: детектор сравнивает окна до и после потенциального сдвига.",
 		}}
 	}
 	if len(points) == 0 {
@@ -323,7 +323,7 @@ func changePointFindings(timeline []TimelineBucket, points []ChangePoint) []Find
 	return []Finding{{
 		Severity:       worst.Severity,
 		Title:          "Найдена точка изменения",
-		Detail:         fmt.Sprintf("%s на %.1fs: медиана %.1f -> %.1f %s, score %.2f.", worst.Signal, seconds(worst.TimeMS), worst.BeforeMedian, worst.AfterMedian, worst.Unit, worst.Score),
+		Detail:         fmt.Sprintf("%s на %.1fs: медиана %.1f -> %.1f %s, оценка %.2f.", worst.Signal, seconds(worst.TimeMS), worst.BeforeMedian, worst.AfterMedian, worst.Unit, worst.Score),
 		Recommendation: worst.Recommendation,
 		Evidence:       changePointEvidence(worst),
 	}}
@@ -365,7 +365,7 @@ func compareChangePointFindings(deltas []ChangePointDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменилась точка изменения",
 				Detail:         delta.Summary,
-				Recommendation: "Сопоставь этот момент с таймлайном, route/owner и lifecycle событиями рядом с точкой.",
+				Recommendation: "Сопоставьте этот момент с таймлайном, маршрутом, источником и lifecycle-событиями рядом с точкой.",
 			}}
 		}
 	}
@@ -405,19 +405,19 @@ func changePointSeverity(signal changeSignal, delta float64, score float64) stri
 
 func changePointRecommendation(signal changeSignal, delta float64) string {
 	if delta <= 0 {
-		return "Сдвиг выглядит как улучшение; проверь, совпадает ли он с окончанием загрузки экрана или восстановлением сети."
+		return "Сдвиг выглядит как улучшение; проверьте, совпадает ли он с окончанием загрузки экрана или восстановлением сети."
 	}
 	switch signal.name {
 	case "HTTP p95":
-		return "Проверь маршруты и источники рядом с точкой: возможен переход сети в медленный режим или всплеск backend-задержки."
-	case "UI доля jank":
-		return "Проверь screen transition, main-thread work и executor/coroutine метрики рядом с этим временем."
+		return "Проверьте маршруты и источники рядом с точкой: возможен переход сети в медленный режим или всплеск серверной задержки."
+	case "Доля подтормаживаний UI":
+		return "Проверьте переходы экранов, работу главного потока и метрики executor/coroutine рядом с этим временем."
 	case "PSS памяти":
-		return "Проверь retained objects, GC/heap pressure и lifecycle события рядом с ростом memory baseline."
+		return "Проверьте удержанные объекты, давление GC/heap и lifecycle-события рядом с ростом базового уровня памяти."
 	case "HTTP ошибки":
-		return "Проверь DNS/connect/retry/reconnect метрики и route-specific ошибки вокруг этого окна."
+		return "Проверьте DNS, соединения, retry/reconnect метрики и ошибки конкретного маршрута вокруг этого окна."
 	default:
-		return "Проверь соседние события и владельцев работ вокруг этой точки изменения."
+		return "Проверьте соседние события и источники работ вокруг этой точки изменения."
 	}
 }
 

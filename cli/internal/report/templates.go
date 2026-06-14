@@ -89,7 +89,7 @@ a:hover { color: white; }
 }
 .hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
   gap: 24px;
   align-items: start;
   max-width: 1280px;
@@ -118,11 +118,14 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   margin-top: 16px;
 }
 .math-link {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 38px;
-  padding: 9px 16px;
+  min-height: 54px;
+  width: 100%;
+  padding: 13px 18px;
   border: 1px solid rgba(98,255,168,0.74);
   border-radius: 999px;
   color: #03130a;
@@ -132,12 +135,20 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   text-transform: none;
   animation: mathGlow 2.7s ease-in-out infinite;
 }
+.math-link::before {
+  content: "Σ λ ∫ p95 Δt";
+  position: absolute;
+  inset: auto 18px 4px auto;
+  color: rgba(3,19,10,0.16);
+  font: 800 12px/1 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  pointer-events: none;
+}
 .math-link:hover {
   color: #03130a;
   filter: brightness(1.08);
 }
-.hero-side { display: grid; gap: 10px; width: min(420px, 38vw); }
-.hero-meta { display: grid; gap: 8px; }
+.hero-side { display: grid; gap: 10px; width: 100%; }
+.hero-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .env-card {
   position: relative;
   overflow: hidden;
@@ -160,8 +171,8 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   background: linear-gradient(90deg, transparent, var(--cyan), var(--magenta), transparent);
 }
 .env-title { font-size: 12px; color: var(--cyan); font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
-.env-device { display: block; margin-top: 6px; font-size: 18px; line-height: 1.2; overflow-wrap: anywhere; }
-.env-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.env-device { display: block; margin-top: 6px; font-size: 18px; line-height: 1.2; overflow-wrap: break-word; word-break: normal; }
+.env-subtitle { margin-top: 2px; color: var(--muted); font-size: 12px; overflow-wrap: break-word; word-break: normal; }
 .env-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .env-item {
   min-width: 0;
@@ -171,8 +182,8 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   background: rgba(255,255,255,0.035);
 }
 .env-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.env-value { margin-top: 2px; font-weight: 850; overflow-wrap: anywhere; }
-.env-detail { margin-top: 1px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.env-value { margin-top: 2px; font-weight: 850; overflow-wrap: break-word; word-break: normal; }
+.env-detail { margin-top: 1px; color: var(--muted); font-size: 11px; overflow-wrap: break-word; word-break: normal; }
 .chip, .nav a {
   display: inline-flex;
   align-items: center;
@@ -198,6 +209,11 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
   backdrop-filter: blur(18px);
 }
 .nav a { white-space: nowrap; }
+.nav a.active {
+  border-color: rgba(98,255,168,0.62);
+  color: var(--ok);
+  box-shadow: 0 0 22px rgba(98,255,168,0.14);
+}
 main {
   position: relative;
   max-width: 1280px;
@@ -241,6 +257,7 @@ main {
 .panel, .log-card {
   margin: 18px 0;
   padding: 18px;
+  overflow-x: auto;
   animation: rise 520ms ease both;
 }
 .panel-head {
@@ -253,6 +270,53 @@ main {
 .panel-kicker {
   color: var(--muted);
   font-size: 12px;
+}
+.help-text {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.explain {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px dashed rgba(111,247,255,0.58);
+  color: inherit;
+  cursor: help;
+}
+.explain::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  width: min(340px, 78vw);
+  padding: 10px 12px;
+  border: 1px solid rgba(111,247,255,0.45);
+  border-radius: 8px;
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(111,247,255,0.12), rgba(255,79,216,0.10)),
+    rgba(7,10,18,0.96);
+  box-shadow: 0 18px 54px rgba(0,0,0,0.42), 0 0 22px rgba(111,247,255,0.16);
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.explain:hover::after,
+.explain:focus::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+.metric .explain {
+  color: var(--muted);
 }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .triad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -286,13 +350,15 @@ main {
 table { width: 100%; border-collapse: collapse; overflow: hidden; }
 th, td { padding: 10px 11px; border-bottom: 1px solid rgba(126,247,255,0.12); text-align: left; vertical-align: top; }
 th { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+th, td { overflow-wrap: break-word; word-break: normal; hyphens: none; }
 tr:hover td { background: rgba(111,247,255,0.035); }
 .muted { color: var(--muted); }
 code {
   color: #d8fcff;
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .bar, .chart-track, .delta-track {
   height: 10px;
@@ -393,13 +459,13 @@ code {
 }
 .fold > summary::-webkit-details-marker { display: none; }
 .fold > summary::after {
-  content: "open";
+  content: "открыть";
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.fold[open] > summary::after { content: "close"; }
+.fold[open] > summary::after { content: "закрыть"; }
 .fold-body {
   max-height: 72vh;
   overflow: auto;
@@ -419,17 +485,30 @@ details.log-card summary {
 details.log-card summary::-webkit-details-marker { display: none; }
 .log-body { max-height: 72vh; overflow: auto; padding: 0 18px 18px; border-top: 1px solid var(--line); }
 .summary-metrics { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.mono-block { overflow-wrap: anywhere; }
+.mono-block { overflow-wrap: break-word; word-break: normal; }
 @media (max-width: 820px) {
   .hero { padding: 28px 18px 18px; }
   .hero-grid, .split, .triad, .detail-grid { grid-template-columns: 1fr; }
   .hero-side { width: 100%; }
+  .hero-meta { grid-template-columns: 1fr; }
   .env-grid { grid-template-columns: 1fr; }
   main { padding: 18px; }
   .panel-head { display: block; }
   .chart-row { grid-template-columns: 1fr; }
   details.log-card summary { grid-template-columns: 1fr; }
   .summary-metrics { justify-content: flex-start; }
+  table { min-width: 680px; }
+  h1 { font-size: clamp(34px, 12vw, 52px); }
+  .metric .value { font-size: 23px; }
+}
+@media (max-width: 520px) {
+  body { font-size: 13px; }
+  .nav { padding: 10px 12px; }
+  main { padding: 12px; }
+  .panel, .log-card { padding: 14px; }
+  .hero { padding: 22px 14px 16px; }
+  .grid { grid-template-columns: 1fr; }
+  h1 { font-size: clamp(32px, 9vw, 40px); line-height: 1; }
 }
 `
 
@@ -438,10 +517,6 @@ const mathCSS = `
 .math-page .fold[open] > summary::after { content: "закрыть"; }
 .math-page .nav {
   box-shadow: 0 14px 36px rgba(0,0,0,0.22);
-}
-.math-page .nav a[href="#method-reference"] {
-  border-color: rgba(98,255,168,0.45);
-  color: var(--ok);
 }
 .math-page .section-status {
   display: inline-flex;
@@ -499,7 +574,8 @@ const mathCSS = `
 .section-overview-summary {
   color: var(--muted);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .timeline-grid {
   display: grid;
@@ -514,14 +590,16 @@ const mathCSS = `
   background: rgba(255,255,255,0.032);
 }
 .timeline-chart-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: baseline;
+  display: block;
   margin-bottom: 8px;
 }
-.timeline-chart-title { font-weight: 850; overflow-wrap: anywhere; }
-.timeline-chart-value { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.timeline-chart-title {
+  font-weight: 850;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+.timeline-chart-value { margin-top: 3px; color: var(--muted); font-size: 12px; white-space: normal; }
 .sparkline {
   width: 100%;
   height: 86px;
@@ -555,8 +633,74 @@ const mathCSS = `
 }
 .method-reference-card { margin: 0; }
 .method-reference-card .fold-body { max-height: none; }
-.method-reference-card summary span:first-child { overflow-wrap: anywhere; }
+.method-reference-card summary span:first-child {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .method-kind { color: var(--ok); }
+.zero-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.zero-toggle input { accent-color: #62ffa8; }
+.bucket-zero { display: none; }
+.show-zero-buckets .bucket-zero { display: table-row; }
+.category-block { margin: 16px 0 22px; }
+.category-block h4 {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.causal-graph-card {
+  margin: 10px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(111,247,255,0.08), rgba(255,79,216,0.06)),
+    rgba(255,255,255,0.026);
+  overflow-x: auto;
+}
+.causal-graph {
+  width: 100%;
+  min-width: 760px;
+  height: auto;
+  display: block;
+}
+.causal-edge { stroke: rgba(111,247,255,0.48); stroke-width: 1.5; }
+.causal-node rect {
+  fill: rgba(13,24,43,0.94);
+  stroke: rgba(126,247,255,0.38);
+  rx: 8;
+}
+.causal-node text {
+  fill: var(--ink);
+  font: 700 11px Inter, "SF Pro Text", Arial, sans-serif;
+}
+.causal-node .kind {
+  fill: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.heuristic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.heuristic-card {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ok);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255,255,255,0.032);
+}
+.heuristic-card.sev-high { border-left-color: var(--bad); }
+.heuristic-card.sev-medium { border-left-color: var(--warn); }
+.heuristic-card strong { display: block; margin-bottom: 4px; }
 .reference-block {
   margin: 12px 0;
   padding: 11px;
@@ -585,8 +729,7 @@ const mathCSS = `
 @media (max-width: 820px) {
   .math-page .math-summary { grid-template-columns: 1fr; }
   .section-overview-grid { grid-template-columns: 1fr; }
-  .timeline-chart-head { display: block; }
-  .timeline-chart-value { margin-top: 3px; white-space: normal; }
+  .timeline-grid { grid-template-columns: 1fr; }
 }
 `
 
@@ -610,9 +753,9 @@ const mathInspectTemplate = `<!doctype html>
       <div class="env-card">
         <div class="env-title">Состояние данных</div>
         <strong class="env-device">{{.Math.Summary.EventCount}} событий</strong>
-        <div class="env-subtitle">{{.Math.Summary.LogCount}} логов · {{.Math.Summary.DurationMS}} ms · {{.Math.Summary.HTTPCount}} HTTP</div>
+        <div class="env-subtitle">{{.Math.Summary.LogCount}} логов · {{humanDuration .Math.Summary.DurationMS}} · {{.Math.Summary.HTTPCount}} HTTP</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">UI-кадры</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">jank {{.Math.Summary.UIJank}}</div></div>
+          <div class="env-item"><div class="env-label">UI-кадры</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">медленных {{.Math.Summary.UIJank}}</div></div>
           <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">сэмплы памяти/сети</div></div>
         </div>
       </div>
@@ -636,8 +779,8 @@ const mathInspectTemplate = `<!doctype html>
       <div class="grid">
         <div class="metric"><div class="label">События</div><div class="value">{{.Math.Summary.EventCount}}</div><div class="hint">{{.Math.Summary.LogCount}} логов</div></div>
         <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
-        <div class="metric"><div class="label">UI jank</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
-        <div class="metric"><div class="label">Память</div><div class="value">{{.Math.Summary.MemoryMaxKB}} KB</div><div class="hint">макс. PSS</div></div>
+        <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
+        <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{.Math.Summary.MemoryMaxKB}} KB</div><div class="hint">макс. PSS</div></div>
       </div>
       <div>
         <h3>Исходные логи</h3>
@@ -686,28 +829,55 @@ const mathInspectTemplate = `<!doctype html>
           </div>
           {{else}}<div class="muted">Нет ненулевых рядов для отображения.</div>{{end}}
         </div>
-        <h3>Бакеты</h3>
-        <table class="timeline-table">
-          <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th><th>UI кадры</th><th>Jank кадры</th><th>Доля jank</th><th>PSS</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
-          {{range $math.Timeline}}
-          <tr><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} ms</td><td>{{.HTTPP95DurationMS}} ms</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} ms</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} ms</td><td>{{.TTFBMS}} ms</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
-          {{else}}<tr><td colspan="17" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
-        </table>
+        <h3>{{tip "Временные интервалы" "Внутренний термин: бакет. Это фиксированное окно времени, например 1 секунда, куда складываются события для анализа временного ряда."}}</h3>
+        <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label>
+        <div class="category-block">
+          <h4>Сеть</h4>
+          <table class="timeline-table">
+            <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th></tr>
+            {{range $math.Timeline}}
+            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} ms</td><td>{{.HTTPP95DurationMS}} ms</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} ms</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} ms</td><td>{{.TTFBMS}} ms</td></tr>
+            {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+          </table>
+        </div>
+        <div class="category-block">
+          <h4>UI и главный поток</h4>
+          <table class="timeline-table">
+          <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
+            {{range $math.Timeline}}
+            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} ms</td></tr>
+            {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+          </table>
+        </div>
+        <div class="category-block">
+          <h4>Память и трафик</h4>
+          <table class="timeline-table">
+            <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
+            {{range $math.Timeline}}
+            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
+            {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+          </table>
+        </div>
         {{end}}
         {{if eq .ID "robust"}}
         <h3>Распределения</h3>
-        <table class="timeline-table">
-          <tr><th>Слой</th><th>Имя</th><th>Метрика</th><th>N</th><th>Медиана</th><th>p90</th><th>p95</th><th>p99</th><th>MAD</th><th>Усеченное среднее</th><th>Мин.</th><th>Макс.</th><th>Интервал p95</th><th>Качество</th></tr>
-          {{range $math.RobustStats}}
-          <tr>
-            <td>{{.Dimension}}</td><td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.Count}}</td>
-            <td>{{printf "%.1f" .Median}} {{.Unit}}</td><td>{{printf "%.1f" .P90}} {{.Unit}}</td><td>{{printf "%.1f" .P95}} {{.Unit}}</td><td>{{printf "%.1f" .P99}} {{.Unit}}</td>
-            <td>{{printf "%.1f" .MAD}} {{.Unit}}</td><td>{{printf "%.1f" .TrimmedMean}} {{.Unit}}</td><td>{{printf "%.1f" .Min}} {{.Unit}}</td><td>{{printf "%.1f" .Max}} {{.Unit}}</td>
-            <td>{{if .HasP95Confidence}}{{printf "%.1f" .P95ConfidenceLow}}..{{printf "%.1f" .P95ConfidenceHigh}} {{.Unit}}{{else}}мало данных{{end}}</td>
-            <td><span class="section-status {{severityClass .SampleQualitySeverity}}">{{.SampleQuality}}</span><div class="muted">{{.SampleDetail}}</div></td>
-          </tr>
-          {{else}}<tr><td colspan="14" class="muted">Недостаточно данных для робастной статистики.</td></tr>{{end}}
-        </table>
+        {{range robustGroups $math.RobustStats}}
+        <div class="category-block">
+          <h4>{{.Title}}</h4>
+          <table class="timeline-table">
+            <tr><th>Имя</th><th>Метрика</th><th>N</th><th>Медиана</th><th>p90</th><th>p95</th><th>p99</th><th>MAD</th><th>Усеченное среднее</th><th>Мин.</th><th>Макс.</th><th>Интервал p95</th><th>Качество</th></tr>
+            {{range .Items}}
+            <tr>
+              <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.Count}}</td>
+              <td>{{printf "%.1f" .Median}} {{.Unit}}</td><td>{{printf "%.1f" .P90}} {{.Unit}}</td><td>{{printf "%.1f" .P95}} {{.Unit}}</td><td>{{printf "%.1f" .P99}} {{.Unit}}</td>
+              <td>{{printf "%.1f" .MAD}} {{.Unit}}</td><td>{{printf "%.1f" .TrimmedMean}} {{.Unit}}</td><td>{{printf "%.1f" .Min}} {{.Unit}}</td><td>{{printf "%.1f" .Max}} {{.Unit}}</td>
+              <td>{{if .HasP95Confidence}}{{printf "%.1f" .P95ConfidenceLow}}..{{printf "%.1f" .P95ConfidenceHigh}} {{.Unit}}{{else}}мало данных{{end}}</td>
+              <td><span class="section-status {{severityClass .SampleQualitySeverity}}">{{.SampleQuality}}</span><div class="muted">{{.SampleDetail}}</div></td>
+            </tr>
+            {{end}}
+          </table>
+        </div>
+        {{else}}<div class="muted">Недостаточно данных для робастной статистики.</div>{{end}}
         <p class="muted">MAD — медиана абсолютных отклонений от медианы. Усеченное среднее считается после отсечения 10% нижнего и верхнего хвоста. Интервал p95 — детерминированный bootstrap-интервал; на очень больших сигналах считается по ограниченной детерминированной выборке.</p>
         {{end}}
         {{if eq .ID "change-points"}}
@@ -776,7 +946,7 @@ const mathInspectTemplate = `<!doctype html>
           </tr>
           {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для интегральных оценок.</td></tr>{{end}}
         </table>
-        <p class="muted">Интегрирование прямоугольное: для каждого бакета берется значение сигнала и умножается на длительность бакета Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
+        <p class="muted">Интегрирование прямоугольное: для каждого временного интервала берется значение сигнала и умножается на длительность интервала Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
         {{end}}
         {{if eq .ID "markov"}}
         <h3>Сводка состояний</h3>
@@ -785,11 +955,11 @@ const mathInspectTemplate = `<!doctype html>
           <tr>
             <td>{{$math.Markov.HealthyToBadCount}}</td>
             <td>{{printf "%.1f" (percent01 $math.Markov.BadToHealthyProbability)}}%</td>
-            <td>{{printf "%.1f" $math.Markov.ExpectedRecoveryWindows}} бакетов</td>
+            <td>{{printf "%.1f" $math.Markov.ExpectedRecoveryWindows}} временных интервалов</td>
             <td>{{range $math.Markov.StickyStates}}<div>{{markovState .State}} · {{printf "%.1f" (percent01 .Probability)}}% · {{.Count}} переходов</div>{{else}}<span class="muted">нет</span>{{end}}</td>
           </tr>
         </table>
-        <h3>Последовательность бакетов</h3>
+        <h3>Последовательность временных интервалов</h3>
         <table class="timeline-table">
           <tr><th>Время</th><th>Состояние</th><th>Причина</th><th>Контекст</th></tr>
           {{range $math.Markov.States}}
@@ -799,7 +969,7 @@ const mathInspectTemplate = `<!doctype html>
             <td>{{.Reason}}</td>
             <td>{{if .Screen}}экран <code>{{.Screen}}</code><br>{{end}}{{if .Route}}маршрут <code>{{.Route}}</code><br>{{end}}{{if .Owner}}источник <code>{{.Owner}}</code><br>{{end}}{{if .Network}}сеть <code>{{.Network}}</code>{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="4" class="muted">Недостаточно бакетов для Markov-модели.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Недостаточно временных интервалов для марковской модели.</td></tr>{{end}}
         </table>
         <h3>Матрица переходов</h3>
         <table class="timeline-table">
@@ -810,6 +980,9 @@ const mathInspectTemplate = `<!doctype html>
         </table>
         {{end}}
         {{if eq .ID "graph"}}
+        <h3>Визуальный граф</h3>
+        <p class="help-text">Показаны только самые сильные связи, чтобы большой проект не превращал граф в шум. Полные ребра и пути доступны в таблицах ниже.</p>
+        {{causalGraphSVG $math.CausalGraph}}
         <h3>Кратчайшие объясняющие пути</h3>
         <table class="timeline-table">
           <tr><th>От</th><th>К</th><th>Путь</th><th>Стоимость</th><th>Доверие</th></tr>
@@ -857,6 +1030,7 @@ const mathInspectTemplate = `<!doctype html>
         <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
         <div class="fold-body">
           <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Где применяется</strong>{{.AppliesTo}}</div>
           <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
           <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
           <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
@@ -867,7 +1041,49 @@ const mathInspectTemplate = `<!doctype html>
       {{end}}
     </div>
   </section>
+  {{with mathHeuristic .Math}}
+  <section id="math-verdict" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Итоговая эвристика</h2>
+        <div class="panel-kicker">Сводка по всем математическим разделам: общий диагноз, главные факторы риска и первый шаг расследования.</div>
+      </div>
+      <span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span>
+    </div>
+    <div class="analysis-banner {{severityClass .Severity}}">
+      <div class="eyebrow">Общий вывод</div>
+      <div class="analysis-status">{{.Status}}</div>
+      <div class="muted">{{.Summary}}</div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Cards}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
 </main>
+<script>
+(() => {
+  const links = Array.from(document.querySelectorAll('.math-page .nav a'));
+  const setActive = (hash) => {
+    links.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === hash));
+  };
+  links.forEach((link) => link.addEventListener('click', () => setActive(link.getAttribute('href'))));
+  if (location.hash) setActive(location.hash);
+  const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setActive('#' + visible.target.id);
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+  }
+  document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
+    input.addEventListener('change', () => document.body.classList.toggle('show-zero-buckets', input.checked));
+  });
+})();
+</script>
 </body>
 </html>`
 
@@ -916,8 +1132,8 @@ const mathCompareTemplate = `<!doctype html>
     <div class="grid">
       <div class="metric"><div class="label">События базы</div><div class="value">{{.Math.Baseline.Summary.EventCount}}</div><div class="hint">{{.Math.Baseline.Summary.LogCount}} логов</div></div>
       <div class="metric"><div class="label">События кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">{{.Math.Candidate.Summary.LogCount}} логов</div></div>
-      <div class="metric"><div class="label">Jank базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
-      <div class="metric"><div class="label">Jank кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">Подтормаживания базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
     </div>
     <h3>Находки</h3>
     <div class="finding-list">
@@ -973,18 +1189,23 @@ const mathCompareTemplate = `<!doctype html>
         {{end}}
         {{if eq .ID "robust"}}
         <h3>Робастные дельты</h3>
-        <table class="timeline-table">
-          <tr><th>Статус</th><th>Слой</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>Доверие</th><th>Вывод</th></tr>
-          {{range $math.RobustDeltas}}
-          <tr>
-            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
-            <td>{{.Dimension}}</td><td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
-            <td>{{printf "%.1f" .BaselineP95}} {{.Unit}}</td><td>{{printf "%.1f" .CandidateP95}} {{.Unit}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .P95DeltaPct}}%</td>
-            <td>{{printf "%.3f" .CliffDelta}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
-          </tr>
-          {{else}}<tr><td colspan="14" class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</td></tr>{{end}}
-        </table>
-        <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, jank, памяти и очередей это обычно ухудшение.</p>
+        {{range robustDeltaGroups $math.RobustDeltas}}
+        <div class="category-block">
+          <h4>{{.Title}}</h4>
+          <table class="timeline-table">
+            <tr><th>Статус</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>Доверие</th><th>Вывод</th></tr>
+            {{range .Items}}
+            <tr>
+              <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+              <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+              <td>{{printf "%.1f" .BaselineP95}} {{.Unit}}</td><td>{{printf "%.1f" .CandidateP95}} {{.Unit}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .P95DeltaPct}}%</td>
+              <td>{{printf "%.3f" .CliffDelta}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
+            </tr>
+            {{end}}
+          </table>
+        </div>
+        {{else}}<div class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</div>{{end}}
+        <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, подтормаживаний UI, памяти и очередей это обычно ухудшение.</p>
         {{end}}
         {{if eq .ID "change-points"}}
         <h3>Изменения точек изменения</h3>
@@ -1056,7 +1277,7 @@ const mathCompareTemplate = `<!doctype html>
         </table>
         {{end}}
         {{if eq .ID "markov"}}
-        <h3>Дельты Markov-метрик</h3>
+        <h3>Дельты марковских метрик</h3>
         <table class="timeline-table">
           <tr><th>Статус</th><th>Метрика</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
           {{range $math.MarkovDeltas}}
@@ -1068,7 +1289,7 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
             <td>{{.Summary}}</td>
           </tr>
-          {{else}}<tr><td colspan="6" class="muted">Markov-дельты недоступны.</td></tr>{{end}}
+          {{else}}<tr><td colspan="6" class="muted">Марковские дельты недоступны.</td></tr>{{end}}
         </table>
         <h3>Переходы кандидата</h3>
         <table class="timeline-table">
@@ -1079,6 +1300,9 @@ const mathCompareTemplate = `<!doctype html>
         </table>
         {{end}}
         {{if eq .ID "graph"}}
+        <h3>Визуальный граф кандидата</h3>
+        <p class="help-text">Показаны самые сильные связи кандидата. Полная детализация ребер остается в таблицах ниже.</p>
+        {{causalGraphSVG $math.Candidate.CausalGraph}}
         <h3>Дельты графа причинности</h3>
         <table class="timeline-table">
           <tr><th>Статус</th><th>Тип</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
@@ -1119,6 +1343,7 @@ const mathCompareTemplate = `<!doctype html>
         <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
         <div class="fold-body">
           <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Где применяется</strong>{{.AppliesTo}}</div>
           <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
           <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
           <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
@@ -1129,99 +1354,141 @@ const mathCompareTemplate = `<!doctype html>
       {{end}}
     </div>
   </section>
+  {{with compareMathHeuristic .Math}}
+  <section id="math-verdict" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Итоговая эвристика сравнения</h2>
+        <div class="panel-kicker">Сводка по математическим дельтам: общий риск кандидата, главные факторы и первый шаг расследования.</div>
+      </div>
+      <span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span>
+    </div>
+    <div class="analysis-banner {{severityClass .Severity}}">
+      <div class="eyebrow">Общий вывод</div>
+      <div class="analysis-status">{{.Status}}</div>
+      <div class="muted">{{.Summary}}</div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Cards}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
 </main>
+<script>
+(() => {
+  const links = Array.from(document.querySelectorAll('.math-page .nav a'));
+  const setActive = (hash) => {
+    links.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === hash));
+  };
+  links.forEach((link) => link.addEventListener('click', () => setActive(link.getAttribute('href'))));
+  if (location.hash) setActive(location.hash);
+  const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setActive('#' + visible.target.id);
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+  }
+  document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
+    input.addEventListener('change', () => document.body.classList.toggle('show-zero-buckets', input.checked));
+  });
+})();
+</script>
 </body>
 </html>`
 
 const inspectTemplate = `<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Jank Hunter Inspect</title>
+  <title>Jank Hunter: отчет</title>
   <style>` + baseCSS + `</style>
 </head>
 <body>
 <header class="hero">
   <div class="hero-grid">
     <div>
-      <div class="eyebrow">Jank Hunter Inspect</div>
-      <h1>Runtime Signal Report</h1>
-      <div class="subhead">{{.Summary.Title}} · generated {{.GeneratedAt}} · standalone offline HTML</div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
+      <div class="eyebrow">Jank Hunter · обзор</div>
+      <h1>Отчет по сигналам выполнения</h1>
+      <div class="subhead">{{.Summary.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
     </div>
     <div class="hero-side">
       <div class="env-card">
-        <div class="env-title">Device Context</div>
-        <strong class="env-device">{{fallback .Summary.Environment.Title "unknown device"}}</strong>
-        <div class="env-subtitle">{{fallback .Summary.Environment.Subtitle "runtime context unavailable"}}</div>
+        <div class="env-title">Контекст устройства</div>
+        <strong class="env-device">{{fallback .Summary.Environment.Title "неизвестное устройство"}}</strong>
+        <div class="env-subtitle">{{fallback .Summary.Environment.Subtitle "контекст выполнения недоступен"}}</div>
         <div class="env-grid">
           {{range .Summary.Environment.Items}}
           <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
-          {{else}}<div class="env-item"><div class="env-label">Context</div><div class="env-value">unknown</div><div class="env-detail">No session/context metadata.</div></div>{{end}}
+          {{else}}<div class="env-item"><div class="env-label">Контекст</div><div class="env-value">неизвестно</div><div class="env-detail">Нет метаданных сессии и контекста.</div></div>{{end}}
         </div>
       </div>
       <div class="hero-meta">
-        <div class="chip">Logs <strong>{{.Summary.LogCount}}</strong></div>
-        <div class="chip">Events <strong>{{.Summary.EventCount}}</strong></div>
-        <div class="chip">Duration <strong>{{.Summary.DurationMS}} ms</strong></div>
+        <div class="chip">Логи <strong>{{.Summary.LogCount}}</strong></div>
+        <div class="chip">События <strong>{{.Summary.EventCount}}</strong></div>
+        <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
     </div>
   </div>
 </header>
 <nav class="nav">
-  <a href="#overview">Overview</a>
-  <a href="#network">Network</a>
+  <a href="#overview">Обзор</a>
+  <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
-  <a href="#owners">Owners</a>
-  <a href="#memory">Memory</a>
-  <a href="#custom">Metrics</a>
-  <a href="#context">Context</a>
-  <a href="#analysis">Verdict</a>
+  <a href="#owners">Источники</a>
+  <a href="#memory">Память</a>
+  <a href="#custom">Метрики</a>
+  <a href="#context">Контекст</a>
+  <a href="#analysis">Итог</a>
 </nav>
 <main>
   <section id="overview" class="panel">
     <div class="panel-head">
       <div>
-        <h2>Executive Signal Matrix</h2>
-        <div class="panel-kicker">Fast read of the run: latency, smoothness, stalls, memory and traffic.</div>
+        <h2>Матрица ключевых сигналов</h2>
+        <div class="panel-kicker">Быстрый срез прогона: задержки, плавность, паузы главного потока, память и трафик.</div>
       </div>
-      <span class="pill">offline report</span>
+      <span class="pill">автономный отчет</span>
     </div>
     <div class="grid">
-      <div class="metric"><div class="label">HTTP p95</div><div class="value">{{.Summary.HTTPP95MS}} ms</div><div class="hint">{{.Summary.HTTPCount}} requests, {{.Summary.HTTPFailed}} failed</div></div>
-      <div class="metric"><div class="label">UI jank</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div><div class="hint">{{.Summary.UIJank}} / {{.Summary.UIFrames}} frames</div></div>
-      <div class="metric"><div class="label">Average FPS</div><div class="value">{{printf "%.1f" .Summary.UIAvgFPS}}</div><div class="hint">min {{printf "%.1f" .Summary.UIMinFPS}}</div></div>
-      <div class="metric"><div class="label">Max stall</div><div class="value">{{.Summary.StallMaxMS}} ms</div><div class="hint">{{.Summary.StallCount}} stall events</div></div>
-      <div class="metric"><div class="label">Max PSS</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div><div class="hint">retained {{.Summary.Retained}}</div></div>
-      <div class="metric"><div class="label">UID RX max</div><div class="value">{{.Summary.TrafficRxMax}}</div><div class="hint">TX max {{.Summary.TrafficTxMax}}</div></div>
+      <div class="metric"><div class="label">{{tip "HTTP p95" "95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее."}}</div><div class="value">{{.Summary.HTTPP95MS}} ms</div><div class="hint">{{.Summary.HTTPCount}} запросов, ошибок {{.Summary.HTTPFailed}}</div></div>
+      <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div><div class="hint">{{.Summary.UIJank}} / {{.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">{{tip "Средний FPS" "Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах."}}</div><div class="value">{{printf "%.1f" .Summary.UIAvgFPS}}</div><div class="hint">минимум {{printf "%.1f" .Summary.UIMinFPS}}</div></div>
+      <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{.Summary.StallMaxMS}} ms</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
+      <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
+      <div class="metric"><div class="label">{{tip "Макс. RX UID" "Максимальный принятый сетевой трафик UID приложения по снимкам контекста. Помогает увидеть тяжелую сетевую активность."}}</div><div class="value">{{.Summary.TrafficRxMax}}</div><div class="hint">макс. TX {{.Summary.TrafficTxMax}}</div></div>
     </div>
-    <h3>Health Gauges</h3>
+    <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      <div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI jank</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP fail</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>avg FPS</span></div></div></div>
+      <div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI-подтормаживания</span></div></div></div>
+      <div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP ошибки</span></div></div></div>
+      <div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>средний FPS</span></div></div></div>
     </div>
   </section>
 
   <section id="network" class="panel">
     <div class="panel-head">
-      <div><h2>Network Routes</h2><div class="panel-kicker">Slowest routes by p95 latency, failures, bytes and owner attribution.</div></div>
+      <div><h2>Сетевые маршруты</h2><div class="panel-kicker">Самые медленные маршруты по p95-задержке, ошибкам, байтам и влиянию источников.</div></div>
     </div>
     <details class="fold">
-      <summary>Route Details</summary>
+      <summary>Детали маршрутов</summary>
       <div class="fold-body">
         <div class="chart-list">
           {{range .Summary.Routes}}
           <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} ms</strong></div>
-          {{else}}<div class="muted">No HTTP events.</div>{{end}}
+          {{else}}<div class="muted">Нет HTTP-событий.</div>{{end}}
         </div>
-        <h3>Route Table</h3>
+        <h3>Таблица маршрутов</h3>
         <table>
-          <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Avg TTFB</th><th>RX</th><th>TX</th><th>Owner</th></tr>
+          <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Средний TTFB</th><th>RX</th><th>TX</th><th>Источник</th></tr>
           {{range .Summary.Routes}}
           <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td>{{.AvgTTFBMS}} ms</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
-          {{else}}<tr><td colspan="10" class="muted">No HTTP events.</td></tr>{{end}}
+          {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1229,26 +1496,26 @@ const inspectTemplate = `<!doctype html>
 
   <section id="ui" class="panel">
     <div class="panel-head">
-      <div><h2>UI Smoothness</h2><div class="panel-kicker">Screens ranked by jank rate and frame latency.</div></div>
+      <div><h2>Плавность UI</h2><div class="panel-kicker">Экраны, отсортированные по доле подтормаживаний и задержке кадров.</div></div>
     </div>
     <details class="fold">
-      <summary>Screen Details</summary>
+      <summary>Детали экранов</summary>
       <div class="fold-body">
         <div class="chart-list">
           {{range .Summary.Screens}}
           <div class="chart-row"><code>{{.Screen}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
-          {{else}}<div class="muted">No UI window events.</div>{{end}}
+          {{else}}<div class="muted">Нет событий UI-окон.</div>{{end}}
         </div>
-        <h3>Screen Table</h3>
+        <h3>Таблица экранов</h3>
         <table>
-          <tr><th>Screen</th><th>Windows</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>Min FPS</th><th>p95 frame</th><th>max p99</th></tr>
+          <tr><th>Экран</th><th>Окна</th><th>Кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Средний FPS</th><th>Мин. FPS</th><th>p95 кадра</th><th>Макс. p99</th></tr>
           {{range .Summary.Screens}}
           <tr>
             <td><code>{{.Screen}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
             <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
             <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} ms</td><td>{{.MaxP99MS}} ms</td>
           </tr>
-          {{else}}<tr><td colspan="9" class="muted">No UI window events.</td></tr>{{end}}
+          {{else}}<tr><td colspan="9" class="muted">Нет событий UI-окон.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1256,16 +1523,16 @@ const inspectTemplate = `<!doctype html>
 
   <section id="owners" class="panel">
     <div class="panel-head">
-      <div><h2>Attribution Hotspots</h2><div class="panel-kicker">Owners, classes and stack hints with the largest measured impact.</div></div>
+      <div><h2>Горячие точки влияния</h2><div class="panel-kicker">Источники, классы и подсказки стека с наибольшим измеренным вкладом.</div></div>
     </div>
     <details class="fold">
-      <summary>Owner Details</summary>
+      <summary>Детали источников</summary>
       <div class="fold-body">
         <table>
-          <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
+          <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
           {{range .Summary.Owners}}
-          <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
-          {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1273,31 +1540,32 @@ const inspectTemplate = `<!doctype html>
 
   <section id="memory" class="panel">
     <div class="panel-head">
-      <div><h2>Memory And Retention</h2><div class="panel-kicker">PSS, available memory, low-memory samples and retained object age buckets.</div></div>
+      <div><h2>Память и удержанные объекты</h2><div class="panel-kicker">PSS, свободная память, сигналы низкой памяти и возраст удержанных объектов.</div></div>
     </div>
     <details class="fold">
-      <summary>Memory Details</summary>
+      <summary>Детали памяти</summary>
       <div class="fold-body">
         <div class="split">
           <div>
-            <h3>Memory</h3>
+            <h3>Память</h3>
+            <p class="help-text">{{tip "PSS" "Proportional Set Size: пропорциональный размер памяти процесса. Разделяемые страницы учитываются только частично, поэтому PSS хорошо показывает вклад приложения в потребление RAM."}} · {{tip "Давление памяти" "Состояние, когда свободной RAM мало или память приложения быстро растет. Это повышает риск частого GC, вытеснения кэшей и убийства процесса системой."}}</p>
             <table>
-              <tr><th>Metric</th><th>Value</th><th>Details</th></tr>
-              {{range .Summary.Memory}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No memory events.</td></tr>{{end}}
+              <tr><th>Метрика</th><th>Значение</th><th>Детали</th><th>Пояснение</th></tr>
+              {{range .Summary.Memory}}<tr><td>{{tip .Name (memoryHelp .Name)}}</td><td>{{.Value}}</td><td>{{.Extra}}</td><td class="muted">{{memoryHelp .Name}}</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий памяти.</td></tr>{{end}}
             </table>
           </div>
           <div>
-            <h3>Retained Classes</h3>
+            <h3>Удержанные классы</h3>
             <table>
-              <tr><th>Class / Owner</th><th>Count</th><th>Details</th></tr>
-              {{range .Summary.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No retained-object events.</td></tr>{{end}}
+              <tr><th>Класс / источник</th><th>Количество</th><th>Детали</th></tr>
+              {{range .Summary.RetainedClasses}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Нет событий удержанных объектов.</td></tr>{{end}}
             </table>
           </div>
         </div>
-        <h3>Retained Age Buckets</h3>
+        <h3>Возраст удержанных объектов</h3>
         <table>
-          <tr><th>Age</th><th>Count</th></tr>
-          {{range .Summary.RetainedAgeBuckets}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No retained-object events.</td></tr>{{end}}
+          <tr><th>Возраст</th><th>Количество</th></tr>
+          {{range .Summary.RetainedAgeBuckets}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет событий удержанных объектов.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1305,23 +1573,25 @@ const inspectTemplate = `<!doctype html>
 
   <section id="custom" class="panel">
     <div class="panel-head">
-      <div><h2>Custom Metrics</h2><div class="panel-kicker">Counters, gauges and AndroidX JankStats bridge metrics when available.</div></div>
+      <div><h2>Пользовательские метрики</h2><div class="panel-kicker">Счетчики, gauge-метрики и метрики AndroidX JankStats, если они доступны.</div></div>
     </div>
     <details class="fold">
-      <summary>Metric Details</summary>
+      <summary>Детали метрик</summary>
       <div class="fold-body">
         <div class="triad">
           <div>
-            <h3>Counters</h3>
-            <table><tr><th>Name</th><th>Value</th></tr>{{range .Summary.Counters}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No counters.</td></tr>{{end}}</table>
+            <h3>Счетчики</h3>
+            <p class="help-text">Счетчик показывает накопленное количество или объем за сценарий. Для <code>gc.bytes_allocated.delta</code> значение <code>4092288</code> означает примерно 4 МБ новых аллокаций: это не всегда плохо само по себе, но опасно рядом с ростом PSS, GC и подтормаживаниями UI.</p>
+            <table><tr><th>Имя</th><th>Значение</th><th>Как читать</th></tr>{{range .Summary.Counters}}<tr><td>{{tip .Name (metricHelp .Name)}}</td><td>{{.Value}}</td><td class="muted">{{metricHelp .Name}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Нет счетчиков.</td></tr>{{end}}</table>
           </div>
           <div>
-            <h3>Gauges</h3>
-            <table><tr><th>Name</th><th>Average</th><th>Details</th></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No gauges.</td></tr>{{end}}</table>
+            <h3>Gauge-метрики</h3>
+            <p class="help-text">Gauge-метрика показывает уровень во времени: среднее, максимум или последнее значение. Высокое значение плохо не само по себе, а когда совпадает с задержками, очередями, памятью или сетевой активностью.</p>
+            <table><tr><th>Имя</th><th>Среднее</th><th>Детали</th><th>Как читать</th></tr>{{range .Summary.Gauges}}<tr><td>{{tip .Name (metricHelp .Name)}}</td><td>{{.Value}}</td><td>{{.Extra}}</td><td class="muted">{{metricHelp .Name}}</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет gauge-метрик.</td></tr>{{end}}</table>
           </div>
           <div>
             <h3>JankStats</h3>
-            <table><tr><th>Metric</th><th>Value</th><th>Details</th></tr>{{range .Summary.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">No JankStats metrics.</td></tr>{{end}}</table>
+            <table><tr><th>Метрика</th><th>Значение</th><th>Детали</th></tr>{{range .Summary.JankStats}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Нет метрик JankStats.</td></tr>{{end}}</table>
           </div>
         </div>
       </div>
@@ -1330,44 +1600,44 @@ const inspectTemplate = `<!doctype html>
 
   <section id="context" class="panel">
     <div class="panel-head">
-      <div><h2>Run Context</h2><div class="panel-kicker">Cohorts keep comparisons honest: app, build, SDK, device, process and network.</div></div>
+      <div><h2>Контекст прогона</h2><div class="panel-kicker">Когорты помогают честно сравнивать версию приложения, сборку, SDK, устройство, процесс и сеть.</div></div>
     </div>
     <details class="fold">
-      <summary>Context Details</summary>
+      <summary>Детали контекста</summary>
       <div class="fold-body">
         <div class="triad">
-          <div><h3>App Versions</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>SDKs</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>Devices</h3><table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">unknown</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
         </div>
-        <h3>Process Breakdown</h3>
-        <table><tr><th>Process</th><th>Sessions</th></tr>{{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No process metadata.</td></tr>{{end}}</table>
-        <h3>Network Samples</h3>
-        <table><tr><th>Network</th><th>Samples</th></tr>{{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No context events.</td></tr>{{end}}</table>
-        <h3>Combined Cohorts</h3>
-        <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+        <h3>Разбивка по процессам</h3>
+        <table><tr><th>Процесс</th><th>Сессии</th></tr>{{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</table>
+        <h3>Сэмплы сети</h3>
+        <table><tr><th>Сеть</th><th>Сэмплы</th></tr>{{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет событий контекста.</td></tr>{{end}}</table>
+        <h3>Объединенные когорты</h3>
+        <table><tr><th>Когорта</th><th>События</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
       </div>
     </details>
   </section>
 
   <section id="analysis" class="panel">
     <div class="panel-head">
-      <div><h2>Heuristic Verdict</h2><div class="panel-kicker">Rule-based triage over all collected signals. Treat it as a review checklist, not as a mathematical proof.</div></div>
+      <div><h2>Эвристический итог</h2><div class="panel-kicker">Правила поверх всех собранных сигналов. Используйте это как чеклист ревью, а не как математическое доказательство.</div></div>
     </div>
     <div class="analysis-banner {{severityClass .Analysis.Severity}}">
-      <div class="eyebrow">Overall status</div>
+      <div class="eyebrow">Общий статус</div>
       <div class="analysis-status">{{.Analysis.Status}}</div>
       <div class="muted">{{.Analysis.Summary}}</div>
     </div>
-    <h3>Findings</h3>
+    <h3>Находки</h3>
     <div class="finding-list">
       {{range .Analysis.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
-      {{else}}<div class="muted">No heuristic findings.</div>{{end}}
+      {{else}}<div class="muted">Нет эвристических находок.</div>{{end}}
     </div>
-    <h3>Recommendations</h3>
+    <h3>Рекомендации</h3>
     <ul class="recommendations">
-      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>No extra recommendations.</li>{{end}}
+      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>Нет дополнительных рекомендаций.</li>{{end}}
     </ul>
   </section>
 </main>
@@ -1375,81 +1645,81 @@ const inspectTemplate = `<!doctype html>
 </html>`
 
 const compareTemplate = `<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Jank Hunter Compare</title>
+  <title>Jank Hunter: сравнение</title>
   <style>` + baseCSS + `</style>
 </head>
 <body>
 <header class="hero">
   <div class="hero-grid">
     <div>
-      <div class="eyebrow">Jank Hunter Compare</div>
-      <h1>Regression Control Deck</h1>
-      <div class="subhead">generated {{.GeneratedAt}} · compare first, then drill into every baseline and candidate log</div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
+      <div class="eyebrow">Jank Hunter · сравнение</div>
+      <h1>Панель контроля регрессий</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · сначала сравнение, затем детальный просмотр логов базы и кандидата</div>
     </div>
     <div class="hero-side">
       <div class="env-card">
-        <div class="env-title">Candidate Device Context</div>
-        <strong class="env-device">{{fallback .Comparison.Candidate.Environment.Title "unknown device"}}</strong>
-        <div class="env-subtitle">{{fallback .Comparison.Candidate.Environment.Subtitle "runtime context unavailable"}}</div>
+        <div class="env-title">Контекст устройства кандидата</div>
+        <strong class="env-device">{{fallback .Comparison.Candidate.Environment.Title "неизвестное устройство"}}</strong>
+        <div class="env-subtitle">{{fallback .Comparison.Candidate.Environment.Subtitle "контекст выполнения недоступен"}}</div>
         <div class="env-grid">
           {{range .Comparison.Candidate.Environment.Items}}
           <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
-          {{else}}<div class="env-item"><div class="env-label">Context</div><div class="env-value">unknown</div><div class="env-detail">No session/context metadata.</div></div>{{end}}
+          {{else}}<div class="env-item"><div class="env-label">Контекст</div><div class="env-value">неизвестно</div><div class="env-detail">Нет метаданных сессии и контекста.</div></div>{{end}}
         </div>
       </div>
       <div class="hero-meta">
-        <div class="chip">Baseline logs <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
-        <div class="chip">Candidate logs <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
-        <div class="chip">Deltas <strong>{{len .Comparison.Deltas}}</strong></div>
+        <div class="chip">Логи базы <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
+        <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
+        <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
       </div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
     </div>
   </div>
 </header>
 <nav class="nav">
-  <a href="#compare">Comparison</a>
-  <a href="#regressions">Regressions</a>
-  <a href="#candidate">Candidate Detail</a>
-  <a href="#drilldown">Per-log Drill-down</a>
-  <a href="#cohorts">Cohorts</a>
-  <a href="#analysis">Verdict</a>
+  <a href="#compare">Сравнение</a>
+  <a href="#regressions">Регрессии</a>
+  <a href="#candidate">Детали кандидата</a>
+  <a href="#drilldown">Детали логов</a>
+  <a href="#cohorts">Когорты</a>
+  <a href="#analysis">Итог</a>
 </nav>
 <main>
   <section id="compare" class="panel">
     <div class="panel-head">
       <div>
-        <h2>Comparative Scoreboard</h2>
-        <div class="panel-kicker">Baseline vs candidate across latency, smoothness, memory, traffic, retention and cohort mix.</div>
+        <h2>Сводная панель сравнения</h2>
+        <div class="panel-kicker">База и кандидат по задержкам, плавности, памяти, трафику, удержанным объектам и составу когорт.</div>
       </div>
-      <span class="pill">standalone HTML</span>
+      <span class="pill">автономный HTML</span>
     </div>
     {{range .Comparison.Warnings}}<p class="warning">{{.}}</p>{{end}}
     <div class="grid">
-      <div class="metric"><div class="label">Baseline HTTP p95</div><div class="value">{{.Comparison.Baseline.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Baseline.HTTPCount}} requests</div></div>
-      <div class="metric"><div class="label">Candidate HTTP p95</div><div class="value">{{.Comparison.Candidate.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Candidate.HTTPCount}} requests</div></div>
-      <div class="metric"><div class="label">Baseline UI jank</div><div class="value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} avg FPS</div></div>
-      <div class="metric"><div class="label">Candidate UI jank</div><div class="value">{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}} avg FPS</div></div>
-      <div class="metric"><div class="label">Baseline Max PSS</div><div class="value">{{.Comparison.Baseline.MemoryMaxKB}} KB</div><div class="hint">retained {{.Comparison.Baseline.Retained}}</div></div>
-      <div class="metric"><div class="label">Candidate Max PSS</div><div class="value">{{.Comparison.Candidate.MemoryMaxKB}} KB</div><div class="hint">retained {{.Comparison.Candidate.Retained}}</div></div>
+      <div class="metric"><div class="label">HTTP p95 базы</div><div class="value">{{.Comparison.Baseline.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Baseline.HTTPCount}} запросов</div></div>
+      <div class="metric"><div class="label">HTTP p95 кандидата</div><div class="value">{{.Comparison.Candidate.HTTPP95MS}} ms</div><div class="hint">{{.Comparison.Candidate.HTTPCount}} запросов</div></div>
+      <div class="metric"><div class="label">Подтормаживания UI базы</div><div class="value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} средний FPS</div></div>
+      <div class="metric"><div class="label">Подтормаживания UI кандидата</div><div class="value">{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="hint">{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}} средний FPS</div></div>
+      <div class="metric"><div class="label">Макс. PSS базы</div><div class="value">{{.Comparison.Baseline.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Comparison.Baseline.Retained}}</div></div>
+      <div class="metric"><div class="label">Макс. PSS кандидата</div><div class="value">{{.Comparison.Candidate.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Comparison.Candidate.Retained}}</div></div>
     </div>
-    <h3>Signal Rings</h3>
+    <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
-      <div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>candidate jank</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>candidate fail</span></div></div></div>
-      <div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>candidate FPS</span></div></div></div>
+      <div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>подтормаживания кандидата</span></div></div></div>
+      <div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>ошибки кандидата</span></div></div></div>
+      <div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS кандидата</span></div></div></div>
     </div>
   </section>
 
   <section id="regressions" class="panel">
     <div class="panel-head">
-      <div><h2>Regression Matrix</h2><div class="panel-kicker">Severity is adjusted for confidence and sample size. Bars show regression magnitude capped at 100%.</div></div>
+      <div><h2>Матрица регрессий</h2><div class="panel-kicker">Серьезность учитывает доверие и размер выборки. Полосы показывают величину регрессии с ограничением до 100%.</div></div>
     </div>
     <table>
-      <tr><th>Metric</th><th>Baseline</th><th>Candidate</th><th>Change</th><th>Regression</th><th>Severity</th><th>Confidence</th><th>Sample</th><th>Interval</th></tr>
+      <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>Доверие</th><th>Выборка</th><th>Интервал</th></tr>
       {{range .Comparison.Deltas}}
       <tr>
         <td>{{.Name}}</td><td>{{.Baseline}}</td><td>{{.Candidate}}</td><td>{{.Change}}</td>
@@ -1458,9 +1728,9 @@ const compareTemplate = `<!doctype html>
       </tr>
       {{end}}
     </table>
-    <h3>Worst Regression Cards</h3>
+    <h3>Худшие регрессии</h3>
     <table>
-      <tr><th>Metric</th><th>Severity</th><th>Regression</th><th>Confidence</th><th>Sample</th></tr>
+      <tr><th>Метрика</th><th>Серьезность</th><th>Регрессия</th><th>Доверие</th><th>Выборка</th></tr>
       {{range .Comparison.Deltas}}
       {{if notOK .Severity}}<tr><td>{{.Name}}</td><td class="{{severityClass .Severity}}">{{.Severity}}</td><td>{{.Change}}</td><td>{{.Confidence}}</td><td>{{.SampleSize}}</td></tr>{{end}}
       {{end}}
@@ -1469,37 +1739,37 @@ const compareTemplate = `<!doctype html>
 
   <section id="candidate" class="panel">
     <div class="panel-head">
-      <div><h2>Candidate Deep Summary</h2><div class="panel-kicker">The aggregate candidate profile after all filters.</div></div>
+      <div><h2>Подробная сводка кандидата</h2><div class="panel-kicker">Агрегированный профиль кандидата после всех фильтров.</div></div>
     </div>
     <details class="fold">
-      <summary>Candidate Route, Screen And Owner Details</summary>
+      <summary>Детали маршрутов, экранов и источников кандидата</summary>
       <div class="fold-body">
         <div class="split">
           <div>
-            <h3>Candidate Routes</h3>
+            <h3>Маршруты кандидата</h3>
             <table>
-              <tr><th>Route</th><th>Count</th><th>Failures</th><th>p50</th><th>p95</th><th>Max</th><th>Owner</th></tr>
+              <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Источник</th></tr>
               {{range .Comparison.Candidate.Routes}}
               <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.OwnerSample}}</code></td></tr>
-              {{else}}<tr><td colspan="7" class="muted">No HTTP events.</td></tr>{{end}}
+              {{else}}<tr><td colspan="7" class="muted">Нет HTTP-событий.</td></tr>{{end}}
             </table>
           </div>
           <div>
-            <h3>Candidate Screens</h3>
+            <h3>Экраны кандидата</h3>
             <table>
-              <tr><th>Screen</th><th>Frames</th><th>Janky</th><th>Jank rate</th><th>Avg FPS</th><th>p95</th></tr>
+              <tr><th>Экран</th><th>Кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Средний FPS</th><th>p95</th></tr>
               {{range .Comparison.Candidate.Screens}}
               <tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>
-              {{else}}<tr><td colspan="6" class="muted">No UI window events.</td></tr>{{end}}
+              {{else}}<tr><td colspan="6" class="muted">Нет событий UI-окон.</td></tr>{{end}}
             </table>
           </div>
         </div>
-        <h3>Candidate Owners</h3>
+        <h3>Источники кандидата</h3>
         <table>
-          <tr><th>Owner / Class</th><th>Kind</th><th>Count</th><th>Total</th><th>Max</th><th>Stack hint</th></tr>
+          <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
           {{range .Comparison.Candidate.Owners}}
-          <tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
-          {{else}}<tr><td colspan="6" class="muted">No owner attribution yet.</td></tr>{{end}}
+          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -1507,68 +1777,68 @@ const compareTemplate = `<!doctype html>
 
   <section id="drilldown" class="panel">
     <div class="panel-head">
-      <div><h2>Per-log Drill-down</h2><div class="panel-kicker">Open any source log to inspect its own network, UI, memory, metrics and attribution profile.</div></div>
+      <div><h2>Детали по каждому логу</h2><div class="panel-kicker">Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.</div></div>
     </div>
-    <h3>Baseline Logs</h3>
+    <h3>Логи базы</h3>
     {{range .BaselineLogs}}
     <details class="log-card" id="{{.Anchor}}">
       <summary>
-        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} events · {{.Summary.DurationMS}} ms · {{.Summary.LogCount}} log</div></div>
-        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Jank {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
-          <div><h3>Routes</h3><table><tr><th>Route</th><th>Count</th><th>Failures</th><th>p95</th><th>Max</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">No HTTP events.</td></tr>{{end}}</table></div>
-          <div><h3>Screens</h3><table><tr><th>Screen</th><th>Frames</th><th>Jank</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">No UI window events.</td></tr>{{end}}</table></div>
-          <div><h3>Owners</h3><table><tr><th>Owner</th><th>Kind</th><th>Count</th><th>Max</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">No owners.</td></tr>{{end}}</table></div>
-          <div><h3>Memory And Metrics</h3><table><tr><th>Signal</th><th>Value</th><th>Details</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>retained={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
         </div>
       </div>
     </details>
-    {{else}}<div class="muted">No per-log baseline details were embedded.</div>{{end}}
-    <h3>Candidate Logs</h3>
+    {{else}}<div class="muted">Детали логов базы не встроены.</div>{{end}}
+    <h3>Логи кандидата</h3>
     {{range .CandidateLogs}}
     <details class="log-card" id="{{.Anchor}}">
       <summary>
-        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} events · {{.Summary.DurationMS}} ms · {{.Summary.LogCount}} log</div></div>
-        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Jank {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
-          <div><h3>Routes</h3><table><tr><th>Route</th><th>Count</th><th>Failures</th><th>p95</th><th>Max</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">No HTTP events.</td></tr>{{end}}</table></div>
-          <div><h3>Screens</h3><table><tr><th>Screen</th><th>Frames</th><th>Jank</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">No UI window events.</td></tr>{{end}}</table></div>
-          <div><h3>Owners</h3><table><tr><th>Owner</th><th>Kind</th><th>Count</th><th>Max</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{.Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">No owners.</td></tr>{{end}}</table></div>
-          <div><h3>Memory And Metrics</h3><table><tr><th>Signal</th><th>Value</th><th>Details</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>retained={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} ms</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} ms</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
         </div>
       </div>
     </details>
-    {{else}}<div class="muted">No per-log candidate details were embedded.</div>{{end}}
+    {{else}}<div class="muted">Детали логов кандидата не встроены.</div>{{end}}
   </section>
 
   <section id="cohorts" class="panel">
     <div class="panel-head">
-      <div><h2>Cohort Breakdown</h2><div class="panel-kicker">Use this to check whether the comparison is fair across app version, SDK, device, process and network.</div></div>
+      <div><h2>Разбивка по когортам</h2><div class="panel-kicker">Используйте это, чтобы проверить честность сравнения по версии приложения, SDK, устройству, процессу и сети.</div></div>
     </div>
     <details class="fold">
-      <summary>Cohort Details</summary>
+      <summary>Детали когорт</summary>
       <div class="fold-body">
         <div class="split">
           <div>
-            <h3>Baseline</h3>
-            <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+            <h3>База</h3>
+            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
           </div>
           <div>
-            <h3>Candidate</h3>
-            <table><tr><th>Cohort</th><th>Events</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">No cohort metadata.</td></tr>{{end}}</table>
+            <h3>Кандидат</h3>
+            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
           </div>
         </div>
-        <h3>Process Mix</h3>
+        <h3>Состав процессов</h3>
         <table>
-          <tr><th>Baseline process</th><th>Sessions</th><th>Candidate process</th><th>Sessions</th></tr>
+          <tr><th>Процесс базы</th><th>Сессии</th><th>Процесс кандидата</th><th>Сессии</th></tr>
           <tr>
-            <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+            <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">неизвестно</span>{{end}}</td>
             <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
-            <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">unknown</span>{{end}}</td>
+            <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">неизвестно</span>{{end}}</td>
             <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
           </tr>
         </table>
@@ -1578,22 +1848,22 @@ const compareTemplate = `<!doctype html>
 
   <section id="analysis" class="panel">
     <div class="panel-head">
-      <div><h2>Heuristic Verdict</h2><div class="panel-kicker">Rule-based triage over all comparison deltas and cohort warnings. Treat it as a review checklist, not as a mathematical proof.</div></div>
+      <div><h2>Эвристический итог</h2><div class="panel-kicker">Правила поверх всех дельт сравнения и предупреждений по когортам. Используйте это как чеклист ревью, а не как математическое доказательство.</div></div>
     </div>
     <div class="analysis-banner {{severityClass .Analysis.Severity}}">
-      <div class="eyebrow">Overall status</div>
+      <div class="eyebrow">Общий статус</div>
       <div class="analysis-status">{{.Analysis.Status}}</div>
       <div class="muted">{{.Analysis.Summary}}</div>
     </div>
-    <h3>Findings</h3>
+    <h3>Находки</h3>
     <div class="finding-list">
       {{range .Analysis.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
-      {{else}}<div class="muted">No heuristic findings.</div>{{end}}
+      {{else}}<div class="muted">Нет эвристических находок.</div>{{end}}
     </div>
-    <h3>Recommendations</h3>
+    <h3>Рекомендации</h3>
     <ul class="recommendations">
-      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>No extra recommendations.</li>{{end}}
+      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>Нет дополнительных рекомендаций.</li>{{end}}
     </ul>
   </section>
 </main>
