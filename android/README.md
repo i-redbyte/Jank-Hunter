@@ -93,7 +93,7 @@ scripts/integrate-android-project.sh \
 
 Если app-модуль называется не `:app`, передайте правильный путь через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
 
-Путь к Android SDK скрипт берет из `--android-sdk`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` или стандартного macOS пути `~/Library/Android/sdk`. Если `local.properties` уже содержит `sdk.dir`, обычный запуск его не перезаписывает.
+Путь к Android SDK скрипт берет из `--android-sdk`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` или стандартного macOS пути `~/Library/Android/sdk`. Этот путь используется и для публикации Jank Hunter из локального clone, и для `local.properties` целевого проекта. Если `local.properties` уже содержит `sdk.dir`, обычный запуск его не перезаписывает.
 
 Сбросить буфер вручную:
 

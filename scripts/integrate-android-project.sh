@@ -13,6 +13,7 @@ TARGET_ROOT=""
 MAVEN_DIR=".jankhunter/maven"
 CLI_DIR=".jankhunter/bin"
 ANDROID_SDK_DIR=""
+RESOLVED_ANDROID_SDK_DIR=""
 DRY_RUN=0
 SKIP_PUBLISH=0
 SKIP_CLI_BUILD=0
@@ -40,8 +41,8 @@ Required:
 Common options:
   --jankhunter PATH             Path to Jank Hunter clone. Defaults to current directory when it
                                 contains cli/ and android/, otherwise to this script's repository.
-  --module :app                 Android module to patch. Can be repeated. If omitted, the first
-                                com.android.application module is detected.
+  --module :app                 Android module to patch. Can be repeated. If omitted, an
+                                application module is detected with :app preferred over test modules.
   --include-package com.myapp   ASM include package. Can be repeated.
   --include-packages a,b,c      Comma-separated ASM include packages.
   --exclude-package com.myapp.generated
@@ -60,7 +61,8 @@ Common options:
 Advanced:
   --skip-publish                Do not publish Jank Hunter artifacts into the target Maven repo.
   --skip-cli-build              Do not build/copy the jankhunter CLI binary.
-  --skip-local-properties       Do not create or update target local.properties.
+  --skip-local-properties       Do not create or update target local.properties. Gradle still gets
+                                the resolved SDK path through ANDROID_HOME during publishing.
   --no-asm-progress-log         Disable one-line ASM progress log in generated config.
   --no-gitignore                Do not add the local Maven repo to target .gitignore.
 
@@ -317,7 +319,10 @@ module_build_file() {
 }
 
 detect_app_module() {
-  local file rel dir module
+  local file rel dir module base total=0
+  local preferred=()
+  local regular=()
+  local suspicious=()
   while IFS= read -r file; do
     if grep -Eq 'com\.android\.application' "$file"; then
       rel="${file#$TARGET_ROOT/}"
@@ -327,15 +332,52 @@ detect_app_module() {
       else
         module=":${dir//\//:}"
       fi
-      printf '%s\n' "$module"
-      return
+      total=$((total + 1))
+      base="${module##*:}"
+      if [[ "$module" == ":app" || "$base" == "app" ]]; then
+        preferred+=("$module")
+      elif is_suspicious_app_module "$module"; then
+        suspicious+=("$module")
+      else
+        regular+=("$module")
+      fi
     fi
   done < <(
     find "$TARGET_ROOT" \
       \( -path "$TARGET_ROOT/.gradle" -o -path "$TARGET_ROOT/build" -o -path "$TARGET_ROOT/.jankhunter" \) -prune \
       -o \( -name build.gradle.kts -o -name build.gradle \) -type f -print | sort
   )
+
+  if [[ "$total" -gt 1 ]]; then
+    printf '[jankhunter-integrate] application module candidates: %s %s %s\n' "${preferred[*]-}" "${regular[*]-}" "${suspicious[*]-}" >&2
+    printf '[jankhunter-integrate] use --module :your-app if auto-detection picks the wrong module\n' >&2
+  fi
+  if [[ "${#preferred[@]}" -gt 0 ]]; then
+    printf '%s\n' "${preferred[0]}"
+    return
+  fi
+  if [[ "${#regular[@]}" -gt 0 ]]; then
+    printf '%s\n' "${regular[0]}"
+    return
+  fi
+  if [[ "${#suspicious[@]}" -gt 0 ]]; then
+    printf '[jankhunter-integrate] warning: only test-like application modules were found\n' >&2
+    printf '%s\n' "${suspicious[0]}"
+    return
+  fi
   fail "could not detect com.android.application module. Pass --module :app"
+}
+
+is_suspicious_app_module() {
+  local module="$1"
+  local lower
+  lower="$(printf '%s' "$module" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *test*|*tests*|*benchmark*|*benchmarks*|*fixture*|*fixtures*|*uitest*|*androidtest*)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 dedupe_array() {
@@ -461,8 +503,8 @@ properties_escape() {
   printf '%s' "$value"
 }
 
-local_properties_sdk_dir() {
-  local file="$TARGET_ROOT/local.properties"
+properties_sdk_dir() {
+  local file="$1"
   [[ -f "$file" ]] || return 0
   awk '
     /^[[:space:]]*sdk\.dir[[:space:]]*=/ {
@@ -473,8 +515,19 @@ local_properties_sdk_dir() {
   ' "$file"
 }
 
+local_properties_sdk_dir() {
+  properties_sdk_dir "$TARGET_ROOT/local.properties"
+}
+
 resolve_android_sdk_dir() {
-  local existing="$1"
+  if [[ -n "$RESOLVED_ANDROID_SDK_DIR" ]]; then
+    printf '%s\n' "$RESOLVED_ANDROID_SDK_DIR"
+    return 0
+  fi
+
+  local target_existing="${1:-}"
+  local jankhunter_existing=""
+  jankhunter_existing="$(properties_sdk_dir "$JANKHUNTER_ROOT/android/local.properties" || true)"
   local candidate=""
   if [[ -n "$ANDROID_SDK_DIR" ]]; then
     candidate="$ANDROID_SDK_DIR"
@@ -484,28 +537,27 @@ resolve_android_sdk_dir() {
     candidate="$ANDROID_SDK_ROOT"
   elif [[ -d "$HOME/Library/Android/sdk" ]]; then
     candidate="$HOME/Library/Android/sdk"
-  elif [[ -n "$existing" ]]; then
-    printf '%s\n' "$existing"
-    return 0
+  elif [[ -n "$target_existing" ]]; then
+    candidate="$target_existing"
+  elif [[ -n "$jankhunter_existing" ]]; then
+    candidate="$jankhunter_existing"
   else
     fail "Android SDK path was not found. Pass --android-sdk /path/to/sdk or set ANDROID_HOME."
   fi
 
   [[ -d "$candidate" ]] || fail "Android SDK path does not exist: $candidate"
-  (cd "$candidate" && pwd)
+  RESOLVED_ANDROID_SDK_DIR="$(cd "$candidate" && pwd)"
+  printf '%s\n' "$RESOLVED_ANDROID_SDK_DIR"
 }
 
-patch_local_properties() {
-  [[ "$SKIP_LOCAL_PROPERTIES" -eq 0 ]] || {
-    log "skipping local.properties"
-    return
-  }
-
-  local file="$TARGET_ROOT/local.properties"
+write_sdk_local_properties() {
+  local file="$1"
+  local label="$2"
+  local use_target_backup="$3"
   local current=""
-  current="$(local_properties_sdk_dir || true)"
+  current="$(properties_sdk_dir "$file" || true)"
   if [[ -n "$current" && -z "$ANDROID_SDK_DIR" ]]; then
-    log "local.properties already contains sdk.dir=$current"
+    log "$label local.properties already contains sdk.dir=$current"
     return
   fi
 
@@ -514,12 +566,15 @@ patch_local_properties() {
   local escaped_sdk_dir
   escaped_sdk_dir="$(properties_escape "$sdk_dir")"
 
-  backup_file "$file"
+  if [[ "$use_target_backup" -eq 1 ]]; then
+    backup_file "$file"
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "would write sdk.dir=$escaped_sdk_dir to $file"
     return
   fi
 
+  mkdir -p "$(dirname "$file")"
   if [[ -f "$file" ]] && grep -Eq '^[[:space:]]*sdk\.dir[[:space:]]*=' "$file"; then
     SDK_DIR_VALUE="$escaped_sdk_dir" perl -0pi -e '
       my $value = $ENV{"SDK_DIR_VALUE"};
@@ -533,6 +588,19 @@ patch_local_properties() {
     } > "$file.tmp"
     mv "$file.tmp" "$file"
   fi
+}
+
+prepare_jankhunter_android_sdk() {
+  resolve_android_sdk_dir "$(local_properties_sdk_dir || true)" >/dev/null
+  log "Android SDK: $RESOLVED_ANDROID_SDK_DIR"
+}
+
+patch_target_local_properties() {
+  [[ "$SKIP_LOCAL_PROPERTIES" -eq 0 ]] || {
+    log "skipping target local.properties"
+    return
+  }
+  write_sdk_local_properties "$TARGET_ROOT/local.properties" "target" 1
 }
 
 patch_module_build_file() {
@@ -646,9 +714,11 @@ publish_artifacts_if_needed() {
   log "publishing Jank Hunter artifacts into $MAVEN_REPO_ABS"
   run_cmd mkdir -p "$MAVEN_REPO_ABS"
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    (cd "$JANKHUNTER_ROOT/android" && ./gradlew publishToMavenLocal -Dmaven.repo.local="$MAVEN_REPO_ABS" --no-daemon)
+    if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew publishToMavenLocal -Dmaven.repo.local="$MAVEN_REPO_ABS" --no-daemon --stacktrace); then
+      fail "failed to publish Jank Hunter artifacts. Android SDK: $RESOLVED_ANDROID_SDK_DIR"
+    fi
   else
-    log "would run: cd $JANKHUNTER_ROOT/android && ./gradlew publishToMavenLocal -Dmaven.repo.local=$MAVEN_REPO_ABS --no-daemon"
+    log "would run: cd $JANKHUNTER_ROOT/android && ANDROID_HOME=$RESOLVED_ANDROID_SDK_DIR ./gradlew publishToMavenLocal -Dmaven.repo.local=$MAVEN_REPO_ABS --no-daemon --stacktrace"
   fi
 }
 
@@ -719,9 +789,10 @@ log "Local Maven repo: $MAVEN_REPO_ABS"
 log "CLI binary: $CLI_DIR_ABS/jankhunter"
 log "Modules: ${MODULES[*]}"
 
+prepare_jankhunter_android_sdk
 publish_artifacts_if_needed
 build_cli_if_needed
-patch_local_properties
+patch_target_local_properties
 patch_settings_file "$SETTINGS_FILE"
 patch_gitignore
 

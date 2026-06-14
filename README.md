@@ -88,7 +88,7 @@ scripts/integrate-android-project.sh \
   --runtime-call-graph
 ```
 
-Скрипт публикует Android SDK в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в указанный модуль и создает `jankHunter { ... }` конфиг. Перед правками он оставляет backup в `.jankhunter-backups/`.
+Скрипт публикует Android-артефакты Jank Hunter в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в указанный модуль и создает `jankHunter { ... }` конфиг. Перед публикацией он также передает найденный Android SDK в Gradle-сборку Jank Hunter, поэтому чистый clone без `ANDROID_HOME` тоже должен собраться на macOS. Перед правками целевого проекта скрипт оставляет backup в `.jankhunter-backups/`.
 
 Если Android SDK лежит не в стандартном месте, передайте путь явно:
 
