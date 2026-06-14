@@ -384,18 +384,44 @@ main {
 }
 .gauge-core strong { display: block; font-size: 23px; line-height: 1; }
 .gauge-core span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
-table { width: 100%; border-collapse: collapse; overflow: hidden; }
-th, td { padding: 10px 11px; border-bottom: 1px solid rgba(126,247,255,0.12); text-align: left; vertical-align: top; }
-th { color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
-th, td { overflow-wrap: break-word; word-break: normal; hyphens: none; }
+table {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  border-collapse: collapse;
+  table-layout: auto;
+  overflow: hidden;
+}
+th, td {
+  min-width: 76px;
+  max-width: 360px;
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(126,247,255,0.12);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+th {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+td:first-child, th:first-child {
+  min-width: 160px;
+}
 tr:hover td { background: rgba(111,247,255,0.035); }
 .muted { color: var(--muted); }
 code {
   color: #d8fcff;
   font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
   word-break: normal;
+  white-space: nowrap;
 }
 .bar, .chart-track, .delta-track {
   height: 10px;
@@ -598,6 +624,104 @@ details.log-card summary::-webkit-details-marker { display: none; }
 #cohorts table td {
   overflow-wrap: normal;
   word-break: normal;
+}
+.table-stack {
+  display: grid;
+  gap: 5px;
+}
+.table-stack span {
+  display: block;
+}
+.table-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+.table-metric {
+  padding: 5px 7px;
+  border: 1px solid rgba(126,247,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.028);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+.table-metric strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.influence-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.influence-node-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+.influence-node-table th:nth-child(1),
+.influence-node-table td:nth-child(1) {
+  width: 19%;
+  min-width: 0;
+  max-width: none;
+}
+.influence-node-table th:nth-child(2),
+.influence-node-table td:nth-child(2) {
+  width: 10%;
+  min-width: 0;
+  max-width: none;
+}
+.influence-node-table th:nth-child(3),
+.influence-node-table td:nth-child(3) {
+  width: 15%;
+  min-width: 0;
+  max-width: none;
+}
+.influence-node-table th:nth-child(4),
+.influence-node-table td:nth-child(4) {
+  width: 23%;
+  min-width: 0;
+  max-width: none;
+}
+.influence-node-table th:nth-child(5),
+.influence-node-table td:nth-child(5),
+.influence-node-table th:nth-child(6),
+.influence-node-table td:nth-child(6) {
+  width: 16.5%;
+  min-width: 0;
+  max-width: none;
+}
+.influence-node-table td:nth-child(1) code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.influence-edge-table {
+  min-width: 980px;
+}
+.influence-edge-table th:nth-child(1),
+.influence-edge-table td:nth-child(1),
+.influence-edge-table th:nth-child(2),
+.influence-edge-table td:nth-child(2) {
+  min-width: 220px;
+  max-width: 280px;
+}
+.influence-edge-table th:nth-child(3),
+.influence-edge-table td:nth-child(3),
+.influence-edge-table th:nth-child(4),
+.influence-edge-table td:nth-child(4),
+.influence-edge-table th:nth-child(5),
+.influence-edge-table td:nth-child(5) {
+  min-width: 120px;
+  max-width: 140px;
+  white-space: nowrap;
+}
+.influence-edge-table th:nth-child(6),
+.influence-edge-table td:nth-child(6) {
+  min-width: 320px;
+  max-width: 460px;
 }
 @media (max-width: 820px) {
   .hero { padding: 28px 18px 18px; }
@@ -1724,24 +1848,27 @@ const influenceTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
     </div>
-    <table>
-      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Проблемы</th><th>Спам логами</th><th>Главный поток</th><th>Сеть</th><th>Jank</th><th>Удержано</th><th>Причины</th><th>Флоу / экраны</th></tr>
+    <table class="influence-table influence-node-table">
+      <tr><th>Класс</th><th>Оценка</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
       {{range .Influence.TopNodes}}
       <tr>
         <td><code>{{.ClassName}}</code></td>
-        <td>{{printf "%.1f" .Score}}</td>
-        <td>{{influenceSeverity .Severity}}</td>
+        <td><div class="table-stack"><strong>{{printf "%.1f" .Score}}</strong><span>{{influenceSeverity .Severity}}</span></div></td>
         <td>{{influenceStatus .Status}}</td>
-        <td>{{.Problems}}</td>
-        <td>{{.LogSpam}}</td>
-        <td>{{.MainThreadMS}} мс</td>
-        <td>{{.NetworkMS}} мс</td>
-        <td>{{.UIJank}}</td>
-        <td>{{.Retained}}</td>
+        <td>
+          <div class="table-metrics">
+            <div class="table-metric">Проблемы<strong>{{.Problems}}</strong></div>
+            <div class="table-metric">Спам логами<strong>{{.LogSpam}}</strong></div>
+            <div class="table-metric">Главный поток<strong>{{.MainThreadMS}} мс</strong></div>
+            <div class="table-metric">Сеть<strong>{{.NetworkMS}} мс</strong></div>
+            <div class="table-metric">Jank<strong>{{.UIJank}}</strong></div>
+            <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
+          </div>
+        </td>
         <td>{{join .Reasons ", "}}</td>
         <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
       </tr>
-      {{else}}<tr><td colspan="12" class="muted">Нет узлов влияния.</td></tr>{{end}}
+      {{else}}<tr><td colspan="6" class="muted">Нет узлов влияния.</td></tr>{{end}}
     </table>
   </section>
 
@@ -1749,7 +1876,7 @@ const influenceTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в runtime-симптомах.</div></div>
     </div>
-    <table>
+    <table class="influence-table influence-edge-table">
       <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Runtime</th><th>Пояснение</th></tr>
       {{range .Influence.TopEdges}}
       <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
