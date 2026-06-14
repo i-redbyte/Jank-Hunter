@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
 import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
@@ -19,6 +20,7 @@ import io.jankhunter.runtime.internal.system.ProcessNames
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
+import java.lang.ref.WeakReference
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -39,6 +41,8 @@ object JankHunter {
     private val runtimeCallCounters = ConcurrentHashMap<RuntimeCallKey, RuntimeCallStats>()
     private val runtimeCallDropped = AtomicLong(0L)
     private val lastRuntimeCallFlushAtMs = AtomicLong(0L)
+    private val handlerRunnableLock = Any()
+    private val handlerRunnableEntries = mutableListOf<HandlerRunnableEntry>()
 
     @Volatile
     private var writer: AsyncLogWriter? = null
@@ -209,6 +213,9 @@ object JankHunter {
         runtimeCallCounters.clear()
         runtimeCallStack.remove()
         runtimeCallDropped.set(0L)
+        synchronized(handlerRunnableLock) {
+            handlerRunnableEntries.clear()
+        }
         started.set(false)
     }
 
@@ -293,6 +300,235 @@ object JankHunter {
         if (runnable == null || runnable is JankHunterRunnable) return runnable
         if (hasAdditionalTypeContract(runnable, Runnable::class.java)) return runnable
         return JankHunterRunnable(runnable, ownerName)
+    }
+
+    @JvmStatic
+    fun postHandlerRunnable(handler: Handler, runnable: Runnable, ownerName: String?): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, null, ownerName) {
+            handler.post(it)
+        }
+    }
+
+    @JvmStatic
+    fun postHandlerRunnableAtFront(handler: Handler, runnable: Runnable, ownerName: String?): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, null, ownerName) {
+            handler.postAtFrontOfQueue(it)
+        }
+    }
+
+    @JvmStatic
+    fun postHandlerRunnableDelayed(
+        handler: Handler,
+        runnable: Runnable,
+        delayMillis: Long,
+        ownerName: String?,
+    ): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, null, ownerName) {
+            handler.postDelayed(it, delayMillis)
+        }
+    }
+
+    @JvmStatic
+    fun postHandlerRunnableDelayed(
+        handler: Handler,
+        runnable: Runnable,
+        token: Any?,
+        delayMillis: Long,
+        ownerName: String?,
+    ): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, token, ownerName) {
+            handler.postDelayed(it, token, delayMillis)
+        }
+    }
+
+    @JvmStatic
+    fun postHandlerRunnableAtTime(
+        handler: Handler,
+        runnable: Runnable,
+        uptimeMillis: Long,
+        ownerName: String?,
+    ): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, null, ownerName) {
+            handler.postAtTime(it, uptimeMillis)
+        }
+    }
+
+    @JvmStatic
+    fun postHandlerRunnableAtTime(
+        handler: Handler,
+        runnable: Runnable,
+        token: Any?,
+        uptimeMillis: Long,
+        ownerName: String?,
+    ): Boolean {
+        return postWrappedHandlerRunnable(handler, runnable, token, ownerName) {
+            handler.postAtTime(it, token, uptimeMillis)
+        }
+    }
+
+    @JvmStatic
+    fun removeHandlerCallbacks(handler: Handler, runnable: Runnable) {
+        handler.removeCallbacks(runnable)
+        val wrappers = handlerWrappers(handler, runnable, null)
+        wrappers.forEach { handler.removeCallbacks(it) }
+        unregisterHandlerRunnables(handler, runnable, null)
+    }
+
+    @JvmStatic
+    fun removeHandlerCallbacks(handler: Handler, runnable: Runnable, token: Any?) {
+        handler.removeCallbacks(runnable, token)
+        val wrappers = handlerWrappers(handler, runnable, token)
+        wrappers.forEach { handler.removeCallbacks(it, token) }
+        unregisterHandlerRunnables(handler, runnable, token)
+    }
+
+    @JvmStatic
+    fun removeHandlerCallbacksAndMessages(handler: Handler, token: Any?) {
+        handler.removeCallbacksAndMessages(token)
+        unregisterHandlerRunnables(handler, token)
+    }
+
+    @JvmStatic
+    fun hasHandlerCallbacks(handler: Handler, runnable: Runnable): Boolean {
+        if (handler.hasCallbacks(runnable)) return true
+        return handlerWrappers(handler, runnable, null).any { handler.hasCallbacks(it) }
+    }
+
+    internal fun unregisterHandlerRunnable(delegate: Runnable, wrapper: Runnable) {
+        synchronized(handlerRunnableLock) {
+            cleanHandlerRunnableEntriesLocked()
+            val iterator = handlerRunnableEntries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.original.get() === delegate) {
+                    entry.wrappers.removeAll { it.wrapper.get() == null || it.wrapper.get() === wrapper }
+                }
+                if (entry.wrappers.isEmpty()) {
+                    iterator.remove()
+                }
+            }
+        }
+    }
+
+    private fun wrapHandlerRunnable(
+        handler: Handler,
+        runnable: Runnable,
+        token: Any?,
+        ownerName: String?,
+    ): Runnable {
+        if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
+        val wrapper = JankHunterHandlerRunnable(runnable, ownerName)
+        registerHandlerRunnable(handler, runnable, token, wrapper)
+        return wrapper
+    }
+
+    private inline fun postWrappedHandlerRunnable(
+        handler: Handler,
+        runnable: Runnable,
+        token: Any?,
+        ownerName: String?,
+        post: (Runnable) -> Boolean,
+    ): Boolean {
+        val wrapped = wrapHandlerRunnable(handler, runnable, token, ownerName)
+        try {
+            val posted = post(wrapped)
+            if (!posted && wrapped !== runnable) {
+                unregisterHandlerRunnable(runnable, wrapped)
+            }
+            return posted
+        } catch (throwable: Throwable) {
+            if (wrapped !== runnable) {
+                unregisterHandlerRunnable(runnable, wrapped)
+            }
+            throw throwable
+        }
+    }
+
+    private fun registerHandlerRunnable(
+        handler: Handler,
+        runnable: Runnable,
+        token: Any?,
+        wrapper: Runnable,
+    ) {
+        synchronized(handlerRunnableLock) {
+            cleanHandlerRunnableEntriesLocked()
+            val entry = handlerRunnableEntries.firstOrNull {
+                it.handler.get() === handler && it.original.get() === runnable
+            } ?: HandlerRunnableEntry(
+                handler = WeakReference(handler),
+                original = WeakReference(runnable),
+                wrappers = mutableListOf(),
+            ).also { handlerRunnableEntries.add(it) }
+            entry.wrappers.add(
+                HandlerRunnableWrapperEntry(
+                    wrapper = WeakReference(wrapper),
+                    token = token?.let(::WeakReference),
+                ),
+            )
+        }
+    }
+
+    private fun handlerWrappers(handler: Handler, runnable: Runnable, token: Any?): List<Runnable> {
+        synchronized(handlerRunnableLock) {
+            cleanHandlerRunnableEntriesLocked()
+            return handlerRunnableEntries
+                .firstOrNull { it.handler.get() === handler && it.original.get() === runnable }
+                ?.wrappers
+                ?.filter { tokenMatches(it.token, token) }
+                ?.mapNotNull { it.wrapper.get() }
+                ?: emptyList()
+        }
+    }
+
+    private fun unregisterHandlerRunnables(handler: Handler, runnable: Runnable, token: Any?) {
+        synchronized(handlerRunnableLock) {
+            cleanHandlerRunnableEntriesLocked()
+            val iterator = handlerRunnableEntries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.handler.get() === handler && entry.original.get() === runnable) {
+                    entry.wrappers.removeAll { tokenMatches(it.token, token) }
+                }
+                if (entry.wrappers.isEmpty()) {
+                    iterator.remove()
+                }
+            }
+        }
+    }
+
+    private fun unregisterHandlerRunnables(handler: Handler, token: Any?) {
+        synchronized(handlerRunnableLock) {
+            cleanHandlerRunnableEntriesLocked()
+            val iterator = handlerRunnableEntries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.handler.get() === handler) {
+                    entry.wrappers.removeAll { tokenMatches(it.token, token) }
+                }
+                if (entry.wrappers.isEmpty()) {
+                    iterator.remove()
+                }
+            }
+        }
+    }
+
+    private fun cleanHandlerRunnableEntriesLocked() {
+        val iterator = handlerRunnableEntries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.handler.get() == null || entry.original.get() == null) {
+                iterator.remove()
+            } else {
+                entry.wrappers.removeAll { it.wrapper.get() == null }
+                if (entry.wrappers.isEmpty()) {
+                    iterator.remove()
+                }
+            }
+        }
+    }
+
+    private fun tokenMatches(registeredToken: WeakReference<Any>?, requestedToken: Any?): Boolean {
+        return requestedToken == null || registeredToken?.get() === requestedToken
     }
 
     @JvmStatic
@@ -821,6 +1057,17 @@ object JankHunter {
     private data class AppIdentity(
         val versionName: String,
         val versionCode: String,
+    )
+
+    private data class HandlerRunnableEntry(
+        val handler: WeakReference<Handler>,
+        val original: WeakReference<Runnable>,
+        val wrappers: MutableList<HandlerRunnableWrapperEntry>,
+    )
+
+    private data class HandlerRunnableWrapperEntry(
+        val wrapper: WeakReference<Runnable>,
+        val token: WeakReference<Any>?,
     )
 
     private const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L

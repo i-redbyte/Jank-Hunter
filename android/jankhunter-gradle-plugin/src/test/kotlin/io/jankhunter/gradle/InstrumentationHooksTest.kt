@@ -22,6 +22,13 @@ class InstrumentationHooksTest {
                 "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
             ),
         )
+        assertTrue(
+            InstrumentationHooks.isOkHttpBuild(
+                "okhttp3/OkHttpClient\$Builder",
+                "build",
+                "()Lokhttp3/OkHttpClient;",
+            ),
+        )
         assertFalse(
             InstrumentationHooks.isOkHttpEventListenerFactory(
                 "okhttp3/OkHttpClient\$Builder",
@@ -42,7 +49,15 @@ class InstrumentationHooksTest {
             ),
         )
         assertEquals(
-            HandlerRunnableKind.RUNNABLE_LONG,
+            HandlerRunnableKind.FRONT_RUNNABLE,
+            InstrumentationHooks.handlerRunnableKind(
+                "android/os/Handler",
+                "postAtFrontOfQueue",
+                "(Ljava/lang/Runnable;)Z",
+            ),
+        )
+        assertEquals(
+            HandlerRunnableKind.RUNNABLE_LONG_DELAY,
             InstrumentationHooks.handlerRunnableKind(
                 "android/os/Handler",
                 "postDelayed",
@@ -50,11 +65,41 @@ class InstrumentationHooksTest {
             ),
         )
         assertEquals(
-            HandlerRunnableKind.RUNNABLE_OBJECT_LONG,
+            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME,
             InstrumentationHooks.handlerRunnableKind(
                 "android/os/Handler",
                 "postAtTime",
                 "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z",
+            ),
+        )
+        assertEquals(
+            HandlerRemoveCallbacksKind.RUNNABLE,
+            InstrumentationHooks.handlerRemoveCallbacksKind(
+                "android/os/Handler",
+                "removeCallbacks",
+                "(Ljava/lang/Runnable;)V",
+            ),
+        )
+        assertEquals(
+            HandlerRemoveCallbacksKind.RUNNABLE_OBJECT,
+            InstrumentationHooks.handlerRemoveCallbacksKind(
+                "android/os/Handler",
+                "removeCallbacks",
+                "(Ljava/lang/Runnable;Ljava/lang/Object;)V",
+            ),
+        )
+        assertTrue(
+            InstrumentationHooks.isHandlerRemoveCallbacksAndMessages(
+                "android/os/Handler",
+                "removeCallbacksAndMessages",
+                "(Ljava/lang/Object;)V",
+            ),
+        )
+        assertTrue(
+            InstrumentationHooks.isHandlerHasCallbacks(
+                "android/os/Handler",
+                "hasCallbacks",
+                "(Ljava/lang/Runnable;)Z",
             ),
         )
         assertTrue(

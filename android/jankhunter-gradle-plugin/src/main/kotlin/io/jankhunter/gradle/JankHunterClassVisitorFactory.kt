@@ -212,6 +212,11 @@ private class JankHunterMethodVisitor(
         } else {
             null
         }
+        val handlerRemoveCallbacksKind = if (config.handlers) {
+            InstrumentationHooks.handlerRemoveCallbacksKind(owner, name, descriptor)
+        } else {
+            null
+        }
         val executorRunnableKind = if (config.executors) {
             InstrumentationHooks.executorRunnableKind(owner, name, descriptor)
         } else {
@@ -232,20 +237,32 @@ private class JankHunterMethodVisitor(
                 wrapOkHttpEventListenerFactory()
             }
 
+            config.okhttp && InstrumentationHooks.isOkHttpBuild(owner, name, descriptor) -> {
+                installOkHttpEventListenerFactory()
+            }
+
             config.webSockets && InstrumentationHooks.isOkHttpNewWebSocket(owner, name, descriptor) -> {
                 wrapWebSocketListener()
             }
 
-            handlerRunnableKind == HandlerRunnableKind.SINGLE_RUNNABLE -> {
-                wrapTopRunnable()
+            handlerRunnableKind != null -> {
+                postHandlerRunnable(handlerRunnableKind)
+                return
             }
 
-            handlerRunnableKind == HandlerRunnableKind.RUNNABLE_LONG -> {
-                wrapRunnableBeforeLong()
+            handlerRemoveCallbacksKind != null -> {
+                removeHandlerCallbacks(handlerRemoveCallbacksKind)
+                return
             }
 
-            handlerRunnableKind == HandlerRunnableKind.RUNNABLE_OBJECT_LONG -> {
-                wrapRunnableBeforeObjectAndLong()
+            config.handlers && InstrumentationHooks.isHandlerRemoveCallbacksAndMessages(owner, name, descriptor) -> {
+                removeHandlerCallbacksAndMessages()
+                return
+            }
+
+            config.handlers && InstrumentationHooks.isHandlerHasCallbacks(owner, name, descriptor) -> {
+                hasHandlerCallbacks()
+                return
             }
 
             config.handlers && InstrumentationHooks.isHandlerMessageSend(owner, name, descriptor) -> {
@@ -313,6 +330,16 @@ private class JankHunterMethodVisitor(
         )
     }
 
+    private fun installOkHttpEventListenerFactory() {
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            OKHTTP_HELPERS,
+            "installEventListenerFactory",
+            "(Lokhttp3/OkHttpClient\$Builder;)Lokhttp3/OkHttpClient\$Builder;",
+            false,
+        )
+    }
+
     private fun wrapWebSocketListener() {
         visitLdcInsn(ownerLabel)
         visitMethodInsn(
@@ -331,6 +358,75 @@ private class JankHunterMethodVisitor(
             JANK_HUNTER,
             "wrapRunnable",
             "(Ljava/lang/Runnable;Ljava/lang/String;)Ljava/lang/Runnable;",
+            false,
+        )
+    }
+
+    private fun postHandlerRunnable(kind: HandlerRunnableKind) {
+        visitLdcInsn(ownerLabel)
+        val methodName = when (kind) {
+            HandlerRunnableKind.SINGLE_RUNNABLE -> "postHandlerRunnable"
+            HandlerRunnableKind.FRONT_RUNNABLE -> "postHandlerRunnableAtFront"
+            HandlerRunnableKind.RUNNABLE_LONG_DELAY -> "postHandlerRunnableDelayed"
+            HandlerRunnableKind.RUNNABLE_LONG_TIME -> "postHandlerRunnableAtTime"
+            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY -> "postHandlerRunnableDelayed"
+            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME -> "postHandlerRunnableAtTime"
+        }
+        val methodDescriptor = when (kind) {
+            HandlerRunnableKind.SINGLE_RUNNABLE,
+            HandlerRunnableKind.FRONT_RUNNABLE -> {
+                "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/String;)Z"
+            }
+            HandlerRunnableKind.RUNNABLE_LONG_DELAY,
+            HandlerRunnableKind.RUNNABLE_LONG_TIME -> {
+                "(Landroid/os/Handler;Ljava/lang/Runnable;JLjava/lang/String;)Z"
+            }
+            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY,
+            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME -> {
+                "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;JLjava/lang/String;)Z"
+            }
+        }
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            methodName,
+            methodDescriptor,
+            false,
+        )
+    }
+
+    private fun removeHandlerCallbacks(kind: HandlerRemoveCallbacksKind) {
+        val methodDescriptor = when (kind) {
+            HandlerRemoveCallbacksKind.RUNNABLE -> "(Landroid/os/Handler;Ljava/lang/Runnable;)V"
+            HandlerRemoveCallbacksKind.RUNNABLE_OBJECT -> {
+                "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;)V"
+            }
+        }
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "removeHandlerCallbacks",
+            methodDescriptor,
+            false,
+        )
+    }
+
+    private fun removeHandlerCallbacksAndMessages() {
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "removeHandlerCallbacksAndMessages",
+            "(Landroid/os/Handler;Ljava/lang/Object;)V",
+            false,
+        )
+    }
+
+    private fun hasHandlerCallbacks() {
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "hasHandlerCallbacks",
+            "(Landroid/os/Handler;Ljava/lang/Runnable;)Z",
             false,
         )
     }
@@ -368,28 +464,11 @@ private class JankHunterMethodVisitor(
         )
     }
 
-    private fun wrapRunnableBeforeLong() {
-        val delayLocal = newLocal(Type.LONG_TYPE)
-        storeLocal(delayLocal)
-        wrapTopRunnable()
-        loadLocal(delayLocal)
-    }
-
     private fun wrapRunnableBeforeObject() {
         val objectLocal = newLocal(OBJECT_TYPE)
         storeLocal(objectLocal)
         wrapTopRunnable()
         loadLocal(objectLocal)
-    }
-
-    private fun wrapRunnableBeforeObjectAndLong() {
-        val delayLocal = newLocal(Type.LONG_TYPE)
-        val objectLocal = newLocal(OBJECT_TYPE)
-        storeLocal(delayLocal)
-        storeLocal(objectLocal)
-        wrapTopRunnable()
-        loadLocal(objectLocal)
-        loadLocal(delayLocal)
     }
 
     private fun wrapRunnableBeforeLongAndObject() {
@@ -549,6 +628,12 @@ internal object InstrumentationHooks {
             descriptor == "(Lokhttp3/EventListener\$Factory;)Lokhttp3/OkHttpClient\$Builder;"
     }
 
+    fun isOkHttpBuild(owner: String, name: String, descriptor: String): Boolean {
+        return owner == "okhttp3/OkHttpClient\$Builder" &&
+            name == "build" &&
+            descriptor == "()Lokhttp3/OkHttpClient;"
+    }
+
     fun isOkHttpNewWebSocket(owner: String, name: String, descriptor: String): Boolean {
         return owner == "okhttp3/OkHttpClient" &&
             name == "newWebSocket" &&
@@ -561,20 +646,47 @@ internal object InstrumentationHooks {
             name == "post" && descriptor == "(Ljava/lang/Runnable;)Z" -> HandlerRunnableKind.SINGLE_RUNNABLE
             name == "postAtFrontOfQueue" &&
                 descriptor == "(Ljava/lang/Runnable;)Z" -> {
-                HandlerRunnableKind.SINGLE_RUNNABLE
+                HandlerRunnableKind.FRONT_RUNNABLE
             }
-            name == "postDelayed" && descriptor == "(Ljava/lang/Runnable;J)Z" -> HandlerRunnableKind.RUNNABLE_LONG
-            name == "postAtTime" && descriptor == "(Ljava/lang/Runnable;J)Z" -> HandlerRunnableKind.RUNNABLE_LONG
+            name == "postDelayed" &&
+                descriptor == "(Ljava/lang/Runnable;J)Z" -> {
+                HandlerRunnableKind.RUNNABLE_LONG_DELAY
+            }
+            name == "postAtTime" &&
+                descriptor == "(Ljava/lang/Runnable;J)Z" -> {
+                HandlerRunnableKind.RUNNABLE_LONG_TIME
+            }
             name == "postDelayed" &&
                 descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_OBJECT_LONG
+                HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY
             }
             name == "postAtTime" &&
                 descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_OBJECT_LONG
+                HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME
             }
             else -> null
         }
+    }
+
+    fun handlerRemoveCallbacksKind(owner: String, name: String, descriptor: String): HandlerRemoveCallbacksKind? {
+        if (owner != "android/os/Handler" || name != "removeCallbacks") return null
+        return when (descriptor) {
+            "(Ljava/lang/Runnable;)V" -> HandlerRemoveCallbacksKind.RUNNABLE
+            "(Ljava/lang/Runnable;Ljava/lang/Object;)V" -> HandlerRemoveCallbacksKind.RUNNABLE_OBJECT
+            else -> null
+        }
+    }
+
+    fun isHandlerRemoveCallbacksAndMessages(owner: String, name: String, descriptor: String): Boolean {
+        return owner == "android/os/Handler" &&
+            name == "removeCallbacksAndMessages" &&
+            descriptor == "(Ljava/lang/Object;)V"
+    }
+
+    fun isHandlerHasCallbacks(owner: String, name: String, descriptor: String): Boolean {
+        return owner == "android/os/Handler" &&
+            name == "hasCallbacks" &&
+            descriptor == "(Ljava/lang/Runnable;)Z"
     }
 
     fun isHandlerMessageSend(owner: String, name: String, descriptor: String): Boolean {
@@ -760,8 +872,16 @@ internal object InstrumentationHooks {
 
 internal enum class HandlerRunnableKind {
     SINGLE_RUNNABLE,
-    RUNNABLE_LONG,
-    RUNNABLE_OBJECT_LONG,
+    FRONT_RUNNABLE,
+    RUNNABLE_LONG_DELAY,
+    RUNNABLE_LONG_TIME,
+    RUNNABLE_OBJECT_LONG_DELAY,
+    RUNNABLE_OBJECT_LONG_TIME,
+}
+
+internal enum class HandlerRemoveCallbacksKind {
+    RUNNABLE,
+    RUNNABLE_OBJECT,
 }
 
 internal enum class ExecutorRunnableKind {
