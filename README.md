@@ -73,6 +73,12 @@ Gradle plugin подключайте только на debug/QA сборки и 
 Автоподключение в существующий Android-проект на macOS:
 
 ```bash
+scripts/integrate-android-project.sh ~/work/MyApp
+```
+
+Если нужно сразу сузить ASM и включить runtime-граф вызовов:
+
+```bash
 scripts/integrate-android-project.sh \
   --target ~/work/MyApp \
   --module :app \
@@ -82,7 +88,7 @@ scripts/integrate-android-project.sh \
   --runtime-call-graph
 ```
 
-Скрипт публикует Android SDK в `~/work/MyApp/.jankhunter/maven`, добавляет этот Maven repo в `settings.gradle(.kts)`, подключает Gradle plugin/dependencies в указанный модуль и создает `jankHunter { ... }` конфиг. Перед правками он оставляет backup в `.jankhunter-backups/`.
+Скрипт публикует Android SDK в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, подключает Gradle plugin/dependencies в указанный модуль и создает `jankHunter { ... }` конфиг. Перед правками он оставляет backup в `.jankhunter-backups/`.
 
 ## Что собирается
 

@@ -66,6 +66,12 @@ JankHunter.init(context, config)
 Для первого подключения к существующему многомодульному Android-проекту можно использовать macOS/bash-скрипт из корня Jank Hunter:
 
 ```bash
+scripts/integrate-android-project.sh ~/work/MyApp
+```
+
+Если нужно сразу сузить ASM и включить runtime-граф вызовов:
+
+```bash
 scripts/integrate-android-project.sh \
   --target ~/work/MyApp \
   --module :app \
@@ -78,6 +84,7 @@ scripts/integrate-android-project.sh \
 Что делает скрипт:
 
 - публикует Jank Hunter в локальный Maven repo целевого проекта: `.jankhunter/maven`;
+- собирает CLI и кладет бинарник в `.jankhunter/bin/jankhunter`;
 - добавляет этот repo в `settings.gradle` или `settings.gradle.kts`;
 - подключает `io.jankhunter.android`, `jankhunter-runtime` и `jankhunter-okhttp3` в указанный модуль;
 - добавляет `jankHunter { ... }` с безопасными дефолтами для debug-сборки;

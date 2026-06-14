@@ -2,13 +2,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_JANKHUNTER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -d "$PWD/cli" && -f "$PWD/android/gradlew" ]]; then
+  DEFAULT_JANKHUNTER_ROOT="$PWD"
+else
+  DEFAULT_JANKHUNTER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 
 JANKHUNTER_ROOT="$DEFAULT_JANKHUNTER_ROOT"
 TARGET_ROOT=""
 MAVEN_DIR=".jankhunter/maven"
+CLI_DIR=".jankhunter/bin"
 DRY_RUN=0
 SKIP_PUBLISH=0
+SKIP_CLI_BUILD=0
 VERIFY=0
 ADD_GITIGNORE=1
 INCLUDE_WHOLE_APPLICATION=0
@@ -23,13 +29,15 @@ BUILD_TYPES=("debug")
 usage() {
   cat <<'EOF'
 Usage:
+  scripts/integrate-android-project.sh /path/to/android/project
   scripts/integrate-android-project.sh --target /path/to/android/project [options]
 
 Required:
-  --target PATH                 Root of the target Android project.
+  PATH or --target PATH         Root of the target Android project.
 
 Common options:
-  --jankhunter PATH             Path to Jank Hunter clone. Defaults to this script's repository.
+  --jankhunter PATH             Path to Jank Hunter clone. Defaults to current directory when it
+                                contains cli/ and android/, otherwise to this script's repository.
   --module :app                 Android module to patch. Can be repeated. If omitted, the first
                                 com.android.application module is detected.
   --include-package com.myapp   ASM include package. Can be repeated.
@@ -41,11 +49,13 @@ Common options:
   --runtime-call-graph          Enable runtime caller -> callee graph hooks.
   --build-type debug            Enabled build type. Can be repeated or comma-separated.
   --maven-dir PATH              Local Maven repo inside target project. Default: .jankhunter/maven.
+  --cli-dir PATH                Target directory for CLI binary. Default: .jankhunter/bin.
   --verify                      Run target Gradle task resolution after patching.
   --dry-run                     Print what would be changed without writing files.
 
 Advanced:
   --skip-publish                Do not publish Jank Hunter artifacts into the target Maven repo.
+  --skip-cli-build              Do not build/copy the jankhunter CLI binary.
   --no-asm-progress-log         Disable one-line ASM progress log in generated config.
   --no-gitignore                Do not add the local Maven repo to target .gitignore.
 
@@ -58,6 +68,10 @@ Example:
     --exclude-packages com.myapp.generated,com.myapp.di \
     --runtime-call-graph \
     --verify
+
+Minimal:
+  cd /path/to/Jank-Hunter
+  scripts/integrate-android-project.sh ~/work/MyApp
 EOF
 }
 
@@ -143,6 +157,10 @@ while [[ $# -gt 0 ]]; do
       MAVEN_DIR="${2:-}"
       shift 2
       ;;
+    --cli-dir)
+      CLI_DIR="${2:-}"
+      shift 2
+      ;;
     --verify)
       VERIFY=1
       shift
@@ -153,6 +171,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-publish|--no-build)
       SKIP_PUBLISH=1
+      shift
+      ;;
+    --skip-cli-build)
+      SKIP_CLI_BUILD=1
       shift
       ;;
     --no-asm-progress-log)
@@ -167,8 +189,27 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
-    *)
+    --)
+      shift
+      while [[ $# -gt 0 ]]; do
+        if [[ -z "$TARGET_ROOT" ]]; then
+          TARGET_ROOT="$1"
+        else
+          fail "unexpected positional argument: $1"
+        fi
+        shift
+      done
+      ;;
+    -*)
       fail "unknown argument: $1"
+      ;;
+    *)
+      if [[ -z "$TARGET_ROOT" ]]; then
+        TARGET_ROOT="$1"
+      else
+        fail "unexpected positional argument: $1"
+      fi
+      shift
       ;;
   esac
 done
@@ -179,6 +220,7 @@ JANKHUNTER_ROOT="$(cd "$JANKHUNTER_ROOT" && pwd)"
 TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd)"
 
 [[ -f "$JANKHUNTER_ROOT/android/gradlew" ]] || fail "Jank Hunter Android Gradle wrapper not found: $JANKHUNTER_ROOT/android/gradlew"
+[[ -f "$JANKHUNTER_ROOT/cli/Makefile" ]] || fail "Jank Hunter CLI Makefile not found: $JANKHUNTER_ROOT/cli/Makefile"
 [[ -d "$TARGET_ROOT" ]] || fail "target project does not exist: $TARGET_ROOT"
 
 VERSION="$(awk -F= '$1 == "jankHunterVersion" { print $2; exit }' "$JANKHUNTER_ROOT/android/gradle.properties")"
@@ -187,6 +229,7 @@ GROUP="$(awk -F= '$1 == "jankHunterGroup" { print $2; exit }' "$JANKHUNTER_ROOT/
 [[ -n "$GROUP" ]] || fail "could not read jankHunterGroup from android/gradle.properties"
 
 MAVEN_REPO_ABS="$TARGET_ROOT/$MAVEN_DIR"
+CLI_DIR_ABS="$TARGET_ROOT/$CLI_DIR"
 BACKUP_ROOT="$TARGET_ROOT/.jankhunter-backups/$(date +%Y%m%d-%H%M%S)"
 
 run_cmd() {
@@ -502,6 +545,30 @@ publish_artifacts_if_needed() {
   fi
 }
 
+build_cli_if_needed() {
+  [[ "$SKIP_CLI_BUILD" -eq 0 ]] || {
+    log "skipping CLI build"
+    return
+  }
+
+  local source_binary="$JANKHUNTER_ROOT/cli/bin/jankhunter"
+  local target_binary="$CLI_DIR_ABS/jankhunter"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "would run: cd $JANKHUNTER_ROOT/cli && make build"
+    log "would copy CLI binary to $target_binary"
+    return
+  fi
+
+  log "building Jank Hunter CLI"
+  (cd "$JANKHUNTER_ROOT/cli" && make build)
+  [[ -x "$source_binary" ]] || fail "CLI binary was not produced: $source_binary"
+
+  mkdir -p "$CLI_DIR_ABS"
+  cp "$source_binary" "$target_binary"
+  chmod 0755 "$target_binary"
+}
+
 verify_target_project() {
   [[ "$VERIFY" -eq 1 ]] || return
   local gradlew="$TARGET_ROOT/gradlew"
@@ -542,9 +609,11 @@ log "Jank Hunter: $JANKHUNTER_ROOT"
 log "Target: $TARGET_ROOT"
 log "Version: $GROUP:$VERSION"
 log "Local Maven repo: $MAVEN_REPO_ABS"
+log "CLI binary: $CLI_DIR_ABS/jankhunter"
 log "Modules: ${MODULES[*]}"
 
 publish_artifacts_if_needed
+build_cli_if_needed
 patch_settings_file "$SETTINGS_FILE"
 patch_gitignore
 
@@ -557,4 +626,5 @@ verify_target_project
 
 log "done"
 log "Backups: $BACKUP_ROOT"
+log "CLI: $CLI_DIR_ABS/jankhunter"
 log "Next: build the target app and inspect generated owner-map/class-graph under each patched module build/generated/jankhunter/<variant>/"
