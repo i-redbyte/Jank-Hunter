@@ -291,6 +291,49 @@ main {
   letter-spacing: 0;
 }
 .metric .hint { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.influence-grid {
+  align-items: stretch;
+}
+.influence-tile {
+  height: 172px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 4px;
+}
+.influence-tile .value {
+  margin-top: 2px;
+}
+.influence-tile-body {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(111,247,255,0.34) rgba(255,255,255,0.04);
+}
+.influence-tile-body::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.influence-tile-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(111,247,255,0.34);
+}
+.influence-tile-body::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.04);
+}
+.influence-tile-body:focus {
+  outline: 1px solid rgba(111,247,255,0.42);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.influence-tile-body code {
+  max-width: none;
+  white-space: nowrap;
+}
+.influence-tile-reasons {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .panel, .log-card {
   margin: 18px 0;
   padding: 18px;
@@ -2450,13 +2493,15 @@ const inspectTemplate = `<!doctype html>
     {{if .Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
     <p class="help-text">Короткий срез “злых” узлов: классы получают вес по паузам главного потока, сети, памяти, лог-спаму, проблемным окнам и флоу. Подробная карта связей вынесена в отдельный отчет.</p>
-    <div class="grid">
+    <div class="grid influence-grid">
       {{range topInfluenceNodes .Summary.Influence 6}}
-      <div class="metric">
+      <div class="metric influence-tile" data-tip="{{.ClassName}} · {{join .Reasons ", "}}">
         <div class="label">{{influenceSeverity .Severity}}</div>
         <div class="value">{{printf "%.1f" .Score}}</div>
-        <div class="hint"><code>{{.ClassName}}</code></div>
-        <div class="hint">{{join .Reasons ", "}}</div>
+        <div class="influence-tile-body" tabindex="0">
+          <div class="hint"><code>{{.ClassName}}</code></div>
+          <div class="hint influence-tile-reasons">{{join .Reasons ", "}}</div>
+        </div>
       </div>
       {{end}}
     </div>
