@@ -358,8 +358,11 @@ main {
 .ring-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: start; }
 .gauge-card {
   width: 170px;
+  height: 198px;
   display: grid;
+  grid-template-rows: 156px 34px;
   justify-items: center;
+  align-items: start;
   gap: 8px;
 }
 .gauge {
@@ -397,7 +400,11 @@ main {
   letter-spacing: 0.04em;
 }
 .gauge-label {
-  min-height: 34px;
+  width: 156px;
+  height: 34px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   color: var(--muted);
   font-size: 12px;
   font-weight: 850;
@@ -406,6 +413,7 @@ main {
   overflow-wrap: normal;
   word-break: normal;
   hyphens: none;
+  text-wrap: balance;
 }
 table {
   width: 100%;
@@ -2435,7 +2443,7 @@ const inspectTemplate = `<!doctype html>
     </div>
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI-подтормаживания</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
       <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>
       <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
     </div>
