@@ -10,19 +10,21 @@ class JankHunterCoroutineFunction2 internal constructor(
     private val delegate: Function2<Any?, Any?, Any?>,
     private val ownerName: String?,
 ) : Function2<Any?, Any?, Any?> {
+    private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
+
     override fun invoke(p1: Any?, p2: Any?): Any? {
         val start = SystemClock.elapsedRealtime()
         var completedByContinuation = false
         var failed = false
         val continuation = if (p2 is Continuation<*>) {
             completedByContinuation = true
-            JankHunterContinuation(p2 as Continuation<Any?>, ownerName, start)
+            JankHunterContinuation(p2 as Continuation<Any?>, ownerName, capturedContext, start)
         } else {
             p2
         }
 
         try {
-            val result = JankHunter.callWithOwner(ownerName) {
+            val result = JankHunter.callWithContext(capturedContext, ownerName) {
                 delegate.invoke(p1, continuation)
             }
             if (result !== COROUTINE_SUSPENDED) {
@@ -48,6 +50,7 @@ class JankHunterCoroutineFunction2 internal constructor(
 private class JankHunterContinuation<T>(
     private val delegate: Continuation<T>,
     private val ownerName: String?,
+    private val capturedContext: JankHunter.JankHunterContext,
     private val startedAtMs: Long,
 ) : Continuation<T> {
     override val context: CoroutineContext
@@ -56,7 +59,7 @@ private class JankHunterContinuation<T>(
     override fun resumeWith(result: Result<T>) {
         val failed = result.exceptionOrNull() != null
         try {
-            JankHunter.callWithOwner(ownerName) {
+            JankHunter.callWithContext(capturedContext, ownerName) {
                 delegate.resumeWith(result)
             }
         } finally {

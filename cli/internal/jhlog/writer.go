@@ -72,6 +72,39 @@ func compactEventFlags(event Event) uint64 {
 	if event.Type == EventSession && event.Session != nil && event.Session.DeviceRooted {
 		flags |= uint64(FlagDeviceRooted)
 	}
+	switch event.Type {
+	case EventFlow:
+		flags |= compactContextFlags(event.Flow)
+	case EventLogSpam:
+		flags |= compactContextFlags(event.LogSpam)
+	case EventProblem:
+		flags |= compactContextFlags(event.Problem)
+	}
+	return flags
+}
+
+type contextIDs interface {
+	contextIDs() (screenID, ownerID, flowID, stepID uint64)
+}
+
+func compactContextFlags(context contextIDs) uint64 {
+	if context == nil {
+		return 0
+	}
+	screenID, ownerID, flowID, stepID := context.contextIDs()
+	var flags uint64
+	if screenID != 0 {
+		flags |= uint64(FlagHasScreen)
+	}
+	if ownerID != 0 {
+		flags |= uint64(FlagHasOwner)
+	}
+	if flowID != 0 {
+		flags |= uint64(FlagHasFlow)
+	}
+	if stepID != 0 {
+		flags |= uint64(FlagHasStep)
+	}
 	return flags
 }
 
@@ -205,8 +238,85 @@ func encodePayload(w io.Writer, event Event) error {
 				return err
 			}
 		}
+	case EventFlow:
+		p := event.Flow
+		if p == nil {
+			return fmt.Errorf("flow payload is nil")
+		}
+		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+			return err
+		}
+	case EventLogSpam:
+		p := event.LogSpam
+		if p == nil {
+			return fmt.Errorf("log spam payload is nil")
+		}
+		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+			return err
+		}
+		for _, value := range []uint64{p.SourceID, p.Level, p.Count} {
+			if err := writeUvarint(w, value); err != nil {
+				return err
+			}
+		}
+	case EventProblem:
+		p := event.Problem
+		if p == nil {
+			return fmt.Errorf("problem payload is nil")
+		}
+		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+			return err
+		}
+		for _, value := range []uint64{p.KindID, p.WindowMS, p.Count, p.MaxMS} {
+			if err := writeUvarint(w, value); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported event type %d", event.Type)
+	}
+	return nil
+}
+
+func (p *FlowEvent) contextIDs() (uint64, uint64, uint64, uint64) {
+	if p == nil {
+		return 0, 0, 0, 0
+	}
+	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
+}
+
+func (p *LogSpamEvent) contextIDs() (uint64, uint64, uint64, uint64) {
+	if p == nil {
+		return 0, 0, 0, 0
+	}
+	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
+}
+
+func (p *ProblemEvent) contextIDs() (uint64, uint64, uint64, uint64) {
+	if p == nil {
+		return 0, 0, 0, 0
+	}
+	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
+}
+
+func writeContextIDs(w io.Writer, flags uint64, context contextIDs) error {
+	screenID, ownerID, flowID, stepID := context.contextIDs()
+	values := []struct {
+		flag  Flag
+		value uint64
+	}{
+		{FlagHasScreen, screenID},
+		{FlagHasOwner, ownerID},
+		{FlagHasFlow, flowID},
+		{FlagHasStep, stepID},
+	}
+	for _, item := range values {
+		if flags&uint64(item.flag) == 0 {
+			continue
+		}
+		if err := writeUvarint(w, item.value); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -378,7 +488,7 @@ func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
 
 func needsPayloadLength(eventType EventType) bool {
 	switch eventType {
-	case EventDictionary, EventSession, EventContext:
+	case EventDictionary, EventSession, EventContext, EventFlow, EventLogSpam, EventProblem:
 		return true
 	default:
 		return false
@@ -410,6 +520,7 @@ func WriteSample(path string) error {
 		{Kind: DictProcess, ID: 4, Value: "main"},
 		{Kind: DictOwner, ID: 10, Value: "FeedRepository.refresh"},
 		{Kind: DictOwner, ID: 11, Value: "CheckoutPresenter.render"},
+		{Kind: DictOwner, ID: 12, Value: "CheckoutButton.onClick"},
 		{Kind: DictRoute, ID: 20, Value: "GET /feed"},
 		{Kind: DictRoute, ID: 21, Value: "POST /checkout"},
 		{Kind: DictScreen, ID: 30, Value: "FeedScreen"},
@@ -418,6 +529,12 @@ func WriteSample(path string) error {
 		{Kind: DictStack, ID: 50, Value: "CheckoutPresenter.renderItems"},
 		{Kind: DictMetric, ID: 60, Value: "logs.warn.count"},
 		{Kind: DictMetric, ID: 61, Value: "ui.fps_x100"},
+		{Kind: DictMetric, ID: 62, Value: "ui_jank"},
+		{Kind: DictMetric, ID: 63, Value: "main_thread_stall"},
+		{Kind: DictLogSource, ID: 64, Value: "android.util.Log.w"},
+		{Kind: DictFlow, ID: 65, Value: "checkout.open"},
+		{Kind: DictStep, ID: 66, Value: "render_list"},
+		{Kind: DictStep, ID: 67, Value: "network"},
 		{Kind: DictGeneric, ID: 70, Value: "15"},
 		{Kind: DictGeneric, ID: 71, Value: "2025-05-05"},
 		{Kind: DictGeneric, ID: 72, Value: "arm64-v8a"},
@@ -441,12 +558,16 @@ func WriteSample(path string) error {
 		{Type: EventHTTP, TimeMS: 2400, Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38900, TxBytes: 730}},
 		{Type: EventUIWindow, TimeMS: 10000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 30, WindowMS: 10000, FrameCount: 580, JankCount: 28, P50MS: 12, P95MS: 33, P99MS: 72}},
 		{Type: EventGauge, TimeMS: 10100, Metric: &MetricEvent{MetricID: 61, Value: 5800}},
+		{Type: EventFlow, TimeMS: 12000, Flow: &FlowEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67}},
+		{Type: EventLogSpam, TimeMS: 12100, LogSpam: &LogSpamEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67, SourceID: 64, Level: 5, Count: 12}},
 		{Type: EventStall, TimeMS: 13200, Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{OwnerID: 11, StackID: 50, DurationMS: 1240}},
+		{Type: EventProblem, TimeMS: 13201, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 63, WindowMS: 1240, Count: 1, MaxMS: 1240}},
 		{Type: EventMemory, TimeMS: 15000, Flags: uint64(FlagAppForeground), Memory: &MemoryEvent{PSSKB: 188240, JavaHeapKB: 90412, NativeHeapKB: 38112}},
 		{Type: EventRetained, TimeMS: 21000, Retained: &RetainedEvent{ClassID: 40, AgeMS: 15000, Count: 2}},
 		{Type: EventCounter, TimeMS: 22000, Metric: &MetricEvent{MetricID: 60, Value: 17}},
 		{Type: EventHTTP, TimeMS: 23000, Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 11, RouteID: 21, DurationMS: 1320, DNSMS: 9, ConnectMS: 0, TTFBMS: 1140, Status: Status5xx, RxBytes: 1024, TxBytes: 1240}},
 		{Type: EventUIWindow, TimeMS: 30000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 31, WindowMS: 10000, FrameCount: 542, JankCount: 62, P50MS: 14, P95MS: 48, P99MS: 108}},
+		{Type: EventProblem, TimeMS: 30001, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 62, WindowMS: 10000, Count: 62, MaxMS: 48}},
 		{Type: EventGauge, TimeMS: 30100, Metric: &MetricEvent{MetricID: 61, Value: 5420}},
 	}
 	for _, event := range events {

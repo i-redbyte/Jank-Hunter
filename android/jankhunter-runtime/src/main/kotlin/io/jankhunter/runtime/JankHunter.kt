@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
+import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
@@ -19,14 +20,21 @@ import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 object JankHunter {
     private val started = AtomicBoolean(false)
     private val owner = ThreadLocal<String>()
+    private val flow = ThreadLocal<String>()
+    private val flowStep = ThreadLocal<String>()
+    private val contextLock = Any()
+    private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
+    private val lastLogSpamFlushAtMs = AtomicLong(0L)
 
     @Volatile
     private var writer: AsyncLogWriter? = null
@@ -66,6 +74,9 @@ object JankHunter {
 
     @Volatile
     private var screen = "unknown"
+
+    @Volatile
+    private var lastContextKey = ""
 
     @JvmStatic
     fun init(context: Context?) {
@@ -162,6 +173,7 @@ object JankHunter {
 
     @JvmStatic
     fun shutdown() {
+        flushLogSpam(force = true)
         activityTracker?.let { tracker ->
             application?.unregisterActivityLifecycleCallbacks(tracker)
             tracker.close()
@@ -187,6 +199,8 @@ object JankHunter {
         objectRetentionWatcher = null
         fpsMonitor = null
         writer = null
+        lastContextKey = ""
+        logSpamCounters.clear()
         started.set(false)
     }
 
@@ -221,6 +235,52 @@ object JankHunter {
     }
 
     @JvmStatic
+    fun startFlow(flowName: String?): JankHunterFlow {
+        val token = JankHunterFlow(
+            previousFlow = flow.get(),
+            previousStep = flowStep.get(),
+        )
+        setThreadLocal(flow, normalizedContextValue(flowName))
+        flowStep.remove()
+        ensureContextRecorded()
+        return token
+    }
+
+    @JvmStatic
+    fun endFlow(token: JankHunterFlow?) {
+        if (token == null) return
+        setThreadLocal(flow, token.previousFlow)
+        setThreadLocal(flowStep, token.previousStep)
+        ensureContextRecorded()
+    }
+
+    @JvmStatic
+    fun markFlowStep(stepName: String?) {
+        setThreadLocal(flowStep, normalizedContextValue(stepName))
+        ensureContextRecorded()
+    }
+
+    @JvmStatic
+    fun withFlow(flowName: String?, runnable: Runnable) {
+        val token = startFlow(flowName)
+        try {
+            runnable.run()
+        } finally {
+            endFlow(token)
+        }
+    }
+
+    @JvmStatic
+    fun <T> withFlow(flowName: String?, callable: Callable<T>): T {
+        val token = startFlow(flowName)
+        try {
+            return callable.call()
+        } finally {
+            endFlow(token)
+        }
+    }
+
+    @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         if (runnable == null || runnable is JankHunterRunnable) return runnable
         return JankHunterRunnable(runnable, ownerName)
@@ -237,6 +297,12 @@ object JankHunter {
         if (block == null || block is JankHunterCoroutineFunction2) return block
         @Suppress("UNCHECKED_CAST")
         return JankHunterCoroutineFunction2(block as Function2<Any?, Any?, Any?>, ownerName)
+    }
+
+    @JvmStatic
+    fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
+        if (listener == null || listener is JankHunterClickListener) return listener
+        return JankHunterClickListener(listener, ownerName)
     }
 
     @JvmStatic
@@ -262,13 +328,21 @@ object JankHunter {
     fun currentScreen(): String = screen
 
     @JvmStatic
+    fun currentFlow(): String = flow.get() ?: "unknown"
+
+    @JvmStatic
+    fun currentFlowStep(): String = flowStep.get() ?: "unknown"
+
+    @JvmStatic
     fun setScreen(screenName: String?) {
         screen = screenName?.takeIf { it.isNotEmpty() } ?: "unknown"
         writer?.screen(screen)
+        ensureContextRecorded()
     }
 
     @JvmStatic
     fun flush() {
+        flushLogSpam(force = true)
         writer?.flush()
     }
 
@@ -285,8 +359,10 @@ object JankHunter {
         txBytes: Long,
         flags: Long,
     ) {
+        val attributedOwner = firstContextValue(owner, this.owner.get())
+        ensureContextRecorded(ownerOverride = attributedOwner)
         writer?.http(
-            owner,
+            attributedOwner,
             config?.redactRoute(route) ?: route,
             durationMs,
             dnsMs,
@@ -297,21 +373,31 @@ object JankHunter {
             txBytes,
             flags,
         )
+        val failed = flags and io.jankhunter.runtime.internal.io.BinaryLogWriter.FLAG_HTTP_FAILED != 0L || statusClass >= 5
+        if (failed || durationMs >= SLOW_HTTP_THRESHOLD_MS) {
+            recordProblemWindow("http_slow_or_failed", durationMs, 1, durationMs, attributedOwner)
+        }
     }
 
     @JvmStatic
     fun recordStall(owner: String?, stackHint: String?, durationMs: Long) {
-        writer?.stall(owner, stackHint, durationMs)
+        val attributedOwner = firstContextValue(owner, this.owner.get())
+        ensureContextRecorded(ownerOverride = attributedOwner)
+        writer?.stall(attributedOwner, stackHint, durationMs)
+        recordProblemWindow("main_thread_stall", durationMs, 1, durationMs, attributedOwner)
     }
 
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
+        ensureContextRecorded()
         writer?.memory(pssKb, javaHeapKb, nativeHeapKb)
     }
 
     @JvmStatic
     fun recordRetained(className: String?, ageMs: Long, count: Long) {
+        ensureContextRecorded(ownerOverride = className)
         writer?.retained(className, ageMs, count)
+        recordProblemWindow("retained_object", ageMs, count, ageMs, className)
     }
 
     @JvmStatic
@@ -379,30 +465,68 @@ object JankHunter {
         p95Ms: Long,
         p99Ms: Long,
     ) {
-        writer?.uiWindow(screen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms)
+        val attributedScreen = firstContextValue(screen, this.screen)
+        ensureContextRecorded(screenOverride = attributedScreen)
+        writer?.uiWindow(attributedScreen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms)
+        if (jankCount > 0 || p95Ms >= UI_PROBLEM_FRAME_THRESHOLD_MS) {
+            recordProblemWindow("ui_jank", windowMs, jankCount, p95Ms)
+        }
     }
 
     @JvmStatic
     fun recordCounter(name: String?, value: Long) {
+        ensureContextRecorded()
         writer?.counter(name, value)
     }
 
     @JvmStatic
     fun recordGauge(name: String?, value: Long) {
+        ensureContextRecorded()
         writer?.gauge(name, value)
     }
 
+    @JvmStatic
+    fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
+        val tuple = captureContext(ownerOverride = firstContextValue(ownerName, owner.get()))
+        val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
+        logSpamCounters.computeIfAbsent(key) { AtomicLong() }.incrementAndGet()
+        flushLogSpam(force = false)
+    }
+
+    internal fun captureContext(
+        screenOverride: String? = null,
+        ownerOverride: String? = null,
+    ): JankHunterContext {
+        return JankHunterContext(
+            screen = normalizedContextValue(firstContextValue(screenOverride, screen)),
+            owner = normalizedContextValue(firstContextValue(ownerOverride, owner.get())),
+            flow = normalizedContextValue(flow.get()),
+            step = normalizedContextValue(flowStep.get()),
+        )
+    }
+
     internal fun <T> callWithOwner(ownerName: String?, block: () -> T): T {
-        val previous = owner.get()
-        owner.set(ownerName)
+        return callWithContext(captureContext(), ownerName, block)
+    }
+
+    internal fun <T> callWithContext(context: JankHunterContext, ownerName: String?, block: () -> T): T {
+        val previousOwner = owner.get()
+        val previousFlow = flow.get()
+        val previousStep = flowStep.get()
+        val previousScreen = screen
+        setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
+        setThreadLocal(flow, context.flow)
+        setThreadLocal(flowStep, context.step)
+        context.screen?.let { screen = it }
+        ensureContextRecorded()
         try {
             return block()
         } finally {
-            if (previous == null) {
-                owner.remove()
-            } else {
-                owner.set(previous)
-            }
+            setThreadLocal(owner, previousOwner)
+            setThreadLocal(flow, previousFlow)
+            setThreadLocal(flowStep, previousStep)
+            screen = previousScreen
+            ensureContextRecorded()
         }
     }
 
@@ -413,6 +537,9 @@ object JankHunter {
         }
         if (durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS) {
             recordGauge("owner.$owner.$kind.duration_ms", durationMs)
+        }
+        if (failed || durationMs >= WRAPPED_WORK_PROBLEM_THRESHOLD_MS) {
+            recordProblemWindow("wrapped_$kind", durationMs, 1, durationMs, ownerName)
         }
     }
 
@@ -471,9 +598,87 @@ object JankHunter {
         recordGauge("main_thread.dispatch.over_threshold_ms", overThresholdMs)
         recordCounter("screen.${metricOwner(currentScreen())}.main_thread.slow_dispatch.count", 1)
         recordCounter("main_thread.dispatch.source.${metricOwner(source)}.slow.count", 1)
+        recordProblemWindow("main_thread_dispatch", durationMs, 1, durationMs, source)
+    }
+
+    internal fun recordClick(ownerName: String?, durationMs: Long, failed: Boolean) {
+        recordWrappedWork(ownerName, "click", durationMs, failed)
+    }
+
+    private fun recordProblemWindow(
+        kind: String,
+        windowMs: Long,
+        count: Long,
+        maxMs: Long,
+        ownerOverride: String? = null,
+    ) {
+        val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, owner.get()))
+        writer?.problemWindow(tuple.screen, tuple.owner, tuple.flow, tuple.step, kind, windowMs, count, maxMs)
+    }
+
+    private fun ensureContextRecorded(
+        screenOverride: String? = null,
+        ownerOverride: String? = null,
+    ) {
+        val asyncWriter = writer ?: return
+        val tuple = captureContext(screenOverride, ownerOverride)
+        val key = tuple.key()
+        synchronized(contextLock) {
+            if (key == lastContextKey) return
+            lastContextKey = key
+            asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
+        }
+    }
+
+    private fun flushLogSpam(force: Boolean) {
+        val asyncWriter = writer ?: return
+        val now = nowMs()
+        val last = lastLogSpamFlushAtMs.get()
+        if (!force && now - last < LOG_SPAM_FLUSH_MS) return
+        if (!lastLogSpamFlushAtMs.compareAndSet(last, now) && !force) return
+
+        logSpamCounters.forEach { (key, counter) ->
+            val count = counter.getAndSet(0)
+            if (count <= 0) return@forEach
+            asyncWriter.logSpam(key.screen, key.owner, key.flow, key.step, key.source, key.level, count)
+            if (count >= LOG_SPAM_PROBLEM_COUNT) {
+                asyncWriter.problemWindow(
+                    key.screen,
+                    key.owner,
+                    key.flow,
+                    key.step,
+                    "log_spam",
+                    LOG_SPAM_FLUSH_MS,
+                    count,
+                    count,
+                )
+            }
+        }
+        logSpamCounters.forEach { (key, counter) ->
+            if (counter.get() == 0L) {
+                logSpamCounters.remove(key, counter)
+            }
+        }
+    }
+
+    private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {
+        if (value == null) {
+            target.remove()
+        } else {
+            target.set(value)
+        }
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun firstContextValue(primary: String?, fallback: String?): String? {
+        return normalizedContextValue(primary) ?: normalizedContextValue(fallback)
+    }
+
+    private fun normalizedContextValue(value: String?): String? {
+        val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
+        return normalized?.takeUnless { it == "unknown" }
+    }
 
     private fun metricOwner(ownerName: String?): String {
         return ownerName
@@ -504,4 +709,27 @@ object JankHunter {
     )
 
     private const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L
+    private const val WRAPPED_WORK_PROBLEM_THRESHOLD_MS = 250L
+    private const val SLOW_HTTP_THRESHOLD_MS = 1000L
+    private const val UI_PROBLEM_FRAME_THRESHOLD_MS = 32L
+    private const val LOG_SPAM_FLUSH_MS = 5000L
+    private const val LOG_SPAM_PROBLEM_COUNT = 50L
+
+    internal data class JankHunterContext(
+        val screen: String?,
+        val owner: String?,
+        val flow: String?,
+        val step: String?,
+    ) {
+        fun key(): String = listOf(screen.orEmpty(), owner.orEmpty(), flow.orEmpty(), step.orEmpty()).joinToString("\u0001")
+    }
+
+    private data class LogSpamKey(
+        val screen: String?,
+        val owner: String?,
+        val flow: String?,
+        val step: String?,
+        val source: String?,
+        val level: Int,
+    )
 }

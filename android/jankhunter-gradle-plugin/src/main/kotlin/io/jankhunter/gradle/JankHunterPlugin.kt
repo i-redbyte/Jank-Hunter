@@ -50,6 +50,8 @@ class JankHunterPlugin : Plugin<Project> {
                 it.handlers.set(extension.instrument.handlers)
                 it.executors.set(extension.instrument.executors)
                 it.coroutines.set(extension.instrument.coroutines)
+                it.flowInteractions.set(extension.instrument.flowInteractions)
+                it.logSpam.set(extension.instrument.logSpam)
                 it.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 it.includeWholeApplication.set(includeWholeApplication)
                 it.androidNamespace.set(androidNamespace)
@@ -70,6 +72,8 @@ class JankHunterPlugin : Plugin<Project> {
                 params.handlers.set(extension.instrument.handlers)
                 params.executors.set(extension.instrument.executors)
                 params.coroutines.set(extension.instrument.coroutines)
+                params.flowInteractions.set(extension.instrument.flowInteractions)
+                params.logSpam.set(extension.instrument.logSpam)
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel(variant.name))
@@ -79,7 +83,7 @@ class JankHunterPlugin : Plugin<Project> {
             variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
 
             project.logger.lifecycle(
-                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
+                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} flowInteractions={} logSpam={} allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -87,6 +91,8 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.handlers,
                 extension.instrument.executors,
                 extension.instrument.coroutines,
+                extension.instrument.flowInteractions,
+                extension.instrument.logSpam,
                 extension.instrument.allowEmptyIncludePackages,
                 extension.instrument.includeWholeApplication,
                 extension.instrument.asmProgressLog,

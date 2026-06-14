@@ -31,6 +31,15 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if summary.HTTPCount != 3 {
 		t.Fatalf("HTTPCount = %d, want 3", summary.HTTPCount)
 	}
+	if len(summary.Flows) == 0 {
+		t.Fatalf("expected flow attribution")
+	}
+	if len(summary.LogSpam) == 0 {
+		t.Fatalf("expected log spam attribution")
+	}
+	if len(summary.ProblemWindows) == 0 {
+		t.Fatalf("expected problem windows")
+	}
 }
 
 func TestInspectFilesAppliesOwnerMap(t *testing.T) {

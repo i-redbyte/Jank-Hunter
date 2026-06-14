@@ -1,6 +1,6 @@
 package jhlog
 
-const FormatVersion = 2
+const FormatVersion = 3
 
 var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 
@@ -17,6 +17,9 @@ const (
 	EventRetained   EventType = 8
 	EventCounter    EventType = 9
 	EventGauge      EventType = 10
+	EventFlow       EventType = 11
+	EventLogSpam    EventType = 12
+	EventProblem    EventType = 13
 )
 
 type Flag uint64
@@ -32,6 +35,10 @@ const (
 	FlagNetworkValidated     Flag = 1 << 7
 	FlagNetworkVPN           Flag = 1 << 8
 	FlagDeviceRooted         Flag = 1 << 9
+	FlagHasScreen            Flag = 1 << 10
+	FlagHasOwner             Flag = 1 << 11
+	FlagHasFlow              Flag = 1 << 12
+	FlagHasStep              Flag = 1 << 13
 )
 
 type DictKind uint64
@@ -48,6 +55,9 @@ const (
 	DictAppVersion
 	DictBuild
 	DictProcess
+	DictFlow
+	DictStep
+	DictLogSource
 )
 
 type NetworkKind uint64
@@ -95,6 +105,9 @@ type Event struct {
 	Memory     *MemoryEvent     `json:"memory,omitempty"`
 	Retained   *RetainedEvent   `json:"retained,omitempty"`
 	Metric     *MetricEvent     `json:"metric,omitempty"`
+	Flow       *FlowEvent       `json:"flow,omitempty"`
+	LogSpam    *LogSpamEvent    `json:"log_spam,omitempty"`
+	Problem    *ProblemEvent    `json:"problem,omitempty"`
 }
 
 type SessionEvent struct {
@@ -177,6 +190,34 @@ type MetricEvent struct {
 	Value    uint64 `json:"value"`
 }
 
+type FlowEvent struct {
+	ScreenID uint64 `json:"screen_id,omitempty"`
+	OwnerID  uint64 `json:"owner_id,omitempty"`
+	FlowID   uint64 `json:"flow_id,omitempty"`
+	StepID   uint64 `json:"step_id,omitempty"`
+}
+
+type LogSpamEvent struct {
+	ScreenID uint64 `json:"screen_id,omitempty"`
+	OwnerID  uint64 `json:"owner_id,omitempty"`
+	FlowID   uint64 `json:"flow_id,omitempty"`
+	StepID   uint64 `json:"step_id,omitempty"`
+	SourceID uint64 `json:"source_id"`
+	Level    uint64 `json:"level"`
+	Count    uint64 `json:"count"`
+}
+
+type ProblemEvent struct {
+	ScreenID uint64 `json:"screen_id,omitempty"`
+	OwnerID  uint64 `json:"owner_id,omitempty"`
+	FlowID   uint64 `json:"flow_id,omitempty"`
+	StepID   uint64 `json:"step_id,omitempty"`
+	KindID   uint64 `json:"kind_id"`
+	WindowMS uint64 `json:"window_ms"`
+	Count    uint64 `json:"count"`
+	MaxMS    uint64 `json:"max_ms"`
+}
+
 type Log struct {
 	Source   string
 	Version  uint8
@@ -208,6 +249,12 @@ func TypeName(t EventType) string {
 		return "counter"
 	case EventGauge:
 		return "gauge"
+	case EventFlow:
+		return "flow_context"
+	case EventLogSpam:
+		return "log_spam"
+	case EventProblem:
+		return "problem_window"
 	default:
 		return "unknown"
 	}

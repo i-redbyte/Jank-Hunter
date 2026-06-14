@@ -164,6 +164,7 @@ func execute(path, source string, data any) error {
 		"memoryHelp":    memoryMetricHelp,
 		"integralHelp":  integralHelp,
 		"ownerKind":     ownerKindLabel,
+		"problemKind":   problemKindLabel,
 		"deltaGroups":   compareDeltaGroups,
 		"deltaLabel":    compareDeltaLabel,
 		"deltaHelp":     compareDeltaHelp,
@@ -451,6 +452,35 @@ func ownerKindLabel(kind string) string {
 	}
 }
 
+func problemKindLabel(kind string) string {
+	switch kind {
+	case "http_slow_or_failed":
+		return "медленный или ошибочный HTTP"
+	case "main_thread_stall":
+		return "пауза главного потока"
+	case "ui_jank":
+		return "подтормаживания UI"
+	case "wrapped_runnable":
+		return "долгая Runnable-задача"
+	case "wrapped_callable":
+		return "долгая Callable-задача"
+	case "wrapped_coroutine":
+		return "долгая coroutine-задача"
+	case "wrapped_executor":
+		return "долгая executor-задача"
+	case "wrapped_click":
+		return "долгий click-handler"
+	case "retained_object":
+		return "удержанный объект"
+	case "main_thread_dispatch":
+		return "медленный dispatch главного потока"
+	case "log_spam":
+		return "спам логами"
+	default:
+		return strings.ReplaceAll(kind, "_", " ")
+	}
+}
+
 type compareDeltaGroup struct {
 	Title  string
 	Detail string
@@ -507,7 +537,7 @@ func compareDeltaCategory(name string) string {
 	switch name {
 	case "HTTP p95", "HTTP failures", "UID RX max", "UID TX max", "Network mix":
 		return "network"
-	case "UI jank rate", "UI avg FPS", "Main-thread stall max":
+	case "UI jank rate", "UI avg FPS", "Main-thread stall max", "Log spam", "Problem windows":
 		return "ui"
 	case "Max PSS", "Min available memory", "Retained objects":
 		return "memory"
@@ -540,6 +570,10 @@ func compareDeltaLabel(name string) string {
 		return "Макс. исходящий трафик приложения"
 	case "Retained objects":
 		return "Удержанные объекты"
+	case "Log spam":
+		return "Спам логами"
+	case "Problem windows":
+		return "Проблемные окна"
 	case "Process mix":
 		return "Состав процессов"
 	case "App version mix":
@@ -577,6 +611,10 @@ func compareDeltaHelp(name string) string {
 		return "Максимальный трафик UID приложения. Рост сам по себе не всегда плох, но важен рядом с сетевой задержкой и ошибками."
 	case "Retained objects":
 		return "Количество удержанных объектов. Рост может указывать на утечки или слишком долгие ссылки."
+	case "Log spam":
+		return "Суммарное количество вызовов android.util.Log.* и Timber.*. Рост может давить на главный поток, I/O и засорять диагностику."
+	case "Problem windows":
+		return "Агрегированные окна, где Jank Hunter уже увидел причину: медленный HTTP, паузу главного потока, UI-подтормаживания, удержания или спам логами."
 	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
 		return "Проверка честности сравнения: база и кандидат должны быть собраны в сопоставимых условиях."
 	default:

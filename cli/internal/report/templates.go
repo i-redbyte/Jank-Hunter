@@ -1517,6 +1517,7 @@ const inspectTemplate = `<!doctype html>
   <a href="#overview">Обзор</a>
   <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
+  <a href="#flows">Флоу</a>
   <a href="#owners">Источники</a>
   <a href="#memory">Память</a>
   <a href="#custom">Метрики</a>
@@ -1594,6 +1595,59 @@ const inspectTemplate = `<!doctype html>
           </tr>
           {{else}}<tr><td colspan="9" class="muted">Нет событий UI-окон.</td></tr>{{end}}
         </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="flows" class="panel">
+    <div class="panel-head">
+      <div><h2>Флоу и причины</h2><div class="panel-kicker">Связка экран → флоу → шаг → источник показывает, где совпали сеть, паузы, UI, память и спам логами.</div></div>
+    </div>
+    <details class="fold" open>
+      <summary>Детали флоу</summary>
+      <div class="fold-body">
+        <table>
+          <tr><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник</th><th>Маршрут</th><th>HTTP</th><th>Ошибки</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Макс. пауза</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+          {{range .Summary.Flows}}
+          <tr>
+            <td><code>{{.Screen}}</code></td>
+            <td><code>{{.Flow}}</code></td>
+            <td><code>{{.Step}}</code></td>
+            <td><code>{{.Owner}}</code></td>
+            <td><code>{{.RouteSample}}</code></td>
+            <td>{{.HTTPCount}}</td>
+            <td>{{.HTTPFailed}}</td>
+            <td>{{.HTTPP95MS}} ms</td>
+            <td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td>
+            <td>{{.StallCount}}</td>
+            <td>{{.StallMaxMS}} ms</td>
+            <td>{{.LogSpam}}</td>
+            <td>{{.ProblemCount}}</td>
+            <td>{{.MemoryMaxKB}} KB</td>
+          </tr>
+          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста флоу. Включите API флоу или ASM-опцию flowInteractions, чтобы увидеть цепочки причин.</td></tr>{{end}}
+        </table>
+
+        <div class="split">
+          <div>
+            <h3>{{tip "Спам логами" "Счетчик частых вызовов android.util.Log.* и Timber.*. Текст логов не сохраняется: пишется только источник, уровень, контекст и количество вызовов."}}</h3>
+            <table>
+              <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник работ</th></tr>
+              {{range .Summary.LogSpam}}
+              <tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
+              {{else}}<tr><td colspan="7" class="muted">Нет событий спама логами.</td></tr>{{end}}
+            </table>
+          </div>
+          <div>
+            <h3>{{tip "Проблемные окна" "Агрегированные окна, где уже заметна причина: медленный HTTP, пауза главного потока, UI-подтормаживания, удержанные объекты или спам логами."}}</h3>
+            <table>
+              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник</th></tr>
+              {{range .Summary.ProblemWindows}}
+              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} ms</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
+              {{else}}<tr><td colspan="9" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}
+            </table>
+          </div>
+        </div>
       </div>
     </details>
   </section>

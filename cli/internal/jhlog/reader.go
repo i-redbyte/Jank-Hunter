@@ -246,6 +246,8 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
 			return err
 		}
 		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
+	case EventFlow, EventLogSpam, EventProblem:
+		return fmt.Errorf("compact event type %d requires payload length", event.Type)
 	default:
 		return fmt.Errorf("compact event type %d requires payload length", event.Type)
 	}
@@ -394,10 +396,77 @@ func decodePayload(payload []byte, event *Event) error {
 			return err
 		}
 		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
+	case EventFlow:
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		if err != nil {
+			return err
+		}
+		event.Flow = &FlowEvent{ScreenID: screenID, OwnerID: ownerID, FlowID: flowID, StepID: stepID}
+	case EventLogSpam:
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		if err != nil {
+			return err
+		}
+		values, err := readN(read, 3)
+		if err != nil {
+			return err
+		}
+		event.LogSpam = &LogSpamEvent{
+			ScreenID: screenID,
+			OwnerID:  ownerID,
+			FlowID:   flowID,
+			StepID:   stepID,
+			SourceID: values[0],
+			Level:    values[1],
+			Count:    values[2],
+		}
+	case EventProblem:
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		if err != nil {
+			return err
+		}
+		values, err := readN(read, 4)
+		if err != nil {
+			return err
+		}
+		event.Problem = &ProblemEvent{
+			ScreenID: screenID,
+			OwnerID:  ownerID,
+			FlowID:   flowID,
+			StepID:   stepID,
+			KindID:   values[0],
+			WindowMS: values[1],
+			Count:    values[2],
+			MaxMS:    values[3],
+		}
 	default:
 		return fmt.Errorf("unsupported event type %d", event.Type)
 	}
 	return nil
+}
+
+func readContextIDs(read func() (uint64, error), flags uint64) (screenID, ownerID, flowID, stepID uint64, err error) {
+	if flags&uint64(FlagHasScreen) != 0 {
+		if screenID, err = read(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+	}
+	if flags&uint64(FlagHasOwner) != 0 {
+		if ownerID, err = read(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+	}
+	if flags&uint64(FlagHasFlow) != 0 {
+		if flowID, err = read(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+	}
+	if flags&uint64(FlagHasStep) != 0 {
+		if stepID, err = read(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+	}
+	return screenID, ownerID, flowID, stepID, nil
 }
 
 func readN(read func() (uint64, error), count int) ([]uint64, error) {

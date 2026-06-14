@@ -206,6 +206,68 @@ class BinaryLogWriter(
         metric(EVENT_GAUGE, name, value)
     }
 
+    @Synchronized
+    fun flowContext(screen: String?, owner: String?, flow: String?, step: String?) {
+        val screenId = idFor(DICT_SCREEN, screen)
+        val ownerId = idFor(DICT_OWNER, owner)
+        val flowId = idFor(DICT_FLOW, flow)
+        val stepId = idFor(DICT_STEP, step)
+        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val payload = Payload()
+            .optionalContext(flags, screenId, ownerId, flowId, stepId)
+        record(EVENT_FLOW, flags, payload)
+    }
+
+    @Synchronized
+    fun logSpam(
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+        source: String?,
+        level: Int,
+        count: Long,
+    ) {
+        val screenId = idFor(DICT_SCREEN, screen)
+        val ownerId = idFor(DICT_OWNER, owner)
+        val flowId = idFor(DICT_FLOW, flow)
+        val stepId = idFor(DICT_STEP, step)
+        val sourceId = idFor(DICT_LOG_SOURCE, source)
+        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val payload = Payload()
+            .optionalContext(flags, screenId, ownerId, flowId, stepId)
+            .uvarint(sourceId)
+            .uvarint(level.toLong())
+            .uvarint(count)
+        record(EVENT_LOG_SPAM, flags, payload)
+    }
+
+    @Synchronized
+    fun problemWindow(
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+        kind: String?,
+        windowMs: Long,
+        count: Long,
+        maxMs: Long,
+    ) {
+        val screenId = idFor(DICT_SCREEN, screen)
+        val ownerId = idFor(DICT_OWNER, owner)
+        val flowId = idFor(DICT_FLOW, flow)
+        val stepId = idFor(DICT_STEP, step)
+        val kindId = idFor(DICT_METRIC, kind)
+        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val payload = Payload()
+            .optionalContext(flags, screenId, ownerId, flowId, stepId)
+            .uvarint(kindId)
+            .uvarint(windowMs)
+            .uvarint(count)
+            .uvarint(maxMs)
+        record(EVENT_PROBLEM, flags, payload)
+    }
+
     private fun metric(eventType: Int, name: String?, value: Long) {
         val metricId = idFor(DICT_METRIC, name)
         val payload = Payload().uvarint(metricId).uvarint(value)
@@ -259,6 +321,14 @@ class BinaryLogWriter(
                 value = value ushr 7
             }
             byteValue(value.toInt())
+            return this
+        }
+
+        fun optionalContext(flags: Long, screenId: Long, ownerId: Long, flowId: Long, stepId: Long): Payload {
+            if (flags and FLAG_HAS_SCREEN != 0L) uvarint(screenId)
+            if (flags and FLAG_HAS_OWNER != 0L) uvarint(ownerId)
+            if (flags and FLAG_HAS_FLOW != 0L) uvarint(flowId)
+            if (flags and FLAG_HAS_STEP != 0L) uvarint(stepId)
             return this
         }
 
@@ -395,6 +465,10 @@ class BinaryLogWriter(
         const val FLAG_NETWORK_VALIDATED: Long = 1L shl 7
         const val FLAG_NETWORK_VPN: Long = 1L shl 8
         const val FLAG_DEVICE_ROOTED: Long = 1L shl 9
+        const val FLAG_HAS_SCREEN: Long = 1L shl 10
+        const val FLAG_HAS_OWNER: Long = 1L shl 11
+        const val FLAG_HAS_FLOW: Long = 1L shl 12
+        const val FLAG_HAS_STEP: Long = 1L shl 13
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 
@@ -408,6 +482,9 @@ class BinaryLogWriter(
         private const val EVENT_RETAINED = 8
         private const val EVENT_COUNTER = 9
         private const val EVENT_GAUGE = 10
+        private const val EVENT_FLOW = 11
+        private const val EVENT_LOG_SPAM = 12
+        private const val EVENT_PROBLEM = 13
 
         private const val DICT_GENERIC = 0
         private const val DICT_OWNER = 1
@@ -420,6 +497,9 @@ class BinaryLogWriter(
         private const val DICT_APP_VERSION = 8
         private const val DICT_BUILD = 9
         private const val DICT_PROCESS = 10
+        private const val DICT_FLOW = 11
+        private const val DICT_STEP = 12
+        private const val DICT_LOG_SOURCE = 13
 
         private const val DICTIONARY_VALUE_UTF8 = 0
         private const val DICTIONARY_VALUE_BCD_DECIMAL = 1
@@ -495,12 +575,24 @@ class BinaryLogWriter(
             return when (eventType) {
                 EVENT_DICTIONARY,
                 EVENT_SESSION,
-                EVENT_CONTEXT -> true
+                EVENT_CONTEXT,
+                EVENT_FLOW,
+                EVENT_LOG_SPAM,
+                EVENT_PROBLEM -> true
                 else -> false
             }
         }
 
-        private const val FORMAT_VERSION = 2
+        private fun contextFlags(screenId: Long, ownerId: Long, flowId: Long, stepId: Long): Long {
+            var flags = 0L
+            if (screenId != 0L) flags = flags or FLAG_HAS_SCREEN
+            if (ownerId != 0L) flags = flags or FLAG_HAS_OWNER
+            if (flowId != 0L) flags = flags or FLAG_HAS_FLOW
+            if (stepId != 0L) flags = flags or FLAG_HAS_STEP
+            return flags
+        }
+
+        private const val FORMAT_VERSION = 3
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
         private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5

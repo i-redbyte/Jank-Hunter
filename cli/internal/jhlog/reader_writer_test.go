@@ -103,6 +103,69 @@ func TestSessionRootedUsesFlags(t *testing.T) {
 	}
 }
 
+func TestFlowLogSpamAndProblemUseContextFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flow-context.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	entries := []DictionaryEntry{
+		{Kind: DictScreen, ID: 1, Value: "Checkout"},
+		{Kind: DictOwner, ID: 2, Value: "CheckoutPresenter"},
+		{Kind: DictFlow, ID: 3, Value: "checkout.open"},
+		{Kind: DictLogSource, ID: 4, Value: "android.util.Log.w"},
+		{Kind: DictMetric, ID: 5, Value: "log_spam"},
+	}
+	for _, entry := range entries {
+		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+	if err := writer.WriteEvent(Event{Type: EventFlow, TimeMS: 10, Flow: &FlowEvent{ScreenID: 1, OwnerID: 2, FlowID: 3}}); err != nil {
+		t.Fatalf("WriteEvent(flow) error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{Type: EventLogSpam, TimeMS: 20, LogSpam: &LogSpamEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, SourceID: 4, Level: 5, Count: 9}}); err != nil {
+		t.Fatalf("WriteEvent(log spam) error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{Type: EventProblem, TimeMS: 30, Problem: &ProblemEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, KindID: 5, WindowMS: 5000, Count: 9, MaxMS: 9}}); err != nil {
+		t.Fatalf("WriteEvent(problem) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var flow *FlowEvent
+	var spam *LogSpamEvent
+	var problem *ProblemEvent
+	for _, event := range log.Events {
+		if event.Flow != nil {
+			flow = event.Flow
+			if event.Flags&uint64(FlagHasStep) != 0 {
+				t.Fatalf("unexpected step flag in %08b", event.Flags)
+			}
+		}
+		if event.LogSpam != nil {
+			spam = event.LogSpam
+		}
+		if event.Problem != nil {
+			problem = event.Problem
+		}
+	}
+	if flow == nil || flow.ScreenID != 1 || flow.OwnerID != 2 || flow.FlowID != 3 || flow.StepID != 0 {
+		t.Fatalf("flow did not round-trip: %+v", flow)
+	}
+	if spam == nil || spam.SourceID != 4 || spam.Level != 5 || spam.Count != 9 {
+		t.Fatalf("log spam did not round-trip: %+v", spam)
+	}
+	if problem == nil || problem.KindID != 5 || problem.WindowMS != 5000 || problem.MaxMS != 9 {
+		t.Fatalf("problem did not round-trip: %+v", problem)
+	}
+}
+
 func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.jhlog")
 	if err := WriteSample(path); err != nil {

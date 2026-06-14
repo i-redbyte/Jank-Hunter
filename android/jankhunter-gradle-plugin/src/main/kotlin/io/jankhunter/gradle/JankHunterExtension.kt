@@ -20,6 +20,8 @@ open class JankHunterExtension {
         var executors: Boolean = true
         var rxJava: Boolean = true
         var coroutines: Boolean = false
+        var flowInteractions: Boolean = true
+        var logSpam: Boolean = true
         var methodCounters: Boolean = false
         var allowEmptyIncludePackages: Boolean = false
         var includeWholeApplication: Boolean = false

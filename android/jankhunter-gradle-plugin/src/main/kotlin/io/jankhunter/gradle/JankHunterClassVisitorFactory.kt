@@ -22,6 +22,8 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             handlers = params.handlers.getOrElse(false),
             executors = params.executors.getOrElse(false),
             coroutines = params.coroutines.getOrElse(false),
+            flowInteractions = params.flowInteractions.getOrElse(false),
+            logSpam = params.logSpam.getOrElse(false),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -44,7 +46,9 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.webSockets.getOrElse(false) ||
             params.handlers.getOrElse(false) ||
             params.executors.getOrElse(false) ||
-            params.coroutines.getOrElse(false)
+            params.coroutines.getOrElse(false) ||
+            params.flowInteractions.getOrElse(false) ||
+            params.logSpam.getOrElse(false)
         val matched = hooksEnabled && InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
             params.excludePackages.getOrElse(emptyList()),
@@ -68,6 +72,8 @@ private data class HookConfig(
     val handlers: Boolean,
     val executors: Boolean,
     val coroutines: Boolean,
+    val flowInteractions: Boolean,
+    val logSpam: Boolean,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -77,6 +83,8 @@ private data class HookConfig(
             if (handlers) add("handler")
             if (executors) add("executor")
             if (coroutines) add("coroutine")
+            if (flowInteractions) add("flow")
+            if (logSpam) add("logspam")
         }.joinToString("+").ifEmpty { "none" }
     }
 }
@@ -192,6 +200,14 @@ private class JankHunterMethodVisitor(
             config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> {
                 wrapCoroutineBlockBeforeIntAndObject()
             }
+
+            config.flowInteractions && InstrumentationHooks.isViewSetOnClickListener(owner, name, descriptor) -> {
+                wrapTopClickListener()
+            }
+
+            config.logSpam && InstrumentationHooks.logSpamLevel(owner, name) != null -> {
+                recordLogSpam(owner, name, InstrumentationHooks.logSpamLevel(owner, name) ?: 0)
+            }
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
@@ -250,6 +266,17 @@ private class JankHunterMethodVisitor(
             JANK_HUNTER,
             "wrapCoroutineBlock",
             "(Lkotlin/jvm/functions/Function2;Ljava/lang/String;)Lkotlin/jvm/functions/Function2;",
+            false,
+        )
+    }
+
+    private fun wrapTopClickListener() {
+        visitLdcInsn(ownerLabel)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "wrapClickListener",
+            "(Landroid/view/View\$OnClickListener;Ljava/lang/String;)Landroid/view/View\$OnClickListener;",
             false,
         )
     }
@@ -340,6 +367,19 @@ private class JankHunterMethodVisitor(
         )
     }
 
+    private fun recordLogSpam(owner: String, name: String, level: Int) {
+        visitLdcInsn(ownerLabel)
+        visitLdcInsn(InstrumentationHooks.logSpamSource(owner, name))
+        push(level)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "recordLogSpam",
+            "(Ljava/lang/String;Ljava/lang/String;I)V",
+            false,
+        )
+    }
+
     companion object {
         private const val JANK_HUNTER = "io/jankhunter/runtime/JankHunter"
         private const val OKHTTP_HELPERS = "io/jankhunter/okhttp3/JankHunterOkHttp3"
@@ -422,6 +462,46 @@ internal object InstrumentationHooks {
             }
 
             else -> null
+        }
+    }
+
+    fun isViewSetOnClickListener(owner: String, name: String, descriptor: String): Boolean {
+        return name == "setOnClickListener" &&
+            descriptor == "(Landroid/view/View\$OnClickListener;)V"
+    }
+
+    fun logSpamLevel(owner: String, name: String): Int? {
+        if (owner == "android/util/Log") {
+            return when (name) {
+                "v" -> 2
+                "d" -> 3
+                "i" -> 4
+                "w" -> 5
+                "e" -> 6
+                "wtf" -> 7
+                else -> null
+            }
+        }
+        if (owner == "timber/log/Timber" || owner == "timber/log/Timber\$Tree") {
+            return when (name) {
+                "v" -> 2
+                "d" -> 3
+                "i" -> 4
+                "w" -> 5
+                "e" -> 6
+                "wtf" -> 7
+                else -> null
+            }
+        }
+        return null
+    }
+
+    fun logSpamSource(owner: String, name: String): String {
+        return when (owner) {
+            "android/util/Log" -> "android.util.Log.$name"
+            "timber/log/Timber" -> "Timber.$name"
+            "timber/log/Timber\$Tree" -> "Timber.Tree.$name"
+            else -> owner.replace('/', '.') + ".$name"
         }
     }
 

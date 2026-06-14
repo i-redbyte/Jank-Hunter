@@ -7,11 +7,13 @@ class JankHunterCallable<T> internal constructor(
     private val delegate: Callable<T>,
     private val ownerName: String?,
 ) : Callable<T> {
+    private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
+
     override fun call(): T {
         val start = SystemClock.elapsedRealtime()
         var failed = false
         try {
-            return JankHunter.callWithOwner(ownerName) {
+            return JankHunter.callWithContext(capturedContext, ownerName) {
                 delegate.call()
             }
         } catch (throwable: Throwable) {

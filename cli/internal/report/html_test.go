@@ -44,6 +44,15 @@ func TestWriteReports(t *testing.T) {
 		Owners: []analyze.OwnerStats{
 			{Owner: "FeedRepository.refresh", Kind: "http", Count: 2, MaxMS: 612},
 		},
+		Flows: []analyze.FlowStats{
+			{Screen: "Feed", Flow: "feed.open", Step: "network", Owner: "FeedRepository.refresh", HTTPCount: 2, HTTPP95MS: 612, UIFrames: 1122, UIJank: 90, UIJankPct: 8.02},
+		},
+		LogSpam: []analyze.LogSpamStats{
+			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Source: "android.util.Log.w", Level: "warn", Count: 7},
+		},
+		ProblemWindows: []analyze.ProblemWindowStats{
+			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Kind: "ui_jank", Windows: 1, Count: 90, TotalWindowMS: 10000, MaxMS: 24},
+		},
 	}
 
 	dir := t.TempDir()
@@ -51,7 +60,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Эвристический итог", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
@@ -107,7 +116,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "Сетевые маршруты", "Эвристический итог", "λ Анализ")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "Сетевые маршруты", "Флоу и причины", "Эвристический итог", "λ Анализ")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReport(

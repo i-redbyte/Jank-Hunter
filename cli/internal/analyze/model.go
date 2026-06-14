@@ -64,6 +64,49 @@ type OwnerStats struct {
 	StackHint string
 }
 
+type FlowStats struct {
+	Screen       string
+	Flow         string
+	Step         string
+	Owner        string
+	RouteSample  string
+	HTTPCount    int
+	HTTPFailed   int
+	HTTPP95MS    uint64
+	StallCount   int
+	StallMaxMS   uint64
+	UIWindows    int
+	UIFrames     uint64
+	UIJank       uint64
+	UIJankPct    float64
+	LogSpam      uint64
+	ProblemCount uint64
+	ProblemMaxMS uint64
+	MemoryMaxKB  uint64
+}
+
+type LogSpamStats struct {
+	Screen string
+	Flow   string
+	Step   string
+	Owner  string
+	Source string
+	Level  string
+	Count  uint64
+}
+
+type ProblemWindowStats struct {
+	Screen        string
+	Flow          string
+	Step          string
+	Owner         string
+	Kind          string
+	Windows       int
+	Count         uint64
+	TotalWindowMS uint64
+	MaxMS         uint64
+}
+
 type Summary struct {
 	Title             string
 	LogCount          int
@@ -106,6 +149,9 @@ type Summary struct {
 	Routes             []RouteStats
 	Screens            []ScreenStats
 	Owners             []OwnerStats
+	Flows              []FlowStats
+	LogSpam            []LogSpamStats
+	ProblemWindows     []ProblemWindowStats
 	AppVersions        []NamedValue
 	Builds             []NamedValue
 	Devices            []NamedValue

@@ -107,6 +107,10 @@ type collector struct {
 
 	screenStats        map[string]*ScreenStats
 	ownerStats         map[string]*OwnerStats
+	flowStats          map[string]*FlowStats
+	flowHTTPDurations  map[string][]uint64
+	logSpamStats       map[string]*LogSpamStats
+	problemStats       map[string]*ProblemWindowStats
 	counterValues      map[string]uint64
 	gaugeValues        map[string][]uint64
 	appVersions        map[string]uint64
@@ -136,6 +140,10 @@ type collector struct {
 	currentProduct    string
 	currentRootKnown  bool
 	currentRooted     bool
+	currentAttrScreen string
+	currentAttrOwner  string
+	currentAttrFlow   string
+	currentAttrStep   string
 }
 
 type namedDuration struct {
@@ -156,6 +164,10 @@ func newCollector(title string, logCount int, options Options) *collector {
 		routeOwner:         map[string]string{},
 		screenStats:        map[string]*ScreenStats{},
 		ownerStats:         map[string]*OwnerStats{},
+		flowStats:          map[string]*FlowStats{},
+		flowHTTPDurations:  map[string][]uint64{},
+		logSpamStats:       map[string]*LogSpamStats{},
+		problemStats:       map[string]*ProblemWindowStats{},
 		counterValues:      map[string]uint64{},
 		gaugeValues:        map[string][]uint64{},
 		appVersions:        map[string]uint64{},
@@ -182,6 +194,10 @@ func newCollector(title string, logCount int, options Options) *collector {
 		currentHardware:    "unknown",
 		currentBoard:       "unknown",
 		currentProduct:     "unknown",
+		currentAttrScreen:  "unknown",
+		currentAttrOwner:   "unknown",
+		currentAttrFlow:    "unknown",
+		currentAttrStep:    "unknown",
 	}
 }
 
@@ -235,6 +251,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.devices[c.currentDevice]++
 		c.sdks[c.currentSDK]++
 		c.processSamples[c.currentProcess]++
+	case event.Flow != nil:
+		c.currentAttrScreen = attrValue(jhlog.Resolve(dict, event.Flow.ScreenID))
+		c.currentAttrOwner = attrValue(c.resolveOwner(dict, event.Flow.OwnerID))
+		c.currentAttrFlow = attrValue(jhlog.Resolve(dict, event.Flow.FlowID))
+		c.currentAttrStep = attrValue(jhlog.Resolve(dict, event.Flow.StepID))
 	case event.HTTP != nil:
 		c.markCohort()
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
@@ -256,6 +277,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.routeFailures[route]++
 		}
 		addOwner(c.ownerStats, owner, "http", event.HTTP.DurationMS, "")
+		flowKey := c.flowKey("", owner)
+		flow := c.ensureFlow(flowKey)
+		flow.HTTPCount++
+		flow.RouteSample = firstNonEmpty(flow.RouteSample, route)
+		c.flowHTTPDurations[flowKey] = append(c.flowHTTPDurations[flowKey], event.HTTP.DurationMS)
+		if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
+			flow.HTTPFailed++
+		}
 	case event.UIWindow != nil:
 		c.markCohort()
 		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
@@ -287,6 +316,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if c.summary.UIMinFPS == 0 || windowFPS < c.summary.UIMinFPS {
 			c.summary.UIMinFPS = windowFPS
 		}
+		flowKey := c.flowKey(screen, "")
+		flow := c.ensureFlow(flowKey)
+		flow.UIWindows++
+		flow.UIFrames += event.UIWindow.FrameCount
+		flow.UIJank += event.UIWindow.JankCount
 	case event.Stall != nil:
 		c.markCohort()
 		owner := c.resolveOwner(dict, event.Stall.OwnerID)
@@ -299,6 +333,12 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.summary.StallMaxMS = event.Stall.DurationMS
 		}
 		addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
+		flowKey := c.flowKey("", owner)
+		flow := c.ensureFlow(flowKey)
+		flow.StallCount++
+		if event.Stall.DurationMS > flow.StallMaxMS {
+			flow.StallMaxMS = event.Stall.DurationMS
+		}
 	case event.Context != nil:
 		c.summary.ContextCount++
 		c.currentNetwork = jhlog.NetworkName(event.Context.Network)
@@ -334,6 +374,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Memory.PSSKB > c.summary.MemoryMaxKB {
 			c.summary.MemoryMaxKB = event.Memory.PSSKB
 		}
+		flow := c.ensureFlow(c.flowKey("", ""))
+		if event.Memory.PSSKB > flow.MemoryMaxKB {
+			flow.MemoryMaxKB = event.Memory.PSSKB
+		}
 	case event.Retained != nil:
 		c.markCohort()
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
@@ -352,6 +396,66 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 		c.retainedAgeBuckets[retainedAgeBucket(event.Retained.AgeMS)] += event.Retained.Count
 		addOwner(c.ownerStats, className, "retained_object", event.Retained.AgeMS, "")
+	case event.LogSpam != nil:
+		c.markCohort()
+		key := c.contextKey(
+			jhlog.Resolve(dict, event.LogSpam.ScreenID),
+			c.resolveOwner(dict, event.LogSpam.OwnerID),
+			jhlog.Resolve(dict, event.LogSpam.FlowID),
+			jhlog.Resolve(dict, event.LogSpam.StepID),
+		)
+		source := jhlog.Resolve(dict, event.LogSpam.SourceID)
+		level := logLevelName(event.LogSpam.Level)
+		logKey := key + "\x00" + source + "\x00" + level
+		stats := c.logSpamStats[logKey]
+		if stats == nil {
+			context := c.flowContextFromKey(key)
+			stats = &LogSpamStats{
+				Screen: context.Screen,
+				Flow:   context.Flow,
+				Step:   context.Step,
+				Owner:  context.Owner,
+				Source: source,
+				Level:  level,
+			}
+			c.logSpamStats[logKey] = stats
+		}
+		stats.Count += event.LogSpam.Count
+		flow := c.ensureFlow(key)
+		flow.LogSpam += event.LogSpam.Count
+	case event.Problem != nil:
+		c.markCohort()
+		key := c.contextKey(
+			jhlog.Resolve(dict, event.Problem.ScreenID),
+			c.resolveOwner(dict, event.Problem.OwnerID),
+			jhlog.Resolve(dict, event.Problem.FlowID),
+			jhlog.Resolve(dict, event.Problem.StepID),
+		)
+		kind := jhlog.Resolve(dict, event.Problem.KindID)
+		problemKey := key + "\x00" + kind
+		stats := c.problemStats[problemKey]
+		if stats == nil {
+			context := c.flowContextFromKey(key)
+			stats = &ProblemWindowStats{
+				Screen: context.Screen,
+				Flow:   context.Flow,
+				Step:   context.Step,
+				Owner:  context.Owner,
+				Kind:   kind,
+			}
+			c.problemStats[problemKey] = stats
+		}
+		stats.Windows++
+		stats.Count += event.Problem.Count
+		stats.TotalWindowMS += event.Problem.WindowMS
+		if event.Problem.MaxMS > stats.MaxMS {
+			stats.MaxMS = event.Problem.MaxMS
+		}
+		flow := c.ensureFlow(key)
+		flow.ProblemCount += event.Problem.Count
+		if event.Problem.MaxMS > flow.ProblemMaxMS {
+			flow.ProblemMaxMS = event.Problem.MaxMS
+		}
 	case event.Metric != nil:
 		c.markCohort()
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
@@ -393,6 +497,85 @@ func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
 		}
 	}
 	return owner
+}
+
+func (c *collector) flowKey(screenOverride, ownerOverride string) string {
+	return c.contextKey(screenOverride, ownerOverride, "", "")
+}
+
+func (c *collector) contextKey(screenOverride, ownerOverride, flowOverride, stepOverride string) string {
+	return strings.Join([]string{
+		firstKnown(screenOverride, c.currentAttrScreen),
+		firstKnown(flowOverride, c.currentAttrFlow),
+		firstKnown(stepOverride, c.currentAttrStep),
+		firstKnown(ownerOverride, c.currentAttrOwner),
+	}, "\x00")
+}
+
+func (c *collector) flowContextFromKey(key string) FlowStats {
+	parts := strings.Split(key, "\x00")
+	for len(parts) < 4 {
+		parts = append(parts, "unknown")
+	}
+	return FlowStats{
+		Screen: attrValue(parts[0]),
+		Flow:   attrValue(parts[1]),
+		Step:   attrValue(parts[2]),
+		Owner:  attrValue(parts[3]),
+	}
+}
+
+func (c *collector) ensureFlow(key string) *FlowStats {
+	stats := c.flowStats[key]
+	if stats != nil {
+		return stats
+	}
+	context := c.flowContextFromKey(key)
+	stats = &FlowStats{
+		Screen: context.Screen,
+		Flow:   context.Flow,
+		Step:   context.Step,
+		Owner:  context.Owner,
+	}
+	c.flowStats[key] = stats
+	return stats
+}
+
+func firstKnown(values ...string) string {
+	for _, value := range values {
+		value = attrValue(value)
+		if value != "unknown" {
+			return value
+		}
+	}
+	return "unknown"
+}
+
+func attrValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "id:0" {
+		return "unknown"
+	}
+	return value
+}
+
+func logLevelName(level uint64) string {
+	switch level {
+	case 2:
+		return "verbose"
+	case 3:
+		return "debug"
+	case 4:
+		return "info"
+	case 5:
+		return "warn"
+	case 6:
+		return "error"
+	case 7:
+		return "assert"
+	default:
+		return fmt.Sprintf("level-%d", level)
+	}
 }
 
 func ownerHash(owner string) (string, bool) {
@@ -464,6 +647,21 @@ func (c *collector) finish() Summary {
 	for _, stats := range c.ownerStats {
 		summary.Owners = append(summary.Owners, *stats)
 	}
+	for key, stats := range c.flowStats {
+		durations := c.flowHTTPDurations[key]
+		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+		stats.HTTPP95MS = percentileSorted(durations, 0.95)
+		if stats.UIFrames > 0 {
+			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
+		}
+		summary.Flows = append(summary.Flows, *stats)
+	}
+	for _, stats := range c.logSpamStats {
+		summary.LogSpam = append(summary.LogSpam, *stats)
+	}
+	for _, stats := range c.problemStats {
+		summary.ProblemWindows = append(summary.ProblemWindows, *stats)
+	}
 	for name, value := range c.counterValues {
 		summary.Counters = append(summary.Counters, NamedValue{Name: name, Value: value})
 		if strings.HasPrefix(name, "jankstats.") {
@@ -532,6 +730,9 @@ func (c *collector) finish() Summary {
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
+	sortFlows(summary.Flows)
+	sortLogSpam(summary.LogSpam)
+	sortProblems(summary.ProblemWindows)
 	sortNamed(summary.AppVersions)
 	sortNamed(summary.Builds)
 	sortNamed(summary.Devices)
@@ -592,6 +793,8 @@ func Compare(baseline, candidate Summary) Comparison {
 		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true, minUint64(baseline.Retained, candidate.Retained)),
+		delta("Log spam", totalLogSpam(baseline), totalLogSpam(candidate), "count", true, minUint64(uint64(len(baseline.LogSpam)), uint64(len(candidate.LogSpam)))),
+		delta("Problem windows", totalProblemWindows(baseline), totalProblemWindows(candidate), "count", true, minUint64(uint64(len(baseline.ProblemWindows)), uint64(len(candidate.ProblemWindows)))),
 		mixDelta("Process mix", baseline.Processes, candidate.Processes, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
@@ -628,6 +831,22 @@ func mixDelta(name string, baseline, candidate []NamedValue, sampleSize uint64) 
 		Severity:   severity,
 		SampleSize: sampleSize,
 	}
+}
+
+func totalLogSpam(summary Summary) uint64 {
+	var total uint64
+	for _, item := range summary.LogSpam {
+		total += item.Count
+	}
+	return total
+}
+
+func totalProblemWindows(summary Summary) uint64 {
+	var total uint64
+	for _, item := range summary.ProblemWindows {
+		total += item.Count
+	}
+	return total
 }
 
 func cohortWarnings(baseline, candidate Summary) []string {
@@ -737,6 +956,45 @@ func sortOwners(owners []OwnerStats) {
 			return owners[i].TotalMS > owners[j].TotalMS
 		}
 		return owners[i].MaxMS > owners[j].MaxMS
+	})
+}
+
+func sortFlows(flows []FlowStats) {
+	sort.Slice(flows, func(i, j int) bool {
+		left := flowSeverityScore(flows[i])
+		right := flowSeverityScore(flows[j])
+		if left == right {
+			return flows[i].Flow < flows[j].Flow
+		}
+		return left > right
+	})
+}
+
+func flowSeverityScore(flow FlowStats) uint64 {
+	return flow.ProblemCount*10_000 +
+		uint64(flow.StallCount)*5_000 +
+		flow.UIJank*100 +
+		flow.LogSpam*10 +
+		uint64(flow.HTTPFailed)*500 +
+		flow.HTTPP95MS +
+		flow.ProblemMaxMS
+}
+
+func sortLogSpam(items []LogSpamStats) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Source < items[j].Source
+		}
+		return items[i].Count > items[j].Count
+	})
+}
+
+func sortProblems(items []ProblemWindowStats) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].MaxMS == items[j].MaxMS {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].MaxMS > items[j].MaxMS
 	})
 }
 

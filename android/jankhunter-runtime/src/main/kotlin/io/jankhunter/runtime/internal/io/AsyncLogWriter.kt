@@ -174,6 +174,35 @@ class AsyncLogWriter private constructor(
         offer { it.gauge(name, value) }
     }
 
+    fun flowContext(screen: String?, owner: String?, flow: String?, step: String?) {
+        offer { it.flowContext(screen, owner, flow, step) }
+    }
+
+    fun logSpam(
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+        source: String?,
+        level: Int,
+        count: Long,
+    ) {
+        offer { it.logSpam(screen, owner, flow, step, source, level, count) }
+    }
+
+    fun problemWindow(
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+        kind: String?,
+        windowMs: Long,
+        count: Long,
+        maxMs: Long,
+    ) {
+        offer { it.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs) }
+    }
+
     fun flush() {
         offer { it.flush() }
     }

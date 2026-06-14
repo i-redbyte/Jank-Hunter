@@ -11,6 +11,8 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val handlers: Property<Boolean>
     val executors: Property<Boolean>
     val coroutines: Property<Boolean>
+    val flowInteractions: Property<Boolean>
+    val logSpam: Property<Boolean>
     val allowEmptyIncludePackages: Property<Boolean>
     val asmProgressLog: Property<Boolean>
     val progressLabel: Property<String>
