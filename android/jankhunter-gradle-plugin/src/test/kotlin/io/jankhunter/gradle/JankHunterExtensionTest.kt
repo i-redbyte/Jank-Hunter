@@ -14,6 +14,7 @@ class JankHunterExtensionTest {
         instrumentation.excludePackages(listOf("com.myapp.legacy"))
         instrumentation.includeWholeApplication = true
         instrumentation.asmProgressLog = true
+        instrumentation.classGraph = true
 
         assertEquals(
             linkedSetOf("com.myapp", "com.myapp.feature", "com.myapp.data"),
@@ -25,6 +26,7 @@ class JankHunterExtensionTest {
         )
         assertEquals(true, instrumentation.includeWholeApplication)
         assertEquals(true, instrumentation.asmProgressLog)
+        assertEquals(true, instrumentation.classGraph)
     }
 
     @Test
@@ -33,5 +35,6 @@ class JankHunterExtensionTest {
 
         assertEquals(false, instrumentation.includeWholeApplication)
         assertEquals(false, instrumentation.asmProgressLog)
+        assertEquals(true, instrumentation.classGraph)
     }
 }

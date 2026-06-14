@@ -25,8 +25,9 @@ type Filter struct {
 }
 
 type Options struct {
-	Filter   Filter
-	OwnerMap map[string]string
+	Filter     Filter
+	OwnerMap   map[string]string
+	ClassGraph *ClassGraph
 }
 
 type RouteStats struct {
@@ -165,6 +166,73 @@ type Summary struct {
 	JankStats          []NamedValue
 	Counters           []NamedValue
 	Gauges             []NamedValue
+	Influence          InfluenceSummary
+}
+
+type ClassGraph struct {
+	Classes map[string]ClassGraphClass `json:"classes"`
+	Edges   []ClassGraphEdge           `json:"edges"`
+}
+
+type ClassGraphClass struct {
+	Name string `json:"name"`
+}
+
+type ClassGraphEdge struct {
+	From         string `json:"from"`
+	To           string `json:"to"`
+	CallerMethod string `json:"caller_method,omitempty"`
+	CalleeMethod string `json:"callee_method,omitempty"`
+	Count        uint64 `json:"count"`
+}
+
+type InfluenceSummary struct {
+	Available        bool
+	HasClassGraph    bool
+	RuntimeNodes     int
+	StaticNodes      int
+	StaticEdges      int
+	ShownNodes       int
+	ShownEdges       int
+	TopNodes         []InfluenceNode
+	TopEdges         []InfluenceEdge
+	Heuristic        []InfluenceFinding
+	StandaloneReason string
+}
+
+type InfluenceNode struct {
+	ClassName       string
+	Label           string
+	Score           float64
+	Severity        string
+	Status          string
+	RuntimeEvidence bool
+	Problems        uint64
+	LogSpam         uint64
+	MainThreadMS    uint64
+	NetworkMS       uint64
+	MemoryPressure  uint64
+	UIJank          uint64
+	Retained        uint64
+	Flows           []string
+	Screens         []string
+	Routes          []string
+	Reasons         []string
+}
+
+type InfluenceEdge struct {
+	From             string
+	To               string
+	Count            uint64
+	Influence        float64
+	RuntimeConfirmed bool
+	Reason           string
+}
+
+type InfluenceFinding struct {
+	Severity string
+	Title    string
+	Detail   string
 }
 
 type Delta struct {

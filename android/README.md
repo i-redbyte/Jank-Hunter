@@ -302,6 +302,7 @@ jankHunter {
         coroutines = true
         flowInteractions = true
         logSpam = true
+        classGraph = true
         methodCounters = false
         allowEmptyIncludePackages = false
         asmProgressLog = false
@@ -339,19 +340,26 @@ jankHunter {
 - `coroutines` - оборачивает основные `kotlinx.coroutines` builders без compile-time зависимости runtime от coroutines;
 - `flowInteractions` - оборачивает `View.setOnClickListener` и создает flow для клика, если явный flow еще не задан;
 - `logSpam` - считает вызовы `android.util.Log.*` и Timber по class/method/level, не сохраняя текст логов;
+- `classGraph` - во время ASM-прохода пишет статический граф вызовов классов в отдельный файл. Байткод приложения ради этого не меняется;
 - `methodCounters` - пишет счетчики входа в методы, по умолчанию выключено.
 
-Для каждого variant plugin пишет owner-map:
+Для каждого variant plugin пишет owner-map и class graph:
 
 ```text
 build/generated/jankhunter/<variant>/owner-map.json
+build/generated/jankhunter/<variant>/class-graph.jsonl
 ```
 
-CLI принимает его так:
+CLI принимает их так:
 
 ```bash
-jankhunter inspect logs/*.jhlog --owner-map build/generated/jankhunter/debug/owner-map.json --out report.html
+jankhunter inspect logs/*.jhlog \
+  --owner-map build/generated/jankhunter/debug/owner-map.json \
+  --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
+  --out report.html
 ```
+
+`class-graph.jsonl` нужен для отдельного отчета `report-influence.html`: там видно, какие классы стали “злыми” узлами, через какие связи они влияют на другие классы и где это подтвердилось runtime-сигналами. Узел без runtime-доказательств не считается виновником: он просто связан со статическим графом, но в конкретном прогоне мог не выполниться.
 
 ## Что с overhead
 
@@ -362,6 +370,7 @@ jankhunter inspect logs/*.jhlog --owner-map build/generated/jankhunter/debug/own
 - начинайте с runtime + OkHttp + FPS + memory/system sampler;
 - ASM включайте сначала на `com.myapp.feature` / `com.myapp.data`, потом расширяйте;
 - `includeWholeApplication = true` используйте осознанно и с `excludePackages`;
+- `classGraph` можно оставлять включенным: он работает на build-time и не добавляет runtime-вызовы;
 - `main_looper_dispatch_monitor_enabled` держите выключенным, пока реально не нужен;
 - `methodCounters` не включайте на весь проект без причины;
 - `coroutines` включайте после smoke-сборки, потому что это широкий bytecode hook.

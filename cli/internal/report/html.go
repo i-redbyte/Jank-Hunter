@@ -24,10 +24,11 @@ type LogReport struct {
 func WriteInspect(path string, summary analyze.Summary) error {
 	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
-		"GeneratedAt":    time.Now().Format(time.RFC3339),
-		"Summary":        summary,
-		"Analysis":       inspectAnalysis(summary, lang),
-		"MathReportHref": MathReportHref(path),
+		"GeneratedAt":         time.Now().Format(time.RFC3339),
+		"Summary":             summary,
+		"Analysis":            inspectAnalysis(summary, lang),
+		"MathReportHref":      MathReportHref(path),
+		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, summary.Influence),
 	})
 }
 
@@ -38,28 +39,39 @@ func WriteCompare(path string, comparison analyze.Comparison) error {
 func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
 	lang := reportLanguage()
 	return execute(path, compareTemplate, map[string]any{
-		"GeneratedAt":    time.Now().Format(time.RFC3339),
-		"Comparison":     comparison,
-		"BaselineLogs":   baselineLogs,
-		"CandidateLogs":  candidateLogs,
-		"Analysis":       compareAnalysis(comparison, lang),
-		"MathReportHref": MathReportHref(path),
+		"GeneratedAt":         time.Now().Format(time.RFC3339),
+		"Comparison":          comparison,
+		"BaselineLogs":        baselineLogs,
+		"CandidateLogs":       candidateLogs,
+		"Analysis":            compareAnalysis(comparison, lang),
+		"MathReportHref":      MathReportHref(path),
+		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
 	})
 }
 
 func WriteMathInspect(path string, mathReport mathanalysis.MathReport) error {
 	return execute(path, mathInspectTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"Math":             mathReport,
-		"MethodReferences": mathanalysis.MethodReferences(),
+		"GeneratedAt":         time.Now().Format(time.RFC3339),
+		"Math":                mathReport,
+		"MethodReferences":    mathanalysis.MethodReferences(),
+		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Summary.Influence),
 	})
 }
 
 func WriteMathCompare(path string, mathReport mathanalysis.CompareMathReport) error {
 	return execute(path, mathCompareTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"Math":             mathReport,
-		"MethodReferences": mathanalysis.MethodReferences(),
+		"GeneratedAt":         time.Now().Format(time.RFC3339),
+		"Math":                mathReport,
+		"MethodReferences":    mathanalysis.MethodReferences(),
+		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Comparison.Candidate.Influence),
+	})
+}
+
+func WriteInfluence(path string, influence analyze.InfluenceSummary, title string) error {
+	return execute(path, influenceTemplate, map[string]any{
+		"GeneratedAt": time.Now().Format(time.RFC3339),
+		"Title":       title,
+		"Influence":   influence,
 	})
 }
 
@@ -73,6 +85,26 @@ func MathReportPath(path string) string {
 
 func MathReportHref(path string) string {
 	return filepath.Base(MathReportPath(path))
+}
+
+func InfluenceReportPath(path string) string {
+	path = strings.TrimSuffix(path, "-math"+filepath.Ext(path))
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + "-influence.html"
+	}
+	return strings.TrimSuffix(path, ext) + "-influence" + ext
+}
+
+func InfluenceReportHref(path string) string {
+	return filepath.Base(InfluenceReportPath(path))
+}
+
+func InfluenceReportHrefIfAvailable(path string, influence analyze.InfluenceSummary) string {
+	if !influence.Available {
+		return ""
+	}
+	return InfluenceReportHref(path)
 }
 
 func execute(path, source string, data any) error {
@@ -194,8 +226,15 @@ func execute(path, source string, data any) error {
 		"robustGroups":         robustStatGroups,
 		"robustDeltaGroups":    robustDeltaGroups,
 		"causalGraphSVG":       causalGraphSVG,
+		"influenceGraphSVG":    influenceGraphSVG,
+		"influenceStatus":      influenceStatusLabel,
+		"influenceSeverity":    influenceSeverityLabel,
+		"topInfluenceNodes":    topInfluenceNodes,
 		"mathHeuristic":        inspectMathHeuristic,
 		"compareMathHeuristic": compareMathHeuristic,
+		"join": func(values []string, separator string) string {
+			return strings.Join(values, separator)
+		},
 		"seconds": func(ms uint64) float64 {
 			return float64(ms) / 1000
 		},
@@ -1334,6 +1373,129 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 	}
 	out.WriteString(`</div>`)
 	return template.HTML(out.String())
+}
+
+func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
+	if !influence.Available || len(influence.TopNodes) == 0 {
+		return template.HTML(`<div class="muted">Недостаточно данных для графа влияния кода.</div>`)
+	}
+	const (
+		maxNodes = 28
+		maxEdges = 60
+		width    = 960.0
+		height   = 520.0
+		cx       = width / 2
+		cy       = height / 2
+		radius   = 198.0
+	)
+	nodes := append([]analyze.InfluenceNode(nil), influence.TopNodes...)
+	if len(nodes) > maxNodes {
+		nodes = nodes[:maxNodes]
+	}
+	edges := append([]analyze.InfluenceEdge(nil), influence.TopEdges...)
+	if len(edges) > maxEdges {
+		edges = edges[:maxEdges]
+	}
+	nodeIndex := map[string]int{}
+	for i, node := range nodes {
+		nodeIndex[node.ClassName] = i
+	}
+	positions := map[string]graphPoint{}
+	for i, node := range nodes {
+		angle := -math.Pi/2 + (2*math.Pi*float64(i))/math.Max(float64(len(nodes)), 1)
+		r := radius
+		if i == 0 {
+			positions[node.ClassName] = graphPoint{x: cx, y: cy}
+			continue
+		}
+		positions[node.ClassName] = graphPoint{x: cx + math.Cos(angle)*r, y: cy + math.Sin(angle)*r}
+	}
+
+	var out strings.Builder
+	out.WriteString(`<div class="influence-graph-card">`)
+	out.WriteString(`<svg class="influence-graph" viewBox="0 0 960 520" role="img" aria-label="Граф влияния кода">`)
+	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="rgba(111,247,255,0.62)"></path></marker></defs>`)
+	for _, edge := range edges {
+		from, okFrom := positions[edge.From]
+		to, okTo := positions[edge.To]
+		if !okFrom || !okTo {
+			continue
+		}
+		opacity := 0.22 + math.Min(edge.Influence/80, 0.62)
+		width := 1.1 + math.Min(edge.Influence/45, 4.2)
+		className := "influence-edge"
+		if edge.RuntimeConfirmed {
+			className += " confirmed"
+		}
+		fmt.Fprintf(&out, `<line class="%s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></line>`,
+			className,
+			from.x, from.y, to.x, to.y,
+			opacity,
+			width,
+			template.HTMLEscapeString(edge.From),
+			template.HTMLEscapeString(edge.To),
+			edge.Influence,
+			edge.Count,
+			template.HTMLEscapeString(edge.Reason),
+		)
+	}
+	for _, node := range nodes {
+		pos := positions[node.ClassName]
+		r := 18 + math.Min(node.Score*1.5, 22)
+		if nodeIndex[node.ClassName] == 0 {
+			r += 8
+		}
+		className := "influence-node " + node.Severity
+		if !node.RuntimeEvidence {
+			className += " static-only"
+		}
+		reasons := strings.Join(node.Reasons, ", ")
+		fmt.Fprintf(&out, `<g class="%s" transform="translate(%.1f %.1f)"><title>%s · score %.1f · %s</title><circle r="%.1f"></circle><text y="4">%s</text></g>`,
+			className,
+			pos.x,
+			pos.y,
+			template.HTMLEscapeString(node.ClassName),
+			node.Score,
+			template.HTMLEscapeString(reasons),
+			r,
+			template.HTMLEscapeString(truncateRunes(node.Label, 18)),
+		)
+	}
+	out.WriteString(`</svg>`)
+	if influence.ShownNodes > len(nodes) || influence.ShownEdges > len(edges) {
+		fmt.Fprintf(&out, `<div class="help-text">Показаны ключевые узлы и связи: %d из %d узлов, %d из %d ребер. Полная детализация находится в таблицах ниже.</div>`, len(nodes), influence.ShownNodes, len(edges), influence.ShownEdges)
+	}
+	out.WriteString(`</div>`)
+	return template.HTML(out.String())
+}
+
+func influenceStatusLabel(value string) string {
+	switch value {
+	case "runtime":
+		return "есть runtime-доказательства"
+	case "static_only":
+		return "статическая связь без проявления"
+	default:
+		return "нет данных"
+	}
+}
+
+func influenceSeverityLabel(value string) string {
+	switch value {
+	case "high":
+		return "высокий риск"
+	case "medium":
+		return "средний риск"
+	default:
+		return "низкий риск"
+	}
+}
+
+func topInfluenceNodes(influence analyze.InfluenceSummary, limit int) []analyze.InfluenceNode {
+	if limit <= 0 || len(influence.TopNodes) <= limit {
+		return influence.TopNodes
+	}
+	return influence.TopNodes[:limit]
 }
 
 type graphPoint struct {

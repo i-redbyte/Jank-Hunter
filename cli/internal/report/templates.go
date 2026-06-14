@@ -763,6 +763,47 @@ const mathCSS = `
   font-size: 9px;
   text-transform: uppercase;
 }
+.influence-graph-card {
+  margin: 10px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(98,255,168,0.08), rgba(111,247,255,0.06)),
+    rgba(255,255,255,0.026);
+  overflow-x: auto;
+}
+.influence-graph {
+  width: 100%;
+  min-width: 760px;
+  height: auto;
+  display: block;
+}
+.influence-edge {
+  stroke: rgba(111,247,255,0.42);
+  stroke-linecap: round;
+}
+.influence-edge.confirmed {
+  stroke: rgba(98,255,168,0.66);
+}
+.influence-node circle {
+  fill: rgba(13,24,43,0.96);
+  stroke: rgba(126,247,255,0.42);
+  stroke-width: 1.4;
+  filter: drop-shadow(0 0 10px rgba(111,247,255,0.18));
+}
+.influence-node.high circle { stroke: var(--bad); filter: drop-shadow(0 0 14px rgba(255,91,124,0.36)); }
+.influence-node.medium circle { stroke: var(--warn); filter: drop-shadow(0 0 12px rgba(255,209,102,0.28)); }
+.influence-node.static-only circle {
+  stroke-dasharray: 4 4;
+  opacity: 0.62;
+}
+.influence-node text {
+  fill: var(--ink);
+  text-anchor: middle;
+  font: 750 10px Inter, "SF Pro Text", Arial, sans-serif;
+  pointer-events: none;
+}
 .heuristic-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -836,6 +877,7 @@ const mathInspectTemplate = `<!doctype html>
           <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">сэмплы памяти/сети</div></div>
         </div>
       </div>
+      {{if .InfluenceReportHref}}<div class="hero-actions"><a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a></div>{{end}}
     </div>
   </div>
 </header>
@@ -882,6 +924,17 @@ const mathInspectTemplate = `<!doctype html>
         <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
       </div>
     </div>
+    {{if .Math.Summary.Influence.Available}}
+    <h3>Граф влияния кода</h3>
+    <p class="help-text">Этот блок связывает математические симптомы с классами: score растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
+    <table class="timeline-table">
+      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
+      {{range topInfluenceNodes .Math.Summary.Influence 8}}
+      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
+      {{end}}
+    </table>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a>. {{.Math.Summary.Influence.StandaloneReason}}</p>{{end}}
+    {{end}}
     <h3>Находки</h3>
     <div class="finding-list">
       {{range .Math.Findings}}
@@ -1208,6 +1261,7 @@ const mathCompareTemplate = `<!doctype html>
           <div class="env-item"><div class="env-label">HTTP кандидата</div><div class="env-value">{{.Math.Candidate.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Candidate.Summary.HTTPP95MS}} мс</div></div>
         </div>
       </div>
+      {{if .InfluenceReportHref}}<div class="hero-actions"><a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a></div>{{end}}
     </div>
   </div>
 </header>
@@ -1231,6 +1285,17 @@ const mathCompareTemplate = `<!doctype html>
       <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">{{tip "Проблемные окна" "Агрегированные окна причин: медленный HTTP, пауза главного потока, UI-подтормаживания, удержания или спам логами."}}</div><div class="value">{{summaryProblems .Math.Baseline.Summary}} → {{summaryProblems .Math.Candidate.Summary}}</div><div class="hint">спам {{summaryLogSpam .Math.Baseline.Summary}} → {{summaryLogSpam .Math.Candidate.Summary}}</div></div>
     </div>
+    {{if .Math.Candidate.Summary.Influence.Available}}
+    <h3>Граф влияния кандидата</h3>
+    <p class="help-text">Встроенный срез показывает верхние классы кандидата, а полный граф вынесен в отдельный HTML.</p>
+    <table class="timeline-table">
+      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Причины</th></tr>
+      {{range topInfluenceNodes .Math.Candidate.Summary.Influence 8}}
+      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td></tr>
+      {{end}}
+    </table>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
+    {{end}}
     <h3>Сравнение флоу и причин</h3>
     <table class="timeline-table">
       <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
@@ -1510,6 +1575,105 @@ const mathCompareTemplate = `<!doctype html>
 </body>
 </html>`
 
+const influenceTemplate = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: граф влияния кода</title>
+  <style>` + baseCSS + `</style>
+</head>
+<body>
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · graph</div>
+      <h1>{{.Title}}</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · автономный HTML · узлы {{.Influence.ShownNodes}} · связи {{.Influence.ShownEdges}}</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Покрытие графа</div>
+        <strong class="env-device">{{if .Influence.HasClassGraph}}runtime + статический граф{{else}}только runtime-сигналы{{end}}</strong>
+        <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">Runtime-узлы</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">есть измеренные симптомы</div></div>
+          <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#graph">Граф</a>
+  <a href="#nodes">Узлы</a>
+  <a href="#edges">Связи</a>
+  <a href="#heuristic">Итог</a>
+</nav>
+<main>
+  <section id="graph" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Карта влияния</h2>
+        <div class="panel-kicker">Размер узла отражает score. Сплошные связи подтверждены runtime-сигналами, пунктирные/тусклые узлы пока видны только по статическому графу.</div>
+      </div>
+      <span class="pill">код → симптомы</span>
+    </div>
+    {{influenceGraphSVG .Influence}}
+  </section>
+
+  <section id="nodes" class="panel">
+    <div class="panel-head">
+      <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
+    </div>
+    <table>
+      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Проблемы</th><th>Спам логами</th><th>Главный поток</th><th>Сеть</th><th>Jank</th><th>Удержано</th><th>Причины</th><th>Флоу / экраны</th></tr>
+      {{range .Influence.TopNodes}}
+      <tr>
+        <td><code>{{.ClassName}}</code></td>
+        <td>{{printf "%.1f" .Score}}</td>
+        <td>{{influenceSeverity .Severity}}</td>
+        <td>{{influenceStatus .Status}}</td>
+        <td>{{.Problems}}</td>
+        <td>{{.LogSpam}}</td>
+        <td>{{.MainThreadMS}} мс</td>
+        <td>{{.NetworkMS}} мс</td>
+        <td>{{.UIJank}}</td>
+        <td>{{.Retained}}</td>
+        <td>{{join .Reasons ", "}}</td>
+        <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
+      </tr>
+      {{else}}<tr><td colspan="12" class="muted">Нет узлов влияния.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section id="edges" class="panel">
+    <div class="panel-head">
+      <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в runtime-симптомах.</div></div>
+    </div>
+    <table>
+      <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Runtime</th><th>Пояснение</th></tr>
+      {{range .Influence.TopEdges}}
+      <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
+      {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте ` + "`--class-graph`" + `, чтобы увидеть ребра между классами.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section id="heuristic" class="panel">
+    <div class="panel-head">
+      <div><h2>Эвристика</h2><div class="panel-kicker">Короткий вывод по графу влияния. Это не заменяет профилировщик, но помогает выбрать первую точку расследования.</div></div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Influence.Heuristic}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{else}}<div class="muted">Нет эвристических выводов.</div>{{end}}
+    </div>
+    <p class="help-text">Статический узел без runtime-доказательств означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
+  </section>
+</main>
+</body>
+</html>`
+
 const inspectTemplate = `<!doctype html>
 <html lang="ru">
 <head>
@@ -1542,7 +1706,7 @@ const inspectTemplate = `<!doctype html>
         <div class="chip">События <strong>{{.Summary.EventCount}}</strong></div>
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
     </div>
   </div>
 </header>
@@ -1580,6 +1744,21 @@ const inspectTemplate = `<!doctype html>
       <div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP ошибки</span></div></div></div>
       <div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>средний FPS</span></div></div></div>
     </div>
+    {{if .Summary.Influence.Available}}
+    <h3>Граф влияния кода</h3>
+    <p class="help-text">Короткий срез “злых” узлов: классы получают вес по паузам главного потока, сети, памяти, лог-спаму, проблемным окнам и флоу. Подробная карта связей вынесена в отдельный отчет.</p>
+    <div class="grid">
+      {{range topInfluenceNodes .Summary.Influence 6}}
+      <div class="metric">
+        <div class="label">{{influenceSeverity .Severity}}</div>
+        <div class="value">{{printf "%.1f" .Score}}</div>
+        <div class="hint"><code>{{.ClassName}}</code></div>
+        <div class="hint">{{join .Reasons ", "}}</div>
+      </div>
+      {{end}}
+    </div>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a></p>{{end}}
+    {{end}}
   </section>
 
   <section id="network" class="panel">
@@ -1841,7 +2020,7 @@ const compareTemplate = `<!doctype html>
         <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
         <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
       </div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a></div>
+      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
     </div>
   </div>
 </header>
@@ -1897,6 +2076,16 @@ const compareTemplate = `<!doctype html>
       <div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>ошибки кандидата</span></div></div></div>
       <div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS кандидата</span></div></div></div>
     </div>
+    {{if .Comparison.Candidate.Influence.Available}}
+    <h3>Граф влияния кандидата</h3>
+    <table>
+      <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Причины</th></tr>
+      {{range topInfluenceNodes .Comparison.Candidate.Influence 6}}
+      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{join .Reasons ", "}}</td></tr>
+      {{end}}
+    </table>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
+    {{end}}
   </section>
 
   <section id="regressions" class="panel">

@@ -52,8 +52,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--route text] [--screen text] [--owner text]
+  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter version
 `)
@@ -80,6 +80,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
+	if err != nil {
+		return err
+	}
 	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
 	if err != nil {
 		return err
@@ -96,7 +100,11 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	options := analyze.Options{Filter: filter, OwnerMap: ownerMap}
+	classGraph, err := analyze.LoadClassGraph(classGraphPath)
+	if err != nil {
+		return err
+	}
+	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
 	summary, err := analyze.InspectFilesWithOptions(
 		strings.Join(paths, ", "),
 		paths,
@@ -123,6 +131,11 @@ func runInspect(args []string) error {
 		if err := report.WriteInspect(out, summary); err != nil {
 			return err
 		}
+		if summary.Influence.Available {
+			if err := report.WriteInfluence(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода"); err != nil {
+				return err
+			}
+		}
 		printReportPath(jsonOut, out)
 	}
 	return nil
@@ -142,6 +155,10 @@ func runCompare(args []string) error {
 		return err
 	}
 	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return err
+	}
+	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
 	if err != nil {
 		return err
 	}
@@ -166,7 +183,11 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
-	options := analyze.Options{Filter: filter, OwnerMap: ownerMap}
+	classGraph, err := analyze.LoadClassGraph(classGraphPath)
+	if err != nil {
+		return err
+	}
+	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
 	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, options)
 	if err != nil {
 		return err
@@ -216,6 +237,11 @@ func runCompare(args []string) error {
 		}
 		if err := report.WriteCompareReport(out, comparison, baselineReports, candidateReports); err != nil {
 			return err
+		}
+		if comparison.Candidate.Influence.Available {
+			if err := report.WriteInfluence(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат"); err != nil {
+				return err
+			}
 		}
 		printReportPath(jsonOut, out)
 	}

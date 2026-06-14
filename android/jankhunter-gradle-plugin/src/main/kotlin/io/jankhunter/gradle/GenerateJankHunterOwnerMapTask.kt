@@ -37,6 +37,9 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val logSpam: Property<Boolean>
 
     @get:Input
+    abstract val classGraph: Property<Boolean>
+
+    @get:Input
     abstract val allowEmptyIncludePackages: Property<Boolean>
 
     @get:Input
@@ -72,7 +75,8 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
                 appendLine("    \"executors\": ${executors.getOrElse(false)},")
                 appendLine("    \"coroutines\": ${coroutines.getOrElse(false)},")
                 appendLine("    \"flowInteractions\": ${flowInteractions.getOrElse(false)},")
-                appendLine("    \"logSpam\": ${logSpam.getOrElse(false)}")
+                appendLine("    \"logSpam\": ${logSpam.getOrElse(false)},")
+                appendLine("    \"classGraph\": ${classGraph.getOrElse(false)}")
                 appendLine("  },")
                 appendLine("  \"allowEmptyIncludePackages\": ${allowEmptyIncludePackages.getOrElse(false)},")
                 appendLine("  \"includeWholeApplication\": ${includeWholeApplication.getOrElse(false)},")

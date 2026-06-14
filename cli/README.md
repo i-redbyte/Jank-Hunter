@@ -71,11 +71,13 @@ make build
 ```text
 /tmp/report.html
 /tmp/report-math.html
+/tmp/report-influence.html
 /tmp/compare.html
 /tmp/compare-math.html
+/tmp/compare-influence.html
 ```
 
-Основной отчет открывается как обычный HTML. Математический отчет открывается из зеленой кнопки `λ Анализ`.
+Основной отчет открывается как обычный HTML. Математический отчет открывается из зеленой кнопки `λ Анализ`, граф влияния кода - из кнопки `Граф влияния`, если в логах есть owner/flow-сигналы.
 
 ## inspect
 
@@ -96,7 +98,8 @@ jankhunter inspect logs/*.jhlog --out report.html
 - counters/gauges;
 - когорты;
 - эвристический итог внизу;
-- отдельная страница математического анализа.
+- отдельная страница математического анализа;
+- отдельный граф влияния кода, где классы связаны с runtime-проблемами и build-time ASM-графом.
 
 Несколько логов можно передавать сразу:
 
@@ -120,13 +123,16 @@ JSON вместо HTML:
 jankhunter inspect logs/*.jhlog --json > inspect.json
 ```
 
-Owner map от Android Gradle plugin:
+Owner map и class graph от Android Gradle plugin:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
   --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
+  --class-graph ../android/sample-app/build/generated/jankhunter/debug/class-graph.jsonl \
   --out report.html
 ```
+
+`--owner-map` помогает красиво раскрыть владельцев работ, а `--class-graph` добавляет статические связи между классами. С ним рядом с `report.html` появится `report-influence.html`.
 
 ## compare
 
@@ -148,7 +154,8 @@ jankhunter compare \
 - проверка когорт, чтобы не сравнивать разные устройства/SDK/сети как будто это один и тот же прогон;
 - детали каждого лога внутри раскрывающихся карточек;
 - эвристический итог;
-- отдельный `compare-math.html`.
+- отдельный `compare-math.html`;
+- отдельный `compare-influence.html` для графа влияния кандидата.
 
 С owner-map:
 
@@ -157,6 +164,7 @@ jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --owner-map owner-map.json \
+  --class-graph class-graph.jsonl \
   --out compare.html
 ```
 
@@ -239,12 +247,14 @@ jankhunter inspect ~/Downloads/*.jhlog --out ~/Downloads/jankhunter-report.html
 
 ```text
 report-math.html
+report-influence.html
 ```
 
 Для `compare --out compare.html`:
 
 ```text
 compare-math.html
+compare-influence.html
 ```
 
 Там лежат более тяжелые методы:
@@ -260,6 +270,21 @@ compare-math.html
 - справка по каждому методу.
 
 Основная идея такая: сначала смотрим обычный отчет, потом открываем `λ Анализ`, если нужно понять глубже, откуда взялась проблема.
+
+## Граф влияния кода
+
+`report-influence.html` и `compare-influence.html` показывают классы, которые чаще всего связаны с проблемами: паузами главного потока, сетевыми хвостами, UI-подтормаживаниями, ростом памяти, удержанными объектами и спамом логами.
+
+Лучший режим - передать и `.jhlog`, и build-time class graph:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --owner-map build/generated/jankhunter/debug/owner-map.json \
+  --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
+  --out report.html
+```
+
+Если `--class-graph` не передан, CLI все равно покажет runtime-подозреваемых, но без ребер между классами. Статический узел без runtime-доказательств означает не “виноват”, а “связан с кодом, но в этом прогоне не проявился”.
 
 ## `.jhlog` коротко
 

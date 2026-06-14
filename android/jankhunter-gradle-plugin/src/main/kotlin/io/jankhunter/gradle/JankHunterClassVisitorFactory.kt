@@ -8,6 +8,7 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
+import java.io.File
 
 abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunterInstrumentationParameters> {
     override fun createClassVisitor(
@@ -24,6 +25,8 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             coroutines = params.coroutines.getOrElse(false),
             flowInteractions = params.flowInteractions.getOrElse(false),
             logSpam = params.logSpam.getOrElse(false),
+            classGraph = params.classGraph.getOrElse(false),
+            classGraphPath = params.classGraphPath.getOrElse(""),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -48,7 +51,8 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.executors.getOrElse(false) ||
             params.coroutines.getOrElse(false) ||
             params.flowInteractions.getOrElse(false) ||
-            params.logSpam.getOrElse(false)
+            params.logSpam.getOrElse(false) ||
+            params.classGraph.getOrElse(false)
         val matched = hooksEnabled && InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
             params.excludePackages.getOrElse(emptyList()),
@@ -74,6 +78,8 @@ private data class HookConfig(
     val coroutines: Boolean,
     val flowInteractions: Boolean,
     val logSpam: Boolean,
+    val classGraph: Boolean,
+    val classGraphPath: String,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -85,6 +91,7 @@ private data class HookConfig(
             if (coroutines) add("coroutine")
             if (flowInteractions) add("flow")
             if (logSpam) add("logspam")
+            if (classGraph) add("graph")
         }.joinToString("+").ifEmpty { "none" }
     }
 }
@@ -94,6 +101,8 @@ private class JankHunterClassVisitor(
     private val className: String,
     private val config: HookConfig,
 ) : ClassVisitor(Opcodes.ASM9, next) {
+    private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
+
     override fun visitMethod(
         access: Int,
         name: String,
@@ -105,7 +114,27 @@ private class JankHunterClassVisitor(
         if (name == "<init>" || name == "<clinit>") return next
         if (access and Opcodes.ACC_ABSTRACT != 0) return next
         if (access and Opcodes.ACC_NATIVE != 0) return next
-        return JankHunterMethodVisitor(next, access, name, descriptor, className, config)
+        return JankHunterMethodVisitor(next, access, name, descriptor, className, config) { calleeOwner, calleeName ->
+            recordStaticEdge(name, descriptor, calleeOwner, calleeName)
+        }
+    }
+
+    override fun visitEnd() {
+        if (config.classGraph) {
+            ClassGraphWriter.append(config.classGraphPath, className, edges)
+        }
+        super.visitEnd()
+    }
+
+    private fun recordStaticEdge(callerName: String, callerDescriptor: String, calleeOwner: String, calleeName: String) {
+        if (!config.classGraph) return
+        if (!ClassGraphWriter.isApplicationLike(calleeOwner)) return
+        val key = ClassGraphEdgeKey(
+            caller = "$callerName$callerDescriptor",
+            calleeClass = calleeOwner.replace('/', '.'),
+            calleeMethod = calleeName,
+        )
+        edges[key] = (edges[key] ?: 0) + 1
     }
 }
 
@@ -116,6 +145,7 @@ private class JankHunterMethodVisitor(
     private val methodDescriptor: String,
     private val className: String,
     private val config: HookConfig,
+    private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val ownerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
 
@@ -140,6 +170,7 @@ private class JankHunterMethodVisitor(
         descriptor: String,
         isInterface: Boolean,
     ) {
+        recordStaticEdge(owner, name)
         when {
             config.okhttp && InstrumentationHooks.isOkHttpEventListenerFactory(owner, name, descriptor) -> {
                 wrapOkHttpEventListenerFactory()
@@ -385,6 +416,74 @@ private class JankHunterMethodVisitor(
         private const val OKHTTP_HELPERS = "io/jankhunter/okhttp3/JankHunterOkHttp3"
         private val OBJECT_TYPE: Type = Type.getType("Ljava/lang/Object;")
     }
+}
+
+internal data class ClassGraphEdgeKey(
+    val caller: String,
+    val calleeClass: String,
+    val calleeMethod: String,
+)
+
+internal object ClassGraphWriter {
+    private val preparedPaths = mutableSetOf<String>()
+
+    @Synchronized
+    fun append(path: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
+        if (path.isBlank() || edges.isEmpty()) return
+        val file = File(path)
+        file.parentFile?.mkdirs()
+        if (preparedPaths.add(file.absolutePath) && file.exists()) {
+            file.delete()
+        }
+        file.appendText(record(className.replace('/', '.'), edges))
+    }
+
+    fun isApplicationLike(owner: String): Boolean {
+        val normalized = owner.replace('/', '.')
+        return builtinPrefixes.none { normalized.startsWith(it) }
+    }
+
+    private fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
+        return buildString {
+            append("{\"format\":1,\"class\":\"")
+            append(escape(className))
+            append("\",\"edges\":[")
+            edges.entries.forEachIndexed { index, entry ->
+                if (index > 0) append(',')
+                append("{\"caller\":\"")
+                append(escape(entry.key.caller))
+                append("\",\"calleeClass\":\"")
+                append(escape(entry.key.calleeClass))
+                append("\",\"calleeMethod\":\"")
+                append(escape(entry.key.calleeMethod))
+                append("\",\"count\":")
+                append(entry.value)
+                append('}')
+            }
+            append("]}\n")
+        }
+    }
+
+    private fun escape(value: String): String {
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+    }
+
+    private val builtinPrefixes = listOf(
+        "android.",
+        "androidx.",
+        "java.",
+        "javax.",
+        "kotlin.",
+        "kotlinx.",
+        "okhttp3.",
+        "okio.",
+        "org.jetbrains.",
+        "io.jankhunter.",
+    )
 }
 
 internal object InstrumentationHooks {

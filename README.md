@@ -79,13 +79,14 @@ Gradle plugin подключайте только на debug/QA сборки и 
 - Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
 - Пользовательские counters/gauges.
 - Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.
+- Граф влияния кода: классы, флоу, проблемные окна, лог-спам и build-time ASM-связи между классами.
 
 CLI строит два основных режима:
 
 - `inspect` - один лог или набор логов, чтобы понять текущий прогон.
 - `compare` - baseline против candidate, чтобы увидеть регрессии, когорты и конкретные места, где стало хуже.
 
-Рядом с основным HTML создается математический отчет: `report-math.html` или `compare-math.html`. Он открывается из зеленой кнопки `λ Анализ`.
+Рядом с основным HTML создается математический отчет: `report-math.html` или `compare-math.html`. Он открывается из зеленой кнопки `λ Анализ`. Если есть owner/flow-сигналы, CLI также создает `report-influence.html` или `compare-influence.html` с графом влияния кода.
 
 ## Проверки
 

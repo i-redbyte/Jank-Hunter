@@ -93,9 +93,10 @@ func LoadOwnerMap(path string) (map[string]string, error) {
 }
 
 type collector struct {
-	summary  Summary
-	filter   Filter
-	ownerMap map[string]string
+	summary    Summary
+	filter     Filter
+	ownerMap   map[string]string
+	classGraph *ClassGraph
 
 	routeDurations []namedDuration
 	routeFailures  map[string]int
@@ -156,6 +157,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		summary:            Summary{Title: title, LogCount: logCount},
 		filter:             normalizeFilter(options.Filter),
 		ownerMap:           options.OwnerMap,
+		classGraph:         options.ClassGraph,
 		routeFailures:      map[string]int{},
 		routeRx:            map[string]uint64{},
 		routeTx:            map[string]uint64{},
@@ -745,6 +747,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.JankStats)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
+	summary.Influence = BuildInfluence(summary, c.classGraph)
 	return summary
 }
 

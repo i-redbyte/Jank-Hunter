@@ -85,6 +85,12 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
 	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
+
+	influencePath := filepath.Join(dir, "inspect-influence.html")
+	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
+		t.Fatalf("WriteInfluence() error = %v", err)
+	}
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -141,6 +147,56 @@ func TestMathReportPath(t *testing.T) {
 		if got := MathReportPath(input); got != want {
 			t.Fatalf("MathReportPath(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestInfluenceReportPath(t *testing.T) {
+	tests := map[string]string{
+		"report.html":           "report-influence.html",
+		"/tmp/report.html":      "/tmp/report-influence.html",
+		"/tmp/report-math.html": "/tmp/report-influence.html",
+	}
+	for input, want := range tests {
+		if got := InfluenceReportPath(input); got != want {
+			t.Fatalf("InfluenceReportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func sampleInfluence() analyze.InfluenceSummary {
+	return analyze.InfluenceSummary{
+		Available:     true,
+		HasClassGraph: true,
+		RuntimeNodes:  1,
+		StaticNodes:   2,
+		StaticEdges:   1,
+		ShownNodes:    2,
+		ShownEdges:    1,
+		TopNodes: []analyze.InfluenceNode{{
+			ClassName:       "com.app.data.CheckoutRepository",
+			Label:           "data.CheckoutRepository",
+			Score:           14.2,
+			Severity:        "high",
+			Status:          "runtime",
+			RuntimeEvidence: true,
+			Problems:        2,
+			NetworkMS:       900,
+			Reasons:         []string{"сетевые задержки", "проблемные окна"},
+			Flows:           []string{"checkout.open"},
+		}},
+		TopEdges: []analyze.InfluenceEdge{{
+			From:             "com.app.feature.CheckoutPresenter",
+			To:               "com.app.data.CheckoutRepository",
+			Count:            3,
+			Influence:        42,
+			RuntimeConfirmed: true,
+			Reason:           "вызывает узел с runtime-проблемами",
+		}},
+		Heuristic: []analyze.InfluenceFinding{{
+			Severity: "high",
+			Title:    "Главный узел влияния",
+			Detail:   "CheckoutRepository.",
+		}},
 	}
 }
 
