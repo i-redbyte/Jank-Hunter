@@ -1,103 +1,124 @@
 # Jank Hunter
 
-Jank Hunter is an Android performance diagnostics toolkit and offline report generator.
+Jank Hunter помогает поймать то, что обычно сложно доказать словами: дерганый UI, длинные паузы главного потока, медленную сеть, рост памяти, удержанные объекты, слишком шумные логи и странные различия между двумя сборками.
 
-It is designed for large legacy Android applications where performance regressions are hard to prove after a release: jank, ANR, slow networking, memory pressure, log/request storms, websocket reconnect loops, and suspected leaks.
+Идея простая: Android-приложение пишет компактный `.jhlog`, а CLI на машине разработчика превращает его в нормальный HTML-отчет. Без сервера, без базы, без загрузки данных наружу.
 
-The repository is intentionally split into two main parts:
+## Что внутри
 
-- `cli/` - Go command-line utility for parsing `.jhlog` files, importing owner maps, comparing builds, exporting data, and producing standalone HTML reports.
-- `android/` - Android runtime SDK, optional integrations, sample app, and Gradle plugin for debug/QA bytecode instrumentation.
+- `android/` - runtime SDK, OkHttp-интеграция, Gradle plugin с ASM-инструментацией и sample app.
+- `cli/` - утилита `jankhunter`, которая читает `.jhlog`, строит inspect/compare отчеты, экспортирует JSONL и умеет работать в CI.
 
-## Current State
+Отчеты автономные: обычный HTML с CSS внутри. Их можно открыть локально, приложить к задаче, положить в CI artifacts или отправить команде.
 
-The implementation currently includes:
-
-- compact binary `.jhlog` format with varint records and bit flags;
-- tolerant streaming Go parser/writer;
-- `jankhunter sample` to generate demo logs;
-- `jankhunter inspect` to summarize one or more logs;
-- `jankhunter compare` to compare baseline and candidate logs;
-- filters by route/screen/owner;
-- standalone cyber-styled HTML reports with charts, gauges, subtle animation and no external CDN dependencies;
-- separate mathematical HTML reports next to inspect/compare outputs, opened from the green `λ Анализ` button;
-- math analysis for timeline buckets, robust distributions, change points, autocorrelation/DFT peaks, network loops, integral pain scores, Markov states, causal graph paths, and compare deltas;
-- bottom-of-report heuristic verdict with findings and recommendations;
-- compare HTML reports with baseline/candidate scoreboard plus per-log drill-down sections;
-- JSON output and threshold-based CI regression gates in the CLI;
-- Android runtime collectors for FPS, stalls, memory, system context, process exits, retained objects, counters, and gauges;
-- multi-process runtime policy with per-process `.jhlog` files and process breakdown in CLI reports;
-- optional OkHttp/WebSocket integrations;
-- optional reflection bridge for AndroidX JankStats;
-- Gradle plugin with variant-aware ASM hooks for method counters, OkHttp builder factories, WebSocket listeners, Handler callbacks, Executor/ExecutorService work, and owner-map seed generation;
-- runtime `Runnable`/`Callable` owner wrappers that preserve thrown exceptions and Future cancellation behavior;
-- CLI owner-map import for resolving generated owner labels in inspect/compare reports;
-- Kotlin-only Android sources.
-
-## Checks
+## Быстрый старт CLI
 
 ```bash
 cd cli
-GOCACHE=/private/tmp/jh-go-cache go test ./...
-
-cd ../android
-./gradlew :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+make build
+./bin/jankhunter sample --out /tmp/sample.jhlog
+./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/jankhunter-report.html
+./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
 ```
 
-CI runs the same core checks on `master`.
+`make build` сам скачает Go в `cli/.tools/go`, если Go не найден в системе. После сборки бинарник лежит в `cli/bin/jankhunter`.
 
-Optional connected-device smoke:
+Установка в систему:
 
 ```bash
-./scripts/android-e2e.sh
+cd cli
+make install
 ```
 
-It runs the sample app instrumented test, pulls `.jhlog`, and generates `reports/android-e2e/report.html`.
+Если не хочется ставить в `/usr/local/bin`:
 
-Manual sample-app dogfooding:
+```bash
+make install PREFIX="$HOME/.local"
+```
+
+## Быстрый старт Android
+
+Для локальной проверки можно собрать и запустить sample app:
 
 ```bash
 ./run-sample-app.sh
 ```
 
-The script starts or reuses an emulator, installs `io.jankhunter.sample`, waits for interactive commands, then pulls `.jhlog` files into `tmp/` and generates a CLI HTML report when you type `log` or `stop`.
+Скрипт поднимет или использует уже запущенный emulator/device, установит sample app и даст интерактивные команды:
 
-## Release
+```text
+log
+report
+stop
+open
+help
+quit
+```
 
-Release and publishing instructions live in [docs/release.md](docs/release.md).
-Large-app validation runbook lives in [docs/large-app-validation.md](docs/large-app-validation.md).
-Mathematical analysis ideas live in [docs/performance-analysis-math.md](docs/performance-analysis-math.md).
-Step-by-step Codex implementation prompt lives in [docs/math-analysis-implementation-prompt.md](docs/math-analysis-implementation-prompt.md).
+`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`.
 
-Quick local dry runs:
+Для своего приложения базовое подключение обычно выглядит так:
+
+```kotlin
+dependencies {
+    debugImplementation("io.jankhunter:jankhunter-runtime:0.1.0-SNAPSHOT")
+    debugImplementation("io.jankhunter:jankhunter-okhttp3:0.1.0-SNAPSHOT")
+}
+```
+
+Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`.
+
+Подробности по Android лежат в [android/README.md](android/README.md), по CLI - в [cli/README.md](cli/README.md).
+
+## Что собирается
+
+- HTTP: длительность запроса, DNS/connect/TTFB, ошибки, байты, route, owner.
+- UI: FPS, доля медленных кадров, p95/p99 кадра, экраны.
+- Главный поток: длинные паузы и источники работ.
+- Память: PSS, Java/native heap, свободная RAM, retained objects.
+- Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
+- Пользовательские counters/gauges.
+- Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.
+
+CLI строит два основных режима:
+
+- `inspect` - один лог или набор логов, чтобы понять текущий прогон.
+- `compare` - baseline против candidate, чтобы увидеть регрессии, когорты и конкретные места, где стало хуже.
+
+Рядом с основным HTML создается математический отчет: `report-math.html` или `compare-math.html`. Он открывается из зеленой кнопки `λ Анализ`.
+
+## Проверки
+
+CLI:
 
 ```bash
 cd cli
-make release VERSION=0.1.0
-
-cd ../android
-./gradlew publishToMavenLocal --no-daemon
+make test
 ```
 
-## CLI quick start
+Android:
 
 ```bash
-cd cli
-go test ./...
-go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/jankhunter-report.html
-go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog --owner-map android/sample-app/build/generated/jankhunter/debug/owner-map.json
+cd android
+./gradlew :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
-The generated HTML files are self-contained dashboards. `inspect --out /tmp/jankhunter-report.html` also writes `/tmp/jankhunter-report-math.html`; `compare --out /tmp/jankhunter-compare.html` writes `/tmp/jankhunter-compare-math.html`. The main reports contain a green `λ Анализ` button that opens the math page.
+End-to-end через emulator/device:
 
-`inspect` is the quick path from one `.jhlog` or a folder of logs to a detailed report. Long route/screen/owner/context tables are collapsed behind expandable sections, so large logs stay readable. `compare` keeps the first screen focused on deltas and cohort warnings, then embeds expandable details for every baseline and candidate log. The math pages add Russian engineering findings, method reference notes, compact SVG sparklines, and collapsible sections for heavier tables.
+```bash
+./scripts/android-e2e.sh
+```
 
-## Product principles
+Он собирает sample app, запускает instrumentation test, вытаскивает `.jhlog` и кладет отчет в:
 
-- Keep app overhead small: aggregate high-frequency data locally before writing.
-- Prefer explicit owner attribution, then cheap generated owner IDs, then sampled stacks.
-- Avoid runtime dependency conflicts in host apps.
-- Keep release mode opt-in and lightweight; make debug/QA instrumentation richer.
-- Make files machine-readable first, then generate human-friendly reports offline.
+```text
+reports/android-e2e/report.html
+```
+
+## Важные принципы
+
+- Не грузить приложение тяжелой диагностикой на каждом событии.
+- Писать high-frequency данные агрегатами.
+- Держать runtime без лишних зависимостей.
+- Все спорное включать явно: ASM, корутины, JankStats, release-сборки.
+- Сначала компактный машинный лог, потом удобный человеческий отчет на стороне CLI.

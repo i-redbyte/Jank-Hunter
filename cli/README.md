@@ -1,178 +1,177 @@
 # Jank Hunter CLI
 
-`jankhunter` - это Go CLI для чтения `.jhlog`, анализа одного или нескольких логов, сравнения baseline/candidate и генерации standalone HTML-отчетов в технологичном темном стиле.
+`jankhunter` - консольная утилита для `.jhlog` файлов. Она читает логи с Android-устройства и делает отчеты: одиночный прогон через `inspect`, сравнение двух прогонов через `compare`, экспорт событий через `export`.
 
-CLI не требует backend, базы данных или браузерных CDN. Отчет - обычный HTML-файл с CSS внутри.
+CLI работает локально. Никакой backend не нужен: на выходе обычный HTML-файл, который можно открыть в браузере или положить в CI artifacts.
 
-## Возможности
+## Установка
 
-- чтение бинарного `.jhlog`;
-- чтение debug/export JSONL;
-- генерация sample-лога;
-- inspect-отчет по одному файлу или пулу файлов;
-- compare-отчет baseline vs candidate с per-log drill-down внутри того же HTML;
-- отдельный математический HTML-отчет рядом с inspect/compare и зеленая кнопка `λ Анализ` в основном отчете;
-- математические разделы: timeline buckets, robust statistics, change points, autocorrelation/DFT, network loop detector, integral pain scores, Markov states, causal graph и compare deltas;
-- справка по каждому математическому методу прямо в math HTML;
-- streaming aggregation для `inspect`/`compare` без хранения всех событий в памяти;
-- фильтры `--route`, `--screen`, `--owner`;
-- owner-map import через `--owner-map path.json`;
-- JSON output для `inspect` и `compare`;
-- threshold config для CI regression gate;
-- экспорт событий в JSONL;
-- красивый standalone HTML без CDN: sticky navigation, gauges, animated bars, detailed tables;
-- итоговый эвристический блок внизу HTML: status, findings и recommendations;
-- сводка по HTTP, UI/FPS/jank, stalls, system context, memory, retained objects, counters, gauges;
-- process breakdown из session metadata;
-- cohort breakdown по app version/build/SDK/device/process/network;
-- warnings, если baseline/candidate собраны на несопоставимых cohort;
-- severity с учетом effect size, confidence и sample size;
-- approximate confidence interval по ключевым deltas, когда есть выборка;
-- retained-object section с top retained classes и age buckets;
-- separate JankStats metrics section для `jankstats.*` counters/gauges;
-- Top Owners по owner/class/stack hint.
-
-## Сборка
+Самый простой вариант:
 
 ```bash
-cd cli
-go test ./...
-go build -o bin/jankhunter ./cmd/jankhunter
+make build
 ```
 
-Release archives для macOS/Linux и checksum-файл:
+Готовый бинарник будет здесь:
+
+```text
+bin/jankhunter
+```
+
+Если Go не установлен, Makefile сам скачает Go в локальную папку:
+
+```text
+cli/.tools/go
+```
+
+Системный Go при этом не трогается.
+
+Поставить команду в систему:
 
 ```bash
-cd cli
+make install
+```
+
+По умолчанию установка идет в `/usr/local/bin`. Если нужны права попроще:
+
+```bash
+make install PREFIX="$HOME/.local"
+```
+
+Проверка:
+
+```bash
+jankhunter version
+```
+
+Сборка под другую платформу:
+
+```bash
+make build BUILD_OS=linux BUILD_ARCH=amd64 OUT=bin/jankhunter-linux-amd64
+make build BUILD_OS=darwin BUILD_ARCH=arm64 OUT=bin/jankhunter-darwin-arm64
+```
+
+Архивы для нескольких платформ:
+
+```bash
 make release VERSION=0.1.0
 ```
 
-Проверить embedded version:
+## Быстрая проверка
 
 ```bash
-make build VERSION=0.1.0
-./bin/jankhunter version
+make build
+./bin/jankhunter sample --out /tmp/sample.jhlog
+./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
+./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
 ```
 
-Запуск без сборки:
+После этого появятся:
 
-```bash
-go run ./cmd/jankhunter help
+```text
+/tmp/report.html
+/tmp/report-math.html
+/tmp/compare.html
+/tmp/compare-math.html
 ```
 
-## Команды
+Основной отчет открывается как обычный HTML. Математический отчет открывается из зеленой кнопки `λ Анализ`.
 
-### sample
+## inspect
 
-Создать демонстрационный `.jhlog`:
+`inspect` нужен, когда есть один лог или пачка логов и нужно понять, что происходило в прогоне.
 
 ```bash
-go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
+jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-### inspect
+Что будет в отчете:
 
-Разобрать один лог и напечатать краткую сводку:
+- быстрый верхний срез: HTTP p95, UI, FPS, память, трафик;
+- контекст устройства: Android, ABI, батарея, сеть/VPN, RAM, storage, рут-доступ;
+- маршруты HTTP;
+- экраны и подтормаживания UI;
+- источники работ: owners/classes/stack hints;
+- память и retained objects;
+- counters/gauges;
+- когорты;
+- эвристический итог внизу;
+- отдельная страница математического анализа.
 
-```bash
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog
-```
-
-Сгенерировать красивый standalone HTML-отчет:
-
-```bash
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
-```
-
-Этот режим подходит для простого сценария "передать `.jhlog` и получить подробный отчет": в HTML будут overview, HTTP routes, UI smoothness, owner hotspots, memory/retained objects, custom counters/gauges, JankStats и context/cohort breakdown. Рядом автоматически создается `/tmp/report-math.html` с математическим анализом; основной отчет открывает его кнопкой `λ Анализ`.
-
-Потенциально длинные таблицы маршрутов, экранов, owners, памяти, метрик и контекста спрятаны в раскрывающиеся блоки, чтобы большие логи не превращали первый экран отчета в бесконечную простыню.
-Внизу отчета есть `Heuristic Verdict`: краткое итоговое заключение, список находок и рекомендации по следующим шагам.
-
-Получить machine-readable JSON:
+Несколько логов можно передавать сразу:
 
 ```bash
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog --json
-```
-
-Можно передать несколько файлов:
-
-```bash
-go run ./cmd/jankhunter inspect logs/*.jhlog --out report.html
+jankhunter inspect logs/main/*.jhlog logs/remote/*.jhlog --out report.html
 ```
 
 Фильтры:
 
 ```bash
-go run ./cmd/jankhunter inspect logs/*.jhlog --route /feed --screen Feed --owner FeedRepository
+jankhunter inspect logs/*.jhlog \
+  --route /feed \
+  --screen Feed \
+  --owner FeedRepository \
+  --out feed-report.html
 ```
 
-С owner-map из Gradle plugin:
+JSON вместо HTML:
 
 ```bash
-go run ./cmd/jankhunter inspect logs/*.jhlog \
+jankhunter inspect logs/*.jhlog --json > inspect.json
+```
+
+Owner map от Android Gradle plugin:
+
+```bash
+jankhunter inspect logs/*.jhlog \
   --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
   --out report.html
 ```
 
-### compare
+## compare
 
-Сравнить baseline и candidate:
+`compare` нужен, когда есть база и кандидат. Например: сборка до изменения и сборка после изменения.
 
 ```bash
-go run ./cmd/jankhunter compare \
+jankhunter compare \
+  --baseline "old/*.jhlog" \
+  --candidate "new/*.jhlog" \
+  --out compare.html
+```
+
+В compare-отчете есть:
+
+- сводная панель базы и кандидата;
+- матрица регрессий по категориям: сеть, UI, память, контекст;
+- подсказки по метрикам;
+- блок `Где изменилось` с парными таблицами маршрутов, экранов и источников;
+- проверка когорт, чтобы не сравнивать разные устройства/SDK/сети как будто это один и тот же прогон;
+- детали каждого лога внутри раскрывающихся карточек;
+- эвристический итог;
+- отдельный `compare-math.html`.
+
+С owner-map:
+
+```bash
+jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --owner-map owner-map.json \
-  --out compare.html \
-  --owner FeedRepository
+  --out compare.html
 ```
-
-HTML compare состоит из двух основных уровней:
-
-- первый экран показывает scoreboard, regression matrix, cohort warnings и candidate summary;
-- секция `Per-log Drill-down` раскрывает каждый baseline/candidate `.jhlog` отдельно с routes, screens, owners, memory и gauges; содержимое раскрытого лога ограничено по высоте и скроллится внутри карточки.
-
-При `--out compare.html` рядом создается `compare-math.html`. В нем показаны baseline/candidate deltas для робастной статистики, точек изменения, сетевых циклов, интегральных оценок, Markov-переходов и графа причинности.
-
-CLI покажет deltas:
-
-```text
-HTTP p95
-HTTP failures
-UI jank rate
-UI avg FPS
-Main-thread stall max
-Max PSS
-Min available memory
-UID RX max
-UID TX max
-Retained objects
-Process mix
-App version mix
-SDK mix
-Device mix
-Network mix
-Cohort mix
-```
-
-Каждая delta получает:
-
-- `confidence=low|medium|high`, рассчитанный из размера выборки;
-- `sample=<n>`;
-- approximate interval вроде `approx 120.00..150.00 ms, n=25`, когда это разумно;
-- severity, которая учитывает effect size, confidence и sample size.
 
 JSON:
 
 ```bash
-go run ./cmd/jankhunter compare \
+jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --json > compare.json
 ```
 
-CI gate через thresholds:
+## CI gate
+
+Для CI можно задать пороги:
 
 ```json
 {
@@ -189,263 +188,103 @@ CI gate через thresholds:
 Запуск:
 
 ```bash
-go run ./cmd/jankhunter compare \
+jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --thresholds thresholds.json \
   --out compare.html
 ```
 
-Если gate падает, CLI возвращает exit code `1`, но HTML успевает сохраниться.
+Если gate падает, команда возвращает exit code `1`. HTML при этом сохраняется, чтобы было что открыть и посмотреть.
 
-### export
+## export
 
-Экспортировать события в JSONL:
+Экспорт событий в JSONL:
 
 ```bash
-go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
+jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
 
-## Математический HTML
+Это удобно, если нужно быстро проверить сырые события или скормить их другому инструменту.
 
-Каждый `inspect --out report.html` создает пару файлов:
+## Как забрать логи с Android
+
+По умолчанию runtime пишет:
 
 ```text
-report.html
+context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
+```
+
+Через adb:
+
+```bash
+APP_ID=com.myapp
+mkdir -p logs
+
+adb shell run-as "$APP_ID" ls files/jankhunter
+adb exec-out run-as "$APP_ID" tar -C files/jankhunter -cf - . | tar -xf - -C logs
+
+jankhunter inspect logs/*.jhlog --out report.html
+```
+
+Если лог получили через FileProvider/share sheet, просто положите файл в папку и передайте его CLI:
+
+```bash
+jankhunter inspect ~/Downloads/*.jhlog --out ~/Downloads/jankhunter-report.html
+```
+
+## Математический отчет
+
+Для `inspect --out report.html` рядом создается:
+
+```text
 report-math.html
 ```
 
-Каждый `compare --out compare.html` создает:
+Для `compare --out compare.html`:
 
 ```text
-compare.html
 compare-math.html
 ```
 
-Основной HTML содержит кнопку `λ Анализ`. Math page полностью автономная, на русском языке и без CDN. Верхняя часть показывает сводку качества/сравнения и быстрые карточки всех разделов. Подробные таблицы закрыты по умолчанию и скроллятся внутри секций, поэтому большие логи остаются читаемыми.
+Там лежат более тяжелые методы:
 
-Разделы math page:
+- временные бакеты и sparklines;
+- робастная статистика;
+- точки изменения;
+- автокорреляция и DFT peaks;
+- сетевые циклы;
+- интегральные оценки боли;
+- Марковская модель состояний;
+- граф причинности;
+- справка по каждому методу.
 
-- `Качество данных` или `Качество сравнения`: sample-size и честность сравнения;
-- `Таймлайн сигналов`: временные бакеты и SVG sparklines;
-- `Робастная статистика`: медиана, p95/p99, MAD, bootstrap-интервал и дельта Клиффа;
-- `Точки изменения`: rolling median/MAD с ближайшим route/owner/screen/network context;
-- `Периодические сигналы`: автокорреляция, DFT peaks, spectral entropy;
-- `Сетевые циклы`: DNS/connect/retry/websocket-like loops, motif, confidence и burn score;
-- `Интегральная оценка боли`: площади jank/latency/stall/memory/recovery debt;
-- `Марковская модель состояний`: state sequence, transition matrix, sticky states и recovery probability;
-- `Граф причинности`: Dijkstra paths, Floyd-Warshall all-pairs для компактного графа и owner blame score;
-- `Справка по методам`: что измеряет каждый метод, как считается, как читать и какие есть ограничения.
+Основная идея такая: сначала смотрим обычный отчет, потом открываем `λ Анализ`, если нужно понять глубже, откуда взялась проблема.
 
-## `.jhlog`
+## `.jhlog` коротко
 
-Формат бинарный:
+Формат бинарный и компактный:
 
-```text
-magic/version
-record*
+- timestamp хранится как delta-ms, а не полной датой в каждом событии;
+- строки лежат в dictionary records;
+- события дальше используют короткие ID;
+- boolean-сигналы пишутся в flags/bitmask;
+- числовые строки и даты могут BCD-паковаться, если так меньше.
 
-record:
-  header: byte
-    bits 0..3: event_type
-    bit 4: flags follow
-    bit 5: payload_len follows
-    bits 6..7: timestamp_delta_ms encoding
-  timestamp_delta_ms: 0 bytes, uint8, uint16le, or uvarint
-  flags: uvarint, only when present
-  payload_len: uvarint, only for variable-length payloads
-  payload: event-specific bytes
-```
+До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=2`.
 
-Время хранится как монотонный delta-ms, а не как полная дата на каждое событие. Частые события обычно занимают 1-3 байта на timestamp часть. До явной фиксации формата `.jhlog` считается pre-release unstable: CLI читает только текущую схему `FormatVersion=2`, без legacy-совместимости с предыдущими pre-release версиями.
-
-Строки пишутся через dictionary records:
-
-```text
-id -> "FeedRepository.refresh"
-id -> "GET /feed"
-id -> "FeedScreen"
-```
-
-Runtime пишет короткие ID, CLI раскрывает их в имена.
-Текст хранится только в dictionary records. Обычные значения пишутся как `length + UTF-8 bytes`, а специальные компактные значения используют sentinel `length=0`, `codec`, затем payload:
-
-```text
-codec 0: UTF-8 fallback, используется для пустой строки
-codec 1: BCD decimal string, digit_count + packed BCD bytes
-codec 2: BCD ISO date YYYY-MM-DD, fixed 4 BCD bytes для 8 цифр
-```
-
-BCD применяется только если итоговая запись меньше UTF-8. Поэтому имена классов, routes, owners и stack hints остаются читаемым UTF-8 в словаре, а длинные числовые строки и даты могут занимать меньше места. Context booleans (`low_memory`, `network_metered`, `network_validated`, `network_vpn`) и session boolean `device_rooted` лежат в event flags/bitmask, не дублируясь в payload.
-
-## Owner map
-
-Gradle plugin пишет seed-файл:
-
-```text
-android/<app>/build/generated/jankhunter/<variant>/owner-map.json
-```
-
-CLI принимает его в `inspect` и `compare`:
+## Проверки
 
 ```bash
-go run ./cmd/jankhunter inspect logs/*.jhlog --owner-map owner-map.json
-go run ./cmd/jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --owner-map owner-map.json
+make test
+make build
+./bin/jankhunter sample --out /tmp/sample.jhlog
+./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
+./bin/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
 
-Поддерживаются две формы:
-
-```json
-{
-  "owners": {
-    "FeedRepository.refresh": "Feed team / refresh",
-    "com.example.FeedPresenter.bind#abcd1234": "FeedPresenter.bind"
-  }
-}
-```
-
-и:
-
-```json
-{
-  "entries": [
-    {"id": "abcd1234", "owner": "FeedPresenter.bind"}
-  ]
-}
-```
-
-Если owner-map не содержит matching entry, CLI показывает owner label из `.jhlog` как есть.
-
-## UI/FPS
-
-SDK пишет UI-window события:
-
-```text
-screen_id
-window_ms
-frame_count
-jank_count
-p50_ms
-p95_ms
-p99_ms
-```
-
-CLI считает:
-
-```text
-avg_fps = frame_count * 1000 / window_ms
-jank_rate = jank_count / frame_count
-```
-
-В HTML-отчете есть:
-
-- общий Avg FPS;
-- jank rate;
-- встроенные chart-блоки без CDN;
-- top janky screens;
-- Avg FPS и Min FPS по каждому screen;
-- p95/p99 frame duration.
-
-## JankStats
-
-Если Android runtime пишет `jankstats.*` metrics, CLI показывает отдельную секцию JankStats в text/HTML отчетах. Эти метрики не смешиваются с Choreographer `ui_window`: `ui_window` остается fallback FPS/jank signal, а JankStats показывает richer frame/state counters и duration gauges.
-
-## System context
-
-Context-события помогают понять условия замера:
-
-```text
-network kind
-battery pct
-available/total memory
-low-memory flag
-network metered/validated/VPN
-uid rx/tx bytes
-free/total app data storage
-device rooted flag from session metadata
-```
-
-В `inspect` и `compare` эти данные показываются рядом с performance-метриками, чтобы отличать реальную регрессию от плохих условий устройства или сети. В верхней части HTML есть отдельная `Device Context` плашка с моделью устройства, Android/API/security patch, CPU ABI, признаком рут-доступа, батареей, сетью/VPN, свободной RAM и свободным storage на момент context sample.
-
-## Cohorts
-
-CLI группирует session/context metadata:
-
-```text
-app_versions: 1.4.0=8
-sdks: api-35=5, api-34=3
-devices: Pixel 8 / API 35=5
-processes: main=8
-network: wifi=20, cellular=4
-cohorts: app=1.4.0 build=420 sdk=api-35 device=Pixel 8 / API 35 process=main network=wifi=120
-```
-
-`compare` добавляет warnings, если baseline/candidate собраны на разных app versions, SDK, devices, process mix, network mix или combined cohorts. Это не запрещает сравнение, но явно помечает риск ложного вывода.
-
-## Process breakdown
-
-Если runtime пишет process metadata, `inspect` показывает session count по process:
-
-```text
-processes: main=1, remote=1
-```
-
-HTML-отчеты содержат отдельную process table. `compare` добавляет delta “Process mix”, чтобы не сравнивать baseline только из main process с candidate, где появились remote-process логи, без явного сигнала.
-
-## Counters и gauges
-
-Counters суммируются:
-
-```text
-logs.warn.count
-jankhunter.events_dropped.count
-```
-
-Gauges усредняются и показывают детали:
-
-```text
-ui.fps_x100
-memory.heap_pressure
-```
-
-## HTML-отчеты
-
-`inspect` генерирует отчет по текущей ситуации.
-
-`compare` генерирует отчет по регрессиям между baseline и candidate.
-
-HTML содержит:
-
-- route details;
-- screen details;
-- Top Owners;
-- retained-object drill-down;
-- JankStats section;
-- process/device/network/cohort breakdown;
-- worst regression cards;
-- compare warnings;
-- зеленую кнопку `λ Анализ` и соседнюю math page при генерации через `--out`.
-
-Отчет самодостаточный:
-
-- HTML;
-- встроенный CSS;
-- без CDN;
-- можно отправить в артефакты CI или открыть локально.
-
-## Проверка MVP
+Для чистки сборочных артефактов:
 
 ```bash
-cd cli
-go test ./...
-go run ./cmd/jankhunter sample --out /tmp/sample.jhlog
-go run ./cmd/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
-go run ./cmd/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
-go run ./cmd/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
+make clean
 ```
-
-После inspect/compare должны появиться `/tmp/report-math.html` и `/tmp/compare-math.html`; в них должны быть `Математический анализ`, `Сетевые циклы`, `Граф причинности` и `Справка по методам`.
-
-## Ограничения статистики
-
-CLI работает локально и streaming-first. Confidence interval сейчас approximate и основан на агрегатах, а не на полноценном bootstrap по всем raw events. Для CI gate это достаточно, чтобы не игнорировать sample size, но окончательные релизные выводы всё равно стоит подтверждать на сопоставимых cohorts.

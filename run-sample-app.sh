@@ -174,7 +174,6 @@ print_help() {
   log      выгрузить текущие .jhlog и сгенерировать HTML-отчет, приложение продолжит работать
   report   то же самое, что log
   stop     выгрузить логи, сгенерировать отчет, остановить приложение и выйти
-  стоп     то же самое, что stop
   open     открыть последний сгенерированный отчет на macOS
   help     показать эту подсказку
   quit     выйти без выгрузки логов
@@ -192,7 +191,6 @@ Commands:
   log      pull current .jhlog files and generate an HTML report, keep app running
   report   same as log
   stop     pull logs, generate report, stop app and exit
-  стоп     same as stop
   open     open the latest generated report on macOS
   help     show this help
   quit     exit without pulling logs
@@ -284,7 +282,7 @@ main() {
       open)
         open_latest_report
         ;;
-      stop | "стоп")
+      stop)
         pull_and_report
         adb_cmd shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
         cleanup_emulator

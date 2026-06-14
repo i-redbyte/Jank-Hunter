@@ -5,6 +5,11 @@
 *.swp
 *.tmp
 
+# Local notes stay on disk, but GitHub keeps only README files.
+*.md
+!README.md
+!**/README.md
+
 # Go
 cli/bin/
 cli/dist/
