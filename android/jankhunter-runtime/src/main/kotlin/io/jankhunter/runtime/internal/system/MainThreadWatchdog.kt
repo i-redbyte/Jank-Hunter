@@ -18,6 +18,7 @@ class MainThreadWatchdog(
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
+        lastBeatMs.set(SystemClock.elapsedRealtime())
         beat()
         thread = Thread({ loop() }, "JankHunterMainWatchdog").apply {
             isDaemon = true
