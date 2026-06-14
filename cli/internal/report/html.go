@@ -179,6 +179,10 @@ func execute(path, source string, data any) error {
 		"routeCompareRows":  routeCompareRows,
 		"screenCompareRows": screenCompareRows,
 		"ownerCompareRows":  ownerCompareRows,
+		"flowCompareRows":   flowCompareRows,
+		"flowKeyLabel":      flowKeyLabel,
+		"summaryLogSpam":    summaryLogSpamTotal,
+		"summaryProblems":   summaryProblemTotal,
 		"signedMS":          signedMS,
 		"signedFloat":       signedFloat,
 		"bucketClass": func(bucket mathanalysis.TimelineBucket) string {
@@ -856,6 +860,129 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 	return rows
 }
 
+type flowCompareRow struct {
+	Screen              string
+	Flow                string
+	Step                string
+	Owner               string
+	BaselineProblems    uint64
+	CandidateProblems   uint64
+	DeltaProblems       int64
+	BaselineLogSpam     uint64
+	CandidateLogSpam    uint64
+	DeltaLogSpam        int64
+	BaselineHTTPP95MS   uint64
+	CandidateHTTPP95MS  uint64
+	DeltaHTTPP95MS      int64
+	BaselineStallMaxMS  uint64
+	CandidateStallMaxMS uint64
+	DeltaStallMaxMS     int64
+	BaselineJankPct     float64
+	CandidateJankPct    float64
+	DeltaJankPct        float64
+	Severity            string
+}
+
+func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
+	base := map[string]analyze.FlowStats{}
+	cand := map[string]analyze.FlowStats{}
+	keys := map[string]struct{}{}
+	for _, flow := range baseline.Flows {
+		key := flowStatsKey(flow)
+		base[key] = flow
+		keys[key] = struct{}{}
+	}
+	for _, flow := range candidate.Flows {
+		key := flowStatsKey(flow)
+		cand[key] = flow
+		keys[key] = struct{}{}
+	}
+	rows := make([]flowCompareRow, 0, len(keys))
+	for key := range keys {
+		b := base[key]
+		c := cand[key]
+		problemDelta := int64(c.ProblemCount) - int64(b.ProblemCount)
+		logDelta := int64(c.LogSpam) - int64(b.LogSpam)
+		httpDelta := int64(c.HTTPP95MS) - int64(b.HTTPP95MS)
+		stallDelta := int64(c.StallMaxMS) - int64(b.StallMaxMS)
+		jankDelta := c.UIJankPct - b.UIJankPct
+		rows = append(rows, flowCompareRow{
+			Screen:              firstNonEmpty(c.Screen, b.Screen),
+			Flow:                firstNonEmpty(c.Flow, b.Flow),
+			Step:                firstNonEmpty(c.Step, b.Step),
+			Owner:               firstNonEmpty(c.Owner, b.Owner),
+			BaselineProblems:    b.ProblemCount,
+			CandidateProblems:   c.ProblemCount,
+			DeltaProblems:       problemDelta,
+			BaselineLogSpam:     b.LogSpam,
+			CandidateLogSpam:    c.LogSpam,
+			DeltaLogSpam:        logDelta,
+			BaselineHTTPP95MS:   b.HTTPP95MS,
+			CandidateHTTPP95MS:  c.HTTPP95MS,
+			DeltaHTTPP95MS:      httpDelta,
+			BaselineStallMaxMS:  b.StallMaxMS,
+			CandidateStallMaxMS: c.StallMaxMS,
+			DeltaStallMaxMS:     stallDelta,
+			BaselineJankPct:     b.UIJankPct,
+			CandidateJankPct:    c.UIJankPct,
+			DeltaJankPct:        jankDelta,
+			Severity:            flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
+			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
+		}
+		left := absInt64(rows[i].DeltaProblems)*10_000 + absInt64(rows[i].DeltaLogSpam)*10 + absInt64(rows[i].DeltaStallMaxMS) + absInt64(rows[i].DeltaHTTPP95MS)
+		right := absInt64(rows[j].DeltaProblems)*10_000 + absInt64(rows[j].DeltaLogSpam)*10 + absInt64(rows[j].DeltaStallMaxMS) + absInt64(rows[j].DeltaHTTPP95MS)
+		if left != right {
+			return left > right
+		}
+		return flowKeyLabel(rows[i].Screen, rows[i].Flow, rows[i].Step, rows[i].Owner) < flowKeyLabel(rows[j].Screen, rows[j].Flow, rows[j].Step, rows[j].Owner)
+	})
+	return rows
+}
+
+func flowStatsKey(flow analyze.FlowStats) string {
+	return strings.Join([]string{flow.Screen, flow.Flow, flow.Step, flow.Owner}, "\x00")
+}
+
+func flowKeyLabel(screen, flow, step, owner string) string {
+	parts := []string{
+		firstNonEmpty(screen, "unknown"),
+		firstNonEmpty(flow, "unknown"),
+		firstNonEmpty(step, "unknown"),
+		firstNonEmpty(owner, "unknown"),
+	}
+	return strings.Join(parts, " / ")
+}
+
+func flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta int64, jankDelta float64) string {
+	if problemDelta >= 10 || stallDelta >= 500 || httpDelta >= 500 || jankDelta >= 3 {
+		return "high"
+	}
+	if problemDelta > 0 || logDelta >= 50 || stallDelta >= 100 || httpDelta >= 100 || jankDelta >= 1 {
+		return "medium"
+	}
+	return "ok"
+}
+
+func summaryLogSpamTotal(summary analyze.Summary) uint64 {
+	var total uint64
+	for _, item := range summary.LogSpam {
+		total += item.Count
+	}
+	return total
+}
+
+func summaryProblemTotal(summary analyze.Summary) uint64 {
+	var total uint64
+	for _, item := range summary.ProblemWindows {
+		total += item.Count
+	}
+	return total
+}
+
 func latencyDeltaSeverity(baseline, candidate uint64) string {
 	if baseline == 0 && candidate > 0 {
 		if candidate >= 1000 {
@@ -948,6 +1075,9 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 		owner := report.CausalGraph.OwnerScores[0]
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Главный источник", Detail: fmt.Sprintf("Наибольший вклад у %s: оценка %.2f. Используйте это как приоритет для просмотра карты источников и трассировок.", owner.Owner, owner.Score)})
 	}
+	if flow, ok := topProblemFlow(report.Summary); ok {
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: flowCardSeverity(flow), Title: "Флоу с причинами", Detail: fmt.Sprintf("%s: проблем %d, спам логами %d, HTTP p95 %d мс, макс. пауза %d мс.", flowKeyLabel(flow.Screen, flow.Flow, flow.Step, flow.Owner), flow.ProblemCount, flow.LogSpam, flow.HTTPP95MS, flow.StallMaxMS)})
+	}
 	if score, ok := topIntegralScore(report.IntegralScores); ok {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: score.Severity, Title: score.Title, Detail: fmt.Sprintf("%.1f %s. %s", score.Value, score.Unit, score.Explanation)})
 	}
@@ -989,10 +1119,51 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 		delta := report.CausalDeltas[0]
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Граф причинности изменился", Detail: delta.Summary})
 	}
+	if row, ok := topFlowDelta(report.Comparison.Baseline, report.Comparison.Candidate); ok && row.Severity != "ok" {
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Флоу ухудшился", Detail: fmt.Sprintf("%s: Δ проблем %d, Δ спама %d, Δ HTTP p95 %d мс, Δ UI %+.2f п.п.", flowKeyLabel(row.Screen, row.Flow, row.Step, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
+	}
 	if len(summary.Cards) == 0 {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующей регрессии начните с разделов робастных дельт, сетевых циклов и графа причинности."})
 	}
 	return summary
+}
+
+func topProblemFlow(summary analyze.Summary) (analyze.FlowStats, bool) {
+	if len(summary.Flows) == 0 {
+		return analyze.FlowStats{}, false
+	}
+	best := summary.Flows[0]
+	for _, flow := range summary.Flows[1:] {
+		if flowProblemScore(flow) > flowProblemScore(best) {
+			best = flow
+		}
+	}
+	if flowProblemScore(best) == 0 {
+		return analyze.FlowStats{}, false
+	}
+	return best, true
+}
+
+func flowProblemScore(flow analyze.FlowStats) uint64 {
+	return flow.ProblemCount*10_000 + flow.LogSpam*10 + uint64(flow.StallCount)*1_000 + flow.StallMaxMS + flow.HTTPP95MS + uint64(flow.UIJank)
+}
+
+func flowCardSeverity(flow analyze.FlowStats) string {
+	if flow.ProblemCount >= 10 || flow.StallMaxMS >= 1000 || flow.HTTPP95MS >= 1500 {
+		return "high"
+	}
+	if flow.ProblemCount > 0 || flow.LogSpam >= 50 || flow.StallMaxMS >= 250 || flow.HTTPP95MS >= 500 {
+		return "medium"
+	}
+	return "ok"
+}
+
+func topFlowDelta(baseline, candidate analyze.Summary) (flowCompareRow, bool) {
+	rows := flowCompareRows(baseline, candidate)
+	if len(rows) == 0 {
+		return flowCompareRow{}, false
+	}
+	return rows[0], true
 }
 
 func networkLoopCardSeverity(confidence, burn float64) string {

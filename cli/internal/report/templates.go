@@ -858,10 +858,28 @@ const mathInspectTemplate = `<!doctype html>
         <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
         <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
         <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{.Math.Summary.MemoryMaxKB}} KB</div><div class="hint">макс. PSS</div></div>
+        <div class="metric"><div class="label">{{tip "Флоу" "Количество кортежей контекста флоу: экран, флоу, шаг и источник работ. Это связывает математические сигналы с пользовательским сценарием."}}</div><div class="value">{{len .Math.Summary.Flows}}</div><div class="hint">проблем {{summaryProblems .Math.Summary}}, спам {{summaryLogSpam .Math.Summary}}</div></div>
       </div>
       <div>
         <h3>Исходные логи</h3>
         <div class="source-list">{{range .Math.SourcePaths}}<code>{{.}}</code>{{else}}<span class="muted">Исходные логи не указаны.</span>{{end}}</div>
+      </div>
+    </div>
+    <h3>Атрибуция флоу и причин</h3>
+    <table class="timeline-table">
+      <tr><th>Экран / флоу / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+      {{range .Math.Summary.Flows}}
+      <tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td><code>{{.RouteSample}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} KB</td></tr>
+      {{else}}<tr><td colspan="9" class="muted">Нет событий контекста флоу. Для причинной математики включите API флоу или ASM-опцию flowInteractions.</td></tr>{{end}}
+    </table>
+    <div class="split">
+      <div>
+        <h3>Спам логами</h3>
+        <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+      </div>
+      <div>
+        <h3>Проблемные окна</h3>
+        <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
       </div>
     </div>
     <h3>Находки</h3>
@@ -913,7 +931,7 @@ const mathInspectTemplate = `<!doctype html>
           <table class="timeline-table">
             <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th></tr>
             {{range $math.Timeline}}
-            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} ms</td><td>{{.HTTPP95DurationMS}} ms</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} ms</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} ms</td><td>{{.TTFBMS}} ms</td></tr>
+            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
             {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
           </table>
         </div>
@@ -922,7 +940,7 @@ const mathInspectTemplate = `<!doctype html>
           <table class="timeline-table">
           <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
             {{range $math.Timeline}}
-            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} ms</td></tr>
+            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
             {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
           </table>
         </div>
@@ -1186,8 +1204,8 @@ const mathCompareTemplate = `<!doctype html>
         <strong class="env-device">{{.Math.Baseline.Summary.LogCount}} → {{.Math.Candidate.Summary.LogCount}} логов</strong>
         <div class="env-subtitle">база {{.Math.Baseline.Summary.EventCount}} событий · кандидат {{.Math.Candidate.Summary.EventCount}} событий</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">HTTP базы</div><div class="env-value">{{.Math.Baseline.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Baseline.Summary.HTTPP95MS}} ms</div></div>
-          <div class="env-item"><div class="env-label">HTTP кандидата</div><div class="env-value">{{.Math.Candidate.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Candidate.Summary.HTTPP95MS}} ms</div></div>
+          <div class="env-item"><div class="env-label">HTTP базы</div><div class="env-value">{{.Math.Baseline.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Baseline.Summary.HTTPP95MS}} мс</div></div>
+          <div class="env-item"><div class="env-label">HTTP кандидата</div><div class="env-value">{{.Math.Candidate.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Candidate.Summary.HTTPP95MS}} мс</div></div>
         </div>
       </div>
     </div>
@@ -1211,7 +1229,22 @@ const mathCompareTemplate = `<!doctype html>
       <div class="metric"><div class="label">События кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">{{.Math.Candidate.Summary.LogCount}} логов</div></div>
       <div class="metric"><div class="label">Подтормаживания базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">{{tip "Проблемные окна" "Агрегированные окна причин: медленный HTTP, пауза главного потока, UI-подтормаживания, удержания или спам логами."}}</div><div class="value">{{summaryProblems .Math.Baseline.Summary}} → {{summaryProblems .Math.Candidate.Summary}}</div><div class="hint">спам {{summaryLogSpam .Math.Baseline.Summary}} → {{summaryLogSpam .Math.Candidate.Summary}}</div></div>
     </div>
+    <h3>Сравнение флоу и причин</h3>
+    <table class="timeline-table">
+      <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
+      {{range flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
+      <tr>
+        <td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td>
+        <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
+        <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
+        <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
+        <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+        <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+      </tr>
+      {{else}}<tr><td colspan="12" class="muted">Нет событий контекста флоу для математического сравнения.</td></tr>{{end}}
+    </table>
     <h3>Находки</h3>
     <div class="finding-list">
       {{range .Math.Findings}}
@@ -1534,10 +1567,10 @@ const inspectTemplate = `<!doctype html>
       <span class="pill">автономный отчет</span>
     </div>
     <div class="grid">
-      <div class="metric"><div class="label">{{tip "HTTP p95" "95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее."}}</div><div class="value">{{.Summary.HTTPP95MS}} ms</div><div class="hint">{{.Summary.HTTPCount}} запросов, ошибок {{.Summary.HTTPFailed}}</div></div>
+      <div class="metric"><div class="label">{{tip "HTTP p95" "95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее."}}</div><div class="value">{{.Summary.HTTPP95MS}} мс</div><div class="hint">{{.Summary.HTTPCount}} запросов, ошибок {{.Summary.HTTPFailed}}</div></div>
       <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div><div class="hint">{{.Summary.UIJank}} / {{.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">{{tip "Средний FPS" "Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах."}}</div><div class="value">{{printf "%.1f" .Summary.UIAvgFPS}}</div><div class="hint">минимум {{printf "%.1f" .Summary.UIMinFPS}}</div></div>
-      <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{.Summary.StallMaxMS}} ms</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
+      <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{.Summary.StallMaxMS}} мс</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{.Summary.MemoryMaxKB}} KB</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. RX UID" "Максимальный принятый сетевой трафик UID приложения по снимкам контекста. Помогает увидеть тяжелую сетевую активность."}}</div><div class="value">{{.Summary.TrafficRxMax}}</div><div class="hint">макс. TX {{.Summary.TrafficTxMax}}</div></div>
     </div>
@@ -1558,14 +1591,14 @@ const inspectTemplate = `<!doctype html>
       <div class="fold-body">
         <div class="chart-list">
           {{range .Summary.Routes}}
-          <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} ms</strong></div>
+          <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} мс</strong></div>
           {{else}}<div class="muted">Нет HTTP-событий.</div>{{end}}
         </div>
         <h3>Таблица маршрутов</h3>
         <table>
           <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Средний TTFB</th><th>RX</th><th>TX</th><th>Источник</th></tr>
           {{range .Summary.Routes}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} ms</td><td>{{.P95MS}} ms</td><td>{{.MaxMS}} ms</td><td>{{.AvgTTFBMS}} ms</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
+          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
           {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
       </div>
@@ -1591,7 +1624,7 @@ const inspectTemplate = `<!doctype html>
           <tr>
             <td><code>{{.Screen}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
             <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
-            <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} ms</td><td>{{.MaxP99MS}} ms</td>
+            <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} мс</td><td>{{.MaxP99MS}} мс</td>
           </tr>
           {{else}}<tr><td colspan="9" class="muted">Нет событий UI-окон.</td></tr>{{end}}
         </table>
@@ -1617,10 +1650,10 @@ const inspectTemplate = `<!doctype html>
             <td><code>{{.RouteSample}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
-            <td>{{.HTTPP95MS}} ms</td>
+            <td>{{.HTTPP95MS}} мс</td>
             <td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td>
             <td>{{.StallCount}}</td>
-            <td>{{.StallMaxMS}} ms</td>
+            <td>{{.StallMaxMS}} мс</td>
             <td>{{.LogSpam}}</td>
             <td>{{.ProblemCount}}</td>
             <td>{{.MemoryMaxKB}} KB</td>
@@ -1643,7 +1676,7 @@ const inspectTemplate = `<!doctype html>
             <table>
               <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник</th></tr>
               {{range .Summary.ProblemWindows}}
-              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} ms</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
+              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
               {{else}}<tr><td colspan="9" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}
             </table>
           </div>
@@ -1662,7 +1695,7 @@ const inspectTemplate = `<!doctype html>
         <table>
           <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
           {{range .Summary.Owners}}
-          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} ms</td><td>{{.MaxMS}} ms</td><td><code>{{.StackHint}}</code></td></tr>
+          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><code>{{.StackHint}}</code></td></tr>
           {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
       </div>
@@ -1816,6 +1849,7 @@ const compareTemplate = `<!doctype html>
   <a href="#compare">Сравнение</a>
   <a href="#regressions">Регрессии</a>
   <a href="#changes">Где изменилось</a>
+  <a href="#flows">Флоу</a>
   <a href="#drilldown">Детали логов</a>
   <a href="#cohorts">Когорты</a>
   <a href="#analysis">Итог</a>
@@ -1847,9 +1881,14 @@ const compareTemplate = `<!doctype html>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 ms ANR-watch такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 мс ANR-watch такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
         <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.StallMaxMS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.StallMaxMS}} мс</strong></div></div>
         <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Флоу и причины" "Сумма агрегированных проблемных окон и спама логами по кортежам контекста флоу. Рост показывает, что кандидат чаще попадает в объяснимые проблемные участки сценария."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>Проблемы</span><strong>{{summaryProblems .Comparison.Baseline}} → {{summaryProblems .Comparison.Candidate}}</strong></div><div class="compare-value"><span>Спам логами</span><strong>{{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}}</strong></div></div>
+        <div class="compare-delta">Флоу {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
       </div>
     </div>
     <h3>Кольцевые индикаторы</h3>
@@ -1950,6 +1989,31 @@ const compareTemplate = `<!doctype html>
     </details>
   </section>
 
+  <section id="flows" class="panel">
+    <div class="panel-head">
+      <div><h2>Сравнение флоу и причин</h2><div class="panel-kicker">Экран, флоу, шаг и источник сопоставлены между базой и кандидатом по проблемным окнам, спаму логами, HTTP, UI и паузам.</div></div>
+    </div>
+    <details class="fold" open>
+      <summary>Детали флоу</summary>
+      <div class="fold-body">
+        <table>
+          <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
+          {{range flowCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td>
+            <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
+            <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
+            <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
+            <td>{{.BaselineStallMaxMS}} мс</td><td>{{.CandidateStallMaxMS}} мс</td>
+            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста флоу для сравнения.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
   <section id="drilldown" class="panel">
     <div class="panel-head">
       <div><h2>Детали по каждому логу</h2><div class="panel-kicker">Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.</div></div>
@@ -1959,7 +2023,7 @@ const compareTemplate = `<!doctype html>
     <details class="log-card" id="{{.Anchor}}">
       <summary>
         <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
-        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
@@ -1967,6 +2031,8 @@ const compareTemplate = `<!doctype html>
           <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>
       </div>
     </details>
@@ -1976,7 +2042,7 @@ const compareTemplate = `<!doctype html>
     <details class="log-card" id="{{.Anchor}}">
       <summary>
         <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
-        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} ms</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
@@ -1984,6 +2050,8 @@ const compareTemplate = `<!doctype html>
           <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>
       </div>
     </details>

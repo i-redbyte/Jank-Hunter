@@ -1,5 +1,6 @@
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     id("com.android.library")
@@ -24,6 +25,14 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+}
+
+tasks.withType<Test>().configureEach {
+    systemProperty("jankhunter.benchmark", providers.systemProperty("jankhunter.benchmark").orElse("false").get())
+    systemProperty(
+        "jankhunter.benchmark.iterations",
+        providers.systemProperty("jankhunter.benchmark.iterations").orElse("100000").get(),
+    )
 }
 
 afterEvaluate {
