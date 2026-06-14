@@ -85,12 +85,15 @@ scripts/integrate-android-project.sh \
 
 - публикует Jank Hunter в локальный Maven repo целевого проекта: `.jankhunter/maven`;
 - собирает CLI и кладет бинарник в `.jankhunter/bin/jankhunter`;
+- прописывает Android SDK в `local.properties` через `sdk.dir`;
 - добавляет этот repo в `settings.gradle` или `settings.gradle.kts`;
 - подключает `io.jankhunter.android`, `jankhunter-runtime` и `jankhunter-okhttp3` в указанный модуль;
 - добавляет `jankHunter { ... }` с безопасными дефолтами для debug-сборки;
 - оставляет backup измененных файлов в `.jankhunter-backups/<timestamp>`.
 
 Если app-модуль называется не `:app`, передайте правильный путь через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
+
+Путь к Android SDK скрипт берет из `--android-sdk`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` или стандартного macOS пути `~/Library/Android/sdk`. Если `local.properties` уже содержит `sdk.dir`, обычный запуск его не перезаписывает.
 
 Сбросить буфер вручную:
 
