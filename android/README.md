@@ -91,7 +91,7 @@ scripts/integrate-android-project.sh \
 - добавляет `jankHunter { ... }` с безопасными дефолтами для debug-сборки;
 - оставляет backup измененных файлов в `.jankhunter-backups/<timestamp>`.
 
-Обычно `--module` указывать не нужно: скрипт сам ранжирует app-кандидаты и выбирает основной app по Android application plugin или alias, launchable manifest, `applicationId`, имени модуля и штрафу для test/benchmark/sample-модулей. Если проект совсем нестандартный, можно переопределить выбор через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
+Обычно `--module` указывать не нужно: скрипт сам ранжирует app-кандидаты и выбирает основной app по Android application plugin или alias, launchable manifest, manifest `android:name`, `Application` subclass, `applicationId`, имени модуля и штрафу для test/benchmark/sample-модулей. Если проект совсем нестандартный, можно переопределить выбор через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
 
 Путь к Android SDK скрипт берет из `--android-sdk`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` или стандартного macOS пути `~/Library/Android/sdk`. Этот путь используется и для публикации Jank Hunter из локального clone, и для `local.properties` целевого проекта. Если `local.properties` уже содержит `sdk.dir`, обычный запуск его не перезаписывает.
 

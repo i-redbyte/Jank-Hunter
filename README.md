@@ -88,7 +88,7 @@ scripts/integrate-android-project.sh \
   --runtime-call-graph
 ```
 
-Скрипт публикует Android-артефакты Jank Hunter в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в найденный app-модуль и создает `jankHunter { ... }` конфиг. App-модуль определяется автоматически: скрипт ранжирует кандидатов по Android application plugin или alias, launchable manifest, `applicationId`, имени модуля и отбрасывает вниз test/benchmark/sample-модули. Перед публикацией он также передает найденный Android SDK в Gradle-сборку Jank Hunter, поэтому чистый clone без `ANDROID_HOME` тоже должен собраться на macOS. Перед правками целевого проекта скрипт оставляет backup в `.jankhunter-backups/`.
+Скрипт публикует Android-артефакты Jank Hunter в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в найденный app-модуль и создает `jankHunter { ... }` конфиг. App-модуль определяется автоматически: скрипт ранжирует кандидатов по Android application plugin или alias, launchable manifest, manifest `android:name`, `Application` subclass, `applicationId`, имени модуля и отбрасывает вниз test/benchmark/sample-модули. Перед публикацией он также передает найденный Android SDK в Gradle-сборку Jank Hunter, поэтому чистый clone без `ANDROID_HOME` тоже должен собраться на macOS. Перед правками целевого проекта скрипт оставляет backup в `.jankhunter-backups/`.
 
 Если Android SDK лежит не в стандартном месте, передайте путь явно:
 

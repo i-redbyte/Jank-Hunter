@@ -379,7 +379,13 @@ is_android_application_candidate() {
   if module_has_launcher_manifest "$module_dir"; then
     return 0
   fi
+  if module_manifest_references_application "$module_dir"; then
+    return 0
+  fi
   if module_name_is_app_like "$module" && grep -Eq 'android[[:space:]]*\{' "$build_file"; then
+    return 0
+  fi
+  if module_name_is_app_like "$module" && module_has_application_class "$module_dir"; then
     return 0
   fi
   return 1
@@ -425,6 +431,14 @@ score_app_module() {
   if module_has_launcher_manifest "$module_dir"; then
     score=$((score + 140))
     reason+=", launcher"
+  fi
+  if module_manifest_references_application "$module_dir"; then
+    score=$((score + 65))
+    reason+=", manifest application"
+  fi
+  if module_has_application_class "$module_dir"; then
+    score=$((score + 60))
+    reason+=", Application subclass"
   fi
   if grep -Eq 'com\.android\.application' "$build_file"; then
     score=$((score + 45))
@@ -473,6 +487,42 @@ module_has_launcher_manifest() {
     fi
   done < <(
     find "$module_dir/src" -path '*/AndroidManifest.xml' -type f 2>/dev/null | sort
+  )
+  return 1
+}
+
+module_manifest_references_application() {
+  local module_dir="$1"
+  local manifest
+  while IFS= read -r manifest; do
+    if awk '
+      /<application([[:space:]>]|$)/ { in_application = 1 }
+      in_application && /android:name[[:space:]]*=/ { found = 1 }
+      in_application && />/ { in_application = 0 }
+      END { exit found ? 0 : 1 }
+    ' "$manifest"; then
+      return 0
+    fi
+  done < <(
+    find "$module_dir/src" -path '*/AndroidManifest.xml' -type f 2>/dev/null | sort
+  )
+  return 1
+}
+
+module_has_application_class() {
+  local module_dir="$1"
+  local source
+  while IFS= read -r source; do
+    if awk '
+      /class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[^{;]*(extends[[:space:]]+[A-Za-z0-9_.]*Application|:[^{;]*[A-Za-z0-9_.]*Application[[:space:]]*\()/ {
+        found = 1
+      }
+      END { exit found ? 0 : 1 }
+    ' "$source"; then
+      return 0
+    fi
+  done < <(
+    find "$module_dir/src" \( -name '*.kt' -o -name '*.java' \) -type f 2>/dev/null | sort
   )
   return 1
 }
