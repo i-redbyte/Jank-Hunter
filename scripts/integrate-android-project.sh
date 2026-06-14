@@ -382,6 +382,12 @@ is_android_application_candidate() {
   if module_manifest_references_application "$module_dir"; then
     return 0
   fi
+  if module_matches_project_name "$module" && grep -Eq 'android[[:space:]]*\{' "$build_file"; then
+    return 0
+  fi
+  if module_matches_project_name "$module" && module_has_application_class "$module_dir"; then
+    return 0
+  fi
   if module_name_is_app_like "$module" && grep -Eq 'android[[:space:]]*\{' "$build_file"; then
     return 0
   fi
@@ -389,6 +395,41 @@ is_android_application_candidate() {
     return 0
   fi
   return 1
+}
+
+module_matches_project_name() {
+  local module="$1"
+  local base
+  base="${module##*:}"
+  local normalized_base
+  normalized_base="$(normalize_name "$base")"
+  [[ -n "$normalized_base" ]] || return 1
+
+  local hint
+  while IFS= read -r hint; do
+    hint="$(normalize_name "$hint")"
+    [[ -n "$hint" ]] || continue
+    if [[ "$normalized_base" == "$hint" ]]; then
+      return 0
+    fi
+  done < <(project_name_hints)
+  return 1
+}
+
+project_name_hints() {
+  basename "$TARGET_ROOT"
+  local settings=""
+  if [[ -f "$TARGET_ROOT/settings.gradle.kts" ]]; then
+    settings="$TARGET_ROOT/settings.gradle.kts"
+  elif [[ -f "$TARGET_ROOT/settings.gradle" ]]; then
+    settings="$TARGET_ROOT/settings.gradle"
+  fi
+  [[ -n "$settings" ]] || return 0
+  sed -nE "s/^[[:space:]]*rootProject[.]name[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"].*$/\1/p" "$settings" | head -n 1
+}
+
+normalize_name() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g'
 }
 
 module_name_is_app_like() {
@@ -450,6 +491,10 @@ score_app_module() {
   if grep -Eq 'applicationId[[:space:]]*(=|[[:space:]])' "$build_file"; then
     score=$((score + 55))
     reason+=", applicationId"
+  fi
+  if module_matches_project_name "$module"; then
+    score=$((score + 85))
+    reason+=", project name"
   fi
   if [[ "$module" == ":app" || "$base" == "app" ]]; then
     score=$((score + 90))
