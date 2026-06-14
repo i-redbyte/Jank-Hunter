@@ -1,0 +1,16 @@
+build:
+  maxIssues: 0
+
+config:
+  validation: true
+  warningsAsErrors: false
+
+formatting:
+  active: true
+  android: false
+
+complexity:
+  active: false
+
+style:
+  active: false

@@ -40,6 +40,12 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if len(summary.ProblemWindows) == 0 {
 		t.Fatalf("expected problem windows")
 	}
+	if len(summary.RuntimeCalls) == 0 {
+		t.Fatalf("expected runtime call graph")
+	}
+	if !summary.Influence.HasRuntimeGraph || len(summary.Influence.TopEdges) == 0 {
+		t.Fatalf("expected influence runtime edges: %+v", summary.Influence)
+	}
 }
 
 func TestInspectFilesAppliesOwnerMap(t *testing.T) {

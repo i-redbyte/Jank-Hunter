@@ -50,6 +50,21 @@ class JankHunterRuntimeBenchmarkTest {
         printBenchmark("runnable wrapper creation", count, elapsedNs)
     }
 
+    @Test
+    fun runtimeCallGraphHotPathWithoutWriter() {
+        assumeBenchmarksEnabled()
+        val count = iterations()
+        val elapsedNs = measureNanoTime {
+            repeat(count) {
+                val parentToken = JankHunter.enterMethod("BenchmarkOwner.parent#1")
+                val childToken = JankHunter.enterMethod("BenchmarkOwner.child#2")
+                JankHunter.exitMethod(childToken, "BenchmarkOwner.child#2")
+                JankHunter.exitMethod(parentToken, "BenchmarkOwner.parent#1")
+            }
+        }
+        printBenchmark("runtime call graph no-writer guard", count, elapsedNs)
+    }
+
     private fun assumeBenchmarksEnabled() {
         assumeTrue(
             "Benchmarks are opt-in. Run with -Djankhunter.benchmark=true",

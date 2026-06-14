@@ -91,8 +91,17 @@ func BuildInfluence(summary Summary, graph *ClassGraph) InfluenceSummary {
 }
 
 type influenceBuilder struct {
-	nodes map[string]*influenceAccumulator
-	edges []ClassGraphEdge
+	nodes        map[string]*influenceAccumulator
+	edges        []ClassGraphEdge
+	runtimeEdges []runtimeInfluenceEdge
+}
+
+type runtimeInfluenceEdge struct {
+	from    string
+	to      string
+	count   uint64
+	totalMS uint64
+	maxMS   uint64
 }
 
 type influenceAccumulator struct {
@@ -228,6 +237,34 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.addReason("сетевой маршрут")
 		node.score += scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3)
 	}
+	for _, call := range summary.RuntimeCalls {
+		callerClass := classFromOwner(call.Caller)
+		calleeClass := classFromOwner(call.Callee)
+		if callerClass == "" || calleeClass == "" || callerClass == calleeClass {
+			continue
+		}
+		caller := b.node(callerClass)
+		callee := b.node(calleeClass)
+		caller.runtime = true
+		callee.runtime = true
+		caller.addFlow(call.Flow)
+		caller.addScreen(call.Screen)
+		callee.addFlow(call.Flow)
+		callee.addScreen(call.Screen)
+		caller.addReason("runtime-вызовы")
+		callee.addReason("runtime-вызовы")
+		caller.score += scoreCount(call.Count, 220) * 0.45
+		callee.score += scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2200) + scoreDuration(call.MaxMS, 500)
+		caller.mainMS += call.TotalMS / 4
+		callee.mainMS += call.TotalMS
+		b.runtimeEdges = append(b.runtimeEdges, runtimeInfluenceEdge{
+			from:    callerClass,
+			to:      calleeClass,
+			count:   call.Count,
+			totalMS: call.TotalMS,
+			maxMS:   call.MaxMS,
+		})
+	}
 }
 
 func (b *influenceBuilder) addStatic(graph *ClassGraph) {
@@ -324,7 +361,9 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 	out := InfluenceSummary{
 		Available:        len(allNodes) > 0,
 		HasClassGraph:    graph != nil && len(graph.Edges) > 0,
+		HasRuntimeGraph:  len(b.runtimeEdges) > 0,
 		RuntimeNodes:     runtimeNodes,
+		RuntimeEdges:     len(b.runtimeEdges),
 		StaticNodes:      staticNodes,
 		StaticEdges:      len(b.edges),
 		ShownNodes:       len(allNodes),
@@ -369,6 +408,31 @@ func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []Influe
 		} else {
 			row.Reason = "статическая связь"
 		}
+	}
+	for _, edge := range b.runtimeEdges {
+		fromNode := b.nodes[edge.from]
+		toNode := b.nodes[edge.to]
+		if fromNode == nil || toNode == nil {
+			continue
+		}
+		_, fromSelected := selected[edge.from]
+		_, toSelected := selected[edge.to]
+		if !fromSelected && !toSelected {
+			continue
+		}
+		key := edge.from + "\x00" + edge.to
+		row := dedup[key]
+		if row == nil {
+			row = &InfluenceEdge{
+				From: edge.from,
+				To:   edge.to,
+			}
+			dedup[key] = row
+		}
+		row.Count += edge.count
+		row.Influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
+		row.RuntimeConfirmed = true
+		row.Reason = "runtime-вызов в этом прогоне"
 	}
 	out := make([]InfluenceEdge, 0, len(dedup))
 	for _, edge := range dedup {
@@ -509,6 +573,13 @@ func classFromOwner(owner string) string {
 		}
 	}
 	normalized := normalizeClassName(owner)
+	if dot := strings.LastIndex(normalized, "."); dot > 0 {
+		candidate := normalized[:dot]
+		simpleCandidate := candidate[strings.LastIndex(candidate, ".")+1:]
+		if simpleCandidate != "" && (isUpperASCII(simpleCandidate[0]) || strings.Contains(simpleCandidate, "$")) {
+			return candidate
+		}
+	}
 	simple := normalized[strings.LastIndex(normalized, ".")+1:]
 	if simple != "" && (isUpperASCII(simple[0]) || strings.Contains(simple, "$")) {
 		return normalized

@@ -79,7 +79,7 @@ Gradle plugin подключайте только на debug/QA сборки и 
 - Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
 - Пользовательские counters/gauges.
 - Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.
-- Граф влияния кода: классы, флоу, проблемные окна, лог-спам и build-time ASM-связи между классами.
+- Граф влияния кода: классы, флоу, проблемные окна, лог-спам, runtime-вызовы и build-time ASM-связи между классами.
 
 CLI строит два основных режима:
 
@@ -101,7 +101,7 @@ Android:
 
 ```bash
 cd android
-./gradlew :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+./gradlew detekt :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
 End-to-end через emulator/device:

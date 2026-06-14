@@ -166,6 +166,67 @@ func TestFlowLogSpamAndProblemUseContextFlags(t *testing.T) {
 	}
 }
 
+func TestRuntimeCallUsesCompactContextFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-call.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	entries := []DictionaryEntry{
+		{Kind: DictScreen, ID: 1, Value: "Checkout"},
+		{Kind: DictOwner, ID: 2, Value: "CheckoutPresenter.open"},
+		{Kind: DictOwner, ID: 3, Value: "CheckoutRepository.load"},
+		{Kind: DictFlow, ID: 4, Value: "checkout.open"},
+		{Kind: DictStep, ID: 5, Value: "network"},
+	}
+	for _, entry := range entries {
+		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+	if err := writer.WriteEvent(Event{
+		Type:   EventRuntimeCall,
+		TimeMS: 40,
+		RuntimeCall: &RuntimeCallEvent{
+			ScreenID: 1,
+			CallerID: 2,
+			FlowID:   4,
+			StepID:   5,
+			CalleeID: 3,
+			Count:    9,
+			TotalMS:  72,
+			MaxMS:    18,
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent(runtime call) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var runtimeCall *RuntimeCallEvent
+	var flags uint64
+	for _, event := range log.Events {
+		if event.RuntimeCall != nil {
+			runtimeCall = event.RuntimeCall
+			flags = event.Flags
+		}
+	}
+	if runtimeCall == nil {
+		t.Fatalf("expected runtime call event")
+	}
+	if flags&uint64(FlagHasScreen|FlagHasOwner|FlagHasFlow|FlagHasStep) == 0 {
+		t.Fatalf("expected compact context flags, got %08b", flags)
+	}
+	if runtimeCall.CallerID != 2 || runtimeCall.CalleeID != 3 || runtimeCall.Count != 9 || runtimeCall.TotalMS != 72 || runtimeCall.MaxMS != 18 {
+		t.Fatalf("runtime call did not round-trip: %+v", runtimeCall)
+	}
+}
+
 func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.jhlog")
 	if err := WriteSample(path); err != nil {

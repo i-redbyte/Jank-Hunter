@@ -23,6 +23,7 @@ open class JankHunterExtension {
         var flowInteractions: Boolean = true
         var logSpam: Boolean = true
         var classGraph: Boolean = true
+        var runtimeCallGraph: Boolean = false
         var methodCounters: Boolean = false
         var allowEmptyIncludePackages: Boolean = false
         var includeWholeApplication: Boolean = false

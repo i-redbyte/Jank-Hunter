@@ -924,6 +924,13 @@ const mathInspectTemplate = `<!doctype html>
         <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
       </div>
     </div>
+    <h3>Runtime-вызовы</h3>
+    <table class="timeline-table">
+      <tr><th>Экран / флоу / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+      {{range .Math.Summary.RuntimeCalls}}
+      <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+      {{else}}<tr><td colspan="6" class="muted">Нет runtime-графа вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+    </table>
     {{if .Math.Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
     <p class="help-text">Этот блок связывает математические симптомы с классами: score растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
@@ -1597,7 +1604,7 @@ const influenceTemplate = `<!doctype html>
         <strong class="env-device">{{if .Influence.HasClassGraph}}runtime + статический граф{{else}}только runtime-сигналы{{end}}</strong>
         <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Runtime-узлы</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">есть измеренные симптомы</div></div>
+          <div class="env-item"><div class="env-label">Runtime-узлы</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{.Influence.RuntimeEdges}} runtime-связей</div></div>
           <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
         </div>
       </div>
@@ -1860,6 +1867,13 @@ const inspectTemplate = `<!doctype html>
             </table>
           </div>
         </div>
+        <h3>Runtime-вызовы</h3>
+        <table>
+          <tr><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          {{range .Summary.RuntimeCalls}}
+          <tr><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          {{else}}<tr><td colspan="8" class="muted">Нет runtime-графа вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+        </table>
       </div>
     </details>
   </section>

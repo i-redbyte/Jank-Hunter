@@ -53,6 +53,9 @@ func TestWriteReports(t *testing.T) {
 		ProblemWindows: []analyze.ProblemWindowStats{
 			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Kind: "ui_jank", Windows: 1, Count: 90, TotalWindowMS: 10000, MaxMS: 24},
 		},
+		RuntimeCalls: []analyze.RuntimeCallStats{
+			{Screen: "Feed", Flow: "feed.open", Step: "render", Caller: "FeedPresenter.render", Callee: "FeedAdapter.bind", Count: 12, TotalMS: 144, MaxMS: 24},
+		},
 	}
 
 	dir := t.TempDir()
@@ -60,13 +63,13 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Runtime-вызовы", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Runtime-вызовы", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -165,13 +168,15 @@ func TestInfluenceReportPath(t *testing.T) {
 
 func sampleInfluence() analyze.InfluenceSummary {
 	return analyze.InfluenceSummary{
-		Available:     true,
-		HasClassGraph: true,
-		RuntimeNodes:  1,
-		StaticNodes:   2,
-		StaticEdges:   1,
-		ShownNodes:    2,
-		ShownEdges:    1,
+		Available:       true,
+		HasClassGraph:   true,
+		HasRuntimeGraph: true,
+		RuntimeNodes:    1,
+		RuntimeEdges:    1,
+		StaticNodes:     2,
+		StaticEdges:     1,
+		ShownNodes:      2,
+		ShownEdges:      1,
 		TopNodes: []analyze.InfluenceNode{{
 			ClassName:       "com.app.data.CheckoutRepository",
 			Label:           "data.CheckoutRepository",

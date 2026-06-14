@@ -14,6 +14,7 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val flowInteractions: Property<Boolean>
     val logSpam: Property<Boolean>
     val classGraph: Property<Boolean>
+    val runtimeCallGraph: Property<Boolean>
     val classGraphPath: Property<String>
     val allowEmptyIncludePackages: Property<Boolean>
     val asmProgressLog: Property<Boolean>

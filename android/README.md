@@ -303,6 +303,7 @@ jankHunter {
         flowInteractions = true
         logSpam = true
         classGraph = true
+        runtimeCallGraph = false
         methodCounters = false
         allowEmptyIncludePackages = false
         asmProgressLog = false
@@ -341,6 +342,7 @@ jankHunter {
 - `flowInteractions` - оборачивает `View.setOnClickListener` и создает flow для клика, если явный flow еще не задан;
 - `logSpam` - считает вызовы `android.util.Log.*` и Timber по class/method/level, не сохраняя текст логов;
 - `classGraph` - во время ASM-прохода пишет статический граф вызовов классов в отдельный файл. Байткод приложения ради этого не меняется;
+- `runtimeCallGraph` - опционально добавляет легкие enter/exit hooks и пишет агрегированные runtime-связи `caller -> callee`;
 - `methodCounters` - пишет счетчики входа в методы, по умолчанию выключено.
 
 Для каждого variant plugin пишет owner-map и class graph:
@@ -361,6 +363,8 @@ jankhunter inspect logs/*.jhlog \
 
 `class-graph.jsonl` нужен для отдельного отчета `report-influence.html`: там видно, какие классы стали “злыми” узлами, через какие связи они влияют на другие классы и где это подтвердилось runtime-сигналами. Узел без runtime-доказательств не считается виновником: он просто связан со статическим графом, но в конкретном прогоне мог не выполниться.
 
+`runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения это лучше включать после smoke-сборки и сначала на ограниченные include-пакеты или на `includeWholeApplication = true` с хорошим списком exclude.
+
 ## Что с overhead
 
 Коротко: библиотека не должна подвешивать большое приложение, если не включать все подряд.
@@ -371,6 +375,7 @@ jankhunter inspect logs/*.jhlog \
 - ASM включайте сначала на `com.myapp.feature` / `com.myapp.data`, потом расширяйте;
 - `includeWholeApplication = true` используйте осознанно и с `excludePackages`;
 - `classGraph` можно оставлять включенным: он работает на build-time и не добавляет runtime-вызовы;
+- `runtimeCallGraph` включайте осознанно: он агрегирует вызовы, но все равно добавляет enter/exit hook в выбранные методы;
 - `main_looper_dispatch_monitor_enabled` держите выключенным, пока реально не нужен;
 - `methodCounters` не включайте на весь проект без причины;
 - `coroutines` включайте после smoke-сборки, потому что это широкий bytecode hook.
@@ -379,7 +384,7 @@ Runtime пишет асинхронно, через очередь и flush-ин
 
 ## Бенчмарки overhead
 
-В runtime есть opt-in unit benchmarks для горячих путей: flow API, счетчик log spam и создание wrapper. Они не запускаются по умолчанию, чтобы не замедлять обычные тесты и не делать CI шумным.
+В runtime есть opt-in unit benchmarks для горячих путей: flow API, счетчик log spam, создание wrapper и guard runtime-графа вызовов. Они не запускаются по умолчанию, чтобы не замедлять обычные тесты и не делать CI шумным.
 
 Запуск:
 
@@ -398,8 +403,10 @@ cd android
 
 ```bash
 cd android
-./gradlew :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+./gradlew detekt :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
+
+`detekt` настроен как Kotlin/ktlint formatting-check с official code style. Отчеты лежат в `build/reports/detekt` каждого Android-модуля.
 
 End-to-end:
 

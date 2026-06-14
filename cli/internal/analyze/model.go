@@ -108,6 +108,17 @@ type ProblemWindowStats struct {
 	MaxMS         uint64
 }
 
+type RuntimeCallStats struct {
+	Screen  string
+	Flow    string
+	Step    string
+	Caller  string
+	Callee  string
+	Count   uint64
+	TotalMS uint64
+	MaxMS   uint64
+}
+
 type Summary struct {
 	Title             string
 	LogCount          int
@@ -153,6 +164,7 @@ type Summary struct {
 	Flows              []FlowStats
 	LogSpam            []LogSpamStats
 	ProblemWindows     []ProblemWindowStats
+	RuntimeCalls       []RuntimeCallStats
 	AppVersions        []NamedValue
 	Builds             []NamedValue
 	Devices            []NamedValue
@@ -189,7 +201,9 @@ type ClassGraphEdge struct {
 type InfluenceSummary struct {
 	Available        bool
 	HasClassGraph    bool
+	HasRuntimeGraph  bool
 	RuntimeNodes     int
+	RuntimeEdges     int
 	StaticNodes      int
 	StaticEdges      int
 	ShownNodes       int

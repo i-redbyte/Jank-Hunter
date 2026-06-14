@@ -79,6 +79,8 @@ func compactEventFlags(event Event) uint64 {
 		flags |= compactContextFlags(event.LogSpam)
 	case EventProblem:
 		flags |= compactContextFlags(event.Problem)
+	case EventRuntimeCall:
+		flags |= compactContextFlags(event.RuntimeCall)
 	}
 	return flags
 }
@@ -272,6 +274,19 @@ func encodePayload(w io.Writer, event Event) error {
 				return err
 			}
 		}
+	case EventRuntimeCall:
+		p := event.RuntimeCall
+		if p == nil {
+			return fmt.Errorf("runtime call payload is nil")
+		}
+		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+			return err
+		}
+		for _, value := range []uint64{p.CalleeID, p.Count, p.TotalMS, p.MaxMS} {
+			if err := writeUvarint(w, value); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("unsupported event type %d", event.Type)
 	}
@@ -297,6 +312,13 @@ func (p *ProblemEvent) contextIDs() (uint64, uint64, uint64, uint64) {
 		return 0, 0, 0, 0
 	}
 	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
+}
+
+func (p *RuntimeCallEvent) contextIDs() (uint64, uint64, uint64, uint64) {
+	if p == nil {
+		return 0, 0, 0, 0
+	}
+	return p.ScreenID, p.CallerID, p.FlowID, p.StepID
 }
 
 func writeContextIDs(w io.Writer, flags uint64, context contextIDs) error {
@@ -488,7 +510,7 @@ func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
 
 func needsPayloadLength(eventType EventType) bool {
 	switch eventType {
-	case EventDictionary, EventSession, EventContext, EventFlow, EventLogSpam, EventProblem:
+	case EventDictionary, EventSession, EventContext, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return true
 	default:
 		return false
@@ -521,6 +543,7 @@ func WriteSample(path string) error {
 		{Kind: DictOwner, ID: 10, Value: "FeedRepository.refresh"},
 		{Kind: DictOwner, ID: 11, Value: "CheckoutPresenter.render"},
 		{Kind: DictOwner, ID: 12, Value: "CheckoutButton.onClick"},
+		{Kind: DictOwner, ID: 13, Value: "CheckoutRepository.load"},
 		{Kind: DictRoute, ID: 20, Value: "GET /feed"},
 		{Kind: DictRoute, ID: 21, Value: "POST /checkout"},
 		{Kind: DictScreen, ID: 30, Value: "FeedScreen"},
@@ -559,6 +582,7 @@ func WriteSample(path string) error {
 		{Type: EventUIWindow, TimeMS: 10000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 30, WindowMS: 10000, FrameCount: 580, JankCount: 28, P50MS: 12, P95MS: 33, P99MS: 72}},
 		{Type: EventGauge, TimeMS: 10100, Metric: &MetricEvent{MetricID: 61, Value: 5800}},
 		{Type: EventFlow, TimeMS: 12000, Flow: &FlowEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67}},
+		{Type: EventRuntimeCall, TimeMS: 12040, RuntimeCall: &RuntimeCallEvent{ScreenID: 31, CallerID: 12, FlowID: 65, StepID: 67, CalleeID: 13, Count: 8, TotalMS: 640, MaxMS: 240}},
 		{Type: EventLogSpam, TimeMS: 12100, LogSpam: &LogSpamEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67, SourceID: 64, Level: 5, Count: 12}},
 		{Type: EventStall, TimeMS: 13200, Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{OwnerID: 11, StackID: 50, DurationMS: 1240}},
 		{Type: EventProblem, TimeMS: 13201, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 63, WindowMS: 1240, Count: 1, MaxMS: 1240}},

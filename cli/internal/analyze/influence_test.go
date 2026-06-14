@@ -37,9 +37,19 @@ func TestLoadClassGraphJSONLAndBuildInfluence(t *testing.T) {
 			HTTPP95MS:    900,
 			ProblemCount: 2,
 		}},
+		RuntimeCalls: []RuntimeCallStats{{
+			Screen:  "Checkout",
+			Flow:    "checkout.open",
+			Step:    "network",
+			Caller:  "com.app.feature.CheckoutPresenter.open#def",
+			Callee:  "com.app.data.CheckoutRepository.load#abc",
+			Count:   3,
+			TotalMS: 600,
+			MaxMS:   240,
+		}},
 	}
 	influence := BuildInfluence(summary, graph)
-	if !influence.Available || !influence.HasClassGraph {
+	if !influence.Available || !influence.HasClassGraph || !influence.HasRuntimeGraph {
 		t.Fatalf("unexpected influence availability: %+v", influence)
 	}
 	if len(influence.TopNodes) == 0 || influence.TopNodes[0].ClassName != "com.app.data.CheckoutRepository" {

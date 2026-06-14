@@ -96,7 +96,7 @@ class InstrumentationHooksTest {
             InstrumentationHooks.executorRunnableKind(
                 "java/util/concurrent/ScheduledExecutorService",
                 "scheduleWithFixedDelay",
-                "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+                RUNNABLE_TWO_DELAYS_SCHEDULED_FUTURE,
             ),
         )
         assertEquals(
@@ -112,7 +112,7 @@ class InstrumentationHooksTest {
             InstrumentationHooks.executorCallableKind(
                 "java/util/concurrent/ScheduledExecutorService",
                 "schedule",
-                "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;",
+                CALLABLE_DELAY_SCHEDULED_FUTURE,
             ),
         )
     }
@@ -124,7 +124,7 @@ class InstrumentationHooksTest {
             InstrumentationHooks.coroutineBlockKind(
                 "kotlinx/coroutines/BuildersKt",
                 "launch",
-                "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Lkotlinx/coroutines/Job;",
+                LAUNCH_DESCRIPTOR,
             ),
         )
         assertEquals(
@@ -132,7 +132,7 @@ class InstrumentationHooksTest {
             InstrumentationHooks.coroutineBlockKind(
                 "kotlinx/coroutines/BuildersKt",
                 "async\$default",
-                "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lkotlinx/coroutines/Deferred;",
+                ASYNC_DEFAULT_DESCRIPTOR,
             ),
         )
         assertEquals(
@@ -140,7 +140,7 @@ class InstrumentationHooksTest {
             InstrumentationHooks.coroutineBlockKind(
                 "kotlinx/coroutines/BuildersKt",
                 "withContext",
-                "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+                WITH_CONTEXT_DESCRIPTOR,
             ),
         )
         assertEquals(
@@ -169,5 +169,23 @@ class InstrumentationHooksTest {
         assertEquals(first, second)
         assertTrue(first.startsWith("com.example.Foo.load#"))
         assertFalse(first == differentDescriptor)
+    }
+
+    private companion object {
+        private const val SCHEDULED_FUTURE = "Ljava/util/concurrent/ScheduledFuture;"
+        private const val RUNNABLE_TWO_DELAYS_SCHEDULED_FUTURE =
+            "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)$SCHEDULED_FUTURE"
+        private const val CALLABLE_DELAY_SCHEDULED_FUTURE =
+            "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)$SCHEDULED_FUTURE"
+        private const val LAUNCH_DESCRIPTOR =
+            "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
+                "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Lkotlinx/coroutines/Job;"
+        private const val ASYNC_DEFAULT_DESCRIPTOR =
+            "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
+                "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)" +
+                "Lkotlinx/coroutines/Deferred;"
+        private const val WITH_CONTEXT_DESCRIPTOR =
+            "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;" +
+                "Lkotlin/coroutines/Continuation;)Ljava/lang/Object;"
     }
 }

@@ -112,6 +112,7 @@ type collector struct {
 	flowHTTPDurations  map[string][]uint64
 	logSpamStats       map[string]*LogSpamStats
 	problemStats       map[string]*ProblemWindowStats
+	runtimeCallStats   map[string]*RuntimeCallStats
 	counterValues      map[string]uint64
 	gaugeValues        map[string][]uint64
 	appVersions        map[string]uint64
@@ -170,6 +171,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		flowHTTPDurations:  map[string][]uint64{},
 		logSpamStats:       map[string]*LogSpamStats{},
 		problemStats:       map[string]*ProblemWindowStats{},
+		runtimeCallStats:   map[string]*RuntimeCallStats{},
 		counterValues:      map[string]uint64{},
 		gaugeValues:        map[string][]uint64{},
 		appVersions:        map[string]uint64{},
@@ -458,6 +460,37 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Problem.MaxMS > flow.ProblemMaxMS {
 			flow.ProblemMaxMS = event.Problem.MaxMS
 		}
+	case event.RuntimeCall != nil:
+		c.markCohort()
+		caller := c.resolveOwner(dict, event.RuntimeCall.CallerID)
+		callee := c.resolveOwner(dict, event.RuntimeCall.CalleeID)
+		if !containsFilter(caller, c.filter.OwnerContains) && !containsFilter(callee, c.filter.OwnerContains) {
+			return
+		}
+		key := c.contextKey(
+			jhlog.Resolve(dict, event.RuntimeCall.ScreenID),
+			caller,
+			jhlog.Resolve(dict, event.RuntimeCall.FlowID),
+			jhlog.Resolve(dict, event.RuntimeCall.StepID),
+		)
+		callKey := key + "\x00" + caller + "\x00" + callee
+		stats := c.runtimeCallStats[callKey]
+		if stats == nil {
+			context := c.flowContextFromKey(key)
+			stats = &RuntimeCallStats{
+				Screen: context.Screen,
+				Flow:   context.Flow,
+				Step:   context.Step,
+				Caller: caller,
+				Callee: callee,
+			}
+			c.runtimeCallStats[callKey] = stats
+		}
+		stats.Count += event.RuntimeCall.Count
+		stats.TotalMS += event.RuntimeCall.TotalMS
+		if event.RuntimeCall.MaxMS > stats.MaxMS {
+			stats.MaxMS = event.RuntimeCall.MaxMS
+		}
 	case event.Metric != nil:
 		c.markCohort()
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
@@ -664,6 +697,9 @@ func (c *collector) finish() Summary {
 	for _, stats := range c.problemStats {
 		summary.ProblemWindows = append(summary.ProblemWindows, *stats)
 	}
+	for _, stats := range c.runtimeCallStats {
+		summary.RuntimeCalls = append(summary.RuntimeCalls, *stats)
+	}
 	for name, value := range c.counterValues {
 		summary.Counters = append(summary.Counters, NamedValue{Name: name, Value: value})
 		if strings.HasPrefix(name, "jankstats.") {
@@ -735,6 +771,7 @@ func (c *collector) finish() Summary {
 	sortFlows(summary.Flows)
 	sortLogSpam(summary.LogSpam)
 	sortProblems(summary.ProblemWindows)
+	sortRuntimeCalls(summary.RuntimeCalls)
 	sortNamed(summary.AppVersions)
 	sortNamed(summary.Builds)
 	sortNamed(summary.Devices)
@@ -998,6 +1035,20 @@ func sortProblems(items []ProblemWindowStats) {
 			return items[i].Count > items[j].Count
 		}
 		return items[i].MaxMS > items[j].MaxMS
+	})
+}
+
+func sortRuntimeCalls(items []RuntimeCallStats) {
+	sort.Slice(items, func(i, j int) bool {
+		left := items[i].TotalMS + items[i].MaxMS*10 + items[i].Count
+		right := items[j].TotalMS + items[j].MaxMS*10 + items[j].Count
+		if left == right {
+			if items[i].Caller == items[j].Caller {
+				return items[i].Callee < items[j].Callee
+			}
+			return items[i].Caller < items[j].Caller
+		}
+		return left > right
 	})
 }
 

@@ -1,25 +1,26 @@
 package jhlog
 
-const FormatVersion = 3
+const FormatVersion = 4
 
 var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 
 type EventType uint64
 
 const (
-	EventDictionary EventType = 1
-	EventSession    EventType = 2
-	EventContext    EventType = 3
-	EventHTTP       EventType = 4
-	EventUIWindow   EventType = 5
-	EventStall      EventType = 6
-	EventMemory     EventType = 7
-	EventRetained   EventType = 8
-	EventCounter    EventType = 9
-	EventGauge      EventType = 10
-	EventFlow       EventType = 11
-	EventLogSpam    EventType = 12
-	EventProblem    EventType = 13
+	EventDictionary  EventType = 1
+	EventSession     EventType = 2
+	EventContext     EventType = 3
+	EventHTTP        EventType = 4
+	EventUIWindow    EventType = 5
+	EventStall       EventType = 6
+	EventMemory      EventType = 7
+	EventRetained    EventType = 8
+	EventCounter     EventType = 9
+	EventGauge       EventType = 10
+	EventFlow        EventType = 11
+	EventLogSpam     EventType = 12
+	EventProblem     EventType = 13
+	EventRuntimeCall EventType = 14
 )
 
 type Flag uint64
@@ -96,18 +97,19 @@ type Event struct {
 	Source   string    `json:"source,omitempty"`
 	Warnings []string  `json:"warnings,omitempty"`
 
-	Dictionary *DictionaryEntry `json:"dictionary,omitempty"`
-	Session    *SessionEvent    `json:"session,omitempty"`
-	Context    *ContextEvent    `json:"context,omitempty"`
-	HTTP       *HTTPEvent       `json:"http,omitempty"`
-	UIWindow   *UIWindowEvent   `json:"ui_window,omitempty"`
-	Stall      *StallEvent      `json:"stall,omitempty"`
-	Memory     *MemoryEvent     `json:"memory,omitempty"`
-	Retained   *RetainedEvent   `json:"retained,omitempty"`
-	Metric     *MetricEvent     `json:"metric,omitempty"`
-	Flow       *FlowEvent       `json:"flow,omitempty"`
-	LogSpam    *LogSpamEvent    `json:"log_spam,omitempty"`
-	Problem    *ProblemEvent    `json:"problem,omitempty"`
+	Dictionary  *DictionaryEntry  `json:"dictionary,omitempty"`
+	Session     *SessionEvent     `json:"session,omitempty"`
+	Context     *ContextEvent     `json:"context,omitempty"`
+	HTTP        *HTTPEvent        `json:"http,omitempty"`
+	UIWindow    *UIWindowEvent    `json:"ui_window,omitempty"`
+	Stall       *StallEvent       `json:"stall,omitempty"`
+	Memory      *MemoryEvent      `json:"memory,omitempty"`
+	Retained    *RetainedEvent    `json:"retained,omitempty"`
+	Metric      *MetricEvent      `json:"metric,omitempty"`
+	Flow        *FlowEvent        `json:"flow,omitempty"`
+	LogSpam     *LogSpamEvent     `json:"log_spam,omitempty"`
+	Problem     *ProblemEvent     `json:"problem,omitempty"`
+	RuntimeCall *RuntimeCallEvent `json:"runtime_call,omitempty"`
 }
 
 type SessionEvent struct {
@@ -218,6 +220,17 @@ type ProblemEvent struct {
 	MaxMS    uint64 `json:"max_ms"`
 }
 
+type RuntimeCallEvent struct {
+	ScreenID uint64 `json:"screen_id,omitempty"`
+	CallerID uint64 `json:"caller_id,omitempty"`
+	FlowID   uint64 `json:"flow_id,omitempty"`
+	StepID   uint64 `json:"step_id,omitempty"`
+	CalleeID uint64 `json:"callee_id"`
+	Count    uint64 `json:"count"`
+	TotalMS  uint64 `json:"total_ms"`
+	MaxMS    uint64 `json:"max_ms"`
+}
+
 type Log struct {
 	Source   string
 	Version  uint8
@@ -255,6 +268,8 @@ func TypeName(t EventType) string {
 		return "log_spam"
 	case EventProblem:
 		return "problem_window"
+	case EventRuntimeCall:
+		return "runtime_call"
 	default:
 		return "unknown"
 	}

@@ -26,6 +26,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             flowInteractions = params.flowInteractions.getOrElse(false),
             logSpam = params.logSpam.getOrElse(false),
             classGraph = params.classGraph.getOrElse(false),
+            runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
             classGraphPath = params.classGraphPath.getOrElse(""),
         )
         if (params.asmProgressLog.getOrElse(false)) {
@@ -52,7 +53,8 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.coroutines.getOrElse(false) ||
             params.flowInteractions.getOrElse(false) ||
             params.logSpam.getOrElse(false) ||
-            params.classGraph.getOrElse(false)
+            params.classGraph.getOrElse(false) ||
+            params.runtimeCallGraph.getOrElse(false)
         val matched = hooksEnabled && InstrumentationMatcher(
             params.includePackages.getOrElse(emptyList()),
             params.excludePackages.getOrElse(emptyList()),
@@ -79,6 +81,7 @@ private data class HookConfig(
     val flowInteractions: Boolean,
     val logSpam: Boolean,
     val classGraph: Boolean,
+    val runtimeCallGraph: Boolean,
     val classGraphPath: String,
 ) {
     fun progressLabel(): String {
@@ -92,6 +95,7 @@ private data class HookConfig(
             if (flowInteractions) add("flow")
             if (logSpam) add("logspam")
             if (classGraph) add("graph")
+            if (runtimeCallGraph) add("runtimegraph")
         }.joinToString("+").ifEmpty { "none" }
     }
 }
@@ -126,7 +130,12 @@ private class JankHunterClassVisitor(
         super.visitEnd()
     }
 
-    private fun recordStaticEdge(callerName: String, callerDescriptor: String, calleeOwner: String, calleeName: String) {
+    private fun recordStaticEdge(
+        callerName: String,
+        callerDescriptor: String,
+        calleeOwner: String,
+        calleeName: String,
+    ) {
         if (!config.classGraph) return
         if (!ClassGraphWriter.isApplicationLike(calleeOwner)) return
         val key = ClassGraphEdgeKey(
@@ -148,6 +157,7 @@ private class JankHunterMethodVisitor(
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val ownerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
+    private var runtimeCallStartLocal = -1
 
     override fun onMethodEnter() {
         if (config.methodCounters) {
@@ -161,6 +171,32 @@ private class JankHunterMethodVisitor(
                 false,
             )
         }
+        if (config.runtimeCallGraph) {
+            visitLdcInsn(ownerLabel)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER,
+                "enterMethod",
+                "(Ljava/lang/String;)J",
+                false,
+            )
+            runtimeCallStartLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(runtimeCallStartLocal)
+        }
+    }
+
+    override fun onMethodExit(opcode: Int) {
+        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
+            loadLocal(runtimeCallStartLocal)
+            visitLdcInsn(ownerLabel)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER,
+                "exitMethod",
+                "(JLjava/lang/String;)V",
+                false,
+            )
+        }
     }
 
     override fun visitMethodInsn(
@@ -171,6 +207,26 @@ private class JankHunterMethodVisitor(
         isInterface: Boolean,
     ) {
         recordStaticEdge(owner, name)
+        val handlerRunnableKind = if (config.handlers) {
+            InstrumentationHooks.handlerRunnableKind(owner, name, descriptor)
+        } else {
+            null
+        }
+        val executorRunnableKind = if (config.executors) {
+            InstrumentationHooks.executorRunnableKind(owner, name, descriptor)
+        } else {
+            null
+        }
+        val executorCallableKind = if (config.executors) {
+            InstrumentationHooks.executorCallableKind(owner, name, descriptor)
+        } else {
+            null
+        }
+        val coroutineBlockKind = if (config.coroutines) {
+            InstrumentationHooks.coroutineBlockKind(owner, name, descriptor)
+        } else {
+            null
+        }
         when {
             config.okhttp && InstrumentationHooks.isOkHttpEventListenerFactory(owner, name, descriptor) -> {
                 wrapOkHttpEventListenerFactory()
@@ -180,15 +236,15 @@ private class JankHunterMethodVisitor(
                 wrapWebSocketListener()
             }
 
-            config.handlers && InstrumentationHooks.handlerRunnableKind(owner, name, descriptor) == HandlerRunnableKind.SINGLE_RUNNABLE -> {
+            handlerRunnableKind == HandlerRunnableKind.SINGLE_RUNNABLE -> {
                 wrapTopRunnable()
             }
 
-            config.handlers && InstrumentationHooks.handlerRunnableKind(owner, name, descriptor) == HandlerRunnableKind.RUNNABLE_LONG -> {
+            handlerRunnableKind == HandlerRunnableKind.RUNNABLE_LONG -> {
                 wrapRunnableBeforeLong()
             }
 
-            config.handlers && InstrumentationHooks.handlerRunnableKind(owner, name, descriptor) == HandlerRunnableKind.RUNNABLE_OBJECT_LONG -> {
+            handlerRunnableKind == HandlerRunnableKind.RUNNABLE_OBJECT_LONG -> {
                 wrapRunnableBeforeObjectAndLong()
             }
 
@@ -196,39 +252,39 @@ private class JankHunterMethodVisitor(
                 recordCallCounter("handler.send_message")
             }
 
-            config.executors && InstrumentationHooks.executorRunnableKind(owner, name, descriptor) == ExecutorRunnableKind.SINGLE_RUNNABLE -> {
+            executorRunnableKind == ExecutorRunnableKind.SINGLE_RUNNABLE -> {
                 wrapTopRunnable()
             }
 
-            config.executors && InstrumentationHooks.executorRunnableKind(owner, name, descriptor) == ExecutorRunnableKind.RUNNABLE_OBJECT -> {
+            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_OBJECT -> {
                 wrapRunnableBeforeObject()
             }
 
-            config.executors && InstrumentationHooks.executorRunnableKind(owner, name, descriptor) == ExecutorRunnableKind.RUNNABLE_LONG_OBJECT -> {
+            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_LONG_OBJECT -> {
                 wrapRunnableBeforeLongAndObject()
             }
 
-            config.executors && InstrumentationHooks.executorRunnableKind(owner, name, descriptor) == ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT -> {
+            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT -> {
                 wrapRunnableBeforeTwoLongsAndObject()
             }
 
-            config.executors && InstrumentationHooks.executorCallableKind(owner, name, descriptor) == ExecutorCallableKind.SINGLE_CALLABLE -> {
+            executorCallableKind == ExecutorCallableKind.SINGLE_CALLABLE -> {
                 wrapTopCallable()
             }
 
-            config.executors && InstrumentationHooks.executorCallableKind(owner, name, descriptor) == ExecutorCallableKind.CALLABLE_LONG_OBJECT -> {
+            executorCallableKind == ExecutorCallableKind.CALLABLE_LONG_OBJECT -> {
                 wrapCallableBeforeLongAndObject()
             }
 
-            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.TOP_FUNCTION2 -> {
+            coroutineBlockKind == CoroutineBlockKind.TOP_FUNCTION2 -> {
                 wrapTopCoroutineBlock()
             }
 
-            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION -> {
+            coroutineBlockKind == CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION -> {
                 wrapCoroutineBlockBeforeContinuation()
             }
 
-            config.coroutines && InstrumentationHooks.coroutineBlockKind(owner, name, descriptor) == CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> {
+            coroutineBlockKind == CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> {
                 wrapCoroutineBlockBeforeIntAndObject()
             }
 
@@ -503,11 +559,20 @@ internal object InstrumentationHooks {
         if (owner != "android/os/Handler") return null
         return when {
             name == "post" && descriptor == "(Ljava/lang/Runnable;)Z" -> HandlerRunnableKind.SINGLE_RUNNABLE
-            name == "postAtFrontOfQueue" && descriptor == "(Ljava/lang/Runnable;)Z" -> HandlerRunnableKind.SINGLE_RUNNABLE
+            name == "postAtFrontOfQueue" &&
+                descriptor == "(Ljava/lang/Runnable;)Z" -> {
+                HandlerRunnableKind.SINGLE_RUNNABLE
+            }
             name == "postDelayed" && descriptor == "(Ljava/lang/Runnable;J)Z" -> HandlerRunnableKind.RUNNABLE_LONG
             name == "postAtTime" && descriptor == "(Ljava/lang/Runnable;J)Z" -> HandlerRunnableKind.RUNNABLE_LONG
-            name == "postDelayed" && descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> HandlerRunnableKind.RUNNABLE_OBJECT_LONG
-            name == "postAtTime" && descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> HandlerRunnableKind.RUNNABLE_OBJECT_LONG
+            name == "postDelayed" &&
+                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
+                HandlerRunnableKind.RUNNABLE_OBJECT_LONG
+            }
+            name == "postAtTime" &&
+                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
+                HandlerRunnableKind.RUNNABLE_OBJECT_LONG
+            }
             else -> null
         }
     }
@@ -527,11 +592,26 @@ internal object InstrumentationHooks {
         if (!isExecutorOwner(owner)) return null
         return when {
             name == "execute" && descriptor == "(Ljava/lang/Runnable;)V" -> ExecutorRunnableKind.SINGLE_RUNNABLE
-            name == "submit" && descriptor == "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;" -> ExecutorRunnableKind.SINGLE_RUNNABLE
-            name == "submit" && descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;" -> ExecutorRunnableKind.RUNNABLE_OBJECT
-            name == "schedule" && descriptor == "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;" -> ExecutorRunnableKind.RUNNABLE_LONG_OBJECT
-            name == "scheduleAtFixedRate" && descriptor == "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;" -> ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
-            name == "scheduleWithFixedDelay" && descriptor == "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;" -> ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
+            name == "submit" &&
+                descriptor == "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;" -> {
+                ExecutorRunnableKind.SINGLE_RUNNABLE
+            }
+            name == "submit" &&
+                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;" -> {
+                ExecutorRunnableKind.RUNNABLE_OBJECT
+            }
+            name == "schedule" &&
+                descriptor == RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
+                ExecutorRunnableKind.RUNNABLE_LONG_OBJECT
+            }
+            name == "scheduleAtFixedRate" &&
+                descriptor == RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
+                ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
+            }
+            name == "scheduleWithFixedDelay" &&
+                descriptor == RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
+                ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
+            }
             else -> null
         }
     }
@@ -539,8 +619,14 @@ internal object InstrumentationHooks {
     fun executorCallableKind(owner: String, name: String, descriptor: String): ExecutorCallableKind? {
         if (!isExecutorOwner(owner)) return null
         return when {
-            name == "submit" && descriptor == "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;" -> ExecutorCallableKind.SINGLE_CALLABLE
-            name == "schedule" && descriptor == "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;" -> ExecutorCallableKind.CALLABLE_LONG_OBJECT
+            name == "submit" &&
+                descriptor == "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;" -> {
+                ExecutorCallableKind.SINGLE_CALLABLE
+            }
+            name == "schedule" &&
+                descriptor == CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
+                ExecutorCallableKind.CALLABLE_LONG_OBJECT
+            }
             else -> null
         }
     }
@@ -548,15 +634,18 @@ internal object InstrumentationHooks {
     fun coroutineBlockKind(owner: String, name: String, descriptor: String): CoroutineBlockKind? {
         if (owner !in coroutineBuilderOwners) return null
         return when {
-            name in coroutineBuildersWithTopBlock && descriptor.endsWith("Lkotlin/jvm/functions/Function2;)${returnDescriptor(owner, name)}") -> {
+            name in coroutineBuildersWithTopBlock &&
+                descriptor.endsWith("Lkotlin/jvm/functions/Function2;)${returnDescriptor(owner, name)}") -> {
                 CoroutineBlockKind.TOP_FUNCTION2
             }
 
-            name in coroutineBuildersWithDefaultBlock && descriptor.endsWith("Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)${returnDescriptor(owner, name.removeSuffix("\$default"))}") -> {
+            name in coroutineBuildersWithDefaultBlock &&
+                descriptor.endsWith(defaultCoroutineDescriptorSuffix(owner, name)) -> {
                 CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT
             }
 
-            name in coroutineSuspendBuilders && descriptor.endsWith("Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;") -> {
+            name in coroutineSuspendBuilders &&
+                descriptor.endsWith(SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX) -> {
                 CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION
             }
 
@@ -613,6 +702,11 @@ internal object InstrumentationHooks {
         }
     }
 
+    private fun defaultCoroutineDescriptorSuffix(owner: String, name: String): String {
+        return "Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)" +
+            returnDescriptor(owner, name.removeSuffix("\$default"))
+    }
+
     private fun isExecutorOwner(owner: String): Boolean {
         return owner in executorOwners
     }
@@ -653,6 +747,15 @@ internal object InstrumentationHooks {
         "withTimeout",
         "withTimeoutOrNull",
     )
+
+    private const val RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+    private const val RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+    private const val CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+    private const val SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX =
+        "Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;"
 }
 
 internal enum class HandlerRunnableKind {

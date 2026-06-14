@@ -268,6 +268,32 @@ class BinaryLogWriter(
         record(EVENT_PROBLEM, flags, payload)
     }
 
+    @Synchronized
+    fun runtimeCall(
+        screen: String?,
+        caller: String?,
+        flow: String?,
+        step: String?,
+        callee: String?,
+        count: Long,
+        totalMs: Long,
+        maxMs: Long,
+    ) {
+        val screenId = idFor(DICT_SCREEN, screen)
+        val callerId = idFor(DICT_OWNER, caller)
+        val flowId = idFor(DICT_FLOW, flow)
+        val stepId = idFor(DICT_STEP, step)
+        val calleeId = idFor(DICT_OWNER, callee)
+        val flags = contextFlags(screenId, callerId, flowId, stepId)
+        val payload = Payload()
+            .optionalContext(flags, screenId, callerId, flowId, stepId)
+            .uvarint(calleeId)
+            .uvarint(count)
+            .uvarint(totalMs)
+            .uvarint(maxMs)
+        record(EVENT_RUNTIME_CALL, flags, payload)
+    }
+
     private fun metric(eventType: Int, name: String?, value: Long) {
         val metricId = idFor(DICT_METRIC, name)
         val payload = Payload().uvarint(metricId).uvarint(value)
@@ -485,6 +511,7 @@ class BinaryLogWriter(
         private const val EVENT_FLOW = 11
         private const val EVENT_LOG_SPAM = 12
         private const val EVENT_PROBLEM = 13
+        private const val EVENT_RUNTIME_CALL = 14
 
         private const val DICT_GENERIC = 0
         private const val DICT_OWNER = 1
@@ -578,7 +605,8 @@ class BinaryLogWriter(
                 EVENT_CONTEXT,
                 EVENT_FLOW,
                 EVENT_LOG_SPAM,
-                EVENT_PROBLEM -> true
+                EVENT_PROBLEM,
+                EVENT_RUNTIME_CALL -> true
                 else -> false
             }
         }
@@ -592,7 +620,7 @@ class BinaryLogWriter(
             return flags
         }
 
-        private const val FORMAT_VERSION = 3
+        private const val FORMAT_VERSION = 4
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4
         private const val COMPACT_HEADER_HAS_PAYLOAD_LEN = 1 shl 5

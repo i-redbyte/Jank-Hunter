@@ -246,7 +246,7 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
 			return err
 		}
 		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
-	case EventFlow, EventLogSpam, EventProblem:
+	case EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return fmt.Errorf("compact event type %d requires payload length", event.Type)
 	default:
 		return fmt.Errorf("compact event type %d requires payload length", event.Type)
@@ -437,6 +437,25 @@ func decodePayload(payload []byte, event *Event) error {
 			KindID:   values[0],
 			WindowMS: values[1],
 			Count:    values[2],
+			MaxMS:    values[3],
+		}
+	case EventRuntimeCall:
+		screenID, callerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		if err != nil {
+			return err
+		}
+		values, err := readN(read, 4)
+		if err != nil {
+			return err
+		}
+		event.RuntimeCall = &RuntimeCallEvent{
+			ScreenID: screenID,
+			CallerID: callerID,
+			FlowID:   flowID,
+			StepID:   stepID,
+			CalleeID: values[0],
+			Count:    values[1],
+			TotalMS:  values[2],
 			MaxMS:    values[3],
 		}
 	default:

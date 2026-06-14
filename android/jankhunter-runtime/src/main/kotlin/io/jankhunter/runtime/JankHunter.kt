@@ -35,6 +35,10 @@ object JankHunter {
     private val contextLock = Any()
     private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
     private val lastLogSpamFlushAtMs = AtomicLong(0L)
+    private val runtimeCallStack = ThreadLocal<MutableList<RuntimeCallFrame>>()
+    private val runtimeCallCounters = ConcurrentHashMap<RuntimeCallKey, RuntimeCallStats>()
+    private val runtimeCallDropped = AtomicLong(0L)
+    private val lastRuntimeCallFlushAtMs = AtomicLong(0L)
 
     @Volatile
     private var writer: AsyncLogWriter? = null
@@ -174,6 +178,7 @@ object JankHunter {
     @JvmStatic
     fun shutdown() {
         flushLogSpam(force = true)
+        flushRuntimeCalls(force = true)
         activityTracker?.let { tracker ->
             application?.unregisterActivityLifecycleCallbacks(tracker)
             tracker.close()
@@ -201,6 +206,9 @@ object JankHunter {
         writer = null
         lastContextKey = ""
         logSpamCounters.clear()
+        runtimeCallCounters.clear()
+        runtimeCallStack.remove()
+        runtimeCallDropped.set(0L)
         started.set(false)
     }
 
@@ -343,7 +351,38 @@ object JankHunter {
     @JvmStatic
     fun flush() {
         flushLogSpam(force = true)
+        flushRuntimeCalls(force = true)
         writer?.flush()
+    }
+
+    @JvmStatic
+    fun enterMethod(ownerName: String?): Long {
+        if (writer == null) return 0L
+        val normalizedOwner = normalizedContextValue(ownerName) ?: return 0L
+        val now = nowMs()
+        val stack = runtimeCallStack.get() ?: ArrayList<RuntimeCallFrame>(16).also(runtimeCallStack::set)
+        stack.add(RuntimeCallFrame(normalizedOwner, now))
+        return now
+    }
+
+    @JvmStatic
+    fun exitMethod(startMs: Long, ownerName: String?) {
+        if (startMs <= 0L || writer == null) return
+        val normalizedOwner = normalizedContextValue(ownerName) ?: return
+        val stack = runtimeCallStack.get() ?: return
+        if (stack.isEmpty()) {
+            runtimeCallStack.remove()
+            return
+        }
+        val frame = popRuntimeCallFrame(stack, normalizedOwner, startMs)
+        val caller = stack.lastOrNull()?.owner
+        val durationMs = maxOf(0L, nowMs() - frame.startMs)
+        if (caller != null && caller != frame.owner) {
+            recordRuntimeCallEdge(caller, frame.owner, durationMs)
+        }
+        if (stack.isEmpty()) {
+            runtimeCallStack.remove()
+        }
     }
 
     @JvmStatic
@@ -661,6 +700,67 @@ object JankHunter {
         }
     }
 
+    private fun recordRuntimeCallEdge(caller: String, callee: String, durationMs: Long) {
+        val tuple = captureContext(ownerOverride = caller)
+        val key = RuntimeCallKey(tuple.screen, caller, tuple.flow, tuple.step, callee)
+        val stats = runtimeCallCounters[key] ?: run {
+            if (runtimeCallCounters.size >= RUNTIME_CALL_MAX_KEYS) {
+                runtimeCallDropped.incrementAndGet()
+                flushRuntimeCalls(force = false)
+                return
+            }
+            runtimeCallCounters.computeIfAbsent(key) { RuntimeCallStats() }
+        }
+        stats.count.incrementAndGet()
+        stats.totalMs.addAndGet(durationMs)
+        stats.updateMax(durationMs)
+        flushRuntimeCalls(force = false)
+    }
+
+    private fun flushRuntimeCalls(force: Boolean) {
+        val asyncWriter = writer ?: return
+        val now = nowMs()
+        val last = lastRuntimeCallFlushAtMs.get()
+        if (!force && now - last < RUNTIME_CALL_FLUSH_MS) return
+        if (!lastRuntimeCallFlushAtMs.compareAndSet(last, now) && !force) return
+
+        runtimeCallCounters.forEach { (key, stats) ->
+            val count = stats.count.getAndSet(0)
+            if (count <= 0) return@forEach
+            val totalMs = stats.totalMs.getAndSet(0)
+            val maxMs = stats.maxMs.getAndSet(0)
+            asyncWriter.runtimeCall(key.screen, key.caller, key.flow, key.step, key.callee, count, totalMs, maxMs)
+        }
+        runtimeCallCounters.forEach { (key, stats) ->
+            if (stats.count.get() == 0L) {
+                runtimeCallCounters.remove(key, stats)
+            }
+        }
+        val dropped = runtimeCallDropped.getAndSet(0)
+        if (dropped > 0) {
+            asyncWriter.counter("jankhunter.runtime_call_graph.dropped.count", dropped)
+        }
+    }
+
+    private fun popRuntimeCallFrame(
+        stack: MutableList<RuntimeCallFrame>,
+        ownerName: String,
+        fallbackStartMs: Long,
+    ): RuntimeCallFrame {
+        val lastIndex = stack.lastIndex
+        val last = stack[lastIndex]
+        if (last.owner == ownerName) {
+            stack.removeAt(lastIndex)
+            return last
+        }
+        for (index in lastIndex - 1 downTo 0) {
+            if (stack[index].owner == ownerName) {
+                return stack.removeAt(index)
+            }
+        }
+        return RuntimeCallFrame(ownerName, fallbackStartMs)
+    }
+
     private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {
         if (value == null) {
             target.remove()
@@ -732,4 +832,34 @@ object JankHunter {
         val source: String?,
         val level: Int,
     )
+
+    private data class RuntimeCallFrame(
+        val owner: String,
+        val startMs: Long,
+    )
+
+    private data class RuntimeCallKey(
+        val screen: String?,
+        val caller: String,
+        val flow: String?,
+        val step: String?,
+        val callee: String,
+    )
+
+    private class RuntimeCallStats {
+        val count = AtomicLong()
+        val totalMs = AtomicLong()
+        val maxMs = AtomicLong()
+
+        fun updateMax(value: Long) {
+            while (true) {
+                val current = maxMs.get()
+                if (value <= current) return
+                if (maxMs.compareAndSet(current, value)) return
+            }
+        }
+    }
+
+    private const val RUNTIME_CALL_FLUSH_MS = 5000L
+    private const val RUNTIME_CALL_MAX_KEYS = 4096
 }

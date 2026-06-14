@@ -203,6 +203,19 @@ class AsyncLogWriter private constructor(
         offer { it.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs) }
     }
 
+    fun runtimeCall(
+        screen: String?,
+        caller: String?,
+        flow: String?,
+        step: String?,
+        callee: String?,
+        count: Long,
+        totalMs: Long,
+        maxMs: Long,
+    ) {
+        offer { it.runtimeCall(screen, caller, flow, step, callee, count, totalMs, maxMs) }
+    }
+
     fun flush() {
         offer { it.flush() }
     }

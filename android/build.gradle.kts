@@ -1,3 +1,5 @@
+import io.gitlab.arturbosch.detekt.Detekt
+import io.gitlab.arturbosch.detekt.extensions.DetektExtension
 import org.gradle.api.artifacts.repositories.PasswordCredentials
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -7,7 +9,10 @@ plugins {
     id("com.android.library") version "9.0.1" apply false
     id("com.android.application") version "9.0.1" apply false
     id("org.jetbrains.kotlin.jvm") version "2.3.20" apply false
+    id("io.gitlab.arturbosch.detekt") version "1.23.8" apply false
 }
+
+val detektVersion = "1.23.8"
 
 allprojects {
     group = providers.gradleProperty("jankHunterGroup").get()
@@ -21,6 +26,30 @@ allprojects {
 }
 
 subprojects {
+    apply(plugin = "io.gitlab.arturbosch.detekt")
+
+    dependencies {
+        add("detektPlugins", "io.gitlab.arturbosch.detekt:detekt-formatting:$detektVersion")
+    }
+
+    extensions.configure<DetektExtension>("detekt") {
+        buildUponDefaultConfig = false
+        allRules = false
+        autoCorrect = false
+        config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+        basePath = rootDir.absolutePath
+    }
+
+    tasks.withType<Detekt>().configureEach {
+        jvmTarget = "17"
+        reports {
+            html.required.set(true)
+            xml.required.set(true)
+            sarif.required.set(true)
+            md.required.set(false)
+        }
+    }
+
     plugins.withId("maven-publish") {
         apply(plugin = "signing")
 

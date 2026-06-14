@@ -53,6 +53,7 @@ class JankHunterPlugin : Plugin<Project> {
                 it.flowInteractions.set(extension.instrument.flowInteractions)
                 it.logSpam.set(extension.instrument.logSpam)
                 it.classGraph.set(extension.instrument.classGraph)
+                it.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
                 it.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 it.includeWholeApplication.set(includeWholeApplication)
                 it.androidNamespace.set(androidNamespace)
@@ -63,7 +64,9 @@ class JankHunterPlugin : Plugin<Project> {
                 )
             }
 
-            val classGraphOutput = project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/class-graph.jsonl")
+            val classGraphOutput = project.layout.buildDirectory.file(
+                "generated/jankhunter/${variant.name}/class-graph.jsonl",
+            )
             project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
                 it.doFirst {
                     classGraphOutput.get().asFile.delete()
@@ -83,6 +86,7 @@ class JankHunterPlugin : Plugin<Project> {
                 params.flowInteractions.set(extension.instrument.flowInteractions)
                 params.logSpam.set(extension.instrument.logSpam)
                 params.classGraph.set(extension.instrument.classGraph)
+                params.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
                 params.classGraphPath.set(classGraphOutput.map { it.asFile.absolutePath })
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
@@ -93,7 +97,10 @@ class JankHunterPlugin : Plugin<Project> {
             variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
 
             project.logger.lifecycle(
-                "Jank Hunter variant {} configured. methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} flowInteractions={} logSpam={} classGraph={} allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
+                "Jank Hunter variant {} configured. " +
+                    "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
+                    "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
+                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -104,6 +111,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.flowInteractions,
                 extension.instrument.logSpam,
                 extension.instrument.classGraph,
+                extension.instrument.runtimeCallGraph,
                 extension.instrument.allowEmptyIncludePackages,
                 extension.instrument.includeWholeApplication,
                 extension.instrument.asmProgressLog,
