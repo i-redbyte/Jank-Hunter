@@ -223,15 +223,23 @@ func execute(path, source string, data any) error {
 			}
 			return ""
 		},
-		"robustGroups":         robustStatGroups,
-		"robustDeltaGroups":    robustDeltaGroups,
-		"causalGraphSVG":       causalGraphSVG,
-		"influenceGraphSVG":    influenceGraphSVG,
-		"influenceStatus":      influenceStatusLabel,
-		"influenceSeverity":    influenceSeverityLabel,
-		"topInfluenceNodes":    topInfluenceNodes,
-		"mathHeuristic":        inspectMathHeuristic,
-		"compareMathHeuristic": compareMathHeuristic,
+		"robustGroups":                 robustStatGroups,
+		"robustDeltaGroups":            robustDeltaGroups,
+		"causalGraphSVG":               causalGraphSVG,
+		"influenceGraphSVG":            influenceGraphSVG,
+		"influenceStatus":              influenceStatusLabel,
+		"influenceSeverity":            influenceSeverityLabel,
+		"topInfluenceNodes":            topInfluenceNodes,
+		"mathHeuristic":                inspectMathHeuristic,
+		"compareMathHeuristic":         compareMathHeuristic,
+		"significantMathFindings":      significantMathFindings,
+		"significantReportFindings":    significantReportFindings,
+		"significantMarkovStates":      significantMarkovStates,
+		"hiddenMarkovStates":           hiddenMarkovStates,
+		"significantMarkovTransitions": significantMarkovTransitions,
+		"hiddenMarkovTransitions":      hiddenMarkovTransitions,
+		"significantMarkovDeltas":      significantMarkovDeltas,
+		"hiddenMarkovDeltas":           hiddenMarkovDeltas,
 		"join": func(values []string, separator string) string {
 			return strings.Join(values, separator)
 		},
@@ -357,6 +365,90 @@ func zeroTimelineBucket(bucket mathanalysis.TimelineBucket) bool {
 		bucket.AvailableMemoryKB == 0 &&
 		bucket.TrafficRxBytes == 0 &&
 		bucket.TrafficTxBytes == 0
+}
+
+func significantMathFindings(findings []mathanalysis.Finding) []mathanalysis.Finding {
+	out := make([]mathanalysis.Finding, 0, len(findings))
+	for _, finding := range findings {
+		if isSignificantSeverity(finding.Severity) {
+			out = append(out, finding)
+		}
+	}
+	return out
+}
+
+func significantReportFindings(findings []ReportFinding) []ReportFinding {
+	out := make([]ReportFinding, 0, len(findings))
+	for _, finding := range findings {
+		if isSignificantSeverity(finding.Severity) {
+			out = append(out, finding)
+		}
+	}
+	return out
+}
+
+func significantMarkovStates(states []mathanalysis.MarkovBucketState) []mathanalysis.MarkovBucketState {
+	out := make([]mathanalysis.MarkovBucketState, 0, len(states))
+	for _, state := range states {
+		if markovStateHasSignal(state) {
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
+func hiddenMarkovStates(states []mathanalysis.MarkovBucketState) int {
+	return len(states) - len(significantMarkovStates(states))
+}
+
+func significantMarkovTransitions(transitions []mathanalysis.MarkovTransition) []mathanalysis.MarkovTransition {
+	out := make([]mathanalysis.MarkovTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		if markovTransitionHasSignal(transition) {
+			out = append(out, transition)
+		}
+	}
+	return out
+}
+
+func hiddenMarkovTransitions(transitions []mathanalysis.MarkovTransition) int {
+	return len(transitions) - len(significantMarkovTransitions(transitions))
+}
+
+func significantMarkovDeltas(deltas []mathanalysis.MarkovDelta) []mathanalysis.MarkovDelta {
+	out := make([]mathanalysis.MarkovDelta, 0, len(deltas))
+	for _, delta := range deltas {
+		if isSignificantSeverity(delta.Severity) {
+			out = append(out, delta)
+		}
+	}
+	return out
+}
+
+func hiddenMarkovDeltas(deltas []mathanalysis.MarkovDelta) int {
+	return len(deltas) - len(significantMarkovDeltas(deltas))
+}
+
+func isSignificantSeverity(severity string) bool {
+	return severity == "high" || severity == "medium"
+}
+
+func markovStateHasSignal(state mathanalysis.MarkovBucketState) bool {
+	switch state.State {
+	case "Healthy":
+		return false
+	case "":
+		return false
+	default:
+		return true
+	}
+}
+
+func markovTransitionHasSignal(transition mathanalysis.MarkovTransition) bool {
+	if transition.Count == 0 {
+		return false
+	}
+	return transition.From != "Healthy" || transition.To != "Healthy"
 }
 
 type robustStatGroup struct {
@@ -1538,6 +1630,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 
 	var out strings.Builder
 	out.WriteString(`<div class="influence-graph-card">`)
+	out.WriteString(`<div class="influence-tools" role="toolbar" aria-label="Режим выделения графа"><button type="button" data-influence-mode="node">Вершина</button><button type="button" class="is-active" data-influence-mode="paths">Пути</button><button type="button" data-influence-mode="tree">Остов</button><button type="button" data-influence-reset>Сброс</button></div>`)
 	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
 	fmt.Fprintf(&out, `<svg class="influence-graph" viewBox="0 0 %.0f %.0f" role="img" aria-label="Граф влияния кода">`, width, height)
 	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="rgba(111,247,255,0.72)"></path></marker></defs>`)

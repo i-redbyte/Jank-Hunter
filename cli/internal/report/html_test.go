@@ -93,7 +93,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-selection", "data-node=", "walkFrom")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 }
 
 func TestWriteReportsRussian(t *testing.T) {

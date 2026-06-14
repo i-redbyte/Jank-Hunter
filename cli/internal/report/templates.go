@@ -968,6 +968,33 @@ const mathCSS = `
 .influence-selection strong {
   color: var(--ink);
 }
+.influence-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+.influence-tools button {
+  appearance: none;
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid rgba(126,247,255,0.22);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255,255,255,0.035);
+  font: 850 11px Inter, "SF Pro Text", Arial, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.influence-tools button:hover,
+.influence-tools button.is-active {
+  color: #06110b;
+  border-color: rgba(98,255,168,0.82);
+  background: linear-gradient(135deg, #62ffa8, #c9ff7a);
+  box-shadow: 0 0 18px rgba(98,255,168,0.22);
+}
 .influence-graph {
   width: 100%;
   min-width: 920px;
@@ -994,6 +1021,12 @@ const mathCSS = `
   stroke: #62ffa8;
   stroke-width: 4px;
   filter: drop-shadow(0 0 8px rgba(98,255,168,0.52));
+}
+.influence-edge.is-tree {
+  opacity: 0.98 !important;
+  stroke: #c9ff7a;
+  stroke-width: 4.2px;
+  filter: drop-shadow(0 0 10px rgba(201,255,122,0.46));
 }
 .influence-edge.is-dimmed {
   opacity: 0.08 !important;
@@ -1084,10 +1117,20 @@ const mathCSS = `
   stroke-width: 2.8;
   filter: drop-shadow(0 0 18px rgba(98,255,168,0.56));
 }
+.influence-node.is-neighbor circle {
+  stroke: #6ff7ff;
+  stroke-width: 2.9;
+  filter: drop-shadow(0 0 18px rgba(111,247,255,0.50));
+}
 .influence-node.is-related .node-card {
   stroke: #62ffa8;
   stroke-width: 1.9;
   filter: drop-shadow(0 0 18px rgba(98,255,168,0.26));
+}
+.influence-node.is-neighbor .node-card {
+  stroke: #6ff7ff;
+  stroke-width: 1.9;
+  filter: drop-shadow(0 0 18px rgba(111,247,255,0.22));
 }
 .influence-node.is-dimmed .node-card,
 .influence-node.is-dimmed circle,
@@ -1234,9 +1277,9 @@ const mathInspectTemplate = `<!doctype html>
     {{end}}
     <h3>Находки</h3>
     <div class="finding-list">
-      {{range .Math.Findings}}
+      {{range significantMathFindings .Math.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
-      {{else}}<div class="muted">Нет находок качества данных.</div>{{end}}
+      {{else}}<div class="muted">Нет значимых предупреждений по качеству данных.</div>{{end}}
     </div>
     <h3>Сводка разделов</h3>
     <div class="section-overview-grid">
@@ -1260,9 +1303,9 @@ const mathInspectTemplate = `<!doctype html>
       <summary>Детали раздела</summary>
       <div class="fold-body">
         <div class="finding-list">
-          {{range .Findings}}
+          {{range significantMathFindings .Findings}}
           <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
-          {{else}}<div class="muted">Подробные находки появятся после реализации вычислений этого раздела.</div>{{end}}
+          {{else}}<div class="muted">Нет значимых предупреждений в этом разделе.</div>{{end}}
         </div>
         {{if eq .ID "timeline"}}
         <h3>Ряды сигналов</h3>
@@ -1407,21 +1450,23 @@ const mathInspectTemplate = `<!doctype html>
         <h3>Последовательность временных интервалов</h3>
         <table class="timeline-table">
           <tr><th>Время</th><th>Состояние</th><th>Причина</th><th>Контекст</th></tr>
-          {{range $math.Markov.States}}
+          {{range significantMarkovStates $math.Markov.States}}
           <tr>
             <td>{{printf "%.1fs" (seconds .TimeMS)}}</td>
             <td>{{markovState .State}}</td>
             <td>{{.Reason}}</td>
             <td>{{if .Screen}}экран <code>{{.Screen}}</code><br>{{end}}{{if .Route}}маршрут <code>{{.Route}}</code><br>{{end}}{{if .Owner}}источник <code>{{.Owner}}</code><br>{{end}}{{if .Network}}сеть <code>{{.Network}}</code>{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="4" class="muted">Недостаточно временных интервалов для марковской модели.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых плохих или восстановительных интервалов.</td></tr>{{end}}
+          {{if hiddenMarkovStates $math.Markov.States}}<tr><td colspan="4" class="muted">Скрыто спокойных интервалов: {{hiddenMarkovStates $math.Markov.States}}.</td></tr>{{end}}
         </table>
         <h3>Матрица переходов</h3>
         <table class="timeline-table">
           <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
-          {{range $math.Markov.Transitions}}
+          {{range significantMarkovTransitions $math.Markov.Transitions}}
           <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Переходы недоступны.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых переходов между состояниями деградации.</td></tr>{{end}}
+          {{if hiddenMarkovTransitions $math.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов: {{hiddenMarkovTransitions $math.Markov.Transitions}}.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "graph"}}
@@ -1609,9 +1654,9 @@ const mathCompareTemplate = `<!doctype html>
     </table>
     <h3>Находки</h3>
     <div class="finding-list">
-      {{range .Math.Findings}}
+      {{range significantMathFindings .Math.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
-      {{else}}<div class="muted">Нет находок качества сравнения.</div>{{end}}
+      {{else}}<div class="muted">Нет значимых предупреждений по качеству сравнения.</div>{{end}}
     </div>
     <h3>Сводка разделов</h3>
     <div class="section-overview-grid">
@@ -1635,9 +1680,9 @@ const mathCompareTemplate = `<!doctype html>
       <summary>Детали раздела</summary>
       <div class="fold-body">
         <div class="finding-list">
-          {{range .Findings}}
+          {{range significantMathFindings .Findings}}
           <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
-          {{else}}<div class="muted">Подробные находки сравнения появятся после реализации вычислений этого раздела.</div>{{end}}
+          {{else}}<div class="muted">Нет значимых предупреждений в этом разделе.</div>{{end}}
         </div>
         {{if eq .ID "timeline"}}
         <h3>База</h3>
@@ -1752,7 +1797,7 @@ const mathCompareTemplate = `<!doctype html>
         <h3>Дельты марковских метрик</h3>
         <table class="timeline-table">
           <tr><th>Статус</th><th>Метрика</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
-          {{range $math.MarkovDeltas}}
+          {{range significantMarkovDeltas $math.MarkovDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
             <td>{{.Metric}}</td>
@@ -1761,14 +1806,16 @@ const mathCompareTemplate = `<!doctype html>
             <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
             <td>{{.Summary}}</td>
           </tr>
-          {{else}}<tr><td colspan="6" class="muted">Марковские дельты недоступны.</td></tr>{{end}}
+          {{else}}<tr><td colspan="6" class="muted">Нет значимых марковских дельт.</td></tr>{{end}}
+          {{if hiddenMarkovDeltas $math.MarkovDeltas}}<tr><td colspan="6" class="muted">Скрыто спокойных марковских дельт: {{hiddenMarkovDeltas $math.MarkovDeltas}}.</td></tr>{{end}}
         </table>
         <h3>Переходы кандидата</h3>
         <table class="timeline-table">
           <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
-          {{range $math.Candidate.Markov.Transitions}}
+          {{range significantMarkovTransitions $math.Candidate.Markov.Transitions}}
           <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Переходы кандидата недоступны.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых переходов кандидата между состояниями деградации.</td></tr>{{end}}
+          {{if hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов кандидата: {{hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "graph"}}
@@ -1988,24 +2035,31 @@ const influenceTemplate = `<!doctype html>
     const edges = Array.from(card.querySelectorAll('.influence-edge[data-from][data-to]'));
     if (!graph || nodes.length === 0) return;
 
-    const adjacency = new Map();
+    const modeButtons = Array.from(card.querySelectorAll('[data-influence-mode]'));
+    const resetButton = card.querySelector('[data-influence-reset]');
+    const outgoing = new Map();
+    const incoming = new Map();
     edges.forEach((edge, index) => {
       const from = edge.dataset.from || '';
       const to = edge.dataset.to || '';
       if (!from || !to) return;
-      if (!adjacency.has(from)) adjacency.set(from, []);
-      adjacency.get(from).push({ index, to });
+      if (!outgoing.has(from)) outgoing.set(from, []);
+      if (!incoming.has(to)) incoming.set(to, []);
+      outgoing.get(from).push({ index, to });
+      incoming.get(to).push({ index, from });
     });
 
     let pinnedNode = '';
+    let currentNode = '';
+    let mode = 'paths';
 
-    const walkFrom = (start) => {
+    const walkPathsFrom = (start) => {
       const reached = new Set([start]);
       const activeEdges = new Set();
       const stack = [start];
       while (stack.length > 0) {
         const current = stack.pop();
-        (adjacency.get(current) || []).forEach(({ index, to }) => {
+        (outgoing.get(current) || []).forEach(({ index, to }) => {
           activeEdges.add(index);
           if (!reached.has(to)) {
             reached.add(to);
@@ -2016,35 +2070,103 @@ const influenceTemplate = `<!doctype html>
       return { reached, activeEdges };
     };
 
+    const walkTreeFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      const queue = [start];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        (outgoing.get(current) || []).forEach(({ index, to }) => {
+          if (reached.has(to)) return;
+          reached.add(to);
+          activeEdges.add(index);
+          queue.push(to);
+        });
+      }
+      return { reached, activeEdges };
+    };
+
+    const incidentFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      (outgoing.get(start) || []).forEach(({ index, to }) => {
+        activeEdges.add(index);
+        reached.add(to);
+      });
+      (incoming.get(start) || []).forEach(({ index, from }) => {
+        activeEdges.add(index);
+        reached.add(from);
+      });
+      return { reached, activeEdges };
+    };
+
+    const analysisFor = (start) => {
+      if (mode === 'tree') return walkTreeFrom(start);
+      if (mode === 'node') return incidentFrom(start);
+      return walkPathsFrom(start);
+    };
+
+    const modeText = () => {
+      if (mode === 'tree') return 'остов влияния';
+      if (mode === 'node') return 'ближайшие связи вершины';
+      return 'исходящие пути';
+    };
+
+    const syncModeButtons = () => {
+      modeButtons.forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.influenceMode === mode);
+      });
+    };
+
     const reset = () => {
       pinnedNode = '';
-      nodes.forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-dimmed'));
-      edges.forEach((edge) => edge.classList.remove('is-path', 'is-dimmed'));
+      currentNode = '';
+      nodes.forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-neighbor', 'is-dimmed'));
+      edges.forEach((edge) => edge.classList.remove('is-path', 'is-tree', 'is-dimmed'));
       if (selection) {
-        selection.textContent = 'Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.';
+        selection.textContent = 'Выберите режим и наведите мышью на вершину: можно выделить вершину, исходящие пути или остов влияния.';
       }
     };
 
     const selectNode = (name) => {
-      const { reached, activeEdges } = walkFrom(name);
+      currentNode = name;
+      const { reached, activeEdges } = analysisFor(name);
       nodes.forEach((node) => {
         const nodeName = node.dataset.node || '';
         const selected = nodeName === name;
         const related = reached.has(nodeName);
         node.classList.toggle('is-selected', selected);
         node.classList.toggle('is-related', related && !selected);
+        node.classList.toggle('is-neighbor', mode === 'node' && related && !selected);
         node.classList.toggle('is-dimmed', !related);
       });
       edges.forEach((edge, index) => {
         const active = activeEdges.has(index);
         edge.classList.toggle('is-path', active);
+        edge.classList.toggle('is-tree', active && mode === 'tree');
         edge.classList.toggle('is-dimmed', !active);
       });
       if (selection) {
-        selection.innerHTML = '<strong>' + escapeHTML(name) + '</strong>: подсвечены исходящие пути, ' +
+        selection.innerHTML = '<strong>' + escapeHTML(name) + '</strong>: выделены ' + modeText() + ', ' +
           reached.size + ' узлов и ' + activeEdges.size + ' связей.';
       }
     };
+
+    modeButtons.forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        mode = button.dataset.influenceMode || 'paths';
+        syncModeButtons();
+        if (currentNode) selectNode(currentNode);
+      });
+    });
+    if (resetButton) {
+      resetButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        reset();
+      });
+    }
+    syncModeButtons();
 
     nodes.forEach((node) => {
       const name = node.dataset.node || '';
@@ -2390,9 +2512,9 @@ const inspectTemplate = `<!doctype html>
     </div>
     <h3>Находки</h3>
     <div class="finding-list">
-      {{range .Analysis.Findings}}
+      {{range significantReportFindings .Analysis.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
-      {{else}}<div class="muted">Нет эвристических находок.</div>{{end}}
+      {{else}}<div class="muted">Нет значимых эвристических предупреждений.</div>{{end}}
     </div>
     <h3>Рекомендации</h3>
     <ul class="recommendations">
@@ -2720,9 +2842,9 @@ const compareTemplate = `<!doctype html>
     </div>
     <h3>Находки</h3>
     <div class="finding-list">
-      {{range .Analysis.Findings}}
+      {{range significantReportFindings .Analysis.Findings}}
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
-      {{else}}<div class="muted">Нет эвристических находок.</div>{{end}}
+      {{else}}<div class="muted">Нет значимых эвристических предупреждений.</div>{{end}}
     </div>
     <h3>Рекомендации</h3>
     <ul class="recommendations">
