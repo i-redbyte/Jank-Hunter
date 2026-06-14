@@ -61,6 +61,30 @@ val config = JankHunterConfig.builder()
 JankHunter.init(context, config)
 ```
 
+## Автоподключение в проект
+
+Для первого подключения к существующему многомодульному Android-проекту можно использовать macOS/bash-скрипт из корня Jank Hunter:
+
+```bash
+scripts/integrate-android-project.sh \
+  --target ~/work/MyApp \
+  --module :app \
+  --include-package com.myapp.feature \
+  --include-package com.myapp.data \
+  --exclude-packages com.myapp.generated,com.myapp.di \
+  --runtime-call-graph
+```
+
+Что делает скрипт:
+
+- публикует Jank Hunter в локальный Maven repo целевого проекта: `.jankhunter/maven`;
+- добавляет этот repo в `settings.gradle` или `settings.gradle.kts`;
+- подключает `io.jankhunter.android`, `jankhunter-runtime` и `jankhunter-okhttp3` в указанный модуль;
+- добавляет `jankHunter { ... }` с безопасными дефолтами для debug-сборки;
+- оставляет backup измененных файлов в `.jankhunter-backups/<timestamp>`.
+
+Если app-модуль называется не `:app`, передайте правильный путь через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
+
 Сбросить буфер вручную:
 
 ```kotlin

@@ -70,6 +70,20 @@ Gradle plugin подключайте только на debug/QA сборки и 
 
 Подробности по Android лежат в [android/README.md](android/README.md), по CLI - в [cli/README.md](cli/README.md).
 
+Автоподключение в существующий Android-проект на macOS:
+
+```bash
+scripts/integrate-android-project.sh \
+  --target ~/work/MyApp \
+  --module :app \
+  --include-package com.myapp.feature \
+  --include-package com.myapp.data \
+  --exclude-packages com.myapp.generated,com.myapp.di \
+  --runtime-call-graph
+```
+
+Скрипт публикует Android SDK в `~/work/MyApp/.jankhunter/maven`, добавляет этот Maven repo в `settings.gradle(.kts)`, подключает Gradle plugin/dependencies в указанный модуль и создает `jankHunter { ... }` конфиг. Перед правками он оставляет backup в `.jankhunter-backups/`.
+
 ## Что собирается
 
 - HTTP: длительность запроса, DNS/connect/TTFB, ошибки, байты, route, owner.
