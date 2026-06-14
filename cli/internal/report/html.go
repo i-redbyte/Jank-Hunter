@@ -1380,42 +1380,170 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 		return template.HTML(`<div class="muted">Недостаточно данных для графа влияния кода.</div>`)
 	}
 	const (
-		maxNodes = 28
-		maxEdges = 60
-		width    = 960.0
-		height   = 520.0
-		cx       = width / 2
-		cy       = height / 2
-		radius   = 198.0
+		maxNodes = 30
+		maxEdges = 72
+		width    = 1040.0
+		nodeW    = 214.0
+		nodeH    = 74.0
+		topY     = 72.0
+		gapY     = 22.0
 	)
-	nodes := append([]analyze.InfluenceNode(nil), influence.TopNodes...)
-	if len(nodes) > maxNodes {
-		nodes = nodes[:maxNodes]
+	nodeByName := map[string]analyze.InfluenceNode{}
+	for _, node := range influence.TopNodes {
+		if node.ClassName != "" {
+			nodeByName[node.ClassName] = node
+		}
 	}
-	edges := append([]analyze.InfluenceEdge(nil), influence.TopEdges...)
-	if len(edges) > maxEdges {
-		edges = edges[:maxEdges]
+
+	visible := map[string]struct{}{}
+	var order []string
+	addVisible := func(name string) bool {
+		if name == "" {
+			return true
+		}
+		if _, ok := visible[name]; ok {
+			return true
+		}
+		if len(order) >= maxNodes {
+			return false
+		}
+		visible[name] = struct{}{}
+		order = append(order, name)
+		return true
 	}
-	nodeIndex := map[string]int{}
-	for i, node := range nodes {
-		nodeIndex[node.ClassName] = i
-	}
-	positions := map[string]graphPoint{}
-	for i, node := range nodes {
-		angle := -math.Pi/2 + (2*math.Pi*float64(i))/math.Max(float64(len(nodes)), 1)
-		r := radius
-		if i == 0 {
-			positions[node.ClassName] = graphPoint{x: cx, y: cy}
+
+	var edges []analyze.InfluenceEdge
+	for _, edge := range influence.TopEdges {
+		if len(edges) >= maxEdges {
+			break
+		}
+		if edge.From == "" || edge.To == "" || edge.From == edge.To {
 			continue
 		}
-		positions[node.ClassName] = graphPoint{x: cx + math.Cos(angle)*r, y: cy + math.Sin(angle)*r}
+		_, fromVisible := visible[edge.From]
+		_, toVisible := visible[edge.To]
+		needed := 0
+		if !fromVisible {
+			needed++
+		}
+		if !toVisible {
+			needed++
+		}
+		if len(order)+needed > maxNodes {
+			if !fromVisible || !toVisible {
+				continue
+			}
+		}
+		addVisible(edge.From)
+		addVisible(edge.To)
+		edges = append(edges, edge)
+	}
+	for _, node := range influence.TopNodes {
+		if len(order) >= maxNodes {
+			break
+		}
+		addVisible(node.ClassName)
+	}
+	if len(order) == 0 {
+		return template.HTML(`<div class="muted">Недостаточно узлов для визуального графа влияния.</div>`)
+	}
+
+	inDegree := map[string]int{}
+	outDegree := map[string]int{}
+	for _, edge := range edges {
+		outDegree[edge.From]++
+		inDegree[edge.To]++
+	}
+
+	type visibleNode struct {
+		node   analyze.InfluenceNode
+		column int
+		degree int
+	}
+	nodes := make([]visibleNode, 0, len(order))
+	for index, name := range order {
+		node, ok := nodeByName[name]
+		if !ok {
+			node = analyze.InfluenceNode{
+				ClassName: name,
+				Label:     influenceGraphLabel(name),
+				Severity:  "ok",
+				Status:    "static_only",
+				Reasons:   []string{"есть связь в графе"},
+			}
+		}
+		if node.Label == "" {
+			node.Label = influenceGraphLabel(name)
+		}
+		if node.Severity == "" {
+			node.Severity = "ok"
+		}
+		column := 1
+		switch {
+		case len(edges) == 0:
+			column = index % 3
+		case outDegree[name] > 0 && inDegree[name] == 0:
+			column = 0
+		case outDegree[name] > 0 && inDegree[name] > 0:
+			column = 1
+		default:
+			column = 2
+		}
+		nodes = append(nodes, visibleNode{
+			node:   node,
+			column: column,
+			degree: inDegree[name] + outDegree[name],
+		})
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		if nodes[i].column != nodes[j].column {
+			return nodes[i].column < nodes[j].column
+		}
+		if nodes[i].node.RuntimeEvidence != nodes[j].node.RuntimeEvidence {
+			return nodes[i].node.RuntimeEvidence
+		}
+		if nodes[i].node.Score != nodes[j].node.Score {
+			return nodes[i].node.Score > nodes[j].node.Score
+		}
+		if nodes[i].degree != nodes[j].degree {
+			return nodes[i].degree > nodes[j].degree
+		}
+		return nodes[i].node.ClassName < nodes[j].node.ClassName
+	})
+
+	columnX := []float64{52, 413, 774}
+	columnCounts := [3]int{}
+	for _, node := range nodes {
+		if node.column >= 0 && node.column < len(columnCounts) {
+			columnCounts[node.column]++
+		}
+	}
+	maxRows := 1
+	for _, count := range columnCounts {
+		if count > maxRows {
+			maxRows = count
+		}
+	}
+	height := math.Max(520, topY+float64(maxRows)*(nodeH+gapY)+34)
+	columnRow := [3]int{}
+	positions := map[string]graphPoint{}
+	for _, item := range nodes {
+		row := columnRow[item.column]
+		columnRow[item.column]++
+		positions[item.node.ClassName] = graphPoint{
+			x: columnX[item.column],
+			y: topY + float64(row)*(nodeH+gapY),
+		}
 	}
 
 	var out strings.Builder
 	out.WriteString(`<div class="influence-graph-card">`)
 	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
-	out.WriteString(`<svg class="influence-graph" viewBox="0 0 960 520" role="img" aria-label="Граф влияния кода">`)
-	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="rgba(111,247,255,0.62)"></path></marker></defs>`)
+	fmt.Fprintf(&out, `<svg class="influence-graph" viewBox="0 0 %.0f %.0f" role="img" aria-label="Граф влияния кода">`, width, height)
+	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="rgba(111,247,255,0.72)"></path></marker></defs>`)
+	out.WriteString(`<text class="influence-layer-label" x="52" y="34">Источники вызовов</text>`)
+	out.WriteString(`<text class="influence-layer-label" x="413" y="34">Связующие классы</text>`)
+	out.WriteString(`<text class="influence-layer-label" x="774" y="34">Проблемные узлы</text>`)
 	for _, edge := range edges {
 		from, okFrom := positions[edge.From]
 		to, okTo := positions[edge.To]
@@ -1423,18 +1551,30 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			continue
 		}
 		opacity := 0.22 + math.Min(edge.Influence/80, 0.62)
-		width := 1.1 + math.Min(edge.Influence/45, 4.2)
+		strokeWidth := 1.4 + math.Min(edge.Influence/45, 4.6)
 		className := "influence-edge"
 		if edge.RuntimeConfirmed {
 			className += " confirmed"
 		}
-		fmt.Fprintf(&out, `<line class="%s" data-from="%s" data-to="%s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></line>`,
+		x1 := from.x + nodeW
+		y1 := from.y + nodeH/2
+		x2 := to.x
+		y2 := to.y + nodeH/2
+		direction := 1.0
+		if x2 < x1 {
+			direction = -1
+			x1 = from.x
+			x2 = to.x + nodeW
+		}
+		curve := math.Max(70, math.Abs(x2-x1)*0.42)
+		path := fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1+direction*curve, y1, x2-direction*curve, y2, x2, y2)
+		fmt.Fprintf(&out, `<path class="%s" data-from="%s" data-to="%s" d="%s" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></path>`,
 			className,
 			template.HTMLEscapeString(edge.From),
 			template.HTMLEscapeString(edge.To),
-			from.x, from.y, to.x, to.y,
+			path,
 			opacity,
-			width,
+			strokeWidth,
 			template.HTMLEscapeString(edge.From),
 			template.HTMLEscapeString(edge.To),
 			edge.Influence,
@@ -1442,18 +1582,19 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			template.HTMLEscapeString(edge.Reason),
 		)
 	}
-	for _, node := range nodes {
+	for _, item := range nodes {
+		node := item.node
 		pos := positions[node.ClassName]
-		r := 18 + math.Min(node.Score*1.5, 22)
-		if nodeIndex[node.ClassName] == 0 {
-			r += 8
-		}
+		scoreRadius := 15 + math.Min(node.Score*0.55, 9)
 		className := "influence-node " + node.Severity
 		if !node.RuntimeEvidence {
 			className += " static-only"
 		}
 		reasons := strings.Join(node.Reasons, ", ")
-		fmt.Fprintf(&out, `<g class="%s" data-node="%s" tabindex="0" role="button" aria-label="%s, score %.1f" transform="translate(%.1f %.1f)"><title>%s · score %.1f · %s</title><circle r="%.1f"></circle><text y="4">%s</text></g>`,
+		if reasons == "" {
+			reasons = influenceStatusLabel(node.Status)
+		}
+		fmt.Fprintf(&out, `<g class="%s" data-node="%s" tabindex="0" role="button" aria-label="%s, оценка %.1f" transform="translate(%.1f %.1f)"><title>%s · оценка %.1f · %s</title><rect class="node-card" width="%.0f" height="%.0f"></rect><circle cx="28" cy="28" r="%.1f"></circle><text class="node-score-text" x="28" y="31">%s</text><text class="node-label" x="55" y="23">%s</text><text class="node-kind" x="55" y="42">%s</text><text class="node-reason" x="55" y="59">%s</text></g>`,
 			className,
 			template.HTMLEscapeString(node.ClassName),
 			template.HTMLEscapeString(node.ClassName),
@@ -1463,11 +1604,19 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			template.HTMLEscapeString(node.ClassName),
 			node.Score,
 			template.HTMLEscapeString(reasons),
-			r,
-			template.HTMLEscapeString(truncateRunes(node.Label, 18)),
+			nodeW,
+			nodeH,
+			scoreRadius,
+			template.HTMLEscapeString(influenceGraphScoreLabel(node.Score)),
+			template.HTMLEscapeString(truncateRunes(node.Label, 24)),
+			template.HTMLEscapeString(influenceGraphNodeKind(node)),
+			template.HTMLEscapeString(truncateRunes(reasons, 34)),
 		)
 	}
 	out.WriteString(`</svg>`)
+	if len(edges) == 0 {
+		out.WriteString(`<div class="help-text">В этом прогоне видны проблемные узлы, но между выбранными классами нет подтвержденных связей. Передайте статический ` + "`--class-graph`" + ` или включите ` + "`runtimeCallGraph`" + `, чтобы получить ребра.</div>`)
+	}
 	if influence.ShownNodes > len(nodes) || influence.ShownEdges > len(edges) {
 		fmt.Fprintf(&out, `<div class="help-text">Показаны ключевые узлы и связи: %d из %d узлов, %d из %d ребер. Полная детализация находится в таблицах ниже.</div>`, len(nodes), influence.ShownNodes, len(edges), influence.ShownEdges)
 	}
@@ -1475,10 +1624,39 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 	return template.HTML(out.String())
 }
 
+func influenceGraphLabel(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "unknown"
+	}
+	parts := strings.Split(name, ".")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	}
+	return name
+}
+
+func influenceGraphScoreLabel(score float64) string {
+	if score <= 0 {
+		return "0"
+	}
+	if score >= 100 {
+		return fmt.Sprintf("%.0f", score)
+	}
+	return fmt.Sprintf("%.1f", score)
+}
+
+func influenceGraphNodeKind(node analyze.InfluenceNode) string {
+	if node.RuntimeEvidence {
+		return influenceSeverityLabel(node.Severity) + " · выполнение"
+	}
+	return "статическая связь"
+}
+
 func influenceStatusLabel(value string) string {
 	switch value {
 	case "runtime":
-		return "есть runtime-доказательства"
+		return "есть доказательства выполнения"
 	case "static_only":
 		return "статическая связь без проявления"
 	default:

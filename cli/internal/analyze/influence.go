@@ -172,13 +172,13 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			node.addReason("спам логами")
 		}
 		if flow.HTTPP95MS > 0 {
-			node.addReason("HTTP p95")
+			node.addReason("95-й процентиль HTTP")
 		}
 		if flow.StallMaxMS > 0 {
 			node.addReason("паузы главного потока")
 		}
 		if flow.UIJank > 0 {
-			node.addReason("UI jank")
+			node.addReason("UI-подтормаживания")
 		}
 		node.score += scoreCount(flow.ProblemCount, 10)
 		node.score += scoreCount(flow.LogSpam, 180)
@@ -251,8 +251,8 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		caller.addScreen(call.Screen)
 		callee.addFlow(call.Flow)
 		callee.addScreen(call.Screen)
-		caller.addReason("runtime-вызовы")
-		callee.addReason("runtime-вызовы")
+		caller.addReason("вызовы выполнения")
+		callee.addReason("вызовы выполнения")
 		caller.score += scoreCount(call.Count, 220) * 0.45
 		callee.score += scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2200) + scoreDuration(call.MaxMS, 500)
 		caller.mainMS += call.TotalMS / 4
@@ -343,15 +343,17 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		edges = edges[:120]
 	}
 	for _, edge := range edges {
-		if _, ok := selected[edge.From]; ok {
-			continue
-		}
-		if len(allNodes) >= 80 {
-			break
-		}
-		if node := b.nodes[edge.From]; node != nil {
-			allNodes = append(allNodes, node.toNode())
-			selected[edge.From] = struct{}{}
+		for _, endpoint := range []string{edge.From, edge.To} {
+			if _, ok := selected[endpoint]; ok {
+				continue
+			}
+			if len(allNodes) >= 80 {
+				break
+			}
+			if node := b.nodes[endpoint]; node != nil {
+				allNodes = append(allNodes, node.toNode())
+				selected[endpoint] = struct{}{}
+			}
 		}
 	}
 	if len(allNodes) > 80 {
@@ -402,9 +404,9 @@ func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []Influe
 		row.Count += edge.Count
 		row.Influence += float64(edge.Count) * math.Max(toNode.score, fromNode.score*0.35)
 		if toNode.runtime {
-			row.Reason = "вызывает узел с runtime-проблемами"
+			row.Reason = "вызывает узел с проблемами выполнения"
 		} else if fromNode.runtime {
-			row.Reason = "сосед runtime-проблемного узла"
+			row.Reason = "сосед проблемного узла выполнения"
 		} else {
 			row.Reason = "статическая связь"
 		}
@@ -432,7 +434,7 @@ func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []Influe
 		row.Count += edge.count
 		row.Influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
 		row.RuntimeConfirmed = true
-		row.Reason = "runtime-вызов в этом прогоне"
+		row.Reason = "вызов выполнения в этом прогоне"
 	}
 	out := make([]InfluenceEdge, 0, len(dedup))
 	for _, edge := range dedup {
@@ -654,7 +656,7 @@ func problemReason(kind string) string {
 	case "http_slow":
 		return "медленный HTTP"
 	case "ui_jank":
-		return "UI jank"
+		return "UI-подтормаживания"
 	case "log_spam":
 		return "спам логами"
 	case "memory_retained":
@@ -677,14 +679,14 @@ func influenceHeuristic(summary InfluenceSummary) []InfluenceFinding {
 		out = append(out, InfluenceFinding{
 			Severity: top.Severity,
 			Title:    "Главный узел влияния",
-			Detail:   fmt.Sprintf("%s: score %.1f, причины: %s.", top.ClassName, top.Score, strings.Join(top.Reasons, ", ")),
+			Detail:   fmt.Sprintf("%s: оценка %.1f, причины: %s.", top.ClassName, top.Score, strings.Join(top.Reasons, ", ")),
 		})
 	}
 	for _, edge := range summary.TopEdges {
 		if edge.RuntimeConfirmed {
 			out = append(out, InfluenceFinding{
 				Severity: "medium",
-				Title:    "Связь с runtime-доказательством",
+				Title:    "Связь с доказательством выполнения",
 				Detail:   fmt.Sprintf("%s → %s, вес %.1f, вызовов %d.", edge.From, edge.To, edge.Influence, edge.Count),
 			})
 			break
@@ -694,7 +696,7 @@ func influenceHeuristic(summary InfluenceSummary) []InfluenceFinding {
 		out = append(out, InfluenceFinding{
 			Severity: "medium",
 			Title:    "Нет статического графа",
-			Detail:   "CLI построил влияние только по runtime-событиям. Передайте --class-graph, чтобы увидеть связи между классами.",
+			Detail:   "CLI построил влияние только по событиям выполнения. Передайте --class-graph, чтобы увидеть связи между классами.",
 		})
 	}
 	return out

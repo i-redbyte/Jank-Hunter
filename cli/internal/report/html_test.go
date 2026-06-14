@@ -63,13 +63,13 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Runtime-вызовы", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "GET /feed", "λ Анализ", `href="inspect-math.html"`)
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Runtime-вызовы", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Вызовы выполнения", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -93,7 +93,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository", ".influence-node.high circle", "data-influence-selection", "data-node=", "walkFrom")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-selection", "data-node=", "walkFrom")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -195,7 +195,7 @@ func sampleInfluence() analyze.InfluenceSummary {
 			Count:            3,
 			Influence:        42,
 			RuntimeConfirmed: true,
-			Reason:           "вызывает узел с runtime-проблемами",
+			Reason:           "вызывает узел с проблемами выполнения",
 		}},
 		Heuristic: []analyze.InfluenceFinding{{
 			Severity: "high",

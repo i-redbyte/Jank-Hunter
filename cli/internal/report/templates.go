@@ -970,13 +970,20 @@ const mathCSS = `
 }
 .influence-graph {
   width: 100%;
-  min-width: 760px;
+  min-width: 920px;
   height: auto;
   display: block;
+}
+.influence-layer-label {
+  fill: rgba(164,178,201,0.82);
+  font: 850 11px Inter, "SF Pro Text", Arial, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .influence-edge {
   stroke: rgba(111,247,255,0.42);
   stroke-linecap: round;
+  fill: none;
   transition: opacity 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
 }
 .influence-edge.confirmed {
@@ -995,28 +1002,46 @@ const mathCSS = `
   cursor: pointer;
   outline: none;
 }
+.influence-node .node-card {
+  fill: rgba(13,24,43,0.94);
+  stroke: rgba(111,247,255,0.38);
+  stroke-width: 1.4;
+  rx: 12;
+  filter: drop-shadow(0 12px 26px rgba(0,0,0,0.26));
+  transition: opacity 140ms ease, fill 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
+}
 .influence-node circle {
   fill: rgba(111,247,255,0.24);
   stroke: rgba(111,247,255,0.94);
   stroke-width: 2.2;
-  filter: drop-shadow(0 0 14px rgba(111,247,255,0.36));
+  filter: drop-shadow(0 0 12px rgba(111,247,255,0.36));
   transition: opacity 140ms ease, fill 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
+}
+.influence-node.high .node-card {
+  stroke: rgba(255,148,170,0.58);
 }
 .influence-node.high circle {
   fill: rgba(255,91,124,0.44);
   stroke: #ff94aa;
   filter: drop-shadow(0 0 18px rgba(255,91,124,0.58));
 }
+.influence-node.medium .node-card {
+  stroke: rgba(255,224,138,0.48);
+}
 .influence-node.medium circle {
   fill: rgba(255,209,102,0.38);
   stroke: #ffe08a;
   filter: drop-shadow(0 0 16px rgba(255,209,102,0.46));
+}
+.influence-node.ok .node-card {
+  stroke: rgba(155,255,198,0.34);
 }
 .influence-node.ok circle {
   fill: rgba(98,255,168,0.30);
   stroke: #9bffc6;
   filter: drop-shadow(0 0 14px rgba(98,255,168,0.42));
 }
+.influence-node.static-only .node-card,
 .influence-node.static-only circle {
   stroke-dasharray: 4 4;
   opacity: 0.78;
@@ -1026,20 +1051,45 @@ const mathCSS = `
   stroke: rgba(3,8,16,0.92);
   stroke-width: 3px;
   paint-order: stroke;
-  text-anchor: middle;
   font: 750 10px Inter, "SF Pro Text", Arial, sans-serif;
   pointer-events: none;
+}
+.influence-node .node-score-text {
+  text-anchor: middle;
+  font-size: 8px;
+  font-weight: 900;
+}
+.influence-node .node-label {
+  font-size: 11px;
+  font-weight: 850;
+}
+.influence-node .node-kind,
+.influence-node .node-reason {
+  fill: var(--muted);
+  font-size: 8.5px;
+  font-weight: 760;
 }
 .influence-node.is-selected circle {
   stroke: white;
   stroke-width: 3.4;
   filter: drop-shadow(0 0 24px rgba(255,255,255,0.46));
 }
+.influence-node.is-selected .node-card {
+  stroke: white;
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 24px rgba(255,255,255,0.34));
+}
 .influence-node.is-related circle {
   stroke: #62ffa8;
   stroke-width: 2.8;
   filter: drop-shadow(0 0 18px rgba(98,255,168,0.56));
 }
+.influence-node.is-related .node-card {
+  stroke: #62ffa8;
+  stroke-width: 1.9;
+  filter: drop-shadow(0 0 18px rgba(98,255,168,0.26));
+}
+.influence-node.is-dimmed .node-card,
 .influence-node.is-dimmed circle,
 .influence-node.is-dimmed text {
   opacity: 0.18;
@@ -1164,16 +1214,16 @@ const mathInspectTemplate = `<!doctype html>
         <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
       </div>
     </div>
-    <h3>Runtime-вызовы</h3>
+    <h3>Вызовы выполнения</h3>
     <table class="timeline-table">
       <tr><th>Экран / флоу / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
       {{range .Math.Summary.RuntimeCalls}}
       <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
-      {{else}}<tr><td colspan="6" class="muted">Нет runtime-графа вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+      {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
     </table>
     {{if .Math.Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
-    <p class="help-text">Этот блок связывает математические симптомы с классами: score растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
+    <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
     <table class="timeline-table">
       <tr><th>Класс</th><th>Score</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
       {{range topInfluenceNodes .Math.Summary.Influence 8}}
@@ -1834,17 +1884,17 @@ const influenceTemplate = `<!doctype html>
 <header class="hero">
   <div class="hero-grid">
     <div>
-      <div class="eyebrow">Jank Hunter · graph</div>
+      <div class="eyebrow">Jank Hunter · граф</div>
       <h1>{{.Title}}</h1>
       <div class="subhead">создан {{.GeneratedAt}} · автономный HTML · узлы {{.Influence.ShownNodes}} · связи {{.Influence.ShownEdges}}</div>
     </div>
     <div class="hero-side">
       <div class="env-card">
         <div class="env-title">Покрытие графа</div>
-        <strong class="env-device">{{if .Influence.HasClassGraph}}runtime + статический граф{{else}}только runtime-сигналы{{end}}</strong>
+        <strong class="env-device">{{if .Influence.HasClassGraph}}сигналы выполнения + статический граф{{else}}только сигналы выполнения{{end}}</strong>
         <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Runtime-узлы</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{.Influence.RuntimeEdges}} runtime-связей</div></div>
+          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{.Influence.RuntimeEdges}} связей выполнения</div></div>
           <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
         </div>
       </div>
@@ -1862,7 +1912,7 @@ const influenceTemplate = `<!doctype html>
     <div class="panel-head">
       <div>
         <h2>Карта влияния</h2>
-        <div class="panel-kicker">Размер узла отражает score. Сплошные связи подтверждены runtime-сигналами, пунктирные/тусклые узлы пока видны только по статическому графу.</div>
+        <div class="panel-kicker">Размер узла отражает оценку. Сплошные связи подтверждены сигналами выполнения, пунктирные/тусклые узлы пока видны только по статическому графу.</div>
       </div>
       <span class="pill">код → симптомы</span>
     </div>
@@ -1886,7 +1936,7 @@ const influenceTemplate = `<!doctype html>
             <div class="table-metric">Спам логами<strong>{{.LogSpam}}</strong></div>
             <div class="table-metric">Главный поток<strong>{{.MainThreadMS}} мс</strong></div>
             <div class="table-metric">Сеть<strong>{{.NetworkMS}} мс</strong></div>
-            <div class="table-metric">Jank<strong>{{.UIJank}}</strong></div>
+            <div class="table-metric">UI-подторм.<strong>{{.UIJank}}</strong></div>
             <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
           </div>
         </td>
@@ -1899,10 +1949,10 @@ const influenceTemplate = `<!doctype html>
 
   <section id="edges" class="panel">
     <div class="panel-head">
-      <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в runtime-симптомах.</div></div>
+      <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в симптомах выполнения.</div></div>
     </div>
     <table class="influence-table influence-edge-table">
-      <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Runtime</th><th>Пояснение</th></tr>
+      <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
       {{range .Influence.TopEdges}}
       <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
       {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте ` + "`--class-graph`" + `, чтобы увидеть ребра между классами.</td></tr>{{end}}
@@ -1918,7 +1968,7 @@ const influenceTemplate = `<!doctype html>
       <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
       {{else}}<div class="muted">Нет эвристических выводов.</div>{{end}}
     </div>
-    <p class="help-text">Статический узел без runtime-доказательств означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
+    <p class="help-text">Статический узел без доказательств выполнения означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
   </section>
 </main>
 <script>
@@ -2219,12 +2269,12 @@ const inspectTemplate = `<!doctype html>
             </table>
           </div>
         </div>
-        <h3>Runtime-вызовы</h3>
+        <h3>Вызовы выполнения</h3>
         <table>
           <tr><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Summary.RuntimeCalls}}
           <tr><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
-          {{else}}<tr><td colspan="8" class="muted">Нет runtime-графа вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+          {{else}}<tr><td colspan="8" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
       </div>
     </details>
