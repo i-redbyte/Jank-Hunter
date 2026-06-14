@@ -1413,6 +1413,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 
 	var out strings.Builder
 	out.WriteString(`<div class="influence-graph-card">`)
+	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
 	out.WriteString(`<svg class="influence-graph" viewBox="0 0 960 520" role="img" aria-label="Граф влияния кода">`)
 	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="rgba(111,247,255,0.62)"></path></marker></defs>`)
 	for _, edge := range edges {
@@ -1427,8 +1428,10 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 		if edge.RuntimeConfirmed {
 			className += " confirmed"
 		}
-		fmt.Fprintf(&out, `<line class="%s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></line>`,
+		fmt.Fprintf(&out, `<line class="%s" data-from="%s" data-to="%s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></line>`,
 			className,
+			template.HTMLEscapeString(edge.From),
+			template.HTMLEscapeString(edge.To),
 			from.x, from.y, to.x, to.y,
 			opacity,
 			width,
@@ -1450,8 +1453,11 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			className += " static-only"
 		}
 		reasons := strings.Join(node.Reasons, ", ")
-		fmt.Fprintf(&out, `<g class="%s" transform="translate(%.1f %.1f)"><title>%s · score %.1f · %s</title><circle r="%.1f"></circle><text y="4">%s</text></g>`,
+		fmt.Fprintf(&out, `<g class="%s" data-node="%s" tabindex="0" role="button" aria-label="%s, score %.1f" transform="translate(%.1f %.1f)"><title>%s · score %.1f · %s</title><circle r="%.1f"></circle><text y="4">%s</text></g>`,
 			className,
+			template.HTMLEscapeString(node.ClassName),
+			template.HTMLEscapeString(node.ClassName),
+			node.Score,
 			pos.x,
 			pos.y,
 			template.HTMLEscapeString(node.ClassName),

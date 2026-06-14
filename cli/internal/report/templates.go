@@ -811,6 +811,14 @@ const mathCSS = `
     rgba(255,255,255,0.026);
   overflow-x: auto;
 }
+.influence-selection {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.influence-selection strong {
+  color: var(--ink);
+}
 .influence-graph {
   width: 100%;
   min-width: 760px;
@@ -820,27 +828,72 @@ const mathCSS = `
 .influence-edge {
   stroke: rgba(111,247,255,0.42);
   stroke-linecap: round;
+  transition: opacity 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
 }
 .influence-edge.confirmed {
   stroke: rgba(98,255,168,0.66);
 }
-.influence-node circle {
-  fill: rgba(13,24,43,0.96);
-  stroke: rgba(126,247,255,0.42);
-  stroke-width: 1.4;
-  filter: drop-shadow(0 0 10px rgba(111,247,255,0.18));
+.influence-edge.is-path {
+  opacity: 0.98 !important;
+  stroke: #62ffa8;
+  stroke-width: 4px;
+  filter: drop-shadow(0 0 8px rgba(98,255,168,0.52));
 }
-.influence-node.high circle { stroke: var(--bad); filter: drop-shadow(0 0 14px rgba(255,91,124,0.36)); }
-.influence-node.medium circle { stroke: var(--warn); filter: drop-shadow(0 0 12px rgba(255,209,102,0.28)); }
+.influence-edge.is-dimmed {
+  opacity: 0.08 !important;
+}
+.influence-node {
+  cursor: pointer;
+  outline: none;
+}
+.influence-node circle {
+  fill: rgba(111,247,255,0.24);
+  stroke: rgba(111,247,255,0.94);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 14px rgba(111,247,255,0.36));
+  transition: opacity 140ms ease, fill 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
+}
+.influence-node.high circle {
+  fill: rgba(255,91,124,0.44);
+  stroke: #ff94aa;
+  filter: drop-shadow(0 0 18px rgba(255,91,124,0.58));
+}
+.influence-node.medium circle {
+  fill: rgba(255,209,102,0.38);
+  stroke: #ffe08a;
+  filter: drop-shadow(0 0 16px rgba(255,209,102,0.46));
+}
+.influence-node.ok circle {
+  fill: rgba(98,255,168,0.30);
+  stroke: #9bffc6;
+  filter: drop-shadow(0 0 14px rgba(98,255,168,0.42));
+}
 .influence-node.static-only circle {
   stroke-dasharray: 4 4;
-  opacity: 0.62;
+  opacity: 0.78;
 }
 .influence-node text {
-  fill: var(--ink);
+  fill: #f7fbff;
+  stroke: rgba(3,8,16,0.92);
+  stroke-width: 3px;
+  paint-order: stroke;
   text-anchor: middle;
   font: 750 10px Inter, "SF Pro Text", Arial, sans-serif;
   pointer-events: none;
+}
+.influence-node.is-selected circle {
+  stroke: white;
+  stroke-width: 3.4;
+  filter: drop-shadow(0 0 24px rgba(255,255,255,0.46));
+}
+.influence-node.is-related circle {
+  stroke: #62ffa8;
+  stroke-width: 2.8;
+  filter: drop-shadow(0 0 18px rgba(98,255,168,0.56));
+}
+.influence-node.is-dimmed circle,
+.influence-node.is-dimmed text {
+  opacity: 0.18;
 }
 .heuristic-grid {
   display: grid;
@@ -1626,7 +1679,7 @@ const influenceTemplate = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: граф влияния кода</title>
-  <style>` + baseCSS + `</style>
+  <style>` + baseCSS + mathCSS + `</style>
 </head>
 <body>
 <header class="hero">
@@ -1716,6 +1769,111 @@ const influenceTemplate = `<!doctype html>
     <p class="help-text">Статический узел без runtime-доказательств означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
   </section>
 </main>
+<script>
+(() => {
+  const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+
+  document.querySelectorAll('.influence-graph-card').forEach((card) => {
+    const selection = card.querySelector('[data-influence-selection]');
+    const graph = card.querySelector('.influence-graph');
+    const nodes = Array.from(card.querySelectorAll('.influence-node[data-node]'));
+    const edges = Array.from(card.querySelectorAll('.influence-edge[data-from][data-to]'));
+    if (!graph || nodes.length === 0) return;
+
+    const adjacency = new Map();
+    edges.forEach((edge, index) => {
+      const from = edge.dataset.from || '';
+      const to = edge.dataset.to || '';
+      if (!from || !to) return;
+      if (!adjacency.has(from)) adjacency.set(from, []);
+      adjacency.get(from).push({ index, to });
+    });
+
+    let pinnedNode = '';
+
+    const walkFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      const stack = [start];
+      while (stack.length > 0) {
+        const current = stack.pop();
+        (adjacency.get(current) || []).forEach(({ index, to }) => {
+          activeEdges.add(index);
+          if (!reached.has(to)) {
+            reached.add(to);
+            stack.push(to);
+          }
+        });
+      }
+      return { reached, activeEdges };
+    };
+
+    const reset = () => {
+      pinnedNode = '';
+      nodes.forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-dimmed'));
+      edges.forEach((edge) => edge.classList.remove('is-path', 'is-dimmed'));
+      if (selection) {
+        selection.textContent = 'Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.';
+      }
+    };
+
+    const selectNode = (name) => {
+      const { reached, activeEdges } = walkFrom(name);
+      nodes.forEach((node) => {
+        const nodeName = node.dataset.node || '';
+        const selected = nodeName === name;
+        const related = reached.has(nodeName);
+        node.classList.toggle('is-selected', selected);
+        node.classList.toggle('is-related', related && !selected);
+        node.classList.toggle('is-dimmed', !related);
+      });
+      edges.forEach((edge, index) => {
+        const active = activeEdges.has(index);
+        edge.classList.toggle('is-path', active);
+        edge.classList.toggle('is-dimmed', !active);
+      });
+      if (selection) {
+        selection.innerHTML = '<strong>' + escapeHTML(name) + '</strong>: подсвечены исходящие пути, ' +
+          reached.size + ' узлов и ' + activeEdges.size + ' связей.';
+      }
+    };
+
+    nodes.forEach((node) => {
+      const name = node.dataset.node || '';
+      node.addEventListener('pointerenter', () => {
+        if (!pinnedNode) selectNode(name);
+      });
+      node.addEventListener('focus', () => selectNode(name));
+      node.addEventListener('click', (event) => {
+        event.stopPropagation();
+        pinnedNode = name;
+        selectNode(name);
+      });
+      node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          pinnedNode = name;
+          selectNode(name);
+        }
+      });
+    });
+
+    card.addEventListener('pointerleave', () => {
+      if (!pinnedNode) reset();
+    });
+    graph.addEventListener('click', () => reset());
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && pinnedNode) reset();
+    });
+  });
+})();
+</script>
 </body>
 </html>`
 
