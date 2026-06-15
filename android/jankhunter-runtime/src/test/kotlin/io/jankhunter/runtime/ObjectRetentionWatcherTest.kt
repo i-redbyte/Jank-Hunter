@@ -16,14 +16,14 @@ class ObjectRetentionWatcherTest {
             forceGcBeforeReport = true,
             clock = { now },
             requestGc = { gcRequests++ },
-            reporter = { className, ageMs, count ->
-                reports += Report(className, ageMs, count)
+            reporter = { className, ownerHint, ageMs, count ->
+                reports += Report(className, ownerHint, ageMs, count)
             },
         )
         val first = Any()
         val second = Any()
-        watcher.watchForTest(first, "com.example.LeakyOwner")
-        watcher.watchForTest(second, "com.example.LeakyOwner")
+        watcher.watchForTest(first, "com.example.LeakyOwner", "com.example.Holder")
+        watcher.watchForTest(second, "com.example.LeakyOwner", "com.example.Holder")
 
         now = 1_000L
         watcher.checkRetained()
@@ -32,11 +32,12 @@ class ObjectRetentionWatcherTest {
 
         now = 1_600L
         watcher.checkRetained()
-        assertEquals(listOf(Report("com.example.LeakyOwner", 1_600L, 2L)), reports)
+        assertEquals(listOf(Report("com.example.LeakyOwner", "com.example.Holder", 1_600L, 2L)), reports)
     }
 
     private data class Report(
         val className: String?,
+        val ownerHint: String?,
         val ageMs: Long,
         val count: Long,
     )

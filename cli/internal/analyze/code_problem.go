@@ -49,6 +49,7 @@ func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
 	builder.addLogSpam(summary.LogSpam)
 	builder.addProblemWindows(summary.ProblemWindows)
 	builder.addRetained(summary.RetainedClasses, summary.LowMemoryCount)
+	builder.addMemoryLeaks(summary.MemoryLeaks)
 	builder.addRoutes(summary.Routes)
 	builder.addRuntimeCalls(summary.RuntimeCalls)
 	builder.addInfluence(summary.Influence)
@@ -281,6 +282,41 @@ func (b *codeProblemBuilder) addRetained(retainedRows []NamedValue, lowMemoryCou
 			Score:    scoreCount(retained.Value, 8),
 			Count:    retained.Value,
 			Detail:   strings.TrimSpace("Класс встречается среди удержанных объектов. " + retained.Extra),
+		})
+	}
+}
+
+func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
+	for _, leak := range leaks {
+		target := leak.ClassName
+		if isLikelyAppClass(leak.Holder) {
+			target = leak.Holder
+		}
+		className, method := codeLocationFromOwner(target)
+		if className == "" {
+			className = normalizeClassName(target)
+		}
+		if className == "" {
+			continue
+		}
+		item := b.item(className, method, target)
+		item.runtimeEvidence = true
+		item.retained += leak.Count
+		item.maxMS = maxUint64(item.maxMS, leak.MaxAgeMS)
+		item.addContext(leak.Screen, leak.Flow, leak.Step, "")
+		detail := fmt.Sprintf("Удержан %s; держатель: %s; качество привязки: %s.", leak.ClassName, leak.Holder, leak.HolderQuality)
+		if leak.ObjectKind != "" {
+			detail += " Тип: " + leak.ObjectKind + "."
+		}
+		item.addSignal(CodeProblemSignal{
+			Name:     "Подозрение утечки памяти",
+			Category: codeCategoryMemory,
+			Severity: leak.Severity,
+			Score:    leak.Score,
+			Count:    leak.Count,
+			Value:    leak.MaxAgeMS,
+			Unit:     "мс возраста",
+			Detail:   detail,
 		})
 	}
 }

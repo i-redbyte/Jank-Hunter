@@ -55,6 +55,9 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if len(summary.CodeProblems[0].Signals) == 0 {
 		t.Fatalf("top code problem has no signals: %+v", summary.CodeProblems[0])
 	}
+	if !codeProblemsHaveSignal(summary.CodeProblems, "Подозрение утечки памяти") {
+		t.Fatalf("expected memory leak signal in code problem registry: %+v", summary.CodeProblems)
+	}
 }
 
 func TestInspectFilesAppliesOwnerMap(t *testing.T) {
@@ -112,6 +115,16 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.RetainedAgeBuckets) != 1 || summary.RetainedAgeBuckets[0].Name != "10s-30s" {
 		t.Fatalf("unexpected retained age buckets: %+v", summary.RetainedAgeBuckets)
 	}
+	if len(summary.MemoryLeaks) != 1 {
+		t.Fatalf("unexpected memory leak suspects: %+v", summary.MemoryLeaks)
+	}
+	leak := summary.MemoryLeaks[0]
+	if leak.ClassName != "com.app.checkout.CheckoutActivity" || leak.Holder != "CheckoutPresenter.render" {
+		t.Fatalf("unexpected memory leak attribution: %+v", leak)
+	}
+	if leak.Screen != "CheckoutScreen" || leak.Flow != "checkout.open" || leak.Step != "render_list" {
+		t.Fatalf("unexpected memory leak context: %+v", leak)
+	}
 	if len(summary.AppVersions) != 1 || summary.AppVersions[0].Name != "0.1.0-debug" {
 		t.Fatalf("unexpected app versions: %+v", summary.AppVersions)
 	}
@@ -139,6 +152,17 @@ func environmentHasItem(environment RunEnvironment, label string, value string) 
 	for _, item := range environment.Items {
 		if item.Label == label && item.Value == value {
 			return true
+		}
+	}
+	return false
+}
+
+func codeProblemsHaveSignal(rows []CodeProblemStats, name string) bool {
+	for _, row := range rows {
+		for _, signal := range row.Signals {
+			if signal.Name == name {
+				return true
+			}
 		}
 	}
 	return false

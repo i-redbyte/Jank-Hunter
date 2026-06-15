@@ -103,6 +103,7 @@ class ActivityTracker(
             }
         }
         jankStatsHandles.remove(activity)?.uninstall()
+        JankHunter.watchActivity(activity, "lifecycle.destroyed.$screenName")
     }
 
     fun close() {

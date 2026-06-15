@@ -266,11 +266,24 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
 		}
 		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
 	case EventRetained:
-		values, err := readN(read, 3)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
 		if err != nil {
 			return err
 		}
-		event.Retained = &RetainedEvent{ClassID: values[0], AgeMS: values[1], Count: values[2]}
+		values, err := readN(read, 4)
+		if err != nil {
+			return err
+		}
+		event.Retained = &RetainedEvent{
+			ScreenID: screenID,
+			OwnerID:  ownerID,
+			FlowID:   flowID,
+			StepID:   stepID,
+			ClassID:  values[0],
+			HolderID: values[1],
+			AgeMS:    values[2],
+			Count:    values[3],
+		}
 	case EventCounter, EventGauge:
 		values, err := readN(read, 2)
 		if err != nil {
@@ -416,11 +429,24 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
 	case EventRetained:
-		values, err := readN(read, 3)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
 		if err != nil {
 			return err
 		}
-		event.Retained = &RetainedEvent{ClassID: values[0], AgeMS: values[1], Count: values[2]}
+		values, err := readN(read, 4)
+		if err != nil {
+			return err
+		}
+		event.Retained = &RetainedEvent{
+			ScreenID: screenID,
+			OwnerID:  ownerID,
+			FlowID:   flowID,
+			StepID:   stepID,
+			ClassID:  values[0],
+			HolderID: values[1],
+			AgeMS:    values[2],
+			Count:    values[3],
+		}
 	case EventCounter, EventGauge:
 		values, err := readN(read, 2)
 		if err != nil {

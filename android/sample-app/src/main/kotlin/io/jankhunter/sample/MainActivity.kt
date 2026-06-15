@@ -81,7 +81,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val sample = RetainedSample(clicks.get())
                 retainedSamples += sample
-                JankHunter.watchObject(sample, "io.jankhunter.sample.RetainedSample")
+                JankHunter.watchObject(sample, "io.jankhunter.sample.RetainedSample", "sample.main.retained_button")
                 JankHunter.recordCounter("sample.retained.watch.count", 1)
             }
         }

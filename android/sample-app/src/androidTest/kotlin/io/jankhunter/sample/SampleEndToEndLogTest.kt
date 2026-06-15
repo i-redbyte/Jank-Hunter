@@ -42,7 +42,7 @@ class SampleEndToEndLogTest {
                 JankHunter.withOwner("sample.e2e.synthetic_stall") {
                     SystemClock.sleep(280)
                 }
-                JankHunter.watchObject(RetainedProbe(), "io.jankhunter.sample.RetainedProbe")
+                JankHunter.watchObject(RetainedProbe(), "io.jankhunter.sample.RetainedProbe", "sample.e2e.retained_probe")
                 JankHunter.recordCounter("sample.e2e.retained.watch.count", 1)
             }
 

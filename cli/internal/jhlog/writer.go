@@ -75,6 +75,8 @@ func compactEventFlags(event Event) uint64 {
 	switch event.Type {
 	case EventFlow:
 		flags |= compactContextFlags(event.Flow)
+	case EventRetained:
+		flags |= compactContextFlags(event.Retained)
 	case EventLogSpam:
 		flags |= compactContextFlags(event.LogSpam)
 	case EventProblem:
@@ -225,7 +227,10 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("retained payload is nil")
 		}
-		for _, value := range []uint64{p.ClassID, p.AgeMS, p.Count} {
+		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+			return err
+		}
+		for _, value := range []uint64{p.ClassID, p.HolderID, p.AgeMS, p.Count} {
 			if err := writeUvarint(w, value); err != nil {
 				return err
 			}
@@ -294,6 +299,13 @@ func encodePayload(w io.Writer, event Event) error {
 }
 
 func (p *FlowEvent) contextIDs() (uint64, uint64, uint64, uint64) {
+	if p == nil {
+		return 0, 0, 0, 0
+	}
+	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
+}
+
+func (p *RetainedEvent) contextIDs() (uint64, uint64, uint64, uint64) {
 	if p == nil {
 		return 0, 0, 0, 0
 	}
@@ -510,7 +522,7 @@ func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
 
 func needsPayloadLength(eventType EventType) bool {
 	switch eventType {
-	case EventDictionary, EventSession, EventContext, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
+	case EventDictionary, EventSession, EventContext, EventRetained, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return true
 	default:
 		return false
@@ -549,6 +561,7 @@ func WriteSample(path string) error {
 		{Kind: DictScreen, ID: 30, Value: "FeedScreen"},
 		{Kind: DictScreen, ID: 31, Value: "CheckoutScreen"},
 		{Kind: DictClass, ID: 40, Value: "com.app.checkout.CheckoutActivity"},
+		{Kind: DictOwner, ID: 41, Value: "CheckoutPresenter.render"},
 		{Kind: DictStack, ID: 50, Value: "CheckoutPresenter.renderItems"},
 		{Kind: DictMetric, ID: 60, Value: "logs.warn.count"},
 		{Kind: DictMetric, ID: 61, Value: "ui.fps_x100"},
@@ -587,7 +600,7 @@ func WriteSample(path string) error {
 		{Type: EventStall, TimeMS: 13200, Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{OwnerID: 11, StackID: 50, DurationMS: 1240}},
 		{Type: EventProblem, TimeMS: 13201, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 63, WindowMS: 1240, Count: 1, MaxMS: 1240}},
 		{Type: EventMemory, TimeMS: 15000, Flags: uint64(FlagAppForeground), Memory: &MemoryEvent{PSSKB: 188240, JavaHeapKB: 90412, NativeHeapKB: 38112}},
-		{Type: EventRetained, TimeMS: 21000, Retained: &RetainedEvent{ClassID: 40, AgeMS: 15000, Count: 2}},
+		{Type: EventRetained, TimeMS: 21000, Retained: &RetainedEvent{ScreenID: 31, OwnerID: 41, FlowID: 65, StepID: 66, ClassID: 40, HolderID: 41, AgeMS: 15000, Count: 2}},
 		{Type: EventCounter, TimeMS: 22000, Metric: &MetricEvent{MetricID: 60, Value: 17}},
 		{Type: EventHTTP, TimeMS: 23000, Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 11, RouteID: 21, DurationMS: 1320, DNSMS: 9, ConnectMS: 0, TTFBMS: 1140, Status: Status5xx, RxBytes: 1024, TxBytes: 1240}},
 		{Type: EventUIWindow, TimeMS: 30000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 31, WindowMS: 10000, FrameCount: 542, JankCount: 62, P50MS: 14, P95MS: 48, P99MS: 108}},

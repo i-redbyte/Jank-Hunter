@@ -151,6 +151,25 @@ type CodeProblemStats struct {
 	Evidence        string
 }
 
+type MemoryLeakSuspect struct {
+	ClassName      string
+	Holder         string
+	Screen         string
+	Flow           string
+	Step           string
+	Count          uint64
+	MaxAgeMS       uint64
+	Score          float64
+	Severity       string
+	ObjectKind     string
+	HolderQuality  string
+	UserOwned      bool
+	SystemRetained bool
+	Impact         string
+	Recommendation string
+	Evidence       string
+}
+
 type Summary struct {
 	Title             string
 	LogCount          int
@@ -198,6 +217,7 @@ type Summary struct {
 	ProblemWindows     []ProblemWindowStats
 	RuntimeCalls       []RuntimeCallStats
 	CodeProblems       []CodeProblemStats
+	MemoryLeaks        []MemoryLeakSuspect
 	AppVersions        []NamedValue
 	Builds             []NamedValue
 	Devices            []NamedValue

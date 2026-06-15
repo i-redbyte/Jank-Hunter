@@ -672,29 +672,57 @@ object JankHunter {
 
     @JvmStatic
     fun recordRetained(className: String?, ageMs: Long, count: Long) {
-        ensureContextRecorded(ownerOverride = className)
-        writer?.retained(className, ageMs, count)
-        recordProblemWindow("retained_object", ageMs, count, ageMs, className)
+        recordRetained(className, null, ageMs, count)
+    }
+
+    @JvmStatic
+    fun recordRetained(className: String?, holder: String?, ageMs: Long, count: Long) {
+        val retainedOwner = firstContextValue(holder, className)
+        val tuple = captureContext(ownerOverride = retainedOwner)
+        ensureContextRecorded(screenOverride = tuple.screen, ownerOverride = tuple.owner)
+        writer?.retained(tuple.screen, tuple.owner, tuple.flow, tuple.step, className, holder, ageMs, count)
+        recordProblemWindow("retained_object", ageMs, count, ageMs, retainedOwner)
     }
 
     @JvmStatic
     fun watchObject(instance: Any?, description: String? = null) {
-        objectRetentionWatcher?.watch(instance, description)
+        watchObject(instance, description, null)
+    }
+
+    @JvmStatic
+    fun watchObject(instance: Any?, description: String?, ownerHint: String?) {
+        val retainedBy = firstContextValue(ownerHint, owner.get())
+        objectRetentionWatcher?.watch(instance, description, retainedBy)
     }
 
     @JvmStatic
     fun watchActivity(activity: android.app.Activity?) {
-        watchObject(activity, activity?.javaClass?.name)
+        watchActivity(activity, null)
+    }
+
+    @JvmStatic
+    fun watchActivity(activity: android.app.Activity?, ownerHint: String?) {
+        watchObject(activity, activity?.javaClass?.name, firstContextValue(ownerHint, activity?.javaClass?.name))
     }
 
     @JvmStatic
     fun watchFragment(fragmentLike: Any?, name: String? = null) {
-        watchObject(fragmentLike, name ?: fragmentLike?.javaClass?.name)
+        watchFragment(fragmentLike, name, null)
+    }
+
+    @JvmStatic
+    fun watchFragment(fragmentLike: Any?, name: String?, ownerHint: String?) {
+        watchObject(fragmentLike, name ?: fragmentLike?.javaClass?.name, ownerHint)
     }
 
     @JvmStatic
     fun watchCloseable(closeable: java.io.Closeable?, name: String? = null) {
-        watchObject(closeable, name ?: closeable?.javaClass?.name)
+        watchCloseable(closeable, name, null)
+    }
+
+    @JvmStatic
+    fun watchCloseable(closeable: java.io.Closeable?, name: String?, ownerHint: String?) {
+        watchObject(closeable, name ?: closeable?.javaClass?.name, ownerHint)
     }
 
     @JvmStatic

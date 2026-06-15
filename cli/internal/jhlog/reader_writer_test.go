@@ -63,6 +63,19 @@ func TestWriteSampleReadFile(t *testing.T) {
 	if context.TotalMemoryKB == 0 || context.FreeStorageKB == 0 {
 		t.Fatalf("expected extended context memory/storage metadata: %+v", context)
 	}
+	var retained *RetainedEvent
+	for _, event := range log.Events {
+		if event.Retained != nil {
+			retained = event.Retained
+			break
+		}
+	}
+	if retained == nil {
+		t.Fatalf("expected retained event")
+	}
+	if retained.ScreenID != 31 || retained.OwnerID != 41 || retained.FlowID != 65 || retained.StepID != 66 || retained.ClassID != 40 || retained.HolderID != 41 {
+		t.Fatalf("retained context did not round-trip: %+v", retained)
+	}
 }
 
 func TestReadFileSupportsCompressedBinaryBody(t *testing.T) {
@@ -277,6 +290,67 @@ func TestRuntimeCallUsesCompactContextFlags(t *testing.T) {
 	}
 	if runtimeCall.CallerID != 2 || runtimeCall.CalleeID != 3 || runtimeCall.Count != 9 || runtimeCall.TotalMS != 72 || runtimeCall.MaxMS != 18 {
 		t.Fatalf("runtime call did not round-trip: %+v", runtimeCall)
+	}
+}
+
+func TestRetainedUsesCompactContextFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retained-context.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	entries := []DictionaryEntry{
+		{Kind: DictScreen, ID: 1, Value: "Checkout"},
+		{Kind: DictOwner, ID: 2, Value: "CheckoutPresenter"},
+		{Kind: DictFlow, ID: 3, Value: "checkout.open"},
+		{Kind: DictStep, ID: 4, Value: "render"},
+		{Kind: DictClass, ID: 5, Value: "com.app.CheckoutActivity"},
+	}
+	for _, entry := range entries {
+		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+	if err := writer.WriteEvent(Event{
+		Type:   EventRetained,
+		TimeMS: 100,
+		Retained: &RetainedEvent{
+			ScreenID: 1,
+			OwnerID:  2,
+			FlowID:   3,
+			StepID:   4,
+			ClassID:  5,
+			HolderID: 2,
+			AgeMS:    30_000,
+			Count:    2,
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent(retained) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var retained *RetainedEvent
+	var flags uint64
+	for _, event := range log.Events {
+		if event.Retained != nil {
+			retained = event.Retained
+			flags = event.Flags
+		}
+	}
+	if retained == nil {
+		t.Fatalf("expected retained event")
+	}
+	if flags&uint64(FlagHasScreen|FlagHasOwner|FlagHasFlow|FlagHasStep) == 0 {
+		t.Fatalf("expected compact context flags, got %08b", flags)
+	}
+	if retained.ScreenID != 1 || retained.OwnerID != 2 || retained.FlowID != 3 || retained.StepID != 4 || retained.ClassID != 5 || retained.HolderID != 2 || retained.AgeMS != 30_000 || retained.Count != 2 {
+		t.Fatalf("retained did not round-trip: %+v", retained)
 	}
 }
 

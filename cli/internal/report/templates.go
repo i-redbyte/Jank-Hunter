@@ -386,6 +386,28 @@ main {
 .code-problem-table {
   min-width: 1520px;
 }
+.leak-table {
+  min-width: 1580px;
+}
+.leak-object-kind {
+  color: var(--cyan);
+  font-size: 12px;
+  font-weight: 850;
+}
+.leak-holder-quality {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.leak-limitations {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,209,102,0.28);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255,209,102,0.055);
+}
 .code-problem-table th {
   vertical-align: middle;
 }
@@ -1704,6 +1726,7 @@ const mathInspectTemplate = `<!doctype html>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
   <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
   <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
@@ -1786,6 +1809,52 @@ const mathInspectTemplate = `<!doctype html>
               </tr>
               {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
             </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+    <details id="memory-leaks" class="fold code-registry-fold">
+      <summary><span>Разбор утечек памяти</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает удержанные объекты с вероятным держателем и контекстом. Системные классы выводятся только как симптом, основной фокус — пользовательский держатель, экран и флоу.</p>
+        <div class="leak-limitations">Точный путь до GC root требует дампа кучи. В легком runtime-режиме отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
+            <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+              <option value="">Все типы</option>
+              <option value="экран / Activity">Activity</option>
+              <option value="Fragment">Fragment</option>
+              <option value="Context">Context</option>
+              <option value="View / binding">View / binding</option>
+              <option value="ресурс">Ресурс</option>
+              <option value="системный объект">Системный объект</option>
+              <option value="пользовательский объект">Пользовательский объект</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам подозрений утечек не найдено.</div>
+          <table class="code-problem-table leak-table">
+            <tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Удержанный объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Вероятный держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>Влияние</th><th>Что проверить</th><th>Доказательства</th></tr>
+            {{range .Math.Summary.MemoryLeaks}}
+            <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}" data-search="{{memoryLeakSearchText .}}">
+              <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
+              <td><code>{{.ClassName}}</code></td>
+              <td><div class="leak-object-kind">{{.ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+              <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
+              <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+              <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
+              <td>{{.Impact}}</td>
+              <td>{{.Recommendation}}</td>
+              <td>{{.Evidence}}</td>
+            </tr>
+            {{else}}<tr><td colspan="9" class="muted">Подозрений на утечки памяти нет.</td></tr>{{end}}
           </table>
         </div>
       </div>
@@ -2172,6 +2241,7 @@ const mathCompareTemplate = `<!doctype html>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
   <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
   <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
@@ -2247,6 +2317,65 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
               </tr>
               {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+    <details id="memory-leaks" class="fold code-registry-fold">
+      <summary><span>Сравнение утечек памяти</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает удержанные объекты кандидата, которые появились или усилились относительно базы. Оценка учитывает количество, возраст удержания, тип объекта и наличие пользовательского держателя.</p>
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
+            <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+              <option value="">Все типы</option>
+              <option value="экран / Activity">Activity</option>
+              <option value="Fragment">Fragment</option>
+              <option value="Context">Context</option>
+              <option value="View / binding">View / binding</option>
+              <option value="ресурс">Ресурс</option>
+              <option value="системный объект">Системный объект</option>
+              <option value="пользовательский объект">Пользовательский объект</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам утечек не найдено.</div>
+          <table class="code-problem-table leak-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="severity">Риск</button></th>
+                <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
+                <th><button type="button" data-code-sort="category">Тип</button></th>
+                <th>Вероятный держатель</th>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th>Изменение</th>
+                <th>Контекст</th>
+                <th>Что проверить</th>
+                <th>Доказательства</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range memoryLeakCompareRows .Math.Comparison}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}" data-search="{{memoryLeakSearchText .Candidate}} {{.Status}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+                <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
+                <td><div class="leak-object-kind">{{.Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+                <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
+                <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+                <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
+                <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+                <td>{{.Candidate.Recommendation}}</td>
+                <td>{{.Candidate.Evidence}}</td>
+              </tr>
+              {{else}}<tr><td colspan="9" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
             </tbody>
           </table>
         </div>
@@ -2877,6 +3006,7 @@ const inspectTemplate = `<!doctype html>
   <a href="#flows">Флоу</a>
   <a href="#code-problems">Реестр кода</a>
   <a href="#owners">Источники</a>
+  <a href="#memory-leaks">Утечки</a>
   <a href="#memory">Память</a>
   <a href="#custom">Метрики</a>
   <a href="#context">Контекст</a>
@@ -3118,6 +3248,71 @@ const inspectTemplate = `<!doctype html>
     </details>
   </section>
 
+  <section id="memory-leaks" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Разбор утечек памяти</h2>
+        <div class="panel-kicker">Пользовательские классы, Activity/Fragment/Context и вероятные держатели, которые не отпустили объект после задержки проверки удержания.</div>
+      </div>
+      <span class="pill">удержания</span>
+    </div>
+    <p class="help-text">Этот блок не показывает системный шум сам по себе: системные классы важны, когда рядом есть пользовательский держатель или экран. Точный путь до GC root без дампа кучи недоступен, поэтому держатель здесь — вероятный владелец из runtime-контекста или места вызова watch-метода.</p>
+    <div class="leak-limitations">Если в колонке “держатель” написано “не определен”, добавьте <code>ownerHint</code> в <code>JankHunter.watchObject(...)</code> или оберните подозрительный участок в <code>JankHunter.withOwner(...)</code>. Тогда следующий прогон покажет, какой пользовательский класс вероятнее всего удерживает объект.</div>
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
+        <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+          <option value="">Все типы</option>
+          <option value="экран / Activity">Activity</option>
+          <option value="Fragment">Fragment</option>
+          <option value="Context">Context</option>
+          <option value="View / binding">View / binding</option>
+          <option value="ресурс">Ресурс</option>
+          <option value="системный объект">Системный объект</option>
+          <option value="пользовательский объект">Пользовательский объект</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам подозрений утечек не найдено.</div>
+      <table class="code-problem-table leak-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="severity">Риск</button></th>
+            <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
+            <th><button type="button" data-code-sort="category">Тип</button></th>
+            <th>Вероятный держатель</th>
+            <th>Контекст</th>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th>Влияние</th>
+            <th>Что проверить</th>
+            <th>Доказательства</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Summary.MemoryLeaks}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}" data-search="{{memoryLeakSearchText .}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
+            <td><div class="problem-location"><code>{{.ClassName}}</code></div></td>
+            <td><div class="leak-object-kind">{{.ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+            <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
+            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+            <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
+            <td>{{.Impact}}</td>
+            <td>{{.Recommendation}}</td>
+            <td>{{.Evidence}}</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что проверка удержания объектов включена и объект был передан в watchObject/watchActivity.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="memory" class="panel">
     <div class="panel-head">
       <div><h2>Память и удержанные объекты</h2><div class="panel-kicker">PSS, свободная память, сигналы низкой памяти и возраст удержанных объектов.</div></div>
@@ -3269,6 +3464,7 @@ const compareTemplate = `<!doctype html>
 <nav class="nav">
   <a href="#compare">Сравнение</a>
   <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
   <a href="#regressions">Регрессии</a>
   <a href="#changes">Где изменилось</a>
   <a href="#flows">Флоу</a>
@@ -3393,6 +3589,70 @@ const compareTemplate = `<!doctype html>
             <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
           </tr>
           {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="memory-leaks" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Сравнение утечек памяти</h2>
+        <div class="panel-kicker">Новые и усилившиеся удержания кандидата: объект, вероятный держатель, контекст и изменение относительно базы.</div>
+      </div>
+      <span class="pill">дельта удержаний</span>
+    </div>
+    <p class="help-text">Сравнение смотрит не только количество, но и возраст удержания. Если держатель не определен, добавьте <code>ownerHint</code> или <code>withOwner</code>, чтобы следующий прогон показал пользовательский класс точнее.</p>
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
+        <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+          <option value="">Все типы</option>
+          <option value="экран / Activity">Activity</option>
+          <option value="Fragment">Fragment</option>
+          <option value="Context">Context</option>
+          <option value="View / binding">View / binding</option>
+          <option value="ресурс">Ресурс</option>
+          <option value="системный объект">Системный объект</option>
+          <option value="пользовательский объект">Пользовательский объект</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам утечек не найдено.</div>
+      <table class="code-problem-table leak-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="severity">Риск</button></th>
+            <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
+            <th><button type="button" data-code-sort="category">Тип</button></th>
+            <th>Вероятный держатель</th>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th>Изменение</th>
+            <th>Контекст</th>
+            <th>Что проверить</th>
+            <th>Доказательства</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range memoryLeakCompareRows .Comparison}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}" data-search="{{memoryLeakSearchText .Candidate}} {{.Status}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+            <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
+            <td><div class="leak-object-kind">{{.Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+            <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
+            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+            <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
+            <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+            <td>{{.Candidate.Recommendation}}</td>
+            <td>{{.Candidate.Evidence}}</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
         </tbody>
       </table>
     </div>

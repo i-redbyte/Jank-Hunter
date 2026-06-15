@@ -20,15 +20,15 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	if err := runInspect([]string{samplePath, "--out", inspectPath}); err != nil {
 		t.Fatalf("runInspect() error = %v", err)
 	}
-	assertFileContains(t, inspectPath, "λ Анализ", `href="report-math.html"`)
-	assertFileContains(t, filepath.Join(dir, "report-math.html"), "Математический анализ", "Качество данных", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Что измеряет")
+	assertFileContains(t, inspectPath, "λ Анализ", `href="report-math.html"`, "Разбор утечек памяти")
+	assertFileContains(t, filepath.Join(dir, "report-math.html"), "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Что измеряет")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--out", comparePath}); err != nil {
 		t.Fatalf("runCompare() error = %v", err)
 	}
-	assertFileContains(t, comparePath, "λ Анализ", `href="compare-math.html"`)
-	assertFileContains(t, filepath.Join(dir, "compare-math.html"), "Математический анализ сравнения", "Качество сравнения", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
+	assertFileContains(t, comparePath, "λ Анализ", `href="compare-math.html"`, "Сравнение утечек памяти")
+	assertFileContains(t, filepath.Join(dir, "compare-math.html"), "Математический анализ сравнения", "Качество сравнения", "Сравнение утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
 }
 
 func assertFileContains(t *testing.T, path string, needles ...string) {

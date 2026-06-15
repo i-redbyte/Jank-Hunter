@@ -182,10 +182,30 @@ class BinaryLogWriter(
     }
 
     @Synchronized
-    fun retained(className: String?, ageMs: Long, count: Long) {
+    fun retained(
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+        className: String?,
+        holder: String?,
+        ageMs: Long,
+        count: Long,
+    ) {
+        val screenId = idFor(DICT_SCREEN, screen)
+        val ownerId = idFor(DICT_OWNER, owner)
+        val flowId = idFor(DICT_FLOW, flow)
+        val stepId = idFor(DICT_STEP, step)
         val classId = idFor(DICT_CLASS, className)
-        val payload = Payload().uvarint(classId).uvarint(ageMs).uvarint(count)
-        record(EVENT_RETAINED, FLAG_APP_FOREGROUND, payload)
+        val holderId = idFor(DICT_OWNER, holder)
+        val flags = FLAG_APP_FOREGROUND or contextFlags(screenId, ownerId, flowId, stepId)
+        val payload = Payload()
+            .optionalContext(flags, screenId, ownerId, flowId, stepId)
+            .uvarint(classId)
+            .uvarint(holderId)
+            .uvarint(ageMs)
+            .uvarint(count)
+        record(EVENT_RETAINED, flags, payload)
     }
 
     @Synchronized
@@ -621,6 +641,7 @@ class BinaryLogWriter(
                 EVENT_DICTIONARY,
                 EVENT_SESSION,
                 EVENT_CONTEXT,
+                EVENT_RETAINED,
                 EVENT_FLOW,
                 EVENT_LOG_SPAM,
                 EVENT_PROBLEM,
@@ -638,7 +659,7 @@ class BinaryLogWriter(
             return flags
         }
 
-        private const val FORMAT_VERSION = 4
+        private const val FORMAT_VERSION = 5
         private const val IO_BUFFER_BYTES = 32 * 1024
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4

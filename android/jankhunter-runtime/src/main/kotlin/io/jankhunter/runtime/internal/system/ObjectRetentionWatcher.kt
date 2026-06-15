@@ -17,7 +17,9 @@ class ObjectRetentionWatcher(
         Runtime.getRuntime().gc()
         System.runFinalization()
     },
-    private val reporter: (String?, Long, Long) -> Unit = JankHunter::recordRetained,
+    private val reporter: (String?, String?, Long, Long) -> Unit = { className, ownerHint, ageMs, count ->
+        JankHunter.recordRetained(className, ownerHint, ageMs, count)
+    },
 ) {
     private val delayMs = max(1_000L, retainedDelayMs)
     private val checkIntervalMs = max(500L, min(delayMs / 2L, 2_000L))
@@ -40,20 +42,21 @@ class ObjectRetentionWatcher(
         watched.clear()
     }
 
-    fun watch(instance: Any?, description: String?) {
+    fun watch(instance: Any?, description: String?, ownerHint: String?) {
         if (instance == null || !running.get()) return
-        addWatched(instance, description)
+        addWatched(instance, description, ownerHint)
     }
 
-    internal fun watchForTest(instance: Any, description: String?) {
-        addWatched(instance, description)
+    internal fun watchForTest(instance: Any, description: String?, ownerHint: String? = null) {
+        addWatched(instance, description, ownerHint)
     }
 
-    private fun addWatched(instance: Any, description: String?) {
+    private fun addWatched(instance: Any, description: String?, ownerHint: String?) {
         watched += WatchedReference(
             instance,
             queue,
             safeClassName(instance, description),
+            ownerHint?.takeIf { it.isNotBlank() },
             clock(),
         )
     }
@@ -100,7 +103,8 @@ class ObjectRetentionWatcher(
                 continue
             }
 
-            groups.getOrPut(ref.className) { RetainedGroup(ref.className) }.add(ageMs)
+            val key = ref.className + "\u0000" + ref.ownerHint.orEmpty()
+            groups.getOrPut(key) { RetainedGroup(ref.className, ref.ownerHint) }.add(ageMs)
             watched.remove(ref)
         }
 
@@ -108,7 +112,7 @@ class ObjectRetentionWatcher(
             requestGc()
         }
         for (group in groups.values) {
-            reporter(group.className, group.maxAgeMs, group.count)
+            reporter(group.className, group.ownerHint, group.maxAgeMs, group.count)
         }
     }
 
@@ -118,6 +122,7 @@ class ObjectRetentionWatcher(
 
     private class RetainedGroup(
         val className: String,
+        val ownerHint: String?,
     ) {
         var count = 0L
             private set
@@ -136,6 +141,7 @@ class ObjectRetentionWatcher(
         referent: Any,
         queue: ReferenceQueue<Any>,
         val className: String,
+        val ownerHint: String?,
         val watchStartedMs: Long,
     ) : WeakReference<Any>(referent, queue) {
         var firstRetainedAtMs = 0L

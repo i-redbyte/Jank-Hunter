@@ -203,6 +203,8 @@ func execute(path, source string, data any) error {
 		"codeProblemLocation":    codeProblemLocation,
 		"codeProblemMetric":      codeProblemMetric,
 		"codeProblemCompareRows": codeProblemCompareRows,
+		"memoryLeakSearchText":   memoryLeakSearchText,
+		"memoryLeakCompareRows":  memoryLeakCompareRows,
 		"deltaGroups":            compareDeltaGroups,
 		"deltaLabel":             compareDeltaLabel,
 		"deltaHelp":              compareDeltaHelp,
@@ -222,6 +224,7 @@ func execute(path, source string, data any) error {
 		"summaryLogSpam":    summaryLogSpamTotal,
 		"summaryProblems":   summaryProblemTotal,
 		"signedMS":          signedMS,
+		"signedDuration":    signedDuration,
 		"signedFloat":       signedFloat,
 		"bucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroTimelineBucket(bucket) {
@@ -709,6 +712,102 @@ func codeProblemMetric(signal analyze.CodeProblemSignal) string {
 		return "сигнал"
 	}
 	return strings.Join(parts, " · ")
+}
+
+func memoryLeakSearchText(item analyze.MemoryLeakSuspect) string {
+	return strings.ToLower(strings.Join([]string{
+		item.ClassName,
+		item.Holder,
+		item.Screen,
+		item.Flow,
+		item.Step,
+		item.ObjectKind,
+		item.HolderQuality,
+		item.Impact,
+		item.Recommendation,
+		item.Evidence,
+	}, " "))
+}
+
+type memoryLeakCompareRow struct {
+	Candidate     analyze.MemoryLeakSuspect
+	BaselineScore float64
+	BaselineCount uint64
+	BaselineAgeMS uint64
+	DeltaScore    float64
+	DeltaCount    int64
+	DeltaAgeMS    int64
+	Status        string
+	Severity      string
+}
+
+func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow {
+	baselineByKey := map[string]analyze.MemoryLeakSuspect{}
+	for _, row := range comparison.Baseline.MemoryLeaks {
+		baselineByKey[memoryLeakCompareKey(row)] = row
+	}
+	out := make([]memoryLeakCompareRow, 0, len(comparison.Candidate.MemoryLeaks))
+	for _, row := range comparison.Candidate.MemoryLeaks {
+		before, found := baselineByKey[memoryLeakCompareKey(row)]
+		delta := row.Score
+		if found {
+			delta = row.Score - before.Score
+		}
+		status := "без сильного изменения"
+		severity := row.Severity
+		switch {
+		case !found:
+			status = "новое удержание кандидата"
+			if severity == "ok" {
+				severity = "medium"
+			}
+		case delta >= 8 || row.Count >= before.Count+5 || row.MaxAgeMS >= before.MaxAgeMS+30_000:
+			status = "утечка усилилась"
+			severity = "high"
+		case delta >= 3 || row.Count > before.Count || row.MaxAgeMS > before.MaxAgeMS:
+			status = "подозрение выросло"
+			if severity == "ok" {
+				severity = "medium"
+			}
+		case delta <= -3 || row.Count < before.Count || row.MaxAgeMS < before.MaxAgeMS:
+			status = "стало легче"
+			severity = "ok"
+		}
+		out = append(out, memoryLeakCompareRow{
+			Candidate:     row,
+			BaselineScore: before.Score,
+			BaselineCount: before.Count,
+			BaselineAgeMS: before.MaxAgeMS,
+			DeltaScore:    math.Round(delta*10) / 10,
+			DeltaCount:    int64(row.Count) - int64(before.Count),
+			DeltaAgeMS:    int64(row.MaxAgeMS) - int64(before.MaxAgeMS),
+			Status:        status,
+			Severity:      severity,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Severity == out[j].Severity {
+			if out[i].DeltaScore == out[j].DeltaScore {
+				return out[i].Candidate.Score > out[j].Candidate.Score
+			}
+			return out[i].DeltaScore > out[j].DeltaScore
+		}
+		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
+	})
+	if len(out) > 80 {
+		out = out[:80]
+	}
+	return out
+}
+
+func memoryLeakCompareKey(row analyze.MemoryLeakSuspect) string {
+	return strings.Join([]string{
+		strings.ToLower(row.ClassName),
+		strings.ToLower(row.Holder),
+		strings.ToLower(row.Screen),
+		strings.ToLower(row.Flow),
+		strings.ToLower(row.Step),
+	}, "\x00")
 }
 
 type codeProblemCompareRow struct {
@@ -1330,6 +1429,18 @@ func signedMS(value int64) string {
 		return "0 мс"
 	}
 	return fmt.Sprintf("%+d мс", value)
+}
+
+func signedDuration(value int64) string {
+	if value == 0 {
+		return "0 мс"
+	}
+	sign := "+"
+	if value < 0 {
+		sign = "-"
+		value = -value
+	}
+	return sign + humanDuration(uint64(value))
 }
 
 func signedFloat(value float64, unit string) string {

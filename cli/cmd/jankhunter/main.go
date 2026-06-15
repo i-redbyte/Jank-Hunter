@@ -207,8 +207,8 @@ func runCompare(args []string) error {
 		}
 		for _, delta := range comparison.Deltas {
 			fmt.Printf(
-				"%-24s %12s -> %-12s %8s %s confidence=%s sample=%d %s\n",
-				delta.Name,
+				"%-24s %12s -> %-12s %8s %s доверие=%s выборка=%d %s\n",
+				compareCLILabel(delta.Name),
 				delta.Baseline,
 				delta.Candidate,
 				delta.Change,
@@ -256,6 +256,49 @@ func runCompare(args []string) error {
 		}
 	}
 	return nil
+}
+
+func compareCLILabel(name string) string {
+	switch name {
+	case "HTTP p95":
+		return "HTTP p95"
+	case "HTTP failures":
+		return "HTTP ошибки"
+	case "UI jank rate":
+		return "Доля UI-подтормаживаний"
+	case "UI avg FPS":
+		return "Средний FPS"
+	case "Main-thread stall max":
+		return "Макс. пауза главного потока"
+	case "Max PSS":
+		return "Макс. PSS"
+	case "Min available memory":
+		return "Мин. свободная память"
+	case "UID RX max":
+		return "Макс. RX UID"
+	case "UID TX max":
+		return "Макс. TX UID"
+	case "Retained objects":
+		return "Удержанные объекты"
+	case "Log spam":
+		return "Спам логами"
+	case "Problem windows":
+		return "Проблемные окна"
+	case "Process mix":
+		return "Состав процессов"
+	case "App version mix":
+		return "Состав версий приложения"
+	case "SDK mix":
+		return "Состав SDK"
+	case "Device mix":
+		return "Состав устройств"
+	case "Network mix":
+		return "Состав сетей"
+	case "Cohort mix":
+		return "Состав когорт"
+	default:
+		return name
+	}
 }
 
 func buildLogReports(group string, paths []string, options analyze.Options) ([]report.LogReport, error) {

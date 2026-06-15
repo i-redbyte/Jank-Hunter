@@ -124,6 +124,7 @@ type collector struct {
 	processSamples     map[string]uint64
 	retainedClasses    map[string]*retainedClassStats
 	retainedAgeBuckets map[string]uint64
+	memoryLeakStats    map[string]*memoryLeakStats
 
 	currentAppVersion string
 	currentBuild      string
@@ -183,6 +184,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		processSamples:     map[string]uint64{},
 		retainedClasses:    map[string]*retainedClassStats{},
 		retainedAgeBuckets: map[string]uint64{},
+		memoryLeakStats:    map[string]*memoryLeakStats{},
 		currentAppVersion:  "unknown",
 		currentBuild:       "unknown",
 		currentDevice:      "unknown",
@@ -208,6 +210,16 @@ func newCollector(title string, logCount int, options Options) *collector {
 type retainedClassStats struct {
 	count    uint64
 	maxAgeMs uint64
+}
+
+type memoryLeakStats struct {
+	className string
+	holder    string
+	screen    string
+	flow      string
+	step      string
+	count     uint64
+	maxAgeMs  uint64
 }
 
 func normalizeFilter(filter Filter) Filter {
@@ -388,6 +400,15 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if !containsFilter(className, c.filter.OwnerContains) {
 			return
 		}
+		holder := c.resolveOwner(dict, event.Retained.HolderID)
+		owner := c.resolveOwner(dict, event.Retained.OwnerID)
+		context := c.flowContextFromKey(c.contextKey(
+			jhlog.Resolve(dict, event.Retained.ScreenID),
+			owner,
+			jhlog.Resolve(dict, event.Retained.FlowID),
+			jhlog.Resolve(dict, event.Retained.StepID),
+		))
+		holder = firstKnown(holder, context.Owner)
 		c.summary.Retained += event.Retained.Count
 		stats := c.retainedClasses[className]
 		if stats == nil {
@@ -399,6 +420,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			stats.maxAgeMs = event.Retained.AgeMS
 		}
 		c.retainedAgeBuckets[retainedAgeBucket(event.Retained.AgeMS)] += event.Retained.Count
+		c.addMemoryLeakSuspect(className, holder, context, event.Retained.AgeMS, event.Retained.Count)
 		addOwner(c.ownerStats, className, "retained_object", event.Retained.AgeMS, "")
 	case event.LogSpam != nil:
 		c.markCohort()
@@ -574,6 +596,27 @@ func (c *collector) ensureFlow(key string) *FlowStats {
 	}
 	c.flowStats[key] = stats
 	return stats
+}
+
+func (c *collector) addMemoryLeakSuspect(className, holder string, context FlowStats, ageMs, count uint64) {
+	className = attrValue(className)
+	holder = attrValue(holder)
+	key := strings.Join([]string{className, holder, context.Screen, context.Flow, context.Step}, "\x00")
+	stats := c.memoryLeakStats[key]
+	if stats == nil {
+		stats = &memoryLeakStats{
+			className: className,
+			holder:    holder,
+			screen:    context.Screen,
+			flow:      context.Flow,
+			step:      context.Step,
+		}
+		c.memoryLeakStats[key] = stats
+	}
+	stats.count += count
+	if ageMs > stats.maxAgeMs {
+		stats.maxAgeMs = ageMs
+	}
 }
 
 func firstKnown(values ...string) string {
@@ -756,6 +799,7 @@ func (c *collector) finish() Summary {
 	for bucket, value := range c.retainedAgeBuckets {
 		summary.RetainedAgeBuckets = append(summary.RetainedAgeBuckets, NamedValue{Name: bucket, Value: value})
 	}
+	summary.MemoryLeaks = buildMemoryLeakSuspects(c.memoryLeakStats, summary.LowMemoryCount, summary.MemoryMaxKB)
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})
@@ -781,6 +825,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Network)
 	sortNamed(summary.RetainedClasses)
 	sortNamed(summary.RetainedAgeBuckets)
+	sortMemoryLeaks(summary.MemoryLeaks)
 	sortNamed(summary.JankStats)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
@@ -824,18 +869,18 @@ func Compare(baseline, candidate Summary) Comparison {
 	comparison := Comparison{Baseline: baseline, Candidate: candidate}
 	confidence := confidence(baseline, candidate)
 	comparison.Deltas = append(comparison.Deltas,
-		delta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "ms", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
-		delta("HTTP failures", uint64(baseline.HTTPFailed), uint64(candidate.HTTPFailed), "count", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
-		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "pp", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
-		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "fps", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
-		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "ms", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
-		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "kb", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "kb", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "bytes", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("Retained objects", baseline.Retained, candidate.Retained, "count", true, minUint64(baseline.Retained, candidate.Retained)),
-		delta("Log spam", totalLogSpam(baseline), totalLogSpam(candidate), "count", true, minUint64(uint64(len(baseline.LogSpam)), uint64(len(candidate.LogSpam)))),
-		delta("Problem windows", totalProblemWindows(baseline), totalProblemWindows(candidate), "count", true, minUint64(uint64(len(baseline.ProblemWindows)), uint64(len(candidate.ProblemWindows)))),
+		delta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "мс", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
+		delta("HTTP failures", uint64(baseline.HTTPFailed), uint64(candidate.HTTPFailed), "шт", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
+		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
+		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
+		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
+		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "KB", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "KB", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Retained objects", baseline.Retained, candidate.Retained, "шт", true, minUint64(baseline.Retained, candidate.Retained)),
+		delta("Log spam", totalLogSpam(baseline), totalLogSpam(candidate), "шт", true, minUint64(uint64(len(baseline.LogSpam)), uint64(len(candidate.LogSpam)))),
+		delta("Problem windows", totalProblemWindows(baseline), totalProblemWindows(candidate), "шт", true, minUint64(uint64(len(baseline.ProblemWindows)), uint64(len(candidate.ProblemWindows)))),
 		mixDelta("Process mix", baseline.Processes, candidate.Processes, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
@@ -859,10 +904,10 @@ func mixDelta(name string, baseline, candidate []NamedValue, sampleSize uint64) 
 	before := namedSummary(baseline)
 	after := namedSummary(candidate)
 	severity := "ok"
-	change := "same"
+	change := "без изменений"
 	if before != after {
 		severity = "medium"
-		change = "changed"
+		change = "изменилось"
 	}
 	return Delta{
 		Name:       name,
@@ -1053,6 +1098,18 @@ func sortRuntimeCalls(items []RuntimeCallStats) {
 	})
 }
 
+func sortMemoryLeaks(items []MemoryLeakSuspect) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Score == items[j].Score {
+			if items[i].MaxAgeMS == items[j].MaxAgeMS {
+				return items[i].ClassName < items[j].ClassName
+			}
+			return items[i].MaxAgeMS > items[j].MaxAgeMS
+		}
+		return items[i].Score > items[j].Score
+	})
+}
+
 func sortNamed(values []NamedValue) {
 	sort.Slice(values, func(i, j int) bool {
 		if values[i].Value == values[j].Value {
@@ -1206,7 +1263,7 @@ func adjustedSeverity(effectSeverity, confidence string, sampleSize uint64) stri
 
 func interval(value float64, unit string, sampleSize uint64) string {
 	if sampleSize < 2 || value <= 0 {
-		return fmt.Sprintf("n=%d", sampleSize)
+		return fmt.Sprintf("выборка=%d", sampleSize)
 	}
 	margin := value / math.Sqrt(float64(sampleSize))
 	low := value - margin
@@ -1214,7 +1271,7 @@ func interval(value float64, unit string, sampleSize uint64) string {
 		low = 0
 	}
 	high := value + margin
-	return fmt.Sprintf("approx %.2f..%.2f %s, n=%d", low, high, unit, sampleSize)
+	return fmt.Sprintf("примерно %.2f..%.2f %s, выборка=%d", low, high, unit, sampleSize)
 }
 
 func minUint64(a, b uint64) uint64 {

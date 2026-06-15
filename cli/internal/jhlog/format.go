@@ -1,6 +1,6 @@
 package jhlog
 
-const FormatVersion = 4
+const FormatVersion = 5
 
 var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 
@@ -182,9 +182,14 @@ type MemoryEvent struct {
 }
 
 type RetainedEvent struct {
-	ClassID uint64 `json:"class_id"`
-	AgeMS   uint64 `json:"age_ms"`
-	Count   uint64 `json:"count"`
+	ScreenID uint64 `json:"screen_id,omitempty"`
+	OwnerID  uint64 `json:"owner_id,omitempty"`
+	FlowID   uint64 `json:"flow_id,omitempty"`
+	StepID   uint64 `json:"step_id,omitempty"`
+	ClassID  uint64 `json:"class_id"`
+	HolderID uint64 `json:"holder_id,omitempty"`
+	AgeMS    uint64 `json:"age_ms"`
+	Count    uint64 `json:"count"`
 }
 
 type MetricEvent struct {
