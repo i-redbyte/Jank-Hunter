@@ -736,6 +736,59 @@ main {
   min-width: 100%;
   margin: 0;
 }
+.table-cell-clip {
+  position: relative;
+  display: block;
+  max-width: min(680px, 72vw);
+  max-height: 92px;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.table-cell-clip code {
+  white-space: nowrap;
+}
+.table-cell-clip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(12,18,31,0), rgba(12,18,31,0.96));
+}
+.table-cell-clip.is-expanded {
+  max-width: min(980px, 82vw);
+  max-height: none;
+  overflow: visible;
+}
+.table-cell-clip.is-expanded::after {
+  display: none;
+}
+.cell-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 7px;
+  padding: 3px 8px;
+  border: 1px solid rgba(126,247,255,0.22);
+  border-radius: 999px;
+  color: var(--cyan);
+  background: rgba(111,247,255,0.055);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.cell-toggle:hover,
+.cell-toggle:focus-visible {
+  border-color: rgba(126,247,255,0.5);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(111,247,255,0.10);
+}
 table {
   width: 100%;
   min-width: 840px;
@@ -1199,6 +1252,13 @@ details.log-card summary::-webkit-details-marker { display: none; }
 
 const reportJS = `
 (() => {
+  const markScrollableTables = () => {
+    document.querySelectorAll('.table-scroll').forEach((wrapper) => {
+      wrapper.classList.toggle('is-scrollable', wrapper.scrollWidth > wrapper.clientWidth + 4);
+    });
+  };
+  const scheduleTableMeasure = () => requestAnimationFrame(markScrollableTables);
+
   const wrapTables = () => {
     document.querySelectorAll('table').forEach((table) => {
       if (table.closest('.table-scroll')) return;
@@ -1207,11 +1267,7 @@ const reportJS = `
       table.parentNode.insertBefore(wrapper, table);
       wrapper.appendChild(table);
     });
-    requestAnimationFrame(() => {
-      document.querySelectorAll('.table-scroll').forEach((wrapper) => {
-        wrapper.classList.toggle('is-scrollable', wrapper.scrollWidth > wrapper.clientWidth + 4);
-      });
-    });
+    scheduleTableMeasure();
   };
   wrapTables();
 
@@ -1229,6 +1285,36 @@ const reportJS = `
       node.dataset.tip = text;
     }
   });
+
+  const enhanceLongCells = () => {
+    document.querySelectorAll('.table-scroll td').forEach((cell) => {
+      if (cell.dataset.cellEnhanced === 'true') return;
+      if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
+      const text = cell.textContent.trim().replace(/\\s+/g, ' ');
+      if (text.length < 150) return;
+      const clip = document.createElement('div');
+      clip.className = 'table-cell-clip';
+      while (cell.firstChild) {
+        clip.appendChild(cell.firstChild);
+      }
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'cell-toggle';
+      toggle.textContent = 'показать полностью';
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.addEventListener('click', () => {
+        const expanded = !clip.classList.contains('is-expanded');
+        clip.classList.toggle('is-expanded', expanded);
+        toggle.textContent = expanded ? 'свернуть' : 'показать полностью';
+        toggle.setAttribute('aria-expanded', String(expanded));
+        scheduleTableMeasure();
+      });
+      cell.append(clip, toggle);
+      cell.dataset.cellEnhanced = 'true';
+    });
+    scheduleTableMeasure();
+  };
+  enhanceLongCells();
 
   const tooltip = document.createElement('div');
   tooltip.className = 'jh-tooltip';
@@ -2348,12 +2434,6 @@ const mathInspectTemplate = `<!doctype html>
     }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
     sections.forEach((section) => observer.observe(section));
   }
-  document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
-    const scope = input.closest('[data-zero-scope]') || document.body;
-    const applyZeroRows = () => scope.classList.toggle('show-zero-buckets', input.checked);
-    input.addEventListener('change', applyZeroRows);
-    applyZeroRows();
-  });
 })();
 </script>
 </body>
@@ -2821,12 +2901,6 @@ const mathCompareTemplate = `<!doctype html>
     }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
     sections.forEach((section) => observer.observe(section));
   }
-  document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
-    const scope = input.closest('[data-zero-scope]') || document.body;
-    const applyZeroRows = () => scope.classList.toggle('show-zero-buckets', input.checked);
-    input.addEventListener('change', applyZeroRows);
-    applyZeroRows();
-  });
 })();
 </script>
 </body>
