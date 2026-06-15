@@ -55,8 +55,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json]
   jankhunter version
@@ -100,6 +100,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	presentation, remaining, err := takeBoolFlag(remaining, "presentation")
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -137,18 +141,19 @@ func runInspect(args []string) error {
 		printSummary(summary)
 	}
 	if out != "" {
+		reportOptions := report.ReportOptions{PresentationMode: presentation}
 		mathReport, err := mathanalysis.AnalyzeInspect(paths, options)
 		if err != nil {
 			return err
 		}
-		if err := report.WriteMathInspect(report.MathReportPath(out), mathReport); err != nil {
+		if err := report.WriteMathInspectWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
 			return err
 		}
-		if err := report.WriteInspect(out, summary); err != nil {
+		if err := report.WriteInspectWithOptions(out, summary, reportOptions); err != nil {
 			return err
 		}
 		if summary.Influence.Available {
-			if err := report.WriteInfluence(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода"); err != nil {
+			if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода", reportOptions); err != nil {
 				return err
 			}
 		}
@@ -195,6 +200,10 @@ func runCompare(args []string) error {
 		return err
 	}
 	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
+	if err != nil {
+		return err
+	}
+	presentation, remaining, err := takeBoolFlag(remaining, "presentation")
 	if err != nil {
 		return err
 	}
@@ -260,6 +269,7 @@ func runCompare(args []string) error {
 		}
 	}
 	if out != "" {
+		reportOptions := report.ReportOptions{PresentationMode: presentation}
 		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions)
 		if err != nil {
 			return err
@@ -275,14 +285,14 @@ func runCompare(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := report.WriteMathCompare(report.MathReportPath(out), mathReport); err != nil {
+		if err := report.WriteMathCompareWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
 			return err
 		}
-		if err := report.WriteCompareReport(out, comparison, baselineReports, candidateReports); err != nil {
+		if err := report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, reportOptions); err != nil {
 			return err
 		}
 		if comparison.Candidate.Influence.Available {
-			if err := report.WriteInfluence(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат"); err != nil {
+			if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {
 				return err
 			}
 		}

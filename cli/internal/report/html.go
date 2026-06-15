@@ -21,7 +21,15 @@ type LogReport struct {
 	Summary analyze.Summary
 }
 
+type ReportOptions struct {
+	PresentationMode bool
+}
+
 func WriteInspect(path string, summary analyze.Summary) error {
+	return WriteInspectWithOptions(path, summary, ReportOptions{})
+}
+
+func WriteInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
 	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
@@ -29,6 +37,7 @@ func WriteInspect(path string, summary analyze.Summary) error {
 		"Analysis":            inspectAnalysis(summary, lang),
 		"MathReportHref":      MathReportHref(path),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, summary.Influence),
+		"PresentationMode":    options.PresentationMode,
 	})
 }
 
@@ -37,6 +46,10 @@ func WriteCompare(path string, comparison analyze.Comparison) error {
 }
 
 func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
+	return WriteCompareReportWithOptions(path, comparison, baselineLogs, candidateLogs, ReportOptions{})
+}
+
+func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport, options ReportOptions) error {
 	lang := reportLanguage()
 	return execute(path, compareTemplate, map[string]any{
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
@@ -46,32 +59,48 @@ func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs
 		"Analysis":            compareAnalysis(comparison, lang),
 		"MathReportHref":      MathReportHref(path),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
+		"PresentationMode":    options.PresentationMode,
 	})
 }
 
 func WriteMathInspect(path string, mathReport mathanalysis.MathReport) error {
+	return WriteMathInspectWithOptions(path, mathReport, ReportOptions{})
+}
+
+func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport, options ReportOptions) error {
 	return execute(path, mathInspectTemplate, map[string]any{
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Summary.Influence),
+		"PresentationMode":    options.PresentationMode,
 	})
 }
 
 func WriteMathCompare(path string, mathReport mathanalysis.CompareMathReport) error {
+	return WriteMathCompareWithOptions(path, mathReport, ReportOptions{})
+}
+
+func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMathReport, options ReportOptions) error {
 	return execute(path, mathCompareTemplate, map[string]any{
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Comparison.Candidate.Influence),
+		"PresentationMode":    options.PresentationMode,
 	})
 }
 
 func WriteInfluence(path string, influence analyze.InfluenceSummary, title string) error {
+	return WriteInfluenceWithOptions(path, influence, title, ReportOptions{})
+}
+
+func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
 	return execute(path, influenceTemplate, map[string]any{
-		"GeneratedAt": time.Now().Format(time.RFC3339),
-		"Title":       title,
-		"Influence":   influence,
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"Title":            title,
+		"Influence":        influence,
+		"PresentationMode": options.PresentationMode,
 	})
 }
 

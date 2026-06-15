@@ -53,6 +53,72 @@ body::after {
   background: linear-gradient(to bottom, transparent, rgba(111,247,255,0.09), transparent);
   animation: scan 12s linear infinite;
 }
+body.presentation-page {
+  --panel: rgba(9, 14, 26, 0.94);
+  --panel-strong: rgba(13, 22, 42, 0.99);
+}
+body.presentation-page .hero {
+  min-height: 70vh;
+  display: grid;
+  align-items: center;
+}
+body.presentation-page .nav {
+  position: sticky;
+  top: 0;
+}
+body.presentation-page main {
+  max-width: 1600px;
+}
+body.presentation-page .panel,
+body.presentation-page .fold {
+  scroll-margin-top: 82px;
+}
+body.presentation-page .panel h2,
+body.presentation-page .fold summary {
+  font-size: 24px;
+}
+body.presentation-page .metric .value {
+  font-size: 34px;
+}
+body.presentation-page .problem-score,
+body.presentation-page .score-band {
+  font-size: 14px;
+}
+@media print {
+  body.presentation-page {
+    color: #08111f;
+    background: #fff;
+  }
+  body.presentation-page::before,
+  body.presentation-page::after,
+  body.presentation-page .nav,
+  body.presentation-page .hero-actions,
+  body.presentation-page .jh-tooltip {
+    display: none !important;
+  }
+  body.presentation-page .hero,
+  body.presentation-page .metric,
+  body.presentation-page .panel,
+  body.presentation-page .fold,
+  body.presentation-page .env-card {
+    break-inside: avoid;
+    box-shadow: none;
+    background: #fff;
+    color: #08111f;
+    border-color: #ccd6e3;
+  }
+  body.presentation-page a,
+  body.presentation-page code,
+  body.presentation-page .muted,
+  body.presentation-page .hint {
+    color: #22324a;
+  }
+  body.presentation-page .fold-body,
+  body.presentation-page .log-body {
+    max-height: none;
+    overflow: visible;
+  }
+}
 @keyframes scan {
   0% { transform: translateY(0); opacity: 0; }
   14% { opacity: 1; }
@@ -2090,7 +2156,7 @@ const mathInspectTemplate = `<!doctype html>
   <title>Jank Hunter: математический анализ</title>
   <style>` + baseCSS + mathCSS + `</style>
 </head>
-<body class="math-page">
+<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -2617,7 +2683,7 @@ const mathCompareTemplate = `<!doctype html>
   <title>Jank Hunter: математическое сравнение</title>
   <style>` + baseCSS + mathCSS + `</style>
 </head>
-<body class="math-page">
+<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -3100,7 +3166,7 @@ const influenceTemplate = `<!doctype html>
   <title>Jank Hunter: граф влияния кода</title>
   <style>` + baseCSS + mathCSS + `</style>
 </head>
-<body>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -3382,7 +3448,7 @@ const inspectTemplate = `<!doctype html>
   <title>Jank Hunter: отчет</title>
   <style>` + baseCSS + `</style>
 </head>
-<body>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
@@ -3862,7 +3928,7 @@ const compareTemplate = `<!doctype html>
   <title>Jank Hunter: сравнение</title>
   <style>` + baseCSS + `</style>
 </head>
-<body>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">

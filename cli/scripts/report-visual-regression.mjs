@@ -22,22 +22,49 @@ const run = (args) => {
   }
 };
 
-const samplePath = resolve(outDir, "sample.jhlog");
-const inspectPath = resolve(outDir, "inspect.html");
-const comparePath = resolve(outDir, "compare.html");
+const buildReportSet = (name, logCount, presentation = false) => {
+  const setDir = resolve(outDir, name);
+  mkdirSync(setDir, { recursive: true });
+  const logs = [];
+  for (let index = 0; index < logCount; index += 1) {
+    const logPath = resolve(setDir, `sample-${index + 1}.jhlog`);
+    run(["sample", "--out", logPath]);
+    logs.push(logPath);
+  }
 
-run(["sample", "--out", samplePath]);
-run(["inspect", samplePath, "--out", inspectPath]);
-run(["compare", "--baseline", samplePath, "--candidate", samplePath, "--out", comparePath]);
+  const inspectPath = resolve(setDir, "inspect.html");
+  const comparePath = resolve(setDir, "compare.html");
+  const presentationFlag = presentation ? ["--presentation"] : [];
+  run(["inspect", ...logs, ...presentationFlag, "--out", inspectPath]);
+  run([
+    "compare",
+    "--baseline", logs.join(","),
+    "--candidate", logs.join(","),
+    ...presentationFlag,
+    "--out", comparePath,
+  ]);
+
+  const reports = [
+    { set: name, type: "inspect", path: inspectPath },
+    { set: name, type: "inspect-math", path: inspectPath.replace(/\.html$/, "-math.html") },
+    { set: name, type: "inspect-influence", path: inspectPath.replace(/\.html$/, "-influence.html") },
+    { set: name, type: "compare", path: comparePath },
+    { set: name, type: "compare-math", path: comparePath.replace(/\.html$/, "-math.html") },
+    { set: name, type: "compare-influence", path: comparePath.replace(/\.html$/, "-influence.html") },
+  ].filter((report) => existsSync(report.path));
+
+  for (const required of ["inspect", "inspect-math", "inspect-influence", "compare", "compare-math", "compare-influence"]) {
+    if (!reports.some((report) => report.type === required)) {
+      throw new Error(`В snapshot-наборе ${name} не создан отчет ${required}`);
+    }
+  }
+  return reports;
+};
 
 const reportPaths = [
-  inspectPath,
-  inspectPath.replace(/\.html$/, "-math.html"),
-  inspectPath.replace(/\.html$/, "-influence.html"),
-  comparePath,
-  comparePath.replace(/\.html$/, "-math.html"),
-  comparePath.replace(/\.html$/, "-influence.html"),
-].filter(existsSync);
+  ...buildReportSet("short", 1, false),
+  ...buildReportSet("long-presentation", 8, true),
+];
 
 const browser = await chromium.launch();
 const viewports = [
@@ -147,12 +174,9 @@ const checkTooltipPlacement = async (page) => {
 try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
-    for (const reportPath of reportPaths) {
-      const reportName = reportPath
-        .slice(outDir.length + 1)
-        .replace(/[^a-z0-9-]+/gi, "-")
-        .replace(/-html$/, "");
-      await page.goto(pathToFileURL(reportPath).href, { waitUntil: "load" });
+    for (const report of reportPaths) {
+      const reportName = `${report.set}-${report.type}`;
+      await page.goto(pathToFileURL(report.path).href, { waitUntil: "load" });
       await page.evaluate(() => document.fonts?.ready);
       await page.waitForTimeout(120);
       const issues = await collectLayoutIssues(page);
@@ -160,37 +184,42 @@ try {
       const zeroToggle = await checkZeroToggle(page);
       const tooltipIssue = await checkTooltipPlacement(page);
 
+      const displayName = report.path
+        .slice(outDir.length + 1)
+        .replace(/[^a-z0-9-]+/gi, "-")
+        .replace(/-html$/, "");
+
       if (issues.pageOverflow > 6) {
-        failures.push(`${viewport.name}/${reportName}: страница шире viewport на ${issues.pageOverflow}px`);
+        failures.push(`${viewport.name}/${displayName}: страница шире viewport на ${issues.pageOverflow}px`);
       }
       if (issues.bareTables.length > 0) {
-        failures.push(`${viewport.name}/${reportName}: таблицы без горизонтального скролла: ${issues.bareTables.length}`);
+        failures.push(`${viewport.name}/${displayName}: таблицы без горизонтального скролла: ${issues.bareTables.length}`);
       }
       if (issues.tallRows.length > 0) {
-        failures.push(`${viewport.name}/${reportName}: слишком высокие строки таблиц: ${JSON.stringify(issues.tallRows.slice(0, 3))}`);
+        failures.push(`${viewport.name}/${displayName}: слишком высокие строки таблиц: ${JSON.stringify(issues.tallRows.slice(0, 3))}`);
       }
       if (issues.clippedTooltips > 0) {
-        failures.push(`${viewport.name}/${reportName}: скрытые элементы с подсказками: ${issues.clippedTooltips}`);
+        failures.push(`${viewport.name}/${displayName}: скрытые элементы с подсказками: ${issues.clippedTooltips}`);
       }
       if (issues.scrollWrappers > 0) {
-        failures.push(`${viewport.name}/${reportName}: table-scroll не дает горизонтальный скролл для ${issues.scrollWrappers} таблиц`);
+        failures.push(`${viewport.name}/${displayName}: table-scroll не дает горизонтальный скролл для ${issues.scrollWrappers} таблиц`);
       }
       if (issues.clippedCells > 0 && !longCellToggle.available) {
-        failures.push(`${viewport.name}/${reportName}: есть обрезанные длинные ячейки без кнопки раскрытия`);
+        failures.push(`${viewport.name}/${displayName}: есть обрезанные длинные ячейки без кнопки раскрытия`);
       }
       if (issues.nakedOverflowCells.length > 0) {
-        failures.push(`${viewport.name}/${reportName}: ячейки вне table-scroll выходят за границы: ${JSON.stringify(issues.nakedOverflowCells.slice(0, 3))}`);
+        failures.push(`${viewport.name}/${displayName}: ячейки вне table-scroll выходят за границы: ${JSON.stringify(issues.nakedOverflowCells.slice(0, 3))}`);
       }
       if (longCellToggle.available && (!longCellToggle.expanded || !longCellToggle.collapsed)) {
-        failures.push(`${viewport.name}/${reportName}: кнопка раскрытия длинной ячейки не переключает состояние`);
+        failures.push(`${viewport.name}/${displayName}: кнопка раскрытия длинной ячейки не переключает состояние`);
       }
       if (zeroToggle.available && zeroToggle.zeroRows > 0) {
         if (zeroToggle.hiddenBefore === 0 || zeroToggle.visibleAfter === 0 || zeroToggle.hiddenAfter === 0) {
-          failures.push(`${viewport.name}/${reportName}: переключатель нулевых бакетов не меняет строки (${JSON.stringify(zeroToggle)})`);
+          failures.push(`${viewport.name}/${displayName}: переключатель нулевых бакетов не меняет строки (${JSON.stringify(zeroToggle)})`);
         }
       }
       if (tooltipIssue) {
-        failures.push(`${viewport.name}/${reportName}: ${tooltipIssue}`);
+        failures.push(`${viewport.name}/${displayName}: ${tooltipIssue}`);
       }
 
       await page.screenshot({

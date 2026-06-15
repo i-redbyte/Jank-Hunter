@@ -53,6 +53,36 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	assertFileContains(t, jsonPath, `"drill_down"`, `"categories"`, `"recommendation"`)
 }
 
+func TestPresentationModeWritesLinkedReports(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	inspectPath := filepath.Join(dir, "presentation-inspect.html")
+	if err := runInspect([]string{samplePath, "--presentation", "--out", inspectPath}); err != nil {
+		t.Fatalf("runInspect(presentation) error = %v", err)
+	}
+	assertFileContains(t, inspectPath, "presentation-page")
+	assertFileContains(t, filepath.Join(dir, "presentation-inspect-math.html"), "presentation-page")
+	if influencePath := filepath.Join(dir, "presentation-inspect-influence.html"); fileExists(influencePath) {
+		assertFileContains(t, influencePath, "presentation-page")
+	}
+
+	comparePath := filepath.Join(dir, "presentation-compare.html")
+	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--presentation", "--out", comparePath}); err != nil {
+		t.Fatalf("runCompare(presentation) error = %v", err)
+	}
+	assertFileContains(t, comparePath, "presentation-page")
+	assertFileContains(t, filepath.Join(dir, "presentation-compare-math.html"), "presentation-page")
+	if influencePath := filepath.Join(dir, "presentation-compare-influence.html"); fileExists(influencePath) {
+		assertFileContains(t, influencePath, "presentation-page")
+	}
+}
+
 func assertFileContains(t *testing.T, path string, needles ...string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -68,4 +98,9 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 			t.Fatalf("%s does not contain %q", path, needle)
 		}
 	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

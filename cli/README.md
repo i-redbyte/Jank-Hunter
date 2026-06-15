@@ -77,6 +77,13 @@ make build
 /tmp/compare-influence.html
 ```
 
+Для демо и ревью с командой добавьте `--presentation`: основной отчет, математическая страница и граф влияния получают presentation mode с более крупными акцентами и печатным CSS.
+
+```bash
+jankhunter inspect logs/*.jhlog --presentation --out report.html
+jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --presentation --out compare.html
+```
+
 Основной отчет открывается как обычный HTML. Математический отчет открывается из зеленой кнопки `λ Анализ`, граф влияния кода - из кнопки `Граф влияния`, если в логах есть owner/flow-сигналы.
 
 ## inspect
