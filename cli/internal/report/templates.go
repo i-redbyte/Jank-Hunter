@@ -443,6 +443,31 @@ main {
   font-size: 12px;
   line-height: 1.35;
 }
+.leak-chain-summary {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.leak-chain-actions {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.leak-chain-actions strong {
+  color: var(--cyan);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.leak-chain-actions span {
+  display: block;
+  padding-left: 10px;
+  border-left: 2px solid rgba(126,247,255,0.26);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .leak-limitations {
   margin-top: 10px;
   padding: 10px 12px;
@@ -2203,9 +2228,9 @@ const mathInspectTemplate = `<!doctype html>
               <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
               <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
               <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
-              <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div></td>
+              <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
               <td>{{.Impact}}</td>
-              <td>{{.Recommendation}}</td>
+              <td>{{.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
               <td>{{.Evidence}}</td>
             </tr>
             {{else}}<tr><td colspan="11" class="muted">Подозрений на утечки памяти нет.</td></tr>{{end}}
@@ -2732,8 +2757,8 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
                 <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
                 <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
-                <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div></td>
-                <td>{{.Candidate.Recommendation}}</td>
+                <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
+                <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
                 <td>{{.Candidate.Evidence}}</td>
               </tr>
               {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
@@ -3669,9 +3694,9 @@ const inspectTemplate = `<!doctype html>
             <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
             <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
-            <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div></td>
+            <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
             <td>{{.Impact}}</td>
-            <td>{{.Recommendation}}</td>
+            <td>{{.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
             <td>{{.Evidence}}</td>
           </tr>
           {{else}}<tr><td colspan="11" class="muted">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что проверка удержания объектов включена и объект был передан в watchObject/watchActivity.</td></tr>{{end}}
@@ -4028,8 +4053,8 @@ const compareTemplate = `<!doctype html>
             <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
             <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
             <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
-            <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div></td>
-            <td>{{.Candidate.Recommendation}}</td>
+            <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
+            <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
             <td>{{.Candidate.Evidence}}</td>
           </tr>
           {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}

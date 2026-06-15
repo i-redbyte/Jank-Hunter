@@ -131,6 +131,9 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(leak.DominatorPath) < 2 || leak.DominatorTreeConfidence == "" {
 		t.Fatalf("expected retained dominator path: %+v", leak)
 	}
+	if leak.LeakChainConfidence == "" || leak.LeakChainSummary == "" || len(leak.LeakChainActions) == 0 {
+		t.Fatalf("expected retained leak chain guidance: %+v", leak)
+	}
 	if len(summary.AppVersions) != 1 || summary.AppVersions[0].Name != "0.1.0-debug" {
 		t.Fatalf("unexpected app versions: %+v", summary.AppVersions)
 	}

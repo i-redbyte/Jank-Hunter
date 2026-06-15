@@ -165,6 +165,9 @@ type MemoryLeakSuspect struct {
 	DominatorPath            []string
 	DominatorTreeConfidence  string
 	DominatorTreeExplanation string
+	LeakChainConfidence      string
+	LeakChainSummary         string
+	LeakChainActions         []string
 	Score                    float64
 	Severity                 string
 	ObjectKind               string

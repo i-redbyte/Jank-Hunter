@@ -48,6 +48,9 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 	sizeConfidence := retainedSizeConfidence(item, holderQuality, maxPSSKB)
 	dominatorPath := retainedDominatorPath(item, holder, className)
 	dominatorConfidence := retainedDominatorConfidence(holderQuality, dominatorPath)
+	chainConfidence := retainedLeakChainConfidence(item, holderQuality, userOwned)
+	chainSummary := retainedLeakChainSummary(item, holder, className, objectKind, chainConfidence)
+	chainActions := retainedLeakChainActions(item, holder, className, objectKind, holderQuality)
 	score := retainedScore(item, userOwned, systemRetained, lowMemoryCount, maxPSSKB)
 	severity := "ok"
 	switch {
@@ -70,6 +73,9 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 		DominatorPath:            dominatorPath,
 		DominatorTreeConfidence:  dominatorConfidence,
 		DominatorTreeExplanation: retainedDominatorExplanation(dominatorConfidence),
+		LeakChainConfidence:      chainConfidence,
+		LeakChainSummary:         chainSummary,
+		LeakChainActions:         chainActions,
 		Score:                    math.Round(score*10) / 10,
 		Severity:                 severity,
 		ObjectKind:               objectKind,
@@ -261,7 +267,7 @@ func retainedSizeExplanation(sizeKB uint64, confidence, objectKind string) strin
 }
 
 func retainedDominatorPath(item memoryLeakStats, holder, className string) []string {
-	path := make([]string, 0, 5)
+	path := make([]string, 0, 6)
 	if item.screen != "" && item.screen != "unknown" {
 		path = append(path, "экран: "+item.screen)
 	}
@@ -272,7 +278,15 @@ func retainedDominatorPath(item memoryLeakStats, holder, className string) []str
 		path = append(path, "шаг: "+item.step)
 	}
 	if holder != "" && holder != "unknown" && holder != "не определен" {
-		path = append(path, "держатель: "+holder)
+		holderClass, holderMethod := splitHolderReference(holder)
+		if holderClass != "" {
+			path = append(path, "держатель: "+holderClass)
+		} else {
+			path = append(path, "держатель: "+holder)
+		}
+		if holderMethod != "" {
+			path = append(path, "метод: "+holderMethod)
+		}
 	}
 	path = append(path, "удержанный объект: "+className)
 	return path
@@ -290,6 +304,112 @@ func retainedDominatorConfidence(holderQuality string, path []string) string {
 
 func retainedDominatorExplanation(confidence string) string {
 	return "Мини-дерево показывает вероятную цепочку доминирования по контексту выполнения. Это помогает быстрее найти владельца ссылки, но точный корень GC и размер удержанной кучи появятся только при анализе дампа памяти. Доверие: " + confidence + "."
+}
+
+func retainedLeakChainConfidence(item memoryLeakStats, holderQuality string, userOwned bool) string {
+	hasContext := knownContextCount(item) > 0
+	switch {
+	case holderQuality == "держатель не определен" && !hasContext:
+		return "низкое: нет держателя и контекста"
+	case holderQuality == "держатель не определен":
+		return "низкое: есть контекст, но нет владельца ссылки"
+	case userOwned && hasContext && item.count >= 2:
+		return "среднее+: пользовательский держатель, контекст и повторяемость"
+	case userOwned && hasContext:
+		return "среднее: пользовательский держатель и контекст"
+	case userOwned:
+		return "среднее: есть пользовательский держатель"
+	default:
+		return "ориентировочное: цепочка построена по runtime-сигналам"
+	}
+}
+
+func retainedLeakChainSummary(item memoryLeakStats, holder, className, objectKind, confidence string) string {
+	parts := []string{fmt.Sprintf("Удержан %s %s.", objectKind, className)}
+	holderClass, holderMethod := splitHolderReference(holder)
+	if holderClass != "" {
+		if holderMethod != "" {
+			parts = append(parts, fmt.Sprintf("Вероятный пользовательский держатель: %s, метод %s.", holderClass, holderMethod))
+		} else {
+			parts = append(parts, fmt.Sprintf("Вероятный пользовательский держатель: %s.", holderClass))
+		}
+	} else if holder != "" && holder != "unknown" && holder != "не определен" {
+		parts = append(parts, fmt.Sprintf("Вероятный держатель: %s.", holder))
+	} else {
+		parts = append(parts, "Вероятный держатель ссылки не определен.")
+	}
+	if item.screen != "" && item.screen != "unknown" {
+		parts = append(parts, "Экран: "+item.screen+".")
+	}
+	if item.flow != "" && item.flow != "unknown" {
+		parts = append(parts, "Флоу: "+item.flow+".")
+	}
+	if item.step != "" && item.step != "unknown" {
+		parts = append(parts, "Шаг: "+item.step+".")
+	}
+	parts = append(parts, "Доверие цепочки: "+confidence+".")
+	return strings.Join(parts, " ")
+}
+
+func retainedLeakChainActions(item memoryLeakStats, holder, className, objectKind, holderQuality string) []string {
+	actions := []string{}
+	holderClass, holderMethod := splitHolderReference(holder)
+	switch {
+	case holderQuality == "держатель не определен":
+		actions = append(actions, "Добавьте ownerHint в watchObject/watchActivity или оберните подозрительный участок в withOwner.")
+	case holderClass != "":
+		if holderMethod != "" {
+			actions = append(actions, fmt.Sprintf("Проверьте %s.%s: какие поля, кеши, listeners или callbacks сохраняют %s.", holderClass, holderMethod, className))
+		} else {
+			actions = append(actions, fmt.Sprintf("Проверьте поля, кеши, listeners и callbacks внутри %s.", holderClass))
+		}
+	}
+	switch objectKind {
+	case "экран / Activity", "Fragment", "Context":
+		actions = append(actions, "Проверьте lifecycle: очистку ссылок в onDestroy/onDestroyView и отсутствие Activity/Context в singleton, static, DI singleton и долгих задачах.")
+	case "View / binding":
+		actions = append(actions, "Проверьте binding/View ссылки: сброс в onDestroyView, adapter/listener cleanup и отсутствие View в фоновых callbacks.")
+	case "ресурс":
+		actions = append(actions, "Проверьте закрытие Cursor/Stream/Closeable и отмену работы при уходе экрана.")
+	case "системный объект":
+		actions = append(actions, "Системный объект считайте симптомом: ищите пользовательский holder, который дольше жизненного цикла держит ссылку на него.")
+	default:
+		actions = append(actions, "Проверьте коллекции, кеши, coroutine Job, Flow subscription и observer/listener, которые живут дольше экрана.")
+	}
+	if item.maxAgeMs >= 30_000 {
+		actions = append(actions, "Возраст удержания больше 30 секунд: проверьте долгие coroutine/executor задачи и отмену при закрытии флоу.")
+	}
+	if item.count >= 3 {
+		actions = append(actions, "Удержание повторяется: ищите накопление в списках, кешах, подписках или повторной регистрации listener без снятия.")
+	}
+	return uniqueStrings(actions)
+}
+
+func splitHolderReference(holder string) (string, string) {
+	holder = strings.TrimSpace(holder)
+	if holder == "" || holder == "unknown" || holder == "не определен" || strings.HasPrefix(holder, "lifecycle.") {
+		return "", ""
+	}
+	holder = strings.TrimPrefix(holder, "owner.")
+	hashIndex := strings.Index(holder, "#")
+	if hashIndex >= 0 {
+		holder = holder[:hashIndex]
+	}
+	dot := strings.LastIndex(holder, ".")
+	if dot <= 0 || dot >= len(holder)-1 {
+		return holder, ""
+	}
+	return holder[:dot], holder[dot+1:]
+}
+
+func knownContextCount(item memoryLeakStats) int {
+	count := 0
+	for _, value := range []string{item.screen, item.flow, item.step} {
+		if value != "" && value != "unknown" {
+			count++
+		}
+	}
+	return count
 }
 
 func isLikelyAppClass(value string) bool {

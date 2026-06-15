@@ -71,6 +71,9 @@ func TestWriteReports(t *testing.T) {
 				DominatorPath:            []string{"экран: Feed", "флоу: feed.open", "держатель: FeedPresenter", "удержанный объект: com.app.feed.FeedActivity"},
 				DominatorTreeConfidence:  "среднее: путь собран из контекста выполнения",
 				DominatorTreeExplanation: "Мини-дерево показывает вероятную цепочку доминирования по контексту выполнения.",
+				LeakChainConfidence:      "среднее: пользовательский держатель и контекст",
+				LeakChainSummary:         "Удержан экран / Activity com.app.feed.FeedActivity. Вероятный пользовательский держатель: FeedPresenter.",
+				LeakChainActions:         []string{"Проверьте FeedPresenter: какие поля, кеши, listeners или callbacks сохраняют com.app.feed.FeedActivity.", "Проверьте lifecycle: очистку ссылок в onDestroy/onDestroyView."},
 				Score:                    9.5,
 				Severity:                 "medium",
 				ObjectKind:               "экран / Activity",
@@ -90,7 +93,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "Шкала утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Оценка удержанного размера", "Мини-дерево доминирования", "leak-dominator", "4.0 MB", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "Шкала утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Мини-дерево доминирования", "leak-dominator", "4.0 MB", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
 	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "viewportBox", "node.closest('.metric')")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
