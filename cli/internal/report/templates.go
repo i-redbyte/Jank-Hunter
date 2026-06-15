@@ -476,6 +476,27 @@ main {
   color: var(--muted);
   background: rgba(255,209,102,0.055);
 }
+.problem-drilldown {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.problem-drill {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-left: 2px solid rgba(126,247,255,0.32);
+  background: rgba(126,247,255,0.045);
+}
+.problem-drill strong {
+  color: var(--cyan);
+  font-size: 12px;
+}
+.problem-drill span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
 .code-problem-table th {
   vertical-align: middle;
 }
@@ -2154,6 +2175,13 @@ const mathInspectTemplate = `<!doctype html>
               <option value="Логи">Логи</option>
               <option value="Выполнение">Выполнение</option>
               <option value="Граф влияния">Граф влияния</option>
+              <option value="ANR-risk">ANR-risk</option>
+              <option value="OOM-risk">OOM-risk</option>
+              <option value="GC pressure">GC pressure</option>
+              <option value="duplicate network">duplicate network</option>
+              <option value="lifecycle leak">lifecycle leak</option>
+              <option value="log spam">log spam</option>
+              <option value="main-thread IO">main-thread IO</option>
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -2178,7 +2206,7 @@ const mathInspectTemplate = `<!doctype html>
                 <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
                 <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
                 <td>{{.Evidence}}</td>
-                <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+                <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .DrillDown}}<div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
                 <td>{{.Impact}}</td>
                 <td>{{.Recommendation}}</td>
                 <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
@@ -2668,6 +2696,13 @@ const mathCompareTemplate = `<!doctype html>
               <option value="Логи">Логи</option>
               <option value="Выполнение">Выполнение</option>
               <option value="Граф влияния">Граф влияния</option>
+              <option value="ANR-risk">ANR-risk</option>
+              <option value="OOM-risk">OOM-risk</option>
+              <option value="GC pressure">GC pressure</option>
+              <option value="duplicate network">duplicate network</option>
+              <option value="lifecycle leak">lifecycle leak</option>
+              <option value="log spam">log spam</option>
+              <option value="main-thread IO">main-thread IO</option>
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -2692,7 +2727,7 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
-                <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+                <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .Candidate.DrillDown}}<div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
                 <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
                 <td>{{.Candidate.Recommendation}}</td>
                 <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
@@ -3473,6 +3508,13 @@ const inspectTemplate = `<!doctype html>
           <option value="Логи">Логи</option>
           <option value="Выполнение">Выполнение</option>
           <option value="Граф влияния">Граф влияния</option>
+          <option value="ANR-risk">ANR-risk</option>
+          <option value="OOM-risk">OOM-risk</option>
+          <option value="GC pressure">GC pressure</option>
+          <option value="duplicate network">duplicate network</option>
+          <option value="lifecycle leak">lifecycle leak</option>
+          <option value="log spam">log spam</option>
+          <option value="main-thread IO">main-thread IO</option>
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
@@ -3497,7 +3539,7 @@ const inspectTemplate = `<!doctype html>
             <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
             <td>{{.Evidence}}</td>
-            <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .DrillDown}}<div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
             <td>{{.Impact}}</td>
             <td>{{.Recommendation}}</td>
             <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
@@ -3959,6 +4001,13 @@ const compareTemplate = `<!doctype html>
           <option value="Логи">Логи</option>
           <option value="Выполнение">Выполнение</option>
           <option value="Граф влияния">Граф влияния</option>
+          <option value="ANR-risk">ANR-risk</option>
+          <option value="OOM-risk">OOM-risk</option>
+          <option value="GC pressure">GC pressure</option>
+          <option value="duplicate network">duplicate network</option>
+          <option value="lifecycle leak">lifecycle leak</option>
+          <option value="log spam">log spam</option>
+          <option value="main-thread IO">main-thread IO</option>
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
@@ -3983,7 +4032,7 @@ const compareTemplate = `<!doctype html>
             <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
             <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
             <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
-            <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .Candidate.DrillDown}}<div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
             <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
             <td>{{.Candidate.Recommendation}}</td>
             <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>

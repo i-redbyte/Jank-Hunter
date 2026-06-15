@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,6 +32,8 @@ func main() {
 		err = runCompare(os.Args[2:])
 	case "export":
 		err = runExport(os.Args[2:])
+	case "problems":
+		err = runProblems(os.Args[2:])
 	case "version":
 		fmt.Println(version)
 	case "help", "-h", "--help":
@@ -55,6 +58,7 @@ Usage:
   jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text]
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json]
   jankhunter version
 `)
 }
@@ -435,6 +439,128 @@ func runExport(args []string) error {
 	return nil
 }
 
+func runProblems(args []string) error {
+	filter, remaining, err := takeFilterFlags(args)
+	if err != nil {
+		return err
+	}
+	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return err
+	}
+	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
+	if err != nil {
+		return err
+	}
+	heapDumpRaw, remaining, err := takeStringFlag(remaining, "heap-dump", "")
+	if err != nil {
+		return err
+	}
+	heapEvidenceRaw, remaining, err := takeStringFlag(remaining, "heap-evidence", "")
+	if err != nil {
+		return err
+	}
+	format, remaining, err := takeStringFlag(remaining, "format", "csv")
+	if err != nil {
+		return err
+	}
+	out, remaining, err := takeStringFlag(remaining, "out", "")
+	if err != nil {
+		return err
+	}
+	paths := expandArgs(remaining)
+	if len(paths) == 0 {
+		return fmt.Errorf("problems needs at least one log file")
+	}
+	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
+	if err != nil {
+		return err
+	}
+	classGraph, err := analyze.LoadClassGraph(classGraphPath)
+	if err != nil {
+		return err
+	}
+	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
+	options, err = optionsWithHeapEvidence(strings.Join(paths, ", "), paths, options, heapEvidenceRaw, heapDumpRaw)
+	if err != nil {
+		return err
+	}
+	summary, err := analyze.InspectFilesWithOptions(strings.Join(paths, ", "), paths, options)
+	if err != nil {
+		return err
+	}
+	writer := os.Stdout
+	if out != "" {
+		file, err := os.Create(out)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		writer = file
+	}
+	switch strings.ToLower(format) {
+	case "json":
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(summary.CodeProblems)
+	case "csv":
+		return writeCodeProblemsCSV(writer, summary.CodeProblems)
+	default:
+		return fmt.Errorf("unsupported problems format %q", format)
+	}
+}
+
+func writeCodeProblemsCSV(file *os.File, rows []analyze.CodeProblemStats) error {
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+	if err := writer.Write([]string{
+		"class",
+		"method",
+		"severity",
+		"score",
+		"categories",
+		"problems",
+		"screen",
+		"flow",
+		"step",
+		"route",
+		"evidence",
+		"recommendation",
+	}); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		drillDown := row.DrillDown
+		if len(drillDown) == 0 {
+			drillDown = []analyze.CodeProblemDrillDown{{
+				ClassName:      row.ClassName,
+				Method:         row.Method,
+				Evidence:       row.Evidence,
+				Recommendation: row.Recommendation,
+			}}
+		}
+		for _, drill := range drillDown {
+			if err := writer.Write([]string{
+				firstNonEmpty(drill.ClassName, row.ClassName),
+				firstNonEmpty(drill.Method, row.Method),
+				row.Severity,
+				fmt.Sprintf("%.1f", row.Score),
+				strings.Join(row.Categories, "|"),
+				strings.Join(row.Problems, "|"),
+				drill.Screen,
+				drill.Flow,
+				drill.Step,
+				drill.Route,
+				firstNonEmpty(drill.Evidence, row.Evidence),
+				firstNonEmpty(drill.Recommendation, row.Recommendation),
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return writer.Error()
+}
+
 func takeStringFlag(args []string, name, fallback string) (string, []string, error) {
 	long := "--" + name
 	short := "-" + name
@@ -591,6 +717,15 @@ func ownerValues(values []analyze.OwnerStats, limit int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d max=%dms", value.Owner, value.Count, value.MaxMS))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type gateError struct {

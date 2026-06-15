@@ -31,6 +31,28 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "compare-math.html"), "Математический анализ сравнения", "Качество сравнения", "Сравнение утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
 }
 
+func TestProblemsExportsCSVAndJSON(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	csvPath := filepath.Join(dir, "problems.csv")
+	if err := runProblems([]string{samplePath, "--out", csvPath}); err != nil {
+		t.Fatalf("runProblems(csv) error = %v", err)
+	}
+	assertFileContains(t, csvPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation", "lifecycle leak")
+
+	jsonPath := filepath.Join(dir, "problems.json")
+	if err := runProblems([]string{samplePath, "--format", "json", "--out", jsonPath}); err != nil {
+		t.Fatalf("runProblems(json) error = %v", err)
+	}
+	assertFileContains(t, jsonPath, `"drill_down"`, `"categories"`, `"recommendation"`)
+}
+
 func assertFileContains(t *testing.T, path string, needles ...string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

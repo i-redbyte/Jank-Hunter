@@ -203,6 +203,7 @@ func execute(path, source string, data any) error {
 		"problemKind":            problemKindLabel,
 		"codeProblemSearchText":  codeProblemSearchText,
 		"codeProblemLocation":    codeProblemLocation,
+		"codeProblemDrillPath":   codeProblemDrillPath,
 		"codeProblemMetric":      codeProblemMetric,
 		"codeProblemCategories":  codeProblemCategoryStats,
 		"codeProblemSeverities":  codeProblemSeverityStats,
@@ -797,7 +798,47 @@ func codeProblemSearchText(row analyze.CodeProblemStats) string {
 	for _, signal := range row.Signals {
 		parts = append(parts, signal.Name, signal.Category, signal.Detail)
 	}
+	for _, drill := range row.DrillDown {
+		parts = append(parts,
+			drill.ClassName,
+			drill.Method,
+			drill.Screen,
+			drill.Flow,
+			drill.Step,
+			drill.Route,
+			drill.Evidence,
+			drill.Recommendation,
+		)
+		parts = append(parts, drill.Signals...)
+	}
 	return strings.ToLower(strings.Join(parts, " "))
+}
+
+func codeProblemDrillPath(drill analyze.CodeProblemDrillDown) string {
+	location := drill.ClassName
+	if drill.Method != "" {
+		location += "." + drill.Method
+	}
+	if location == "" {
+		location = "класс не определен"
+	}
+	context := []string{}
+	if drill.Screen != "" {
+		context = append(context, "экран "+drill.Screen)
+	}
+	if drill.Flow != "" {
+		context = append(context, "флоу "+drill.Flow)
+	}
+	if drill.Step != "" {
+		context = append(context, "шаг "+drill.Step)
+	}
+	if drill.Route != "" {
+		context = append(context, "маршрут "+drill.Route)
+	}
+	if len(context) == 0 {
+		return location
+	}
+	return location + " -> " + strings.Join(context, " -> ")
 }
 
 func codeProblemMetric(signal analyze.CodeProblemSignal) string {

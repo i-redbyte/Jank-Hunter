@@ -123,35 +123,48 @@ type RuntimeCallStats struct {
 }
 
 type CodeProblemSignal struct {
-	Name     string
-	Category string
-	Severity string
-	Score    float64
-	Count    uint64
-	TotalMS  uint64
-	MaxMS    uint64
-	Value    uint64
-	Unit     string
-	Detail   string
+	Name     string  `json:"name"`
+	Category string  `json:"category"`
+	Severity string  `json:"severity"`
+	Score    float64 `json:"score"`
+	Count    uint64  `json:"count,omitempty"`
+	TotalMS  uint64  `json:"total_ms,omitempty"`
+	MaxMS    uint64  `json:"max_ms,omitempty"`
+	Value    uint64  `json:"value,omitempty"`
+	Unit     string  `json:"unit,omitempty"`
+	Detail   string  `json:"detail,omitempty"`
 }
 
 type CodeProblemStats struct {
-	ClassName       string
-	Method          string
-	Owner           string
-	Score           float64
-	Severity        string
-	RuntimeEvidence bool
-	Categories      []string
-	Problems        []string
-	Signals         []CodeProblemSignal
-	Screens         []string
-	Flows           []string
-	Steps           []string
-	Routes          []string
-	Impact          string
-	Recommendation  string
-	Evidence        string
+	ClassName       string                 `json:"class_name"`
+	Method          string                 `json:"method,omitempty"`
+	Owner           string                 `json:"owner,omitempty"`
+	Score           float64                `json:"score"`
+	Severity        string                 `json:"severity"`
+	RuntimeEvidence bool                   `json:"runtime_evidence"`
+	Categories      []string               `json:"categories,omitempty"`
+	Problems        []string               `json:"problems,omitempty"`
+	Signals         []CodeProblemSignal    `json:"signals,omitempty"`
+	Screens         []string               `json:"screens,omitempty"`
+	Flows           []string               `json:"flows,omitempty"`
+	Steps           []string               `json:"steps,omitempty"`
+	Routes          []string               `json:"routes,omitempty"`
+	DrillDown       []CodeProblemDrillDown `json:"drill_down,omitempty"`
+	Impact          string                 `json:"impact,omitempty"`
+	Recommendation  string                 `json:"recommendation,omitempty"`
+	Evidence        string                 `json:"evidence,omitempty"`
+}
+
+type CodeProblemDrillDown struct {
+	ClassName      string   `json:"class_name"`
+	Method         string   `json:"method,omitempty"`
+	Screen         string   `json:"screen,omitempty"`
+	Flow           string   `json:"flow,omitempty"`
+	Step           string   `json:"step,omitempty"`
+	Route          string   `json:"route,omitempty"`
+	Evidence       string   `json:"evidence"`
+	Recommendation string   `json:"recommendation"`
+	Signals        []string `json:"signals,omitempty"`
 }
 
 type MemoryLeakSuspect struct {

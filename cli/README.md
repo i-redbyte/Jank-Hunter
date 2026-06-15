@@ -264,6 +264,17 @@ jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 
 Это удобно, если нужно быстро проверить сырые события или скормить их другому инструменту.
 
+## problems
+
+Экспорт реестра проблем кода для обсуждения с командой:
+
+```bash
+jankhunter problems logs/*.jhlog --out problems.csv
+jankhunter problems logs/*.jhlog --format json --out problems.json
+```
+
+CSV содержит drill-down строки `класс -> метод -> экран/флоу/шаг/маршрут -> доказательства -> рекомендация`. В реестре есть категории `ANR-risk`, `OOM-risk`, `GC pressure`, `duplicate network`, `lifecycle leak`, `log spam`, `main-thread IO` и базовые группы отчета.
+
 ## Как забрать логи с Android
 
 По умолчанию runtime пишет:
