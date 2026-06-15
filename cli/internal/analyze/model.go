@@ -152,22 +152,28 @@ type CodeProblemStats struct {
 }
 
 type MemoryLeakSuspect struct {
-	ClassName      string
-	Holder         string
-	Screen         string
-	Flow           string
-	Step           string
-	Count          uint64
-	MaxAgeMS       uint64
-	Score          float64
-	Severity       string
-	ObjectKind     string
-	HolderQuality  string
-	UserOwned      bool
-	SystemRetained bool
-	Impact         string
-	Recommendation string
-	Evidence       string
+	ClassName                string
+	Holder                   string
+	Screen                   string
+	Flow                     string
+	Step                     string
+	Count                    uint64
+	MaxAgeMS                 uint64
+	EstimatedRetainedKB      uint64
+	RetainedSizeConfidence   string
+	RetainedSizeExplanation  string
+	DominatorPath            []string
+	DominatorTreeConfidence  string
+	DominatorTreeExplanation string
+	Score                    float64
+	Severity                 string
+	ObjectKind               string
+	HolderQuality            string
+	UserOwned                bool
+	SystemRetained           bool
+	Impact                   string
+	Recommendation           string
+	Evidence                 string
 }
 
 type Summary struct {

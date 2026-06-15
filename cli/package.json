@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "visual-regression": "node ./scripts/report-visual-regression.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.54.0"
+  }
+}

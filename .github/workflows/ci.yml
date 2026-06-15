@@ -87,3 +87,32 @@ jobs:
             /tmp/compare.json
             cli/dist/*.tar.gz
             cli/dist/checksums.txt
+
+  report-visual-regression:
+    name: Report visual regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - name: Install report visual dependencies
+        working-directory: cli
+        run: npm ci
+      - name: Install Chromium
+        working-directory: cli
+        run: npx playwright install --with-deps chromium
+      - name: Check report layout
+        working-directory: cli
+        run: npm run visual-regression
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jankhunter-report-visual-regression
+          path: tmp/report-visual-regression

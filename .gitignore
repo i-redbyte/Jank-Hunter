@@ -13,6 +13,7 @@
 # Go
 cli/bin/
 cli/dist/
+cli/node_modules/
 cli/coverage.out
 *.test
 *.prof

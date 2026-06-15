@@ -191,6 +191,7 @@ func execute(path, source string, data any) error {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
 		"humanDuration":          humanDuration,
+		"dataSize":               humanDataSizeKB,
 		"tip":                    tooltipHTML,
 		"metricHelp":             metricHelp,
 		"memoryHelp":             memoryMetricHelp,
@@ -348,6 +349,17 @@ func humanDuration(ms uint64) string {
 		parts = append(parts, fmt.Sprintf("%d сек", seconds))
 	}
 	return strings.Join(parts, " ")
+}
+
+func humanDataSizeKB(kb uint64) string {
+	switch {
+	case kb >= 1024*1024:
+		return fmt.Sprintf("%.1f GB", float64(kb)/1024/1024)
+	case kb >= 1024:
+		return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+	default:
+		return fmt.Sprintf("%d KB", kb)
+	}
 }
 
 func tooltipHTML(label, body string) template.HTML {

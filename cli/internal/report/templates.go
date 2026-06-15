@@ -253,7 +253,7 @@ h3 { margin: 18px 0 10px; font-size: 14px; color: var(--cyan); letter-spacing: 0
 }
 main {
   position: relative;
-  max-width: 1280px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 24px;
 }
@@ -384,10 +384,10 @@ main {
   font-weight: 800;
 }
 .code-problem-table {
-  min-width: 1520px;
+  min-width: 1880px;
 }
 .leak-table {
-  min-width: 1580px;
+  min-width: 1900px;
 }
 .leak-object-kind {
   color: var(--cyan);
@@ -410,6 +410,67 @@ main {
 }
 .code-problem-table th {
   vertical-align: middle;
+}
+.code-problem-table th:nth-child(1),
+.code-problem-table td:nth-child(1) { min-width: 150px; }
+.code-problem-table th:nth-child(2),
+.code-problem-table td:nth-child(2) { min-width: 280px; }
+.code-problem-table th:nth-child(3),
+.code-problem-table td:nth-child(3) { min-width: 260px; }
+.code-problem-table th:nth-child(4),
+.code-problem-table td:nth-child(4) { min-width: 270px; }
+.code-problem-table th:nth-child(5),
+.code-problem-table td:nth-child(5) { min-width: 260px; }
+.code-problem-table th:nth-child(6),
+.code-problem-table td:nth-child(6) { min-width: 360px; }
+.code-problem-table th:nth-child(7),
+.code-problem-table td:nth-child(7) { min-width: 460px; }
+.code-problem-table th:nth-child(8),
+.code-problem-table td:nth-child(8) { min-width: 360px; }
+.code-problem-table td:nth-child(3),
+.code-problem-table td:nth-child(4),
+.code-problem-table td:nth-child(5),
+.code-problem-table td:nth-child(6),
+.code-problem-table td:nth-child(7),
+.code-problem-table td:nth-child(8) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+.leak-table th:nth-child(7),
+.leak-table td:nth-child(7) { min-width: 320px; }
+.leak-table th:nth-child(8),
+.leak-table td:nth-child(8) { min-width: 520px; }
+.leak-table th:nth-child(9),
+.leak-table td:nth-child(9) { min-width: 420px; }
+.leak-table th:nth-child(10),
+.leak-table td:nth-child(10) { min-width: 520px; }
+.leak-table th:nth-child(11),
+.leak-table td:nth-child(11) { min-width: 380px; }
+.leak-dominator {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  align-items: center;
+  max-width: none;
+}
+.leak-dominator span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid rgba(126,247,255,0.16);
+  border-radius: 999px;
+  background: rgba(111,247,255,0.05);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.leak-dominator span + span::before {
+  content: "→";
+  margin-right: 6px;
+  color: var(--cyan);
 }
 .code-problem-table th button {
   appearance: none;
@@ -445,12 +506,13 @@ main {
 .problem-tags,
 .problem-context,
 .problem-signals {
-  display: grid;
+  display: inline-flex;
+  align-items: flex-start;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 .problem-tags {
-  display: flex;
-  flex-wrap: wrap;
+  max-width: none;
 }
 .problem-chip {
   display: inline-flex;
@@ -463,11 +525,12 @@ main {
   color: var(--ink);
   font-size: 11px;
   font-weight: 850;
+  white-space: nowrap;
 }
 .problem-chip.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
 .problem-chip.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
 .problem-location {
-  display: grid;
+  display: inline-grid;
   gap: 5px;
 }
 .problem-location .method {
@@ -475,18 +538,27 @@ main {
   font-size: 12px;
 }
 .problem-signal {
+  min-width: 260px;
+  max-width: 360px;
+  max-height: 98px;
+  overflow: auto;
   padding: 7px 8px;
   border: 1px solid rgba(126,247,255,0.12);
   border-radius: 8px;
   background: rgba(255,255,255,0.028);
+  scrollbar-width: thin;
 }
 .problem-signal strong {
   display: block;
   margin-bottom: 2px;
 }
 .problem-signal small {
+  display: block;
   color: var(--muted);
   line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .problem-empty {
   display: none;
@@ -498,7 +570,7 @@ main {
 .panel, .log-card {
   margin: 18px 0;
   padding: 18px;
-  overflow-x: auto;
+  overflow-x: visible;
   overflow-y: visible;
   animation: rise 520ms ease both;
 }
@@ -624,6 +696,46 @@ main {
   hyphens: none;
   text-wrap: balance;
 }
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  margin: 8px 0 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid rgba(126,247,255,0.10);
+  border-radius: 8px;
+  background: rgba(5,9,18,0.12);
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(111,247,255,0.36) rgba(255,255,255,0.05);
+}
+.table-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(111,247,255,0.36);
+}
+.table-scroll::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+}
+.table-scroll::after {
+  content: "Прокрутите таблицу по горизонтали, если не видны все колонки";
+  display: none;
+  padding: 6px 10px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  border-top: 1px solid rgba(126,247,255,0.08);
+}
+.table-scroll.is-scrollable::after {
+  display: block;
+}
+.table-scroll table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+}
 table {
   width: 100%;
   min-width: 840px;
@@ -634,18 +746,18 @@ table {
   overflow: visible;
 }
 th, td {
-  min-width: 0;
+  min-width: 92px;
   max-width: none;
-  padding: 10px 11px;
+  padding: 11px 13px;
   border-bottom: 1px solid rgba(126,247,255,0.12);
   text-align: left;
   vertical-align: top;
   overflow: visible;
   text-overflow: clip;
-  overflow-wrap: break-word;
-  word-break: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
   hyphens: none;
-  white-space: normal;
+  white-space: nowrap;
   line-height: 1.45;
 }
 th {
@@ -653,14 +765,14 @@ th {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  white-space: normal;
+  white-space: nowrap;
 }
 td:first-child, th:first-child {
   min-width: 160px;
 }
 td:last-child {
-  white-space: normal;
-  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 tr:hover td { background: rgba(111,247,255,0.035); }
 .muted { color: var(--muted); }
@@ -685,8 +797,9 @@ th code {
   vertical-align: baseline;
   overflow: visible;
   text-overflow: clip;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
 }
 .muted,
 .help-text,
@@ -847,7 +960,8 @@ th code {
 .fold[open] > summary::after { content: "закрыть"; }
 .fold-body {
   max-height: 72vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0 14px 14px;
   border-top: 1px solid var(--line);
 }
@@ -948,14 +1062,16 @@ details.log-card summary::-webkit-details-marker { display: none; }
 .compare-table td,
 #changes table td,
 #cohorts table td {
-  overflow-wrap: break-word;
-  word-break: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
 }
 .compare-table code,
 #changes table code,
 #cohorts table code {
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
 }
 .table-stack {
   display: grid;
@@ -991,7 +1107,7 @@ details.log-card summary::-webkit-details-marker { display: none; }
 }
 .influence-node-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1320px;
   table-layout: fixed;
 }
 .influence-node-table th:nth-child(1),
@@ -1064,7 +1180,8 @@ details.log-card summary::-webkit-details-marker { display: none; }
   .chart-row { grid-template-columns: 1fr; }
   details.log-card summary { grid-template-columns: 1fr; }
   .summary-metrics { justify-content: flex-start; }
-  table { min-width: 680px; }
+  table { min-width: 720px; }
+  .code-problem-table, .leak-table { min-width: 1320px; }
   h1 { font-size: clamp(34px, 12vw, 52px); }
   .metric .value { font-size: 23px; }
 }
@@ -1082,10 +1199,33 @@ details.log-card summary::-webkit-details-marker { display: none; }
 
 const reportJS = `
 (() => {
+  const wrapTables = () => {
+    document.querySelectorAll('table').forEach((table) => {
+      if (table.closest('.table-scroll')) return;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'table-scroll';
+      table.parentNode.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+    });
+    requestAnimationFrame(() => {
+      document.querySelectorAll('.table-scroll').forEach((wrapper) => {
+        wrapper.classList.toggle('is-scrollable', wrapper.scrollWidth > wrapper.clientWidth + 4);
+      });
+    });
+  };
+  wrapTables();
+
   document.querySelectorAll('code').forEach((node) => {
     const text = node.textContent.trim();
     if (text && !node.title) node.title = text;
     if (text && node.closest('.metric') && !node.dataset.tip) {
+      node.dataset.tip = text;
+    }
+  });
+
+  document.querySelectorAll('td, th').forEach((node) => {
+    const text = node.textContent.trim().replace(/\\s+/g, ' ');
+    if (text.length > 80 && !node.dataset.tip) {
       node.dataset.tip = text;
     }
   });
@@ -1184,6 +1324,13 @@ const reportJS = `
       if (activeTarget) placeTooltip(activeTarget);
     }, { passive: true });
   }
+
+  document.querySelectorAll('[data-zero-toggle]').forEach((toggle) => {
+    const scope = toggle.closest('[data-zero-scope]') || document.body;
+    const apply = () => scope.classList.toggle('show-zero-buckets', toggle.checked);
+    toggle.addEventListener('change', apply);
+    apply();
+  });
 
   document.querySelectorAll('[data-code-registry]').forEach((registry) => {
     const tbody = registry.querySelector('tbody');
@@ -1366,29 +1513,31 @@ const mathCSS = `
   filter: drop-shadow(0 0 7px rgba(98,255,168,0.45));
 }
 .timeline-table {
-  min-width: 980px;
+  min-width: 1180px;
   table-layout: auto;
   display: table;
 }
 .timeline-table th,
 .timeline-table td {
   min-width: 92px;
-  white-space: normal;
-  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 .timeline-table th:first-child,
 .timeline-table td:first-child {
   min-width: 150px;
 }
 .timeline-table td:last-child {
-  white-space: normal;
-  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .timeline-table code {
-  overflow-wrap: anywhere;
-  white-space: normal;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  white-space: nowrap;
 }
-.timeline-table td:last-child code { white-space: normal; }
+.timeline-table td:last-child code { white-space: nowrap; }
 .method-reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -1817,7 +1966,7 @@ const mathInspectTemplate = `<!doctype html>
       <summary><span>Разбор утечек памяти</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает удержанные объекты с вероятным держателем и контекстом. Системные классы выводятся только как симптом, основной фокус — пользовательский держатель, экран и флоу.</p>
-        <div class="leak-limitations">Точный путь до GC root требует дампа кучи. В легком runtime-режиме отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
+        <div class="leak-limitations">Точный путь до корня GC требует дампа памяти. В легком режиме выполнения отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
@@ -1841,7 +1990,7 @@ const mathInspectTemplate = `<!doctype html>
           </div>
           <div class="problem-empty">По текущим фильтрам подозрений утечек не найдено.</div>
           <table class="code-problem-table leak-table">
-            <tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Удержанный объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Вероятный держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>Влияние</th><th>Что проверить</th><th>Доказательства</th></tr>
+            <tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Удержанный объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Вероятный держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th><th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения из контекста выполнения: экран, флоу, шаг, держатель и удержанный объект. Точный корень GC требует дампа памяти."}}</th><th>Влияние</th><th>Что проверить</th><th>Доказательства</th></tr>
             {{range .Math.Summary.MemoryLeaks}}
             <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}" data-search="{{memoryLeakSearchText .}}">
               <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
@@ -1850,11 +1999,13 @@ const mathInspectTemplate = `<!doctype html>
               <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
               <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
               <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
+              <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
+              <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div></td>
               <td>{{.Impact}}</td>
               <td>{{.Recommendation}}</td>
               <td>{{.Evidence}}</td>
             </tr>
-            {{else}}<tr><td colspan="9" class="muted">Подозрений на утечки памяти нет.</td></tr>{{end}}
+            {{else}}<tr><td colspan="11" class="muted">Подозрений на утечки памяти нет.</td></tr>{{end}}
           </table>
         </div>
       </div>
@@ -2358,6 +2509,8 @@ const mathCompareTemplate = `<!doctype html>
                 <th><button type="button" data-code-sort="score">Оценка</button></th>
                 <th>Изменение</th>
                 <th>Контекст</th>
+                <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера кандидата. Точное значение требует дампа памяти."}}</th>
+                <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения кандидата по контексту выполнения."}}</th>
                 <th>Что проверить</th>
                 <th>Доказательства</th>
               </tr>
@@ -2372,10 +2525,12 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
                 <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+                <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
+                <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div></td>
                 <td>{{.Candidate.Recommendation}}</td>
                 <td>{{.Candidate.Evidence}}</td>
               </tr>
-              {{else}}<tr><td colspan="9" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
+              {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
             </tbody>
           </table>
         </div>
@@ -3256,7 +3411,7 @@ const inspectTemplate = `<!doctype html>
       </div>
       <span class="pill">удержания</span>
     </div>
-    <p class="help-text">Этот блок не показывает системный шум сам по себе: системные классы важны, когда рядом есть пользовательский держатель или экран. Точный путь до GC root без дампа кучи недоступен, поэтому держатель здесь — вероятный владелец из runtime-контекста или места вызова watch-метода.</p>
+    <p class="help-text">Этот блок не показывает системный шум сам по себе: системные классы важны, когда рядом есть пользовательский держатель или экран. Точный путь до корня GC без дампа памяти недоступен, поэтому держатель здесь — вероятный владелец из контекста выполнения или места вызова watch-метода.</p>
     <div class="leak-limitations">Если в колонке “держатель” написано “не определен”, добавьте <code>ownerHint</code> в <code>JankHunter.watchObject(...)</code> или оберните подозрительный участок в <code>JankHunter.withOwner(...)</code>. Тогда следующий прогон покажет, какой пользовательский класс вероятнее всего удерживает объект.</div>
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -3289,6 +3444,8 @@ const inspectTemplate = `<!doctype html>
             <th>Вероятный держатель</th>
             <th>Контекст</th>
             <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th>
+            <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения из контекста выполнения: экран, флоу, шаг, держатель и удержанный объект. Точный корень GC требует дампа памяти."}}</th>
             <th>Влияние</th>
             <th>Что проверить</th>
             <th>Доказательства</th>
@@ -3303,11 +3460,13 @@ const inspectTemplate = `<!doctype html>
             <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
             <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
+            <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
+            <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div></td>
             <td>{{.Impact}}</td>
             <td>{{.Recommendation}}</td>
             <td>{{.Evidence}}</td>
           </tr>
-          {{else}}<tr><td colspan="9" class="muted">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что проверка удержания объектов включена и объект был передан в watchObject/watchActivity.</td></tr>{{end}}
+          {{else}}<tr><td colspan="11" class="muted">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что проверка удержания объектов включена и объект был передан в watchObject/watchActivity.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
@@ -3635,6 +3794,8 @@ const compareTemplate = `<!doctype html>
             <th><button type="button" data-code-sort="score">Оценка</button></th>
             <th>Изменение</th>
             <th>Контекст</th>
+            <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера кандидата. Точное значение требует дампа памяти."}}</th>
+            <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения кандидата по контексту выполнения."}}</th>
             <th>Что проверить</th>
             <th>Доказательства</th>
           </tr>
@@ -3649,10 +3810,12 @@ const compareTemplate = `<!doctype html>
             <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
             <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
             <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+            <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
+            <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div></td>
             <td>{{.Candidate.Recommendation}}</td>
             <td>{{.Candidate.Evidence}}</td>
           </tr>
-          {{else}}<tr><td colspan="9" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
+          {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
         </tbody>
       </table>
     </div>

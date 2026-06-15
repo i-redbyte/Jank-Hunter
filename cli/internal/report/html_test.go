@@ -58,21 +58,27 @@ func TestWriteReports(t *testing.T) {
 		},
 		MemoryLeaks: []analyze.MemoryLeakSuspect{
 			{
-				ClassName:      "com.app.feed.FeedActivity",
-				Holder:         "FeedPresenter",
-				Screen:         "Feed",
-				Flow:           "feed.open",
-				Step:           "render",
-				Count:          2,
-				MaxAgeMS:       30_000,
-				Score:          9.5,
-				Severity:       "medium",
-				ObjectKind:     "экран / Activity",
-				HolderQuality:  "вероятный держатель из контекста",
-				UserOwned:      true,
-				Impact:         "Удержано 2 объекта, максимальный возраст 30 сек.",
-				Recommendation: "Проверьте FeedPresenter: очистку слушателей и отмену фоновой работы.",
-				Evidence:       "кол-во=2 · макс. возраст=30 сек",
+				ClassName:                "com.app.feed.FeedActivity",
+				Holder:                   "FeedPresenter",
+				Screen:                   "Feed",
+				Flow:                     "feed.open",
+				Step:                     "render",
+				Count:                    2,
+				MaxAgeMS:                 30_000,
+				EstimatedRetainedKB:      4096,
+				RetainedSizeConfidence:   "среднее: есть возраст/повторяемость",
+				RetainedSizeExplanation:  "Оценка по типу объекта, числу удержаний, возрасту и PSS процесса.",
+				DominatorPath:            []string{"экран: Feed", "флоу: feed.open", "держатель: FeedPresenter", "удержанный объект: com.app.feed.FeedActivity"},
+				DominatorTreeConfidence:  "среднее: путь собран из контекста выполнения",
+				DominatorTreeExplanation: "Мини-дерево показывает вероятную цепочку доминирования по контексту выполнения.",
+				Score:                    9.5,
+				Severity:                 "medium",
+				ObjectKind:               "экран / Activity",
+				HolderQuality:            "вероятный держатель из контекста",
+				UserOwned:                true,
+				Impact:                   "Удержано 2 объекта, максимальный возраст 30 сек.",
+				Recommendation:           "Проверьте FeedPresenter: очистку слушателей и отмену фоновой работы.",
+				Evidence:                 "кол-во=2 · макс. возраст=30 сек",
 			},
 		},
 		Influence: sampleInfluence(),
@@ -84,14 +90,14 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInspect(inspectPath, summary); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
-	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "overflow-wrap: anywhere", "viewportBox", "node.closest('.metric')")
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Оценка удержанного размера", "Мини-дерево доминирования", "leak-dominator", "4.0 MB", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "viewportBox", "node.closest('.metric')")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Реестр проблем кода", "Разбор утечек памяти", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Реестр проблем кода", "Разбор утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -103,13 +109,13 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение утечек памяти", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Реестр проблем кода кандидата", "Сравнение утечек памяти", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Реестр проблем кода кандидата", "Сравнение утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {

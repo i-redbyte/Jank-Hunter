@@ -125,6 +125,12 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if leak.Screen != "CheckoutScreen" || leak.Flow != "checkout.open" || leak.Step != "render_list" {
 		t.Fatalf("unexpected memory leak context: %+v", leak)
 	}
+	if leak.EstimatedRetainedKB == 0 || leak.RetainedSizeConfidence == "" {
+		t.Fatalf("expected retained size estimate: %+v", leak)
+	}
+	if len(leak.DominatorPath) < 2 || leak.DominatorTreeConfidence == "" {
+		t.Fatalf("expected retained dominator path: %+v", leak)
+	}
 	if len(summary.AppVersions) != 1 || summary.AppVersions[0].Name != "0.1.0-debug" {
 		t.Fatalf("unexpected app versions: %+v", summary.AppVersions)
 	}
