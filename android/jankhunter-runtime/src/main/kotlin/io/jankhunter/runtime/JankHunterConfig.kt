@@ -32,6 +32,13 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
+    private val adaptiveSamplingEnabled = builder.adaptiveSamplingEnabled
+    private val adaptiveMemoryStableIntervalMs = builder.adaptiveMemoryStableIntervalMs
+    private val adaptiveContextStableIntervalMs = builder.adaptiveContextStableIntervalMs
+    private val metricAggregationEnabled = builder.metricAggregationEnabled
+    private val metricAggregationWindowMs = builder.metricAggregationWindowMs
+    private val maxMetricAggregationKeys = builder.maxMetricAggregationKeys
+    private val maxLogSpamKeys = builder.maxLogSpamKeys
     private val routeRedactor = builder.routeRedactor
     private val logDirectory = builder.logDirectory
     private val mainProcessOnly = builder.mainProcessOnly
@@ -90,6 +97,20 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun flushIntervalMs(): Long = flushIntervalMs
 
+    fun adaptiveSamplingEnabled(): Boolean = adaptiveSamplingEnabled
+
+    fun adaptiveMemoryStableIntervalMs(): Long = adaptiveMemoryStableIntervalMs
+
+    fun adaptiveContextStableIntervalMs(): Long = adaptiveContextStableIntervalMs
+
+    fun metricAggregationEnabled(): Boolean = metricAggregationEnabled
+
+    fun metricAggregationWindowMs(): Long = metricAggregationWindowMs
+
+    fun maxMetricAggregationKeys(): Int = maxMetricAggregationKeys
+
+    fun maxLogSpamKeys(): Int = maxLogSpamKeys
+
     fun redactRoute(route: String?): String? = routeRedactor.redact(route)
 
     fun logDirectory(): File? = logDirectory
@@ -133,6 +154,13 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = 256
         internal var flushIntervalMs = 5_000L
+        internal var adaptiveSamplingEnabled = true
+        internal var adaptiveMemoryStableIntervalMs = 60_000L
+        internal var adaptiveContextStableIntervalMs = 60_000L
+        internal var metricAggregationEnabled = true
+        internal var metricAggregationWindowMs = 5_000L
+        internal var maxMetricAggregationKeys = 2048
+        internal var maxLogSpamKeys = 2048
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
         internal var mainProcessOnly = false
@@ -191,6 +219,20 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun flushIntervalMs(value: Long) = apply { flushIntervalMs = value }
 
+        fun adaptiveSamplingEnabled(value: Boolean) = apply { adaptiveSamplingEnabled = value }
+
+        fun adaptiveMemoryStableIntervalMs(value: Long) = apply { adaptiveMemoryStableIntervalMs = value }
+
+        fun adaptiveContextStableIntervalMs(value: Long) = apply { adaptiveContextStableIntervalMs = value }
+
+        fun metricAggregationEnabled(value: Boolean) = apply { metricAggregationEnabled = value }
+
+        fun metricAggregationWindowMs(value: Long) = apply { metricAggregationWindowMs = value }
+
+        fun maxMetricAggregationKeys(value: Int) = apply { maxMetricAggregationKeys = value }
+
+        fun maxLogSpamKeys(value: Int) = apply { maxLogSpamKeys = value }
+
         fun routeRedactor(value: JankHunterRedactor) = apply { routeRedactor = value }
 
         fun logDirectory(value: File?) = apply { logDirectory = value }
@@ -234,6 +276,13 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
         const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
+        const val META_ADAPTIVE_SAMPLING_ENABLED = "io.jankhunter.adaptive_sampling_enabled"
+        const val META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS = "io.jankhunter.adaptive_memory_stable_interval_ms"
+        const val META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS = "io.jankhunter.adaptive_context_stable_interval_ms"
+        const val META_METRIC_AGGREGATION_ENABLED = "io.jankhunter.metric_aggregation_enabled"
+        const val META_METRIC_AGGREGATION_WINDOW_MS = "io.jankhunter.metric_aggregation_window_ms"
+        const val META_MAX_METRIC_AGGREGATION_KEYS = "io.jankhunter.max_metric_aggregation_keys"
+        const val META_MAX_LOG_SPAM_KEYS = "io.jankhunter.max_log_spam_keys"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
 
@@ -277,6 +326,19 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .maxDictionaryEntries(metadata?.getInt(META_MAX_DICTIONARY_ENTRIES, 8192) ?: 8192)
                 .maxDictionaryValueBytes(metadata?.getInt(META_MAX_DICTIONARY_VALUE_BYTES, 256) ?: 256)
                 .flushIntervalMs(metadata?.getLong(META_FLUSH_INTERVAL_MS, 5_000L) ?: 5_000L)
+                .adaptiveSamplingEnabled(metadata?.getBoolean(META_ADAPTIVE_SAMPLING_ENABLED, true) ?: true)
+                .adaptiveMemoryStableIntervalMs(
+                    metadata?.getLong(META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS, 60_000L)
+                        ?: 60_000L,
+                )
+                .adaptiveContextStableIntervalMs(
+                    metadata?.getLong(META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS, 60_000L)
+                        ?: 60_000L,
+                )
+                .metricAggregationEnabled(metadata?.getBoolean(META_METRIC_AGGREGATION_ENABLED, true) ?: true)
+                .metricAggregationWindowMs(metadata?.getLong(META_METRIC_AGGREGATION_WINDOW_MS, 5_000L) ?: 5_000L)
+                .maxMetricAggregationKeys(metadata?.getInt(META_MAX_METRIC_AGGREGATION_KEYS, 2048) ?: 2048)
+                .maxLogSpamKeys(metadata?.getInt(META_MAX_LOG_SPAM_KEYS, 2048) ?: 2048)
                 .mainProcessOnly(metadata?.getBoolean(META_MAIN_PROCESS_ONLY, false) ?: false)
                 .allowedProcesses(parseProcessList(metadata?.getString(META_ALLOWED_PROCESSES)))
                 .build()

@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.MetricAggregator
+import io.jankhunter.runtime.internal.system.AdaptiveRuntimeSampler
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.FpsMonitor
@@ -38,6 +40,7 @@ object JankHunter {
     private val contextLock = Any()
     private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
     private val lastLogSpamFlushAtMs = AtomicLong(0L)
+    private val lastMetricFlushAtMs = AtomicLong(0L)
     private val runtimeCallStack = ThreadLocal<MutableList<RuntimeCallFrame>>()
     private val runtimeCallCounters = ConcurrentHashMap<RuntimeCallKey, RuntimeCallStats>()
     private val runtimeCallDropped = AtomicLong(0L)
@@ -50,6 +53,9 @@ object JankHunter {
 
     @Volatile
     private var config: JankHunterConfig? = null
+
+    @Volatile
+    private var metricAggregator = MetricAggregator(DEFAULT_MAX_METRIC_AGGREGATION_KEYS)
 
     @Volatile
     private var watchdog: MainThreadWatchdog? = null
@@ -68,6 +74,9 @@ object JankHunter {
 
     @Volatile
     private var systemContextSampler: SystemContextSampler? = null
+
+    @Volatile
+    private var adaptiveRuntimeSampler: AdaptiveRuntimeSampler? = null
 
     @Volatile
     private var objectRetentionWatcher: ObjectRetentionWatcher? = null
@@ -106,6 +115,12 @@ object JankHunter {
         if (!started.compareAndSet(false, true)) return
 
         config = providedConfig
+        metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
+        lastMetricFlushAtMs.set(0L)
+        adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
+            providedConfig.adaptiveMemoryStableIntervalMs(),
+            providedConfig.adaptiveContextStableIntervalMs(),
+        )
 
         val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
         val redactedProcessName = providedConfig.redactProcessName(processName)
@@ -193,6 +208,7 @@ object JankHunter {
     @JvmStatic
     fun shutdown() {
         flushLogSpam(force = true)
+        flushMetrics(force = true)
         flushRuntimeCalls(force = true)
         activityTracker?.let { tracker ->
             application?.unregisterActivityLifecycleCallbacks(tracker)
@@ -216,11 +232,13 @@ object JankHunter {
         componentCallbackContext = null
         memorySampler = null
         systemContextSampler = null
+        adaptiveRuntimeSampler = null
         objectRetentionWatcher = null
         retainedHeapDumper = null
         fpsMonitor = null
         writer = null
         lastContextKey = ""
+        lastMetricFlushAtMs.set(0L)
         logSpamCounters.clear()
         runtimeCallCounters.clear()
         runtimeCallStack.remove()
@@ -678,6 +696,10 @@ object JankHunter {
 
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
+        if (!shouldRecordMemorySample(pssKb, javaHeapKb, nativeHeapKb)) {
+            recordCounter("jankhunter.memory_sample.skipped.count", 1)
+            return
+        }
         ensureContextRecorded()
         writer?.memory(pssKb, javaHeapKb, nativeHeapKb)
     }
@@ -755,6 +777,22 @@ object JankHunter {
         totalStorageKb: Long,
         networkVpn: Boolean,
     ) {
+        if (
+            !shouldRecordContextSample(
+                networkKind,
+                batteryPct,
+                availMemoryKb,
+                lowMemory,
+                networkMetered,
+                networkValidated,
+                rxBytes,
+                txBytes,
+                networkVpn,
+            )
+        ) {
+            recordCounter("jankhunter.context_sample.skipped.count", 1)
+            return
+        }
         writer?.context(
             networkKind,
             batteryPct,
@@ -793,20 +831,38 @@ object JankHunter {
 
     @JvmStatic
     fun recordCounter(name: String?, value: Long) {
+        val asyncWriter = writer ?: return
+        if (shouldAggregateMetrics()) {
+            metricAggregator.counter(name, value)
+            flushMetrics(force = false)
+            return
+        }
         ensureContextRecorded()
-        writer?.counter(name, value)
+        asyncWriter.counter(name, value)
     }
 
     @JvmStatic
     fun recordGauge(name: String?, value: Long) {
+        val asyncWriter = writer ?: return
+        if (shouldAggregateMetrics()) {
+            metricAggregator.gauge(name, value)
+            flushMetrics(force = false)
+            return
+        }
         ensureContextRecorded()
-        writer?.gauge(name, value)
+        asyncWriter.gauge(name, value)
     }
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
         val tuple = captureContext(ownerOverride = firstContextValue(ownerName, owner.get()))
         val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
+        val maxKeys = config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS
+        if (!logSpamCounters.containsKey(key) && logSpamCounters.size >= maxKeys) {
+            recordCounter("jankhunter.log_spam.dropped_keys.count", 1)
+            flushLogSpam(force = false)
+            return
+        }
         logSpamCounters.computeIfAbsent(key) { AtomicLong() }.incrementAndGet()
         flushLogSpam(force = false)
     }
@@ -932,6 +988,65 @@ object JankHunter {
     ) {
         val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, owner.get()))
         writer?.problemWindow(tuple.screen, tuple.owner, tuple.flow, tuple.step, kind, windowMs, count, maxMs)
+    }
+
+    private fun shouldRecordMemorySample(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long): Boolean {
+        val localConfig = config
+        if (localConfig?.adaptiveSamplingEnabled() != true) return true
+        return adaptiveRuntimeSampler?.shouldRecordMemory(nowMs(), pssKb, javaHeapKb, nativeHeapKb) ?: true
+    }
+
+    private fun shouldRecordContextSample(
+        networkKind: Int,
+        batteryPct: Int,
+        availMemoryKb: Long,
+        lowMemory: Boolean,
+        networkMetered: Boolean,
+        networkValidated: Boolean,
+        rxBytes: Long,
+        txBytes: Long,
+        networkVpn: Boolean,
+    ): Boolean {
+        val localConfig = config
+        if (localConfig?.adaptiveSamplingEnabled() != true) return true
+        return adaptiveRuntimeSampler?.shouldRecordContext(
+            nowMs(),
+            networkKind,
+            batteryPct,
+            availMemoryKb,
+            lowMemory,
+            networkMetered,
+            networkValidated,
+            rxBytes,
+            txBytes,
+            networkVpn,
+        ) ?: true
+    }
+
+    private fun shouldAggregateMetrics(): Boolean {
+        val localConfig = config ?: return false
+        return localConfig.metricAggregationEnabled() && localConfig.maxMetricAggregationKeys() > 0
+    }
+
+    private fun flushMetrics(force: Boolean) {
+        val asyncWriter = writer ?: return
+        val localConfig = config ?: return
+        if (!localConfig.metricAggregationEnabled()) return
+        val now = nowMs()
+        val last = lastMetricFlushAtMs.get()
+        val interval = localConfig.metricAggregationWindowMs()
+        if (!force && (interval <= 0 || now - last < interval)) return
+        if (!lastMetricFlushAtMs.compareAndSet(last, now) && !force) return
+        ensureContextRecorded()
+        metricAggregator.flush(object : MetricAggregator.Sink {
+            override fun counter(name: String, value: Long) {
+                asyncWriter.counter(name, value)
+            }
+
+            override fun gauge(name: String, value: Long) {
+                asyncWriter.gauge(name, value)
+            }
+        })
     }
 
     private fun maybeDumpRetainedHeap(className: String?, holder: String?, ageMs: Long, count: Long) {
@@ -1136,6 +1251,8 @@ object JankHunter {
     private const val UI_PROBLEM_FRAME_THRESHOLD_MS = 32L
     private const val LOG_SPAM_FLUSH_MS = 5000L
     private const val LOG_SPAM_PROBLEM_COUNT = 50L
+    private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
+    private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
 
     internal data class JankHunterContext(
         val screen: String?,

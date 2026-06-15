@@ -440,6 +440,25 @@ Heap dump останавливает VM на время записи, поэто
 
 Runtime пишет асинхронно, через очередь и flush-интервал. Если очередь переполнена, события дропаются счетчиком, а не блокируют приложение.
 
+Для долгих прогонов включены два защитных механизма:
+
+- adaptive sampling для стабильных memory/context snapshots: повторяющиеся значения пропускаются, но заметный сдвиг PSS/heap/RAM/traffic/network/low-memory сразу записывается;
+- агрегация counters/gauges: горячие метрики складываются в окне `io.jankhunter.metric_aggregation_window_ms`, counters пишутся суммой, gauges — средним и max.
+
+Настройки:
+
+```xml
+<meta-data android:name="io.jankhunter.adaptive_sampling_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.adaptive_memory_stable_interval_ms" android:value="60000" />
+<meta-data android:name="io.jankhunter.adaptive_context_stable_interval_ms" android:value="60000" />
+<meta-data android:name="io.jankhunter.metric_aggregation_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.metric_aggregation_window_ms" android:value="5000" />
+<meta-data android:name="io.jankhunter.max_metric_aggregation_keys" android:value="2048" />
+<meta-data android:name="io.jankhunter.max_log_spam_keys" android:value="2048" />
+```
+
+При превышении cardinality runtime пишет счетчики `jankhunter.metric_aggregation.dropped.count` или `jankhunter.log_spam.dropped_keys.count`, а не раздувает `.jhlog` новыми ключами.
+
 ## Бенчмарки overhead
 
 В runtime есть opt-in unit benchmarks для горячих путей: flow API, счетчик log spam, создание wrapper и guard runtime-графа вызовов. Они не запускаются по умолчанию, чтобы не замедлять обычные тесты и не делать CI шумным.
