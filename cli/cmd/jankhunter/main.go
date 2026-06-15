@@ -52,8 +52,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--route text] [--screen text] [--owner text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--route text] [--screen text] [--owner text]
+  jankhunter inspect <logs...> --out report.html [--json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter version
 `)
@@ -84,6 +84,14 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	heapDumpRaw, remaining, err := takeStringFlag(remaining, "heap-dump", "")
+	if err != nil {
+		return err
+	}
+	heapEvidenceRaw, remaining, err := takeStringFlag(remaining, "heap-evidence", "")
+	if err != nil {
+		return err
+	}
 	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
 	if err != nil {
 		return err
@@ -105,6 +113,10 @@ func runInspect(args []string) error {
 		return err
 	}
 	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
+	options, err = optionsWithHeapEvidence(strings.Join(paths, ", "), paths, options, heapEvidenceRaw, heapDumpRaw)
+	if err != nil {
+		return err
+	}
 	summary, err := analyze.InspectFilesWithOptions(
 		strings.Join(paths, ", "),
 		paths,
@@ -162,6 +174,22 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	baselineHeapDumpRaw, remaining, err := takeStringFlag(remaining, "baseline-heap-dump", "")
+	if err != nil {
+		return err
+	}
+	candidateHeapDumpRaw, remaining, err := takeStringFlag(remaining, "candidate-heap-dump", "")
+	if err != nil {
+		return err
+	}
+	baselineHeapEvidenceRaw, remaining, err := takeStringFlag(remaining, "baseline-heap-evidence", "")
+	if err != nil {
+		return err
+	}
+	candidateHeapEvidenceRaw, remaining, err := takeStringFlag(remaining, "candidate-heap-evidence", "")
+	if err != nil {
+		return err
+	}
 	jsonOut, remaining, err := takeBoolFlag(remaining, "json")
 	if err != nil {
 		return err
@@ -188,11 +216,19 @@ func runCompare(args []string) error {
 		return err
 	}
 	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
-	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, options)
+	baselineOptions, err := optionsWithHeapEvidence("baseline", baselinePaths, options, baselineHeapEvidenceRaw, baselineHeapDumpRaw)
 	if err != nil {
 		return err
 	}
-	candidate, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, options)
+	candidateOptions, err := optionsWithHeapEvidence("candidate", candidatePaths, options, candidateHeapEvidenceRaw, candidateHeapDumpRaw)
+	if err != nil {
+		return err
+	}
+	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
+	if err != nil {
+		return err
+	}
+	candidate, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
 	if err != nil {
 		return err
 	}
@@ -220,15 +256,18 @@ func runCompare(args []string) error {
 		}
 	}
 	if out != "" {
-		baselineReports, err := buildLogReports("baseline", baselinePaths, options)
+		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions)
 		if err != nil {
 			return err
 		}
-		candidateReports, err := buildLogReports("candidate", candidatePaths, options)
+		candidateReports, err := buildLogReports("candidate", candidatePaths, candidateOptions)
 		if err != nil {
 			return err
 		}
-		mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, options)
+		mathOptions := options
+		mathOptions.BaselineHeapEvidence = baselineOptions.HeapEvidence
+		mathOptions.CandidateHeapEvidence = candidateOptions.HeapEvidence
+		mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, mathOptions)
 		if err != nil {
 			return err
 		}
@@ -299,6 +338,30 @@ func compareCLILabel(name string) string {
 	default:
 		return name
 	}
+}
+
+func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
+	heapEvidencePaths := expandComma(heapEvidenceRaw)
+	heapDumpPaths := expandComma(heapDumpRaw)
+	if len(heapEvidencePaths) == 0 && len(heapDumpPaths) == 0 {
+		return options, nil
+	}
+	targetClasses := []string{}
+	if len(heapDumpPaths) > 0 {
+		preliminary, err := analyze.InspectFilesWithOptions(title, paths, options)
+		if err != nil {
+			return options, err
+		}
+		targetClasses = analyze.HeapTargetClasses(preliminary)
+	}
+	heapInputs := append([]string{}, heapEvidencePaths...)
+	heapInputs = append(heapInputs, heapDumpPaths...)
+	evidence, err := analyze.LoadHeapEvidenceFiles(heapInputs, targetClasses)
+	if err != nil {
+		return options, err
+	}
+	options.HeapEvidence = evidence
+	return options, nil
 }
 
 func buildLogReports(group string, paths []string, options analyze.Options) ([]report.LogReport, error) {

@@ -155,7 +155,7 @@ scripts/integrate-android-project.sh ~/work/MyApp --android-build-tools 35.0.0
 - HTTP: длительность запроса, DNS/connect/TTFB, ошибки, байты, route, owner.
 - UI: FPS, доля медленных кадров, p95/p99 кадра, экраны.
 - Главный поток: длинные паузы и источники работ.
-- Память: PSS, Java/native heap, свободная RAM, retained objects.
+- Память: PSS, Java/native heap, свободная RAM, retained objects и опциональный HPROF/heap evidence для пути до GC root, holder field и retained size.
 - Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
 - Пользовательские counters/gauges.
 - Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.

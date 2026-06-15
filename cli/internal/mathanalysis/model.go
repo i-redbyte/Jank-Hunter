@@ -367,28 +367,37 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
-	baselineSummary, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, options)
+	baselineOptions := options
+	candidateOptions := options
+	if options.BaselineHeapEvidence != nil {
+		baselineOptions.HeapEvidence = options.BaselineHeapEvidence
+	}
+	if options.CandidateHeapEvidence != nil {
+		candidateOptions.HeapEvidence = options.CandidateHeapEvidence
+	}
+
+	baselineSummary, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateSummary, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, options)
+	candidateSummary, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
 
-	baselineTimeline, baselineSeries, err := buildTimeline(baselinePaths, options)
+	baselineTimeline, baselineSeries, err := buildTimeline(baselinePaths, baselineOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateTimeline, candidateSeries, err := buildTimeline(candidatePaths, options)
+	candidateTimeline, candidateSeries, err := buildTimeline(candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	baselineRobustSamples, err := collectRobustSamples(baselinePaths, options)
+	baselineRobustSamples, err := collectRobustSamples(baselinePaths, baselineOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateRobustSamples, err := collectRobustSamples(candidatePaths, options)
+	candidateRobustSamples, err := collectRobustSamples(candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
@@ -399,19 +408,19 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	baselineChangePoints := detectChangePoints(baselineTimeline)
 	candidateChangePoints := detectChangePoints(candidateTimeline)
 	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
-	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, options, baselineTimeline)
+	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, baselineOptions, baselineTimeline)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, options, candidateTimeline)
+	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, candidateOptions, candidateTimeline)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	baselineNetworkLoops, err := detectNetworkLoops(baselinePaths, options, baselineTimeline)
+	baselineNetworkLoops, err := detectNetworkLoops(baselinePaths, baselineOptions, baselineTimeline)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateNetworkLoops, err := detectNetworkLoops(candidatePaths, options, candidateTimeline)
+	candidateNetworkLoops, err := detectNetworkLoops(candidatePaths, candidateOptions, candidateTimeline)
 	if err != nil {
 		return CompareMathReport{}, err
 	}

@@ -308,6 +308,16 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 		if leak.ObjectKind != "" {
 			detail += " Тип: " + leak.ObjectKind + "."
 		}
+		if leak.HeapEvidence {
+			detail += " Heap dump подтвердил путь до GC root"
+			if leak.GCRoot != "" {
+				detail += " " + leak.GCRoot
+			}
+			if leak.HolderField != "" {
+				detail += "; поле " + leak.HolderField
+			}
+			detail += "."
+		}
 		item.addSignal(CodeProblemSignal{
 			Name:     "Подозрение утечки памяти",
 			Category: codeCategoryMemory,

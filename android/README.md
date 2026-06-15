@@ -228,7 +228,7 @@ startActivity(Intent.createChooser(intent, "Share Jank Hunter log"))
 - main-thread stalls через watchdog;
 - memory snapshots: PSS, Java heap, native heap;
 - previous process exit summary на Android 11+;
-- retained objects без heap dump;
+- retained objects без heap dump в легком runtime-режиме; CLI может дополнительно связать эти события с HPROF/heap evidence;
 - counters/gauges;
 - owner attribution через `JankHunter.withOwner(...)`;
 - атрибуция флоу/контекста: экран, флоу, шаг и источник работ;

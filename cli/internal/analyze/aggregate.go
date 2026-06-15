@@ -97,6 +97,7 @@ type collector struct {
 	filter     Filter
 	ownerMap   map[string]string
 	classGraph *ClassGraph
+	heap       *HeapEvidence
 
 	routeDurations []namedDuration
 	routeFailures  map[string]int
@@ -160,6 +161,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		filter:             normalizeFilter(options.Filter),
 		ownerMap:           options.OwnerMap,
 		classGraph:         options.ClassGraph,
+		heap:               options.HeapEvidence,
 		routeFailures:      map[string]int{},
 		routeRx:            map[string]uint64{},
 		routeTx:            map[string]uint64{},
@@ -619,6 +621,40 @@ func (c *collector) addMemoryLeakSuspect(className, holder string, context FlowS
 	}
 }
 
+func (c *collector) addHeapOnlyMemoryLeaks() {
+	if c.heap == nil {
+		return
+	}
+	for _, leak := range c.heap.Leaks {
+		className := attrValue(leak.ClassName)
+		if className == "unknown" || c.hasMemoryLeakClass(className) {
+			continue
+		}
+		count := leak.RetainedObjectCount
+		if count == 0 {
+			count = 1
+		}
+		holder := firstKnown(leak.Holder, leak.HolderField)
+		c.addMemoryLeakSuspect(className, holder, FlowStats{}, 0, count)
+		c.summary.Retained += count
+		stats := c.retainedClasses[className]
+		if stats == nil {
+			stats = &retainedClassStats{}
+			c.retainedClasses[className] = stats
+		}
+		stats.count += count
+	}
+}
+
+func (c *collector) hasMemoryLeakClass(className string) bool {
+	for _, stats := range c.memoryLeakStats {
+		if stats != nil && stats.className == className {
+			return true
+		}
+	}
+	return false
+}
+
 func firstKnown(values ...string) string {
 	for _, value := range values {
 		value = attrValue(value)
@@ -789,6 +825,7 @@ func (c *collector) finish() Summary {
 	for name, value := range c.processSamples {
 		summary.Processes = append(summary.Processes, NamedValue{Name: name, Value: value})
 	}
+	c.addHeapOnlyMemoryLeaks()
 	for name, stats := range c.retainedClasses {
 		summary.RetainedClasses = append(summary.RetainedClasses, NamedValue{
 			Name:  name,
@@ -799,7 +836,7 @@ func (c *collector) finish() Summary {
 	for bucket, value := range c.retainedAgeBuckets {
 		summary.RetainedAgeBuckets = append(summary.RetainedAgeBuckets, NamedValue{Name: bucket, Value: value})
 	}
-	summary.MemoryLeaks = buildMemoryLeakSuspects(c.memoryLeakStats, summary.LowMemoryCount, summary.MemoryMaxKB)
+	summary.MemoryLeaks = buildMemoryLeakSuspects(c.memoryLeakStats, summary.LowMemoryCount, summary.MemoryMaxKB, c.heap)
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})

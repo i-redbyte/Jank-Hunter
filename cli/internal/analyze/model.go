@@ -25,9 +25,12 @@ type Filter struct {
 }
 
 type Options struct {
-	Filter     Filter
-	OwnerMap   map[string]string
-	ClassGraph *ClassGraph
+	Filter                Filter
+	OwnerMap              map[string]string
+	ClassGraph            *ClassGraph
+	HeapEvidence          *HeapEvidence
+	BaselineHeapEvidence  *HeapEvidence
+	CandidateHeapEvidence *HeapEvidence
 }
 
 type RouteStats struct {
@@ -160,6 +163,11 @@ type MemoryLeakSuspect struct {
 	Count                    uint64
 	MaxAgeMS                 uint64
 	EstimatedRetainedKB      uint64
+	HeapEvidence             bool
+	HeapSource               string
+	GCRoot                   string
+	HolderField              string
+	RetainedObjectCount      uint64
 	RetainedSizeConfidence   string
 	RetainedSizeExplanation  string
 	DominatorPath            []string
@@ -177,6 +185,33 @@ type MemoryLeakSuspect struct {
 	Impact                   string
 	Recommendation           string
 	Evidence                 string
+}
+
+type HeapEvidence struct {
+	Sources  []string           `json:"sources,omitempty"`
+	Leaks    []HeapLeakEvidence `json:"leaks"`
+	Warnings []string           `json:"warnings,omitempty"`
+}
+
+type HeapLeakEvidence struct {
+	ClassName           string            `json:"class_name"`
+	Holder              string            `json:"holder,omitempty"`
+	HolderField         string            `json:"holder_field,omitempty"`
+	GCRoot              string            `json:"gc_root,omitempty"`
+	RetainedSizeKB      uint64            `json:"retained_size_kb,omitempty"`
+	RetainedSizeBytes   uint64            `json:"retained_size_bytes,omitempty"`
+	RetainedObjectCount uint64            `json:"retained_object_count,omitempty"`
+	ReferencePath       []HeapPathElement `json:"reference_path,omitempty"`
+	DominatorTree       []string          `json:"dominator_tree,omitempty"`
+	Source              string            `json:"source,omitempty"`
+	Confidence          string            `json:"confidence,omitempty"`
+}
+
+type HeapPathElement struct {
+	ClassName string `json:"class_name,omitempty"`
+	FieldName string `json:"field_name,omitempty"`
+	ObjectID  string `json:"object_id,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type Summary struct {

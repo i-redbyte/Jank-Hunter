@@ -134,6 +134,44 @@ jankhunter inspect logs/*.jhlog \
 
 `--owner-map` помогает красиво раскрыть владельцев работ, а `--class-graph` добавляет статические связи между классами. С ним рядом с `report.html` появится `report-influence.html`.
 
+Heap evidence для точных цепочек утечек:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --heap-dump dumps/checkout.hprof \
+  --out report.html
+```
+
+`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает пользовательский класс-держатель, поле ссылки, retained size и мини-дерево доминирования. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS.
+
+Можно передать уже подготовленный JSON evidence вместо HPROF:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --heap-evidence heap-evidence.json \
+  --out report.html
+```
+
+Минимальная форма JSON:
+
+```json
+{
+  "leaks": [{
+    "class_name": "com.app.checkout.CheckoutActivity",
+    "holder": "com.app.checkout.CheckoutPresenter",
+    "holder_field": "com.app.checkout.CheckoutPresenter.activity",
+    "gc_root": "sticky class",
+    "retained_size_kb": 8192,
+    "retained_object_count": 4,
+    "reference_path": [
+      {"class_name": "GC root: sticky class", "kind": "gc_root"},
+      {"class_name": "com.app.checkout.CheckoutPresenter", "kind": "root_object"},
+      {"class_name": "com.app.checkout.CheckoutActivity", "field_name": "activity", "kind": "field"}
+    ]
+  }]
+}
+```
+
 ## compare
 
 `compare` нужен, когда есть база и кандидат. Например: сборка до изменения и сборка после изменения.
@@ -175,6 +213,17 @@ jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --json > compare.json
+```
+
+Heap evidence для сравнения передается отдельно для базы и кандидата:
+
+```bash
+jankhunter compare \
+  --baseline "old/*.jhlog" \
+  --candidate "new/*.jhlog" \
+  --baseline-heap-dump old/heap.hprof \
+  --candidate-heap-dump new/heap.hprof \
+  --out compare.html
 ```
 
 ## CI gate
