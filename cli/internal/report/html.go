@@ -190,26 +190,27 @@ func execute(path, source string, data any) error {
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
-		"humanDuration":         humanDuration,
-		"tip":                   tooltipHTML,
-		"metricHelp":            metricHelp,
-		"memoryHelp":            memoryMetricHelp,
-		"integralHelp":          integralHelp,
-		"scoreHelp":             scoreHelp,
-		"integralCriteria":      integralCriteria,
-		"ownerKind":             ownerKindLabel,
-		"problemKind":           problemKindLabel,
-		"codeProblemSearchText": codeProblemSearchText,
-		"codeProblemLocation":   codeProblemLocation,
-		"codeProblemMetric":     codeProblemMetric,
-		"deltaGroups":           compareDeltaGroups,
-		"deltaLabel":            compareDeltaLabel,
-		"deltaHelp":             compareDeltaHelp,
-		"deltaValue":            compareDeltaValue,
-		"deltaChange":           compareDeltaChange,
-		"deltaInterval":         compareDeltaInterval,
-		"problemDeltas":         problemDeltas,
-		"severityLabel":         severityLabel,
+		"humanDuration":          humanDuration,
+		"tip":                    tooltipHTML,
+		"metricHelp":             metricHelp,
+		"memoryHelp":             memoryMetricHelp,
+		"integralHelp":           integralHelp,
+		"scoreHelp":              scoreHelp,
+		"integralCriteria":       integralCriteria,
+		"ownerKind":              ownerKindLabel,
+		"problemKind":            problemKindLabel,
+		"codeProblemSearchText":  codeProblemSearchText,
+		"codeProblemLocation":    codeProblemLocation,
+		"codeProblemMetric":      codeProblemMetric,
+		"codeProblemCompareRows": codeProblemCompareRows,
+		"deltaGroups":            compareDeltaGroups,
+		"deltaLabel":             compareDeltaLabel,
+		"deltaHelp":              compareDeltaHelp,
+		"deltaValue":             compareDeltaValue,
+		"deltaChange":            compareDeltaChange,
+		"deltaInterval":          compareDeltaInterval,
+		"problemDeltas":          problemDeltas,
+		"severityLabel":          severityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
@@ -708,6 +709,88 @@ func codeProblemMetric(signal analyze.CodeProblemSignal) string {
 		return "сигнал"
 	}
 	return strings.Join(parts, " · ")
+}
+
+type codeProblemCompareRow struct {
+	Candidate     analyze.CodeProblemStats
+	BaselineScore float64
+	DeltaScore    float64
+	Status        string
+	Severity      string
+}
+
+func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareRow {
+	baseline := comparison.Baseline.CodeProblems
+	if len(baseline) == 0 {
+		baseline = analyze.BuildCodeProblemRegistry(comparison.Baseline)
+	}
+	candidate := comparison.Candidate.CodeProblems
+	if len(candidate) == 0 {
+		candidate = analyze.BuildCodeProblemRegistry(comparison.Candidate)
+	}
+	baselineByLocation := map[string]analyze.CodeProblemStats{}
+	for _, row := range baseline {
+		baselineByLocation[codeProblemLocation(row)] = row
+	}
+	out := make([]codeProblemCompareRow, 0, len(candidate))
+	for _, row := range candidate {
+		before, found := baselineByLocation[codeProblemLocation(row)]
+		delta := row.Score
+		if found {
+			delta = row.Score - before.Score
+		}
+		status := "без сильного изменения"
+		severity := row.Severity
+		switch {
+		case !found:
+			status = "новая проблема кандидата"
+			if severity == "ok" {
+				severity = "medium"
+			}
+		case delta >= 8:
+			status = "сильное усиление"
+			severity = "high"
+		case delta >= 3:
+			status = "усиление"
+			if severity == "ok" {
+				severity = "medium"
+			}
+		case delta <= -3:
+			status = "стало легче"
+			severity = "ok"
+		}
+		out = append(out, codeProblemCompareRow{
+			Candidate:     row,
+			BaselineScore: before.Score,
+			DeltaScore:    math.Round(delta*10) / 10,
+			Status:        status,
+			Severity:      severity,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Severity == out[j].Severity {
+			if out[i].DeltaScore == out[j].DeltaScore {
+				return out[i].Candidate.Score > out[j].Candidate.Score
+			}
+			return out[i].DeltaScore > out[j].DeltaScore
+		}
+		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
+	})
+	if len(out) > 120 {
+		out = out[:120]
+	}
+	return out
+}
+
+func reportSeverityRank(value string) int {
+	switch value {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	default:
+		return 1
+	}
 }
 
 type compareDeltaGroup struct {

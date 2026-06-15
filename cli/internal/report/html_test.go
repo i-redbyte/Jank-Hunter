@@ -84,13 +84,13 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Реестр проблем кода кандидата", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {

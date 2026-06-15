@@ -1703,6 +1703,7 @@ const mathInspectTemplate = `<!doctype html>
 </header>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#code-problems">Реестр кода</a>
   <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
@@ -1732,7 +1733,7 @@ const mathInspectTemplate = `<!doctype html>
       <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
       <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
     </div>
-    <details class="fold code-registry-fold">
+    <details id="code-problems" class="fold code-registry-fold">
       <summary><span>Реестр проблем кода</span></summary>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
@@ -2170,6 +2171,7 @@ const mathCompareTemplate = `<!doctype html>
 </header>
 <nav class="nav">
   {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#code-problems">Реестр кода</a>
   <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
@@ -2193,6 +2195,63 @@ const mathCompareTemplate = `<!doctype html>
       <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Флоу и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
       <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
     </div>
+    <details id="code-problems" class="fold code-registry-fold">
+      <summary><span>Реестр проблем кода кандидата</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+            <select data-code-registry-severity aria-label="Фильтр по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр по категории">
+              <option value="">Все категории</option>
+              <option value="Сеть">Сеть</option>
+              <option value="UI">UI</option>
+              <option value="Главный поток">Главный поток</option>
+              <option value="Память">Память</option>
+              <option value="Логи">Логи</option>
+              <option value="Выполнение">Выполнение</option>
+              <option value="Граф влияния">Граф влияния</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+          <table class="code-problem-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="severity">Статус</button></th>
+                <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th><button type="button" data-code-sort="category">Категории</button></th>
+                <th>Контекст</th>
+                <th>Влияние кандидата</th>
+                <th>Что проверить</th>
+                <th>Сигналы кандидата</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range codeProblemCompareRows .Math.Comparison}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}" data-search="{{codeProblemSearchText .Candidate}} {{.Status}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+                <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
+                <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+                <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
+                <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+                <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
+                <td>{{.Candidate.Recommendation}}</td>
+                <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+              </tr>
+              {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
     {{if .Math.Candidate.Summary.Influence.Available}}
     <h3>Граф влияния кандидата</h3>
     <p class="help-text">Встроенный срез показывает верхние классы кандидата, а полный граф вынесен в отдельный HTML.</p>
@@ -3209,6 +3268,7 @@ const compareTemplate = `<!doctype html>
 </header>
 <nav class="nav">
   <a href="#compare">Сравнение</a>
+  <a href="#code-problems">Реестр кода</a>
   <a href="#regressions">Регрессии</a>
   <a href="#changes">Где изменилось</a>
   <a href="#flows">Флоу</a>
@@ -3274,6 +3334,68 @@ const compareTemplate = `<!doctype html>
     </table>
     {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
     {{end}}
+  </section>
+
+  <section id="code-problems" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Реестр проблем кода кандидата</h2>
+        <div class="panel-kicker">Сравнение проблемных классов и методов кандидата с базой: новые точки, усиление оценки и текущие доказательства.</div>
+      </div>
+      <span class="pill">кандидат против базы</span>
+    </div>
+    <p class="help-text">Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+        <select data-code-registry-severity aria-label="Фильтр по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр по категории">
+          <option value="">Все категории</option>
+          <option value="Сеть">Сеть</option>
+          <option value="UI">UI</option>
+          <option value="Главный поток">Главный поток</option>
+          <option value="Память">Память</option>
+          <option value="Логи">Логи</option>
+          <option value="Выполнение">Выполнение</option>
+          <option value="Граф влияния">Граф влияния</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+      <table class="code-problem-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="severity">Статус</button></th>
+            <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th><button type="button" data-code-sort="category">Категории</button></th>
+            <th>Контекст</th>
+            <th>Влияние кандидата</th>
+            <th>Что проверить</th>
+            <th>Сигналы кандидата</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range codeProblemCompareRows .Comparison}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}" data-search="{{codeProblemSearchText .Candidate}} {{.Status}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+            <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
+            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+            <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
+            <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+            <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
+            <td>{{.Candidate.Recommendation}}</td>
+            <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <section id="regressions" class="panel">
