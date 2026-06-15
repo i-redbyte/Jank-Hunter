@@ -17,6 +17,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
+    private val retainedHeapDumpEnabled = builder.retainedHeapDumpEnabled
+    private val retainedHeapDumpMinIntervalMs = builder.retainedHeapDumpMinIntervalMs
+    private val retainedHeapDumpMaxCount = builder.retainedHeapDumpMaxCount
+    private val retainedHeapDumpDirectory = builder.retainedHeapDumpDirectory
     private val fpsMonitorEnabled = builder.fpsMonitorEnabled
     private val jankStatsEnabled = builder.jankStatsEnabled
     private val fpsWindowMs = builder.fpsWindowMs
@@ -55,6 +59,14 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun retainedObjectDelayMs(): Long = retainedObjectDelayMs
 
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
+
+    fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled
+
+    fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs
+
+    fun retainedHeapDumpMaxCount(): Int = retainedHeapDumpMaxCount
+
+    fun retainedHeapDumpDirectory(): File? = retainedHeapDumpDirectory
 
     fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
 
@@ -106,6 +118,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
+        internal var retainedHeapDumpEnabled = false
+        internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
+        internal var retainedHeapDumpMaxCount = 1
+        internal var retainedHeapDumpDirectory: File? = null
         internal var fpsMonitorEnabled = true
         internal var jankStatsEnabled = false
         internal var fpsWindowMs = 1_000L
@@ -144,6 +160,14 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun retainedObjectDelayMs(value: Long) = apply { retainedObjectDelayMs = value }
 
         fun retainedObjectForceGcEnabled(value: Boolean) = apply { retainedObjectForceGcEnabled = value }
+
+        fun retainedHeapDumpEnabled(value: Boolean) = apply { retainedHeapDumpEnabled = value }
+
+        fun retainedHeapDumpMinIntervalMs(value: Long) = apply { retainedHeapDumpMinIntervalMs = value }
+
+        fun retainedHeapDumpMaxCount(value: Int) = apply { retainedHeapDumpMaxCount = value }
+
+        fun retainedHeapDumpDirectory(value: File?) = apply { retainedHeapDumpDirectory = value }
 
         fun fpsMonitorEnabled(value: Boolean) = apply { fpsMonitorEnabled = value }
 
@@ -196,6 +220,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
         const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
+        const val META_RETAINED_HEAP_DUMP_ENABLED = "io.jankhunter.retained_heap_dump_enabled"
+        const val META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS = "io.jankhunter.retained_heap_dump_min_interval_ms"
+        const val META_RETAINED_HEAP_DUMP_MAX_COUNT = "io.jankhunter.retained_heap_dump_max_count"
         const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
         const val META_JANKSTATS_ENABLED = "io.jankhunter.jankstats_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
@@ -230,6 +257,12 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .objectWatcherEnabled(metadata?.getBoolean(META_OBJECT_WATCHER_ENABLED, true) ?: true)
                 .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
                 .retainedObjectForceGcEnabled(metadata?.getBoolean(META_RETAINED_OBJECT_FORCE_GC_ENABLED, false) ?: false)
+                .retainedHeapDumpEnabled(metadata?.getBoolean(META_RETAINED_HEAP_DUMP_ENABLED, false) ?: false)
+                .retainedHeapDumpMinIntervalMs(
+                    metadata?.getLong(META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L)
+                        ?: 10 * 60_000L,
+                )
+                .retainedHeapDumpMaxCount(metadata?.getInt(META_RETAINED_HEAP_DUMP_MAX_COUNT, 1) ?: 1)
                 .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
                 .jankStatsEnabled(metadata?.getBoolean(META_JANKSTATS_ENABLED, false) ?: false)
                 .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)

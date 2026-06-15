@@ -18,6 +18,7 @@ import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessNames
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
+import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 import java.lang.ref.WeakReference
@@ -70,6 +71,9 @@ object JankHunter {
 
     @Volatile
     private var objectRetentionWatcher: ObjectRetentionWatcher? = null
+
+    @Volatile
+    private var retainedHeapDumper: RetainedHeapDumper? = null
 
     @Volatile
     private var fpsMonitor: FpsMonitor? = null
@@ -162,6 +166,13 @@ object JankHunter {
                 ProcessExitReporter.report(appContext)
             }
             if (providedConfig.objectWatcherEnabled()) {
+                if (providedConfig.retainedHeapDumpEnabled()) {
+                    retainedHeapDumper = RetainedHeapDumper(
+                        providedConfig.retainedHeapDumpDirectory() ?: File(directory, "heap-dumps"),
+                        providedConfig.retainedHeapDumpMinIntervalMs(),
+                        providedConfig.retainedHeapDumpMaxCount(),
+                    )
+                }
                 objectRetentionWatcher = ObjectRetentionWatcher(
                     providedConfig.retainedObjectDelayMs(),
                     providedConfig.retainedObjectForceGcEnabled(),
@@ -206,6 +217,7 @@ object JankHunter {
         memorySampler = null
         systemContextSampler = null
         objectRetentionWatcher = null
+        retainedHeapDumper = null
         fpsMonitor = null
         writer = null
         lastContextKey = ""
@@ -682,6 +694,7 @@ object JankHunter {
         ensureContextRecorded(screenOverride = tuple.screen, ownerOverride = tuple.owner)
         writer?.retained(tuple.screen, tuple.owner, tuple.flow, tuple.step, className, holder, ageMs, count)
         recordProblemWindow("retained_object", ageMs, count, ageMs, retainedOwner)
+        maybeDumpRetainedHeap(className, retainedOwner, ageMs, count)
     }
 
     @JvmStatic
@@ -919,6 +932,25 @@ object JankHunter {
     ) {
         val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, owner.get()))
         writer?.problemWindow(tuple.screen, tuple.owner, tuple.flow, tuple.step, kind, windowMs, count, maxMs)
+    }
+
+    private fun maybeDumpRetainedHeap(className: String?, holder: String?, ageMs: Long, count: Long) {
+        val asyncWriter = writer ?: return
+        when (val result = retainedHeapDumper?.maybeDump(className, holder, ageMs, count)) {
+            is RetainedHeapDumper.Result.Dumped -> {
+                asyncWriter.counter("jankhunter.heap_dump.created.count", 1)
+                asyncWriter.gauge("jankhunter.heap_dump.retained_age_ms", result.ageMs)
+                asyncWriter.counter("jankhunter.heap_dump.retained_objects.count", result.count)
+                asyncWriter.gauge("jankhunter.heap_dump.file_size_kb", result.file.length() / 1024L)
+            }
+            is RetainedHeapDumper.Result.Skipped -> {
+                asyncWriter.counter("jankhunter.heap_dump.skipped.${metricOwner(result.reason)}.count", 1)
+            }
+            is RetainedHeapDumper.Result.Failed -> {
+                asyncWriter.counter("jankhunter.heap_dump.failed.${metricOwner(result.reason)}.count", 1)
+            }
+            null -> Unit
+        }
     }
 
     private fun ensureContextRecorded(

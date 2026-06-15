@@ -403,6 +403,26 @@ jankhunter inspect logs/*.jhlog \
 
 `runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения это лучше включать после smoke-сборки и сначала на ограниченные include-пакеты или на `includeWholeApplication = true` с хорошим списком exclude.
 
+## Heap dump для утечек
+
+Легкий режим retained objects работает без дампа памяти. Если нужен точный путь до GC root, включите HPROF только для debug/QA-прогона:
+
+```xml
+<meta-data android:name="io.jankhunter.retained_heap_dump_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.retained_heap_dump_min_interval_ms" android:value="600000" />
+<meta-data android:name="io.jankhunter.retained_heap_dump_max_count" android:value="1" />
+```
+
+При подтвержденном retained object runtime сохранит `.hprof` в `files/jankhunter/heap-dumps/` и запишет counters/gauges `jankhunter.heap_dump.*` в `.jhlog`. Дальше передайте дамп в CLI:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --heap-dump heap-dumps/retained-*.hprof \
+  --out report.html
+```
+
+Heap dump останавливает VM на время записи, поэтому держите режим выключенным по умолчанию и используйте лимиты для больших приложений.
+
 ## Что с overhead
 
 Коротко: библиотека не должна подвешивать большое приложение, если не включать все подряд.
