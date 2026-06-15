@@ -481,8 +481,8 @@ table {
   max-width: none;
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
-  overflow: hidden;
+  table-layout: auto;
+  overflow: visible;
 }
 th, td {
   min-width: 0;
@@ -491,22 +491,23 @@ th, td {
   border-bottom: 1px solid rgba(126,247,255,0.12);
   text-align: left;
   vertical-align: top;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  overflow-wrap: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: break-word;
   word-break: normal;
   hyphens: none;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.45;
 }
 th {
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  white-space: nowrap;
+  white-space: normal;
 }
 td:first-child, th:first-child {
-  width: 18%;
+  min-width: 160px;
 }
 td:last-child {
   white-space: normal;
@@ -527,6 +528,16 @@ code {
   overflow-wrap: normal;
   word-break: normal;
   white-space: nowrap;
+}
+td code,
+th code {
+  display: inline;
+  max-width: none;
+  vertical-align: baseline;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .muted,
 .help-text,
@@ -788,8 +799,14 @@ details.log-card summary::-webkit-details-marker { display: none; }
 .compare-table td,
 #changes table td,
 #cohorts table td {
-  overflow-wrap: normal;
+  overflow-wrap: break-word;
   word-break: normal;
+}
+.compare-table code,
+#changes table code,
+#cohorts table code {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .table-stack {
   display: grid;
@@ -1132,15 +1149,28 @@ const mathCSS = `
 }
 .timeline-table {
   min-width: 980px;
+  table-layout: auto;
   display: table;
-  overflow-x: auto;
 }
-.timeline-table th, .timeline-table td { white-space: nowrap; }
+.timeline-table th,
+.timeline-table td {
+  min-width: 92px;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.timeline-table th:first-child,
+.timeline-table td:first-child {
+  min-width: 150px;
+}
 .timeline-table td:last-child {
   white-space: normal;
   overflow-wrap: break-word;
 }
-.timeline-table td:last-child code { white-space: nowrap; }
+.timeline-table code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.timeline-table td:last-child code { white-space: normal; }
 .method-reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -1163,7 +1193,14 @@ const mathCSS = `
 }
 .zero-toggle input { accent-color: #62ffa8; }
 .bucket-zero { display: none; }
+.zero-bucket-scope.show-zero-buckets .bucket-zero,
 .show-zero-buckets .bucket-zero { display: table-row; }
+.zero-toggle-note {
+  display: inline-block;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .category-block { margin: 16px 0 22px; }
 .category-block h4 {
   margin: 0 0 8px;
@@ -1499,41 +1536,47 @@ const mathInspectTemplate = `<!doctype html>
       <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
       <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
     </div>
-    <h3>Атрибуция флоу и причин</h3>
-    <table class="timeline-table">
-      <tr><th>Экран / флоу / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
-      {{range .Math.Summary.Flows}}
-      <tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td><code>{{.RouteSample}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} KB</td></tr>
-      {{else}}<tr><td colspan="9" class="muted">Нет событий контекста флоу. Для причинной математики включите API флоу или ASM-опцию flowInteractions.</td></tr>{{end}}
-    </table>
-    <div class="split">
-      <div>
-        <h3>Спам логами</h3>
-        <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+    <details class="fold overview-attribution-fold">
+      <summary><span>Атрибуция флоу и причин</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Здесь собраны длинные таблицы связки “экран → флоу → шаг → источник → маршрут/пауза/память/спам”. Блок свернут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
+        <h3>Флоу и причины</h3>
+        <table class="timeline-table">
+          <tr><th>Экран / флоу / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+          {{range .Math.Summary.Flows}}
+          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td><code>{{.RouteSample}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} KB</td></tr>
+          {{else}}<tr><td colspan="9" class="muted">Нет событий контекста флоу. Для причинной математики включите API флоу или ASM-опцию flowInteractions.</td></tr>{{end}}
+        </table>
+        <div class="split">
+          <div>
+            <h3>Спам логами</h3>
+            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Проблемные окна</h3>
+            <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Вызовы выполнения</h3>
+        <table class="timeline-table">
+          <tr><th>Экран / флоу / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          {{range .Math.Summary.RuntimeCalls}}
+          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+        </table>
+        {{if .Math.Summary.Influence.Available}}
+        <h3>Граф влияния кода</h3>
+        <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
+        <table class="timeline-table">
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
+          {{range topInfluenceNodes .Math.Summary.Influence 8}}
+          <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
+          {{end}}
+        </table>
+        {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a>. {{.Math.Summary.Influence.StandaloneReason}}</p>{{end}}
+        {{end}}
       </div>
-      <div>
-        <h3>Проблемные окна</h3>
-        <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
-      </div>
-    </div>
-    <h3>Вызовы выполнения</h3>
-    <table class="timeline-table">
-      <tr><th>Экран / флоу / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
-      {{range .Math.Summary.RuntimeCalls}}
-      <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
-      {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
-    </table>
-    {{if .Math.Summary.Influence.Available}}
-    <h3>Граф влияния кода</h3>
-    <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче ` + "`--class-graph`" + `.</p>
-    <table class="timeline-table">
-      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
-      {{range topInfluenceNodes .Math.Summary.Influence 8}}
-      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
-      {{end}}
-    </table>
-    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a>. {{.Math.Summary.Influence.StandaloneReason}}</p>{{end}}
-    {{end}}
+    </details>
     <h3>Находки</h3>
     <div class="finding-list">
       {{range significantMathFindings .Math.Findings}}
@@ -1577,33 +1620,35 @@ const mathInspectTemplate = `<!doctype html>
           {{else}}<div class="muted">Нет ненулевых рядов для отображения.</div>{{end}}
         </div>
         <h3>{{tip "Временные интервалы" "Внутренний термин: бакет. Это фиксированное окно времени, например 1 секунда, куда складываются события для анализа временного ряда."}}</h3>
-        <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label>
-        <div class="category-block">
-          <h4>Сеть</h4>
-          <table class="timeline-table">
-            <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th></tr>
-            {{range $math.Timeline}}
-            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
-            {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
-          </table>
-        </div>
-        <div class="category-block">
-          <h4>UI и главный поток</h4>
-          <table class="timeline-table">
-          <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
-            {{range $math.Timeline}}
-            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
-            {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
-          </table>
-        </div>
-        <div class="category-block">
-          <h4>Память и трафик</h4>
-          <table class="timeline-table">
-            <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
-            {{range $math.Timeline}}
-            <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
-            {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
-          </table>
+        <div class="zero-bucket-scope" data-zero-scope>
+          <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label><span class="zero-toggle-note">Пустые интервалы скрыты, чтобы таймлайн показывал только полезные участки.</span>
+          <div class="category-block">
+            <h4>Сеть</h4>
+            <table class="timeline-table">
+              <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
+              {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
+          <div class="category-block">
+            <h4>UI и главный поток</h4>
+            <table class="timeline-table">
+            <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
+              {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
+          <div class="category-block">
+            <h4>Память и трафик</h4>
+            <table class="timeline-table">
+              <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
+              {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
         </div>
         {{end}}
         {{if eq .ID "robust"}}
@@ -1830,7 +1875,10 @@ const mathInspectTemplate = `<!doctype html>
     sections.forEach((section) => observer.observe(section));
   }
   document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
-    input.addEventListener('change', () => document.body.classList.toggle('show-zero-buckets', input.checked));
+    const scope = input.closest('[data-zero-scope]') || document.body;
+    const applyZeroRows = () => scope.classList.toggle('show-zero-buckets', input.checked);
+    input.addEventListener('change', applyZeroRows);
+    applyZeroRows();
   });
 })();
 </script>
@@ -2178,7 +2226,10 @@ const mathCompareTemplate = `<!doctype html>
     sections.forEach((section) => observer.observe(section));
   }
   document.querySelectorAll('[data-zero-toggle]').forEach((input) => {
-    input.addEventListener('change', () => document.body.classList.toggle('show-zero-buckets', input.checked));
+    const scope = input.closest('[data-zero-scope]') || document.body;
+    const applyZeroRows = () => scope.classList.toggle('show-zero-buckets', input.checked);
+    input.addEventListener('change', applyZeroRows);
+    applyZeroRows();
   });
 })();
 </script>

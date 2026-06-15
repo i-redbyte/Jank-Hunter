@@ -71,7 +71,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -219,8 +219,13 @@ func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
 		}},
 		Sections: []mathanalysis.MathSection{
 			{ID: "quality", Title: "Качество данных", Status: "ok", Summary: "Сводка качества данных."},
+			{ID: "timeline", Title: "Таймлайн сигналов", Status: "ok", Summary: "Сводка таймлайна."},
 			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас детектора сетевых циклов."},
 			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Каркас интегральных оценок."},
+		},
+		Timeline: []mathanalysis.TimelineBucket{
+			{StartMS: 0, EndMS: 1000},
+			{StartMS: 1000, EndMS: 2000, HTTPCount: 2, HTTPP95DurationMS: 612, UIFrames: 90, UIJankyFrames: 7},
 		},
 		IntegralScores: []mathanalysis.IntegralScore{
 			{
