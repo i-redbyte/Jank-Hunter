@@ -119,6 +119,38 @@ type RuntimeCallStats struct {
 	MaxMS   uint64
 }
 
+type CodeProblemSignal struct {
+	Name     string
+	Category string
+	Severity string
+	Score    float64
+	Count    uint64
+	TotalMS  uint64
+	MaxMS    uint64
+	Value    uint64
+	Unit     string
+	Detail   string
+}
+
+type CodeProblemStats struct {
+	ClassName       string
+	Method          string
+	Owner           string
+	Score           float64
+	Severity        string
+	RuntimeEvidence bool
+	Categories      []string
+	Problems        []string
+	Signals         []CodeProblemSignal
+	Screens         []string
+	Flows           []string
+	Steps           []string
+	Routes          []string
+	Impact          string
+	Recommendation  string
+	Evidence        string
+}
+
 type Summary struct {
 	Title             string
 	LogCount          int
@@ -165,6 +197,7 @@ type Summary struct {
 	LogSpam            []LogSpamStats
 	ProblemWindows     []ProblemWindowStats
 	RuntimeCalls       []RuntimeCallStats
+	CodeProblems       []CodeProblemStats
 	AppVersions        []NamedValue
 	Builds             []NamedValue
 	Devices            []NamedValue

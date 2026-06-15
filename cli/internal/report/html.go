@@ -190,23 +190,26 @@ func execute(path, source string, data any) error {
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
-		"humanDuration":    humanDuration,
-		"tip":              tooltipHTML,
-		"metricHelp":       metricHelp,
-		"memoryHelp":       memoryMetricHelp,
-		"integralHelp":     integralHelp,
-		"scoreHelp":        scoreHelp,
-		"integralCriteria": integralCriteria,
-		"ownerKind":        ownerKindLabel,
-		"problemKind":      problemKindLabel,
-		"deltaGroups":      compareDeltaGroups,
-		"deltaLabel":       compareDeltaLabel,
-		"deltaHelp":        compareDeltaHelp,
-		"deltaValue":       compareDeltaValue,
-		"deltaChange":      compareDeltaChange,
-		"deltaInterval":    compareDeltaInterval,
-		"problemDeltas":    problemDeltas,
-		"severityLabel":    severityLabel,
+		"humanDuration":         humanDuration,
+		"tip":                   tooltipHTML,
+		"metricHelp":            metricHelp,
+		"memoryHelp":            memoryMetricHelp,
+		"integralHelp":          integralHelp,
+		"scoreHelp":             scoreHelp,
+		"integralCriteria":      integralCriteria,
+		"ownerKind":             ownerKindLabel,
+		"problemKind":           problemKindLabel,
+		"codeProblemSearchText": codeProblemSearchText,
+		"codeProblemLocation":   codeProblemLocation,
+		"codeProblemMetric":     codeProblemMetric,
+		"deltaGroups":           compareDeltaGroups,
+		"deltaLabel":            compareDeltaLabel,
+		"deltaHelp":             compareDeltaHelp,
+		"deltaValue":            compareDeltaValue,
+		"deltaChange":           compareDeltaChange,
+		"deltaInterval":         compareDeltaInterval,
+		"problemDeltas":         problemDeltas,
+		"severityLabel":         severityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
@@ -654,6 +657,59 @@ func problemKindLabel(kind string) string {
 	}
 }
 
+func codeProblemLocation(row analyze.CodeProblemStats) string {
+	if row.Method == "" {
+		return row.ClassName
+	}
+	return row.ClassName + "." + row.Method
+}
+
+func codeProblemSearchText(row analyze.CodeProblemStats) string {
+	parts := []string{
+		row.ClassName,
+		row.Method,
+		row.Owner,
+		row.Severity,
+		row.Impact,
+		row.Recommendation,
+		row.Evidence,
+	}
+	parts = append(parts, row.Categories...)
+	parts = append(parts, row.Problems...)
+	parts = append(parts, row.Screens...)
+	parts = append(parts, row.Flows...)
+	parts = append(parts, row.Steps...)
+	parts = append(parts, row.Routes...)
+	for _, signal := range row.Signals {
+		parts = append(parts, signal.Name, signal.Category, signal.Detail)
+	}
+	return strings.ToLower(strings.Join(parts, " "))
+}
+
+func codeProblemMetric(signal analyze.CodeProblemSignal) string {
+	parts := []string{}
+	if signal.Count > 0 {
+		parts = append(parts, fmt.Sprintf("кол-во %d", signal.Count))
+	}
+	if signal.TotalMS > 0 {
+		parts = append(parts, fmt.Sprintf("итого %s", humanDuration(signal.TotalMS)))
+	}
+	if signal.MaxMS > 0 {
+		parts = append(parts, fmt.Sprintf("макс. %d мс", signal.MaxMS))
+	}
+	if signal.Value > 0 {
+		unit := signal.Unit
+		if unit == "" {
+			unit = "значение"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", signal.Value, unit))
+	}
+	if len(parts) == 0 {
+		return "сигнал"
+	}
+	return strings.Join(parts, " · ")
+}
+
 type compareDeltaGroup struct {
 	Title  string
 	Detail string
@@ -775,7 +831,7 @@ func compareDeltaHelp(name string) string {
 	case "UI avg FPS":
 		return "Средняя частота кадров. Для FPS ухудшением считается падение значения."
 	case "Main-thread stall max":
-		return "Самая длинная зафиксированная пауза главного потока. Даже один большой пик может быть причиной ANR-рискa."
+		return "Самая длинная зафиксированная пауза главного потока. Даже один большой пик может быть причиной риска АНР."
 	case "Max PSS":
 		return "Максимальный PSS процесса. Рост показывает больший вклад приложения в потребление RAM."
 	case "Min available memory":

@@ -46,6 +46,15 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if !summary.Influence.HasRuntimeGraph || len(summary.Influence.TopEdges) == 0 {
 		t.Fatalf("expected influence runtime edges: %+v", summary.Influence)
 	}
+	if len(summary.CodeProblems) == 0 {
+		t.Fatalf("expected code problem registry")
+	}
+	if summary.CodeProblems[0].Score <= 0 {
+		t.Fatalf("top code problem has no score: %+v", summary.CodeProblems[0])
+	}
+	if len(summary.CodeProblems[0].Signals) == 0 {
+		t.Fatalf("top code problem has no signals: %+v", summary.CodeProblems[0])
+	}
 }
 
 func TestInspectFilesAppliesOwnerMap(t *testing.T) {

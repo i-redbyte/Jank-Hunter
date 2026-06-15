@@ -346,6 +346,133 @@ main {
   overflow-wrap: break-word;
   word-break: normal;
 }
+.code-registry {
+  display: grid;
+  gap: 14px;
+}
+.registry-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.035);
+}
+.registry-toolbar input,
+.registry-toolbar select {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(5,9,18,0.64);
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+}
+.registry-toolbar input {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+.registry-toolbar select {
+  flex: 0 1 180px;
+}
+.registry-counter {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.code-problem-table {
+  min-width: 1520px;
+}
+.code-problem-table th {
+  vertical-align: middle;
+}
+.code-problem-table th button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.code-problem-table th button::after {
+  content: "↕";
+  margin-left: 5px;
+  color: rgba(111,247,255,0.58);
+}
+.code-problem-table th button.active.asc::after { content: "↑"; }
+.code-problem-table th button.active.desc::after { content: "↓"; }
+.problem-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 5px 8px;
+  border: 1px solid rgba(126,247,255,0.28);
+  border-radius: 999px;
+  font-weight: 900;
+}
+.problem-score.sev-high { border-color: rgba(255,91,124,0.52); color: var(--bad); }
+.problem-score.sev-medium { border-color: rgba(255,209,102,0.52); color: var(--warn); }
+.problem-score.sev-ok { border-color: rgba(98,255,168,0.42); color: var(--ok); }
+.problem-tags,
+.problem-context,
+.problem-signals {
+  display: grid;
+  gap: 6px;
+}
+.problem-tags {
+  display: flex;
+  flex-wrap: wrap;
+}
+.problem-chip {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 7px;
+  border: 1px solid rgba(126,247,255,0.2);
+  border-radius: 999px;
+  background: rgba(111,247,255,0.055);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 850;
+}
+.problem-chip.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
+.problem-chip.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
+.problem-location {
+  display: grid;
+  gap: 5px;
+}
+.problem-location .method {
+  color: var(--muted);
+  font-size: 12px;
+}
+.problem-signal {
+  padding: 7px 8px;
+  border: 1px solid rgba(126,247,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.028);
+}
+.problem-signal strong {
+  display: block;
+  margin-bottom: 2px;
+}
+.problem-signal small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+.problem-empty {
+  display: none;
+  color: var(--muted);
+}
+.code-registry.no-results .problem-empty {
+  display: block;
+}
 .panel, .log-card {
   margin: 18px 0;
   padding: 18px;
@@ -1035,6 +1162,75 @@ const reportJS = `
       if (activeTarget) placeTooltip(activeTarget);
     }, { passive: true });
   }
+
+  document.querySelectorAll('[data-code-registry]').forEach((registry) => {
+    const tbody = registry.querySelector('tbody');
+    const rows = Array.from(registry.querySelectorAll('[data-code-problem-row]'));
+    const search = registry.querySelector('[data-code-registry-search]');
+    const severity = registry.querySelector('[data-code-registry-severity]');
+    const category = registry.querySelector('[data-code-registry-category]');
+    const counter = registry.querySelector('[data-code-registry-count]');
+    const sortButtons = Array.from(registry.querySelectorAll('[data-code-sort]'));
+    const severityRank = { high: 3, medium: 2, ok: 1 };
+    let sortKey = 'score';
+    let sortDir = 'desc';
+    const valueFor = (row, key) => {
+      if (key === 'score') return Number(row.dataset.score || 0);
+      if (key === 'severity') return severityRank[row.dataset.severity] || 0;
+      if (key === 'class') return row.dataset.class || '';
+      if (key === 'category') return row.dataset.categories || '';
+      return row.dataset.search || '';
+    };
+    const compareValues = (a, b) => {
+      const av = valueFor(a, sortKey);
+      const bv = valueFor(b, sortKey);
+      if (typeof av === 'number' && typeof bv === 'number') return av - bv;
+      return String(av).localeCompare(String(bv), 'ru');
+    };
+    const apply = () => {
+      const query = (search?.value || '').trim().toLowerCase();
+      const severityValue = severity?.value || '';
+      const categoryValue = category?.value || '';
+      const sorted = rows.slice().sort((a, b) => {
+        const result = compareValues(a, b);
+        return sortDir === 'asc' ? result : -result;
+      });
+      let visible = 0;
+      sorted.forEach((row) => {
+        const matchesQuery = !query || (row.dataset.search || '').includes(query);
+        const matchesSeverity = !severityValue || row.dataset.severity === severityValue;
+        const matchesCategory = !categoryValue || (row.dataset.categories || '').split('|').includes(categoryValue);
+        const hidden = !(matchesQuery && matchesSeverity && matchesCategory);
+        row.hidden = hidden;
+        if (!hidden) visible += 1;
+        tbody.appendChild(row);
+      });
+      registry.classList.toggle('no-results', visible === 0);
+      if (counter) counter.textContent = visible + ' из ' + rows.length;
+      sortButtons.forEach((button) => {
+        const active = button.dataset.codeSort === sortKey;
+        button.classList.toggle('active', active);
+        button.classList.toggle('asc', active && sortDir === 'asc');
+        button.classList.toggle('desc', active && sortDir === 'desc');
+      });
+    };
+    search?.addEventListener('input', apply);
+    severity?.addEventListener('change', apply);
+    category?.addEventListener('change', apply);
+    sortButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const nextKey = button.dataset.codeSort;
+        if (sortKey === nextKey) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = nextKey;
+          sortDir = nextKey === 'class' || nextKey === 'category' ? 'asc' : 'desc';
+        }
+        apply();
+      });
+    });
+    apply();
+  });
 })();
 `
 
@@ -1536,6 +1732,63 @@ const mathInspectTemplate = `<!doctype html>
       <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
       <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
     </div>
+    <details class="fold code-registry-fold">
+      <summary><span>Реестр проблем кода</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
+            <select data-code-registry-severity aria-label="Фильтр по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Низкий риск</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр по категории">
+              <option value="">Все категории</option>
+              <option value="Сеть">Сеть</option>
+              <option value="UI">UI</option>
+              <option value="Главный поток">Главный поток</option>
+              <option value="Память">Память</option>
+              <option value="Логи">Логи</option>
+              <option value="Выполнение">Выполнение</option>
+              <option value="Граф влияния">Граф влияния</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+          <table class="code-problem-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+                <th><button type="button" data-code-sort="category">Категории</button></th>
+                <th>Доказательства</th>
+                <th>Контекст</th>
+                <th>Влияние</th>
+                <th>Что проверить</th>
+                <th>Сигналы</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Math.Summary.CodeProblems}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}" data-search="{{codeProblemSearchText .}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
+                <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
+                <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
+                <td>{{.Evidence}}</td>
+                <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+                <td>{{.Impact}}</td>
+                <td>{{.Recommendation}}</td>
+                <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+              </tr>
+              {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
     <details class="fold overview-attribution-fold">
       <summary><span>Атрибуция флоу и причин</span></summary>
       <div class="fold-body">
@@ -2563,6 +2816,7 @@ const inspectTemplate = `<!doctype html>
   <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
   <a href="#flows">Флоу</a>
+  <a href="#code-problems">Реестр кода</a>
   <a href="#owners">Источники</a>
   <a href="#memory">Память</a>
   <a href="#custom">Метрики</a>
@@ -2614,6 +2868,68 @@ const inspectTemplate = `<!doctype html>
     </div>
     {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a></p>{{end}}
     {{end}}
+  </section>
+
+  <section id="code-problems" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Реестр проблем кода</h2>
+        <div class="panel-kicker">Ранжированный список классов и методов, где сошлись риск АНР, сеть, память, UI, спам логами, удержания и граф влияния.</div>
+      </div>
+      <span class="pill">сортировка и фильтры</span>
+    </div>
+    <p class="help-text">Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода. Чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
+        <select data-code-registry-severity aria-label="Фильтр по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Низкий риск</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр по категории">
+          <option value="">Все категории</option>
+          <option value="Сеть">Сеть</option>
+          <option value="UI">UI</option>
+          <option value="Главный поток">Главный поток</option>
+          <option value="Память">Память</option>
+          <option value="Логи">Логи</option>
+          <option value="Выполнение">Выполнение</option>
+          <option value="Граф влияния">Граф влияния</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+      <table class="code-problem-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+            <th><button type="button" data-code-sort="category">Категории</button></th>
+            <th>Доказательства</th>
+            <th>Контекст</th>
+            <th>Влияние</th>
+            <th>Что проверить</th>
+            <th>Сигналы</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Summary.CodeProblems}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}" data-search="{{codeProblemSearchText .}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
+            <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
+            <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
+            <td>{{.Evidence}}</td>
+            <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></td>
+            <td>{{.Impact}}</td>
+            <td>{{.Recommendation}}</td>
+            <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <section id="network" class="panel">
@@ -2927,7 +3243,7 @@ const compareTemplate = `<!doctype html>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 мс ANR-watch такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 мс watchdog задержек такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
         <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.StallMaxMS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.StallMaxMS}} мс</strong></div></div>
         <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
       </div>

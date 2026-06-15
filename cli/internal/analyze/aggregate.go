@@ -785,6 +785,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	summary.Influence = BuildInfluence(summary, c.classGraph)
+	summary.CodeProblems = BuildCodeProblemRegistry(summary)
 	return summary
 }
 
