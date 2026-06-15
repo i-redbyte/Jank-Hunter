@@ -383,6 +383,49 @@ main {
   font-size: 12px;
   font-weight: 800;
 }
+.registry-insights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin: 8px 0 12px;
+}
+.registry-insights-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.registry-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid rgba(126,247,255,0.18);
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(111,247,255,0.045);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.registry-chip strong {
+  color: var(--cyan);
+}
+.registry-chip.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
+.registry-chip.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
+.registry-chip.sev-ok { border-color: rgba(98,255,168,0.32); color: var(--ok); }
+.registry-chip.is-active,
+.registry-chip:hover,
+.registry-chip:focus-visible {
+  outline: none;
+  border-color: rgba(126,247,255,0.56);
+  box-shadow: 0 0 0 3px rgba(111,247,255,0.10);
+}
 .code-problem-table {
   min-width: 1880px;
 }
@@ -1466,6 +1509,9 @@ const reportJS = `
     const category = registry.querySelector('[data-code-registry-category]');
     const counter = registry.querySelector('[data-code-registry-count]');
     const sortButtons = Array.from(registry.querySelectorAll('[data-code-sort]'));
+    const registryScope = registry.closest('.fold-body, .panel, .details-body, .report-section') || registry.parentElement || registry;
+    const categoryButtons = Array.from(registryScope.querySelectorAll('[data-registry-category]'));
+    const severityButtons = Array.from(registryScope.querySelectorAll('[data-registry-severity]'));
     const severityRank = { high: 3, medium: 2, ok: 1 };
     let sortKey = 'score';
     let sortDir = 'desc';
@@ -1502,6 +1548,12 @@ const reportJS = `
       });
       registry.classList.toggle('no-results', visible === 0);
       if (counter) counter.textContent = visible + ' из ' + rows.length;
+      categoryButtons.forEach((button) => {
+        button.classList.toggle('is-active', Boolean(categoryValue) && button.dataset.registryCategory === categoryValue);
+      });
+      severityButtons.forEach((button) => {
+        button.classList.toggle('is-active', Boolean(severityValue) && button.dataset.registrySeverity === severityValue);
+      });
       sortButtons.forEach((button) => {
         const active = button.dataset.codeSort === sortKey;
         button.classList.toggle('active', active);
@@ -1512,6 +1564,22 @@ const reportJS = `
     search?.addEventListener('input', apply);
     severity?.addEventListener('change', apply);
     category?.addEventListener('change', apply);
+    categoryButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!category) return;
+        const value = button.dataset.registryCategory || '';
+        category.value = category.value === value ? '' : value;
+        apply();
+      });
+    });
+    severityButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!severity) return;
+        const value = button.dataset.registrySeverity || '';
+        severity.value = severity.value === value ? '' : value;
+        apply();
+      });
+    });
     sortButtons.forEach((button) => {
       button.addEventListener('click', () => {
         const nextKey = button.dataset.codeSort;
@@ -2037,6 +2105,12 @@ const mathInspectTemplate = `<!doctype html>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
         {{scoreGuide "code"}}
+        {{with codeProblemCategories .Math.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        {{with codeProblemSeverities .Math.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
@@ -2545,6 +2619,12 @@ const mathCompareTemplate = `<!doctype html>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
         {{scoreGuide "code"}}
+        {{with codeProblemCategories .Math.Candidate.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        {{with codeProblemSeverities .Math.Candidate.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
@@ -3344,6 +3424,12 @@ const inspectTemplate = `<!doctype html>
     </div>
     <p class="help-text">Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода. Чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
     {{scoreGuide "code"}}
+    {{with codeProblemCategories .Summary.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
+    {{with codeProblemSeverities .Summary.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
@@ -3824,6 +3910,12 @@ const compareTemplate = `<!doctype html>
     </div>
     <p class="help-text">Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
     {{scoreGuide "code"}}
+    {{with codeProblemCategories .Comparison.Candidate.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
+    {{with codeProblemSeverities .Comparison.Candidate.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">

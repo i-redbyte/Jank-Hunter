@@ -204,6 +204,8 @@ func execute(path, source string, data any) error {
 		"codeProblemSearchText":  codeProblemSearchText,
 		"codeProblemLocation":    codeProblemLocation,
 		"codeProblemMetric":      codeProblemMetric,
+		"codeProblemCategories":  codeProblemCategoryStats,
+		"codeProblemSeverities":  codeProblemSeverityStats,
 		"codeProblemCompareRows": codeProblemCompareRows,
 		"memoryLeakSearchText":   memoryLeakSearchText,
 		"memoryLeakCompareRows":  memoryLeakCompareRows,
@@ -645,6 +647,86 @@ func scoreGuideHTML(kind string) template.HTML {
 	default:
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Как читать оценку</strong><p>Оценка - это относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и контекст.</p></div></div>`)
 	}
+}
+
+type registryStat struct {
+	Name     string
+	Count    int
+	Score    float64
+	Severity string
+}
+
+func codeProblemCategoryStats(items []analyze.CodeProblemStats) []registryStat {
+	stats := map[string]*registryStat{}
+	for _, item := range items {
+		for _, category := range item.Categories {
+			if category == "" {
+				continue
+			}
+			stat := stats[category]
+			if stat == nil {
+				stat = &registryStat{Name: category, Severity: "ok"}
+				stats[category] = stat
+			}
+			stat.Count++
+			stat.Score += item.Score
+			stat.Severity = maxSeverity(stat.Severity, item.Severity)
+		}
+	}
+	return sortedRegistryStats(stats)
+}
+
+func codeProblemSeverityStats(items []analyze.CodeProblemStats) []registryStat {
+	stats := map[string]*registryStat{
+		"high":   {Name: "high", Severity: "high"},
+		"medium": {Name: "medium", Severity: "medium"},
+		"ok":     {Name: "ok", Severity: "ok"},
+	}
+	for _, item := range items {
+		key := item.Severity
+		if key == "" {
+			key = "ok"
+		}
+		stat := stats[key]
+		if stat == nil {
+			stat = &registryStat{Name: key, Severity: key}
+			stats[key] = stat
+		}
+		stat.Count++
+		stat.Score += item.Score
+	}
+	ordered := []registryStat{}
+	for _, key := range []string{"high", "medium", "ok"} {
+		if stat := stats[key]; stat != nil && stat.Count > 0 {
+			ordered = append(ordered, *stat)
+		}
+	}
+	return ordered
+}
+
+func sortedRegistryStats(stats map[string]*registryStat) []registryStat {
+	result := make([]registryStat, 0, len(stats))
+	for _, stat := range stats {
+		result = append(result, *stat)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		if result[i].Score != result[j].Score {
+			return result[i].Score > result[j].Score
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func maxSeverity(a, b string) string {
+	rank := map[string]int{"ok": 1, "medium": 2, "high": 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
 }
 
 func ownerKindLabel(kind string) string {
