@@ -197,6 +197,7 @@ func execute(path, source string, data any) error {
 		"memoryHelp":             memoryMetricHelp,
 		"integralHelp":           integralHelp,
 		"scoreHelp":              scoreHelp,
+		"scoreGuide":             scoreGuideHTML,
 		"integralCriteria":       integralCriteria,
 		"ownerKind":              ownerKindLabel,
 		"problemKind":            problemKindLabel,
@@ -628,6 +629,21 @@ func scoreHelp(kind string) string {
 		return "Интегральная оценка — площадь симптома по времени: значение сигнала умножается на длительность окна и суммируется. Она помогает отличить короткий пик от долгой деградации."
 	default:
 		return "Оценка — относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и связанный контекст."
+	}
+}
+
+func scoreGuideHTML(kind string) template.HTML {
+	switch kind {
+	case "code":
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Оценка показывает приоритет расследования внутри текущего прогона. Она растет от совпадения сетевых хвостов, пауз главного потока, подтормаживаний UI, памяти, логов, флоу и графа влияния.</p></div></div>`)
+	case "leak":
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала утечек памяти</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: критично</span><p>Риск дополнительно повышают возраст удержания от 15 секунд, повторяемость, удержанный размер от 4 МБ и связь с пользовательским держателем.</p></div></div>`)
+	case "math":
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: заметный сигнал</span><span class="score-band sev-high">6+: сильный сигнал</span><p>Для задержек, памяти, подтормаживаний и сетевых циклов больше обычно хуже. Доверие 0..1 показывает, насколько вывод подтвержден данными.</p></div></div>`)
+	case "compare":
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сравнения</strong><span class="score-band sev-ok">зеленый: без регрессии</span><span class="score-band sev-medium">желтый: нужна проверка</span><span class="score-band sev-high">красный: критично</span><p>Положительная дельта задержек, ошибок, памяти, подтормаживаний и спама обычно означает ухудшение кандидата. Смотрите дельту вместе с доверием и размером выборки.</p></div></div>`)
+	default:
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Как читать оценку</strong><p>Оценка - это относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и контекст.</p></div></div>`)
 	}
 }
 

@@ -905,6 +905,46 @@ th code {
   margin-bottom: 5px;
   color: var(--cyan);
 }
+.score-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.score-guide-card {
+  padding: 11px 12px;
+  border: 1px solid rgba(126,247,255,0.14);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.032);
+}
+.score-guide-card strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--cyan);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.score-guide-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.score-band {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: 0 6px 6px 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 850;
+}
+.score-band.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
+.score-band.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
+.score-band.sev-ok { border-color: rgba(98,255,168,0.36); color: var(--ok); }
 .bar, .chart-track, .delta-track {
   height: 10px;
   min-width: 90px;
@@ -1991,10 +2031,12 @@ const mathInspectTemplate = `<!doctype html>
       <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
       <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
     </div>
+    {{scoreGuide "math"}}
     <details id="code-problems" class="fold code-registry-fold">
       <summary><span>Реестр проблем кода</span></summary>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
+        {{scoreGuide "code"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
@@ -2053,6 +2095,7 @@ const mathInspectTemplate = `<!doctype html>
       <div class="fold-body">
         <p class="help-text">Показывает удержанные объекты с вероятным держателем и контекстом. Системные классы выводятся только как симптом, основной фокус — пользовательский держатель, экран и флоу.</p>
         <div class="leak-limitations">Точный путь до корня GC требует дампа памяти. В легком режиме выполнения отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
+        {{scoreGuide "leak"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
@@ -2496,10 +2539,12 @@ const mathCompareTemplate = `<!doctype html>
       <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Флоу и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
       <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
     </div>
+    {{scoreGuide "compare"}}
     <details id="code-problems" class="fold code-registry-fold">
       <summary><span>Реестр проблем кода кандидата</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
+        {{scoreGuide "code"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
@@ -2557,6 +2602,7 @@ const mathCompareTemplate = `<!doctype html>
       <summary><span>Сравнение утечек памяти</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает удержанные объекты кандидата, которые появились или усилились относительно базы. Оценка учитывает количество, возраст удержания, тип объекта и наличие пользовательского держателя.</p>
+        {{scoreGuide "leak"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
@@ -3297,6 +3343,7 @@ const inspectTemplate = `<!doctype html>
       <span class="pill">сортировка и фильтры</span>
     </div>
     <p class="help-text">Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода. Чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
+    {{scoreGuide "code"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
@@ -3487,6 +3534,7 @@ const inspectTemplate = `<!doctype html>
     </div>
     <p class="help-text">Этот блок не показывает системный шум сам по себе: системные классы важны, когда рядом есть пользовательский держатель или экран. Точный путь до корня GC без дампа памяти недоступен, поэтому держатель здесь — вероятный владелец из контекста выполнения или места вызова watch-метода.</p>
     <div class="leak-limitations">Если в колонке “держатель” написано “не определен”, добавьте <code>ownerHint</code> в <code>JankHunter.watchObject(...)</code> или оберните подозрительный участок в <code>JankHunter.withOwner(...)</code>. Тогда следующий прогон покажет, какой пользовательский класс вероятнее всего удерживает объект.</div>
+    {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
@@ -3747,6 +3795,7 @@ const compareTemplate = `<!doctype html>
       <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Флоу”: там видно конкретный маршрут, экран или источник, который изменился.</div>
       <div class="guide-card"><strong>Когда эскалировать</strong>Критичные регрессии с повторяемостью, сетевые циклы или рост интегральной нагрузки лучше сразу превращать в задачу на исправление.</div>
     </div>
+    {{scoreGuide "compare"}}
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
       <div class="gauge-card"><div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
@@ -3774,6 +3823,7 @@ const compareTemplate = `<!doctype html>
       <span class="pill">кандидат против базы</span>
     </div>
     <p class="help-text">Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
+    {{scoreGuide "code"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
@@ -3836,6 +3886,7 @@ const compareTemplate = `<!doctype html>
       <span class="pill">дельта удержаний</span>
     </div>
     <p class="help-text">Сравнение смотрит не только количество, но и возраст удержания. Если держатель не определен, добавьте <code>ownerHint</code> или <code>withOwner</code>, чтобы следующий прогон показал пользовательский класс точнее.</p>
+    {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
