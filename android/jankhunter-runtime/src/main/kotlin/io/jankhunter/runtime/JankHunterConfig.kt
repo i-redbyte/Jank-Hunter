@@ -39,6 +39,9 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val metricAggregationWindowMs = builder.metricAggregationWindowMs
     private val maxMetricAggregationKeys = builder.maxMetricAggregationKeys
     private val maxLogSpamKeys = builder.maxLogSpamKeys
+    private val maxRuntimeCallGraphKeys = builder.maxRuntimeCallGraphKeys
+    private val maxHandlerTrackingEntries = builder.maxHandlerTrackingEntries
+    private val maxHandlerWrappersPerRunnable = builder.maxHandlerWrappersPerRunnable
     private val routeRedactor = builder.routeRedactor
     private val logDirectory = builder.logDirectory
     private val mainProcessOnly = builder.mainProcessOnly
@@ -111,6 +114,12 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxLogSpamKeys(): Int = maxLogSpamKeys
 
+    fun maxRuntimeCallGraphKeys(): Int = maxRuntimeCallGraphKeys
+
+    fun maxHandlerTrackingEntries(): Int = maxHandlerTrackingEntries
+
+    fun maxHandlerWrappersPerRunnable(): Int = maxHandlerWrappersPerRunnable
+
     fun redactRoute(route: String?): String? = routeRedactor.redact(route)
 
     fun logDirectory(): File? = logDirectory
@@ -161,6 +170,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var metricAggregationWindowMs = 5_000L
         internal var maxMetricAggregationKeys = 2048
         internal var maxLogSpamKeys = 2048
+        internal var maxRuntimeCallGraphKeys = 4096
+        internal var maxHandlerTrackingEntries = 4096
+        internal var maxHandlerWrappersPerRunnable = 32
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
         internal var mainProcessOnly = false
@@ -233,6 +245,12 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun maxLogSpamKeys(value: Int) = apply { maxLogSpamKeys = value }
 
+        fun maxRuntimeCallGraphKeys(value: Int) = apply { maxRuntimeCallGraphKeys = value }
+
+        fun maxHandlerTrackingEntries(value: Int) = apply { maxHandlerTrackingEntries = value }
+
+        fun maxHandlerWrappersPerRunnable(value: Int) = apply { maxHandlerWrappersPerRunnable = value }
+
         fun routeRedactor(value: JankHunterRedactor) = apply { routeRedactor = value }
 
         fun logDirectory(value: File?) = apply { logDirectory = value }
@@ -283,6 +301,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_METRIC_AGGREGATION_WINDOW_MS = "io.jankhunter.metric_aggregation_window_ms"
         const val META_MAX_METRIC_AGGREGATION_KEYS = "io.jankhunter.max_metric_aggregation_keys"
         const val META_MAX_LOG_SPAM_KEYS = "io.jankhunter.max_log_spam_keys"
+        const val META_MAX_RUNTIME_CALL_GRAPH_KEYS = "io.jankhunter.max_runtime_call_graph_keys"
+        const val META_MAX_HANDLER_TRACKING_ENTRIES = "io.jankhunter.max_handler_tracking_entries"
+        const val META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = "io.jankhunter.max_handler_wrappers_per_runnable"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
 
@@ -339,6 +360,11 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .metricAggregationWindowMs(metadata?.getLong(META_METRIC_AGGREGATION_WINDOW_MS, 5_000L) ?: 5_000L)
                 .maxMetricAggregationKeys(metadata?.getInt(META_MAX_METRIC_AGGREGATION_KEYS, 2048) ?: 2048)
                 .maxLogSpamKeys(metadata?.getInt(META_MAX_LOG_SPAM_KEYS, 2048) ?: 2048)
+                .maxRuntimeCallGraphKeys(metadata?.getInt(META_MAX_RUNTIME_CALL_GRAPH_KEYS, 4096) ?: 4096)
+                .maxHandlerTrackingEntries(metadata?.getInt(META_MAX_HANDLER_TRACKING_ENTRIES, 4096) ?: 4096)
+                .maxHandlerWrappersPerRunnable(
+                    metadata?.getInt(META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32) ?: 32,
+                )
                 .mainProcessOnly(metadata?.getBoolean(META_MAIN_PROCESS_ONLY, false) ?: false)
                 .allowedProcesses(parseProcessList(metadata?.getString(META_ALLOWED_PROCESSES)))
                 .build()

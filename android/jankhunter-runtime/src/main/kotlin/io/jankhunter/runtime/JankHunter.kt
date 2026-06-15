@@ -117,6 +117,8 @@ object JankHunter {
         config = providedConfig
         metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
         lastMetricFlushAtMs.set(0L)
+        lastRuntimeCallFlushAtMs.set(0L)
+        runtimeCallDropped.set(0L)
         adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
             providedConfig.adaptiveMemoryStableIntervalMs(),
             providedConfig.adaptiveContextStableIntervalMs(),
@@ -448,7 +450,9 @@ object JankHunter {
     ): Runnable {
         if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
         val wrapper = JankHunterHandlerRunnable(runnable, ownerName)
-        registerHandlerRunnable(handler, runnable, token, wrapper)
+        if (!registerHandlerRunnable(handler, runnable, token, wrapper)) {
+            return runnable
+        }
         return wrapper
     }
 
@@ -479,22 +483,34 @@ object JankHunter {
         runnable: Runnable,
         token: Any?,
         wrapper: Runnable,
-    ) {
+    ): Boolean {
         synchronized(handlerRunnableLock) {
             cleanHandlerRunnableEntriesLocked()
+            val maxEntries = config?.maxHandlerTrackingEntries() ?: DEFAULT_MAX_HANDLER_TRACKING_ENTRIES
+            val maxWrappers = config?.maxHandlerWrappersPerRunnable() ?: DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE
             val entry = handlerRunnableEntries.firstOrNull {
                 it.handler.get() === handler && it.original.get() === runnable
-            } ?: HandlerRunnableEntry(
+            }
+            if (entry == null && (maxEntries <= 0 || handlerRunnableEntries.size >= maxEntries)) {
+                recordCounter("jankhunter.handler_wrapper.dropped_entries.count", 1)
+                return false
+            }
+            val resolvedEntry = entry ?: HandlerRunnableEntry(
                 handler = WeakReference(handler),
                 original = WeakReference(runnable),
                 wrappers = mutableListOf(),
             ).also { handlerRunnableEntries.add(it) }
-            entry.wrappers.add(
+            if (maxWrappers <= 0 || resolvedEntry.wrappers.size >= maxWrappers) {
+                recordCounter("jankhunter.handler_wrapper.dropped_wrappers.count", 1)
+                return false
+            }
+            resolvedEntry.wrappers.add(
                 HandlerRunnableWrapperEntry(
                     wrapper = WeakReference(wrapper),
                     token = token?.let(::WeakReference),
                 ),
             )
+            return true
         }
     }
 
@@ -1117,7 +1133,8 @@ object JankHunter {
         val tuple = captureContext(ownerOverride = caller)
         val key = RuntimeCallKey(tuple.screen, caller, tuple.flow, tuple.step, callee)
         val stats = runtimeCallCounters[key] ?: run {
-            if (runtimeCallCounters.size >= RUNTIME_CALL_MAX_KEYS) {
+            val maxKeys = config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS
+            if (maxKeys <= 0 || runtimeCallCounters.size >= maxKeys) {
                 runtimeCallDropped.incrementAndGet()
                 flushRuntimeCalls(force = false)
                 return
@@ -1253,6 +1270,9 @@ object JankHunter {
     private const val LOG_SPAM_PROBLEM_COUNT = 50L
     private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
     private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
+    private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
+    private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
+    private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
 
     internal data class JankHunterContext(
         val screen: String?,
@@ -1300,5 +1320,4 @@ object JankHunter {
     }
 
     private const val RUNTIME_CALL_FLUSH_MS = 5000L
-    private const val RUNTIME_CALL_MAX_KEYS = 4096
 }

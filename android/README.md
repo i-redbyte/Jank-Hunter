@@ -455,13 +455,16 @@ Runtime пишет асинхронно, через очередь и flush-ин
 <meta-data android:name="io.jankhunter.metric_aggregation_window_ms" android:value="5000" />
 <meta-data android:name="io.jankhunter.max_metric_aggregation_keys" android:value="2048" />
 <meta-data android:name="io.jankhunter.max_log_spam_keys" android:value="2048" />
+<meta-data android:name="io.jankhunter.max_runtime_call_graph_keys" android:value="4096" />
+<meta-data android:name="io.jankhunter.max_handler_tracking_entries" android:value="4096" />
+<meta-data android:name="io.jankhunter.max_handler_wrappers_per_runnable" android:value="32" />
 ```
 
-При превышении cardinality runtime пишет счетчики `jankhunter.metric_aggregation.dropped.count` или `jankhunter.log_spam.dropped_keys.count`, а не раздувает `.jhlog` новыми ключами.
+При превышении cardinality runtime пишет счетчики `jankhunter.metric_aggregation.dropped.count`, `jankhunter.log_spam.dropped_keys.count`, `jankhunter.runtime_call_graph.dropped.count`, `jankhunter.handler_wrapper.dropped_entries.count` или `jankhunter.handler_wrapper.dropped_wrappers.count`, а не раздувает `.jhlog` новыми ключами и registry-записями.
 
 ## Бенчмарки overhead
 
-В runtime есть opt-in unit benchmarks для горячих путей: flow API, счетчик log spam, создание wrapper и guard runtime-графа вызовов. Они не запускаются по умолчанию, чтобы не замедлять обычные тесты и не делать CI шумным.
+В runtime есть opt-in unit benchmarks для горячих путей: flow API, счетчик log spam, создание и выполнение wrapper, ASM enter/exit guard, runtime wrappers, log writer, агрегация метрик и coroutine propagation. Они не запускаются по умолчанию, чтобы не замедлять обычные тесты и не делать CI шумным.
 
 Запуск:
 

@@ -41,6 +41,9 @@ class JankHunterConfigTest {
             .metricAggregationWindowMs(15)
             .maxMetricAggregationKeys(16)
             .maxLogSpamKeys(17)
+            .maxRuntimeCallGraphKeys(18)
+            .maxHandlerTrackingEntries(19)
+            .maxHandlerWrappersPerRunnable(20)
             .mainProcessOnly(true)
             .allowedProcesses(listOf("com.example", "com.example:remote"))
             .processNameRedactor { "redacted.$it" }
@@ -78,6 +81,9 @@ class JankHunterConfigTest {
         assertEquals(15, config.metricAggregationWindowMs())
         assertEquals(16, config.maxMetricAggregationKeys())
         assertEquals(17, config.maxLogSpamKeys())
+        assertEquals(18, config.maxRuntimeCallGraphKeys())
+        assertEquals(19, config.maxHandlerTrackingEntries())
+        assertEquals(20, config.maxHandlerWrappersPerRunnable())
         assertTrue(config.mainProcessOnly())
         assertEquals(setOf("com.example", "com.example:remote"), config.allowedProcesses())
         assertEquals("redacted.com.example", config.redactProcessName("com.example"))
@@ -114,6 +120,9 @@ class JankHunterConfigTest {
         assertEquals(5_000L, config.metricAggregationWindowMs())
         assertEquals(2048, config.maxMetricAggregationKeys())
         assertEquals(2048, config.maxLogSpamKeys())
+        assertEquals(4096, config.maxRuntimeCallGraphKeys())
+        assertEquals(4096, config.maxHandlerTrackingEntries())
+        assertEquals(32, config.maxHandlerWrappersPerRunnable())
     }
 
     @Test
