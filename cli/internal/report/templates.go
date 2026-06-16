@@ -3370,40 +3370,50 @@ const influenceTemplate = `<!doctype html>
     <div class="panel-head">
       <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
     </div>
-    <table class="influence-table influence-node-table">
-      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
-      {{range .Influence.TopNodes}}
-      <tr>
-        <td><code>{{.ClassName}}</code></td>
-        <td><div class="table-stack"><strong>{{printf "%.1f" .Score}}</strong><span>{{influenceSeverity .Severity}}</span></div></td>
-        <td>{{influenceStatus .Status}}</td>
-        <td>
-          <div class="table-metrics">
-            <div class="table-metric">Проблемы<strong>{{.Problems}}</strong></div>
-            <div class="table-metric">Спам логами<strong>{{.LogSpam}}</strong></div>
-            <div class="table-metric">Главный поток<strong>{{.MainThreadMS}} мс</strong></div>
-            <div class="table-metric">Сеть<strong>{{.NetworkMS}} мс</strong></div>
-            <div class="table-metric">UI-подторм.<strong>{{.UIJank}}</strong></div>
-            <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
-          </div>
-        </td>
-        <td>{{join .Reasons ", "}}</td>
-        <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
-      </tr>
-      {{else}}<tr><td colspan="6" class="muted">Нет узлов влияния.</td></tr>{{end}}
-    </table>
+    <details class="fold influence-table-fold">
+      <summary><span>Показать проблемные классы</span><span class="method-kind">{{len .Influence.TopNodes}} классов</span></summary>
+      <div class="fold-body">
+        <table class="influence-table influence-node-table">
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
+          {{range .Influence.TopNodes}}
+          <tr>
+            <td><code>{{.ClassName}}</code></td>
+            <td><div class="table-stack"><strong>{{printf "%.1f" .Score}}</strong><span>{{influenceSeverity .Severity}}</span></div></td>
+            <td>{{influenceStatus .Status}}</td>
+            <td>
+              <div class="table-metrics">
+                <div class="table-metric">Проблемы<strong>{{.Problems}}</strong></div>
+                <div class="table-metric">Спам логами<strong>{{.LogSpam}}</strong></div>
+                <div class="table-metric">Главный поток<strong>{{.MainThreadMS}} мс</strong></div>
+                <div class="table-metric">Сеть<strong>{{.NetworkMS}} мс</strong></div>
+                <div class="table-metric">UI-подторм.<strong>{{.UIJank}}</strong></div>
+                <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
+              </div>
+            </td>
+            <td>{{join .Reasons ", "}}</td>
+            <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет узлов влияния.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
   </section>
 
   <section id="edges" class="panel">
     <div class="panel-head">
       <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в симптомах выполнения.</div></div>
     </div>
-    <table class="influence-table influence-edge-table">
-      <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
-      {{range .Influence.TopEdges}}
-      <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
-      {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте ` + "`--class-graph`" + `, чтобы увидеть ребра между классами.</td></tr>{{end}}
-    </table>
+    <details class="fold influence-table-fold">
+      <summary><span>Показать связи влияния</span><span class="method-kind">{{len .Influence.TopEdges}} связей</span></summary>
+      <div class="fold-body">
+        <table class="influence-table influence-edge-table">
+          <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
+          {{range .Influence.TopEdges}}
+          <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте ` + "`--class-graph`" + `, чтобы увидеть ребра между классами.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
   </section>
 
   <section id="heuristic" class="panel">
