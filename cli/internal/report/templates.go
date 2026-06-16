@@ -722,10 +722,29 @@ main {
   color: var(--ink);
   cursor: pointer;
 }
-.code-problem-details summary span {
+.code-problem-summary-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.code-problem-summary-main strong {
+  color: var(--ink);
   font-weight: 850;
 }
+.code-problem-summary-main em {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .code-problem-details summary small {
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -733,6 +752,9 @@ main {
 }
 .code-problem-details[open] summary {
   border-bottom: 1px solid rgba(126,247,255,0.12);
+  color: var(--cyan);
+}
+.code-problem-details[open] .code-problem-summary-main strong {
   color: var(--cyan);
 }
 .code-problem-detail-body {
@@ -748,7 +770,7 @@ main {
   border-radius: 8px;
   background: rgba(6,12,26,0.42);
 }
-.code-problem-detail-block.full {
+.code-problem-detail-block.span-all {
   grid-column: 1 / -1;
 }
 .code-problem-detail-block strong {
@@ -1680,7 +1702,11 @@ const reportJS = `
     if (activeTarget) placeTooltip(activeTarget);
   });
   document.addEventListener('pointerout', (event) => {
-    if (activeTarget && activeTarget.contains(event.target) && !activeTarget.contains(event.relatedTarget)) {
+    const fromTarget = event.target.closest('[data-tip]');
+    const toTarget = event.relatedTarget && event.relatedTarget.closest
+      ? event.relatedTarget.closest('[data-tip]')
+      : null;
+    if (fromTarget && fromTarget === activeTarget && !toTarget) {
       hideTooltip();
     }
   });
@@ -2307,7 +2333,7 @@ const mathInspectTemplate = `<!doctype html>
       <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
     </div>
     {{scoreGuide "math"}}
-    <details id="code-problems" class="fold code-registry-fold">
+    <details id="code-problems" class="fold code-registry-fold" open>
       <summary><span>Реестр проблем кода</span></summary>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
@@ -2364,14 +2390,14 @@ const mathInspectTemplate = `<!doctype html>
                 <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
                 <td>
                   <details class="code-problem-details">
-                    <summary><span>Открыть доказательства</span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
                     <div class="code-problem-detail-body">
-                      <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
+                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
                       <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                       <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
-                      <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
-                      {{if .DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                      <div class="code-problem-detail-block full"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
+                      {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                     </div>
                   </details>
                 </td>
@@ -2832,7 +2858,7 @@ const mathCompareTemplate = `<!doctype html>
       <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
     </div>
     {{scoreGuide "compare"}}
-    <details id="code-problems" class="fold code-registry-fold">
+    <details id="code-problems" class="fold code-registry-fold" open>
       <summary><span>Реестр проблем кода кандидата</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
@@ -2891,14 +2917,14 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
                 <td>
                   <details class="code-problem-details">
-                    <summary><span>Открыть доказательства</span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
                     <div class="code-problem-detail-body">
-                      <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
                       <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                       <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
-                      <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
-                      {{if .Candidate.DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                      <div class="code-problem-detail-block full"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                      {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                     </div>
                   </details>
                 </td>
@@ -3707,14 +3733,14 @@ const inspectTemplate = `<!doctype html>
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span>Открыть доказательства</span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
                 <div class="code-problem-detail-body">
-                  <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
+                  <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
                   <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                   <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
-                  <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
-                  {{if .DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                  <div class="code-problem-detail-block full"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
+                  {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                 </div>
               </details>
             </td>
@@ -4206,14 +4232,14 @@ const compareTemplate = `<!doctype html>
             <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span>Открыть доказательства</span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
                 <div class="code-problem-detail-body">
-                  <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                  <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
                   <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                   <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
-                  <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
-                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                  <div class="code-problem-detail-block full"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                 </div>
               </details>
             </td>

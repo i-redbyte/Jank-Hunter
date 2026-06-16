@@ -164,20 +164,22 @@ const checkZeroToggle = async (page) => page.evaluate(() => {
 });
 
 const checkTooltipPlacement = async (page) => {
-  const boxes = await page.$$eval("[data-tip]", (nodes) => nodes
-    .map((node) => {
+  const handles = await page.$$("[data-tip]");
+  let checked = 0;
+  for (const handle of handles) {
+    const box = await handle.evaluate((node) => {
       const rect = node.getBoundingClientRect();
       return {
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2,
         visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth,
       };
-    })
-    .filter((box) => box.visible));
-  let checked = 0;
-  for (const box of boxes.slice(0, 12)) {
+    });
+    if (!box.visible) {
+      continue;
+    }
     await page.mouse.move(box.x, box.y);
-    await page.waitForTimeout(40);
+    await page.waitForTimeout(120);
     const issue = await page.evaluate(() => {
       const tip = document.querySelector(".jh-tooltip.is-visible");
       if (!tip) return "подсказка не появилась";
@@ -191,6 +193,9 @@ const checkTooltipPlacement = async (page) => {
       return issue;
     }
     checked += 1;
+    if (checked >= 12) {
+      break;
+    }
   }
   return checked > 0 ? "" : "";
 };
