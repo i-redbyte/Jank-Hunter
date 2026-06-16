@@ -142,6 +142,22 @@ class JankHunterConfigTest {
     }
 
     @Test
+    fun manifestMetadataAcceptsAndroidXmlValueTypes() {
+        assertEquals(600_000L, JankHunterConfig.coerceMetadataLong("600000", 1L))
+        assertEquals(123L, JankHunterConfig.coerceMetadataLong(123, 1L))
+        assertEquals(456L, JankHunterConfig.coerceMetadataLong(456L, 1L))
+        assertEquals(42, JankHunterConfig.coerceMetadataInt("42", 1))
+        assertEquals(7, JankHunterConfig.coerceMetadataInt(7L, 1))
+        assertTrue(JankHunterConfig.coerceMetadataBoolean("true", false))
+        assertFalse(JankHunterConfig.coerceMetadataBoolean("0", true))
+        assertTrue(JankHunterConfig.coerceMetadataBoolean(1, false))
+        assertFalse(JankHunterConfig.coerceMetadataBoolean(false, true))
+        assertEquals(9L, JankHunterConfig.coerceMetadataLong("not-a-number", 9L))
+        assertEquals(9, JankHunterConfig.coerceMetadataInt("not-a-number", 9))
+        assertTrue(JankHunterConfig.coerceMetadataBoolean("maybe", true))
+    }
+
+    @Test
     fun processPolicyHonorsMainProcessAndAllowList() {
         val mainOnly = JankHunterConfig.builder()
             .mainProcessOnly(true)

@@ -321,64 +321,60 @@ class JankHunterConfig private constructor(builder: Builder) {
         @JvmStatic
         fun fromManifest(context: Context): JankHunterConfig {
             val metadata = metadata(context)
+            val defaultEnabled = isDebuggable(context)
             return builder()
-                .enabled(metadata?.getBoolean(META_ENABLED, isDebuggable(context)) ?: isDebuggable(context))
-                .autoStartCollectors(metadata?.getBoolean(META_AUTO_START_COLLECTORS, true) ?: true)
-                .mainThreadStallThresholdMs(metadata?.getLong(META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L) ?: 700L)
-                .memorySampleIntervalMs(metadata?.getLong(META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L) ?: 10_000L)
-                .systemSamplerEnabled(metadata?.getBoolean(META_SYSTEM_SAMPLER_ENABLED, true) ?: true)
-                .systemSampleIntervalMs(metadata?.getLong(META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L) ?: 15_000L)
+                .enabled(metadataBoolean(metadata, META_ENABLED, defaultEnabled))
+                .autoStartCollectors(metadataBoolean(metadata, META_AUTO_START_COLLECTORS, true))
+                .mainThreadStallThresholdMs(metadataLong(metadata, META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
+                .memorySampleIntervalMs(metadataLong(metadata, META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L))
+                .systemSamplerEnabled(metadataBoolean(metadata, META_SYSTEM_SAMPLER_ENABLED, true))
+                .systemSampleIntervalMs(metadataLong(metadata, META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L))
                 .mainLooperDispatchMonitorEnabled(
-                    metadata?.getBoolean(META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false) ?: false,
+                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false),
                 )
-                .processExitInfoEnabled(metadata?.getBoolean(META_PROCESS_EXIT_INFO_ENABLED, true) ?: true)
-                .objectWatcherEnabled(metadata?.getBoolean(META_OBJECT_WATCHER_ENABLED, true) ?: true)
-                .retainedObjectDelayMs(metadata?.getLong(META_RETAINED_OBJECT_DELAY_MS, 5_000L) ?: 5_000L)
-                .retainedObjectForceGcEnabled(metadata?.getBoolean(META_RETAINED_OBJECT_FORCE_GC_ENABLED, false) ?: false)
-                .retainedHeapDumpEnabled(metadata?.getBoolean(META_RETAINED_HEAP_DUMP_ENABLED, false) ?: false)
+                .processExitInfoEnabled(metadataBoolean(metadata, META_PROCESS_EXIT_INFO_ENABLED, true))
+                .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
+                .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
+                .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
+                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, false))
                 .retainedHeapDumpMinIntervalMs(
-                    metadata?.getLong(META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L)
-                        ?: 10 * 60_000L,
+                    metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L),
                 )
-                .retainedHeapDumpMaxCount(metadata?.getInt(META_RETAINED_HEAP_DUMP_MAX_COUNT, 1) ?: 1)
+                .retainedHeapDumpMaxCount(metadataInt(metadata, META_RETAINED_HEAP_DUMP_MAX_COUNT, 1))
                 .retainedHeapDumpMinRetainedAgeMs(
-                    metadata?.getLong(META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS, 30_000L)
-                        ?: 30_000L,
+                    metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS, 30_000L),
                 )
-                .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
-                .jankStatsEnabled(metadata?.getBoolean(META_JANKSTATS_ENABLED, false) ?: false)
-                .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)
-                .jankFrameThresholdMs(metadata?.getLong(META_JANK_FRAME_THRESHOLD_MS, 32L) ?: 32L)
-                .maxQueueSize(metadata?.getInt(META_MAX_QUEUE_SIZE, 2048) ?: 2048)
-                .maxLogBytes(metadata?.getLong(META_MAX_LOG_BYTES, 5L * 1024L * 1024L) ?: 5L * 1024L * 1024L)
+                .fpsMonitorEnabled(metadataBoolean(metadata, META_FPS_MONITOR_ENABLED, true))
+                .jankStatsEnabled(metadataBoolean(metadata, META_JANKSTATS_ENABLED, false))
+                .fpsWindowMs(metadataLong(metadata, META_FPS_WINDOW_MS, 1_000L))
+                .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
+                .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
+                .maxLogBytes(metadataLong(metadata, META_MAX_LOG_BYTES, 5L * 1024L * 1024L))
                 .maxLogDirectoryBytes(
-                    metadata?.getLong(META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L)
-                        ?: 25L * 1024L * 1024L,
+                    metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L),
                 )
-                .logCompressionEnabled(metadata?.getBoolean(META_LOG_COMPRESSION_ENABLED, true) ?: true)
-                .maxDictionaryEntries(metadata?.getInt(META_MAX_DICTIONARY_ENTRIES, 8192) ?: 8192)
-                .maxDictionaryValueBytes(metadata?.getInt(META_MAX_DICTIONARY_VALUE_BYTES, 256) ?: 256)
-                .flushIntervalMs(metadata?.getLong(META_FLUSH_INTERVAL_MS, 5_000L) ?: 5_000L)
-                .adaptiveSamplingEnabled(metadata?.getBoolean(META_ADAPTIVE_SAMPLING_ENABLED, true) ?: true)
+                .logCompressionEnabled(metadataBoolean(metadata, META_LOG_COMPRESSION_ENABLED, true))
+                .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
+                .maxDictionaryValueBytes(metadataInt(metadata, META_MAX_DICTIONARY_VALUE_BYTES, 256))
+                .flushIntervalMs(metadataLong(metadata, META_FLUSH_INTERVAL_MS, 5_000L))
+                .adaptiveSamplingEnabled(metadataBoolean(metadata, META_ADAPTIVE_SAMPLING_ENABLED, true))
                 .adaptiveMemoryStableIntervalMs(
-                    metadata?.getLong(META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS, 60_000L)
-                        ?: 60_000L,
+                    metadataLong(metadata, META_ADAPTIVE_MEMORY_STABLE_INTERVAL_MS, 60_000L),
                 )
                 .adaptiveContextStableIntervalMs(
-                    metadata?.getLong(META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS, 60_000L)
-                        ?: 60_000L,
+                    metadataLong(metadata, META_ADAPTIVE_CONTEXT_STABLE_INTERVAL_MS, 60_000L),
                 )
-                .metricAggregationEnabled(metadata?.getBoolean(META_METRIC_AGGREGATION_ENABLED, true) ?: true)
-                .metricAggregationWindowMs(metadata?.getLong(META_METRIC_AGGREGATION_WINDOW_MS, 5_000L) ?: 5_000L)
-                .maxMetricAggregationKeys(metadata?.getInt(META_MAX_METRIC_AGGREGATION_KEYS, 2048) ?: 2048)
-                .maxLogSpamKeys(metadata?.getInt(META_MAX_LOG_SPAM_KEYS, 2048) ?: 2048)
-                .maxRuntimeCallGraphKeys(metadata?.getInt(META_MAX_RUNTIME_CALL_GRAPH_KEYS, 4096) ?: 4096)
-                .maxHandlerTrackingEntries(metadata?.getInt(META_MAX_HANDLER_TRACKING_ENTRIES, 4096) ?: 4096)
+                .metricAggregationEnabled(metadataBoolean(metadata, META_METRIC_AGGREGATION_ENABLED, true))
+                .metricAggregationWindowMs(metadataLong(metadata, META_METRIC_AGGREGATION_WINDOW_MS, 5_000L))
+                .maxMetricAggregationKeys(metadataInt(metadata, META_MAX_METRIC_AGGREGATION_KEYS, 2048))
+                .maxLogSpamKeys(metadataInt(metadata, META_MAX_LOG_SPAM_KEYS, 2048))
+                .maxRuntimeCallGraphKeys(metadataInt(metadata, META_MAX_RUNTIME_CALL_GRAPH_KEYS, 4096))
+                .maxHandlerTrackingEntries(metadataInt(metadata, META_MAX_HANDLER_TRACKING_ENTRIES, 4096))
                 .maxHandlerWrappersPerRunnable(
-                    metadata?.getInt(META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32) ?: 32,
+                    metadataInt(metadata, META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32),
                 )
-                .mainProcessOnly(metadata?.getBoolean(META_MAIN_PROCESS_ONLY, false) ?: false)
-                .allowedProcesses(parseProcessList(metadata?.getString(META_ALLOWED_PROCESSES)))
+                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, false))
+                .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
                 .build()
         }
 
@@ -388,6 +384,58 @@ class JankHunterConfig private constructor(builder: Builder) {
                 ?.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
                 ?: emptyList()
         }
+
+        internal fun metadataBoolean(metadata: Bundle?, key: String, defaultValue: Boolean): Boolean {
+            return coerceMetadataBoolean(metadataValue(metadata, key), defaultValue)
+        }
+
+        internal fun metadataLong(metadata: Bundle?, key: String, defaultValue: Long): Long {
+            return coerceMetadataLong(metadataValue(metadata, key), defaultValue)
+        }
+
+        internal fun metadataInt(metadata: Bundle?, key: String, defaultValue: Int): Int {
+            return coerceMetadataInt(metadataValue(metadata, key), defaultValue)
+        }
+
+        internal fun coerceMetadataBoolean(value: Any?, defaultValue: Boolean): Boolean {
+            return when (value) {
+                is Boolean -> value
+                is Number -> value.toInt() != 0
+                is String -> when (value.trim().lowercase()) {
+                    "true", "1" -> true
+                    "false", "0" -> false
+                    else -> defaultValue
+                }
+                else -> defaultValue
+            }
+        }
+
+        internal fun coerceMetadataLong(value: Any?, defaultValue: Long): Long {
+            return when (value) {
+                is Number -> value.toLong()
+                is String -> value.trim().toLongOrNull() ?: defaultValue
+                else -> defaultValue
+            }
+        }
+
+        internal fun coerceMetadataInt(value: Any?, defaultValue: Int): Int {
+            return when (value) {
+                is Number -> value.toInt()
+                is String -> value.trim().toIntOrNull() ?: defaultValue
+                else -> defaultValue
+            }
+        }
+
+        private fun metadataString(metadata: Bundle?, key: String): String? {
+            return when (val value = metadataValue(metadata, key)) {
+                is String -> value
+                null -> null
+                else -> value.toString()
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        private fun metadataValue(metadata: Bundle?, key: String): Any? = metadata?.get(key)
 
         private fun metadata(context: Context): Bundle? {
             return try {
