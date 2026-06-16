@@ -117,12 +117,14 @@ func MathReportHref(path string) string {
 }
 
 func InfluenceReportPath(path string) string {
-	path = strings.TrimSuffix(path, "-math"+filepath.Ext(path))
 	ext := filepath.Ext(path)
-	if ext == "" {
-		return path + "-influence.html"
+	if ext != "" {
+		base := strings.TrimSuffix(path, ext)
+		base = strings.TrimSuffix(base, "-math")
+		return base + "-influence" + ext
 	}
-	return strings.TrimSuffix(path, ext) + "-influence" + ext
+	path = strings.TrimSuffix(path, "-math")
+	return path + "-influence.html"
 }
 
 func InfluenceReportHref(path string) string {

@@ -29,6 +29,13 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}
 	assertFileContains(t, comparePath, "λ Анализ", `href="compare-math.html"`, "Сравнение утечек памяти")
 	assertFileContains(t, filepath.Join(dir, "compare-math.html"), "Математический анализ сравнения", "Качество сравнения", "Сравнение утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
+
+	customComparePath := filepath.Join(dir, "another.custom.name.html")
+	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--out", customComparePath}); err != nil {
+		t.Fatalf("runCompare(custom name) error = %v", err)
+	}
+	assertFileContains(t, customComparePath, `href="another.custom.name-math.html"`, `href="another.custom.name-influence.html"`)
+	assertFileContains(t, filepath.Join(dir, "another.custom.name-math.html"), `href="another.custom.name-influence.html"`)
 }
 
 func TestProblemsExportsCSVAndJSON(t *testing.T) {

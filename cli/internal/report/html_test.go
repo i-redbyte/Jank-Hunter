@@ -186,9 +186,13 @@ func TestMathReportPath(t *testing.T) {
 
 func TestInfluenceReportPath(t *testing.T) {
 	tests := map[string]string{
-		"report.html":           "report-influence.html",
-		"/tmp/report.html":      "/tmp/report-influence.html",
-		"/tmp/report-math.html": "/tmp/report-influence.html",
+		"report.html":                    "report-influence.html",
+		"/tmp/report.html":               "/tmp/report-influence.html",
+		"/tmp/report-math.html":          "/tmp/report-influence.html",
+		"/tmp/report.with.dots.html":     "/tmp/report.with.dots-influence.html",
+		"/tmp/report.with.dots-math.htm": "/tmp/report.with.dots-influence.htm",
+		"/tmp/report.with.dots":          "/tmp/report.with-influence.dots",
+		"/tmp/report-math":               "/tmp/report-influence.html",
 	}
 	for input, want := range tests {
 		if got := InfluenceReportPath(input); got != want {

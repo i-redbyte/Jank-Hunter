@@ -1582,6 +1582,36 @@ const reportJS = `
   };
   wrapTables();
 
+  const runIdle = (callback) => {
+    if ('requestIdleCallback' in window) {
+      window.requestIdleCallback(callback, { timeout: 700 });
+      return;
+    }
+    window.setTimeout(() => callback({ timeRemaining: () => 8 }), 0);
+  };
+
+  const forEachChunk = (nodes, chunkSize, visit, done) => {
+    let index = 0;
+    const step = (deadline) => {
+      const start = Date.now();
+      while (
+        index < nodes.length &&
+        (index % chunkSize !== 0 ||
+          deadline.timeRemaining() > 2 ||
+          Date.now() - start < 12)
+      ) {
+        visit(nodes[index]);
+        index += 1;
+      }
+      if (index < nodes.length) {
+        runIdle(step);
+      } else if (done) {
+        done();
+      }
+    };
+    runIdle(step);
+  };
+
   document.querySelectorAll('code').forEach((node) => {
     const text = node.textContent.trim();
     if (text && !node.title) node.title = text;
@@ -1590,7 +1620,7 @@ const reportJS = `
     }
   });
 
-  document.querySelectorAll('td, th').forEach((node) => {
+  forEachChunk(Array.from(document.querySelectorAll('td, th')), 300, (node) => {
     const text = node.textContent.trim().replace(/\\s+/g, ' ');
     if (text.length > 80 && !node.dataset.tip) {
       node.dataset.tip = text;
@@ -1598,7 +1628,8 @@ const reportJS = `
   });
 
   const enhanceLongCells = () => {
-    document.querySelectorAll('.table-scroll td').forEach((cell) => {
+    const cells = Array.from(document.querySelectorAll('.table-scroll td'));
+    forEachChunk(cells, 180, (cell) => {
       if (cell.dataset.cellEnhanced === 'true') return;
       if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
       const text = cell.textContent.trim().replace(/\\s+/g, ' ');
@@ -1623,8 +1654,7 @@ const reportJS = `
       });
       cell.append(clip, toggle);
       cell.dataset.cellEnhanced = 'true';
-    });
-    scheduleTableMeasure();
+    }, scheduleTableMeasure);
   };
   enhanceLongCells();
 
