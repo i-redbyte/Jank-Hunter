@@ -86,7 +86,7 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun jankFrameThresholdMs(): Long = jankFrameThresholdMs
 
-    fun maxQueueSize(): Int = maxQueueSize
+    fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
 
     fun maxLogBytes(): Long = maxLogBytes
 

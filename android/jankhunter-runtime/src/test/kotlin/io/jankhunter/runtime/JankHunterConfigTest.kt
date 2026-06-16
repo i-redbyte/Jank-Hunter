@@ -126,6 +126,19 @@ class JankHunterConfigTest {
     }
 
     @Test
+    fun queueSizeIsClampedToKeepWriterConstructible() {
+        val zero = JankHunterConfig.builder()
+            .maxQueueSize(0)
+            .build()
+        val negative = JankHunterConfig.builder()
+            .maxQueueSize(-10)
+            .build()
+
+        assertEquals(1, zero.maxQueueSize())
+        assertEquals(1, negative.maxQueueSize())
+    }
+
+    @Test
     fun processPolicyHonorsMainProcessAndAllowList() {
         val mainOnly = JankHunterConfig.builder()
             .mainProcessOnly(true)
