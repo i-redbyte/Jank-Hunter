@@ -336,6 +336,7 @@ jankHunter {
         enabled = true
         minIntervalMs = 600_000
         maxCount = 1
+        minRetainedAgeMs = 30_000
     }
 
     instrument {
@@ -419,11 +420,12 @@ jankHunter {
         enabled = true
         minIntervalMs = 600_000
         maxCount = 1
+        minRetainedAgeMs = 30_000
     }
 }
 ```
 
-Плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. Чтобы оставить легкий режим без HPROF, поставьте `enabled = false`.
+Плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Чтобы оставить легкий режим без HPROF, поставьте `enabled = false`.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 
@@ -431,6 +433,7 @@ jankHunter {
 <meta-data android:name="io.jankhunter.retained_heap_dump_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.retained_heap_dump_min_interval_ms" android:value="600000" />
 <meta-data android:name="io.jankhunter.retained_heap_dump_max_count" android:value="1" />
+<meta-data android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms" android:value="30000" />
 ```
 
 При подтвержденном retained object runtime сохранит `.hprof` в `files/jankhunter/heap-dumps/` и запишет counters/gauges `jankhunter.heap_dump.*` в `.jhlog`. Дальше передайте дамп в CLI:

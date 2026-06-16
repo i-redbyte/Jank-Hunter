@@ -67,6 +67,25 @@ class RetainedHeapDumperTest {
     }
 
     @Test
+    fun skipsWhenRetainedObjectIsTooYoungForHeapDump() {
+        val dumper = RetainedHeapDumper(
+            directory = tempDir(),
+            minIntervalMs = 0L,
+            maxDumpCount = 1,
+            minRetainedAgeMs = 30_000L,
+            clock = { 1_000L },
+            wallClock = { 42L },
+            dumpHprof = { path -> File(path).writeText("hprof") },
+        )
+
+        assertEquals(
+            RetainedHeapDumper.Result.Skipped("min_age"),
+            dumper.maybeDump("A", "Owner", 29_999L, 1),
+        )
+        assertTrue(dumper.maybeDump("A", "Owner", 30_000L, 1) is RetainedHeapDumper.Result.Dumped)
+    }
+
+    @Test
     fun reportsFailureWithoutThrowingIntoRuntimeWatcher() {
         val dumper = RetainedHeapDumper(
             directory = tempDir(),

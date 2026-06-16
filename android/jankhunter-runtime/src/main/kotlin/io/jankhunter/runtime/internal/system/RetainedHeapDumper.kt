@@ -9,15 +9,20 @@ class RetainedHeapDumper(
     private val directory: File,
     private val minIntervalMs: Long,
     maxDumpCount: Int,
+    minRetainedAgeMs: Long = 0L,
     private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() },
     private val wallClock: () -> Long = { System.currentTimeMillis() },
     private val dumpHprof: (String) -> Unit = { path -> Debug.dumpHprofData(path) },
 ) {
     private val maxCount = maxDumpCount.coerceAtLeast(0)
+    private val minAgeMs = minRetainedAgeMs.coerceAtLeast(0L)
     private val lastDumpAtMs = AtomicLong(Long.MIN_VALUE)
     private val dumpCount = AtomicInteger()
 
     fun maybeDump(className: String?, holder: String?, ageMs: Long, count: Long): Result {
+        if (ageMs < minAgeMs) {
+            return Result.Skipped("min_age")
+        }
         if (maxCount <= 0) {
             return Result.Skipped("max_count")
         }

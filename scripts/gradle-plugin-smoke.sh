@@ -145,6 +145,7 @@ jankHunter {
         enabled = true
         minIntervalMs = 600_000
         maxCount = 1
+        minRetainedAgeMs = 30_000
     }
     instrument {
         includeWholeApplication = true

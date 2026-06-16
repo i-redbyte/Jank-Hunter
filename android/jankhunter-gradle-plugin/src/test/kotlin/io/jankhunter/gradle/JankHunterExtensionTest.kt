@@ -48,6 +48,7 @@ class JankHunterExtensionTest {
         assertEquals(true, retainedHeapDump.enabled)
         assertEquals(10 * 60_000L, retainedHeapDump.minIntervalMs)
         assertEquals(1, retainedHeapDump.maxCount)
+        assertEquals(30_000L, retainedHeapDump.minRetainedAgeMs)
     }
 
     @Test
@@ -58,10 +59,12 @@ class JankHunterExtensionTest {
             it.enabled = true
             it.minIntervalMs = 123_000L
             it.maxCount = 2
+            it.minRetainedAgeMs = 45_000L
         }
 
         assertEquals(true, extension.retainedHeapDump.enabled)
         assertEquals(123_000L, extension.retainedHeapDump.minIntervalMs)
         assertEquals(2, extension.retainedHeapDump.maxCount)
+        assertEquals(45_000L, extension.retainedHeapDump.minRetainedAgeMs)
     }
 }

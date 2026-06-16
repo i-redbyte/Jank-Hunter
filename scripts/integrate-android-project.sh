@@ -870,6 +870,7 @@ patch_module_build_file() {
   jh_block+=$'        enabled = true\n'
   jh_block+=$'        minIntervalMs = 600_000\n'
   jh_block+=$'        maxCount = 1\n'
+  jh_block+=$'        minRetainedAgeMs = 30_000\n'
   jh_block+=$'    }\n\n'
   jh_block+=$'    instrument {\n'
   jh_block+=$'        okhttp = true\n'

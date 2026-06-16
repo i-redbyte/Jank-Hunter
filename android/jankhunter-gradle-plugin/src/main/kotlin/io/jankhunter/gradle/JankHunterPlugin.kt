@@ -36,6 +36,7 @@ class JankHunterPlugin : Plugin<Project> {
                     it.retainedHeapDumpEnabled.set(true)
                     it.retainedHeapDumpMinIntervalMs.set(extension.retainedHeapDump.minIntervalMs)
                     it.retainedHeapDumpMaxCount.set(extension.retainedHeapDump.maxCount)
+                    it.retainedHeapDumpMinRetainedAgeMs.set(extension.retainedHeapDump.minRetainedAgeMs)
                 }
                 variant.sources.manifests.addGeneratedManifestFile(
                     runtimeManifest,
@@ -118,6 +119,7 @@ class JankHunterPlugin : Plugin<Project> {
                     "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
                     "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} " +
                     "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
+                    "retainedHeapDumpMinRetainedAgeMs={} " +
                     "ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
@@ -136,6 +138,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.retainedHeapDump.enabled,
                 extension.retainedHeapDump.minIntervalMs,
                 extension.retainedHeapDump.maxCount,
+                extension.retainedHeapDump.minRetainedAgeMs,
                 ownerMap.name,
             )
         }

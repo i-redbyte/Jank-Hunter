@@ -17,6 +17,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     @get:Input
     abstract val retainedHeapDumpMaxCount: Property<Int>
 
+    @get:Input
+    abstract val retainedHeapDumpMinRetainedAgeMs: Property<Long>
+
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
@@ -40,6 +43,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.retained_heap_dump_max_count"
                         android:value="${retainedHeapDumpMaxCount.get()}"
+                        tools:replace="android:value" />
+                    <meta-data
+                        android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms"
+                        android:value="${retainedHeapDumpMinRetainedAgeMs.get()}"
                         tools:replace="android:value" />
                 </application>
             </manifest>

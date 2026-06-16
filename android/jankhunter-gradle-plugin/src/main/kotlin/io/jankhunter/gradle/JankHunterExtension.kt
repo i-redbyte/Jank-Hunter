@@ -61,5 +61,6 @@ open class JankHunterExtension {
         var enabled: Boolean = true
         var minIntervalMs: Long = 10 * 60_000L
         var maxCount: Int = 1
+        var minRetainedAgeMs: Long = 30_000L
     }
 }

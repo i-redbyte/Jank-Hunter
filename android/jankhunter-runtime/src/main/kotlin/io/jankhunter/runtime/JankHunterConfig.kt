@@ -20,6 +20,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val retainedHeapDumpEnabled = builder.retainedHeapDumpEnabled
     private val retainedHeapDumpMinIntervalMs = builder.retainedHeapDumpMinIntervalMs
     private val retainedHeapDumpMaxCount = builder.retainedHeapDumpMaxCount
+    private val retainedHeapDumpMinRetainedAgeMs = builder.retainedHeapDumpMinRetainedAgeMs
     private val retainedHeapDumpDirectory = builder.retainedHeapDumpDirectory
     private val fpsMonitorEnabled = builder.fpsMonitorEnabled
     private val jankStatsEnabled = builder.jankStatsEnabled
@@ -75,6 +76,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs
 
     fun retainedHeapDumpMaxCount(): Int = retainedHeapDumpMaxCount
+
+    fun retainedHeapDumpMinRetainedAgeMs(): Long = retainedHeapDumpMinRetainedAgeMs.coerceAtLeast(0L)
 
     fun retainedHeapDumpDirectory(): File? = retainedHeapDumpDirectory
 
@@ -151,6 +154,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var retainedHeapDumpEnabled = false
         internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
         internal var retainedHeapDumpMaxCount = 1
+        internal var retainedHeapDumpMinRetainedAgeMs = 30_000L
         internal var retainedHeapDumpDirectory: File? = null
         internal var fpsMonitorEnabled = true
         internal var jankStatsEnabled = false
@@ -206,6 +210,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun retainedHeapDumpMinIntervalMs(value: Long) = apply { retainedHeapDumpMinIntervalMs = value }
 
         fun retainedHeapDumpMaxCount(value: Int) = apply { retainedHeapDumpMaxCount = value }
+
+        fun retainedHeapDumpMinRetainedAgeMs(value: Long) = apply { retainedHeapDumpMinRetainedAgeMs = value }
 
         fun retainedHeapDumpDirectory(value: File?) = apply { retainedHeapDumpDirectory = value }
 
@@ -283,6 +289,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_RETAINED_HEAP_DUMP_ENABLED = "io.jankhunter.retained_heap_dump_enabled"
         const val META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS = "io.jankhunter.retained_heap_dump_min_interval_ms"
         const val META_RETAINED_HEAP_DUMP_MAX_COUNT = "io.jankhunter.retained_heap_dump_max_count"
+        const val META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS =
+            "io.jankhunter.retained_heap_dump_min_retained_age_ms"
         const val META_FPS_MONITOR_ENABLED = "io.jankhunter.fps_monitor_enabled"
         const val META_JANKSTATS_ENABLED = "io.jankhunter.jankstats_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
@@ -333,6 +341,10 @@ class JankHunterConfig private constructor(builder: Builder) {
                         ?: 10 * 60_000L,
                 )
                 .retainedHeapDumpMaxCount(metadata?.getInt(META_RETAINED_HEAP_DUMP_MAX_COUNT, 1) ?: 1)
+                .retainedHeapDumpMinRetainedAgeMs(
+                    metadata?.getLong(META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS, 30_000L)
+                        ?: 30_000L,
+                )
                 .fpsMonitorEnabled(metadata?.getBoolean(META_FPS_MONITOR_ENABLED, true) ?: true)
                 .jankStatsEnabled(metadata?.getBoolean(META_JANKSTATS_ENABLED, false) ?: false)
                 .fpsWindowMs(metadata?.getLong(META_FPS_WINDOW_MS, 1_000L) ?: 1_000L)

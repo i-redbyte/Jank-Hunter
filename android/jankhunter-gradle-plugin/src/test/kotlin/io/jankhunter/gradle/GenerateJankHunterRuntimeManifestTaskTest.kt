@@ -16,6 +16,7 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.retainedHeapDumpEnabled.set(true)
         task.retainedHeapDumpMinIntervalMs.set(123_000L)
         task.retainedHeapDumpMaxCount.set(2)
+        task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
 
         task.writeManifest()
 
@@ -26,6 +27,8 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("""android:value="123000""""))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_max_count"))
         assertTrue(manifest.contains("""android:value="2""""))
+        assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_retained_age_ms"))
+        assertTrue(manifest.contains("""android:value="45000""""))
         assertTrue(manifest.contains("""tools:replace="android:value""""))
     }
 }

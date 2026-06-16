@@ -191,6 +191,7 @@ object JankHunter {
                             providedConfig.retainedHeapDumpDirectory() ?: File(directory, "heap-dumps"),
                             providedConfig.retainedHeapDumpMinIntervalMs(),
                             providedConfig.retainedHeapDumpMaxCount(),
+                            providedConfig.retainedHeapDumpMinRetainedAgeMs(),
                         )
                     }
                     objectRetentionWatcher = ObjectRetentionWatcher(
