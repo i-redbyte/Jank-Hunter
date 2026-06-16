@@ -6,9 +6,14 @@ open class JankHunterExtension {
     val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
     var autoInit: Boolean = true
     val instrument: Instrumentation = Instrumentation()
+    val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
 
     fun instrument(action: Action<Instrumentation>) {
         action.execute(instrument)
+    }
+
+    fun retainedHeapDump(action: Action<RetainedHeapDump>) {
+        action.execute(retainedHeapDump)
     }
 
     open class Instrumentation {
@@ -50,5 +55,11 @@ open class JankHunterExtension {
         private fun addPackages(target: MutableSet<String>, values: Iterable<String>) {
             values.mapNotNullTo(target) { it.trim().takeIf(String::isNotEmpty) }
         }
+    }
+
+    open class RetainedHeapDump {
+        var enabled: Boolean = false
+        var minIntervalMs: Long = 10 * 60_000L
+        var maxCount: Int = 1
     }
 }

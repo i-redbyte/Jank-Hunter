@@ -332,6 +332,12 @@ jankHunter {
     enabledBuildTypes.add("qa")
     autoInit = true
 
+    retainedHeapDump {
+        enabled = false
+        minIntervalMs = 600_000
+        maxCount = 1
+    }
+
     instrument {
         okhttp = true
         webSockets = true
@@ -405,7 +411,21 @@ jankhunter inspect logs/*.jhlog \
 
 ## Heap dump для утечек
 
-Легкий режим retained objects работает без дампа памяти. Если нужен точный путь до GC root, включите HPROF только для debug/QA-прогона:
+Легкий режим retained objects работает без дампа памяти. Если нужен точный путь до GC root, включите HPROF только для debug/QA-прогона через Gradle DSL:
+
+```kotlin
+jankHunter {
+    retainedHeapDump {
+        enabled = true
+        minIntervalMs = 600_000
+        maxCount = 1
+    }
+}
+```
+
+Плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`.
+
+Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 
 ```xml
 <meta-data android:name="io.jankhunter.retained_heap_dump_enabled" android:value="true" />

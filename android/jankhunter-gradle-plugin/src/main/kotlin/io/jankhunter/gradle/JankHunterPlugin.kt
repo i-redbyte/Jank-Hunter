@@ -28,6 +28,21 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) return@onVariants
+            if (extension.retainedHeapDump.enabled) {
+                val runtimeManifest = project.tasks.register(
+                    "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
+                    GenerateJankHunterRuntimeManifestTask::class.java,
+                ) {
+                    it.retainedHeapDumpEnabled.set(true)
+                    it.retainedHeapDumpMinIntervalMs.set(extension.retainedHeapDump.minIntervalMs)
+                    it.retainedHeapDumpMaxCount.set(extension.retainedHeapDump.maxCount)
+                }
+                variant.sources.manifests.addGeneratedManifestFile(
+                    runtimeManifest,
+                    GenerateJankHunterRuntimeManifestTask::outputFile,
+                )
+            }
+
             val includeWholeApplication = extension.instrument.includeWholeApplication
             val manualIncludes = extension.instrument.includePackages.toList()
             val androidNamespace = variant.namespace.orElse("")
@@ -101,7 +116,9 @@ class JankHunterPlugin : Plugin<Project> {
                 "Jank Hunter variant {} configured. " +
                     "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
                     "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
-                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} ownerMapTask={}",
+                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} " +
+                    "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
+                    "ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -116,6 +133,9 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.allowEmptyIncludePackages,
                 extension.instrument.includeWholeApplication,
                 extension.instrument.asmProgressLog,
+                extension.retainedHeapDump.enabled,
+                extension.retainedHeapDump.minIntervalMs,
+                extension.retainedHeapDump.maxCount,
                 ownerMap.name,
             )
         }

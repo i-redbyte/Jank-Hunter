@@ -1,0 +1,31 @@
+package io.jankhunter.gradle
+
+import org.gradle.testfixtures.ProjectBuilder
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class GenerateJankHunterRuntimeManifestTaskTest {
+    @Test
+    fun writesRetainedHeapDumpMetadata() {
+        val project = ProjectBuilder.builder().build()
+        val task = project.tasks.register(
+            "generateRuntimeManifest",
+            GenerateJankHunterRuntimeManifestTask::class.java,
+        ).get()
+        task.outputFile.set(project.layout.buildDirectory.file("jankhunter/AndroidManifest.xml"))
+        task.retainedHeapDumpEnabled.set(true)
+        task.retainedHeapDumpMinIntervalMs.set(123_000L)
+        task.retainedHeapDumpMaxCount.set(2)
+
+        task.writeManifest()
+
+        val manifest = task.outputFile.get().asFile.readText()
+        assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_enabled"))
+        assertTrue(manifest.contains("""android:value="true""""))
+        assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_interval_ms"))
+        assertTrue(manifest.contains("""android:value="123000""""))
+        assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_max_count"))
+        assertTrue(manifest.contains("""android:value="2""""))
+        assertTrue(manifest.contains("""tools:replace="android:value""""))
+    }
+}

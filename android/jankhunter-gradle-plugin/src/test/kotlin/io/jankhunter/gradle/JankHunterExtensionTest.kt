@@ -40,4 +40,28 @@ class JankHunterExtensionTest {
         assertEquals(true, instrumentation.classGraph)
         assertEquals(false, instrumentation.runtimeCallGraph)
     }
+
+    @Test
+    fun retainedHeapDumpDslHasSafeDefaults() {
+        val retainedHeapDump = JankHunterExtension.RetainedHeapDump()
+
+        assertEquals(false, retainedHeapDump.enabled)
+        assertEquals(10 * 60_000L, retainedHeapDump.minIntervalMs)
+        assertEquals(1, retainedHeapDump.maxCount)
+    }
+
+    @Test
+    fun retainedHeapDumpDslAcceptsRuntimeLimits() {
+        val extension = JankHunterExtension()
+
+        extension.retainedHeapDump {
+            it.enabled = true
+            it.minIntervalMs = 123_000L
+            it.maxCount = 2
+        }
+
+        assertEquals(true, extension.retainedHeapDump.enabled)
+        assertEquals(123_000L, extension.retainedHeapDump.minIntervalMs)
+        assertEquals(2, extension.retainedHeapDump.maxCount)
+    }
 }
