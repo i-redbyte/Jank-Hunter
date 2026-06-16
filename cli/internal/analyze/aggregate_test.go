@@ -157,6 +157,58 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	}
 }
 
+func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "uptime-offset.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	const uptimeOffsetMS = 12 * 60 * 60 * 1000
+	events := []jhlog.Event{
+		{
+			Type:   jhlog.EventDictionary,
+			TimeMS: uptimeOffsetMS,
+			Dictionary: &jhlog.DictionaryEntry{
+				Kind:  jhlog.DictRoute,
+				ID:    1,
+				Value: "GET /feed",
+			},
+		},
+		{
+			Type:   jhlog.EventSession,
+			TimeMS: uptimeOffsetMS + 1,
+			Session: &jhlog.SessionEvent{
+				SDKInt: 35,
+			},
+		},
+		{
+			Type:   jhlog.EventHTTP,
+			TimeMS: uptimeOffsetMS + 120_000,
+			HTTP: &jhlog.HTTPEvent{
+				RouteID:    1,
+				DurationMS: 120,
+				Status:     jhlog.Status2xx,
+			},
+		},
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(%d) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := InspectFiles("sample", []string{path})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	if summary.DurationMS != 120_000 {
+		t.Fatalf("DurationMS = %d, want 120000", summary.DurationMS)
+	}
+}
+
 func environmentHasItem(environment RunEnvironment, label string, value string) bool {
 	for _, item := range environment.Items {
 		if item.Label == label && item.Value == value {

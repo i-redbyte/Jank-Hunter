@@ -12,6 +12,8 @@ import (
 	"os"
 )
 
+const firstMetadataDeltaUptimeThresholdMS uint64 = 60_000
+
 func ReadFile(path string) (Log, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -112,6 +114,7 @@ func readBinary(r io.Reader, source string, version uint8) (Log, error) {
 		if err != nil {
 			return toleratePartial(log, source, "compact event", err)
 		}
+		deltaMS = normalizeFirstMetadataDelta(event, deltaMS, len(log.Events))
 		currentMS += deltaMS
 		event.TimeMS = currentMS
 		event.DeltaMS = deltaMS
@@ -138,6 +141,7 @@ func streamBinary(
 	}
 	reader := bufio.NewReader(r)
 	var currentMS uint64
+	eventCount := 0
 	for {
 		event, deltaMS, err := readCompactEvent(reader, source)
 		if errors.Is(err, io.EOF) {
@@ -146,6 +150,7 @@ func streamBinary(
 		if err != nil {
 			return toleratePartial(log, source, "compact event", err)
 		}
+		deltaMS = normalizeFirstMetadataDelta(event, deltaMS, eventCount)
 		currentMS += deltaMS
 		event.TimeMS = currentMS
 		event.DeltaMS = deltaMS
@@ -157,6 +162,19 @@ func streamBinary(
 		if err := handle(event, log.Dict); err != nil {
 			return log, err
 		}
+		eventCount++
+	}
+}
+
+func normalizeFirstMetadataDelta(event Event, deltaMS uint64, eventCount int) uint64 {
+	if eventCount != 0 || deltaMS < firstMetadataDeltaUptimeThresholdMS {
+		return deltaMS
+	}
+	switch event.Type {
+	case EventDictionary, EventSession:
+		return 0
+	default:
+		return deltaMS
 	}
 }
 

@@ -348,7 +348,7 @@ class BinaryLogWriter(
 
     private fun record(eventType: Int, flags: Long, payload: Payload) {
         val now = SystemClock.elapsedRealtime()
-        val delta = if (lastTimestampMs == 0L) now else max(0L, now - lastTimestampMs)
+        val delta = if (lastTimestampMs == 0L) 0L else max(0L, now - lastTimestampMs)
         lastTimestampMs = now
 
         val written = writeCompactHeader(
