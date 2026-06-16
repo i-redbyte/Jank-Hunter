@@ -4,6 +4,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -56,11 +57,66 @@ class JankHunterExecutorTest {
     }
 
     @Test
+    fun wrapExecutorServiceKeepsScheduledExecutorServiceContract() {
+        val delegate = Executors.newSingleThreadScheduledExecutor()
+        try {
+            val wrapped = JankHunter.wrapExecutorService(delegate, "scheduler")
+
+            assertTrue(wrapped is ScheduledExecutorService)
+            val result = (wrapped as ScheduledExecutorService).schedule(
+                Callable { JankHunter.currentOwner() },
+                0L,
+                TimeUnit.MILLISECONDS,
+            )
+
+            assertEquals("scheduler", result.get(1, TimeUnit.SECONDS))
+            assertSame(wrapped, JankHunter.wrapExecutorService(wrapped, "scheduler"))
+            assertSame(wrapped, JankHunter.wrapScheduledExecutorService(wrapped, "scheduler"))
+        } finally {
+            delegate.shutdownNow()
+        }
+    }
+
+    @Test
+    fun scheduledExecutorWrapsPeriodicTasks() {
+        val delegate = Executors.newSingleThreadScheduledExecutor()
+        try {
+            val wrapped = JankHunter.wrapScheduledExecutorService(delegate, "ticker")!!
+            val latch = CountDownLatch(2)
+            val owners = mutableListOf<String>()
+
+            val future = wrapped.scheduleAtFixedRate(
+                {
+                    owners += JankHunter.currentOwner()
+                    latch.countDown()
+                },
+                0L,
+                10L,
+                TimeUnit.MILLISECONDS,
+            )
+
+            assertTrue(latch.await(1, TimeUnit.SECONDS))
+            future.cancel(false)
+            assertTrue(owners.all { it == "ticker" })
+        } finally {
+            delegate.shutdownNow()
+        }
+    }
+
+    @Test
     fun wrappersAreIdempotent() {
         val delegate = Executor { command -> command.run() }
         val wrapped = JankHunter.wrapExecutor(delegate, "db")
 
         assertSame(wrapped, JankHunter.wrapExecutor(wrapped, "db"))
+
+        val scheduled = Executors.newSingleThreadScheduledExecutor()
+        try {
+            val wrappedScheduled = JankHunter.wrapExecutor(scheduled, "scheduled")
+            assertSame(wrappedScheduled, JankHunter.wrapExecutor(wrappedScheduled, "scheduled"))
+        } finally {
+            scheduled.shutdownNow()
+        }
     }
 
     @Test

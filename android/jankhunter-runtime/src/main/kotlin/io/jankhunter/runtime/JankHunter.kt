@@ -28,6 +28,7 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -627,9 +628,15 @@ object JankHunter {
 
     @JvmStatic
     fun wrapExecutor(executor: Executor?, name: String?, ownerName: String? = name): Executor? {
-        if (executor == null || executor is JankHunterExecutor || executor is JankHunterExecutorService) return executor
+        if (executor == null ||
+            executor is JankHunterExecutor ||
+            executor is JankHunterExecutorService ||
+            executor is JankHunterScheduledExecutorService
+        ) {
+            return executor
+        }
         return if (executor is ExecutorService) {
-            JankHunterExecutorService(executor, name, ownerName)
+            wrapExecutorService(executor, name, ownerName)
         } else {
             JankHunterExecutor(executor, name, ownerName)
         }
@@ -637,8 +644,27 @@ object JankHunter {
 
     @JvmStatic
     fun wrapExecutorService(executor: ExecutorService?, name: String?, ownerName: String? = name): ExecutorService? {
-        if (executor == null || executor is JankHunterExecutorService) return executor
-        return JankHunterExecutorService(executor, name, ownerName)
+        if (executor == null ||
+            executor is JankHunterExecutorService ||
+            executor is JankHunterScheduledExecutorService
+        ) {
+            return executor
+        }
+        return if (executor is ScheduledExecutorService) {
+            JankHunterScheduledExecutorService(executor, name, ownerName)
+        } else {
+            JankHunterExecutorService(executor, name, ownerName)
+        }
+    }
+
+    @JvmStatic
+    fun wrapScheduledExecutorService(
+        executor: ScheduledExecutorService?,
+        name: String?,
+        ownerName: String? = name,
+    ): ScheduledExecutorService? {
+        if (executor == null || executor is JankHunterScheduledExecutorService) return executor
+        return JankHunterScheduledExecutorService(executor, name, ownerName)
     }
 
     @JvmStatic
@@ -993,6 +1019,32 @@ object JankHunter {
         try {
             callWithOwner(ownerName) {
                 command.run()
+            }
+        } catch (throwable: Throwable) {
+            failed = true
+            throw throwable
+        } finally {
+            val executorName = metricExecutorName(name)
+            val durationMs = clock() - start
+            recordGauge("executor.$executorName.service_ms", durationMs)
+            if (failed) {
+                recordCounter("executor.$executorName.failure.count", 1)
+            }
+            recordWrappedWork(ownerName, "executor", durationMs, failed)
+        }
+    }
+
+    internal fun <T> callExecutorTask(
+        name: String?,
+        ownerName: String?,
+        callable: Callable<T>,
+        clock: () -> Long = ::nowMs,
+    ): T {
+        val start = clock()
+        var failed = false
+        try {
+            return callWithOwner(ownerName) {
+                callable.call()
             }
         } catch (throwable: Throwable) {
             failed = true
