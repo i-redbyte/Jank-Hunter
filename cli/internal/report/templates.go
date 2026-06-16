@@ -492,8 +492,9 @@ main {
   border-color: rgba(126,247,255,0.56);
   box-shadow: 0 0 0 3px rgba(111,247,255,0.10);
 }
-.code-problem-table {
-  min-width: 1880px;
+.code-problem-table:not(.leak-table) {
+  min-width: 1080px;
+  table-layout: fixed;
 }
 .leak-table {
   min-width: 1900px;
@@ -583,28 +584,19 @@ main {
 .code-problem-table th {
   vertical-align: middle;
 }
-.code-problem-table th:nth-child(1),
-.code-problem-table td:nth-child(1) { min-width: 150px; }
-.code-problem-table th:nth-child(2),
-.code-problem-table td:nth-child(2) { min-width: 280px; }
-.code-problem-table th:nth-child(3),
-.code-problem-table td:nth-child(3) { min-width: 260px; }
-.code-problem-table th:nth-child(4),
-.code-problem-table td:nth-child(4) { min-width: 270px; }
-.code-problem-table th:nth-child(5),
-.code-problem-table td:nth-child(5) { min-width: 260px; }
-.code-problem-table th:nth-child(6),
-.code-problem-table td:nth-child(6) { min-width: 360px; }
-.code-problem-table th:nth-child(7),
-.code-problem-table td:nth-child(7) { min-width: 460px; }
-.code-problem-table th:nth-child(8),
-.code-problem-table td:nth-child(8) { min-width: 360px; }
-.code-problem-table td:nth-child(3),
-.code-problem-table td:nth-child(4),
-.code-problem-table td:nth-child(5),
-.code-problem-table td:nth-child(6),
-.code-problem-table td:nth-child(7),
-.code-problem-table td:nth-child(8) {
+.code-problem-table:not(.leak-table) th:nth-child(1),
+.code-problem-table:not(.leak-table) td:nth-child(1) { width: 130px; }
+.code-problem-table:not(.leak-table) th:nth-child(2),
+.code-problem-table:not(.leak-table) td:nth-child(2) { width: 280px; }
+.code-problem-table:not(.leak-table) th:nth-child(3),
+.code-problem-table:not(.leak-table) td:nth-child(3) { width: 230px; }
+.code-problem-table:not(.leak-table) th:nth-child(4),
+.code-problem-table:not(.leak-table) td:nth-child(4) { width: auto; }
+.code-problem-table:not(.leak-table) th:nth-child(5),
+.code-problem-table:not(.leak-table) td:nth-child(5) { width: auto; }
+.code-problem-table:not(.leak-table) td:nth-child(3),
+.code-problem-table:not(.leak-table) td:nth-child(4),
+.code-problem-table:not(.leak-table) td:nth-child(5) {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: normal;
@@ -714,6 +706,64 @@ main {
 .problem-location .method {
   color: var(--muted);
   font-size: 12px;
+}
+.code-problem-details {
+  border: 1px solid rgba(126,247,255,0.16);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.026);
+}
+.code-problem-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.code-problem-details summary span {
+  font-weight: 850;
+}
+.code-problem-details summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: right;
+}
+.code-problem-details[open] summary {
+  border-bottom: 1px solid rgba(126,247,255,0.12);
+  color: var(--cyan);
+}
+.code-problem-detail-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+}
+.code-problem-detail-block {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(126,247,255,0.10);
+  border-radius: 8px;
+  background: rgba(6,12,26,0.42);
+}
+.code-problem-detail-block.full {
+  grid-column: 1 / -1;
+}
+.code-problem-detail-block strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.code-problem-detail-block p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
 }
 .problem-signal {
   min-width: 260px;
@@ -1471,7 +1521,9 @@ details.log-card summary::-webkit-details-marker { display: none; }
   details.log-card summary { grid-template-columns: 1fr; }
   .summary-metrics { justify-content: flex-start; }
   table { min-width: 720px; }
-  .code-problem-table, .leak-table { min-width: 1320px; }
+  .code-problem-table:not(.leak-table) { min-width: 920px; }
+  .leak-table { min-width: 1320px; }
+  .code-problem-detail-body { grid-template-columns: 1fr; }
   h1 { font-size: clamp(34px, 12vw, 52px); }
   .metric .value { font-size: 23px; }
 }
@@ -2301,11 +2353,7 @@ const mathInspectTemplate = `<!doctype html>
                 <th><button type="button" data-code-sort="score">Оценка</button></th>
                 <th><button type="button" data-code-sort="class">Класс / метод</button></th>
                 <th><button type="button" data-code-sort="category">Категории</button></th>
-                <th>Доказательства</th>
-                <th>Контекст</th>
-                <th>Влияние</th>
-                <th>Что проверить</th>
-                <th>Сигналы</th>
+                <th>Подробности</th>
               </tr>
             </thead>
             <tbody>
@@ -2314,13 +2362,21 @@ const mathInspectTemplate = `<!doctype html>
                 <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
                 <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
                 <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
-                <td>{{.Evidence}}</td>
-                <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .DrillDown}}<div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
-                <td>{{.Impact}}</td>
-                <td>{{.Recommendation}}</td>
-                <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+                <td>
+                  <details class="code-problem-details">
+                    <summary><span>Открыть доказательства</span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                    <div class="code-problem-detail-body">
+                      <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
+                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
+                      <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
+                      {{if .DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block full"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                    </div>
+                  </details>
+                </td>
               </tr>
-              {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+              {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
             </tbody>
           </table>
         </div>
@@ -2823,10 +2879,7 @@ const mathCompareTemplate = `<!doctype html>
                 <th><button type="button" data-code-sort="class">Класс / метод</button></th>
                 <th><button type="button" data-code-sort="score">Оценка</button></th>
                 <th><button type="button" data-code-sort="category">Категории</button></th>
-                <th>Контекст</th>
-                <th>Влияние кандидата</th>
-                <th>Что проверить</th>
-                <th>Сигналы кандидата</th>
+                <th>Подробности кандидата</th>
               </tr>
             </thead>
             <tbody>
@@ -2836,12 +2889,21 @@ const mathCompareTemplate = `<!doctype html>
                 <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
-                <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .Candidate.DrillDown}}<div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
-                <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
-                <td>{{.Candidate.Recommendation}}</td>
-                <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+                <td>
+                  <details class="code-problem-details">
+                    <summary><span>Открыть доказательства</span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                    <div class="code-problem-detail-body">
+                      <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
+                      <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                      {{if .Candidate.DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block full"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                    </div>
+                  </details>
+                </td>
               </tr>
-              {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+              {{else}}<tr><td colspan="5" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
             </tbody>
           </table>
         </div>
@@ -3634,11 +3696,7 @@ const inspectTemplate = `<!doctype html>
             <th><button type="button" data-code-sort="score">Оценка</button></th>
             <th><button type="button" data-code-sort="class">Класс / метод</button></th>
             <th><button type="button" data-code-sort="category">Категории</button></th>
-            <th>Доказательства</th>
-            <th>Контекст</th>
-            <th>Влияние</th>
-            <th>Что проверить</th>
-            <th>Сигналы</th>
+            <th>Подробности</th>
           </tr>
         </thead>
         <tbody>
@@ -3647,13 +3705,21 @@ const inspectTemplate = `<!doctype html>
             <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
             <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
-            <td>{{.Evidence}}</td>
-            <td><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .DrillDown}}<div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
-            <td>{{.Impact}}</td>
-            <td>{{.Recommendation}}</td>
-            <td><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+            <td>
+              <details class="code-problem-details">
+                <summary><span>Открыть доказательства</span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                <div class="code-problem-detail-body">
+                  <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
+                  <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
+                  {{if .DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  <div class="code-problem-detail-block full"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                </div>
+              </details>
+            </td>
           </tr>
-          {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
@@ -4128,10 +4194,7 @@ const compareTemplate = `<!doctype html>
             <th><button type="button" data-code-sort="class">Класс / метод</button></th>
             <th><button type="button" data-code-sort="score">Оценка</button></th>
             <th><button type="button" data-code-sort="category">Категории</button></th>
-            <th>Контекст</th>
-            <th>Влияние кандидата</th>
-            <th>Что проверить</th>
-            <th>Сигналы кандидата</th>
+            <th>Подробности кандидата</th>
           </tr>
         </thead>
         <tbody>
@@ -4141,12 +4204,21 @@ const compareTemplate = `<!doctype html>
             <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
             <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
             <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
-            <td><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div>{{if .Candidate.DrillDown}}<div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div>{{end}}</td>
-            <td>{{.Candidate.Impact}}<div class="muted">{{.Candidate.Evidence}}</div></td>
-            <td>{{.Candidate.Recommendation}}</td>
-            <td><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></td>
+            <td>
+              <details class="code-problem-details">
+                <summary><span>Открыть доказательства</span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                <div class="code-problem-detail-body">
+                  <div class="code-problem-detail-block full"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
+                  <div class="code-problem-detail-block full"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block full"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  <div class="code-problem-detail-block full"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                </div>
+              </details>
+            </td>
           </tr>
-          {{else}}<tr><td colspan="8" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+          {{else}}<tr><td colspan="5" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
