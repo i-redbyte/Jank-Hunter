@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
@@ -35,11 +35,24 @@ const buildReportSet = (name, logCount, presentation = false) => {
   const inspectPath = resolve(setDir, "inspect.html");
   const comparePath = resolve(setDir, "compare.html");
   const presentationFlag = presentation ? ["--presentation"] : [];
-  run(["inspect", ...logs, ...presentationFlag, "--out", inspectPath]);
+  const ownerMapArgs = [];
+  if (presentation) {
+    const ownerMapPath = resolve(setDir, "owner-map.json");
+    writeFileSync(ownerMapPath, JSON.stringify({
+      owners: {
+        "FeedRepository.refresh": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
+        "CheckoutPresenter.render": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
+        "CheckoutPresenter.renderItems": "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
+      },
+    }, null, 2));
+    ownerMapArgs.push("--owner-map", ownerMapPath);
+  }
+  run(["inspect", ...logs, ...ownerMapArgs, ...presentationFlag, "--out", inspectPath]);
   run([
     "compare",
     "--baseline", logs.join(","),
     "--candidate", logs.join(","),
+    ...ownerMapArgs,
     ...presentationFlag,
     "--out", comparePath,
   ]);
@@ -103,7 +116,18 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
   const nakedOverflowCells = Array.from(document.querySelectorAll("td, th"))
     .filter((cell) => !cell.closest(".table-scroll") && cell.scrollWidth > cell.clientWidth + 4)
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 120));
-  return { pageOverflow, bareTables, tallRows, clippedTooltips, scrollWrappers, clippedCells, nakedOverflowCells };
+  const escapedProblemCells = Array.from(document.querySelectorAll(".code-problem-table td, .leak-table td"))
+    .filter((cell) => {
+      const cellRect = cell.getBoundingClientRect();
+      if (cellRect.width <= 0 || cellRect.height <= 0) return false;
+      return Array.from(cell.querySelectorAll("code, .problem-chip, .problem-score, .problem-signal, .leak-dominator span, .table-cell-clip"))
+        .some((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && (rect.left < cellRect.left - 4 || rect.right > cellRect.right + 4);
+        });
+    })
+    .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
+  return { pageOverflow, bareTables, tallRows, clippedTooltips, scrollWrappers, clippedCells, nakedOverflowCells, escapedProblemCells };
 });
 
 const checkLongCellToggle = async (page) => page.evaluate(() => {
@@ -209,6 +233,9 @@ try {
       }
       if (issues.nakedOverflowCells.length > 0) {
         failures.push(`${viewport.name}/${displayName}: ячейки вне table-scroll выходят за границы: ${JSON.stringify(issues.nakedOverflowCells.slice(0, 3))}`);
+      }
+      if (issues.escapedProblemCells.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: содержимое problem/leak таблицы вышло за границы ячейки: ${JSON.stringify(issues.escapedProblemCells.slice(0, 3))}`);
       }
       if (longCellToggle.available && (!longCellToggle.expanded || !longCellToggle.collapsed)) {
         failures.push(`${viewport.name}/${displayName}: кнопка раскрытия длинной ячейки не переключает состояние`);

@@ -498,6 +498,23 @@ main {
 .leak-table {
   min-width: 1900px;
 }
+.code-problem-table td,
+.leak-table td {
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.code-problem-table td code,
+.leak-table td code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
 .leak-object-kind {
   color: var(--cyan);
   font-size: 12px;
@@ -588,9 +605,9 @@ main {
 .code-problem-table td:nth-child(6),
 .code-problem-table td:nth-child(7),
 .code-problem-table td:nth-child(8) {
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: keep-all;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .leak-table th:nth-child(7),
 .leak-table td:nth-child(7) { min-width: 320px; }
@@ -604,10 +621,10 @@ main {
 .leak-table td:nth-child(11) { min-width: 380px; }
 .leak-dominator {
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  max-width: none;
+  max-width: 100%;
 }
 .leak-dominator span {
   display: inline-flex;
@@ -620,7 +637,9 @@ main {
   color: var(--ink);
   font-size: 11px;
   font-weight: 800;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .leak-dominator span + span::before {
   content: "→";
@@ -661,10 +680,12 @@ main {
 .problem-tags,
 .problem-context,
 .problem-signals {
-  display: inline-flex;
+  display: flex;
   align-items: flex-start;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 .problem-tags {
   max-width: none;
@@ -685,8 +706,10 @@ main {
 .problem-chip.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
 .problem-chip.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
 .problem-location {
-  display: inline-grid;
+  display: grid;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
 }
 .problem-location .method {
   color: var(--muted);
@@ -713,6 +736,13 @@ main {
   line-height: 1.35;
   white-space: normal;
   overflow-wrap: normal;
+  word-break: normal;
+}
+.problem-drill,
+.problem-drill strong,
+.problem-drill span {
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: normal;
 }
 .problem-empty {
@@ -898,11 +928,13 @@ main {
   max-height: 92px;
   overflow: hidden;
   white-space: normal;
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
   word-break: normal;
 }
 .table-cell-clip code {
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 .table-cell-clip::after {
   content: "";
@@ -960,7 +992,7 @@ th, td {
   border-bottom: 1px solid rgba(126,247,255,0.12);
   text-align: left;
   vertical-align: top;
-  overflow: visible;
+  overflow: hidden;
   text-overflow: clip;
   overflow-wrap: normal;
   word-break: keep-all;
@@ -1000,14 +1032,24 @@ code {
 }
 td code,
 th code {
-  display: inline;
-  max-width: none;
-  vertical-align: baseline;
-  overflow: visible;
-  text-overflow: clip;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  overflow: hidden;
+  text-overflow: ellipsis;
   overflow-wrap: normal;
   word-break: keep-all;
   white-space: nowrap;
+}
+.code-problem-table td code,
+.leak-table td code {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 .muted,
 .help-text,
@@ -1486,7 +1528,8 @@ const reportJS = `
       if (cell.dataset.cellEnhanced === 'true') return;
       if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
       const text = cell.textContent.trim().replace(/\\s+/g, ' ');
-      if (text.length < 150) return;
+      const overflows = cell.scrollWidth > cell.clientWidth + 4 || cell.scrollHeight > 180;
+      if (text.length < 120 && !overflows) return;
       const clip = document.createElement('div');
       clip.className = 'table-cell-clip';
       while (cell.firstChild) {
