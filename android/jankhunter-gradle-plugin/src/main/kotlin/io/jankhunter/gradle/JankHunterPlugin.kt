@@ -12,14 +12,29 @@ class JankHunterPlugin : Plugin<Project> {
         val extension = project.extensions.create("jankHunter", JankHunterExtension::class.java)
 
         project.pluginManager.withPlugin("com.android.application") {
-            configureAndroidProject(project, extension)
+            configureAndroidProject(
+                project,
+                extension,
+                instrumentationScope = InstrumentationScope.ALL,
+                generateRuntimeManifest = true,
+            )
         }
         project.pluginManager.withPlugin("com.android.library") {
-            configureAndroidProject(project, extension)
+            configureAndroidProject(
+                project,
+                extension,
+                instrumentationScope = InstrumentationScope.PROJECT,
+                generateRuntimeManifest = false,
+            )
         }
     }
 
-    private fun configureAndroidProject(project: Project, extension: JankHunterExtension) {
+    private fun configureAndroidProject(
+        project: Project,
+        extension: JankHunterExtension,
+        instrumentationScope: InstrumentationScope,
+        generateRuntimeManifest: Boolean,
+    ) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
             project.logger.warn("Jank Hunter could not find AndroidComponentsExtension.")
@@ -28,7 +43,7 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) return@onVariants
-            if (extension.retainedHeapDump.enabled) {
+            if (generateRuntimeManifest && extension.retainedHeapDump.enabled) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
                     GenerateJankHunterRuntimeManifestTask::class.java,
@@ -92,7 +107,7 @@ class JankHunterPlugin : Plugin<Project> {
 
             variant.instrumentation.transformClassesWith(
                 JankHunterClassVisitorFactory::class.java,
-                InstrumentationScope.ALL,
+                instrumentationScope,
             ) { params ->
                 params.methodCounters.set(extension.instrument.methodCounters)
                 params.okhttp.set(extension.instrument.okhttp)
@@ -119,7 +134,7 @@ class JankHunterPlugin : Plugin<Project> {
                     "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
                     "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} " +
                     "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
-                    "retainedHeapDumpMinRetainedAgeMs={} " +
+                    "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
                     "ownerMapTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
@@ -139,6 +154,8 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.retainedHeapDump.minIntervalMs,
                 extension.retainedHeapDump.maxCount,
                 extension.retainedHeapDump.minRetainedAgeMs,
+                instrumentationScope,
+                generateRuntimeManifest,
                 ownerMap.name,
             )
         }

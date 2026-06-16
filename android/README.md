@@ -425,7 +425,7 @@ jankHunter {
 }
 ```
 
-Плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Чтобы оставить легкий режим без HPROF, поставьте `enabled = false`.
+В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Чтобы оставить легкий режим без HPROF, поставьте `enabled = false`.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 

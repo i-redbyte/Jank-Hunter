@@ -88,6 +88,7 @@ write_fixture() {
   local version="$6"
 
   mkdir -p "$fixture_dir/app/src/main/java/com/example/jhsmoke"
+  mkdir -p "$fixture_dir/feature/src/main/java/com/example/jhsmoke/feature"
 
   cat > "$fixture_dir/settings.gradle.kts" <<EOF
 pluginManagement {
@@ -109,12 +110,13 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "JankHunterPluginSmoke"
-include(":app")
+include(":app", ":feature")
 EOF
 
   cat > "$fixture_dir/build.gradle.kts" <<EOF
 plugins {
     id("com.android.application") version "9.0.1" apply false
+    id("com.android.library") version "9.0.1" apply false
     id("io.jankhunter.android") version "$version" apply false
 }
 EOF
@@ -159,8 +161,45 @@ jankHunter {
 }
 
 dependencies {
+    implementation(project(":feature"))
     debugImplementation("$group:jankhunter-runtime:$version")
     debugImplementation("$group:jankhunter-okhttp3:$version")
+}
+EOF
+
+  cat > "$fixture_dir/feature/build.gradle.kts" <<EOF
+plugins {
+    id("com.android.library")
+    id("io.jankhunter.android")
+}
+
+android {
+    namespace = "com.example.jhsmoke.feature"
+    compileSdk = $SMOKE_COMPILE_SDK
+    buildToolsVersion = "$build_tools_version"
+
+    defaultConfig {
+        minSdk = 23
+    }
+}
+
+jankHunter {
+    enabledBuildTypes.add("debug")
+    retainedHeapDump {
+        enabled = true
+        minIntervalMs = 600_000
+        maxCount = 1
+        minRetainedAgeMs = 30_000
+    }
+    instrument {
+        includeWholeApplication = true
+        methodCounters = true
+        handlers = true
+        logSpam = true
+        classGraph = true
+        runtimeCallGraph = true
+        asmProgressLog = false
+    }
 }
 EOF
 
@@ -224,12 +263,29 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Helper.work();
+        com.example.jhsmoke.feature.FeatureEntry.touch();
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
                 Log.d("JankHunterSmoke", "ready");
             }
         });
+    }
+}
+EOF
+
+  cat > "$fixture_dir/feature/src/main/AndroidManifest.xml" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+EOF
+
+  cat > "$fixture_dir/feature/src/main/java/com/example/jhsmoke/feature/FeatureEntry.java" <<'EOF'
+package com.example.jhsmoke.feature;
+
+public final class FeatureEntry {
+    private FeatureEntry() {
+    }
+
+    public static void touch() {
     }
 }
 EOF
@@ -303,6 +359,11 @@ main() {
 
   local owner_map="$fixture_dir/app/build/generated/jankhunter/debug/owner-map.json"
   [[ -s "$owner_map" ]] || fail "Owner map was not generated: $owner_map"
+  local feature_owner_map="$fixture_dir/feature/build/generated/jankhunter/debug/owner-map.json"
+  [[ -s "$feature_owner_map" ]] || fail "Feature owner map was not generated: $feature_owner_map"
+  if [[ -e "$fixture_dir/feature/build/generated/jankhunterRuntimeManifest/debug/AndroidManifest.xml" ]]; then
+    fail "Library module should not generate Jank Hunter runtime manifest"
+  fi
 
   log "ok"
 }
