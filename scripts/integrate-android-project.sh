@@ -866,6 +866,11 @@ patch_module_build_file() {
     jh_block+="    enabledBuildTypes.add(\"$build_type\")"$'\n'
   done
   jh_block+=$'    autoInit = true\n\n'
+  jh_block+=$'    retainedHeapDump {\n'
+  jh_block+=$'        enabled = true\n'
+  jh_block+=$'        minIntervalMs = 600_000\n'
+  jh_block+=$'        maxCount = 1\n'
+  jh_block+=$'    }\n\n'
   jh_block+=$'    instrument {\n'
   jh_block+=$'        okhttp = true\n'
   jh_block+=$'        webSockets = true\n'

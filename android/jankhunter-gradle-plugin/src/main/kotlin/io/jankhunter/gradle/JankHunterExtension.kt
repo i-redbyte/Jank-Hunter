@@ -58,7 +58,7 @@ open class JankHunterExtension {
     }
 
     open class RetainedHeapDump {
-        var enabled: Boolean = false
+        var enabled: Boolean = true
         var minIntervalMs: Long = 10 * 60_000L
         var maxCount: Int = 1
     }

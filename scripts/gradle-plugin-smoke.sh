@@ -141,6 +141,11 @@ android {
 
 jankHunter {
     enabledBuildTypes.add("debug")
+    retainedHeapDump {
+        enabled = true
+        minIntervalMs = 600_000
+        maxCount = 1
+    }
     instrument {
         includeWholeApplication = true
         methodCounters = true
