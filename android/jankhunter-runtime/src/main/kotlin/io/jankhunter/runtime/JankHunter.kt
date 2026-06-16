@@ -108,98 +108,108 @@ object JankHunter {
     fun init(context: Context?, providedConfig: JankHunterConfig?) {
         if (context == null || providedConfig == null || !providedConfig.enabled()) return
 
-        val appContext = context.applicationContext ?: context
-        val processName = ProcessNames.current(appContext)
-        val mainProcessName = appContext.packageName
-        if (!providedConfig.isProcessAllowed(processName, mainProcessName)) return
-        if (!started.compareAndSet(false, true)) return
+        var acquiredStart = false
+        try {
+            val appContext = context.applicationContext ?: context
+            val processName = ProcessNames.current(appContext)
+            val mainProcessName = appContext.packageName
+            if (!providedConfig.isProcessAllowed(processName, mainProcessName)) return
+            if (!started.compareAndSet(false, true)) return
+            acquiredStart = true
 
-        config = providedConfig
-        metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
-        lastMetricFlushAtMs.set(0L)
-        lastRuntimeCallFlushAtMs.set(0L)
-        runtimeCallDropped.set(0L)
-        adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
-            providedConfig.adaptiveMemoryStableIntervalMs(),
-            providedConfig.adaptiveContextStableIntervalMs(),
-        )
+            config = providedConfig
+            metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
+            lastMetricFlushAtMs.set(0L)
+            lastRuntimeCallFlushAtMs.set(0L)
+            runtimeCallDropped.set(0L)
+            adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
+                providedConfig.adaptiveMemoryStableIntervalMs(),
+                providedConfig.adaptiveContextStableIntervalMs(),
+            )
 
-        val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
-        val redactedProcessName = providedConfig.redactProcessName(processName)
-            ?.takeIf { it.isNotBlank() }
-            ?: "unknown"
-        val asyncWriter = AsyncLogWriter.open(
-            directory,
-            providedConfig,
-            ProcessNames.safeFileSuffix(redactedProcessName, mainProcessName),
-        )
-        writer = asyncWriter
+            val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
+            val redactedProcessName = providedConfig.redactProcessName(processName)
+                ?.takeIf { it.isNotBlank() }
+                ?: "unknown"
+            val asyncWriter = AsyncLogWriter.open(
+                directory,
+                providedConfig,
+                ProcessNames.safeFileSuffix(redactedProcessName, mainProcessName),
+            )
+            writer = asyncWriter
 
-        val identity = appIdentity(appContext)
-        val device = DeviceSnapshots.current()
-        asyncWriter.session(
-            identity.versionName,
-            identity.versionCode,
-            device.displayName,
-            Build.VERSION.SDK_INT,
-            redactedProcessName,
-            device.androidRelease,
-            device.securityPatch,
-            device.primaryAbi,
-            device.supportedAbis,
-            device.manufacturer,
-            device.brand,
-            device.hardware,
-            device.board,
-            device.product,
-            device.rooted,
-        )
+            val identity = appIdentity(appContext)
+            val device = DeviceSnapshots.current()
+            asyncWriter.session(
+                identity.versionName,
+                identity.versionCode,
+                device.displayName,
+                Build.VERSION.SDK_INT,
+                redactedProcessName,
+                device.androidRelease,
+                device.securityPatch,
+                device.primaryAbi,
+                device.supportedAbis,
+                device.manufacturer,
+                device.brand,
+                device.hardware,
+                device.board,
+                device.product,
+                device.rooted,
+            )
 
-        if (providedConfig.autoStartCollectors()) {
-            if (appContext is Application) {
-                application = appContext
-                activityTracker = ActivityTracker(providedConfig.jankStatsEnabled()).also {
-                    appContext.registerActivityLifecycleCallbacks(it)
+            if (providedConfig.autoStartCollectors()) {
+                if (appContext is Application) {
+                    application = appContext
+                    activityTracker = ActivityTracker(providedConfig.jankStatsEnabled()).also {
+                        appContext.registerActivityLifecycleCallbacks(it)
+                    }
+                }
+                watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
+                if (providedConfig.mainLooperDispatchMonitorEnabled()) {
+                    dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also {
+                        it.start()
+                    }
+                }
+                memoryTrimReporter = MemoryTrimReporter().also {
+                    appContext.registerComponentCallbacks(it)
+                    componentCallbackContext = appContext
+                }
+                memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
+                if (providedConfig.systemSamplerEnabled()) {
+                    systemContextSampler = SystemContextSampler(
+                        appContext,
+                        providedConfig.systemSampleIntervalMs(),
+                    ).also { it.start() }
+                }
+                if (providedConfig.processExitInfoEnabled()) {
+                    ProcessExitReporter.report(appContext)
+                }
+                if (providedConfig.objectWatcherEnabled()) {
+                    if (providedConfig.retainedHeapDumpEnabled()) {
+                        retainedHeapDumper = RetainedHeapDumper(
+                            providedConfig.retainedHeapDumpDirectory() ?: File(directory, "heap-dumps"),
+                            providedConfig.retainedHeapDumpMinIntervalMs(),
+                            providedConfig.retainedHeapDumpMaxCount(),
+                        )
+                    }
+                    objectRetentionWatcher = ObjectRetentionWatcher(
+                        providedConfig.retainedObjectDelayMs(),
+                        providedConfig.retainedObjectForceGcEnabled(),
+                    ).also { it.start() }
+                }
+                if (providedConfig.fpsMonitorEnabled()) {
+                    fpsMonitor = FpsMonitor(
+                        providedConfig.fpsWindowMs(),
+                        providedConfig.jankFrameThresholdMs(),
+                    ).also { it.start() }
                 }
             }
-            watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
-            if (providedConfig.mainLooperDispatchMonitorEnabled()) {
-                dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also {
-                    it.start()
-                }
-            }
-            memoryTrimReporter = MemoryTrimReporter().also {
-                appContext.registerComponentCallbacks(it)
-                componentCallbackContext = appContext
-            }
-            memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
-            if (providedConfig.systemSamplerEnabled()) {
-                systemContextSampler = SystemContextSampler(
-                    appContext,
-                    providedConfig.systemSampleIntervalMs(),
-                ).also { it.start() }
-            }
-            if (providedConfig.processExitInfoEnabled()) {
-                ProcessExitReporter.report(appContext)
-            }
-            if (providedConfig.objectWatcherEnabled()) {
-                if (providedConfig.retainedHeapDumpEnabled()) {
-                    retainedHeapDumper = RetainedHeapDumper(
-                        providedConfig.retainedHeapDumpDirectory() ?: File(directory, "heap-dumps"),
-                        providedConfig.retainedHeapDumpMinIntervalMs(),
-                        providedConfig.retainedHeapDumpMaxCount(),
-                    )
-                }
-                objectRetentionWatcher = ObjectRetentionWatcher(
-                    providedConfig.retainedObjectDelayMs(),
-                    providedConfig.retainedObjectForceGcEnabled(),
-                ).also { it.start() }
-            }
-            if (providedConfig.fpsMonitorEnabled()) {
-                fpsMonitor = FpsMonitor(
-                    providedConfig.fpsWindowMs(),
-                    providedConfig.jankFrameThresholdMs(),
-                ).also { it.start() }
+        } catch (_: Throwable) {
+            if (acquiredStart) {
+                shutdown()
+            } else {
+                resetState()
             }
         }
     }
@@ -209,23 +219,33 @@ object JankHunter {
 
     @JvmStatic
     fun shutdown() {
-        flushLogSpam(force = true)
-        flushMetrics(force = true)
-        flushRuntimeCalls(force = true)
-        activityTracker?.let { tracker ->
-            application?.unregisterActivityLifecycleCallbacks(tracker)
-            tracker.close()
+        swallow {
+            flushLogSpam(force = true)
+            flushMetrics(force = true)
+            flushRuntimeCalls(force = true)
         }
-        watchdog?.stop()
-        dispatchMonitor?.stop()
-        memoryTrimReporter?.let { reporter ->
-            componentCallbackContext?.unregisterComponentCallbacks(reporter)
+        swallow {
+            activityTracker?.let { tracker ->
+                application?.unregisterActivityLifecycleCallbacks(tracker)
+                tracker.close()
+            }
         }
-        memorySampler?.stop()
-        systemContextSampler?.stop()
-        objectRetentionWatcher?.stop()
-        fpsMonitor?.stop()
-        writer?.close()
+        swallow { watchdog?.stop() }
+        swallow { dispatchMonitor?.stop() }
+        swallow {
+            memoryTrimReporter?.let { reporter ->
+                componentCallbackContext?.unregisterComponentCallbacks(reporter)
+            }
+        }
+        swallow { memorySampler?.stop() }
+        swallow { systemContextSampler?.stop() }
+        swallow { objectRetentionWatcher?.stop() }
+        swallow { fpsMonitor?.stop() }
+        swallow { writer?.close() }
+        resetState()
+    }
+
+    private fun resetState() {
         activityTracker = null
         application = null
         watchdog = null
@@ -249,6 +269,13 @@ object JankHunter {
             handlerRunnableEntries.clear()
         }
         started.set(false)
+    }
+
+    private inline fun swallow(block: () -> Unit) {
+        try {
+            block()
+        } catch (_: Throwable) {
+        }
     }
 
     @JvmStatic
