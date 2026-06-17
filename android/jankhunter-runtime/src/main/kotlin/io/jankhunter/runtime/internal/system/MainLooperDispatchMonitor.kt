@@ -44,10 +44,12 @@ class MainLooperDispatchMonitor(
     }
 
     fun stop() {
-        running.set(false)
+        if (!running.getAndSet(false)) return
         if (safeCurrentPrinter() === printer) {
             setMessageLogging(previousPrinter)
         }
+        // If a later profiler replaced the global printer, replacing it here would break that profiler.
+        // Leave its chain in place; this wrapper is inactive and only forwards to the printer it captured.
     }
 
     private fun safeCurrentPrinter(): Printer? {

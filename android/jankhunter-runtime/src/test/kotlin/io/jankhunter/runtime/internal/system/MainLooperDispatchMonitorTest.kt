@@ -122,4 +122,39 @@ class MainLooperDispatchMonitorTest {
 
         assertSame(other, installed)
     }
+
+    @Test
+    fun stopKeepsLaterProfilerChainWorkingAndDisablesDispatchRecording() {
+        val previousLines = mutableListOf<String>()
+        val laterProfilerLines = mutableListOf<String>()
+        val previous = Printer { line -> previousLines += line }
+        var installed: Printer? = previous
+        var now = 1_000L
+        val recordedDurations = mutableListOf<Long>()
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { installed },
+            setMessageLogging = { installed = it },
+            clockMs = { now },
+            recordDispatch = { durationMs, _, _ -> recordedDurations += durationMs },
+        )
+
+        monitor.start()
+        val jankHunterPrinter = requireNotNull(installed)
+        val laterProfiler = Printer { line ->
+            laterProfilerLines += line
+            jankHunterPrinter.println(line)
+        }
+        installed = laterProfiler
+
+        monitor.stop()
+        installed?.println(">>>>> Dispatching to Handler (android.os.Handler) {abc} callback: work")
+        now += 10L
+        installed?.println("<<<<< Finished to Handler (android.os.Handler) {abc} callback: work")
+
+        assertSame(laterProfiler, installed)
+        assertEquals(2, laterProfilerLines.size)
+        assertEquals(2, previousLines.size)
+        assertEquals(emptyList<Long>(), recordedDurations)
+    }
 }
