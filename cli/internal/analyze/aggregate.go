@@ -268,6 +268,29 @@ func containsAnyFilter(needle string, values ...string) bool {
 	return false
 }
 
+func (c *collector) eventContext(screenOverride, ownerOverride, flowOverride, stepOverride string) FlowStats {
+	return c.flowContextFromKey(c.contextKey(screenOverride, ownerOverride, flowOverride, stepOverride))
+}
+
+func (c *collector) matchesFilters(route string, context FlowStats, classCandidates []string, ownerCandidates ...string) bool {
+	if !containsFilter(route, c.filter.RouteContains) {
+		return false
+	}
+	if !containsFilter(context.Screen, c.filter.ScreenContains) {
+		return false
+	}
+	if c.filter.ClassContains != "" && !containsAnyFilter(c.filter.ClassContains, classCandidates...) {
+		return false
+	}
+	if c.filter.OwnerContains != "" {
+		candidates := append([]string{context.Owner}, ownerCandidates...)
+		if !containsAnyFilter(c.filter.OwnerContains, candidates...) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	c.summary.EventCount++
 	if !c.seenEvent {
@@ -314,12 +337,13 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentAttrFlow = attrValue(jhlog.Resolve(dict, event.Flow.FlowID))
 		c.currentAttrStep = attrValue(jhlog.Resolve(dict, event.Flow.StepID))
 	case event.HTTP != nil:
-		c.markCohort()
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
 		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
-		if !containsFilter(route, c.filter.RouteContains) || !containsFilter(owner, c.filter.OwnerContains) {
+		context := c.eventContext("", owner, "", "")
+		if !c.matchesFilters(route, context, nil, owner) {
 			return
 		}
+		c.markCohort()
 		c.summary.HTTPCount++
 		c.routeDurations = append(c.routeDurations, namedDuration{route, event.HTTP.DurationMS})
 		c.routeRx[route] += event.HTTP.RxBytes
@@ -343,11 +367,12 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			flow.HTTPFailed++
 		}
 	case event.UIWindow != nil:
-		c.markCohort()
 		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
-		if !containsFilter(screen, c.filter.ScreenContains) {
+		context := c.eventContext(screen, "", "", "")
+		if !c.matchesFilters("", context, nil) {
 			return
 		}
+		c.markCohort()
 		stats := c.screenStats[screen]
 		if stats == nil {
 			stats = &ScreenStats{Screen: screen}
@@ -379,12 +404,13 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		flow.UIFrames += event.UIWindow.FrameCount
 		flow.UIJank += event.UIWindow.JankCount
 	case event.Stall != nil:
-		c.markCohort()
 		owner := c.resolveOwner(dict, event.Stall.OwnerID)
 		stack := jhlog.Resolve(dict, event.Stall.StackID)
-		if !containsFilter(owner, c.filter.OwnerContains) {
+		context := c.eventContext("", owner, "", "")
+		if !c.matchesFilters("", context, nil, owner) {
 			return
 		}
+		c.markCohort()
 		c.summary.StallCount++
 		if event.Stall.DurationMS > c.summary.StallMaxMS {
 			c.summary.StallMaxMS = event.Stall.DurationMS
@@ -427,6 +453,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 		c.networkSamples[c.currentNetwork]++
 	case event.Memory != nil:
+		context := c.eventContext("", "", "", "")
+		if !c.matchesFilters("", context, nil) {
+			return
+		}
 		c.markCohort()
 		if event.Memory.PSSKB > c.summary.MemoryMaxKB {
 			c.summary.MemoryMaxKB = event.Memory.PSSKB
@@ -436,22 +466,20 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			flow.MemoryMaxKB = event.Memory.PSSKB
 		}
 	case event.Retained != nil:
-		c.markCohort()
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
 		holder := c.resolveOwner(dict, event.Retained.HolderID)
 		owner := c.resolveOwner(dict, event.Retained.OwnerID)
-		context := c.flowContextFromKey(c.contextKey(
+		context := c.eventContext(
 			jhlog.Resolve(dict, event.Retained.ScreenID),
 			owner,
 			jhlog.Resolve(dict, event.Retained.FlowID),
 			jhlog.Resolve(dict, event.Retained.StepID),
-		))
+		)
 		holder = firstKnown(holder, context.Owner)
-		if !containsFilter(className, c.filter.ClassContains) ||
-			!containsFilter(context.Screen, c.filter.ScreenContains) ||
-			!containsAnyFilter(c.filter.OwnerContains, holder, owner, context.Owner) {
+		if !c.matchesFilters("", context, []string{className}, holder, owner) {
 			return
 		}
+		c.markCohort()
 		c.summary.Retained += event.Retained.Count
 		stats := c.retainedClasses[className]
 		if stats == nil {
@@ -466,19 +494,22 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.addMemoryLeakSuspect(className, holder, context, event.Retained.AgeMS, event.Retained.Count)
 		addOwner(c.ownerStats, className, "retained_object", event.Retained.AgeMS, "")
 	case event.LogSpam != nil:
-		c.markCohort()
 		key := c.contextKey(
 			jhlog.Resolve(dict, event.LogSpam.ScreenID),
 			c.resolveOwner(dict, event.LogSpam.OwnerID),
 			jhlog.Resolve(dict, event.LogSpam.FlowID),
 			jhlog.Resolve(dict, event.LogSpam.StepID),
 		)
+		context := c.flowContextFromKey(key)
 		source := jhlog.Resolve(dict, event.LogSpam.SourceID)
+		if !c.matchesFilters("", context, []string{source}, context.Owner) {
+			return
+		}
+		c.markCohort()
 		level := logLevelName(event.LogSpam.Level)
 		logKey := key + "\x00" + source + "\x00" + level
 		stats := c.logSpamStats[logKey]
 		if stats == nil {
-			context := c.flowContextFromKey(key)
 			stats = &LogSpamStats{
 				Screen: context.Screen,
 				Flow:   context.Flow,
@@ -493,18 +524,21 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		flow := c.ensureFlow(key)
 		flow.LogSpam += event.LogSpam.Count
 	case event.Problem != nil:
-		c.markCohort()
 		key := c.contextKey(
 			jhlog.Resolve(dict, event.Problem.ScreenID),
 			c.resolveOwner(dict, event.Problem.OwnerID),
 			jhlog.Resolve(dict, event.Problem.FlowID),
 			jhlog.Resolve(dict, event.Problem.StepID),
 		)
+		context := c.flowContextFromKey(key)
+		if !c.matchesFilters("", context, nil, context.Owner) {
+			return
+		}
+		c.markCohort()
 		kind := jhlog.Resolve(dict, event.Problem.KindID)
 		problemKey := key + "\x00" + kind
 		stats := c.problemStats[problemKey]
 		if stats == nil {
-			context := c.flowContextFromKey(key)
 			stats = &ProblemWindowStats{
 				Screen: context.Screen,
 				Flow:   context.Flow,
@@ -526,22 +560,22 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			flow.ProblemMaxMS = event.Problem.MaxMS
 		}
 	case event.RuntimeCall != nil:
-		c.markCohort()
 		caller := c.resolveOwner(dict, event.RuntimeCall.CallerID)
 		callee := c.resolveOwner(dict, event.RuntimeCall.CalleeID)
-		if !containsFilter(caller, c.filter.OwnerContains) && !containsFilter(callee, c.filter.OwnerContains) {
-			return
-		}
 		key := c.contextKey(
 			jhlog.Resolve(dict, event.RuntimeCall.ScreenID),
 			caller,
 			jhlog.Resolve(dict, event.RuntimeCall.FlowID),
 			jhlog.Resolve(dict, event.RuntimeCall.StepID),
 		)
+		context := c.flowContextFromKey(key)
+		if !c.matchesFilters("", context, []string{caller, callee}, caller, callee) {
+			return
+		}
+		c.markCohort()
 		callKey := key + "\x00" + caller + "\x00" + callee
 		stats := c.runtimeCallStats[callKey]
 		if stats == nil {
-			context := c.flowContextFromKey(key)
 			stats = &RuntimeCallStats{
 				Screen: context.Screen,
 				Flow:   context.Flow,
@@ -676,6 +710,9 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 			count = 1
 		}
 		holder := firstKnown(leak.Holder, leak.HolderField)
+		if !c.matchesFilters("", FlowStats{}, []string{className}, holder) {
+			continue
+		}
 		c.addMemoryLeakSuspect(className, holder, FlowStats{}, 0, count)
 		c.summary.Retained += count
 		stats := c.retainedClasses[className]

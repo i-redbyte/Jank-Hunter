@@ -372,6 +372,78 @@ func TestInspectFilesAppliesRouteFilter(t *testing.T) {
 	}
 }
 
+func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "problem-filters.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	events := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 1, Value: "FeedScreen"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 2, Value: "CheckoutScreen"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "FeedOwner"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 4, Value: "CheckoutOwner"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 5, Value: "FeedCallee"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 6, Value: "CheckoutCallee"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 7, Value: "feed.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 8, Value: "checkout.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 9, Value: "render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 10, Value: "FeedLogger.render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 11, Value: "CheckoutLogger.render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 12, Value: "main_thread_stall"}},
+		{Type: jhlog.EventLogSpam, TimeMS: 1, LogSpam: &jhlog.LogSpamEvent{ScreenID: 1, OwnerID: 3, FlowID: 7, StepID: 9, SourceID: 10, Level: 5, Count: 3}},
+		{Type: jhlog.EventLogSpam, TimeMS: 2, LogSpam: &jhlog.LogSpamEvent{ScreenID: 2, OwnerID: 4, FlowID: 8, StepID: 9, SourceID: 11, Level: 5, Count: 5}},
+		{Type: jhlog.EventProblem, TimeMS: 3, Problem: &jhlog.ProblemEvent{ScreenID: 1, OwnerID: 3, FlowID: 7, StepID: 9, KindID: 12, WindowMS: 5000, Count: 2, MaxMS: 80}},
+		{Type: jhlog.EventProblem, TimeMS: 4, Problem: &jhlog.ProblemEvent{ScreenID: 2, OwnerID: 4, FlowID: 8, StepID: 9, KindID: 12, WindowMS: 5000, Count: 4, MaxMS: 120}},
+		{Type: jhlog.EventRuntimeCall, TimeMS: 5, RuntimeCall: &jhlog.RuntimeCallEvent{ScreenID: 1, CallerID: 3, FlowID: 7, StepID: 9, CalleeID: 5, Count: 1, TotalMS: 20, MaxMS: 20}},
+		{Type: jhlog.EventRuntimeCall, TimeMS: 6, RuntimeCall: &jhlog.RuntimeCallEvent{ScreenID: 2, CallerID: 4, FlowID: 8, StepID: 9, CalleeID: 6, Count: 1, TotalMS: 30, MaxMS: 30}},
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(%d) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	feedOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{ScreenContains: "FeedScreen"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(screen) error = %v", err)
+	}
+	if len(feedOnly.LogSpam) != 1 || feedOnly.LogSpam[0].Screen != "FeedScreen" {
+		t.Fatalf("screen filter leaked log spam: %+v", feedOnly.LogSpam)
+	}
+	if len(feedOnly.ProblemWindows) != 1 || feedOnly.ProblemWindows[0].Screen != "FeedScreen" {
+		t.Fatalf("screen filter leaked problems: %+v", feedOnly.ProblemWindows)
+	}
+	if len(feedOnly.RuntimeCalls) != 1 || feedOnly.RuntimeCalls[0].Screen != "FeedScreen" {
+		t.Fatalf("screen filter leaked runtime calls: %+v", feedOnly.RuntimeCalls)
+	}
+
+	loggerOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "FeedLogger"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(class) error = %v", err)
+	}
+	if len(loggerOnly.LogSpam) != 1 || loggerOnly.LogSpam[0].Source != "FeedLogger.render" {
+		t.Fatalf("class filter did not select log source: %+v", loggerOnly.LogSpam)
+	}
+	if len(loggerOnly.ProblemWindows) != 0 || len(loggerOnly.RuntimeCalls) != 0 {
+		t.Fatalf("class filter leaked non-matching signals: problems=%+v runtime=%+v", loggerOnly.ProblemWindows, loggerOnly.RuntimeCalls)
+	}
+
+	calleeOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{OwnerContains: "FeedCallee"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(owner callee) error = %v", err)
+	}
+	if len(calleeOnly.RuntimeCalls) != 1 || calleeOnly.RuntimeCalls[0].Callee != "FeedCallee" {
+		t.Fatalf("owner filter did not match runtime callee: %+v", calleeOnly.RuntimeCalls)
+	}
+	if len(calleeOnly.LogSpam) != 0 || len(calleeOnly.ProblemWindows) != 0 {
+		t.Fatalf("owner filter leaked unrelated signals: logspam=%+v problems=%+v", calleeOnly.LogSpam, calleeOnly.ProblemWindows)
+	}
+}
+
 func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 	log := jhlog.Log{
 		Dict: map[uint64]string{
