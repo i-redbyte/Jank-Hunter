@@ -17,6 +17,7 @@ class AsyncLogWriter private constructor(
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val running = AtomicBoolean(true)
     private val dropped = AtomicLong()
+    private val pendingIoErrors = AtomicLong()
     private val filePrefix = "session-$processFileSuffix-"
     private var nextSegmentId = 1L
     private var writer = openSegment()
@@ -262,11 +263,13 @@ class AsyncLogWriter private constructor(
             try {
                 queue.poll(250, TimeUnit.MILLISECONDS)?.let {
                     it.write(writer)
+                    writePendingIoErrors()
                     rotateIfNeeded()
                 }
                 val lost = dropped.getAndSet(0)
                 if (lost > 0) {
                     writer.counter("jankhunter.events_dropped.count", lost)
+                    writePendingIoErrors()
                     rotateIfNeeded()
                 }
                 flushIfNeeded(force = false)
@@ -275,6 +278,8 @@ class AsyncLogWriter private constructor(
                     break
                 }
             } catch (_: IOException) {
+                pendingIoErrors.incrementAndGet()
+                recoverWriterAfterIoError()
             }
         }
         flushIfNeeded(force = true)
@@ -288,6 +293,7 @@ class AsyncLogWriter private constructor(
         writer = openSegment()
         lastFlushAtMs = SystemClock.elapsedRealtime()
         bootstrap?.write(writer)
+        writePendingIoErrors()
         enforceRetention()
     }
 
@@ -297,9 +303,39 @@ class AsyncLogWriter private constructor(
         if (!force && (interval <= 0 || now - lastFlushAtMs < interval)) return
 
         try {
+            writePendingIoErrors()
             writer.flush()
             lastFlushAtMs = now
         } catch (_: IOException) {
+            pendingIoErrors.incrementAndGet()
+            recoverWriterAfterIoError()
+        }
+    }
+
+    private fun recoverWriterAfterIoError() {
+        try {
+            writer.close()
+        } catch (_: IOException) {
+        }
+        try {
+            writer = openSegment()
+            lastFlushAtMs = SystemClock.elapsedRealtime()
+            bootstrap?.write(writer)
+            writePendingIoErrors()
+            enforceRetention()
+        } catch (_: IOException) {
+            pendingIoErrors.incrementAndGet()
+        }
+    }
+
+    private fun writePendingIoErrors() {
+        val errors = pendingIoErrors.getAndSet(0)
+        if (errors <= 0) return
+        try {
+            writer.counter("jankhunter.writer_io_error.count", errors)
+        } catch (error: IOException) {
+            pendingIoErrors.addAndGet(errors)
+            throw error
         }
     }
 
