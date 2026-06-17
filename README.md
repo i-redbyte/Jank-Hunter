@@ -109,6 +109,7 @@ quit
 
 ```kotlin
 dependencies {
+    compileOnly("io.jankhunter:jankhunter-annotations:0.1.0-SNAPSHOT")
     debugImplementation("io.jankhunter:jankhunter-runtime:0.1.0-SNAPSHOT")
     debugImplementation("io.jankhunter:jankhunter-okhttp3:0.1.0-SNAPSHOT")
 }
@@ -158,9 +159,9 @@ scripts/integrate-android-project.sh ~/work/MyApp --android-build-tools 35.0.0
 - Память: PSS, Java/native heap, свободная RAM, retained objects и опциональный HPROF/heap evidence для пути до GC root, holder field и retained size.
 - Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
 - Пользовательские counters/gauges.
-- Owner attribution: ручной `JankHunter.withOwner(...)` и ASM-generated owners.
+- Owner attribution: ручной `JankHunter.withOwner(...)`, ASM-generated owners и lightweight-аннотации `@JankOwner` / `@JankIgnore`.
 - Граф влияния кода: классы, флоу, проблемные окна, лог-спам, runtime-вызовы и build-time ASM-связи между классами.
-- ASM-интеграция: OkHttp/WebSocket, Handler, Executor, builders корутин, click-flow, log spam и статический class graph.
+- ASM-интеграция: rule/spec/intent pipeline для OkHttp/WebSocket, Handler, Executor, builders корутин, click-flow, log spam и статического class graph.
 
 CLI строит два основных режима:
 
@@ -180,7 +181,7 @@ git push origin v0.1.0
 
 В GitHub Release попадают:
 
-- `jankhunter-android-sdk-<version>-maven.zip` - локальный Maven-репозиторий с runtime, OkHttp-интеграцией, Gradle plugin и plugin marker;
+- `jankhunter-android-sdk-<version>-maven.zip` - локальный Maven-репозиторий с annotations, runtime, OkHttp-интеграцией, Gradle plugin и plugin marker;
 - `jankhunter_<version>_darwin_amd64.tar.gz` - CLI для macOS Intel;
 - `jankhunter_<version>_darwin_arm64.tar.gz` - CLI для macOS Apple Silicon;
 - `checksums.txt` - SHA-256 суммы релизных файлов.
