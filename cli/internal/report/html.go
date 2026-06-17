@@ -2103,6 +2103,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 	height := math.Max(520, topY+float64(maxRows)*(nodeH+gapY)+34)
 	columnRow := [3]int{}
 	positions := map[string]graphPoint{}
+	nodeColumns := map[string]int{}
 	for _, item := range nodes {
 		row := columnRow[item.column]
 		columnRow[item.column]++
@@ -2110,6 +2111,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			x: columnX[item.column],
 			y: topY + float64(row)*(nodeH+gapY),
 		}
+		nodeColumns[item.node.ClassName] = item.column
 	}
 
 	var out strings.Builder
@@ -2117,7 +2119,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 	out.WriteString(`<div class="influence-tools" role="toolbar" aria-label="Режим выделения графа"><button type="button" data-influence-mode="node">Вершина</button><button type="button" class="is-active" data-influence-mode="paths">Пути</button><button type="button" data-influence-mode="tree">Остов</button><button type="button" data-influence-reset>Сброс</button></div>`)
 	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
 	fmt.Fprintf(&out, `<svg class="influence-graph" viewBox="0 0 %.0f %.0f" role="img" aria-label="Граф влияния кода">`, width, height)
-	out.WriteString(`<defs><marker id="influence-arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="rgba(111,247,255,0.72)"></path></marker></defs>`)
+	out.WriteString(`<defs><marker id="influence-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.78"></path></marker><marker id="influence-arrow-confirmed" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#62ffa8" opacity="0.88"></path></marker></defs>`)
 	out.WriteString(`<text class="influence-layer-label" x="52" y="34">Источники вызовов</text>`)
 	out.WriteString(`<text class="influence-layer-label" x="413" y="34">Связующие классы</text>`)
 	out.WriteString(`<text class="influence-layer-label" x="774" y="34">Проблемные узлы</text>`)
@@ -2133,25 +2135,19 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 		if edge.RuntimeConfirmed {
 			className += " confirmed"
 		}
-		x1 := from.x + nodeW
-		y1 := from.y + nodeH/2
-		x2 := to.x
-		y2 := to.y + nodeH/2
-		direction := 1.0
-		if x2 < x1 {
-			direction = -1
-			x1 = from.x
-			x2 = to.x + nodeW
+		path := influenceEdgePath(from, to, nodeColumns[edge.From], nodeColumns[edge.To], nodeW, nodeH, width)
+		markerID := "influence-arrow"
+		if edge.RuntimeConfirmed {
+			markerID = "influence-arrow-confirmed"
 		}
-		curve := math.Max(70, math.Abs(x2-x1)*0.42)
-		path := fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1+direction*curve, y1, x2-direction*curve, y2, x2, y2)
-		fmt.Fprintf(&out, `<path class="%s" data-from="%s" data-to="%s" d="%s" opacity="%.2f" stroke-width="%.2f" marker-end="url(#influence-arrow)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></path>`,
+		fmt.Fprintf(&out, `<path class="%s" data-from="%s" data-to="%s" d="%s" opacity="%.2f" stroke-width="%.2f" marker-end="url(#%s)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></path>`,
 			className,
 			template.HTMLEscapeString(edge.From),
 			template.HTMLEscapeString(edge.To),
 			path,
 			opacity,
 			strokeWidth,
+			markerID,
 			template.HTMLEscapeString(edge.From),
 			template.HTMLEscapeString(edge.To),
 			edge.Influence,
@@ -2257,6 +2253,42 @@ func topInfluenceNodes(influence analyze.InfluenceSummary, limit int) []analyze.
 		return influence.TopNodes
 	}
 	return influence.TopNodes[:limit]
+}
+
+func influenceEdgePath(from, to graphPoint, fromColumn, toColumn int, nodeW, nodeH, width float64) string {
+	const edgeGap = 14.0
+	y1 := from.y + nodeH/2
+	y2 := to.y + nodeH/2
+	if fromColumn == toColumn {
+		useLeftRail := from.x < width/2
+		railX := math.Max(18, from.x-48)
+		x1 := from.x - edgeGap
+		x2 := to.x - edgeGap
+		if !useLeftRail {
+			railX = math.Min(width-18, from.x+nodeW+48)
+			x1 = from.x + nodeW + edgeGap
+			x2 = to.x + nodeW + edgeGap
+		}
+		midY := (y1 + y2) / 2
+		return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f S%.1f %.1f %.1f %.1f",
+			x1, y1,
+			railX, y1,
+			railX, midY,
+			railX, midY,
+			railX, y2,
+			x2, y2,
+		)
+	}
+	if to.x > from.x {
+		x1 := from.x + nodeW + edgeGap
+		x2 := to.x - edgeGap
+		curve := math.Max(70, math.Abs(x2-x1)*0.42)
+		return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1+curve, y1, x2-curve, y2, x2, y2)
+	}
+	x1 := from.x - edgeGap
+	x2 := to.x + nodeW + edgeGap
+	curve := math.Max(70, math.Abs(x2-x1)*0.42)
+	return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1-curve, y1, x2+curve, y2, x2, y2)
 }
 
 type graphPoint struct {

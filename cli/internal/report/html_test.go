@@ -124,7 +124,7 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 }
 
 func TestWriteReportsCanHideMathLink(t *testing.T) {

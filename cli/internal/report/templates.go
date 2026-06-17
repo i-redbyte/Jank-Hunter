@@ -2123,6 +2123,7 @@ const mathCSS = `
   stroke: rgba(111,247,255,0.42);
   stroke-linecap: round;
   fill: none;
+  vector-effect: non-scaling-stroke;
   transition: opacity 140ms ease, stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease;
 }
 .influence-edge.confirmed {
