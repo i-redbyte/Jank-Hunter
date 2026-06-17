@@ -22,6 +22,7 @@ type Filter struct {
 	RouteContains  string
 	ScreenContains string
 	OwnerContains  string
+	ClassContains  string
 }
 
 type Options struct {

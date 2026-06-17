@@ -232,6 +232,7 @@ func normalizeFilter(filter Filter) Filter {
 		RouteContains:  strings.ToLower(filter.RouteContains),
 		ScreenContains: strings.ToLower(filter.ScreenContains),
 		OwnerContains:  strings.ToLower(filter.OwnerContains),
+		ClassContains:  strings.ToLower(filter.ClassContains),
 	}
 }
 
@@ -240,6 +241,18 @@ func containsFilter(value string, needle string) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(value), needle)
+}
+
+func containsAnyFilter(needle string, values ...string) bool {
+	if needle == "" {
+		return true
+	}
+	for _, value := range values {
+		if containsFilter(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
@@ -411,9 +424,6 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	case event.Retained != nil:
 		c.markCohort()
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
-		if !containsFilter(className, c.filter.OwnerContains) {
-			return
-		}
 		holder := c.resolveOwner(dict, event.Retained.HolderID)
 		owner := c.resolveOwner(dict, event.Retained.OwnerID)
 		context := c.flowContextFromKey(c.contextKey(
@@ -423,6 +433,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			jhlog.Resolve(dict, event.Retained.StepID),
 		))
 		holder = firstKnown(holder, context.Owner)
+		if !containsFilter(className, c.filter.ClassContains) ||
+			!containsFilter(context.Screen, c.filter.ScreenContains) ||
+			!containsAnyFilter(c.filter.OwnerContains, holder, owner, context.Owner) {
+			return
+		}
 		c.summary.Retained += event.Retained.Count
 		stats := c.retainedClasses[className]
 		if stats == nil {

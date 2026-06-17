@@ -113,6 +113,7 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 		"--route", "feed",
 		"--screen=Home",
 		"--owner", "FeedRepository",
+		"--class", "CheckoutActivity",
 		"--owner-map", "owners.json",
 		"--class-graph=graph.jsonl",
 		"sample.jhlog",
@@ -123,7 +124,10 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 	if got, want := strings.Join(remaining, ","), "sample.jhlog"; got != want {
 		t.Fatalf("remaining = %q, want %q", got, want)
 	}
-	if builder.filter.RouteContains != "feed" || builder.filter.ScreenContains != "Home" || builder.filter.OwnerContains != "FeedRepository" {
+	if builder.filter.RouteContains != "feed" ||
+		builder.filter.ScreenContains != "Home" ||
+		builder.filter.OwnerContains != "FeedRepository" ||
+		builder.filter.ClassContains != "CheckoutActivity" {
 		t.Fatalf("filter = %+v", builder.filter)
 	}
 	if builder.ownerMapPath != "owners.json" || builder.classGraphPath != "graph.jsonl" {

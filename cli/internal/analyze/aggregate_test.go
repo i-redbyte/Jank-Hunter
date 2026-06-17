@@ -157,6 +157,37 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	}
 }
 
+func TestInspectFilesFiltersRetainedObjectsByClass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.jhlog")
+	if err := jhlog.WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+
+	matching, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "CheckoutActivity"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(class match) error = %v", err)
+	}
+	if len(matching.MemoryLeaks) != 1 || matching.MemoryLeaks[0].ClassName != "com.app.checkout.CheckoutActivity" {
+		t.Fatalf("expected checkout leak with class filter: %+v", matching.MemoryLeaks)
+	}
+
+	nonMatching, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "FeedActivity"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(class miss) error = %v", err)
+	}
+	if len(nonMatching.MemoryLeaks) != 0 || nonMatching.Retained != 0 {
+		t.Fatalf("expected retained objects to be filtered by class: leaks=%+v retained=%d", nonMatching.MemoryLeaks, nonMatching.Retained)
+	}
+
+	ownerOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{OwnerContains: "CheckoutActivity"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter(owner class name) error = %v", err)
+	}
+	if ownerOnly.Retained != 0 {
+		t.Fatalf("owner filter should not match retained class names: retained=%d leaks=%+v", ownerOnly.Retained, ownerOnly.MemoryLeaks)
+	}
+}
+
 func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "uptime-offset.jhlog")
 	file, writer, err := jhlog.Create(path)
