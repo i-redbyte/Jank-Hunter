@@ -292,6 +292,53 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 	}
 }
 
+func TestInspectKeepsOwnerKindsSeparate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owner-kinds.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	events := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 1, Value: "SharedOwner"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 2, Value: "GET /shared"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStack, ID: 3, Value: "SharedOwner.render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 4, Value: "SharedOwner"}},
+		{Type: jhlog.EventHTTP, TimeMS: 1, HTTP: &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 100, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventStall, TimeMS: 2, Stall: &jhlog.StallEvent{OwnerID: 1, StackID: 3, DurationMS: 250}},
+		{Type: jhlog.EventRetained, TimeMS: 3, Retained: &jhlog.RetainedEvent{ClassID: 4, AgeMS: 10_000, Count: 1}},
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(%d) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := InspectFiles("sample", []string{path})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	byKind := map[string]OwnerStats{}
+	for _, owner := range summary.Owners {
+		if owner.Owner == "SharedOwner" {
+			byKind[owner.Kind] = owner
+		}
+	}
+	for _, kind := range []string{"http", "main_thread_stall", "retained_object"} {
+		if _, ok := byKind[kind]; !ok {
+			t.Fatalf("missing owner kind %q in %+v", kind, summary.Owners)
+		}
+	}
+	if byKind["http"].TotalMS != 100 || byKind["main_thread_stall"].TotalMS != 250 || byKind["retained_object"].TotalMS != 10_000 {
+		t.Fatalf("owner durations were merged incorrectly: %+v", byKind)
+	}
+	if byKind["main_thread_stall"].StackHint != "SharedOwner.render" {
+		t.Fatalf("stall stack hint = %q", byKind["main_thread_stall"].StackHint)
+	}
+}
+
 func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bounded-aggregate.jhlog")
 	file, writer, err := jhlog.Create(path)

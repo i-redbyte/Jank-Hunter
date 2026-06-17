@@ -116,7 +116,7 @@ type collector struct {
 	routeOwner     map[string]string
 
 	screenStats        map[string]*ScreenStats
-	ownerStats         map[string]*OwnerStats
+	ownerStats         map[ownerStatKey]*OwnerStats
 	flowStats          map[string]*FlowStats
 	flowHTTPDurations  map[string]*uint64SampleSet
 	logSpamStats       map[string]*LogSpamStats
@@ -173,7 +173,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		routeTTFBCount:     map[string]uint64{},
 		routeOwner:         map[string]string{},
 		screenStats:        map[string]*ScreenStats{},
-		ownerStats:         map[string]*OwnerStats{},
+		ownerStats:         map[ownerStatKey]*OwnerStats{},
 		flowStats:          map[string]*FlowStats{},
 		flowHTTPDurations:  map[string]*uint64SampleSet{},
 		logSpamStats:       map[string]*LogSpamStats{},
@@ -1152,14 +1152,20 @@ func confidence(baseline, candidate Summary) string {
 	}
 }
 
-func addOwner(stats map[string]*OwnerStats, owner, kind string, duration uint64, stack string) {
+type ownerStatKey struct {
+	owner string
+	kind  string
+}
+
+func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration uint64, stack string) {
 	if owner == "" {
 		owner = "unknown"
 	}
-	item := stats[owner]
+	key := ownerStatKey{owner: owner, kind: kind}
+	item := stats[key]
 	if item == nil {
 		item = &OwnerStats{Owner: owner, Kind: kind}
-		stats[owner] = item
+		stats[key] = item
 	}
 	item.Count++
 	item.TotalMS += duration
