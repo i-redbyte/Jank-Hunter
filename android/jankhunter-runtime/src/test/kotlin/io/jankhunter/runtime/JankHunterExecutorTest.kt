@@ -57,6 +57,41 @@ class JankHunterExecutorTest {
     }
 
     @Test
+    fun executorServiceShutdownNowReturnsOriginalPendingRunnable() {
+        val delegate = Executors.newSingleThreadExecutor()
+        try {
+            val wrapped = JankHunterExecutorService(
+                delegate = delegate,
+                name = "api-pool",
+                ownerName = "api-pool",
+                clock = { 1L },
+            )
+            val started = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val blocker = Runnable {
+                started.countDown()
+                try {
+                    release.await(5, TimeUnit.SECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            val pending = Runnable {}
+
+            wrapped.execute(blocker)
+            assertTrue(started.await(1, TimeUnit.SECONDS))
+            wrapped.execute(pending)
+
+            val returned = wrapped.shutdownNow()
+            release.countDown()
+
+            assertTrue(returned.any { it === pending })
+        } finally {
+            delegate.shutdownNow()
+        }
+    }
+
+    @Test
     fun wrapExecutorServiceKeepsScheduledExecutorServiceContract() {
         val delegate = Executors.newSingleThreadScheduledExecutor()
         try {

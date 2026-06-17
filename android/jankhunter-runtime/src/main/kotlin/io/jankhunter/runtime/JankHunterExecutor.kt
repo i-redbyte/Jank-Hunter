@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 import android.os.SystemClock
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Delayed
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
@@ -42,7 +43,7 @@ class JankHunterExecutorService internal constructor(
         delegate.shutdown()
     }
 
-    override fun shutdownNow(): MutableList<Runnable> = delegate.shutdownNow()
+    override fun shutdownNow(): MutableList<Runnable> = tracker.unwrapShutdownNow(delegate.shutdownNow())
 
     override fun isShutdown(): Boolean = delegate.isShutdown
 
@@ -104,7 +105,7 @@ class JankHunterScheduledExecutorService internal constructor(
         delegate.shutdown()
     }
 
-    override fun shutdownNow(): MutableList<Runnable> = delegate.shutdownNow()
+    override fun shutdownNow(): MutableList<Runnable> = tracker.unwrapShutdownNow(delegate.shutdownNow())
 
     override fun isShutdown(): Boolean = delegate.isShutdown
 
@@ -122,6 +123,7 @@ private class ExecutorTaskTracker(
     private val clock: () -> Long,
 ) {
     private val queued = AtomicInteger()
+    private val trackedRunnables = ConcurrentHashMap<Runnable, PendingRunnable>()
 
     private fun enqueue(): QueuedTaskState {
         val state = QueuedTaskState(clock())
@@ -132,9 +134,11 @@ private class ExecutorTaskTracker(
 
     fun execute(command: Runnable) {
         val state = enqueue()
+        val wrapped = oneShotRunnable(command, state)
         try {
-            delegate.execute(oneShotRunnable(command, state))
+            delegate.execute(wrapped)
         } catch (throwable: Throwable) {
+            trackedRunnables.remove(wrapped)
             state.cancelIfQueued()
             throw throwable
         }
@@ -145,8 +149,9 @@ private class ExecutorTaskTracker(
         schedule: (Runnable) -> ScheduledFuture<*>,
     ): ScheduledFuture<*> {
         val state = enqueue()
-        return trackScheduled(state) {
-            schedule(oneShotRunnable(command, state))
+        val wrapped = oneShotRunnable(command, state)
+        return trackScheduled(state, onCancel = { trackedRunnables.remove(wrapped) }) {
+            schedule(wrapped)
         }
     }
 
@@ -155,7 +160,7 @@ private class ExecutorTaskTracker(
         schedule: (Callable<T>) -> ScheduledFuture<T>,
     ): ScheduledFuture<T> {
         val state = enqueue()
-        return trackScheduled(state) {
+        return trackScheduled(state, onCancel = {}) {
             schedule(oneShotCallable(callable, state))
         }
     }
@@ -165,16 +170,14 @@ private class ExecutorTaskTracker(
         schedule: (Runnable) -> ScheduledFuture<*>,
     ): ScheduledFuture<*> {
         val state = enqueue()
-        return trackScheduled(state) {
-            schedule(periodicRunnable(command, state))
+        val wrapped = periodicRunnable(command, state)
+        return trackScheduled(state, onCancel = { trackedRunnables.remove(wrapped) }) {
+            schedule(wrapped)
         }
     }
 
     private fun oneShotRunnable(command: Runnable, state: QueuedTaskState): Runnable {
-        return Runnable {
-            markStarted(state)
-            JankHunter.runExecutorTask(name, ownerName, command, clock)
-        }
+        return trackRunnable(command, state, removeAfterRun = true)
     }
 
     private fun <T> oneShotCallable(callable: Callable<T>, state: QueuedTaskState): Callable<T> {
@@ -185,9 +188,39 @@ private class ExecutorTaskTracker(
     }
 
     private fun periodicRunnable(command: Runnable, state: QueuedTaskState): Runnable {
-        return Runnable {
-            markStarted(state)
-            JankHunter.runExecutorTask(name, ownerName, command, clock)
+        return trackRunnable(command, state, removeAfterRun = false)
+    }
+
+    private fun trackRunnable(
+        command: Runnable,
+        state: QueuedTaskState,
+        removeAfterRun: Boolean,
+    ): Runnable {
+        val wrapped = object : Runnable {
+            override fun run() {
+                markStarted(state)
+                try {
+                    JankHunter.runExecutorTask(name, ownerName, command, clock)
+                } finally {
+                    if (removeAfterRun) {
+                        trackedRunnables.remove(this)
+                    }
+                }
+            }
+        }
+        trackedRunnables[wrapped] = PendingRunnable(command, state)
+        return wrapped
+    }
+
+    fun unwrapShutdownNow(tasks: MutableList<Runnable>): MutableList<Runnable> {
+        return tasks.mapTo(mutableListOf()) { task ->
+            val pending = trackedRunnables.remove(task)
+            if (pending != null) {
+                pending.state.cancelIfQueued()
+                pending.original
+            } else {
+                task
+            }
         }
     }
 
@@ -208,11 +241,13 @@ private class ExecutorTaskTracker(
 
     private fun <T> trackScheduled(
         state: QueuedTaskState,
+        onCancel: () -> Unit,
         schedule: () -> ScheduledFuture<T>,
     ): ScheduledFuture<T> {
         return try {
-            TrackedScheduledFuture(schedule(), state)
+            TrackedScheduledFuture(schedule(), state, onCancel)
         } catch (throwable: Throwable) {
+            onCancel()
             state.cancelIfQueued()
             throw throwable
         }
@@ -232,15 +267,22 @@ private class ExecutorTaskTracker(
             }
         }
     }
+
+    private data class PendingRunnable(
+        val original: Runnable,
+        val state: QueuedTaskState,
+    )
 }
 
 private class TrackedScheduledFuture<V>(
     private val delegate: ScheduledFuture<V>,
     private val state: ExecutorTaskTracker.QueuedTaskState,
+    private val onCancel: () -> Unit,
 ) : ScheduledFuture<V> {
     override fun cancel(mayInterruptIfRunning: Boolean): Boolean {
         val cancelled = delegate.cancel(mayInterruptIfRunning)
         if (cancelled) {
+            onCancel()
             state.cancelIfQueued()
         }
         return cancelled
