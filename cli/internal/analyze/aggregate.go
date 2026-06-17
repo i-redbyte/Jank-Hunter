@@ -42,7 +42,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 	for _, path := range paths {
 		collector.startLog()
 		lastDictSize := 0
-		err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
+		warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
 				collector.summary.Dictionary += len(dict) - lastDictSize
 				lastDictSize = len(dict)
@@ -53,6 +53,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		if err != nil {
 			return Summary{}, err
 		}
+		collector.summary.Warnings = append(collector.summary.Warnings, warnings...)
 	}
 	return collector.finish(), nil
 }

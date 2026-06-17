@@ -530,6 +530,35 @@ func TestInspectFilesWarnsWhenFilterKeepsGlobalSignals(t *testing.T) {
 	}
 }
 
+func TestInspectFilesPropagatesStreamWarnings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.jhlog")
+	if err := jhlog.WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := file.Write([]byte{byte(jhlog.EventHTTP), 0x80}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := InspectFiles("partial", []string{path})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	if summary.EventCount == 0 {
+		t.Fatalf("expected preserved events")
+	}
+	warning := strings.Join(summary.Warnings, "\n")
+	if !strings.Contains(warning, "ignored partial trailing compact event") {
+		t.Fatalf("expected partial-tail warning, got %+v", summary.Warnings)
+	}
+}
+
 func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "problem-filters.jhlog")
 	file, writer, err := jhlog.Create(path)

@@ -512,10 +512,14 @@ func runExport(args []string) error {
 	}
 	for _, path := range paths {
 		encoder := json.NewEncoder(writer)
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, _ map[uint64]string) error {
+		warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
 			return encoder.Encode(event)
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
 	}
 	return nil

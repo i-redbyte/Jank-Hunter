@@ -382,6 +382,41 @@ func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
 	}
 }
 
+func TestStreamFileWithWarningsToleratesPartialBinaryTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial-stream.jhlog")
+	if err := WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := file.Write([]byte{byte(EventHTTP), 0x80}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	streamed := 0
+	warnings, err := StreamFileWithWarnings(path, func(Event, map[uint64]string) error {
+		streamed++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamFileWithWarnings() error = %v", err)
+	}
+	if streamed == 0 {
+		t.Fatalf("expected preserved streamed events")
+	}
+	if len(warnings) == 0 {
+		t.Fatalf("expected partial-tail warning")
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "ignored partial trailing compact event") {
+		t.Fatalf("unexpected warnings: %+v", warnings)
+	}
+}
+
 func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "future.jhlog")
 	future := append([]byte{}, Magic...)

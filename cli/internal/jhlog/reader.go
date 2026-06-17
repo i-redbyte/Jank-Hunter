@@ -48,37 +48,42 @@ func ReadFile(path string) (Log, error) {
 }
 
 func StreamFile(path string, handle func(Event, map[uint64]string) error) error {
+	_, err := StreamFileWithWarnings(path, handle)
+	return err
+}
+
+func StreamFileWithWarnings(path string, handle func(Event, map[uint64]string) error) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
 	var prefix [8]byte
 	n, err := io.ReadFull(file, prefix[:])
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return err
+		return nil, err
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
 		version := prefix[7]
 		if version != FormatVersion {
-			return fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
+			return nil, fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
 		body, closeBody, err := compressedBinaryBody(file)
 		if err != nil {
-			return fmt.Errorf("%s: compressed jhlog body: %w", path, err)
+			return nil, fmt.Errorf("%s: compressed jhlog body: %w", path, err)
 		}
 		if closeBody != nil {
 			defer closeBody.Close()
 		}
-		_, err = streamBinary(body, path, version, handle)
-		return err
+		log, err := streamBinary(body, path, version, handle)
+		return log.Warnings, err
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
+		return nil, err
 	}
-	return streamJSONL(file, path, handle)
+	return nil, streamJSONL(file, path, handle)
 }
 
 func compressedBinaryBody(r io.Reader) (io.Reader, io.Closer, error) {
