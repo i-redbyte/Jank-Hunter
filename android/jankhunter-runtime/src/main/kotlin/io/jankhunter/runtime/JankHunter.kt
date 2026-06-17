@@ -49,6 +49,7 @@ object JankHunter {
     private val initFailures get() = runtimeState.initFailures
     private val contextTracker = ContextTracker()
     private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
+    private val logSpamKeyAdmissionLock = Any()
     private val lastLogSpamFlushAtMs = AtomicLong(0L)
     private val lastMetricFlushAtMs = AtomicLong(0L)
     private val runtimeCallGraph = RuntimeCallGraph(
@@ -927,12 +928,17 @@ object JankHunter {
         val tuple = captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull()))
         val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
         val maxKeys = config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS
-        if (!logSpamCounters.containsKey(key) && logSpamCounters.size >= maxKeys) {
-            recordCounter("jankhunter.log_spam.dropped_keys.count", 1)
-            flushLogSpam(force = false)
-            return
+        val counter = logSpamCounters[key] ?: synchronized(logSpamKeyAdmissionLock) {
+            logSpamCounters[key] ?: run {
+                if (maxKeys <= 0 || logSpamCounters.size >= maxKeys) {
+                    recordCounter("jankhunter.log_spam.dropped_keys.count", 1)
+                    flushLogSpam(force = false)
+                    return
+                }
+                AtomicLong().also { logSpamCounters[key] = it }
+            }
         }
-        logSpamCounters.computeIfAbsent(key) { AtomicLong() }.incrementAndGet()
+        counter.incrementAndGet()
         flushLogSpam(force = false)
     }
 
