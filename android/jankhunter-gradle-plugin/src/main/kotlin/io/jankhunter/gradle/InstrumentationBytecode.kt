@@ -94,7 +94,7 @@ private data class SimpleCommand(
 
 internal class HookBytecodeEmitter(
     private val visitor: AdviceAdapter,
-    private val ownerLabel: String,
+    private val ownerLabel: () -> String,
 ) {
     fun wrapOkHttpEventListenerFactory() {
         visitor.visitMethodInsn(
@@ -117,7 +117,7 @@ internal class HookBytecodeEmitter(
     }
 
     fun wrapWebSocketListener() {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             OKHTTP_HELPERS,
@@ -128,7 +128,7 @@ internal class HookBytecodeEmitter(
     }
 
     fun postHandlerRunnable(kind: HandlerRunnableKind) {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         val methodName = when (kind) {
             HandlerRunnableKind.SINGLE_RUNNABLE -> "postHandlerRunnable"
             HandlerRunnableKind.FRONT_RUNNABLE -> "postHandlerRunnableAtFront"
@@ -221,7 +221,7 @@ internal class HookBytecodeEmitter(
     }
 
     fun wrapTopClickListener() {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER,
@@ -232,7 +232,7 @@ internal class HookBytecodeEmitter(
     }
 
     fun recordCallCounter(prefix: String) {
-        visitor.visitLdcInsn("owner.$ownerLabel.$prefix.count")
+        visitor.visitLdcInsn("owner.${ownerLabel()}.$prefix.count")
         visitor.visitInsn(Opcodes.LCONST_1)
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
@@ -244,7 +244,7 @@ internal class HookBytecodeEmitter(
     }
 
     fun recordLogSpam(source: String, level: Int) {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitLdcInsn(source)
         visitor.push(level)
         visitor.visitMethodInsn(
@@ -257,7 +257,7 @@ internal class HookBytecodeEmitter(
     }
 
     private fun wrapTopRunnable() {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER,
@@ -268,7 +268,7 @@ internal class HookBytecodeEmitter(
     }
 
     private fun wrapTopCallable() {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER,
@@ -279,7 +279,7 @@ internal class HookBytecodeEmitter(
     }
 
     private fun wrapTopCoroutineBlock() {
-        visitor.visitLdcInsn(ownerLabel)
+        visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER,

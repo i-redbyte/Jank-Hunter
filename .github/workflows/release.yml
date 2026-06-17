@@ -93,6 +93,7 @@ jobs:
           Jank Hunter Android SDK $version
 
           В архиве лежит локальный Maven-репозиторий с артефактами:
+          - io.jankhunter:jankhunter-annotations:$version
           - io.jankhunter:jankhunter-runtime:$version
           - io.jankhunter:jankhunter-okhttp3:$version
           - io.jankhunter:jankhunter-gradle-plugin:$version
@@ -120,7 +121,7 @@ jobs:
           - CLI для macOS Apple Silicon: \`jankhunter_${version}_darwin_arm64.tar.gz\`;
           - SHA-256 суммы: \`checksums.txt\`.
 
-          Android SDK архив содержит runtime, OkHttp-интеграцию, Gradle plugin и маркер Gradle-плагина.
+          Android SDK архив содержит annotations, runtime, OkHttp-интеграцию, Gradle plugin и маркер Gradle-плагина.
           EOF
 
           ls -lh "$release_dir"

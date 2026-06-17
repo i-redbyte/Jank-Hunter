@@ -850,13 +850,15 @@ patch_module_build_file() {
   local dsl="groovy"
   [[ "$file" == *.kts ]] && dsl="kts"
 
-  local plugin_line runtime_dep okhttp_dep jh_block includes excludes build_type
+  local plugin_line annotations_dep runtime_dep okhttp_dep jh_block includes excludes build_type
   if [[ "$dsl" == "kts" ]]; then
     plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
+    annotations_dep="    compileOnly(\"$GROUP:jankhunter-annotations:$VERSION\")"
     runtime_dep="    debugImplementation(\"$GROUP:jankhunter-runtime:$VERSION\")"
     okhttp_dep="    debugImplementation(\"$GROUP:jankhunter-okhttp3:$VERSION\")"
   else
     plugin_line="    id 'io.jankhunter.android' version '$VERSION'"
+    annotations_dep="    compileOnly \"$GROUP:jankhunter-annotations:$VERSION\""
     runtime_dep="    debugImplementation \"$GROUP:jankhunter-runtime:$VERSION\""
     okhttp_dep="    debugImplementation \"$GROUP:jankhunter-okhttp3:$VERSION\""
   fi
@@ -928,12 +930,23 @@ patch_module_build_file() {
   ' "$file"
 
   if ! grep -q "$GROUP:jankhunter-runtime" "$file"; then
-    RUNTIME_DEP="$runtime_dep" OKHTTP_DEP="$okhttp_dep" perl -0pi -e '
-      my $deps = $ENV{"RUNTIME_DEP"} . "\n" . $ENV{"OKHTTP_DEP"} . "\n";
+    ANNOTATIONS_DEP="$annotations_dep" RUNTIME_DEP="$runtime_dep" OKHTTP_DEP="$okhttp_dep" perl -0pi -e '
+      my $deps = $ENV{"ANNOTATIONS_DEP"} . "\n" . $ENV{"RUNTIME_DEP"} . "\n" . $ENV{"OKHTTP_DEP"} . "\n";
       if ($_ =~ /dependencies\s*\{/) {
         s/(dependencies\s*\{)/$1\n$deps/s;
       } else {
         $_ .= "\n\ndependencies {\n$deps}\n";
+      }
+    ' "$file"
+  fi
+
+  if ! grep -q "$GROUP:jankhunter-annotations" "$file"; then
+    ANNOTATIONS_DEP="$annotations_dep" perl -0pi -e '
+      my $dep = $ENV{"ANNOTATIONS_DEP"} . "\n";
+      if ($_ =~ /dependencies\s*\{/) {
+        s/(dependencies\s*\{)/$1\n$dep/s;
+      } else {
+        $_ .= "\n\ndependencies {\n$dep}\n";
       }
     ' "$file"
   fi
@@ -950,10 +963,11 @@ publish_artifacts_if_needed() {
   }
 
   local runtime_aar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-runtime/$VERSION/jankhunter-runtime-$VERSION.aar"
+  local annotations_jar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-annotations/$VERSION/jankhunter-annotations-$VERSION.jar"
   local okhttp_aar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-okhttp3/$VERSION/jankhunter-okhttp3-$VERSION.aar"
   local plugin_pom="$MAVEN_REPO_ABS/io/jankhunter/android/io.jankhunter.android.gradle.plugin/$VERSION/io.jankhunter.android.gradle.plugin-$VERSION.pom"
 
-  if [[ -f "$runtime_aar" && -f "$okhttp_aar" && -f "$plugin_pom" ]]; then
+  if [[ -f "$runtime_aar" && -f "$annotations_jar" && -f "$okhttp_aar" && -f "$plugin_pom" ]]; then
     log "Jank Hunter artifacts already exist in $MAVEN_REPO_ABS"
     return
   fi

@@ -162,6 +162,7 @@ jankHunter {
 
 dependencies {
     implementation(project(":feature"))
+    compileOnly("$group:jankhunter-annotations:$version")
     debugImplementation("$group:jankhunter-runtime:$version")
     debugImplementation("$group:jankhunter-okhttp3:$version")
 }

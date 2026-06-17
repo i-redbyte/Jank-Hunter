@@ -3,6 +3,7 @@ package io.jankhunter.gradle
 import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
+import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
@@ -107,6 +108,12 @@ internal class JankHunterClassVisitor(
     private val config: HookConfig,
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
+    private val classAnnotations = JankAnnotationMetadata.Builder()
+
+    override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
+        val delegate = super.visitAnnotation(descriptor, visible)
+        return JankAnnotationParser.visitorFor(descriptor, delegate, classAnnotations)
+    }
 
     override fun visitMethod(
         access: Int,
@@ -119,7 +126,15 @@ internal class JankHunterClassVisitor(
         if (name == "<init>" || name == "<clinit>") return next
         if (access and Opcodes.ACC_ABSTRACT != 0) return next
         if (access and Opcodes.ACC_NATIVE != 0) return next
-        return JankHunterMethodVisitor(next, access, name, descriptor, className, config) { calleeOwner, calleeName ->
+        return JankHunterMethodVisitor(
+            next,
+            access,
+            name,
+            descriptor,
+            className,
+            config,
+            classAnnotations.snapshot(),
+        ) { calleeOwner, calleeName ->
             recordStaticEdge(name, descriptor, calleeOwner, calleeName)
         }
     }
@@ -155,16 +170,26 @@ private class JankHunterMethodVisitor(
     private val methodDescriptor: String,
     private val className: String,
     private val config: HookConfig,
+    private val classAnnotations: JankAnnotationMetadata,
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
-    private val ownerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
-    private val hookEmitter = HookBytecodeEmitter(this, ownerLabel)
+    private val generatedOwnerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
+    private val methodAnnotations = JankAnnotationMetadata.Builder()
+    private val ownerLabel: String
+        get() = methodAnnotations.owner?.takeIf { it.isNotBlank() } ?: classAnnotations.owner ?: generatedOwnerLabel
+    private val hookEmitter = HookBytecodeEmitter(this) { ownerLabel }
     private var runtimeCallStartLocal = -1
     private val runtimeCallTryStart = Label()
     private val runtimeCallTryEnd = Label()
     private val runtimeCallExceptionHandler = Label()
 
+    override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
+        val delegate = super.visitAnnotation(descriptor, visible)
+        return JankAnnotationParser.visitorFor(descriptor, delegate, methodAnnotations)
+    }
+
     override fun onMethodEnter() {
+        if (instrumentationIgnored()) return
         if (config.methodCounters) {
             visitLdcInsn("owner.$ownerLabel")
             visitInsn(Opcodes.LCONST_1)
@@ -192,6 +217,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun onMethodExit(opcode: Int) {
+        if (instrumentationIgnored()) return
         if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
         }
@@ -217,6 +243,10 @@ private class JankHunterMethodVisitor(
         isInterface: Boolean,
     ) {
         recordStaticEdge(owner, name)
+        if (instrumentationIgnored()) {
+            super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
+            return
+        }
         val call = MethodCall(
             opcode = opcodeAndSource,
             owner = owner,
@@ -239,7 +269,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
-        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
+        if (!instrumentationIgnored() && config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
             visitLabel(runtimeCallTryEnd)
             visitTryCatchBlock(runtimeCallTryStart, runtimeCallTryEnd, runtimeCallExceptionHandler, null)
             visitLabel(runtimeCallExceptionHandler)
@@ -254,6 +284,10 @@ private class JankHunterMethodVisitor(
 
     companion object {
         private const val JANK_HUNTER = "io/jankhunter/runtime/JankHunter"
+    }
+
+    private fun instrumentationIgnored(): Boolean {
+        return classAnnotations.ignored || methodAnnotations.ignored
     }
 }
 
