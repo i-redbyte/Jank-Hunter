@@ -4,6 +4,7 @@ import com.android.build.api.instrumentation.AsmClassVisitorFactory
 import com.android.build.api.instrumentation.ClassContext
 import com.android.build.api.instrumentation.ClassData
 import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
@@ -71,7 +72,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     }
 }
 
-private data class HookConfig(
+internal data class HookConfig(
     val methodCounters: Boolean,
     val okhttp: Boolean,
     val webSockets: Boolean,
@@ -100,7 +101,7 @@ private data class HookConfig(
     }
 }
 
-private class JankHunterClassVisitor(
+internal class JankHunterClassVisitor(
     next: ClassVisitor,
     private val className: String,
     private val config: HookConfig,
@@ -158,6 +159,9 @@ private class JankHunterMethodVisitor(
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val ownerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
     private var runtimeCallStartLocal = -1
+    private val runtimeCallTryStart = Label()
+    private val runtimeCallTryEnd = Label()
+    private val runtimeCallExceptionHandler = Label()
 
     override fun onMethodEnter() {
         if (config.methodCounters) {
@@ -182,21 +186,26 @@ private class JankHunterMethodVisitor(
             )
             runtimeCallStartLocal = newLocal(Type.LONG_TYPE)
             storeLocal(runtimeCallStartLocal)
+            visitLabel(runtimeCallTryStart)
         }
     }
 
     override fun onMethodExit(opcode: Int) {
-        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
-            loadLocal(runtimeCallStartLocal)
-            visitLdcInsn(ownerLabel)
-            visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                JANK_HUNTER,
-                "exitMethod",
-                "(JLjava/lang/String;)V",
-                false,
-            )
+        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            emitRuntimeCallExit()
         }
+    }
+
+    private fun emitRuntimeCallExit() {
+        loadLocal(runtimeCallStartLocal)
+        visitLdcInsn(ownerLabel)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "exitMethod",
+            "(JLjava/lang/String;)V",
+            false,
+        )
     }
 
     override fun visitMethodInsn(
@@ -317,6 +326,16 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
+        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
+            visitLabel(runtimeCallTryEnd)
+            visitTryCatchBlock(runtimeCallTryStart, runtimeCallTryEnd, runtimeCallExceptionHandler, null)
+            visitLabel(runtimeCallExceptionHandler)
+            val throwableLocal = newLocal(Type.getType(Throwable::class.java))
+            storeLocal(throwableLocal)
+            emitRuntimeCallExit()
+            loadLocal(throwableLocal)
+            visitInsn(Opcodes.ATHROW)
+        }
         super.visitMaxs(maxStack + 6, maxLocals)
     }
 

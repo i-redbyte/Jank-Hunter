@@ -126,7 +126,13 @@ class JankHunterPlugin : Plugin<Project> {
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(extension.instrument.excludePackages.toList())
             }
-            variant.instrumentation.setAsmFramesComputationMode(FramesComputationMode.COPY_FRAMES)
+            variant.instrumentation.setAsmFramesComputationMode(
+                if (extension.instrument.runtimeCallGraph) {
+                    FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
+                } else {
+                    FramesComputationMode.COPY_FRAMES
+                },
+            )
 
             project.logger.lifecycle(
                 "Jank Hunter variant {} configured. " +
