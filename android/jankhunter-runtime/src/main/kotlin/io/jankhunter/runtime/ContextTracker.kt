@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 internal class ContextTracker(
     initialScreen: String = "unknown",
 ) {
+    private val screenOverride = ThreadLocal<String>()
     private val owner = ThreadLocal<String>()
     private val flow = ThreadLocal<String>()
     private val flowStep = ThreadLocal<String>()
@@ -16,7 +17,7 @@ internal class ContextTracker(
 
     fun currentOwner(): String = owner.get() ?: "unknown"
 
-    fun currentScreen(): String = screen
+    fun currentScreen(): String = screenOverride.get() ?: screen
 
     fun currentFlow(): String = flow.get() ?: "unknown"
 
@@ -54,7 +55,7 @@ internal class ContextTracker(
         ownerOverride: String? = null,
     ): JankHunterContext {
         return JankHunterContext(
-            screen = normalizedContextValue(firstContextValue(screenOverride, screen)),
+            screen = normalizedContextValue(firstContextValue(screenOverride, currentScreen())),
             owner = normalizedContextValue(firstContextValue(ownerOverride, owner.get())),
             flow = normalizedContextValue(flow.get()),
             step = normalizedContextValue(flowStep.get()),
@@ -67,22 +68,22 @@ internal class ContextTracker(
         onContextChanged: () -> Unit,
         block: () -> T,
     ): T {
+        val previousScreenOverride = screenOverride.get()
         val previousOwner = owner.get()
         val previousFlow = flow.get()
         val previousStep = flowStep.get()
-        val previousScreen = screen
+        setThreadLocal(screenOverride, context.screen)
         setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
         setThreadLocal(flow, context.flow)
         setThreadLocal(flowStep, context.step)
-        context.screen?.let { screen = it }
         onContextChanged()
         try {
             return block()
         } finally {
+            setThreadLocal(screenOverride, previousScreenOverride)
             setThreadLocal(owner, previousOwner)
             setThreadLocal(flow, previousFlow)
             setThreadLocal(flowStep, previousStep)
-            screen = previousScreen
             onContextChanged()
         }
     }
