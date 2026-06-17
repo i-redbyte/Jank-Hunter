@@ -256,7 +256,7 @@ func writeInspectReportSet(out string, summary analyze.Summary, paths []string, 
 			return err
 		}
 	}
-	mathReport, err := mathanalysis.AnalyzeInspect(paths, options)
+	mathReport, err := mathanalysis.AnalyzeInspectWithSummary(paths, options, summary)
 	if err != nil {
 		warnReportGeneration("математический отчет inspect не создан", err)
 		return nil
@@ -293,7 +293,13 @@ func writeCompareReportSet(
 	mathOptions := options
 	mathOptions.BaselineHeapEvidence = baselineOptions.HeapEvidence
 	mathOptions.CandidateHeapEvidence = candidateOptions.HeapEvidence
-	mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, mathOptions)
+	mathReport, err := mathanalysis.AnalyzeCompareWithSummaries(
+		baselinePaths,
+		candidatePaths,
+		mathOptions,
+		comparison.Baseline,
+		comparison.Candidate,
+	)
 	if err != nil {
 		warnReportGeneration("математический отчет compare не создан", err)
 		return nil
@@ -552,7 +558,7 @@ func runProblems(args []string) error {
 	}
 	var mathReport *mathanalysis.MathReport
 	if dataset == datasetMathFindings {
-		report, err := mathanalysis.AnalyzeInspect(paths, options)
+		report, err := mathanalysis.AnalyzeInspectWithSummary(paths, options, summary)
 		if err != nil {
 			return err
 		}

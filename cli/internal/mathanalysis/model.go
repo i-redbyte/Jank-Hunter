@@ -342,6 +342,10 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	if err != nil {
 		return MathReport{}, err
 	}
+	return AnalyzeInspectWithSummary(paths, options, summary)
+}
+
+func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary analyze.Summary) (MathReport, error) {
 	timeline, series, scale, err := buildTimeline(paths, options)
 	if err != nil {
 		return MathReport{}, err
@@ -383,6 +387,24 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	candidateSummary, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
+	}
+	return AnalyzeCompareWithSummaries(baselinePaths, candidatePaths, options, baselineSummary, candidateSummary)
+}
+
+func AnalyzeCompareWithSummaries(
+	baselinePaths,
+	candidatePaths []string,
+	options analyze.Options,
+	baselineSummary,
+	candidateSummary analyze.Summary,
+) (CompareMathReport, error) {
+	baselineOptions := options
+	candidateOptions := options
+	if options.BaselineHeapEvidence != nil {
+		baselineOptions.HeapEvidence = options.BaselineHeapEvidence
+	}
+	if options.CandidateHeapEvidence != nil {
+		candidateOptions.HeapEvidence = options.CandidateHeapEvidence
 	}
 
 	baselineTimeline, baselineSeries, baselineScale, err := buildTimeline(baselinePaths, baselineOptions)
