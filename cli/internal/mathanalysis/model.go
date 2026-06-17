@@ -509,32 +509,34 @@ func titleFromPaths(paths []string) string {
 }
 
 func dataQualityFindings(summary analyze.Summary) []Finding {
+	findings := warningFindings("", summary.Warnings, "Проверьте целостность входных .jhlog и фильтры команды перед тем, как доверять математическим выводам.")
 	switch {
 	case summary.EventCount == 0:
-		return []Finding{{
+		findings = append(findings, Finding{
 			Severity:       "high",
 			Title:          "Нет событий для математического анализа",
 			Detail:         "Лог не содержит событий, поэтому отчет показывает только структуру будущих разделов.",
 			Recommendation: "Проверьте, что runtime писал .jhlog во время сценария, и повторите команду inspect с непустым логом.",
-		}}
+		})
 	case summary.HTTPCount < 5 && summary.UIFrames < 300 && summary.ContextCount < 3:
-		return []Finding{{
+		findings = append(findings, Finding{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
 			Detail:         fmt.Sprintf("Собрано %d событий, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d. Этого мало для устойчивых выводов.", summary.EventCount, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
 			Recommendation: "Соберите более длинный прогон или несколько повторов того же сценария.",
-		}}
+		})
 	default:
-		return []Finding{{
+		findings = append(findings, Finding{
 			Severity: "ok",
 			Title:    "Данных достаточно для каркаса математического отчета",
 			Detail:   fmt.Sprintf("Собрано %d событий из %d логов. Подробные вычисления будут заполнять эти разделы по следующим этапам.", summary.EventCount, summary.LogCount),
-		}}
+		})
 	}
+	return findings
 }
 
 func compareFindings(comparison analyze.Comparison) []Finding {
-	findings := make([]Finding, 0, len(comparison.Warnings)+1)
+	findings := make([]Finding, 0, len(comparison.Warnings)+len(comparison.Baseline.Warnings)+len(comparison.Candidate.Warnings)+1)
 	for _, warning := range comparison.Warnings {
 		findings = append(findings, Finding{
 			Severity:       "medium",
@@ -543,11 +545,38 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 			Recommendation: "Проверьте, что база и кандидат собраны на сопоставимых устройствах, версиях и сетях.",
 		})
 	}
+	findings = append(findings, warningFindings("База", comparison.Baseline.Warnings, "Проверьте целостность логов базы перед выводом о регрессии.")...)
+	findings = append(findings, warningFindings("Кандидат", comparison.Candidate.Warnings, "Проверьте целостность логов кандидата перед выводом о регрессии.")...)
 	if len(findings) == 0 {
 		findings = append(findings, Finding{
 			Severity: "ok",
 			Title:    "Сравнение готово для математического слоя",
 			Detail:   "База и кандидат агрегированы; последующие этапы добавят робастные интервалы, циклы, состояния и граф причинности.",
+		})
+	}
+	return findings
+}
+
+func warningFindings(prefix string, warnings []string, recommendation string) []Finding {
+	if len(warnings) == 0 {
+		return nil
+	}
+	findings := make([]Finding, 0, len(warnings))
+	for _, warning := range warnings {
+		warning = strings.TrimSpace(warning)
+		if warning == "" {
+			continue
+		}
+		title := "Предупреждение о качестве данных"
+		if prefix != "" {
+			title = fmt.Sprintf("%s: предупреждение о качестве данных", prefix)
+			warning = fmt.Sprintf("%s: %s", prefix, warning)
+		}
+		findings = append(findings, Finding{
+			Severity:       "medium",
+			Title:          title,
+			Detail:         warning,
+			Recommendation: recommendation,
 		})
 	}
 	return findings
