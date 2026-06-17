@@ -9,27 +9,32 @@ class MetricAggregator(
     private val counters = ConcurrentHashMap<String, AtomicLong>()
     private val gauges = ConcurrentHashMap<String, GaugeStats>()
     private val dropped = AtomicLong()
+    private val keyAdmissionLock = Any()
 
     fun counter(name: String?, value: Long) {
         val key = metricKey(name)
-        val counter = counters[key] ?: run {
-            if (counters.size + gauges.size >= maxKeys) {
-                dropped.incrementAndGet()
-                return
+        val counter = counters[key] ?: synchronized(keyAdmissionLock) {
+            counters[key] ?: run {
+                if (counters.size + gauges.size >= maxKeys) {
+                    dropped.incrementAndGet()
+                    return
+                }
+                counters.computeIfAbsent(key) { AtomicLong() }
             }
-            counters.computeIfAbsent(key) { AtomicLong() }
         }
         counter.addAndGet(value)
     }
 
     fun gauge(name: String?, value: Long) {
         val key = metricKey(name)
-        val gauge = gauges[key] ?: run {
-            if (counters.size + gauges.size >= maxKeys) {
-                dropped.incrementAndGet()
-                return
+        val gauge = gauges[key] ?: synchronized(keyAdmissionLock) {
+            gauges[key] ?: run {
+                if (counters.size + gauges.size >= maxKeys) {
+                    dropped.incrementAndGet()
+                    return
+                }
+                gauges.computeIfAbsent(key) { GaugeStats() }
             }
-            gauges.computeIfAbsent(key) { GaugeStats() }
         }
         gauge.add(value)
     }
