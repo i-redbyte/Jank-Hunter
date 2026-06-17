@@ -155,11 +155,7 @@ func execute(path, source string, data any) error {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return err
 	}
-	html := buf.String()
-	if reportLanguage() == "ru" {
-		html = localizeRussianHTML(html)
-	}
-	return os.WriteFile(path, []byte(html), 0o644)
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
 func reportTemplateFuncs() template.FuncMap {
@@ -272,6 +268,8 @@ func reportTemplateFuncs() template.FuncMap {
 		"codeProblemCategoryOptions": codeProblemCategoryOptions,
 		"codeProblemCategories":      codeProblemCategoryStats,
 		"codeProblemSeverities":      codeProblemSeverityStats,
+		"leakObjectKindOptions":      leakObjectKindOptions,
+		"leakObjectKindLabel":        leakObjectKindLabel,
 		"codeProblemCompareRows":     codeProblemCompareRows,
 		"memoryLeakSearchText":       memoryLeakSearchText,
 		"memoryLeakCompareRows":      memoryLeakCompareRows,
@@ -727,13 +725,82 @@ var codeProblemCategoryFilterOptions = []string{
 	"main-thread IO",
 }
 
-func codeProblemCategoryOptions() template.HTML {
-	var out strings.Builder
+func codeProblemCategoryOptions(items []analyze.CodeProblemStats) template.HTML {
+	categories := make([]string, 0, len(codeProblemCategoryFilterOptions))
+	seen := map[string]struct{}{}
 	for _, category := range codeProblemCategoryFilterOptions {
+		if category == "" {
+			continue
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	var dynamic []string
+	for _, item := range items {
+		for _, category := range item.Categories {
+			if category == "" {
+				continue
+			}
+			if _, ok := seen[category]; ok {
+				continue
+			}
+			seen[category] = struct{}{}
+			dynamic = append(dynamic, category)
+		}
+	}
+	sort.Strings(dynamic)
+	categories = append(categories, dynamic...)
+
+	var out strings.Builder
+	for _, category := range categories {
 		escaped := template.HTMLEscapeString(category)
 		fmt.Fprintf(&out, `<option value="%s">%s</option>`, escaped, escaped)
 	}
 	return template.HTML(out.String())
+}
+
+type selectOption struct {
+	Value string
+	Label string
+}
+
+var leakObjectKindFilterOptions = []string{
+	"экран / Activity",
+	"Fragment",
+	"Context",
+	"View / binding",
+	"ресурс",
+	"системный объект",
+	"пользовательский объект",
+}
+
+func leakObjectKindOptions() []selectOption {
+	options := make([]selectOption, 0, len(leakObjectKindFilterOptions))
+	for _, value := range leakObjectKindFilterOptions {
+		options = append(options, selectOption{Value: value, Label: leakObjectKindLabel(value)})
+	}
+	return options
+}
+
+func leakObjectKindLabel(value string) string {
+	switch value {
+	case "экран / Activity":
+		return "Экран / Activity"
+	case "Fragment":
+		return "Fragment"
+	case "Context":
+		return "Context"
+	case "View / binding":
+		return "View / binding"
+	case "ресурс":
+		return "Ресурс"
+	case "системный объект":
+		return "Системный объект"
+	case "пользовательский объект":
+		return "Пользовательский объект"
+	default:
+		return value
+	}
 }
 
 func codeProblemCategoryStats(items []analyze.CodeProblemStats) []registryStat {
@@ -2415,229 +2482,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func localizeRussianHTML(html string) string {
-	replacer := strings.NewReplacer(
-		`<html lang="en">`, `<html lang="ru">`,
-		`<title>Jank Hunter Inspect</title>`, `<title>Jank Hunter: отчет</title>`,
-		`<title>Jank Hunter Compare</title>`, `<title>Jank Hunter: сравнение</title>`,
-		`Runtime Signal Report`, `Отчет по сигналам выполнения`,
-		`Regression Control Deck`, `Панель контроля регрессий`,
-		`Candidate Device Context`, `Контекст сравнения`,
-		`Device Context`, `Контекст устройства`,
-		`runtime context unavailable`, `контекст выполнения недоступен`,
-		`unknown device`, `неизвестное устройство`,
-		`No session/context metadata.`, `Нет метаданных сессии и контекста.`,
-		`generated `, `создан `,
-		`standalone offline HTML`, `автономный HTML`,
-		`compare first, then drill into every baseline and candidate log`, `сначала сравнение, затем детальный просмотр логов базы и кандидата`,
-		`>Logs <strong>`, `>Логи <strong>`,
-		`>Events <strong>`, `>События <strong>`,
-		`>Duration <strong>`, `>Длительность <strong>`,
-		`>Baseline logs <strong>`, `>Логи базы <strong>`,
-		`>Candidate logs <strong>`, `>Логи кандидата <strong>`,
-		`>Deltas <strong>`, `>Дельты <strong>`,
-		`>Overview<`, `>Обзор<`,
-		`>Network<`, `>Сеть<`,
-		`>Owners<`, `>Источники<`,
-		`>Memory<`, `>Память<`,
-		`>Metrics<`, `>Метрики<`,
-		`>Context<`, `>Контекст<`,
-		`>Verdict<`, `>Итог<`,
-		`>Comparison<`, `>Сравнение<`,
-		`>Regressions<`, `>Регрессии<`,
-		`>Candidate Detail<`, `>Где изменилось<`,
-		`>Per-log Drill-down<`, `>Детали логов<`,
-		`>Cohorts<`, `>Когорты<`,
-		`Executive Signal Matrix`, `Матрица ключевых сигналов`,
-		`Fast read of the run: latency, smoothness, stalls, memory and traffic.`, `Быстрый срез прогона: задержки, плавность, паузы главного потока, память и трафик.`,
-		`offline report`, `автономный отчет`,
-		`Comparative Scoreboard`, `Сводная панель сравнения`,
-		`Baseline vs candidate across latency, smoothness, memory, traffic, retention and cohort mix.`, `База и кандидат по задержкам, плавности, памяти, трафику, удержанным объектам и составу когорт.`,
-		`standalone HTML`, `автономный HTML`,
-		`Regression Matrix`, `Матрица регрессий`,
-		`Severity is adjusted for confidence and sample size. Bars show regression magnitude capped at 100%.`, `Серьезность учитывает доверие и размер выборки. Полосы показывают величину регрессии с ограничением в 100%.`,
-		`Worst Regression Cards`, `Худшие регрессии`,
-		`Candidate Deep Summary`, `Где изменилось`,
-		`The aggregate candidate profile after all filters.`, `Агрегированный профиль кандидата после всех фильтров.`,
-		`Per-log Drill-down`, `Детали по каждому логу`,
-		`Open any source log to inspect its own network, UI, memory, metrics and attribution profile.`, `Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.`,
-		`Baseline Logs`, `Логи базы`,
-		`Candidate Logs`, `Логи кандидата`,
-		`Cohort Breakdown`, `Разбивка по когортам`,
-		`Use this to check whether the comparison is fair across app version, SDK, device, process and network.`, `Используйте это, чтобы проверить честность сравнения по версии приложения, SDK, устройству, процессу и сети.`,
-		`Process Mix`, `Состав процессов`,
-		`Network Routes`, `Сетевые маршруты`,
-		`Slowest routes by p95 latency, failures, bytes and owner attribution.`, `Самые медленные маршруты по p95-задержке, ошибкам, байтам и влиянию источников.`,
-		`Route Table`, `Таблица маршрутов`,
-		`UI Smoothness`, `Плавность UI`,
-		`Screens ranked by jank rate and frame latency.`, `Экраны, отсортированные по доле подтормаживаний и задержке кадров.`,
-		`Screen Table`, `Таблица экранов`,
-		`Attribution Hotspots`, `Горячие точки влияния`,
-		`Owners, classes and stack hints with the largest measured impact.`, `Источники, классы и подсказки стека с наибольшим измеренным вкладом.`,
-		`Memory And Retention`, `Память и удержанные объекты`,
-		`PSS, available memory, low-memory samples and retained object age buckets.`, `PSS, свободная память, сигналы низкой памяти и возраст удержанных объектов.`,
-		`Custom Metrics`, `Пользовательские метрики`,
-		`Counters, gauges and AndroidX JankStats bridge metrics when available.`, `Счетчики, gauge-метрики и AndroidX JankStats bridge, если они доступны.`,
-		`Run Context`, `Контекст прогона`,
-		`Cohorts keep comparisons honest: app, build, SDK, device, process and network.`, `Когорты помогают честно сравнивать версию приложения, сборку, SDK, устройство, процесс и сеть.`,
-		`Health Gauges`, `Индикаторы здоровья`,
-		`Signal Rings`, `Кольцевые индикаторы`,
-		`>Battery<`, `>Батарея<`,
-		`>Free RAM<`, `>Свободная RAM<`,
-		`>Free storage<`, `>Свободное хранилище<`,
-		`>Android<`, `>Android<`,
-		`>CPU ABI<`, `>CPU ABI<`,
-		`>Hardware<`, `>Железо<`,
-		`>Brand<`, `>Бренд<`,
-		`Route Details`, `Детали маршрутов`,
-		`Screen Details`, `Детали экранов`,
-		`Owner Details`, `Детали источников`,
-		`Memory Details`, `Детали памяти`,
-		`Metric Details`, `Детали метрик`,
-		`Context Details`, `Детали контекста`,
-		`Candidate Route, Screen And Owner Details`, `Детали маршрутов, экранов и источников кандидата`,
-		`Cohort Details`, `Детали когорт`,
-		`Heuristic Verdict`, `Эвристический итог`,
-		`Rule-based triage over all collected signals. Treat it as a review checklist, not as a mathematical proof.`, `Эвристический разбор всех собранных сигналов. Это проверочный список для ревью, а не математическое доказательство.`,
-		`Rule-based triage over all comparison deltas and cohort warnings. Treat it as a review checklist, not as a mathematical proof.`, `Эвристический разбор изменений и предупреждений по когортам. Это проверочный список для ревью, а не математическое доказательство.`,
-		`Overall status`, `Общий статус`,
-		`Findings`, `Находки`,
-		`Recommendations`, `Рекомендации`,
-		`No heuristic findings.`, `Нет эвристических находок.`,
-		`No extra recommendations.`, `Нет дополнительных рекомендаций.`,
-		`>Routes<`, `>Маршруты<`,
-		`>Route<`, `>Маршрут<`,
-		`>Count<`, `>Количество<`,
-		`>Failures<`, `>Ошибки<`,
-		`>Avg TTFB<`, `>Средний TTFB<`,
-		`>Owner / Class<`, `>Источник / класс<`,
-		`>Owner<`, `>Источник<`,
-		`>Screens<`, `>Экраны<`,
-		`>Screen<`, `>Экран<`,
-		`>Windows<`, `>Окна<`,
-		`>Frames<`, `>Кадры<`,
-		`>Janky<`, `>Медленные кадры<`,
-		`>Jank rate<`, `>Доля подтормаживаний<`,
-		`>Avg FPS<`, `>Средний FPS<`,
-		`>Min FPS<`, `>Мин. FPS<`,
-		`>p95 frame<`, `>p95 кадра<`,
-		`>max p99<`, `>макс. p99<`,
-		`>Kind<`, `>Тип<`,
-		`>Total<`, `>Итого<`,
-		`>Stack hint<`, `>Подсказка стека<`,
-		`>Value<`, `>Значение<`,
-		`>Details<`, `>Детали<`,
-		`>Class / Owner<`, `>Класс / источник<`,
-		`>Age<`, `>Возраст<`,
-		`>Name<`, `>Имя<`,
-		`>Average<`, `>Среднее<`,
-		`>Metric<`, `>Метрика<`,
-		`>App Versions<`, `>Версии приложения<`,
-		`>Devices<`, `>Устройства<`,
-		`>Process Breakdown<`, `>Разбивка по процессам<`,
-		`>Process<`, `>Процесс<`,
-		`>Sessions<`, `>Сессии<`,
-		`>Network Samples<`, `>Сэмплы сети<`,
-		`>Combined Cohorts<`, `>Объединенные когорты<`,
-		`>Counters<`, `>Счетчики<`,
-		`>Gauges<`, `>Gauge-метрики<`,
-		`>Memory And Metrics<`, `>Память и метрики<`,
-		`>Signal<`, `>Сигнал<`,
-		`>Cohort<`, `>Когорта<`,
-		`>Baseline process<`, `>Процесс базы<`,
-		`>Candidate process<`, `>Процесс кандидата<`,
-		`>Change<`, `>Изменение<`,
-		`>Regression<`, `>Регрессия<`,
-		`>Severity<`, `>Серьезность<`,
-		`>Confidence<`, `>Доверие<`,
-		`>Sample<`, `>Выборка<`,
-		`>Interval<`, `>Интервал<`,
-		`HTTP p95`, `HTTP p95`,
-		`HTTP failures`, `HTTP ошибки`,
-		`UI jank rate`, `Доля подтормаживаний UI`,
-		`UI avg FPS`, `Средний FPS UI`,
-		`Main-thread stall max`, `Макс. пауза главного потока`,
-		`Max PSS`, `Макс. PSS`,
-		`Min available memory`, `Мин. доступная память`,
-		`UID RX max`, `Макс. UID RX`,
-		`UID TX max`, `Макс. UID TX`,
-		` ms`, ` мс`,
-		`Retained objects`, `Удержанные объекты`,
-		`Process mix`, `Состав процессов`,
-		`App version mix`, `Состав версий приложения`,
-		`SDK mix`, `Состав SDK`,
-		`Device mix`, `Состав устройств`,
-		`Network mix`, `Состав сетей`,
-		`Cohort mix`, `Состав когорт`,
-		`<div class="label">Average FPS</div>`, `<div class="label">Средний FPS</div>`,
-		`<div class="label">Max stall</div>`, `<div class="label">Макс. пауза</div>`,
-		`<div class="label">UID RX max</div>`, `<div class="label">Макс. UID RX</div>`,
-		` requests, `, ` запросов, `,
-		` requests<`, ` запросов<`,
-		` failed`, ` ошибок`,
-		` frames`, ` кадров`,
-		`min free`, `мин. свободно`,
-		`min `, `мин. `,
-		` stall events`, ` событий пауз`,
-		`retained `, `удержано `,
-		`TX max `, `макс. TX `,
-		`validated yes`, `проверена: да`,
-		`validated no`, `проверена: нет`,
-		`metered yes`, `лимитная: да`,
-		`metered no`, `лимитная: нет`,
-		`VPN yes`, `VPN да`,
-		`VPN no`, `VPN нет`,
-		`not charging`, `не заряжается`,
-		`charging`, `заряжается`,
-		`discharging`, `разряжается`,
-		`full`, `полная`,
-		`total`, `всего`,
-		`supported`, `поддерживаются`,
-		`security patch unknown`, `патч безопасности неизвестен`,
-		`security patch`, `патч безопасности`,
-		`app data partition`, `раздел данных приложения`,
-		`board `, `плата `,
-		`product `, `продукт `,
-		`brand `, `бренд `,
-		`process `, `процесс `,
-		`avg FPS`, `средний FPS`,
-		`candidate jank`, `подтормаживания кандидата`,
-		`candidate fail`, `ошибки кандидата`,
-		`candidate FPS`, `FPS кандидата`,
-		`avg FPS`, `средний FPS`,
-		`No HTTP events.`, `Нет HTTP-событий.`,
-		`No UI window events.`, `Нет событий UI-окон.`,
-		`No owner attribution yet.`, `Атрибуция источников пока недоступна.`,
-		`No memory events.`, `Нет событий памяти.`,
-		`No retained-object events.`, `Нет событий удержанных объектов.`,
-		`No counters.`, `Нет счетчиков.`,
-		`No gauges.`, `Нет gauge-метрик.`,
-		`No JankStats metrics.`, `Нет метрик JankStats.`,
-		`No process metadata.`, `Нет метаданных процессов.`,
-		`No context events.`, `Нет событий контекста.`,
-		`No cohort metadata.`, `Нет метаданных когорт.`,
-		`No per-log baseline details were embedded.`, `Детали логов базы не встроены.`,
-		`No per-log candidate details were embedded.`, `Детали логов кандидата не встроены.`,
-		`No owners.`, `Нет источников.`,
-		`content: "open";`, `content: "открыть";`,
-		`content: "close";`, `content: "закрыть";`,
-		`<td class="sev-high">high</td>`, `<td class="sev-high">высокая</td>`,
-		`<td class="sev-medium">medium</td>`, `<td class="sev-medium">средняя</td>`,
-		`<td class="sev-ok">ok</td>`, `<td class="sev-ok">норма</td>`,
-		`<td>high</td>`, `<td>высокая</td>`,
-		`<td>medium</td>`, `<td>средняя</td>`,
-		`<td>low</td>`, `<td>низкая</td>`,
-		`<td>same</td>`, `<td>без изменений</td>`,
-		`changed`, `изменено`,
-		`app version mix differs: baseline`, `состав версий приложения отличается: база`,
-		`SDK mix differs: baseline`, `состав SDK отличается: база`,
-		`device mix differs: baseline`, `состав устройств отличается: база`,
-		`process mix differs: baseline`, `состав процессов отличается: база`,
-		`network mix differs: baseline`, `состав сетей отличается: база`,
-		`cohort mix differs: baseline`, `состав когорт отличается: база`,
-		`, candidate`, `, кандидат`,
-	)
-	return replacer.Replace(html)
 }

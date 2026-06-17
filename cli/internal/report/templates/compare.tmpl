@@ -138,7 +138,7 @@
         </select>
         <select data-code-registry-category aria-label="Фильтр по категории">
           <option value="">Все категории</option>
-          {{codeProblemCategoryOptions}}
+          {{codeProblemCategoryOptions .Comparison.Candidate.CodeProblems}}
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
@@ -168,7 +168,7 @@
                   <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                   <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
                   <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
-                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
                   <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                 </div>
               </details>
@@ -201,13 +201,7 @@
         </select>
         <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
           <option value="">Все типы</option>
-          <option value="экран / Activity">Activity</option>
-          <option value="Fragment">Fragment</option>
-          <option value="Context">Context</option>
-          <option value="View / binding">View / binding</option>
-          <option value="ресурс">Ресурс</option>
-          <option value="системный объект">Системный объект</option>
-          <option value="пользовательский объект">Пользовательский объект</option>
+          {{range leakObjectKindOptions}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
@@ -233,7 +227,7 @@
           <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}" data-search="{{memoryLeakSearchText .Candidate}} {{.Status}}">
             <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
             <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
-            <td><div class="leak-object-kind">{{.Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+            <td><div class="leak-object-kind">{{leakObjectKindLabel .Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
             <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
             <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
             <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>

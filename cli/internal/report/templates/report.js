@@ -224,6 +224,17 @@
     const severityRank = { high: 3, medium: 2, ok: 1 };
     let sortKey = 'score';
     let sortDir = 'desc';
+    const ensureSelectOption = (select, value, label) => {
+      if (!select || !value || Array.from(select.options).some((option) => option.value === value)) return;
+      select.appendChild(new Option(label || value, value));
+    };
+    const chipLabel = (button) => button.textContent.trim().replace(/\s+\d+$/, '').trim();
+    const setSelectFromChip = (select, value, label) => {
+      if (!select) return;
+      ensureSelectOption(select, value, label);
+      select.value = select.value === value ? '' : value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    };
     const valueFor = (row, key) => {
       if (key === 'score') return Number(row.dataset.score || 0);
       if (key === 'severity') return severityRank[row.dataset.severity] || 0;
@@ -276,18 +287,14 @@
     category?.addEventListener('change', apply);
     categoryButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        if (!category) return;
         const value = button.dataset.registryCategory || '';
-        category.value = category.value === value ? '' : value;
-        apply();
+        setSelectFromChip(category, value, chipLabel(button));
       });
     });
     severityButtons.forEach((button) => {
       button.addEventListener('click', () => {
-        if (!severity) return;
         const value = button.dataset.registrySeverity || '';
-        severity.value = severity.value === value ? '' : value;
-        apply();
+        setSelectFromChip(severity, value, chipLabel(button));
       });
     });
     sortButtons.forEach((button) => {

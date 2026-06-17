@@ -11,7 +11,6 @@ import (
 )
 
 func TestWriteReports(t *testing.T) {
-	t.Setenv("JH_LANG", "en")
 	summary := analyze.Summary{
 		Title:       "sample.jhlog",
 		LogCount:    1,
@@ -28,10 +27,10 @@ func TestWriteReports(t *testing.T) {
 		MemoryMaxKB: 188240,
 		Environment: analyze.RunEnvironment{
 			Title:    "Pixel 8",
-			Subtitle: "Android 15 · 0.1.0-debug (100) · process main",
+			Subtitle: "Android 15 · 0.1.0-debug (100) · процесс main",
 			Items: []analyze.InfoItem{
-				{Label: "Battery", Value: "82%", Detail: "charging · 32.0 C"},
-				{Label: "Network", Value: "wifi", Detail: "validated yes · metered no · VPN no"},
+				{Label: "Батарея", Value: "82%", Detail: "заряжается · 32.0 C"},
+				{Label: "Сеть", Value: "wifi", Detail: "валидирована да · лимитная нет · VPN нет"},
 				{Label: "Рут-доступ", Value: "нет", Detail: "признаки рут-доступа не найдены"},
 			},
 		},
@@ -94,7 +93,8 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Мини-дерево доминирования", "leak-dominator", "4.0 MB", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`)
-	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "viewportBox", "node.closest('.metric')")
+	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "ensureSelectOption", "setSelectFromChip", "viewportBox", "node.closest('.metric')")
+	assertHTMLNotContains(t, inspectPath, "Drill-down")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
@@ -128,15 +128,31 @@ func TestWriteReports(t *testing.T) {
 }
 
 func TestCodeProblemCategoryOptions(t *testing.T) {
-	html := string(codeProblemCategoryOptions())
-	if got := strings.Count(html, "<option "); got != len(codeProblemCategoryFilterOptions) {
-		t.Fatalf("option count = %d, want %d", got, len(codeProblemCategoryFilterOptions))
+	html := string(codeProblemCategoryOptions([]analyze.CodeProblemStats{
+		{Categories: []string{"Новая категория"}},
+		{Categories: []string{"Сеть"}},
+	}))
+	if got, want := strings.Count(html, "<option "), len(codeProblemCategoryFilterOptions)+1; got != want {
+		t.Fatalf("option count = %d, want %d", got, want)
 	}
 	for _, category := range codeProblemCategoryFilterOptions {
 		want := `<option value="` + category + `">` + category + `</option>`
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing category option %q in %s", category, html)
 		}
+	}
+	if !strings.Contains(html, `<option value="Новая категория">Новая категория</option>`) {
+		t.Fatalf("missing dynamic category option in %s", html)
+	}
+}
+
+func TestLeakObjectKindOptions(t *testing.T) {
+	options := leakObjectKindOptions()
+	if len(options) != len(leakObjectKindFilterOptions) {
+		t.Fatalf("option count = %d, want %d", len(options), len(leakObjectKindFilterOptions))
+	}
+	if got := leakObjectKindLabel("экран / Activity"); got != "Экран / Activity" {
+		t.Fatalf("leakObjectKindLabel() = %q", got)
 	}
 }
 
@@ -159,7 +175,6 @@ func TestWriteReportsCanHideMathLink(t *testing.T) {
 }
 
 func TestWriteReportsRussian(t *testing.T) {
-	t.Setenv("JH_LANG", "ru")
 	summary := analyze.Summary{
 		Title:      "sample.jhlog",
 		LogCount:   1,
@@ -172,9 +187,9 @@ func TestWriteReportsRussian(t *testing.T) {
 		UIAvgFPS:   56.1,
 		Environment: analyze.RunEnvironment{
 			Title:    "Pixel 8",
-			Subtitle: "Android 15 · 0.1.0-debug (100) · process main",
+			Subtitle: "Android 15 · 0.1.0-debug (100) · процесс main",
 			Items: []analyze.InfoItem{
-				{Label: "Battery", Value: "82%", Detail: "charging · 32.0 C"},
+				{Label: "Батарея", Value: "82%", Detail: "заряжается · 32.0 C"},
 			},
 		},
 		Routes: []analyze.RouteStats{

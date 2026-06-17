@@ -84,7 +84,7 @@
             </select>
             <select data-code-registry-category aria-label="Фильтр по категории">
               <option value="">Все категории</option>
-              {{codeProblemCategoryOptions}}
+              {{codeProblemCategoryOptions .Math.Summary.CodeProblems}}
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -112,7 +112,7 @@
                       <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                       <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
                       <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
-                      {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
                       <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
                     </div>
                   </details>
@@ -141,13 +141,7 @@
             </select>
             <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
               <option value="">Все типы</option>
-              <option value="экран / Activity">Activity</option>
-              <option value="Fragment">Fragment</option>
-              <option value="Context">Context</option>
-              <option value="View / binding">View / binding</option>
-              <option value="ресурс">Ресурс</option>
-              <option value="системный объект">Системный объект</option>
-              <option value="пользовательский объект">Пользовательский объект</option>
+              {{range leakObjectKindOptions}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -158,7 +152,7 @@
             <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}" data-search="{{memoryLeakSearchText .}}">
               <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
               <td><code>{{.ClassName}}</code></td>
-              <td><div class="leak-object-kind">{{.ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+              <td><div class="leak-object-kind">{{leakObjectKindLabel .ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
               <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
               <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
               <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
