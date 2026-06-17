@@ -304,6 +304,13 @@ func normalizeFilter(filter Filter) Filter {
 	}
 }
 
+func filterActive(filter Filter) bool {
+	return filter.RouteContains != "" ||
+		filter.ScreenContains != "" ||
+		filter.OwnerContains != "" ||
+		filter.ClassContains != ""
+}
+
 func containsFilter(value string, needle string) bool {
 	if needle == "" {
 		return true
@@ -982,6 +989,7 @@ func (c *collector) finish() Summary {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "low_memory_samples", Value: uint64(summary.LowMemoryCount)})
 	}
 	summary.Environment = c.runEnvironment(summary)
+	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
 
 	sortRoutes(summary.Routes)
 	sortScreens(summary.Screens)
@@ -1006,6 +1014,28 @@ func (c *collector) finish() Summary {
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
 	return summary
+}
+
+func (c *collector) filterWarnings(summary Summary) []string {
+	if !filterActive(c.filter) {
+		return nil
+	}
+	var globalSignals []string
+	if summary.ContextCount > 0 {
+		globalSignals = append(globalSignals, "контекст устройства")
+	}
+	if len(summary.Counters) > 0 || len(summary.Gauges) > 0 {
+		globalSignals = append(globalSignals, "custom metrics")
+	}
+	if len(globalSignals) == 0 {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf(
+			"Фильтр применен к событиям с маршрутом, экраном, источником или классом; %s не несут полного runtime-контекста и показаны глобально.",
+			strings.Join(globalSignals, " и "),
+		),
+	}
 }
 
 func (c *collector) runEnvironment(summary Summary) RunEnvironment {

@@ -509,6 +509,27 @@ func TestInspectFilesAppliesRouteFilter(t *testing.T) {
 	}
 }
 
+func TestInspectFilesWarnsWhenFilterKeepsGlobalSignals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.jhlog")
+	if err := jhlog.WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+
+	summary, err := InspectFilesWithFilter("sample", []string{path}, Filter{RouteContains: "/checkout"})
+	if err != nil {
+		t.Fatalf("InspectFilesWithFilter() error = %v", err)
+	}
+	if len(summary.Warnings) == 0 {
+		t.Fatalf("expected global signal warning")
+	}
+	warning := strings.Join(summary.Warnings, "\n")
+	for _, want := range []string{"показаны глобально", "контекст устройства", "custom metrics"} {
+		if !strings.Contains(warning, want) {
+			t.Fatalf("warning %q does not contain %q", warning, want)
+		}
+	}
+}
+
 func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "problem-filters.jhlog")
 	file, writer, err := jhlog.Create(path)

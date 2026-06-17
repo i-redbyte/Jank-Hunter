@@ -266,6 +266,7 @@ type Summary struct {
 	MemoryMaxKB       uint64
 	Retained          uint64
 	Environment       RunEnvironment
+	Warnings          []string
 
 	Routes             []RouteStats
 	Screens            []ScreenStats

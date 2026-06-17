@@ -60,6 +60,8 @@
       <span class="pill">автономный HTML</span>
     </div>
     {{range .Comparison.Warnings}}<p class="warning">{{.}}</p>{{end}}
+    {{range .Comparison.Baseline.Warnings}}<p class="warning">База: {{.}}</p>{{end}}
+    {{range .Comparison.Candidate.Warnings}}<p class="warning">Кандидат: {{.}}</p>{{end}}
     <div class="compare-pair-grid">
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "HTTP p95" "95-й процентиль HTTP-задержки. Рост показывает ухудшение хвоста сетевых запросов."}}</div>

@@ -203,6 +203,12 @@ func runCompare(args []string) error {
 		for _, warning := range comparison.Warnings {
 			fmt.Printf("warning: %s\n", warning)
 		}
+		for _, warning := range comparison.Baseline.Warnings {
+			fmt.Printf("warning: baseline: %s\n", warning)
+		}
+		for _, warning := range comparison.Candidate.Warnings {
+			fmt.Printf("warning: candidate: %s\n", warning)
+		}
 		for _, delta := range comparison.Deltas {
 			fmt.Printf(
 				"%-24s %12s -> %-12s %8s %s доверие=%s выборка=%d %s\n",
@@ -676,6 +682,9 @@ func expandOne(pattern string) []string {
 
 func printSummary(summary analyze.Summary) {
 	fmt.Printf("logs: %d events: %d duration: %dms\n", summary.LogCount, summary.EventCount, summary.DurationMS)
+	for _, warning := range summary.Warnings {
+		fmt.Printf("warning: %s\n", warning)
+	}
 	fmt.Printf("http: count=%d failed=%d p95=%dms\n", summary.HTTPCount, summary.HTTPFailed, summary.HTTPP95MS)
 	fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
 	if len(summary.AppVersions) > 0 {

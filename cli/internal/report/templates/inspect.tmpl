@@ -73,6 +73,7 @@
       <div class="guide-card"><strong>Что важно</strong>Один показатель редко объясняет проблему. Ищите совпадение во времени: UI-подтормаживания, паузы главного потока, сетевые хвосты, память и спам логами.</div>
       <div class="guide-card"><strong>Что исправлять</strong>Начинайте с источников с высоким вкладом и понятным контекстом: экран, флоу, шаг, маршрут или класс. Неочевидные пики лучше подтвердить профилировщиком.</div>
     </div>
+    {{range .Summary.Warnings}}<p class="warning">{{.}}</p>{{end}}
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
       <div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
