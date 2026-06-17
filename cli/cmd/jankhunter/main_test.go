@@ -58,6 +58,24 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 		t.Fatalf("runProblems(json) error = %v", err)
 	}
 	assertFileContains(t, jsonPath, `"drill_down"`, `"categories"`, `"recommendation"`)
+
+	leaksPath := filepath.Join(dir, "leaks.csv")
+	if err := runProblems([]string{samplePath, "--dataset", "leaks", "--out", leaksPath}); err != nil {
+		t.Fatalf("runProblems(leaks csv) error = %v", err)
+	}
+	assertFileContains(t, leaksPath, "class,holder,screen,flow,step,severity,score,count,max_age_ms,estimated_retained_kb,heap_evidence")
+
+	influencePath := filepath.Join(dir, "influence.csv")
+	if err := runProblems([]string{samplePath, "--dataset", "influence", "--out", influencePath}); err != nil {
+		t.Fatalf("runProblems(influence csv) error = %v", err)
+	}
+	assertFileContains(t, influencePath, "record_type,from,to,severity,score,status,runtime_confirmed,count")
+
+	mathFindingsPath := filepath.Join(dir, "math-findings.csv")
+	if err := runProblems([]string{samplePath, "--dataset", "math-findings", "--out", mathFindingsPath}); err != nil {
+		t.Fatalf("runProblems(math findings csv) error = %v", err)
+	}
+	assertFileContains(t, mathFindingsPath, "section,severity,title,detail,evidence,recommendation")
 }
 
 func TestPresentationModeWritesLinkedReports(t *testing.T) {

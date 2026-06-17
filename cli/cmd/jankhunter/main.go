@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -58,7 +57,7 @@ Usage:
   jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text]
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text]
   jankhunter export <logs...> --out events.jsonl
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json]
   jankhunter version
 `)
 }
@@ -520,6 +519,14 @@ func runProblems(args []string) error {
 	if err != nil {
 		return err
 	}
+	datasetRaw, remaining, err := takeStringFlag(remaining, "dataset", string(datasetCodeProblems))
+	if err != nil {
+		return err
+	}
+	dataset, err := parseProblemsDataset(datasetRaw)
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -540,6 +547,14 @@ func runProblems(args []string) error {
 	if err != nil {
 		return err
 	}
+	var mathReport *mathanalysis.MathReport
+	if dataset == datasetMathFindings {
+		report, err := mathanalysis.AnalyzeInspect(paths, options)
+		if err != nil {
+			return err
+		}
+		mathReport = &report
+	}
 	writer := os.Stdout
 	if out != "" {
 		file, err := os.Create(out)
@@ -551,65 +566,12 @@ func runProblems(args []string) error {
 	}
 	switch strings.ToLower(format) {
 	case "json":
-		encoder := json.NewEncoder(writer)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(summary.CodeProblems)
+		return writeProblemsDatasetJSON(writer, dataset, summary, mathReport)
 	case "csv":
-		return writeCodeProblemsCSV(writer, summary.CodeProblems)
+		return writeProblemsDatasetCSV(writer, dataset, summary, mathReport)
 	default:
 		return fmt.Errorf("unsupported problems format %q", format)
 	}
-}
-
-func writeCodeProblemsCSV(file *os.File, rows []analyze.CodeProblemStats) error {
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-	if err := writer.Write([]string{
-		"class",
-		"method",
-		"severity",
-		"score",
-		"categories",
-		"problems",
-		"screen",
-		"flow",
-		"step",
-		"route",
-		"evidence",
-		"recommendation",
-	}); err != nil {
-		return err
-	}
-	for _, row := range rows {
-		drillDown := row.DrillDown
-		if len(drillDown) == 0 {
-			drillDown = []analyze.CodeProblemDrillDown{{
-				ClassName:      row.ClassName,
-				Method:         row.Method,
-				Evidence:       row.Evidence,
-				Recommendation: row.Recommendation,
-			}}
-		}
-		for _, drill := range drillDown {
-			if err := writer.Write([]string{
-				firstNonEmpty(drill.ClassName, row.ClassName),
-				firstNonEmpty(drill.Method, row.Method),
-				row.Severity,
-				fmt.Sprintf("%.1f", row.Score),
-				strings.Join(row.Categories, "|"),
-				strings.Join(row.Problems, "|"),
-				drill.Screen,
-				drill.Flow,
-				drill.Step,
-				drill.Route,
-				firstNonEmpty(drill.Evidence, row.Evidence),
-				firstNonEmpty(drill.Recommendation, row.Recommendation),
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	return writer.Error()
 }
 
 func takeStringFlag(args []string, name, fallback string) (string, []string, error) {
