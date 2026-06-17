@@ -82,6 +82,38 @@ class AsyncLogWriterTest {
     }
 
     @Test
+    fun closeReturnsWhenInFlightActionExceedsTimeout() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            val config = JankHunterConfig.builder()
+                .maxQueueSize(16)
+                .flushIntervalMs(60_000)
+                .logCompressionEnabled(false)
+                .build()
+            val asyncWriter = AsyncLogWriter.open(directory, config, "main")
+            val actionStarted = CountDownLatch(1)
+            val releaseAction = CountDownLatch(1)
+
+            asyncWriter.enqueueForTest { writer ->
+                actionStarted.countDown()
+                releaseAction.await(5, TimeUnit.SECONDS)
+                writer.counter("released.after.timeout", 1)
+            }
+
+            assertTrue(actionStarted.await(1, TimeUnit.SECONDS))
+            val startNs = System.nanoTime()
+            assertFalse(asyncWriter.close(timeoutMs = 100))
+            val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs)
+            assertTrue("close ignored timeout: elapsedMs=$elapsedMs", elapsedMs < 1_000)
+
+            releaseAction.countDown()
+            assertTrue(asyncWriter.close(timeoutMs = 2_000))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun negativeMetricsAreRecordedAsInvalidCounters() {
         val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
         try {

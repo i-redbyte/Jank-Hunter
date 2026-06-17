@@ -18,6 +18,7 @@ class AsyncLogWriter private constructor(
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val accepting = AtomicBoolean(true)
     private val running = AtomicBoolean(true)
+    private val writerClosed = AtomicBoolean(false)
     private val dropped = AtomicLong()
     private val pendingIoErrors = AtomicLong()
     private val pendingIoLostEvents = AtomicLong()
@@ -263,15 +264,14 @@ class AsyncLogWriter private constructor(
         }
     }
 
-    fun close() {
-        if (!accepting.getAndSet(false)) return
+    fun close(timeoutMs: Long = closeTimeoutMs()): Boolean {
+        accepting.set(false)
         running.set(false)
-        waitForWorker()
-        if (worker.isAlive) return
-        try {
-            writer.close()
-        } catch (_: IOException) {
+        val finished = waitForWorker(timeoutMs.coerceAtLeast(1L))
+        if (finished) {
+            closeWriterOnce()
         }
+        return finished
     }
 
     private fun offer(action: Action) {
@@ -300,11 +300,19 @@ class AsyncLogWriter private constructor(
         }
     }
 
-    private fun waitForWorker() {
+    private fun closeTimeoutMs(): Long {
+        return maxOf(1000L, config.flushIntervalMs() + 500L)
+    }
+
+    private fun waitForWorker(timeoutMs: Long): Boolean {
+        val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         var interrupted = false
         while (worker.isAlive) {
+            val remainingNs = deadlineNs - System.nanoTime()
+            if (remainingNs <= 0L) break
             try {
-                worker.join(CLOSE_JOIN_POLL_MS)
+                val remainingMs = TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceAtLeast(1L)
+                worker.join(minOf(CLOSE_JOIN_POLL_MS, remainingMs))
             } catch (_: InterruptedException) {
                 interrupted = true
                 break
@@ -313,30 +321,45 @@ class AsyncLogWriter private constructor(
         if (interrupted) {
             Thread.currentThread().interrupt()
         }
+        return !worker.isAlive
     }
 
     private fun loop() {
-        while (running.get() || queue.isNotEmpty()) {
-            try {
-                queue.poll(250, TimeUnit.MILLISECONDS)?.let(::writeAction)
-                writeDroppedIfNeeded()
-                flushIfNeeded(force = false)
-            } catch (_: InterruptedException) {
-                if (!running.get() && queue.isEmpty()) {
-                    break
+        try {
+            while (running.get() || queue.isNotEmpty()) {
+                try {
+                    queue.poll(250, TimeUnit.MILLISECONDS)?.let(::writeAction)
+                    writeDroppedIfNeeded()
+                    flushIfNeeded(force = false)
+                } catch (_: InterruptedException) {
+                    if (!running.get() && queue.isEmpty()) {
+                        break
+                    }
+                } catch (_: IOException) {
+                    pendingIoErrors.incrementAndGet()
+                    recoverWriterAfterIoError()
                 }
+            }
+            try {
+                writeDroppedIfNeeded()
+                flushIfNeeded(force = true)
             } catch (_: IOException) {
                 pendingIoErrors.incrementAndGet()
                 recoverWriterAfterIoError()
+                flushIfNeeded(force = true)
+            }
+        } finally {
+            if (!running.get()) {
+                closeWriterOnce()
             }
         }
+    }
+
+    private fun closeWriterOnce() {
+        if (!writerClosed.compareAndSet(false, true)) return
         try {
-            writeDroppedIfNeeded()
-            flushIfNeeded(force = true)
+            writer.close()
         } catch (_: IOException) {
-            pendingIoErrors.incrementAndGet()
-            recoverWriterAfterIoError()
-            flushIfNeeded(force = true)
         }
     }
 
