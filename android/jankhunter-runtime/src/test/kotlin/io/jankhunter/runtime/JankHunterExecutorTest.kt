@@ -147,6 +147,37 @@ class JankHunterExecutorTest {
     }
 
     @Test
+    fun scheduledExecutorClearsPeriodicTrackingWhenTaskFails() {
+        val delegate = Executors.newSingleThreadScheduledExecutor()
+        try {
+            var now = 500L
+            val wrapped = JankHunterScheduledExecutorService(
+                delegate = delegate,
+                name = "ticker",
+                ownerName = "ticker",
+                clock = { now++ },
+            )
+            val ran = CountDownLatch(1)
+
+            val future = wrapped.scheduleAtFixedRate(
+                {
+                    ran.countDown()
+                    throw IllegalStateException("boom")
+                },
+                0L,
+                10L,
+                TimeUnit.MILLISECONDS,
+            )
+
+            assertTrue(ran.await(1, TimeUnit.SECONDS))
+            waitUntilDone(future)
+            assertEquals(0, trackedRunnableCount(wrapped))
+        } finally {
+            delegate.shutdownNow()
+        }
+    }
+
+    @Test
     fun publicWrappersAreNoopsWhenRuntimeInactive() {
         JankHunter.shutdown()
 
@@ -234,6 +265,26 @@ class JankHunterExecutorTest {
         fun offer(command: Runnable) {
             (command as PriorityRunnable).run()
         }
+    }
+
+    private fun waitUntilDone(future: java.util.concurrent.Future<*>) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+        while (!future.isDone && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+        assertTrue("future did not complete", future.isDone)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun trackedRunnableCount(executor: Any): Int {
+        val trackerField = executor.javaClass.getDeclaredField("tracker").apply {
+            isAccessible = true
+        }
+        val tracker = trackerField.get(executor)
+        val trackedField = tracker.javaClass.getDeclaredField("trackedRunnables").apply {
+            isAccessible = true
+        }
+        return (trackedField.get(tracker) as Map<Any, Any>).size
     }
 
     @Suppress("UNCHECKED_CAST")

@@ -188,21 +188,26 @@ private class ExecutorTaskTracker(
     }
 
     private fun periodicRunnable(command: Runnable, state: QueuedTaskState): Runnable {
-        return trackRunnable(command, state, removeAfterRun = false)
+        return trackRunnable(command, state, removeAfterRun = false, removeOnFailure = true)
     }
 
     private fun trackRunnable(
         command: Runnable,
         state: QueuedTaskState,
         removeAfterRun: Boolean,
+        removeOnFailure: Boolean = false,
     ): Runnable {
         val wrapped = object : Runnable {
             override fun run() {
                 markStarted(state)
+                var failed = false
                 try {
                     JankHunter.runExecutorTask(name, ownerName, command, clock)
+                } catch (throwable: Throwable) {
+                    failed = true
+                    throw throwable
                 } finally {
-                    if (removeAfterRun) {
+                    if (removeAfterRun || (failed && removeOnFailure)) {
                         trackedRunnables.remove(this)
                     }
                 }
