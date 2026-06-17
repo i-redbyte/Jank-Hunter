@@ -4,7 +4,7 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
@@ -25,7 +25,7 @@ class ObjectRetentionWatcher(
     private val checkIntervalMs = max(500L, min(delayMs / 2L, 2_000L))
     private val running = AtomicBoolean(false)
     private val queue = ReferenceQueue<Any>()
-    private val watched = CopyOnWriteArrayList<WatchedReference>()
+    private val watched = ConcurrentLinkedQueue<WatchedReference>()
     private var thread: Thread? = null
 
     fun start() {
@@ -52,18 +52,19 @@ class ObjectRetentionWatcher(
     }
 
     private fun addWatched(instance: Any, description: String?, ownerHint: String?) {
-        watched += WatchedReference(
-            instance,
-            queue,
-            safeClassName(instance, description),
-            ownerHint?.takeIf { it.isNotBlank() },
-            clock(),
+        watched.add(
+            WatchedReference(
+                instance,
+                queue,
+                safeClassName(instance, description),
+                ownerHint?.takeIf { it.isNotBlank() },
+                clock(),
+            ),
         )
     }
 
     private fun loop() {
         while (running.get()) {
-            drainCleared()
             checkRetained()
             try {
                 Thread.sleep(checkIntervalMs)
@@ -73,10 +74,12 @@ class ObjectRetentionWatcher(
         }
     }
 
-    private fun drainCleared() {
+    private fun drainCleared(): Boolean {
+        var removed = false
         while (true) {
-            val ref = queue.poll() as? WatchedReference ?: return
-            watched.remove(ref)
+            val ref = queue.poll() as? WatchedReference ?: return removed
+            ref.removed = true
+            removed = true
         }
     }
 
@@ -84,10 +87,16 @@ class ObjectRetentionWatcher(
         val now = clock()
         val groups = linkedMapOf<String, RetainedGroup>()
         var shouldRequestGc = false
+        var shouldCompact = drainCleared()
 
         for (ref in watched) {
+            if (ref.removed) {
+                shouldCompact = true
+                continue
+            }
             if (ref.get() == null) {
-                watched.remove(ref)
+                ref.removed = true
+                shouldCompact = true
                 continue
             }
 
@@ -105,7 +114,12 @@ class ObjectRetentionWatcher(
 
             val key = ref.className + "\u0000" + ref.ownerHint.orEmpty()
             groups.getOrPut(key) { RetainedGroup(ref.className, ref.ownerHint) }.add(ageMs)
-            watched.remove(ref)
+            ref.removed = true
+            shouldCompact = true
+        }
+
+        if (shouldCompact) {
+            compactWatched()
         }
 
         if (shouldRequestGc) {
@@ -115,6 +129,19 @@ class ObjectRetentionWatcher(
             reporter(group.className, group.ownerHint, group.maxAgeMs, group.count)
         }
     }
+
+    private fun compactWatched() {
+        val survivors = ArrayList<WatchedReference>()
+        while (true) {
+            val ref = watched.poll() ?: break
+            if (!ref.removed && ref.get() != null) {
+                survivors.add(ref)
+            }
+        }
+        survivors.forEach(watched::add)
+    }
+
+    internal fun watchedCountForTest(): Int = watched.count { !it.removed }
 
     private fun safeClassName(instance: Any, description: String?): String {
         return description?.takeIf { it.isNotBlank() } ?: instance.javaClass.name
@@ -146,5 +173,7 @@ class ObjectRetentionWatcher(
     ) : WeakReference<Any>(referent, queue) {
         var firstRetainedAtMs = 0L
         var gcRequested = false
+        @Volatile
+        var removed = false
     }
 }
