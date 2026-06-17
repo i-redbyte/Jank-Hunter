@@ -142,20 +142,8 @@ func runInspect(args []string) error {
 	}
 	if out != "" {
 		reportOptions := report.ReportOptions{PresentationMode: presentation}
-		mathReport, err := mathanalysis.AnalyzeInspect(paths, options)
-		if err != nil {
+		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
 			return err
-		}
-		if err := report.WriteMathInspectWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
-			return err
-		}
-		if err := report.WriteInspectWithOptions(out, summary, reportOptions); err != nil {
-			return err
-		}
-		if summary.Influence.Available {
-			if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода", reportOptions); err != nil {
-				return err
-			}
 		}
 		printReportPath(jsonOut, out)
 	}
@@ -278,23 +266,8 @@ func runCompare(args []string) error {
 		if err != nil {
 			return err
 		}
-		mathOptions := options
-		mathOptions.BaselineHeapEvidence = baselineOptions.HeapEvidence
-		mathOptions.CandidateHeapEvidence = candidateOptions.HeapEvidence
-		mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, mathOptions)
-		if err != nil {
+		if err := writeCompareReportSet(out, comparison, baselineReports, candidateReports, baselinePaths, candidatePaths, baselineOptions, candidateOptions, options, reportOptions); err != nil {
 			return err
-		}
-		if err := report.WriteMathCompareWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
-			return err
-		}
-		if err := report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, reportOptions); err != nil {
-			return err
-		}
-		if comparison.Candidate.Influence.Available {
-			if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {
-				return err
-			}
 		}
 		printReportPath(jsonOut, out)
 	}
@@ -309,6 +282,70 @@ func runCompare(args []string) error {
 		}
 	}
 	return nil
+}
+
+func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
+	baseOptions := reportOptions
+	baseOptions.DisableMathLink = true
+	if err := report.WriteInspectWithOptions(out, summary, baseOptions); err != nil {
+		return err
+	}
+	if summary.Influence.Available {
+		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода", reportOptions); err != nil {
+			return err
+		}
+	}
+	mathReport, err := mathanalysis.AnalyzeInspect(paths, options)
+	if err != nil {
+		warnReportGeneration("математический отчет inspect не создан", err)
+		return nil
+	}
+	if err := report.WriteMathInspectWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
+		warnReportGeneration("математический отчет inspect не записан", err)
+		return nil
+	}
+	return report.WriteInspectWithOptions(out, summary, reportOptions)
+}
+
+func writeCompareReportSet(
+	out string,
+	comparison analyze.Comparison,
+	baselineReports []report.LogReport,
+	candidateReports []report.LogReport,
+	baselinePaths []string,
+	candidatePaths []string,
+	baselineOptions analyze.Options,
+	candidateOptions analyze.Options,
+	options analyze.Options,
+	reportOptions report.ReportOptions,
+) error {
+	baseOptions := reportOptions
+	baseOptions.DisableMathLink = true
+	if err := report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, baseOptions); err != nil {
+		return err
+	}
+	if comparison.Candidate.Influence.Available {
+		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {
+			return err
+		}
+	}
+	mathOptions := options
+	mathOptions.BaselineHeapEvidence = baselineOptions.HeapEvidence
+	mathOptions.CandidateHeapEvidence = candidateOptions.HeapEvidence
+	mathReport, err := mathanalysis.AnalyzeCompare(baselinePaths, candidatePaths, mathOptions)
+	if err != nil {
+		warnReportGeneration("математический отчет compare не создан", err)
+		return nil
+	}
+	if err := report.WriteMathCompareWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
+		warnReportGeneration("математический отчет compare не записан", err)
+		return nil
+	}
+	return report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, reportOptions)
+}
+
+func warnReportGeneration(message string, err error) {
+	fmt.Fprintf(os.Stderr, "warning: %s: %v\n", message, err)
 }
 
 func compareCLILabel(name string) string {

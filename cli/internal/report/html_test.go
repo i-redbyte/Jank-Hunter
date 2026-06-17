@@ -127,6 +127,24 @@ func TestWriteReports(t *testing.T) {
 	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "<path class=\"influence-edge", "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 }
 
+func TestWriteReportsCanHideMathLink(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+	dir := t.TempDir()
+	summary := analyze.Summary{Title: "sample.jhlog", LogCount: 1, EventCount: 1}
+
+	inspectPath := filepath.Join(dir, "inspect.html")
+	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{DisableMathLink: true}); err != nil {
+		t.Fatalf("WriteInspectWithOptions() error = %v", err)
+	}
+	assertHTMLNotContains(t, inspectPath, "λ Анализ", `href="inspect-math.html"`)
+
+	comparePath := filepath.Join(dir, "compare.html")
+	if err := WriteCompareReportWithOptions(comparePath, analyze.Compare(summary, summary), nil, nil, ReportOptions{DisableMathLink: true}); err != nil {
+		t.Fatalf("WriteCompareReportWithOptions() error = %v", err)
+	}
+	assertHTMLNotContains(t, comparePath, "λ Анализ", `href="compare-math.html"`)
+}
+
 func TestWriteReportsRussian(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 	summary := analyze.Summary{
@@ -322,6 +340,20 @@ func assertHTMLContains(t *testing.T, path string, needles ...string) {
 	for _, needle := range needles {
 		if !strings.Contains(html, needle) {
 			t.Fatalf("%s does not contain %q", path, needle)
+		}
+	}
+}
+
+func assertHTMLNotContains(t *testing.T, path string, needles ...string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	html := string(data)
+	for _, needle := range needles {
+		if strings.Contains(html, needle) {
+			t.Fatalf("%s unexpectedly contains %q", path, needle)
 		}
 	}
 }

@@ -3646,7 +3646,7 @@ const inspectTemplate = `<!doctype html>
         <div class="chip">События <strong>{{.Summary.EventCount}}</strong></div>
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
+      {{if or .MathReportHref .InfluenceReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>{{end}}
       </div>
     </div>
   </div>
@@ -4131,7 +4131,7 @@ const compareTemplate = `<!doctype html>
         <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
         <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
       </div>
-      <div class="hero-actions"><a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>
+      {{if or .MathReportHref .InfluenceReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>{{end}}
       </div>
     </div>
   </div>

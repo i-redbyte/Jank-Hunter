@@ -23,6 +23,7 @@ type LogReport struct {
 
 type ReportOptions struct {
 	PresentationMode bool
+	DisableMathLink  bool
 }
 
 func WriteInspect(path string, summary analyze.Summary) error {
@@ -35,7 +36,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
 		"Summary":             summary,
 		"Analysis":            inspectAnalysis(summary, lang),
-		"MathReportHref":      MathReportHref(path),
+		"MathReportHref":      mathReportHrefForOptions(path, options),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, summary.Influence),
 		"PresentationMode":    options.PresentationMode,
 	})
@@ -57,7 +58,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"BaselineLogs":        baselineLogs,
 		"CandidateLogs":       candidateLogs,
 		"Analysis":            compareAnalysis(comparison, lang),
-		"MathReportHref":      MathReportHref(path),
+		"MathReportHref":      mathReportHrefForOptions(path, options),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
 		"PresentationMode":    options.PresentationMode,
 	})
@@ -114,6 +115,13 @@ func MathReportPath(path string) string {
 
 func MathReportHref(path string) string {
 	return filepath.Base(MathReportPath(path))
+}
+
+func mathReportHrefForOptions(path string, options ReportOptions) string {
+	if options.DisableMathLink {
+		return ""
+	}
+	return MathReportHref(path)
 }
 
 func InfluenceReportPath(path string) string {
