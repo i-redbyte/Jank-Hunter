@@ -1024,17 +1024,17 @@ func (c *collector) runEnvironment(summary Summary) RunEnvironment {
 
 	return RunEnvironment{
 		Title:    device,
-		Subtitle: fmt.Sprintf("%s · %s · process %s", osValue(c.currentAndroid, c.currentSDK), appBuildValue(app, build), process),
+		Subtitle: fmt.Sprintf("%s · %s · процесс %s", osValue(c.currentAndroid, c.currentSDK), appBuildValue(app, build), process),
 		Items: []InfoItem{
-			{Label: "Battery", Value: batteryValue(summary.BatteryLastPct), Detail: batteryDetail(summary)},
-			{Label: "Network", Value: network, Detail: networkDetail(summary)},
-			{Label: "Free RAM", Value: formatDataSize(summary.AvailMemoryLastKB), Detail: memoryDetail(summary)},
-			{Label: "Free storage", Value: formatDataSize(summary.FreeStorageKB), Detail: storageDetail(summary)},
+			{Label: "Батарея", Value: batteryValue(summary.BatteryLastPct), Detail: batteryDetail(summary)},
+			{Label: "Сеть", Value: network, Detail: networkDetail(summary)},
+			{Label: "Свободная RAM", Value: formatDataSize(summary.AvailMemoryLastKB), Detail: memoryDetail(summary)},
+			{Label: "Свободное хранилище", Value: formatDataSize(summary.FreeStorageKB), Detail: storageDetail(summary)},
 			{Label: "Android", Value: osValue(c.currentAndroid, c.currentSDK), Detail: androidDetail(c.currentSDK, c.currentPatch)},
 			{Label: "Рут-доступ", Value: rootValue(summary.DeviceRootKnown, summary.DeviceRooted), Detail: rootDetail(summary.DeviceRootKnown, summary.DeviceRooted)},
-			{Label: "CPU ABI", Value: abi, Detail: fmt.Sprintf("supported %s", abis)},
-			{Label: "Hardware", Value: hardware, Detail: fmt.Sprintf("board %s · product %s", board, product)},
-			{Label: "Brand", Value: manufacturer, Detail: fmt.Sprintf("brand %s", brand)},
+			{Label: "CPU ABI", Value: abi, Detail: fmt.Sprintf("поддерживаются %s", abis)},
+			{Label: "Железо", Value: hardware, Detail: fmt.Sprintf("плата %s · продукт %s", board, product)},
+			{Label: "Бренд", Value: manufacturer, Detail: fmt.Sprintf("бренд %s", brand)},
 		},
 	}
 }
@@ -1505,10 +1505,10 @@ func batteryValue(pct uint64) string {
 func batteryDetail(summary Summary) string {
 	parts := []string{batteryStateName(summary.BatteryStateLast)}
 	if summary.BatteryTempDeciC > 0 {
-		parts = append(parts, fmt.Sprintf("%.1f C", float64(summary.BatteryTempDeciC)/10))
+		parts = append(parts, fmt.Sprintf("%.1f °C", float64(summary.BatteryTempDeciC)/10))
 	}
 	if summary.BatteryMinPct > 0 {
-		parts = append(parts, fmt.Sprintf("min %d%%", summary.BatteryMinPct))
+		parts = append(parts, fmt.Sprintf("мин. %d%%", summary.BatteryMinPct))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -1516,40 +1516,40 @@ func batteryDetail(summary Summary) string {
 func batteryStateName(state uint64) string {
 	switch state {
 	case 2:
-		return "charging"
+		return "заряжается"
 	case 3:
-		return "discharging"
+		return "разряжается"
 	case 4:
-		return "not charging"
+		return "не заряжается"
 	case 5:
-		return "full"
+		return "полный заряд"
 	default:
-		return "unknown"
+		return "неизвестно"
 	}
 }
 
 func networkDetail(summary Summary) string {
 	return fmt.Sprintf(
-		"validated %s · metered %s · VPN %s",
-		yesNo(summary.NetworkValidated),
-		yesNo(summary.NetworkMetered),
-		yesNo(summary.NetworkVPN),
+		"валидирована %s · лимитная %s · VPN %s",
+		yesNoRU(summary.NetworkValidated),
+		yesNoRU(summary.NetworkMetered),
+		yesNoRU(summary.NetworkVPN),
 	)
 }
 
 func memoryDetail(summary Summary) string {
 	parts := []string{}
 	if summary.TotalMemoryKB > 0 {
-		parts = append(parts, fmt.Sprintf("total %s", formatDataSize(summary.TotalMemoryKB)))
+		parts = append(parts, fmt.Sprintf("всего %s", formatDataSize(summary.TotalMemoryKB)))
 	}
 	if summary.AvailMemoryMinKB > 0 {
-		parts = append(parts, fmt.Sprintf("min free %s", formatDataSize(summary.AvailMemoryMinKB)))
+		parts = append(parts, fmt.Sprintf("мин. свободно %s", formatDataSize(summary.AvailMemoryMinKB)))
 	}
 	if summary.LowMemoryCount > 0 {
-		parts = append(parts, fmt.Sprintf("low-memory samples %d", summary.LowMemoryCount))
+		parts = append(parts, fmt.Sprintf("сигналы low-memory %d", summary.LowMemoryCount))
 	}
 	if len(parts) == 0 {
-		return "no memory context"
+		return "нет контекста памяти"
 	}
 	return strings.Join(parts, " · ")
 }
@@ -1565,9 +1565,9 @@ func androidDetail(sdk string, patch string) string {
 	patch = unknownIfEmpty(patch)
 	sdk = unknownIfEmpty(sdk)
 	if patch == "unknown" {
-		return fmt.Sprintf("API %s · security patch unknown", apiNumber(sdk))
+		return fmt.Sprintf("API %s · патч безопасности неизвестен", apiNumber(sdk))
 	}
-	return fmt.Sprintf("API %s · security patch %s", apiNumber(sdk), patch)
+	return fmt.Sprintf("API %s · патч безопасности %s", apiNumber(sdk), patch)
 }
 
 func apiNumber(sdk string) string {
@@ -1579,6 +1579,13 @@ func yesNo(value bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func yesNoRU(value bool) string {
+	if value {
+		return "да"
+	}
+	return "нет"
 }
 
 func rootCohortValue(known bool, rooted bool) string {

@@ -95,6 +95,15 @@
   };
   enhanceLongCells();
 
+  document.querySelectorAll('details').forEach((details) => {
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      wrapTables();
+      enhanceLongCells();
+      scheduleTableMeasure();
+    });
+  });
+
   const tooltip = document.createElement('div');
   tooltip.className = 'jh-tooltip';
   document.body.appendChild(tooltip);
@@ -260,6 +269,7 @@
         button.classList.toggle('asc', active && sortDir === 'asc');
         button.classList.toggle('desc', active && sortDir === 'desc');
       });
+      scheduleTableMeasure();
     };
     search?.addEventListener('input', apply);
     severity?.addEventListener('change', apply);

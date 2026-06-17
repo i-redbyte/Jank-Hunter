@@ -640,18 +640,6 @@ func printReportPath(jsonOut bool, path string) {
 	fmt.Printf("report: %s\n", path)
 }
 
-func readLogs(paths []string) ([]jhlog.Log, error) {
-	logs := make([]jhlog.Log, 0, len(paths))
-	for _, path := range paths {
-		log, err := jhlog.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		logs = append(logs, log)
-	}
-	return logs, nil
-}
-
 func expandArgs(args []string) []string {
 	var out []string
 	for _, arg := range args {

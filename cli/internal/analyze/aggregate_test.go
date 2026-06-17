@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
@@ -149,6 +150,16 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	}
 	if !environmentHasItem(summary.Environment, "Рут-доступ", "нет") {
 		t.Fatalf("root state is missing from environment: %+v", summary.Environment)
+	}
+	if !environmentHasItem(summary.Environment, "Батарея", "82%") ||
+		!environmentHasItem(summary.Environment, "Сеть", "wifi") ||
+		!environmentHasItem(summary.Environment, "Свободная RAM", "1.9 GB") ||
+		!environmentHasItem(summary.Environment, "Свободное хранилище", "45.8 GB") {
+		t.Fatalf("environment labels should be Russian: %+v", summary.Environment)
+	}
+	if !environmentItemDetailContains(summary.Environment, "Сеть", "валидирована да") ||
+		!environmentItemDetailContains(summary.Environment, "Android", "патч безопасности") {
+		t.Fatalf("environment details should be Russian: %+v", summary.Environment)
 	}
 	if summary.TotalMemoryKB == 0 || summary.FreeStorageKB == 0 {
 		t.Fatalf("expected memory/storage context: %+v", summary)
@@ -407,6 +418,15 @@ func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
 func environmentHasItem(environment RunEnvironment, label string, value string) bool {
 	for _, item := range environment.Items {
 		if item.Label == label && item.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func environmentItemDetailContains(environment RunEnvironment, label string, text string) bool {
+	for _, item := range environment.Items {
+		if item.Label == label && strings.Contains(item.Detail, text) {
 			return true
 		}
 	}
