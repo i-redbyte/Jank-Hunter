@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
 func TestInspectAndCompareWriteMathReports(t *testing.T) {
@@ -105,6 +108,35 @@ func TestPresentationModeWritesLinkedReports(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "presentation-compare-math.html"), "presentation-page")
 	if influencePath := filepath.Join(dir, "presentation-compare-influence.html"); fileExists(influencePath) {
 		assertFileContains(t, influencePath, "presentation-page")
+	}
+}
+
+func TestExportStreamsSampleJSONL(t *testing.T) {
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	exportPath := filepath.Join(dir, "events.jsonl")
+	if err := runExport([]string{samplePath, "--out", exportPath}); err != nil {
+		t.Fatalf("runExport() error = %v", err)
+	}
+
+	log, err := jhlog.ReadFile(samplePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var expected bytes.Buffer
+	if err := jhlog.ExportJSONL(log, &expected); err != nil {
+		t.Fatalf("ExportJSONL() error = %v", err)
+	}
+	actual, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", exportPath, err)
+	}
+	if !bytes.Equal(actual, expected.Bytes()) {
+		t.Fatalf("streaming export output changed\nactual:\n%s\nexpected:\n%s", actual, expected.String())
 	}
 }
 

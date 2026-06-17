@@ -499,11 +499,10 @@ func runExport(args []string) error {
 		writer = file
 	}
 	for _, path := range paths {
-		log, err := jhlog.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := jhlog.ExportJSONL(log, writer); err != nil {
+		encoder := json.NewEncoder(writer)
+		if err := jhlog.StreamFile(path, func(event jhlog.Event, _ map[uint64]string) error {
+			return encoder.Encode(event)
+		}); err != nil {
 			return err
 		}
 	}
