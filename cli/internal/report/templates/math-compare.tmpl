@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: математическое сравнение</title>
+  <style>{{baseCSS}}{{mathCSS}}</style>
+</head>
+<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · математическое сравнение</div>
+      <h1>Математический анализ сравнения</h1>
+      <div class="subhead">{{.Math.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Сравнение</div>
+        <strong class="env-device">{{.Math.Baseline.Summary.LogCount}} → {{.Math.Candidate.Summary.LogCount}} логов</strong>
+        <div class="env-subtitle">база {{.Math.Baseline.Summary.EventCount}} событий · кандидат {{.Math.Candidate.Summary.EventCount}} событий</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">HTTP базы</div><div class="env-value">{{.Math.Baseline.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Baseline.Summary.HTTPP95MS}} мс</div></div>
+          <div class="env-item"><div class="env-label">HTTP кандидата</div><div class="env-value">{{.Math.Candidate.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Candidate.Summary.HTTPP95MS}} мс</div></div>
+        </div>
+      </div>
+      {{if .InfluenceReportHref}}<div class="hero-actions"><a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a></div>{{end}}
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
+  <a href="#method-reference">Справка по методам</a>
+</nav>
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Обзор сравнения</h2>
+        <div class="panel-kicker">Каркас математического отчета сравнения подключен к сводкам базы и кандидата.</div>
+      </div>
+      <span class="pill">математическое сравнение</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">События базы</div><div class="value">{{.Math.Baseline.Summary.EventCount}}</div><div class="hint">{{.Math.Baseline.Summary.LogCount}} логов</div></div>
+      <div class="metric"><div class="label">События кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">{{.Math.Candidate.Summary.LogCount}} логов</div></div>
+      <div class="metric"><div class="label">Подтормаживания базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
+      <div class="metric"><div class="label">{{tip "Проблемные окна" "Агрегированные окна причин: медленный HTTP, пауза главного потока, UI-подтормаживания, удержания или спам логами."}}</div><div class="value">{{summaryProblems .Math.Baseline.Summary}} → {{summaryProblems .Math.Candidate.Summary}}</div><div class="hint">спам {{summaryLogSpam .Math.Baseline.Summary}} → {{summaryLogSpam .Math.Candidate.Summary}}</div></div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать сравнение</strong>Положительная дельта у задержек, памяти, подтормаживаний, ошибок и спама обычно означает ухудшение кандидата. Смотрите серьезность вместе с доверием и размером выборки.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Флоу и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
+      <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
+    </div>
+    {{scoreGuide "compare"}}
+    <details id="code-problems" class="fold code-registry-fold" open>
+      <summary><span>Реестр проблем кода кандидата</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
+        {{scoreGuide "code"}}
+        {{with codeProblemCategories .Math.Candidate.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        {{with codeProblemSeverities .Math.Candidate.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+            <select data-code-registry-severity aria-label="Фильтр по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр по категории">
+              <option value="">Все категории</option>
+              {{codeProblemCategoryOptions}}
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+          <table class="code-problem-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="severity">Статус</button></th>
+                <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th><button type="button" data-code-sort="category">Категории</button></th>
+                <th>Подробности кандидата</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range codeProblemCompareRows .Math.Comparison}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}" data-search="{{codeProblemSearchText .Candidate}} {{.Status}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+                <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
+                <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+                <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
+                <td>
+                  <details class="code-problem-details">
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                    <div class="code-problem-detail-body">
+                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
+                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                      {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                    </div>
+                  </details>
+                </td>
+              </tr>
+              {{else}}<tr><td colspan="5" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+    <details id="memory-leaks" class="fold code-registry-fold">
+      <summary><span>Сравнение утечек памяти</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает удержанные объекты кандидата, которые появились или усилились относительно базы. Оценка учитывает количество, возраст удержания, тип объекта и наличие пользовательского держателя.</p>
+        {{scoreGuide "leak"}}
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
+            <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+              <option value="">Все типы</option>
+              <option value="экран / Activity">Activity</option>
+              <option value="Fragment">Fragment</option>
+              <option value="Context">Context</option>
+              <option value="View / binding">View / binding</option>
+              <option value="ресурс">Ресурс</option>
+              <option value="системный объект">Системный объект</option>
+              <option value="пользовательский объект">Пользовательский объект</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам утечек не найдено.</div>
+          <table class="code-problem-table leak-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="severity">Риск</button></th>
+                <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
+                <th><button type="button" data-code-sort="category">Тип</button></th>
+                <th>Вероятный держатель</th>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th>Изменение</th>
+                <th>Контекст</th>
+                <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера кандидата. Точное значение требует дампа памяти."}}</th>
+                <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения кандидата по контексту выполнения."}}</th>
+                <th>Что проверить</th>
+                <th>Доказательства</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range memoryLeakCompareRows .Math.Comparison}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}" data-search="{{memoryLeakSearchText .Candidate}} {{.Status}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+                <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
+                <td><div class="leak-object-kind">{{.Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+                <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
+                <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+                <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
+                <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+                <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
+                <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
+                <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
+                <td>{{.Candidate.Evidence}}</td>
+              </tr>
+              {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+    {{if .Math.Candidate.Summary.Influence.Available}}
+    <h3>Граф влияния кандидата</h3>
+    <p class="help-text">Встроенный срез показывает верхние классы кандидата, а полный граф вынесен в отдельный HTML.</p>
+    <table class="timeline-table">
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th></tr>
+      {{range topInfluenceNodes .Math.Candidate.Summary.Influence 8}}
+      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td></tr>
+      {{end}}
+    </table>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
+    {{end}}
+    <h3>Сравнение флоу и причин</h3>
+    <table class="timeline-table">
+      <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
+      {{range flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
+      <tr>
+        <td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td>
+        <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
+        <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
+        <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
+        <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+        <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+      </tr>
+      {{else}}<tr><td colspan="12" class="muted">Нет событий контекста флоу для математического сравнения.</td></tr>{{end}}
+    </table>
+    <h3>Находки</h3>
+    <div class="finding-list">
+      {{range significantMathFindings .Math.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+      {{else}}<div class="muted">Нет значимых предупреждений по качеству сравнения.</div>{{end}}
+    </div>
+    <h3>Сводка разделов</h3>
+    <div class="section-overview-grid">
+      {{range .Math.Sections}}
+      <a class="section-overview-card {{severityClass .Status}}" href="#{{.ID}}">
+        <div class="section-overview-title"><span>{{.Title}}</span><span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span></div>
+        <div class="section-overview-summary">{{.Summary}}</div>
+      </a>
+      {{end}}
+    </div>
+  </section>
+
+  {{$math := .Math}}
+  {{range .Math.Sections}}
+  <section id="{{.ID}}" class="panel">
+    <div class="panel-head">
+      <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
+      <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
+    </div>
+    <details class="fold">
+      <summary>Детали раздела</summary>
+      <div class="fold-body">
+        <div class="finding-list">
+          {{range significantMathFindings .Findings}}
+          <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+          {{else}}<div class="muted">Нет значимых предупреждений в этом разделе.</div>{{end}}
+        </div>
+        {{if eq .ID "timeline"}}
+        <h3>База</h3>
+        <div class="timeline-grid">
+          {{range $math.Baseline.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов базы для отображения.</div>{{end}}
+        </div>
+        <h3>Кандидат</h3>
+        <div class="timeline-grid">
+          {{range $math.Candidate.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов кандидата для отображения.</div>{{end}}
+        </div>
+        {{end}}
+        {{if eq .ID "robust"}}
+        <h3>Робастные дельты</h3>
+        {{range robustDeltaGroups $math.RobustDeltas}}
+        <div class="category-block">
+          <h4>{{.Title}}</h4>
+          <table class="timeline-table">
+            <tr><th>Статус</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
+            {{range .Items}}
+            <tr>
+              <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+              <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+              <td>{{printf "%.1f" .BaselineP95}} {{.Unit}}</td><td>{{printf "%.1f" .CandidateP95}} {{.Unit}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .P95DeltaPct}}%</td>
+              <td>{{printf "%.3f" .CliffDelta}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
+            </tr>
+            {{end}}
+          </table>
+        </div>
+        {{else}}<div class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</div>{{end}}
+        <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, подтормаживаний UI, памяти и очередей это обычно ухудшение.</p>
+        {{end}}
+        {{if eq .ID "change-points"}}
+        <h3>Изменения точек изменения</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>{{tip "Оценка базы" (scoreHelp "change")}}</th><th>{{tip "Оценка кандидата" (scoreHelp "change")}}</th><th>Вывод</th></tr>
+          {{range $math.ChangeDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td><td>{{.Signal}}</td>
+            <td>{{if .BaselineTime}}{{printf "%.1fs" (seconds .BaselineTime)}}{{else}}-{{end}}</td>
+            <td>{{if .CandidateTime}}{{printf "%.1fs" (seconds .CandidateTime)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.2f" .BaselineScore}}</td><td><div>{{printf "%.2f" .CandidateScore}}</div><div class="bar"><i style="{{scoreWidth .CandidateScore}}"></i></div></td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="7" class="muted">Новых, исчезнувших или усилившихся точек изменения не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "periodic"}}
+        <h3>База</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          {{range $math.Baseline.Periodic}}
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных базы.</td></tr>{{end}}
+        </table>
+        <h3>Кандидат</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          {{range $math.Candidate.Periodic}}
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных кандидата.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "network-loops"}}
+        <h3>Дельты сетевых циклов</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Маршрут</th><th>Источник</th><th>Период базы</th><th>Период кандидата</th><th>{{tip "Выгорание базы" (scoreHelp "network_burn")}}</th><th>{{tip "Выгорание кандидата" (scoreHelp "network_burn")}}</th><th>Δ выгорания</th><th>{{tip "Δ доверия" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
+          {{range $math.NetworkLoopDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td>
+            <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .BaselinePeriodMS}}{{printf "%.1fs" (seconds .BaselinePeriodMS)}}{{else}}-{{end}}</td>
+            <td>{{if .CandidatePeriodMS}}{{printf "%.1fs" (seconds .CandidatePeriodMS)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.1f" .BaselineBurn}}</td>
+            <td>{{printf "%.1f" .CandidateBurn}}</td>
+            <td>{{printf "%+.1f" .BurnDelta}}</td>
+            <td>{{printf "%+.2f" .ConfidenceDelta}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Заметных изменений сетевых циклов не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "integral"}}
+        <h3>Дельты интегральных оценок</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Δ%</th><th>Критерии</th><th>Формула</th><th>Вывод</th></tr>
+          {{range $math.IntegralDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Title}}</td>
+            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td>{{integralCriteria .ID}}</td>
+            <td><code>{{.Formula}}</code></td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "markov"}}
+        <h3>Дельты марковских метрик</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Метрика</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          {{range significantMarkovDeltas $math.MarkovDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Metric}}</td>
+            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
+            <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет значимых марковских дельт.</td></tr>{{end}}
+          {{if hiddenMarkovDeltas $math.MarkovDeltas}}<tr><td colspan="6" class="muted">Скрыто спокойных марковских дельт: {{hiddenMarkovDeltas $math.MarkovDeltas}}.</td></tr>{{end}}
+        </table>
+        <h3>Переходы кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
+          {{range significantMarkovTransitions $math.Candidate.Markov.Transitions}}
+          <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых переходов кандидата между состояниями деградации.</td></tr>{{end}}
+          {{if hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов кандидата: {{hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "graph"}}
+        <h3>Визуальный граф кандидата</h3>
+        <p class="help-text">Показаны самые сильные связи кандидата. Полная детализация ребер остается в таблицах ниже.</p>
+        {{causalGraphSVG $math.Candidate.CausalGraph}}
+        <h3>Дельты графа причинности</h3>
+        <table class="timeline-table">
+          <tr><th>Статус</th><th>Тип</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          {{range $math.CausalDeltas}}
+          <tr>
+            <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
+            <td>{{.Kind}}</td>
+            <td>{{printf "%.2f" .BaselineValue}}</td>
+            <td>{{printf "%.2f" .CandidateValue}}</td>
+            <td>{{printf "%+.2f" .Delta}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Заметных изменений графа не найдено.</td></tr>{{end}}
+        </table>
+        <h3>Кратчайшие пути кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th></tr>
+          {{range $math.Candidate.CausalGraph.Paths}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
+          {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути кандидата не найдены.</td></tr>{{end}}
+        </table>
+        {{end}}
+      </div>
+    </details>
+  </section>
+  {{end}}
+  <section id="method-reference" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Справка по методам</h2>
+        <div class="panel-kicker">Что именно измеряет каждый математический метод, как считается результат и как читать дельты между базой и кандидатом.</div>
+      </div>
+      <span class="pill">объяснимость</span>
+    </div>
+    <div class="method-reference-grid">
+      {{range .MethodReferences}}
+      <details class="fold method-reference-card" id="method-{{.ID}}">
+        <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
+        <div class="fold-body">
+          <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Где применяется</strong>{{.AppliesTo}}</div>
+          <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
+          <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
+          <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
+          <div class="reference-block"><strong>Поля в inspect</strong><div class="reference-list">{{range .InspectFields}}<code>{{.}}</code>{{end}}</div></div>
+          <div class="reference-block"><strong>Поля в compare</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+  </section>
+  {{with compareMathHeuristic .Math}}
+  <section id="math-verdict" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Итоговая эвристика сравнения</h2>
+        <div class="panel-kicker">Сводка по математическим дельтам: общий риск кандидата, главные факторы и первый шаг расследования.</div>
+      </div>
+      <span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span>
+    </div>
+    <div class="analysis-banner {{severityClass .Severity}}">
+      <div class="eyebrow">Общий вывод</div>
+      <div class="analysis-status">{{.Status}}</div>
+      <div class="muted">{{.Summary}}</div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Cards}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+</main>
+<script>{{reportJS}}
+(() => {
+  const links = Array.from(document.querySelectorAll('.math-page .nav a'));
+  const setActive = (hash) => {
+    links.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === hash));
+  };
+  links.forEach((link) => link.addEventListener('click', () => setActive(link.getAttribute('href'))));
+  if (location.hash) setActive(location.hash);
+  const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setActive('#' + visible.target.id);
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+  }
+})();
+</script>
+</body>
+</html>

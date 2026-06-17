@@ -164,6 +164,15 @@ func execute(path, source string, data any) error {
 
 func reportTemplateFuncs() template.FuncMap {
 	return template.FuncMap{
+		"baseCSS": func() template.CSS {
+			return template.CSS(baseCSS)
+		},
+		"mathCSS": func() template.CSS {
+			return template.CSS(mathCSS)
+		},
+		"reportJS": func() template.JS {
+			return template.JS(reportJS)
+		},
 		"pctWidth": func(value float64) template.CSS {
 			return template.CSS(fmt.Sprintf("width:%.2f%%", clampPct(value)))
 		},

@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: сравнение</title>
+  <style>{{baseCSS}}</style>
+</head>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<header class="hero">
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
+      <div class="eyebrow">Jank Hunter · сравнение</div>
+      <h1>Панель контроля регрессий</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · база против кандидата · автономный HTML</div>
+    </div>
+    <div class="report-hero-lower">
+      <div class="report-hero-context">
+      <div class="env-card">
+        <div class="env-title">Контекст сравнения</div>
+        <strong class="env-device">{{fallback .Comparison.Baseline.Environment.Title "неизвестная база"}} → {{fallback .Comparison.Candidate.Environment.Title "неизвестный кандидат"}}</strong>
+        <div class="env-subtitle">база {{humanDuration .Comparison.Baseline.DurationMS}} · кандидат {{humanDuration .Comparison.Candidate.DurationMS}}</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">База</div><div class="env-value">{{fallback .Comparison.Baseline.Environment.Title "неизвестно"}}</div><div class="env-detail">{{fallback .Comparison.Baseline.Environment.Subtitle "контекст недоступен"}}</div></div>
+          <div class="env-item"><div class="env-label">Кандидат</div><div class="env-value">{{fallback .Comparison.Candidate.Environment.Title "неизвестно"}}</div><div class="env-detail">{{fallback .Comparison.Candidate.Environment.Subtitle "контекст недоступен"}}</div></div>
+          <div class="env-item"><div class="env-label">HTTP p95</div><div class="env-value">{{.Comparison.Baseline.HTTPP95MS}} → {{.Comparison.Candidate.HTTPP95MS}} мс</div><div class="env-detail">ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
+          <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}% → {{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="env-detail">FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div></div>
+        </div>
+      </div>
+      </div>
+      <div class="report-hero-control">
+      <div class="hero-meta">
+        <div class="chip">Логи базы <strong>{{.Comparison.Baseline.LogCount}}</strong></div>
+        <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
+        <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
+      </div>
+      {{if or .MathReportHref .InfluenceReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>{{end}}
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#compare">Сравнение</a>
+  <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
+  <a href="#regressions">Регрессии</a>
+  <a href="#changes">Где изменилось</a>
+  <a href="#flows">Флоу</a>
+  <a href="#drilldown">Детали логов</a>
+  <a href="#cohorts">Когорты</a>
+  <a href="#analysis">Итог</a>
+</nav>
+<main>
+  <section id="compare" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Сводная панель сравнения</h2>
+        <div class="panel-kicker">База и кандидат по задержкам, плавности, памяти, трафику, удержанным объектам и составу когорт.</div>
+      </div>
+      <span class="pill">автономный HTML</span>
+    </div>
+    {{range .Comparison.Warnings}}<p class="warning">{{.}}</p>{{end}}
+    <div class="compare-pair-grid">
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "HTTP p95" "95-й процентиль HTTP-задержки. Рост показывает ухудшение хвоста сетевых запросов."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.HTTPP95MS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.HTTPP95MS}} мс</strong></div></div>
+        <div class="compare-delta">Запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше значение у кандидата, тем заметнее просадка интерфейса."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</strong></div></div>
+        <div class="compare-delta">Средний FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.MemoryMaxKB}} KB</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.MemoryMaxKB}} KB</strong></div></div>
+        <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 мс watchdog задержек такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.StallMaxMS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.StallMaxMS}} мс</strong></div></div>
+        <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
+      </div>
+      <div class="compare-pair">
+        <div class="compare-pair-title">{{tip "Флоу и причины" "Сумма агрегированных проблемных окон и спама логами по кортежам контекста флоу. Рост показывает, что кандидат чаще попадает в объяснимые проблемные участки сценария."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>Проблемы</span><strong>{{summaryProblems .Comparison.Baseline}} → {{summaryProblems .Comparison.Candidate}}</strong></div><div class="compare-value"><span>Спам логами</span><strong>{{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}}</strong></div></div>
+        <div class="compare-delta">Флоу {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
+      </div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать сравнение</strong>Рост задержек, ошибок, памяти, подтормаживаний и спама логами обычно означает ухудшение кандидата. Доверие и выборка показывают, насколько этому можно верить.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Флоу”: там видно конкретный маршрут, экран или источник, который изменился.</div>
+      <div class="guide-card"><strong>Когда эскалировать</strong>Критичные регрессии с повторяемостью, сетевые циклы или рост интегральной нагрузки лучше сразу превращать в задачу на исправление.</div>
+    </div>
+    {{scoreGuide "compare"}}
+    <h3>Кольцевые индикаторы</h3>
+    <div class="ring-row">
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">Ошибки кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">FPS кандидата</div></div>
+    </div>
+    {{if .Comparison.Candidate.Influence.Available}}
+    <h3>Граф влияния кандидата</h3>
+    <table>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Причины</th></tr>
+      {{range topInfluenceNodes .Comparison.Candidate.Influence 6}}
+      <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{join .Reasons ", "}}</td></tr>
+      {{end}}
+    </table>
+    {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
+    {{end}}
+  </section>
+
+  <section id="code-problems" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Реестр проблем кода кандидата</h2>
+        <div class="panel-kicker">Сравнение проблемных классов и методов кандидата с базой: новые точки, усиление оценки и текущие доказательства.</div>
+      </div>
+      <span class="pill">кандидат против базы</span>
+    </div>
+    <p class="help-text">Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
+    {{scoreGuide "code"}}
+    {{with codeProblemCategories .Comparison.Candidate.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
+    {{with codeProblemSeverities .Comparison.Candidate.CodeProblems}}
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    {{end}}
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+        <select data-code-registry-severity aria-label="Фильтр по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр по категории">
+          <option value="">Все категории</option>
+          {{codeProblemCategoryOptions}}
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+      <table class="code-problem-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="severity">Статус</button></th>
+            <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th><button type="button" data-code-sort="category">Категории</button></th>
+            <th>Подробности кандидата</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range codeProblemCompareRows .Comparison}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}" data-search="{{codeProblemSearchText .Candidate}} {{.Status}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+            <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
+            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+            <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
+            <td>
+              <details class="code-problem-details">
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                <div class="code-problem-detail-body">
+                  <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
+                  <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
+                  {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                  <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong><div class="problem-signals">{{range .Candidate.Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                </div>
+              </details>
+            </td>
+          </tr>
+          {{else}}<tr><td colspan="5" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="memory-leaks" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Сравнение утечек памяти</h2>
+        <div class="panel-kicker">Новые и усилившиеся удержания кандидата: объект, вероятный держатель, контекст и изменение относительно базы.</div>
+      </div>
+      <span class="pill">дельта удержаний</span>
+    </div>
+    <p class="help-text">Сравнение смотрит не только количество, но и возраст удержания. Если держатель не определен, добавьте <code>ownerHint</code> или <code>withOwner</code>, чтобы следующий прогон показал пользовательский класс точнее.</p>
+    {{scoreGuide "leak"}}
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по удержанному объекту, держателю, экрану или рекомендации" aria-label="Фильтр сравнительного реестра утечек памяти">
+        <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+          <option value="">Все типы</option>
+          <option value="экран / Activity">Activity</option>
+          <option value="Fragment">Fragment</option>
+          <option value="Context">Context</option>
+          <option value="View / binding">View / binding</option>
+          <option value="ресурс">Ресурс</option>
+          <option value="системный объект">Системный объект</option>
+          <option value="пользовательский объект">Пользовательский объект</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам утечек не найдено.</div>
+      <table class="code-problem-table leak-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-code-sort="severity">Риск</button></th>
+            <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
+            <th><button type="button" data-code-sort="category">Тип</button></th>
+            <th>Вероятный держатель</th>
+            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th>Изменение</th>
+            <th>Контекст</th>
+            <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера кандидата. Точное значение требует дампа памяти."}}</th>
+            <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения кандидата по контексту выполнения."}}</th>
+            <th>Что проверить</th>
+            <th>Доказательства</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range memoryLeakCompareRows .Comparison}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}" data-search="{{memoryLeakSearchText .Candidate}} {{.Status}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+            <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
+            <td><div class="leak-object-kind">{{.Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+            <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
+            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+            <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
+            <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+            <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
+            <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
+            <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
+            <td>{{.Candidate.Evidence}}</td>
+          </tr>
+          {{else}}<tr><td colspan="11" class="muted">У кандидата нет подозрений на утечки памяти.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="regressions" class="panel">
+    <div class="panel-head">
+      <div><h2>Матрица регрессий</h2><div class="panel-kicker">Серьезность учитывает доверие и размер выборки. Полосы показывают величину регрессии с ограничением до 100%.</div></div>
+    </div>
+    {{range deltaGroups .Comparison.Deltas}}
+    <div class="category-block">
+      <h3>{{.Title}}</h3>
+      <p class="help-text">{{.Detail}}</p>
+      <table class="compare-table">
+        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th><th>Интервал</th></tr>
+        {{range .Items}}
+        <tr>
+          <td class="metric-name">{{tip (deltaLabel .Name) (deltaHelp .Name)}}</td>
+          <td>{{deltaValue .Baseline}}</td>
+          <td>{{deltaValue .Candidate}}</td>
+          <td>{{deltaChange .Change}}</td>
+          <td><div class="delta-track"><i class="{{severityClass .Severity}}" style="{{deltaWidth .RegressionPct}}"></i></div></td>
+          <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          <td>{{confidenceLabel .Confidence}}</td>
+          <td>{{.SampleSize}}</td>
+          <td>{{deltaInterval .Interval}}</td>
+        </tr>
+        {{end}}
+      </table>
+    </div>
+    {{end}}
+    <h3>Худшие регрессии</h3>
+    <table>
+      <tr><th>Метрика</th><th>Серьезность</th><th>Регрессия</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th></tr>
+      {{range problemDeltas .Comparison.Deltas}}
+      <tr><td>{{deltaLabel .Name}}</td><td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td><td>{{deltaChange .Change}}</td><td>{{confidenceLabel .Confidence}}</td><td>{{.SampleSize}}</td></tr>
+      {{else}}<tr><td colspan="5" class="muted">Регрессий высокой или средней серьезности не найдено.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section id="changes" class="panel">
+    <div class="panel-head">
+      <div><h2>Где изменилось</h2><div class="panel-kicker">Парные таблицы показывают конкретные маршруты, экраны и источники, где кандидат отличается от базы.</div></div>
+    </div>
+    <details class="fold">
+      <summary>Сравнение маршрутов, экранов и источников</summary>
+      <div class="fold-body">
+        <h3>Маршруты</h3>
+        <table>
+          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>p95 базы</th><th>p95 кандидата</th><th>Дельта p95</th><th>Серьезность</th><th>Источник</th></tr>
+          {{range routeCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Route}}</code></td>
+            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+            <td>{{.BaselineFailures}}</td><td>{{.CandidateFailures}}</td>
+            <td>{{.BaselineP95MS}} мс</td><td>{{.CandidateP95MS}} мс</td>
+            <td>{{signedMS .DeltaP95MS}}</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td><code>{{fallback .CandidateOwner .BaselineOwner}}</code></td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий для сравнения.</td></tr>{{end}}
+        </table>
+        <h3>Экраны</h3>
+        <table>
+          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>Дельта</th><th>FPS базы</th><th>FPS кандидата</th><th>Дельта FPS</th><th>Серьезность</th></tr>
+          {{range screenCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Screen}}</code></td>
+            <td>{{.BaselineFrames}}</td><td>{{.CandidateFrames}}</td>
+            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+            <td>{{signedFloat .DeltaJankPct "п.п."}}</td>
+            <td>{{printf "%.1f" .BaselineAvgFPS}}</td><td>{{printf "%.1f" .CandidateAvgFPS}}</td>
+            <td>{{signedFloat .DeltaFPS "FPS"}}</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Нет UI-окон для сравнения.</td></tr>{{end}}
+        </table>
+        <h3>Источники</h3>
+        <table>
+          <tr><th>Источник / класс</th><th>Тип</th><th>Количество базы</th><th>Количество кандидата</th><th>Макс. базы</th><th>Макс. кандидата</th><th>Дельта макс.</th><th>Итого базы</th><th>Итого кандидата</th><th>Серьезность</th></tr>
+          {{range ownerCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td>
+            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
+            <td>{{.BaselineMaxMS}} мс</td><td>{{.CandidateMaxMS}} мс</td>
+            <td>{{signedMS .DeltaMaxMS}}</td>
+            <td>{{.BaselineTotalMS}} мс</td><td>{{.CandidateTotalMS}} мс</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="10" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="flows" class="panel">
+    <div class="panel-head">
+      <div><h2>Сравнение флоу и причин</h2><div class="panel-kicker">Экран, флоу, шаг и источник сопоставлены между базой и кандидатом по проблемным окнам, спаму логами, HTTP, UI и паузам.</div></div>
+    </div>
+    <details class="fold" open>
+      <summary>Детали флоу</summary>
+      <div class="fold-body">
+        <table>
+          <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
+          {{range flowCompareRows .Comparison.Baseline .Comparison.Candidate}}
+          <tr>
+            <td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td>
+            <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
+            <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
+            <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
+            <td>{{.BaselineStallMaxMS}} мс</td><td>{{.CandidateStallMaxMS}} мс</td>
+            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
+            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          </tr>
+          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста флоу для сравнения.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="drilldown" class="panel">
+    <div class="panel-head">
+      <div><h2>Детали по каждому логу</h2><div class="panel-kicker">Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.</div></div>
+    </div>
+    <h3>Логи базы</h3>
+    {{range .BaselineLogs}}
+    <details class="log-card" id="{{.Anchor}}">
+      <summary>
+        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+      </summary>
+      <div class="log-body">
+        <div class="detail-grid">
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
+        </div>
+      </div>
+    </details>
+    {{else}}<div class="muted">Детали логов базы не встроены.</div>{{end}}
+    <h3>Логи кандидата</h3>
+    {{range .CandidateLogs}}
+    <details class="log-card" id="{{.Anchor}}">
+      <summary>
+        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
+        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
+      </summary>
+      <div class="log-body">
+        <div class="detail-grid">
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
+          <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
+        </div>
+      </div>
+    </details>
+    {{else}}<div class="muted">Детали логов кандидата не встроены.</div>{{end}}
+  </section>
+
+  <section id="cohorts" class="panel">
+    <div class="panel-head">
+      <div><h2>Разбивка по когортам</h2><div class="panel-kicker">Используйте это, чтобы проверить честность сравнения по версии приложения, SDK, устройству, процессу, сети и рут-доступу.</div></div>
+    </div>
+    <details class="fold">
+      <summary>Детали когорт</summary>
+      <div class="fold-body">
+        <div class="split">
+          <div>
+            <h3>База</h3>
+            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Кандидат</h3>
+            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Контекст устройств</h3>
+        <div class="split">
+          <div>
+            <h3>База</h3>
+            <table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr>{{range .Comparison.Baseline.Environment.Items}}<tr><td>{{.Label}}</td><td>{{.Value}}</td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Контекст устройства базы недоступен.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Кандидат</h3>
+            <table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr>{{range .Comparison.Candidate.Environment.Items}}<tr><td>{{.Label}}</td><td>{{.Value}}</td><td>{{.Detail}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Контекст устройства кандидата недоступен.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Состав процессов</h3>
+        <table>
+          <tr><th>Процесс базы</th><th>Сессии</th><th>Процесс кандидата</th><th>Сессии</th></tr>
+          <tr>
+            <td>{{range .Comparison.Baseline.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">неизвестно</span>{{end}}</td>
+            <td>{{range .Comparison.Baseline.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+            <td>{{range .Comparison.Candidate.Processes}}<div><code>{{.Name}}</code></div>{{else}}<span class="muted">неизвестно</span>{{end}}</td>
+            <td>{{range .Comparison.Candidate.Processes}}<div>{{.Value}}</div>{{else}}<span class="muted">0</span>{{end}}</td>
+          </tr>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Эвристический итог</h2><div class="panel-kicker">Правила поверх всех дельт сравнения и предупреждений по когортам. Используйте это как чеклист ревью, а не как математическое доказательство.</div></div>
+    </div>
+    <div class="analysis-banner {{severityClass .Analysis.Severity}}">
+      <div class="eyebrow">Общий статус</div>
+      <div class="analysis-status">{{.Analysis.Status}}</div>
+      <div class="muted">{{.Analysis.Summary}}</div>
+    </div>
+    <h3>Находки</h3>
+    <div class="finding-list">
+      {{range significantReportFindings .Analysis.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{else}}<div class="muted">Нет значимых эвристических предупреждений.</div>{{end}}
+    </div>
+    <h3>Рекомендации</h3>
+    <ul class="recommendations">
+      {{range .Analysis.Recommendations}}<li>{{.}}</li>{{else}}<li>Нет дополнительных рекомендаций.</li>{{end}}
+    </ul>
+  </section>
+</main>
+<script>{{reportJS}}</script>
+</body>
+</html>

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: граф влияния кода</title>
+  <style>{{baseCSS}}{{mathCSS}}</style>
+</head>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · граф</div>
+      <h1>{{.Title}}</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · автономный HTML · узлы {{.Influence.ShownNodes}} · связи {{.Influence.ShownEdges}}</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Покрытие графа</div>
+        <strong class="env-device">{{if .Influence.HasClassGraph}}сигналы выполнения + статический граф{{else}}только сигналы выполнения{{end}}</strong>
+        <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{.Influence.RuntimeEdges}} связей выполнения</div></div>
+          <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#graph">Граф</a>
+  <a href="#nodes">Узлы</a>
+  <a href="#edges">Связи</a>
+  <a href="#heuristic">Итог</a>
+</nav>
+<main>
+  <section id="graph" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Карта влияния</h2>
+        <div class="panel-kicker">Размер узла отражает оценку. Сплошные связи подтверждены сигналами выполнения, пунктирные/тусклые узлы пока видны только по статическому графу.</div>
+      </div>
+      <span class="pill">код → симптомы</span>
+    </div>
+    {{influenceGraphSVG .Influence}}
+  </section>
+
+  <section id="nodes" class="panel">
+    <div class="panel-head">
+      <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
+    </div>
+    <details class="fold influence-table-fold">
+      <summary><span>Показать проблемные классы</span><span class="method-kind">{{len .Influence.TopNodes}} классов</span></summary>
+      <div class="fold-body">
+        <table class="influence-table influence-node-table">
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
+          {{range .Influence.TopNodes}}
+          <tr>
+            <td><code>{{.ClassName}}</code></td>
+            <td><div class="table-stack"><strong>{{printf "%.1f" .Score}}</strong><span>{{influenceSeverity .Severity}}</span></div></td>
+            <td>{{influenceStatus .Status}}</td>
+            <td>
+              <div class="table-metrics">
+                <div class="table-metric">Проблемы<strong>{{.Problems}}</strong></div>
+                <div class="table-metric">Спам логами<strong>{{.LogSpam}}</strong></div>
+                <div class="table-metric">Главный поток<strong>{{.MainThreadMS}} мс</strong></div>
+                <div class="table-metric">Сеть<strong>{{.NetworkMS}} мс</strong></div>
+                <div class="table-metric">UI-подторм.<strong>{{.UIJank}}</strong></div>
+                <div class="table-metric">Удержано<strong>{{.Retained}}</strong></div>
+              </div>
+            </td>
+            <td>{{join .Reasons ", "}}</td>
+            <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет узлов влияния.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="edges" class="panel">
+    <div class="panel-head">
+      <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в симптомах выполнения.</div></div>
+    </div>
+    <details class="fold influence-table-fold">
+      <summary><span>Показать связи влияния</span><span class="method-kind">{{len .Influence.TopEdges}} связей</span></summary>
+      <div class="fold-body">
+        <table class="influence-table influence-edge-table">
+          <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
+          {{range .Influence.TopEdges}}
+          <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте `--class-graph`, чтобы увидеть ребра между классами.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="heuristic" class="panel">
+    <div class="panel-head">
+      <div><h2>Эвристика</h2><div class="panel-kicker">Короткий вывод по графу влияния. Это не заменяет профилировщик, но помогает выбрать первую точку расследования.</div></div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Influence.Heuristic}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{else}}<div class="muted">Нет эвристических выводов.</div>{{end}}
+    </div>
+    <p class="help-text">Статический узел без доказательств выполнения означает “код связан, но в этом прогоне не проявился”: например фича могла быть выключена флагом или сценарий не дошел до этого класса.</p>
+  </section>
+</main>
+<script>{{reportJS}}
+(() => {
+  const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]));
+
+  document.querySelectorAll('.influence-graph-card').forEach((card) => {
+    const selection = card.querySelector('[data-influence-selection]');
+    const graph = card.querySelector('.influence-graph');
+    const nodes = Array.from(card.querySelectorAll('.influence-node[data-node]'));
+    const edges = Array.from(card.querySelectorAll('.influence-edge[data-from][data-to]'));
+    if (!graph || nodes.length === 0) return;
+
+    const modeButtons = Array.from(card.querySelectorAll('[data-influence-mode]'));
+    const resetButton = card.querySelector('[data-influence-reset]');
+    const outgoing = new Map();
+    const incoming = new Map();
+    edges.forEach((edge, index) => {
+      const from = edge.dataset.from || '';
+      const to = edge.dataset.to || '';
+      if (!from || !to) return;
+      if (!outgoing.has(from)) outgoing.set(from, []);
+      if (!incoming.has(to)) incoming.set(to, []);
+      outgoing.get(from).push({ index, to });
+      incoming.get(to).push({ index, from });
+    });
+
+    let pinnedNode = '';
+    let currentNode = '';
+    let mode = 'paths';
+
+    const walkPathsFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      const stack = [start];
+      while (stack.length > 0) {
+        const current = stack.pop();
+        (outgoing.get(current) || []).forEach(({ index, to }) => {
+          activeEdges.add(index);
+          if (!reached.has(to)) {
+            reached.add(to);
+            stack.push(to);
+          }
+        });
+      }
+      return { reached, activeEdges };
+    };
+
+    const walkTreeFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      const queue = [start];
+      while (queue.length > 0) {
+        const current = queue.shift();
+        (outgoing.get(current) || []).forEach(({ index, to }) => {
+          if (reached.has(to)) return;
+          reached.add(to);
+          activeEdges.add(index);
+          queue.push(to);
+        });
+      }
+      return { reached, activeEdges };
+    };
+
+    const incidentFrom = (start) => {
+      const reached = new Set([start]);
+      const activeEdges = new Set();
+      (outgoing.get(start) || []).forEach(({ index, to }) => {
+        activeEdges.add(index);
+        reached.add(to);
+      });
+      (incoming.get(start) || []).forEach(({ index, from }) => {
+        activeEdges.add(index);
+        reached.add(from);
+      });
+      return { reached, activeEdges };
+    };
+
+    const analysisFor = (start) => {
+      if (mode === 'tree') return walkTreeFrom(start);
+      if (mode === 'node') return incidentFrom(start);
+      return walkPathsFrom(start);
+    };
+
+    const modeText = () => {
+      if (mode === 'tree') return 'остов влияния';
+      if (mode === 'node') return 'ближайшие связи вершины';
+      return 'исходящие пути';
+    };
+
+    const syncModeButtons = () => {
+      modeButtons.forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.influenceMode === mode);
+      });
+    };
+
+    const reset = () => {
+      pinnedNode = '';
+      currentNode = '';
+      nodes.forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-neighbor', 'is-dimmed'));
+      edges.forEach((edge) => edge.classList.remove('is-path', 'is-tree', 'is-dimmed'));
+      if (selection) {
+        selection.textContent = 'Выберите режим и наведите мышью на вершину: можно выделить вершину, исходящие пути или остов влияния.';
+      }
+    };
+
+    const selectNode = (name) => {
+      currentNode = name;
+      const { reached, activeEdges } = analysisFor(name);
+      nodes.forEach((node) => {
+        const nodeName = node.dataset.node || '';
+        const selected = nodeName === name;
+        const related = reached.has(nodeName);
+        node.classList.toggle('is-selected', selected);
+        node.classList.toggle('is-related', related && !selected);
+        node.classList.toggle('is-neighbor', mode === 'node' && related && !selected);
+        node.classList.toggle('is-dimmed', !related);
+      });
+      edges.forEach((edge, index) => {
+        const active = activeEdges.has(index);
+        edge.classList.toggle('is-path', active);
+        edge.classList.toggle('is-tree', active && mode === 'tree');
+        edge.classList.toggle('is-dimmed', !active);
+      });
+      if (selection) {
+        selection.innerHTML = '<strong>' + escapeHTML(name) + '</strong>: выделены ' + modeText() + ', ' +
+          reached.size + ' узлов и ' + activeEdges.size + ' связей.';
+      }
+    };
+
+    modeButtons.forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        mode = button.dataset.influenceMode || 'paths';
+        syncModeButtons();
+        if (currentNode) selectNode(currentNode);
+      });
+    });
+    if (resetButton) {
+      resetButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        reset();
+      });
+    }
+    syncModeButtons();
+
+    nodes.forEach((node) => {
+      const name = node.dataset.node || '';
+      node.addEventListener('pointerenter', () => {
+        if (!pinnedNode) selectNode(name);
+      });
+      node.addEventListener('focus', () => selectNode(name));
+      node.addEventListener('click', (event) => {
+        event.stopPropagation();
+        pinnedNode = name;
+        selectNode(name);
+      });
+      node.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          pinnedNode = name;
+          selectNode(name);
+        }
+      });
+    });
+
+    card.addEventListener('pointerleave', () => {
+      if (!pinnedNode) reset();
+    });
+    graph.addEventListener('click', () => reset());
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && pinnedNode) reset();
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: математический анализ</title>
+  <style>{{baseCSS}}{{mathCSS}}</style>
+</head>
+<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · математика</div>
+      <h1>Математический анализ</h1>
+      <div class="subhead">{{.Math.Title}} · создан {{.GeneratedAt}} · автономный HTML</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Состояние данных</div>
+        <strong class="env-device">{{.Math.Summary.EventCount}} событий</strong>
+        <div class="env-subtitle">{{.Math.Summary.LogCount}} логов · {{humanDuration .Math.Summary.DurationMS}} · {{.Math.Summary.HTTPCount}} HTTP</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">UI-кадры</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">медленных {{.Math.Summary.UIJank}}</div></div>
+          <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">сэмплы памяти/сети</div></div>
+        </div>
+      </div>
+      {{if .InfluenceReportHref}}<div class="hero-actions"><a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a></div>{{end}}
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  {{range .Math.Sections}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+  <a href="#code-problems">Реестр кода</a>
+  <a href="#memory-leaks">Утечки</a>
+  <a href="#method-reference">Справка по методам</a>
+</nav>
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Обзор качества данных</h2>
+        <div class="panel-kicker">Каркас математического отчета подключен к существующей inspect-сводке.</div>
+      </div>
+      <span class="pill">математический отчет</span>
+    </div>
+    <div class="math-summary">
+      <div class="grid">
+        <div class="metric"><div class="label">События</div><div class="value">{{.Math.Summary.EventCount}}</div><div class="hint">{{.Math.Summary.LogCount}} логов</div></div>
+        <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
+        <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
+        <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{.Math.Summary.MemoryMaxKB}} KB</div><div class="hint">макс. PSS</div></div>
+        <div class="metric"><div class="label">{{tip "Флоу" "Количество кортежей контекста флоу: экран, флоу, шаг и источник работ. Это связывает математические сигналы с пользовательским сценарием."}}</div><div class="value">{{len .Math.Summary.Flows}}</div><div class="hint">проблем {{summaryProblems .Math.Summary}}, спам {{summaryLogSpam .Math.Summary}}</div></div>
+      </div>
+      <div>
+        <h3>Исходные логи</h3>
+        <div class="source-list">{{range .Math.SourcePaths}}<code>{{.}}</code>{{else}}<span class="muted">Исходные логи не указаны.</span>{{end}}</div>
+      </div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Как читать оценки</strong>Числа вроде 28.04 или 4.86 — не абсолютная “оценка приложения”, а приоритет расследования внутри текущего прогона. Больше обычно важнее, если речь о задержках, памяти, подтормаживаниях или сетевых циклах.</div>
+      <div class="guide-card"><strong>С чего начинать</strong>Сначала откройте итоговую эвристику, затем разделы со статусом “критично”, после этого проверьте флоу, проблемные окна и граф влияния кода.</div>
+      <div class="guide-card"><strong>Как связывать данные</strong>Смотрите не одну метрику, а цепочку: экран → флоу → шаг → источник → маршрут/пауза/память/спам. Так отчет подсказывает место, где стоит искать причину.</div>
+    </div>
+    {{scoreGuide "math"}}
+    <details id="code-problems" class="fold code-registry-fold" open>
+      <summary><span>Реестр проблем кода</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, флоу и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
+        {{scoreGuide "code"}}
+        {{with codeProblemCategories .Math.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        {{with codeProblemSeverities .Math.Summary.CodeProblems}}
+        <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+        {{end}}
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
+            <select data-code-registry-severity aria-label="Фильтр по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Низкий риск</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр по категории">
+              <option value="">Все категории</option>
+              {{codeProblemCategoryOptions}}
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам проблемных классов не найдено.</div>
+          <table class="code-problem-table">
+            <thead>
+              <tr>
+                <th><button type="button" data-code-sort="score">Оценка</button></th>
+                <th><button type="button" data-code-sort="class">Класс / метод</button></th>
+                <th><button type="button" data-code-sort="category">Категории</button></th>
+                <th>Подробности</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Math.Summary.CodeProblems}}
+              <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}" data-search="{{codeProblemSearchText .}}">
+                <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
+                <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
+                <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
+                <td>
+                  <details class="code-problem-details">
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                    <div class="code-problem-detail-body">
+                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
+                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
+                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
+                      {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Drill-down</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
+                      <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals">{{range .Signals}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
+                    </div>
+                  </details>
+                </td>
+              </tr>
+              {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+    <details id="memory-leaks" class="fold code-registry-fold">
+      <summary><span>Разбор утечек памяти</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Показывает удержанные объекты с вероятным держателем и контекстом. Системные классы выводятся только как симптом, основной фокус — пользовательский держатель, экран и флоу.</p>
+        <div class="leak-limitations">Точный путь до корня GC требует дампа памяти. В легком режиме выполнения отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
+        {{scoreGuide "leak"}}
+        <div class="code-registry" data-code-registry>
+          <div class="registry-toolbar">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
+            <select data-code-registry-severity aria-label="Фильтр утечек по риску">
+              <option value="">Все уровни риска</option>
+              <option value="high">Критично</option>
+              <option value="medium">Предупреждение</option>
+              <option value="ok">Норма</option>
+            </select>
+            <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
+              <option value="">Все типы</option>
+              <option value="экран / Activity">Activity</option>
+              <option value="Fragment">Fragment</option>
+              <option value="Context">Context</option>
+              <option value="View / binding">View / binding</option>
+              <option value="ресурс">Ресурс</option>
+              <option value="системный объект">Системный объект</option>
+              <option value="пользовательский объект">Пользовательский объект</option>
+            </select>
+            <span class="registry-counter" data-code-registry-count></span>
+          </div>
+          <div class="problem-empty">По текущим фильтрам подозрений утечек не найдено.</div>
+          <table class="code-problem-table leak-table">
+            <tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Удержанный объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Вероятный держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th><th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения из контекста выполнения: экран, флоу, шаг, держатель и удержанный объект. Точный корень GC требует дампа памяти."}}</th><th>Влияние</th><th>Что проверить</th><th>Доказательства</th></tr>
+            {{range .Math.Summary.MemoryLeaks}}
+            <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}" data-search="{{memoryLeakSearchText .}}">
+              <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
+              <td><code>{{.ClassName}}</code></td>
+              <td><div class="leak-object-kind">{{.ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
+              <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
+              <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+              <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
+              <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
+              <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
+              <td>{{.Impact}}</td>
+              <td>{{.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
+              <td>{{.Evidence}}</td>
+            </tr>
+            {{else}}<tr><td colspan="11" class="muted">Подозрений на утечки памяти нет.</td></tr>{{end}}
+          </table>
+        </div>
+      </div>
+    </details>
+    <details class="fold overview-attribution-fold">
+      <summary><span>Атрибуция флоу и причин</span></summary>
+      <div class="fold-body">
+        <p class="help-text">Здесь собраны длинные таблицы связки “экран → флоу → шаг → источник → маршрут/пауза/память/спам”. Блок свернут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
+        <h3>Флоу и причины</h3>
+        <table class="timeline-table">
+          <tr><th>Экран / флоу / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+          {{range .Math.Summary.Flows}}
+          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td><code>{{.RouteSample}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} KB</td></tr>
+          {{else}}<tr><td colspan="9" class="muted">Нет событий контекста флоу. Для причинной математики включите API флоу или ASM-опцию flowInteractions.</td></tr>{{end}}
+        </table>
+        <div class="split">
+          <div>
+            <h3>Спам логами</h3>
+            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+          </div>
+          <div>
+            <h3>Проблемные окна</h3>
+            <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
+          </div>
+        </div>
+        <h3>Вызовы выполнения</h3>
+        <table class="timeline-table">
+          <tr><th>Экран / флоу / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          {{range .Math.Summary.RuntimeCalls}}
+          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+        </table>
+        {{if .Math.Summary.Influence.Available}}
+        <h3>Граф влияния кода</h3>
+        <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса флоу. Статические связи между классами доступны при передаче `--class-graph`.</p>
+        <table class="timeline-table">
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Флоу</th></tr>
+          {{range topInfluenceNodes .Math.Summary.Influence 8}}
+          <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
+          {{end}}
+        </table>
+        {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a>. {{.Math.Summary.Influence.StandaloneReason}}</p>{{end}}
+        {{end}}
+      </div>
+    </details>
+    <h3>Находки</h3>
+    <div class="finding-list">
+      {{range significantMathFindings .Math.Findings}}
+      <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+      {{else}}<div class="muted">Нет значимых предупреждений по качеству данных.</div>{{end}}
+    </div>
+    <h3>Сводка разделов</h3>
+    <div class="section-overview-grid">
+      {{range .Math.Sections}}
+      <a class="section-overview-card {{severityClass .Status}}" href="#{{.ID}}">
+        <div class="section-overview-title"><span>{{.Title}}</span><span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span></div>
+        <div class="section-overview-summary">{{.Summary}}</div>
+      </a>
+      {{end}}
+    </div>
+  </section>
+
+  {{$math := .Math}}
+  {{range .Math.Sections}}
+  <section id="{{.ID}}" class="panel">
+    <div class="panel-head">
+      <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
+      <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
+    </div>
+    <details class="fold">
+      <summary>Детали раздела</summary>
+      <div class="fold-body">
+        <div class="finding-list">
+          {{range significantMathFindings .Findings}}
+          <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
+          {{else}}<div class="muted">Нет значимых предупреждений в этом разделе.</div>{{end}}
+        </div>
+        {{if eq .ID "timeline"}}
+        <h3>Ряды сигналов</h3>
+        <div class="timeline-grid">
+          {{range $math.Series}}
+          <div class="timeline-chart">
+            <div class="timeline-chart-head"><div class="timeline-chart-title">{{.Name}}</div><div class="timeline-chart-value">макс. {{printf "%.1f" (seriesMax .)}} {{.Unit}} · последн. {{printf "%.1f" (seriesLast .)}} {{.Unit}}</div></div>
+            {{sparkline .}}
+          </div>
+          {{else}}<div class="muted">Нет ненулевых рядов для отображения.</div>{{end}}
+        </div>
+        <h3>{{tip "Временные интервалы" "Внутренний термин: бакет. Это фиксированное окно времени, например 1 секунда, куда складываются события для анализа временного ряда."}}</h3>
+        <div class="zero-bucket-scope" data-zero-scope>
+          <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label><span class="zero-toggle-note">Пустые интервалы скрыты, чтобы таймлайн показывал только полезные участки.</span>
+          <div class="category-block">
+            <h4>Сеть</h4>
+            <table class="timeline-table">
+              <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Connect кол-во</th><th>Connect средн.</th><th>TTFB средн.</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
+              {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
+          <div class="category-block">
+            <h4>UI и главный поток</h4>
+            <table class="timeline-table">
+            <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
+              {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
+          <div class="category-block">
+            <h4>Память и трафик</h4>
+            <table class="timeline-table">
+              <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
+              {{range $math.Timeline}}
+              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} KB</td><td>{{.AvailableMemoryKB}} KB</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
+              {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
+            </table>
+          </div>
+        </div>
+        {{end}}
+        {{if eq .ID "robust"}}
+        <h3>Распределения</h3>
+        {{range robustGroups $math.RobustStats}}
+        <div class="category-block">
+          <h4>{{.Title}}</h4>
+          <table class="timeline-table">
+            <tr><th>Имя</th><th>Метрика</th><th>N</th><th>Медиана</th><th>p90</th><th>p95</th><th>p99</th><th>MAD</th><th>Усеченное среднее</th><th>Мин.</th><th>Макс.</th><th>Интервал p95</th><th>Качество</th></tr>
+            {{range .Items}}
+            <tr>
+              <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.Count}}</td>
+              <td>{{printf "%.1f" .Median}} {{.Unit}}</td><td>{{printf "%.1f" .P90}} {{.Unit}}</td><td>{{printf "%.1f" .P95}} {{.Unit}}</td><td>{{printf "%.1f" .P99}} {{.Unit}}</td>
+              <td>{{printf "%.1f" .MAD}} {{.Unit}}</td><td>{{printf "%.1f" .TrimmedMean}} {{.Unit}}</td><td>{{printf "%.1f" .Min}} {{.Unit}}</td><td>{{printf "%.1f" .Max}} {{.Unit}}</td>
+              <td>{{if .HasP95Confidence}}{{printf "%.1f" .P95ConfidenceLow}}..{{printf "%.1f" .P95ConfidenceHigh}} {{.Unit}}{{else}}мало данных{{end}}</td>
+              <td><span class="section-status {{severityClass .SampleQualitySeverity}}">{{.SampleQuality}}</span><div class="muted">{{.SampleDetail}}</div></td>
+            </tr>
+            {{end}}
+          </table>
+        </div>
+        {{else}}<div class="muted">Недостаточно данных для робастной статистики.</div>{{end}}
+        <p class="muted">MAD — медиана абсолютных отклонений от медианы. Усеченное среднее считается после отсечения 10% нижнего и верхнего хвоста. Интервал p95 — детерминированный bootstrap-интервал; на очень больших сигналах считается по ограниченной детерминированной выборке.</p>
+        {{end}}
+        {{if eq .ID "change-points"}}
+        <h3>Сдвиги сигналов</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>Время</th><th>Направление</th><th>До</th><th>После</th><th>Δ</th><th>Δ%</th><th>MAD до/после</th><th>{{tip "Оценка" (scoreHelp "change")}}</th><th>Контекст</th><th>Рекомендация</th></tr>
+          {{range $math.ChangePoints}}
+          <tr>
+            <td>{{.Signal}}</td><td>{{printf "%.1fs" (seconds .TimeMS)}}</td><td>{{.Direction}}</td>
+            <td>{{printf "%.1f" .BeforeMedian}} {{.Unit}}</td><td>{{printf "%.1f" .AfterMedian}} {{.Unit}}</td><td>{{printf "%+.1f" .Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td>{{printf "%.1f" .BeforeMAD}} / {{printf "%.1f" .AfterMAD}}</td>
+            <td><div>{{printf "%.2f" .Score}}</div><div class="bar"><i style="{{scoreWidth .Score}}"></i></div></td>
+            <td>{{if .NearbyScreen}}экран <code>{{.NearbyScreen}}</code><br>{{end}}{{if .NearbyRoute}}маршрут <code>{{.NearbyRoute}}</code><br>{{end}}{{if .NearbyOwner}}источник <code>{{.NearbyOwner}}</code><br>{{end}}{{if .NearbyNetwork}}сеть <code>{{.NearbyNetwork}}</code>{{end}}</td>
+            <td>{{.Recommendation}}</td>
+          </tr>
+          {{else}}<tr><td colspan="11" class="muted">Сильных точек изменения не найдено.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "periodic"}}
+        <h3>Автокорреляция и спектр</h3>
+        <table class="timeline-table">
+          <tr><th>Сигнал</th><th>N</th><th>Первый значимый лаг</th><th>Полураспад</th><th>Энтропия</th><th>Главные лаги</th><th>Спектральные пики</th><th>Вывод</th></tr>
+          {{range $math.Periodic}}
+          <tr>
+            <td>{{.Signal}}</td><td>{{.SampleCount}}</td>
+            <td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td>
+            <td>{{if .DecayHalfLifeMS}}{{printf "%.1fs" (seconds .DecayHalfLifeMS)}}{{else}}-{{end}}</td>
+            <td>{{printf "%.2f" .SpectralEntropy}}</td>
+            <td>{{range .TopLags}}<div>{{printf "%.1fs" (seconds .LagMS)}} · r={{printf "%.2f" .Correlation}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · пик/фон {{printf "%.2f" .PeakToBackground}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{.Summary}}</td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Недостаточно данных для периодического анализа.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "network-loops"}}
+        <h3>Кандидаты циклов</h3>
+        <table class="timeline-table">
+          <tr><th>Маршрут</th><th>Источник</th><th>Период</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>{{tip "Выгорание" (scoreHelp "network_burn")}}</th><th>Окно</th><th>Паттерн</th><th>Вероятная причина</th><th>Путь</th></tr>
+          {{range $math.NetworkLoops}}
+          <tr>
+            <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{printf "%.1fs" (seconds .PeriodMS)}}</td>
+            <td>{{printf "%.2f" .Confidence}}</td>
+            <td>{{printf "%.1f" .BurnScore}}</td>
+            <td>{{printf "%.1fs" (seconds .FirstMS)}}..{{printf "%.1fs" (seconds .LastMS)}}</td>
+            <td>{{motifText .Motif}}</td>
+            <td>{{.ProbableCause}}</td>
+            <td>{{if .Path.Nodes}}{{pathText .Path}}<div class="muted">стоимость {{printf "%.2f" .Path.Cost}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+          </tr>
+          {{else}}<tr><td colspan="9" class="muted">Сетевые циклы с достаточным доверием не найдены.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "integral"}}
+        <h3>Площади под сигналами</h3>
+        <table class="timeline-table">
+          <tr><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>Значение</th><th>Критерии</th><th>Формула</th><th>Что измеряет</th><th>Как читать</th></tr>
+          {{range $math.IntegralScores}}
+          <tr>
+            <td>{{.Title}}</td>
+            <td><span class="section-status {{severityClass .Severity}}">{{printf "%.1f" .Value}} {{.Unit}}</span></td>
+            <td>{{integralCriteria .ID}}</td>
+            <td><code>{{.Formula}}</code></td>
+            <td>{{.Explanation}}</td>
+            <td>{{integralHelp .ID}}</td>
+          </tr>
+          {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для интегральных оценок.</td></tr>{{end}}
+        </table>
+        <p class="muted">Интегрирование прямоугольное: для каждого временного интервала берется значение сигнала и умножается на длительность интервала Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
+        {{end}}
+        {{if eq .ID "markov"}}
+        <h3>Сводка состояний</h3>
+        <table class="timeline-table">
+          <tr><th>Здоровые -> плохие</th><th>Восстановление</th><th>Ожидаемое восстановление</th><th>Липкие состояния</th></tr>
+          <tr>
+            <td>{{$math.Markov.HealthyToBadCount}}</td>
+            <td>{{printf "%.1f" (percent01 $math.Markov.BadToHealthyProbability)}}%</td>
+            <td>{{printf "%.1f" $math.Markov.ExpectedRecoveryWindows}} временных интервалов</td>
+            <td>{{range $math.Markov.StickyStates}}<div>{{markovState .State}} · {{printf "%.1f" (percent01 .Probability)}}% · {{.Count}} переходов</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+          </tr>
+        </table>
+        <h3>Последовательность временных интервалов</h3>
+        <table class="timeline-table">
+          <tr><th>Время</th><th>Состояние</th><th>Причина</th><th>Контекст</th></tr>
+          {{range significantMarkovStates $math.Markov.States}}
+          <tr>
+            <td>{{printf "%.1fs" (seconds .TimeMS)}}</td>
+            <td>{{markovState .State}}</td>
+            <td>{{.Reason}}</td>
+            <td>{{if .Screen}}экран <code>{{.Screen}}</code><br>{{end}}{{if .Route}}маршрут <code>{{.Route}}</code><br>{{end}}{{if .Owner}}источник <code>{{.Owner}}</code><br>{{end}}{{if .Network}}сеть <code>{{.Network}}</code>{{end}}</td>
+          </tr>
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых плохих или восстановительных интервалов.</td></tr>{{end}}
+          {{if hiddenMarkovStates $math.Markov.States}}<tr><td colspan="4" class="muted">Скрыто спокойных интервалов: {{hiddenMarkovStates $math.Markov.States}}.</td></tr>{{end}}
+        </table>
+        <h3>Матрица переходов</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
+          {{range significantMarkovTransitions $math.Markov.Transitions}}
+          <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Нет значимых переходов между состояниями деградации.</td></tr>{{end}}
+          {{if hiddenMarkovTransitions $math.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов: {{hiddenMarkovTransitions $math.Markov.Transitions}}.</td></tr>{{end}}
+        </table>
+        {{end}}
+        {{if eq .ID "graph"}}
+        <h3>Визуальный граф</h3>
+        <p class="help-text">Показаны только самые сильные связи, чтобы большой проект не превращал граф в шум. Полные ребра и пути доступны в таблицах ниже.</p>
+        {{causalGraphSVG $math.CausalGraph}}
+        <h3>Кратчайшие объясняющие пути</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th></tr>
+          {{range $math.CausalGraph.Paths}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
+          {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути от симптомов к источникам/маршрутам не найдены.</td></tr>{{end}}
+        </table>
+        <h3>Вклад источников</h3>
+        <table class="timeline-table">
+          <tr><th>Ранг</th><th>Источник</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th></tr>
+          {{range $math.CausalGraph.OwnerScores}}
+          <tr><td>{{.Rank}}</td><td><code>{{.Owner}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
+          {{else}}<tr><td colspan="3" class="muted">Источники не выделены.</td></tr>{{end}}
+        </table>
+        <h3>Ребра графа</h3>
+        <table class="timeline-table">
+          <tr><th>Из</th><th>В</th><th>Тип</th><th>Наблюдения</th><th>Вес</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Описание</th></tr>
+          {{range $math.CausalGraph.Edges}}
+          <tr><td>{{.FromLabel}}</td><td>{{.ToLabel}}</td><td>{{causalKind .Kind}}</td><td>{{.Count}}</td><td>{{printf "%.2f" .Weight}}</td><td>{{printf "%.2f" .Confidence}}</td><td>{{.Description}}</td></tr>
+          {{else}}<tr><td colspan="7" class="muted">Ребра недоступны.</td></tr>{{end}}
+        </table>
+        <h3>Все кратчайшие пары Floyd-Warshall</h3>
+        <table class="timeline-table">
+          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th></tr>
+          {{range $math.CausalGraph.AllPairs}}
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Пути между всеми парами не рассчитаны: граф пустой или слишком большой для компактного HTML.</td></tr>{{end}}
+        </table>
+        {{end}}
+      </div>
+    </details>
+  </section>
+  {{end}}
+  <section id="method-reference" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Справка по методам</h2>
+        <div class="panel-kicker">Что именно измеряет каждый математический метод, как считается результат и где границы применимости.</div>
+      </div>
+      <span class="pill">объяснимость</span>
+    </div>
+    <div class="method-reference-grid">
+      {{range .MethodReferences}}
+      <details class="fold method-reference-card" id="method-{{.ID}}">
+        <summary><span>{{.Title}}</span><span class="method-kind">{{.Kind}}</span></summary>
+        <div class="fold-body">
+          <div class="reference-block"><strong>Что измеряет</strong>{{.Measures}}</div>
+          <div class="reference-block"><strong>Где применяется</strong>{{.AppliesTo}}</div>
+          <div class="reference-block"><strong>Как считается</strong>{{.Calculation}}</div>
+          <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
+          <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
+          <div class="reference-block"><strong>Поля в inspect</strong><div class="reference-list">{{range .InspectFields}}<code>{{.}}</code>{{end}}</div></div>
+          <div class="reference-block"><strong>Поля в compare</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
+        </div>
+      </details>
+      {{end}}
+    </div>
+  </section>
+  {{with mathHeuristic .Math}}
+  <section id="math-verdict" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Итоговая эвристика</h2>
+        <div class="panel-kicker">Сводка по всем математическим разделам: общий диагноз, главные факторы риска и первый шаг расследования.</div>
+      </div>
+      <span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span>
+    </div>
+    <div class="analysis-banner {{severityClass .Severity}}">
+      <div class="eyebrow">Общий вывод</div>
+      <div class="analysis-status">{{.Status}}</div>
+      <div class="muted">{{.Summary}}</div>
+    </div>
+    <div class="heuristic-grid">
+      {{range .Cards}}
+      <div class="heuristic-card {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div></div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+</main>
+<script>{{reportJS}}
+(() => {
+  const links = Array.from(document.querySelectorAll('.math-page .nav a'));
+  const setActive = (hash) => {
+    links.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === hash));
+  };
+  links.forEach((link) => link.addEventListener('click', () => setActive(link.getAttribute('href'))));
+  if (location.hash) setActive(location.hash);
+  const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setActive('#' + visible.target.id);
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+  }
+})();
+</script>
+</body>
+</html>
