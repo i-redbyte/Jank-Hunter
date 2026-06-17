@@ -16,6 +16,7 @@ class AsyncLogWriter private constructor(
     private val processFileSuffix: String,
 ) {
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
+    private val accepting = AtomicBoolean(true)
     private val running = AtomicBoolean(true)
     private val dropped = AtomicLong()
     private val pendingIoErrors = AtomicLong()
@@ -235,7 +236,7 @@ class AsyncLogWriter private constructor(
     }
 
     fun flushBlocking(timeoutMs: Long = maxOf(1000L, config.flushIntervalMs() + 500L)): Boolean {
-        if (!running.get()) return false
+        if (!accepting.get()) return false
         val latch = CountDownLatch(1)
         val timeout = timeoutMs.coerceAtLeast(1L)
         val accepted = offerBlocking(timeout) {
@@ -255,9 +256,28 @@ class AsyncLogWriter private constructor(
     }
 
     fun close() {
+        if (!accepting.getAndSet(false)) return
+        val drained = CountDownLatch(1)
+        val closeTimeoutMs = closeTimeoutMs()
+        val markerAccepted = offerControlBlocking(closeTimeoutMs) {
+            try {
+                flushIfNeeded(force = true)
+            } finally {
+                drained.countDown()
+            }
+        }
         running.set(false)
+        if (markerAccepted) {
+            try {
+                drained.await(closeTimeoutMs, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        } else {
+            dropped.addAndGet(queue.size.toLong())
+        }
         try {
-            worker.join(maxOf(1000L, config.flushIntervalMs() + 500L))
+            worker.join(closeTimeoutMs)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
@@ -276,14 +296,18 @@ class AsyncLogWriter private constructor(
     }
 
     private fun offer(action: Action) {
-        if (!running.get()) return
+        if (!accepting.get()) return
         if (!queue.offer(action)) {
             dropped.incrementAndGet()
         }
     }
 
     private fun offerBlocking(timeoutMs: Long, action: Action): Boolean {
-        if (!running.get()) return false
+        if (!accepting.get()) return false
+        return offerControlBlocking(timeoutMs, action)
+    }
+
+    private fun offerControlBlocking(timeoutMs: Long, action: Action): Boolean {
         return try {
             if (queue.offer(action, timeoutMs, TimeUnit.MILLISECONDS)) {
                 true
@@ -295,6 +319,11 @@ class AsyncLogWriter private constructor(
             Thread.currentThread().interrupt()
             false
         }
+    }
+
+    private fun closeTimeoutMs(): Long {
+        val queueBudgetMs = queue.size.toLong().coerceAtLeast(1L) * CLOSE_DRAIN_MS_PER_QUEUED_ACTION
+        return maxOf(CLOSE_DRAIN_MIN_MS, config.flushIntervalMs() + 500L, queueBudgetMs)
     }
 
     private fun loop() {
@@ -462,6 +491,9 @@ class AsyncLogWriter private constructor(
     }
 
     companion object {
+        private const val CLOSE_DRAIN_MIN_MS = 5_000L
+        private const val CLOSE_DRAIN_MS_PER_QUEUED_ACTION = 5L
+
         fun open(directory: File, config: JankHunterConfig, processFileSuffix: String): AsyncLogWriter {
             if (!directory.exists() && !directory.mkdirs()) {
                 error("Cannot create Jank Hunter log directory: $directory")
