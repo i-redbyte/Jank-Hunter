@@ -40,6 +40,8 @@ class RetainedHeapDumper(
         }
         val nextCount = dumpCount.incrementAndGet()
         if (nextCount > maxCount) {
+            dumpCount.decrementAndGet()
+            lastDumpAtMs.compareAndSet(now, last)
             return Result.Skipped("max_count")
         }
         return try {
@@ -51,6 +53,8 @@ class RetainedHeapDumper(
             dumpHprof(file.absolutePath)
             Result.Dumped(file, safeName(className), safeName(holder), ageMs, count)
         } catch (error: Throwable) {
+            dumpCount.decrementAndGet()
+            lastDumpAtMs.compareAndSet(now, last)
             Result.Failed(error.javaClass.simpleName ?: "error")
         }
     }

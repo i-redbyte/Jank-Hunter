@@ -102,5 +102,37 @@ class RetainedHeapDumperTest {
         )
     }
 
+    @Test
+    fun failedDumpDoesNotConsumeSingleDumpSlotOrInterval() {
+        var shouldFail = true
+        val paths = mutableListOf<String>()
+        val dumper = RetainedHeapDumper(
+            directory = tempDir(),
+            minIntervalMs = 60_000L,
+            maxDumpCount = 1,
+            clock = { 1_000L },
+            wallClock = { 42L },
+            dumpHprof = { path ->
+                if (shouldFail) {
+                    shouldFail = false
+                    error("boom")
+                }
+                paths += path
+                File(path).writeText("hprof")
+            },
+        )
+
+        assertEquals(
+            RetainedHeapDumper.Result.Failed("IllegalStateException"),
+            dumper.maybeDump("A", "Owner", 1, 1),
+        )
+
+        val result = dumper.maybeDump("B", "Owner", 1, 1)
+
+        assertTrue(result is RetainedHeapDumper.Result.Dumped)
+        assertEquals(1, paths.size)
+        assertTrue(paths.single().contains("retained-42-B-1.hprof"))
+    }
+
     private fun tempDir(): File = Files.createTempDirectory("jankhunter-heap-dumper-test").toFile()
 }
