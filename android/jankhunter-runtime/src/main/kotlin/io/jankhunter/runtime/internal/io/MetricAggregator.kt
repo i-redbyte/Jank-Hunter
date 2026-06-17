@@ -9,9 +9,14 @@ class MetricAggregator(
     private val counters = ConcurrentHashMap<String, AtomicLong>()
     private val gauges = ConcurrentHashMap<String, GaugeStats>()
     private val dropped = AtomicLong()
+    private val invalidNegative = AtomicLong()
     private val keyAdmissionLock = Any()
 
     fun counter(name: String?, value: Long) {
+        if (value < 0) {
+            invalidNegative.incrementAndGet()
+            return
+        }
         val key = metricKey(name)
         val counter = counters[key] ?: synchronized(keyAdmissionLock) {
             counters[key] ?: run {
@@ -26,6 +31,10 @@ class MetricAggregator(
     }
 
     fun gauge(name: String?, value: Long) {
+        if (value < 0) {
+            invalidNegative.incrementAndGet()
+            return
+        }
         val key = metricKey(name)
         val gauge = gauges[key] ?: synchronized(keyAdmissionLock) {
             gauges[key] ?: run {
@@ -68,6 +77,10 @@ class MetricAggregator(
         val droppedCount = dropped.getAndSet(0)
         if (droppedCount > 0) {
             sink.counter("jankhunter.metric_aggregation.dropped.count", droppedCount)
+        }
+        val invalidNegativeCount = invalidNegative.getAndSet(0)
+        if (invalidNegativeCount > 0) {
+            sink.counter("jankhunter.metric.invalid_negative.count", invalidNegativeCount)
         }
     }
 

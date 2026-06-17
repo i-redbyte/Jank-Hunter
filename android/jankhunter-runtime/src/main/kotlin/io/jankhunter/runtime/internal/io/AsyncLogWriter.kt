@@ -180,10 +180,18 @@ class AsyncLogWriter private constructor(
     }
 
     fun counter(name: String?, value: Long) {
+        if (value < 0) {
+            offer { it.counter("jankhunter.metric.invalid_negative.counter.count", 1) }
+            return
+        }
         offer { it.counter(name, value) }
     }
 
     fun gauge(name: String?, value: Long) {
+        if (value < 0) {
+            offer { it.counter("jankhunter.metric.invalid_negative.gauge.count", 1) }
+            return
+        }
         offer { it.gauge(name, value) }
     }
 

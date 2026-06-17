@@ -45,6 +45,20 @@ class MetricAggregatorTest {
     }
 
     @Test
+    fun dropsNegativeMetricValuesWithInvalidCounter() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.counter("bad.counter", -1)
+        aggregator.gauge("bad.gauge", -10)
+        aggregator.flush(sink)
+
+        assertEquals(2L, sink.counters["jankhunter.metric.invalid_negative.count"])
+        assertEquals(null, sink.counters["bad.counter"])
+        assertEquals(null, sink.gauges["bad.gauge"])
+    }
+
+    @Test
     fun enforcesMaxKeysUnderConcurrentUniqueMetrics() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val ready = CountDownLatch(32)
