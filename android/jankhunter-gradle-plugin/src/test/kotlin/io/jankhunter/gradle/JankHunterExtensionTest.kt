@@ -1,6 +1,7 @@
 package io.jankhunter.gradle
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class JankHunterExtensionTest {
@@ -39,6 +40,19 @@ class JankHunterExtensionTest {
         assertEquals(false, instrumentation.asmProgressLog)
         assertEquals(true, instrumentation.classGraph)
         assertEquals(false, instrumentation.runtimeCallGraph)
+    }
+
+    @Test
+    fun instrumentationDslDoesNotExposeDisconnectedFlags() {
+        val methodNames = JankHunterExtension.Instrumentation::class.java.methods
+            .mapTo(mutableSetOf()) { it.name }
+
+        assertFalse("getActivities" in methodNames)
+        assertFalse("setActivities" in methodNames)
+        assertFalse("getFragments" in methodNames)
+        assertFalse("setFragments" in methodNames)
+        assertFalse("getRxJava" in methodNames)
+        assertFalse("setRxJava" in methodNames)
     }
 
     @Test

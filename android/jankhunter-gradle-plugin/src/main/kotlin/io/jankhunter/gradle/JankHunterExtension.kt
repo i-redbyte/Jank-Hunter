@@ -17,13 +17,10 @@ open class JankHunterExtension {
     }
 
     open class Instrumentation {
-        var activities: Boolean = true
-        var fragments: Boolean = true
         var okhttp: Boolean = true
         var webSockets: Boolean = true
         var handlers: Boolean = true
         var executors: Boolean = true
-        var rxJava: Boolean = true
         var coroutines: Boolean = false
         var flowInteractions: Boolean = true
         var logSpam: Boolean = true
