@@ -342,7 +342,7 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	if err != nil {
 		return MathReport{}, err
 	}
-	timeline, series, err := buildTimeline(paths, options)
+	timeline, series, scale, err := buildTimeline(paths, options)
 	if err != nil {
 		return MathReport{}, err
 	}
@@ -352,11 +352,11 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 	}
 	robustStats := summarizeRobustSamples(robustSamples)
 	changePoints := detectChangePoints(timeline)
-	periodic, spectral, err := buildPeriodicAnalysis(paths, options, timeline)
+	periodic, spectral, err := buildPeriodicAnalysis(paths, options, timeline, scale)
 	if err != nil {
 		return MathReport{}, err
 	}
-	networkLoops, err := detectNetworkLoops(paths, options, timeline)
+	networkLoops, err := detectNetworkLoops(paths, options, scale)
 	if err != nil {
 		return MathReport{}, err
 	}
@@ -385,11 +385,11 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 		return CompareMathReport{}, err
 	}
 
-	baselineTimeline, baselineSeries, err := buildTimeline(baselinePaths, baselineOptions)
+	baselineTimeline, baselineSeries, baselineScale, err := buildTimeline(baselinePaths, baselineOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateTimeline, candidateSeries, err := buildTimeline(candidatePaths, candidateOptions)
+	candidateTimeline, candidateSeries, candidateScale, err := buildTimeline(candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
@@ -408,19 +408,19 @@ func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Opti
 	baselineChangePoints := detectChangePoints(baselineTimeline)
 	candidateChangePoints := detectChangePoints(candidateTimeline)
 	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
-	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, baselineOptions, baselineTimeline)
+	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, baselineOptions, baselineTimeline, baselineScale)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, candidateOptions, candidateTimeline)
+	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, candidateOptions, candidateTimeline, candidateScale)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	baselineNetworkLoops, err := detectNetworkLoops(baselinePaths, baselineOptions, baselineTimeline)
+	baselineNetworkLoops, err := detectNetworkLoops(baselinePaths, baselineOptions, baselineScale)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateNetworkLoops, err := detectNetworkLoops(candidatePaths, candidateOptions, candidateTimeline)
+	candidateNetworkLoops, err := detectNetworkLoops(candidatePaths, candidateOptions, candidateScale)
 	if err != nil {
 		return CompareMathReport{}, err
 	}

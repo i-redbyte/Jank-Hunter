@@ -22,9 +22,9 @@ type periodicDefinition struct {
 	points []float64
 }
 
-func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []TimelineBucket) ([]PeriodicSignal, []SpectralPeak, error) {
+func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []TimelineBucket, scale timelineScale) ([]PeriodicSignal, []SpectralPeak, error) {
 	definitions := timelinePeriodicDefinitions(timeline)
-	routeDefinitions, err := routePeriodicDefinitions(paths, options, len(timeline))
+	routeDefinitions, err := routePeriodicDefinitions(paths, options, scale)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -36,7 +36,7 @@ func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []T
 		if !hasNonZeroFloat(definition.points) {
 			continue
 		}
-		signal := analyzePeriodicSignal(definition.name, definition.unit, DefaultBucketMS, definition.points)
+		signal := analyzePeriodicSignal(definition.name, definition.unit, scale.bucketMSOrDefault(), definition.points)
 		signals = append(signals, signal)
 		peaks = append(peaks, signal.Peaks...)
 	}
@@ -77,8 +77,8 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 	return out
 }
 
-func routePeriodicDefinitions(paths []string, options analyze.Options, bucketCount int) ([]periodicDefinition, error) {
-	if bucketCount == 0 {
+func routePeriodicDefinitions(paths []string, options analyze.Options, scale timelineScale) ([]periodicDefinition, error) {
+	if !scale.hasData || scale.bucketCount == 0 {
 		return nil, nil
 	}
 	collector := &routeSeriesCollector{
@@ -96,13 +96,14 @@ func routePeriodicDefinitions(paths []string, options analyze.Options, bucketCou
 			if !timelineContainsFilter(route, collector.filter.RouteContains) || !timelineContainsFilter(owner, collector.filter.OwnerContains) {
 				return nil
 			}
-			index := int(event.TimeMS / DefaultBucketMS)
-			if index < 0 || index >= bucketCount {
+			indexValue, ok := scale.index(event.TimeMS)
+			if !ok {
 				return nil
 			}
+			index := int(indexValue)
 			points := collector.routes[route]
 			if points == nil {
-				points = make([]float64, bucketCount)
+				points = make([]float64, scale.bucketCount)
 				collector.routes[route] = points
 			}
 			points[index]++

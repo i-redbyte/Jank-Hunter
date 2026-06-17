@@ -111,6 +111,56 @@ func TestAnalyzeInspectTimelineHonorsFilters(t *testing.T) {
 	}
 }
 
+func TestAnalyzeInspectNormalizesAbsoluteTimelineOffset(t *testing.T) {
+	path := writeAbsoluteOffsetTimelineFixture(t)
+
+	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	if err != nil {
+		t.Fatalf("AnalyzeInspect() error = %v", err)
+	}
+
+	if got, want := len(report.Timeline), 4; got != want {
+		t.Fatalf("len(Timeline) = %d, want %d", got, want)
+	}
+	if got := report.Timeline[0].StartMS; got != 0 {
+		t.Fatalf("first bucket StartMS = %d, want normalized zero", got)
+	}
+	if got, want := report.Timeline[0].HTTPCount, 1; got != want {
+		t.Fatalf("bucket0 HTTPCount = %d, want %d", got, want)
+	}
+	if got, want := report.Timeline[3].HTTPCount, 1; got != want {
+		t.Fatalf("bucket3 HTTPCount = %d, want %d", got, want)
+	}
+	for _, series := range report.Series {
+		if len(series.Points) != 4 {
+			t.Fatalf("series %q points = %d, want 4", series.Name, len(series.Points))
+		}
+	}
+}
+
+func TestTimelineScaleCapsHugeRanges(t *testing.T) {
+	baseMS := uint64(12 * 60 * 60 * 1000)
+	maxMS := baseMS + 14*24*60*60*1000
+
+	scale := newTimelineScale(baseMS, maxMS, true)
+
+	if !scale.hasData {
+		t.Fatalf("scale should have data")
+	}
+	if scale.baseMS != baseMS {
+		t.Fatalf("baseMS = %d, want %d", scale.baseMS, baseMS)
+	}
+	if scale.bucketMS <= DefaultBucketMS {
+		t.Fatalf("bucketMS = %d, want adaptive bucket larger than %d", scale.bucketMS, DefaultBucketMS)
+	}
+	if scale.bucketCount > maxTimelineBuckets {
+		t.Fatalf("bucketCount = %d, want <= %d", scale.bucketCount, maxTimelineBuckets)
+	}
+	if _, ok := scale.index(maxMS); !ok {
+		t.Fatalf("scale should index max timestamp")
+	}
+}
+
 func writeTimelineFixture(t *testing.T) string {
 	t.Helper()
 
@@ -149,6 +199,45 @@ func writeTimelineFixture(t *testing.T) string {
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
 			t.Fatalf("WriteEvent(%v) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	return path
+}
+
+func writeAbsoluteOffsetTimelineFixture(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "absolute-offset.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, entry := range []jhlog.DictionaryEntry{
+		{Kind: jhlog.DictOwner, ID: 1, Value: "FeedRepository.refresh"},
+		{Kind: jhlog.DictRoute, ID: 2, Value: "GET /feed"},
+	} {
+		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+
+	baseMS := uint64(12 * 60 * 60 * 1000)
+	for _, timeMS := range []uint64{baseMS + 100, baseMS + 3_100} {
+		event := jhlog.Event{
+			Type:   jhlog.EventHTTP,
+			TimeMS: timeMS,
+			HTTP: &jhlog.HTTPEvent{
+				OwnerID:    1,
+				RouteID:    2,
+				DurationMS: 100,
+				Status:     jhlog.Status2xx,
+			},
+		}
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(http) error = %v", err)
 		}
 	}
 	if err := file.Close(); err != nil {

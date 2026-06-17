@@ -10,15 +10,23 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-const DefaultBucketMS uint64 = 1000
+const (
+	DefaultBucketMS    uint64 = 1000
+	maxTimelineBuckets        = 50_000
+)
+
+type timelineScale struct {
+	baseMS      uint64
+	bucketMS    uint64
+	bucketCount int
+	hasData     bool
+}
 
 type timelineCollector struct {
 	filter   analyze.Filter
 	ownerMap map[string]string
-	bucketMS uint64
+	scale    timelineScale
 	buckets  map[uint64]*timelineBucketAgg
-	maxIndex uint64
-	hasData  bool
 }
 
 type timelineBucketAgg struct {
@@ -48,11 +56,15 @@ type timelineStreamState struct {
 	currentNetwork string
 }
 
-func buildTimeline(paths []string, options analyze.Options) ([]TimelineBucket, []Series, error) {
+func buildTimeline(paths []string, options analyze.Options) ([]TimelineBucket, []Series, timelineScale, error) {
+	scale, err := detectMathTimeScale(paths, options)
+	if err != nil {
+		return nil, nil, timelineScale{}, err
+	}
 	collector := &timelineCollector{
 		filter:   normalizeTimelineFilter(options.Filter),
 		ownerMap: options.OwnerMap,
-		bucketMS: DefaultBucketMS,
+		scale:    scale,
 		buckets:  map[uint64]*timelineBucketAgg{},
 	}
 	for _, path := range paths {
@@ -61,11 +73,72 @@ func buildTimeline(paths []string, options analyze.Options) ([]TimelineBucket, [
 			collector.add(event, dict, state)
 			return nil
 		}); err != nil {
-			return nil, nil, err
+			return nil, nil, timelineScale{}, err
 		}
 	}
 	timeline := collector.finish()
-	return timeline, timelineSeries(timeline, collector.bucketMS), nil
+	return timeline, timelineSeries(timeline, scale.bucketMSOrDefault()), scale, nil
+}
+
+func detectMathTimeScale(paths []string, options analyze.Options) (timelineScale, error) {
+	filter := normalizeTimelineFilter(options.Filter)
+	var minMS uint64
+	var maxMS uint64
+	hasData := false
+	for _, path := range paths {
+		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
+			timeMS, ok := mathScaleEventTimeMS(event, dict, filter, options.OwnerMap)
+			if !ok {
+				return nil
+			}
+			if !hasData || timeMS < minMS {
+				minMS = timeMS
+			}
+			if !hasData || timeMS > maxMS {
+				maxMS = timeMS
+			}
+			hasData = true
+			return nil
+		}); err != nil {
+			return timelineScale{}, err
+		}
+	}
+	return newTimelineScale(minMS, maxMS, hasData), nil
+}
+
+func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+	if timeMS, ok := timelineEventTimeMS(event, dict, filter, ownerMap); ok {
+		return timeMS, true
+	}
+	return networkLoopEventTimeMS(event, dict, filter, ownerMap)
+}
+
+func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+	switch {
+	case event.HTTP != nil:
+		route := jhlog.Resolve(dict, event.HTTP.RouteID)
+		owner := resolveTimelineOwner(ownerMap, dict, event.HTTP.OwnerID)
+		if !timelineContainsFilter(route, filter.RouteContains) || !timelineContainsFilter(owner, filter.OwnerContains) {
+			return 0, false
+		}
+		return event.TimeMS, true
+	case event.UIWindow != nil:
+		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
+		if !timelineContainsFilter(screen, filter.ScreenContains) {
+			return 0, false
+		}
+		return event.TimeMS, true
+	case event.Stall != nil:
+		owner := resolveTimelineOwner(ownerMap, dict, event.Stall.OwnerID)
+		if !timelineContainsFilter(owner, filter.OwnerContains) {
+			return 0, false
+		}
+		return event.TimeMS, true
+	case event.Memory != nil, event.Context != nil:
+		return event.TimeMS, true
+	default:
+		return 0, false
+	}
 }
 
 func normalizeTimelineFilter(filter analyze.Filter) analyze.Filter {
@@ -77,6 +150,67 @@ func normalizeTimelineFilter(filter analyze.Filter) analyze.Filter {
 	}
 }
 
+func newTimelineScale(minMS, maxMS uint64, hasData bool) timelineScale {
+	if !hasData {
+		return timelineScale{}
+	}
+	if maxMS < minMS {
+		maxMS = minMS
+	}
+	durationMS := maxMS - minMS
+	bucketMS := chooseTimelineBucketMS(durationMS)
+	bucketCount := int(durationMS/bucketMS) + 1
+	return timelineScale{
+		baseMS:      minMS,
+		bucketMS:    bucketMS,
+		bucketCount: bucketCount,
+		hasData:     true,
+	}
+}
+
+func chooseTimelineBucketMS(durationMS uint64) uint64 {
+	if durationMS/DefaultBucketMS+1 <= uint64(maxTimelineBuckets) {
+		return DefaultBucketMS
+	}
+	minBucketMS := (durationMS + uint64(maxTimelineBuckets-2)) / uint64(maxTimelineBuckets-1)
+	if minBucketMS < DefaultBucketMS {
+		minBucketMS = DefaultBucketMS
+	}
+	for _, candidate := range []uint64{
+		1_000, 2_000, 5_000, 10_000, 15_000, 30_000,
+		60_000, 120_000, 300_000, 600_000, 900_000,
+		1_800_000, 3_600_000,
+	} {
+		if candidate >= minBucketMS {
+			return candidate
+		}
+	}
+	hourMS := uint64(3_600_000)
+	return ((minBucketMS + hourMS - 1) / hourMS) * hourMS
+}
+
+func (s timelineScale) index(timeMS uint64) (uint64, bool) {
+	if !s.hasData || s.bucketMS == 0 || s.bucketCount <= 0 {
+		return 0, false
+	}
+	offsetMS := uint64(0)
+	if timeMS > s.baseMS {
+		offsetMS = timeMS - s.baseMS
+	}
+	index := offsetMS / s.bucketMS
+	if index >= uint64(s.bucketCount) {
+		return 0, false
+	}
+	return index, true
+}
+
+func (s timelineScale) bucketMSOrDefault() uint64 {
+	if s.bucketMS > 0 {
+		return s.bucketMS
+	}
+	return DefaultBucketMS
+}
+
 func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state *timelineStreamState) {
 	switch {
 	case event.HTTP != nil:
@@ -86,6 +220,9 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg := c.bucket(event.TimeMS)
+		if agg == nil {
+			return
+		}
 		agg.addSample(agg.routes, route)
 		agg.addSample(agg.owners, owner)
 		agg.bucket.HTTPCount++
@@ -112,6 +249,9 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg := c.bucket(event.TimeMS)
+		if agg == nil {
+			return
+		}
 		agg.addSample(agg.screens, screen)
 		agg.bucket.UIFrames += event.UIWindow.FrameCount
 		agg.bucket.UIJankyFrames += event.UIWindow.JankCount
@@ -121,6 +261,9 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg := c.bucket(event.TimeMS)
+		if agg == nil {
+			return
+		}
 		agg.addSample(agg.owners, owner)
 		agg.bucket.StallCount++
 		if event.Stall.DurationMS > agg.bucket.StallMaxMS {
@@ -128,12 +271,18 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		}
 	case event.Memory != nil:
 		agg := c.bucket(event.TimeMS)
+		if agg == nil {
+			return
+		}
 		if !agg.hasMemoryPSS || event.Memory.PSSKB > agg.bucket.MemoryPSSKB {
 			agg.bucket.MemoryPSSKB = event.Memory.PSSKB
 			agg.hasMemoryPSS = true
 		}
 	case event.Context != nil:
 		agg := c.bucket(event.TimeMS)
+		if agg == nil {
+			return
+		}
 		state.currentNetwork = jhlog.NetworkName(event.Context.Network)
 		agg.addSample(agg.networks, state.currentNetwork)
 		if !agg.hasAvailableMemory || event.Context.AvailMemoryKB < agg.bucket.AvailableMemoryKB {
@@ -155,14 +304,17 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 }
 
 func (c *timelineCollector) bucket(timeMS uint64) *timelineBucketAgg {
-	index := timeMS / c.bucketMS
+	index, ok := c.scale.index(timeMS)
+	if !ok {
+		return nil
+	}
 	agg := c.buckets[index]
 	if agg == nil {
-		startMS := index * c.bucketMS
+		startMS := index * c.scale.bucketMS
 		agg = &timelineBucketAgg{
 			bucket: TimelineBucket{
 				StartMS: startMS,
-				EndMS:   startMS + c.bucketMS,
+				EndMS:   startMS + c.scale.bucketMS,
 			},
 			routes:   map[string]int{},
 			owners:   map[string]int{},
@@ -171,21 +323,17 @@ func (c *timelineCollector) bucket(timeMS uint64) *timelineBucketAgg {
 		}
 		c.buckets[index] = agg
 	}
-	if !c.hasData || index > c.maxIndex {
-		c.maxIndex = index
-	}
-	c.hasData = true
 	return agg
 }
 
 func (c *timelineCollector) finish() []TimelineBucket {
-	if !c.hasData {
+	if !c.scale.hasData {
 		return nil
 	}
-	out := make([]TimelineBucket, 0, c.maxIndex+1)
-	for index := uint64(0); index <= c.maxIndex; index++ {
-		startMS := index * c.bucketMS
-		bucket := TimelineBucket{StartMS: startMS, EndMS: startMS + c.bucketMS}
+	out := make([]TimelineBucket, 0, c.scale.bucketCount)
+	for index := uint64(0); index < uint64(c.scale.bucketCount); index++ {
+		startMS := index * c.scale.bucketMS
+		bucket := TimelineBucket{StartMS: startMS, EndMS: startMS + c.scale.bucketMS}
 		if agg := c.buckets[index]; agg != nil {
 			bucket = agg.bucket
 			if bucket.HTTPCount > 0 {
@@ -289,7 +437,7 @@ func timelineSummary(timeline []TimelineBucket, series []Series) string {
 	if len(timeline) < 3 {
 		return "Недостаточно данных для надежного анализа: нужно хотя бы несколько временных интервалов одного сценария."
 	}
-	return fmt.Sprintf("Построено %d временных интервалов по %d ms и %d рядов сигналов.", len(timeline), DefaultBucketMS, len(series))
+	return fmt.Sprintf("Построено %d временных интервалов по %d ms и %d рядов сигналов.", len(timeline), timelineBucketMS(timeline, series), len(series))
 }
 
 func timelineFindings(timeline []TimelineBucket) []Finding {
@@ -304,7 +452,7 @@ func timelineFindings(timeline []TimelineBucket) []Finding {
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Таймлайн сигналов построен",
-		Detail:   fmt.Sprintf("Временные интервалы по %d ms готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и FFT.", DefaultBucketMS),
+		Detail:   fmt.Sprintf("Временные интервалы по %d ms готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и FFT.", timelineBucketMS(timeline, nil)),
 	}}
 }
 
@@ -319,7 +467,7 @@ func compareTimelineSummary(baselineTimeline, candidateTimeline []TimelineBucket
 	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
 		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных интервалов."
 	}
-	return fmt.Sprintf("База: %d временных интервалов, кандидат: %d временных интервалов, размер интервала: %d ms.", len(baselineTimeline), len(candidateTimeline), DefaultBucketMS)
+	return fmt.Sprintf("База: %d временных интервалов по %d ms, кандидат: %d временных интервалов по %d ms.", len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
 }
 
 func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucket) []Finding {
@@ -345,19 +493,35 @@ func timelineContainsFilter(value string, needle string) bool {
 	return strings.Contains(strings.ToLower(value), needle)
 }
 
+func timelineBucketMS(timeline []TimelineBucket, series []Series) uint64 {
+	if len(timeline) > 0 && timeline[0].EndMS > timeline[0].StartMS {
+		return timeline[0].EndMS - timeline[0].StartMS
+	}
+	for _, item := range series {
+		if item.BucketMS > 0 {
+			return item.BucketMS
+		}
+	}
+	return DefaultBucketMS
+}
+
 func (c *timelineCollector) resolveOwner(dict map[uint64]string, id uint64) string {
+	return resolveTimelineOwner(c.ownerMap, dict, id)
+}
+
+func resolveTimelineOwner(ownerMap map[string]string, dict map[uint64]string, id uint64) string {
 	owner := jhlog.Resolve(dict, id)
-	if len(c.ownerMap) == 0 {
+	if len(ownerMap) == 0 {
 		return owner
 	}
-	if mapped, ok := c.ownerMap[owner]; ok {
+	if mapped, ok := ownerMap[owner]; ok {
 		return mapped
 	}
 	if hash, ok := timelineOwnerHash(owner); ok {
-		if mapped, ok := c.ownerMap[hash]; ok {
+		if mapped, ok := ownerMap[hash]; ok {
 			return mapped
 		}
-		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
+		if mapped, ok := ownerMap["jh:"+hash]; ok {
 			return mapped
 		}
 	}

@@ -33,6 +33,7 @@ type networkLoopCollector struct {
 	ownerMap   map[string]string
 	bucketMS   uint64
 	bucketSize int
+	scale      timelineScale
 	signals    map[string]*networkLoopSignal
 }
 
@@ -44,12 +45,16 @@ type metricNetworkSignal struct {
 	ok     bool
 }
 
-func detectNetworkLoops(paths []string, options analyze.Options, timeline []TimelineBucket) ([]NetworkLoopFinding, error) {
+func detectNetworkLoops(paths []string, options analyze.Options, scale timelineScale) ([]NetworkLoopFinding, error) {
+	if !scale.hasData {
+		return nil, nil
+	}
 	collector := &networkLoopCollector{
 		filter:     normalizeTimelineFilter(options.Filter),
 		ownerMap:   options.OwnerMap,
-		bucketMS:   DefaultBucketMS,
-		bucketSize: len(timeline),
+		bucketMS:   scale.bucketMS,
+		bucketSize: scale.bucketCount,
+		scale:      scale,
 		signals:    map[string]*networkLoopSignal{},
 	}
 	for _, path := range paths {
@@ -61,6 +66,37 @@ func detectNetworkLoops(paths []string, options analyze.Options, timeline []Time
 		}
 	}
 	return selectNetworkLoops(collector.findings()), nil
+}
+
+func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+	switch {
+	case event.HTTP != nil:
+		route := jhlog.Resolve(dict, event.HTTP.RouteID)
+		owner := resolveTimelineOwner(ownerMap, dict, event.HTTP.OwnerID)
+		if !networkLoopPassesFilter(filter, route, owner) {
+			return 0, false
+		}
+		return event.TimeMS, true
+	case event.Metric != nil && (event.Type == jhlog.EventCounter || event.Type == jhlog.EventGauge):
+		name := jhlog.Resolve(dict, event.Metric.MetricID)
+		if name == "" {
+			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
+		}
+		network := classifyNetworkMetric(name)
+		if !network.ok || !networkLoopPassesFilter(filter, network.route, network.owner) {
+			return 0, false
+		}
+		value := float64(event.Metric.Value)
+		if value <= 0 {
+			return 0, false
+		}
+		if event.Type == jhlog.EventGauge && strings.Contains(strings.ToLower(name), "attempts") && value <= 1 {
+			return 0, false
+		}
+		return event.TimeMS, true
+	default:
+		return 0, false
+	}
 }
 
 func (c *networkLoopCollector) add(event jhlog.Event, dict map[uint64]string) {
@@ -78,7 +114,11 @@ func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string
 	if !c.passesFilter(route, owner) {
 		return
 	}
-	index := int(event.TimeMS / c.bucketMS)
+	indexValue, ok := c.scale.index(event.TimeMS)
+	if !ok {
+		return
+	}
+	index := int(indexValue)
 	baseTokens := []string{}
 	if route != "" {
 		baseTokens = append(baseTokens, "route:"+route)
@@ -127,7 +167,11 @@ func (c *networkLoopCollector) addMetric(event jhlog.Event, dict map[uint64]stri
 	if event.Type == jhlog.EventGauge && strings.Contains(strings.ToLower(name), "attempts") && value <= 1 {
 		return
 	}
-	index := int(event.TimeMS / c.bucketMS)
+	indexValue, ok := c.scale.index(event.TimeMS)
+	if !ok {
+		return
+	}
+	index := int(indexValue)
 	tokens := append([]string(nil), network.tokens...)
 	if network.route != "" {
 		tokens = append(tokens, "route:"+network.route)
@@ -200,10 +244,14 @@ func (c *networkLoopCollector) findings() []NetworkLoopFinding {
 }
 
 func (c *networkLoopCollector) passesFilter(route, owner string) bool {
-	if c.filter.RouteContains != "" && !metricAwareContains(route, c.filter.RouteContains) {
+	return networkLoopPassesFilter(c.filter, route, owner)
+}
+
+func networkLoopPassesFilter(filter analyze.Filter, route, owner string) bool {
+	if filter.RouteContains != "" && !metricAwareContains(route, filter.RouteContains) {
 		return false
 	}
-	if c.filter.OwnerContains != "" && !metricAwareContains(owner, c.filter.OwnerContains) {
+	if filter.OwnerContains != "" && !metricAwareContains(owner, filter.OwnerContains) {
 		return false
 	}
 	return true

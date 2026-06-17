@@ -36,6 +36,30 @@ func TestAnalyzeInspectDetectsDNSNetworkLoop(t *testing.T) {
 	}
 }
 
+func TestAnalyzeInspectDetectsDNSNetworkLoopWithAbsoluteOffset(t *testing.T) {
+	path := writeDNSLoopFixtureWithBase(t, true, 12*60*60*1000)
+
+	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	if err != nil {
+		t.Fatalf("AnalyzeInspect() error = %v", err)
+	}
+
+	loop := findNetworkLoop(report.NetworkLoops, func(loop NetworkLoopFinding) bool {
+		return loop.Route == "GET /config" &&
+			loop.Owner == "ConfigRepository.refresh" &&
+			containsToken(loop.Motif, "dns_high")
+	})
+	if loop == nil {
+		t.Fatalf("DNS network loop was not detected: %+v", report.NetworkLoops)
+	}
+	if loop.FirstMS > 2*DefaultBucketMS {
+		t.Fatalf("loop FirstMS = %d, want normalized offset near zero", loop.FirstMS)
+	}
+	if len(report.Timeline) > 32 {
+		t.Fatalf("timeline buckets = %d, want compact normalized timeline", len(report.Timeline))
+	}
+}
+
 func TestAnalyzeInspectDetectsMetricOnlyReconnectLoop(t *testing.T) {
 	path := writeReconnectLoopFixture(t)
 
@@ -74,6 +98,10 @@ func TestAnalyzeCompareReportsAppearedNetworkLoop(t *testing.T) {
 }
 
 func writeDNSLoopFixture(t *testing.T, loop bool) string {
+	return writeDNSLoopFixtureWithBase(t, loop, 0)
+}
+
+func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dns-loop.jhlog")
@@ -95,7 +123,7 @@ func writeDNSLoopFixture(t *testing.T, loop bool) string {
 			for offset := uint64(0); offset < 3; offset++ {
 				event := jhlog.Event{
 					Type:   jhlog.EventHTTP,
-					TimeMS: bucket*DefaultBucketMS + 100 + offset*80,
+					TimeMS: baseMS + bucket*DefaultBucketMS + 100 + offset*80,
 					HTTP: &jhlog.HTTPEvent{
 						OwnerID:    1,
 						RouteID:    2,
@@ -114,7 +142,7 @@ func writeDNSLoopFixture(t *testing.T, loop bool) string {
 		for _, timeMS := range []uint64{100, 11_000, 24_000} {
 			event := jhlog.Event{
 				Type:   jhlog.EventHTTP,
-				TimeMS: timeMS,
+				TimeMS: baseMS + timeMS,
 				HTTP: &jhlog.HTTPEvent{
 					OwnerID:    1,
 					RouteID:    2,
