@@ -2,11 +2,12 @@ package io.jankhunter.runtime.integration
 
 import android.view.Window
 import io.jankhunter.runtime.JankHunter
+import java.lang.ref.WeakReference
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 
 object JankHunterJankStats {
-    private val handles = CopyOnWriteArrayList<Handle>()
+    private val handleRegistry = HandleRegistry()
 
     @JvmStatic
     fun install(window: Window?): Handle? = install(window, JankHunter.currentScreen())
@@ -31,8 +32,8 @@ object JankHunterJankStats {
             val instance: Any = jankStatsClass
                 .getMethod("createAndTrack", Window::class.java, listenerClass)
                 .invoke(null, window, proxy) ?: return null
-            Handle(instance).also {
-                handles += it
+            Handle(instance, handleRegistry).also {
+                handleRegistry.add(it)
                 JankHunter.recordCounter("jankstats.install.count", 1)
             }
         } catch (_: Throwable) {
@@ -42,14 +43,12 @@ object JankHunterJankStats {
 
     @JvmStatic
     fun uninstallAll() {
-        for (handle in handles) {
-            handle.uninstall()
-        }
-        handles.clear()
+        handleRegistry.uninstallAll()
     }
 
     class Handle internal constructor(
         private val instance: Any,
+        private val registry: HandleRegistry? = handleRegistry,
     ) {
         @Volatile
         private var installed = true
@@ -71,7 +70,7 @@ object JankHunterJankStats {
                     .invoke(instance, false)
             } catch (_: Throwable) {
             }
-            handles.remove(this)
+            registry?.remove(this)
             JankHunter.recordCounter("jankstats.uninstall.count", 1)
         }
 
@@ -86,6 +85,45 @@ object JankHunterJankStats {
                         .invoke(instance, safeKey, value)
                 }
             } catch (_: Throwable) {
+            }
+        }
+    }
+
+    internal class HandleRegistry {
+        private val references = CopyOnWriteArrayList<WeakReference<Handle>>()
+
+        fun add(handle: Handle) {
+            cleanup()
+            references += WeakReference(handle)
+        }
+
+        fun remove(handle: Handle) {
+            for (reference in references) {
+                val current = reference.get()
+                if (current == null || current === handle) {
+                    references.remove(reference)
+                }
+            }
+        }
+
+        fun uninstallAll() {
+            val snapshot = references.toList()
+            references.clear()
+            for (reference in snapshot) {
+                reference.get()?.uninstall()
+            }
+        }
+
+        internal fun liveCount(): Int {
+            cleanup()
+            return references.count { it.get() != null }
+        }
+
+        private fun cleanup() {
+            for (reference in references) {
+                if (reference.get() == null) {
+                    references.remove(reference)
+                }
             }
         }
     }
