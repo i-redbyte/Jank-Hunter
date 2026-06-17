@@ -23,11 +23,16 @@ type periodicDefinition struct {
 }
 
 func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []TimelineBucket, scale timelineScale) ([]PeriodicSignal, []SpectralPeak, error) {
-	definitions := timelinePeriodicDefinitions(timeline)
 	routeDefinitions, err := routePeriodicDefinitions(paths, options, scale)
 	if err != nil {
 		return nil, nil, err
 	}
+	periodic, spectral := buildPeriodicAnalysisWithRouteDefinitions(timeline, scale, routeDefinitions)
+	return periodic, spectral, nil
+}
+
+func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale timelineScale, routeDefinitions []periodicDefinition) ([]PeriodicSignal, []SpectralPeak) {
+	definitions := timelinePeriodicDefinitions(timeline)
 	definitions = append(definitions, routeDefinitions...)
 
 	signals := make([]PeriodicSignal, 0, len(definitions))
@@ -49,7 +54,7 @@ func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []T
 		}
 		return signals[i].Signal < signals[j].Signal
 	})
-	return signals, peaks, nil
+	return signals, peaks
 }
 
 func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition {
@@ -81,32 +86,10 @@ func routePeriodicDefinitions(paths []string, options analyze.Options, scale tim
 	if !scale.hasData || scale.bucketCount == 0 {
 		return nil, nil
 	}
-	collector := &routeSeriesCollector{
-		filter:   normalizeTimelineFilter(options.Filter),
-		ownerMap: options.OwnerMap,
-		routes:   map[string][]float64{},
-	}
+	collector := newRouteSeriesCollector(options, scale)
 	for _, path := range paths {
 		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			if event.HTTP == nil {
-				return nil
-			}
-			route := jhlog.Resolve(dict, event.HTTP.RouteID)
-			owner := collector.resolveOwner(dict, event.HTTP.OwnerID)
-			if !timelineContainsFilter(route, collector.filter.RouteContains) || !timelineContainsFilter(owner, collector.filter.OwnerContains) {
-				return nil
-			}
-			indexValue, ok := scale.index(event.TimeMS)
-			if !ok {
-				return nil
-			}
-			index := int(indexValue)
-			points := collector.routes[route]
-			if points == nil {
-				points = make([]float64, scale.bucketCount)
-				collector.routes[route] = points
-			}
-			points[index]++
+			collector.add(event, dict)
 			return nil
 		}); err != nil {
 			return nil, err
@@ -115,10 +98,42 @@ func routePeriodicDefinitions(paths []string, options analyze.Options, scale tim
 	return collector.definitions(3), nil
 }
 
+func newRouteSeriesCollector(options analyze.Options, scale timelineScale) *routeSeriesCollector {
+	return &routeSeriesCollector{
+		filter:   normalizeTimelineFilter(options.Filter),
+		ownerMap: options.OwnerMap,
+		scale:    scale,
+		routes:   map[string][]float64{},
+	}
+}
+
 type routeSeriesCollector struct {
 	filter   analyze.Filter
 	ownerMap map[string]string
+	scale    timelineScale
 	routes   map[string][]float64
+}
+
+func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string) {
+	if event.HTTP == nil || !c.scale.hasData || c.scale.bucketCount == 0 {
+		return
+	}
+	route := jhlog.Resolve(dict, event.HTTP.RouteID)
+	owner := c.resolveOwner(dict, event.HTTP.OwnerID)
+	if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
+		return
+	}
+	indexValue, ok := c.scale.index(event.TimeMS)
+	if !ok {
+		return
+	}
+	index := int(indexValue)
+	points := c.routes[route]
+	if points == nil {
+		points = make([]float64, c.scale.bucketCount)
+		c.routes[route] = points
+	}
+	points[index]++
 }
 
 func (c *routeSeriesCollector) definitions(limit int) []periodicDefinition {

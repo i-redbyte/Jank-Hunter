@@ -49,14 +49,7 @@ func detectNetworkLoops(paths []string, options analyze.Options, scale timelineS
 	if !scale.hasData {
 		return nil, nil
 	}
-	collector := &networkLoopCollector{
-		filter:     normalizeTimelineFilter(options.Filter),
-		ownerMap:   options.OwnerMap,
-		bucketMS:   scale.bucketMS,
-		bucketSize: scale.bucketCount,
-		scale:      scale,
-		signals:    map[string]*networkLoopSignal{},
-	}
+	collector := newNetworkLoopCollector(options, scale)
 	for _, path := range paths {
 		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
 			collector.add(event, dict)
@@ -66,6 +59,17 @@ func detectNetworkLoops(paths []string, options analyze.Options, scale timelineS
 		}
 	}
 	return selectNetworkLoops(collector.findings()), nil
+}
+
+func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *networkLoopCollector {
+	return &networkLoopCollector{
+		filter:     normalizeTimelineFilter(options.Filter),
+		ownerMap:   options.OwnerMap,
+		bucketMS:   scale.bucketMS,
+		bucketSize: scale.bucketCount,
+		scale:      scale,
+		signals:    map[string]*networkLoopSignal{},
+	}
 }
 
 func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {

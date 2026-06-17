@@ -346,28 +346,17 @@ func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error)
 }
 
 func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary analyze.Summary) (MathReport, error) {
-	timeline, series, scale, err := buildTimeline(paths, options)
+	inputs, err := analyzeMathInputs(paths, options)
 	if err != nil {
 		return MathReport{}, err
 	}
-	robustSamples, err := collectRobustSamples(paths, options)
-	if err != nil {
-		return MathReport{}, err
-	}
-	robustStats := summarizeRobustSamples(robustSamples)
-	changePoints := detectChangePoints(timeline)
-	periodic, spectral, err := buildPeriodicAnalysis(paths, options, timeline, scale)
-	if err != nil {
-		return MathReport{}, err
-	}
-	networkLoops, err := detectNetworkLoops(paths, options, scale)
-	if err != nil {
-		return MathReport{}, err
-	}
-	integralScores := computeIntegralScores(timeline, networkLoops)
-	markov := buildMarkovModel(timeline, networkLoops)
-	causalGraph := buildCausalGraph(timeline, networkLoops, markov)
-	return buildInspectReport(summary, paths, timeline, series, robustStats, changePoints, periodic, spectral, networkLoops, integralScores, markov, causalGraph), nil
+	robustStats := summarizeRobustSamples(inputs.RobustSamples)
+	changePoints := detectChangePoints(inputs.Timeline)
+	periodic, spectral := buildPeriodicAnalysisWithRouteDefinitions(inputs.Timeline, inputs.Scale, inputs.RouteDefinitions)
+	integralScores := computeIntegralScores(inputs.Timeline, inputs.NetworkLoops)
+	markov := buildMarkovModel(inputs.Timeline, inputs.NetworkLoops)
+	causalGraph := buildCausalGraph(inputs.Timeline, inputs.NetworkLoops, markov)
+	return buildInspectReport(summary, paths, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
 }
 
 func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
@@ -407,57 +396,35 @@ func AnalyzeCompareWithSummaries(
 		candidateOptions.HeapEvidence = options.CandidateHeapEvidence
 	}
 
-	baselineTimeline, baselineSeries, baselineScale, err := buildTimeline(baselinePaths, baselineOptions)
+	baselineInputs, err := analyzeMathInputs(baselinePaths, baselineOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
-	candidateTimeline, candidateSeries, candidateScale, err := buildTimeline(candidatePaths, candidateOptions)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	baselineRobustSamples, err := collectRobustSamples(baselinePaths, baselineOptions)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	candidateRobustSamples, err := collectRobustSamples(candidatePaths, candidateOptions)
+	candidateInputs, err := analyzeMathInputs(candidatePaths, candidateOptions)
 	if err != nil {
 		return CompareMathReport{}, err
 	}
 
-	baselineRobustStats := summarizeRobustSamples(baselineRobustSamples)
-	candidateRobustStats := summarizeRobustSamples(candidateRobustSamples)
-	robustDeltas := compareRobustSamples(baselineRobustSamples, candidateRobustSamples)
-	baselineChangePoints := detectChangePoints(baselineTimeline)
-	candidateChangePoints := detectChangePoints(candidateTimeline)
+	baselineRobustStats := summarizeRobustSamples(baselineInputs.RobustSamples)
+	candidateRobustStats := summarizeRobustSamples(candidateInputs.RobustSamples)
+	robustDeltas := compareRobustSamples(baselineInputs.RobustSamples, candidateInputs.RobustSamples)
+	baselineChangePoints := detectChangePoints(baselineInputs.Timeline)
+	candidateChangePoints := detectChangePoints(candidateInputs.Timeline)
 	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
-	baselinePeriodic, baselineSpectral, err := buildPeriodicAnalysis(baselinePaths, baselineOptions, baselineTimeline, baselineScale)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	candidatePeriodic, candidateSpectral, err := buildPeriodicAnalysis(candidatePaths, candidateOptions, candidateTimeline, candidateScale)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	baselineNetworkLoops, err := detectNetworkLoops(baselinePaths, baselineOptions, baselineScale)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	candidateNetworkLoops, err := detectNetworkLoops(candidatePaths, candidateOptions, candidateScale)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	networkLoopDeltas := compareNetworkLoops(baselineNetworkLoops, candidateNetworkLoops)
-	baselineIntegralScores := computeIntegralScores(baselineTimeline, baselineNetworkLoops)
-	candidateIntegralScores := computeIntegralScores(candidateTimeline, candidateNetworkLoops)
+	baselinePeriodic, baselineSpectral := buildPeriodicAnalysisWithRouteDefinitions(baselineInputs.Timeline, baselineInputs.Scale, baselineInputs.RouteDefinitions)
+	candidatePeriodic, candidateSpectral := buildPeriodicAnalysisWithRouteDefinitions(candidateInputs.Timeline, candidateInputs.Scale, candidateInputs.RouteDefinitions)
+	networkLoopDeltas := compareNetworkLoops(baselineInputs.NetworkLoops, candidateInputs.NetworkLoops)
+	baselineIntegralScores := computeIntegralScores(baselineInputs.Timeline, baselineInputs.NetworkLoops)
+	candidateIntegralScores := computeIntegralScores(candidateInputs.Timeline, candidateInputs.NetworkLoops)
 	integralDeltas := compareIntegralScores(baselineIntegralScores, candidateIntegralScores)
-	baselineMarkov := buildMarkovModel(baselineTimeline, baselineNetworkLoops)
-	candidateMarkov := buildMarkovModel(candidateTimeline, candidateNetworkLoops)
+	baselineMarkov := buildMarkovModel(baselineInputs.Timeline, baselineInputs.NetworkLoops)
+	candidateMarkov := buildMarkovModel(candidateInputs.Timeline, candidateInputs.NetworkLoops)
 	markovDeltas := compareMarkovModels(baselineMarkov, candidateMarkov)
-	baselineCausalGraph := buildCausalGraph(baselineTimeline, baselineNetworkLoops, baselineMarkov)
-	candidateCausalGraph := buildCausalGraph(candidateTimeline, candidateNetworkLoops, candidateMarkov)
+	baselineCausalGraph := buildCausalGraph(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineMarkov)
+	candidateCausalGraph := buildCausalGraph(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateMarkov)
 	causalDeltas := compareCausalGraphs(baselineCausalGraph, candidateCausalGraph)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineTimeline, baselineSeries, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineNetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateTimeline, candidateSeries, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateNetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineInputs.Timeline, baselineInputs.Series, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineInputs.NetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateInputs.Timeline, candidateInputs.Series, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateInputs.NetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -469,7 +436,7 @@ func AnalyzeCompareWithSummaries(
 		Candidate:         candidate,
 		Comparison:        comparison,
 		Findings:          findings,
-		Sections:          compareSections(comparison, findings, baselineTimeline, candidateTimeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas, integralDeltas, markovDeltas, causalDeltas),
+		Sections:          compareSections(comparison, findings, baselineInputs.Timeline, candidateInputs.Timeline, robustDeltas, changeDeltas, baselinePeriodic, candidatePeriodic, networkLoopDeltas, integralDeltas, markovDeltas, causalDeltas),
 		RobustDeltas:      robustDeltas,
 		ChangeDeltas:      changeDeltas,
 		NetworkLoopDeltas: networkLoopDeltas,
