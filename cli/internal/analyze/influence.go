@@ -651,16 +651,34 @@ func influenceSeverity(score float64) string {
 
 func problemReason(kind string) string {
 	switch kind {
+	case "http", "http_slow", "http_slow_or_failed":
+		return "медленный или ошибочный HTTP"
 	case "main_thread_stall":
 		return "паузы главного потока"
-	case "http_slow":
-		return "медленный HTTP"
+	case "main_thread_dispatch":
+		return "медленный dispatch главного потока"
+	case "main_thread_io", "main_thread_disk_io", "disk_io_main_thread":
+		return "IO на главном потоке"
 	case "ui_jank":
 		return "UI-подтормаживания"
 	case "log_spam":
 		return "спам логами"
-	case "memory_retained":
+	case "retained_object", "memory_retained":
 		return "удержанные объекты"
+	case "wrapped_runnable":
+		return "долгая Runnable-задача"
+	case "wrapped_handler_runnable":
+		return "долгая Handler-задача"
+	case "wrapped_callable":
+		return "долгая Callable-задача"
+	case "wrapped_coroutine":
+		return "долгая coroutine-задача"
+	case "wrapped_executor":
+		return "долгая executor-задача"
+	case "wrapped_click":
+		return "долгий click-handler"
+	case "gc_pressure", "gc_count", "gc_time":
+		return "давление GC"
 	default:
 		if kind == "" {
 			return "проблемные окна"

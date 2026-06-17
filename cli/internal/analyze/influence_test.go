@@ -78,3 +78,29 @@ func TestBuildInfluenceWorksWithoutClassGraph(t *testing.T) {
 		t.Fatalf("expected heuristic")
 	}
 }
+
+func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
+	cases := map[string]string{
+		"http_slow_or_failed":      "медленный или ошибочный HTTP",
+		"main_thread_stall":        "паузы главного потока",
+		"main_thread_dispatch":     "медленный dispatch главного потока",
+		"main_thread_io":           "IO на главном потоке",
+		"ui_jank":                  "UI-подтормаживания",
+		"log_spam":                 "спам логами",
+		"retained_object":          "удержанные объекты",
+		"wrapped_runnable":         "долгая Runnable-задача",
+		"wrapped_handler_runnable": "долгая Handler-задача",
+		"wrapped_callable":         "долгая Callable-задача",
+		"wrapped_coroutine":        "долгая coroutine-задача",
+		"wrapped_executor":         "долгая executor-задача",
+		"wrapped_click":            "долгий click-handler",
+		"gc_pressure":              "давление GC",
+		"":                         "проблемные окна",
+	}
+
+	for kind, want := range cases {
+		if got := problemReason(kind); got != want {
+			t.Fatalf("problemReason(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}
