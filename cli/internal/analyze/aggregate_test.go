@@ -62,6 +62,58 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	}
 }
 
+func TestUint64SampleSetMergeMatchesOnePassForSmallSamples(t *testing.T) {
+	values := []uint64{90, 10, 70, 30, 50, 110}
+	var onePass uint64SampleSet
+	var left uint64SampleSet
+	var right uint64SampleSet
+	for i, value := range values {
+		onePass.add(value)
+		if i < 3 {
+			left.add(value)
+		} else {
+			right.add(value)
+		}
+	}
+
+	left.merge(right)
+
+	if left.seen != onePass.seen {
+		t.Fatalf("seen = %d, want %d", left.seen, onePass.seen)
+	}
+	if left.max != onePass.max {
+		t.Fatalf("max = %d, want %d", left.max, onePass.max)
+	}
+	if fmt.Sprint(left.sortedValues()) != fmt.Sprint(onePass.sortedValues()) {
+		t.Fatalf("values = %v, want %v", left.sortedValues(), onePass.sortedValues())
+	}
+}
+
+func TestUint64SampleSetMergeIsAssociativeForSmallSnapshots(t *testing.T) {
+	chunks := [][]uint64{
+		{1, 9, 3},
+		{8, 2},
+		{7, 4, 6, 5},
+	}
+
+	left := sampleSetFromValues(chunks[0]...)
+	middle := sampleSetFromValues(chunks[1]...)
+	right := sampleSetFromValues(chunks[2]...)
+
+	a := left
+	a.merge(middle)
+	a.merge(right)
+
+	b := middle
+	b.merge(right)
+	c := left
+	c.merge(b)
+
+	if fmt.Sprint(a.sortedValues()) != fmt.Sprint(c.sortedValues()) || a.seen != c.seen || a.max != c.max {
+		t.Fatalf("merge is not associative: a=%+v values=%v c=%+v values=%v", a, a.sortedValues(), c, c.sortedValues())
+	}
+}
+
 func TestInspectFilesAppliesOwnerMap(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "sample.jhlog")
@@ -725,4 +777,12 @@ func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
 	if !result.Failed {
 		t.Fatalf("expected confidence gate failure")
 	}
+}
+
+func sampleSetFromValues(values ...uint64) uint64SampleSet {
+	var set uint64SampleSet
+	for _, value := range values {
+		set.add(value)
+	}
+	return set
 }

@@ -93,6 +93,7 @@ func BuildInfluence(summary Summary, graph *ClassGraph) InfluenceSummary {
 type influenceBuilder struct {
 	nodes        map[string]*influenceAccumulator
 	edges        []ClassGraphEdge
+	staticIndex  *ClassGraphIndex
 	runtimeEdges []runtimeInfluenceEdge
 }
 
@@ -294,6 +295,7 @@ func (b *influenceBuilder) addStatic(graph *ClassGraph) {
 		edge.Count = count
 		b.edges = append(b.edges, edge)
 	}
+	b.staticIndex = NewClassGraphIndex(b.edges)
 }
 
 func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
@@ -380,7 +382,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 
 func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []InfluenceEdge {
 	dedup := map[string]*InfluenceEdge{}
-	for _, edge := range b.edges {
+	for _, edge := range b.relevantStaticEdges(selected) {
 		fromNode := b.nodes[edge.From]
 		toNode := b.nodes[edge.To]
 		if fromNode == nil || toNode == nil {
@@ -441,6 +443,19 @@ func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []Influe
 		out = append(out, *edge)
 	}
 	return out
+}
+
+func (b *influenceBuilder) relevantStaticEdges(selected map[string]struct{}) []ClassGraphEdge {
+	runtimeTargets := map[string]struct{}{}
+	for className, node := range b.nodes {
+		if node.runtime {
+			runtimeTargets[className] = struct{}{}
+		}
+	}
+	if b.staticIndex == nil {
+		return nil
+	}
+	return b.staticIndex.RelevantEdges(selected, runtimeTargets)
 }
 
 func (b *influenceBuilder) node(className string) *influenceAccumulator {

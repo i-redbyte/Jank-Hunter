@@ -251,6 +251,21 @@ func (s *uint64SampleSet) add(value uint64) {
 	}
 }
 
+func (s *uint64SampleSet) merge(other uint64SampleSet) {
+	if other.seen == 0 {
+		return
+	}
+	if other.max > s.max {
+		s.max = other.max
+	}
+	for _, value := range other.values {
+		s.add(value)
+	}
+	if other.seen > len(other.values) {
+		s.seen += other.seen - len(other.values)
+	}
+}
+
 func (s *uint64SampleSet) sortedValues() []uint64 {
 	if len(s.values) == 0 {
 		return nil
