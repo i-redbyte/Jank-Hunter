@@ -150,6 +150,12 @@ internal sealed class HookIntent(
     data class LogSpam(val source: String, val level: Int) : HookIntent("logspam.$source")
 }
 
+internal interface InstrumentationRule {
+    val id: String
+    val priority: Int
+    fun evaluate(call: MethodCall, config: HookConfig): HookDecision
+}
+
 internal sealed class HookDecision {
     data class Matched(
         val intent: HookIntent,
@@ -184,8 +190,43 @@ internal object HookSignatureCatalog {
     )
 }
 
-internal object HookIntentResolver {
+internal class RuleRegistry(
+    rules: List<InstrumentationRule>,
+) {
+    private val rules = rules.sortedWith(compareBy<InstrumentationRule> { it.priority }.thenBy { it.id })
+
     fun resolve(call: MethodCall, config: HookConfig): HookDecision {
+        rules.forEach { rule ->
+            val decision = rule.evaluate(call, config)
+            if (decision is HookDecision.Matched) return decision
+        }
+        return HookDecision.NotMatched
+    }
+}
+
+internal object HookIntentResolver {
+    private val registry = RuleRegistry(
+        listOf(
+            OkHttpInstrumentationRule,
+            WebSocketInstrumentationRule,
+            HandlerInstrumentationRule,
+            ExecutorInstrumentationRule,
+            CoroutineInstrumentationRule,
+            FlowInstrumentationRule,
+            LogSpamInstrumentationRule,
+        ),
+    )
+
+    fun resolve(call: MethodCall, config: HookConfig): HookDecision {
+        return registry.resolve(call, config)
+    }
+}
+
+private object OkHttpInstrumentationRule : InstrumentationRule {
+    override val id: String = "okhttp"
+    override val priority: Int = 100
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.okhttp) {
             when {
                 HookSignatureCatalog.okHttpEventListenerFactory.matches(call) -> {
@@ -200,15 +241,32 @@ internal object HookIntentResolver {
                         HookSignatureCatalog.okHttpBuild.id,
                     )
                 }
-                HookSignatureCatalog.okHttpNewWebSocket.matches(call) -> {
-                    return HookDecision.Matched(
-                        HookIntent.WrapWebSocketListener,
-                        HookSignatureCatalog.okHttpNewWebSocket.id,
-                    )
-                }
             }
         }
+        return HookDecision.NotMatched
+    }
+}
 
+private object WebSocketInstrumentationRule : InstrumentationRule {
+    override val id: String = "websocket"
+    override val priority: Int = 110
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
+        if (config.webSockets && HookSignatureCatalog.okHttpNewWebSocket.matches(call)) {
+            return HookDecision.Matched(
+                HookIntent.WrapWebSocketListener,
+                HookSignatureCatalog.okHttpNewWebSocket.id,
+            )
+        }
+        return HookDecision.NotMatched
+    }
+}
+
+private object HandlerInstrumentationRule : InstrumentationRule {
+    override val id: String = "handler"
+    override val priority: Int = 200
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.handlers) {
             InstrumentationHooks.handlerRunnableKind(call.owner, call.name, call.descriptor)?.let {
                 return HookDecision.Matched(HookIntent.HandlerRunnable(it), "android.handler.runnable.${it.name.lowercase()}")
@@ -229,7 +287,15 @@ internal object HookIntentResolver {
                 return HookDecision.Matched(HookIntent.HandlerMessageSend, "android.handler.message_send")
             }
         }
+        return HookDecision.NotMatched
+    }
+}
 
+private object ExecutorInstrumentationRule : InstrumentationRule {
+    override val id: String = "executor"
+    override val priority: Int = 300
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.executors) {
             InstrumentationHooks.executorRunnableKind(call.owner, call.name, call.descriptor)?.let {
                 return HookDecision.Matched(HookIntent.ExecutorRunnable(it), "jdk.executor.runnable.${it.name.lowercase()}")
@@ -238,17 +304,41 @@ internal object HookIntentResolver {
                 return HookDecision.Matched(HookIntent.ExecutorCallable(it), "jdk.executor.callable.${it.name.lowercase()}")
             }
         }
+        return HookDecision.NotMatched
+    }
+}
 
+private object CoroutineInstrumentationRule : InstrumentationRule {
+    override val id: String = "coroutine"
+    override val priority: Int = 400
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.coroutines) {
             InstrumentationHooks.coroutineBlockKind(call.owner, call.name, call.descriptor)?.let {
                 return HookDecision.Matched(HookIntent.CoroutineBlock(it), "kotlin.coroutines.block.${it.name.lowercase()}")
             }
         }
+        return HookDecision.NotMatched
+    }
+}
 
+private object FlowInstrumentationRule : InstrumentationRule {
+    override val id: String = "flow"
+    override val priority: Int = 500
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.flowInteractions && InstrumentationHooks.isViewSetOnClickListener(call.owner, call.name, call.descriptor)) {
             return HookDecision.Matched(HookIntent.WrapClickListener, "android.view.click_listener")
         }
+        return HookDecision.NotMatched
+    }
+}
 
+private object LogSpamInstrumentationRule : InstrumentationRule {
+    override val id: String = "logspam"
+    override val priority: Int = 600
+
+    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.logSpam) {
             val level = InstrumentationHooks.logSpamLevel(call.owner, call.name)
             if (level != null) {
@@ -256,8 +346,6 @@ internal object HookIntentResolver {
                 return HookDecision.Matched(HookIntent.LogSpam(source, level), "logspam.$source")
             }
         }
-
         return HookDecision.NotMatched
     }
 }
-

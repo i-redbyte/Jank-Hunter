@@ -58,7 +58,14 @@ class InstrumentationModelTest {
 
     @Test
     fun resolverMapsExistingHooksToCanonicalIntents() {
-        val config = testHookConfig(okhttp = true, handlers = true, executors = true, coroutines = true, logSpam = true)
+        val config = testHookConfig(
+            okhttp = true,
+            webSockets = true,
+            handlers = true,
+            executors = true,
+            coroutines = true,
+            logSpam = true,
+        )
 
         assertIntent(
             HookIntent.WrapOkHttpEventListenerFactory,
@@ -67,6 +74,17 @@ class InstrumentationModelTest {
                 owner = "okhttp3/OkHttpClient\$Builder",
                 name = "eventListenerFactory",
                 descriptor = "(Lokhttp3/EventListener\$Factory;)Lokhttp3/OkHttpClient\$Builder;",
+                isInterface = false,
+            ),
+            config,
+        )
+        assertIntent(
+            HookIntent.WrapWebSocketListener,
+            MethodCall(
+                opcode = Opcodes.INVOKEVIRTUAL,
+                owner = "okhttp3/OkHttpClient",
+                name = "newWebSocket",
+                descriptor = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
                 isInterface = false,
             ),
             config,
@@ -119,6 +137,20 @@ class InstrumentationModelTest {
         assertEquals(HookDecision.NotMatched, HookIntentResolver.resolve(call, testHookConfig()))
     }
 
+    @Test
+    fun resolverKeepsWebSocketGateSeparateFromOkHttpGate() {
+        val call = MethodCall(
+            opcode = Opcodes.INVOKEVIRTUAL,
+            owner = "okhttp3/OkHttpClient",
+            name = "newWebSocket",
+            descriptor = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
+            isInterface = false,
+        )
+
+        assertEquals(HookDecision.NotMatched, HookIntentResolver.resolve(call, testHookConfig(okhttp = true)))
+        assertIntent(HookIntent.WrapWebSocketListener, call, testHookConfig(webSockets = true))
+    }
+
     private fun assertIntent(expected: HookIntent, call: MethodCall, config: HookConfig) {
         val decision = HookIntentResolver.resolve(call, config)
         require(decision is HookDecision.Matched) { "Expected matched hook for $call but got $decision" }
@@ -153,4 +185,3 @@ class InstrumentationModelTest {
         )
     }
 }
-

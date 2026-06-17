@@ -216,113 +216,68 @@ private class JankHunterMethodVisitor(
         isInterface: Boolean,
     ) {
         recordStaticEdge(owner, name)
-        val handlerRunnableKind = if (config.handlers) {
-            InstrumentationHooks.handlerRunnableKind(owner, name, descriptor)
-        } else {
-            null
-        }
-        val handlerRemoveCallbacksKind = if (config.handlers) {
-            InstrumentationHooks.handlerRemoveCallbacksKind(owner, name, descriptor)
-        } else {
-            null
-        }
-        val executorRunnableKind = if (config.executors) {
-            InstrumentationHooks.executorRunnableKind(owner, name, descriptor)
-        } else {
-            null
-        }
-        val executorCallableKind = if (config.executors) {
-            InstrumentationHooks.executorCallableKind(owner, name, descriptor)
-        } else {
-            null
-        }
-        val coroutineBlockKind = if (config.coroutines) {
-            InstrumentationHooks.coroutineBlockKind(owner, name, descriptor)
-        } else {
-            null
-        }
-        when {
-            config.okhttp && InstrumentationHooks.isOkHttpEventListenerFactory(owner, name, descriptor) -> {
-                wrapOkHttpEventListenerFactory()
-            }
-
-            config.okhttp && InstrumentationHooks.isOkHttpBuild(owner, name, descriptor) -> {
-                installOkHttpEventListenerFactory()
-            }
-
-            config.webSockets && InstrumentationHooks.isOkHttpNewWebSocket(owner, name, descriptor) -> {
-                wrapWebSocketListener()
-            }
-
-            handlerRunnableKind != null -> {
-                postHandlerRunnable(handlerRunnableKind)
-                return
-            }
-
-            handlerRemoveCallbacksKind != null -> {
-                removeHandlerCallbacks(handlerRemoveCallbacksKind)
-                return
-            }
-
-            config.handlers && InstrumentationHooks.isHandlerRemoveCallbacksAndMessages(owner, name, descriptor) -> {
-                removeHandlerCallbacksAndMessages()
-                return
-            }
-
-            config.handlers && InstrumentationHooks.isHandlerHasCallbacks(owner, name, descriptor) -> {
-                hasHandlerCallbacks()
-                return
-            }
-
-            config.handlers && InstrumentationHooks.isHandlerMessageSend(owner, name, descriptor) -> {
-                recordCallCounter("handler.send_message")
-            }
-
-            executorRunnableKind == ExecutorRunnableKind.SINGLE_RUNNABLE -> {
-                wrapTopRunnable()
-            }
-
-            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_OBJECT -> {
-                wrapRunnableBeforeObject()
-            }
-
-            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_LONG_OBJECT -> {
-                wrapRunnableBeforeLongAndObject()
-            }
-
-            executorRunnableKind == ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT -> {
-                wrapRunnableBeforeTwoLongsAndObject()
-            }
-
-            executorCallableKind == ExecutorCallableKind.SINGLE_CALLABLE -> {
-                wrapTopCallable()
-            }
-
-            executorCallableKind == ExecutorCallableKind.CALLABLE_LONG_OBJECT -> {
-                wrapCallableBeforeLongAndObject()
-            }
-
-            coroutineBlockKind == CoroutineBlockKind.TOP_FUNCTION2 -> {
-                wrapTopCoroutineBlock()
-            }
-
-            coroutineBlockKind == CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION -> {
-                wrapCoroutineBlockBeforeContinuation()
-            }
-
-            coroutineBlockKind == CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> {
-                wrapCoroutineBlockBeforeIntAndObject()
-            }
-
-            config.flowInteractions && InstrumentationHooks.isViewSetOnClickListener(owner, name, descriptor) -> {
-                wrapTopClickListener()
-            }
-
-            config.logSpam && InstrumentationHooks.logSpamLevel(owner, name) != null -> {
-                recordLogSpam(owner, name, InstrumentationHooks.logSpamLevel(owner, name) ?: 0)
-            }
+        val call = MethodCall(
+            opcode = opcodeAndSource,
+            owner = owner,
+            name = name,
+            descriptor = descriptor,
+            isInterface = isInterface,
+            caller = CallerMethod(className, methodName, methodDescriptor),
+        )
+        val decision = HookIntentResolver.resolve(call, config)
+        if (decision is HookDecision.Matched && emitHook(decision.intent)) {
+            return
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
+    }
+
+    private fun emitHook(intent: HookIntent): Boolean {
+        when (intent) {
+            HookIntent.WrapOkHttpEventListenerFactory -> wrapOkHttpEventListenerFactory()
+            HookIntent.InstallOkHttpEventListenerFactory -> installOkHttpEventListenerFactory()
+            HookIntent.WrapWebSocketListener -> wrapWebSocketListener()
+            is HookIntent.HandlerRunnable -> {
+                postHandlerRunnable(intent.kind)
+                return true
+            }
+            is HookIntent.HandlerRemoveCallbacks -> {
+                removeHandlerCallbacks(intent.kind)
+                return true
+            }
+            HookIntent.HandlerRemoveCallbacksAndMessages -> {
+                removeHandlerCallbacksAndMessages()
+                return true
+            }
+            HookIntent.HandlerHasCallbacks -> {
+                hasHandlerCallbacks()
+                return true
+            }
+            HookIntent.HandlerMessageSend -> recordCallCounter("handler.send_message")
+            is HookIntent.ExecutorRunnable -> {
+                when (intent.kind) {
+                    ExecutorRunnableKind.SINGLE_RUNNABLE -> wrapTopRunnable()
+                    ExecutorRunnableKind.RUNNABLE_OBJECT -> wrapRunnableBeforeObject()
+                    ExecutorRunnableKind.RUNNABLE_LONG_OBJECT -> wrapRunnableBeforeLongAndObject()
+                    ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT -> wrapRunnableBeforeTwoLongsAndObject()
+                }
+            }
+            is HookIntent.ExecutorCallable -> {
+                when (intent.kind) {
+                    ExecutorCallableKind.SINGLE_CALLABLE -> wrapTopCallable()
+                    ExecutorCallableKind.CALLABLE_LONG_OBJECT -> wrapCallableBeforeLongAndObject()
+                }
+            }
+            is HookIntent.CoroutineBlock -> {
+                when (intent.kind) {
+                    CoroutineBlockKind.TOP_FUNCTION2 -> wrapTopCoroutineBlock()
+                    CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION -> wrapCoroutineBlockBeforeContinuation()
+                    CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT -> wrapCoroutineBlockBeforeIntAndObject()
+                }
+            }
+            HookIntent.WrapClickListener -> wrapTopClickListener()
+            is HookIntent.LogSpam -> recordLogSpam(intent.source, intent.level)
+        }
+        return false
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
@@ -552,9 +507,9 @@ private class JankHunterMethodVisitor(
         )
     }
 
-    private fun recordLogSpam(owner: String, name: String, level: Int) {
+    private fun recordLogSpam(source: String, level: Int) {
         visitLdcInsn(ownerLabel)
-        visitLdcInsn(InstrumentationHooks.logSpamSource(owner, name))
+        visitLdcInsn(source)
         push(level)
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
