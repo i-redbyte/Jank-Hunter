@@ -18,6 +18,7 @@ func Inspect(title string, logs []jhlog.Log) Summary {
 func InspectWithFilter(title string, logs []jhlog.Log, filter Filter) Summary {
 	collector := newCollector(title, len(logs), Options{Filter: filter})
 	for _, log := range logs {
+		collector.startLog()
 		collector.summary.Dictionary += len(log.Dict)
 		for _, event := range log.Events {
 			collector.add(log.Dict, event)
@@ -37,6 +38,7 @@ func InspectFilesWithFilter(title string, paths []string, filter Filter) (Summar
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
 	collector := newCollector(title, len(paths), options)
 	for _, path := range paths {
+		collector.startLog()
 		lastDictSize := 0
 		err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
@@ -212,6 +214,17 @@ func newCollector(title string, logCount int, options Options) *collector {
 	}
 }
 
+func (c *collector) startLog() {
+	c.resetAttribution()
+}
+
+func (c *collector) resetAttribution() {
+	c.currentAttrScreen = "unknown"
+	c.currentAttrOwner = "unknown"
+	c.currentAttrFlow = "unknown"
+	c.currentAttrStep = "unknown"
+}
+
 type retainedClassStats struct {
 	count    uint64
 	maxAgeMs uint64
@@ -271,6 +284,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	}
 	switch {
 	case event.Session != nil:
+		c.resetAttribution()
 		c.currentAppVersion = jhlog.Resolve(dict, event.Session.AppVersionID)
 		c.currentBuild = jhlog.Resolve(dict, event.Session.BuildID)
 		c.currentDevice = jhlog.Resolve(dict, event.Session.DeviceID)

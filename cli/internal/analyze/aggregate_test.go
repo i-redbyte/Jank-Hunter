@@ -280,6 +280,60 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 	}
 }
 
+func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.jhlog")
+	firstFile, firstWriter, err := jhlog.Create(first)
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	firstEvents := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 1, Value: "CheckoutScreen"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 2, Value: "CheckoutPresenter.render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 3, Value: "checkout.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 4, Value: "render_list"}},
+		{Type: jhlog.EventFlow, TimeMS: 1, Flow: &jhlog.FlowEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, StepID: 4}},
+	}
+	for _, event := range firstEvents {
+		if err := firstWriter.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(first %d) error = %v", event.Type, err)
+		}
+	}
+	if err := firstFile.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	second := filepath.Join(dir, "second.jhlog")
+	secondFile, secondWriter, err := jhlog.Create(second)
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+	secondEvents := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 1, Value: "GET /feed"}},
+		{Type: jhlog.EventHTTP, TimeMS: 1, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 120, Status: jhlog.Status2xx}},
+	}
+	for _, event := range secondEvents {
+		if err := secondWriter.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(second %d) error = %v", event.Type, err)
+		}
+	}
+	if err := secondFile.Close(); err != nil {
+		t.Fatalf("Close(second) error = %v", err)
+	}
+
+	summary, err := InspectFiles("sample", []string{first, second})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	if len(summary.Flows) != 1 {
+		t.Fatalf("Flows = %+v, want exactly one HTTP flow", summary.Flows)
+	}
+	flow := summary.Flows[0]
+	if flow.Screen != "unknown" || flow.Flow != "unknown" || flow.Step != "unknown" || flow.Owner != "unknown" {
+		t.Fatalf("second log inherited stale flow context: %+v", flow)
+	}
+}
+
 func environmentHasItem(environment RunEnvironment, label string, value string) bool {
 	for _, item := range environment.Items {
 		if item.Label == label && item.Value == value {
