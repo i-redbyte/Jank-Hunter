@@ -174,10 +174,12 @@ object JankHunterJankStats {
     private fun metricPart(value: String?): String {
         return value
             ?.takeIf { it.isNotBlank() }
-            ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            ?.replace(METRIC_PART_UNSAFE_CHARS, "_")
             ?.trim('_', '.', '-')
             ?.take(80)
             ?.takeIf { it.isNotBlank() }
             ?: "unknown"
     }
+
+    private val METRIC_PART_UNSAFE_CHARS = Regex("[^A-Za-z0-9._-]")
 }

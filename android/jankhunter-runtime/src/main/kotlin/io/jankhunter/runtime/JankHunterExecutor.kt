@@ -309,8 +309,10 @@ private class TrackedScheduledFuture<V>(
 internal fun metricExecutorName(name: String?): String {
     return name
         ?.takeIf { it.isNotBlank() }
-        ?.replace(Regex("[^A-Za-z0-9_.-]+"), "_")
+        ?.replace(EXECUTOR_METRIC_UNSAFE_CHARS, "_")
         ?: "unknown"
 }
 
 internal fun ThreadPoolExecutor.snapshotActiveCount(): Int = activeCount
+
+private val EXECUTOR_METRIC_UNSAFE_CHARS = Regex("[^A-Za-z0-9_.-]+")

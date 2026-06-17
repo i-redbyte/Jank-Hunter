@@ -22,7 +22,7 @@ internal object ProcessNames {
 
     fun safeFileSuffix(processName: String?, packageName: String): String {
         val normalized = displayName(processName, packageName)
-            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .replace(SAFE_FILE_SUFFIX_UNSAFE_CHARS, "_")
             .trim('_', '.', '-')
             .take(80)
         return normalized.takeIf { it.isNotBlank() } ?: "unknown"
@@ -34,4 +34,6 @@ internal object ProcessNames {
         if (name.startsWith("$packageName:")) return name.removePrefix("$packageName:")
         return name
     }
+
+    private val SAFE_FILE_SUFFIX_UNSAFE_CHARS = Regex("[^A-Za-z0-9._-]")
 }

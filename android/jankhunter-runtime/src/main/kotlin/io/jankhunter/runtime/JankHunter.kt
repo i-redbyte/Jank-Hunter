@@ -1201,7 +1201,7 @@ object JankHunter {
     private fun metricOwner(ownerName: String?): String {
         return ownerName
             ?.takeIf { it.isNotBlank() }
-            ?.replace(Regex("\\s+"), "_")
+            ?.replace(OWNER_WHITESPACE, "_")
             ?: "unknown"
     }
 
@@ -1250,6 +1250,7 @@ object JankHunter {
     private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
     private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
+    private val OWNER_WHITESPACE = Regex("\\s+")
 
     private data class LogSpamKey(
         val screen: String?,
