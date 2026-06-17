@@ -23,14 +23,12 @@ import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
-import java.lang.ref.WeakReference
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class JankHunterInitDiagnostics(
@@ -45,76 +43,118 @@ data class JankHunterInitDiagnostics(
 )
 
 object JankHunter {
-    private val started = AtomicBoolean(false)
-    private val initAttempts = AtomicLong()
-    private val initFailures = AtomicLong()
-    private val owner = ThreadLocal<String>()
-    private val flow = ThreadLocal<String>()
-    private val flowStep = ThreadLocal<String>()
-    private val contextLock = Any()
+    private val runtimeState = RuntimeState(DEFAULT_MAX_METRIC_AGGREGATION_KEYS)
+    private val started get() = runtimeState.started
+    private val initAttempts get() = runtimeState.initAttempts
+    private val initFailures get() = runtimeState.initFailures
+    private val contextTracker = ContextTracker()
     private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
     private val lastLogSpamFlushAtMs = AtomicLong(0L)
     private val lastMetricFlushAtMs = AtomicLong(0L)
-    private val runtimeCallStack = ThreadLocal<MutableList<RuntimeCallFrame>>()
-    private val runtimeCallCounters = ConcurrentHashMap<RuntimeCallKey, RuntimeCallStats>()
-    private val runtimeCallDropped = AtomicLong(0L)
-    private val lastRuntimeCallFlushAtMs = AtomicLong(0L)
-    private val handlerRunnableLock = Any()
-    private val handlerRunnableEntries = mutableListOf<HandlerRunnableEntry>()
+    private val runtimeCallGraph = RuntimeCallGraph(
+        nowMs = ::nowMs,
+        captureContext = { ownerOverride -> captureContext(ownerOverride = ownerOverride) },
+        maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
+    )
+    private val handlerWrappers = HandlerWrapperRegistry { metricName ->
+        recordCounter(metricName, 1)
+    }
 
-    @Volatile
-    private var writer: AsyncLogWriter? = null
+    private var writer: AsyncLogWriter?
+        get() = runtimeState.writer
+        set(value) {
+            runtimeState.writer = value
+        }
 
-    @Volatile
-    private var config: JankHunterConfig? = null
+    private var config: JankHunterConfig?
+        get() = runtimeState.config
+        set(value) {
+            runtimeState.config = value
+        }
 
-    @Volatile
-    private var metricAggregator = MetricAggregator(DEFAULT_MAX_METRIC_AGGREGATION_KEYS)
+    private var metricAggregator: MetricAggregator
+        get() = runtimeState.metricAggregator
+        set(value) {
+            runtimeState.metricAggregator = value
+        }
 
-    @Volatile
-    private var watchdog: MainThreadWatchdog? = null
+    private var watchdog: MainThreadWatchdog?
+        get() = runtimeState.watchdog
+        set(value) {
+            runtimeState.watchdog = value
+        }
 
-    @Volatile
-    private var dispatchMonitor: MainLooperDispatchMonitor? = null
+    private var dispatchMonitor: MainLooperDispatchMonitor?
+        get() = runtimeState.dispatchMonitor
+        set(value) {
+            runtimeState.dispatchMonitor = value
+        }
 
-    @Volatile
-    private var memorySampler: MemorySampler? = null
+    private var memorySampler: MemorySampler?
+        get() = runtimeState.memorySampler
+        set(value) {
+            runtimeState.memorySampler = value
+        }
 
-    @Volatile
-    private var memoryTrimReporter: MemoryTrimReporter? = null
+    private var memoryTrimReporter: MemoryTrimReporter?
+        get() = runtimeState.memoryTrimReporter
+        set(value) {
+            runtimeState.memoryTrimReporter = value
+        }
 
-    @Volatile
-    private var componentCallbackContext: Context? = null
+    private var componentCallbackContext: Context?
+        get() = runtimeState.componentCallbackContext
+        set(value) {
+            runtimeState.componentCallbackContext = value
+        }
 
-    @Volatile
-    private var systemContextSampler: SystemContextSampler? = null
+    private var systemContextSampler: SystemContextSampler?
+        get() = runtimeState.systemContextSampler
+        set(value) {
+            runtimeState.systemContextSampler = value
+        }
 
-    @Volatile
-    private var adaptiveRuntimeSampler: AdaptiveRuntimeSampler? = null
+    private var adaptiveRuntimeSampler: AdaptiveRuntimeSampler?
+        get() = runtimeState.adaptiveRuntimeSampler
+        set(value) {
+            runtimeState.adaptiveRuntimeSampler = value
+        }
 
-    @Volatile
-    private var objectRetentionWatcher: ObjectRetentionWatcher? = null
+    private var objectRetentionWatcher: ObjectRetentionWatcher?
+        get() = runtimeState.objectRetentionWatcher
+        set(value) {
+            runtimeState.objectRetentionWatcher = value
+        }
 
-    @Volatile
-    private var retainedHeapDumper: RetainedHeapDumper? = null
+    private var retainedHeapDumper: RetainedHeapDumper?
+        get() = runtimeState.retainedHeapDumper
+        set(value) {
+            runtimeState.retainedHeapDumper = value
+        }
 
-    @Volatile
-    private var fpsMonitor: FpsMonitor? = null
+    private var fpsMonitor: FpsMonitor?
+        get() = runtimeState.fpsMonitor
+        set(value) {
+            runtimeState.fpsMonitor = value
+        }
 
-    @Volatile
-    private var application: Application? = null
+    private var application: Application?
+        get() = runtimeState.application
+        set(value) {
+            runtimeState.application = value
+        }
 
-    @Volatile
-    private var activityTracker: ActivityTracker? = null
+    private var activityTracker: ActivityTracker?
+        get() = runtimeState.activityTracker
+        set(value) {
+            runtimeState.activityTracker = value
+        }
 
-    @Volatile
-    private var screen = "unknown"
-
-    @Volatile
-    private var lastContextKey = ""
-
-    @Volatile
-    private var initDiagnostics = JankHunterInitDiagnostics(status = "not_started")
+    private var initDiagnostics: JankHunterInitDiagnostics
+        get() = runtimeState.initDiagnostics
+        set(value) {
+            runtimeState.initDiagnostics = value
+        }
 
     @JvmStatic
     fun init(context: Context?) {
@@ -158,8 +198,7 @@ object JankHunter {
             config = providedConfig
             metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
             lastMetricFlushAtMs.set(0L)
-            lastRuntimeCallFlushAtMs.set(0L)
-            runtimeCallDropped.set(0L)
+            runtimeCallGraph.resetFlushState()
             adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
                 providedConfig.adaptiveMemoryStableIntervalMs(),
                 providedConfig.adaptiveContextStableIntervalMs(),
@@ -275,7 +314,7 @@ object JankHunter {
         swallow {
             flushLogSpam(force = true)
             flushMetrics(force = true)
-            flushRuntimeCalls(force = true)
+            runtimeCallGraph.flush(force = true, writer)
         }
         swallow {
             activityTracker?.let { tracker ->
@@ -312,15 +351,11 @@ object JankHunter {
         retainedHeapDumper = null
         fpsMonitor = null
         writer = null
-        lastContextKey = ""
+        contextTracker.resetRecordedContext()
         lastMetricFlushAtMs.set(0L)
         logSpamCounters.clear()
-        runtimeCallCounters.clear()
-        runtimeCallStack.remove()
-        runtimeCallDropped.set(0L)
-        synchronized(handlerRunnableLock) {
-            handlerRunnableEntries.clear()
-        }
+        runtimeCallGraph.clear()
+        handlerWrappers.clear()
         started.set(false)
     }
 
@@ -398,27 +433,20 @@ object JankHunter {
 
     @JvmStatic
     fun startFlow(flowName: String?): JankHunterFlow {
-        val token = JankHunterFlow(
-            previousFlow = flow.get(),
-            previousStep = flowStep.get(),
-        )
-        setThreadLocal(flow, normalizedContextValue(flowName))
-        flowStep.remove()
+        val token = contextTracker.startFlow(flowName)
         ensureContextRecorded()
         return token
     }
 
     @JvmStatic
     fun endFlow(token: JankHunterFlow?) {
-        if (token == null) return
-        setThreadLocal(flow, token.previousFlow)
-        setThreadLocal(flowStep, token.previousStep)
+        contextTracker.endFlow(token)
         ensureContextRecorded()
     }
 
     @JvmStatic
     fun markFlowStep(stepName: String?) {
-        setThreadLocal(flowStep, normalizedContextValue(stepName))
+        contextTracker.markFlowStep(stepName)
         ensureContextRecorded()
     }
 
@@ -516,45 +544,33 @@ object JankHunter {
     @JvmStatic
     fun removeHandlerCallbacks(handler: Handler, runnable: Runnable) {
         handler.removeCallbacks(runnable)
-        val wrappers = handlerWrappers(handler, runnable, null)
+        val wrappers = handlerWrappers.wrappers(handler, runnable, null)
         wrappers.forEach { handler.removeCallbacks(it) }
-        unregisterHandlerRunnables(handler, runnable, null)
+        handlerWrappers.unregister(handler, runnable, null)
     }
 
     @JvmStatic
     fun removeHandlerCallbacks(handler: Handler, runnable: Runnable, token: Any?) {
         handler.removeCallbacks(runnable, token)
-        val wrappers = handlerWrappers(handler, runnable, token)
+        val wrappers = handlerWrappers.wrappers(handler, runnable, token)
         wrappers.forEach { handler.removeCallbacks(it, token) }
-        unregisterHandlerRunnables(handler, runnable, token)
+        handlerWrappers.unregister(handler, runnable, token)
     }
 
     @JvmStatic
     fun removeHandlerCallbacksAndMessages(handler: Handler, token: Any?) {
         handler.removeCallbacksAndMessages(token)
-        unregisterHandlerRunnables(handler, token)
+        handlerWrappers.unregister(handler, token)
     }
 
     @JvmStatic
     fun hasHandlerCallbacks(handler: Handler, runnable: Runnable): Boolean {
         if (handler.hasCallbacks(runnable)) return true
-        return handlerWrappers(handler, runnable, null).any { handler.hasCallbacks(it) }
+        return handlerWrappers.wrappers(handler, runnable, null).any { handler.hasCallbacks(it) }
     }
 
     internal fun unregisterHandlerRunnable(delegate: Runnable, wrapper: Runnable) {
-        synchronized(handlerRunnableLock) {
-            cleanHandlerRunnableEntriesLocked()
-            val iterator = handlerRunnableEntries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.original.get() === delegate) {
-                    entry.wrappers.removeAll { it.wrapper.get() == null || it.wrapper.get() === wrapper }
-                }
-                if (entry.wrappers.isEmpty()) {
-                    iterator.remove()
-                }
-            }
-        }
+        handlerWrappers.unregister(delegate, wrapper)
     }
 
     private fun wrapHandlerRunnable(
@@ -565,7 +581,9 @@ object JankHunter {
     ): Runnable {
         if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
         val wrapper = JankHunterHandlerRunnable(runnable, ownerName)
-        if (!registerHandlerRunnable(handler, runnable, token, wrapper)) {
+        val maxEntries = config?.maxHandlerTrackingEntries() ?: DEFAULT_MAX_HANDLER_TRACKING_ENTRIES
+        val maxWrappers = config?.maxHandlerWrappersPerRunnable() ?: DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE
+        if (!handlerWrappers.register(handler, runnable, token, wrapper, maxEntries, maxWrappers)) {
             return runnable
         }
         return wrapper
@@ -591,105 +609,6 @@ object JankHunter {
             }
             throw throwable
         }
-    }
-
-    private fun registerHandlerRunnable(
-        handler: Handler,
-        runnable: Runnable,
-        token: Any?,
-        wrapper: Runnable,
-    ): Boolean {
-        synchronized(handlerRunnableLock) {
-            cleanHandlerRunnableEntriesLocked()
-            val maxEntries = config?.maxHandlerTrackingEntries() ?: DEFAULT_MAX_HANDLER_TRACKING_ENTRIES
-            val maxWrappers = config?.maxHandlerWrappersPerRunnable() ?: DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE
-            val entry = handlerRunnableEntries.firstOrNull {
-                it.handler.get() === handler && it.original.get() === runnable
-            }
-            if (entry == null && (maxEntries <= 0 || handlerRunnableEntries.size >= maxEntries)) {
-                recordCounter("jankhunter.handler_wrapper.dropped_entries.count", 1)
-                return false
-            }
-            val resolvedEntry = entry ?: HandlerRunnableEntry(
-                handler = WeakReference(handler),
-                original = WeakReference(runnable),
-                wrappers = mutableListOf(),
-            ).also { handlerRunnableEntries.add(it) }
-            if (maxWrappers <= 0 || resolvedEntry.wrappers.size >= maxWrappers) {
-                recordCounter("jankhunter.handler_wrapper.dropped_wrappers.count", 1)
-                return false
-            }
-            resolvedEntry.wrappers.add(
-                HandlerRunnableWrapperEntry(
-                    wrapper = WeakReference(wrapper),
-                    token = token?.let(::WeakReference),
-                ),
-            )
-            return true
-        }
-    }
-
-    private fun handlerWrappers(handler: Handler, runnable: Runnable, token: Any?): List<Runnable> {
-        synchronized(handlerRunnableLock) {
-            cleanHandlerRunnableEntriesLocked()
-            return handlerRunnableEntries
-                .firstOrNull { it.handler.get() === handler && it.original.get() === runnable }
-                ?.wrappers
-                ?.filter { tokenMatches(it.token, token) }
-                ?.mapNotNull { it.wrapper.get() }
-                ?: emptyList()
-        }
-    }
-
-    private fun unregisterHandlerRunnables(handler: Handler, runnable: Runnable, token: Any?) {
-        synchronized(handlerRunnableLock) {
-            cleanHandlerRunnableEntriesLocked()
-            val iterator = handlerRunnableEntries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.handler.get() === handler && entry.original.get() === runnable) {
-                    entry.wrappers.removeAll { tokenMatches(it.token, token) }
-                }
-                if (entry.wrappers.isEmpty()) {
-                    iterator.remove()
-                }
-            }
-        }
-    }
-
-    private fun unregisterHandlerRunnables(handler: Handler, token: Any?) {
-        synchronized(handlerRunnableLock) {
-            cleanHandlerRunnableEntriesLocked()
-            val iterator = handlerRunnableEntries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.handler.get() === handler) {
-                    entry.wrappers.removeAll { tokenMatches(it.token, token) }
-                }
-                if (entry.wrappers.isEmpty()) {
-                    iterator.remove()
-                }
-            }
-        }
-    }
-
-    private fun cleanHandlerRunnableEntriesLocked() {
-        val iterator = handlerRunnableEntries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (entry.handler.get() == null || entry.original.get() == null) {
-                iterator.remove()
-            } else {
-                entry.wrappers.removeAll { it.wrapper.get() == null }
-                if (entry.wrappers.isEmpty()) {
-                    iterator.remove()
-                }
-            }
-        }
-    }
-
-    private fun tokenMatches(registeredToken: WeakReference<Any>?, requestedToken: Any?): Boolean {
-        return requestedToken == null || registeredToken?.get() === requestedToken
     }
 
     @JvmStatic
@@ -754,20 +673,20 @@ object JankHunter {
     }
 
     @JvmStatic
-    fun currentOwner(): String = owner.get() ?: "unknown"
+    fun currentOwner(): String = contextTracker.currentOwner()
 
     @JvmStatic
-    fun currentScreen(): String = screen
+    fun currentScreen(): String = contextTracker.currentScreen()
 
     @JvmStatic
-    fun currentFlow(): String = flow.get() ?: "unknown"
+    fun currentFlow(): String = contextTracker.currentFlow()
 
     @JvmStatic
-    fun currentFlowStep(): String = flowStep.get() ?: "unknown"
+    fun currentFlowStep(): String = contextTracker.currentFlowStep()
 
     @JvmStatic
     fun setScreen(screenName: String?) {
-        screen = screenName?.takeIf { it.isNotEmpty() } ?: "unknown"
+        val screen = contextTracker.setScreen(screenName)
         writer?.screen(screen)
         ensureContextRecorded()
     }
@@ -775,38 +694,18 @@ object JankHunter {
     @JvmStatic
     fun flush() {
         flushLogSpam(force = true)
-        flushRuntimeCalls(force = true)
+        runtimeCallGraph.flush(force = true, writer)
         writer?.flush()
     }
 
     @JvmStatic
     fun enterMethod(ownerName: String?): Long {
-        if (writer == null) return 0L
-        val normalizedOwner = normalizedContextValue(ownerName) ?: return 0L
-        val now = nowMs()
-        val stack = runtimeCallStack.get() ?: ArrayList<RuntimeCallFrame>(16).also(runtimeCallStack::set)
-        stack.add(RuntimeCallFrame(normalizedOwner, now))
-        return now
+        return runtimeCallGraph.enter(ownerName, writer != null)
     }
 
     @JvmStatic
     fun exitMethod(startMs: Long, ownerName: String?) {
-        if (startMs <= 0L || writer == null) return
-        val normalizedOwner = normalizedContextValue(ownerName) ?: return
-        val stack = runtimeCallStack.get() ?: return
-        if (stack.isEmpty()) {
-            runtimeCallStack.remove()
-            return
-        }
-        val frame = popRuntimeCallFrame(stack, normalizedOwner, startMs)
-        val caller = stack.lastOrNull()?.owner
-        val durationMs = maxOf(0L, nowMs() - frame.startMs)
-        if (caller != null && caller != frame.owner) {
-            recordRuntimeCallEdge(caller, frame.owner, durationMs)
-        }
-        if (stack.isEmpty()) {
-            runtimeCallStack.remove()
-        }
+        runtimeCallGraph.exit(startMs, ownerName, writer)
     }
 
     @JvmStatic
@@ -822,7 +721,7 @@ object JankHunter {
         txBytes: Long,
         flags: Long,
     ) {
-        val attributedOwner = firstContextValue(owner, this.owner.get())
+        val attributedOwner = firstContextValue(owner, contextTracker.ownerOrNull())
         ensureContextRecorded(ownerOverride = attributedOwner)
         writer?.http(
             attributedOwner,
@@ -844,7 +743,7 @@ object JankHunter {
 
     @JvmStatic
     fun recordStall(owner: String?, stackHint: String?, durationMs: Long) {
-        val attributedOwner = firstContextValue(owner, this.owner.get())
+        val attributedOwner = firstContextValue(owner, contextTracker.ownerOrNull())
         ensureContextRecorded(ownerOverride = attributedOwner)
         writer?.stall(attributedOwner, stackHint, durationMs)
         recordProblemWindow("main_thread_stall", durationMs, 1, durationMs, attributedOwner)
@@ -882,7 +781,7 @@ object JankHunter {
 
     @JvmStatic
     fun watchObject(instance: Any?, description: String?, ownerHint: String?) {
-        val retainedBy = firstContextValue(ownerHint, owner.get())
+        val retainedBy = firstContextValue(ownerHint, contextTracker.ownerOrNull())
         objectRetentionWatcher?.watch(instance, description, retainedBy)
     }
 
@@ -977,7 +876,7 @@ object JankHunter {
         p95Ms: Long,
         p99Ms: Long,
     ) {
-        val attributedScreen = firstContextValue(screen, this.screen)
+        val attributedScreen = firstContextValue(screen, contextTracker.currentScreen())
         ensureContextRecorded(screenOverride = attributedScreen)
         writer?.uiWindow(attributedScreen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms)
         if (jankCount > 0 || p95Ms >= UI_PROBLEM_FRAME_THRESHOLD_MS) {
@@ -1011,7 +910,7 @@ object JankHunter {
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
-        val tuple = captureContext(ownerOverride = firstContextValue(ownerName, owner.get()))
+        val tuple = captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull()))
         val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
         val maxKeys = config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS
         if (!logSpamCounters.containsKey(key) && logSpamCounters.size >= maxKeys) {
@@ -1027,12 +926,7 @@ object JankHunter {
         screenOverride: String? = null,
         ownerOverride: String? = null,
     ): JankHunterContext {
-        return JankHunterContext(
-            screen = normalizedContextValue(firstContextValue(screenOverride, screen)),
-            owner = normalizedContextValue(firstContextValue(ownerOverride, owner.get())),
-            flow = normalizedContextValue(flow.get()),
-            step = normalizedContextValue(flowStep.get()),
-        )
+        return contextTracker.capture(screenOverride, ownerOverride)
     }
 
     internal fun <T> callWithOwner(ownerName: String?, block: () -> T): T {
@@ -1040,24 +934,7 @@ object JankHunter {
     }
 
     internal fun <T> callWithContext(context: JankHunterContext, ownerName: String?, block: () -> T): T {
-        val previousOwner = owner.get()
-        val previousFlow = flow.get()
-        val previousStep = flowStep.get()
-        val previousScreen = screen
-        setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
-        setThreadLocal(flow, context.flow)
-        setThreadLocal(flowStep, context.step)
-        context.screen?.let { screen = it }
-        ensureContextRecorded()
-        try {
-            return block()
-        } finally {
-            setThreadLocal(owner, previousOwner)
-            setThreadLocal(flow, previousFlow)
-            setThreadLocal(flowStep, previousStep)
-            screen = previousScreen
-            ensureContextRecorded()
-        }
+        return contextTracker.callWithContext(context, ownerName, ::ensureContextRecorded, block)
     }
 
     internal fun recordWrappedWork(ownerName: String?, kind: String, durationMs: Long, failed: Boolean) {
@@ -1168,7 +1045,7 @@ object JankHunter {
         maxMs: Long,
         ownerOverride: String? = null,
     ) {
-        val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, owner.get()))
+        val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, contextTracker.ownerOrNull()))
         writer?.problemWindow(tuple.screen, tuple.owner, tuple.flow, tuple.step, kind, windowMs, count, maxMs)
     }
 
@@ -1256,12 +1133,8 @@ object JankHunter {
     ) {
         val asyncWriter = writer ?: return
         val tuple = captureContext(screenOverride, ownerOverride)
-        val key = tuple.key()
-        synchronized(contextLock) {
-            if (key == lastContextKey) return
-            lastContextKey = key
-            asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
-        }
+        if (!contextTracker.shouldRecord(tuple)) return
+        asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
     }
 
     private fun flushLogSpam(force: Boolean) {
@@ -1295,86 +1168,7 @@ object JankHunter {
         }
     }
 
-    private fun recordRuntimeCallEdge(caller: String, callee: String, durationMs: Long) {
-        val tuple = captureContext(ownerOverride = caller)
-        val key = RuntimeCallKey(tuple.screen, caller, tuple.flow, tuple.step, callee)
-        val stats = runtimeCallCounters[key] ?: run {
-            val maxKeys = config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS
-            if (maxKeys <= 0 || runtimeCallCounters.size >= maxKeys) {
-                runtimeCallDropped.incrementAndGet()
-                flushRuntimeCalls(force = false)
-                return
-            }
-            runtimeCallCounters.computeIfAbsent(key) { RuntimeCallStats() }
-        }
-        stats.count.incrementAndGet()
-        stats.totalMs.addAndGet(durationMs)
-        stats.updateMax(durationMs)
-        flushRuntimeCalls(force = false)
-    }
-
-    private fun flushRuntimeCalls(force: Boolean) {
-        val asyncWriter = writer ?: return
-        val now = nowMs()
-        val last = lastRuntimeCallFlushAtMs.get()
-        if (!force && now - last < RUNTIME_CALL_FLUSH_MS) return
-        if (!lastRuntimeCallFlushAtMs.compareAndSet(last, now) && !force) return
-
-        runtimeCallCounters.forEach { (key, stats) ->
-            val count = stats.count.getAndSet(0)
-            if (count <= 0) return@forEach
-            val totalMs = stats.totalMs.getAndSet(0)
-            val maxMs = stats.maxMs.getAndSet(0)
-            asyncWriter.runtimeCall(key.screen, key.caller, key.flow, key.step, key.callee, count, totalMs, maxMs)
-        }
-        runtimeCallCounters.forEach { (key, stats) ->
-            if (stats.count.get() == 0L) {
-                runtimeCallCounters.remove(key, stats)
-            }
-        }
-        val dropped = runtimeCallDropped.getAndSet(0)
-        if (dropped > 0) {
-            asyncWriter.counter("jankhunter.runtime_call_graph.dropped.count", dropped)
-        }
-    }
-
-    private fun popRuntimeCallFrame(
-        stack: MutableList<RuntimeCallFrame>,
-        ownerName: String,
-        fallbackStartMs: Long,
-    ): RuntimeCallFrame {
-        val lastIndex = stack.lastIndex
-        val last = stack[lastIndex]
-        if (last.owner == ownerName) {
-            stack.removeAt(lastIndex)
-            return last
-        }
-        for (index in lastIndex - 1 downTo 0) {
-            if (stack[index].owner == ownerName) {
-                return stack.removeAt(index)
-            }
-        }
-        return RuntimeCallFrame(ownerName, fallbackStartMs)
-    }
-
-    private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {
-        if (value == null) {
-            target.remove()
-        } else {
-            target.set(value)
-        }
-    }
-
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
-
-    private fun firstContextValue(primary: String?, fallback: String?): String? {
-        return normalizedContextValue(primary) ?: normalizedContextValue(fallback)
-    }
-
-    private fun normalizedContextValue(value: String?): String? {
-        val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
-        return normalized?.takeUnless { it == "unknown" }
-    }
 
     private fun metricOwner(ownerName: String?): String {
         return ownerName
@@ -1417,17 +1211,6 @@ object JankHunter {
         val versionCode: String,
     )
 
-    private data class HandlerRunnableEntry(
-        val handler: WeakReference<Handler>,
-        val original: WeakReference<Runnable>,
-        val wrappers: MutableList<HandlerRunnableWrapperEntry>,
-    )
-
-    private data class HandlerRunnableWrapperEntry(
-        val wrapper: WeakReference<Runnable>,
-        val token: WeakReference<Any>?,
-    )
-
     private const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L
     private const val WRAPPED_WORK_PROBLEM_THRESHOLD_MS = 250L
     private const val SLOW_HTTP_THRESHOLD_MS = 1000L
@@ -1440,15 +1223,6 @@ object JankHunter {
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
     private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
 
-    internal data class JankHunterContext(
-        val screen: String?,
-        val owner: String?,
-        val flow: String?,
-        val step: String?,
-    ) {
-        fun key(): String = listOf(screen.orEmpty(), owner.orEmpty(), flow.orEmpty(), step.orEmpty()).joinToString("\u0001")
-    }
-
     private data class LogSpamKey(
         val screen: String?,
         val owner: String?,
@@ -1458,32 +1232,4 @@ object JankHunter {
         val level: Int,
     )
 
-    private data class RuntimeCallFrame(
-        val owner: String,
-        val startMs: Long,
-    )
-
-    private data class RuntimeCallKey(
-        val screen: String?,
-        val caller: String,
-        val flow: String?,
-        val step: String?,
-        val callee: String,
-    )
-
-    private class RuntimeCallStats {
-        val count = AtomicLong()
-        val totalMs = AtomicLong()
-        val maxMs = AtomicLong()
-
-        fun updateMax(value: Long) {
-            while (true) {
-                val current = maxMs.get()
-                if (value <= current) return
-                if (maxMs.compareAndSet(current, value)) return
-            }
-        }
-    }
-
-    private const val RUNTIME_CALL_FLUSH_MS = 5000L
 }

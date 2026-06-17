@@ -50,7 +50,7 @@ class JankHunterCoroutineFunction2 internal constructor(
 private class JankHunterContinuation<T>(
     private val delegate: Continuation<T>,
     private val ownerName: String?,
-    private val capturedContext: JankHunter.JankHunterContext,
+    private val capturedContext: JankHunterContext,
     private val startedAtMs: Long,
 ) : Continuation<T> {
     override val context: CoroutineContext
