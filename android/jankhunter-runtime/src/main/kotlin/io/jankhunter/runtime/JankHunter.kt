@@ -694,8 +694,9 @@ object JankHunter {
     @JvmStatic
     fun flush() {
         flushLogSpam(force = true)
+        flushMetrics(force = true)
         runtimeCallGraph.flush(force = true, writer)
-        writer?.flush()
+        writer?.flushBlocking(flushTimeoutMs())
     }
 
     @JvmStatic
@@ -1106,6 +1107,10 @@ object JankHunter {
                 asyncWriter.gauge(name, value)
             }
         })
+    }
+
+    private fun flushTimeoutMs(): Long {
+        return maxOf(1000L, (config?.flushIntervalMs() ?: 0L) + 500L)
     }
 
     private fun maybeDumpRetainedHeap(className: String?, holder: String?, ageMs: Long, count: Long) {

@@ -5,6 +5,7 @@ import io.jankhunter.runtime.JankHunterConfig
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -227,7 +228,29 @@ class AsyncLogWriter private constructor(
     }
 
     fun flush() {
-        offer { it.flush() }
+        offer {
+            flushIfNeeded(force = true)
+        }
+    }
+
+    fun flushBlocking(timeoutMs: Long = maxOf(1000L, config.flushIntervalMs() + 500L)): Boolean {
+        if (!running.get()) return false
+        val latch = CountDownLatch(1)
+        val timeout = timeoutMs.coerceAtLeast(1L)
+        val accepted = offerBlocking(timeout) {
+            try {
+                flushIfNeeded(force = true)
+            } finally {
+                latch.countDown()
+            }
+        }
+        if (!accepted) return false
+        return try {
+            latch.await(timeout, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
     }
 
     fun close() {
@@ -255,6 +278,21 @@ class AsyncLogWriter private constructor(
         if (!running.get()) return
         if (!queue.offer(action)) {
             dropped.incrementAndGet()
+        }
+    }
+
+    private fun offerBlocking(timeoutMs: Long, action: Action): Boolean {
+        if (!running.get()) return false
+        return try {
+            if (queue.offer(action, timeoutMs, TimeUnit.MILLISECONDS)) {
+                true
+            } else {
+                dropped.incrementAndGet()
+                false
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
         }
     }
 

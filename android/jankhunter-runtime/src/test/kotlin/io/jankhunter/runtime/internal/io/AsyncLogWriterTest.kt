@@ -8,6 +8,33 @@ import org.junit.Test
 
 class AsyncLogWriterTest {
     @Test
+    fun flushBlockingWaitsUntilQueuedWritesReachDisk() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            val config = JankHunterConfig.builder()
+                .flushIntervalMs(60_000)
+                .logCompressionEnabled(false)
+                .build()
+            val asyncWriter = AsyncLogWriter.open(directory, config, "main")
+
+            asyncWriter.counter("before.close", 1)
+            assertTrue(asyncWriter.flushBlocking())
+
+            val text = directory
+                .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
+                .orEmpty()
+                .joinToString(separator = "\n") { file ->
+                    file.readBytes().toString(StandardCharsets.ISO_8859_1)
+                }
+            assertTrue(text.contains("before.close"))
+
+            asyncWriter.close()
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun recordsIoErrorsAfterWriterRecovery() {
         val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
         try {
