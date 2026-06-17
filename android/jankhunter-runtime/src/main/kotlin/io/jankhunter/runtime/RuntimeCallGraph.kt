@@ -11,6 +11,7 @@ internal class RuntimeCallGraph(
 ) {
     private val stack = ThreadLocal<MutableList<RuntimeCallFrame>>()
     private val counters = ConcurrentHashMap<RuntimeCallKey, RuntimeCallStats>()
+    private val keyAdmissionLock = Any()
     private val dropped = AtomicLong(0L)
     private val lastFlushAtMs = AtomicLong(0L)
 
@@ -81,14 +82,16 @@ internal class RuntimeCallGraph(
     private fun recordEdge(caller: String, callee: String, durationMs: Long, writer: AsyncLogWriter) {
         val tuple = captureContext(caller)
         val key = RuntimeCallKey(tuple.screen, caller, tuple.flow, tuple.step, callee)
-        val stats = counters[key] ?: run {
-            val limit = maxKeys()
-            if (limit <= 0 || counters.size >= limit) {
-                dropped.incrementAndGet()
-                flush(force = false, writer)
-                return
+        val stats = counters[key] ?: synchronized(keyAdmissionLock) {
+            counters[key] ?: run {
+                val limit = maxKeys()
+                if (limit <= 0 || counters.size >= limit) {
+                    dropped.incrementAndGet()
+                    flush(force = false, writer)
+                    return
+                }
+                RuntimeCallStats().also { counters[key] = it }
             }
-            counters.computeIfAbsent(key) { RuntimeCallStats() }
         }
         stats.count.incrementAndGet()
         stats.totalMs.addAndGet(durationMs)
