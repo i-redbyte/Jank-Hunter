@@ -412,7 +412,7 @@ jankhunter inspect logs/*.jhlog \
 
 ## Heap dump для утечек
 
-В Gradle plugin heap dump включен для выбранных debug/QA variant по умолчанию. В новом `jankHunter { ... }` блок настроек сразу лежит рядом с instrumentation-настройками, чтобы его можно было быстро выключить или изменить лимиты:
+В Gradle plugin heap dump выключен по умолчанию и включается только явно для выбранных debug/QA variant. В новом `jankHunter { ... }` блок настроек сразу лежит рядом с instrumentation-настройками, чтобы его можно было быстро включить и задать лимиты:
 
 ```kotlin
 jankHunter {
@@ -425,7 +425,7 @@ jankHunter {
 }
 ```
 
-В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Чтобы оставить легкий режим без HPROF, поставьте `enabled = false`.
+В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если блок не указан или `enabled = false`, SDK остается в легком режиме без HPROF.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 

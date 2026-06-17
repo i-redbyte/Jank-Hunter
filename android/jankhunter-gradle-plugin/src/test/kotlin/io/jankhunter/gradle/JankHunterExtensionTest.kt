@@ -42,10 +42,10 @@ class JankHunterExtensionTest {
     }
 
     @Test
-    fun retainedHeapDumpDslIsEnabledByDefault() {
+    fun retainedHeapDumpDslIsOptInByDefault() {
         val retainedHeapDump = JankHunterExtension.RetainedHeapDump()
 
-        assertEquals(true, retainedHeapDump.enabled)
+        assertEquals(false, retainedHeapDump.enabled)
         assertEquals(10 * 60_000L, retainedHeapDump.minIntervalMs)
         assertEquals(1, retainedHeapDump.maxCount)
         assertEquals(30_000L, retainedHeapDump.minRetainedAgeMs)
