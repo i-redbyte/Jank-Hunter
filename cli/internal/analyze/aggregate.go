@@ -11,6 +11,8 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
+const maxAggregateSamplesPerSignal = 20_000
+
 func Inspect(title string, logs []jhlog.Log) Summary {
 	return InspectWithFilter(title, logs, Filter{})
 }
@@ -104,7 +106,8 @@ type collector struct {
 	firstTime  uint64
 	lastTime   uint64
 
-	routeDurations []namedDuration
+	httpDurations  uint64SampleSet
+	routeDurations map[string]*uint64SampleSet
 	routeFailures  map[string]int
 	routeRx        map[string]uint64
 	routeTx        map[string]uint64
@@ -115,12 +118,12 @@ type collector struct {
 	screenStats        map[string]*ScreenStats
 	ownerStats         map[string]*OwnerStats
 	flowStats          map[string]*FlowStats
-	flowHTTPDurations  map[string][]uint64
+	flowHTTPDurations  map[string]*uint64SampleSet
 	logSpamStats       map[string]*LogSpamStats
 	problemStats       map[string]*ProblemWindowStats
 	runtimeCallStats   map[string]*RuntimeCallStats
 	counterValues      map[string]uint64
-	gaugeValues        map[string][]uint64
+	gaugeValues        map[string]*gaugeStats
 	appVersions        map[string]uint64
 	builds             map[string]uint64
 	devices            map[string]uint64
@@ -155,11 +158,6 @@ type collector struct {
 	currentAttrStep   string
 }
 
-type namedDuration struct {
-	name     string
-	duration uint64
-}
-
 func newCollector(title string, logCount int, options Options) *collector {
 	return &collector{
 		summary:            Summary{Title: title, LogCount: logCount},
@@ -167,6 +165,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 		ownerMap:           options.OwnerMap,
 		classGraph:         options.ClassGraph,
 		heap:               options.HeapEvidence,
+		routeDurations:     map[string]*uint64SampleSet{},
 		routeFailures:      map[string]int{},
 		routeRx:            map[string]uint64{},
 		routeTx:            map[string]uint64{},
@@ -176,12 +175,12 @@ func newCollector(title string, logCount int, options Options) *collector {
 		screenStats:        map[string]*ScreenStats{},
 		ownerStats:         map[string]*OwnerStats{},
 		flowStats:          map[string]*FlowStats{},
-		flowHTTPDurations:  map[string][]uint64{},
+		flowHTTPDurations:  map[string]*uint64SampleSet{},
 		logSpamStats:       map[string]*LogSpamStats{},
 		problemStats:       map[string]*ProblemWindowStats{},
 		runtimeCallStats:   map[string]*RuntimeCallStats{},
 		counterValues:      map[string]uint64{},
-		gaugeValues:        map[string][]uint64{},
+		gaugeValues:        map[string]*gaugeStats{},
 		appVersions:        map[string]uint64{},
 		builds:             map[string]uint64{},
 		devices:            map[string]uint64{},
@@ -230,6 +229,57 @@ type retainedClassStats struct {
 	maxAgeMs uint64
 }
 
+type uint64SampleSet struct {
+	values []uint64
+	seen   int
+	max    uint64
+}
+
+func (s *uint64SampleSet) add(value uint64) {
+	s.seen++
+	if value > s.max {
+		s.max = value
+	}
+	if len(s.values) < maxAggregateSamplesPerSignal {
+		s.values = append(s.values, value)
+		return
+	}
+	index := deterministicAggregateReservoirIndex(s.seen)
+	if index < maxAggregateSamplesPerSignal {
+		s.values[index] = value
+	}
+}
+
+func (s *uint64SampleSet) sortedValues() []uint64 {
+	if len(s.values) == 0 {
+		return nil
+	}
+	values := append([]uint64(nil), s.values...)
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	return values
+}
+
+type gaugeStats struct {
+	count uint64
+	total uint64
+	max   uint64
+}
+
+func (s *gaugeStats) add(value uint64) {
+	s.count++
+	s.total += value
+	if value > s.max {
+		s.max = value
+	}
+}
+
+func (s *gaugeStats) avg() uint64 {
+	if s.count == 0 {
+		return 0
+	}
+	return s.total / s.count
+}
+
 type memoryLeakStats struct {
 	className string
 	holder    string
@@ -238,6 +288,11 @@ type memoryLeakStats struct {
 	step      string
 	count     uint64
 	maxAgeMs  uint64
+}
+
+func deterministicAggregateReservoirIndex(seen int) int {
+	x := uint64(seen)*2862933555777941757 + 3037000493
+	return int(x % uint64(seen))
 }
 
 func normalizeFilter(filter Filter) Filter {
@@ -345,7 +400,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 		c.markCohort()
 		c.summary.HTTPCount++
-		c.routeDurations = append(c.routeDurations, namedDuration{route, event.HTTP.DurationMS})
+		c.httpDurations.add(event.HTTP.DurationMS)
+		c.sampleSet(c.routeDurations, route).add(event.HTTP.DurationMS)
 		c.routeRx[route] += event.HTTP.RxBytes
 		c.routeTx[route] += event.HTTP.TxBytes
 		c.routeTTFB[route] += event.HTTP.TTFBMS
@@ -362,7 +418,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		flow := c.ensureFlow(flowKey)
 		flow.HTTPCount++
 		flow.RouteSample = firstNonEmpty(flow.RouteSample, route)
-		c.flowHTTPDurations[flowKey] = append(c.flowHTTPDurations[flowKey], event.HTTP.DurationMS)
+		c.sampleSet(c.flowHTTPDurations, flowKey).add(event.HTTP.DurationMS)
 		if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
 			flow.HTTPFailed++
 		}
@@ -594,7 +650,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.markCohort()
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
 		if event.Type == jhlog.EventGauge {
-			c.gaugeValues[name] = append(c.gaugeValues[name], event.Metric.Value)
+			c.gauge(name).add(event.Metric.Value)
 		} else {
 			c.counterValues[name] += event.Metric.Value
 		}
@@ -672,6 +728,24 @@ func (c *collector) ensureFlow(key string) *FlowStats {
 		Owner:  context.Owner,
 	}
 	c.flowStats[key] = stats
+	return stats
+}
+
+func (c *collector) sampleSet(target map[string]*uint64SampleSet, key string) *uint64SampleSet {
+	set := target[key]
+	if set == nil {
+		set = &uint64SampleSet{}
+		target[key] = set
+	}
+	return set
+}
+
+func (c *collector) gauge(name string) *gaugeStats {
+	stats := c.gaugeValues[name]
+	if stats == nil {
+		stats = &gaugeStats{}
+		c.gaugeValues[name] = stats
+	}
 	return stats
 }
 
@@ -798,34 +872,27 @@ func (c *collector) finish() Summary {
 	if c.seenEvent && c.lastTime >= c.firstTime {
 		summary.DurationMS = c.lastTime - c.firstTime
 	}
-	routeDurations := map[string][]uint64{}
-	for _, item := range c.routeDurations {
-		routeDurations[item.name] = append(routeDurations[item.name], item.duration)
-	}
 
-	var allHTTPDurations []uint64
-	for route, durations := range routeDurations {
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-		allHTTPDurations = append(allHTTPDurations, durations...)
+	for route, set := range c.routeDurations {
+		durations := set.sortedValues()
 		ttfbAvg := uint64(0)
 		if c.routeTTFBCount[route] > 0 {
 			ttfbAvg = c.routeTTFB[route] / c.routeTTFBCount[route]
 		}
 		summary.Routes = append(summary.Routes, RouteStats{
 			Route:       route,
-			Count:       len(durations),
+			Count:       set.seen,
 			Failures:    c.routeFailures[route],
 			P50MS:       percentileSorted(durations, 0.50),
 			P95MS:       percentileSorted(durations, 0.95),
-			MaxMS:       durations[len(durations)-1],
+			MaxMS:       set.max,
 			AvgTTFBMS:   ttfbAvg,
 			BytesRx:     c.routeRx[route],
 			BytesTx:     c.routeTx[route],
 			OwnerSample: c.routeOwner[route],
 		})
 	}
-	sort.Slice(allHTTPDurations, func(i, j int) bool { return allHTTPDurations[i] < allHTTPDurations[j] })
-	summary.HTTPP95MS = percentileSorted(allHTTPDurations, 0.95)
+	summary.HTTPP95MS = percentileSorted(c.httpDurations.sortedValues(), 0.95)
 
 	for _, stats := range c.screenStats {
 		if stats.Frames > 0 {
@@ -843,9 +910,9 @@ func (c *collector) finish() Summary {
 		summary.Owners = append(summary.Owners, *stats)
 	}
 	for key, stats := range c.flowStats {
-		durations := c.flowHTTPDurations[key]
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-		stats.HTTPP95MS = percentileSorted(durations, 0.95)
+		if durations := c.flowHTTPDurations[key]; durations != nil {
+			stats.HTTPP95MS = percentileSorted(durations.sortedValues(), 0.95)
+		}
 		if stats.UIFrames > 0 {
 			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
 		}
@@ -867,21 +934,10 @@ func (c *collector) finish() Summary {
 		}
 	}
 	for name, values := range c.gaugeValues {
-		var total uint64
-		var max uint64
-		for _, value := range values {
-			total += value
-			if value > max {
-				max = value
-			}
-		}
-		avg := uint64(0)
-		if len(values) > 0 {
-			avg = total / uint64(len(values))
-		}
-		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, max, len(values))})
+		avg := values.avg()
+		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, values.max, values.count)})
 		if strings.HasPrefix(name, "jankstats.") {
-			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, max, len(values))})
+			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, values.max, values.count)})
 		}
 	}
 

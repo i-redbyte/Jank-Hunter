@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -277,6 +278,75 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 	}
 	if len(summary.Flows) != 1 || summary.Flows[0].HTTPP95MS != 1000 {
 		t.Fatalf("flow p95 = %+v, want 1000", summary.Flows)
+	}
+}
+
+func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bounded-aggregate.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	entries := []jhlog.DictionaryEntry{
+		{Kind: jhlog.DictRoute, ID: 1, Value: "GET /feed"},
+		{Kind: jhlog.DictOwner, ID: 2, Value: "FeedRepository.refresh"},
+		{Kind: jhlog.DictMetric, ID: 3, Value: "executor.queue.depth"},
+	}
+	for _, entry := range entries {
+		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+	const total = maxAggregateSamplesPerSignal + 25
+	for i := 1; i <= total; i++ {
+		value := uint64(i)
+		if err := writer.WriteEvent(jhlog.Event{
+			Type:   jhlog.EventHTTP,
+			TimeMS: value,
+			HTTP: &jhlog.HTTPEvent{
+				OwnerID:    2,
+				RouteID:    1,
+				DurationMS: value,
+				Status:     jhlog.Status2xx,
+			},
+		}); err != nil {
+			t.Fatalf("WriteEvent(http %d) error = %v", i, err)
+		}
+		if err := writer.WriteEvent(jhlog.Event{
+			Type:   jhlog.EventGauge,
+			TimeMS: value,
+			Metric: &jhlog.MetricEvent{
+				MetricID: 3,
+				Value:    value,
+			},
+		}); err != nil {
+			t.Fatalf("WriteEvent(gauge %d) error = %v", i, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := InspectFiles("sample", []string{path})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	if summary.HTTPCount != total {
+		t.Fatalf("HTTPCount = %d, want %d", summary.HTTPCount, total)
+	}
+	if len(summary.Routes) != 1 {
+		t.Fatalf("Routes = %+v, want one route", summary.Routes)
+	}
+	route := summary.Routes[0]
+	if route.Count != total || route.MaxMS != total || route.P95MS == 0 {
+		t.Fatalf("route stats lost exact count/max or percentile: %+v", route)
+	}
+	if len(summary.Gauges) != 1 {
+		t.Fatalf("Gauges = %+v, want one gauge", summary.Gauges)
+	}
+	expectedExtra := fmt.Sprintf("avg=%d max=%d samples=%d", uint64(total+1)/2, uint64(total), uint64(total))
+	if summary.Gauges[0].Extra != expectedExtra {
+		t.Fatalf("gauge Extra = %q, want %q", summary.Gauges[0].Extra, expectedExtra)
 	}
 }
 
