@@ -265,38 +265,9 @@ class AsyncLogWriter private constructor(
 
     fun close() {
         if (!accepting.getAndSet(false)) return
-        val drained = CountDownLatch(1)
-        val closeTimeoutMs = closeTimeoutMs()
-        val markerAccepted = offerControlBlocking(closeTimeoutMs) {
-            try {
-                flushIfNeeded(force = true)
-            } finally {
-                drained.countDown()
-            }
-        }
         running.set(false)
-        if (markerAccepted) {
-            try {
-                drained.await(closeTimeoutMs, TimeUnit.MILLISECONDS)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-        } else {
-            dropped.addAndGet(queue.size.toLong())
-        }
-        try {
-            worker.join(closeTimeoutMs)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-        if (worker.isAlive) {
-            worker.interrupt()
-            try {
-                worker.join(500)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-            }
-        }
+        waitForWorker()
+        if (worker.isAlive) return
         try {
             writer.close()
         } catch (_: IOException) {
@@ -329,21 +300,26 @@ class AsyncLogWriter private constructor(
         }
     }
 
-    private fun closeTimeoutMs(): Long {
-        val queueBudgetMs = queue.size.toLong().coerceAtLeast(1L) * CLOSE_DRAIN_MS_PER_QUEUED_ACTION
-        return maxOf(CLOSE_DRAIN_MIN_MS, config.flushIntervalMs() + 500L, queueBudgetMs)
+    private fun waitForWorker() {
+        var interrupted = false
+        while (worker.isAlive) {
+            try {
+                worker.join(CLOSE_JOIN_POLL_MS)
+            } catch (_: InterruptedException) {
+                interrupted = true
+                break
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun loop() {
         while (running.get() || queue.isNotEmpty()) {
             try {
                 queue.poll(250, TimeUnit.MILLISECONDS)?.let(::writeAction)
-                val lost = dropped.getAndSet(0)
-                if (lost > 0) {
-                    writer.counter("jankhunter.events_dropped.count", lost)
-                    writePendingIoErrors()
-                    rotateIfNeeded()
-                }
+                writeDroppedIfNeeded()
                 flushIfNeeded(force = false)
             } catch (_: InterruptedException) {
                 if (!running.get() && queue.isEmpty()) {
@@ -354,7 +330,22 @@ class AsyncLogWriter private constructor(
                 recoverWriterAfterIoError()
             }
         }
-        flushIfNeeded(force = true)
+        try {
+            writeDroppedIfNeeded()
+            flushIfNeeded(force = true)
+        } catch (_: IOException) {
+            pendingIoErrors.incrementAndGet()
+            recoverWriterAfterIoError()
+            flushIfNeeded(force = true)
+        }
+    }
+
+    private fun writeDroppedIfNeeded() {
+        val lost = dropped.getAndSet(0)
+        if (lost <= 0) return
+        writer.counter("jankhunter.events_dropped.count", lost)
+        writePendingIoErrors()
+        rotateIfNeeded()
     }
 
     private fun writeAction(action: Action) {
@@ -455,6 +446,10 @@ class AsyncLogWriter private constructor(
         LogRetention.enforce(directory, filePrefix, writer.file, config.maxLogDirectoryBytes())
     }
 
+    internal fun enqueueForTest(action: Action) {
+        offer(action)
+    }
+
     private data class SessionBootstrap(
         val appVersion: String?,
         val build: String?,
@@ -499,8 +494,7 @@ class AsyncLogWriter private constructor(
     }
 
     companion object {
-        private const val CLOSE_DRAIN_MIN_MS = 5_000L
-        private const val CLOSE_DRAIN_MS_PER_QUEUED_ACTION = 5L
+        private const val CLOSE_JOIN_POLL_MS = 250L
 
         fun open(directory: File, config: JankHunterConfig, processFileSuffix: String): AsyncLogWriter {
             if (!directory.exists() && !directory.mkdirs()) {

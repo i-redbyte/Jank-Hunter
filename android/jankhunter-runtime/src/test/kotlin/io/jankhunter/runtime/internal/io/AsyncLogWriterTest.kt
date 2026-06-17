@@ -3,6 +3,9 @@ package io.jankhunter.runtime.internal.io
 import io.jankhunter.runtime.JankHunterConfig
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,6 +41,47 @@ class AsyncLogWriterTest {
     }
 
     @Test
+    fun closeWaitsForInFlightQueuedActionBeforeClosingWriter() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            val config = JankHunterConfig.builder()
+                .maxQueueSize(16)
+                .flushIntervalMs(60_000)
+                .logCompressionEnabled(false)
+                .build()
+            val asyncWriter = AsyncLogWriter.open(directory, config, "main")
+            val actionStarted = CountDownLatch(1)
+            val releaseAction = CountDownLatch(1)
+
+            asyncWriter.enqueueForTest { writer ->
+                actionStarted.countDown()
+                if (!releaseAction.await(1, TimeUnit.SECONDS)) {
+                    throw java.io.IOException("test action was not released")
+                }
+                writer.counter("slow.close.action", 1)
+            }
+            asyncWriter.counter("after.slow.close", 1)
+
+            val closer = thread(start = true) {
+                asyncWriter.close()
+            }
+            assertTrue(actionStarted.await(1, TimeUnit.SECONDS))
+            Thread.sleep(100)
+            assertTrue("close returned while a queued action was still running", closer.isAlive)
+
+            releaseAction.countDown()
+            closer.join(2_000)
+            assertFalse("close did not finish after the queued action was released", closer.isAlive)
+
+            val text = logText(directory)
+            assertTrue(text.contains("slow.close.action"))
+            assertTrue(text.contains("after.slow.close"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun negativeMetricsAreRecordedAsInvalidCounters() {
         val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
         try {
@@ -65,6 +109,15 @@ class AsyncLogWriterTest {
         } finally {
             directory.deleteRecursively()
         }
+    }
+
+    private fun logText(directory: java.io.File): String {
+        return directory
+            .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
+            .orEmpty()
+            .joinToString(separator = "\n") { file ->
+                file.readBytes().toString(StandardCharsets.ISO_8859_1)
+            }
     }
 
     @Test
