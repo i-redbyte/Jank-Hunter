@@ -90,6 +90,44 @@ func TestPresentationModeWritesLinkedReports(t *testing.T) {
 	}
 }
 
+func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
+	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
+		"--route", "feed",
+		"--screen=Home",
+		"--owner", "FeedRepository",
+		"--owner-map", "owners.json",
+		"--class-graph=graph.jsonl",
+		"sample.jhlog",
+	})
+	if err != nil {
+		t.Fatalf("takeAnalysisOptionsBuilder() error = %v", err)
+	}
+	if got, want := strings.Join(remaining, ","), "sample.jhlog"; got != want {
+		t.Fatalf("remaining = %q, want %q", got, want)
+	}
+	if builder.filter.RouteContains != "feed" || builder.filter.ScreenContains != "Home" || builder.filter.OwnerContains != "FeedRepository" {
+		t.Fatalf("filter = %+v", builder.filter)
+	}
+	if builder.ownerMapPath != "owners.json" || builder.classGraphPath != "graph.jsonl" {
+		t.Fatalf("paths = owner map %q class graph %q", builder.ownerMapPath, builder.classGraphPath)
+	}
+
+	heap, remaining, err := takeHeapInputFlags([]string{
+		"--heap-dump", "dump.hprof",
+		"--heap-evidence=evidence.json",
+		"sample.jhlog",
+	}, "heap-dump", "heap-evidence")
+	if err != nil {
+		t.Fatalf("takeHeapInputFlags() error = %v", err)
+	}
+	if got, want := strings.Join(remaining, ","), "sample.jhlog"; got != want {
+		t.Fatalf("heap remaining = %q, want %q", got, want)
+	}
+	if heap.dumpRaw != "dump.hprof" || heap.evidenceRaw != "evidence.json" {
+		t.Fatalf("heap flags = %+v", heap)
+	}
+}
+
 func assertFileContains(t *testing.T, path string, needles ...string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

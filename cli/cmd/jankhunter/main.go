@@ -76,23 +76,11 @@ func runSample(args []string) error {
 }
 
 func runInspect(args []string) error {
-	filter, remaining, err := takeFilterFlags(args)
+	builder, remaining, err := takeAnalysisOptionsBuilder(args)
 	if err != nil {
 		return err
 	}
-	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
-	if err != nil {
-		return err
-	}
-	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
-	if err != nil {
-		return err
-	}
-	heapDumpRaw, remaining, err := takeStringFlag(remaining, "heap-dump", "")
-	if err != nil {
-		return err
-	}
-	heapEvidenceRaw, remaining, err := takeStringFlag(remaining, "heap-evidence", "")
+	heap, remaining, err := takeHeapInputFlags(remaining, "heap-dump", "heap-evidence")
 	if err != nil {
 		return err
 	}
@@ -112,16 +100,11 @@ func runInspect(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
-	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
+	options, err := builder.build()
 	if err != nil {
 		return err
 	}
-	classGraph, err := analyze.LoadClassGraph(classGraphPath)
-	if err != nil {
-		return err
-	}
-	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
-	options, err = optionsWithHeapEvidence(strings.Join(paths, ", "), paths, options, heapEvidenceRaw, heapDumpRaw)
+	options, err = heap.apply(strings.Join(paths, ", "), paths, options)
 	if err != nil {
 		return err
 	}
@@ -151,7 +134,7 @@ func runInspect(args []string) error {
 }
 
 func runCompare(args []string) error {
-	filter, remaining, err := takeFilterFlags(args)
+	builder, remaining, err := takeAnalysisOptionsBuilder(args)
 	if err != nil {
 		return err
 	}
@@ -163,27 +146,11 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
-	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	baselineHeap, remaining, err := takeHeapInputFlags(remaining, "baseline-heap-dump", "baseline-heap-evidence")
 	if err != nil {
 		return err
 	}
-	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
-	if err != nil {
-		return err
-	}
-	baselineHeapDumpRaw, remaining, err := takeStringFlag(remaining, "baseline-heap-dump", "")
-	if err != nil {
-		return err
-	}
-	candidateHeapDumpRaw, remaining, err := takeStringFlag(remaining, "candidate-heap-dump", "")
-	if err != nil {
-		return err
-	}
-	baselineHeapEvidenceRaw, remaining, err := takeStringFlag(remaining, "baseline-heap-evidence", "")
-	if err != nil {
-		return err
-	}
-	candidateHeapEvidenceRaw, remaining, err := takeStringFlag(remaining, "candidate-heap-evidence", "")
+	candidateHeap, remaining, err := takeHeapInputFlags(remaining, "candidate-heap-dump", "candidate-heap-evidence")
 	if err != nil {
 		return err
 	}
@@ -208,20 +175,15 @@ func runCompare(args []string) error {
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("compare needs --baseline and --candidate")
 	}
-	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
+	options, err := builder.build()
 	if err != nil {
 		return err
 	}
-	classGraph, err := analyze.LoadClassGraph(classGraphPath)
+	baselineOptions, err := baselineHeap.apply("baseline", baselinePaths, options)
 	if err != nil {
 		return err
 	}
-	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
-	baselineOptions, err := optionsWithHeapEvidence("baseline", baselinePaths, options, baselineHeapEvidenceRaw, baselineHeapDumpRaw)
-	if err != nil {
-		return err
-	}
-	candidateOptions, err := optionsWithHeapEvidence("candidate", candidatePaths, options, candidateHeapEvidenceRaw, candidateHeapDumpRaw)
+	candidateOptions, err := candidateHeap.apply("candidate", candidatePaths, options)
 	if err != nil {
 		return err
 	}
@@ -391,6 +353,65 @@ func compareCLILabel(name string) string {
 	}
 }
 
+type analysisOptionsBuilder struct {
+	filter         analyze.Filter
+	ownerMapPath   string
+	classGraphPath string
+}
+
+func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
+	filter, remaining, err := takeFilterFlags(args)
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	return analysisOptionsBuilder{
+		filter:         filter,
+		ownerMapPath:   ownerMapPath,
+		classGraphPath: classGraphPath,
+	}, remaining, nil
+}
+
+func (b analysisOptionsBuilder) build() (analyze.Options, error) {
+	ownerMap, err := analyze.LoadOwnerMap(b.ownerMapPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	classGraph, err := analyze.LoadClassGraph(b.classGraphPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	return analyze.Options{Filter: b.filter, OwnerMap: ownerMap, ClassGraph: classGraph}, nil
+}
+
+type heapInputFlags struct {
+	dumpRaw     string
+	evidenceRaw string
+}
+
+func takeHeapInputFlags(args []string, dumpFlag, evidenceFlag string) (heapInputFlags, []string, error) {
+	dumpRaw, remaining, err := takeStringFlag(args, dumpFlag, "")
+	if err != nil {
+		return heapInputFlags{}, nil, err
+	}
+	evidenceRaw, remaining, err := takeStringFlag(remaining, evidenceFlag, "")
+	if err != nil {
+		return heapInputFlags{}, nil, err
+	}
+	return heapInputFlags{dumpRaw: dumpRaw, evidenceRaw: evidenceRaw}, remaining, nil
+}
+
+func (h heapInputFlags) apply(title string, paths []string, options analyze.Options) (analyze.Options, error) {
+	return optionsWithHeapEvidence(title, paths, options, h.evidenceRaw, h.dumpRaw)
+}
+
 func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
 	heapEvidencePaths := expandComma(heapEvidenceRaw)
 	heapDumpPaths := expandComma(heapDumpRaw)
@@ -487,23 +508,11 @@ func runExport(args []string) error {
 }
 
 func runProblems(args []string) error {
-	filter, remaining, err := takeFilterFlags(args)
+	builder, remaining, err := takeAnalysisOptionsBuilder(args)
 	if err != nil {
 		return err
 	}
-	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
-	if err != nil {
-		return err
-	}
-	classGraphPath, remaining, err := takeStringFlag(remaining, "class-graph", "")
-	if err != nil {
-		return err
-	}
-	heapDumpRaw, remaining, err := takeStringFlag(remaining, "heap-dump", "")
-	if err != nil {
-		return err
-	}
-	heapEvidenceRaw, remaining, err := takeStringFlag(remaining, "heap-evidence", "")
+	heap, remaining, err := takeHeapInputFlags(remaining, "heap-dump", "heap-evidence")
 	if err != nil {
 		return err
 	}
@@ -519,16 +528,11 @@ func runProblems(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("problems needs at least one log file")
 	}
-	ownerMap, err := analyze.LoadOwnerMap(ownerMapPath)
+	options, err := builder.build()
 	if err != nil {
 		return err
 	}
-	classGraph, err := analyze.LoadClassGraph(classGraphPath)
-	if err != nil {
-		return err
-	}
-	options := analyze.Options{Filter: filter, OwnerMap: ownerMap, ClassGraph: classGraph}
-	options, err = optionsWithHeapEvidence(strings.Join(paths, ", "), paths, options, heapEvidenceRaw, heapDumpRaw)
+	options, err = heap.apply(strings.Join(paths, ", "), paths, options)
 	if err != nil {
 		return err
 	}
