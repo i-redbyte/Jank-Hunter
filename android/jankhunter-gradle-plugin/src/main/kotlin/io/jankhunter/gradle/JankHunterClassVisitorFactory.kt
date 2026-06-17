@@ -582,6 +582,15 @@ internal object ClassGraphWriter {
     private val preparedPaths = mutableSetOf<String>()
 
     @Synchronized
+    fun prepare(path: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        file.parentFile?.mkdirs()
+        file.delete()
+        preparedPaths.add(file.absolutePath)
+    }
+
+    @Synchronized
     fun append(path: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
         if (path.isBlank() || edges.isEmpty()) return
         val file = File(path)

@@ -106,7 +106,7 @@ class JankHunterPlugin : Plugin<Project> {
             project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
                 it.dependsOn(ownerMap)
                 it.doFirst {
-                    classGraphOutput.get().asFile.delete()
+                    ClassGraphWriter.prepare(classGraphOutput.get().asFile.absolutePath)
                 }
             }
 
