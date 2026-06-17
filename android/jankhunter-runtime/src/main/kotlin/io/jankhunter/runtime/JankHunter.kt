@@ -473,10 +473,7 @@ object JankHunter {
 
     @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
-        if (runnable == null || runnable is JankHunterRunnable) return runnable
-        if (!isRuntimeActiveForHooks()) return runnable
-        if (hasAdditionalTypeContract(runnable, Runnable::class.java)) return runnable
-        return JankHunterRunnable(runnable, ownerName)
+        return RuntimeDecoratorFactory.wrapRunnable(runnable, ownerName, isRuntimeActiveForHooks())
     }
 
     @JvmStatic
@@ -585,9 +582,9 @@ object JankHunter {
         token: Any?,
         ownerName: String?,
     ): Runnable {
-        if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
-        if (!isRuntimeActiveForHooks()) return runnable
-        val wrapper = JankHunterHandlerRunnable(runnable, ownerName)
+        val runtimeActive = isRuntimeActiveForHooks()
+        val wrapper = RuntimeDecoratorFactory.wrapHandlerRunnable(runnable, ownerName, runtimeActive)
+        if (wrapper === runnable) return runnable
         val maxEntries = config?.maxHandlerTrackingEntries() ?: DEFAULT_MAX_HANDLER_TRACKING_ENTRIES
         val maxWrappers = config?.maxHandlerWrappersPerRunnable() ?: DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE
         if (!handlerWrappers.register(handler, runnable, token, wrapper, maxEntries, maxWrappers)) {
@@ -620,25 +617,17 @@ object JankHunter {
 
     @JvmStatic
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
-        if (callable == null || callable is JankHunterCallable<*>) return callable
-        if (!isRuntimeActiveForHooks()) return callable
-        if (hasAdditionalTypeContract(callable, Callable::class.java)) return callable
-        return JankHunterCallable(callable, ownerName)
+        return RuntimeDecoratorFactory.wrapCallable(callable, ownerName, isRuntimeActiveForHooks())
     }
 
     @JvmStatic
     fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
-        if (block == null || block is JankHunterCoroutineFunction2) return block
-        if (!isRuntimeActiveForHooks()) return block
-        @Suppress("UNCHECKED_CAST")
-        return JankHunterCoroutineFunction2(block as Function2<Any?, Any?, Any?>, ownerName)
+        return RuntimeDecoratorFactory.wrapCoroutineBlock(block, ownerName, isRuntimeActiveForHooks())
     }
 
     @JvmStatic
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
-        if (listener == null || listener is JankHunterClickListener) return listener
-        if (!isRuntimeActiveForHooks()) return listener
-        return JankHunterClickListener(listener, ownerName)
+        return RuntimeDecoratorFactory.wrapClickListener(listener, ownerName, isRuntimeActiveForHooks())
     }
 
     @JvmStatic
@@ -1203,19 +1192,6 @@ object JankHunter {
             ?.takeIf { it.isNotBlank() }
             ?.replace(OWNER_WHITESPACE, "_")
             ?: "unknown"
-    }
-
-    private fun hasAdditionalTypeContract(value: Any, plainType: Class<*>): Boolean {
-        val valueType = value.javaClass
-        if (valueType.interfaces.any { it != plainType }) return true
-
-        var current = valueType.superclass
-        while (current != null && current != Any::class.java) {
-            if (plainType.isAssignableFrom(current)) return true
-            current = current.superclass
-        }
-
-        return false
     }
 
     private fun appIdentity(context: Context): AppIdentity {
