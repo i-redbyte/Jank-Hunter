@@ -48,8 +48,8 @@ class AsyncLogWriterTest {
             }
             (writerField.get(asyncWriter) as BinaryLogWriter).close()
 
-            asyncWriter.counter("after.closed.writer", 1)
-            asyncWriter.flush()
+            asyncWriter.counter("afterclosedwriter", 1)
+            assertTrue(asyncWriter.flushBlocking())
             asyncWriter.close()
 
             val text = directory
@@ -59,6 +59,7 @@ class AsyncLogWriterTest {
                     file.readBytes().toString(StandardCharsets.ISO_8859_1)
                 }
             assertTrue(text.contains("jankhunter.writer_io_error.count"))
+            assertTrue(text.contains("afterclosedwriter"))
         } finally {
             directory.deleteRecursively()
         }

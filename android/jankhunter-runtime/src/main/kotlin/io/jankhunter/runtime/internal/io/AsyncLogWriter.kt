@@ -19,6 +19,7 @@ class AsyncLogWriter private constructor(
     private val running = AtomicBoolean(true)
     private val dropped = AtomicLong()
     private val pendingIoErrors = AtomicLong()
+    private val pendingIoLostEvents = AtomicLong()
     private val filePrefix = "session-$processFileSuffix-"
     private var nextSegmentId = 1L
     private var writer = openSegment()
@@ -299,11 +300,7 @@ class AsyncLogWriter private constructor(
     private fun loop() {
         while (running.get() || queue.isNotEmpty()) {
             try {
-                queue.poll(250, TimeUnit.MILLISECONDS)?.let {
-                    it.write(writer)
-                    writePendingIoErrors()
-                    rotateIfNeeded()
-                }
+                queue.poll(250, TimeUnit.MILLISECONDS)?.let(::writeAction)
                 val lost = dropped.getAndSet(0)
                 if (lost > 0) {
                     writer.counter("jankhunter.events_dropped.count", lost)
@@ -321,6 +318,25 @@ class AsyncLogWriter private constructor(
             }
         }
         flushIfNeeded(force = true)
+    }
+
+    private fun writeAction(action: Action) {
+        try {
+            action.write(writer)
+        } catch (_: IOException) {
+            pendingIoErrors.incrementAndGet()
+            recoverWriterAfterIoError()
+            try {
+                action.write(writer)
+            } catch (_: IOException) {
+                pendingIoErrors.incrementAndGet()
+                pendingIoLostEvents.incrementAndGet()
+                recoverWriterAfterIoError()
+                return
+            }
+        }
+        writePendingIoErrors()
+        rotateIfNeeded()
     }
 
     private fun rotateIfNeeded() {
@@ -368,11 +384,22 @@ class AsyncLogWriter private constructor(
 
     private fun writePendingIoErrors() {
         val errors = pendingIoErrors.getAndSet(0)
-        if (errors <= 0) return
+        val lostEvents = pendingIoLostEvents.getAndSet(0)
+        if (errors <= 0 && lostEvents <= 0) return
         try {
-            writer.counter("jankhunter.writer_io_error.count", errors)
+            if (errors > 0) {
+                writer.counter("jankhunter.writer_io_error.count", errors)
+            }
+            if (lostEvents > 0) {
+                writer.counter("jankhunter.writer_event_lost_on_io.count", lostEvents)
+            }
         } catch (error: IOException) {
-            pendingIoErrors.addAndGet(errors)
+            if (errors > 0) {
+                pendingIoErrors.addAndGet(errors)
+            }
+            if (lostEvents > 0) {
+                pendingIoLostEvents.addAndGet(lostEvents)
+            }
             throw error
         }
     }

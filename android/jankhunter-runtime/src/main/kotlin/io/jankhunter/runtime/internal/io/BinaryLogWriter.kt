@@ -5,6 +5,7 @@ import java.io.BufferedOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.GZIPOutputStream
@@ -23,6 +24,7 @@ class BinaryLogWriter(
     private val dictionary = DictionaryIds(maxDictionaryEntries, maxDictionaryValueBytes)
     private var lastTimestampMs = 0L
     private var logicalBytesWritten = file.length()
+    private var closed = false
 
     init {
         if (file.length() == 0L) {
@@ -43,6 +45,7 @@ class BinaryLogWriter(
 
     @Synchronized
     fun flush() {
+        ensureOpen()
         out.flush()
         bufferedOut.flush()
     }
@@ -335,6 +338,7 @@ class BinaryLogWriter(
     }
 
     private fun idFor(kind: Int, rawValue: String?): Long {
+        ensureOpen()
         val result = dictionary.idFor(kind, rawValue)
         result.definition?.let { definition ->
             val payload = Payload()
@@ -347,6 +351,7 @@ class BinaryLogWriter(
     }
 
     private fun record(eventType: Int, flags: Long, payload: Payload) {
+        ensureOpen()
         val now = SystemClock.elapsedRealtime()
         val delta = if (lastTimestampMs == 0L) 0L else max(0L, now - lastTimestampMs)
         lastTimestampMs = now
@@ -363,8 +368,16 @@ class BinaryLogWriter(
         logicalBytesWritten += written + payload.size
     }
 
+    private fun ensureOpen() {
+        if (closed) {
+            throw IOException("BinaryLogWriter is closed")
+        }
+    }
+
     @Synchronized
     override fun close() {
+        if (closed) return
+        closed = true
         try {
             compressedOut?.finish()
             out.flush()
