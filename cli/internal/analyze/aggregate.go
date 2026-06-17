@@ -1068,7 +1068,7 @@ func percentileSorted(values []uint64, p float64) uint64 {
 	if len(values) == 0 {
 		return 0
 	}
-	index := int(float64(len(values)-1) * p)
+	index := int(math.Ceil(float64(len(values))*p)) - 1
 	if index < 0 {
 		index = 0
 	}

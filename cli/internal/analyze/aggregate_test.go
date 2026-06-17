@@ -240,6 +240,46 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 	}
 }
 
+func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "http-p95.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	events := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 1, Value: "GET /feed"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 2, Value: "FeedScreen"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "FeedRepository.refresh"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 4, Value: "feed.refresh"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 5, Value: "network"}},
+		{Type: jhlog.EventFlow, TimeMS: 1, Flow: &jhlog.FlowEvent{ScreenID: 2, OwnerID: 3, FlowID: 4, StepID: 5}},
+		{Type: jhlog.EventHTTP, TimeMS: 2, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 100, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 3, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 1000, Status: jhlog.Status2xx}},
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(%d) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := InspectFiles("sample", []string{path})
+	if err != nil {
+		t.Fatalf("InspectFiles() error = %v", err)
+	}
+	if summary.HTTPP95MS != 1000 {
+		t.Fatalf("HTTPP95MS = %d, want 1000", summary.HTTPP95MS)
+	}
+	if len(summary.Routes) != 1 || summary.Routes[0].P95MS != 1000 {
+		t.Fatalf("route p95 = %+v, want 1000", summary.Routes)
+	}
+	if len(summary.Flows) != 1 || summary.Flows[0].HTTPP95MS != 1000 {
+		t.Fatalf("flow p95 = %+v, want 1000", summary.Flows)
+	}
+}
+
 func environmentHasItem(environment RunEnvironment, label string, value string) bool {
 	for _, item := range environment.Items {
 		if item.Label == label && item.Value == value {
