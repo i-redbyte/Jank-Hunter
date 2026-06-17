@@ -473,6 +473,7 @@ object JankHunter {
     @JvmStatic
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         if (runnable == null || runnable is JankHunterRunnable) return runnable
+        if (!isRuntimeActiveForHooks()) return runnable
         if (hasAdditionalTypeContract(runnable, Runnable::class.java)) return runnable
         return JankHunterRunnable(runnable, ownerName)
     }
@@ -544,6 +545,7 @@ object JankHunter {
     @JvmStatic
     fun removeHandlerCallbacks(handler: Handler, runnable: Runnable) {
         handler.removeCallbacks(runnable)
+        if (!isRuntimeActiveForHooks()) return
         val wrappers = handlerWrappers.wrappers(handler, runnable, null)
         wrappers.forEach { handler.removeCallbacks(it) }
         handlerWrappers.unregister(handler, runnable, null)
@@ -552,6 +554,7 @@ object JankHunter {
     @JvmStatic
     fun removeHandlerCallbacks(handler: Handler, runnable: Runnable, token: Any?) {
         handler.removeCallbacks(runnable, token)
+        if (!isRuntimeActiveForHooks()) return
         val wrappers = handlerWrappers.wrappers(handler, runnable, token)
         wrappers.forEach { handler.removeCallbacks(it, token) }
         handlerWrappers.unregister(handler, runnable, token)
@@ -560,12 +563,14 @@ object JankHunter {
     @JvmStatic
     fun removeHandlerCallbacksAndMessages(handler: Handler, token: Any?) {
         handler.removeCallbacksAndMessages(token)
+        if (!isRuntimeActiveForHooks()) return
         handlerWrappers.unregister(handler, token)
     }
 
     @JvmStatic
     fun hasHandlerCallbacks(handler: Handler, runnable: Runnable): Boolean {
         if (handler.hasCallbacks(runnable)) return true
+        if (!isRuntimeActiveForHooks()) return false
         return handlerWrappers.wrappers(handler, runnable, null).any { handler.hasCallbacks(it) }
     }
 
@@ -580,6 +585,7 @@ object JankHunter {
         ownerName: String?,
     ): Runnable {
         if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
+        if (!isRuntimeActiveForHooks()) return runnable
         val wrapper = JankHunterHandlerRunnable(runnable, ownerName)
         val maxEntries = config?.maxHandlerTrackingEntries() ?: DEFAULT_MAX_HANDLER_TRACKING_ENTRIES
         val maxWrappers = config?.maxHandlerWrappersPerRunnable() ?: DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE
@@ -614,6 +620,7 @@ object JankHunter {
     @JvmStatic
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
         if (callable == null || callable is JankHunterCallable<*>) return callable
+        if (!isRuntimeActiveForHooks()) return callable
         if (hasAdditionalTypeContract(callable, Callable::class.java)) return callable
         return JankHunterCallable(callable, ownerName)
     }
@@ -621,6 +628,7 @@ object JankHunter {
     @JvmStatic
     fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
         if (block == null || block is JankHunterCoroutineFunction2) return block
+        if (!isRuntimeActiveForHooks()) return block
         @Suppress("UNCHECKED_CAST")
         return JankHunterCoroutineFunction2(block as Function2<Any?, Any?, Any?>, ownerName)
     }
@@ -628,6 +636,7 @@ object JankHunter {
     @JvmStatic
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         if (listener == null || listener is JankHunterClickListener) return listener
+        if (!isRuntimeActiveForHooks()) return listener
         return JankHunterClickListener(listener, ownerName)
     }
 
@@ -640,6 +649,7 @@ object JankHunter {
         ) {
             return executor
         }
+        if (!isRuntimeActiveForHooks()) return executor
         return if (executor is ExecutorService) {
             wrapExecutorService(executor, name, ownerName)
         } else {
@@ -655,6 +665,7 @@ object JankHunter {
         ) {
             return executor
         }
+        if (!isRuntimeActiveForHooks()) return executor
         return if (executor is ScheduledExecutorService) {
             JankHunterScheduledExecutorService(executor, name, ownerName)
         } else {
@@ -669,6 +680,7 @@ object JankHunter {
         ownerName: String? = name,
     ): ScheduledExecutorService? {
         if (executor == null || executor is JankHunterScheduledExecutorService) return executor
+        if (!isRuntimeActiveForHooks()) return executor
         return JankHunterScheduledExecutorService(executor, name, ownerName)
     }
 
@@ -911,6 +923,7 @@ object JankHunter {
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
+        if (!isRuntimeActiveForHooks()) return
         val tuple = captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull()))
         val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
         val maxKeys = config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS
@@ -1086,6 +1099,10 @@ object JankHunter {
     private fun shouldAggregateMetrics(): Boolean {
         val localConfig = config ?: return false
         return localConfig.metricAggregationEnabled() && localConfig.maxMetricAggregationKeys() > 0
+    }
+
+    private fun isRuntimeActiveForHooks(): Boolean {
+        return started.get() && writer != null
     }
 
     private fun flushMetrics(force: Boolean) {

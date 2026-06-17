@@ -1,13 +1,12 @@
 package io.jankhunter.runtime
 
+import android.view.View
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,18 +94,21 @@ class JankHunterExecutorTest {
     fun wrapExecutorServiceKeepsScheduledExecutorServiceContract() {
         val delegate = Executors.newSingleThreadScheduledExecutor()
         try {
-            val wrapped = JankHunter.wrapExecutorService(delegate, "scheduler")
+            var now = 300L
+            val wrapped = JankHunterScheduledExecutorService(
+                delegate = delegate,
+                name = "scheduler",
+                ownerName = "scheduler",
+                clock = { now++ },
+            )
 
-            assertTrue(wrapped is ScheduledExecutorService)
-            val result = (wrapped as ScheduledExecutorService).schedule(
+            val result = wrapped.schedule(
                 Callable { JankHunter.currentOwner() },
                 0L,
                 TimeUnit.MILLISECONDS,
             )
 
             assertEquals("scheduler", result.get(1, TimeUnit.SECONDS))
-            assertSame(wrapped, JankHunter.wrapExecutorService(wrapped, "scheduler"))
-            assertSame(wrapped, JankHunter.wrapScheduledExecutorService(wrapped, "scheduler"))
         } finally {
             delegate.shutdownNow()
         }
@@ -116,7 +118,13 @@ class JankHunterExecutorTest {
     fun scheduledExecutorWrapsPeriodicTasks() {
         val delegate = Executors.newSingleThreadScheduledExecutor()
         try {
-            val wrapped = JankHunter.wrapScheduledExecutorService(delegate, "ticker")!!
+            var now = 400L
+            val wrapped = JankHunterScheduledExecutorService(
+                delegate = delegate,
+                name = "ticker",
+                ownerName = "ticker",
+                clock = { now++ },
+            )
             val latch = CountDownLatch(2)
             val owners = mutableListOf<String>()
 
@@ -139,19 +147,28 @@ class JankHunterExecutorTest {
     }
 
     @Test
-    fun wrappersAreIdempotent() {
+    fun publicWrappersAreNoopsWhenRuntimeInactive() {
+        JankHunter.shutdown()
+
         val delegate = Executor { command -> command.run() }
-        val wrapped = JankHunter.wrapExecutor(delegate, "db")
-
-        assertSame(wrapped, JankHunter.wrapExecutor(wrapped, "db"))
-
+        assertSame(delegate, JankHunter.wrapExecutor(delegate, "db"))
         val scheduled = Executors.newSingleThreadScheduledExecutor()
         try {
-            val wrappedScheduled = JankHunter.wrapExecutor(scheduled, "scheduled")
-            assertSame(wrappedScheduled, JankHunter.wrapExecutor(wrappedScheduled, "scheduled"))
+            assertSame(scheduled, JankHunter.wrapExecutor(scheduled, "scheduled"))
+            assertSame(scheduled, JankHunter.wrapExecutorService(scheduled, "scheduled"))
+            assertSame(scheduled, JankHunter.wrapScheduledExecutorService(scheduled, "scheduled"))
         } finally {
             scheduled.shutdownNow()
         }
+
+        val runnable = Runnable {}
+        assertSame(runnable, JankHunter.wrapRunnable(runnable, "plain"))
+        val callable = Callable { "ok" }
+        assertSame(callable, JankHunter.wrapCallable(callable, "plain"))
+        val coroutineBlock: Function2<Any?, Any?, Any?> = { _, _ -> "ok" }
+        assertSame(coroutineBlock, JankHunter.wrapCoroutineBlock(coroutineBlock, "plain"))
+        val listener = View.OnClickListener {}
+        assertSame(listener, JankHunter.wrapClickListener(listener, "plain"))
     }
 
     @Test
@@ -171,13 +188,13 @@ class JankHunterExecutorTest {
     }
 
     @Test
-    fun wrapRunnableStillWrapsPlainRunnable() {
+    fun wrapRunnableReturnsOriginalWhenRuntimeInactive() {
+        JankHunter.shutdown()
         val runnable = Runnable {}
 
         val wrapped = JankHunter.wrapRunnable(runnable, "plain")
 
-        assertNotSame(runnable, wrapped)
-        assertTrue(wrapped is JankHunterRunnable)
+        assertSame(runnable, wrapped)
     }
 
     @Test
@@ -189,6 +206,18 @@ class JankHunterExecutorTest {
         val wrapped = JankHunter.wrapCallable(priorityCallable, "priority")
 
         assertSame(priorityCallable, wrapped)
+    }
+
+    @Test
+    fun recordLogSpamIsNoopWhenRuntimeInactive() {
+        JankHunter.shutdown()
+        assertEquals(0, logSpamCounterSize())
+
+        repeat(3) {
+            JankHunter.recordLogSpam("BenchmarkOwner", "android.util.Log.d", 3)
+        }
+
+        assertEquals(0, logSpamCounterSize())
     }
 
     @Test
@@ -205,5 +234,13 @@ class JankHunterExecutorTest {
         fun offer(command: Runnable) {
             (command as PriorityRunnable).run()
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun logSpamCounterSize(): Int {
+        val field = JankHunter::class.java.getDeclaredField("logSpamCounters").apply {
+            isAccessible = true
+        }
+        return (field.get(JankHunter) as Map<Any, Any>).size
     }
 }
