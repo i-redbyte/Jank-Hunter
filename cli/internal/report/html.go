@@ -147,7 +147,23 @@ func InfluenceReportHrefIfAvailable(path string, influence analyze.InfluenceSumm
 }
 
 func execute(path, source string, data any) error {
-	tmpl, err := template.New("report").Funcs(template.FuncMap{
+	tmpl, err := template.New("report").Funcs(reportTemplateFuncs()).Parse(source)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return err
+	}
+	html := buf.String()
+	if reportLanguage() == "ru" {
+		html = localizeRussianHTML(html)
+	}
+	return os.WriteFile(path, []byte(html), 0o644)
+}
+
+func reportTemplateFuncs() template.FuncMap {
+	return template.FuncMap{
 		"pctWidth": func(value float64) template.CSS {
 			return template.CSS(fmt.Sprintf("width:%.2f%%", clampPct(value)))
 		},
@@ -229,34 +245,35 @@ func execute(path, source string, data any) error {
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
-		"humanDuration":          humanDuration,
-		"dataSize":               humanDataSizeKB,
-		"tip":                    tooltipHTML,
-		"metricHelp":             metricHelp,
-		"memoryHelp":             memoryMetricHelp,
-		"integralHelp":           integralHelp,
-		"scoreHelp":              scoreHelp,
-		"scoreGuide":             scoreGuideHTML,
-		"integralCriteria":       integralCriteria,
-		"ownerKind":              ownerKindLabel,
-		"problemKind":            problemKindLabel,
-		"codeProblemSearchText":  codeProblemSearchText,
-		"codeProblemLocation":    codeProblemLocation,
-		"codeProblemDrillPath":   codeProblemDrillPath,
-		"codeProblemMetric":      codeProblemMetric,
-		"codeProblemCategories":  codeProblemCategoryStats,
-		"codeProblemSeverities":  codeProblemSeverityStats,
-		"codeProblemCompareRows": codeProblemCompareRows,
-		"memoryLeakSearchText":   memoryLeakSearchText,
-		"memoryLeakCompareRows":  memoryLeakCompareRows,
-		"deltaGroups":            compareDeltaGroups,
-		"deltaLabel":             compareDeltaLabel,
-		"deltaHelp":              compareDeltaHelp,
-		"deltaValue":             compareDeltaValue,
-		"deltaChange":            compareDeltaChange,
-		"deltaInterval":          compareDeltaInterval,
-		"problemDeltas":          problemDeltas,
-		"severityLabel":          severityLabel,
+		"humanDuration":              humanDuration,
+		"dataSize":                   humanDataSizeKB,
+		"tip":                        tooltipHTML,
+		"metricHelp":                 metricHelp,
+		"memoryHelp":                 memoryMetricHelp,
+		"integralHelp":               integralHelp,
+		"scoreHelp":                  scoreHelp,
+		"scoreGuide":                 scoreGuideHTML,
+		"integralCriteria":           integralCriteria,
+		"ownerKind":                  ownerKindLabel,
+		"problemKind":                problemKindLabel,
+		"codeProblemSearchText":      codeProblemSearchText,
+		"codeProblemLocation":        codeProblemLocation,
+		"codeProblemDrillPath":       codeProblemDrillPath,
+		"codeProblemMetric":          codeProblemMetric,
+		"codeProblemCategoryOptions": codeProblemCategoryOptions,
+		"codeProblemCategories":      codeProblemCategoryStats,
+		"codeProblemSeverities":      codeProblemSeverityStats,
+		"codeProblemCompareRows":     codeProblemCompareRows,
+		"memoryLeakSearchText":       memoryLeakSearchText,
+		"memoryLeakCompareRows":      memoryLeakCompareRows,
+		"deltaGroups":                compareDeltaGroups,
+		"deltaLabel":                 compareDeltaLabel,
+		"deltaHelp":                  compareDeltaHelp,
+		"deltaValue":                 compareDeltaValue,
+		"deltaChange":                compareDeltaChange,
+		"deltaInterval":              compareDeltaInterval,
+		"problemDeltas":              problemDeltas,
+		"severityLabel":              severityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
@@ -332,19 +349,7 @@ func execute(path, source string, data any) error {
 			}
 			return value
 		},
-	}).Parse(source)
-	if err != nil {
-		return err
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return err
-	}
-	html := buf.String()
-	if reportLanguage() == "ru" {
-		html = localizeRussianHTML(html)
-	}
-	return os.WriteFile(path, []byte(html), 0o644)
 }
 
 func clampPct(value float64) float64 {
@@ -694,6 +699,32 @@ type registryStat struct {
 	Count    int
 	Score    float64
 	Severity string
+}
+
+var codeProblemCategoryFilterOptions = []string{
+	"Сеть",
+	"UI",
+	"Главный поток",
+	"Память",
+	"Логи",
+	"Выполнение",
+	"Граф влияния",
+	"ANR-risk",
+	"OOM-risk",
+	"GC pressure",
+	"duplicate network",
+	"lifecycle leak",
+	"log spam",
+	"main-thread IO",
+}
+
+func codeProblemCategoryOptions() template.HTML {
+	var out strings.Builder
+	for _, category := range codeProblemCategoryFilterOptions {
+		escaped := template.HTMLEscapeString(category)
+		fmt.Fprintf(&out, `<option value="%s">%s</option>`, escaped, escaped)
+	}
+	return template.HTML(out.String())
 }
 
 func codeProblemCategoryStats(items []analyze.CodeProblemStats) []registryStat {

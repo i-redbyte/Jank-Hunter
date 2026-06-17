@@ -127,6 +127,19 @@ func TestWriteReports(t *testing.T) {
 	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 }
 
+func TestCodeProblemCategoryOptions(t *testing.T) {
+	html := string(codeProblemCategoryOptions())
+	if got := strings.Count(html, "<option "); got != len(codeProblemCategoryFilterOptions) {
+		t.Fatalf("option count = %d, want %d", got, len(codeProblemCategoryFilterOptions))
+	}
+	for _, category := range codeProblemCategoryFilterOptions {
+		want := `<option value="` + category + `">` + category + `</option>`
+		if !strings.Contains(html, want) {
+			t.Fatalf("missing category option %q in %s", category, html)
+		}
+	}
+}
+
 func TestWriteReportsCanHideMathLink(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 	dir := t.TempDir()

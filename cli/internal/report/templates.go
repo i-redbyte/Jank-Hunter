@@ -2386,20 +2386,7 @@ const mathInspectTemplate = `<!doctype html>
             </select>
             <select data-code-registry-category aria-label="Фильтр по категории">
               <option value="">Все категории</option>
-              <option value="Сеть">Сеть</option>
-              <option value="UI">UI</option>
-              <option value="Главный поток">Главный поток</option>
-              <option value="Память">Память</option>
-              <option value="Логи">Логи</option>
-              <option value="Выполнение">Выполнение</option>
-              <option value="Граф влияния">Граф влияния</option>
-              <option value="ANR-risk">ANR-risk</option>
-              <option value="OOM-risk">OOM-risk</option>
-              <option value="GC pressure">GC pressure</option>
-              <option value="duplicate network">duplicate network</option>
-              <option value="lifecycle leak">lifecycle leak</option>
-              <option value="log spam">log spam</option>
-              <option value="main-thread IO">main-thread IO</option>
+              {{codeProblemCategoryOptions}}
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -2911,20 +2898,7 @@ const mathCompareTemplate = `<!doctype html>
             </select>
             <select data-code-registry-category aria-label="Фильтр по категории">
               <option value="">Все категории</option>
-              <option value="Сеть">Сеть</option>
-              <option value="UI">UI</option>
-              <option value="Главный поток">Главный поток</option>
-              <option value="Память">Память</option>
-              <option value="Логи">Логи</option>
-              <option value="Выполнение">Выполнение</option>
-              <option value="Граф влияния">Граф влияния</option>
-              <option value="ANR-risk">ANR-risk</option>
-              <option value="OOM-risk">OOM-risk</option>
-              <option value="GC pressure">GC pressure</option>
-              <option value="duplicate network">duplicate network</option>
-              <option value="lifecycle leak">lifecycle leak</option>
-              <option value="log spam">log spam</option>
-              <option value="main-thread IO">main-thread IO</option>
+              {{codeProblemCategoryOptions}}
             </select>
             <span class="registry-counter" data-code-registry-count></span>
           </div>
@@ -3739,20 +3713,7 @@ const inspectTemplate = `<!doctype html>
         </select>
         <select data-code-registry-category aria-label="Фильтр по категории">
           <option value="">Все категории</option>
-          <option value="Сеть">Сеть</option>
-          <option value="UI">UI</option>
-          <option value="Главный поток">Главный поток</option>
-          <option value="Память">Память</option>
-          <option value="Логи">Логи</option>
-          <option value="Выполнение">Выполнение</option>
-          <option value="Граф влияния">Граф влияния</option>
-          <option value="ANR-risk">ANR-risk</option>
-          <option value="OOM-risk">OOM-risk</option>
-          <option value="GC pressure">GC pressure</option>
-          <option value="duplicate network">duplicate network</option>
-          <option value="lifecycle leak">lifecycle leak</option>
-          <option value="log spam">log spam</option>
-          <option value="main-thread IO">main-thread IO</option>
+          {{codeProblemCategoryOptions}}
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
@@ -4236,20 +4197,7 @@ const compareTemplate = `<!doctype html>
         </select>
         <select data-code-registry-category aria-label="Фильтр по категории">
           <option value="">Все категории</option>
-          <option value="Сеть">Сеть</option>
-          <option value="UI">UI</option>
-          <option value="Главный поток">Главный поток</option>
-          <option value="Память">Память</option>
-          <option value="Логи">Логи</option>
-          <option value="Выполнение">Выполнение</option>
-          <option value="Граф влияния">Граф влияния</option>
-          <option value="ANR-risk">ANR-risk</option>
-          <option value="OOM-risk">OOM-risk</option>
-          <option value="GC pressure">GC pressure</option>
-          <option value="duplicate network">duplicate network</option>
-          <option value="lifecycle leak">lifecycle leak</option>
-          <option value="log spam">log spam</option>
-          <option value="main-thread IO">main-thread IO</option>
+          {{codeProblemCategoryOptions}}
         </select>
         <span class="registry-counter" data-code-registry-count></span>
       </div>
