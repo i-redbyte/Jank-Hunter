@@ -98,6 +98,9 @@ type collector struct {
 	ownerMap   map[string]string
 	classGraph *ClassGraph
 	heap       *HeapEvidence
+	seenEvent  bool
+	firstTime  uint64
+	lastTime   uint64
 
 	routeDurations []namedDuration
 	routeFailures  map[string]int
@@ -241,8 +244,17 @@ func containsFilter(value string, needle string) bool {
 
 func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	c.summary.EventCount++
-	if event.TimeMS > c.summary.DurationMS {
-		c.summary.DurationMS = event.TimeMS
+	if !c.seenEvent {
+		c.seenEvent = true
+		c.firstTime = event.TimeMS
+		c.lastTime = event.TimeMS
+	} else {
+		if event.TimeMS < c.firstTime {
+			c.firstTime = event.TimeMS
+		}
+		if event.TimeMS > c.lastTime {
+			c.lastTime = event.TimeMS
+		}
 	}
 	switch {
 	case event.Session != nil:
@@ -717,6 +729,9 @@ func firstNonEmpty(values ...string) string {
 
 func (c *collector) finish() Summary {
 	summary := c.summary
+	if c.seenEvent && c.lastTime >= c.firstTime {
+		summary.DurationMS = c.lastTime - c.firstTime
+	}
 	routeDurations := map[string][]uint64{}
 	for _, item := range c.routeDurations {
 		routeDurations[item.name] = append(routeDurations[item.name], item.duration)
