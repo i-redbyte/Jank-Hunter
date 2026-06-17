@@ -43,12 +43,17 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) return@onVariants
-            if (generateRuntimeManifest && extension.retainedHeapDump.enabled) {
+            val shouldGenerateRuntimeManifest = generateRuntimeManifest &&
+                (extension.retainedHeapDump.enabled || !extension.autoInit)
+            if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
                     GenerateJankHunterRuntimeManifestTask::class.java,
                 ) {
-                    it.retainedHeapDumpEnabled.set(true)
+                    if (!extension.autoInit) {
+                        it.runtimeEnabled.set(false)
+                    }
+                    it.retainedHeapDumpEnabled.set(extension.retainedHeapDump.enabled)
                     it.retainedHeapDumpMinIntervalMs.set(extension.retainedHeapDump.minIntervalMs)
                     it.retainedHeapDumpMaxCount.set(extension.retainedHeapDump.maxCount)
                     it.retainedHeapDumpMinRetainedAgeMs.set(extension.retainedHeapDump.minRetainedAgeMs)
@@ -138,7 +143,7 @@ class JankHunterPlugin : Plugin<Project> {
                 "Jank Hunter variant {} configured. " +
                     "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
                     "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
-                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} " +
+                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
                     "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                     "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
                     "ownerMapTask={}",
@@ -156,6 +161,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.allowEmptyIncludePackages,
                 extension.instrument.includeWholeApplication,
                 extension.instrument.asmProgressLog,
+                extension.autoInit,
                 extension.retainedHeapDump.enabled,
                 extension.retainedHeapDump.minIntervalMs,
                 extension.retainedHeapDump.maxCount,
