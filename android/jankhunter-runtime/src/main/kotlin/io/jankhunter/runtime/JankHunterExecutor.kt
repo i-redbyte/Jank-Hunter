@@ -22,13 +22,7 @@ class JankHunterExecutor internal constructor(
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
     override fun execute(command: Runnable) {
-        val state = tracker.enqueue()
-        try {
-            delegate.execute(tracker.oneShotRunnable(command, state))
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
-        }
+        tracker.execute(command)
     }
 }
 
@@ -41,13 +35,7 @@ class JankHunterExecutorService internal constructor(
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
     override fun execute(command: Runnable) {
-        val state = tracker.enqueue()
-        try {
-            delegate.execute(tracker.oneShotRunnable(command, state))
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
-        }
+        tracker.execute(command)
     }
 
     override fun shutdown() {
@@ -75,32 +63,18 @@ class JankHunterScheduledExecutorService internal constructor(
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
     override fun execute(command: Runnable) {
-        val state = tracker.enqueue()
-        try {
-            delegate.execute(tracker.oneShotRunnable(command, state))
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
-        }
+        tracker.execute(command)
     }
 
     override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> {
-        val state = tracker.enqueue()
-        return try {
-            TrackedScheduledFuture(delegate.schedule(tracker.oneShotRunnable(command, state), delay, unit), state)
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
+        return tracker.scheduleRunnable(command) { scheduledCommand ->
+            delegate.schedule(scheduledCommand, delay, unit)
         }
     }
 
     override fun <V> schedule(callable: Callable<V>, delay: Long, unit: TimeUnit): ScheduledFuture<V> {
-        val state = tracker.enqueue()
-        return try {
-            TrackedScheduledFuture(delegate.schedule(tracker.oneShotCallable(callable, state), delay, unit), state)
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
+        return tracker.scheduleCallable(callable) { scheduledCallable ->
+            delegate.schedule(scheduledCallable, delay, unit)
         }
     }
 
@@ -110,15 +84,8 @@ class JankHunterScheduledExecutorService internal constructor(
         period: Long,
         unit: TimeUnit,
     ): ScheduledFuture<*> {
-        val state = tracker.enqueue()
-        return try {
-            TrackedScheduledFuture(
-                delegate.scheduleAtFixedRate(tracker.periodicRunnable(command, state), initialDelay, period, unit),
-                state,
-            )
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
+        return tracker.schedulePeriodic(command) { scheduledCommand ->
+            delegate.scheduleAtFixedRate(scheduledCommand, initialDelay, period, unit)
         }
     }
 
@@ -128,15 +95,8 @@ class JankHunterScheduledExecutorService internal constructor(
         delay: Long,
         unit: TimeUnit,
     ): ScheduledFuture<*> {
-        val state = tracker.enqueue()
-        return try {
-            TrackedScheduledFuture(
-                delegate.scheduleWithFixedDelay(tracker.periodicRunnable(command, state), initialDelay, delay, unit),
-                state,
-            )
-        } catch (throwable: Throwable) {
-            state.cancelIfQueued()
-            throw throwable
+        return tracker.schedulePeriodic(command) { scheduledCommand ->
+            delegate.scheduleWithFixedDelay(scheduledCommand, initialDelay, delay, unit)
         }
     }
 
@@ -163,28 +123,68 @@ private class ExecutorTaskTracker(
 ) {
     private val queued = AtomicInteger()
 
-    fun enqueue(): QueuedTaskState {
+    private fun enqueue(): QueuedTaskState {
         val state = QueuedTaskState(clock())
         queued.incrementAndGet()
         recordSnapshot()
         return state
     }
 
-    fun oneShotRunnable(command: Runnable, state: QueuedTaskState): Runnable {
+    fun execute(command: Runnable) {
+        val state = enqueue()
+        try {
+            delegate.execute(oneShotRunnable(command, state))
+        } catch (throwable: Throwable) {
+            state.cancelIfQueued()
+            throw throwable
+        }
+    }
+
+    fun scheduleRunnable(
+        command: Runnable,
+        schedule: (Runnable) -> ScheduledFuture<*>,
+    ): ScheduledFuture<*> {
+        val state = enqueue()
+        return trackScheduled(state) {
+            schedule(oneShotRunnable(command, state))
+        }
+    }
+
+    fun <T> scheduleCallable(
+        callable: Callable<T>,
+        schedule: (Callable<T>) -> ScheduledFuture<T>,
+    ): ScheduledFuture<T> {
+        val state = enqueue()
+        return trackScheduled(state) {
+            schedule(oneShotCallable(callable, state))
+        }
+    }
+
+    fun schedulePeriodic(
+        command: Runnable,
+        schedule: (Runnable) -> ScheduledFuture<*>,
+    ): ScheduledFuture<*> {
+        val state = enqueue()
+        return trackScheduled(state) {
+            schedule(periodicRunnable(command, state))
+        }
+    }
+
+    private fun oneShotRunnable(command: Runnable, state: QueuedTaskState): Runnable {
         return Runnable {
             markStarted(state)
             JankHunter.runExecutorTask(name, ownerName, command, clock)
         }
     }
 
-    fun <T> oneShotCallable(callable: Callable<T>, state: QueuedTaskState): Callable<T> {
+    private fun <T> oneShotCallable(callable: Callable<T>, state: QueuedTaskState): Callable<T> {
         return Callable {
             markStarted(state)
             JankHunter.callExecutorTask(name, ownerName, callable, clock)
         }
     }
 
-    fun periodicRunnable(command: Runnable, state: QueuedTaskState): Runnable {
+    private fun periodicRunnable(command: Runnable, state: QueuedTaskState): Runnable {
         return Runnable {
             markStarted(state)
             JankHunter.runExecutorTask(name, ownerName, command, clock)
@@ -204,6 +204,18 @@ private class ExecutorTaskTracker(
 
     private fun recordSnapshot() {
         JankHunter.recordExecutorSnapshot(name, delegate, queued.get())
+    }
+
+    private fun <T> trackScheduled(
+        state: QueuedTaskState,
+        schedule: () -> ScheduledFuture<T>,
+    ): ScheduledFuture<T> {
+        return try {
+            TrackedScheduledFuture(schedule(), state)
+        } catch (throwable: Throwable) {
+            state.cancelIfQueued()
+            throw throwable
+        }
     }
 
     inner class QueuedTaskState(
