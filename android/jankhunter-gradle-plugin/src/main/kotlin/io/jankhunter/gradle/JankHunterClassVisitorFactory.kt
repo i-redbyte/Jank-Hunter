@@ -354,106 +354,48 @@ internal object InstrumentationHooks {
     }
 
     fun handlerRunnableKind(owner: String, name: String, descriptor: String): HandlerRunnableKind? {
-        if (owner != "android/os/Handler") return null
-        return when {
-            name == "post" && descriptor == "(Ljava/lang/Runnable;)Z" -> HandlerRunnableKind.SINGLE_RUNNABLE
-            name == "postAtFrontOfQueue" &&
-                descriptor == "(Ljava/lang/Runnable;)Z" -> {
-                HandlerRunnableKind.FRONT_RUNNABLE
-            }
-            name == "postDelayed" &&
-                descriptor == "(Ljava/lang/Runnable;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_LONG_DELAY
-            }
-            name == "postAtTime" &&
-                descriptor == "(Ljava/lang/Runnable;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_LONG_TIME
-            }
-            name == "postDelayed" &&
-                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY
-            }
-            name == "postAtTime" &&
-                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z" -> {
-                HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME
-            }
-            else -> null
-        }
+        return HookSignatureCatalog.handlerRunnableSignatures
+            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+            ?.intent
+            ?.let { it as? HookIntent.HandlerRunnable }
+            ?.kind
     }
 
     fun handlerRemoveCallbacksKind(owner: String, name: String, descriptor: String): HandlerRemoveCallbacksKind? {
-        if (owner != "android/os/Handler" || name != "removeCallbacks") return null
-        return when (descriptor) {
-            "(Ljava/lang/Runnable;)V" -> HandlerRemoveCallbacksKind.RUNNABLE
-            "(Ljava/lang/Runnable;Ljava/lang/Object;)V" -> HandlerRemoveCallbacksKind.RUNNABLE_OBJECT
-            else -> null
-        }
+        return HookSignatureCatalog.handlerRemoveCallbacksSignatures
+            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+            ?.intent
+            ?.let { it as? HookIntent.HandlerRemoveCallbacks }
+            ?.kind
     }
 
     fun isHandlerRemoveCallbacksAndMessages(owner: String, name: String, descriptor: String): Boolean {
-        return owner == "android/os/Handler" &&
-            name == "removeCallbacksAndMessages" &&
-            descriptor == "(Ljava/lang/Object;)V"
+        return HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.matches(methodCall(owner, name, descriptor))
     }
 
     fun isHandlerHasCallbacks(owner: String, name: String, descriptor: String): Boolean {
-        return owner == "android/os/Handler" &&
-            name == "hasCallbacks" &&
-            descriptor == "(Ljava/lang/Runnable;)Z"
+        return HookSignatureCatalog.handlerHasCallbacks.spec.matches(methodCall(owner, name, descriptor))
     }
 
     fun isHandlerMessageSend(owner: String, name: String, descriptor: String): Boolean {
-        if (owner != "android/os/Handler") return false
-        return when (name) {
-            "sendMessage",
-            "sendMessageAtFrontOfQueue" -> descriptor == "(Landroid/os/Message;)Z"
-            "sendMessageDelayed",
-            "sendMessageAtTime" -> descriptor == "(Landroid/os/Message;J)Z"
-            else -> false
-        }
+        val call = methodCall(owner, name, descriptor)
+        return HookSignatureCatalog.handlerMessageSendSignatures.any { it.matches(call) }
     }
 
     fun executorRunnableKind(owner: String, name: String, descriptor: String): ExecutorRunnableKind? {
-        if (!isExecutorOwner(owner)) return null
-        return when {
-            name == "execute" && descriptor == "(Ljava/lang/Runnable;)V" -> ExecutorRunnableKind.SINGLE_RUNNABLE
-            name == "submit" &&
-                descriptor == "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;" -> {
-                ExecutorRunnableKind.SINGLE_RUNNABLE
-            }
-            name == "submit" &&
-                descriptor == "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;" -> {
-                ExecutorRunnableKind.RUNNABLE_OBJECT
-            }
-            name == "schedule" &&
-                descriptor == RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
-                ExecutorRunnableKind.RUNNABLE_LONG_OBJECT
-            }
-            name == "scheduleAtFixedRate" &&
-                descriptor == RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
-                ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
-            }
-            name == "scheduleWithFixedDelay" &&
-                descriptor == RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
-                ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT
-            }
-            else -> null
-        }
+        return HookSignatureCatalog.executorRunnableSignatures
+            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+            ?.intent
+            ?.let { it as? HookIntent.ExecutorRunnable }
+            ?.kind
     }
 
     fun executorCallableKind(owner: String, name: String, descriptor: String): ExecutorCallableKind? {
-        if (!isExecutorOwner(owner)) return null
-        return when {
-            name == "submit" &&
-                descriptor == "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;" -> {
-                ExecutorCallableKind.SINGLE_CALLABLE
-            }
-            name == "schedule" &&
-                descriptor == CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE -> {
-                ExecutorCallableKind.CALLABLE_LONG_OBJECT
-            }
-            else -> null
-        }
+        return HookSignatureCatalog.executorCallableSignatures
+            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+            ?.intent
+            ?.let { it as? HookIntent.ExecutorCallable }
+            ?.kind
     }
 
     fun coroutineBlockKind(owner: String, name: String, descriptor: String): CoroutineBlockKind? {
@@ -532,20 +474,6 @@ internal object InstrumentationHooks {
             returnDescriptor(owner, name.removeSuffix("\$default"))
     }
 
-    private fun isExecutorOwner(owner: String): Boolean {
-        return owner in executorOwners
-    }
-
-    private val executorOwners = setOf(
-        "java/util/concurrent/Executor",
-        "java/util/concurrent/ExecutorService",
-        "java/util/concurrent/ScheduledExecutorService",
-        "java/util/concurrent/AbstractExecutorService",
-        "java/util/concurrent/ThreadPoolExecutor",
-        "java/util/concurrent/ScheduledThreadPoolExecutor",
-        "java/util/concurrent/ForkJoinPool",
-    )
-
     private val coroutineBuilderOwners = setOf(
         "kotlinx/coroutines/BuildersKt",
         "kotlinx/coroutines/CoroutineScopeKt",
@@ -573,14 +501,18 @@ internal object InstrumentationHooks {
         "withTimeoutOrNull",
     )
 
-    private const val RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
-        "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
-    private const val RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE =
-        "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
-    private const val CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
-        "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
     private const val SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX =
         "Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;"
+
+    private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {
+        return MethodCall(
+            opcode = Opcodes.INVOKEVIRTUAL,
+            owner = owner,
+            name = name,
+            descriptor = descriptor,
+            isInterface = false,
+        )
+    }
 }
 
 internal enum class HandlerRunnableKind {

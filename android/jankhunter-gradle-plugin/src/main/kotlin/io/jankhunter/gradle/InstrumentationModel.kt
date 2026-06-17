@@ -130,6 +130,11 @@ internal data class SignatureSpec(
     }
 }
 
+internal data class IntentSignature(
+    val spec: SignatureSpec,
+    val intent: HookIntent,
+)
+
 internal sealed class HookIntent(
     val id: String,
 ) {
@@ -166,6 +171,13 @@ internal sealed class HookDecision {
 }
 
 internal object HookSignatureCatalog {
+    private const val RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+    private const val RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/lang/Runnable;JJLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+    private const val CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE =
+        "(Ljava/util/concurrent/Callable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;"
+
     val okHttpEventListenerFactory = SignatureSpec(
         id = "okhttp3.builder.event_listener_factory.v3",
         owner = "okhttp3/OkHttpClient\$Builder",
@@ -188,6 +200,226 @@ internal object HookSignatureCatalog {
         descriptor = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
         roles = mapOf(ArgumentRole.Listener to 1),
     )
+
+    val handlerRunnableSignatures = listOf(
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post.runnable",
+                owner = "android/os/Handler",
+                name = "post",
+                descriptor = "(Ljava/lang/Runnable;)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.SINGLE_RUNNABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post_at_front.runnable",
+                owner = "android/os/Handler",
+                name = "postAtFrontOfQueue",
+                descriptor = "(Ljava/lang/Runnable;)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.FRONT_RUNNABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post_delayed.runnable_delay",
+                owner = "android/os/Handler",
+                name = "postDelayed",
+                descriptor = "(Ljava/lang/Runnable;J)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Delay to 1),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.RUNNABLE_LONG_DELAY),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post_at_time.runnable_time",
+                owner = "android/os/Handler",
+                name = "postAtTime",
+                descriptor = "(Ljava/lang/Runnable;J)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Delay to 1),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.RUNNABLE_LONG_TIME),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post_delayed.runnable_token_delay",
+                owner = "android/os/Handler",
+                name = "postDelayed",
+                descriptor = "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Token to 1, ArgumentRole.Delay to 2),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.post_at_time.runnable_token_time",
+                owner = "android/os/Handler",
+                name = "postAtTime",
+                descriptor = "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z",
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Token to 1, ArgumentRole.Delay to 2),
+            ),
+            HookIntent.HandlerRunnable(HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME),
+        ),
+    )
+
+    val handlerRemoveCallbacksSignatures = listOf(
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.remove_callbacks.runnable",
+                owner = "android/os/Handler",
+                name = "removeCallbacks",
+                descriptor = "(Ljava/lang/Runnable;)V",
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.HandlerRemoveCallbacks(HandlerRemoveCallbacksKind.RUNNABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "android.handler.remove_callbacks.runnable_token",
+                owner = "android/os/Handler",
+                name = "removeCallbacks",
+                descriptor = "(Ljava/lang/Runnable;Ljava/lang/Object;)V",
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Token to 1),
+            ),
+            HookIntent.HandlerRemoveCallbacks(HandlerRemoveCallbacksKind.RUNNABLE_OBJECT),
+        ),
+    )
+
+    val handlerRemoveCallbacksAndMessages = IntentSignature(
+        SignatureSpec(
+            id = "android.handler.remove_callbacks_and_messages.token",
+            owner = "android/os/Handler",
+            name = "removeCallbacksAndMessages",
+            descriptor = "(Ljava/lang/Object;)V",
+            roles = mapOf(ArgumentRole.Token to 0),
+        ),
+        HookIntent.HandlerRemoveCallbacksAndMessages,
+    )
+
+    val handlerHasCallbacks = IntentSignature(
+        SignatureSpec(
+            id = "android.handler.has_callbacks.runnable",
+            owner = "android/os/Handler",
+            name = "hasCallbacks",
+            descriptor = "(Ljava/lang/Runnable;)Z",
+            roles = mapOf(ArgumentRole.Runnable to 0),
+        ),
+        HookIntent.HandlerHasCallbacks,
+    )
+
+    val handlerMessageSendSignatures = listOf(
+        SignatureSpec(
+            id = "android.handler.send_message.message",
+            owners = setOf("android/os/Handler"),
+            names = setOf("sendMessage", "sendMessageAtFrontOfQueue"),
+            descriptors = setOf("(Landroid/os/Message;)Z"),
+        ),
+        SignatureSpec(
+            id = "android.handler.send_message_delayed.message_time",
+            owners = setOf("android/os/Handler"),
+            names = setOf("sendMessageDelayed", "sendMessageAtTime"),
+            descriptors = setOf("(Landroid/os/Message;J)Z"),
+            roles = mapOf(ArgumentRole.Delay to 1),
+        ),
+    )
+
+    val executorOwners = setOf(
+        "java/util/concurrent/Executor",
+        "java/util/concurrent/ExecutorService",
+        "java/util/concurrent/ScheduledExecutorService",
+        "java/util/concurrent/AbstractExecutorService",
+        "java/util/concurrent/ThreadPoolExecutor",
+        "java/util/concurrent/ScheduledThreadPoolExecutor",
+        "java/util/concurrent/ForkJoinPool",
+    )
+
+    val executorRunnableSignatures = listOf(
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.executor.execute.runnable",
+                owners = executorOwners,
+                names = setOf("execute"),
+                descriptors = setOf("(Ljava/lang/Runnable;)V"),
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.ExecutorRunnable(ExecutorRunnableKind.SINGLE_RUNNABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.executor.submit.runnable",
+                owners = executorOwners,
+                names = setOf("submit"),
+                descriptors = setOf("(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;"),
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.ExecutorRunnable(ExecutorRunnableKind.SINGLE_RUNNABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.executor.submit.runnable_result",
+                owners = executorOwners,
+                names = setOf("submit"),
+                descriptors = setOf("(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;"),
+                roles = mapOf(ArgumentRole.Runnable to 0),
+            ),
+            HookIntent.ExecutorRunnable(ExecutorRunnableKind.RUNNABLE_OBJECT),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.scheduled_executor.schedule.runnable_delay_unit",
+                owners = executorOwners,
+                names = setOf("schedule"),
+                descriptors = setOf(RUNNABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE),
+                roles = mapOf(ArgumentRole.Runnable to 0, ArgumentRole.Delay to 1, ArgumentRole.TimeUnit to 2),
+            ),
+            HookIntent.ExecutorRunnable(ExecutorRunnableKind.RUNNABLE_LONG_OBJECT),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.scheduled_executor.periodic.runnable_delay_period_unit",
+                owners = executorOwners,
+                names = setOf("scheduleAtFixedRate", "scheduleWithFixedDelay"),
+                descriptors = setOf(RUNNABLE_LONG_LONG_TIME_UNIT_SCHEDULED_FUTURE),
+                roles = mapOf(
+                    ArgumentRole.Runnable to 0,
+                    ArgumentRole.Delay to 1,
+                    ArgumentRole.Period to 2,
+                    ArgumentRole.TimeUnit to 3,
+                ),
+            ),
+            HookIntent.ExecutorRunnable(ExecutorRunnableKind.RUNNABLE_LONG_LONG_OBJECT),
+        ),
+    )
+
+    val executorCallableSignatures = listOf(
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.executor.submit.callable",
+                owners = executorOwners,
+                names = setOf("submit"),
+                descriptors = setOf("(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;"),
+                roles = mapOf(ArgumentRole.Callable to 0),
+            ),
+            HookIntent.ExecutorCallable(ExecutorCallableKind.SINGLE_CALLABLE),
+        ),
+        IntentSignature(
+            SignatureSpec(
+                id = "jdk.scheduled_executor.schedule.callable_delay_unit",
+                owners = executorOwners,
+                names = setOf("schedule"),
+                descriptors = setOf(CALLABLE_LONG_TIME_UNIT_SCHEDULED_FUTURE),
+                roles = mapOf(ArgumentRole.Callable to 0, ArgumentRole.Delay to 1, ArgumentRole.TimeUnit to 2),
+            ),
+            HookIntent.ExecutorCallable(ExecutorCallableKind.CALLABLE_LONG_OBJECT),
+        ),
+    )
+
+    fun matchIntent(call: MethodCall, signatures: List<IntentSignature>): HookDecision.Matched? {
+        val matched = signatures.firstOrNull { it.spec.matches(call) } ?: return null
+        return HookDecision.Matched(matched.intent, matched.spec.id)
+    }
 }
 
 internal class RuleRegistry(
@@ -268,23 +500,23 @@ private object HandlerInstrumentationRule : InstrumentationRule {
 
     override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.handlers) {
-            InstrumentationHooks.handlerRunnableKind(call.owner, call.name, call.descriptor)?.let {
-                return HookDecision.Matched(HookIntent.HandlerRunnable(it), "android.handler.runnable.${it.name.lowercase()}")
+            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.handlerRunnableSignatures)?.let {
+                return it
             }
-            InstrumentationHooks.handlerRemoveCallbacksKind(call.owner, call.name, call.descriptor)?.let {
-                return HookDecision.Matched(HookIntent.HandlerRemoveCallbacks(it), "android.handler.remove.${it.name.lowercase()}")
+            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.handlerRemoveCallbacksSignatures)?.let {
+                return it
             }
-            if (InstrumentationHooks.isHandlerRemoveCallbacksAndMessages(call.owner, call.name, call.descriptor)) {
+            if (HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.matches(call)) {
                 return HookDecision.Matched(
                     HookIntent.HandlerRemoveCallbacksAndMessages,
-                    "android.handler.remove_callbacks_and_messages",
+                    HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.id,
                 )
             }
-            if (InstrumentationHooks.isHandlerHasCallbacks(call.owner, call.name, call.descriptor)) {
-                return HookDecision.Matched(HookIntent.HandlerHasCallbacks, "android.handler.has_callbacks")
+            if (HookSignatureCatalog.handlerHasCallbacks.spec.matches(call)) {
+                return HookDecision.Matched(HookIntent.HandlerHasCallbacks, HookSignatureCatalog.handlerHasCallbacks.spec.id)
             }
-            if (InstrumentationHooks.isHandlerMessageSend(call.owner, call.name, call.descriptor)) {
-                return HookDecision.Matched(HookIntent.HandlerMessageSend, "android.handler.message_send")
+            HookSignatureCatalog.handlerMessageSendSignatures.firstOrNull { it.matches(call) }?.let {
+                return HookDecision.Matched(HookIntent.HandlerMessageSend, it.id)
             }
         }
         return HookDecision.NotMatched
@@ -297,11 +529,11 @@ private object ExecutorInstrumentationRule : InstrumentationRule {
 
     override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.executors) {
-            InstrumentationHooks.executorRunnableKind(call.owner, call.name, call.descriptor)?.let {
-                return HookDecision.Matched(HookIntent.ExecutorRunnable(it), "jdk.executor.runnable.${it.name.lowercase()}")
+            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.executorRunnableSignatures)?.let {
+                return it
             }
-            InstrumentationHooks.executorCallableKind(call.owner, call.name, call.descriptor)?.let {
-                return HookDecision.Matched(HookIntent.ExecutorCallable(it), "jdk.executor.callable.${it.name.lowercase()}")
+            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.executorCallableSignatures)?.let {
+                return it
             }
         }
         return HookDecision.NotMatched
