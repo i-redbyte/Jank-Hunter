@@ -95,6 +95,28 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 	}
 }
 
+func TestAnalyzeInspectRobustStatsHonorClassFilter(t *testing.T) {
+	path := writeRobustFixture(t)
+
+	report, err := AnalyzeInspect([]string{path}, analyze.Options{
+		Filter: analyze.Filter{ClassContains: "CheckoutActivity"},
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeInspect() error = %v", err)
+	}
+
+	checkout := findRobustStat(report.RobustStats, "Источник", "com.app.CheckoutActivity", "Возраст удержанного объекта")
+	if checkout == nil {
+		t.Fatalf("checkout retained stat not found: %#v", report.RobustStats)
+	}
+	if checkout.Count != 1 || checkout.P95 != 30_000 {
+		t.Fatalf("unexpected checkout retained stat: %+v", *checkout)
+	}
+	if feed := findRobustStat(report.RobustStats, "Источник", "com.app.FeedActivity", "Возраст удержанного объекта"); feed != nil {
+		t.Fatalf("class filter leaked feed retained stat: %+v", *feed)
+	}
+}
+
 func robustSet(values ...float64) *robustSampleSet {
 	set := &robustSampleSet{}
 	for _, value := range values {
@@ -116,6 +138,8 @@ func writeRobustFixture(t *testing.T) string {
 		{Kind: jhlog.DictRoute, ID: 2, Value: "GET /feed"},
 		{Kind: jhlog.DictScreen, ID: 3, Value: "FeedScreen"},
 		{Kind: jhlog.DictMetric, ID: 4, Value: "executor.queue.depth"},
+		{Kind: jhlog.DictClass, ID: 5, Value: "com.app.CheckoutActivity"},
+		{Kind: jhlog.DictClass, ID: 6, Value: "com.app.FeedActivity"},
 	}
 	for _, entry := range entries {
 		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
@@ -131,6 +155,8 @@ func writeRobustFixture(t *testing.T) string {
 		{Type: jhlog.EventStall, TimeMS: 2200, Stall: &jhlog.StallEvent{OwnerID: 1, DurationMS: 42}},
 		{Type: jhlog.EventGauge, TimeMS: 2300, Metric: &jhlog.MetricEvent{MetricID: 4, Value: 10}},
 		{Type: jhlog.EventGauge, TimeMS: 2400, Metric: &jhlog.MetricEvent{MetricID: 4, Value: 20}},
+		{Type: jhlog.EventRetained, TimeMS: 2500, Retained: &jhlog.RetainedEvent{ClassID: 5, AgeMS: 30_000, Count: 1}},
+		{Type: jhlog.EventRetained, TimeMS: 2600, Retained: &jhlog.RetainedEvent{ClassID: 6, AgeMS: 40_000, Count: 1}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {

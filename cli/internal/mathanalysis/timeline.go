@@ -73,6 +73,7 @@ func normalizeTimelineFilter(filter analyze.Filter) analyze.Filter {
 		RouteContains:  strings.ToLower(filter.RouteContains),
 		ScreenContains: strings.ToLower(filter.ScreenContains),
 		OwnerContains:  strings.ToLower(filter.OwnerContains),
+		ClassContains:  strings.ToLower(filter.ClassContains),
 	}
 }
 

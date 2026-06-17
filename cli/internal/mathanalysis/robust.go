@@ -86,7 +86,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 		c.addValue("Источник", owner, "Пауза главного потока", "ms", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
-		if !timelineContainsFilter(className, c.filter.OwnerContains) {
+		if !timelineContainsFilter(className, c.filter.ClassContains) {
 			return
 		}
 		c.addValue("Источник", className, "Возраст удержанного объекта", "ms", float64(event.Retained.AgeMS))
