@@ -33,8 +33,21 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+data class JankHunterInitDiagnostics(
+    val status: String,
+    val failureClass: String? = null,
+    val failureMessage: String? = null,
+    val processName: String? = null,
+    val logDirectory: String? = null,
+    val atMs: Long = 0L,
+    val attempts: Long = 0L,
+    val failures: Long = 0L,
+)
+
 object JankHunter {
     private val started = AtomicBoolean(false)
+    private val initAttempts = AtomicLong()
+    private val initFailures = AtomicLong()
     private val owner = ThreadLocal<String>()
     private val flow = ThreadLocal<String>()
     private val flowStep = ThreadLocal<String>()
@@ -100,6 +113,9 @@ object JankHunter {
     @Volatile
     private var lastContextKey = ""
 
+    @Volatile
+    private var initDiagnostics = JankHunterInitDiagnostics(status = "not_started")
+
     @JvmStatic
     fun init(context: Context?) {
         init(context, JankHunterConfig.builder().build())
@@ -107,15 +123,36 @@ object JankHunter {
 
     @JvmStatic
     fun init(context: Context?, providedConfig: JankHunterConfig?) {
-        if (context == null || providedConfig == null || !providedConfig.enabled()) return
+        val attempt = initAttempts.incrementAndGet()
+        if (context == null) {
+            recordInitStatus("missing_context", attempt)
+            return
+        }
+        if (providedConfig == null) {
+            recordInitStatus("missing_config", attempt)
+            return
+        }
+        if (!providedConfig.enabled()) {
+            recordInitStatus("disabled", attempt)
+            return
+        }
 
         var acquiredStart = false
+        var processNameForDiagnostics: String? = null
+        var directoryForDiagnostics: File? = null
         try {
             val appContext = context.applicationContext ?: context
             val processName = ProcessNames.current(appContext)
+            processNameForDiagnostics = processName
             val mainProcessName = appContext.packageName
-            if (!providedConfig.isProcessAllowed(processName, mainProcessName)) return
-            if (!started.compareAndSet(false, true)) return
+            if (!providedConfig.isProcessAllowed(processName, mainProcessName)) {
+                recordInitStatus("process_not_allowed", attempt, processName)
+                return
+            }
+            if (!started.compareAndSet(false, true)) {
+                recordInitStatus("already_started", attempt, processName)
+                return
+            }
             acquiredStart = true
 
             config = providedConfig
@@ -129,6 +166,7 @@ object JankHunter {
             )
 
             val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
+            directoryForDiagnostics = directory
             val redactedProcessName = providedConfig.redactProcessName(processName)
                 ?.takeIf { it.isNotBlank() }
                 ?: "unknown"
@@ -207,17 +245,30 @@ object JankHunter {
                     ).also { it.start() }
                 }
             }
-        } catch (_: Throwable) {
+            recordInitStatus("started", attempt, processName, directory)
+        } catch (throwable: Throwable) {
             if (acquiredStart) {
                 shutdown()
             } else {
                 resetState()
             }
+            recordInitFailure(throwable, attempt, processNameForDiagnostics, directoryForDiagnostics)
         }
     }
 
     @JvmStatic
     fun isStarted(): Boolean = started.get()
+
+    @JvmStatic
+    fun initDiagnostics(): JankHunterInitDiagnostics = initDiagnostics
+
+    @JvmStatic
+    fun lastInitFailure(): String? {
+        val diagnostics = initDiagnostics
+        return diagnostics.failureClass?.let { failureClass ->
+            diagnostics.failureMessage?.let { "$failureClass: $it" } ?: failureClass
+        }
+    }
 
     @JvmStatic
     fun shutdown() {
@@ -278,6 +329,41 @@ object JankHunter {
             block()
         } catch (_: Throwable) {
         }
+    }
+
+    private fun recordInitStatus(
+        status: String,
+        attempt: Long,
+        processName: String? = null,
+        logDirectory: File? = null,
+    ) {
+        initDiagnostics = JankHunterInitDiagnostics(
+            status = status,
+            processName = processName,
+            logDirectory = logDirectory?.absolutePath,
+            atMs = nowMs(),
+            attempts = attempt,
+            failures = initFailures.get(),
+        )
+    }
+
+    private fun recordInitFailure(
+        throwable: Throwable,
+        attempt: Long,
+        processName: String?,
+        logDirectory: File?,
+    ) {
+        val failures = initFailures.incrementAndGet()
+        initDiagnostics = JankHunterInitDiagnostics(
+            status = "failed",
+            failureClass = throwable.javaClass.simpleName ?: throwable.javaClass.name,
+            failureMessage = throwable.message,
+            processName = processName,
+            logDirectory = logDirectory?.absolutePath,
+            atMs = nowMs(),
+            attempts = attempt,
+            failures = failures,
+        )
     }
 
     @JvmStatic
