@@ -13,29 +13,32 @@ import (
 )
 
 const (
-	hprofTagString        = 0x01
-	hprofTagLoadClass     = 0x02
-	hprofTagHeapDump      = 0x0c
-	hprofTagHeapDumpSeg   = 0x1c
-	hprofSubClassDump     = 0x20
-	hprofSubInstanceDump  = 0x21
-	hprofSubObjectArray   = 0x22
-	hprofSubPrimitiveArr  = 0x23
-	hprofSubHeapDumpInfo  = 0xfe
-	hprofTypeObject       = 2
-	hprofTypeBoolean      = 4
-	hprofTypeChar         = 5
-	hprofTypeFloat        = 6
-	hprofTypeDouble       = 7
-	hprofTypeByte         = 8
-	hprofTypeShort        = 9
-	hprofTypeInt          = 10
-	hprofTypeLong         = 11
-	maxHprofObjects       = 250_000
-	maxHprofEdges         = 1_500_000
-	maxHprofTargets       = 2_000
-	maxHprofPathElements  = 48
-	maxRetainedTreeSample = 8
+	hprofTagString          = 0x01
+	hprofTagLoadClass       = 0x02
+	hprofTagHeapDump        = 0x0c
+	hprofTagHeapDumpSeg     = 0x1c
+	hprofSubClassDump       = 0x20
+	hprofSubInstanceDump    = 0x21
+	hprofSubObjectArray     = 0x22
+	hprofSubPrimitiveArr    = 0x23
+	hprofSubHeapDumpInfo    = 0xfe
+	hprofTypeObject         = 2
+	hprofTypeBoolean        = 4
+	hprofTypeChar           = 5
+	hprofTypeFloat          = 6
+	hprofTypeDouble         = 7
+	hprofTypeByte           = 8
+	hprofTypeShort          = 9
+	hprofTypeInt            = 10
+	hprofTypeLong           = 11
+	maxHprofObjects         = 250_000
+	maxHprofEdges           = 1_500_000
+	maxHprofTargets         = 2_000
+	maxHprofPathElements    = 48
+	maxRetainedTreeSample   = 8
+	maxHprofExactTargets    = 512
+	maxHprofEvidenceTargets = 4_096
+	maxHprofRetainedVisits  = 5_000_000
 )
 
 func LoadHeapEvidenceFiles(paths []string, targetClasses []string) (*HeapEvidence, error) {
@@ -815,6 +818,12 @@ func (p *hprofParser) evidence() *HeapEvidence {
 	}
 	parent := p.rootBFS()
 	targetsByClass := p.targetNodes(parent)
+	rootIDs := p.rootIDs()
+	exactBudget := &heapTraversalBudget{remaining: maxHprofRetainedVisits}
+	exactTargets := 0
+	evidenceTargets := 0
+	skippedEvidenceTargets := 0
+	limitedRetainedTargets := 0
 	for className, ids := range targetsByClass {
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		if len(ids) > maxHprofTargets {
@@ -823,8 +832,22 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		}
 		best := HeapLeakEvidence{ClassName: className, Source: p.path}
 		for _, id := range ids {
-			retainedSize, retainedCount, retainedSample := p.retainedSizeFor(id)
+			if evidenceTargets >= maxHprofEvidenceTargets {
+				skippedEvidenceTargets++
+				continue
+			}
+			evidenceTargets++
+			retainedSize, retainedCount, retainedSample, exact := p.retainedSizeForLimited(id, rootIDs, exactBudget, exactTargets < maxHprofExactTargets)
+			if exact {
+				exactTargets++
+			} else {
+				limitedRetainedTargets++
+			}
 			path := p.referencePath(parent, id)
+			confidence := "высокое: путь найден в HPROF"
+			if !exact {
+				confidence = "среднее: путь найден в HPROF, retained size ограничен безопасным лимитом"
+			}
 			candidate := HeapLeakEvidence{
 				ClassName:           className,
 				Holder:              heapHolder(path, className),
@@ -836,7 +859,7 @@ func (p *hprofParser) evidence() *HeapEvidence {
 				ReferencePath:       path,
 				DominatorTree:       retainedSample,
 				Source:              p.path,
-				Confidence:          "высокое: путь найден в HPROF",
+				Confidence:          confidence,
 			}
 			if betterHeapLeak(candidate, best) {
 				best = candidate
@@ -848,6 +871,12 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		normalizeHeapLeak(&best)
 		evidence.Leaks = append(evidence.Leaks, best)
 	}
+	if limitedRetainedTargets > 0 {
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Точный retained size ограничен: для %d объектов использована безопасная оценка, чтобы большой HPROF не зависал.", limitedRetainedTargets))
+	}
+	if skippedEvidenceTargets > 0 {
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF содержит слишком много retained-кандидатов: пропущено %d объектов после лимита %d.", skippedEvidenceTargets, maxHprofEvidenceTargets))
+	}
 	sort.Slice(evidence.Leaks, func(i, j int) bool {
 		if evidence.Leaks[i].RetainedSizeKB == evidence.Leaks[j].RetainedSizeKB {
 			return evidence.Leaks[i].ClassName < evidence.Leaks[j].ClassName
@@ -855,6 +884,11 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		return evidence.Leaks[i].RetainedSizeKB > evidence.Leaks[j].RetainedSizeKB
 	})
 	return evidence
+}
+
+type heapTraversalBudget struct {
+	remaining int
+	exhausted bool
 }
 
 type heapParent struct {
@@ -914,9 +948,18 @@ func (p *hprofParser) targetNodes(parent map[uint64]heapParent) map[string][]uin
 	return out
 }
 
-func (p *hprofParser) retainedSizeFor(target uint64) (uint64, uint64, []string) {
-	fromTarget := p.reachableFrom([]uint64{target}, 0)
-	withoutTarget := p.reachableFrom(p.rootIDs(), target)
+func (p *hprofParser) retainedSizeForLimited(target uint64, rootIDs []uint64, budget *heapTraversalBudget, allowExact bool) (uint64, uint64, []string, bool) {
+	if !allowExact || budget == nil || budget.exhausted {
+		return p.shallowRetainedFallback(target)
+	}
+	fromTarget := p.reachableFromLimited([]uint64{target}, 0, budget)
+	if budget.exhausted {
+		return p.shallowRetainedFallback(target)
+	}
+	withoutTarget := p.reachableFromLimited(rootIDs, target, budget)
+	if budget.exhausted {
+		return p.shallowRetainedFallback(target)
+	}
 	var size uint64
 	var count uint64
 	classes := map[string]uint64{}
@@ -939,15 +982,27 @@ func (p *hprofParser) retainedSizeFor(target uint64) (uint64, uint64, []string) 
 			size = node.shallowSize
 		}
 	}
-	return size, count, retainedClassSample(classes)
+	return size, count, retainedClassSample(classes), true
 }
 
-func (p *hprofParser) reachableFrom(start []uint64, blocked uint64) map[uint64]bool {
+func (p *hprofParser) shallowRetainedFallback(target uint64) (uint64, uint64, []string, bool) {
+	node := p.nodes[target]
+	if node == nil {
+		return 0, 0, nil, false
+	}
+	classes := map[string]uint64{node.className: 1}
+	return node.shallowSize, 1, retainedClassSample(classes), false
+}
+
+func (p *hprofParser) reachableFromLimited(start []uint64, blocked uint64, budget *heapTraversalBudget) map[uint64]bool {
 	seen := map[uint64]bool{}
 	queue := make([]uint64, 0, len(start))
 	for _, id := range start {
 		if id == 0 || id == blocked || seen[id] {
 			continue
+		}
+		if !budget.take() {
+			return seen
 		}
 		seen[id] = true
 		queue = append(queue, id)
@@ -961,11 +1016,23 @@ func (p *hprofParser) reachableFrom(start []uint64, blocked uint64) map[uint64]b
 			if edge.to == 0 || edge.to == blocked || seen[edge.to] {
 				continue
 			}
+			if !budget.take() {
+				return seen
+			}
 			seen[edge.to] = true
 			queue = append(queue, edge.to)
 		}
 	}
 	return seen
+}
+
+func (b *heapTraversalBudget) take() bool {
+	if b.remaining <= 0 {
+		b.exhausted = true
+		return false
+	}
+	b.remaining--
+	return true
 }
 
 func (p *hprofParser) rootIDs() []uint64 {

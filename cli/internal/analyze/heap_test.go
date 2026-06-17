@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
@@ -87,6 +88,34 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	}
 	if len(leak.ReferencePath) < 3 || len(leak.DominatorTree) == 0 {
 		t.Fatalf("expected reference path and dominator sample: %+v", leak)
+	}
+}
+
+func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
+	parser := newHprofParser("large.hprof", map[string]struct{}{"com.app.LeakedActivity": struct{}{}})
+	rootID := uint64(1)
+	parser.roots = []heapRoot{{id: rootID, kind: "sticky class"}}
+	root := parser.ensureNode(rootID, "java.lang.Class", 16)
+	for i := 0; i < maxHprofExactTargets+8; i++ {
+		id := uint64(100 + i)
+		shallowSize := uint64(48)
+		if i >= maxHprofExactTargets {
+			shallowSize = 4096
+		}
+		parser.nodes[id] = &heapNode{id: id, className: "com.app.LeakedActivity", shallowSize: shallowSize}
+		parser.addEdge(root, id, "static leaked", "static")
+	}
+
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 {
+		t.Fatalf("unexpected evidence: %+v", evidence)
+	}
+	if !warningContains(evidence.Warnings, "Точный retained size ограничен") {
+		t.Fatalf("expected retained-size limit warning: %+v", evidence.Warnings)
+	}
+	if !strings.Contains(evidence.Leaks[0].Confidence, "retained size ограничен") {
+		t.Fatalf("expected limited confidence on best leak: %+v", evidence.Leaks[0])
 	}
 }
 
@@ -225,4 +254,13 @@ func writeU8(out *bytes.Buffer, value uint64) {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], value)
 	out.Write(buf[:])
+}
+
+func warningContains(warnings []string, needle string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, needle) {
+			return true
+		}
+	}
+	return false
 }
