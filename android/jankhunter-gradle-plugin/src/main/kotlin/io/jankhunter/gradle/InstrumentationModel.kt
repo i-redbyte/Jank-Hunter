@@ -165,6 +165,7 @@ internal sealed class HookDecision {
     data class Matched(
         val intent: HookIntent,
         val signatureId: String,
+        val bridgeId: String? = null,
     ) : HookDecision()
 
     data object NotMatched : HookDecision()
@@ -457,22 +458,15 @@ internal object HookIntentResolver {
 private object OkHttpInstrumentationRule : InstrumentationRule {
     override val id: String = "okhttp"
     override val priority: Int = 100
+    private val intents = setOf(
+        HookIntent.WrapOkHttpEventListenerFactory.id,
+        HookIntent.InstallOkHttpEventListenerFactory.id,
+    )
 
     override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.okhttp) {
-            when {
-                HookSignatureCatalog.okHttpEventListenerFactory.matches(call) -> {
-                    return HookDecision.Matched(
-                        HookIntent.WrapOkHttpEventListenerFactory,
-                        HookSignatureCatalog.okHttpEventListenerFactory.id,
-                    )
-                }
-                HookSignatureCatalog.okHttpBuild.matches(call) -> {
-                    return HookDecision.Matched(
-                        HookIntent.InstallOkHttpEventListenerFactory,
-                        HookSignatureCatalog.okHttpBuild.id,
-                    )
-                }
+            VersionedBridgeCatalog.matchOkHttp(call, intents)?.let {
+                return it.toDecision()
             }
         }
         return HookDecision.NotMatched
@@ -482,13 +476,13 @@ private object OkHttpInstrumentationRule : InstrumentationRule {
 private object WebSocketInstrumentationRule : InstrumentationRule {
     override val id: String = "websocket"
     override val priority: Int = 110
+    private val intents = setOf(HookIntent.WrapWebSocketListener.id)
 
     override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.webSockets && HookSignatureCatalog.okHttpNewWebSocket.matches(call)) {
-            return HookDecision.Matched(
-                HookIntent.WrapWebSocketListener,
-                HookSignatureCatalog.okHttpNewWebSocket.id,
-            )
+        if (config.webSockets) {
+            VersionedBridgeCatalog.matchOkHttp(call, intents)?.let {
+                return it.toDecision()
+            }
         }
         return HookDecision.NotMatched
     }
@@ -546,8 +540,8 @@ private object CoroutineInstrumentationRule : InstrumentationRule {
 
     override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
         if (config.coroutines) {
-            InstrumentationHooks.coroutineBlockKind(call.owner, call.name, call.descriptor)?.let {
-                return HookDecision.Matched(HookIntent.CoroutineBlock(it), "kotlin.coroutines.block.${it.name.lowercase()}")
+            VersionedBridgeCatalog.matchCoroutine(call)?.let {
+                return it.toDecision()
             }
         }
         return HookDecision.NotMatched

@@ -441,21 +441,24 @@ internal object ClassGraphWriter {
 
 internal object InstrumentationHooks {
     fun isOkHttpEventListenerFactory(owner: String, name: String, descriptor: String): Boolean {
-        return owner == "okhttp3/OkHttpClient\$Builder" &&
-            name == "eventListenerFactory" &&
-            descriptor == "(Lokhttp3/EventListener\$Factory;)Lokhttp3/OkHttpClient\$Builder;"
+        return VersionedBridgeCatalog.matchOkHttp(
+            methodCall(owner, name, descriptor),
+            setOf(HookIntent.WrapOkHttpEventListenerFactory.id),
+        ) != null
     }
 
     fun isOkHttpBuild(owner: String, name: String, descriptor: String): Boolean {
-        return owner == "okhttp3/OkHttpClient\$Builder" &&
-            name == "build" &&
-            descriptor == "()Lokhttp3/OkHttpClient;"
+        return VersionedBridgeCatalog.matchOkHttp(
+            methodCall(owner, name, descriptor),
+            setOf(HookIntent.InstallOkHttpEventListenerFactory.id),
+        ) != null
     }
 
     fun isOkHttpNewWebSocket(owner: String, name: String, descriptor: String): Boolean {
-        return owner == "okhttp3/OkHttpClient" &&
-            name == "newWebSocket" &&
-            descriptor == "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;"
+        return VersionedBridgeCatalog.matchOkHttp(
+            methodCall(owner, name, descriptor),
+            setOf(HookIntent.WrapWebSocketListener.id),
+        ) != null
     }
 
     fun handlerRunnableKind(owner: String, name: String, descriptor: String): HandlerRunnableKind? {
@@ -504,25 +507,10 @@ internal object InstrumentationHooks {
     }
 
     fun coroutineBlockKind(owner: String, name: String, descriptor: String): CoroutineBlockKind? {
-        if (owner !in coroutineBuilderOwners) return null
-        return when {
-            name in coroutineBuildersWithTopBlock &&
-                descriptor.endsWith("Lkotlin/jvm/functions/Function2;)${returnDescriptor(owner, name)}") -> {
-                CoroutineBlockKind.TOP_FUNCTION2
-            }
-
-            name in coroutineBuildersWithDefaultBlock &&
-                descriptor.endsWith(defaultCoroutineDescriptorSuffix(owner, name)) -> {
-                CoroutineBlockKind.FUNCTION2_BEFORE_INT_OBJECT
-            }
-
-            name in coroutineSuspendBuilders &&
-                descriptor.endsWith(SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX) -> {
-                CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION
-            }
-
-            else -> null
-        }
+        return VersionedBridgeCatalog.matchCoroutine(methodCall(owner, name, descriptor))
+            ?.intent
+            ?.let { it as? HookIntent.CoroutineBlock }
+            ?.kind
     }
 
     fun isViewSetOnClickListener(owner: String, name: String, descriptor: String): Boolean {
@@ -564,50 +552,6 @@ internal object InstrumentationHooks {
             else -> owner.replace('/', '.') + ".$name"
         }
     }
-
-    private fun returnDescriptor(owner: String, name: String): String {
-        return when {
-            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("launch") -> "Lkotlinx/coroutines/Job;"
-            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("async") -> "Lkotlinx/coroutines/Deferred;"
-            owner == "kotlinx/coroutines/BuildersKt" && name.startsWith("runBlocking") -> "Ljava/lang/Object;"
-            else -> "Ljava/lang/Object;"
-        }
-    }
-
-    private fun defaultCoroutineDescriptorSuffix(owner: String, name: String): String {
-        return "Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)" +
-            returnDescriptor(owner, name.removeSuffix("\$default"))
-    }
-
-    private val coroutineBuilderOwners = setOf(
-        "kotlinx/coroutines/BuildersKt",
-        "kotlinx/coroutines/CoroutineScopeKt",
-        "kotlinx/coroutines/SupervisorKt",
-        "kotlinx/coroutines/TimeoutKt",
-    )
-
-    private val coroutineBuildersWithTopBlock = setOf(
-        "launch",
-        "async",
-        "runBlocking",
-    )
-
-    private val coroutineBuildersWithDefaultBlock = setOf(
-        "launch\$default",
-        "async\$default",
-        "runBlocking\$default",
-    )
-
-    private val coroutineSuspendBuilders = setOf(
-        "withContext",
-        "coroutineScope",
-        "supervisorScope",
-        "withTimeout",
-        "withTimeoutOrNull",
-    )
-
-    private const val SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX =
-        "Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;"
 
     private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {
         return MethodCall(

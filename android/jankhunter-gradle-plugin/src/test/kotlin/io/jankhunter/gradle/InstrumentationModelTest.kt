@@ -112,6 +112,18 @@ class InstrumentationModelTest {
             config,
         )
         assertIntent(
+            HookIntent.CoroutineBlock(CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION),
+            MethodCall(
+                opcode = Opcodes.INVOKESTATIC,
+                owner = "kotlinx/coroutines/BuildersKt",
+                name = "withContext",
+                descriptor = "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;" +
+                    "Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+                isInterface = false,
+            ),
+            config,
+        )
+        assertIntent(
             HookIntent.LogSpam("android.util.Log.d", 3),
             MethodCall(
                 opcode = Opcodes.INVOKESTATIC,
@@ -121,6 +133,55 @@ class InstrumentationModelTest {
                 isInterface = false,
             ),
             config,
+        )
+    }
+
+    @Test
+    fun resolverReportsVersionedBridgeForOkHttpAndCoroutineMatches() {
+        val okHttpDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKEVIRTUAL,
+                owner = "okhttp3/OkHttpClient\$Builder",
+                name = "build",
+                descriptor = "()Lokhttp3/OkHttpClient;",
+                isInterface = false,
+            ),
+            testHookConfig(okhttp = true),
+        )
+        require(okHttpDecision is HookDecision.Matched)
+        assertEquals("okhttp3.bridge.v3", okHttpDecision.bridgeId)
+        assertEquals("okhttp3.builder.build.v3", okHttpDecision.signatureId)
+
+        val coroutineDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKESTATIC,
+                owner = "kotlinx/coroutines/BuildersKt",
+                name = "launch\$default",
+                descriptor = "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
+                    "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)" +
+                    "Lkotlinx/coroutines/Job;",
+                isInterface = false,
+            ),
+            testHookConfig(coroutines = true),
+        )
+        require(coroutineDecision is HookDecision.Matched)
+        assertEquals("kotlinx.coroutines.bridge.v1", coroutineDecision.bridgeId)
+        assertEquals("kotlinx.coroutines.builders.default_function2.v1", coroutineDecision.signatureId)
+    }
+
+    @Test
+    fun versionedBridgeCatalogExposesExtensibleFamilies() {
+        val bridgeIds = VersionedBridgeCatalog.all().map { it.id }.toSet()
+        val families = VersionedBridgeCatalog.all().map { it.family }.toSet()
+
+        assertTrue("okhttp3.bridge.v3" in bridgeIds)
+        assertTrue("kotlinx.coroutines.bridge.v1" in bridgeIds)
+        assertTrue("okhttp" in families)
+        assertTrue("coroutines" in families)
+        assertTrue(
+            VersionedBridgeCatalog.all()
+                .flatMap { it.signatures }
+                .any { it.id == "kotlinx.coroutines.suspend_builders.function2_continuation.v1" },
         )
     }
 
