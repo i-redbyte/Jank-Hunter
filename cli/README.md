@@ -367,9 +367,20 @@ jankhunter inspect logs/*.jhlog \
 - boolean-сигналы пишутся в flags/bitmask;
 - контекст `screen/owner/flow/step` пишется только когда поле реально есть;
 - runtime call graph хранится как агрегаты `caller_id -> callee_id`, а не как сырые вызовы;
+- `context.battery_temp_deci_c` хранится signed zigzag-varint, поэтому отрицательная температура батареи остается корректной величиной;
+- metric events для gauges несут `value/count/sum/max/mode`, чтобы CLI мог объединять Android-side flush-окна взвешенно, а не усреднять уже усредненные значения;
 - числовые строки и даты в словаре BCD-пакуются, когда это короче обычной строки;
 - Android runtime по умолчанию сжимает тело файла gzip-потоком после magic-заголовка, CLI читает и сжатый, и старый несжатый body;
 - события Handler/OkHttp не пишут повторяющиеся строки: owner/route/flow остаются в словаре, а события ссылаются на короткие ID.
+
+Gauge aggregation mode хранится рядом с metric event:
+
+- `AVERAGE` - обычные числовые gauge-метрики; CLI складывает `sum/count` и показывает weighted average плюс max;
+- `LAST` - идентификаторы и последние уровни (`*.last_id`, `*.last_level`, `*.core_count`, `*.max_kb`), где среднее не имеет смысла;
+- `STATE` - enum/state метрики вроде battery status, plugged, health, thermal status, process exit reason/importance;
+- `BOOLEAN_RATE` - boolean gauge-метрики; в отчете значение означает процент `true` за окно.
+
+Пользовательские negative gauges сейчас не пишутся как signed metric values: runtime считает их ошибочным input и увеличивает `jankhunter.metric.invalid_negative.gauge.count`. Если нужна отрицательная физическая величина, она должна иметь отдельный typed event или signed context field, как `battery_temp_deci_c`.
 
 До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=5`.
 

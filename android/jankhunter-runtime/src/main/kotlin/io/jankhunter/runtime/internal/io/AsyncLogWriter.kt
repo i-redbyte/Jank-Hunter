@@ -188,12 +188,19 @@ class AsyncLogWriter private constructor(
         offer { it.counter(name, value) }
     }
 
-    fun gauge(name: String?, value: Long) {
+    fun gauge(
+        name: String?,
+        value: Long,
+        count: Long = 1L,
+        sum: Long = value,
+        max: Long = value,
+        mode: MetricAggregationMode = MetricAggregationMode.AVERAGE,
+    ) {
         if (value < 0) {
             offer { it.counter("jankhunter.metric.invalid_negative.gauge.count", 1) }
             return
         }
-        offer { it.gauge(name, value) }
+        offer { it.gauge(name, value, count, sum, max, mode) }
     }
 
     fun flowContext(screen: String?, owner: String?, flow: String?, step: String?) {

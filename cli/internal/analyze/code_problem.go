@@ -108,7 +108,6 @@ func (b *codeProblemBuilder) addOwners(owners []OwnerStats) {
 			item.addCategory(codeCategoryLifecycle)
 			item.addCategory(codeCategoryOOM)
 			item.retained += uint64(owner.Count)
-			item.memoryKB += owner.MaxMS
 			item.addSignal(CodeProblemSignal{
 				Name:     "Удержанный объект",
 				Category: codeCategoryMemory,
@@ -325,6 +324,7 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			item.addCategory(codeCategoryOOM)
 		}
 		item.retained += leak.Count
+		item.memoryKB += leak.EstimatedRetainedKB
 		item.maxMS = maxUint64(item.maxMS, leak.MaxAgeMS)
 		item.addContext(leak.Screen, leak.Flow, leak.Step, "")
 		detail := fmt.Sprintf("Удержан %s; держатель: %s; качество привязки: %s.", leak.ClassName, leak.Holder, leak.HolderQuality)
@@ -374,7 +374,8 @@ func (b *codeProblemBuilder) addRoutes(routes []RouteStats) {
 			Severity: severityFromNetwork(route.P95MS, route.Failures),
 			Score:    scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3) + scoreCount(uint64(route.Count), 120)*0.25,
 			Count:    uint64(route.Count),
-			TotalMS:  route.P95MS,
+			Value:    route.P95MS,
+			Unit:     "мс p95",
 			MaxMS:    route.MaxMS,
 			Detail:   fmt.Sprintf("Маршрут %s: p95=%d мс, ошибок=%d.", route.Route, route.P95MS, route.Failures),
 		})

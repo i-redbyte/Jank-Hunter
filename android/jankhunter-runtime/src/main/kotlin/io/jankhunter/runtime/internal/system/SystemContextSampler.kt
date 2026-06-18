@@ -168,7 +168,11 @@ class SystemContextSampler(
 
     private fun recordBatteryPowerMetrics(battery: BatterySnapshot) {
         JankHunter.recordGauge("battery.level_pct", battery.percent.toLong())
-        JankHunter.recordGauge("battery.temperature_deci_c", battery.temperatureDeciC.toLong())
+        if (battery.temperatureDeciC >= 0) {
+            JankHunter.recordGauge("battery.temperature_deci_c", battery.temperatureDeciC.toLong())
+        } else {
+            JankHunter.recordCounter("battery.temperature.negative.count", 1)
+        }
         JankHunter.recordGauge("battery.status", battery.state.toLong())
         JankHunter.recordGauge("battery.plugged", battery.plugged.toLong())
         JankHunter.recordGauge("battery.voltage_mv", battery.voltageMv.toLong())

@@ -30,7 +30,7 @@ class MetricAggregator(
         counter.addAndGet(value)
     }
 
-    fun gauge(name: String?, value: Long) {
+    fun gauge(name: String?, value: Long, mode: MetricAggregationMode = MetricAggregationMode.AVERAGE) {
         if (value < 0) {
             invalidNegative.incrementAndGet()
             return
@@ -45,7 +45,7 @@ class MetricAggregator(
                 gauges.computeIfAbsent(key) { GaugeStats() }
             }
         }
-        gauge.add(value)
+        gauge.add(value, mode)
     }
 
     fun flush(sink: Sink) {
@@ -63,9 +63,19 @@ class MetricAggregator(
         gauges.forEach { (name, gauge) ->
             val snapshot = gauge.snapshotAndReset()
             if (snapshot.count > 0) {
-                sink.gauge(name, snapshot.average)
-                if (snapshot.max != snapshot.average) {
-                    sink.gauge("$name.max", snapshot.max)
+                when (snapshot.mode) {
+                    MetricAggregationMode.LAST,
+                    MetricAggregationMode.STATE -> {
+                        sink.gauge(name, snapshot.last, snapshot.count, snapshot.last, snapshot.last, snapshot.mode)
+                    }
+                    MetricAggregationMode.BOOLEAN_RATE -> {
+                        val truePct = (snapshot.total * 100L) / snapshot.count
+                        sink.gauge(name, truePct, snapshot.count, snapshot.total, snapshot.max, snapshot.mode)
+                    }
+                    MetricAggregationMode.UNKNOWN,
+                    MetricAggregationMode.AVERAGE -> {
+                        sink.gauge(name, snapshot.average, snapshot.count, snapshot.total, snapshot.max, snapshot.mode)
+                    }
                 }
             }
         }
@@ -86,18 +96,22 @@ class MetricAggregator(
 
     interface Sink {
         fun counter(name: String, value: Long)
-        fun gauge(name: String, value: Long)
+        fun gauge(name: String, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode)
     }
 
     private class GaugeStats {
         private var count = 0L
         private var total = 0L
         private var max = Long.MIN_VALUE
+        private var last = 0L
+        private var mode = MetricAggregationMode.AVERAGE
 
         @Synchronized
-        fun add(value: Long) {
+        fun add(value: Long, aggregationMode: MetricAggregationMode) {
             count++
             total += value
+            last = value
+            mode = aggregationMode
             if (value > max) {
                 max = value
             }
@@ -109,10 +123,14 @@ class MetricAggregator(
                 count = count,
                 average = if (count > 0) total / count else 0L,
                 max = if (max == Long.MIN_VALUE) 0L else max,
+                last = last,
+                total = total,
+                mode = mode,
             )
             count = 0L
             total = 0L
             max = Long.MIN_VALUE
+            last = 0L
             return snapshot
         }
 
@@ -124,6 +142,9 @@ class MetricAggregator(
         val count: Long,
         val average: Long,
         val max: Long,
+        val last: Long,
+        val total: Long,
+        val mode: MetricAggregationMode,
     )
 
     companion object {

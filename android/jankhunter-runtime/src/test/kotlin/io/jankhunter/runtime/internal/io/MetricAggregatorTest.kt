@@ -21,8 +21,16 @@ class MetricAggregatorTest {
         aggregator.flush(sink)
 
         assertEquals(mapOf("runtime.call" to 5L), sink.counters)
-        assertEquals(130L, sink.gauges["memory.pss"])
-        assertEquals(160L, sink.gauges["memory.pss.max"])
+        assertEquals(
+            RecordingGauge(
+                value = 130L,
+                count = 2L,
+                sum = 260L,
+                max = 160L,
+                mode = MetricAggregationMode.AVERAGE,
+            ),
+            sink.gauges["memory.pss"],
+        )
 
         sink.clear()
         aggregator.flush(sink)
@@ -59,6 +67,39 @@ class MetricAggregatorTest {
     }
 
     @Test
+    fun preservesStateAndBooleanGaugeSemantics() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.gauge("battery.status", 2, MetricAggregationMode.STATE)
+        aggregator.gauge("battery.status", 5, MetricAggregationMode.STATE)
+        aggregator.gauge("battery.charging", 1, MetricAggregationMode.BOOLEAN_RATE)
+        aggregator.gauge("battery.charging", 0, MetricAggregationMode.BOOLEAN_RATE)
+        aggregator.flush(sink)
+
+        assertEquals(
+            RecordingGauge(
+                value = 5L,
+                count = 2L,
+                sum = 5L,
+                max = 5L,
+                mode = MetricAggregationMode.STATE,
+            ),
+            sink.gauges["battery.status"],
+        )
+        assertEquals(
+            RecordingGauge(
+                value = 50L,
+                count = 2L,
+                sum = 1L,
+                max = 1L,
+                mode = MetricAggregationMode.BOOLEAN_RATE,
+            ),
+            sink.gauges["battery.charging"],
+        )
+    }
+
+    @Test
     fun enforcesMaxKeysUnderConcurrentUniqueMetrics() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val ready = CountDownLatch(32)
@@ -89,14 +130,21 @@ class MetricAggregatorTest {
 
     private class RecordingSink : MetricAggregator.Sink {
         val counters = linkedMapOf<String, Long>()
-        val gauges = linkedMapOf<String, Long>()
+        val gauges = linkedMapOf<String, RecordingGauge>()
 
         override fun counter(name: String, value: Long) {
             counters[name] = value
         }
 
-        override fun gauge(name: String, value: Long) {
-            gauges[name] = value
+        override fun gauge(
+            name: String,
+            value: Long,
+            count: Long,
+            sum: Long,
+            max: Long,
+            mode: MetricAggregationMode,
+        ) {
+            gauges[name] = RecordingGauge(value, count, sum, max, mode)
         }
 
         fun clear() {
@@ -104,4 +152,12 @@ class MetricAggregatorTest {
             gauges.clear()
         }
     }
+
+    private data class RecordingGauge(
+        val value: Long,
+        val count: Long,
+        val sum: Long,
+        val max: Long,
+        val mode: MetricAggregationMode,
+    )
 }

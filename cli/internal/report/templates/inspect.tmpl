@@ -175,14 +175,14 @@
       <div class="fold-body">
         <div class="chart-list">
           {{range .Summary.Routes}}
-          <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong>{{.P95MS}} мс</strong></div>
+          <div class="chart-row"><code>{{.Route}}</code><div class="chart-track"><i style="{{msWidth .P95MS}}"></i></div><strong class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</strong></div>
           {{else}}<div class="muted">Нет HTTP-событий.</div>{{end}}
         </div>
         <h3>Таблица маршрутов</h3>
         <table>
           <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Средний TTFB</th><th>RX</th><th>TX</th><th>Источник</th></tr>
           {{range .Summary.Routes}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
+          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td><span class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</span></td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
           {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
       </div>
@@ -234,7 +234,7 @@
             <td><code>{{.RouteSample}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
-            <td>{{.HTTPP95MS}} мс</td>
+            <td><span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 флоу рассчитан по reservoir-сэмплу">≈</span>{{end}}</span></td>
             <td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td>
             <td>{{.StallCount}}</td>
             <td>{{.StallMaxMS}} мс</td>

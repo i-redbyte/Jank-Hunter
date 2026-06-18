@@ -312,7 +312,7 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
 		if err != nil {
 			return err
 		}
-		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
+		event.Metric = metricFromValues(values)
 	case EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return fmt.Errorf("compact event type %d requires payload length", event.Type)
 	default:
@@ -408,7 +408,7 @@ func decodePayload(payload []byte, event *Event) error {
 			BatteryPct:       values[1],
 			AvailMemoryKB:    values[2],
 			BatteryState:     values[3],
-			BatteryTempDeciC: values[4],
+			BatteryTempDeciC: decodeSVarint(values[4]),
 			RxBytes:          values[5],
 			TxBytes:          values[6],
 			TotalMemoryKB:    values[7],
@@ -471,11 +471,14 @@ func decodePayload(payload []byte, event *Event) error {
 			Count:    values[3],
 		}
 	case EventCounter, EventGauge:
-		values, err := readN(read, 2)
+		values, err := readRemaining(reader)
 		if err != nil {
 			return err
 		}
-		event.Metric = &MetricEvent{MetricID: values[0], Value: values[1]}
+		if len(values) < 2 {
+			return fmt.Errorf("metric payload has %d values, expected at least 2", len(values))
+		}
+		event.Metric = metricFromValues(values)
 	case EventFlow:
 		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
 		if err != nil {
@@ -580,6 +583,38 @@ func readN(read func() (uint64, error), count int) ([]uint64, error) {
 	return values, nil
 }
 
+func metricFromValues(values []uint64) *MetricEvent {
+	event := &MetricEvent{
+		MetricID: values[0],
+		Value:    values[1],
+		Count:    1,
+		Sum:      values[1],
+		Max:      values[1],
+	}
+	if len(values) > 2 {
+		event.Count = values[2]
+	}
+	if len(values) > 3 {
+		event.Sum = values[3]
+	}
+	if len(values) > 4 {
+		event.Max = values[4]
+	}
+	if len(values) > 5 {
+		event.Mode = MetricMode(values[5])
+	}
+	if event.Count == 0 {
+		event.Count = 1
+	}
+	if event.Sum == 0 {
+		event.Sum = event.Value
+	}
+	if event.Max == 0 {
+		event.Max = event.Value
+	}
+	return event
+}
+
 func readRemaining(reader *bytes.Reader) ([]uint64, error) {
 	var values []uint64
 	for reader.Len() > 0 {
@@ -590,6 +625,10 @@ func readRemaining(reader *bytes.Reader) ([]uint64, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func decodeSVarint(value uint64) int64 {
+	return int64(value>>1) ^ -int64(value&1)
 }
 
 func readDictionaryValue(reader io.ByteReader) (string, error) {

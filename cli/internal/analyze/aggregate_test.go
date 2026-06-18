@@ -463,6 +463,15 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 	if route.Count != total || route.MaxMS != total || route.P95MS == 0 {
 		t.Fatalf("route stats lost exact count/max or percentile: %+v", route)
 	}
+	if !route.P95Approximate || route.Sampled != maxAggregateSamplesPerSignal {
+		t.Fatalf("route approximation was not marked: %+v", route)
+	}
+	if !summary.HTTPP95Approximate {
+		t.Fatalf("HTTP p95 approximation was not marked")
+	}
+	if !warningsContain(summary.Warnings, "reservoir-сэмплу") {
+		t.Fatalf("expected reservoir warning, got %+v", summary.Warnings)
+	}
 	if len(summary.Gauges) != 1 {
 		t.Fatalf("Gauges = %+v, want one gauge", summary.Gauges)
 	}
@@ -714,6 +723,77 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 	}
 }
 
+func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
+	log := jhlog.Log{
+		Dict: map[uint64]string{
+			1: "memory.pss",
+			2: "battery.status",
+			3: "battery.charging",
+		},
+		Events: []jhlog.Event{
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 1,
+					Value:    100,
+					Count:    2,
+					Sum:      200,
+					Max:      140,
+					Mode:     jhlog.MetricModeAverage,
+				},
+			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 1,
+					Value:    200,
+					Count:    4,
+					Sum:      800,
+					Max:      260,
+					Mode:     jhlog.MetricModeAverage,
+				},
+			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 2,
+					Value:    2,
+				},
+			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 2,
+					Value:    5,
+				},
+			},
+			{
+				Type: jhlog.EventGauge,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 3,
+					Value:    50,
+					Count:    2,
+					Sum:      1,
+					Max:      1,
+					Mode:     jhlog.MetricModeBooleanRate,
+				},
+			},
+		},
+	}
+
+	summary := Inspect("metrics", []jhlog.Log{log})
+	gauges := namedValuesByName(summary.Gauges)
+	if got := gauges["memory.pss"]; got.Value != 166 || got.Extra != "avg=166 max=260 samples=6" {
+		t.Fatalf("memory.pss = %+v", got)
+	}
+	if got := gauges["battery.status"]; got.Value != 5 || got.Extra != "state=5 samples=2" {
+		t.Fatalf("battery.status = %+v", got)
+	}
+	if got := gauges["battery.charging"]; got.Value != 50 || got.Extra != "true_pct=50 true=1 samples=2" {
+		t.Fatalf("battery.charging = %+v", got)
+	}
+}
+
 func TestCompareWarnsOnCohortMismatch(t *testing.T) {
 	baseline := Summary{
 		LogCount:    5,
@@ -748,6 +828,39 @@ func TestCompareWarnsOnCohortMismatch(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected Cohort mix delta: %+v", comparison.Deltas)
+	}
+}
+
+func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
+	comparison := Compare(
+		Summary{
+			LogCount:     5,
+			EventCount:   500,
+			MemoryCount:  3,
+			ContextCount: 50,
+			MemoryMaxKB: 100,
+			ProblemWindows: []ProblemWindowStats{
+				{Kind: "main_thread_stall", Windows: 2, Count: 10},
+			},
+		},
+		Summary{
+			LogCount:     5,
+			EventCount:   500,
+			MemoryCount:  4,
+			ContextCount: 60,
+			MemoryMaxKB: 140,
+			ProblemWindows: []ProblemWindowStats{
+				{Kind: "main_thread_stall", Windows: 3, Count: 30},
+			},
+		},
+	)
+
+	deltas := deltasByName(comparison.Deltas)
+	if got := deltas["Max PSS"]; got.SampleSize != 3 || got.Interval != "выборка=3" {
+		t.Fatalf("Max PSS delta = %+v", got)
+	}
+	if got := deltas["Problem windows"]; got.Baseline != "2 шт" || got.Candidate != "3 шт" {
+		t.Fatalf("Problem windows delta = %+v", got)
 	}
 }
 
@@ -797,4 +910,29 @@ func sampleSetFromValues(values ...uint64) uint64SampleSet {
 		set.add(value)
 	}
 	return set
+}
+
+func namedValuesByName(values []NamedValue) map[string]NamedValue {
+	out := map[string]NamedValue{}
+	for _, value := range values {
+		out[value.Name] = value
+	}
+	return out
+}
+
+func deltasByName(values []Delta) map[string]Delta {
+	out := map[string]Delta{}
+	for _, value := range values {
+		out[value.Name] = value
+	}
+	return out
+}
+
+func warningsContain(warnings []string, fragment string) bool {
+	for _, warning := range warnings {
+		if strings.Contains(warning, fragment) {
+			return true
+		}
+	}
+	return false
 }

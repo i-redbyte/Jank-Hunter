@@ -235,9 +235,10 @@ type retainedClassStats struct {
 }
 
 type uint64SampleSet struct {
-	values []uint64
-	seen   int
-	max    uint64
+	values       []uint64
+	seen         int
+	max          uint64
+	approximated bool
 }
 
 func (s *uint64SampleSet) add(value uint64) {
@@ -249,6 +250,7 @@ func (s *uint64SampleSet) add(value uint64) {
 		s.values = append(s.values, value)
 		return
 	}
+	s.approximated = true
 	index := deterministicAggregateReservoirIndex(s.seen)
 	if index < maxAggregateSamplesPerSignal {
 		s.values[index] = value
@@ -261,6 +263,9 @@ func (s *uint64SampleSet) merge(other uint64SampleSet) {
 	}
 	if other.max > s.max {
 		s.max = other.max
+	}
+	if other.approximated || other.seen > len(other.values) {
+		s.approximated = true
 	}
 	for _, value := range other.values {
 		s.add(value)
@@ -279,25 +284,110 @@ func (s *uint64SampleSet) sortedValues() []uint64 {
 	return values
 }
 
+func (s *uint64SampleSet) sampled() int {
+	return len(s.values)
+}
+
+func (s *uint64SampleSet) isApproximated() bool {
+	return s.approximated || s.seen > len(s.values)
+}
+
 type gaugeStats struct {
 	count uint64
 	total uint64
 	max   uint64
+	last  uint64
+	mode  jhlog.MetricMode
 }
 
-func (s *gaugeStats) add(value uint64) {
+func (s *gaugeStats) add(value, count, sum, max uint64, mode jhlog.MetricMode) {
+	if count == 0 {
+		count = 1
+	}
+	if sum == 0 {
+		sum = value
+	}
+	if max == 0 {
+		max = value
+	}
+	if mode != jhlog.MetricModeUnknown {
+		s.mode = mode
+	}
+	if s.mode == jhlog.MetricModeUnknown {
+		s.mode = jhlog.MetricModeAverage
+	}
 	s.count++
-	s.total += value
-	if value > s.max {
-		s.max = value
+	s.count += count - 1
+	s.last = value
+	switch s.mode {
+	case jhlog.MetricModeLast, jhlog.MetricModeState:
+		s.total = value
+		s.max = max
+	case jhlog.MetricModeBooleanRate:
+		s.total += sum
+		if max > s.max {
+			s.max = max
+		}
+	default:
+		s.total += sum
+		if max > s.max {
+			s.max = max
+		}
 	}
 }
 
-func (s *gaugeStats) avg() uint64 {
+func (s *gaugeStats) value() uint64 {
 	if s.count == 0 {
 		return 0
 	}
+	switch s.mode {
+	case jhlog.MetricModeLast, jhlog.MetricModeState:
+		return s.last
+	case jhlog.MetricModeBooleanRate:
+		return (s.total * 100) / s.count
+	}
 	return s.total / s.count
+}
+
+func (s *gaugeStats) extra() string {
+	switch s.mode {
+	case jhlog.MetricModeLast:
+		return fmt.Sprintf("last=%d samples=%d", s.last, s.count)
+	case jhlog.MetricModeState:
+		return fmt.Sprintf("state=%d samples=%d", s.last, s.count)
+	case jhlog.MetricModeBooleanRate:
+		return fmt.Sprintf("true_pct=%d true=%d samples=%d", s.value(), s.total, s.count)
+	default:
+		return fmt.Sprintf("avg=%d max=%d samples=%d", s.value(), s.max, s.count)
+	}
+}
+
+func metricModeForGauge(name string) jhlog.MetricMode {
+	metric := strings.ToLower(strings.TrimSpace(name))
+	switch metric {
+	case "battery.status",
+		"battery.plugged",
+		"battery.health",
+		"device.thermal.status",
+		"process.exit.last.reason",
+		"process.exit.last.importance",
+		"memory.trim.last_level":
+		return jhlog.MetricModeState
+	case "battery.charging",
+		"device.power_save_mode",
+		"device.interactive",
+		"device.idle_mode",
+		"network.request.connection_released":
+		return jhlog.MetricModeBooleanRate
+	}
+	if strings.HasSuffix(metric, ".last_id") ||
+		strings.Contains(metric, ".last.") ||
+		strings.HasSuffix(metric, ".last_level") ||
+		strings.HasSuffix(metric, ".core_count") ||
+		strings.HasSuffix(metric, ".max_kb") {
+		return jhlog.MetricModeLast
+	}
+	return jhlog.MetricModeAverage
 }
 
 type memoryLeakStats struct {
@@ -541,6 +631,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			return
 		}
 		c.markCohort()
+		c.summary.MemoryCount++
 		if event.Memory.PSSKB > c.summary.MemoryMaxKB {
 			c.summary.MemoryMaxKB = event.Memory.PSSKB
 		}
@@ -677,7 +768,11 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.markCohort()
 		name := jhlog.Resolve(dict, event.Metric.MetricID)
 		if event.Type == jhlog.EventGauge {
-			c.gauge(name).add(event.Metric.Value)
+			mode := event.Metric.Mode
+			if mode == jhlog.MetricModeUnknown {
+				mode = metricModeForGauge(name)
+			}
+			c.gauge(name).add(event.Metric.Value, event.Metric.Count, event.Metric.Sum, event.Metric.Max, mode)
 		} else {
 			c.counterValues[name] += event.Metric.Value
 		}
@@ -907,19 +1002,22 @@ func (c *collector) finish() Summary {
 			ttfbAvg = c.routeTTFB[route] / c.routeTTFBCount[route]
 		}
 		summary.Routes = append(summary.Routes, RouteStats{
-			Route:       route,
-			Count:       set.seen,
-			Failures:    c.routeFailures[route],
-			P50MS:       percentileSorted(durations, 0.50),
-			P95MS:       percentileSorted(durations, 0.95),
-			MaxMS:       set.max,
-			AvgTTFBMS:   ttfbAvg,
-			BytesRx:     c.routeRx[route],
-			BytesTx:     c.routeTx[route],
-			OwnerSample: c.routeOwner[route],
+			Route:          route,
+			Count:          set.seen,
+			Sampled:        set.sampled(),
+			Failures:       c.routeFailures[route],
+			P50MS:          percentileSorted(durations, 0.50),
+			P95MS:          percentileSorted(durations, 0.95),
+			P95Approximate: set.isApproximated(),
+			MaxMS:          set.max,
+			AvgTTFBMS:      ttfbAvg,
+			BytesRx:        c.routeRx[route],
+			BytesTx:        c.routeTx[route],
+			OwnerSample:    c.routeOwner[route],
 		})
 	}
 	summary.HTTPP95MS = percentileSorted(c.httpDurations.sortedValues(), 0.95)
+	summary.HTTPP95Approximate = c.httpDurations.isApproximated()
 
 	for _, stats := range c.screenStats {
 		if stats.Frames > 0 {
@@ -939,6 +1037,7 @@ func (c *collector) finish() Summary {
 	for key, stats := range c.flowStats {
 		if durations := c.flowHTTPDurations[key]; durations != nil {
 			stats.HTTPP95MS = percentileSorted(durations.sortedValues(), 0.95)
+			stats.HTTPP95Approximate = durations.isApproximated()
 		}
 		if stats.UIFrames > 0 {
 			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
@@ -961,10 +1060,11 @@ func (c *collector) finish() Summary {
 		}
 	}
 	for name, values := range c.gaugeValues {
-		avg := values.avg()
-		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, values.max, values.count)})
+		value := values.value()
+		extra := values.extra()
+		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: value, Extra: extra})
 		if strings.HasPrefix(name, "jankstats.") {
-			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: avg, Extra: fmt.Sprintf("avg=%d max=%d samples=%d", avg, values.max, values.count)})
+			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value, Extra: extra})
 		}
 	}
 
@@ -1009,6 +1109,7 @@ func (c *collector) finish() Summary {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "low_memory_samples", Value: uint64(summary.LowMemoryCount)})
 	}
 	summary.Environment = c.runEnvironment(summary)
+	summary.Warnings = append(summary.Warnings, c.sampleWarnings(summary)...)
 	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
 
 	sortRoutes(summary.Routes)
@@ -1034,6 +1135,25 @@ func (c *collector) finish() Summary {
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
 	return summary
+}
+
+func (c *collector) sampleWarnings(summary Summary) []string {
+	var warnings []string
+	if summary.HTTPP95Approximate {
+		warnings = append(warnings, fmt.Sprintf("HTTP p95 рассчитан по reservoir-сэмплу: использовано %d из %d запросов.", c.httpDurations.sampled(), c.httpDurations.seen))
+	}
+	var approximateRoutes int
+	var totalRoutes int
+	for _, route := range summary.Routes {
+		if route.P95Approximate {
+			approximateRoutes++
+			totalRoutes += route.Count
+		}
+	}
+	if approximateRoutes > 0 {
+		warnings = append(warnings, fmt.Sprintf("P95 маршрутов приблизительный для %d маршрутов; суммарно %d запросов ограничены reservoir-сэмплингом.", approximateRoutes, totalRoutes))
+	}
+	return warnings
 }
 
 func (c *collector) filterWarnings(summary Summary) []string {
@@ -1098,7 +1218,7 @@ func Compare(baseline, candidate Summary) Comparison {
 		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
 		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
-		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "KB", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "KB", true, minUint64(uint64(baseline.MemoryCount), uint64(candidate.MemoryCount))),
 		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "KB", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
@@ -1154,7 +1274,7 @@ func totalLogSpam(summary Summary) uint64 {
 func totalProblemWindows(summary Summary) uint64 {
 	var total uint64
 	for _, item := range summary.ProblemWindows {
-		total += item.Count
+		total += uint64(item.Windows)
 	}
 	return total
 }
@@ -1419,7 +1539,7 @@ func delta(name string, before, after uint64, unit string, higherIsWorse bool, s
 		Candidate:      fmt.Sprintf("%d %s", after, unit),
 		Change:         change,
 		Severity:       severity,
-		Interval:       interval(float64(after), unit, sampleSize),
+		Interval:       sampleNote(sampleSize),
 		Unit:           unit,
 		BaselineValue:  float64(before),
 		CandidateValue: float64(after),
@@ -1467,7 +1587,7 @@ func deltaFloat(name string, before, after float64, unit string, higherIsWorse b
 		Candidate:      fmt.Sprintf("%.2f %s", after, unit),
 		Change:         fmt.Sprintf("%+.2f %s", diff, unit),
 		Severity:       severity,
-		Interval:       interval(after, unit, sampleSize),
+		Interval:       sampleNote(sampleSize),
 		Unit:           unit,
 		BaselineValue:  before,
 		CandidateValue: after,
@@ -1491,17 +1611,8 @@ func adjustedSeverity(effectSeverity, confidence string, sampleSize uint64) stri
 	return effectSeverity
 }
 
-func interval(value float64, unit string, sampleSize uint64) string {
-	if sampleSize < 2 || value <= 0 {
-		return fmt.Sprintf("выборка=%d", sampleSize)
-	}
-	margin := value / math.Sqrt(float64(sampleSize))
-	low := value - margin
-	if low < 0 {
-		low = 0
-	}
-	high := value + margin
-	return fmt.Sprintf("примерно %.2f..%.2f %s, выборка=%d", low, high, unit, sampleSize)
+func sampleNote(sampleSize uint64) string {
+	return fmt.Sprintf("выборка=%d", sampleSize)
 }
 
 func minUint64(a, b uint64) uint64 {
@@ -1560,7 +1671,7 @@ func batteryValue(pct uint64) string {
 
 func batteryDetail(summary Summary) string {
 	parts := []string{batteryStateName(summary.BatteryStateLast)}
-	if summary.BatteryTempDeciC > 0 {
+	if summary.BatteryTempDeciC != 0 {
 		parts = append(parts, fmt.Sprintf("%.1f °C", float64(summary.BatteryTempDeciC)/10))
 	}
 	if summary.BatteryMinPct > 0 {

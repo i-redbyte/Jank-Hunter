@@ -83,6 +83,16 @@ const (
 	Status5xx
 )
 
+type MetricMode uint64
+
+const (
+	MetricModeUnknown MetricMode = iota
+	MetricModeAverage
+	MetricModeLast
+	MetricModeState
+	MetricModeBooleanRate
+)
+
 type DictionaryEntry struct {
 	Kind  DictKind `json:"kind"`
 	ID    uint64   `json:"id"`
@@ -136,7 +146,7 @@ type ContextEvent struct {
 	AvailMemoryKB    uint64      `json:"avail_memory_kb"`
 	TotalMemoryKB    uint64      `json:"total_memory_kb,omitempty"`
 	BatteryState     uint64      `json:"battery_state,omitempty"`
-	BatteryTempDeciC uint64      `json:"battery_temp_deci_c,omitempty"`
+	BatteryTempDeciC int64       `json:"battery_temp_deci_c,omitempty"`
 	LowMemory        bool        `json:"low_memory,omitempty"`
 	NetworkMetered   bool        `json:"network_metered,omitempty"`
 	NetworkValidated bool        `json:"network_validated,omitempty"`
@@ -193,8 +203,12 @@ type RetainedEvent struct {
 }
 
 type MetricEvent struct {
-	MetricID uint64 `json:"metric_id"`
-	Value    uint64 `json:"value"`
+	MetricID uint64     `json:"metric_id"`
+	Value    uint64     `json:"value"`
+	Count    uint64     `json:"count,omitempty"`
+	Sum      uint64     `json:"sum,omitempty"`
+	Max      uint64     `json:"max,omitempty"`
+	Mode     MetricMode `json:"mode,omitempty"`
 }
 
 type FlowEvent struct {

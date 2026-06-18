@@ -36,16 +36,18 @@ type Options struct {
 }
 
 type RouteStats struct {
-	Route       string
-	Count       int
-	Failures    int
-	P50MS       uint64
-	P95MS       uint64
-	MaxMS       uint64
-	AvgTTFBMS   uint64
-	BytesRx     uint64
-	BytesTx     uint64
-	OwnerSample string
+	Route          string
+	Count          int
+	Sampled        int
+	Failures       int
+	P50MS          uint64
+	P95MS          uint64
+	P95Approximate bool
+	MaxMS          uint64
+	AvgTTFBMS      uint64
+	BytesRx        uint64
+	BytesTx        uint64
+	OwnerSample    string
 }
 
 type ScreenStats struct {
@@ -71,24 +73,25 @@ type OwnerStats struct {
 }
 
 type FlowStats struct {
-	Screen       string
-	Flow         string
-	Step         string
-	Owner        string
-	RouteSample  string
-	HTTPCount    int
-	HTTPFailed   int
-	HTTPP95MS    uint64
-	StallCount   int
-	StallMaxMS   uint64
-	UIWindows    int
-	UIFrames     uint64
-	UIJank       uint64
-	UIJankPct    float64
-	LogSpam      uint64
-	ProblemCount uint64
-	ProblemMaxMS uint64
-	MemoryMaxKB  uint64
+	Screen             string
+	Flow               string
+	Step               string
+	Owner              string
+	RouteSample        string
+	HTTPCount          int
+	HTTPFailed         int
+	HTTPP95MS          uint64
+	HTTPP95Approximate bool
+	StallCount         int
+	StallMaxMS         uint64
+	UIWindows          int
+	UIFrames           uint64
+	UIJank             uint64
+	UIJankPct          float64
+	LogSpam            uint64
+	ProblemCount       uint64
+	ProblemMaxMS       uint64
+	MemoryMaxKB        uint64
 }
 
 type LogSpamStats struct {
@@ -230,44 +233,46 @@ type HeapPathElement struct {
 }
 
 type Summary struct {
-	Title             string
-	LogCount          int
-	EventCount        int
-	DurationMS        uint64
-	Dictionary        int
-	HTTPCount         int
-	HTTPFailed        int
-	HTTPP95MS         uint64
-	UIFrames          uint64
-	UIJank            uint64
-	UIWindowMS        uint64
-	UIJankPct         float64
-	UIAvgFPS          float64
-	UIMinFPS          float64
-	StallCount        int
-	StallMaxMS        uint64
-	ContextCount      int
-	BatteryMinPct     uint64
-	BatteryLastPct    uint64
-	AvailMemoryMinKB  uint64
-	LowMemoryCount    int
-	TrafficRxMax      uint64
-	TrafficTxMax      uint64
-	BatteryStateLast  uint64
-	BatteryTempDeciC  uint64
-	AvailMemoryLastKB uint64
-	TotalMemoryKB     uint64
-	FreeStorageKB     uint64
-	TotalStorageKB    uint64
-	NetworkMetered    bool
-	NetworkValidated  bool
-	NetworkVPN        bool
-	DeviceRootKnown   bool
-	DeviceRooted      bool
-	MemoryMaxKB       uint64
-	Retained          uint64
-	Environment       RunEnvironment
-	Warnings          []string
+	Title              string
+	LogCount           int
+	EventCount         int
+	DurationMS         uint64
+	Dictionary         int
+	HTTPCount          int
+	HTTPFailed         int
+	HTTPP95MS          uint64
+	HTTPP95Approximate bool
+	UIFrames           uint64
+	UIJank             uint64
+	UIWindowMS         uint64
+	UIJankPct          float64
+	UIAvgFPS           float64
+	UIMinFPS           float64
+	StallCount         int
+	StallMaxMS         uint64
+	ContextCount       int
+	MemoryCount        int
+	BatteryMinPct      uint64
+	BatteryLastPct     uint64
+	AvailMemoryMinKB   uint64
+	LowMemoryCount     int
+	TrafficRxMax       uint64
+	TrafficTxMax       uint64
+	BatteryStateLast   uint64
+	BatteryTempDeciC   int64
+	AvailMemoryLastKB  uint64
+	TotalMemoryKB      uint64
+	FreeStorageKB      uint64
+	TotalStorageKB     uint64
+	NetworkMetered     bool
+	NetworkValidated   bool
+	NetworkVPN         bool
+	DeviceRootKnown    bool
+	DeviceRooted       bool
+	MemoryMaxKB        uint64
+	Retained           uint64
+	Environment        RunEnvironment
+	Warnings           []string
 
 	Routes             []RouteStats
 	Screens            []ScreenStats
@@ -341,6 +346,7 @@ type InfluenceNode struct {
 	Problems        uint64
 	LogSpam         uint64
 	MainThreadMS    uint64
+	RuntimeWallMS   uint64
 	NetworkMS       uint64
 	MemoryPressure  uint64
 	UIJank          uint64

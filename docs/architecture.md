@@ -80,7 +80,23 @@ record:
   payload: event-specific uvarints and dictionary ids
 ```
 
-The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, gauges, and context samples omit payload length; variable and append-friendly events keep it. Context booleans such as low-memory, metered, validated, and VPN plus the session rooted-device signal are stored in the event flags bitmask instead of being duplicated as payload uvarints.
+The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, gauges, and context samples omit payload length; variable and append-friendly events keep it. Context booleans such as low-memory, metered, validated, and VPN plus the session rooted-device signal are stored in the event flags bitmask instead of being duplicated as payload uvarints. Context battery temperature is stored as signed zigzag-varint because sub-zero Celsius values are valid data, not invalid counters.
+
+Metric payloads keep enough aggregation metadata for CLI-side merges:
+
+```text
+counter: metric_id, value, count=1, sum=value, max=value, mode=UNKNOWN
+gauge:   metric_id, value, count, sum, max, mode
+```
+
+Gauge `mode` prevents semantically different signals from being averaged together:
+
+- `AVERAGE` for numeric gauges where weighted average and max are meaningful;
+- `LAST` for IDs, last levels, core counts, and max snapshots where the newest value is the only useful aggregate;
+- `STATE` for enum/state gauges such as battery status, plugged, health, thermal status, process exit reason, and trim level;
+- `BOOLEAN_RATE` for boolean gauges where the report value is the percentage of `true` samples.
+
+The CLI merges Android-side metric windows by `sum/count` for `AVERAGE`, by latest value for `LAST`/`STATE`, and by true-count percentage for `BOOLEAN_RATE`. Negative custom gauges are rejected by the runtime and surfaced through `jankhunter.metric.invalid_negative.gauge.count`; signed values need a typed event or an explicitly signed context field.
 
 String-heavy values are dictionary encoded:
 

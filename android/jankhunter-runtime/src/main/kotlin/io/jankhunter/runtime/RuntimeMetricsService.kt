@@ -2,6 +2,8 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.MetricAggregator
+import io.jankhunter.runtime.internal.io.MetricAggregationMode
+import io.jankhunter.runtime.internal.io.MetricSemantics
 import java.util.concurrent.atomic.AtomicLong
 
 internal class RuntimeMetricsService(
@@ -39,13 +41,14 @@ internal class RuntimeMetricsService(
 
     fun recordGauge(name: String?, value: Long) {
         val asyncWriter = writer() ?: return
+        val mode = MetricSemantics.gaugeMode(name)
         if (shouldAggregate()) {
-            aggregator.gauge(name, value)
+            aggregator.gauge(name, value, mode)
             flush(force = false)
             return
         }
         ensureContextRecorded()
-        asyncWriter.gauge(name, value)
+        asyncWriter.gauge(name, value, count = 1L, sum = value, max = value, mode = mode)
     }
 
     fun flush(force: Boolean) {
@@ -63,8 +66,15 @@ internal class RuntimeMetricsService(
                 asyncWriter.counter(name, value)
             }
 
-            override fun gauge(name: String, value: Long) {
-                asyncWriter.gauge(name, value)
+            override fun gauge(
+                name: String,
+                value: Long,
+                count: Long,
+                sum: Long,
+                max: Long,
+                mode: MetricAggregationMode,
+            ) {
+                asyncWriter.gauge(name, value, count, sum, max, mode)
             }
         })
         events.emit(RuntimeEvent.MetricsFlushed(force))

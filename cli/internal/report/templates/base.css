@@ -1212,6 +1212,28 @@ th code {
 .score-band.sev-high { border-color: rgba(255,91,124,0.42); color: var(--bad); }
 .score-band.sev-medium { border-color: rgba(255,209,102,0.42); color: var(--warn); }
 .score-band.sev-ok { border-color: rgba(98,255,168,0.36); color: var(--ok); }
+.metric-with-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.approx-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,209,102,0.42);
+  color: var(--warn);
+  background: rgba(255,209,102,0.10);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
 .bar, .chart-track, .delta-track {
   height: 10px;
   min-width: 90px;

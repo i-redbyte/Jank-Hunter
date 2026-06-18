@@ -494,7 +494,16 @@ Runtime пишет асинхронно, через очередь и flush-ин
 Для долгих прогонов включены два защитных механизма:
 
 - adaptive sampling для стабильных memory/context snapshots: повторяющиеся значения пропускаются, но заметный сдвиг PSS/heap/RAM/traffic/network/low-memory сразу записывается;
-- агрегация counters/gauges: горячие метрики складываются в окне `io.jankhunter.metric_aggregation_window_ms`, counters пишутся суммой, gauges — средним и max.
+- агрегация counters/gauges: горячие метрики складываются в окне `io.jankhunter.metric_aggregation_window_ms`, counters пишутся суммой, gauges пишутся с `count/sum/max/mode`, чтобы CLI мог корректно объединять несколько flush-окон.
+
+У gauge-метрик есть семантика агрегации:
+
+- `AVERAGE` - обычные числовые значения; CLI показывает weighted average и max;
+- `LAST` - последние ID/уровни/снапшоты, где среднее значение бессмысленно;
+- `STATE` - enum/state значения вроде battery status, plugged, health, thermal status, process exit reason/importance и trim level;
+- `BOOLEAN_RATE` - boolean gauges; отчет показывает процент `true` за окно.
+
+Отрицательные пользовательские gauges не кодируются как metric value: runtime увеличивает `jankhunter.metric.invalid_negative.gauge.count`, чтобы не записать некорректный unsigned payload. Для отрицательных физических величин нужен typed signed field; например `battery_temp_deci_c` в context хранится signed zigzag-varint и корректно поддерживает значения ниже 0 °C.
 
 Настройки:
 

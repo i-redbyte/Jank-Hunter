@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.io.MetricAggregator
+import io.jankhunter.runtime.internal.io.MetricAggregationMode
 import java.io.File
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
@@ -117,7 +118,14 @@ class JankHunterRuntimeBenchmarkTest {
             aggregator.flush(object : MetricAggregator.Sink {
                 override fun counter(name: String, value: Long) = Unit
 
-                override fun gauge(name: String, value: Long) = Unit
+                override fun gauge(
+                    name: String,
+                    value: Long,
+                    count: Long,
+                    sum: Long,
+                    max: Long,
+                    mode: MetricAggregationMode,
+                ) = Unit
             })
         }
         printBenchmark("metric aggregation counter/gauge", count * 2, elapsedNs)

@@ -166,7 +166,7 @@ func encodePayload(w io.Writer, event Event) error {
 			p.BatteryPct,
 			p.AvailMemoryKB,
 			p.BatteryState,
-			p.BatteryTempDeciC,
+			encodeSVarint(p.BatteryTempDeciC),
 			p.RxBytes,
 			p.TxBytes,
 			p.TotalMemoryKB,
@@ -240,7 +240,19 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("metric payload is nil")
 		}
-		for _, value := range []uint64{p.MetricID, p.Value} {
+		count := p.Count
+		if count == 0 {
+			count = 1
+		}
+		sum := p.Sum
+		if sum == 0 {
+			sum = p.Value
+		}
+		max := p.Max
+		if max == 0 {
+			max = p.Value
+		}
+		for _, value := range []uint64{p.MetricID, p.Value, count, sum, max, uint64(p.Mode)} {
 			if err := writeUvarint(w, value); err != nil {
 				return err
 			}
@@ -463,6 +475,10 @@ func writeUvarint(w io.Writer, value uint64) error {
 	return err
 }
 
+func encodeSVarint(value int64) uint64 {
+	return uint64(value<<1) ^ uint64(value>>63)
+}
+
 func writeCompactHeader(w io.Writer, eventType EventType, deltaMS, flags uint64, payloadLength bool, payloadSize uint64) error {
 	deltaCode := compactDeltaCode(deltaMS)
 	header := byte(eventType & compactEventTypeMask)
@@ -522,7 +538,7 @@ func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
 
 func needsPayloadLength(eventType EventType) bool {
 	switch eventType {
-	case EventDictionary, EventSession, EventContext, EventRetained, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
+	case EventDictionary, EventSession, EventContext, EventRetained, EventCounter, EventGauge, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return true
 	default:
 		return false

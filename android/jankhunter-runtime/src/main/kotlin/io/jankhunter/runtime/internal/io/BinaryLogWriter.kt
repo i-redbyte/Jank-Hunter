@@ -133,7 +133,7 @@ class BinaryLogWriter(
             .uvarint(batteryPct.toLong())
             .uvarint(availMemoryKb)
             .uvarint(batteryState.toLong())
-            .uvarint(batteryTempDeciC.toLong())
+            .svarint(batteryTempDeciC.toLong())
             .uvarint(rxBytes)
             .uvarint(txBytes)
             .uvarint(totalMemoryKb)
@@ -235,12 +235,37 @@ class BinaryLogWriter(
 
     @Synchronized
     fun counter(name: String?, value: Long) {
-        metric(EVENT_COUNTER, name, value)
+        if (value < 0L) {
+            counter("jankhunter.metric.invalid_negative.counter.count", 1L)
+            return
+        }
+        metric(EVENT_COUNTER, name, value, count = 1L, sum = value, max = value, mode = MetricAggregationMode.UNKNOWN)
     }
 
     @Synchronized
     fun gauge(name: String?, value: Long) {
-        metric(EVENT_GAUGE, name, value)
+        if (value < 0L) {
+            counter("jankhunter.metric.invalid_negative.gauge.count", 1L)
+            return
+        }
+        gauge(name, value, count = 1L, sum = value, max = value, mode = MetricAggregationMode.AVERAGE)
+    }
+
+    @Synchronized
+    fun gauge(
+        name: String?,
+        value: Long,
+        count: Long,
+        sum: Long,
+        max: Long,
+        mode: MetricAggregationMode,
+    ) {
+        if (value < 0L || sum < 0L || max < 0L) {
+            counter("jankhunter.metric.invalid_negative.gauge.count", 1L)
+            return
+        }
+        val safeCount = if (count > 0L) count else 1L
+        metric(EVENT_GAUGE, name, value, safeCount, sum, max, mode)
     }
 
     @Synchronized
@@ -331,9 +356,23 @@ class BinaryLogWriter(
         record(EVENT_RUNTIME_CALL, flags, payload)
     }
 
-    private fun metric(eventType: Int, name: String?, value: Long) {
+    private fun metric(
+        eventType: Int,
+        name: String?,
+        value: Long,
+        count: Long,
+        sum: Long,
+        max: Long,
+        mode: MetricAggregationMode,
+    ) {
         val metricId = idFor(DICT_METRIC, name)
-        val payload = Payload().uvarint(metricId).uvarint(value)
+        val payload = Payload()
+            .uvarint(metricId)
+            .uvarint(value)
+            .uvarint(count)
+            .uvarint(sum)
+            .uvarint(max)
+            .uvarint(mode.wireValue)
         record(eventType, 0L, payload)
     }
 
@@ -399,6 +438,10 @@ class BinaryLogWriter(
             }
             byteValue(value.toInt())
             return this
+        }
+
+        fun svarint(value: Long): Payload {
+            return uvarint((value shl 1) xor (value shr 63))
         }
 
         fun optionalContext(flags: Long, screenId: Long, ownerId: Long, flowId: Long, stepId: Long): Payload {
@@ -654,6 +697,8 @@ class BinaryLogWriter(
                 EVENT_DICTIONARY,
                 EVENT_SESSION,
                 EVENT_CONTEXT,
+                EVENT_COUNTER,
+                EVENT_GAUGE,
                 EVENT_RETAINED,
                 EVENT_FLOW,
                 EVENT_LOG_SPAM,

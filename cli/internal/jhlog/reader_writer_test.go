@@ -483,6 +483,58 @@ func TestDictionaryValueCodecsDecodeBCD(t *testing.T) {
 	}
 }
 
+func TestMetricAggregationMetadataRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{
+		Type: EventDictionary,
+		Dictionary: &DictionaryEntry{
+			Kind:  DictGeneric,
+			ID:    1,
+			Value: "memory.pss",
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent(dictionary) error = %v", err)
+	}
+	if err := writer.WriteEvent(Event{
+		Type: EventGauge,
+		Metric: &MetricEvent{
+			MetricID: 1,
+			Value:    130,
+			Count:    2,
+			Sum:      260,
+			Max:      160,
+			Mode:     MetricModeAverage,
+		},
+	}); err != nil {
+		t.Fatalf("WriteEvent(gauge) error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	log, err := ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var metric *MetricEvent
+	for _, event := range log.Events {
+		if event.Type == EventGauge {
+			metric = event.Metric
+			break
+		}
+	}
+	if metric == nil {
+		t.Fatalf("gauge event not found: %+v", log.Events)
+	}
+	if metric.Value != 130 || metric.Count != 2 || metric.Sum != 260 || metric.Max != 160 || metric.Mode != MetricModeAverage {
+		t.Fatalf("metric metadata = %+v", metric)
+	}
+}
+
 func TestContextBooleansUseFlags(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "context-flags.jhlog")
 	file, writer, err := Create(path)
@@ -498,7 +550,7 @@ func TestContextBooleansUseFlags(t *testing.T) {
 			BatteryPct:       50,
 			AvailMemoryKB:    1024,
 			BatteryState:     3,
-			BatteryTempDeciC: 301,
+			BatteryTempDeciC: -45,
 			LowMemory:        true,
 			NetworkMetered:   true,
 			NetworkValidated: true,
@@ -532,5 +584,17 @@ func TestContextBooleansUseFlags(t *testing.T) {
 	context := event.Context
 	if !context.LowMemory || !context.NetworkMetered || !context.NetworkValidated || !context.NetworkVPN {
 		t.Fatalf("context booleans did not round-trip from flags: %+v", context)
+	}
+	if context.Network != NetworkVPN ||
+		context.BatteryPct != 50 ||
+		context.AvailMemoryKB != 1024 ||
+		context.BatteryState != 3 ||
+		context.BatteryTempDeciC != -45 ||
+		context.RxBytes != 1000 ||
+		context.TxBytes != 2000 ||
+		context.TotalMemoryKB != 4096 ||
+		context.FreeStorageKB != 8192 ||
+		context.TotalStorageKB != 16384 {
+		t.Fatalf("context payload did not round-trip: %+v", context)
 	}
 }

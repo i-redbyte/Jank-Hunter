@@ -98,6 +98,56 @@ func TestBuildInfluenceWorksWithoutClassGraph(t *testing.T) {
 	}
 }
 
+func TestBuildInfluenceSeparatesRuntimeWallTimeAndRetainedMemory(t *testing.T) {
+	influence := BuildInfluence(Summary{
+		Owners: []OwnerStats{{
+			Owner: "com.app.FeedActivity",
+			Kind:  "retained_object",
+			Count: 1,
+			MaxMS: 60_000,
+		}},
+		RuntimeCalls: []RuntimeCallStats{{
+			Caller:  "com.app.FeedPresenter.open",
+			Callee:  "com.app.FeedRepository.load",
+			Count:   4,
+			TotalMS: 800,
+			MaxMS:   300,
+		}},
+		ProblemWindows: []ProblemWindowStats{{
+			Owner:         "com.app.FeedPresenter.open",
+			Kind:          "http_slow_or_failed",
+			Windows:       1,
+			Count:         3,
+			TotalWindowMS: 1_500,
+			MaxMS:         900,
+		}},
+		MemoryLeaks: []MemoryLeakSuspect{{
+			ClassName:           "com.app.BigBitmapHolder",
+			Holder:              "com.app.FeedActivity",
+			Count:               1,
+			EstimatedRetainedKB: 4_096,
+			Severity:            "medium",
+			Score:               8,
+		}},
+	}, nil)
+
+	presenter := influenceNodeByClass(influence.TopNodes, "com.app.FeedPresenter")
+	if presenter.MainThreadMS != 0 {
+		t.Fatalf("non-main-thread problem contributed to main thread: %+v", presenter)
+	}
+	if presenter.RuntimeWallMS != 200 {
+		t.Fatalf("caller runtime wall = %d, want 200: %+v", presenter.RuntimeWallMS, presenter)
+	}
+	repository := influenceNodeByClass(influence.TopNodes, "com.app.FeedRepository")
+	if repository.MainThreadMS != 0 || repository.RuntimeWallMS != 800 {
+		t.Fatalf("callee runtime metrics = %+v", repository)
+	}
+	activity := influenceNodeByClass(influence.TopNodes, "com.app.FeedActivity")
+	if activity.MemoryPressure != 4_096 {
+		t.Fatalf("heap retained size missing or age used as memory: %+v", activity)
+	}
+}
+
 func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
 	cases := map[string]string{
 		"http_slow_or_failed":      "медленный или ошибочный HTTP",
@@ -122,4 +172,13 @@ func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
 			t.Fatalf("problemReason(%q) = %q, want %q", kind, got, want)
 		}
 	}
+}
+
+func influenceNodeByClass(nodes []InfluenceNode, className string) InfluenceNode {
+	for _, node := range nodes {
+		if node.ClassName == className {
+			return node
+		}
+	}
+	return InfluenceNode{}
 }

@@ -254,7 +254,7 @@
       <h3>{{.Title}}</h3>
       <p class="help-text">{{.Detail}}</p>
       <table class="compare-table">
-        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th><th>Интервал</th></tr>
+        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th><th>Основа оценки</th></tr>
         {{range .Items}}
         <tr>
           <td class="metric-name">{{tip (deltaLabel .Name) (deltaHelp .Name)}}</td>

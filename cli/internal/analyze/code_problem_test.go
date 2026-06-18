@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -90,5 +91,38 @@ func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 	}
 	if !slices.Contains(repository.Categories, codeCategoryDuplicate) {
 		t.Fatalf("repository should be marked duplicate network: %+v", repository.Categories)
+	}
+}
+
+func TestCodeProblemRegistryDoesNotTreatRetainedAgeAsMemory(t *testing.T) {
+	rows := BuildCodeProblemRegistry(Summary{
+		Owners: []OwnerStats{{
+			Owner: "com.app.FeedActivity",
+			Kind:  "retained_object",
+			Count: 1,
+			MaxMS: 60_000,
+		}},
+		MemoryLeaks: []MemoryLeakSuspect{{
+			ClassName:           "com.app.BigBitmapHolder",
+			Holder:              "com.app.FeedActivity",
+			Count:               1,
+			MaxAgeMS:            60_000,
+			EstimatedRetainedKB: 4_096,
+			Severity:            "medium",
+			Score:               8,
+		}},
+	})
+
+	var feedActivity CodeProblemStats
+	for _, row := range rows {
+		if row.ClassName == "com.app.FeedActivity" && row.Owner == "com.app.FeedActivity" {
+			feedActivity = row
+		}
+	}
+	if strings.Contains(feedActivity.Evidence, "память=60000 KB") {
+		t.Fatalf("retained age leaked into memory evidence: %+v", feedActivity)
+	}
+	if !strings.Contains(feedActivity.Evidence, "память=4096 KB") {
+		t.Fatalf("heap retained size missing from evidence: %+v", feedActivity)
 	}
 }

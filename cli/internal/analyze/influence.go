@@ -119,6 +119,7 @@ type influenceAccumulator struct {
 	problems  uint64
 	logSpam   uint64
 	mainMS    uint64
+	runtimeMS uint64
 	networkMS uint64
 	memoryKB  uint64
 	uiJank    uint64
@@ -151,7 +152,6 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			node.score += scoreDuration(owner.TotalMS, 2500) + scoreDuration(owner.MaxMS, 900)
 		case "retained_object":
 			node.retained += uint64(owner.Count)
-			node.memoryKB += owner.MaxMS
 			node.addReason("удержанные объекты")
 			node.score += scoreCount(uint64(owner.Count), 8) + scoreDuration(owner.MaxMS, 60_000)
 		default:
@@ -216,7 +216,9 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node := b.node(className)
 		node.runtime = true
 		node.problems += problem.Count
-		node.mainMS += problem.MaxMS
+		if problemKindIsMainThread(problem.Kind) {
+			node.mainMS += problem.TotalWindowMS
+		}
 		node.addFlow(problem.Flow)
 		node.addScreen(problem.Screen)
 		node.addReason(problemReason(problem.Kind))
@@ -246,6 +248,27 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.addReason("сетевой маршрут")
 		node.score += scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3)
 	}
+	for _, leak := range summary.MemoryLeaks {
+		target := leak.ClassName
+		if isLikelyAppClass(leak.Holder) {
+			target = leak.Holder
+		}
+		className := classFromOwner(target)
+		if className == "" {
+			className = normalizeClassName(target)
+		}
+		if className == "" {
+			continue
+		}
+		node := b.node(className)
+		node.runtime = true
+		node.retained += leak.Count
+		node.memoryKB += leak.EstimatedRetainedKB
+		node.addFlow(leak.Flow)
+		node.addScreen(leak.Screen)
+		node.addReason("heap evidence утечки")
+		node.score += leak.Score * 0.45
+	}
 	for _, call := range summary.RuntimeCalls {
 		callerClass := classFromOwner(call.Caller)
 		calleeClass := classFromOwner(call.Callee)
@@ -264,8 +287,8 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		callee.addReason("вызовы выполнения")
 		caller.score += scoreCount(call.Count, 220) * 0.45
 		callee.score += scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2200) + scoreDuration(call.MaxMS, 500)
-		caller.mainMS += call.TotalMS / 4
-		callee.mainMS += call.TotalMS
+		caller.runtimeMS += call.TotalMS / 4
+		callee.runtimeMS += call.TotalMS
 		b.runtimeEdges = append(b.runtimeEdges, runtimeInfluenceEdge{
 			from:    callerClass,
 			to:      calleeClass,
@@ -566,6 +589,7 @@ func (n *influenceAccumulator) toNode() InfluenceNode {
 		Problems:        n.problems,
 		LogSpam:         n.logSpam,
 		MainThreadMS:    n.mainMS,
+		RuntimeWallMS:   n.runtimeMS,
 		NetworkMS:       n.networkMS,
 		MemoryPressure:  n.memoryKB,
 		UIJank:          n.uiJank,
@@ -774,6 +798,20 @@ func problemReason(kind string) string {
 			return "проблемные окна"
 		}
 		return kind
+	}
+}
+
+func problemKindIsMainThread(kind string) bool {
+	switch kind {
+	case "main_thread_stall",
+		"main_thread_dispatch",
+		"main_thread_io",
+		"main_thread_disk_io",
+		"disk_io_main_thread",
+		"wrapped_click":
+		return true
+	default:
+		return false
 	}
 }
 

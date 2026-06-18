@@ -99,7 +99,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 		if event.Context.BatteryPct > 0 {
 			c.addValue("Контекст", "устройство", "Батарея", "%", float64(event.Context.BatteryPct))
 		}
-		if event.Context.BatteryTempDeciC > 0 {
+		if event.Context.BatteryTempDeciC != 0 {
 			c.addValue("Контекст", "устройство", "Температура батареи", "0.1 C", float64(event.Context.BatteryTempDeciC))
 		}
 	case event.Metric != nil && event.Type == jhlog.EventGauge:
