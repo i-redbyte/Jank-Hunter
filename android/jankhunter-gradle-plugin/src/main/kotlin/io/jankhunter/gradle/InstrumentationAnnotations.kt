@@ -6,6 +6,7 @@ import org.objectweb.asm.Opcodes
 internal data class JankAnnotationMetadata(
     val owner: String? = null,
     val trace: String? = null,
+    val tracePresent: Boolean = false,
     val flow: String? = null,
     val screen: String? = null,
     val ignored: Boolean = false,
@@ -13,6 +14,7 @@ internal data class JankAnnotationMetadata(
     class Builder {
         var owner: String? = null
         var trace: String? = null
+        var tracePresent: Boolean = false
         var flow: String? = null
         var screen: String? = null
         var ignored: Boolean = false
@@ -21,6 +23,7 @@ internal data class JankAnnotationMetadata(
             return JankAnnotationMetadata(
                 owner = owner?.takeIf { it.isNotBlank() },
                 trace = trace?.takeIf { it.isNotBlank() },
+                tracePresent = tracePresent,
                 flow = flow?.takeIf { it.isNotBlank() },
                 screen = screen?.takeIf { it.isNotBlank() },
                 ignored = ignored,
@@ -37,7 +40,10 @@ internal object JankAnnotationParser {
     ): AnnotationVisitor? {
         return when (descriptor) {
             OWNER_DESCRIPTOR -> StringValueAnnotationVisitor(delegate) { metadata.owner = it }
-            TRACE_DESCRIPTOR -> StringValueAnnotationVisitor(delegate) { metadata.trace = it }
+            TRACE_DESCRIPTOR -> {
+                metadata.tracePresent = true
+                StringValueAnnotationVisitor(delegate) { metadata.trace = it }
+            }
             FLOW_DESCRIPTOR -> StringValueAnnotationVisitor(delegate) { metadata.flow = it }
             SCREEN_DESCRIPTOR -> StringValueAnnotationVisitor(delegate) { metadata.screen = it }
             IGNORE_DESCRIPTOR -> {
@@ -66,4 +72,3 @@ private class StringValueAnnotationVisitor(
         super.visit(name, value)
     }
 }
-

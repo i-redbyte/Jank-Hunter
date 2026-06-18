@@ -177,11 +177,30 @@ private class JankHunterMethodVisitor(
     private val methodAnnotations = JankAnnotationMetadata.Builder()
     private val ownerLabel: String
         get() = methodAnnotations.owner?.takeIf { it.isNotBlank() } ?: classAnnotations.owner ?: generatedOwnerLabel
+    private val annotationScreen: String?
+        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() } ?: classAnnotations.screen
+    private val annotationFlow: String?
+        get() = methodAnnotations.flow?.takeIf { it.isNotBlank() } ?: classAnnotations.flow
+    private val annotationTrace: String?
+        get() {
+            methodAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
+            if (methodAnnotations.tracePresent) return methodName
+            classAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
+            if (classAnnotations.tracePresent) return methodName
+            return null
+        }
+    private val hasAnnotationContext: Boolean
+        get() = annotationScreen != null ||
+            annotationFlow != null ||
+            annotationTrace != null ||
+            methodAnnotations.owner?.takeIf { it.isNotBlank() } != null ||
+            classAnnotations.owner != null
     private val hookEmitter = HookBytecodeEmitter(this) { ownerLabel }
     private var runtimeCallStartLocal = -1
-    private val runtimeCallTryStart = Label()
-    private val runtimeCallTryEnd = Label()
-    private val runtimeCallExceptionHandler = Label()
+    private var annotationScopeLocal = -1
+    private val methodTryStart = Label()
+    private val methodTryEnd = Label()
+    private val methodExceptionHandler = Label()
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -190,6 +209,9 @@ private class JankHunterMethodVisitor(
 
     override fun onMethodEnter() {
         if (instrumentationIgnored()) return
+        if (hasAnnotationContext) {
+            emitEnterAnnotatedContext()
+        }
         if (config.methodCounters) {
             visitLdcInsn("owner.$ownerLabel")
             visitInsn(Opcodes.LCONST_1)
@@ -212,7 +234,9 @@ private class JankHunterMethodVisitor(
             )
             runtimeCallStartLocal = newLocal(Type.LONG_TYPE)
             storeLocal(runtimeCallStartLocal)
-            visitLabel(runtimeCallTryStart)
+        }
+        if (requiresCatchAllExit()) {
+            visitLabel(methodTryStart)
         }
     }
 
@@ -220,6 +244,9 @@ private class JankHunterMethodVisitor(
         if (instrumentationIgnored()) return
         if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
+        }
+        if (annotationScopeLocal >= 0 && opcode != Opcodes.ATHROW) {
+            emitExitAnnotatedContext()
         }
     }
 
@@ -269,13 +296,18 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
-        if (!instrumentationIgnored() && config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
-            visitLabel(runtimeCallTryEnd)
-            visitTryCatchBlock(runtimeCallTryStart, runtimeCallTryEnd, runtimeCallExceptionHandler, null)
-            visitLabel(runtimeCallExceptionHandler)
+        if (!instrumentationIgnored() && requiresCatchAllExit()) {
+            visitLabel(methodTryEnd)
+            visitTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+            visitLabel(methodExceptionHandler)
             val throwableLocal = newLocal(Type.getType(Throwable::class.java))
             storeLocal(throwableLocal)
-            emitRuntimeCallExit()
+            if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
+                emitRuntimeCallExit()
+            }
+            if (annotationScopeLocal >= 0) {
+                emitExitAnnotatedContext()
+            }
             loadLocal(throwableLocal)
             visitInsn(Opcodes.ATHROW)
         }
@@ -284,6 +316,45 @@ private class JankHunterMethodVisitor(
 
     companion object {
         private const val JANK_HUNTER = "io/jankhunter/runtime/JankHunter"
+    }
+
+    private fun emitEnterAnnotatedContext() {
+        pushNullableString(annotationScreen)
+        pushNullableString(ownerLabel)
+        pushNullableString(annotationFlow)
+        pushNullableString(annotationTrace)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "enterAnnotatedContext",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+            false,
+        )
+        annotationScopeLocal = newLocal(Type.getType("Ljava/lang/Object;"))
+        storeLocal(annotationScopeLocal)
+    }
+
+    private fun emitExitAnnotatedContext() {
+        loadLocal(annotationScopeLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "exitAnnotatedContext",
+            "(Ljava/lang/Object;)V",
+            false,
+        )
+    }
+
+    private fun pushNullableString(value: String?) {
+        if (value == null) {
+            visitInsn(Opcodes.ACONST_NULL)
+        } else {
+            visitLdcInsn(value)
+        }
+    }
+
+    private fun requiresCatchAllExit(): Boolean {
+        return (config.runtimeCallGraph && runtimeCallStartLocal >= 0) || annotationScopeLocal >= 0
     }
 
     private fun instrumentationIgnored(): Boolean {

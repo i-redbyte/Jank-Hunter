@@ -452,6 +452,26 @@ object JankHunter {
     }
 
     @JvmStatic
+    fun enterAnnotatedContext(
+        screenName: String?,
+        ownerName: String?,
+        flowName: String?,
+        traceName: String?,
+    ): Any? {
+        if (!isRuntimeActiveForHooks()) return null
+        val token = contextTracker.enterScopedContext(screenName, ownerName, flowName, traceName)
+        ensureContextRecorded()
+        return token
+    }
+
+    @JvmStatic
+    fun exitAnnotatedContext(token: Any?) {
+        if (token !is JankHunterAnnotationScope) return
+        contextTracker.exitScopedContext(token)
+        ensureContextRecorded()
+    }
+
+    @JvmStatic
     fun withFlow(flowName: String?, runnable: Runnable) {
         val token = startFlow(flowName)
         try {

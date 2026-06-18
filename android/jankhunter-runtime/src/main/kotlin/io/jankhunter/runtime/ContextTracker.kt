@@ -50,6 +50,36 @@ internal class ContextTracker(
         setThreadLocal(flowStep, normalizedContextValue(stepName))
     }
 
+    fun enterScopedContext(
+        screenName: String?,
+        ownerName: String?,
+        flowName: String?,
+        stepName: String?,
+    ): JankHunterAnnotationScope {
+        val token = JankHunterAnnotationScope(
+            previousScreenOverride = screenOverride.get(),
+            previousOwner = owner.get(),
+            previousFlow = flow.get(),
+            previousStep = flowStep.get(),
+        )
+        normalizedContextValue(screenName)?.let { setThreadLocal(screenOverride, it) }
+        normalizedContextValue(ownerName)?.let { setThreadLocal(owner, it) }
+        normalizedContextValue(flowName)?.let {
+            setThreadLocal(flow, it)
+            flowStep.remove()
+        }
+        normalizedContextValue(stepName)?.let { setThreadLocal(flowStep, it) }
+        return token
+    }
+
+    fun exitScopedContext(token: JankHunterAnnotationScope?) {
+        if (token == null) return
+        setThreadLocal(screenOverride, token.previousScreenOverride)
+        setThreadLocal(owner, token.previousOwner)
+        setThreadLocal(flow, token.previousFlow)
+        setThreadLocal(flowStep, token.previousStep)
+    }
+
     fun capture(
         screenOverride: String? = null,
         ownerOverride: String? = null,

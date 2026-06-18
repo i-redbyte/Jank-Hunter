@@ -37,4 +37,35 @@ class ContextTrackerTest {
         assertEquals("Home", propagatedScreen.get())
         assertEquals("Payment", tracker.currentScreen())
     }
+
+    @Test
+    fun scopedAnnotationContextRestoresPreviousThreadLocalValues() {
+        val tracker = ContextTracker()
+        tracker.setScreen("Home")
+        val outer = tracker.enterScopedContext("FeedScreen", "FeedOwner", "feed.open", "load")
+
+        assertEquals("FeedScreen", tracker.currentScreen())
+        assertEquals("FeedOwner", tracker.currentOwner())
+        assertEquals("feed.open", tracker.currentFlow())
+        assertEquals("load", tracker.currentFlowStep())
+
+        val inner = tracker.enterScopedContext("DetailsScreen", null, null, "render")
+
+        assertEquals("DetailsScreen", tracker.currentScreen())
+        assertEquals("FeedOwner", tracker.currentOwner())
+        assertEquals("feed.open", tracker.currentFlow())
+        assertEquals("render", tracker.currentFlowStep())
+
+        tracker.exitScopedContext(inner)
+        assertEquals("FeedScreen", tracker.currentScreen())
+        assertEquals("FeedOwner", tracker.currentOwner())
+        assertEquals("feed.open", tracker.currentFlow())
+        assertEquals("load", tracker.currentFlowStep())
+
+        tracker.exitScopedContext(outer)
+        assertEquals("Home", tracker.currentScreen())
+        assertEquals("unknown", tracker.currentOwner())
+        assertEquals("unknown", tracker.currentFlow())
+        assertEquals("unknown", tracker.currentFlowStep())
+    }
 }

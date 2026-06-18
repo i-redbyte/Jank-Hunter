@@ -44,6 +44,43 @@ class InstrumentationAnnotationsTest {
         assertEquals(0, countRuntimeCalls(instrumented, "recordCounter"))
     }
 
+    @Test
+    fun screenFlowAndTraceAnnotationsEnterRuntimeContext() {
+        val instrumented = instrument(
+            ownerFixture(
+                classScreen = "FeedScreen",
+                classFlow = "feed.open",
+                methodTrace = "refresh",
+            ),
+        )
+
+        val strings = collectMethodStrings(instrumented, "load")
+        assertTrue(strings.contains("FeedScreen"))
+        assertTrue(strings.contains("FeedOwner"))
+        assertTrue(strings.contains("feed.open"))
+        assertTrue(strings.contains("refresh"))
+        assertEquals(1, countRuntimeCalls(instrumented, "enterAnnotatedContext"))
+        assertEquals(2, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
+    }
+
+    @Test
+    fun defaultTraceAnnotationUsesMethodName() {
+        val instrumented = instrument(ownerFixture(methodTrace = ""))
+
+        val strings = collectMethodStrings(instrumented, "load")
+
+        assertTrue(strings.contains("load"))
+        assertEquals(1, countRuntimeCalls(instrumented, "enterAnnotatedContext"))
+    }
+
+    @Test
+    fun annotatedContextGetsCatchAllExitForExceptionUnwind() {
+        val instrumented = instrument(ownerFixture(methodTrace = "refresh", throwsException = true))
+
+        assertEquals(1, countCatchAllHandlers(instrumented, "load"))
+        assertEquals(1, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
+    }
+
     private fun instrument(bytes: ByteArray): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
@@ -73,13 +110,21 @@ class InstrumentationAnnotationsTest {
     private fun ownerFixture(
         classOwner: String? = null,
         methodOwner: String? = null,
+        classScreen: String? = null,
+        classFlow: String? = null,
+        methodTrace: String? = null,
         classIgnored: Boolean = false,
         methodIgnored: Boolean = false,
+        throwsException: Boolean = false,
     ): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Annotated", null, "java/lang/Object", null)
-        if (classOwner != null) {
-            writer.visitAnnotation(OWNER_DESCRIPTOR, false).stringValue(classOwner)
+        writer.visitAnnotation(OWNER_DESCRIPTOR, false).stringValue(classOwner ?: "FeedOwner")
+        if (classScreen != null) {
+            writer.visitAnnotation(SCREEN_DESCRIPTOR, false).stringValue(classScreen)
+        }
+        if (classFlow != null) {
+            writer.visitAnnotation(FLOW_DESCRIPTOR, false).stringValue(classFlow)
         }
         if (classIgnored) {
             writer.visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
@@ -89,11 +134,26 @@ class InstrumentationAnnotationsTest {
             if (methodOwner != null) {
                 visitAnnotation(OWNER_DESCRIPTOR, false).stringValue(methodOwner)
             }
+            if (methodTrace != null) {
+                val annotation = visitAnnotation(TRACE_DESCRIPTOR, false)
+                if (methodTrace.isNotEmpty()) {
+                    annotation.stringValue(methodTrace)
+                } else {
+                    annotation.visitEnd()
+                }
+            }
             if (methodIgnored) {
                 visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
             }
             visitCode()
-            visitInsn(Opcodes.RETURN)
+            if (throwsException) {
+                visitTypeInsn(Opcodes.NEW, "java/lang/RuntimeException")
+                visitInsn(Opcodes.DUP)
+                visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/RuntimeException", "<init>", "()V", false)
+                visitInsn(Opcodes.ATHROW)
+            } else {
+                visitInsn(Opcodes.RETURN)
+            }
             visitMaxs(0, 0)
             visitEnd()
         }
@@ -157,6 +217,35 @@ class InstrumentationAnnotationsTest {
         return count
     }
 
+    private fun countCatchAllHandlers(bytes: ByteArray, targetMethod: String): Int {
+        var count = 0
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor? {
+                    if (name != targetMethod) return null
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitTryCatchBlock(
+                            start: org.objectweb.asm.Label,
+                            end: org.objectweb.asm.Label,
+                            handler: org.objectweb.asm.Label,
+                            type: String?,
+                        ) {
+                            if (type == null) count += 1
+                        }
+                    }
+                }
+            },
+            0,
+        )
+        return count
+    }
+
     private fun AnnotationVisitor.stringValue(value: String) {
         visit("value", value)
         visitEnd()
@@ -164,7 +253,9 @@ class InstrumentationAnnotationsTest {
 
     private companion object {
         private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankOwner;"
+        private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankScreen;"
+        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankFlow;"
+        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankTrace;"
         private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankIgnore;"
     }
 }
-
