@@ -40,6 +40,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val classGraphPath: Property<String>
 
     @get:Input
+    val instrumentationDiagnosticsPath: Property<String>
+
+    @get:Input
     val allowEmptyIncludePackages: Property<Boolean>
 
     @get:Input

@@ -26,6 +26,19 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	assertFileContains(t, inspectPath, "λ Анализ", `href="report-math.html"`, "Разбор утечек памяти")
 	assertFileContains(t, filepath.Join(dir, "report-math.html"), "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Что измеряет")
 
+	diagnosticsPath := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
+	writeDiagnosticsFixture(t, diagnosticsPath)
+	inspectWithDiagnosticsPath := filepath.Join(dir, "report-with-diagnostics.html")
+	if err := runInspect([]string{
+		samplePath,
+		"--instrumentation-diagnostics", diagnosticsPath,
+		"--out", inspectWithDiagnosticsPath,
+	}); err != nil {
+		t.Fatalf("runInspect(diagnostics) error = %v", err)
+	}
+	assertFileContains(t, inspectWithDiagnosticsPath, "ASM диагностика", `href="report-with-diagnostics-diagnostics.html"`)
+	assertFileContains(t, filepath.Join(dir, "report-with-diagnostics-diagnostics.html"), "ASM диагностика", "okhttp3.bridge.v3", "FeedOwner")
+
 	comparePath := filepath.Join(dir, "compare.html")
 	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--out", comparePath}); err != nil {
 		t.Fatalf("runCompare() error = %v", err)
@@ -161,6 +174,7 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 		"--class", "CheckoutActivity",
 		"--owner-map", "owners.json",
 		"--class-graph=graph.jsonl",
+		"--instrumentation-diagnostics", "diagnostics.jsonl",
 		"sample.jhlog",
 	})
 	if err != nil {
@@ -175,8 +189,15 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 		builder.filter.ClassContains != "CheckoutActivity" {
 		t.Fatalf("filter = %+v", builder.filter)
 	}
-	if builder.ownerMapPath != "owners.json" || builder.classGraphPath != "graph.jsonl" {
-		t.Fatalf("paths = owner map %q class graph %q", builder.ownerMapPath, builder.classGraphPath)
+	if builder.ownerMapPath != "owners.json" ||
+		builder.classGraphPath != "graph.jsonl" ||
+		builder.diagnosticsPath != "diagnostics.jsonl" {
+		t.Fatalf(
+			"paths = owner map %q class graph %q diagnostics %q",
+			builder.ownerMapPath,
+			builder.classGraphPath,
+			builder.diagnosticsPath,
+		)
 	}
 
 	heap, remaining, err := takeHeapInputFlags([]string{
@@ -209,6 +230,14 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("%s does not contain %q", path, needle)
 		}
+	}
+}
+
+func writeDiagnosticsFixture(t *testing.T, path string) {
+	t.Helper()
+	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","count":2}],"annotations":[{"owner":"FeedOwner","screen":"Feed","flow":"feed.open","trace":"refresh","count":1}]}`
+	if err := os.WriteFile(path, []byte(data+"\n"), 0o644); err != nil {
+		t.Fatalf("write diagnostics fixture: %v", err)
 	}
 }
 

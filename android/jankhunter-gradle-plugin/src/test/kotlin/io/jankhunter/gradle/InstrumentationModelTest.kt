@@ -243,6 +243,7 @@ class InstrumentationModelTest {
             classGraph = classGraph,
             runtimeCallGraph = runtimeCallGraph,
             classGraphPath = "",
+            instrumentationDiagnosticsPath = "",
         )
     }
 }

@@ -35,6 +35,35 @@ const buildReportSet = (name, logCount, presentation = false) => {
   const inspectPath = resolve(setDir, "inspect.html");
   const comparePath = resolve(setDir, "compare.html");
   const presentationFlag = presentation ? ["--presentation"] : [];
+  const diagnosticsPath = resolve(setDir, "instrumentation-diagnostics.jsonl");
+  writeFileSync(diagnosticsPath, [
+    JSON.stringify({
+      format: 1,
+      class: "com.app.feed.FeedRepository",
+      methods: 12,
+      ignoredMethods: 1,
+      annotatedMethods: 3,
+      skippedMethods: [{ reason: "constructor", count: 1 }],
+      hooks: [
+        { intent: "okhttp.install_event_listener_factory", signature: "okhttp3.builder.build.v3", bridge: "okhttp3.bridge.v3", count: 4 },
+        { intent: "logspam.android.util.Log.d", signature: "logspam.android.util.Log.d", count: 9 },
+      ],
+      annotations: [{ owner: "FeedOwner", screen: "Feed", flow: "feed.open", trace: "refresh", count: 3 }],
+    }),
+    JSON.stringify({
+      format: 1,
+      class: "com.app.checkout.CheckoutPresenter",
+      methods: 9,
+      ignoredMethods: 0,
+      annotatedMethods: 2,
+      skippedMethods: [],
+      hooks: [
+        { intent: "coroutine.wrap_block.function2_before_continuation", signature: "kotlinx.coroutines.suspend_builders.function2_continuation.v1", bridge: "kotlinx.coroutines.bridge.v1", count: 2 },
+      ],
+      annotations: [{ owner: "CheckoutPresenter", screen: "Checkout", flow: "checkout.pay", trace: "submit", count: 2 }],
+    }),
+  ].join("\n") + "\n");
+  const diagnosticsArgs = ["--instrumentation-diagnostics", diagnosticsPath];
   const ownerMapArgs = [];
   if (presentation) {
     const ownerMapPath = resolve(setDir, "owner-map.json");
@@ -47,12 +76,13 @@ const buildReportSet = (name, logCount, presentation = false) => {
     }, null, 2));
     ownerMapArgs.push("--owner-map", ownerMapPath);
   }
-  run(["inspect", ...logs, ...ownerMapArgs, ...presentationFlag, "--out", inspectPath]);
+  run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...presentationFlag, "--out", inspectPath]);
   run([
     "compare",
     "--baseline", logs.join(","),
     "--candidate", logs.join(","),
     ...ownerMapArgs,
+    ...diagnosticsArgs,
     ...presentationFlag,
     "--out", comparePath,
   ]);
@@ -61,12 +91,14 @@ const buildReportSet = (name, logCount, presentation = false) => {
     { set: name, type: "inspect", path: inspectPath },
     { set: name, type: "inspect-math", path: inspectPath.replace(/\.html$/, "-math.html") },
     { set: name, type: "inspect-influence", path: inspectPath.replace(/\.html$/, "-influence.html") },
+    { set: name, type: "inspect-diagnostics", path: inspectPath.replace(/\.html$/, "-diagnostics.html") },
     { set: name, type: "compare", path: comparePath },
     { set: name, type: "compare-math", path: comparePath.replace(/\.html$/, "-math.html") },
     { set: name, type: "compare-influence", path: comparePath.replace(/\.html$/, "-influence.html") },
+    { set: name, type: "compare-diagnostics", path: comparePath.replace(/\.html$/, "-diagnostics.html") },
   ].filter((report) => existsSync(report.path));
 
-  for (const required of ["inspect", "inspect-math", "inspect-influence", "compare", "compare-math", "compare-influence"]) {
+  for (const required of ["inspect", "inspect-math", "inspect-influence", "inspect-diagnostics", "compare", "compare-math", "compare-influence", "compare-diagnostics"]) {
     if (!reports.some((report) => report.type === required)) {
       throw new Error(`В snapshot-наборе ${name} не создан отчет ${required}`);
     }

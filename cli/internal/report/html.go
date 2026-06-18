@@ -22,8 +22,9 @@ type LogReport struct {
 }
 
 type ReportOptions struct {
-	PresentationMode bool
-	DisableMathLink  bool
+	PresentationMode                    bool
+	DisableMathLink                     bool
+	InstrumentationDiagnosticsAvailable bool
 }
 
 func WriteInspect(path string, summary analyze.Summary) error {
@@ -33,12 +34,13 @@ func WriteInspect(path string, summary analyze.Summary) error {
 func WriteInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
 	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
-		"GeneratedAt":         time.Now().Format(time.RFC3339),
-		"Summary":             summary,
-		"Analysis":            inspectAnalysis(summary, lang),
-		"MathReportHref":      mathReportHrefForOptions(path, options),
-		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, summary.Influence),
-		"PresentationMode":    options.PresentationMode,
+		"GeneratedAt":           time.Now().Format(time.RFC3339),
+		"Summary":               summary,
+		"Analysis":              inspectAnalysis(summary, lang),
+		"MathReportHref":        mathReportHrefForOptions(path, options),
+		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, summary.Influence),
+		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
+		"PresentationMode":      options.PresentationMode,
 	})
 }
 
@@ -53,14 +55,15 @@ func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs
 func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport, options ReportOptions) error {
 	lang := reportLanguage()
 	return execute(path, compareTemplate, map[string]any{
-		"GeneratedAt":         time.Now().Format(time.RFC3339),
-		"Comparison":          comparison,
-		"BaselineLogs":        baselineLogs,
-		"CandidateLogs":       candidateLogs,
-		"Analysis":            compareAnalysis(comparison, lang),
-		"MathReportHref":      mathReportHrefForOptions(path, options),
-		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
-		"PresentationMode":    options.PresentationMode,
+		"GeneratedAt":           time.Now().Format(time.RFC3339),
+		"Comparison":            comparison,
+		"BaselineLogs":          baselineLogs,
+		"CandidateLogs":         candidateLogs,
+		"Analysis":              compareAnalysis(comparison, lang),
+		"MathReportHref":        mathReportHrefForOptions(path, options),
+		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
+		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
+		"PresentationMode":      options.PresentationMode,
 	})
 }
 
@@ -105,6 +108,22 @@ func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, 
 	})
 }
 
+func WriteInstrumentationDiagnostics(path string, diagnostics analyze.InstrumentationDiagnostics) error {
+	return WriteInstrumentationDiagnosticsWithOptions(path, diagnostics, ReportOptions{})
+}
+
+func WriteInstrumentationDiagnosticsWithOptions(
+	path string,
+	diagnostics analyze.InstrumentationDiagnostics,
+	options ReportOptions,
+) error {
+	return execute(path, diagnosticsTemplate, map[string]any{
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"Diagnostics":      diagnostics,
+		"PresentationMode": options.PresentationMode,
+	})
+}
+
 func MathReportPath(path string) string {
 	ext := filepath.Ext(path)
 	if ext == "" {
@@ -144,6 +163,30 @@ func InfluenceReportHrefIfAvailable(path string, influence analyze.InfluenceSumm
 		return ""
 	}
 	return InfluenceReportHref(path)
+}
+
+func DiagnosticsReportPath(path string) string {
+	ext := filepath.Ext(path)
+	if ext != "" {
+		base := strings.TrimSuffix(path, ext)
+		base = strings.TrimSuffix(base, "-math")
+		base = strings.TrimSuffix(base, "-influence")
+		return base + "-diagnostics" + ext
+	}
+	path = strings.TrimSuffix(path, "-math")
+	path = strings.TrimSuffix(path, "-influence")
+	return path + "-diagnostics.html"
+}
+
+func DiagnosticsReportHref(path string) string {
+	return filepath.Base(DiagnosticsReportPath(path))
+}
+
+func DiagnosticsReportHrefForOptions(path string, options ReportOptions) string {
+	if !options.InstrumentationDiagnosticsAvailable {
+		return ""
+	}
+	return DiagnosticsReportHref(path)
 }
 
 func execute(path, source string, data any) error {

@@ -20,6 +20,9 @@ var mathCompareTemplate string
 //go:embed templates/influence.tmpl
 var influenceTemplate string
 
+//go:embed templates/diagnostics.tmpl
+var diagnosticsTemplate string
+
 //go:embed templates/inspect.tmpl
 var inspectTemplate string
 

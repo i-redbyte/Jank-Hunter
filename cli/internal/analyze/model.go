@@ -26,12 +26,13 @@ type Filter struct {
 }
 
 type Options struct {
-	Filter                Filter
-	OwnerMap              map[string]string
-	ClassGraph            *ClassGraph
-	HeapEvidence          *HeapEvidence
-	BaselineHeapEvidence  *HeapEvidence
-	CandidateHeapEvidence *HeapEvidence
+	Filter                     Filter
+	OwnerMap                   map[string]string
+	ClassGraph                 *ClassGraph
+	InstrumentationDiagnostics *InstrumentationDiagnostics
+	HeapEvidence               *HeapEvidence
+	BaselineHeapEvidence       *HeapEvidence
+	CandidateHeapEvidence      *HeapEvidence
 }
 
 type RouteStats struct {

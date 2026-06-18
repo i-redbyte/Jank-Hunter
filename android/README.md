@@ -414,11 +414,12 @@ jankHunter {
 - `runtimeCallGraph` - опционально добавляет легкие enter/exit hooks и пишет агрегированные runtime-связи `caller -> callee`;
 - `methodCounters` - пишет счетчики входа в методы, по умолчанию выключено.
 
-Для каждого variant plugin пишет owner-map и class graph:
+Для каждого variant plugin пишет owner-map, class graph и diagnostics artifact:
 
 ```text
 build/generated/jankhunter/<variant>/owner-map.json
 build/generated/jankhunter/<variant>/class-graph.jsonl
+build/generated/jankhunter/<variant>/instrumentation-diagnostics.jsonl
 ```
 
 CLI принимает их так:
@@ -427,10 +428,13 @@ CLI принимает их так:
 jankhunter inspect logs/*.jhlog \
   --owner-map build/generated/jankhunter/debug/owner-map.json \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
+  --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 
 `class-graph.jsonl` нужен для отдельного отчета `report-influence.html`: там видно, какие классы стали “злыми” узлами, через какие связи они влияют на другие классы и где это подтвердилось runtime-сигналами. Узел без runtime-доказательств не считается виновником: он просто связан со статическим графом, но в конкретном прогоне мог не выполниться.
+
+`instrumentation-diagnostics.jsonl` нужен для отдельного отчета `report-diagnostics.html`: там видно, какие ASM hooks реально совпали с байткодом, какие versioned bridges сработали, какие методы пропущены и какие `@JankFlow` / `@JankScreen` / `@JankTrace` scopes попадут в runtime attribution.
 
 `runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения это лучше включать после smoke-сборки и сначала на ограниченные include-пакеты или на `includeWholeApplication = true` с хорошим списком exclude.
 

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: ASM диагностика</title>
+  <style>{{baseCSS}}</style>
+</head>
+<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<header class="hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · instrumentation</div>
+      <h1>ASM диагностика</h1>
+      <div class="subhead">{{.Diagnostics.Source}} · создан {{.GeneratedAt}} · автономный HTML</div>
+    </div>
+    <div class="hero-side">
+      <div class="env-card">
+        <div class="env-title">Покрытие instrumentation</div>
+        <strong class="env-device">{{.Diagnostics.ClassCount}} классов</strong>
+        <div class="env-subtitle">Методы {{.Diagnostics.MethodCount}} · hooks {{.Diagnostics.HookCount}} · аннотаций {{.Diagnostics.AnnotatedMethodCount}}</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">Игнорировано</div><div class="env-value">{{.Diagnostics.IgnoredMethodCount}}</div><div class="env-detail">методов с @JankIgnore или class-level ignore</div></div>
+          <div class="env-item"><div class="env-label">Топ-классы</div><div class="env-value">{{len .Diagnostics.TopClasses}}</div><div class="env-detail">ограниченный список для стабильного HTML</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#overview">Обзор</a>
+  <a href="#hooks">Hooks</a>
+  <a href="#annotations">Аннотации</a>
+  <a href="#classes">Классы</a>
+  <a href="#warnings">Предупреждения</a>
+</nav>
+<main>
+  <section id="overview" class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Сводка ASM</h2>
+        <div class="panel-kicker">Build-time diagnostics показывает, какие hooks реально совпали с байткодом и какие annotation scopes попали в runtime attribution.</div>
+      </div>
+      <span class="pill">instrumentation-diagnostics.jsonl</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">Классы</div><div class="value">{{.Diagnostics.ClassCount}}</div><div class="hint">попали в instrumentation matcher</div></div>
+      <div class="metric"><div class="label">Методы</div><div class="value">{{.Diagnostics.MethodCount}}</div><div class="hint">безопасные, skipped и ignored вместе</div></div>
+      <div class="metric"><div class="label">Hooks</div><div class="value">{{.Diagnostics.HookCount}}</div><div class="hint">сумма срабатываний bytecode hooks</div></div>
+      <div class="metric"><div class="label">Аннотации</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankFlow / @JankScreen / @JankTrace / @JankOwner</div></div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Зачем смотреть</strong>Если ожидаемый hook не попал в таблицу, сигнатура библиотеки изменилась или вызов ушел через другую overload-форму.</div>
+      <div class="guide-card"><strong>Как чинить</strong>Ищите signature id и bridge id. Для новых OkHttp/coroutines вариантов добавляйте versioned bridge entry и тест resolver-а.</div>
+      <div class="guide-card"><strong>Что считать нормой</strong>Constructor/native/abstract skipped не ошибка. Нулевые hooks при включенной фиче требуют проверки include/exclude packages и сигнатур.</div>
+    </div>
+  </section>
+
+  <section id="hooks" class="panel">
+    <div class="panel-head">
+      <div><h2>Сработавшие hooks</h2><div class="panel-kicker">Группировка по intent, signature id и versioned bridge.</div></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <tr><th>Intent</th><th>Signature</th><th>Bridge</th><th>Срабатывания</th></tr>
+        {{range .Diagnostics.Hooks}}
+        <tr><td><code>{{.Intent}}</code></td><td><code>{{.Signature}}</code></td><td>{{if .Bridge}}<code>{{.Bridge}}</code>{{else}}<span class="muted">без bridge</span>{{end}}</td><td>{{.Count}}</td></tr>
+        {{else}}<tr><td colspan="4" class="muted">Нет сработавших hooks. Проверьте DSL flags, includePackages/excludePackages и сигнатуры целевых библиотек.</td></tr>{{end}}
+      </table>
+    </div>
+  </section>
+
+  <section id="annotations" class="panel">
+    <div class="panel-head">
+      <div><h2>Annotation scopes</h2><div class="panel-kicker">Эти значения будут попадать в runtime context и дальше в основной отчет.</div></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <tr><th>Owner</th><th>Screen</th><th>Flow</th><th>Trace</th><th>Методы</th></tr>
+        {{range .Diagnostics.Annotations}}
+        <tr><td><code>{{.Owner}}</code></td><td>{{.Screen}}</td><td><code>{{.Flow}}</code></td><td><code>{{.Trace}}</code></td><td>{{.Count}}</td></tr>
+        {{else}}<tr><td colspan="5" class="muted">Аннотационные scopes не найдены.</td></tr>{{end}}
+      </table>
+    </div>
+  </section>
+
+  <section id="classes" class="panel">
+    <div class="panel-head">
+      <div><h2>Классы</h2><div class="panel-kicker">Топ классов по числу hook-срабатываний и аннотированных методов.</div></div>
+    </div>
+    <details class="fold" open>
+      <summary><span>Показать классы</span><span class="method-kind">{{len .Diagnostics.TopClasses}} записей</span></summary>
+      <div class="fold-body">
+        <div class="table-scroll">
+          <table>
+            <tr><th>Класс</th><th>Методы</th><th>Hooks</th><th>Аннотации</th><th>Ignored</th><th>Skipped</th><th>Главные hooks</th></tr>
+            {{range .Diagnostics.TopClasses}}
+            <tr>
+              <td><code>{{.ClassName}}</code></td>
+              <td>{{.Methods}}</td>
+              <td>{{.HookCount}}</td>
+              <td>{{.AnnotatedMethods}}</td>
+              <td>{{.IgnoredMethods}}</td>
+              <td>{{range .SkippedMethods}}<div>{{.Reason}}: {{.Count}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+              <td>{{range .Hooks}}<div><code>{{.Intent}}</code> · {{.Count}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
+            </tr>
+            {{else}}<tr><td colspan="7" class="muted">Нет классов diagnostics.</td></tr>{{end}}
+          </table>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section id="warnings" class="panel">
+    <div class="panel-head">
+      <div><h2>Предупреждения</h2><div class="panel-kicker">Ошибки формата и неполные записи diagnostics.</div></div>
+    </div>
+    {{range .Diagnostics.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="muted">Предупреждений нет.</p>{{end}}
+  </section>
+</main>
+<script>{{reportJS}}</script>
+</body>
+</html>

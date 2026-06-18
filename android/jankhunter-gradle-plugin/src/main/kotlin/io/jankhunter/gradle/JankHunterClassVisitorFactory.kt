@@ -30,6 +30,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             classGraph = params.classGraph.getOrElse(false),
             runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
             classGraphPath = params.classGraphPath.getOrElse(""),
+            instrumentationDiagnosticsPath = params.instrumentationDiagnosticsPath.getOrElse(""),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -85,6 +86,7 @@ internal data class HookConfig(
     val classGraph: Boolean,
     val runtimeCallGraph: Boolean,
     val classGraphPath: String,
+    val instrumentationDiagnosticsPath: String,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -109,6 +111,7 @@ internal class JankHunterClassVisitor(
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
     private val classAnnotations = JankAnnotationMetadata.Builder()
+    private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -123,9 +126,18 @@ internal class JankHunterClassVisitor(
         exceptions: Array<out String>?,
     ): MethodVisitor {
         val next = super.visitMethod(access, name, descriptor, signature, exceptions)
-        if (name == "<init>" || name == "<clinit>") return next
-        if (access and Opcodes.ACC_ABSTRACT != 0) return next
-        if (access and Opcodes.ACC_NATIVE != 0) return next
+        if (name == "<init>" || name == "<clinit>") {
+            diagnostics.recordSkippedMethod("constructor")
+            return next
+        }
+        if (access and Opcodes.ACC_ABSTRACT != 0) {
+            diagnostics.recordSkippedMethod("abstract")
+            return next
+        }
+        if (access and Opcodes.ACC_NATIVE != 0) {
+            diagnostics.recordSkippedMethod("native")
+            return next
+        }
         return JankHunterMethodVisitor(
             next,
             access,
@@ -134,6 +146,7 @@ internal class JankHunterClassVisitor(
             className,
             config,
             classAnnotations.snapshot(),
+            diagnostics,
         ) { calleeOwner, calleeName ->
             recordStaticEdge(name, descriptor, calleeOwner, calleeName)
         }
@@ -143,6 +156,10 @@ internal class JankHunterClassVisitor(
         if (config.classGraph) {
             ClassGraphWriter.append(config.classGraphPath, className, edges)
         }
+        InstrumentationDiagnosticsWriter.append(
+            config.instrumentationDiagnosticsPath,
+            diagnostics.finish(),
+        )
         super.visitEnd()
     }
 
@@ -171,6 +188,7 @@ private class JankHunterMethodVisitor(
     private val className: String,
     private val config: HookConfig,
     private val classAnnotations: JankAnnotationMetadata,
+    private val diagnostics: InstrumentationDiagnosticsClassBuilder,
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val generatedOwnerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
@@ -284,7 +302,11 @@ private class JankHunterMethodVisitor(
         )
         val decision = HookIntentResolver.resolve(call, config)
         if (decision is HookDecision.Matched && emitHook(decision.intent)) {
+            diagnostics.recordHook(decision)
             return
+        }
+        if (decision is HookDecision.Matched) {
+            diagnostics.recordHook(decision)
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
@@ -312,6 +334,15 @@ private class JankHunterMethodVisitor(
             visitInsn(Opcodes.ATHROW)
         }
         super.visitMaxs(maxStack + 6, maxLocals)
+    }
+
+    override fun visitEnd() {
+        val ignored = instrumentationIgnored()
+        diagnostics.recordMethod(
+            ignored = ignored,
+            annotation = if (!ignored) annotationDiagnosticKey() else null,
+        )
+        super.visitEnd()
     }
 
     companion object {
@@ -359,6 +390,16 @@ private class JankHunterMethodVisitor(
 
     private fun instrumentationIgnored(): Boolean {
         return classAnnotations.ignored || methodAnnotations.ignored
+    }
+
+    private fun annotationDiagnosticKey(): AnnotationDiagnosticKey? {
+        if (!hasAnnotationContext) return null
+        return AnnotationDiagnosticKey(
+            owner = ownerLabel,
+            screen = annotationScreen,
+            flow = annotationFlow,
+            trace = annotationTrace,
+        )
     }
 }
 

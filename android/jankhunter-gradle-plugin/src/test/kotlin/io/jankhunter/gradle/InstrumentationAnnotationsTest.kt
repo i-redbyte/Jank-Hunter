@@ -100,6 +100,7 @@ class InstrumentationAnnotationsTest {
                     classGraph = false,
                     runtimeCallGraph = false,
                     classGraphPath = "",
+                    instrumentationDiagnosticsPath = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

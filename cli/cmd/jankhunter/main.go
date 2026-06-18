@@ -60,8 +60,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
@@ -129,7 +129,10 @@ func runInspect(args []string) error {
 		printSummary(summary)
 	}
 	if out != "" {
-		reportOptions := report.ReportOptions{PresentationMode: presentation}
+		reportOptions := report.ReportOptions{
+			PresentationMode:                    presentation,
+			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
+		}
 		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
 			return err
 		}
@@ -230,7 +233,10 @@ func runCompare(args []string) error {
 		}
 	}
 	if out != "" {
-		reportOptions := report.ReportOptions{PresentationMode: presentation}
+		reportOptions := report.ReportOptions{
+			PresentationMode:                    presentation,
+			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
+		}
 		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions)
 		if err != nil {
 			return err
@@ -268,6 +274,15 @@ func writeInspectReportSet(out string, summary analyze.Summary, paths []string, 
 			return err
 		}
 	}
+	if diagnosticsAvailable(options) {
+		if err := report.WriteInstrumentationDiagnosticsWithOptions(
+			report.DiagnosticsReportPath(out),
+			*options.InstrumentationDiagnostics,
+			reportOptions,
+		); err != nil {
+			return err
+		}
+	}
 	mathReport, err := mathanalysis.AnalyzeInspectWithSummary(paths, options, summary)
 	if err != nil {
 		warnReportGeneration("математический отчет inspect не создан", err)
@@ -299,6 +314,15 @@ func writeCompareReportSet(
 	}
 	if comparison.Candidate.Influence.Available {
 		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {
+			return err
+		}
+	}
+	if diagnosticsAvailable(options) {
+		if err := report.WriteInstrumentationDiagnosticsWithOptions(
+			report.DiagnosticsReportPath(out),
+			*options.InstrumentationDiagnostics,
+			reportOptions,
+		); err != nil {
 			return err
 		}
 	}
@@ -371,9 +395,10 @@ func compareCLILabel(name string) string {
 }
 
 type analysisOptionsBuilder struct {
-	filter         analyze.Filter
-	ownerMapPath   string
-	classGraphPath string
+	filter          analyze.Filter
+	ownerMapPath    string
+	classGraphPath  string
+	diagnosticsPath string
 }
 
 func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
@@ -389,10 +414,15 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
+	diagnosticsPath, remaining, err := takeStringFlag(remaining, "instrumentation-diagnostics", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
 	return analysisOptionsBuilder{
-		filter:         filter,
-		ownerMapPath:   ownerMapPath,
-		classGraphPath: classGraphPath,
+		filter:          filter,
+		ownerMapPath:    ownerMapPath,
+		classGraphPath:  classGraphPath,
+		diagnosticsPath: diagnosticsPath,
 	}, remaining, nil
 }
 
@@ -405,7 +435,20 @@ func (b analysisOptionsBuilder) build() (analyze.Options, error) {
 	if err != nil {
 		return analyze.Options{}, err
 	}
-	return analyze.Options{Filter: b.filter, OwnerMap: ownerMap, ClassGraph: classGraph}, nil
+	diagnostics, err := analyze.LoadInstrumentationDiagnostics(b.diagnosticsPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	return analyze.Options{
+		Filter:                     b.filter,
+		OwnerMap:                   ownerMap,
+		ClassGraph:                 classGraph,
+		InstrumentationDiagnostics: diagnostics,
+	}, nil
+}
+
+func diagnosticsAvailable(options analyze.Options) bool {
+	return options.InstrumentationDiagnostics != nil && options.InstrumentationDiagnostics.Available
 }
 
 type heapInputFlags struct {

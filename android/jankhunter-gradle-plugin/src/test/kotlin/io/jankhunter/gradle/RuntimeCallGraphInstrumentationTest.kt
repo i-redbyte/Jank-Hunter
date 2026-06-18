@@ -39,6 +39,7 @@ class RuntimeCallGraphInstrumentationTest {
                     classGraph = false,
                     runtimeCallGraph = true,
                     classGraphPath = "",
+                    instrumentationDiagnosticsPath = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

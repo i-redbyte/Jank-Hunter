@@ -103,10 +103,16 @@ class JankHunterPlugin : Plugin<Project> {
             val classGraphOutput = project.layout.buildDirectory.file(
                 "generated/jankhunter/${variant.name}/class-graph.jsonl",
             )
+            val instrumentationDiagnosticsOutput = project.layout.buildDirectory.file(
+                "generated/jankhunter/${variant.name}/instrumentation-diagnostics.jsonl",
+            )
             project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
                 it.dependsOn(ownerMap)
                 it.doFirst {
                     ClassGraphWriter.prepare(classGraphOutput.get().asFile.absolutePath)
+                    InstrumentationDiagnosticsWriter.prepare(
+                        instrumentationDiagnosticsOutput.get().asFile.absolutePath,
+                    )
                 }
             }
 
@@ -125,6 +131,9 @@ class JankHunterPlugin : Plugin<Project> {
                 params.classGraph.set(extension.instrument.classGraph)
                 params.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
                 params.classGraphPath.set(classGraphOutput.map { it.asFile.absolutePath })
+                params.instrumentationDiagnosticsPath.set(
+                    instrumentationDiagnosticsOutput.map { it.asFile.absolutePath },
+                )
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel(variant.name))

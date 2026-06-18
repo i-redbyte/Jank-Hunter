@@ -136,10 +136,11 @@ Owner map и class graph от Android Gradle plugin:
 jankhunter inspect logs/*.jhlog \
   --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
   --class-graph ../android/sample-app/build/generated/jankhunter/debug/class-graph.jsonl \
+  --instrumentation-diagnostics ../android/sample-app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 
-`--owner-map` помогает красиво раскрыть владельцев работ, а `--class-graph` добавляет статические связи между классами. С ним рядом с `report.html` появится `report-influence.html`.
+`--owner-map` помогает красиво раскрыть владельцев работ, `--class-graph` добавляет статические связи между классами, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
 
 Heap evidence для точных цепочек утечек:
 
@@ -315,6 +316,7 @@ jankhunter inspect ~/Downloads/*.jhlog --out ~/Downloads/jankhunter-report.html
 ```text
 report-math.html
 report-influence.html
+report-diagnostics.html
 ```
 
 Для `compare --out compare.html`:
@@ -322,6 +324,7 @@ report-influence.html
 ```text
 compare-math.html
 compare-influence.html
+compare-diagnostics.html
 ```
 
 Там лежат более тяжелые методы:
@@ -348,6 +351,7 @@ compare-influence.html
 jankhunter inspect logs/*.jhlog \
   --owner-map build/generated/jankhunter/debug/owner-map.json \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
+  --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 

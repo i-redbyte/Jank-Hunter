@@ -125,6 +125,12 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
 	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
+
+	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
+	if err := WriteInstrumentationDiagnostics(diagnosticsPath, sampleInstrumentationDiagnostics()); err != nil {
+		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
+	}
+	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие hooks", "Annotation scopes", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl")
 }
 
 func TestCodeProblemCategoryOptions(t *testing.T) {
@@ -247,6 +253,23 @@ func TestInfluenceReportPath(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsReportPath(t *testing.T) {
+	tests := map[string]string{
+		"report.html":                         "report-diagnostics.html",
+		"/tmp/report.html":                    "/tmp/report-diagnostics.html",
+		"/tmp/report-math.html":               "/tmp/report-diagnostics.html",
+		"/tmp/report-influence.html":          "/tmp/report-diagnostics.html",
+		"/tmp/report.with.dots.html":          "/tmp/report.with.dots-diagnostics.html",
+		"/tmp/report.with.dots-influence.htm": "/tmp/report.with.dots-diagnostics.htm",
+		"/tmp/report-math":                    "/tmp/report-diagnostics.html",
+	}
+	for input, want := range tests {
+		if got := DiagnosticsReportPath(input); got != want {
+			t.Fatalf("DiagnosticsReportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func sampleInfluence() analyze.InfluenceSummary {
 	return analyze.InfluenceSummary{
 		Available:       true,
@@ -283,6 +306,42 @@ func sampleInfluence() analyze.InfluenceSummary {
 			Title:    "Главный узел влияния",
 			Detail:   "CheckoutRepository.",
 		}},
+	}
+}
+
+func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
+	return analyze.InstrumentationDiagnostics{
+		Available:            true,
+		Source:               "instrumentation-diagnostics.jsonl",
+		ClassCount:           2,
+		MethodCount:          5,
+		IgnoredMethodCount:   1,
+		AnnotatedMethodCount: 1,
+		HookCount:            3,
+		SkippedMethods: []analyze.InstrumentationSkippedSummary{
+			{Reason: "constructor", Count: 2},
+		},
+		Hooks: []analyze.InstrumentationHookSummary{
+			{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Count: 2},
+			{Intent: "logspam.android.util.Log.d", Signature: "logspam.android.util.Log.d", Count: 1},
+		},
+		Annotations: []analyze.InstrumentationAnnotationSummary{
+			{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
+		},
+		TopClasses: []analyze.InstrumentationClassDiagnostic{
+			{
+				ClassName:        "com.app.FeedRepository",
+				Methods:          3,
+				AnnotatedMethods: 1,
+				HookCount:        2,
+				Hooks: []analyze.InstrumentationHookSummary{
+					{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Count: 2},
+				},
+				Annotations: []analyze.InstrumentationAnnotationSummary{
+					{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
+				},
+			},
+		},
 	}
 }
 
