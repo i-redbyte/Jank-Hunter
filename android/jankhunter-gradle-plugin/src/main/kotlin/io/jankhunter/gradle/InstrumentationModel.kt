@@ -494,6 +494,46 @@ internal object HookIntentResolver {
     fun modules(): List<InstrumentationModule> = registry.modules()
 }
 
+internal object HookNearMissDiagnostics {
+    fun resolve(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
+        return coroutineNearMiss(call, config)
+            ?: okHttpNearMiss(call, config)
+    }
+
+    private fun coroutineNearMiss(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
+        if (!config.coroutines) return null
+        if (!call.owner.startsWith("kotlinx/coroutines/")) return null
+        val knownBuilderName = call.name.removeSuffix("\$default") in coroutineBuilderNames
+        val descriptorLooksRelevant = call.descriptor.contains("Lkotlin/jvm/functions/Function2;") ||
+            call.descriptor.contains("Lkotlin/coroutines/Continuation;")
+        if (!knownBuilderName && !descriptorLooksRelevant) return null
+        return HookDecision.Skipped("coroutine", "coroutines", "near_miss_coroutine_signature")
+    }
+
+    private fun okHttpNearMiss(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
+        if (!call.owner.startsWith("okhttp3/")) return null
+        if (config.webSockets && call.name == "newWebSocket") {
+            return HookDecision.Skipped("websocket", "okhttp", "near_miss_okhttp_signature")
+        }
+        if (config.okhttp && call.name in okHttpBuilderNames) {
+            return HookDecision.Skipped("okhttp", "okhttp", "near_miss_okhttp_signature")
+        }
+        return null
+    }
+
+    private val coroutineBuilderNames = setOf(
+        "launch",
+        "async",
+        "runBlocking",
+        "withContext",
+        "coroutineScope",
+        "supervisorScope",
+        "withTimeout",
+        "withTimeoutOrNull",
+    )
+    private val okHttpBuilderNames = setOf("eventListenerFactory", "build")
+}
+
 private object OkHttpInstrumentationModule : InstrumentationModule {
     override val id: String = "okhttp"
     override val family: String = "okhttp"

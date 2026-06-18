@@ -34,6 +34,7 @@ type InstrumentationHookSummary struct {
 	Intent    string
 	Signature string
 	Bridge    string
+	Line      int
 	Count     uint64
 }
 
@@ -42,6 +43,7 @@ type InstrumentationDecisionSummary struct {
 	Module string
 	Family string
 	Reason string
+	Line   int
 	Count  uint64
 }
 
@@ -137,7 +139,12 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 	for _, item := range class.Hooks {
 		class.HookCount += item.Count
 		b.hookCount += item.Count
-		b.hooks[instrumentationHookKey{intent: item.Intent, signature: item.Signature, bridge: item.Bridge}] += item.Count
+		b.hooks[instrumentationHookKey{
+			intent:    item.Intent,
+			signature: item.Signature,
+			bridge:    item.Bridge,
+			line:      item.Line,
+		}] += item.Count
 	}
 	for _, item := range class.Decisions {
 		b.decisions[instrumentationDecisionKey{
@@ -145,6 +152,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 			module: item.Module,
 			family: item.Family,
 			reason: item.Reason,
+			line:   item.Line,
 		}] += item.Count
 	}
 	for _, item := range class.Annotations {
@@ -214,6 +222,7 @@ type instrumentationHookRecord struct {
 	Intent    string `json:"intent"`
 	Signature string `json:"signature"`
 	Bridge    string `json:"bridge"`
+	Line      int    `json:"line"`
 	Count     uint64 `json:"count"`
 }
 
@@ -222,6 +231,7 @@ type instrumentationDecisionRecord struct {
 	Module string `json:"module"`
 	Family string `json:"family"`
 	Reason string `json:"reason"`
+	Line   int    `json:"line"`
 	Count  uint64 `json:"count"`
 }
 
@@ -237,6 +247,7 @@ type instrumentationHookKey struct {
 	intent    string
 	signature string
 	bridge    string
+	line      int
 }
 
 type instrumentationDecisionKey struct {
@@ -244,6 +255,7 @@ type instrumentationDecisionKey struct {
 	module string
 	family string
 	reason string
+	line   int
 }
 
 type instrumentationAnnotationKey struct {
@@ -269,6 +281,7 @@ func hookSummaries(records []instrumentationHookRecord) []InstrumentationHookSum
 			Intent:    record.Intent,
 			Signature: record.Signature,
 			Bridge:    record.Bridge,
+			Line:      record.Line,
 			Count:     record.Count,
 		})
 	}
@@ -284,6 +297,7 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 			Module: record.Module,
 			Family: record.Family,
 			Reason: record.Reason,
+			Line:   record.Line,
 			Count:  record.Count,
 		})
 	}
@@ -322,6 +336,7 @@ func hookMapSummaries(values map[instrumentationHookKey]uint64) []Instrumentatio
 			Intent:    key.intent,
 			Signature: key.signature,
 			Bridge:    key.bridge,
+			Line:      key.line,
 			Count:     count,
 		})
 	}
@@ -337,6 +352,7 @@ func decisionMapSummaries(values map[instrumentationDecisionKey]uint64) []Instru
 			Module: key.module,
 			Family: key.family,
 			Reason: key.reason,
+			Line:   key.line,
 			Count:  count,
 		})
 	}
@@ -379,7 +395,10 @@ func sortHookSummaries(values []InstrumentationHookSummary) {
 		if values[i].Signature != values[j].Signature {
 			return values[i].Signature < values[j].Signature
 		}
-		return values[i].Bridge < values[j].Bridge
+		if values[i].Bridge != values[j].Bridge {
+			return values[i].Bridge < values[j].Bridge
+		}
+		return values[i].Line < values[j].Line
 	})
 }
 
@@ -397,7 +416,10 @@ func sortDecisionSummaries(values []InstrumentationDecisionSummary) {
 		if values[i].Family != values[j].Family {
 			return values[i].Family < values[j].Family
 		}
-		return values[i].Reason < values[j].Reason
+		if values[i].Reason != values[j].Reason {
+			return values[i].Reason < values[j].Reason
+		}
+		return values[i].Line < values[j].Line
 	})
 }
 

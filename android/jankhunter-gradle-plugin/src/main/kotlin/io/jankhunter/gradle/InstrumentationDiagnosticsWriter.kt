@@ -6,6 +6,7 @@ internal data class HookDiagnosticKey(
     val intent: String,
     val signature: String,
     val bridge: String?,
+    val line: Int?,
 )
 
 internal data class DecisionDiagnosticKey(
@@ -13,6 +14,7 @@ internal data class DecisionDiagnosticKey(
     val module: String,
     val family: String,
     val reason: String,
+    val line: Int?,
 )
 
 internal data class AnnotationDiagnosticKey(
@@ -58,34 +60,38 @@ internal class InstrumentationDiagnosticsClassBuilder(
         }
     }
 
-    fun recordHook(decision: HookDecision.Matched) {
+    fun recordHook(decision: HookDecision.Matched, line: Int?) {
         val key = HookDiagnosticKey(
             intent = decision.intent.id,
             signature = decision.signatureId,
             bridge = decision.bridgeId,
+            line = line,
         )
         hooks[key] = (hooks[key] ?: 0) + 1
     }
 
-    fun recordDecision(decision: HookDecision) {
+    fun recordDecision(decision: HookDecision, line: Int?) {
         val key = when (decision) {
             is HookDecision.Disabled -> DecisionDiagnosticKey(
                 kind = "disabled",
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                line = line,
             )
             is HookDecision.Unsupported -> DecisionDiagnosticKey(
                 kind = "unsupported",
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                line = line,
             )
             is HookDecision.Skipped -> DecisionDiagnosticKey(
                 kind = "skipped",
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                line = line,
             )
             is HookDecision.Matched,
             HookDecision.NotMatched -> return
@@ -169,7 +175,11 @@ internal object InstrumentationDiagnosticsWriter {
 
     private fun StringBuilder.appendHooks(hooks: Map<HookDiagnosticKey, Int>) {
         hooks.entries
-            .sortedWith(compareByDescending<Map.Entry<HookDiagnosticKey, Int>> { it.value }.thenBy { it.key.intent })
+            .sortedWith(
+                compareByDescending<Map.Entry<HookDiagnosticKey, Int>> { it.value }
+                    .thenBy { it.key.intent }
+                    .thenBy { it.key.line ?: Int.MAX_VALUE },
+            )
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"intent\":\"")
@@ -183,13 +193,22 @@ internal object InstrumentationDiagnosticsWriter {
                     append(escape(it))
                     append('"')
                 }
+                entry.key.line?.let {
+                    append(",\"line\":")
+                    append(it)
+                }
                 append('}')
             }
     }
 
     private fun StringBuilder.appendDecisions(decisions: Map<DecisionDiagnosticKey, Int>) {
         decisions.entries
-            .sortedWith(compareByDescending<Map.Entry<DecisionDiagnosticKey, Int>> { it.value }.thenBy { it.key.kind })
+            .sortedWith(
+                compareByDescending<Map.Entry<DecisionDiagnosticKey, Int>> { it.value }
+                    .thenBy { it.key.kind }
+                    .thenBy { it.key.module }
+                    .thenBy { it.key.line ?: Int.MAX_VALUE },
+            )
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"kind\":\"")
@@ -202,6 +221,10 @@ internal object InstrumentationDiagnosticsWriter {
                 append(escape(entry.key.reason))
                 append("\",\"count\":")
                 append(entry.value)
+                entry.key.line?.let {
+                    append(",\"line\":")
+                    append(it)
+                }
                 append('}')
             }
     }

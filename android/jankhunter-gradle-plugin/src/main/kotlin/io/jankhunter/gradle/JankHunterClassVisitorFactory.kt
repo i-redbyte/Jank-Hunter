@@ -230,10 +230,16 @@ private class JankHunterMethodVisitor(
     private val methodTryStart = Label()
     private val methodTryEnd = Label()
     private val methodExceptionHandler = Label()
+    private var currentLine: Int? = null
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
         return JankAnnotationParser.visitorFor(descriptor, delegate, methodAnnotations)
+    }
+
+    override fun visitLineNumber(line: Int, start: Label) {
+        currentLine = line
+        super.visitLineNumber(line, start)
     }
 
     override fun onMethodEnter() {
@@ -298,11 +304,11 @@ private class JankHunterMethodVisitor(
         descriptor: String,
         isInterface: Boolean,
     ) {
-        recordStaticEdge(owner, name)
         if (!shouldInstrumentMethod()) {
             super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
             return
         }
+        recordStaticEdge(owner, name)
         val call = MethodCall(
             opcode = opcodeAndSource,
             owner = owner,
@@ -310,16 +316,24 @@ private class JankHunterMethodVisitor(
             descriptor = descriptor,
             isInterface = isInterface,
             caller = CallerMethod(className, methodName, methodDescriptor),
+            line = currentLine,
         )
         val decision = HookIntentResolver.resolve(call, config)
         if (decision is HookDecision.Matched && emitHook(decision.intent)) {
-            diagnostics.recordHook(decision)
+            diagnostics.recordHook(decision, call.line)
             return
         }
         if (decision is HookDecision.Matched) {
-            diagnostics.recordHook(decision)
+            diagnostics.recordHook(decision, call.line)
         } else {
-            diagnostics.recordDecision(decision)
+            diagnostics.recordDecision(
+                if (decision is HookDecision.NotMatched) {
+                    HookNearMissDiagnostics.resolve(call, config) ?: decision
+                } else {
+                    decision
+                },
+                call.line,
+            )
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
@@ -450,8 +464,7 @@ internal object ClassGraphWriter {
     }
 
     fun isApplicationLike(owner: String): Boolean {
-        val normalized = owner.replace('/', '.')
-        return builtinPrefixes.none { normalized.startsWith(it) }
+        return !InstrumentationPackages.isBuiltinExcluded(owner)
     }
 
     private fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
@@ -485,18 +498,6 @@ internal object ClassGraphWriter {
             .replace("\r", "\\r")
     }
 
-    private val builtinPrefixes = listOf(
-        "android.",
-        "androidx.",
-        "java.",
-        "javax.",
-        "kotlin.",
-        "kotlinx.",
-        "okhttp3.",
-        "okio.",
-        "org.jetbrains.",
-        "io.jankhunter.",
-    )
 }
 
 internal object InstrumentationHooks {

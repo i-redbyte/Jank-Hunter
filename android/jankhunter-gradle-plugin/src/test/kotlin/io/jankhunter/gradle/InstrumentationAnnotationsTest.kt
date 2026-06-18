@@ -10,6 +10,7 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import java.io.File
 
 class InstrumentationAnnotationsTest {
     @Test
@@ -42,6 +43,35 @@ class InstrumentationAnnotationsTest {
         val instrumented = instrument(ownerFixture(classIgnored = true))
 
         assertEquals(0, countRuntimeCalls(instrumented, "recordCounter"))
+    }
+
+    @Test
+    fun ignoreAnnotationSkipsClassGraphEdges() {
+        val graph = File.createTempFile("jankhunter-ignored-graph", ".jsonl")
+        graph.delete()
+
+        instrument(
+            ownerFixture(
+                methodIgnored = true,
+                calleeOwner = "com/example/FeedRepository",
+            ),
+            classGraphPath = graph.absolutePath,
+        )
+
+        assertFalse(graph.exists())
+    }
+
+    @Test
+    fun classGraphKeepsEdgesForInstrumentedMethods() {
+        val graph = File.createTempFile("jankhunter-class-graph", ".jsonl")
+        graph.delete()
+
+        instrument(
+            ownerFixture(calleeOwner = "com/example/FeedRepository"),
+            classGraphPath = graph.absolutePath,
+        )
+
+        assertTrue(graph.readText().contains("\"calleeClass\":\"com.example.FeedRepository\""))
     }
 
     @Test
@@ -93,7 +123,7 @@ class InstrumentationAnnotationsTest {
         assertEquals(1, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
     }
 
-    private fun instrument(bytes: ByteArray): ByteArray {
+    private fun instrument(bytes: ByteArray, classGraphPath: String = ""): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
@@ -109,9 +139,9 @@ class InstrumentationAnnotationsTest {
                     coroutines = false,
                     flowInteractions = false,
                     logSpam = false,
-                    classGraph = false,
+                    classGraph = classGraphPath.isNotBlank(),
                     runtimeCallGraph = false,
-                    classGraphPath = "",
+                    classGraphPath = classGraphPath,
                     instrumentationDiagnosticsPath = "",
                 ),
             ),
@@ -130,6 +160,7 @@ class InstrumentationAnnotationsTest {
         classIgnored: Boolean = false,
         methodIgnored: Boolean = false,
         throwsException: Boolean = false,
+        calleeOwner: String? = null,
     ): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Annotated", null, "java/lang/Object", null)
@@ -178,6 +209,9 @@ class InstrumentationAnnotationsTest {
                 visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/RuntimeException", "<init>", "()V", false)
                 visitInsn(Opcodes.ATHROW)
             } else {
+                if (calleeOwner != null) {
+                    visitMethodInsn(Opcodes.INVOKESTATIC, calleeOwner, "refresh", "()V", false)
+                }
                 visitInsn(Opcodes.RETURN)
             }
             visitMaxs(0, 0)

@@ -5,6 +5,7 @@ import org.junit.Test
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Label
 import org.objectweb.asm.Opcodes
 import java.io.File
 
@@ -27,7 +28,7 @@ class InstrumentationDiagnosticsTest {
                     webSockets = false,
                     handlers = false,
                     executors = false,
-                    coroutines = false,
+                    coroutines = true,
                     flowInteractions = false,
                     logSpam = true,
                     classGraph = false,
@@ -46,6 +47,9 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"annotatedMethods\":1"))
         assertTrue(text.contains("\"intent\":\"logspam.android.util.Log.d\""))
         assertTrue(text.contains("\"signature\":\"logspam.android.util.Log.d\""))
+        assertTrue(text.contains("\"line\":42"))
+        assertTrue(text.contains("\"reason\":\"near_miss_coroutine_signature\""))
+        assertTrue(text.contains("\"line\":55"))
         assertTrue(text.contains("\"owner\":\"FeedOwner\""))
         assertTrue(text.contains("\"screen\":\"FeedScreen\""))
         assertTrue(text.contains("\"flow\":\"feed.open\""))
@@ -61,6 +65,9 @@ class InstrumentationDiagnosticsTest {
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).run {
             visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("refresh")
             visitCode()
+            val logLine = Label()
+            visitLabel(logLine)
+            visitLineNumber(42, logLine)
             visitLdcInsn("JankHunter")
             visitLdcInsn("diagnostics")
             visitMethodInsn(
@@ -68,6 +75,22 @@ class InstrumentationDiagnosticsTest {
                 "android/util/Log",
                 "d",
                 "(Ljava/lang/String;Ljava/lang/String;)I",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+            val coroutineLine = Label()
+            visitLabel(coroutineLine)
+            visitLineNumber(55, coroutineLine)
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ACONST_NULL)
+            visitInsn(Opcodes.ACONST_NULL)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "kotlinx/coroutines/BuildersKt__BuildersKt",
+                "launch",
+                "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
+                    "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Ljava/lang/Object;",
                 false,
             )
             visitInsn(Opcodes.POP)

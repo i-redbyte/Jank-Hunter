@@ -1,6 +1,8 @@
 package io.jankhunter.gradle
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InstrumentationPackagesTest {
@@ -35,5 +37,14 @@ class InstrumentationPackagesTest {
         )
 
         assertEquals(emptyList<String>(), includes)
+    }
+
+    @Test
+    fun sharedPackageHelpersClassifyGeneratedAndBuiltinClasses() {
+        assertTrue(InstrumentationPackages.isBuiltinExcluded("kotlinx/coroutines/BuildersKt"))
+        assertTrue(InstrumentationPackages.isBuiltinExcluded("org.jetbrains.annotations.NotNull"))
+        assertTrue(InstrumentationPackages.isGeneratedAndroidClass("com/example/R\$string"))
+        assertFalse(InstrumentationPackages.isBuiltinExcluded("com/example/FeedRepository"))
+        assertFalse(InstrumentationPackages.isGeneratedAndroidClass("com/example/FeedRepository"))
     }
 }
