@@ -141,11 +141,7 @@ class JankHunterPlugin : Plugin<Project> {
                 params.excludePackages.set(extension.instrument.excludePackages.toList())
             }
             variant.instrumentation.setAsmFramesComputationMode(
-                if (extension.instrument.runtimeCallGraph) {
-                    FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
-                } else {
-                    FramesComputationMode.COPY_FRAMES
-                },
+                FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,
             )
 
             project.logger.lifecycle(

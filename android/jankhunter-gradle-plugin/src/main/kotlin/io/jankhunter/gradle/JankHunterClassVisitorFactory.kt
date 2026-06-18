@@ -126,8 +126,8 @@ internal class JankHunterClassVisitor(
         exceptions: Array<out String>?,
     ): MethodVisitor {
         val next = super.visitMethod(access, name, descriptor, signature, exceptions)
-        if (name == "<init>" || name == "<clinit>") {
-            diagnostics.recordSkippedMethod("constructor")
+        if (name == "<clinit>") {
+            diagnostics.recordSkippedMethod("class_initializer")
             return next
         }
         if (access and Opcodes.ACC_ABSTRACT != 0) {
@@ -146,6 +146,7 @@ internal class JankHunterClassVisitor(
             className,
             config,
             classAnnotations.snapshot(),
+            name == "<init>",
             diagnostics,
         ) { calleeOwner, calleeName ->
             recordStaticEdge(name, descriptor, calleeOwner, calleeName)
@@ -188,6 +189,7 @@ private class JankHunterMethodVisitor(
     private val className: String,
     private val config: HookConfig,
     private val classAnnotations: JankAnnotationMetadata,
+    private val constructor: Boolean,
     private val diagnostics: InstrumentationDiagnosticsClassBuilder,
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
@@ -196,23 +198,32 @@ private class JankHunterMethodVisitor(
     private val ownerLabel: String
         get() = methodAnnotations.owner?.takeIf { it.isNotBlank() } ?: classAnnotations.owner ?: generatedOwnerLabel
     private val annotationScreen: String?
-        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() } ?: classAnnotations.screen
+        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() }
+            ?: classAnnotations.screen.takeIf { !constructor || constructorHasDirectAnnotationContext }
     private val annotationFlow: String?
-        get() = methodAnnotations.flow?.takeIf { it.isNotBlank() } ?: classAnnotations.flow
+        get() = methodAnnotations.flow?.takeIf { it.isNotBlank() }
+            ?: classAnnotations.flow.takeIf { !constructor || constructorHasDirectAnnotationContext }
     private val annotationTrace: String?
         get() {
             methodAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
             if (methodAnnotations.tracePresent) return methodName
+            if (constructor && !constructorHasDirectAnnotationContext) return null
             classAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
             if (classAnnotations.tracePresent) return methodName
             return null
         }
+    private val constructorHasDirectAnnotationContext: Boolean
+        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() } != null ||
+            methodAnnotations.flow?.takeIf { it.isNotBlank() } != null ||
+            methodAnnotations.trace?.takeIf { it.isNotBlank() } != null ||
+            methodAnnotations.tracePresent ||
+            methodAnnotations.owner?.takeIf { it.isNotBlank() } != null
     private val hasAnnotationContext: Boolean
         get() = annotationScreen != null ||
             annotationFlow != null ||
             annotationTrace != null ||
             methodAnnotations.owner?.takeIf { it.isNotBlank() } != null ||
-            classAnnotations.owner != null
+            (!constructor && classAnnotations.owner != null)
     private val hookEmitter = HookBytecodeEmitter(this) { ownerLabel }
     private var runtimeCallStartLocal = -1
     private var annotationScopeLocal = -1
@@ -226,7 +237,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun onMethodEnter() {
-        if (instrumentationIgnored()) return
+        if (!shouldInstrumentMethod()) return
         if (hasAnnotationContext) {
             emitEnterAnnotatedContext()
         }
@@ -259,7 +270,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun onMethodExit(opcode: Int) {
-        if (instrumentationIgnored()) return
+        if (!shouldInstrumentMethod()) return
         if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
         }
@@ -288,7 +299,7 @@ private class JankHunterMethodVisitor(
         isInterface: Boolean,
     ) {
         recordStaticEdge(owner, name)
-        if (instrumentationIgnored()) {
+        if (!shouldInstrumentMethod()) {
             super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
             return
         }
@@ -320,7 +331,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
-        if (!instrumentationIgnored() && requiresCatchAllExit()) {
+        if (shouldInstrumentMethod() && requiresCatchAllExit()) {
             visitLabel(methodTryEnd)
             visitTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
             visitLabel(methodExceptionHandler)
@@ -333,7 +344,7 @@ private class JankHunterMethodVisitor(
                 emitExitAnnotatedContext()
             }
             loadLocal(throwableLocal)
-            visitInsn(Opcodes.ATHROW)
+            mv.visitInsn(Opcodes.ATHROW)
         }
         super.visitMaxs(maxStack + 6, maxLocals)
     }
@@ -392,6 +403,10 @@ private class JankHunterMethodVisitor(
 
     private fun instrumentationIgnored(): Boolean {
         return classAnnotations.ignored || methodAnnotations.ignored
+    }
+
+    private fun shouldInstrumentMethod(): Boolean {
+        return !instrumentationIgnored() && (!constructor || constructorHasDirectAnnotationContext)
     }
 
     private fun annotationDiagnosticKey(): AnnotationDiagnosticKey? {

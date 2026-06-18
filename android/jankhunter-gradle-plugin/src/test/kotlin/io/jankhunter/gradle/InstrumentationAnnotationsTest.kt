@@ -74,6 +74,18 @@ class InstrumentationAnnotationsTest {
     }
 
     @Test
+    fun constructorAnnotationsEnterRuntimeContextAfterSuperCall() {
+        val instrumented = instrument(ownerFixture(constructorTrace = "create"))
+
+        val strings = collectMethodStrings(instrumented, "<init>")
+
+        assertTrue(strings.contains("FeedOwner"))
+        assertTrue(strings.contains("create"))
+        assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
+        assertEquals(2, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+    }
+
+    @Test
     fun annotatedContextGetsCatchAllExitForExceptionUnwind() {
         val instrumented = instrument(ownerFixture(methodTrace = "refresh", throwsException = true))
 
@@ -114,6 +126,7 @@ class InstrumentationAnnotationsTest {
         classScreen: String? = null,
         classFlow: String? = null,
         methodTrace: String? = null,
+        constructorTrace: String? = null,
         classIgnored: Boolean = false,
         methodIgnored: Boolean = false,
         throwsException: Boolean = false,
@@ -129,6 +142,18 @@ class InstrumentationAnnotationsTest {
         }
         if (classIgnored) {
             writer.visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
+        }
+
+        writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
+            if (constructorTrace != null) {
+                visitAnnotation(TRACE_DESCRIPTOR, false).stringValue(constructorTrace)
+            }
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
         }
 
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).apply {
@@ -207,6 +232,42 @@ class InstrumentationAnnotationsTest {
                             isInterface: Boolean,
                         ) {
                             if (owner == "io/jankhunter/runtime/JankHunter" && methodName == targetMethod) {
+                                count += 1
+                            }
+                        }
+                    }
+                }
+            },
+            0,
+        )
+        return count
+    }
+
+    private fun countRuntimeCallsInMethod(bytes: ByteArray, targetMethod: String, runtimeMethod: String): Int {
+        var count = 0
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor {
+                    if (name != targetMethod) {
+                        return object : MethodVisitor(Opcodes.ASM9) {}
+                    }
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitMethodInsn(
+                            opcodeAndSource: Int,
+                            owner: String,
+                            methodName: String,
+                            descriptor: String,
+                            isInterface: Boolean,
+                        ) {
+                            if (owner == "io/jankhunter/runtime/JankHunter" &&
+                                methodName == runtimeMethod
+                            ) {
                                 count += 1
                             }
                         }
