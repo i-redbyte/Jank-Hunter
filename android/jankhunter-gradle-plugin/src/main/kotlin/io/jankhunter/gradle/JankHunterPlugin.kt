@@ -79,6 +79,7 @@ class JankHunterPlugin : Plugin<Project> {
                 "generate${variant.name.capitalized()}JankHunterOwnerMap",
                 GenerateJankHunterOwnerMapTask::class.java,
             ) {
+                it.outputs.upToDateWhen { false }
                 it.variantName.set(variant.name)
                 it.methodCounters.set(extension.instrument.methodCounters)
                 it.okhttp.set(extension.instrument.okhttp)
@@ -90,6 +91,7 @@ class JankHunterPlugin : Plugin<Project> {
                 it.logSpam.set(extension.instrument.logSpam)
                 it.classGraph.set(extension.instrument.classGraph)
                 it.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
+                it.generatedOwners.set(extension.instrument.methodCounters || extension.instrument.runtimeCallGraph)
                 it.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 it.includeWholeApplication.set(includeWholeApplication)
                 it.androidNamespace.set(androidNamespace)
@@ -148,6 +150,7 @@ class JankHunterPlugin : Plugin<Project> {
                 params.instrumentationDiagnosticsPath.set(
                     instrumentationDiagnosticsOutput.map { it.asFile.absolutePath },
                 )
+                params.ownerMapPath.set(ownerMap.flatMap { it.outputFile }.map { it.asFile.absolutePath })
                 params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel(variant.name))
@@ -193,9 +196,7 @@ class JankHunterPlugin : Plugin<Project> {
     }
 
     private fun JankHunterExtension.isVariantEnabled(variantName: String): Boolean {
-        return enabledBuildTypes.any { enabled ->
-            variantName.lowercase(Locale.US).contains(enabled.lowercase(Locale.US))
-        }
+        return VariantBuildTypeMatcher.isEnabled(variantName, enabledBuildTypes)
     }
 
     private fun String.capitalized(): String {
@@ -206,5 +207,17 @@ class JankHunterPlugin : Plugin<Project> {
 
     private fun Project.progressLabel(variantName: String): String {
         return if (path == ":") ":$variantName" else "$path:$variantName"
+    }
+}
+
+internal object VariantBuildTypeMatcher {
+    fun isEnabled(variantName: String, enabledBuildTypes: Iterable<String>): Boolean {
+        val normalizedVariant = variantName.lowercase(Locale.US)
+        return enabledBuildTypes
+            .map { it.trim().lowercase(Locale.US) }
+            .filter { it.isNotEmpty() }
+            .any { buildType ->
+                normalizedVariant == buildType || normalizedVariant.endsWith(buildType)
+            }
     }
 }

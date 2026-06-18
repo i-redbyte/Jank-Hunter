@@ -143,6 +143,7 @@ class InstrumentationAnnotationsTest {
                     runtimeCallGraph = false,
                     classGraphPath = classGraphPath,
                     instrumentationDiagnosticsPath = "",
+                    ownerMapPath = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

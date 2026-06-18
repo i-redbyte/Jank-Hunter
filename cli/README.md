@@ -140,7 +140,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--owner-map` помогает красиво раскрыть владельцев работ, `--class-graph` добавляет статические связи, горячие пути и method-level hotspots, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет с matched hooks и disabled/unsupported decisions. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
+`--owner-map` читает JSONL v2 от Gradle plugin и раскрывает generated owner hash-и в человекочитаемые `class.method`, `--class-graph` добавляет статические связи, горячие пути и method-level hotspots, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет с matched hooks и disabled/unsupported decisions. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
 
 Heap evidence для точных цепочек утечек:
 

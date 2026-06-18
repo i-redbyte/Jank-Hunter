@@ -156,6 +156,27 @@ func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
 	}
 }
 
+func TestLoadOwnerMapReadsJSONLEntries(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "owner-map.json")
+	data := `{"format":2,"kind":"metadata","variant":"debug","generatedOwners":true}` + "\n" +
+		`{"format":2,"kind":"entry","id":"abc123","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ownerMap, err := LoadOwnerMap(mapPath)
+	if err != nil {
+		t.Fatalf("LoadOwnerMap() error = %v", err)
+	}
+	if got := ownerMap["abc123"]; got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("ownerMap[abc123] = %q", got)
+	}
+	if got := ownerMap["jh:abc123"]; got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("ownerMap[jh:abc123] = %q", got)
+	}
+}
+
 func TestInspectFilesStreamsSample(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := jhlog.WriteSample(path); err != nil {
@@ -838,7 +859,7 @@ func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
 			EventCount:   500,
 			MemoryCount:  3,
 			ContextCount: 50,
-			MemoryMaxKB: 100,
+			MemoryMaxKB:  100,
 			ProblemWindows: []ProblemWindowStats{
 				{Kind: "main_thread_stall", Windows: 2, Count: 10},
 			},
@@ -848,7 +869,7 @@ func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
 			EventCount:   500,
 			MemoryCount:  4,
 			ContextCount: 60,
-			MemoryMaxKB: 140,
+			MemoryMaxKB:  140,
 			ProblemWindows: []ProblemWindowStats{
 				{Kind: "main_thread_stall", Windows: 3, Count: 30},
 			},

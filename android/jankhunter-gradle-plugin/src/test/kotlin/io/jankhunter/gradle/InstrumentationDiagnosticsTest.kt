@@ -35,6 +35,7 @@ class InstrumentationDiagnosticsTest {
                     runtimeCallGraph = false,
                     classGraphPath = "",
                     instrumentationDiagnosticsPath = diagnostics.absolutePath,
+                    ownerMapPath = "",
                 ),
             ),
             0,

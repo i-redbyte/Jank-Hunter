@@ -3,7 +3,7 @@ package analyze
 import "fmt"
 
 const (
-	OwnerMapFormat                   = 1
+	OwnerMapFormat                   = 2
 	ClassGraphFormat                 = 1
 	InstrumentationDiagnosticsFormat = 1
 )

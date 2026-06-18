@@ -34,6 +34,7 @@ class InstrumentationSmokeTest {
                     runtimeCallGraph = true,
                     classGraphPath = "",
                     instrumentationDiagnosticsPath = "",
+                    ownerMapPath = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

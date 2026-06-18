@@ -422,6 +422,8 @@ build/generated/jankhunter/<variant>/class-graph.jsonl
 build/generated/jankhunter/<variant>/instrumentation-diagnostics.jsonl
 ```
 
+`owner-map.json` использует JSONL v2: первая строка содержит metadata variant-а и включенных ASM hooks, последующие строки добавляются ASM visitor-ом для generated owners (`hash -> class.method`). Поэтому файл переписывается на старте сборки и наполняется во время instrumentation-прохода.
+
 CLI принимает их так:
 
 ```bash

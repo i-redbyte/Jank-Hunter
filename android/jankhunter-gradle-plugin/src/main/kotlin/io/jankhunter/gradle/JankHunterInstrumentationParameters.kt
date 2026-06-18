@@ -43,6 +43,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val instrumentationDiagnosticsPath: Property<String>
 
     @get:Input
+    val ownerMapPath: Property<String>
+
+    @get:Input
     val allowEmptyIncludePackages: Property<Boolean>
 
     @get:Input

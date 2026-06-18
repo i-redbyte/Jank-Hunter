@@ -1,12 +1,14 @@
 package io.jankhunter.gradle
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import java.io.File
 
 class RuntimeCallGraphInstrumentationTest {
     @Test
@@ -20,7 +22,40 @@ class RuntimeCallGraphInstrumentationTest {
         assertEquals(1, stats.childExitCalls)
     }
 
-    private fun instrumentRuntimeCallGraph(bytes: ByteArray): ByteArray {
+    @Test
+    fun runtimeCallGraphWritesOwnerMapEntries() {
+        val ownerMap = File.createTempFile("jankhunter-owner-map", ".json")
+        ownerMap.writeText(
+            OwnerMapWriter.metadataRecord(
+                variantName = "debug",
+                methodCounters = false,
+                okhttp = false,
+                webSockets = false,
+                handlers = false,
+                executors = false,
+                coroutines = false,
+                flowInteractions = false,
+                logSpam = false,
+                classGraph = false,
+                runtimeCallGraph = true,
+                generatedOwners = true,
+                allowEmptyIncludePackages = false,
+                includeWholeApplication = false,
+                androidNamespace = "example",
+                includePackages = listOf("example"),
+                excludePackages = emptyList(),
+            ) + "\n",
+        )
+
+        instrumentRuntimeCallGraph(throwingFixture(), ownerMap.absolutePath)
+
+        val text = ownerMap.readText()
+        assertTrue(text.contains("\"kind\":\"entry\""))
+        assertTrue(text.contains("\"owner\":\"example.Throwing.parent\""))
+        assertTrue(text.contains("\"owner\":\"example.Throwing.child\""))
+    }
+
+    private fun instrumentRuntimeCallGraph(bytes: ByteArray, ownerMapPath: String = ""): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
@@ -40,6 +75,7 @@ class RuntimeCallGraphInstrumentationTest {
                     runtimeCallGraph = true,
                     classGraphPath = "",
                     instrumentationDiagnosticsPath = "",
+                    ownerMapPath = ownerMapPath,
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

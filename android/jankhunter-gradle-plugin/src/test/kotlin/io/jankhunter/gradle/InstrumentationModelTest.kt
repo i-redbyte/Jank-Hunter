@@ -363,6 +363,7 @@ class InstrumentationModelTest {
             runtimeCallGraph = runtimeCallGraph,
             classGraphPath = "",
             instrumentationDiagnosticsPath = "",
+            ownerMapPath = "",
         )
     }
 }

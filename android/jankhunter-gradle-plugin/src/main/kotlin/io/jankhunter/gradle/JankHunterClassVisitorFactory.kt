@@ -31,6 +31,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
             classGraphPath = params.classGraphPath.getOrElse(""),
             instrumentationDiagnosticsPath = params.instrumentationDiagnosticsPath.getOrElse(""),
+            ownerMapPath = params.ownerMapPath.getOrElse(""),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -87,6 +88,7 @@ internal data class HookConfig(
     val runtimeCallGraph: Boolean,
     val classGraphPath: String,
     val instrumentationDiagnosticsPath: String,
+    val ownerMapPath: String,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -365,6 +367,18 @@ private class JankHunterMethodVisitor(
 
     override fun visitEnd() {
         val ignored = instrumentationIgnored()
+        if (!ignored && shouldInstrumentMethod() && (config.methodCounters || config.runtimeCallGraph)) {
+            OwnerMapWriter.appendEntry(
+                config.ownerMapPath,
+                OwnerMapEntry(
+                    id = OwnerIds.ownerHash(className, methodName, methodDescriptor),
+                    owner = OwnerIds.readableOwner(className, methodName),
+                    className = className.replace('/', '.'),
+                    methodName = methodName,
+                    descriptor = methodDescriptor,
+                ),
+            )
+        }
         diagnostics.recordMethod(
             ignored = ignored,
             annotation = if (!ignored) annotationDiagnosticKey() else null,
@@ -636,10 +650,16 @@ internal enum class CoroutineBlockKind {
 
 internal object OwnerIds {
     fun ownerLabel(className: String, methodName: String, descriptor: String): String {
-        val normalizedClass = className.replace('/', '.')
-        val readable = "$normalizedClass.$methodName"
-        val id = fnv1a64("$readable$descriptor")
-        return "$readable#${id.toString(16)}"
+        return "${readableOwner(className, methodName)}#${ownerHash(className, methodName, descriptor)}"
+    }
+
+    fun readableOwner(className: String, methodName: String): String {
+        return "${className.replace('/', '.')}.$methodName"
+    }
+
+    fun ownerHash(className: String, methodName: String, descriptor: String): String {
+        val readable = readableOwner(className, methodName)
+        return fnv1a64("$readable$descriptor").toString(16)
     }
 
     private fun fnv1a64(value: String): ULong {

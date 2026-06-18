@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -66,39 +67,100 @@ func LoadOwnerMap(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var raw struct {
-		Format  int               `json:"format"`
-		Owners  map[string]string `json:"owners"`
-		Entries []struct {
-			ID    string `json:"id"`
-			Owner string `json:"owner"`
-			Name  string `json:"name"`
-			Value string `json:"value"`
-		} `json:"entries"`
+	if ownerMap, ok, err := loadOwnerMapObject(path, data); ok || err != nil {
+		return ownerMap, err
 	}
+	return loadOwnerMapJSONL(path, data)
+}
+
+type ownerMapRecord struct {
+	Format  int               `json:"format"`
+	Kind    string            `json:"kind"`
+	Owners  map[string]string `json:"owners"`
+	Entries []ownerMapEntry   `json:"entries"`
+	ID      string            `json:"id"`
+	Owner   string            `json:"owner"`
+	Name    string            `json:"name"`
+	Value   string            `json:"value"`
+}
+
+type ownerMapEntry struct {
+	ID    string `json:"id"`
+	Owner string `json:"owner"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func loadOwnerMapObject(path string, data []byte) (map[string]string, bool, error) {
+	var raw ownerMapRecord
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
+		return nil, false, nil
 	}
-	if err := validateArtifactFormat(path, "owner map", raw.Format, OwnerMapFormat); err != nil {
-		return nil, err
+	if err := validateOwnerMapFormat(path, raw.Format); err != nil {
+		return nil, true, err
 	}
-	out := make(map[string]string, len(raw.Owners)+len(raw.Entries))
-	for id, owner := range raw.Owners {
-		if id == "" || owner == "" {
+	out := map[string]string{}
+	addOwnerMapRecord(out, raw)
+	return out, true, nil
+}
+
+func loadOwnerMapJSONL(path string, data []byte) (map[string]string, error) {
+	out := map[string]string{}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		out[id] = owner
-		out["jh:"+id] = owner
-	}
-	for _, entry := range raw.Entries {
-		name := firstNonEmpty(entry.Owner, entry.Name, entry.Value)
-		if entry.ID == "" || name == "" {
-			continue
+		var raw ownerMapRecord
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
 		}
-		out[entry.ID] = name
-		out["jh:"+entry.ID] = name
+		if err := validateOwnerMapFormat(path, raw.Format); err != nil {
+			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
+		}
+		addOwnerMapRecord(out, raw)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+func addOwnerMapRecord(out map[string]string, raw ownerMapRecord) {
+	for id, owner := range raw.Owners {
+		addOwnerMapEntry(out, ownerMapEntry{ID: id, Owner: owner})
+	}
+	for _, entry := range raw.Entries {
+		addOwnerMapEntry(out, entry)
+	}
+	if raw.ID != "" {
+		addOwnerMapEntry(out, ownerMapEntry{
+			ID:    raw.ID,
+			Owner: raw.Owner,
+			Name:  raw.Name,
+			Value: raw.Value,
+		})
+	}
+}
+
+func addOwnerMapEntry(out map[string]string, entry ownerMapEntry) {
+	name := firstNonEmpty(entry.Owner, entry.Name, entry.Value)
+	if entry.ID == "" || name == "" {
+		return
+	}
+	out[entry.ID] = name
+	out["jh:"+entry.ID] = name
+}
+
+func validateOwnerMapFormat(path string, got int) error {
+	if got == 1 {
+		return nil
+	}
+	return validateArtifactFormat(path, "owner map", got, OwnerMapFormat)
 }
 
 type collector struct {
