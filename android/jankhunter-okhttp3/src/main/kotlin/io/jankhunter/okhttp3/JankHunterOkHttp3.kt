@@ -1,5 +1,6 @@
 package io.jankhunter.okhttp3
 
+import io.jankhunter.runtime.JankHunter
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.WebSocketListener
@@ -13,8 +14,14 @@ object JankHunterOkHttp3 {
 
     @JvmStatic
     fun installEventListenerFactory(builder: OkHttpClient.Builder): OkHttpClient.Builder {
-        val factory = eventListenerFactory(builder)
-        builder.eventListenerFactory(wrapEventListenerFactory(factory))
+        when (val lookup = eventListenerFactory(builder)) {
+            is EventListenerFactoryLookup.Found -> {
+                builder.eventListenerFactory(wrapEventListenerFactory(lookup.factory))
+            }
+            EventListenerFactoryLookup.Unavailable -> {
+                JankHunter.recordCounter("jankhunter.okhttp.event_listener_factory.lookup_failed.count", 1)
+            }
+        }
         return builder
     }
 
@@ -24,11 +31,18 @@ object JankHunterOkHttp3 {
         return JankHunterWebSocketListener(owner = ownerName, delegate = listener)
     }
 
-    private fun eventListenerFactory(builder: OkHttpClient.Builder): EventListener.Factory? {
+    private fun eventListenerFactory(builder: OkHttpClient.Builder): EventListenerFactoryLookup {
         return runCatching {
             val field = builder.javaClass.getDeclaredField("eventListenerFactory")
             field.isAccessible = true
-            field.get(builder) as? EventListener.Factory
-        }.getOrNull()
+            EventListenerFactoryLookup.Found(field.get(builder) as? EventListener.Factory)
+        }.getOrElse {
+            EventListenerFactoryLookup.Unavailable
+        }
+    }
+
+    private sealed class EventListenerFactoryLookup {
+        data class Found(val factory: EventListener.Factory?) : EventListenerFactoryLookup()
+        data object Unavailable : EventListenerFactoryLookup()
     }
 }

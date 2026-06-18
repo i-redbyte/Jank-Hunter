@@ -106,8 +106,22 @@ class JankHunterPlugin : Plugin<Project> {
             val instrumentationDiagnosticsOutput = project.layout.buildDirectory.file(
                 "generated/jankhunter/${variant.name}/instrumentation-diagnostics.jsonl",
             )
+            val okHttpClasspathValidation = project.tasks.register(
+                "validate${variant.name.capitalized()}JankHunterOkHttpClasspath",
+            ) {
+                it.inputs.property("okhttp", extension.instrument.okhttp)
+                it.inputs.property("webSockets", extension.instrument.webSockets)
+                it.doLast {
+                    JankHunterDependencyValidator.validateOkHttpHelper(
+                        project,
+                        variant.name,
+                        hooksEnabled = extension.instrument.okhttp || extension.instrument.webSockets,
+                    )
+                }
+            }
             project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
                 it.dependsOn(ownerMap)
+                it.dependsOn(okHttpClasspathValidation)
                 it.doFirst {
                     ClassGraphWriter.prepare(classGraphOutput.get().asFile.absolutePath)
                     InstrumentationDiagnosticsWriter.prepare(
