@@ -68,6 +68,7 @@ const buildReportSet = (name, logCount, presentation = false) => {
   if (presentation) {
     const ownerMapPath = resolve(setDir, "owner-map.json");
     writeFileSync(ownerMapPath, JSON.stringify({
+      format: 1,
       owners: {
         "FeedRepository.refresh": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
         "CheckoutPresenter.render": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",

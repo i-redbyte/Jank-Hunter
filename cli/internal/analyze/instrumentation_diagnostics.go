@@ -106,8 +106,8 @@ type instrumentationDiagnosticsBuilder struct {
 }
 
 func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnosticsRecord) {
-	if record.Format != 1 {
-		b.warnings = append(b.warnings, fmt.Sprintf("class %s uses unsupported diagnostics format %d", record.ClassName, record.Format))
+	if err := validateArtifactFormat("instrumentation-diagnostics", "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat); err != nil {
+		b.warnings = append(b.warnings, fmt.Sprintf("class %s uses %v", record.ClassName, err))
 	}
 	class := InstrumentationClassDiagnostic{
 		ClassName:        record.ClassName,

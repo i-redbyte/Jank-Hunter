@@ -31,6 +31,8 @@
   <a href="#graph">Граф</a>
   <a href="#nodes">Узлы</a>
   <a href="#edges">Связи</a>
+  <a href="#paths">Пути</a>
+  <a href="#cycles">Циклы</a>
   <a href="#heuristic">Итог</a>
 </nav>
 <main>
@@ -90,6 +92,40 @@
           {{range .Influence.TopEdges}}
           <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте `--class-graph`, чтобы увидеть ребра между классами.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="paths" class="panel">
+    <div class="panel-head">
+      <div><h2>Горячие пути</h2><div class="panel-kicker">BFS-цепочки из статического графа, усиленные runtime-симптомами и весом вызовов.</div></div>
+    </div>
+    <details class="fold influence-table-fold" open>
+      <summary><span>Показать горячие пути</span><span class="method-kind">{{len .Influence.HotPaths}} путей</span></summary>
+      <div class="fold-body">
+        <table class="influence-table">
+          <tr><th>Путь</th><th>Вес</th><th>Runtime</th><th>Пояснение</th></tr>
+          {{range .Influence.HotPaths}}
+          <tr><td><code>{{join .Nodes " → "}}</code></td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTarget}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">Нет горячих путей. Нужен `--class-graph` и runtime-симптомы.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="cycles" class="panel">
+    <div class="panel-head">
+      <div><h2>Циклы зависимостей</h2><div class="panel-kicker">SCC-компоненты показывают замкнутые зоны, где изменения и нагрузка могут быстро распространяться по соседним классам.</div></div>
+    </div>
+    <details class="fold influence-table-fold">
+      <summary><span>Показать циклы</span><span class="method-kind">{{len .Influence.Cycles}} циклов</span></summary>
+      <div class="fold-body">
+        <table class="influence-table">
+          <tr><th>Компонента</th><th>Вес</th><th>Затронута runtime</th></tr>
+          {{range .Influence.Cycles}}
+          <tr><td><code>{{join .Nodes " ↔ "}}</code></td><td>{{.Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
+          {{else}}<tr><td colspan="3" class="muted">Сильносвязных циклов не найдено или статический граф не передан.</td></tr>{{end}}
         </table>
       </div>
     </details>

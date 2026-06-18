@@ -439,7 +439,9 @@ internal object ClassGraphWriter {
 
     private fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
         return buildString {
-            append("{\"format\":1,\"class\":\"")
+            append("{\"format\":")
+            append(ArtifactSchemas.CLASS_GRAPH_FORMAT)
+            append(",\"class\":\"")
             append(escape(className))
             append("\",\"edges\":[")
             edges.entries.forEachIndexed { index, entry ->
@@ -503,45 +505,43 @@ internal object InstrumentationHooks {
     }
 
     fun handlerRunnableKind(owner: String, name: String, descriptor: String): HandlerRunnableKind? {
-        return HookSignatureCatalog.handlerRunnableSignatures
-            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.HandlerRunnable }
             ?.kind
     }
 
     fun handlerRemoveCallbacksKind(owner: String, name: String, descriptor: String): HandlerRemoveCallbacksKind? {
-        return HookSignatureCatalog.handlerRemoveCallbacksSignatures
-            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.HandlerRemoveCallbacks }
             ?.kind
     }
 
     fun isHandlerRemoveCallbacksAndMessages(owner: String, name: String, descriptor: String): Boolean {
-        return HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.matches(methodCall(owner, name, descriptor))
+        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
+            ?.intent == HookIntent.HandlerRemoveCallbacksAndMessages
     }
 
     fun isHandlerHasCallbacks(owner: String, name: String, descriptor: String): Boolean {
-        return HookSignatureCatalog.handlerHasCallbacks.spec.matches(methodCall(owner, name, descriptor))
+        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
+            ?.intent == HookIntent.HandlerHasCallbacks
     }
 
     fun isHandlerMessageSend(owner: String, name: String, descriptor: String): Boolean {
-        val call = methodCall(owner, name, descriptor)
-        return HookSignatureCatalog.handlerMessageSendSignatures.any { it.matches(call) }
+        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
+            ?.intent == HookIntent.HandlerMessageSend
     }
 
     fun executorRunnableKind(owner: String, name: String, descriptor: String): ExecutorRunnableKind? {
-        return HookSignatureCatalog.executorRunnableSignatures
-            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+        return VersionedBridgeCatalog.matchExecutor(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.ExecutorRunnable }
             ?.kind
     }
 
     fun executorCallableKind(owner: String, name: String, descriptor: String): ExecutorCallableKind? {
-        return HookSignatureCatalog.executorCallableSignatures
-            .firstOrNull { it.spec.matches(methodCall(owner, name, descriptor)) }
+        return VersionedBridgeCatalog.matchExecutor(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.ExecutorCallable }
             ?.kind
@@ -555,43 +555,22 @@ internal object InstrumentationHooks {
     }
 
     fun isViewSetOnClickListener(owner: String, name: String, descriptor: String): Boolean {
-        return name == "setOnClickListener" &&
-            descriptor == "(Landroid/view/View\$OnClickListener;)V"
+        return VersionedBridgeCatalog.matchFlow(methodCall(owner, name, descriptor)) != null
     }
 
     fun logSpamLevel(owner: String, name: String): Int? {
-        if (owner == "android/util/Log") {
-            return when (name) {
-                "v" -> 2
-                "d" -> 3
-                "i" -> 4
-                "w" -> 5
-                "e" -> 6
-                "wtf" -> 7
-                else -> null
-            }
-        }
-        if (owner == "timber/log/Timber" || owner == "timber/log/Timber\$Tree") {
-            return when (name) {
-                "v" -> 2
-                "d" -> 3
-                "i" -> 4
-                "w" -> 5
-                "e" -> 6
-                "wtf" -> 7
-                else -> null
-            }
-        }
-        return null
+        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, "()V"))
+            ?.intent
+            ?.let { it as? HookIntent.LogSpam }
+            ?.level
     }
 
     fun logSpamSource(owner: String, name: String): String {
-        return when (owner) {
-            "android/util/Log" -> "android.util.Log.$name"
-            "timber/log/Timber" -> "Timber.$name"
-            "timber/log/Timber\$Tree" -> "Timber.Tree.$name"
-            else -> owner.replace('/', '.') + ".$name"
-        }
+        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, "()V"))
+            ?.intent
+            ?.let { it as? HookIntent.LogSpam }
+            ?.source
+            ?: owner.replace('/', '.') + ".$name"
     }
 
     private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {

@@ -121,7 +121,7 @@ func TestInspectFilesAppliesOwnerMap(t *testing.T) {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 	mapPath := filepath.Join(dir, "owner-map.json")
-	if err := os.WriteFile(mapPath, []byte(`{"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
+	if err := os.WriteFile(mapPath, []byte(`{"format":1,"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	ownerMap, err := LoadOwnerMap(mapPath)
@@ -141,6 +141,18 @@ func TestInspectFilesAppliesOwnerMap(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("owner map was not applied: %+v", summary.Owners)
+	}
+}
+
+func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
+	dir := t.TempDir()
+	mapPath := filepath.Join(dir, "owner-map.json")
+	if err := os.WriteFile(mapPath, []byte(`{"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := LoadOwnerMap(mapPath); err == nil {
+		t.Fatal("LoadOwnerMap() accepted owner map without format")
 	}
 }
 

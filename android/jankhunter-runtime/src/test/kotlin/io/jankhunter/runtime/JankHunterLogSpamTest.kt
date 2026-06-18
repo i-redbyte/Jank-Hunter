@@ -7,7 +7,6 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -54,19 +53,12 @@ class JankHunterLogSpamTest {
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun logSpamCounterSize(): Int {
-        val field = JankHunter::class.java.getDeclaredField("logSpamCounters").apply {
-            isAccessible = true
-        }
-        return (field.get(JankHunter) as Map<Any, Any>).size
+        return JankHunter.logSpamCounterSizeForTests()
     }
 
     private fun setLastLogSpamFlushAt(value: Long) {
-        val field = JankHunter::class.java.getDeclaredField("lastLogSpamFlushAtMs").apply {
-            isAccessible = true
-        }
-        (field.get(JankHunter) as AtomicLong).set(value)
+        JankHunter.setLastLogSpamFlushAtForTests(value)
     }
 
     private class TestContext(

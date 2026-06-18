@@ -17,30 +17,7 @@ import (
 var version = "1.0.0"
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
-
-	var err error
-	switch os.Args[1] {
-	case "sample":
-		err = runSample(os.Args[2:])
-	case "inspect":
-		err = runInspect(os.Args[2:])
-	case "compare":
-		err = runCompare(os.Args[2:])
-	case "export":
-		err = runExport(os.Args[2:])
-	case "problems":
-		err = runProblems(os.Args[2:])
-	case "version":
-		printVersion(os.Stdout)
-	case "help", "-h", "--help":
-		usage()
-	default:
-		err = fmt.Errorf("unknown command %q", os.Args[1])
-	}
+	err := newCommandRegistry(os.Stdout).run(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jankhunter:", err)
 		if exit, ok := err.(interface{ ExitCode() int }); ok {

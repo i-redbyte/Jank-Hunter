@@ -60,6 +60,19 @@ func TestLoadClassGraphJSONLAndBuildInfluence(t *testing.T) {
 	}
 }
 
+func TestLoadClassGraphRequiresSupportedFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "class-graph.jsonl")
+	data := `{"class":"com.app.Feature","edges":[{"caller":"open()V","calleeClass":"com.app.Repository","calleeMethod":"load","count":1}]}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := LoadClassGraph(path); err == nil {
+		t.Fatal("LoadClassGraph() accepted graph record without format")
+	}
+}
+
 func TestBuildInfluenceWorksWithoutClassGraph(t *testing.T) {
 	influence := BuildInfluence(Summary{
 		LogSpam: []LogSpamStats{{

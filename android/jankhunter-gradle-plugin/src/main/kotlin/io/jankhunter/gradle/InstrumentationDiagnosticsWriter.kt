@@ -96,7 +96,9 @@ internal object InstrumentationDiagnosticsWriter {
 
     private fun toJsonLine(record: InstrumentationDiagnosticsRecord): String {
         return buildString {
-            append("{\"format\":1,\"class\":\"")
+            append("{\"format\":")
+            append(ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT)
+            append(",\"class\":\"")
             append(escape(record.className))
             append("\",\"methods\":")
             append(record.methods)

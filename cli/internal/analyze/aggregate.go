@@ -67,6 +67,7 @@ func LoadOwnerMap(path string) (map[string]string, error) {
 		return nil, err
 	}
 	var raw struct {
+		Format  int               `json:"format"`
 		Owners  map[string]string `json:"owners"`
 		Entries []struct {
 			ID    string `json:"id"`
@@ -76,6 +77,9 @@ func LoadOwnerMap(path string) (map[string]string, error) {
 		} `json:"entries"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	if err := validateArtifactFormat(path, "owner map", raw.Format, OwnerMapFormat); err != nil {
 		return nil, err
 	}
 	out := make(map[string]string, len(raw.Owners)+len(raw.Entries))

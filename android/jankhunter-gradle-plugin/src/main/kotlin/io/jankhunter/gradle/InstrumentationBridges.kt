@@ -15,6 +15,10 @@ internal data class VersionedBridgeSignature(
     }
 
     companion object {
+        fun exact(signature: IntentSignature): VersionedBridgeSignature {
+            return exact(signature.spec, signature.intent)
+        }
+
         fun exact(spec: SignatureSpec, intent: HookIntent): VersionedBridgeSignature {
             return VersionedBridgeSignature(
                 id = spec.id,
@@ -57,7 +61,11 @@ internal interface VersionedInstrumentationBridge {
 
 internal object VersionedBridgeCatalog {
     val okHttp: List<VersionedInstrumentationBridge> = listOf(OkHttp3Bridge)
+    val handlers: List<VersionedInstrumentationBridge> = listOf(AndroidHandlerBridge)
+    val executors: List<VersionedInstrumentationBridge> = listOf(JdkExecutorBridge)
     val coroutines: List<VersionedInstrumentationBridge> = listOf(KotlinxCoroutinesBridge)
+    val flows: List<VersionedInstrumentationBridge> = listOf(AndroidViewFlowBridge)
+    val logSpam: List<VersionedInstrumentationBridge> = listOf(AndroidLogSpamBridge, TimberLogSpamBridge)
 
     fun matchOkHttp(call: MethodCall, intents: Set<String>): VersionedBridgeMatch? {
         return okHttp.firstNotNullOfOrNull { bridge ->
@@ -65,11 +73,27 @@ internal object VersionedBridgeCatalog {
         }
     }
 
+    fun matchHandler(call: MethodCall): VersionedBridgeMatch? {
+        return handlers.firstNotNullOfOrNull { it.match(call) }
+    }
+
+    fun matchExecutor(call: MethodCall): VersionedBridgeMatch? {
+        return executors.firstNotNullOfOrNull { it.match(call) }
+    }
+
     fun matchCoroutine(call: MethodCall): VersionedBridgeMatch? {
         return coroutines.firstNotNullOfOrNull { it.match(call) }
     }
 
-    fun all(): List<VersionedInstrumentationBridge> = okHttp + coroutines
+    fun matchFlow(call: MethodCall): VersionedBridgeMatch? {
+        return flows.firstNotNullOfOrNull { it.match(call) }
+    }
+
+    fun matchLogSpam(call: MethodCall): VersionedBridgeMatch? {
+        return logSpam.firstNotNullOfOrNull { it.match(call) }
+    }
+
+    fun all(): List<VersionedInstrumentationBridge> = okHttp + handlers + executors + coroutines + flows + logSpam
 }
 
 private object OkHttp3Bridge : VersionedInstrumentationBridge {
@@ -170,4 +194,77 @@ private object KotlinxCoroutinesBridge : VersionedInstrumentationBridge {
 
     private const val SUSPEND_COROUTINE_DESCRIPTOR_SUFFIX =
         "Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;"
+}
+
+private object AndroidHandlerBridge : VersionedInstrumentationBridge {
+    override val id: String = "android.handler.bridge.v1"
+    override val family: String = "handler"
+    override val signatures: List<VersionedBridgeSignature> =
+        HookSignatureCatalog.handlerRunnableSignatures.map(VersionedBridgeSignature::exact) +
+            HookSignatureCatalog.handlerRemoveCallbacksSignatures.map(VersionedBridgeSignature::exact) +
+            VersionedBridgeSignature.exact(HookSignatureCatalog.handlerRemoveCallbacksAndMessages) +
+            VersionedBridgeSignature.exact(HookSignatureCatalog.handlerHasCallbacks) +
+            HookSignatureCatalog.handlerMessageSendSignatures.map {
+                VersionedBridgeSignature.exact(it, HookIntent.HandlerMessageSend)
+            }
+}
+
+private object JdkExecutorBridge : VersionedInstrumentationBridge {
+    override val id: String = "jdk.executor.bridge.v1"
+    override val family: String = "executor"
+    override val signatures: List<VersionedBridgeSignature> =
+        HookSignatureCatalog.executorRunnableSignatures.map(VersionedBridgeSignature::exact) +
+            HookSignatureCatalog.executorCallableSignatures.map(VersionedBridgeSignature::exact)
+}
+
+private object AndroidViewFlowBridge : VersionedInstrumentationBridge {
+    override val id: String = "android.view.flow.bridge.v1"
+    override val family: String = "flow"
+    override val signatures: List<VersionedBridgeSignature> = listOf(
+        VersionedBridgeSignature(
+            id = "android.view.click_listener.v1",
+            intent = HookIntent.WrapClickListener,
+            owners = setOf("android/view/View"),
+            names = setOf("setOnClickListener"),
+            roles = mapOf(ArgumentRole.Listener to 0),
+            descriptorMatcher = { call ->
+                call.descriptor == "(Landroid/view/View\$OnClickListener;)V"
+            },
+        ),
+    )
+}
+
+private object AndroidLogSpamBridge : VersionedInstrumentationBridge {
+    override val id: String = "android.log.bridge.v1"
+    override val family: String = "logspam"
+    override val signatures: List<VersionedBridgeSignature> =
+        logSpamSignatures("android/util/Log", "android.util.Log")
+}
+
+private object TimberLogSpamBridge : VersionedInstrumentationBridge {
+    override val id: String = "timber.log.bridge.v1"
+    override val family: String = "logspam"
+    override val signatures: List<VersionedBridgeSignature> =
+        logSpamSignatures("timber/log/Timber", "Timber") +
+            logSpamSignatures("timber/log/Timber\$Tree", "Timber.Tree")
+}
+
+private fun logSpamSignatures(owner: String, sourcePrefix: String): List<VersionedBridgeSignature> {
+    return listOf(
+        "v" to 2,
+        "d" to 3,
+        "i" to 4,
+        "w" to 5,
+        "e" to 6,
+        "wtf" to 7,
+    ).map { (name, level) ->
+        val source = "$sourcePrefix.$name"
+        VersionedBridgeSignature(
+            id = "logspam.$source",
+            intent = HookIntent.LogSpam(source, level),
+            owners = setOf(owner),
+            names = setOf(name),
+            descriptorMatcher = { true },
+        )
+    }
 }

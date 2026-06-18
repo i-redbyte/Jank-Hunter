@@ -67,6 +67,21 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	}
 }
 
+func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
+	var buffer bytes.Buffer
+	registry := newCommandRegistry(&buffer)
+
+	if err := registry.run([]string{"version"}); err != nil {
+		t.Fatalf("registry version error = %v", err)
+	}
+	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.0") {
+		t.Fatalf("version command output = %q", buffer.String())
+	}
+	if err := registry.run([]string{"missing"}); err == nil {
+		t.Fatal("registry accepted unknown command")
+	}
+}
+
 func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 

@@ -295,6 +295,7 @@ type Summary struct {
 }
 
 type ClassGraph struct {
+	Format  int                        `json:"format,omitempty"`
 	Classes map[string]ClassGraphClass `json:"classes"`
 	Edges   []ClassGraphEdge           `json:"edges"`
 }
@@ -323,6 +324,8 @@ type InfluenceSummary struct {
 	ShownEdges       int
 	TopNodes         []InfluenceNode
 	TopEdges         []InfluenceEdge
+	HotPaths         []InfluencePath
+	Cycles           []InfluenceCycle
 	Heuristic        []InfluenceFinding
 	StandaloneReason string
 }
@@ -354,6 +357,19 @@ type InfluenceEdge struct {
 	Influence        float64
 	RuntimeConfirmed bool
 	Reason           string
+}
+
+type InfluencePath struct {
+	Nodes         []string
+	Weight        float64
+	RuntimeTarget bool
+	Reason        string
+}
+
+type InfluenceCycle struct {
+	Nodes          []string
+	Weight         uint64
+	RuntimeTouched bool
 }
 
 type InfluenceFinding struct {

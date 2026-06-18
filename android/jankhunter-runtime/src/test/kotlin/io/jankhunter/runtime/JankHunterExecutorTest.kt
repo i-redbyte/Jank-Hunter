@@ -287,11 +287,7 @@ class JankHunterExecutorTest {
         return (trackedField.get(tracker) as Map<Any, Any>).size
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun logSpamCounterSize(): Int {
-        val field = JankHunter::class.java.getDeclaredField("logSpamCounters").apply {
-            isAccessible = true
-        }
-        return (field.get(JankHunter) as Map<Any, Any>).size
+        return JankHunter.logSpamCounterSizeForTests()
     }
 }

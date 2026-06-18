@@ -1,6 +1,5 @@
 package io.jankhunter.runtime
 
-import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -8,28 +7,15 @@ import android.os.Handler
 import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
-import io.jankhunter.runtime.internal.io.MetricAggregator
-import io.jankhunter.runtime.internal.system.AdaptiveRuntimeSampler
-import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
-import io.jankhunter.runtime.internal.system.FpsMonitor
-import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
-import io.jankhunter.runtime.internal.system.MainThreadWatchdog
-import io.jankhunter.runtime.internal.system.MemorySampler
-import io.jankhunter.runtime.internal.system.MemoryTrimReporter
-import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessNames
-import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
-import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 import java.util.concurrent.Callable
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.atomic.AtomicLong
 
 data class JankHunterInitDiagnostics(
     val status: String,
@@ -43,15 +29,31 @@ data class JankHunterInitDiagnostics(
 )
 
 object JankHunter {
-    private val runtimeState = RuntimeState(DEFAULT_MAX_METRIC_AGGREGATION_KEYS)
+    private val runtimeState = RuntimeState()
     private val started get() = runtimeState.started
     private val initAttempts get() = runtimeState.initAttempts
-    private val initFailures get() = runtimeState.initFailures
     private val contextTracker = ContextTracker()
-    private val logSpamCounters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
-    private val logSpamKeyAdmissionLock = Any()
-    private val lastLogSpamFlushAtMs = AtomicLong(0L)
-    private val lastMetricFlushAtMs = AtomicLong(0L)
+    private val runtimeEvents = RuntimeEventBus()
+    private val coordinator = RuntimeCoordinator(runtimeState, runtimeEvents, ::nowMs)
+    private val collectors = RuntimeCollectorService(runtimeState)
+    private val metrics = RuntimeMetricsService(
+        DEFAULT_MAX_METRIC_AGGREGATION_KEYS,
+        ::nowMs,
+        { writer },
+        { config },
+        { ensureContextRecorded() },
+        runtimeEvents,
+    )
+    private val sampling = RuntimeSamplingService(::nowMs)
+    private val logSpam = RuntimeLogSpamService(
+        ::nowMs,
+        { config },
+        { writer },
+        { isRuntimeActiveForHooks() },
+        { ownerName -> captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull())) },
+        { recordCounter("jankhunter.log_spam.dropped_keys.count", 1) },
+        runtimeEvents,
+    )
     private val runtimeCallGraph = RuntimeCallGraph(
         nowMs = ::nowMs,
         captureContext = { ownerOverride -> captureContext(ownerOverride = ownerOverride) },
@@ -73,83 +75,11 @@ object JankHunter {
             runtimeState.config = value
         }
 
-    private var metricAggregator: MetricAggregator
-        get() = runtimeState.metricAggregator
-        set(value) {
-            runtimeState.metricAggregator = value
-        }
-
-    private var watchdog: MainThreadWatchdog?
-        get() = runtimeState.watchdog
-        set(value) {
-            runtimeState.watchdog = value
-        }
-
-    private var dispatchMonitor: MainLooperDispatchMonitor?
-        get() = runtimeState.dispatchMonitor
-        set(value) {
-            runtimeState.dispatchMonitor = value
-        }
-
-    private var memorySampler: MemorySampler?
-        get() = runtimeState.memorySampler
-        set(value) {
-            runtimeState.memorySampler = value
-        }
-
-    private var memoryTrimReporter: MemoryTrimReporter?
-        get() = runtimeState.memoryTrimReporter
-        set(value) {
-            runtimeState.memoryTrimReporter = value
-        }
-
-    private var componentCallbackContext: Context?
-        get() = runtimeState.componentCallbackContext
-        set(value) {
-            runtimeState.componentCallbackContext = value
-        }
-
-    private var systemContextSampler: SystemContextSampler?
-        get() = runtimeState.systemContextSampler
-        set(value) {
-            runtimeState.systemContextSampler = value
-        }
-
-    private var adaptiveRuntimeSampler: AdaptiveRuntimeSampler?
-        get() = runtimeState.adaptiveRuntimeSampler
-        set(value) {
-            runtimeState.adaptiveRuntimeSampler = value
-        }
-
-    private var objectRetentionWatcher: ObjectRetentionWatcher?
+    private val objectRetentionWatcher
         get() = runtimeState.objectRetentionWatcher
-        set(value) {
-            runtimeState.objectRetentionWatcher = value
-        }
 
-    private var retainedHeapDumper: RetainedHeapDumper?
+    private val retainedHeapDumper
         get() = runtimeState.retainedHeapDumper
-        set(value) {
-            runtimeState.retainedHeapDumper = value
-        }
-
-    private var fpsMonitor: FpsMonitor?
-        get() = runtimeState.fpsMonitor
-        set(value) {
-            runtimeState.fpsMonitor = value
-        }
-
-    private var application: Application?
-        get() = runtimeState.application
-        set(value) {
-            runtimeState.application = value
-        }
-
-    private var activityTracker: ActivityTracker?
-        get() = runtimeState.activityTracker
-        set(value) {
-            runtimeState.activityTracker = value
-        }
 
     private var initDiagnostics: JankHunterInitDiagnostics
         get() = runtimeState.initDiagnostics
@@ -190,20 +120,16 @@ object JankHunter {
                 recordInitStatus("process_not_allowed", attempt, processName)
                 return
             }
-            if (!started.compareAndSet(false, true)) {
+            if (!coordinator.tryMarkStarted()) {
                 recordInitStatus("already_started", attempt, processName)
                 return
             }
             acquiredStart = true
 
             config = providedConfig
-            metricAggregator = MetricAggregator(providedConfig.maxMetricAggregationKeys())
-            lastMetricFlushAtMs.set(0L)
+            metrics.configure(providedConfig.maxMetricAggregationKeys())
             runtimeCallGraph.resetFlushState()
-            adaptiveRuntimeSampler = AdaptiveRuntimeSampler(
-                providedConfig.adaptiveMemoryStableIntervalMs(),
-                providedConfig.adaptiveContextStableIntervalMs(),
-            )
+            sampling.configure(providedConfig)
 
             val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
             directoryForDiagnostics = directory
@@ -237,54 +163,7 @@ object JankHunter {
                 device.rooted,
             )
 
-            if (providedConfig.autoStartCollectors()) {
-                if (appContext is Application) {
-                    application = appContext
-                    activityTracker = ActivityTracker(providedConfig.jankStatsEnabled()).also {
-                        appContext.registerActivityLifecycleCallbacks(it)
-                    }
-                }
-                watchdog = MainThreadWatchdog(providedConfig.mainThreadStallThresholdMs()).also { it.start() }
-                if (providedConfig.mainLooperDispatchMonitorEnabled()) {
-                    dispatchMonitor = MainLooperDispatchMonitor(providedConfig.mainThreadStallThresholdMs()).also {
-                        it.start()
-                    }
-                }
-                memoryTrimReporter = MemoryTrimReporter().also {
-                    appContext.registerComponentCallbacks(it)
-                    componentCallbackContext = appContext
-                }
-                memorySampler = MemorySampler(appContext, providedConfig.memorySampleIntervalMs()).also { it.start() }
-                if (providedConfig.systemSamplerEnabled()) {
-                    systemContextSampler = SystemContextSampler(
-                        appContext,
-                        providedConfig.systemSampleIntervalMs(),
-                    ).also { it.start() }
-                }
-                if (providedConfig.processExitInfoEnabled()) {
-                    ProcessExitReporter.report(appContext)
-                }
-                if (providedConfig.objectWatcherEnabled()) {
-                    if (providedConfig.retainedHeapDumpEnabled()) {
-                        retainedHeapDumper = RetainedHeapDumper(
-                            providedConfig.retainedHeapDumpDirectory() ?: File(directory, "heap-dumps"),
-                            providedConfig.retainedHeapDumpMinIntervalMs(),
-                            providedConfig.retainedHeapDumpMaxCount(),
-                            providedConfig.retainedHeapDumpMinRetainedAgeMs(),
-                        )
-                    }
-                    objectRetentionWatcher = ObjectRetentionWatcher(
-                        providedConfig.retainedObjectDelayMs(),
-                        providedConfig.retainedObjectForceGcEnabled(),
-                    ).also { it.start() }
-                }
-                if (providedConfig.fpsMonitorEnabled()) {
-                    fpsMonitor = FpsMonitor(
-                        providedConfig.fpsWindowMs(),
-                        providedConfig.jankFrameThresholdMs(),
-                    ).also { it.start() }
-                }
-            }
+            collectors.start(appContext, providedConfig, directory)
             recordInitStatus("started", attempt, processName, directory)
         } catch (throwable: Throwable) {
             if (acquiredStart) {
@@ -310,54 +189,38 @@ object JankHunter {
         }
     }
 
+    internal fun addRuntimeObserver(observer: RuntimeObserver) {
+        runtimeEvents.add(observer)
+    }
+
+    internal fun removeRuntimeObserver(observer: RuntimeObserver) {
+        runtimeEvents.remove(observer)
+    }
+
     @JvmStatic
     fun shutdown() {
+        runtimeEvents.emit(RuntimeEvent.ShutdownStarted)
         swallow {
             flushLogSpam(force = true)
             flushMetrics(force = true)
             runtimeCallGraph.flush(force = true, writer)
         }
-        swallow {
-            activityTracker?.let { tracker ->
-                application?.unregisterActivityLifecycleCallbacks(tracker)
-                tracker.close()
-            }
-        }
-        swallow { watchdog?.stop() }
-        swallow { dispatchMonitor?.stop() }
-        swallow {
-            memoryTrimReporter?.let { reporter ->
-                componentCallbackContext?.unregisterComponentCallbacks(reporter)
-            }
-        }
-        swallow { memorySampler?.stop() }
-        swallow { systemContextSampler?.stop() }
-        swallow { objectRetentionWatcher?.stop() }
-        swallow { fpsMonitor?.stop() }
+        collectors.stop()
         swallow { writer?.close() }
         resetState()
+        runtimeEvents.emit(RuntimeEvent.ShutdownFinished)
     }
 
     private fun resetState() {
-        activityTracker = null
-        application = null
-        watchdog = null
-        dispatchMonitor = null
-        memoryTrimReporter = null
-        componentCallbackContext = null
-        memorySampler = null
-        systemContextSampler = null
-        adaptiveRuntimeSampler = null
-        objectRetentionWatcher = null
-        retainedHeapDumper = null
-        fpsMonitor = null
+        collectors.reset()
         writer = null
         contextTracker.resetRecordedContext()
-        lastMetricFlushAtMs.set(0L)
-        logSpamCounters.clear()
+        metrics.reset()
+        sampling.reset()
+        logSpam.reset()
         runtimeCallGraph.clear()
         handlerWrappers.clear()
-        started.set(false)
+        coordinator.markStopped()
     }
 
     private inline fun swallow(block: () -> Unit) {
@@ -373,14 +236,7 @@ object JankHunter {
         processName: String? = null,
         logDirectory: File? = null,
     ) {
-        initDiagnostics = JankHunterInitDiagnostics(
-            status = status,
-            processName = processName,
-            logDirectory = logDirectory?.absolutePath,
-            atMs = nowMs(),
-            attempts = attempt,
-            failures = initFailures.get(),
-        )
+        coordinator.recordInitStatus(status, attempt, processName, logDirectory)
     }
 
     private fun recordInitFailure(
@@ -389,17 +245,7 @@ object JankHunter {
         processName: String?,
         logDirectory: File?,
     ) {
-        val failures = initFailures.incrementAndGet()
-        initDiagnostics = JankHunterInitDiagnostics(
-            status = "failed",
-            failureClass = throwable.javaClass.simpleName ?: throwable.javaClass.name,
-            failureMessage = throwable.message,
-            processName = processName,
-            logDirectory = logDirectory?.absolutePath,
-            atMs = nowMs(),
-            attempts = attempt,
-            failures = failures,
-        )
+        coordinator.recordInitFailure(throwable, attempt, processName, logDirectory)
     }
 
     @JvmStatic
@@ -909,46 +755,23 @@ object JankHunter {
 
     @JvmStatic
     fun recordCounter(name: String?, value: Long) {
-        val asyncWriter = writer ?: return
-        if (shouldAggregateMetrics()) {
-            metricAggregator.counter(name, value)
-            flushMetrics(force = false)
-            return
-        }
-        ensureContextRecorded()
-        asyncWriter.counter(name, value)
+        metrics.recordCounter(name, value)
     }
 
     @JvmStatic
     fun recordGauge(name: String?, value: Long) {
-        val asyncWriter = writer ?: return
-        if (shouldAggregateMetrics()) {
-            metricAggregator.gauge(name, value)
-            flushMetrics(force = false)
-            return
-        }
-        ensureContextRecorded()
-        asyncWriter.gauge(name, value)
+        metrics.recordGauge(name, value)
     }
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
-        if (!isRuntimeActiveForHooks()) return
-        val tuple = captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull()))
-        val key = LogSpamKey(tuple.screen, tuple.owner, tuple.flow, tuple.step, normalizedContextValue(source), level)
-        val maxKeys = config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS
-        val counter = logSpamCounters[key] ?: synchronized(logSpamKeyAdmissionLock) {
-            logSpamCounters[key] ?: run {
-                if (maxKeys <= 0 || logSpamCounters.size >= maxKeys) {
-                    recordCounter("jankhunter.log_spam.dropped_keys.count", 1)
-                    flushLogSpam(force = false)
-                    return
-                }
-                AtomicLong().also { logSpamCounters[key] = it }
-            }
-        }
-        counter.incrementAndGet()
-        flushLogSpam(force = false)
+        logSpam.record(ownerName, source, level)
+    }
+
+    internal fun logSpamCounterSizeForTests(): Int = logSpam.counterSizeForTests()
+
+    internal fun setLastLogSpamFlushAtForTests(value: Long) {
+        logSpam.setLastFlushAtForTests(value)
     }
 
     internal fun captureContext(
@@ -1079,9 +902,7 @@ object JankHunter {
     }
 
     private fun shouldRecordMemorySample(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long): Boolean {
-        val localConfig = config
-        if (localConfig?.adaptiveSamplingEnabled() != true) return true
-        return adaptiveRuntimeSampler?.shouldRecordMemory(nowMs(), pssKb, javaHeapKb, nativeHeapKb) ?: true
+        return sampling.shouldRecordMemory(pssKb, javaHeapKb, nativeHeapKb)
     }
 
     private fun shouldRecordContextSample(
@@ -1095,10 +916,7 @@ object JankHunter {
         txBytes: Long,
         networkVpn: Boolean,
     ): Boolean {
-        val localConfig = config
-        if (localConfig?.adaptiveSamplingEnabled() != true) return true
-        return adaptiveRuntimeSampler?.shouldRecordContext(
-            nowMs(),
+        return sampling.shouldRecordContext(
             networkKind,
             batteryPct,
             availMemoryKb,
@@ -1108,37 +926,15 @@ object JankHunter {
             rxBytes,
             txBytes,
             networkVpn,
-        ) ?: true
-    }
-
-    private fun shouldAggregateMetrics(): Boolean {
-        val localConfig = config ?: return false
-        return localConfig.metricAggregationEnabled() && localConfig.maxMetricAggregationKeys() > 0
+        )
     }
 
     private fun isRuntimeActiveForHooks(): Boolean {
-        return started.get() && writer != null
+        return coordinator.isActiveForHooks()
     }
 
     private fun flushMetrics(force: Boolean) {
-        val asyncWriter = writer ?: return
-        val localConfig = config ?: return
-        if (!localConfig.metricAggregationEnabled()) return
-        val now = nowMs()
-        val last = lastMetricFlushAtMs.get()
-        val interval = localConfig.metricAggregationWindowMs()
-        if (!force && (interval <= 0 || now - last < interval)) return
-        if (!lastMetricFlushAtMs.compareAndSet(last, now) && !force) return
-        ensureContextRecorded()
-        metricAggregator.flush(object : MetricAggregator.Sink {
-            override fun counter(name: String, value: Long) {
-                asyncWriter.counter(name, value)
-            }
-
-            override fun gauge(name: String, value: Long) {
-                asyncWriter.gauge(name, value)
-            }
-        })
+        metrics.flush(force)
     }
 
     private fun flushTimeoutMs(): Long {
@@ -1175,34 +971,7 @@ object JankHunter {
     }
 
     private fun flushLogSpam(force: Boolean) {
-        val asyncWriter = writer ?: return
-        val now = nowMs()
-        val last = lastLogSpamFlushAtMs.get()
-        if (!force && now - last < LOG_SPAM_FLUSH_MS) return
-        if (!lastLogSpamFlushAtMs.compareAndSet(last, now) && !force) return
-
-        logSpamCounters.forEach { (key, counter) ->
-            val count = counter.getAndSet(0)
-            if (count <= 0) return@forEach
-            asyncWriter.logSpam(key.screen, key.owner, key.flow, key.step, key.source, key.level, count)
-            if (count >= LOG_SPAM_PROBLEM_COUNT) {
-                asyncWriter.problemWindow(
-                    key.screen,
-                    key.owner,
-                    key.flow,
-                    key.step,
-                    "log_spam",
-                    LOG_SPAM_FLUSH_MS,
-                    count,
-                    count,
-                )
-            }
-        }
-        logSpamCounters.forEach { (key, counter) ->
-            if (counter.get() == 0L) {
-                logSpamCounters.remove(key, counter)
-            }
-        }
+        logSpam.flush(force)
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
@@ -1239,22 +1008,10 @@ object JankHunter {
     private const val WRAPPED_WORK_PROBLEM_THRESHOLD_MS = 250L
     private const val SLOW_HTTP_THRESHOLD_MS = 1000L
     private const val UI_PROBLEM_FRAME_THRESHOLD_MS = 32L
-    private const val LOG_SPAM_FLUSH_MS = 5000L
-    private const val LOG_SPAM_PROBLEM_COUNT = 50L
     private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
-    private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
     private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
     private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
     private val OWNER_WHITESPACE = Regex("\\s+")
-
-    private data class LogSpamKey(
-        val screen: String?,
-        val owner: String?,
-        val flow: String?,
-        val step: String?,
-        val source: String?,
-        val level: Int,
-    )
 
 }

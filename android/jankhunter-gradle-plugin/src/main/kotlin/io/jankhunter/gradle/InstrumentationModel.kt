@@ -155,10 +155,17 @@ internal sealed class HookIntent(
     data class LogSpam(val source: String, val level: Int) : HookIntent("logspam.$source")
 }
 
-internal interface InstrumentationRule {
+internal interface InstrumentationModule {
     val id: String
+    val family: String
     val priority: Int
-    fun evaluate(call: MethodCall, config: HookConfig): HookDecision
+    val bridges: List<VersionedInstrumentationBridge>
+    fun enabled(config: HookConfig): Boolean
+
+    fun match(call: MethodCall, config: HookConfig): HookDecision {
+        if (!enabled(config)) return HookDecision.NotMatched
+        return bridges.firstNotNullOfOrNull { it.match(call) }?.toDecision() ?: HookDecision.NotMatched
+    }
 }
 
 internal sealed class HookDecision {
@@ -423,155 +430,116 @@ internal object HookSignatureCatalog {
     }
 }
 
-internal class RuleRegistry(
-    rules: List<InstrumentationRule>,
+internal class InstrumentationModuleRegistry(
+    modules: List<InstrumentationModule>,
 ) {
-    private val rules = rules.sortedWith(compareBy<InstrumentationRule> { it.priority }.thenBy { it.id })
+    private val modules = modules.sortedWith(compareBy<InstrumentationModule> { it.priority }.thenBy { it.id })
 
     fun resolve(call: MethodCall, config: HookConfig): HookDecision {
-        rules.forEach { rule ->
-            val decision = rule.evaluate(call, config)
+        modules.forEach { module ->
+            val decision = module.match(call, config)
             if (decision is HookDecision.Matched) return decision
         }
         return HookDecision.NotMatched
     }
+
+    fun modules(): List<InstrumentationModule> = modules
 }
 
 internal object HookIntentResolver {
-    private val registry = RuleRegistry(
+    private val registry = InstrumentationModuleRegistry(
         listOf(
-            OkHttpInstrumentationRule,
-            WebSocketInstrumentationRule,
-            HandlerInstrumentationRule,
-            ExecutorInstrumentationRule,
-            CoroutineInstrumentationRule,
-            FlowInstrumentationRule,
-            LogSpamInstrumentationRule,
+            OkHttpInstrumentationModule,
+            WebSocketInstrumentationModule,
+            HandlerInstrumentationModule,
+            ExecutorInstrumentationModule,
+            CoroutineInstrumentationModule,
+            FlowInstrumentationModule,
+            LogSpamInstrumentationModule,
         ),
     )
 
     fun resolve(call: MethodCall, config: HookConfig): HookDecision {
         return registry.resolve(call, config)
     }
+
+    fun modules(): List<InstrumentationModule> = registry.modules()
 }
 
-private object OkHttpInstrumentationRule : InstrumentationRule {
+private object OkHttpInstrumentationModule : InstrumentationModule {
     override val id: String = "okhttp"
+    override val family: String = "okhttp"
     override val priority: Int = 100
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.okHttp
     private val intents = setOf(
         HookIntent.WrapOkHttpEventListenerFactory.id,
         HookIntent.InstallOkHttpEventListenerFactory.id,
     )
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.okhttp) {
-            VersionedBridgeCatalog.matchOkHttp(call, intents)?.let {
-                return it.toDecision()
-            }
-        }
-        return HookDecision.NotMatched
+    override fun enabled(config: HookConfig): Boolean = config.okhttp
+
+    override fun match(call: MethodCall, config: HookConfig): HookDecision {
+        if (!enabled(config)) return HookDecision.NotMatched
+        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision() ?: HookDecision.NotMatched
     }
 }
 
-private object WebSocketInstrumentationRule : InstrumentationRule {
+private object WebSocketInstrumentationModule : InstrumentationModule {
     override val id: String = "websocket"
+    override val family: String = "okhttp"
     override val priority: Int = 110
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.okHttp
     private val intents = setOf(HookIntent.WrapWebSocketListener.id)
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.webSockets) {
-            VersionedBridgeCatalog.matchOkHttp(call, intents)?.let {
-                return it.toDecision()
-            }
-        }
-        return HookDecision.NotMatched
+    override fun enabled(config: HookConfig): Boolean = config.webSockets
+
+    override fun match(call: MethodCall, config: HookConfig): HookDecision {
+        if (!enabled(config)) return HookDecision.NotMatched
+        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision() ?: HookDecision.NotMatched
     }
 }
 
-private object HandlerInstrumentationRule : InstrumentationRule {
+private object HandlerInstrumentationModule : InstrumentationModule {
     override val id: String = "handler"
+    override val family: String = "handler"
     override val priority: Int = 200
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.handlers
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.handlers) {
-            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.handlerRunnableSignatures)?.let {
-                return it
-            }
-            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.handlerRemoveCallbacksSignatures)?.let {
-                return it
-            }
-            if (HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.matches(call)) {
-                return HookDecision.Matched(
-                    HookIntent.HandlerRemoveCallbacksAndMessages,
-                    HookSignatureCatalog.handlerRemoveCallbacksAndMessages.spec.id,
-                )
-            }
-            if (HookSignatureCatalog.handlerHasCallbacks.spec.matches(call)) {
-                return HookDecision.Matched(HookIntent.HandlerHasCallbacks, HookSignatureCatalog.handlerHasCallbacks.spec.id)
-            }
-            HookSignatureCatalog.handlerMessageSendSignatures.firstOrNull { it.matches(call) }?.let {
-                return HookDecision.Matched(HookIntent.HandlerMessageSend, it.id)
-            }
-        }
-        return HookDecision.NotMatched
-    }
+    override fun enabled(config: HookConfig): Boolean = config.handlers
 }
 
-private object ExecutorInstrumentationRule : InstrumentationRule {
+private object ExecutorInstrumentationModule : InstrumentationModule {
     override val id: String = "executor"
+    override val family: String = "executor"
     override val priority: Int = 300
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.executors
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.executors) {
-            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.executorRunnableSignatures)?.let {
-                return it
-            }
-            HookSignatureCatalog.matchIntent(call, HookSignatureCatalog.executorCallableSignatures)?.let {
-                return it
-            }
-        }
-        return HookDecision.NotMatched
-    }
+    override fun enabled(config: HookConfig): Boolean = config.executors
 }
 
-private object CoroutineInstrumentationRule : InstrumentationRule {
+private object CoroutineInstrumentationModule : InstrumentationModule {
     override val id: String = "coroutine"
+    override val family: String = "coroutines"
     override val priority: Int = 400
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.coroutines
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.coroutines) {
-            VersionedBridgeCatalog.matchCoroutine(call)?.let {
-                return it.toDecision()
-            }
-        }
-        return HookDecision.NotMatched
-    }
+    override fun enabled(config: HookConfig): Boolean = config.coroutines
 }
 
-private object FlowInstrumentationRule : InstrumentationRule {
+private object FlowInstrumentationModule : InstrumentationModule {
     override val id: String = "flow"
+    override val family: String = "flow"
     override val priority: Int = 500
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.flows
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.flowInteractions && InstrumentationHooks.isViewSetOnClickListener(call.owner, call.name, call.descriptor)) {
-            return HookDecision.Matched(HookIntent.WrapClickListener, "android.view.click_listener")
-        }
-        return HookDecision.NotMatched
-    }
+    override fun enabled(config: HookConfig): Boolean = config.flowInteractions
 }
 
-private object LogSpamInstrumentationRule : InstrumentationRule {
+private object LogSpamInstrumentationModule : InstrumentationModule {
     override val id: String = "logspam"
+    override val family: String = "logspam"
     override val priority: Int = 600
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.logSpam
 
-    override fun evaluate(call: MethodCall, config: HookConfig): HookDecision {
-        if (config.logSpam) {
-            val level = InstrumentationHooks.logSpamLevel(call.owner, call.name)
-            if (level != null) {
-                val source = InstrumentationHooks.logSpamSource(call.owner, call.name)
-                return HookDecision.Matched(HookIntent.LogSpam(source, level), "logspam.$source")
-            }
-        }
-        return HookDecision.NotMatched
-    }
+    override fun enabled(config: HookConfig): Boolean = config.logSpam
 }

@@ -69,7 +69,7 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
         file.writeText(
             buildString {
                 appendLine("{")
-                appendLine("  \"format\": 1,")
+                appendLine("  \"format\": ${ArtifactSchemas.OWNER_MAP_FORMAT},")
                 appendLine("  \"variant\": \"${escape(variantName.get())}\",")
                 appendLine("  \"idAlgorithm\": \"fnv1a64(class.method+descriptor)\",")
                 appendLine("  \"hooks\": {")

@@ -123,7 +123,7 @@ class FeedRepository {
 }
 ```
 
-`@JankTrace`, `@JankFlow` и `@JankScreen` уже распознаются Gradle plugin как metadata для следующих attribution-слоев.
+`@JankTrace`, `@JankFlow` и `@JankScreen` раскрываются Gradle plugin в runtime attribution: метод получает scoped context, а отчеты видят screen/flow/trace не как сырой metadata, а как часть привязки событий.
 
 ## Где лежит лог
 

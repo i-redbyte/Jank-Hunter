@@ -20,7 +20,7 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 	}
 	defer file.Close()
 
-	graph := &ClassGraph{Classes: map[string]ClassGraphClass{}}
+	graph := &ClassGraph{Format: ClassGraphFormat, Classes: map[string]ClassGraphClass{}}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	lineCount := 0
@@ -35,12 +35,16 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 			if err := json.Unmarshal([]byte(line), &full); err != nil {
 				return nil, err
 			}
+			if err := validateArtifactFormat(path, "class graph", full.Format, ClassGraphFormat); err != nil {
+				return nil, err
+			}
 			normalizeClassGraph(&full)
 			return &full, nil
 		}
 		var record struct {
-			Class string `json:"class"`
-			Edges []struct {
+			Format int    `json:"format"`
+			Class  string `json:"class"`
+			Edges  []struct {
 				Caller       string `json:"caller"`
 				CalleeClass  string `json:"calleeClass"`
 				CalleeMethod string `json:"calleeMethod"`
@@ -48,6 +52,9 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 			} `json:"edges"`
 		}
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return nil, fmt.Errorf("parse class graph line %d: %w", lineCount, err)
+		}
+		if err := validateArtifactFormat(path, "class graph", record.Format, ClassGraphFormat); err != nil {
 			return nil, fmt.Errorf("parse class graph line %d: %w", lineCount, err)
 		}
 		from := normalizeClassName(record.Class)
@@ -94,6 +101,7 @@ type influenceBuilder struct {
 	nodes        map[string]*influenceAccumulator
 	edges        []ClassGraphEdge
 	staticIndex  *ClassGraphIndex
+	methodIndex  *MethodGraphIndex
 	runtimeEdges []runtimeInfluenceEdge
 }
 
@@ -296,6 +304,7 @@ func (b *influenceBuilder) addStatic(graph *ClassGraph) {
 		b.edges = append(b.edges, edge)
 	}
 	b.staticIndex = NewClassGraphIndex(b.edges)
+	b.methodIndex = NewMethodGraphIndex(b.edges)
 }
 
 func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
@@ -361,6 +370,9 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 	if len(allNodes) > 80 {
 		allNodes = allNodes[:80]
 	}
+	runtimeTargets := b.runtimeTargets()
+	hotPaths := b.hotPaths(runtimeTargets)
+	cycles := b.cycles(runtimeTargets)
 
 	out := InfluenceSummary{
 		Available:        len(allNodes) > 0,
@@ -374,10 +386,64 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		ShownEdges:       len(edges),
 		TopNodes:         allNodes,
 		TopEdges:         edges,
+		HotPaths:         hotPaths,
+		Cycles:           cycles,
 		StandaloneReason: "Подробный граф вынесен отдельно, чтобы большой проект не превращал основной математический отчет в тяжелую страницу.",
 	}
 	out.Heuristic = influenceHeuristic(out)
 	return out
+}
+
+func (b *influenceBuilder) runtimeTargets() map[string]struct{} {
+	out := map[string]struct{}{}
+	for className, node := range b.nodes {
+		if node.runtime {
+			out[className] = struct{}{}
+		}
+	}
+	return out
+}
+
+func (b *influenceBuilder) scoreByClass() map[string]float64 {
+	out := map[string]float64{}
+	for className, node := range b.nodes {
+		if node.score > 0 {
+			out[className] = node.score
+		}
+	}
+	return out
+}
+
+func (b *influenceBuilder) hotPaths(runtimeTargets map[string]struct{}) []InfluencePath {
+	if b.staticIndex == nil {
+		return nil
+	}
+	return b.staticIndex.HotPaths(b.scoreByClass(), runtimeTargets, 8)
+}
+
+func (b *influenceBuilder) cycles(runtimeTargets map[string]struct{}) []InfluenceCycle {
+	if b.staticIndex == nil {
+		return nil
+	}
+	cycles := b.staticIndex.StronglyConnectedComponents(8)
+	for index := range cycles {
+		for _, node := range cycles[index].Nodes {
+			if _, ok := runtimeTargets[node]; ok {
+				cycles[index].RuntimeTouched = true
+				break
+			}
+		}
+	}
+	sort.Slice(cycles, func(i, j int) bool {
+		if cycles[i].RuntimeTouched != cycles[j].RuntimeTouched {
+			return cycles[i].RuntimeTouched
+		}
+		if cycles[i].Weight == cycles[j].Weight {
+			return strings.Join(cycles[i].Nodes, ".") < strings.Join(cycles[j].Nodes, ".")
+		}
+		return cycles[i].Weight > cycles[j].Weight
+	})
+	return cycles
 }
 
 func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []InfluenceEdge {

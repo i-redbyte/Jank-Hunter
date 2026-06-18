@@ -3,8 +3,6 @@ package io.jankhunter.runtime
 import android.app.Application
 import android.content.Context
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
-import io.jankhunter.runtime.internal.io.MetricAggregator
-import io.jankhunter.runtime.internal.system.AdaptiveRuntimeSampler
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
@@ -17,7 +15,7 @@ import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-internal class RuntimeState(defaultMaxMetricAggregationKeys: Int) {
+internal class RuntimeState {
     val started = AtomicBoolean(false)
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
@@ -27,9 +25,6 @@ internal class RuntimeState(defaultMaxMetricAggregationKeys: Int) {
 
     @Volatile
     var config: JankHunterConfig? = null
-
-    @Volatile
-    var metricAggregator = MetricAggregator(defaultMaxMetricAggregationKeys)
 
     @Volatile
     var watchdog: MainThreadWatchdog? = null
@@ -48,9 +43,6 @@ internal class RuntimeState(defaultMaxMetricAggregationKeys: Int) {
 
     @Volatile
     var systemContextSampler: SystemContextSampler? = null
-
-    @Volatile
-    var adaptiveRuntimeSampler: AdaptiveRuntimeSampler? = null
 
     @Volatile
     var objectRetentionWatcher: ObjectRetentionWatcher? = null

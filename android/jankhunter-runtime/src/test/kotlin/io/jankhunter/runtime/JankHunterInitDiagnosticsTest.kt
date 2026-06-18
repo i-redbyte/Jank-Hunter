@@ -33,6 +33,23 @@ class JankHunterInitDiagnosticsTest {
     }
 
     @Test
+    fun observerReceivesInitAndShutdownEvents() {
+        val events = mutableListOf<RuntimeEvent>()
+        val observer = RuntimeObserver { event -> events += event }
+        JankHunter.addRuntimeObserver(observer)
+        try {
+            JankHunter.init(null)
+            JankHunter.shutdown()
+        } finally {
+            JankHunter.removeRuntimeObserver(observer)
+        }
+
+        assertTrue(events.any { it is RuntimeEvent.InitStatus && it.diagnostics.status == "missing_context" })
+        assertTrue(events.any { it is RuntimeEvent.ShutdownStarted })
+        assertTrue(events.any { it is RuntimeEvent.ShutdownFinished })
+    }
+
+    @Test
     fun initRecordsStartupFailureWithoutThrowing() {
         val filesDir = File(tempDir(), "files").apply {
             writeText("not a directory")

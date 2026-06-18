@@ -137,7 +137,7 @@ class InstrumentationModelTest {
     }
 
     @Test
-    fun resolverReportsVersionedBridgeForOkHttpAndCoroutineMatches() {
+    fun resolverReportsVersionedBridgeForAllHookFamilies() {
         val okHttpDecision = HookIntentResolver.resolve(
             MethodCall(
                 opcode = Opcodes.INVOKEVIRTUAL,
@@ -151,6 +151,32 @@ class InstrumentationModelTest {
         require(okHttpDecision is HookDecision.Matched)
         assertEquals("okhttp3.bridge.v3", okHttpDecision.bridgeId)
         assertEquals("okhttp3.builder.build.v3", okHttpDecision.signatureId)
+
+        val handlerDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKEVIRTUAL,
+                owner = "android/os/Handler",
+                name = "post",
+                descriptor = "(Ljava/lang/Runnable;)Z",
+                isInterface = false,
+            ),
+            testHookConfig(handlers = true),
+        )
+        require(handlerDecision is HookDecision.Matched)
+        assertEquals("android.handler.bridge.v1", handlerDecision.bridgeId)
+
+        val executorDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKEINTERFACE,
+                owner = "java/util/concurrent/Executor",
+                name = "execute",
+                descriptor = "(Ljava/lang/Runnable;)V",
+                isInterface = true,
+            ),
+            testHookConfig(executors = true),
+        )
+        require(executorDecision is HookDecision.Matched)
+        assertEquals("jdk.executor.bridge.v1", executorDecision.bridgeId)
 
         val coroutineDecision = HookIntentResolver.resolve(
             MethodCall(
@@ -167,17 +193,56 @@ class InstrumentationModelTest {
         require(coroutineDecision is HookDecision.Matched)
         assertEquals("kotlinx.coroutines.bridge.v1", coroutineDecision.bridgeId)
         assertEquals("kotlinx.coroutines.builders.default_function2.v1", coroutineDecision.signatureId)
+
+        val flowDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKEVIRTUAL,
+                owner = "android/view/View",
+                name = "setOnClickListener",
+                descriptor = "(Landroid/view/View\$OnClickListener;)V",
+                isInterface = false,
+            ),
+            testHookConfig(flowInteractions = true),
+        )
+        require(flowDecision is HookDecision.Matched)
+        assertEquals("android.view.flow.bridge.v1", flowDecision.bridgeId)
+
+        val logSpamDecision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKESTATIC,
+                owner = "android/util/Log",
+                name = "d",
+                descriptor = "(Ljava/lang/String;Ljava/lang/String;)I",
+                isInterface = false,
+            ),
+            testHookConfig(logSpam = true),
+        )
+        require(logSpamDecision is HookDecision.Matched)
+        assertEquals("android.log.bridge.v1", logSpamDecision.bridgeId)
     }
 
     @Test
-    fun versionedBridgeCatalogExposesExtensibleFamilies() {
+    fun moduleRegistryExposesExtensibleFamilies() {
         val bridgeIds = VersionedBridgeCatalog.all().map { it.id }.toSet()
         val families = VersionedBridgeCatalog.all().map { it.family }.toSet()
+        val moduleIds = HookIntentResolver.modules().map { it.id }.toSet()
 
         assertTrue("okhttp3.bridge.v3" in bridgeIds)
+        assertTrue("android.handler.bridge.v1" in bridgeIds)
+        assertTrue("jdk.executor.bridge.v1" in bridgeIds)
         assertTrue("kotlinx.coroutines.bridge.v1" in bridgeIds)
+        assertTrue("android.view.flow.bridge.v1" in bridgeIds)
+        assertTrue("android.log.bridge.v1" in bridgeIds)
         assertTrue("okhttp" in families)
+        assertTrue("handler" in families)
+        assertTrue("executor" in families)
         assertTrue("coroutines" in families)
+        assertTrue("flow" in families)
+        assertTrue("logspam" in families)
+        assertEquals(
+            setOf("okhttp", "websocket", "handler", "executor", "coroutine", "flow", "logspam"),
+            moduleIds,
+        )
         assertTrue(
             VersionedBridgeCatalog.all()
                 .flatMap { it.signatures }

@@ -46,6 +46,69 @@ func TestClassGraphIndexDeduplicatesCyclesAndRepeatedLookups(t *testing.T) {
 	assertGraphEdge(t, edges, "feature.B", "feature.A")
 }
 
+func TestClassGraphIndexShortestPathAndCycles(t *testing.T) {
+	index := NewClassGraphIndex([]ClassGraphEdge{
+		{From: "feature.A", To: "feature.B", Count: 1},
+		{From: "feature.B", To: "feature.C", Count: 2},
+		{From: "feature.C", To: "feature.A", Count: 3},
+		{From: "feature.C", To: "feature.D", Count: 4},
+	})
+
+	path := index.ShortestPath("feature.A", "feature.D", 4)
+	if got := len(path); got != 3 {
+		t.Fatalf("len(path) = %d, want 3: %+v", got, path)
+	}
+	if path[0].From != "feature.A" || path[2].To != "feature.D" {
+		t.Fatalf("unexpected path: %+v", path)
+	}
+
+	cycles := index.StronglyConnectedComponents(8)
+	if len(cycles) != 1 {
+		t.Fatalf("len(cycles) = %d, want 1: %+v", len(cycles), cycles)
+	}
+	if len(cycles[0].Nodes) != 3 || cycles[0].Weight != 6 {
+		t.Fatalf("unexpected cycle: %+v", cycles[0])
+	}
+}
+
+func TestClassGraphIndexHotPathsPrioritizeRuntimeTargets(t *testing.T) {
+	index := NewClassGraphIndex([]ClassGraphEdge{
+		{From: "feature.A", To: "feature.B", Count: 4},
+		{From: "feature.B", To: "feature.C", Count: 2},
+		{From: "feature.Noise", To: "feature.Other", Count: 100},
+	})
+
+	paths := index.HotPaths(
+		map[string]float64{"feature.C": 10},
+		map[string]struct{}{"feature.C": {}},
+		4,
+	)
+	if len(paths) == 0 {
+		t.Fatal("HotPaths() returned no paths")
+	}
+	if got := paths[0].Nodes[len(paths[0].Nodes)-1]; got != "feature.C" {
+		t.Fatalf("hot path target = %q, want feature.C: %+v", got, paths[0])
+	}
+	if !paths[0].RuntimeTarget {
+		t.Fatalf("hot path did not preserve runtime target marker: %+v", paths[0])
+	}
+}
+
+func TestMethodGraphIndexUsesCallerAndCalleeMethods(t *testing.T) {
+	index := NewMethodGraphIndex([]ClassGraphEdge{
+		{From: "feature.A", To: "feature.B", CallerMethod: "open()V", CalleeMethod: "load()V", Count: 2},
+		{From: "feature.A", To: "feature.B", CallerMethod: "open()V", CalleeMethod: "load()V", Count: 3},
+	})
+
+	edges := index.Outgoing["feature.A#open()V"]
+	if len(edges) != 1 {
+		t.Fatalf("len(method edges) = %d, want 1: %+v", len(edges), edges)
+	}
+	if edges[0].ToMethod != "load()V" || edges[0].Count != 5 {
+		t.Fatalf("unexpected method edge: %+v", edges[0])
+	}
+}
+
 func assertGraphEdge(t *testing.T, edges []ClassGraphEdge, from string, to string) {
 	t.Helper()
 	for _, edge := range edges {
@@ -55,4 +118,3 @@ func assertGraphEdge(t *testing.T, edges []ClassGraphEdge, from string, to strin
 	}
 	t.Fatalf("edge %s -> %s not found in %+v", from, to, edges)
 }
-
