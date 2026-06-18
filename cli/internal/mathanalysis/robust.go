@@ -11,6 +11,7 @@ import (
 )
 
 const maxRobustSamplesPerSignal = 20_000
+const maxRobustWeightExpansion = 200_000
 
 type robustKey struct {
 	Dimension string
@@ -107,12 +108,33 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 		if name == "" {
 			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
 		}
-		c.addValue("Gauge-метрика", name, "Значение", "знач.", float64(event.Metric.Value))
+		c.addMetricValue(name, event.Metric)
 	}
 }
 
+func (c *robustCollector) addMetricValue(name string, metric *jhlog.MetricEvent) {
+	if metric == nil {
+		return
+	}
+	weight := metric.Count
+	if weight == 0 {
+		weight = 1
+	}
+	if metric.Mode == jhlog.MetricModeLast || metric.Mode == jhlog.MetricModeState {
+		weight = 1
+	}
+	c.addWeightedValue("Gauge-метрика", name, "Значение", "знач.", float64(metric.Value), weight)
+}
+
 func (c *robustCollector) addValue(dimension, name, metric, unit string, value float64) {
+	c.addWeightedValue(dimension, name, metric, unit, value, 1)
+}
+
+func (c *robustCollector) addWeightedValue(dimension, name, metric, unit string, value float64, weight uint64) {
 	if name == "" || math.IsNaN(value) || math.IsInf(value, 0) {
+		return
+	}
+	if weight == 0 {
 		return
 	}
 	key := robustKey{Dimension: dimension, Name: name, Metric: metric, Unit: unit}
@@ -121,29 +143,35 @@ func (c *robustCollector) addValue(dimension, name, metric, unit string, value f
 		set = &robustSampleSet{}
 		c.samples[key] = set
 	}
-	set.add(value)
+	set.addWeighted(value, weight)
 }
 
 func (c *robustCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	owner := jhlog.Resolve(dict, id)
-	if len(c.ownerMap) == 0 {
-		return owner
-	}
-	if mapped, ok := c.ownerMap[owner]; ok {
-		return mapped
-	}
-	if hash, ok := timelineOwnerHash(owner); ok {
-		if mapped, ok := c.ownerMap[hash]; ok {
-			return mapped
-		}
-		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
-			return mapped
-		}
-	}
-	return owner
+	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func (s *robustSampleSet) add(value float64) {
+	s.addWeighted(value, 1)
+}
+
+func (s *robustSampleSet) addWeighted(value float64, weight uint64) {
+	if weight == 0 {
+		return
+	}
+	expanded := weight
+	if expanded > maxRobustWeightExpansion {
+		expanded = maxRobustWeightExpansion
+		s.approximated = true
+	}
+	for i := uint64(0); i < expanded; i++ {
+		s.addOne(value)
+	}
+	if skipped := weight - expanded; skipped > 0 {
+		s.seen += int(skipped)
+	}
+}
+
+func (s *robustSampleSet) addOne(value float64) {
 	s.seen++
 	if len(s.values) < maxRobustSamplesPerSignal {
 		s.values = append(s.values, value)

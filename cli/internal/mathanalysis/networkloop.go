@@ -262,22 +262,7 @@ func networkLoopPassesFilter(filter analyze.Filter, route, owner string) bool {
 }
 
 func (c *networkLoopCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	owner := jhlog.Resolve(dict, id)
-	if len(c.ownerMap) == 0 {
-		return owner
-	}
-	if mapped, ok := c.ownerMap[owner]; ok {
-		return mapped
-	}
-	if hash, ok := timelineOwnerHash(owner); ok {
-		if mapped, ok := c.ownerMap[hash]; ok {
-			return mapped
-		}
-		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
-			return mapped
-		}
-	}
-	return owner
+	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func analyzeNetworkLoopSignal(signal *networkLoopSignal, bucketMS uint64) (NetworkLoopFinding, bool) {

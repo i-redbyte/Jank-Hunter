@@ -11,6 +11,43 @@ import org.junit.Test
 
 class RuntimeCallGraphTest {
     @Test
+    fun nonLifoExitDoesNotRecordFalseEdge() {
+        val now = AtomicLong(1L)
+        val graph = RuntimeCallGraph(
+            nowMs = { now.getAndIncrement() },
+            captureContext = { ownerOverride ->
+                JankHunterContext(
+                    screen = "screen",
+                    owner = ownerOverride,
+                    flow = "flow",
+                    step = "step",
+                )
+            },
+            maxKeys = { 8 },
+        )
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph").toFile()
+        val writer = AsyncLogWriter.open(
+            directory,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logCompressionEnabled(false)
+                .build(),
+            "main",
+        )
+        try {
+            val parent = graph.enter("parent", enabled = true)
+            graph.enter("child", enabled = true)
+
+            graph.exit(parent, "parent", writer)
+
+            assertTrue("non-LIFO exit recorded an edge", counterSize(graph) == 0)
+        } finally {
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun maxKeysIsPreservedUnderConcurrentUniqueEdges() {
         val now = AtomicLong(1L)
         val graph = RuntimeCallGraph(

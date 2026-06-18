@@ -170,22 +170,7 @@ func (c *routeSeriesCollector) definitions(limit int) []periodicDefinition {
 }
 
 func (c *routeSeriesCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	owner := jhlog.Resolve(dict, id)
-	if len(c.ownerMap) == 0 {
-		return owner
-	}
-	if mapped, ok := c.ownerMap[owner]; ok {
-		return mapped
-	}
-	if hash, ok := timelineOwnerHash(owner); ok {
-		if mapped, ok := c.ownerMap[hash]; ok {
-			return mapped
-		}
-		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
-			return mapped
-		}
-	}
-	return owner
+	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func analyzePeriodicSignal(name string, unit string, bucketMS uint64, points []float64) PeriodicSignal {

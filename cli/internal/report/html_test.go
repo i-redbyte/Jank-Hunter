@@ -336,11 +336,11 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 			{Reason: "constructor", Count: 2},
 		},
 		Hooks: []analyze.InstrumentationHookSummary{
-			{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Count: 2},
-			{Intent: "logspam.android.util.Log.d", Signature: "logspam.android.util.Log.d", Count: 1},
+			{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Method: "client()V", Count: 2},
+			{Intent: "logspam.android.util.Log.d", Signature: "logspam.android.util.Log.d", Method: "load()V", Count: 1},
 		},
 		Decisions: []analyze.InstrumentationDecisionSummary{
-			{Kind: "unsupported", Module: "okhttp", Family: "okhttp", Reason: "unsupported_signature", Count: 2},
+			{Kind: "unsupported", Module: "okhttp", Family: "okhttp", Reason: "unsupported_signature", Method: "client()V", Count: 2},
 		},
 		Annotations: []analyze.InstrumentationAnnotationSummary{
 			{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
@@ -352,7 +352,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 				AnnotatedMethods: 1,
 				HookCount:        2,
 				Hooks: []analyze.InstrumentationHookSummary{
-					{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Count: 2},
+					{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Method: "client()V", Count: 2},
 				},
 				Annotations: []analyze.InstrumentationAnnotationSummary{
 					{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},

@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
@@ -50,6 +51,7 @@ object JankHunter {
         { config },
         { writer },
         { isRuntimeActiveForHooks() },
+        { isAppForeground() },
         { ownerName -> captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull())) },
         { recordCounter("jankhunter.log_spam.dropped_keys.count", 1) },
         runtimeEvents,
@@ -577,6 +579,10 @@ object JankHunter {
         runtimeCallGraph.exit(startMs, ownerName, writer)
     }
 
+    internal fun setAppForeground(foreground: Boolean) {
+        runtimeState.appForeground.set(foreground)
+    }
+
     @JvmStatic
     fun recordHttp(
         owner: String?,
@@ -602,9 +608,9 @@ object JankHunter {
             statusClass,
             rxBytes,
             txBytes,
-            flags,
+            flags or foregroundFlag(),
         )
-        val failed = flags and io.jankhunter.runtime.internal.io.BinaryLogWriter.FLAG_HTTP_FAILED != 0L || statusClass >= 5
+        val failed = flags and BinaryLogWriter.FLAG_HTTP_FAILED != 0L || statusClass >= 5
         if (failed || durationMs >= SLOW_HTTP_THRESHOLD_MS) {
             recordProblemWindow("http_slow_or_failed", durationMs, 1, durationMs, attributedOwner)
         }
@@ -614,7 +620,7 @@ object JankHunter {
     fun recordStall(owner: String?, stackHint: String?, durationMs: Long) {
         val attributedOwner = firstContextValue(owner, contextTracker.ownerOrNull())
         ensureContextRecorded(ownerOverride = attributedOwner)
-        writer?.stall(attributedOwner, stackHint, durationMs)
+        writer?.stall(attributedOwner, stackHint, durationMs, foreground = isAppForeground())
         recordProblemWindow("main_thread_stall", durationMs, 1, durationMs, attributedOwner)
     }
 
@@ -625,7 +631,7 @@ object JankHunter {
             return
         }
         ensureContextRecorded()
-        writer?.memory(pssKb, javaHeapKb, nativeHeapKb)
+        writer?.memory(pssKb, javaHeapKb, nativeHeapKb, foreground = isAppForeground())
     }
 
     @JvmStatic
@@ -638,8 +644,8 @@ object JankHunter {
         val retainedOwner = firstContextValue(holder, className)
         val tuple = captureContext(ownerOverride = retainedOwner)
         ensureContextRecorded(screenOverride = tuple.screen, ownerOverride = tuple.owner)
-        writer?.retained(tuple.screen, tuple.owner, tuple.flow, tuple.step, className, holder, ageMs, count)
-        recordProblemWindow("retained_object", ageMs, count, ageMs, retainedOwner)
+        writer?.retained(tuple.screen, tuple.owner, tuple.flow, tuple.step, className, holder, ageMs, count, foreground = isAppForeground())
+        recordProblemWindow("retained_object", ageMs, count.coerceAtLeast(1L), ageMs, retainedOwner)
         maybeDumpRetainedHeap(className, retainedOwner, ageMs, count)
     }
 
@@ -732,6 +738,7 @@ object JankHunter {
             freeStorageKb,
             totalStorageKb,
             networkVpn,
+            foreground = isAppForeground(),
         )
     }
 
@@ -747,9 +754,9 @@ object JankHunter {
     ) {
         val attributedScreen = firstContextValue(screen, contextTracker.currentScreen())
         ensureContextRecorded(screenOverride = attributedScreen)
-        writer?.uiWindow(attributedScreen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms)
+        writer?.uiWindow(attributedScreen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms, foreground = isAppForeground())
         if (jankCount > 0 || p95Ms >= UI_PROBLEM_FRAME_THRESHOLD_MS) {
-            recordProblemWindow("ui_jank", windowMs, jankCount, p95Ms)
+            recordProblemWindow("ui_jank", windowMs, jankCount.coerceAtLeast(1L), p95Ms)
         }
     }
 
@@ -898,7 +905,17 @@ object JankHunter {
         ownerOverride: String? = null,
     ) {
         val tuple = captureContext(ownerOverride = firstContextValue(ownerOverride, contextTracker.ownerOrNull()))
-        writer?.problemWindow(tuple.screen, tuple.owner, tuple.flow, tuple.step, kind, windowMs, count, maxMs)
+        writer?.problemWindow(
+            tuple.screen,
+            tuple.owner,
+            tuple.flow,
+            tuple.step,
+            kind,
+            windowMs,
+            count,
+            maxMs,
+            foreground = isAppForeground(),
+        )
     }
 
     private fun shouldRecordMemorySample(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long): Boolean {
@@ -975,6 +992,10 @@ object JankHunter {
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun isAppForeground(): Boolean = runtimeState.appForeground.get()
+
+    private fun foregroundFlag(): Long = if (isAppForeground()) BinaryLogWriter.FLAG_APP_FOREGROUND else 0L
 
     private fun metricOwner(ownerName: String?): String {
         return ownerName

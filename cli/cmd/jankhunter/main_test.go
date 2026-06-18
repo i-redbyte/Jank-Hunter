@@ -250,7 +250,7 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 
 func writeDiagnosticsFixture(t *testing.T, path string) {
 	t.Helper()
-	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","flow":"feed.open","trace":"refresh","count":1}]}`
+	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","method":"load()V","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","flow":"feed.open","trace":"refresh","count":1}]}`
 	if err := os.WriteFile(path, []byte(data+"\n"), 0o644); err != nil {
 		t.Fatalf("write diagnostics fixture: %v", err)
 	}

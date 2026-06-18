@@ -30,6 +30,7 @@ class ActivityTracker(
 
     override fun onActivityStarted(activity: Activity) {
         if (startedActivities == 0) {
+            JankHunter.setAppForeground(true)
             JankHunter.recordCounter("app.lifecycle.foreground.count", 1)
         }
         startedActivities++
@@ -85,6 +86,7 @@ class ActivityTracker(
         }
         JankHunter.recordGauge("app.lifecycle.started_activities", startedActivities.toLong())
         if (startedActivities == 0) {
+            JankHunter.setAppForeground(false)
             JankHunter.recordCounter("app.lifecycle.background.count", 1)
             JankHunter.flush()
         }

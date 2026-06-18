@@ -10,7 +10,6 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
-import java.io.File
 
 abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunterInstrumentationParameters> {
     override fun createClassVisitor(
@@ -196,6 +195,7 @@ private class JankHunterMethodVisitor(
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val generatedOwnerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
+    private val methodDiagnosticName = "$methodName$methodDescriptor"
     private val methodAnnotations = JankAnnotationMetadata.Builder()
     private val ownerLabel: String
         get() = methodAnnotations.owner?.takeIf { it.isNotBlank() } ?: classAnnotations.owner ?: generatedOwnerLabel
@@ -322,11 +322,11 @@ private class JankHunterMethodVisitor(
         )
         val decision = HookIntentResolver.resolve(call, config)
         if (decision is HookDecision.Matched && emitHook(decision.intent)) {
-            diagnostics.recordHook(decision, call.line)
+            diagnostics.recordHook(decision, methodDiagnosticName, call.line)
             return
         }
         if (decision is HookDecision.Matched) {
-            diagnostics.recordHook(decision, call.line)
+            diagnostics.recordHook(decision, methodDiagnosticName, call.line)
         } else {
             diagnostics.recordDecision(
                 if (decision is HookDecision.NotMatched) {
@@ -334,6 +334,7 @@ private class JankHunterMethodVisitor(
                 } else {
                     decision
                 },
+                methodDiagnosticName,
                 call.line,
             )
         }
@@ -455,26 +456,15 @@ internal data class ClassGraphEdgeKey(
 )
 
 internal object ClassGraphWriter {
-    private val preparedPaths = mutableSetOf<String>()
-
     @Synchronized
     fun prepare(path: String) {
-        if (path.isBlank()) return
-        val file = File(path)
-        file.parentFile?.mkdirs()
-        file.delete()
-        preparedPaths.add(file.absolutePath)
+        InstrumentationArtifactFiles.prepare(path)
     }
 
     @Synchronized
     fun append(path: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
         if (path.isBlank() || edges.isEmpty()) return
-        val file = File(path)
-        file.parentFile?.mkdirs()
-        if (preparedPaths.add(file.absolutePath) && file.exists()) {
-            file.delete()
-        }
-        file.appendText(record(className.replace('/', '.'), edges))
+        InstrumentationArtifactFiles.append(path, record(className.replace('/', '.'), edges))
     }
 
     fun isApplicationLike(owner: String): Boolean {

@@ -9,6 +9,7 @@ internal class RuntimeLogSpamService(
     private val config: () -> JankHunterConfig?,
     private val writer: () -> AsyncLogWriter?,
     private val runtimeActive: () -> Boolean,
+    private val foreground: () -> Boolean,
     private val captureContext: (String?) -> JankHunterContext,
     private val recordDropCounter: () -> Unit,
     private val events: RuntimeEventBus,
@@ -51,6 +52,7 @@ internal class RuntimeLogSpamService(
                     LOG_SPAM_FLUSH_MS,
                     count,
                     count,
+                    foreground = foreground(),
                 )
             }
         }

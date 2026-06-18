@@ -1,11 +1,10 @@
 package io.jankhunter.gradle
 
-import java.io.File
-
 internal data class HookDiagnosticKey(
     val intent: String,
     val signature: String,
     val bridge: String?,
+    val method: String,
     val line: Int?,
 )
 
@@ -14,6 +13,7 @@ internal data class DecisionDiagnosticKey(
     val module: String,
     val family: String,
     val reason: String,
+    val method: String,
     val line: Int?,
 )
 
@@ -60,23 +60,25 @@ internal class InstrumentationDiagnosticsClassBuilder(
         }
     }
 
-    fun recordHook(decision: HookDecision.Matched, line: Int?) {
+    fun recordHook(decision: HookDecision.Matched, method: String, line: Int?) {
         val key = HookDiagnosticKey(
             intent = decision.intent.id,
             signature = decision.signatureId,
             bridge = decision.bridgeId,
+            method = method,
             line = line,
         )
         hooks[key] = (hooks[key] ?: 0) + 1
     }
 
-    fun recordDecision(decision: HookDecision, line: Int?) {
+    fun recordDecision(decision: HookDecision, method: String, line: Int?) {
         val key = when (decision) {
             is HookDecision.Disabled -> DecisionDiagnosticKey(
                 kind = "disabled",
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                method = method,
                 line = line,
             )
             is HookDecision.Unsupported -> DecisionDiagnosticKey(
@@ -84,6 +86,7 @@ internal class InstrumentationDiagnosticsClassBuilder(
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                method = method,
                 line = line,
             )
             is HookDecision.Skipped -> DecisionDiagnosticKey(
@@ -91,6 +94,7 @@ internal class InstrumentationDiagnosticsClassBuilder(
                 module = decision.moduleId,
                 family = decision.family,
                 reason = decision.reason,
+                method = method,
                 line = line,
             )
             is HookDecision.Matched,
@@ -114,26 +118,15 @@ internal class InstrumentationDiagnosticsClassBuilder(
 }
 
 internal object InstrumentationDiagnosticsWriter {
-    private val preparedPaths = mutableSetOf<String>()
-
     @Synchronized
     fun prepare(path: String) {
-        if (path.isBlank()) return
-        val file = File(path)
-        file.parentFile?.mkdirs()
-        file.delete()
-        preparedPaths.add(file.absolutePath)
+        InstrumentationArtifactFiles.prepare(path)
     }
 
     @Synchronized
     fun append(path: String, record: InstrumentationDiagnosticsRecord) {
         if (path.isBlank()) return
-        val file = File(path)
-        file.parentFile?.mkdirs()
-        if (preparedPaths.add(file.absolutePath) && file.exists()) {
-            file.delete()
-        }
-        file.appendText(toJsonLine(record))
+        InstrumentationArtifactFiles.append(path, toJsonLine(record))
     }
 
     private fun toJsonLine(record: InstrumentationDiagnosticsRecord): String {
@@ -178,6 +171,7 @@ internal object InstrumentationDiagnosticsWriter {
             .sortedWith(
                 compareByDescending<Map.Entry<HookDiagnosticKey, Int>> { it.value }
                     .thenBy { it.key.intent }
+                    .thenBy { it.key.method }
                     .thenBy { it.key.line ?: Int.MAX_VALUE },
             )
             .forEachIndexed { index, entry ->
@@ -188,6 +182,9 @@ internal object InstrumentationDiagnosticsWriter {
                 append(escape(entry.key.signature))
                 append("\",\"count\":")
                 append(entry.value)
+                append(",\"method\":\"")
+                append(escape(entry.key.method))
+                append('"')
                 entry.key.bridge?.let {
                     append(",\"bridge\":\"")
                     append(escape(it))
@@ -207,6 +204,7 @@ internal object InstrumentationDiagnosticsWriter {
                 compareByDescending<Map.Entry<DecisionDiagnosticKey, Int>> { it.value }
                     .thenBy { it.key.kind }
                     .thenBy { it.key.module }
+                    .thenBy { it.key.method }
                     .thenBy { it.key.line ?: Int.MAX_VALUE },
             )
             .forEachIndexed { index, entry ->
@@ -221,6 +219,9 @@ internal object InstrumentationDiagnosticsWriter {
                 append(escape(entry.key.reason))
                 append("\",\"count\":")
                 append(entry.value)
+                append(",\"method\":\"")
+                append(escape(entry.key.method))
+                append('"')
                 entry.key.line?.let {
                     append(",\"line\":")
                     append(it)

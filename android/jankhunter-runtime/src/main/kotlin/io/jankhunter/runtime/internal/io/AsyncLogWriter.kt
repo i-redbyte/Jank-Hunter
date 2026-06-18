@@ -70,6 +70,7 @@ class AsyncLogWriter private constructor(
             board,
             product,
             deviceRooted,
+            appForeground = false,
         )
         offer {
             it.session(
@@ -88,6 +89,7 @@ class AsyncLogWriter private constructor(
                 board,
                 product,
                 deviceRooted,
+                appForeground = false,
             )
         }
     }
@@ -111,6 +113,7 @@ class AsyncLogWriter private constructor(
         freeStorageKb: Long,
         totalStorageKb: Long,
         networkVpn: Boolean,
+        foreground: Boolean,
     ) {
         offer {
             it.context(
@@ -128,6 +131,7 @@ class AsyncLogWriter private constructor(
                 freeStorageKb,
                 totalStorageKb,
                 networkVpn,
+                foreground,
             )
         }
     }
@@ -147,12 +151,12 @@ class AsyncLogWriter private constructor(
         offer { it.http(owner, route, durationMs, dnsMs, connectMs, ttfbMs, statusClass, rxBytes, txBytes, flags) }
     }
 
-    fun stall(owner: String?, stackHint: String?, durationMs: Long) {
-        offer { it.stall(owner, stackHint, durationMs) }
+    fun stall(owner: String?, stackHint: String?, durationMs: Long, foreground: Boolean) {
+        offer { it.stall(owner, stackHint, durationMs, foreground) }
     }
 
-    fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
-        offer { it.memory(pssKb, javaHeapKb, nativeHeapKb) }
+    fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean) {
+        offer { it.memory(pssKb, javaHeapKb, nativeHeapKb, foreground) }
     }
 
     fun retained(
@@ -164,8 +168,9 @@ class AsyncLogWriter private constructor(
         holder: String?,
         ageMs: Long,
         count: Long,
+        foreground: Boolean,
     ) {
-        offer { it.retained(screen, owner, flow, step, className, holder, ageMs, count) }
+        offer { it.retained(screen, owner, flow, step, className, holder, ageMs, count, foreground) }
     }
 
     fun uiWindow(
@@ -176,8 +181,9 @@ class AsyncLogWriter private constructor(
         p50Ms: Long,
         p95Ms: Long,
         p99Ms: Long,
+        foreground: Boolean,
     ) {
-        offer { it.uiWindow(screen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms) }
+        offer { it.uiWindow(screen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms, foreground) }
     }
 
     fun counter(name: String?, value: Long) {
@@ -228,8 +234,9 @@ class AsyncLogWriter private constructor(
         windowMs: Long,
         count: Long,
         maxMs: Long,
+        foreground: Boolean = false,
     ) {
-        offer { it.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs) }
+        offer { it.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs, foreground) }
     }
 
     fun runtimeCall(
@@ -496,6 +503,7 @@ class AsyncLogWriter private constructor(
         val board: String?,
         val product: String?,
         val deviceRooted: Boolean,
+        val appForeground: Boolean,
     ) {
         fun write(writer: BinaryLogWriter) {
             writer.session(
@@ -514,6 +522,7 @@ class AsyncLogWriter private constructor(
                 board,
                 product,
                 deviceRooted,
+                appForeground,
             )
         }
     }

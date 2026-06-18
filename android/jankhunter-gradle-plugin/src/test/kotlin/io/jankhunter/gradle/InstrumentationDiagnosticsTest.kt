@@ -48,6 +48,7 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"annotatedMethods\":1"))
         assertTrue(text.contains("\"intent\":\"logspam.android.util.Log.d\""))
         assertTrue(text.contains("\"signature\":\"logspam.android.util.Log.d\""))
+        assertTrue(text.contains("\"method\":\"load()V\""))
         assertTrue(text.contains("\"line\":42"))
         assertTrue(text.contains("\"reason\":\"near_miss_coroutine_signature\""))
         assertTrue(text.contains("\"line\":55"))

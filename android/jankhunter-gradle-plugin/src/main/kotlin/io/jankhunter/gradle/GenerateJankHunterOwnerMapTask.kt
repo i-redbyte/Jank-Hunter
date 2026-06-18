@@ -7,7 +7,6 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
-import java.io.File
 
 abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     @get:Input
@@ -158,9 +157,7 @@ internal object OwnerMapWriter {
     @Synchronized
     fun appendEntry(path: String, entry: OwnerMapEntry) {
         if (path.isBlank() || entry.id.isBlank() || entry.owner.isBlank()) return
-        val file = File(path)
-        file.parentFile?.mkdirs()
-        file.appendText(entryRecord(entry) + "\n")
+        InstrumentationArtifactFiles.append(path, entryRecord(entry) + "\n")
     }
 
     fun entryRecord(entry: OwnerMapEntry): String {

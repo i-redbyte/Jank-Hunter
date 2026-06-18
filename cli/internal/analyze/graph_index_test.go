@@ -124,6 +124,75 @@ func TestMethodGraphIndexUsesCallerAndCalleeMethods(t *testing.T) {
 	}
 }
 
+func TestClassGraphIndexPrunesLargeSparseGraphByWeight(t *testing.T) {
+	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
+		{From: "feature.LowA", To: "feature.LowB", Count: 1},
+		{From: "feature.HotA", To: "feature.HotB", Count: 50},
+		{From: "feature.MidA", To: "feature.MidB", Count: 20},
+		{From: "feature.ColdA", To: "feature.ColdB", Count: 2},
+	}, GraphIndexBudget{MaxEdges: 2})
+
+	if _, ok := index.Outgoing["feature.HotA"]; !ok {
+		t.Fatalf("hot edge was pruned: %+v", index.Outgoing)
+	}
+	if _, ok := index.Outgoing["feature.MidA"]; !ok {
+		t.Fatalf("mid edge was pruned: %+v", index.Outgoing)
+	}
+	if _, ok := index.Outgoing["feature.LowA"]; ok {
+		t.Fatalf("low edge survived pruning: %+v", index.Outgoing)
+	}
+}
+
+func TestClassGraphIndexBudgetsRelevantEdgesAndShortestPath(t *testing.T) {
+	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
+		{From: "feature.A", To: "feature.B", Count: 10},
+		{From: "feature.B", To: "feature.C", Count: 8},
+		{From: "feature.D", To: "feature.A", Count: 6},
+		{From: "feature.E", To: "feature.A", Count: 4},
+	}, GraphIndexBudget{MaxRelevantEdges: 2, MaxShortestPathVisits: 2})
+
+	edges := index.RelevantEdges(map[string]struct{}{"feature.A": {}}, nil)
+	if len(edges) != 2 {
+		t.Fatalf("len(edges) = %d, want 2: %+v", len(edges), edges)
+	}
+	for _, edge := range edges {
+		if edge.Count < 6 {
+			t.Fatalf("low-priority relevant edge survived budget: %+v", edges)
+		}
+	}
+
+	path := index.ShortestPath("feature.A", "feature.C", 4)
+	if path != nil {
+		t.Fatalf("ShortestPath should respect visit budget, got %+v", path)
+	}
+}
+
+func TestClassGraphIndexSkipsCyclesWhenGraphExceedsBudget(t *testing.T) {
+	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
+		{From: "feature.A", To: "feature.B", Count: 1},
+		{From: "feature.B", To: "feature.A", Count: 1},
+		{From: "feature.C", To: "feature.D", Count: 1},
+	}, GraphIndexBudget{MaxSCCNodes: 2})
+
+	if cycles := index.StronglyConnectedComponents(8); len(cycles) != 0 {
+		t.Fatalf("cycles should be skipped when SCC budget is exceeded: %+v", cycles)
+	}
+}
+
+func TestMethodGraphIndexPrunesByWeight(t *testing.T) {
+	index := NewMethodGraphIndexWithBudget([]ClassGraphEdge{
+		{From: "feature.Low", To: "feature.Target", CallerMethod: "low()V", CalleeMethod: "load()V", Count: 1},
+		{From: "feature.Hot", To: "feature.Target", CallerMethod: "hot()V", CalleeMethod: "load()V", Count: 10},
+	}, GraphIndexBudget{MaxEdges: 1})
+
+	if _, ok := index.Outgoing["feature.Hot#hot()V"]; !ok {
+		t.Fatalf("hot method edge was pruned: %+v", index.Outgoing)
+	}
+	if _, ok := index.Outgoing["feature.Low#low()V"]; ok {
+		t.Fatalf("low method edge survived pruning: %+v", index.Outgoing)
+	}
+}
+
 func assertGraphEdge(t *testing.T, edges []ClassGraphEdge, from string, to string) {
 	t.Helper()
 	for _, edge := range edges {

@@ -510,36 +510,7 @@ func (c *timelineCollector) resolveOwner(dict map[uint64]string, id uint64) stri
 }
 
 func resolveTimelineOwner(ownerMap map[string]string, dict map[uint64]string, id uint64) string {
-	owner := jhlog.Resolve(dict, id)
-	if len(ownerMap) == 0 {
-		return owner
-	}
-	if mapped, ok := ownerMap[owner]; ok {
-		return mapped
-	}
-	if hash, ok := timelineOwnerHash(owner); ok {
-		if mapped, ok := ownerMap[hash]; ok {
-			return mapped
-		}
-		if mapped, ok := ownerMap["jh:"+hash]; ok {
-			return mapped
-		}
-	}
-	return owner
-}
-
-func timelineOwnerHash(owner string) (string, bool) {
-	if owner == "" {
-		return "", false
-	}
-	if strings.HasPrefix(owner, "jh:") {
-		return strings.TrimPrefix(owner, "jh:"), true
-	}
-	hashIndex := strings.LastIndex(owner, "#")
-	if hashIndex < 0 || hashIndex == len(owner)-1 {
-		return "", false
-	}
-	return owner[hashIndex+1:], true
+	return analyze.ResolveOwnerAlias(ownerMap, jhlog.Resolve(dict, id))
 }
 
 func percentileSorted(values []uint64, p float64) uint64 {

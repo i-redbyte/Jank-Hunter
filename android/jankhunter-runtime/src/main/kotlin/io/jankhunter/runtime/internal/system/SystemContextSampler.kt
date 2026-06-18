@@ -104,7 +104,7 @@ class SystemContextSampler(
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val percent = if (level >= 0 && scale > 0) (level * 100) / scale else 0
         return BatterySnapshot(
-            percent = percent,
+            percent = percent.coerceIn(0, 100),
             state = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
                 ?: BatteryManager.BATTERY_STATUS_UNKNOWN,
             temperatureDeciC = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0,

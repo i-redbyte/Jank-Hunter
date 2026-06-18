@@ -31,7 +31,7 @@ class JankHunterEventListenerFactory(
         private var startedAt = 0L
         private var dnsStartedAt = 0L
         private var connectStartedAt = 0L
-        private var responseStartedAt = 0L
+        private var requestFinishedAt = 0L
         private var dnsMs = 0L
         private var connectMs = 0L
         private var ttfbMs = 0L
@@ -69,7 +69,8 @@ class JankHunterEventListenerFactory(
         }
 
         override fun dnsEnd(call: Call, domainName: String, inetAddressList: List<InetAddress>) {
-            dnsMs = elapsed(dnsStartedAt)
+            dnsMs += elapsed(dnsStartedAt)
+            dnsStartedAt = 0L
             delegate.dnsEnd(call, domainName, inetAddressList)
         }
 
@@ -98,7 +99,8 @@ class JankHunterEventListenerFactory(
             proxy: Proxy,
             protocol: Protocol?,
         ) {
-            connectMs = elapsed(connectStartedAt)
+            connectMs += elapsed(connectStartedAt)
+            connectStartedAt = 0L
             delegate.connectEnd(call, inetSocketAddress, proxy, protocol)
         }
 
@@ -110,6 +112,8 @@ class JankHunterEventListenerFactory(
             ioe: IOException,
         ) {
             phase = if (tlsAttemptCount > 0) "tls" else "connect"
+            connectMs += elapsed(connectStartedAt)
+            connectStartedAt = 0L
             recordPhaseFailure(call, phase, ioe)
             delegate.connectFailed(call, inetSocketAddress, proxy, protocol, ioe)
         }
@@ -134,9 +138,16 @@ class JankHunterEventListenerFactory(
             delegate.connectionReleased(call, connection)
         }
 
+        override fun requestHeadersEnd(call: Call, request: Request) {
+            phase = "request"
+            requestFinishedAt = now()
+            delegate.requestHeadersEnd(call, request)
+        }
+
         override fun requestBodyEnd(call: Call, byteCount: Long) {
             phase = "request"
             requestBodyBytes = max(0L, byteCount)
+            requestFinishedAt = now()
             delegate.requestBodyEnd(call, byteCount)
         }
 
@@ -148,12 +159,13 @@ class JankHunterEventListenerFactory(
 
         override fun responseHeadersStart(call: Call) {
             phase = "response"
-            responseStartedAt = now()
+            val responseStartedAt = now()
+            val base = if (requestFinishedAt > 0L) requestFinishedAt else startedAt
+            ttfbMs = elapsed(base, responseStartedAt)
             delegate.responseHeadersStart(call)
         }
 
         override fun responseHeadersEnd(call: Call, response: Response) {
-            ttfbMs = elapsed(responseStartedAt)
             statusClass = response.code() / 100
             delegate.responseHeadersEnd(call, response)
         }
@@ -177,7 +189,8 @@ class JankHunterEventListenerFactory(
         private fun record(call: Call, failed: Boolean) {
             val request: Request = call.request()
             val routeKey = routeKey(request)
-            var localFlags = flags or BinaryLogWriter.FLAG_APP_FOREGROUND
+            val durationMs = elapsed(startedAt)
+            var localFlags = flags
             if (connectionAcquired && !connectStarted) {
                 localFlags = localFlags or BinaryLogWriter.FLAG_HTTP_REUSED_CONNECTION
             }
@@ -187,7 +200,7 @@ class JankHunterEventListenerFactory(
             JankHunter.recordHttp(
                 JankHunter.currentOwner(),
                 "${request.method()} ${request.url().encodedPath()}",
-                elapsed(startedAt),
+                durationMs,
                 dnsMs,
                 connectMs,
                 ttfbMs,
@@ -196,7 +209,7 @@ class JankHunterEventListenerFactory(
                 requestBodyBytes,
                 localFlags,
             )
-            JankHunter.recordGauge("network.request.duration_ms", elapsed(startedAt))
+            JankHunter.recordGauge("network.request.duration_ms", durationMs)
             JankHunter.recordGauge("network.request.dns_attempts", dnsAttemptCount.toLong())
             JankHunter.recordGauge("network.request.connect_attempts", connectAttemptCount.toLong())
             JankHunter.recordGauge("network.request.tls_attempts", tlsAttemptCount.toLong())
@@ -226,7 +239,9 @@ class JankHunterEventListenerFactory(
 
         private fun now(): Long = SystemClock.elapsedRealtime()
 
-        private fun elapsed(start: Long): Long = if (start <= 0) 0 else max(0L, now() - start)
+        private fun elapsed(start: Long): Long = elapsed(start, now())
+
+        private fun elapsed(start: Long, end: Long): Long = if (start <= 0) 0 else max(0L, end - start)
     }
 
     private companion object {

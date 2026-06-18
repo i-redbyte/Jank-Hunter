@@ -253,6 +253,13 @@ class InstrumentationModelTest {
     }
 
     @Test
+    fun currentInstrumentationModulesStayLinearByDefault() {
+        assertFalse(HookIntentResolver.needsControlFlow())
+        assertFalse(HookIntentResolver.needsControlFlow(testHookConfig(okhttp = true, coroutines = true)))
+        assertTrue(HookIntentResolver.modules().none { it.needsControlFlow })
+    }
+
+    @Test
     fun resolverRespectsDisabledGates() {
         val call = MethodCall(
             opcode = Opcodes.INVOKEVIRTUAL,

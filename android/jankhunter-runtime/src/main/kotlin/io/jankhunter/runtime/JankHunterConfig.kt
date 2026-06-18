@@ -53,13 +53,13 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
-    fun mainThreadStallThresholdMs(): Long = mainThreadStallThresholdMs
+    fun mainThreadStallThresholdMs(): Long = mainThreadStallThresholdMs.coerceAtLeast(1L)
 
-    fun memorySampleIntervalMs(): Long = memorySampleIntervalMs
+    fun memorySampleIntervalMs(): Long = memorySampleIntervalMs.coerceAtLeast(1L)
 
     fun systemSamplerEnabled(): Boolean = systemSamplerEnabled
 
-    fun systemSampleIntervalMs(): Long = systemSampleIntervalMs
+    fun systemSampleIntervalMs(): Long = systemSampleIntervalMs.coerceAtLeast(1L)
 
     fun mainLooperDispatchMonitorEnabled(): Boolean = mainLooperDispatchMonitorEnabled
 
@@ -67,15 +67,15 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
 
-    fun retainedObjectDelayMs(): Long = retainedObjectDelayMs
+    fun retainedObjectDelayMs(): Long = retainedObjectDelayMs.coerceAtLeast(0L)
 
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
     fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled
 
-    fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs
+    fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs.coerceAtLeast(0L)
 
-    fun retainedHeapDumpMaxCount(): Int = retainedHeapDumpMaxCount
+    fun retainedHeapDumpMaxCount(): Int = retainedHeapDumpMaxCount.coerceAtLeast(0)
 
     fun retainedHeapDumpMinRetainedAgeMs(): Long = retainedHeapDumpMinRetainedAgeMs.coerceAtLeast(0L)
 
@@ -85,43 +85,43 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun jankStatsEnabled(): Boolean = jankStatsEnabled
 
-    fun fpsWindowMs(): Long = fpsWindowMs
+    fun fpsWindowMs(): Long = fpsWindowMs.coerceAtLeast(1L)
 
-    fun jankFrameThresholdMs(): Long = jankFrameThresholdMs
+    fun jankFrameThresholdMs(): Long = jankFrameThresholdMs.coerceAtLeast(1L)
 
     fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
 
-    fun maxLogBytes(): Long = maxLogBytes
+    fun maxLogBytes(): Long = maxLogBytes.coerceAtLeast(1L)
 
-    fun maxLogDirectoryBytes(): Long = maxLogDirectoryBytes
+    fun maxLogDirectoryBytes(): Long = maxLogDirectoryBytes.coerceAtLeast(1L)
 
     fun logCompressionEnabled(): Boolean = logCompressionEnabled
 
-    fun maxDictionaryEntries(): Int = maxDictionaryEntries
+    fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
 
-    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes
+    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceAtLeast(1)
 
-    fun flushIntervalMs(): Long = flushIntervalMs
+    fun flushIntervalMs(): Long = flushIntervalMs.coerceAtLeast(1L)
 
     fun adaptiveSamplingEnabled(): Boolean = adaptiveSamplingEnabled
 
-    fun adaptiveMemoryStableIntervalMs(): Long = adaptiveMemoryStableIntervalMs
+    fun adaptiveMemoryStableIntervalMs(): Long = adaptiveMemoryStableIntervalMs.coerceAtLeast(0L)
 
-    fun adaptiveContextStableIntervalMs(): Long = adaptiveContextStableIntervalMs
+    fun adaptiveContextStableIntervalMs(): Long = adaptiveContextStableIntervalMs.coerceAtLeast(0L)
 
     fun metricAggregationEnabled(): Boolean = metricAggregationEnabled
 
-    fun metricAggregationWindowMs(): Long = metricAggregationWindowMs
+    fun metricAggregationWindowMs(): Long = metricAggregationWindowMs.coerceAtLeast(1L)
 
-    fun maxMetricAggregationKeys(): Int = maxMetricAggregationKeys
+    fun maxMetricAggregationKeys(): Int = maxMetricAggregationKeys.coerceAtLeast(0)
 
-    fun maxLogSpamKeys(): Int = maxLogSpamKeys
+    fun maxLogSpamKeys(): Int = maxLogSpamKeys.coerceAtLeast(0)
 
-    fun maxRuntimeCallGraphKeys(): Int = maxRuntimeCallGraphKeys
+    fun maxRuntimeCallGraphKeys(): Int = maxRuntimeCallGraphKeys.coerceAtLeast(0)
 
-    fun maxHandlerTrackingEntries(): Int = maxHandlerTrackingEntries
+    fun maxHandlerTrackingEntries(): Int = maxHandlerTrackingEntries.coerceAtLeast(0)
 
-    fun maxHandlerWrappersPerRunnable(): Int = maxHandlerWrappersPerRunnable
+    fun maxHandlerWrappersPerRunnable(): Int = maxHandlerWrappersPerRunnable.coerceAtLeast(0)
 
     fun redactRoute(route: String?): String? = routeRedactor.redact(route)
 

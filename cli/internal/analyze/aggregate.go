@@ -26,6 +26,7 @@ func InspectWithFilter(title string, logs []jhlog.Log, filter Filter) Summary {
 		for _, event := range log.Events {
 			collector.add(log.Dict, event)
 		}
+		collector.finishLog()
 	}
 	return collector.finish()
 }
@@ -55,6 +56,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 			return Summary{}, err
 		}
 		collector.summary.Warnings = append(collector.summary.Warnings, warnings...)
+		collector.finishLog()
 	}
 	return collector.finish(), nil
 }
@@ -164,14 +166,26 @@ func validateOwnerMapFormat(path string, got int) error {
 }
 
 type collector struct {
-	summary    Summary
-	filter     Filter
-	ownerMap   map[string]string
-	classGraph *ClassGraph
-	heap       *HeapEvidence
-	seenEvent  bool
-	firstTime  uint64
-	lastTime   uint64
+	summary             Summary
+	filter              Filter
+	ownerMap            map[string]string
+	classGraph          *ClassGraph
+	heap                *HeapEvidence
+	seenEvent           bool
+	firstTime           uint64
+	lastTime            uint64
+	logSeen             bool
+	logFirst            uint64
+	logLast             uint64
+	logsWithEvents      int
+	totalLogDurationMS  uint64
+	logTrafficSeen      bool
+	logTrafficFirstRx   uint64
+	logTrafficFirstTx   uint64
+	logTrafficLastRx    uint64
+	logTrafficLastTx    uint64
+	totalTrafficRxBytes uint64
+	totalTrafficTxBytes uint64
 
 	httpDurations  uint64SampleSet
 	routeDurations map[string]*uint64SampleSet
@@ -282,6 +296,38 @@ func newCollector(title string, logCount int, options Options) *collector {
 
 func (c *collector) startLog() {
 	c.resetAttribution()
+	c.logSeen = false
+	c.logFirst = 0
+	c.logLast = 0
+	c.logTrafficSeen = false
+	c.logTrafficFirstRx = 0
+	c.logTrafficFirstTx = 0
+	c.logTrafficLastRx = 0
+	c.logTrafficLastTx = 0
+}
+
+func (c *collector) finishLog() {
+	if !c.logSeen {
+		return
+	}
+	c.logsWithEvents++
+	if c.logLast >= c.logFirst {
+		c.totalLogDurationMS += c.logLast - c.logFirst
+	}
+	if c.logTrafficSeen {
+		c.totalTrafficRxBytes += counterDelta(c.logTrafficFirstRx, c.logTrafficLastRx)
+		c.totalTrafficTxBytes += counterDelta(c.logTrafficFirstTx, c.logTrafficLastTx)
+	}
+}
+
+func (c *collector) recordTraffic(rxBytes, txBytes uint64) {
+	if !c.logTrafficSeen {
+		c.logTrafficSeen = true
+		c.logTrafficFirstRx = rxBytes
+		c.logTrafficFirstTx = txBytes
+	}
+	c.logTrafficLastRx = rxBytes
+	c.logTrafficLastTx = txBytes
 }
 
 func (c *collector) resetAttribution() {
@@ -442,6 +488,9 @@ func metricModeForGauge(name string) jhlog.MetricMode {
 		"network.request.connection_released":
 		return jhlog.MetricModeBooleanRate
 	}
+	if strings.HasPrefix(metric, "process.exit.last.reason_") && strings.HasSuffix(metric, ".count") {
+		return jhlog.MetricModeLast
+	}
 	if strings.HasSuffix(metric, ".last_id") ||
 		strings.Contains(metric, ".last.") ||
 		strings.HasSuffix(metric, ".last_level") ||
@@ -537,6 +586,18 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 		if event.TimeMS > c.lastTime {
 			c.lastTime = event.TimeMS
+		}
+	}
+	if !c.logSeen {
+		c.logSeen = true
+		c.logFirst = event.TimeMS
+		c.logLast = event.TimeMS
+	} else {
+		if event.TimeMS < c.logFirst {
+			c.logFirst = event.TimeMS
+		}
+		if event.TimeMS > c.logLast {
+			c.logLast = event.TimeMS
 		}
 	}
 	switch {
@@ -680,12 +741,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Context.LowMemory {
 			c.summary.LowMemoryCount++
 		}
-		if event.Context.RxBytes > c.summary.TrafficRxMax {
-			c.summary.TrafficRxMax = event.Context.RxBytes
-		}
-		if event.Context.TxBytes > c.summary.TrafficTxMax {
-			c.summary.TrafficTxMax = event.Context.TxBytes
-		}
+		c.recordTraffic(event.Context.RxBytes, event.Context.TxBytes)
 		c.networkSamples[c.currentNetwork]++
 	case event.Memory != nil:
 		context := c.eventContext("", "", "", "")
@@ -855,22 +911,7 @@ func (c *collector) markCohort() {
 }
 
 func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
-	owner := jhlog.Resolve(dict, id)
-	if len(c.ownerMap) == 0 {
-		return owner
-	}
-	if mapped, ok := c.ownerMap[owner]; ok {
-		return mapped
-	}
-	if hash, ok := ownerHash(owner); ok {
-		if mapped, ok := c.ownerMap[hash]; ok {
-			return mapped
-		}
-		if mapped, ok := c.ownerMap["jh:"+hash]; ok {
-			return mapped
-		}
-	}
-	return owner
+	return ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func (c *collector) flowKey(screenOverride, ownerOverride string) string {
@@ -1028,20 +1069,6 @@ func logLevelName(level uint64) string {
 	}
 }
 
-func ownerHash(owner string) (string, bool) {
-	if owner == "" {
-		return "", false
-	}
-	if strings.HasPrefix(owner, "jh:") {
-		return strings.TrimPrefix(owner, "jh:"), true
-	}
-	hashIndex := strings.LastIndex(owner, "#")
-	if hashIndex < 0 || hashIndex == len(owner)-1 {
-		return "", false
-	}
-	return owner[hashIndex+1:], true
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value != "" {
@@ -1051,11 +1078,28 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func counterDelta(first, last uint64) uint64 {
+	if last >= first {
+		return last - first
+	}
+	return last
+}
+
 func (c *collector) finish() Summary {
 	summary := c.summary
-	if c.seenEvent && c.lastTime >= c.firstTime {
+	if c.logsWithEvents > 0 {
+		summary.DurationMS = c.totalLogDurationMS
+	} else if c.seenEvent && c.lastTime >= c.firstTime {
 		summary.DurationMS = c.lastTime - c.firstTime
 	}
+	if summary.LogCount > 1 && c.logsWithEvents > 1 {
+		summary.Warnings = append(
+			summary.Warnings,
+			"Несколько логов считаются независимыми прогонами: длительность в обзоре равна сумме длительностей логов, а math timeline накладывает события по относительному времени.",
+		)
+	}
+	summary.TrafficRxMax = c.totalTrafficRxBytes
+	summary.TrafficTxMax = c.totalTrafficTxBytes
 
 	for route, set := range c.routeDurations {
 		durations := set.sortedValues()
@@ -1282,8 +1326,8 @@ func Compare(baseline, candidate Summary) Comparison {
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
 		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "KB", true, minUint64(uint64(baseline.MemoryCount), uint64(candidate.MemoryCount))),
 		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "KB", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID RX max", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID TX max", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID RX delta", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("UID TX delta", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "шт", true, minUint64(baseline.Retained, candidate.Retained)),
 		delta("Log spam", totalLogSpam(baseline), totalLogSpam(candidate), "шт", true, minUint64(uint64(len(baseline.LogSpam)), uint64(len(candidate.LogSpam)))),
 		delta("Problem windows", totalProblemWindows(baseline), totalProblemWindows(candidate), "шт", true, minUint64(uint64(len(baseline.ProblemWindows)), uint64(len(candidate.ProblemWindows)))),

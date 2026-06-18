@@ -43,7 +43,7 @@ internal class RuntimeCallGraph(
             stack.remove()
             return
         }
-        val frame = popFrame(currentStack, normalizedOwner, startMs)
+        val frame = popFrame(currentStack, normalizedOwner) ?: return
         val caller = currentStack.lastOrNull()?.owner
         val durationMs = maxOf(0L, nowMs() - frame.startMs)
         if (caller != null && caller != frame.owner) {
@@ -102,20 +102,23 @@ internal class RuntimeCallGraph(
     private fun popFrame(
         currentStack: MutableList<RuntimeCallFrame>,
         ownerName: String,
-        fallbackStartMs: Long,
-    ): RuntimeCallFrame {
+    ): RuntimeCallFrame? {
         val lastIndex = currentStack.lastIndex
         val last = currentStack[lastIndex]
         if (last.owner == ownerName) {
             currentStack.removeAt(lastIndex)
             return last
         }
+        dropped.incrementAndGet()
         for (index in lastIndex - 1 downTo 0) {
             if (currentStack[index].owner == ownerName) {
-                return currentStack.removeAt(index)
+                while (currentStack.lastIndex >= index) {
+                    currentStack.removeAt(currentStack.lastIndex)
+                }
+                return null
             }
         }
-        return RuntimeCallFrame(ownerName, fallbackStartMs)
+        return null
     }
 
     private data class RuntimeCallFrame(

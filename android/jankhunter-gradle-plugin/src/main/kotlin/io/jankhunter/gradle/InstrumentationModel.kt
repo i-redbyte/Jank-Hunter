@@ -160,6 +160,9 @@ internal interface InstrumentationModule {
     val family: String
     val priority: Int
     val bridges: List<VersionedInstrumentationBridge>
+    val needsControlFlow: Boolean
+        get() = false
+
     fun enabled(config: HookConfig): Boolean
 
     fun relevant(call: MethodCall): Boolean {
@@ -472,6 +475,12 @@ internal class InstrumentationModuleRegistry(
     }
 
     fun modules(): List<InstrumentationModule> = modules
+
+    fun needsControlFlow(): Boolean = modules.any { it.needsControlFlow }
+
+    fun needsControlFlow(config: HookConfig): Boolean {
+        return modules.any { it.needsControlFlow && it.enabled(config) }
+    }
 }
 
 internal object HookIntentResolver {
@@ -492,6 +501,10 @@ internal object HookIntentResolver {
     }
 
     fun modules(): List<InstrumentationModule> = registry.modules()
+
+    fun needsControlFlow(): Boolean = registry.needsControlFlow()
+
+    fun needsControlFlow(config: HookConfig): Boolean = registry.needsControlFlow(config)
 }
 
 internal object HookNearMissDiagnostics {

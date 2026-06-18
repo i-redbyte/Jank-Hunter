@@ -177,6 +177,26 @@ func TestLoadOwnerMapReadsJSONLEntries(t *testing.T) {
 	}
 }
 
+func TestResolveOwnerAliasSupportsFullOwnerHashAndJhPrefix(t *testing.T) {
+	ownerMap := map[string]string{
+		"abc123": "com.app.FeedRepository.refresh",
+		"manual": "manual owner",
+	}
+
+	if got := ResolveOwnerAlias(ownerMap, "manual"); got != "manual owner" {
+		t.Fatalf("manual alias = %q", got)
+	}
+	if got := ResolveOwnerAlias(ownerMap, "com.app.Generated#abc123"); got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("hash alias = %q", got)
+	}
+	if got := ResolveOwnerAlias(ownerMap, "jh:abc123"); got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("jh hash alias = %q", got)
+	}
+	if got := ResolveOwnerAlias(ownerMap, "unknown"); got != "unknown" {
+		t.Fatalf("unknown alias = %q", got)
+	}
+}
+
 func TestInspectFilesStreamsSample(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := jhlog.WriteSample(path); err != nil {
@@ -334,6 +354,43 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 	}
 	if summary.DurationMS != 120_000 {
 		t.Fatalf("DurationMS = %d, want 120000", summary.DurationMS)
+	}
+}
+
+func TestInspectMultipleLogsSumsPerLogDuration(t *testing.T) {
+	summary := Inspect("sample", []jhlog.Log{
+		{Events: []jhlog.Event{
+			{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
+			{Type: jhlog.EventHTTP, TimeMS: 120_000, HTTP: &jhlog.HTTPEvent{DurationMS: 100, Status: jhlog.Status2xx}},
+		}},
+		{Events: []jhlog.Event{
+			{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
+			{Type: jhlog.EventHTTP, TimeMS: 120_000, HTTP: &jhlog.HTTPEvent{DurationMS: 200, Status: jhlog.Status2xx}},
+		}},
+	})
+
+	if summary.DurationMS != 240_000 {
+		t.Fatalf("DurationMS = %d, want 240000", summary.DurationMS)
+	}
+	if len(summary.Warnings) == 0 {
+		t.Fatalf("expected multi-log duration warning")
+	}
+}
+
+func TestInspectTrafficUsesPerLogDelta(t *testing.T) {
+	summary := Inspect("sample", []jhlog.Log{
+		{Events: []jhlog.Event{
+			{Type: jhlog.EventContext, TimeMS: 0, Context: &jhlog.ContextEvent{RxBytes: 1_000, TxBytes: 2_000}},
+			{Type: jhlog.EventContext, TimeMS: 1_000, Context: &jhlog.ContextEvent{RxBytes: 1_250, TxBytes: 2_300}},
+		}},
+		{Events: []jhlog.Event{
+			{Type: jhlog.EventContext, TimeMS: 0, Context: &jhlog.ContextEvent{RxBytes: 10_000, TxBytes: 20_000}},
+			{Type: jhlog.EventContext, TimeMS: 1_000, Context: &jhlog.ContextEvent{RxBytes: 10_400, TxBytes: 20_500}},
+		}},
+	})
+
+	if summary.TrafficRxMax != 650 || summary.TrafficTxMax != 800 {
+		t.Fatalf("traffic deltas = rx %d tx %d, want rx 650 tx 800", summary.TrafficRxMax, summary.TrafficTxMax)
 	}
 }
 

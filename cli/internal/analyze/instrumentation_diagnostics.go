@@ -21,6 +21,7 @@ type InstrumentationDiagnostics struct {
 	Hooks                []InstrumentationHookSummary
 	Decisions            []InstrumentationDecisionSummary
 	Annotations          []InstrumentationAnnotationSummary
+	Classes              []InstrumentationClassDiagnostic
 	TopClasses           []InstrumentationClassDiagnostic
 	Warnings             []string
 }
@@ -34,6 +35,7 @@ type InstrumentationHookSummary struct {
 	Intent    string
 	Signature string
 	Bridge    string
+	Method    string
 	Line      int
 	Count     uint64
 }
@@ -43,6 +45,7 @@ type InstrumentationDecisionSummary struct {
 	Module string
 	Family string
 	Reason string
+	Method string
 	Line   int
 	Count  uint64
 }
@@ -143,6 +146,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 			intent:    item.Intent,
 			signature: item.Signature,
 			bridge:    item.Bridge,
+			method:    item.Method,
 			line:      item.Line,
 		}] += item.Count
 	}
@@ -152,6 +156,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 			module: item.Module,
 			family: item.Family,
 			reason: item.Reason,
+			method: item.Method,
 			line:   item.Line,
 		}] += item.Count
 	}
@@ -196,6 +201,7 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		Hooks:                hookMapSummaries(b.hooks),
 		Decisions:            decisionMapSummaries(b.decisions),
 		Annotations:          annotationMapSummaries(b.annotations),
+		Classes:              b.classes,
 		TopClasses:           limitInstrumentationClasses(b.classes, 200),
 		Warnings:             b.warnings,
 	}
@@ -222,6 +228,7 @@ type instrumentationHookRecord struct {
 	Intent    string `json:"intent"`
 	Signature string `json:"signature"`
 	Bridge    string `json:"bridge"`
+	Method    string `json:"method"`
 	Line      int    `json:"line"`
 	Count     uint64 `json:"count"`
 }
@@ -231,6 +238,7 @@ type instrumentationDecisionRecord struct {
 	Module string `json:"module"`
 	Family string `json:"family"`
 	Reason string `json:"reason"`
+	Method string `json:"method"`
 	Line   int    `json:"line"`
 	Count  uint64 `json:"count"`
 }
@@ -247,6 +255,7 @@ type instrumentationHookKey struct {
 	intent    string
 	signature string
 	bridge    string
+	method    string
 	line      int
 }
 
@@ -255,6 +264,7 @@ type instrumentationDecisionKey struct {
 	module string
 	family string
 	reason string
+	method string
 	line   int
 }
 
@@ -281,6 +291,7 @@ func hookSummaries(records []instrumentationHookRecord) []InstrumentationHookSum
 			Intent:    record.Intent,
 			Signature: record.Signature,
 			Bridge:    record.Bridge,
+			Method:    record.Method,
 			Line:      record.Line,
 			Count:     record.Count,
 		})
@@ -297,6 +308,7 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 			Module: record.Module,
 			Family: record.Family,
 			Reason: record.Reason,
+			Method: record.Method,
 			Line:   record.Line,
 			Count:  record.Count,
 		})
@@ -336,6 +348,7 @@ func hookMapSummaries(values map[instrumentationHookKey]uint64) []Instrumentatio
 			Intent:    key.intent,
 			Signature: key.signature,
 			Bridge:    key.bridge,
+			Method:    key.method,
 			Line:      key.line,
 			Count:     count,
 		})
@@ -352,6 +365,7 @@ func decisionMapSummaries(values map[instrumentationDecisionKey]uint64) []Instru
 			Module: key.module,
 			Family: key.family,
 			Reason: key.reason,
+			Method: key.method,
 			Line:   key.line,
 			Count:  count,
 		})
@@ -398,6 +412,9 @@ func sortHookSummaries(values []InstrumentationHookSummary) {
 		if values[i].Bridge != values[j].Bridge {
 			return values[i].Bridge < values[j].Bridge
 		}
+		if values[i].Method != values[j].Method {
+			return values[i].Method < values[j].Method
+		}
 		return values[i].Line < values[j].Line
 	})
 }
@@ -418,6 +435,9 @@ func sortDecisionSummaries(values []InstrumentationDecisionSummary) {
 		}
 		if values[i].Reason != values[j].Reason {
 			return values[i].Reason < values[j].Reason
+		}
+		if values[i].Method != values[j].Method {
+			return values[i].Method < values[j].Method
 		}
 		return values[i].Line < values[j].Line
 	})

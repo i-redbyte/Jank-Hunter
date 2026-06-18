@@ -19,6 +19,7 @@ internal class RuntimeState {
     val started = AtomicBoolean(false)
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
+    val appForeground = AtomicBoolean(false)
 
     @Volatile
     var writer: AsyncLogWriter? = null

@@ -67,6 +67,7 @@ class BinaryLogWriter(
         board: String?,
         product: String?,
         deviceRooted: Boolean,
+        appForeground: Boolean = true,
     ) {
         val appVersionId = idFor(DICT_APP_VERSION, appVersion)
         val buildId = idFor(DICT_BUILD, build)
@@ -96,7 +97,7 @@ class BinaryLogWriter(
             .uvarint(hardwareId)
             .uvarint(boardId)
             .uvarint(productId)
-        var flags = FLAG_APP_FOREGROUND
+        var flags = foregroundFlag(appForeground)
         if (deviceRooted) flags = flags or FLAG_DEVICE_ROOTED
         record(EVENT_SESSION, flags, payload)
     }
@@ -122,23 +123,24 @@ class BinaryLogWriter(
         freeStorageKb: Long,
         totalStorageKb: Long,
         networkVpn: Boolean,
+        foreground: Boolean = true,
     ) {
-        var flags = FLAG_APP_FOREGROUND
+        var flags = foregroundFlag(foreground)
         if (lowMemory) flags = flags or FLAG_CONTEXT_LOW_MEMORY
         if (networkMetered) flags = flags or FLAG_NETWORK_METERED
         if (networkValidated) flags = flags or FLAG_NETWORK_VALIDATED
         if (networkVpn) flags = flags or FLAG_NETWORK_VPN
         val payload = Payload()
-            .uvarint(networkKind.toLong())
-            .uvarint(batteryPct.toLong())
-            .uvarint(availMemoryKb)
+            .uvarint(networkKind.coerceIn(0, 5).toLong())
+            .uvarint(batteryPct.coerceIn(0, 100).toLong())
+            .uvarint(nonNegative(availMemoryKb))
             .uvarint(batteryState.toLong())
             .svarint(batteryTempDeciC.toLong())
-            .uvarint(rxBytes)
-            .uvarint(txBytes)
-            .uvarint(totalMemoryKb)
-            .uvarint(freeStorageKb)
-            .uvarint(totalStorageKb)
+            .uvarint(nonNegative(rxBytes))
+            .uvarint(nonNegative(txBytes))
+            .uvarint(nonNegative(totalMemoryKb))
+            .uvarint(nonNegative(freeStorageKb))
+            .uvarint(nonNegative(totalStorageKb))
         record(EVENT_CONTEXT, flags, payload)
     }
 
@@ -157,31 +159,32 @@ class BinaryLogWriter(
     ) {
         val ownerId = idFor(DICT_OWNER, owner)
         val routeId = idFor(DICT_ROUTE, route)
+        val safeDurationMs = nonNegative(durationMs)
         val payload = Payload()
             .uvarint(ownerId)
             .uvarint(routeId)
-            .uvarint(durationMs)
-            .uvarint(dnsMs)
-            .uvarint(connectMs)
-            .uvarint(ttfbMs)
-            .uvarint(statusClass.toLong())
-            .uvarint(rxBytes)
-            .uvarint(txBytes)
-        record(EVENT_HTTP, flags, payload)
+            .uvarint(safeDurationMs)
+            .uvarint(clampDuration(dnsMs, safeDurationMs))
+            .uvarint(clampDuration(connectMs, safeDurationMs))
+            .uvarint(clampDuration(ttfbMs, safeDurationMs))
+            .uvarint(statusClass.coerceIn(0, 5).toLong())
+            .uvarint(nonNegative(rxBytes))
+            .uvarint(nonNegative(txBytes))
+        record(EVENT_HTTP, flags and FLAG_KNOWN_MASK, payload)
     }
 
     @Synchronized
-    fun stall(owner: String?, stackHint: String?, durationMs: Long) {
+    fun stall(owner: String?, stackHint: String?, durationMs: Long, foreground: Boolean = true) {
         val ownerId = idFor(DICT_OWNER, owner)
         val stackId = idFor(DICT_STACK, stackHint)
-        val payload = Payload().uvarint(ownerId).uvarint(stackId).uvarint(durationMs)
-        record(EVENT_STALL, FLAG_THREAD_MAIN or FLAG_APP_FOREGROUND, payload)
+        val payload = Payload().uvarint(ownerId).uvarint(stackId).uvarint(nonNegative(durationMs))
+        record(EVENT_STALL, FLAG_THREAD_MAIN or foregroundFlag(foreground), payload)
     }
 
     @Synchronized
-    fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
-        val payload = Payload().uvarint(pssKb).uvarint(javaHeapKb).uvarint(nativeHeapKb)
-        record(EVENT_MEMORY, FLAG_APP_FOREGROUND, payload)
+    fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean = true) {
+        val payload = Payload().uvarint(nonNegative(pssKb)).uvarint(nonNegative(javaHeapKb)).uvarint(nonNegative(nativeHeapKb))
+        record(EVENT_MEMORY, foregroundFlag(foreground), payload)
     }
 
     @Synchronized
@@ -194,6 +197,7 @@ class BinaryLogWriter(
         holder: String?,
         ageMs: Long,
         count: Long,
+        foreground: Boolean = true,
     ) {
         val screenId = idFor(DICT_SCREEN, screen)
         val ownerId = idFor(DICT_OWNER, owner)
@@ -201,13 +205,13 @@ class BinaryLogWriter(
         val stepId = idFor(DICT_STEP, step)
         val classId = idFor(DICT_CLASS, className)
         val holderId = idFor(DICT_OWNER, holder)
-        val flags = FLAG_APP_FOREGROUND or contextFlags(screenId, ownerId, flowId, stepId)
+        val flags = foregroundFlag(foreground) or contextFlags(screenId, ownerId, flowId, stepId)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
             .uvarint(classId)
             .uvarint(holderId)
-            .uvarint(ageMs)
-            .uvarint(count)
+            .uvarint(nonNegative(ageMs))
+            .uvarint(nonNegative(count))
         record(EVENT_RETAINED, flags, payload)
     }
 
@@ -220,17 +224,24 @@ class BinaryLogWriter(
         p50Ms: Long,
         p95Ms: Long,
         p99Ms: Long,
+        foreground: Boolean = true,
     ) {
         val screenId = idFor(DICT_SCREEN, screen)
+        val safeWindowMs = nonNegative(windowMs).coerceAtLeast(1L)
+        val safeFrameCount = nonNegative(frameCount)
+        val safeJankCount = nonNegative(jankCount).coerceAtMost(safeFrameCount)
+        val safeP50Ms = nonNegative(p50Ms)
+        val safeP95Ms = nonNegative(p95Ms).coerceAtLeast(safeP50Ms)
+        val safeP99Ms = nonNegative(p99Ms).coerceAtLeast(safeP95Ms)
         val payload = Payload()
             .uvarint(screenId)
-            .uvarint(windowMs)
-            .uvarint(frameCount)
-            .uvarint(jankCount)
-            .uvarint(p50Ms)
-            .uvarint(p95Ms)
-            .uvarint(p99Ms)
-        record(EVENT_UI_WINDOW, FLAG_THREAD_MAIN or FLAG_APP_FOREGROUND, payload)
+            .uvarint(safeWindowMs)
+            .uvarint(safeFrameCount)
+            .uvarint(safeJankCount)
+            .uvarint(safeP50Ms)
+            .uvarint(safeP95Ms)
+            .uvarint(safeP99Ms)
+        record(EVENT_UI_WINDOW, FLAG_THREAD_MAIN or foregroundFlag(foreground), payload)
     }
 
     @Synchronized
@@ -314,19 +325,20 @@ class BinaryLogWriter(
         windowMs: Long,
         count: Long,
         maxMs: Long,
+        foreground: Boolean = true,
     ) {
         val screenId = idFor(DICT_SCREEN, screen)
         val ownerId = idFor(DICT_OWNER, owner)
         val flowId = idFor(DICT_FLOW, flow)
         val stepId = idFor(DICT_STEP, step)
         val kindId = idFor(DICT_METRIC, kind)
-        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val flags = foregroundFlag(foreground) or contextFlags(screenId, ownerId, flowId, stepId)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
             .uvarint(kindId)
-            .uvarint(windowMs)
-            .uvarint(count)
-            .uvarint(maxMs)
+            .uvarint(nonNegative(windowMs).coerceAtLeast(1L))
+            .uvarint(nonNegative(count))
+            .uvarint(nonNegative(maxMs))
         record(EVENT_PROBLEM, flags, payload)
     }
 
@@ -350,10 +362,18 @@ class BinaryLogWriter(
         val payload = Payload()
             .optionalContext(flags, screenId, callerId, flowId, stepId)
             .uvarint(calleeId)
-            .uvarint(count)
-            .uvarint(totalMs)
-            .uvarint(maxMs)
+            .uvarint(nonNegative(count))
+            .uvarint(nonNegative(totalMs))
+            .uvarint(nonNegative(maxMs))
         record(EVENT_RUNTIME_CALL, flags, payload)
+    }
+
+    private fun foregroundFlag(foreground: Boolean): Long = if (foreground) FLAG_APP_FOREGROUND else 0L
+
+    private fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)
+
+    private fun clampDuration(value: Long, durationMs: Long): Long {
+        return nonNegative(value).coerceAtMost(durationMs)
     }
 
     private fun metric(
@@ -431,7 +451,7 @@ class BinaryLogWriter(
             private set
 
         fun uvarint(rawValue: Long): Payload {
-            var value = rawValue
+            var value = rawValue.coerceAtLeast(0L)
             while (value and 0x7FL.inv() != 0L) {
                 byteValue(((value and 0x7F) or 0x80).toInt())
                 value = value ushr 7
@@ -589,6 +609,7 @@ class BinaryLogWriter(
         const val FLAG_HAS_OWNER: Long = 1L shl 11
         const val FLAG_HAS_FLOW: Long = 1L shl 12
         const val FLAG_HAS_STEP: Long = 1L shl 13
+        private const val FLAG_KNOWN_MASK: Long = (1L shl 14) - 1L
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 
@@ -627,7 +648,7 @@ class BinaryLogWriter(
         private const val DICTIONARY_VALUE_BCD_ISO_DATE = 2
 
         private fun writeUvarint(out: OutputStream, rawValue: Long): Int {
-            var value = rawValue
+            var value = rawValue.coerceAtLeast(0L)
             var count = 0
             while (value and 0x7FL.inv() != 0L) {
                 out.write(((value and 0x7F) or 0x80).toInt())

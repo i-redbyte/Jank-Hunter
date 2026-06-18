@@ -90,7 +90,7 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 	if gauge == nil {
 		t.Fatalf("gauge robust stat not found: %#v", report.RobustStats)
 	}
-	if gauge.Count != 2 || gauge.Median != 15 || gauge.P95 != 20 {
+	if gauge.Count != 5 || gauge.Median != 30 || gauge.P95 != 30 {
 		t.Fatalf("unexpected gauge stat: %+v", *gauge)
 	}
 }
@@ -155,6 +155,7 @@ func writeRobustFixture(t *testing.T) string {
 		{Type: jhlog.EventStall, TimeMS: 2200, Stall: &jhlog.StallEvent{OwnerID: 1, DurationMS: 42}},
 		{Type: jhlog.EventGauge, TimeMS: 2300, Metric: &jhlog.MetricEvent{MetricID: 4, Value: 10}},
 		{Type: jhlog.EventGauge, TimeMS: 2400, Metric: &jhlog.MetricEvent{MetricID: 4, Value: 20}},
+		{Type: jhlog.EventGauge, TimeMS: 2450, Metric: &jhlog.MetricEvent{MetricID: 4, Value: 30, Count: 3, Sum: 90, Max: 30, Mode: jhlog.MetricModeAverage}},
 		{Type: jhlog.EventRetained, TimeMS: 2500, Retained: &jhlog.RetainedEvent{ClassID: 5, AgeMS: 30_000, Count: 1}},
 		{Type: jhlog.EventRetained, TimeMS: 2600, Retained: &jhlog.RetainedEvent{ClassID: 6, AgeMS: 40_000, Count: 1}},
 	}

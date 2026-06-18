@@ -30,7 +30,7 @@ object ProcessExitReporter {
                 counts[exit.reason] = (counts[exit.reason] ?: 0L) + 1L
             }
             for ((reason, count) in counts) {
-                JankHunter.recordCounter("process.exit.reason_$reason.count", count)
+                JankHunter.recordGauge("process.exit.last.reason_$reason.count", count)
             }
         } catch (_: Exception) {
             JankHunter.recordCounter("process.exit.read_failed.count", 1)
