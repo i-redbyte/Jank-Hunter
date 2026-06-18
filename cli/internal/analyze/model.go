@@ -325,6 +325,7 @@ type InfluenceSummary struct {
 	TopNodes         []InfluenceNode
 	TopEdges         []InfluenceEdge
 	HotPaths         []InfluencePath
+	MethodHotspots   []InfluenceMethod
 	Cycles           []InfluenceCycle
 	Heuristic        []InfluenceFinding
 	StandaloneReason string
@@ -364,6 +365,15 @@ type InfluencePath struct {
 	Weight        float64
 	RuntimeTarget bool
 	Reason        string
+}
+
+type InfluenceMethod struct {
+	ClassName      string
+	Method         string
+	Role           string
+	Count          uint64
+	Weight         float64
+	RuntimeTouched bool
 }
 
 type InfluenceCycle struct {

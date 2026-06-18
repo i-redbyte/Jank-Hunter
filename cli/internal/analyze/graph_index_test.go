@@ -79,7 +79,7 @@ func TestClassGraphIndexHotPathsPrioritizeRuntimeTargets(t *testing.T) {
 	})
 
 	paths := index.HotPaths(
-		map[string]float64{"feature.C": 10},
+		map[string]float64{"feature.A": 5, "feature.C": 10},
 		map[string]struct{}{"feature.C": {}},
 		4,
 	)
@@ -91,6 +91,9 @@ func TestClassGraphIndexHotPathsPrioritizeRuntimeTargets(t *testing.T) {
 	}
 	if !paths[0].RuntimeTarget {
 		t.Fatalf("hot path did not preserve runtime target marker: %+v", paths[0])
+	}
+	if len(paths[0].Nodes) != 3 {
+		t.Fatalf("hot path should preserve multi-hop chain: %+v", paths[0])
 	}
 }
 
@@ -106,6 +109,18 @@ func TestMethodGraphIndexUsesCallerAndCalleeMethods(t *testing.T) {
 	}
 	if edges[0].ToMethod != "load()V" || edges[0].Count != 5 {
 		t.Fatalf("unexpected method edge: %+v", edges[0])
+	}
+
+	methods := index.HotMethods(
+		map[string]float64{"feature.B": 10},
+		map[string]struct{}{"feature.B": {}},
+		4,
+	)
+	if len(methods) == 0 {
+		t.Fatal("HotMethods() returned no rows")
+	}
+	if methods[0].Method != "load()V" || methods[0].Role != "callee" {
+		t.Fatalf("unexpected top method: %+v", methods[0])
 	}
 }
 

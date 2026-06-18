@@ -58,6 +58,12 @@ func TestLoadClassGraphJSONLAndBuildInfluence(t *testing.T) {
 	if len(influence.TopEdges) == 0 || influence.TopEdges[0].To != "com.app.data.CheckoutRepository" {
 		t.Fatalf("unexpected top edges: %+v", influence.TopEdges)
 	}
+	if len(influence.HotPaths) == 0 || influence.HotPaths[0].Nodes[len(influence.HotPaths[0].Nodes)-1] != "com.app.data.CheckoutRepository" {
+		t.Fatalf("unexpected hot paths: %+v", influence.HotPaths)
+	}
+	if len(influence.MethodHotspots) == 0 || influence.MethodHotspots[0].Method == "" {
+		t.Fatalf("unexpected method hotspots: %+v", influence.MethodHotspots)
+	}
 }
 
 func TestLoadClassGraphRequiresSupportedFormat(t *testing.T) {

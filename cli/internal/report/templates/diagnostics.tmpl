@@ -30,6 +30,7 @@
 <nav class="nav">
   <a href="#overview">Обзор</a>
   <a href="#hooks">Hooks</a>
+  <a href="#decisions">Решения</a>
   <a href="#annotations">Аннотации</a>
   <a href="#classes">Классы</a>
   <a href="#warnings">Предупреждения</a>
@@ -66,6 +67,20 @@
         {{range .Diagnostics.Hooks}}
         <tr><td><code>{{.Intent}}</code></td><td><code>{{.Signature}}</code></td><td>{{if .Bridge}}<code>{{.Bridge}}</code>{{else}}<span class="muted">без bridge</span>{{end}}</td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="4" class="muted">Нет сработавших hooks. Проверьте DSL flags, includePackages/excludePackages и сигнатуры целевых библиотек.</td></tr>{{end}}
+      </table>
+    </div>
+  </section>
+
+  <section id="decisions" class="panel">
+    <div class="panel-head">
+      <div><h2>Решения matcher-а</h2><div class="panel-kicker">Disabled/unsupported/skipped показывают, почему релевантный call-site не был превращен в hook.</div></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <tr><th>Тип</th><th>Модуль</th><th>Family</th><th>Причина</th><th>Срабатывания</th></tr>
+        {{range .Diagnostics.Decisions}}
+        <tr><td>{{.Kind}}</td><td><code>{{.Module}}</code></td><td>{{.Family}}</td><td><code>{{.Reason}}</code></td><td>{{.Count}}</td></tr>
+        {{else}}<tr><td colspan="5" class="muted">Нет disabled/unsupported/skipped решений. Все релевантные call-sites либо сработали, либо не попадали в известные families.</td></tr>{{end}}
       </table>
     </div>
   </section>

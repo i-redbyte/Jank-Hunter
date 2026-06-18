@@ -124,13 +124,13 @@ func TestWriteReports(t *testing.T) {
 	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Горячие пути", "Горячие методы", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 
 	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
 	if err := WriteInstrumentationDiagnostics(diagnosticsPath, sampleInstrumentationDiagnostics()); err != nil {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
-	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие hooks", "Annotation scopes", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl")
+	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие hooks", "Решения matcher-а", "Annotation scopes", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl")
 }
 
 func TestCodeProblemCategoryOptions(t *testing.T) {
@@ -301,6 +301,20 @@ func sampleInfluence() analyze.InfluenceSummary {
 			RuntimeConfirmed: true,
 			Reason:           "вызывает узел с проблемами выполнения",
 		}},
+		HotPaths: []analyze.InfluencePath{{
+			Nodes:         []string{"com.app.feature.CheckoutPresenter", "com.app.data.CheckoutRepository"},
+			Weight:        10.4,
+			RuntimeTarget: true,
+			Reason:        "ведет к классу с runtime-симптомами",
+		}},
+		MethodHotspots: []analyze.InfluenceMethod{{
+			ClassName:      "com.app.data.CheckoutRepository",
+			Method:         "load",
+			Role:           "callee",
+			Count:          3,
+			Weight:         9.5,
+			RuntimeTouched: true,
+		}},
 		Heuristic: []analyze.InfluenceFinding{{
 			Severity: "high",
 			Title:    "Главный узел влияния",
@@ -324,6 +338,9 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		Hooks: []analyze.InstrumentationHookSummary{
 			{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Count: 2},
 			{Intent: "logspam.android.util.Log.d", Signature: "logspam.android.util.Log.d", Count: 1},
+		},
+		Decisions: []analyze.InstrumentationDecisionSummary{
+			{Kind: "unsupported", Module: "okhttp", Family: "okhttp", Reason: "unsupported_signature", Count: 2},
 		},
 		Annotations: []analyze.InstrumentationAnnotationSummary{
 			{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},

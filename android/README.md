@@ -434,7 +434,7 @@ jankhunter inspect logs/*.jhlog \
 
 `class-graph.jsonl` нужен для отдельного отчета `report-influence.html`: там видно, какие классы стали “злыми” узлами, через какие связи они влияют на другие классы и где это подтвердилось runtime-сигналами. Узел без runtime-доказательств не считается виновником: он просто связан со статическим графом, но в конкретном прогоне мог не выполниться.
 
-`instrumentation-diagnostics.jsonl` нужен для отдельного отчета `report-diagnostics.html`: там видно, какие ASM hooks реально совпали с байткодом, какие versioned bridges сработали, какие методы пропущены и какие `@JankFlow` / `@JankScreen` / `@JankTrace` scopes попадут в runtime attribution.
+`instrumentation-diagnostics.jsonl` нужен для отдельного отчета `report-diagnostics.html`: там видно, какие ASM hooks реально совпали с байткодом, какие versioned bridges сработали, какие методы пропущены, какие gates выключили релевантные hooks, какие сигнатуры оказались unsupported, и какие `@JankFlow` / `@JankScreen` / `@JankTrace` scopes попадут в runtime attribution.
 
 `runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения это лучше включать после smoke-сборки и сначала на ограниченные include-пакеты или на `includeWholeApplication = true` с хорошим списком exclude.
 

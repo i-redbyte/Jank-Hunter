@@ -48,6 +48,7 @@ const buildReportSet = (name, logCount, presentation = false) => {
         { intent: "okhttp.install_event_listener_factory", signature: "okhttp3.builder.build.v3", bridge: "okhttp3.bridge.v3", count: 4 },
         { intent: "logspam.android.util.Log.d", signature: "logspam.android.util.Log.d", count: 9 },
       ],
+      decisions: [{ kind: "unsupported", module: "okhttp", family: "okhttp", reason: "unsupported_signature", count: 2 }],
       annotations: [{ owner: "FeedOwner", screen: "Feed", flow: "feed.open", trace: "refresh", count: 3 }],
     }),
     JSON.stringify({

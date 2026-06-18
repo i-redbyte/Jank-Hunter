@@ -32,6 +32,7 @@
   <a href="#nodes">Узлы</a>
   <a href="#edges">Связи</a>
   <a href="#paths">Пути</a>
+  <a href="#methods">Методы</a>
   <a href="#cycles">Циклы</a>
   <a href="#heuristic">Итог</a>
 </nav>
@@ -109,6 +110,23 @@
           {{range .Influence.HotPaths}}
           <tr><td><code>{{join .Nodes " → "}}</code></td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTarget}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
           {{else}}<tr><td colspan="4" class="muted">Нет горячих путей. Нужен `--class-graph` и runtime-симптомы.</td></tr>{{end}}
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <section id="methods" class="panel">
+    <div class="panel-head">
+      <div><h2>Горячие методы</h2><div class="panel-kicker">Method-level индекс показывает caller/callee методы рядом с runtime-симптомами и сильными статическими связями.</div></div>
+    </div>
+    <details class="fold influence-table-fold" open>
+      <summary><span>Показать горячие методы</span><span class="method-kind">{{len .Influence.MethodHotspots}} методов</span></summary>
+      <div class="fold-body">
+        <table class="influence-table">
+          <tr><th>Класс</th><th>Метод</th><th>Роль</th><th>Вызовы</th><th>Вес</th><th>Runtime</th></tr>
+          {{range .Influence.MethodHotspots}}
+          <tr><td><code>{{.ClassName}}</code></td><td><code>{{.Method}}</code></td><td>{{.Role}}</td><td>{{.Count}}</td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет method-level данных. Передайте class graph с caller/callee methods.</td></tr>{{end}}
         </table>
       </div>
     </details>

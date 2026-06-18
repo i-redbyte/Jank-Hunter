@@ -19,6 +19,7 @@ type InstrumentationDiagnostics struct {
 	HookCount            uint64
 	SkippedMethods       []InstrumentationSkippedSummary
 	Hooks                []InstrumentationHookSummary
+	Decisions            []InstrumentationDecisionSummary
 	Annotations          []InstrumentationAnnotationSummary
 	TopClasses           []InstrumentationClassDiagnostic
 	Warnings             []string
@@ -34,6 +35,14 @@ type InstrumentationHookSummary struct {
 	Signature string
 	Bridge    string
 	Count     uint64
+}
+
+type InstrumentationDecisionSummary struct {
+	Kind   string
+	Module string
+	Family string
+	Reason string
+	Count  uint64
 }
 
 type InstrumentationAnnotationSummary struct {
@@ -52,6 +61,7 @@ type InstrumentationClassDiagnostic struct {
 	HookCount        uint64
 	SkippedMethods   []InstrumentationSkippedSummary
 	Hooks            []InstrumentationHookSummary
+	Decisions        []InstrumentationDecisionSummary
 	Annotations      []InstrumentationAnnotationSummary
 }
 
@@ -69,6 +79,7 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 		source:      path,
 		skipped:     map[string]uint64{},
 		hooks:       map[instrumentationHookKey]uint64{},
+		decisions:   map[instrumentationDecisionKey]uint64{},
 		annotations: map[instrumentationAnnotationKey]uint64{},
 	}
 	scanner := bufio.NewScanner(file)
@@ -84,6 +95,9 @@ func LoadInstrumentationDiagnostics(path string) (*InstrumentationDiagnostics, e
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
 		}
+		if err := validateArtifactFormat(path, "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat); err != nil {
+			return nil, fmt.Errorf("parse instrumentation diagnostics line %d: %w", lineNumber, err)
+		}
 		builder.add(record)
 	}
 	if err := scanner.Err(); err != nil {
@@ -97,6 +111,7 @@ type instrumentationDiagnosticsBuilder struct {
 	classes     []InstrumentationClassDiagnostic
 	skipped     map[string]uint64
 	hooks       map[instrumentationHookKey]uint64
+	decisions   map[instrumentationDecisionKey]uint64
 	annotations map[instrumentationAnnotationKey]uint64
 	methods     int
 	ignored     int
@@ -106,9 +121,6 @@ type instrumentationDiagnosticsBuilder struct {
 }
 
 func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnosticsRecord) {
-	if err := validateArtifactFormat("instrumentation-diagnostics", "instrumentation diagnostics", record.Format, InstrumentationDiagnosticsFormat); err != nil {
-		b.warnings = append(b.warnings, fmt.Sprintf("class %s uses %v", record.ClassName, err))
-	}
 	class := InstrumentationClassDiagnostic{
 		ClassName:        record.ClassName,
 		Methods:          record.Methods,
@@ -116,6 +128,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		AnnotatedMethods: record.AnnotatedMethods,
 		SkippedMethods:   skippedSummaries(record.SkippedMethods),
 		Hooks:            hookSummaries(record.Hooks),
+		Decisions:        decisionSummaries(record.Decisions),
 		Annotations:      annotationSummaries(record.Annotations),
 	}
 	for _, item := range class.SkippedMethods {
@@ -125,6 +138,14 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 		class.HookCount += item.Count
 		b.hookCount += item.Count
 		b.hooks[instrumentationHookKey{intent: item.Intent, signature: item.Signature, bridge: item.Bridge}] += item.Count
+	}
+	for _, item := range class.Decisions {
+		b.decisions[instrumentationDecisionKey{
+			kind:   item.Kind,
+			module: item.Module,
+			family: item.Family,
+			reason: item.Reason,
+		}] += item.Count
 	}
 	for _, item := range class.Annotations {
 		b.annotations[instrumentationAnnotationKey{
@@ -165,6 +186,7 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		HookCount:            b.hookCount,
 		SkippedMethods:       skippedMapSummaries(b.skipped),
 		Hooks:                hookMapSummaries(b.hooks),
+		Decisions:            decisionMapSummaries(b.decisions),
 		Annotations:          annotationMapSummaries(b.annotations),
 		TopClasses:           limitInstrumentationClasses(b.classes, 200),
 		Warnings:             b.warnings,
@@ -179,6 +201,7 @@ type instrumentationDiagnosticsRecord struct {
 	AnnotatedMethods int                               `json:"annotatedMethods"`
 	SkippedMethods   []instrumentationSkippedRecord    `json:"skippedMethods"`
 	Hooks            []instrumentationHookRecord       `json:"hooks"`
+	Decisions        []instrumentationDecisionRecord   `json:"decisions"`
 	Annotations      []instrumentationAnnotationRecord `json:"annotations"`
 }
 
@@ -194,6 +217,14 @@ type instrumentationHookRecord struct {
 	Count     uint64 `json:"count"`
 }
 
+type instrumentationDecisionRecord struct {
+	Kind   string `json:"kind"`
+	Module string `json:"module"`
+	Family string `json:"family"`
+	Reason string `json:"reason"`
+	Count  uint64 `json:"count"`
+}
+
 type instrumentationAnnotationRecord struct {
 	Owner  string `json:"owner"`
 	Screen string `json:"screen"`
@@ -206,6 +237,13 @@ type instrumentationHookKey struct {
 	intent    string
 	signature string
 	bridge    string
+}
+
+type instrumentationDecisionKey struct {
+	kind   string
+	module string
+	family string
+	reason string
 }
 
 type instrumentationAnnotationKey struct {
@@ -235,6 +273,21 @@ func hookSummaries(records []instrumentationHookRecord) []InstrumentationHookSum
 		})
 	}
 	sortHookSummaries(out)
+	return out
+}
+
+func decisionSummaries(records []instrumentationDecisionRecord) []InstrumentationDecisionSummary {
+	out := make([]InstrumentationDecisionSummary, 0, len(records))
+	for _, record := range records {
+		out = append(out, InstrumentationDecisionSummary{
+			Kind:   record.Kind,
+			Module: record.Module,
+			Family: record.Family,
+			Reason: record.Reason,
+			Count:  record.Count,
+		})
+	}
+	sortDecisionSummaries(out)
 	return out
 }
 
@@ -276,6 +329,21 @@ func hookMapSummaries(values map[instrumentationHookKey]uint64) []Instrumentatio
 	return out
 }
 
+func decisionMapSummaries(values map[instrumentationDecisionKey]uint64) []InstrumentationDecisionSummary {
+	out := make([]InstrumentationDecisionSummary, 0, len(values))
+	for key, count := range values {
+		out = append(out, InstrumentationDecisionSummary{
+			Kind:   key.kind,
+			Module: key.module,
+			Family: key.family,
+			Reason: key.reason,
+			Count:  count,
+		})
+	}
+	sortDecisionSummaries(out)
+	return out
+}
+
 func annotationMapSummaries(values map[instrumentationAnnotationKey]uint64) []InstrumentationAnnotationSummary {
 	out := make([]InstrumentationAnnotationSummary, 0, len(values))
 	for key, count := range values {
@@ -312,6 +380,24 @@ func sortHookSummaries(values []InstrumentationHookSummary) {
 			return values[i].Signature < values[j].Signature
 		}
 		return values[i].Bridge < values[j].Bridge
+	})
+}
+
+func sortDecisionSummaries(values []InstrumentationDecisionSummary) {
+	sort.SliceStable(values, func(i, j int) bool {
+		if values[i].Count != values[j].Count {
+			return values[i].Count > values[j].Count
+		}
+		if values[i].Kind != values[j].Kind {
+			return values[i].Kind < values[j].Kind
+		}
+		if values[i].Module != values[j].Module {
+			return values[i].Module < values[j].Module
+		}
+		if values[i].Family != values[j].Family {
+			return values[i].Family < values[j].Family
+		}
+		return values[i].Reason < values[j].Reason
 	})
 }
 

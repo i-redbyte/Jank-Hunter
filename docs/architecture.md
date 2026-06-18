@@ -188,10 +188,12 @@ Instrumentation matching is split into explicit extension points:
 - `MethodCall` describes the bytecode call site.
 - `SignatureSpec` and `VersionedInstrumentationBridge` map old/new library signatures to stable `HookIntent` values.
 - `InstrumentationModule` is the Chain of Responsibility unit; modules own enablement, priority and bridge families.
+- `InstrumentationBridgeProvider` feeds bridge families into the registry, so a new library/signature family does not require rewriting resolver plumbing.
 - `BytecodeCommand` objects perform stack/local mutations, keeping emit logic outside the matcher.
 - `ArtifactSchemas` versions owner-map, class-graph and instrumentation-diagnostics outputs.
 
 Adding a new OkHttp/coroutine/Handler signature should normally mean adding a signature variant to the bridge family, not editing every hook helper by hand.
+Diagnostics records matched hooks plus disabled/unsupported/skipped decisions, which makes DSL gates and unknown signatures visible in `report-diagnostics.html`.
 
 ## UI and JankStats Model
 
@@ -239,7 +241,7 @@ flowchart LR
 
 `inspect` and `compare` stream files instead of loading every event into memory. The analyzer keeps bounded maps and duration samples needed for p95/route/screen/owner reporting.
 
-The CLI command surface is registered through command objects in `cmd/jankhunter`, while analyzers stay in `internal/analyze`. Artifact loaders validate schema versions up front. Influence analysis builds class and method graph indexes, then computes relevant edges, shortest explanation paths, SCC cycles and hot paths for the standalone graph report.
+The CLI command surface is registered through command objects in `cmd/jankhunter`, while analyzers stay in `internal/analyze`. Artifact loaders validate schema versions up front. Influence analysis builds class and method graph indexes, then computes relevant edges, multi-hop shortest explanation paths, method hotspots, SCC cycles and hot paths for the standalone graph report.
 
 Compare includes:
 

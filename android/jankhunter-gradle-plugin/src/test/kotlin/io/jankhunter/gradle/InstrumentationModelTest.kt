@@ -226,6 +226,7 @@ class InstrumentationModelTest {
         val bridgeIds = VersionedBridgeCatalog.all().map { it.id }.toSet()
         val families = VersionedBridgeCatalog.all().map { it.family }.toSet()
         val moduleIds = HookIntentResolver.modules().map { it.id }.toSet()
+        val providerBridgeIds = DefaultInstrumentationBridgeProvider.bridges().map { it.id }.toSet()
 
         assertTrue("okhttp3.bridge.v3" in bridgeIds)
         assertTrue("android.handler.bridge.v1" in bridgeIds)
@@ -233,6 +234,7 @@ class InstrumentationModelTest {
         assertTrue("kotlinx.coroutines.bridge.v1" in bridgeIds)
         assertTrue("android.view.flow.bridge.v1" in bridgeIds)
         assertTrue("android.log.bridge.v1" in bridgeIds)
+        assertEquals(providerBridgeIds, bridgeIds)
         assertTrue("okhttp" in families)
         assertTrue("handler" in families)
         assertTrue("executor" in families)
@@ -260,7 +262,10 @@ class InstrumentationModelTest {
             isInterface = false,
         )
 
-        assertEquals(HookDecision.NotMatched, HookIntentResolver.resolve(call, testHookConfig()))
+        val decision = HookIntentResolver.resolve(call, testHookConfig())
+        require(decision is HookDecision.Disabled)
+        assertEquals("handler", decision.moduleId)
+        assertEquals("disabled_by_gate", decision.reason)
     }
 
     @Test
@@ -273,8 +278,57 @@ class InstrumentationModelTest {
             isInterface = false,
         )
 
-        assertEquals(HookDecision.NotMatched, HookIntentResolver.resolve(call, testHookConfig(okhttp = true)))
+        val disabled = HookIntentResolver.resolve(call, testHookConfig(okhttp = true))
+        require(disabled is HookDecision.Disabled)
+        assertEquals("websocket", disabled.moduleId)
         assertIntent(HookIntent.WrapWebSocketListener, call, testHookConfig(webSockets = true))
+    }
+
+    @Test
+    fun resolverReportsUnsupportedKnownOwnerSignature() {
+        val decision = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKEVIRTUAL,
+                owner = "android/os/Handler",
+                name = "post",
+                descriptor = "(Ljava/lang/Runnable;Ljava/lang/Object;)Z",
+                isInterface = false,
+            ),
+            testHookConfig(handlers = true),
+        )
+
+        require(decision is HookDecision.Unsupported)
+        assertEquals("handler", decision.moduleId)
+        assertEquals("unsupported_signature", decision.reason)
+    }
+
+    @Test
+    fun logSpamBridgeRejectsUnknownDescriptors() {
+        val supported = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKESTATIC,
+                owner = "android/util/Log",
+                name = "w",
+                descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;)I",
+                isInterface = false,
+            ),
+            testHookConfig(logSpam = true),
+        )
+        require(supported is HookDecision.Matched)
+        assertEquals("android.log.bridge.v1", supported.bridgeId)
+
+        val unsupported = HookIntentResolver.resolve(
+            MethodCall(
+                opcode = Opcodes.INVOKESTATIC,
+                owner = "android/util/Log",
+                name = "d",
+                descriptor = "(Ljava/lang/Object;)V",
+                isInterface = false,
+            ),
+            testHookConfig(logSpam = true),
+        )
+        require(unsupported is HookDecision.Unsupported)
+        assertEquals("logspam", unsupported.moduleId)
     }
 
     private fun assertIntent(expected: HookIntent, call: MethodCall, config: HookConfig) {

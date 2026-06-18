@@ -15,11 +15,16 @@ internal fun interface RuntimeObserver {
     fun onRuntimeEvent(event: RuntimeEvent)
 }
 
+internal fun interface RuntimeSubscription : AutoCloseable {
+    override fun close()
+}
+
 internal class RuntimeEventBus {
     private val observers = CopyOnWriteArraySet<RuntimeObserver>()
 
-    fun add(observer: RuntimeObserver) {
+    fun add(observer: RuntimeObserver): RuntimeSubscription {
         observers.add(observer)
+        return RuntimeSubscription { remove(observer) }
     }
 
     fun remove(observer: RuntimeObserver) {

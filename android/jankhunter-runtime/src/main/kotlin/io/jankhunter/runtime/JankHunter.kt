@@ -189,8 +189,8 @@ object JankHunter {
         }
     }
 
-    internal fun addRuntimeObserver(observer: RuntimeObserver) {
-        runtimeEvents.add(observer)
+    internal fun addRuntimeObserver(observer: RuntimeObserver): RuntimeSubscription {
+        return runtimeEvents.add(observer)
     }
 
     internal fun removeRuntimeObserver(observer: RuntimeObserver) {

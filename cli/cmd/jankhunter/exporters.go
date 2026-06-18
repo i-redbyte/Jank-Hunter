@@ -236,6 +236,38 @@ func influenceTable(influence analyze.InfluenceSummary) csvTable {
 			edge.Reason,
 		})
 	}
+	for _, method := range influence.MethodHotspots {
+		table.rows = append(table.rows, []string{
+			"method",
+			method.ClassName,
+			method.Method,
+			"",
+			fmt.Sprintf("%.1f", method.Weight),
+			method.Role,
+			fmt.Sprintf("%t", method.RuntimeTouched),
+			fmt.Sprintf("%d", method.Count),
+			"",
+			"",
+			"",
+			"method-level hotspot",
+		})
+	}
+	for _, path := range influence.HotPaths {
+		table.rows = append(table.rows, []string{
+			"path",
+			strings.Join(path.Nodes, " -> "),
+			"",
+			"",
+			fmt.Sprintf("%.1f", path.Weight),
+			"",
+			fmt.Sprintf("%t", path.RuntimeTarget),
+			"",
+			"",
+			"",
+			"",
+			path.Reason,
+		})
+	}
 	for _, finding := range influence.Heuristic {
 		table.rows = append(table.rows, []string{
 			"finding",

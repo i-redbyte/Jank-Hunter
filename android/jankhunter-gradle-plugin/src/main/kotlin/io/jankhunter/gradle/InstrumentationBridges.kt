@@ -53,19 +53,53 @@ internal interface VersionedInstrumentationBridge {
     val family: String
     val signatures: List<VersionedBridgeSignature>
 
+    fun relevant(call: MethodCall): Boolean {
+        return signatures.any { signature ->
+            call.owner in signature.owners && call.name in signature.names
+        }
+    }
+
     fun match(call: MethodCall): VersionedBridgeMatch? {
         val signature = signatures.firstOrNull { it.matches(call) } ?: return null
         return VersionedBridgeMatch(id, signature)
     }
 }
 
+internal fun interface InstrumentationBridgeProvider {
+    fun bridges(): List<VersionedInstrumentationBridge>
+}
+
+internal object DefaultInstrumentationBridgeProvider : InstrumentationBridgeProvider {
+    override fun bridges(): List<VersionedInstrumentationBridge> = listOf(
+        OkHttp3Bridge,
+        AndroidHandlerBridge,
+        JdkExecutorBridge,
+        KotlinxCoroutinesBridge,
+        AndroidViewFlowBridge,
+        AndroidLogSpamBridge,
+        TimberLogSpamBridge,
+    )
+}
+
+internal class InstrumentationBridgeRegistry(
+    providers: List<InstrumentationBridgeProvider>,
+) {
+    private val bridges: List<VersionedInstrumentationBridge> = providers.flatMap { it.bridges() }
+    private val byFamily: Map<String, List<VersionedInstrumentationBridge>> = bridges.groupBy { it.family }
+
+    fun family(family: String): List<VersionedInstrumentationBridge> = byFamily[family].orEmpty()
+
+    fun all(): List<VersionedInstrumentationBridge> = bridges
+}
+
 internal object VersionedBridgeCatalog {
-    val okHttp: List<VersionedInstrumentationBridge> = listOf(OkHttp3Bridge)
-    val handlers: List<VersionedInstrumentationBridge> = listOf(AndroidHandlerBridge)
-    val executors: List<VersionedInstrumentationBridge> = listOf(JdkExecutorBridge)
-    val coroutines: List<VersionedInstrumentationBridge> = listOf(KotlinxCoroutinesBridge)
-    val flows: List<VersionedInstrumentationBridge> = listOf(AndroidViewFlowBridge)
-    val logSpam: List<VersionedInstrumentationBridge> = listOf(AndroidLogSpamBridge, TimberLogSpamBridge)
+    private val registry = InstrumentationBridgeRegistry(listOf(DefaultInstrumentationBridgeProvider))
+    val okHttp: List<VersionedInstrumentationBridge> = registry.family("okhttp")
+    val handlers: List<VersionedInstrumentationBridge> = registry.family("handler")
+    val executors: List<VersionedInstrumentationBridge> = registry.family("executor")
+    val coroutines: List<VersionedInstrumentationBridge> = registry.family("coroutines")
+    val flows: List<VersionedInstrumentationBridge> = registry.family("flow")
+    val logSpam: List<VersionedInstrumentationBridge> = registry.family("logspam")
 
     fun matchOkHttp(call: MethodCall, intents: Set<String>): VersionedBridgeMatch? {
         return okHttp.firstNotNullOfOrNull { bridge ->
@@ -93,7 +127,7 @@ internal object VersionedBridgeCatalog {
         return logSpam.firstNotNullOfOrNull { it.match(call) }
     }
 
-    fun all(): List<VersionedInstrumentationBridge> = okHttp + handlers + executors + coroutines + flows + logSpam
+    fun all(): List<VersionedInstrumentationBridge> = registry.all()
 }
 
 private object OkHttp3Bridge : VersionedInstrumentationBridge {
@@ -238,18 +272,34 @@ private object AndroidLogSpamBridge : VersionedInstrumentationBridge {
     override val id: String = "android.log.bridge.v1"
     override val family: String = "logspam"
     override val signatures: List<VersionedBridgeSignature> =
-        logSpamSignatures("android/util/Log", "android.util.Log")
+        logSpamSignatures(
+            owner = "android/util/Log",
+            sourcePrefix = "android.util.Log",
+            descriptors = androidLogDescriptors,
+        )
 }
 
 private object TimberLogSpamBridge : VersionedInstrumentationBridge {
     override val id: String = "timber.log.bridge.v1"
     override val family: String = "logspam"
     override val signatures: List<VersionedBridgeSignature> =
-        logSpamSignatures("timber/log/Timber", "Timber") +
-            logSpamSignatures("timber/log/Timber\$Tree", "Timber.Tree")
+        logSpamSignatures(
+            owner = "timber/log/Timber",
+            sourcePrefix = "Timber",
+            descriptors = timberDescriptors,
+        ) +
+            logSpamSignatures(
+                owner = "timber/log/Timber\$Tree",
+                sourcePrefix = "Timber.Tree",
+                descriptors = timberDescriptors,
+            )
 }
 
-private fun logSpamSignatures(owner: String, sourcePrefix: String): List<VersionedBridgeSignature> {
+private fun logSpamSignatures(
+    owner: String,
+    sourcePrefix: String,
+    descriptors: Set<String>,
+): List<VersionedBridgeSignature> {
     return listOf(
         "v" to 2,
         "d" to 3,
@@ -264,7 +314,19 @@ private fun logSpamSignatures(owner: String, sourcePrefix: String): List<Version
             intent = HookIntent.LogSpam(source, level),
             owners = setOf(owner),
             names = setOf(name),
-            descriptorMatcher = { true },
+            descriptorMatcher = { call -> call.descriptor in descriptors },
         )
     }
 }
+
+private val androidLogDescriptors = setOf(
+    "(Ljava/lang/String;Ljava/lang/String;)I",
+    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I",
+    "(Ljava/lang/String;Ljava/lang/Throwable;)I",
+)
+
+private val timberDescriptors = setOf(
+    "(Ljava/lang/String;[Ljava/lang/Object;)V",
+    "(Ljava/lang/Throwable;Ljava/lang/String;[Ljava/lang/Object;)V",
+    "(Ljava/lang/Throwable;)V",
+)

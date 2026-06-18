@@ -8,6 +8,13 @@ internal data class HookDiagnosticKey(
     val bridge: String?,
 )
 
+internal data class DecisionDiagnosticKey(
+    val kind: String,
+    val module: String,
+    val family: String,
+    val reason: String,
+)
+
 internal data class AnnotationDiagnosticKey(
     val owner: String?,
     val screen: String?,
@@ -22,6 +29,7 @@ internal data class InstrumentationDiagnosticsRecord(
     val ignoredMethods: Int,
     val annotatedMethods: Int,
     val hooks: Map<HookDiagnosticKey, Int>,
+    val decisions: Map<DecisionDiagnosticKey, Int>,
     val annotations: Map<AnnotationDiagnosticKey, Int>,
 )
 
@@ -32,6 +40,7 @@ internal class InstrumentationDiagnosticsClassBuilder(
     private var ignoredMethods = 0
     private val skippedMethods = linkedMapOf<String, Int>()
     private val hooks = linkedMapOf<HookDiagnosticKey, Int>()
+    private val decisions = linkedMapOf<DecisionDiagnosticKey, Int>()
     private val annotations = linkedMapOf<AnnotationDiagnosticKey, Int>()
 
     fun recordSkippedMethod(reason: String) {
@@ -58,6 +67,32 @@ internal class InstrumentationDiagnosticsClassBuilder(
         hooks[key] = (hooks[key] ?: 0) + 1
     }
 
+    fun recordDecision(decision: HookDecision) {
+        val key = when (decision) {
+            is HookDecision.Disabled -> DecisionDiagnosticKey(
+                kind = "disabled",
+                module = decision.moduleId,
+                family = decision.family,
+                reason = decision.reason,
+            )
+            is HookDecision.Unsupported -> DecisionDiagnosticKey(
+                kind = "unsupported",
+                module = decision.moduleId,
+                family = decision.family,
+                reason = decision.reason,
+            )
+            is HookDecision.Skipped -> DecisionDiagnosticKey(
+                kind = "skipped",
+                module = decision.moduleId,
+                family = decision.family,
+                reason = decision.reason,
+            )
+            is HookDecision.Matched,
+            HookDecision.NotMatched -> return
+        }
+        decisions[key] = (decisions[key] ?: 0) + 1
+    }
+
     fun finish(): InstrumentationDiagnosticsRecord {
         return InstrumentationDiagnosticsRecord(
             className = className.replace('/', '.'),
@@ -66,6 +101,7 @@ internal class InstrumentationDiagnosticsClassBuilder(
             ignoredMethods = ignoredMethods,
             annotatedMethods = annotations.values.sum(),
             hooks = hooks.toMap(),
+            decisions = decisions.toMap(),
             annotations = annotations.toMap(),
         )
     }
@@ -110,6 +146,8 @@ internal object InstrumentationDiagnosticsWriter {
             appendSkipped(record.skippedMethods)
             append("],\"hooks\":[")
             appendHooks(record.hooks)
+            append("],\"decisions\":[")
+            appendDecisions(record.decisions)
             append("],\"annotations\":[")
             appendAnnotations(record.annotations)
             append("]}\n")
@@ -145,6 +183,25 @@ internal object InstrumentationDiagnosticsWriter {
                     append(escape(it))
                     append('"')
                 }
+                append('}')
+            }
+    }
+
+    private fun StringBuilder.appendDecisions(decisions: Map<DecisionDiagnosticKey, Int>) {
+        decisions.entries
+            .sortedWith(compareByDescending<Map.Entry<DecisionDiagnosticKey, Int>> { it.value }.thenBy { it.key.kind })
+            .forEachIndexed { index, entry ->
+                if (index > 0) append(',')
+                append("{\"kind\":\"")
+                append(escape(entry.key.kind))
+                append("\",\"module\":\"")
+                append(escape(entry.key.module))
+                append("\",\"family\":\"")
+                append(escape(entry.key.family))
+                append("\",\"reason\":\"")
+                append(escape(entry.key.reason))
+                append("\",\"count\":")
+                append(entry.value)
                 append('}')
             }
     }

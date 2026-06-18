@@ -162,9 +162,15 @@ internal interface InstrumentationModule {
     val bridges: List<VersionedInstrumentationBridge>
     fun enabled(config: HookConfig): Boolean
 
+    fun relevant(call: MethodCall): Boolean {
+        return bridges.any { it.relevant(call) }
+    }
+
     fun match(call: MethodCall, config: HookConfig): HookDecision {
-        if (!enabled(config)) return HookDecision.NotMatched
-        return bridges.firstNotNullOfOrNull { it.match(call) }?.toDecision() ?: HookDecision.NotMatched
+        if (!relevant(call)) return HookDecision.NotMatched
+        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
+        return bridges.firstNotNullOfOrNull { it.match(call) }?.toDecision()
+            ?: HookDecision.Unsupported(id, family, "unsupported_signature")
     }
 }
 
@@ -173,6 +179,24 @@ internal sealed class HookDecision {
         val intent: HookIntent,
         val signatureId: String,
         val bridgeId: String? = null,
+    ) : HookDecision()
+
+    data class Disabled(
+        val moduleId: String,
+        val family: String,
+        val reason: String,
+    ) : HookDecision()
+
+    data class Unsupported(
+        val moduleId: String,
+        val family: String,
+        val reason: String,
+    ) : HookDecision()
+
+    data class Skipped(
+        val moduleId: String,
+        val family: String,
+        val reason: String,
     ) : HookDecision()
 
     data object NotMatched : HookDecision()
@@ -436,11 +460,15 @@ internal class InstrumentationModuleRegistry(
     private val modules = modules.sortedWith(compareBy<InstrumentationModule> { it.priority }.thenBy { it.id })
 
     fun resolve(call: MethodCall, config: HookConfig): HookDecision {
+        var firstDiagnostic: HookDecision? = null
         modules.forEach { module ->
             val decision = module.match(call, config)
             if (decision is HookDecision.Matched) return decision
+            if (decision !is HookDecision.NotMatched && firstDiagnostic == null) {
+                firstDiagnostic = decision
+            }
         }
-        return HookDecision.NotMatched
+        return firstDiagnostic ?: HookDecision.NotMatched
     }
 
     fun modules(): List<InstrumentationModule> = modules
@@ -478,9 +506,13 @@ private object OkHttpInstrumentationModule : InstrumentationModule {
 
     override fun enabled(config: HookConfig): Boolean = config.okhttp
 
+    override fun relevant(call: MethodCall): Boolean = relevantOkHttp(call, intents)
+
     override fun match(call: MethodCall, config: HookConfig): HookDecision {
-        if (!enabled(config)) return HookDecision.NotMatched
-        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision() ?: HookDecision.NotMatched
+        if (!relevant(call)) return HookDecision.NotMatched
+        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
+        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision()
+            ?: HookDecision.Unsupported(id, family, "unsupported_signature")
     }
 }
 
@@ -493,9 +525,23 @@ private object WebSocketInstrumentationModule : InstrumentationModule {
 
     override fun enabled(config: HookConfig): Boolean = config.webSockets
 
+    override fun relevant(call: MethodCall): Boolean = relevantOkHttp(call, intents)
+
     override fun match(call: MethodCall, config: HookConfig): HookDecision {
-        if (!enabled(config)) return HookDecision.NotMatched
-        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision() ?: HookDecision.NotMatched
+        if (!relevant(call)) return HookDecision.NotMatched
+        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
+        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision()
+            ?: HookDecision.Unsupported(id, family, "unsupported_signature")
+    }
+}
+
+private fun relevantOkHttp(call: MethodCall, intents: Set<String>): Boolean {
+    return VersionedBridgeCatalog.okHttp.any { bridge ->
+        bridge.signatures.any { signature ->
+            call.owner in signature.owners &&
+                call.name in signature.names &&
+                signature.intent.id in intents
+        }
     }
 }
 

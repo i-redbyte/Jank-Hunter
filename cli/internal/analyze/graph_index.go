@@ -245,62 +245,161 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 	if i == nil || limit == 0 {
 		return nil
 	}
+	type source struct {
+		className string
+		score     float64
+	}
+	sources := make([]source, 0, len(scores))
+	for className, score := range scores {
+		if score <= 0 {
+			continue
+		}
+		if _, ok := i.Outgoing[className]; !ok {
+			continue
+		}
+		sources = append(sources, source{className: className, score: score})
+	}
+	sort.Slice(sources, func(a, b int) bool {
+		if sources[a].score == sources[b].score {
+			return sources[a].className < sources[b].className
+		}
+		return sources[a].score > sources[b].score
+	})
+	if len(sources) > 80 {
+		sources = sources[:80]
+	}
+
 	type candidate struct {
-		from   string
-		to     string
-		weight float64
+		nodes         []string
+		weight        float64
+		runtimeTarget bool
+	}
+	type state struct {
+		node  string
+		edges []ClassGraphEdge
 	}
 	candidates := []candidate{}
-	for from, edges := range i.Outgoing {
-		fromScore := scores[from]
-		if fromScore == 0 {
-			fromScore = 0.25
-		}
-		for _, edge := range edges {
-			toScore := scores[edge.To]
-			_, runtimeTarget := runtimeTargets[edge.To]
-			if toScore == 0 && !runtimeTarget {
+	for _, src := range sources {
+		queue := []state{{node: src.className}}
+		seenDepth := map[string]int{src.className: 0}
+		explored := 0
+		for len(queue) > 0 && explored < 2048 {
+			current := queue[0]
+			queue = queue[1:]
+			explored++
+			if len(current.edges) >= 4 {
 				continue
 			}
-			weight := math.Log1p(float64(edge.Count)) * (1 + fromScore*0.2 + toScore*0.8)
-			if runtimeTarget {
-				weight *= 1.35
+			for _, edge := range i.Outgoing[current.node] {
+				if edge.To == src.className {
+					continue
+				}
+				nextEdges := append(append([]ClassGraphEdge{}, current.edges...), edge)
+				depth := len(nextEdges)
+				if previousDepth, seen := seenDepth[edge.To]; seen && previousDepth <= depth {
+					continue
+				}
+				seenDepth[edge.To] = depth
+				_, runtimeTarget := runtimeTargets[edge.To]
+				targetScore := scores[edge.To]
+				if runtimeTarget || targetScore > 0 {
+					candidates = append(candidates, candidate{
+						nodes:         pathNodes(nextEdges),
+						weight:        hotPathWeight(nextEdges, src.score, targetScore, runtimeTarget),
+						runtimeTarget: runtimeTarget,
+					})
+				}
+				if depth < 4 {
+					queue = append(queue, state{node: edge.To, edges: nextEdges})
+				}
 			}
-			candidates = append(candidates, candidate{from: from, to: edge.To, weight: weight})
 		}
 	}
 	sort.Slice(candidates, func(a, b int) bool {
 		if candidates[a].weight == candidates[b].weight {
-			if candidates[a].from == candidates[b].from {
-				return candidates[a].to < candidates[b].to
-			}
-			return candidates[a].from < candidates[b].from
+			return stringsKey(candidates[a].nodes) < stringsKey(candidates[b].nodes)
 		}
 		return candidates[a].weight > candidates[b].weight
 	})
 	seen := map[string]struct{}{}
 	out := []InfluencePath{}
 	for _, candidate := range candidates {
-		pathEdges := i.ShortestPath(candidate.from, candidate.to, 4)
-		if len(pathEdges) == 0 {
-			pathEdges = []ClassGraphEdge{{From: candidate.from, To: candidate.to}}
-		}
-		nodes := pathNodes(pathEdges)
-		key := stringsKey(nodes)
+		key := stringsKey(candidate.nodes)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		_, runtimeTarget := runtimeTargets[candidate.to]
 		out = append(out, InfluencePath{
-			Nodes:         nodes,
+			Nodes:         candidate.nodes,
 			Weight:        math.Round(candidate.weight*10) / 10,
-			RuntimeTarget: runtimeTarget,
-			Reason:        hotPathReason(runtimeTarget),
+			RuntimeTarget: candidate.runtimeTarget,
+			Reason:        hotPathReason(candidate.runtimeTarget),
 		})
 		if limit > 0 && len(out) >= limit {
 			break
 		}
+	}
+	return out
+}
+
+func (i *MethodGraphIndex) HotMethods(scores map[string]float64, runtimeTargets map[string]struct{}, limit int) []InfluenceMethod {
+	if i == nil || limit == 0 {
+		return nil
+	}
+	type aggregate struct {
+		item InfluenceMethod
+	}
+	aggregates := map[string]*aggregate{}
+	add := func(className string, method string, role string, count uint64, score float64, runtimeTouched bool) {
+		if method == "" || method == "<unknown>" {
+			return
+		}
+		key := className + "\x00" + method + "\x00" + role
+		row := aggregates[key]
+		if row == nil {
+			row = &aggregate{item: InfluenceMethod{
+				ClassName: className,
+				Method:    method,
+				Role:      role,
+			}}
+			aggregates[key] = row
+		}
+		row.item.Count += count
+		row.item.Weight += math.Log1p(float64(count)) * (1 + score)
+		row.item.RuntimeTouched = row.item.RuntimeTouched || runtimeTouched
+	}
+	for _, edges := range i.Outgoing {
+		for _, edge := range edges {
+			fromScore := scores[edge.FromClass]
+			toScore := scores[edge.ToClass]
+			_, fromRuntime := runtimeTargets[edge.FromClass]
+			_, toRuntime := runtimeTargets[edge.ToClass]
+			if fromScore == 0 && toScore == 0 && !fromRuntime && !toRuntime {
+				continue
+			}
+			add(edge.FromClass, edge.FromMethod, "caller", edge.Count, fromScore, fromRuntime || toRuntime)
+			add(edge.ToClass, edge.ToMethod, "callee", edge.Count, toScore, fromRuntime || toRuntime)
+		}
+	}
+	out := make([]InfluenceMethod, 0, len(aggregates))
+	for _, row := range aggregates {
+		row.item.Weight = math.Round(row.item.Weight*10) / 10
+		out = append(out, row.item)
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Weight == out[b].Weight {
+			if out[a].ClassName == out[b].ClassName {
+				if out[a].Method == out[b].Method {
+					return out[a].Role < out[b].Role
+				}
+				return out[a].Method < out[b].Method
+			}
+			return out[a].ClassName < out[b].ClassName
+		}
+		return out[a].Weight > out[b].Weight
+	})
+	if limit > 0 && len(out) > limit {
+		return out[:limit]
 	}
 	return out
 }
@@ -403,4 +502,20 @@ func hotPathReason(runtimeTarget bool) string {
 		return "ведет к классу с runtime-симптомами"
 	}
 	return "сильная статическая связь рядом с проблемной зоной"
+}
+
+func hotPathWeight(edges []ClassGraphEdge, sourceScore float64, targetScore float64, runtimeTarget bool) float64 {
+	var edgeWeight float64
+	for _, edge := range edges {
+		edgeWeight += math.Log1p(float64(edge.Count))
+	}
+	if edgeWeight == 0 {
+		edgeWeight = 1
+	}
+	depthPenalty := 1 / math.Sqrt(float64(len(edges)))
+	weight := edgeWeight * depthPenalty * (1 + sourceScore*0.25 + targetScore*0.75)
+	if runtimeTarget {
+		weight *= 1.35
+	}
+	return weight
 }

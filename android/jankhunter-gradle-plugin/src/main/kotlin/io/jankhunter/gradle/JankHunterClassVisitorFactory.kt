@@ -307,6 +307,8 @@ private class JankHunterMethodVisitor(
         }
         if (decision is HookDecision.Matched) {
             diagnostics.recordHook(decision)
+        } else {
+            diagnostics.recordDecision(decision)
         }
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
@@ -558,15 +560,15 @@ internal object InstrumentationHooks {
         return VersionedBridgeCatalog.matchFlow(methodCall(owner, name, descriptor)) != null
     }
 
-    fun logSpamLevel(owner: String, name: String): Int? {
-        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, "()V"))
+    fun logSpamLevel(owner: String, name: String, descriptor: String): Int? {
+        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.LogSpam }
             ?.level
     }
 
-    fun logSpamSource(owner: String, name: String): String {
-        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, "()V"))
+    fun logSpamSource(owner: String, name: String, descriptor: String): String {
+        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, descriptor))
             ?.intent
             ?.let { it as? HookIntent.LogSpam }
             ?.source

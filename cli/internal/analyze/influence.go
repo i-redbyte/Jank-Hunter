@@ -372,6 +372,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 	}
 	runtimeTargets := b.runtimeTargets()
 	hotPaths := b.hotPaths(runtimeTargets)
+	methodHotspots := b.methodHotspots(runtimeTargets)
 	cycles := b.cycles(runtimeTargets)
 
 	out := InfluenceSummary{
@@ -387,6 +388,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		TopNodes:         allNodes,
 		TopEdges:         edges,
 		HotPaths:         hotPaths,
+		MethodHotspots:   methodHotspots,
 		Cycles:           cycles,
 		StandaloneReason: "Подробный граф вынесен отдельно, чтобы большой проект не превращал основной математический отчет в тяжелую страницу.",
 	}
@@ -419,6 +421,13 @@ func (b *influenceBuilder) hotPaths(runtimeTargets map[string]struct{}) []Influe
 		return nil
 	}
 	return b.staticIndex.HotPaths(b.scoreByClass(), runtimeTargets, 8)
+}
+
+func (b *influenceBuilder) methodHotspots(runtimeTargets map[string]struct{}) []InfluenceMethod {
+	if b.methodIndex == nil {
+		return nil
+	}
+	return b.methodIndex.HotMethods(b.scoreByClass(), runtimeTargets, 12)
 }
 
 func (b *influenceBuilder) cycles(runtimeTargets map[string]struct{}) []InfluenceCycle {
