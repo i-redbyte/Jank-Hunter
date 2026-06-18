@@ -54,7 +54,7 @@ make build BUILD_OS=darwin BUILD_ARCH=arm64 OUT=bin/jankhunter-darwin-arm64
 Архивы для нескольких платформ:
 
 ```bash
-make release VERSION=0.1.0
+make release VERSION=1.0.0
 ```
 
 ## Быстрая проверка

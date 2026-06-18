@@ -41,6 +41,19 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "another.custom.name-math.html"), `href="another.custom.name-influence.html"`)
 }
 
+func TestVersionOutputIsHumanReadable(t *testing.T) {
+	var buffer bytes.Buffer
+	printVersion(&buffer)
+
+	text := buffer.String()
+	if !strings.Contains(text, "Jank Hunter CLI 1.0.0") {
+		t.Fatalf("version output missing CLI version: %q", text)
+	}
+	if !strings.Contains(text, ".jhlog format") {
+		t.Fatalf("version output missing log format: %q", text)
+	}
+}
+
 func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 

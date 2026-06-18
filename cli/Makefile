@@ -3,7 +3,7 @@ BIN_DIR ?= bin
 DIST ?= dist
 TOOLS_DIR ?= .tools
 GO_VERSION ?= 1.22.12
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= 1.0.0
 PLATFORMS ?= darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 PREFIX ?= /usr/local
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-var version = "dev"
+var version = "1.0.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -34,7 +35,7 @@ func main() {
 	case "problems":
 		err = runProblems(os.Args[2:])
 	case "version":
-		fmt.Println(version)
+		printVersion(os.Stdout)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -47,6 +48,11 @@ func main() {
 		}
 		os.Exit(1)
 	}
+}
+
+func printVersion(out io.Writer) {
+	fmt.Fprintf(out, "Jank Hunter CLI %s\n", version)
+	fmt.Fprintf(out, ".jhlog format %d\n", jhlog.FormatVersion)
 }
 
 func usage() {

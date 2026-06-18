@@ -109,9 +109,9 @@ quit
 
 ```kotlin
 dependencies {
-    compileOnly("io.jankhunter:jankhunter-annotations:0.1.0-SNAPSHOT")
-    debugImplementation("io.jankhunter:jankhunter-runtime:0.1.0-SNAPSHOT")
-    debugImplementation("io.jankhunter:jankhunter-okhttp3:0.1.0-SNAPSHOT")
+    compileOnly("io.jankhunter:jankhunter-annotations:1.0.0")
+    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.0")
+    debugImplementation("io.jankhunter:jankhunter-okhttp3:1.0.0")
 }
 ```
 
@@ -175,8 +175,8 @@ CLI строит два основных режима:
 GitHub Actions собирает релиз по тегу `v*` или вручную из workflow `Release`.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 В GitHub Release попадают:
@@ -186,7 +186,7 @@ git push origin v0.1.0
 - `jankhunter_<version>_darwin_arm64.tar.gz` - CLI для macOS Apple Silicon;
 - `checksums.txt` - SHA-256 суммы релизных файлов.
 
-Для ручного релиза откройте `Actions -> Release -> Run workflow` и укажите версию без `v`, например `0.1.0`.
+Для ручного релиза откройте `Actions -> Release -> Run workflow` и укажите версию без `v`, например `1.0.0`.
 
 ## Проверки
 
