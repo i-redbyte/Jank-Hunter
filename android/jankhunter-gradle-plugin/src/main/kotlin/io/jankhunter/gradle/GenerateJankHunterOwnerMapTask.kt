@@ -39,6 +39,9 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val flowInteractions: Property<Boolean>
 
     @get:Input
+    abstract val lifecycleLeaks: Property<Boolean>
+
+    @get:Input
     abstract val logSpam: Property<Boolean>
 
     @get:Input
@@ -96,6 +99,7 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
             executors = executors.getOrElse(false),
             coroutines = coroutines.getOrElse(false),
             flowInteractions = flowInteractions.getOrElse(false),
+            lifecycleLeaks = lifecycleLeaks.getOrElse(false),
             logSpam = logSpam.getOrElse(false),
             classGraph = classGraph.getOrElse(false),
             runtimeCallGraph = runtimeCallGraph.getOrElse(false),
@@ -151,6 +155,7 @@ internal object OwnerMapWriter {
         executors: Boolean,
         coroutines: Boolean,
         flowInteractions: Boolean,
+        lifecycleLeaks: Boolean,
         logSpam: Boolean,
         classGraph: Boolean,
         runtimeCallGraph: Boolean,
@@ -178,6 +183,7 @@ internal object OwnerMapWriter {
             appendHook("executors", executors)
             appendHook("coroutines", coroutines)
             appendHook("flowInteractions", flowInteractions)
+            appendHook("lifecycleLeaks", lifecycleLeaks)
             appendHook("logSpam", logSpam)
             appendHook("classGraph", classGraph)
             appendHook("runtimeCallGraph", runtimeCallGraph)

@@ -192,6 +192,8 @@ type MemoryLeakSuspect struct {
 	AlternativePaths         [][]HeapPathElement
 	AlternativePathSummaries []string
 	RetainedClassSample      []string
+	LeakPattern              string
+	ReferenceMatchers        []string
 	RetainedSizeConfidence   string
 	RetainedSizeExplanation  string
 	DominatorPath            []string
@@ -233,6 +235,8 @@ type HeapLeakEvidence struct {
 	ReferencePath       []HeapPathElement   `json:"reference_path,omitempty"`
 	AlternativePaths    [][]HeapPathElement `json:"alternative_paths,omitempty"`
 	DominatorTree       []string            `json:"dominator_tree,omitempty"`
+	LeakPattern         string              `json:"leak_pattern,omitempty"`
+	ReferenceMatchers   []string            `json:"reference_matchers,omitempty"`
 	Source              string              `json:"source,omitempty"`
 	Confidence          string              `json:"confidence,omitempty"`
 }

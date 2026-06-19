@@ -49,6 +49,9 @@ internal class ObjectRetentionWatcher(
     }
 
     private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?) {
+        if (isAlreadyWatched(instance)) {
+            return
+        }
         watched.add(
             WatchedReference(
                 instance,
@@ -59,6 +62,15 @@ internal class ObjectRetentionWatcher(
                 clock(),
             ),
         )
+    }
+
+    private fun isAlreadyWatched(instance: Any): Boolean {
+        for (ref in watched) {
+            if (!ref.removed && ref.get() === instance) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun loop() {

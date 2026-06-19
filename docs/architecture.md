@@ -233,10 +233,14 @@ The retained-object watcher is a lightweight signal, not a heap analyzer:
 
 - stores weak references and safe class/owner labels;
 - stores the watch-time screen/flow/step context, but not object fields or stringified object state;
+- deduplicates repeated watch calls for the same live object, so overlapping lifecycle callbacks and ASM hooks do not inflate retained counts;
 - checks once after `retainedObjectDelayMs`;
 - optionally requests lightweight GC for debug/QA;
 - checks again before reporting;
 - groups by class/owner and writes count plus max age.
+- automatically watches Activity destroy through dependency-free application callbacks.
+- can be fed by ASM lifecycle leak hooks for Fragment/ViewModel/View/Dialog/Service methods without adding AndroidX to runtime core.
+- `onDestroyView` lifecycle hooks observe the current Fragment view and likely binding/view fields before cleanup, which makes clean code disappear naturally after retained-delay and leaks stay visible.
 
 It never records `object.toString()`, fields, heap dumps, headers, bodies, tokens, or user data.
 

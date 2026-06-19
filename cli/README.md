@@ -152,7 +152,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
+`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Когда есть несколько близких путей, CLI выбирает primary path по actionability: app-holder, holder field, GC root category, leak pattern и reference matcher hints важнее шумной system-only цепочки близкого размера. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
 
 Как читать leak report:
 

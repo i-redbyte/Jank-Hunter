@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "purpose": "Real-world memory leak validation scorecard for Jank Hunter vs LeakCanary.",
+  "target_app": {
+    "name": "",
+    "baseline_version": "",
+    "candidate_version": "",
+    "package_name": "",
+    "device_matrix": [],
+    "scenario_owner": "",
+    "date": ""
+  },
+  "artifacts": {
+    "baseline_jhlog": [],
+    "candidate_jhlog": [],
+    "heap_dumps": [],
+    "jankhunter_inspect_html": "",
+    "jankhunter_compare_html": "",
+    "jankhunter_json": "",
+    "leakcanary_exports": [],
+    "notes": ""
+  },
+  "scenarios": [
+    {
+      "name": "clean_watched_object",
+      "expected": "no high or medium retained leak",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "activity_singleton_cache",
+      "expected": "activity leak detected",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "fragment_binding_not_cleared",
+      "expected": "fragment view or binding leak detected",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "viewmodel_retains_view_or_activity",
+      "expected": "viewmodel leak detected after onCleared",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "dialog_or_listener_retains_activity",
+      "expected": "dialog or callback leak detected",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "recyclerview_viewholder_binding_retained",
+      "expected": "viewholder or binding leak detected",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "candidate_only_leak_burst",
+      "expected": "compare marks new or worse",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    },
+    {
+      "name": "fixed_leak_in_candidate",
+      "expected": "compare marks better or resolved",
+      "jankhunter_result": "",
+      "leakcanary_result": "",
+      "false_positive": false,
+      "false_negative": false,
+      "notes": ""
+    }
+  ],
+  "scores": {
+    "retained_object_recall": {
+      "weight": 25,
+      "score_0_to_10": 0,
+      "evidence": ""
+    },
+    "false_positive_control": {
+      "weight": 20,
+      "score_0_to_10": 0,
+      "evidence": ""
+    },
+    "heap_graph_actionability": {
+      "weight": 20,
+      "score_0_to_10": 0,
+      "evidence": ""
+    },
+    "lifecycle_coverage": {
+      "weight": 15,
+      "score_0_to_10": 0,
+      "evidence": ""
+    },
+    "compare_stability": {
+      "weight": 10,
+      "score_0_to_10": 0,
+      "evidence": ""
+    },
+    "junior_readability": {
+      "weight": 10,
+      "score_0_to_10": 0,
+      "evidence": ""
+    }
+  },
+  "summary": {
+    "weighted_score_0_to_10": 0,
+    "precision": null,
+    "recall_vs_leakcanary": null,
+    "known_false_positives": [],
+    "known_false_negatives": [],
+    "go_no_go": "not_run",
+    "next_actions": []
+  }
+}

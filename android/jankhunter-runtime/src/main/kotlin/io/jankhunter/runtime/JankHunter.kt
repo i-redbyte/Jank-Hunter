@@ -11,6 +11,7 @@ import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
+import io.jankhunter.runtime.internal.system.RetainedLifecycleClassifier
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import java.io.File
 import java.util.concurrent.Callable
@@ -793,6 +794,58 @@ object JankHunter {
     @JvmStatic
     fun watchFragment(fragmentLike: Any?, name: String?, ownerHint: String?) {
         watchObject(fragmentLike, name ?: fragmentLike?.javaClass?.name, ownerHint)
+    }
+
+    @JvmStatic
+    fun watchView(view: View?) {
+        watchView(view, null)
+    }
+
+    @JvmStatic
+    fun watchView(view: View?, ownerHint: String?) {
+        watchObject(view, view?.javaClass?.name, firstContextValue(ownerHint, view?.javaClass?.name))
+    }
+
+    @JvmStatic
+    fun watchViewModel(viewModelLike: Any?, name: String? = null) {
+        watchViewModel(viewModelLike, name, null)
+    }
+
+    @JvmStatic
+    fun watchViewModel(viewModelLike: Any?, name: String?, ownerHint: String?) {
+        watchObject(viewModelLike, name ?: viewModelLike?.javaClass?.name, ownerHint)
+    }
+
+    @JvmStatic
+    fun watchService(service: android.app.Service?) {
+        watchService(service, null)
+    }
+
+    @JvmStatic
+    fun watchService(service: android.app.Service?, ownerHint: String?) {
+        watchObject(service, service?.javaClass?.name, firstContextValue(ownerHint, service?.javaClass?.name))
+    }
+
+    @JvmStatic
+    fun watchDialog(dialog: android.app.Dialog?) {
+        watchDialog(dialog, null)
+    }
+
+    @JvmStatic
+    fun watchDialog(dialog: android.app.Dialog?, ownerHint: String?) {
+        watchObject(dialog, dialog?.javaClass?.name, firstContextValue(ownerHint, dialog?.javaClass?.name))
+    }
+
+    @JvmStatic
+    fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
+        val targets = RetainedLifecycleClassifier.targets(instance, lifecycleEvent, ownerHint)
+        if (targets.isEmpty()) return
+        for (target in targets) {
+            withFlow(target.flow) {
+                markFlowStep(target.step)
+                watchObject(target.instance, target.description, target.ownerHint)
+            }
+        }
     }
 
     @JvmStatic

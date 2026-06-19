@@ -331,6 +331,9 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 		if leak.ObjectKind != "" {
 			detail += " Тип: " + leak.ObjectKind + "."
 		}
+		if leak.LeakPattern != "" {
+			detail += " Паттерн: " + leak.LeakPattern + "."
+		}
 		if leak.HeapEvidence {
 			detail += " Heap dump подтвердил путь до GC root"
 			if leak.GCRoot != "" {

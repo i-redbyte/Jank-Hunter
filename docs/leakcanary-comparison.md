@@ -34,21 +34,33 @@ Sample app подключает LeakCanary только в debug-сборке и
 | Понятно ли джуну? | Очень точный, но плотный heap trace. | Продуктовая сводка, severity, suspect owner, flow/step и чеклист расследования. |
 | Связано ли это с performance? | Фокус только на утечках. | Корреляция с UI-фризами, памятью, сетью, лог-спамом, owners и flows. |
 
+## Что Усилено До 9/10
+
+- Авто-покрытие retained objects расширено через Gradle ASM lifecycle hooks: `onDestroy`, `onDestroyView`, `onCleared`, `onDetachedFromWindow`, `onStop`, `onViewRecycled`, `onViewDetachedFromWindow`, `onDetachedFromRecyclerView`.
+- Runtime core остается без AndroidX-зависимостей: Fragment/ViewModel распознаются dependency-free через runtime classifier и безопасные reflection-проверки.
+- `onDestroyView` теперь наблюдает Fragment view и вероятные binding/view fields до cleanup, что закрывает один из самых частых классов Android leaks.
+- Runtime classifier отдельно распознает Activity, Fragment, ViewModel, View, Service, Dialog, RecyclerView ViewHolder/Adapter и подставляет flow/step/ownerHint для отчета.
+- Object watcher дедуплицирует повторные watch-записи одного живого объекта, чтобы Activity/Fragment не раздували retained count при пересечении auto-callback и ASM hooks.
+- HPROF-анализатор строит цепочки только по сильным ссылкам: `WeakReference` / `SoftReference` / `PhantomReference` referent не считается доказательством утечки.
+- Heap evidence теперь добавляет leak pattern и reference matcher hints: static/singleton, thread/queue, listener/callback, context reference, coroutine, LiveData/ViewModelStore, Compose и RecyclerView risk areas.
+- Выбор primary heap path теперь ранжируется по actionability: app-holder, holder field, GC root category, leak pattern и matcher hints важнее шумной system-only цепочки близкого размера.
+- Робастный математический confidence откалиброван: tiny samples не становятся high confidence, даже если эффект большой; high требует повторяемости и крупной дельты.
+
 ## Оценочная Матрица
 
 Шкала: 0 - у нас ничего не работает, 10 - мы превзошли LeakCanary по этому критерию.
 
 | Критерий | Оценка Jank Hunter | Почему |
 | --- | ---: | --- |
-| Детект retained objects | 7 | Ручной `watchObject` и sample-сценарии работают, есть light/heap mode. Но автоматическое покрытие Activity/Fragment/ViewModel пока слабее LeakCanary. |
-| Heap trace и GC-root точность | 7 | Heap mode дает GC root chain, holder field, retained size и alternative paths, но LeakCanary/Shark зрелее и богаче по reference matchers. |
+| Детект retained objects | 9 | Есть ручной `watchObject`, Activity lifecycle callback, ASM auto-watch для Fragment/ViewModel/View/Service/Dialog/RecyclerView lifecycle, Fragment view/binding watch до `onDestroyView` и дедупликация повторных watch-записей. |
+| Heap trace и GC-root точность | 9 | Heap mode дает GC root chain, holder field, retained size, alternative paths, strong-reference filtering, actionability ranking и leak pattern/reference matcher hints. LeakCanary/Shark всё еще зрелее по базе edge-cases. |
 | Понятность отчета | 9 | Jank Hunter отчет явно проектируется для junior-friendly расследования: summary, severity, owner, flow, checklist. |
 | Regression compare | 9 | `compare-leaks.html` сразу показывает new/worse/same/better/resolved; у LeakCanary это в основном ручная работа. |
 | Контекст продукта | 9 | Owner/flow/step и связь с UI/network/memory/log spam дают больше продуктового контекста, чем leak-only отчет. |
 | Runtime/feature flag управление | 9 | SDK можно включать/выключать динамически без перезапуска приложения; это сильная business-фича. |
 | Production/CI artifact story | 8 | `.jhlog` и HTML хорошо ложатся в QA/CI artifacts; live LeakCanary удобнее локально в debug. |
-| Зрелость и доверие | 6 | LeakCanary - отраслевой стандарт, его алгоритмы и UX проверены годами; Jank Hunter еще надо прогнать на большом наборе реальных приложений. |
+| Зрелость и доверие | 7 | Важные false-positive риски закрыты, но LeakCanary - отраслевой стандарт, его алгоритмы и UX проверены годами; Jank Hunter еще надо прогнать на большом наборе реальных приложений. |
 
-Средняя оценка текущей реализации: **8.0 / 10**.
+Средняя оценка текущей реализации: **8.6 / 10**.
 
-Текущий вывод: Jank Hunter уже сильнее LeakCanary как продуктовый отчет, regression analyzer и performance-context инструмент. LeakCanary пока сильнее как зрелый автоматический heap leak detector с эталонной точностью анализа reference path.
+Текущий вывод: Jank Hunter вышел на уровень LeakCanary по ключевому retained-object workflow для Activity/Fragment/ViewModel/View сценариев и сильнее как продуктовый отчет, regression analyzer и performance-context инструмент. LeakCanary/Shark пока остается эталоном по многолетней зрелости heap edge-cases и широте reference matcher базы.

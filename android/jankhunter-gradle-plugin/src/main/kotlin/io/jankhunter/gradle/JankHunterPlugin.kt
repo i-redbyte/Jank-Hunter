@@ -107,6 +107,7 @@ class JankHunterPlugin : Plugin<Project> {
                 it.executors.set(extension.instrument.executors)
                 it.coroutines.set(extension.instrument.coroutines)
                 it.flowInteractions.set(extension.instrument.flowInteractions)
+                it.lifecycleLeaks.set(extension.instrument.lifecycleLeaks)
                 it.logSpam.set(extension.instrument.logSpam)
                 it.classGraph.set(extension.instrument.classGraph)
                 it.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
@@ -169,6 +170,7 @@ class JankHunterPlugin : Plugin<Project> {
                 params.executors.set(extension.instrument.executors)
                 params.coroutines.set(extension.instrument.coroutines)
                 params.flowInteractions.set(extension.instrument.flowInteractions)
+                params.lifecycleLeaks.set(extension.instrument.lifecycleLeaks)
                 params.logSpam.set(extension.instrument.logSpam)
                 params.classGraph.set(extension.instrument.classGraph)
                 params.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
@@ -190,7 +192,7 @@ class JankHunterPlugin : Plugin<Project> {
             project.logger.lifecycle(
                 "Jank Hunter variant {} configured. " +
                     "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
-                    "flowInteractions={} logSpam={} classGraph={} runtimeCallGraph={} " +
+                    "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
                     "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
                     "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                     "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
@@ -203,6 +205,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.instrument.executors,
                 extension.instrument.coroutines,
                 extension.instrument.flowInteractions,
+                extension.instrument.lifecycleLeaks,
                 extension.instrument.logSpam,
                 extension.instrument.classGraph,
                 extension.instrument.runtimeCallGraph,

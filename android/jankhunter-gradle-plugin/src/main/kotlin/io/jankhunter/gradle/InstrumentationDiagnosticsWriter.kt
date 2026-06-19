@@ -71,6 +71,17 @@ internal class InstrumentationDiagnosticsClassBuilder(
         hooks[key] = (hooks[key] ?: 0) + 1
     }
 
+    fun recordLifecycleHook(methodName: String, descriptor: String, superName: String?) {
+        val key = HookDiagnosticKey(
+            intent = "lifecycle.watch_retained",
+            signature = "android.lifecycle.$methodName$descriptor",
+            bridge = superName?.takeIf { it.isNotBlank() },
+            method = "$methodName$descriptor",
+            line = null,
+        )
+        hooks[key] = (hooks[key] ?: 0) + 1
+    }
+
     fun recordDecision(decision: HookDecision, method: String, line: Int?) {
         val key = when (decision) {
             is HookDecision.Disabled -> DecisionDiagnosticKey(

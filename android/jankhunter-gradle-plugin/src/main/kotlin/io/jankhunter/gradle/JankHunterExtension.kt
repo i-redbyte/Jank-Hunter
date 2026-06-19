@@ -28,6 +28,7 @@ open class JankHunterExtension {
         var executors: Boolean = true
         var coroutines: Boolean = false
         var flowInteractions: Boolean = true
+        var lifecycleLeaks: Boolean = true
         var logSpam: Boolean = true
         var classGraph: Boolean = true
         var runtimeCallGraph: Boolean = false

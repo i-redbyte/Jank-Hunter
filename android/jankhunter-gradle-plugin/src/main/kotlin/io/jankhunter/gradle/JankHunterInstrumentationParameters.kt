@@ -28,6 +28,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val flowInteractions: Property<Boolean>
 
     @get:Input
+    val lifecycleLeaks: Property<Boolean>
+
+    @get:Input
     val logSpam: Property<Boolean>
 
     @get:Input

@@ -35,6 +35,7 @@ class InstrumentationSmokeTest {
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = "",
                     ownerMapEntriesDirectory = "",
+                    lifecycleLeaks = true,
                 ),
             ),
             ClassReader.EXPAND_FRAMES,
@@ -49,11 +50,17 @@ class InstrumentationSmokeTest {
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunter", "wrapRunnable")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunter", "wrapCoroutineBlock")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunter", "wrapClickListener")))
+        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunter", "watchLifecycleObject")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunter", "recordLogSpam")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "wrapEventListenerFactory")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "installEventListenerFactory")))
         assertTrue(calls.contains(Call("io/jankhunter/okhttp3/JankHunterOkHttp3", "wrapWebSocketListener")))
         assertFalse(calls.contains(Call("android/os/Handler", "post")))
+        assertTrue(
+            methodCalls(instrumented, "onViewRecycled").contains(
+                Call("io/jankhunter/runtime/JankHunter", "watchLifecycleObject"),
+            ),
+        )
     }
 
     private fun mixedHookFixture(): ByteArray {
@@ -151,6 +158,18 @@ class InstrumentationSmokeTest {
             visitMaxs(0, 0)
             visitEnd()
         }
+        writer.visitMethod(Opcodes.ACC_PROTECTED, "onCleared", "()V", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitMethod(Opcodes.ACC_PUBLIC, "onViewRecycled", "(Ljava/lang/Object;)V", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
         writer.visitEnd()
         return writer.toByteArray()
     }
@@ -190,6 +209,37 @@ class InstrumentationSmokeTest {
     }
 
     private data class Call(val owner: String, val name: String)
+
+    private fun methodCalls(bytes: ByteArray, targetMethod: String): Set<Call> {
+        val calls = linkedSetOf<Call>()
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<out String>?,
+                ): MethodVisitor {
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitMethodInsn(
+                            opcodeAndSource: Int,
+                            owner: String,
+                            methodName: String,
+                            descriptor: String,
+                            isInterface: Boolean,
+                        ) {
+                            if (name == targetMethod) {
+                                calls += Call(owner, methodName)
+                            }
+                        }
+                    }
+                }
+            },
+            0,
+        )
+        return calls
+    }
 
     private class SafeClassWriter(
         reader: ClassReader?,

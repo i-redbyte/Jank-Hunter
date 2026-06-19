@@ -87,6 +87,7 @@
           <div class="leak-explain-grid">
             <div><strong>Что это значит</strong><p>{{.Suspect.Impact}}</p></div>
             <div><strong>Что проверить</strong><p>{{.Suspect.Recommendation}}</p></div>
+            {{if .Suspect.LeakPattern}}<div><strong>Паттерн утечки</strong><p>{{.Suspect.LeakPattern}}{{if .Suspect.ReferenceMatchers}} · matchers: {{range .Suspect.ReferenceMatchers}}<code>{{.}}</code> {{end}}{{end}}</p></div>{{end}}
           </div>
           <div class="leak-checklist-grid">
             <div><strong>План расследования</strong>{{range .Suspect.InvestigationSteps}}<span>{{.}}</span>{{end}}</div>
@@ -141,7 +142,7 @@
             <td>{{dataSize .Suspect.EstimatedRetainedKB}}<div class="muted">{{.Suspect.RetainedSizeConfidence}}</div></td>
             <td><div class="leak-dominator">{{range .Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
             <td>{{.Suspect.Recommendation}}</td>
-            <td>{{.Suspect.Evidence}}{{if .Suspect.GCRootCategory}}<div class="muted">root category: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
+            <td>{{.Suspect.Evidence}}{{if .Suspect.LeakPattern}}<div class="muted">pattern: {{.Suspect.LeakPattern}}</div>{{end}}{{if .Suspect.GCRootCategory}}<div class="muted">root category: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Подозрений нет.</td></tr>{{end}}
         </tbody>

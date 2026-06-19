@@ -169,8 +169,10 @@ func normalizeHeapLeak(leak *HeapLeakEvidence) {
 	leak.HolderField = strings.TrimSpace(leak.HolderField)
 	leak.GCRoot = strings.TrimSpace(leak.GCRoot)
 	leak.GCRootCategory = firstNonEmpty(strings.TrimSpace(leak.GCRootCategory), heapRootCategory(leak.GCRoot))
+	leak.LeakPattern = strings.TrimSpace(leak.LeakPattern)
 	leak.Source = strings.TrimSpace(leak.Source)
 	leak.Confidence = strings.TrimSpace(leak.Confidence)
+	leak.ReferenceMatchers = uniqueStrings(leak.ReferenceMatchers)
 	leak.ChainFingerprint = firstNonEmpty(
 		strings.TrimSpace(leak.ChainFingerprint),
 		heapChainFingerprint(leak.ClassName, leak.Holder, leak.HolderField, leak.GCRootCategory, leak.ReferencePath),
@@ -655,7 +657,7 @@ func (p *hprofParser) parseInstanceDump(reader *hprofReader) error {
 			if err != nil {
 				return err
 			}
-			if target != 0 {
+			if target != 0 && !ignoredReferenceField(node.className, field.owner, field.name) {
 				p.addEdge(node, target, field.name, "field")
 			}
 		} else if err := reader.skip(int(size)); err != nil {
@@ -865,13 +867,12 @@ func (p *hprofParser) evidence() *HeapEvidence {
 			path := p.referencePath(parent, id)
 			alternativePaths := p.alternativeReferencePaths(incoming, rootKinds, id, path)
 			root := heapRootLabel(path)
-			confidence := "высокое: путь найден в HPROF"
-			if !exact {
-				confidence = "среднее: путь найден в HPROF, retained size ограничен безопасным лимитом"
-			}
 			holder := heapHolder(path, className)
 			holderField := heapHolderField(path, className)
 			rootCategory := heapRootCategory(root)
+			referenceMatchers := heapReferenceMatchers(path)
+			pattern := heapLeakPattern(className, holder, holderField, rootCategory, path)
+			confidence := heapEvidenceConfidence(exact, referenceMatchers)
 			candidate := HeapLeakEvidence{
 				ClassName:           className,
 				Holder:              holder,
@@ -885,6 +886,8 @@ func (p *hprofParser) evidence() *HeapEvidence {
 				ReferencePath:       path,
 				AlternativePaths:    alternativePaths,
 				DominatorTree:       retainedSample,
+				LeakPattern:         pattern,
+				ReferenceMatchers:   referenceMatchers,
 				Source:              p.path,
 				Confidence:          confidence,
 			}
@@ -1254,6 +1257,17 @@ func betterHeapLeak(candidate, current HeapLeakEvidence) bool {
 	if current.ClassName == "" {
 		return true
 	}
+	if heapSizeDominates(candidate.RetainedSizeKB, current.RetainedSizeKB) {
+		return true
+	}
+	if heapSizeDominates(current.RetainedSizeKB, candidate.RetainedSizeKB) {
+		return false
+	}
+	candidateActionability := heapLeakActionabilityScore(candidate)
+	currentActionability := heapLeakActionabilityScore(current)
+	if candidateActionability != currentActionability {
+		return candidateActionability > currentActionability
+	}
 	if candidate.RetainedSizeKB == current.RetainedSizeKB {
 		if len(candidate.ReferencePath) == len(current.ReferencePath) {
 			return candidate.Holder < current.Holder
@@ -1261,6 +1275,62 @@ func betterHeapLeak(candidate, current HeapLeakEvidence) bool {
 		return len(candidate.ReferencePath) < len(current.ReferencePath)
 	}
 	return candidate.RetainedSizeKB > current.RetainedSizeKB
+}
+
+func heapSizeDominates(left, right uint64) bool {
+	if left == 0 || left <= right {
+		return false
+	}
+	if right == 0 {
+		return true
+	}
+	return left-right >= 4*1024 && left/right >= 2
+}
+
+func heapLeakActionabilityScore(leak HeapLeakEvidence) int {
+	score := 0
+	if isLikelyAppClass(leak.Holder) {
+		score += 8
+	}
+	if leak.HolderField != "" {
+		score += 5
+		if isLikelyAppClass(leak.HolderField) {
+			score += 2
+		}
+	}
+	switch leak.GCRootCategory {
+	case "class/static":
+		score += 5
+	case "thread":
+		score += 4
+	case "jni", "monitor":
+		score += 2
+	}
+	if leak.LeakPattern != "" && leak.LeakPattern != "Сильная цепочка GC root удерживает объект" {
+		score += 4
+	}
+	if len(leak.ReferenceMatchers) > 0 {
+		score += 3
+	}
+	if heapPathContainsAppClass(leak.ReferencePath) {
+		score += 3
+	}
+	if len(leak.AlternativePaths) > 0 {
+		score += 1
+	}
+	if len(leak.ReferencePath) > 0 && len(leak.ReferencePath) <= 8 {
+		score += 1
+	}
+	return score
+}
+
+func heapPathContainsAppClass(path []HeapPathElement) bool {
+	for _, step := range path {
+		if isLikelyAppClass(strings.TrimPrefix(step.ClassName, "GC root: ")) {
+			return true
+		}
+	}
+	return false
 }
 
 func retainedClassSample(classes map[string]uint64) []string {
@@ -1347,6 +1417,125 @@ func heapRootCategory(root string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func ignoredReferenceField(nodeClass, fieldOwner, fieldName string) bool {
+	lowerField := strings.ToLower(strings.TrimSpace(fieldName))
+	if lowerField != "referent" {
+		return false
+	}
+	for _, owner := range []string{nodeClass, fieldOwner} {
+		lowerOwner := strings.ToLower(strings.TrimSpace(owner))
+		if lowerOwner == "java.lang.ref.reference" ||
+			strings.HasPrefix(lowerOwner, "java.lang.ref.weakreference") ||
+			strings.HasPrefix(lowerOwner, "java.lang.ref.softreference") ||
+			strings.HasPrefix(lowerOwner, "java.lang.ref.phantomreference") {
+			return true
+		}
+	}
+	return false
+}
+
+func heapEvidenceConfidence(exact bool, matchers []string) string {
+	parts := []string{"высокое: путь найден в HPROF по сильным ссылкам"}
+	if !exact {
+		parts[0] = "среднее+: путь найден в HPROF по сильным ссылкам, retained size ограничен безопасным лимитом"
+	}
+	if len(matchers) > 0 {
+		parts = append(parts, "reference matchers: "+strings.Join(matchers, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func heapReferenceMatchers(path []HeapPathElement) []string {
+	var out []string
+	for _, step := range path {
+		className := strings.ToLower(strings.TrimPrefix(step.ClassName, "GC root: "))
+		fieldName := strings.ToLower(step.FieldName)
+		if strings.Contains(className, "inputmethodmanager") {
+			out = append(out, "android.input_method_manager")
+		}
+		if strings.Contains(className, "viewmodelstore") {
+			out = append(out, "androidx.viewmodel_store")
+		}
+		if strings.Contains(className, "livedata") {
+			out = append(out, "androidx.livedata_observer")
+		}
+		if strings.Contains(className, "recyclerview") {
+			out = append(out, "androidx.recyclerview")
+		}
+		if strings.Contains(className, "compose") {
+			out = append(out, "androidx.compose")
+		}
+		if strings.Contains(className, "kotlinx.coroutines") || strings.Contains(className, "job") ||
+			strings.Contains(fieldName, "continuation") {
+			out = append(out, "kotlin.coroutines")
+		}
+		if strings.Contains(className, "textline") {
+			out = append(out, "android.text_line_pool")
+		}
+		if strings.Contains(className, "choreographer") || strings.Contains(className, "handler") || strings.Contains(className, "looper") {
+			out = append(out, "android.main_thread_queue")
+		}
+		if strings.Contains(fieldName, "listener") || strings.Contains(fieldName, "callback") || strings.Contains(fieldName, "observer") {
+			out = append(out, "listener_or_callback")
+		}
+		if strings.Contains(fieldName, "adapter") {
+			out = append(out, "adapter_reference")
+		}
+		if strings.Contains(fieldName, "binding") {
+			out = append(out, "view_binding_reference")
+		}
+		if strings.Contains(fieldName, "mcontext") || strings.HasSuffix(fieldName, ".context") {
+			out = append(out, "context_reference")
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func heapLeakPattern(className, holder, holderField, rootCategory string, path []HeapPathElement) string {
+	lowerClass := strings.ToLower(className)
+	lowerHolder := strings.ToLower(holder)
+	lowerField := strings.ToLower(holderField)
+	switch {
+	case strings.Contains(lowerClass, "activity") && strings.Contains(lowerField, "mcontext"):
+		return "View/Context цепочка удерживает Activity"
+	case strings.Contains(lowerClass, "activity") && rootCategory == "class/static":
+		return "Activity удерживается static/singleton цепочкой"
+	case strings.Contains(lowerClass, "fragment") && rootCategory == "class/static":
+		return "Fragment удерживается static/singleton цепочкой"
+	case strings.Contains(lowerClass, "viewmodel"):
+		return "ViewModel живет после onCleared"
+	case strings.Contains(lowerClass, "service"):
+		return "Service удерживается после onDestroy"
+	case strings.Contains(lowerClass, "dialog"):
+		return "Dialog/window цепочка живет после dismiss или onStop"
+	case strings.Contains(lowerClass, "viewholder"):
+		return "RecyclerView ViewHolder удерживает view/binding после recycle"
+	case strings.Contains(lowerClass, "adapter"):
+		return "RecyclerView adapter удерживает экран после detach"
+	case strings.Contains(lowerClass, "view") || strings.Contains(lowerClass, "binding"):
+		return "View/binding живет после onDestroyView или detach"
+	case rootCategory == "thread":
+		return "Активный поток/очередь удерживает lifecycle-объект"
+	case strings.Contains(lowerHolder, "listener") || strings.Contains(lowerField, "listener") ||
+		strings.Contains(lowerHolder, "callback") || strings.Contains(lowerField, "callback"):
+		return "Listener/callback удерживает объект после lifecycle cleanup"
+	case pathContainsClass(path, "kotlinx.coroutines") || pathContainsClass(path, "java.util.concurrent"):
+		return "Coroutine/executor задача удерживает объект"
+	default:
+		return "Сильная цепочка GC root удерживает объект"
+	}
+}
+
+func pathContainsClass(path []HeapPathElement, needle string) bool {
+	needle = strings.ToLower(needle)
+	for _, step := range path {
+		if strings.Contains(strings.ToLower(step.ClassName), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func heapChainFingerprint(className, holder, holderField, rootCategory string, path []HeapPathElement) string {

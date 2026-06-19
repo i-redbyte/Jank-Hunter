@@ -7,13 +7,16 @@ Jank Hunter should beat LeakCanary by combining leak detection, heap evidence, j
 - Parse HPROF safely with bounded object, edge, target, and retained-size traversal limits.
 - Classify GC roots into actionable categories: class/static, thread, JNI, monitor, VM/internal, reference processing, and unknown.
 - Prefer shortest actionable path from GC root to retained object.
+- Ignore weak/soft/phantom `java.lang.ref.Reference.referent` edges when building leak paths; heap-confirmed paths must be strong-reference paths.
 - Keep alternative paths when the same retained object is reachable through more than one owner chain.
 - Surface retained size, retained object count, dominator sample, and confidence.
+- Surface leak pattern and reference matcher hints, for example static/singleton, thread/queue, listener/callback, context reference, and known Android framework risk areas.
 - Filter reporting toward app-owned holders while preserving the raw root/path evidence.
+- Rank primary heap paths by actionability when retained sizes are close: app holder, holder field, GC root category, leak pattern, matcher hints, and short strong-reference path should beat noisy system-only paths.
 
 Acceptance:
 
-- Heap report shows root kind/category, holder field, retained size/count, primary path, and alternative paths.
+- Heap report shows root kind/category, holder field, retained size/count, primary strong-reference path, alternative paths, pattern, and matcher hints.
 - Large HPROF files degrade into bounded warnings instead of hanging.
 - Compare mode can fingerprint leaks by normalized chain, not just class name.
 
@@ -42,6 +45,10 @@ Acceptance:
 
 - Runtime retained events should preserve screen, flow, step, ownerHint, and lifecycle source.
 - Activity lifecycle destroy watch should remain automatic and dependency-free.
+- ASM lifecycle leak hooks should auto-watch `onDestroy`, `onDestroyView`, `onCleared`, `onDetachedFromWindow`, Dialog/Service stop-destroy boundaries, and RecyclerView adapter/view-holder boundaries without adding AndroidX to runtime core.
+- Fragment `onDestroyView` should watch the current view and likely binding/view fields before cleanup, so fixed code naturally disappears after retained-delay.
+- Lifecycle classification should produce specific object kinds for Activity, Fragment, ViewModel, View, Service, Dialog, RecyclerView ViewHolder/Adapter, View/binding, resources, and system objects.
+- Runtime watcher should deduplicate repeated watch calls for the same live object.
 - Developers should be guided to use `withOwner`, `withFlow`, `markFlowStep`, and `watchObject(..., ownerHint)`.
 
 Acceptance:
@@ -80,7 +87,9 @@ Acceptance:
 
 - Validate against at least one large Android app and compare output with LeakCanary on the same scenarios.
 - Track false positives, false negatives, report readability, and CI usefulness.
+- Use `docs/memory-leak-validation-scorecard.json` for scenario-level precision/recall, heap actionability, lifecycle coverage, compare stability, and junior readability scoring.
 
 Acceptance:
 
 - Validation notes are documented separately from synthetic tests.
+- A 9/10 claim requires a completed scorecard with controlled positive/negative scenarios and matching Jank Hunter/LeakCanary artifacts.

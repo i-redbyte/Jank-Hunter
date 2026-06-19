@@ -49,8 +49,48 @@ func TestCompareRobustSamplesComputesCliffsDelta(t *testing.T) {
 	if delta.EffectSize != "крупный" {
 		t.Fatalf("EffectSize = %q, want крупный", delta.EffectSize)
 	}
-	if delta.Confidence != "низкое" {
-		t.Fatalf("Confidence = %q, want низкое", delta.Confidence)
+	if delta.Confidence != "низкое: нужна повторная выборка" {
+		t.Fatalf("Confidence = %q, want low repeatability warning", delta.Confidence)
+	}
+}
+
+func TestCompareRobustSamplesCalibratesHighConfidenceRegression(t *testing.T) {
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}
+	baseValues := make([]float64, 0, 80)
+	candidateValues := make([]float64, 0, 80)
+	for i := 0; i < 80; i++ {
+		baseValues = append(baseValues, 100+float64(i%5))
+		candidateValues = append(candidateValues, 180+float64(i%5))
+	}
+	deltas := compareRobustSamples(
+		robustSampleMap{key: robustSet(baseValues...)},
+		robustSampleMap{key: robustSet(candidateValues...)},
+	)
+	if len(deltas) != 1 {
+		t.Fatalf("len(deltas) = %d, want 1", len(deltas))
+	}
+	if deltas[0].Severity != "high" {
+		t.Fatalf("Severity = %q, want high: %+v", deltas[0].Severity, deltas[0])
+	}
+	if deltas[0].Confidence != "высокое: повторяемая выборка и крупный эффект" {
+		t.Fatalf("Confidence = %q, want calibrated high", deltas[0].Confidence)
+	}
+}
+
+func TestCompareRobustSamplesAvoidsHighSeverityForTinySample(t *testing.T) {
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}
+	deltas := compareRobustSamples(
+		robustSampleMap{key: robustSet(100, 101, 102)},
+		robustSampleMap{key: robustSet(220, 221, 222)},
+	)
+	if len(deltas) != 1 {
+		t.Fatalf("len(deltas) = %d, want 1", len(deltas))
+	}
+	if deltas[0].Severity != "medium" {
+		t.Fatalf("Severity = %q, want medium for tiny but strong effect: %+v", deltas[0].Severity, deltas[0])
+	}
+	if deltas[0].Confidence != "низкое: нужна повторная выборка" {
+		t.Fatalf("Confidence = %q, want low repeatability warning", deltas[0].Confidence)
 	}
 }
 

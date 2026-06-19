@@ -262,7 +262,7 @@ func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) Robus
 	}
 	cliff := cliffDelta(candidateValues, baseValues)
 	effect := effectSizeLabel(cliff)
-	confidence := compareConfidence(baseCount, candidateCount)
+	confidence := compareConfidence(baseCount, candidateCount, deltaPct, cliff)
 	severity := robustDeltaSeverity(deltaPct, cliff, baseCount, candidateCount)
 	return RobustDelta{
 		Dimension:      key.Dimension,
@@ -423,18 +423,24 @@ func sampleQuality(total, sampled int, approximated bool) (string, string, strin
 	return quality, severity, fmt.Sprintf("сэмплов=%d", total)
 }
 
-func compareConfidence(baseCount, candidateCount int) string {
+func compareConfidence(baseCount, candidateCount int, deltaPct, cliff float64) string {
 	minCount := baseCount
 	if candidateCount < minCount {
 		minCount = candidateCount
 	}
+	absDeltaPct := math.Abs(deltaPct)
+	absCliff := math.Abs(cliff)
 	switch {
+	case minCount >= 50 && absCliff >= 0.33 && absDeltaPct >= 20:
+		return "высокое: повторяемая выборка и крупный эффект"
 	case minCount >= 50:
-		return "высокое"
+		return "среднее+: выборка хорошая, эффект умеренный"
+	case minCount >= 20 && absCliff >= 0.147 && absDeltaPct >= 10:
+		return "среднее: достаточная выборка и заметный эффект"
 	case minCount >= 20:
-		return "среднее"
+		return "среднее-: выборка достаточная, эффект слабый"
 	default:
-		return "низкое"
+		return "низкое: нужна повторная выборка"
 	}
 }
 
@@ -442,13 +448,34 @@ func robustDeltaSeverity(deltaPct, cliff float64, baseCount, candidateCount int)
 	if baseCount == 0 || candidateCount == 0 {
 		return "medium"
 	}
-	if deltaPct >= 50 && cliff >= 0.33 {
+	confidenceTier := robustConfidenceTier(baseCount, candidateCount, deltaPct, cliff)
+	if confidenceTier >= 2 && deltaPct >= 50 && cliff >= 0.33 {
 		return "high"
 	}
-	if deltaPct >= 20 && cliff >= 0.147 {
+	if confidenceTier >= 1 && deltaPct >= 20 && cliff >= 0.147 {
+		return "medium"
+	}
+	if confidenceTier == 0 && deltaPct >= 80 && cliff >= 0.474 {
 		return "medium"
 	}
 	return "ok"
+}
+
+func robustConfidenceTier(baseCount, candidateCount int, deltaPct, cliff float64) int {
+	minCount := baseCount
+	if candidateCount < minCount {
+		minCount = candidateCount
+	}
+	absDeltaPct := math.Abs(deltaPct)
+	absCliff := math.Abs(cliff)
+	switch {
+	case minCount >= 50 && absCliff >= 0.33 && absDeltaPct >= 20:
+		return 2
+	case minCount >= 20 && absCliff >= 0.147 && absDeltaPct >= 10:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func robustDeltaSummary(key robustKey, baseCount, candidateCount int, baseP95, candidateP95, deltaPct, cliff float64) string {

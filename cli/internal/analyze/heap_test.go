@@ -89,6 +89,12 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	if leak.ChainFingerprint == "" {
 		t.Fatalf("expected chain fingerprint: %+v", leak)
 	}
+	if leak.LeakPattern != "Activity удерживается static/singleton цепочкой" {
+		t.Fatalf("unexpected leak pattern: %+v", leak)
+	}
+	if !strings.Contains(leak.Confidence, "сильным ссылкам") {
+		t.Fatalf("expected strong-reference confidence: %+v", leak)
+	}
 	if leak.RetainedObjectCount != 2 || leak.RetainedSizeBytes != 64 || leak.RetainedSizeKB != 1 {
 		t.Fatalf("retained size/count mismatch: %+v", leak)
 	}
@@ -97,6 +103,92 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	}
 	if len(leak.AlternativePaths) == 0 {
 		t.Fatalf("expected alternative reference path: %+v", leak)
+	}
+}
+
+func TestLoadHprofHeapEvidenceIgnoresWeakReferenceReferent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "weak.hprof")
+	if err := os.WriteFile(path, syntheticWeakReferenceHprof(), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	evidence, err := LoadHeapEvidenceFiles([]string{path}, []string{"com.app.LeakedActivity"})
+	if err != nil {
+		t.Fatalf("LoadHeapEvidenceFiles() error = %v", err)
+	}
+	if evidence == nil {
+		t.Fatalf("expected empty evidence object")
+	}
+	if len(evidence.Leaks) != 0 {
+		t.Fatalf("weak referent should not create strong leak path: %+v", evidence.Leaks)
+	}
+}
+
+func TestBetterHeapLeakPrefersActionablePathUnlessSizeDominates(t *testing.T) {
+	actionable := HeapLeakEvidence{
+		ClassName:      "com.app.LeakedActivity",
+		Holder:         "com.app.CheckoutPresenter",
+		HolderField:    "com.app.CheckoutPresenter.activity",
+		GCRootCategory: "class/static",
+		RetainedSizeKB: 6 * 1024,
+		ReferencePath: []HeapPathElement{
+			{ClassName: "GC root: sticky class", Kind: "gc_root"},
+			{ClassName: "com.app.CheckoutPresenter", Kind: "root_object"},
+			{ClassName: "com.app.LeakedActivity", FieldName: "activity", Kind: "field"},
+		},
+		LeakPattern: "Activity удерживается static/singleton цепочкой",
+	}
+	noisyLarge := HeapLeakEvidence{
+		ClassName:      "com.app.LeakedActivity",
+		GCRootCategory: "unknown",
+		RetainedSizeKB: 8 * 1024,
+		ReferencePath: []HeapPathElement{
+			{ClassName: "GC root: unknown", Kind: "gc_root"},
+			{ClassName: "java.lang.Object", Kind: "field"},
+			{ClassName: "com.app.LeakedActivity", Kind: "field"},
+		},
+	}
+	if !betterHeapLeak(actionable, noisyLarge) {
+		t.Fatalf("actionable heap path should win when retained size is close")
+	}
+
+	huge := noisyLarge
+	huge.RetainedSizeKB = 64 * 1024
+	if betterHeapLeak(actionable, huge) {
+		t.Fatalf("massively larger retained size should still win")
+	}
+}
+
+func TestBestHeapEvidencePrefersActionablePathForSameRuntimeLeak(t *testing.T) {
+	heap := &HeapEvidence{Leaks: []HeapLeakEvidence{
+		{
+			ClassName:      "com.app.LeakedActivity",
+			GCRootCategory: "unknown",
+			RetainedSizeKB: 8 * 1024,
+			ReferencePath: []HeapPathElement{
+				{ClassName: "GC root: unknown", Kind: "gc_root"},
+				{ClassName: "java.lang.Object", Kind: "field"},
+				{ClassName: "com.app.LeakedActivity", Kind: "field"},
+			},
+		},
+		{
+			ClassName:      "com.app.LeakedActivity",
+			Holder:         "com.app.CheckoutPresenter",
+			HolderField:    "com.app.CheckoutPresenter.activity",
+			GCRootCategory: "class/static",
+			RetainedSizeKB: 6 * 1024,
+			ReferencePath: []HeapPathElement{
+				{ClassName: "GC root: sticky class", Kind: "gc_root"},
+				{ClassName: "com.app.CheckoutPresenter", Kind: "root_object"},
+				{ClassName: "com.app.LeakedActivity", FieldName: "activity", Kind: "field"},
+			},
+			LeakPattern: "Activity удерживается static/singleton цепочкой",
+		},
+	}}
+
+	best := bestHeapEvidence(memoryLeakStats{className: "com.app.LeakedActivity"}, heap)
+	if best == nil || best.Holder != "com.app.CheckoutPresenter" {
+		t.Fatalf("bestHeapEvidence() = %+v, want actionable app holder", best)
 	}
 }
 
@@ -161,6 +253,37 @@ func syntheticLeakHprof() []byte {
 	builder.classDump(&heap, childClassID, 16, nil, nil)
 	builder.instanceDump(&heap, activityID, activityClassID, []uint32{childID})
 	builder.instanceDump(&heap, childID, childClassID, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+	return builder.bytes()
+}
+
+func syntheticWeakReferenceHprof() []byte {
+	builder := newMiniHprof()
+	holderName := builder.string("com.app.LeakHolder")
+	weakName := builder.string("java.lang.ref.WeakReference")
+	activityName := builder.string("com.app.LeakedActivity")
+	weakField := builder.string("weakActivity")
+	referentField := builder.string("referent")
+
+	const (
+		holderClassID   = uint32(0x100)
+		weakClassID     = uint32(0x180)
+		activityClassID = uint32(0x200)
+		weakID          = uint32(0x1001)
+		activityID      = uint32(0x1002)
+	)
+	builder.loadClass(holderClassID, holderName)
+	builder.loadClass(weakClassID, weakName)
+	builder.loadClass(activityClassID, activityName)
+
+	var heap bytes.Buffer
+	heap.WriteByte(0x05)
+	writeU4(&heap, holderClassID)
+	builder.classDump(&heap, holderClassID, 16, []miniStaticField{{nameID: weakField, valueID: weakID}}, nil)
+	builder.classDump(&heap, weakClassID, 16, nil, []miniField{{nameID: referentField, typ: hprofTypeObject}})
+	builder.classDump(&heap, activityClassID, 48, nil, nil)
+	builder.instanceDump(&heap, weakID, weakClassID, []uint32{activityID})
+	builder.instanceDump(&heap, activityID, activityClassID, nil)
 	builder.record(hprofTagHeapDump, heap.Bytes())
 	return builder.bytes()
 }

@@ -40,6 +40,7 @@ class JankHunterExtensionTest {
         assertEquals(false, instrumentation.asmProgressLog)
         assertEquals(true, instrumentation.classGraph)
         assertEquals(false, instrumentation.runtimeCallGraph)
+        assertEquals(true, instrumentation.lifecycleLeaks)
     }
 
     @Test

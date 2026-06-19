@@ -111,6 +111,35 @@ class ObjectRetentionWatcherTest {
         }
     }
 
+    @Test
+    fun ignoresDuplicateWatchesForSameLiveObject() {
+        var now = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count ->
+                reports += Report(className, ownerHint, context, ageMs, count)
+            },
+        )
+        val retained = Any()
+        enableManualWatch(watcher)
+        try {
+            watcher.watch(retained, "com.example.Screen", "lifecycle.onDestroy.com.example.Screen", null)
+            watcher.watch(retained, "com.example.Screen", "lifecycle.onDestroy.com.example.Screen", null)
+            watcher.watch(retained, "com.example.Screen", "manual.watch", null)
+
+            now = RETAINED_DELAY_MS
+            watcher.checkRetained()
+            now = RETAINED_DELAY_MS + 500L
+            watcher.checkRetained()
+
+            assertEquals(listOf(Report("com.example.Screen", "lifecycle.onDestroy.com.example.Screen", null, now, 1L)), reports)
+        } finally {
+            watcher.stop()
+        }
+    }
+
     private data class Report(
         val className: String?,
         val ownerHint: String?,

@@ -31,6 +31,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             classGraphDirectory = params.classGraphDirectory.getOrElse(""),
             instrumentationDiagnosticsDirectory = params.instrumentationDiagnosticsDirectory.getOrElse(""),
             ownerMapEntriesDirectory = params.ownerMapEntriesDirectory.getOrElse(""),
+            lifecycleLeaks = params.lifecycleLeaks.getOrElse(false),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -55,6 +56,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.executors.getOrElse(false) ||
             params.coroutines.getOrElse(false) ||
             params.flowInteractions.getOrElse(false) ||
+            params.lifecycleLeaks.getOrElse(false) ||
             params.logSpam.getOrElse(false) ||
             params.classGraph.getOrElse(false) ||
             params.runtimeCallGraph.getOrElse(false)
@@ -88,6 +90,7 @@ internal data class HookConfig(
     val classGraphDirectory: String,
     val instrumentationDiagnosticsDirectory: String,
     val ownerMapEntriesDirectory: String,
+    val lifecycleLeaks: Boolean = false,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -98,6 +101,7 @@ internal data class HookConfig(
             if (executors) add("executor")
             if (coroutines) add("coroutine")
             if (flowInteractions) add("flow")
+            if (lifecycleLeaks) add("lifecycle")
             if (logSpam) add("logspam")
             if (classGraph) add("graph")
             if (runtimeCallGraph) add("runtimegraph")
@@ -114,6 +118,19 @@ internal class JankHunterClassVisitor(
     private val ownerMapEntries = mutableListOf<OwnerMapEntry>()
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
+    private var superName: String? = null
+
+    override fun visit(
+        version: Int,
+        access: Int,
+        name: String?,
+        signature: String?,
+        superName: String?,
+        interfaces: Array<out String>?,
+    ) {
+        this.superName = superName
+        super.visit(version, access, name, signature, superName, interfaces)
+    }
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -149,6 +166,7 @@ internal class JankHunterClassVisitor(
             config,
             classAnnotations.snapshot(),
             name == "<init>",
+            superName,
             diagnostics,
             recordOwnerMapEntry = ownerMapEntries::add,
             recordStaticEdge = { calleeOwner, calleeName ->
@@ -190,17 +208,18 @@ internal class JankHunterClassVisitor(
 
 private class JankHunterMethodVisitor(
     next: MethodVisitor,
-    access: Int,
+    private val accessFlags: Int,
     private val methodName: String,
     private val methodDescriptor: String,
     private val className: String,
     private val config: HookConfig,
     private val classAnnotations: JankAnnotationMetadata,
     private val constructor: Boolean,
+    private val superName: String?,
     private val diagnostics: InstrumentationDiagnosticsClassBuilder,
     private val recordOwnerMapEntry: (OwnerMapEntry) -> Unit,
     private val recordStaticEdge: (String, String) -> Unit,
-) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
+) : AdviceAdapter(Opcodes.ASM9, next, accessFlags, methodName, methodDescriptor) {
     private val generatedOwnerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
     private val methodDiagnosticName = "$methodName$methodDescriptor"
     private val methodAnnotations = JankAnnotationMetadata.Builder()
@@ -253,6 +272,9 @@ private class JankHunterMethodVisitor(
 
     override fun onMethodEnter() {
         if (!shouldInstrumentMethod()) return
+        if (shouldWatchLifecycleOnEnter()) {
+            emitLifecycleWatch()
+        }
         if (hasAnnotationContext) {
             emitEnterAnnotatedContext()
         }
@@ -286,6 +308,12 @@ private class JankHunterMethodVisitor(
 
     override fun onMethodExit(opcode: Int) {
         if (!shouldInstrumentMethod()) return
+        if (shouldWatchLifecycleOnExit() && opcode != Opcodes.ATHROW) {
+            emitLifecycleWatch()
+        }
+        if (shouldWatchLifecycleArgumentOnExit() && opcode != Opcodes.ATHROW) {
+            emitLifecycleArgumentWatch()
+        }
         if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
         }
@@ -440,6 +468,76 @@ private class JankHunterMethodVisitor(
 
     private fun shouldInstrumentMethod(): Boolean {
         return !instrumentationIgnored() && (!constructor || constructorHasDirectAnnotationContext)
+    }
+
+    private fun shouldWatchLifecycleOnEnter(): Boolean {
+        if (!config.lifecycleLeaks || constructor || methodIsStatic()) return false
+        if (methodName == "onDestroyView" && methodDescriptor == "()V") return true
+        return false
+    }
+
+    private fun shouldWatchLifecycleOnExit(): Boolean {
+        if (!config.lifecycleLeaks || constructor || methodIsStatic()) return false
+        if (methodName == "onDetachedFromRecyclerView") return singleObjectArgumentLifecycleDescriptor()
+        if (!lifecycleMethodDescriptorSupported()) return false
+        if (methodName == "onDestroyView") return false
+        if (methodName == "onViewDetachedFromWindow") return methodDescriptor == "()V"
+        return lifecycleMethodNameSupported()
+    }
+
+    private fun shouldWatchLifecycleArgumentOnExit(): Boolean {
+        if (!config.lifecycleLeaks || constructor || methodIsStatic()) return false
+        if (!singleObjectArgumentLifecycleDescriptor()) return false
+        return methodName == "onViewRecycled" || methodName == "onViewDetachedFromWindow"
+    }
+
+    private fun lifecycleMethodNameSupported(): Boolean {
+        return methodName == "onDestroy" ||
+            methodName == "onCleared" ||
+            methodName == "onDetachedFromWindow" ||
+            methodName == "onDetachedFromRecyclerView" ||
+            methodName == "onStop"
+    }
+
+    private fun lifecycleMethodDescriptorSupported(): Boolean {
+        return methodDescriptor == "()V"
+    }
+
+    private fun singleObjectArgumentLifecycleDescriptor(): Boolean {
+        val args = Type.getArgumentTypes(methodDescriptor)
+        return args.size == 1 && (args[0].sort == Type.OBJECT || args[0].sort == Type.ARRAY)
+    }
+
+    private fun methodIsStatic(): Boolean {
+        return accessFlags and Opcodes.ACC_STATIC != 0
+    }
+
+    private fun emitLifecycleWatch() {
+        loadThis()
+        visitLdcInsn(methodName)
+        visitLdcInsn(ownerLabel)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "watchLifecycleObject",
+            "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)V",
+            false,
+        )
+        diagnostics.recordLifecycleHook(methodName, methodDescriptor, superName)
+    }
+
+    private fun emitLifecycleArgumentWatch() {
+        loadArg(0)
+        visitLdcInsn(methodName)
+        visitLdcInsn(ownerLabel)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER,
+            "watchLifecycleObject",
+            "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)V",
+            false,
+        )
+        diagnostics.recordLifecycleHook(methodName, methodDescriptor, superName)
     }
 
     private fun annotationDiagnosticKey(): AnnotationDiagnosticKey? {

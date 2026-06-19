@@ -89,6 +89,7 @@
           <div class="leak-explain-grid">
             <div><strong>Дельта</strong><p>score {{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}} ({{printf "%+.1f" $delta.DeltaScore}}), count {{$delta.CountBefore}} → {{$delta.CountAfter}} ({{printf "%+d" $delta.DeltaCount}}), возраст {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}. Match: {{$delta.MatchConfidence}}.</p></div>
             <div><strong>Что проверить</strong><p>{{$delta.Recommendation}}</p></div>
+            {{if $suspect.LeakPattern}}<div><strong>Паттерн утечки</strong><p>{{$suspect.LeakPattern}}{{if $suspect.ReferenceMatchers}} · matchers: {{range $suspect.ReferenceMatchers}}<code>{{.}}</code> {{end}}{{end}}</p></div>{{end}}
           </div>
           <div class="leak-checklist-grid">
             <div><strong>План расследования</strong>{{range $suspect.InvestigationSteps}}<span>{{.}}</span>{{end}}</div>

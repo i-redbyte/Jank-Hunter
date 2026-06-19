@@ -66,6 +66,8 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 	gcRootCategory := ""
 	holderField := ""
 	chainFingerprint := ""
+	leakPattern := ""
+	var referenceMatchers []string
 	var alternativePaths [][]HeapPathElement
 	if heapEvidence {
 		estimatedRetainedKB = firstPositive(heap.RetainedSizeKB, estimatedRetainedKB)
@@ -81,6 +83,8 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 		gcRootCategory = heap.GCRootCategory
 		holderField = heap.HolderField
 		chainFingerprint = heap.ChainFingerprint
+		leakPattern = heap.LeakPattern
+		referenceMatchers = append([]string(nil), heap.ReferenceMatchers...)
 		alternativePaths = cloneHeapPaths(heap.AlternativePaths)
 		score += 6
 		if estimatedRetainedKB >= 16*1024 {
@@ -116,6 +120,8 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 		AlternativePaths:         alternativePaths,
 		AlternativePathSummaries: heapPathSummaries(alternativePaths),
 		RetainedClassSample:      append([]string(nil), heapDominatorTree(heap)...),
+		LeakPattern:              leakPattern,
+		ReferenceMatchers:        referenceMatchers,
 		RetainedSizeConfidence:   sizeConfidence,
 		RetainedSizeExplanation:  retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, heap),
 		DominatorPath:            dominatorPath,
@@ -217,9 +223,7 @@ func retainedScore(item memoryLeakStats, userOwned, systemRetained bool, lowMemo
 	if systemRetained {
 		score += 3
 	}
-	if strings.Contains(strings.ToLower(item.className), "activity") ||
-		strings.Contains(strings.ToLower(item.className), "fragment") ||
-		strings.Contains(strings.ToLower(item.className), "context") {
+	if isHighRiskRetainedClass(item.className) {
 		score += 5
 	}
 	if lowMemoryCount > 0 {
@@ -243,6 +247,16 @@ func retainedObjectKind(className string) string {
 		return "экран / Activity"
 	case strings.Contains(lower, "fragment"):
 		return "Fragment"
+	case strings.Contains(lower, "viewmodel"):
+		return "ViewModel"
+	case strings.Contains(lower, "service"):
+		return "Service"
+	case strings.Contains(lower, "dialog"):
+		return "Dialog"
+	case strings.Contains(lower, "viewholder"):
+		return "RecyclerView ViewHolder"
+	case strings.Contains(lower, "adapter"):
+		return "adapter"
 	case strings.Contains(lower, "context"):
 		return "Context"
 	case strings.Contains(lower, "view") || strings.Contains(lower, "binding"):
@@ -254,6 +268,20 @@ func retainedObjectKind(className string) string {
 	default:
 		return "пользовательский объект"
 	}
+}
+
+func isHighRiskRetainedClass(className string) bool {
+	lower := strings.ToLower(className)
+	return strings.Contains(lower, "activity") ||
+		strings.Contains(lower, "fragment") ||
+		strings.Contains(lower, "context") ||
+		strings.Contains(lower, "viewmodel") ||
+		strings.Contains(lower, "service") ||
+		strings.Contains(lower, "dialog") ||
+		strings.Contains(lower, "viewholder") ||
+		strings.Contains(lower, "adapter") ||
+		strings.Contains(lower, "binding") ||
+		strings.Contains(lower, "view")
 }
 
 func retainedHolderQuality(holder string) string {
@@ -270,6 +298,9 @@ func retainedHolderQuality(holder string) string {
 func retainedImpact(className string, item memoryLeakStats, lowMemoryCount int, maxPSSKB, estimatedRetainedKB uint64, heap *HeapLeakEvidence) string {
 	parts := []string{fmt.Sprintf("Удержано %d объект(ов), максимальный возраст %s.", item.count, formatDurationMS(item.maxAgeMs))}
 	if heap != nil {
+		if heap.LeakPattern != "" {
+			parts = append(parts, "Паттерн: "+heap.LeakPattern+".")
+		}
 		if heap.RetainedObjectCount > 0 {
 			parts = append(parts, fmt.Sprintf("В heap dump доминируемых объектов: %d.", heap.RetainedObjectCount))
 		}
@@ -317,6 +348,12 @@ func retainedEvidence(item memoryLeakStats, lowMemoryCount int, maxPSSKB, estima
 		}
 		if heap.HolderField != "" {
 			parts = append(parts, "поле="+heap.HolderField)
+		}
+		if heap.LeakPattern != "" {
+			parts = append(parts, "паттерн="+heap.LeakPattern)
+		}
+		if len(heap.ReferenceMatchers) > 0 {
+			parts = append(parts, "reference matchers="+strings.Join(heap.ReferenceMatchers, ","))
 		}
 		if heap.RetainedObjectCount > 0 {
 			parts = append(parts, fmt.Sprintf("dominated objects=%d", heap.RetainedObjectCount))
@@ -372,6 +409,16 @@ func retainedObjectBaseSizeKB(objectKind string) uint64 {
 		return 2 * 1024
 	case "Fragment":
 		return 1024
+	case "ViewModel":
+		return 512
+	case "Service":
+		return 1024
+	case "Dialog":
+		return 768
+	case "RecyclerView ViewHolder":
+		return 512
+	case "adapter":
+		return 768
 	case "Context":
 		return 768
 	case "View / binding":
@@ -521,6 +568,14 @@ func retainedLeakChainActions(item memoryLeakStats, holder, className, objectKin
 	switch objectKind {
 	case "экран / Activity", "Fragment", "Context":
 		actions = append(actions, "Проверьте lifecycle: очистку ссылок в onDestroy/onDestroyView и отсутствие Activity/Context в singleton, static, DI singleton и долгих задачах.")
+	case "ViewModel":
+		actions = append(actions, "Проверьте onCleared: отмену coroutine Job/Flow subscription, очистку LiveData observers/callbacks и отсутствие ссылок на View/Activity.")
+	case "Service":
+		actions = append(actions, "Проверьте onDestroy сервиса: отмену foreground/background work, unregisterReceiver, callbacks и release долгоживущих ресурсов.")
+	case "Dialog":
+		actions = append(actions, "Проверьте dismiss/onStop/onDestroy: listener/window/decorView ссылки должны очищаться, а callback не должен держать Activity.")
+	case "RecyclerView ViewHolder", "adapter":
+		actions = append(actions, "Проверьте RecyclerView cleanup: onViewRecycled/onViewDetachedFromWindow/onDetachedFromRecyclerView должны очищать binding, listeners, observers и adapter callbacks.")
 	case "View / binding":
 		actions = append(actions, "Проверьте binding/View ссылки: сброс в onDestroyView, adapter/listener cleanup и отсутствие View в фоновых callbacks.")
 	case "ресурс":
@@ -547,6 +602,9 @@ func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectK
 		if heap.HolderField != "" {
 			steps = append(steps, "Найдите поле "+heap.HolderField+" в коде и проверьте, где ссылка присваивается и где должна очищаться.")
 		}
+		if heap.LeakPattern != "" {
+			steps = append(steps, "Проверьте конкретный паттерн: "+heap.LeakPattern+".")
+		}
 		if heap.GCRootCategory != "" {
 			steps = append(steps, "Проверьте категорию GC root: "+heap.GCRootCategory+"; она подсказывает, искать static/singleton, поток, JNI или системный callback.")
 		}
@@ -562,6 +620,14 @@ func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectK
 	switch objectKind {
 	case "экран / Activity", "Fragment", "Context":
 		steps = append(steps, "Проверьте lifecycle boundary: onDestroy/onDestroyView, отписку observers/listeners и отмену фоновой работы.")
+	case "ViewModel":
+		steps = append(steps, "Проверьте ViewModel.onCleared: все coroutine scope, Flow/LiveData подписки и callbacks должны завершаться или отвязываться.")
+	case "Service":
+		steps = append(steps, "Проверьте Service.onDestroy и stopSelf/stopForeground путь: не остается ли активный поток, receiver, binder callback или singleton reference.")
+	case "Dialog":
+		steps = append(steps, "Проверьте dismiss/onStop/onDestroy: window/decorView/listener ссылки не должны переживать закрытие dialog.")
+	case "RecyclerView ViewHolder", "adapter":
+		steps = append(steps, "Проверьте RecyclerView lifecycle: binding/listener/observer очищаются при recycle/detach, adapter не держит экран после detach.")
 	case "View / binding":
 		steps = append(steps, "Проверьте, что binding/View не хранится после onDestroyView и не попадает в adapter/listener/cache.")
 	case "ресурс":
@@ -581,12 +647,23 @@ func retainedFixExamples(holder, objectKind string, heap *HeapLeakEvidence) []st
 	if heap != nil && heap.HolderField != "" {
 		examples = append(examples, "Очистите "+heap.HolderField+" на lifecycle boundary или замените сильную ссылку на WeakReference, если владелец обязан жить дольше.")
 	}
+	if heap != nil && heap.LeakPattern != "" {
+		examples = append(examples, "Зафиксируйте паттерн \""+heap.LeakPattern+"\" регрессионным сценарием: объект должен исчезнуть после retained-delay и повторного heap dump.")
+	}
 	switch objectKind {
 	case "экран / Activity", "Context":
 		examples = append(examples, "Не храните Activity/Context в singleton/static; передавайте applicationContext только для app-wide зависимостей.")
 		examples = append(examples, "Отменяйте coroutine/executor work в onDestroy или scope владельца экрана.")
 	case "Fragment":
 		examples = append(examples, "Очищайте view binding в onDestroyView и отписывайте observers, привязанные к view lifecycle.")
+	case "ViewModel":
+		examples = append(examples, "В onCleared отменяйте jobs/scopes и очищайте callbacks; не храните Activity/View/Fragment в ViewModel.")
+	case "Service":
+		examples = append(examples, "В onDestroy снимайте receivers/listeners, останавливайте foreground работу и закрывайте binder/native ресурсы.")
+	case "Dialog":
+		examples = append(examples, "Перед dismiss/onDestroy сбрасывайте listeners и callbacks, которые держат Activity или decorView.")
+	case "RecyclerView ViewHolder", "adapter":
+		examples = append(examples, "В onViewRecycled/onViewDetachedFromWindow очищайте binding/listeners; в adapter detach очищайте callbacks на экран.")
 	case "View / binding":
 		examples = append(examples, "Сбрасывайте adapter/listener callbacks, которые держат View или binding после закрытия экрана.")
 	case "ресурс":
@@ -631,9 +708,12 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 		if leak.HolderField != "" && item.holder != "" && strings.Contains(strings.ToLower(leak.HolderField), strings.ToLower(item.holder)) {
 			score += 800
 		}
+		score += heapLeakActionabilityScore(leak) * 100
 		score += int(minUint64(leak.RetainedSizeKB, 512*1024) / 1024)
-		score += len(leak.ReferencePath)
-		if score > bestScore {
+		if len(leak.ReferencePath) > 0 && len(leak.ReferencePath) < maxHprofPathElements {
+			score += maxHprofPathElements - len(leak.ReferencePath)
+		}
+		if score > bestScore || (score == bestScore && (bestIndex < 0 || betterHeapLeak(leak, heap.Leaks[bestIndex]))) {
 			bestScore = score
 			bestIndex = i
 		}
@@ -719,6 +799,9 @@ func retainedHeapChainActions(heap HeapLeakEvidence, fallback []string) []string
 		case "monitor":
 			actions = append(actions, "Категория monitor: проверьте синхронизацию и объекты, удерживаемые заблокированными потоками.")
 		}
+	}
+	if len(heap.ReferenceMatchers) > 0 {
+		actions = append(actions, "Reference matchers подсказали область риска: "+strings.Join(heap.ReferenceMatchers, ", ")+". Проверьте соответствующий framework/listener/context cleanup.")
 	}
 	actions = append(actions, fallback...)
 	return uniqueStrings(actions)

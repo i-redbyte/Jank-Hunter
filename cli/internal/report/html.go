@@ -854,6 +854,11 @@ type selectOption struct {
 var leakObjectKindFilterOptions = []string{
 	"экран / Activity",
 	"Fragment",
+	"ViewModel",
+	"Service",
+	"Dialog",
+	"RecyclerView ViewHolder",
+	"adapter",
 	"Context",
 	"View / binding",
 	"ресурс",
@@ -875,6 +880,16 @@ func leakObjectKindLabel(value string) string {
 		return "Экран / Activity"
 	case "Fragment":
 		return "Fragment"
+	case "ViewModel":
+		return "ViewModel"
+	case "Service":
+		return "Service"
+	case "Dialog":
+		return "Dialog"
+	case "RecyclerView ViewHolder":
+		return "RecyclerView ViewHolder"
+	case "adapter":
+		return "Adapter"
 	case "Context":
 		return "Context"
 	case "View / binding":
@@ -1110,6 +1125,8 @@ func memoryLeakSearchText(item analyze.MemoryLeakSuspect) string {
 		item.HeapSource,
 		item.GCRoot,
 		item.HolderField,
+		item.LeakPattern,
+		strings.Join(item.ReferenceMatchers, " "),
 		item.LeakChainConfidence,
 		item.LeakChainSummary,
 		strings.Join(item.LeakChainActions, " "),
