@@ -41,8 +41,8 @@ class MainActivity : Activity() {
         LeakCanaryBridge.configure()
         JankHunter.setScreen("SamplePlayground")
         setContentView(createContent())
-        refreshRuntimeFlag("ready")
-        refreshLeakCanaryStatus("ready")
+        refreshRuntimeFlag(getString(R.string.status_ready))
+        refreshLeakCanaryStatus(getString(R.string.status_ready))
     }
 
     override fun onDestroy() {
@@ -71,27 +71,27 @@ class MainActivity : Activity() {
 
     private fun hero(): View {
         statusText = TextView(this).apply {
-            text = "Ready: run a baseline, create a regression, flush, then pull the report."
+            text = getString(R.string.hero_status_ready)
             textSize = 14f
             setTextColor(MUTED)
         }
         return card {
-            addView(label("Jank Hunter · sample lab", CYAN))
-            addView(title("Performance & Leak Playground"))
-            addView(copy("A guided demo for UI stalls, network, memory pressure, log spam, custom metrics, retained objects, LeakCanary comparison, compare reports, and dynamic SDK feature flags."))
+            addView(label(getString(R.string.hero_label), CYAN))
+            addView(title(getString(R.string.hero_title)))
+            addView(copy(getString(R.string.hero_description)))
             addView(statusText)
         }
     }
 
     private fun controlTower(): View = section(
-        title = "Control tower",
-        subtitle = "One-tap scenarios for clean baseline and noisy candidate runs.",
+        title = getString(R.string.section_control_tower),
+        subtitle = getString(R.string.section_control_tower_subtitle),
         actions = listOf(
-            action("Run clean baseline", OK) { runCleanBaseline() },
-            action("Run noisy candidate", MAGENTA) { runNoisyCandidate() },
-            action("Flush diagnostics", CYAN) {
+            action(getString(R.string.action_run_clean_baseline), OK) { runCleanBaseline() },
+            action(getString(R.string.action_run_noisy_candidate), MAGENTA) { runNoisyCandidate() },
+            action(getString(R.string.action_flush_diagnostics), CYAN) {
                 JankHunter.flush()
-                updateStatus("Flushed. Pull .jhlog with run-sample-app.sh or collect-android-leak-report.sh.")
+                updateStatus(getString(R.string.status_flushed))
             },
         ),
     )
@@ -102,93 +102,102 @@ class MainActivity : Activity() {
             setTextColor(MUTED)
         }
         return section(
-            title = "Feature flag",
-            subtitle = "Dynamic runtime switch for Remote Config, kill switches, staged rollout and QA toggles.",
+            title = getString(R.string.section_feature_flag),
+            subtitle = getString(R.string.section_feature_flag_subtitle),
             beforeActions = listOf(runtimeFlagText),
             actions = listOf(
-                action("Enable SDK runtime", OK) {
+                action(getString(R.string.action_enable_sdk_runtime), OK) {
                     val enabled = JankHunter.setRuntimeEnabled(true, "sample_feature_flag")
                     JankHunter.setScreen("SamplePlayground")
-                    refreshRuntimeFlag(if (enabled) "enabled from feature flag" else "enable failed")
+                    refreshRuntimeFlag(
+                        if (enabled) {
+                            getString(R.string.status_runtime_enabled)
+                        } else {
+                            getString(R.string.status_runtime_enable_failed)
+                        },
+                    )
                 },
-                action("Disable SDK runtime", WARN) {
+                action(getString(R.string.action_disable_sdk_runtime), WARN) {
                     JankHunter.setRuntimeEnabled(false, "sample_feature_flag")
-                    refreshRuntimeFlag("disabled from feature flag")
+                    refreshRuntimeFlag(getString(R.string.status_runtime_disabled))
                 },
-                action("Record flag probe", CYAN) {
+                action(getString(R.string.action_record_flag_probe), CYAN) {
                     JankHunter.recordCounter("sample.feature_flag.probe.count", 1)
                     JankHunter.recordGauge("sample.feature_flag.runtime_enabled", if (JankHunter.isRuntimeEnabled()) 1 else 0)
-                    refreshRuntimeFlag("probe recorded")
+                    refreshRuntimeFlag(getString(R.string.status_runtime_probe_recorded))
                 },
             ),
         )
     }
 
     private fun performanceLab(): View = section(
-        title = "Performance lab",
-        subtitle = "Signals that show up in inspect, math, influence and code-problem reports.",
+        title = getString(R.string.section_performance_lab),
+        subtitle = getString(R.string.section_performance_lab_subtitle),
         actions = listOf(
-            action("UI stall", WARN) { recordUiStall() },
-            action("Background work", CYAN) { recordBackgroundWork() },
-            action("HTTP success", OK) {
+            action(getString(R.string.action_ui_stall), WARN) { recordUiStall() },
+            action(getString(R.string.action_background_work), CYAN) { recordBackgroundWork() },
+            action(getString(R.string.action_http_success), OK) {
                 runNetworkCall(
                     label = "JSONPlaceholder",
                     owner = "sample.network.jsonplaceholder",
                     url = "https://jsonplaceholder.typicode.com/posts/1",
                 )
             },
-            action("HTTP 503", BAD) {
+            action(getString(R.string.action_http_503), BAD) {
                 runNetworkCall(
                     label = "httpbin 503",
                     owner = "sample.network.httpbin_503",
                     url = "https://httpbin.org/status/503",
                 )
             },
-            action("Memory pressure", MAGENTA) { recordMemoryPressure() },
-            action("Log spam", BAD) { recordLogSpamBurst() },
-            action("Custom metrics", CYAN) { recordCustomMetrics() },
+            action(getString(R.string.action_memory_pressure), MAGENTA) { recordMemoryPressure() },
+            action(getString(R.string.action_log_spam), BAD) { recordLogSpamBurst() },
+            action(getString(R.string.action_custom_metrics), CYAN) { recordCustomMetrics() },
         ),
     )
 
     private fun leakLab(): View = section(
-        title = "Leak lab",
-        subtitle = "The same retained objects are watched by Jank Hunter and, in debug builds, LeakCanary.",
+        title = getString(R.string.section_leak_lab),
+        subtitle = getString(R.string.section_leak_lab_subtitle),
         actions = listOf(
-            action("Clean object", OK) { recordCleanObject() },
-            action("Activity reference", MAGENTA) {
+            action(getString(R.string.action_clean_object), OK) { recordCleanObject() },
+            action(getString(R.string.action_activity_reference), MAGENTA) {
                 recordLeakDemo(
                     step = "activity_reference",
+                    displayName = getString(R.string.leak_display_activity_reference),
                     owner = "sample.memory_leak.activity_registry",
                     className = "io.jankhunter.sample.LeakedCheckoutActivity",
                 ) {
                     LeakedActivityScreen(clicks.incrementAndGet())
                 }
             },
-            action("View binding", MAGENTA) {
+            action(getString(R.string.action_view_binding), MAGENTA) {
                 recordLeakDemo(
                     step = "view_binding",
+                    displayName = getString(R.string.leak_display_view_binding),
                     owner = "sample.memory_leak.binding_cache",
                     className = "io.jankhunter.sample.LeakedCheckoutBinding",
                 ) {
                     LeakedBindingSnapshot(screen = this@MainActivity, payload = ByteArray(96 * 1024))
                 }
             },
-            action("Listener callback", WARN) {
+            action(getString(R.string.action_listener_callback), WARN) {
                 recordLeakDemo(
                     step = "listener_callback",
+                    displayName = getString(R.string.leak_display_listener_callback),
                     owner = "sample.memory_leak.listener_registry",
                     className = "io.jankhunter.sample.LeakedPaymentListener",
                 ) {
                     LeakedPaymentListener {
-                        updateStatus("Listener callback is still retained.")
+                        updateStatus(getString(R.string.status_listener_retained))
                     }
                 }
             },
-            action("Cache entries", WARN) { recordCacheLeaks() },
-            action("Clear retained list", OK) {
+            action(getString(R.string.action_cache_entries), WARN) { recordCacheLeaks() },
+            action(getString(R.string.action_clear_retained_list), OK) {
                 retainedSamples.clear()
                 JankHunter.recordCounter("sample.memory_leak.retained_list.clear.count", 1)
-                updateStatus("Retained sample list cleared.")
+                updateStatus(getString(R.string.status_retained_list_cleared))
             },
         ),
     )
@@ -199,51 +208,52 @@ class MainActivity : Activity() {
             setTextColor(MUTED)
         }
         return section(
-            title = "LeakCanary benchmark",
-            subtitle = "Run matched scenarios, then compare Jank Hunter HTML with LeakCanary heap analysis.",
+            title = getString(R.string.section_leakcanary_benchmark),
+            subtitle = getString(R.string.section_leakcanary_benchmark_subtitle),
             beforeActions = listOf(leakCanaryStatusText),
             actions = listOf(
-                action("Both: clean object", OK) {
+                action(getString(R.string.action_both_clean_object), OK) {
                     recordCleanObject()
-                    refreshLeakCanaryStatus("clean object queued")
+                    refreshLeakCanaryStatus(getString(R.string.status_clean_object_queued))
                 },
-                action("Both: retained object", MAGENTA) {
+                action(getString(R.string.action_both_retained_object), MAGENTA) {
                     recordLeakDemo(
                         step = "leakcanary_retained_object",
+                        displayName = getString(R.string.leak_display_leakcanary_retained),
                         owner = "sample.memory_leak.leakcanary_benchmark",
                         className = "io.jankhunter.sample.LeakedCheckoutActivity",
                     ) {
                         LeakedActivityScreen(clicks.incrementAndGet())
                     }
-                    refreshLeakCanaryStatus("retained object queued")
+                    refreshLeakCanaryStatus(getString(R.string.status_retained_object_queued))
                 },
-                action("Both: cache burst", BAD) {
+                action(getString(R.string.action_both_cache_burst), BAD) {
                     recordCacheLeaks()
-                    refreshLeakCanaryStatus("cache burst queued")
+                    refreshLeakCanaryStatus(getString(R.string.status_cache_burst_queued))
                 },
-                action("How to compare", CYAN) {
+                action(getString(R.string.action_how_to_compare), CYAN) {
                     JankHunter.flush()
-                    updateStatus("Jank Hunter: pull report-leaks.html. LeakCanary: wait a few seconds, background the app, then open notification or launcher report.")
-                    refreshLeakCanaryStatus("comparison hint shown")
+                    updateStatus(getString(R.string.status_compare_hint))
+                    refreshLeakCanaryStatus(getString(R.string.status_comparison_hint_shown))
                 },
             ),
         )
     }
 
     private fun compareLab(): View = section(
-        title = "Compare lab",
-        subtitle = "Create candidate-only regressions, then compare baseline and candidate logs.",
+        title = getString(R.string.section_compare_lab),
+        subtitle = getString(R.string.section_compare_lab_subtitle),
         actions = listOf(
-            action("Candidate leak burst", BAD) { recordLeakRegressionBurst() },
-            action("Candidate perf burst", BAD) {
+            action(getString(R.string.action_candidate_leak_burst), BAD) { recordLeakRegressionBurst() },
+            action(getString(R.string.action_candidate_perf_burst), BAD) {
                 repeat(2) { recordUiStall() }
                 recordMemoryPressure()
                 recordLogSpamBurst()
-                updateStatus("Candidate performance burst recorded.")
+                updateStatus(getString(R.string.status_candidate_perf_burst_recorded))
             },
-            action("Pull report hint", CYAN) {
+            action(getString(R.string.action_pull_report_hint), CYAN) {
                 JankHunter.flush()
-                updateStatus("Use: run-sample-app.sh -> log/report, or cli/scripts/collect-android-leak-report.sh.")
+                updateStatus(getString(R.string.status_pull_report_hint))
             },
         ),
     )
@@ -257,7 +267,7 @@ class MainActivity : Activity() {
             recordCleanObject()
         }
         JankHunter.flush()
-        updateStatus("Baseline recorded: clean object, custom metrics, no retained sample list.")
+        updateStatus(getString(R.string.status_baseline_recorded))
     }
 
     private fun runNoisyCandidate() {
@@ -269,7 +279,7 @@ class MainActivity : Activity() {
             recordLeakRegressionBurst()
         }
         JankHunter.flush()
-        updateStatus("Candidate recorded: UI, memory and leak regressions are ready for compare.")
+        updateStatus(getString(R.string.status_candidate_recorded))
     }
 
     private fun recordUiStall() {
@@ -278,7 +288,7 @@ class MainActivity : Activity() {
             SystemClock.sleep(280)
         }
         JankHunter.recordCounter("sample.ui_stall.clicks", 1)
-        updateStatus("UI stall recorded (#$count).")
+        updateStatus(getString(R.string.status_ui_stall_recorded, count))
     }
 
     private fun recordBackgroundWork() {
@@ -290,7 +300,7 @@ class MainActivity : Activity() {
             JankHunter.recordGauge("sample.worker.duration_ms", SystemClock.elapsedRealtime() - start)
             JankHunter.recordCounter("sample.worker.completed.count", 1)
             JankHunter.flush()
-            runOnUiThread { updateStatus("Background work recorded.") }
+            runOnUiThread { updateStatus(getString(R.string.status_background_work_recorded)) }
         }
     }
 
@@ -300,7 +310,7 @@ class MainActivity : Activity() {
         val retainedKb = memoryPressure.sumOf { it.size / 1024L }
         JankHunter.recordGauge("sample.memory.pressure_kb", retainedKb)
         JankHunter.recordCounter("sample.memory.pressure.alloc.count", 1)
-        updateStatus("Memory pressure recorded: ${retainedKb}KB retained in sample list.")
+        updateStatus(getString(R.string.status_memory_pressure_recorded, retainedKb))
     }
 
     private fun recordLogSpamBurst() {
@@ -308,7 +318,7 @@ class MainActivity : Activity() {
             JankHunter.recordLogSpam("sample.logging.checkout_renderer", "SampleLogger.render#$index", 5)
         }
         JankHunter.recordCounter("sample.log_spam.manual_burst.count", 12)
-        updateStatus("Log spam burst recorded.")
+        updateStatus(getString(R.string.status_log_spam_recorded))
     }
 
     private fun recordCustomMetrics() {
@@ -316,7 +326,7 @@ class MainActivity : Activity() {
         JankHunter.recordCounter("sample.checkout.render.count", 1)
         JankHunter.recordGauge("sample.checkout.render_items", 24 + count.toLong())
         JankHunter.recordGauge("sample.checkout.cart_value", 1_990 + count.toLong() * 10)
-        updateStatus("Custom counters and gauges recorded.")
+        updateStatus(getString(R.string.status_custom_metrics_recorded))
     }
 
     private fun recordCleanObject() {
@@ -329,15 +339,16 @@ class MainActivity : Activity() {
                     "io.jankhunter.sample.CleanedLeakProbe",
                     "sample.memory_leak.cleaned_scope",
                 )
-                watchWithLeakCanary(probe, "clean object should be collected")
+                watchWithLeakCanary(probe, getString(R.string.leakcanary_desc_clean_object))
             }
         }
         JankHunter.recordCounter("sample.memory_leak.clean.watch.count", 1)
-        updateStatus("Clean object watched without retaining.")
+        updateStatus(getString(R.string.status_clean_object_watched))
     }
 
     private fun recordLeakDemo(
         step: String,
+        displayName: String,
         owner: String,
         className: String,
         factory: () -> Any,
@@ -348,12 +359,15 @@ class MainActivity : Activity() {
                 val sample = factory()
                 retainedSamples += sample
                 JankHunter.watchObject(sample, className, owner)
-                watchWithLeakCanary(sample, "$step retained by $owner")
+                watchWithLeakCanary(
+                    sample,
+                    getString(R.string.leakcanary_desc_retained_by_owner, displayName, owner),
+                )
             }
         }
         JankHunter.recordCounter("sample.memory_leak.watch.count", 1)
         JankHunter.flush()
-        updateStatus("Leak scenario recorded: $step.")
+        updateStatus(getString(R.string.status_leak_scenario_recorded, displayName))
     }
 
     private fun recordCacheLeaks() {
@@ -368,13 +382,13 @@ class MainActivity : Activity() {
                         "io.jankhunter.sample.LeakedCheckoutCacheEntry",
                         "sample.memory_leak.checkout_cache",
                     )
-                    watchWithLeakCanary(entry, "cache entry $index retained by checkout cache")
+                    watchWithLeakCanary(entry, getString(R.string.leakcanary_desc_cache_entry, index))
                 }
             }
         }
         JankHunter.recordCounter("sample.memory_leak.cache.watch.count", 3)
         JankHunter.flush()
-        updateStatus("Retained cache entries watched.")
+        updateStatus(getString(R.string.status_cache_entries_watched))
     }
 
     private fun recordLeakRegressionBurst() {
@@ -391,26 +405,26 @@ class MainActivity : Activity() {
                         "io.jankhunter.sample.LeakedCheckoutActivity",
                         "sample.memory_leak.regression_burst",
                     )
-                    watchWithLeakCanary(activity, "regression burst activity $index")
+                    watchWithLeakCanary(activity, getString(R.string.leakcanary_desc_regression_activity, index))
                     JankHunter.watchObject(
                         binding,
                         "io.jankhunter.sample.LeakedCheckoutBinding",
                         "sample.memory_leak.regression_burst",
                     )
-                    watchWithLeakCanary(binding, "regression burst binding $index")
+                    watchWithLeakCanary(binding, getString(R.string.leakcanary_desc_regression_binding, index))
                 }
             }
         }
         JankHunter.recordCounter("sample.memory_leak.regression_burst.watch.count", 4)
         JankHunter.flush()
-        updateStatus("Candidate leak burst watched.")
+        updateStatus(getString(R.string.status_candidate_leak_burst_watched))
     }
 
     private fun runNetworkCall(label: String, owner: String, url: String) {
-        updateStatus("Network: $label running.")
+        updateStatus(getString(R.string.status_network_running, label))
         executor.execute {
             val startedAt = SystemClock.elapsedRealtime()
-            var message = "Network: $label failed"
+            var message = getString(R.string.status_network_failed, label)
 
             try {
                 var responseCode = 0
@@ -429,10 +443,10 @@ class MainActivity : Activity() {
                     JankHunter.recordCounter("sample.network.success.count", 1)
                 }
                 JankHunter.recordCounter("sample.network.response_bytes", responseBytes.toLong())
-                message = "Network: $label HTTP $responseCode, ${responseBytes}b"
+                message = getString(R.string.status_network_http, label, responseCode, responseBytes)
             } catch (throwable: Throwable) {
                 JankHunter.recordCounter("sample.network.failure.count", 1)
-                message = "Network: $label ${throwable.javaClass.simpleName}"
+                message = getString(R.string.status_network_exception, label, throwable.javaClass.simpleName)
             } finally {
                 JankHunter.recordGauge(
                     "sample.network.duration_ms",
@@ -540,16 +554,33 @@ class MainActivity : Activity() {
 
     private fun refreshRuntimeFlag(reason: String) {
         if (::runtimeFlagText.isInitialized) {
-            val state = if (JankHunter.isRuntimeEnabled()) "ON" else "OFF"
-            val active = if (JankHunter.isStarted()) "collecting" else "paused"
-            runtimeFlagText.text = "Runtime flag: $state · $active · $reason"
+            val state = if (JankHunter.isRuntimeEnabled()) {
+                getString(R.string.runtime_flag_on)
+            } else {
+                getString(R.string.runtime_flag_off)
+            }
+            val active = if (JankHunter.isStarted()) {
+                getString(R.string.runtime_collecting)
+            } else {
+                getString(R.string.runtime_paused)
+            }
+            runtimeFlagText.text = getString(R.string.runtime_flag_line, state, active, reason)
         }
-        updateStatus("Runtime flag ${if (JankHunter.isRuntimeEnabled()) "ON" else "OFF"}: $reason")
+        val state = if (JankHunter.isRuntimeEnabled()) {
+            getString(R.string.runtime_flag_on)
+        } else {
+            getString(R.string.runtime_flag_off)
+        }
+        updateStatus(getString(R.string.runtime_status_line, state, reason))
     }
 
     private fun refreshLeakCanaryStatus(reason: String) {
         if (::leakCanaryStatusText.isInitialized) {
-            leakCanaryStatusText.text = "${LeakCanaryBridge.status()} · $reason"
+            leakCanaryStatusText.text = getString(
+                R.string.leakcanary_status_line,
+                LeakCanaryBridge.status(this),
+                reason,
+            )
         }
     }
 

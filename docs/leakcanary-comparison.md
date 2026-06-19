@@ -1,47 +1,54 @@
-# LeakCanary Comparison
+# Сравнение с LeakCanary
 
-Sample app includes a debug-only LeakCanary bridge so the same retained objects can be watched by both tools:
+Sample app подключает LeakCanary только в debug-сборке и отправляет одни и те же retained objects в оба инструмента:
 
-- Jank Hunter records `.jhlog` events with screen, flow, step, owner, counters and optional heap evidence.
-- LeakCanary watches objects through `AppWatcher.objectWatcher.expectWeaklyReachable(...)`, dumps/analyzes the heap when its retained-object threshold is reached, and shows the result through its notification or launcher entry.
-- Release builds keep a no-op bridge, so LeakCanary classes are not bundled outside debug.
+- Jank Hunter пишет `.jhlog` с screen, flow, step, owner, counters и опциональным heap evidence.
+- LeakCanary получает объекты через `AppWatcher.objectWatcher.expectWeaklyReachable(...)`, при достижении retained-threshold делает heap dump, анализирует его и показывает результат через notification или launcher report.
+- Release-сборка содержит no-op bridge, поэтому классы LeakCanary не попадают в production artifact.
 
-The integration follows the official LeakCanary 2.14 setup: `debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")`. LeakCanary auto-installs in debug builds, and custom objects are sent to the modern reachability API, `AppWatcher.objectWatcher.expectWeaklyReachable(...)`.
+Интеграция соответствует официальной схеме LeakCanary 2.14: `debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")`. LeakCanary автоматически стартует в debug-сборке, а кастомные объекты отправляются в современный reachability API `AppWatcher.objectWatcher.expectWeaklyReachable(...)`.
 
-Sources:
+Источники:
 
 - [LeakCanary Getting Started](https://square.github.io/leakcanary/getting_started/)
-- [LeakCanary Code Recipes](https://square.github.io/leakcanary/recipes/)
 - [How LeakCanary works](https://square.github.io/leakcanary/fundamentals-how-leakcanary-works/)
+- [LeakCanary Code Recipes](https://square.github.io/leakcanary/recipes/)
 - [LeakCanary Change Log](https://square.github.io/leakcanary/changelog/)
 
-## How To Run
+## Как Запустить
 
-1. Start the sample app with `./run-sample-app.sh`.
-2. In the app, open `LeakCanary benchmark`.
-3. Tap `Both: clean object` for a negative control.
-4. Tap `Both: retained object` or `Both: cache burst` for positive leak cases.
-5. Wait a few seconds. If LeakCanary has not dumped yet, background the app or open its notification/launcher entry.
-6. In the script shell, run `log` or `report` to pull Jank Hunter logs and generate HTML.
+1. Запустите sample app через `./run-sample-app.sh`.
+2. В приложении откройте блок `Бенчмарк LeakCanary`.
+3. Нажмите `Оба: чистый объект` для negative control.
+4. Нажмите `Оба: удержанный объект` или `Оба: cache burst` для positive leak cases.
+5. Подождите несколько секунд. Если LeakCanary еще не сделал dump, сверните приложение или откройте notification / launcher report.
+6. В shell скрипта выполните `log` или `report`, чтобы забрать `.jhlog` и собрать HTML Jank Hunter.
 
-## What To Compare
+## Что Сравнивать
 
-| Question | LeakCanary report | Jank Hunter report |
+| Вопрос | LeakCanary | Jank Hunter |
 | --- | --- | --- |
-| Did the object leak? | Retained object count, heap analysis result and leak signature. | `report-leaks.html` retained count, class, owner, flow and evidence freshness. |
-| Why is it retained? | Strong reference path from GC root to leaking object. | Light mode: holder/scope/context. Heap mode: GC root chain, holder field, retained size and alternative paths. |
-| Is this a regression? | Manual comparison between separate LeakCanary reports. | `compare-leaks.html` groups new, worse, same, better and resolved leak signatures. |
-| Is the report readable for juniors? | Precise but dense heap trace. | Product-style summary, severity, checklist, suspect owner and step-by-step investigation hints. |
-| Can it join performance analysis? | Leak-focused only. | Correlates leaks with UI stalls, memory pressure, network, log spam, owners and flows. |
+| Нашелась ли утечка? | Retained count, heap analysis result и leak signature. | `report-leaks.html`: retained count, class, owner, flow и свежесть evidence. |
+| Почему объект удерживается? | Сильная reference path от GC root до leaking object. | Light mode: holder/scope/context. Heap mode: GC root chain, holder field, retained size и alternative paths. |
+| Это регрессия? | Обычно ручное сравнение отдельных отчетов. | `compare-leaks.html`: new, worse, same, better и resolved leak signatures. |
+| Понятно ли джуну? | Очень точный, но плотный heap trace. | Продуктовая сводка, severity, suspect owner, flow/step и чеклист расследования. |
+| Связано ли это с performance? | Фокус только на утечках. | Корреляция с UI-фризами, памятью, сетью, лог-спамом, owners и flows. |
 
-## Expected Demo Behavior
+## Оценочная Матрица
 
-`Both: clean object` should disappear after GC and should not become a persistent leak.
+Шкала: 0 - у нас ничего не работает, 10 - мы превзошли LeakCanary по этому критерию.
 
-`Both: retained object` keeps a `LeakedActivityScreen` instance in the sample retained list. LeakCanary should eventually show a retained object / leak trace. Jank Hunter should show the same class with `sample.memory_leak.leakcanary_benchmark` owner and `sample.memory_leak.demo` flow.
+| Критерий | Оценка Jank Hunter | Почему |
+| --- | ---: | --- |
+| Детект retained objects | 7 | Ручной `watchObject` и sample-сценарии работают, есть light/heap mode. Но автоматическое покрытие Activity/Fragment/ViewModel пока слабее LeakCanary. |
+| Heap trace и GC-root точность | 7 | Heap mode дает GC root chain, holder field, retained size и alternative paths, но LeakCanary/Shark зрелее и богаче по reference matchers. |
+| Понятность отчета | 9 | Jank Hunter отчет явно проектируется для junior-friendly расследования: summary, severity, owner, flow, checklist. |
+| Regression compare | 9 | `compare-leaks.html` сразу показывает new/worse/same/better/resolved; у LeakCanary это в основном ручная работа. |
+| Контекст продукта | 9 | Owner/flow/step и связь с UI/network/memory/log spam дают больше продуктового контекста, чем leak-only отчет. |
+| Runtime/feature flag управление | 9 | SDK можно включать/выключать динамически без перезапуска приложения; это сильная business-фича. |
+| Production/CI artifact story | 8 | `.jhlog` и HTML хорошо ложатся в QA/CI artifacts; live LeakCanary удобнее локально в debug. |
+| Зрелость и доверие | 6 | LeakCanary - отраслевой стандарт, его алгоритмы и UX проверены годами; Jank Hunter еще надо прогнать на большом наборе реальных приложений. |
 
-`Both: cache burst` keeps three cache entries. LeakCanary should group or list retained objects after analysis. Jank Hunter should make the burst obvious in both single-run leak report and baseline/candidate comparison.
+Средняя оценка текущей реализации: **8.0 / 10**.
 
-## Product Positioning
-
-LeakCanary remains the reference for local heap leak detection and precise GC-root traces. Jank Hunter should be stronger when a team needs readable reporting, regression comparison, ownership attribution, flow context, CI artifacts and correlation with broader performance signals.
+Текущий вывод: Jank Hunter уже сильнее LeakCanary как продуктовый отчет, regression analyzer и performance-context инструмент. LeakCanary пока сильнее как зрелый автоматический heap leak detector с эталонной точностью анализа reference path.

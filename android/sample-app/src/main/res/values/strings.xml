@@ -1,0 +1,100 @@
+<resources>
+    <string name="app_name">Jank Hunter Демо</string>
+
+    <string name="status_ready">готово</string>
+    <string name="hero_status_ready">Готово: запустите baseline, создайте регрессию, выполните flush и заберите отчет.</string>
+    <string name="hero_label">Jank Hunter · демо-лаборатория</string>
+    <string name="hero_title">Лаборатория производительности и утечек</string>
+    <string name="hero_description">Пошаговое демо для UI-фризов, сети, давления памяти, шумных логов, кастомных метрик, удержанных объектов, сравнения с LeakCanary, compare-отчетов и динамического feature flag SDK.</string>
+
+    <string name="section_control_tower">Пульт управления</string>
+    <string name="section_control_tower_subtitle">Готовые сценарии для чистого baseline и шумного candidate-прогона.</string>
+    <string name="action_run_clean_baseline">Запустить чистый baseline</string>
+    <string name="action_run_noisy_candidate">Запустить шумный candidate</string>
+    <string name="action_flush_diagnostics">Сбросить диагностику</string>
+    <string name="status_flushed">Данные сброшены. Заберите .jhlog через run-sample-app.sh или collect-android-leak-report.sh.</string>
+
+    <string name="section_feature_flag">Feature flag</string>
+    <string name="section_feature_flag_subtitle">Динамический runtime-переключатель для Remote Config, kill switch, staged rollout и QA-меню.</string>
+    <string name="action_enable_sdk_runtime">Включить SDK runtime</string>
+    <string name="action_disable_sdk_runtime">Выключить SDK runtime</string>
+    <string name="action_record_flag_probe">Записать проверку флага</string>
+    <string name="status_runtime_enabled">включено через feature flag</string>
+    <string name="status_runtime_enable_failed">включить не удалось</string>
+    <string name="status_runtime_disabled">выключено через feature flag</string>
+    <string name="status_runtime_probe_recorded">проверка записана</string>
+    <string name="runtime_flag_on">ВКЛ</string>
+    <string name="runtime_flag_off">ВЫКЛ</string>
+    <string name="runtime_collecting">сбор идет</string>
+    <string name="runtime_paused">пауза</string>
+    <string name="runtime_flag_line">Runtime-флаг: %1$s · %2$s · %3$s</string>
+    <string name="runtime_status_line">Runtime-флаг %1$s: %2$s</string>
+
+    <string name="section_performance_lab">Лаборатория производительности</string>
+    <string name="section_performance_lab_subtitle">Сигналы, которые видны в inspect, math, influence и code-problem отчетах.</string>
+    <string name="action_ui_stall">UI-фриз</string>
+    <string name="action_background_work">Фоновая работа</string>
+    <string name="action_http_success">HTTP успех</string>
+    <string name="action_http_503">HTTP 503</string>
+    <string name="action_memory_pressure">Давление памяти</string>
+    <string name="action_log_spam">Шумные логи</string>
+    <string name="action_custom_metrics">Кастомные метрики</string>
+    <string name="status_ui_stall_recorded">UI-фриз записан (#%1$d).</string>
+    <string name="status_background_work_recorded">Фоновая работа записана.</string>
+    <string name="status_memory_pressure_recorded">Давление памяти записано: %1$d КБ удерживается в sample-списке.</string>
+    <string name="status_log_spam_recorded">Всплеск шумных логов записан.</string>
+    <string name="status_custom_metrics_recorded">Кастомные counters и gauges записаны.</string>
+    <string name="status_network_running">Сеть: %1$s выполняется.</string>
+    <string name="status_network_failed">Сеть: %1$s завершилась ошибкой.</string>
+    <string name="status_network_http">Сеть: %1$s HTTP %2$d, %3$d Б</string>
+    <string name="status_network_exception">Сеть: %1$s %2$s</string>
+
+    <string name="section_leak_lab">Лаборатория утечек</string>
+    <string name="section_leak_lab_subtitle">Одни и те же удержанные объекты наблюдают Jank Hunter и, в debug-сборке, LeakCanary.</string>
+    <string name="action_clean_object">Чистый объект</string>
+    <string name="action_activity_reference">Ссылка на Activity</string>
+    <string name="action_view_binding">View binding</string>
+    <string name="action_listener_callback">Listener callback</string>
+    <string name="action_cache_entries">Cache entries</string>
+    <string name="action_clear_retained_list">Очистить retained-список</string>
+    <string name="status_listener_retained">Listener callback все еще удерживается.</string>
+    <string name="status_retained_list_cleared">Retained-список sample очищен.</string>
+    <string name="status_clean_object_watched">Чистый объект поставлен под наблюдение без удержания.</string>
+    <string name="status_leak_scenario_recorded">Leak-сценарий записан: %1$s.</string>
+    <string name="status_cache_entries_watched">Удержанные cache entries поставлены под наблюдение.</string>
+    <string name="leak_display_activity_reference">ссылка на Activity</string>
+    <string name="leak_display_view_binding">View binding</string>
+    <string name="leak_display_listener_callback">listener callback</string>
+    <string name="leak_display_leakcanary_retained">объект для сравнения с LeakCanary</string>
+    <string name="leakcanary_desc_clean_object">чистый объект должен быть собран GC</string>
+    <string name="leakcanary_desc_retained_by_owner">%1$s удерживается owner-ом %2$s</string>
+    <string name="leakcanary_desc_cache_entry">cache entry %1$d удерживается checkout cache</string>
+    <string name="leakcanary_desc_regression_activity">regression burst Activity %1$d</string>
+    <string name="leakcanary_desc_regression_binding">regression burst Binding %1$d</string>
+
+    <string name="section_leakcanary_benchmark">Бенчмарк LeakCanary</string>
+    <string name="section_leakcanary_benchmark_subtitle">Запустите одинаковые сценарии, затем сравните Jank Hunter HTML с heap-анализом LeakCanary.</string>
+    <string name="action_both_clean_object">Оба: чистый объект</string>
+    <string name="action_both_retained_object">Оба: удержанный объект</string>
+    <string name="action_both_cache_burst">Оба: cache burst</string>
+    <string name="action_how_to_compare">Как сравнить</string>
+    <string name="status_clean_object_queued">чистый объект отправлен</string>
+    <string name="status_retained_object_queued">удержанный объект отправлен</string>
+    <string name="status_cache_burst_queued">cache burst отправлен</string>
+    <string name="status_comparison_hint_shown">подсказка по сравнению показана</string>
+    <string name="status_compare_hint">Jank Hunter: заберите report-leaks.html. LeakCanary: подождите несколько секунд, сверните приложение и откройте notification или launcher report.</string>
+    <string name="leakcanary_debug_status">LeakCanary debug: ВКЛ · threshold retained = 1 · notification / launcher report</string>
+    <string name="leakcanary_release_status">LeakCanary release: не входит в сборку; для benchmark используйте debug</string>
+    <string name="leakcanary_status_line">%1$s · %2$s</string>
+
+    <string name="section_compare_lab">Лаборатория сравнения</string>
+    <string name="section_compare_lab_subtitle">Создайте candidate-only регрессии, затем сравните baseline и candidate логи.</string>
+    <string name="action_candidate_leak_burst">Candidate leak burst</string>
+    <string name="action_candidate_perf_burst">Candidate perf burst</string>
+    <string name="action_pull_report_hint">Подсказка по отчету</string>
+    <string name="status_candidate_perf_burst_recorded">Candidate performance burst записан.</string>
+    <string name="status_pull_report_hint">Используйте: run-sample-app.sh -> log/report или cli/scripts/collect-android-leak-report.sh.</string>
+    <string name="status_baseline_recorded">Baseline записан: чистый объект, кастомные метрики, без удержания sample-списка.</string>
+    <string name="status_candidate_recorded">Candidate записан: UI, память и leak-регрессии готовы к compare.</string>
+    <string name="status_candidate_leak_burst_watched">Candidate leak burst поставлен под наблюдение.</string>
+</resources>

@@ -1,5 +1,6 @@
 package io.jankhunter.sample
 
+import android.content.Context
 import leakcanary.AppWatcher
 import leakcanary.LeakCanary
 
@@ -20,8 +21,8 @@ internal object LeakCanaryBridge {
         )
     }
 
-    fun status(): String {
+    fun status(context: Context): String {
         configure()
-        return "LeakCanary debug: ON · retained threshold 1 · notification / launcher report"
+        return context.getString(R.string.leakcanary_debug_status)
     }
 }
