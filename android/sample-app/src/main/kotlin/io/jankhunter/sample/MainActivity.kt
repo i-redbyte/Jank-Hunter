@@ -34,12 +34,15 @@ class MainActivity : Activity() {
 
     private lateinit var statusText: TextView
     private lateinit var runtimeFlagText: TextView
+    private lateinit var leakCanaryStatusText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LeakCanaryBridge.configure()
         JankHunter.setScreen("SamplePlayground")
         setContentView(createContent())
         refreshRuntimeFlag("ready")
+        refreshLeakCanaryStatus("ready")
     }
 
     override fun onDestroy() {
@@ -57,6 +60,7 @@ class MainActivity : Activity() {
             addView(featureFlagLab())
             addView(performanceLab())
             addView(leakLab())
+            addView(leakCanaryBenchmarkLab())
             addView(compareLab())
         }
         return ScrollView(this).apply {
@@ -74,7 +78,7 @@ class MainActivity : Activity() {
         return card {
             addView(label("Jank Hunter · sample lab", CYAN))
             addView(title("Performance & Leak Playground"))
-            addView(copy("A guided demo for UI stalls, network, memory pressure, log spam, custom metrics, retained objects, compare reports, and dynamic SDK feature flags."))
+            addView(copy("A guided demo for UI stalls, network, memory pressure, log spam, custom metrics, retained objects, LeakCanary comparison, compare reports, and dynamic SDK feature flags."))
             addView(statusText)
         }
     }
@@ -148,7 +152,7 @@ class MainActivity : Activity() {
 
     private fun leakLab(): View = section(
         title = "Leak lab",
-        subtitle = "Runtime-only light report becomes heap mode when HPROF/evidence is attached.",
+        subtitle = "The same retained objects are watched by Jank Hunter and, in debug builds, LeakCanary.",
         actions = listOf(
             action("Clean object", OK) { recordCleanObject() },
             action("Activity reference", MAGENTA) {
@@ -188,6 +192,43 @@ class MainActivity : Activity() {
             },
         ),
     )
+
+    private fun leakCanaryBenchmarkLab(): View {
+        leakCanaryStatusText = TextView(this).apply {
+            textSize = 14f
+            setTextColor(MUTED)
+        }
+        return section(
+            title = "LeakCanary benchmark",
+            subtitle = "Run matched scenarios, then compare Jank Hunter HTML with LeakCanary heap analysis.",
+            beforeActions = listOf(leakCanaryStatusText),
+            actions = listOf(
+                action("Both: clean object", OK) {
+                    recordCleanObject()
+                    refreshLeakCanaryStatus("clean object queued")
+                },
+                action("Both: retained object", MAGENTA) {
+                    recordLeakDemo(
+                        step = "leakcanary_retained_object",
+                        owner = "sample.memory_leak.leakcanary_benchmark",
+                        className = "io.jankhunter.sample.LeakedCheckoutActivity",
+                    ) {
+                        LeakedActivityScreen(clicks.incrementAndGet())
+                    }
+                    refreshLeakCanaryStatus("retained object queued")
+                },
+                action("Both: cache burst", BAD) {
+                    recordCacheLeaks()
+                    refreshLeakCanaryStatus("cache burst queued")
+                },
+                action("How to compare", CYAN) {
+                    JankHunter.flush()
+                    updateStatus("Jank Hunter: pull report-leaks.html. LeakCanary: wait a few seconds, background the app, then open notification or launcher report.")
+                    refreshLeakCanaryStatus("comparison hint shown")
+                },
+            ),
+        )
+    }
 
     private fun compareLab(): View = section(
         title = "Compare lab",
@@ -282,11 +323,13 @@ class MainActivity : Activity() {
         JankHunter.withFlow("sample.memory_leak.demo") {
             JankHunter.markFlowStep("clean_object")
             JankHunter.withOwner("sample.memory_leak.cleaned_scope") {
+                val probe = CleanedLeakProbe()
                 JankHunter.watchObject(
-                    CleanedLeakProbe(),
+                    probe,
                     "io.jankhunter.sample.CleanedLeakProbe",
                     "sample.memory_leak.cleaned_scope",
                 )
+                watchWithLeakCanary(probe, "clean object should be collected")
             }
         }
         JankHunter.recordCounter("sample.memory_leak.clean.watch.count", 1)
@@ -305,6 +348,7 @@ class MainActivity : Activity() {
                 val sample = factory()
                 retainedSamples += sample
                 JankHunter.watchObject(sample, className, owner)
+                watchWithLeakCanary(sample, "$step retained by $owner")
             }
         }
         JankHunter.recordCounter("sample.memory_leak.watch.count", 1)
@@ -324,6 +368,7 @@ class MainActivity : Activity() {
                         "io.jankhunter.sample.LeakedCheckoutCacheEntry",
                         "sample.memory_leak.checkout_cache",
                     )
+                    watchWithLeakCanary(entry, "cache entry $index retained by checkout cache")
                 }
             }
         }
@@ -346,11 +391,13 @@ class MainActivity : Activity() {
                         "io.jankhunter.sample.LeakedCheckoutActivity",
                         "sample.memory_leak.regression_burst",
                     )
+                    watchWithLeakCanary(activity, "regression burst activity $index")
                     JankHunter.watchObject(
                         binding,
                         "io.jankhunter.sample.LeakedCheckoutBinding",
                         "sample.memory_leak.regression_burst",
                     )
+                    watchWithLeakCanary(binding, "regression burst binding $index")
                 }
             }
         }
@@ -395,6 +442,11 @@ class MainActivity : Activity() {
                 runOnUiThread { updateStatus(message) }
             }
         }
+    }
+
+    private fun watchWithLeakCanary(watchedObject: Any, description: String) {
+        LeakCanaryBridge.watch(watchedObject, description)
+        JankHunter.recordCounter("sample.leakcanary.watch.count", 1)
     }
 
     private fun section(
@@ -493,6 +545,12 @@ class MainActivity : Activity() {
             runtimeFlagText.text = "Runtime flag: $state · $active · $reason"
         }
         updateStatus("Runtime flag ${if (JankHunter.isRuntimeEnabled()) "ON" else "OFF"}: $reason")
+    }
+
+    private fun refreshLeakCanaryStatus(reason: String) {
+        if (::leakCanaryStatusText.isInitialized) {
+            leakCanaryStatusText.text = "${LeakCanaryBridge.status()} · $reason"
+        }
     }
 
     private fun updateStatus(message: String) {

@@ -517,7 +517,7 @@ jankhunter inspect logs/*.jhlog \
   --out /tmp/jankhunter-leaks
 ```
 
-Скрипт работает с debuggable-приложением через `adb run-as`, поэтому не требует root. В sample-app есть отдельный Leak Lab flow: кнопки создают Activity/View binding/listener/cache утечки, clean object и candidate regression burst для демонстрации `compare-leaks.html`.
+Скрипт работает с debuggable-приложением через `adb run-as`, поэтому не требует root. В sample-app есть отдельный Leak Lab flow: кнопки создают Activity/View binding/listener/cache утечки, clean object и candidate regression burst для демонстрации `compare-leaks.html`. Debug-сборка sample также подключает LeakCanary и через `LeakCanary benchmark` отправляет те же объекты в `AppWatcher`, чтобы сравнить LeakCanary heap report с Jank Hunter HTML. Подробный чеклист: [../docs/leakcanary-comparison.md](../docs/leakcanary-comparison.md).
 
 Heap dump останавливает VM на время записи, поэтому держите режим выключенным по умолчанию и используйте лимиты для больших приложений.
 

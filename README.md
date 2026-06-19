@@ -103,7 +103,9 @@ help
 quit
 ```
 
-`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`. Сам sample теперь работает как Jank Hunter Playground: внутри есть guided baseline/candidate сценарии, Leak Lab, performance lab и переключатель runtime feature flag.
+`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`. Сам sample теперь работает как Jank Hunter Playground: внутри есть guided baseline/candidate сценарии, Leak Lab, LeakCanary benchmark, performance lab и переключатель runtime feature flag.
+
+Debug-сборка sample дополнительно подключает LeakCanary и зеркалирует те же retained objects в оба инструмента. Методика сравнения лежит в [docs/leakcanary-comparison.md](docs/leakcanary-comparison.md).
 
 Для своего приложения базовое подключение обычно выглядит так:
 
