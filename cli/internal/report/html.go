@@ -2110,7 +2110,19 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		if node.ID == graph.RootID {
 			classes += " is-root"
 		}
-		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%.1f %.1f)">`, classes, point.x, point.y)
+		tip := strings.TrimSpace(node.Label)
+		if node.Detail != "" {
+			tip += " · " + node.Detail
+		}
+		fmt.Fprintf(
+			&builder,
+			`<g class="%s" transform="translate(%.1f %.1f)" data-leak-node data-tip="%s" tabindex="0" role="button">`,
+			classes,
+			point.x,
+			point.y,
+			template.HTMLEscapeString(tip),
+		)
+		fmt.Fprintf(&builder, `<title>%s</title>`, template.HTMLEscapeString(tip))
 		fmt.Fprintf(&builder, `<rect width="%.0f" height="%.0f" rx="8"/>`, nodeW, nodeH)
 		fmt.Fprintf(&builder, `<text x="12" y="22" class="node-title">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Label, 26)))
 		fmt.Fprintf(&builder, `<text x="12" y="43" class="node-detail">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Detail, 30)))

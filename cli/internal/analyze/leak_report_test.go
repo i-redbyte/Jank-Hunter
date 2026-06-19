@@ -1,6 +1,9 @@
 package analyze
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCompareLeakSuspectsClassifiesStatuses(t *testing.T) {
 	baseline := []MemoryLeakSuspect{
@@ -31,6 +34,44 @@ func TestCompareLeakSuspectsClassifiesStatuses(t *testing.T) {
 	assertLeakStatus(t, statusByClass, "com.app.BetterBinding", LeakDeltaBetter)
 	assertLeakStatus(t, statusByClass, "com.app.ResolvedActivity", LeakDeltaResolved)
 	assertLeakStatus(t, statusByClass, "com.app.SameCache", LeakDeltaSame)
+}
+
+func TestCompareLeakSuspectsMatchesByChainFingerprint(t *testing.T) {
+	baseline := []MemoryLeakSuspect{
+		{
+			ClassName:        "com.app.checkout.CheckoutActivity",
+			Holder:           "OldPresenter",
+			Count:            2,
+			MaxAgeMS:         30_000,
+			Score:            12,
+			Severity:         "medium",
+			HeapEvidence:     true,
+			ChainFingerprint: "chain:checkout-activity",
+		},
+	}
+	candidate := []MemoryLeakSuspect{
+		{
+			ClassName:        "com.app.checkout.CheckoutActivity",
+			Holder:           "NewPresenter",
+			Count:            2,
+			MaxAgeMS:         30_000,
+			Score:            12,
+			Severity:         "medium",
+			HeapEvidence:     true,
+			ChainFingerprint: "chain:checkout-activity",
+		},
+	}
+
+	deltas := CompareLeakSuspects(baseline, candidate)
+	if len(deltas) != 1 {
+		t.Fatalf("expected one matched delta, got %+v", deltas)
+	}
+	if deltas[0].Status != LeakDeltaSame {
+		t.Fatalf("status = %q, want same; delta=%+v", deltas[0].Status, deltas[0])
+	}
+	if !strings.Contains(deltas[0].MatchConfidence, "heap-chain fingerprint") {
+		t.Fatalf("unexpected match confidence: %q", deltas[0].MatchConfidence)
+	}
 }
 
 func TestBuildLeakReportUsesHeapModeWhenEvidenceExists(t *testing.T) {

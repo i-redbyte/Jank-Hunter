@@ -13,32 +13,34 @@ import (
 )
 
 const (
-	hprofTagString          = 0x01
-	hprofTagLoadClass       = 0x02
-	hprofTagHeapDump        = 0x0c
-	hprofTagHeapDumpSeg     = 0x1c
-	hprofSubClassDump       = 0x20
-	hprofSubInstanceDump    = 0x21
-	hprofSubObjectArray     = 0x22
-	hprofSubPrimitiveArr    = 0x23
-	hprofSubHeapDumpInfo    = 0xfe
-	hprofTypeObject         = 2
-	hprofTypeBoolean        = 4
-	hprofTypeChar           = 5
-	hprofTypeFloat          = 6
-	hprofTypeDouble         = 7
-	hprofTypeByte           = 8
-	hprofTypeShort          = 9
-	hprofTypeInt            = 10
-	hprofTypeLong           = 11
-	maxHprofObjects         = 250_000
-	maxHprofEdges           = 1_500_000
-	maxHprofTargets         = 2_000
-	maxHprofPathElements    = 48
-	maxRetainedTreeSample   = 8
-	maxHprofExactTargets    = 512
-	maxHprofEvidenceTargets = 4_096
-	maxHprofRetainedVisits  = 5_000_000
+	hprofTagString            = 0x01
+	hprofTagLoadClass         = 0x02
+	hprofTagHeapDump          = 0x0c
+	hprofTagHeapDumpSeg       = 0x1c
+	hprofSubClassDump         = 0x20
+	hprofSubInstanceDump      = 0x21
+	hprofSubObjectArray       = 0x22
+	hprofSubPrimitiveArr      = 0x23
+	hprofSubHeapDumpInfo      = 0xfe
+	hprofTypeObject           = 2
+	hprofTypeBoolean          = 4
+	hprofTypeChar             = 5
+	hprofTypeFloat            = 6
+	hprofTypeDouble           = 7
+	hprofTypeByte             = 8
+	hprofTypeShort            = 9
+	hprofTypeInt              = 10
+	hprofTypeLong             = 11
+	maxHprofObjects           = 250_000
+	maxHprofEdges             = 1_500_000
+	maxHprofTargets           = 2_000
+	maxHprofPathElements      = 48
+	maxRetainedTreeSample     = 8
+	maxHprofExactTargets      = 512
+	maxHprofEvidenceTargets   = 4_096
+	maxHprofRetainedVisits    = 5_000_000
+	maxHprofAlternativePaths  = 3
+	maxHprofAlternativeStates = 6_000
 )
 
 func LoadHeapEvidenceFiles(paths []string, targetClasses []string) (*HeapEvidence, error) {
@@ -166,8 +168,13 @@ func normalizeHeapLeak(leak *HeapLeakEvidence) {
 	leak.Holder = strings.TrimSpace(leak.Holder)
 	leak.HolderField = strings.TrimSpace(leak.HolderField)
 	leak.GCRoot = strings.TrimSpace(leak.GCRoot)
+	leak.GCRootCategory = firstNonEmpty(strings.TrimSpace(leak.GCRootCategory), heapRootCategory(leak.GCRoot))
 	leak.Source = strings.TrimSpace(leak.Source)
 	leak.Confidence = strings.TrimSpace(leak.Confidence)
+	leak.ChainFingerprint = firstNonEmpty(
+		strings.TrimSpace(leak.ChainFingerprint),
+		heapChainFingerprint(leak.ClassName, leak.Holder, leak.HolderField, leak.GCRootCategory, leak.ReferencePath),
+	)
 	if leak.RetainedSizeKB == 0 && leak.RetainedSizeBytes > 0 {
 		leak.RetainedSizeKB = (leak.RetainedSizeBytes + 1023) / 1024
 	}
@@ -247,6 +254,17 @@ type heapEdge struct {
 type heapRoot struct {
 	id   uint64
 	kind string
+}
+
+type heapIncomingEdge struct {
+	from uint64
+	edge heapEdge
+}
+
+type heapReverseStep struct {
+	from uint64
+	to   uint64
+	edge heapEdge
 }
 
 type hprofReader struct {
@@ -816,6 +834,8 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		return evidence
 	}
 	parent := p.rootBFS()
+	incoming := p.incomingEdges()
+	rootKinds := p.rootKindByID()
 	targetsByClass := p.targetNodes(parent)
 	rootIDs := p.rootIDs()
 	exactBudget := &heapTraversalBudget{remaining: maxHprofRetainedVisits}
@@ -843,19 +863,27 @@ func (p *hprofParser) evidence() *HeapEvidence {
 				limitedRetainedTargets++
 			}
 			path := p.referencePath(parent, id)
+			alternativePaths := p.alternativeReferencePaths(incoming, rootKinds, id, path)
+			root := heapRootLabel(path)
 			confidence := "высокое: путь найден в HPROF"
 			if !exact {
 				confidence = "среднее: путь найден в HPROF, retained size ограничен безопасным лимитом"
 			}
+			holder := heapHolder(path, className)
+			holderField := heapHolderField(path, className)
+			rootCategory := heapRootCategory(root)
 			candidate := HeapLeakEvidence{
 				ClassName:           className,
-				Holder:              heapHolder(path, className),
-				HolderField:         heapHolderField(path, className),
-				GCRoot:              heapRootLabel(path),
+				Holder:              holder,
+				HolderField:         holderField,
+				GCRoot:              root,
+				GCRootCategory:      rootCategory,
+				ChainFingerprint:    heapChainFingerprint(className, holder, holderField, rootCategory, path),
 				RetainedSizeKB:      (retainedSize + 1023) / 1024,
 				RetainedSizeBytes:   retainedSize,
 				RetainedObjectCount: retainedCount,
 				ReferencePath:       path,
+				AlternativePaths:    alternativePaths,
 				DominatorTree:       retainedSample,
 				Source:              p.path,
 				Confidence:          confidence,
@@ -1042,6 +1070,48 @@ func (p *hprofParser) rootIDs() []uint64 {
 	return ids
 }
 
+func (p *hprofParser) rootKindByID() map[uint64]string {
+	out := map[uint64]string{}
+	for _, root := range p.roots {
+		if root.id == 0 {
+			continue
+		}
+		if _, ok := out[root.id]; !ok {
+			out[root.id] = root.kind
+		}
+	}
+	return out
+}
+
+func (p *hprofParser) incomingEdges() map[uint64][]heapIncomingEdge {
+	out := map[uint64][]heapIncomingEdge{}
+	for from, node := range p.nodes {
+		if node == nil {
+			continue
+		}
+		for _, edge := range node.edges {
+			if edge.to == 0 {
+				continue
+			}
+			out[edge.to] = append(out[edge.to], heapIncomingEdge{from: from, edge: edge})
+		}
+	}
+	for id := range out {
+		sort.Slice(out[id], func(i, j int) bool {
+			left := out[id][i]
+			right := out[id][j]
+			if left.edge.kind == right.edge.kind {
+				if left.edge.label == right.edge.label {
+					return p.nodeClassName(left.from) < p.nodeClassName(right.from)
+				}
+				return left.edge.label < right.edge.label
+			}
+			return left.edge.kind < right.edge.kind
+		})
+	}
+	return out
+}
+
 func (p *hprofParser) referencePath(parent map[uint64]heapParent, target uint64) []HeapPathElement {
 	var reversed []HeapPathElement
 	current := target
@@ -1082,6 +1152,102 @@ func (p *hprofParser) referencePath(parent map[uint64]heapParent, target uint64)
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
 	return reversed
+}
+
+func (p *hprofParser) alternativeReferencePaths(
+	incoming map[uint64][]heapIncomingEdge,
+	rootKinds map[uint64]string,
+	target uint64,
+	primary []HeapPathElement,
+) [][]HeapPathElement {
+	type state struct {
+		id    uint64
+		steps []heapReverseStep
+	}
+	rootIDs := map[uint64]struct{}{}
+	for id := range rootKinds {
+		rootIDs[id] = struct{}{}
+	}
+	seenFingerprints := map[string]struct{}{}
+	if fp := pathFingerprint(primary); fp != "" {
+		seenFingerprints[fp] = struct{}{}
+	}
+	queue := []state{{id: target}}
+	var out [][]HeapPathElement
+	visitedStates := 0
+	for head := 0; head < len(queue) && len(out) < maxHprofAlternativePaths && visitedStates < maxHprofAlternativeStates; head++ {
+		current := queue[head]
+		visitedStates++
+		if len(current.steps) >= maxHprofPathElements {
+			continue
+		}
+		for _, incomingEdge := range incoming[current.id] {
+			if incomingEdge.from == 0 || reversePathContains(current.steps, incomingEdge.from) {
+				continue
+			}
+			nextSteps := append(append([]heapReverseStep(nil), current.steps...), heapReverseStep{
+				from: incomingEdge.from,
+				to:   current.id,
+				edge: incomingEdge.edge,
+			})
+			if _, isRoot := rootIDs[incomingEdge.from]; isRoot {
+				path := p.pathFromReverseSteps(incomingEdge.from, rootKinds[incomingEdge.from], nextSteps)
+				fp := pathFingerprint(path)
+				if fp == "" {
+					continue
+				}
+				if _, ok := seenFingerprints[fp]; ok {
+					continue
+				}
+				seenFingerprints[fp] = struct{}{}
+				out = append(out, path)
+				continue
+			}
+			queue = append(queue, state{id: incomingEdge.from, steps: nextSteps})
+		}
+	}
+	return out
+}
+
+func reversePathContains(steps []heapReverseStep, id uint64) bool {
+	for _, step := range steps {
+		if step.from == id || step.to == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *hprofParser) pathFromReverseSteps(rootID uint64, rootKind string, steps []heapReverseStep) []HeapPathElement {
+	path := []HeapPathElement{{
+		ClassName: "GC root: " + rootKind,
+		ObjectID:  fmt.Sprintf("0x%x", rootID),
+		Kind:      "gc_root",
+	}}
+	if className := p.nodeClassName(rootID); className != "" {
+		path = append(path, HeapPathElement{
+			ClassName: className,
+			ObjectID:  fmt.Sprintf("0x%x", rootID),
+			Kind:      "root_object",
+		})
+	}
+	for i := len(steps) - 1; i >= 0; i-- {
+		step := steps[i]
+		path = append(path, HeapPathElement{
+			ClassName: p.nodeClassName(step.to),
+			FieldName: step.edge.label,
+			ObjectID:  fmt.Sprintf("0x%x", step.to),
+			Kind:      step.edge.kind,
+		})
+	}
+	return path
+}
+
+func (p *hprofParser) nodeClassName(id uint64) string {
+	if node := p.nodes[id]; node != nil {
+		return node.className
+	}
+	return ""
 }
 
 func betterHeapLeak(candidate, current HeapLeakEvidence) bool {
@@ -1159,6 +1325,70 @@ func heapRootLabel(path []HeapPathElement) string {
 		return strings.TrimPrefix(path[0].ClassName, "GC root: ")
 	}
 	return path[0].Kind
+}
+
+func heapRootCategory(root string) string {
+	lower := strings.ToLower(strings.TrimSpace(root))
+	switch {
+	case lower == "":
+		return ""
+	case strings.Contains(lower, "sticky class"):
+		return "class/static"
+	case strings.Contains(lower, "jni"):
+		return "jni"
+	case strings.Contains(lower, "thread") || strings.Contains(lower, "java frame") || strings.Contains(lower, "native stack"):
+		return "thread"
+	case strings.Contains(lower, "monitor"):
+		return "monitor"
+	case strings.Contains(lower, "reference") || strings.Contains(lower, "finalizing"):
+		return "reference"
+	case strings.Contains(lower, "vm") || strings.Contains(lower, "debugger"):
+		return "vm/internal"
+	default:
+		return "unknown"
+	}
+}
+
+func heapChainFingerprint(className, holder, holderField, rootCategory string, path []HeapPathElement) string {
+	parts := []string{
+		normalizeLeakToken(className),
+		normalizeLeakToken(holder),
+		normalizeLeakToken(holderField),
+		normalizeLeakToken(rootCategory),
+	}
+	for _, step := range path {
+		classToken := normalizeLeakToken(strings.TrimPrefix(step.ClassName, "GC root: "))
+		fieldToken := normalizeLeakToken(step.FieldName)
+		kindToken := normalizeLeakToken(step.Kind)
+		if classToken == "" && fieldToken == "" && kindToken == "" {
+			continue
+		}
+		parts = append(parts, classToken+"."+fieldToken+"."+kindToken)
+	}
+	return strings.Join(parts, "|")
+}
+
+func pathFingerprint(path []HeapPathElement) string {
+	if len(path) == 0 {
+		return ""
+	}
+	return heapChainFingerprint("", "", "", heapRootCategory(heapRootLabel(path)), path)
+}
+
+func normalizeLeakToken(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimPrefix(value, "gc root: ")
+	value = strings.ReplaceAll(value, "/", ".")
+	value = strings.ReplaceAll(value, "$", ".")
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case '\x00', '\x01', '\t', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+	return strings.Join(fields, " ")
 }
 
 func emptyFieldName(name string) string {

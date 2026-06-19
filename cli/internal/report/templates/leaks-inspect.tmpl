@@ -88,6 +88,14 @@
             <div><strong>Что это значит</strong><p>{{.Suspect.Impact}}</p></div>
             <div><strong>Что проверить</strong><p>{{.Suspect.Recommendation}}</p></div>
           </div>
+          <div class="leak-checklist-grid">
+            <div><strong>План расследования</strong>{{range .Suspect.InvestigationSteps}}<span>{{.}}</span>{{end}}</div>
+            <div><strong>Примеры фикса</strong>{{range .Suspect.FixExamples}}<span>{{.}}</span>{{end}}</div>
+            <div><strong>Проверка после фикса</strong>{{range .Suspect.VerificationSteps}}<span>{{.}}</span>{{end}}</div>
+          </div>
+          {{if .Suspect.AlternativePathSummaries}}
+          <div class="leak-alt-paths"><strong>Альтернативные цепочки</strong>{{range .Suspect.AlternativePathSummaries}}<span>{{.}}</span>{{end}}</div>
+          {{end}}
           <div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
         </article>
         {{end}}
@@ -133,7 +141,7 @@
             <td>{{dataSize .Suspect.EstimatedRetainedKB}}<div class="muted">{{.Suspect.RetainedSizeConfidence}}</div></td>
             <td><div class="leak-dominator">{{range .Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
             <td>{{.Suspect.Recommendation}}</td>
-            <td>{{.Suspect.Evidence}}</td>
+            <td>{{.Suspect.Evidence}}{{if .Suspect.GCRootCategory}}<div class="muted">root category: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Подозрений нет.</td></tr>{{end}}
         </tbody>

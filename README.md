@@ -168,7 +168,7 @@ CLI строит два основных режима:
 - `inspect` - один лог или набор логов, чтобы понять текущий прогон.
 - `compare` - baseline против candidate, чтобы увидеть регрессии, когорты и конкретные места, где стало хуже.
 
-Рядом с основным HTML создаются дополнительные автономные страницы: `report-math.html` / `compare-math.html`, `report-leaks.html` / `compare-leaks.html`, а при наличии owner/flow-сигналов еще `report-influence.html` / `compare-influence.html`. Отчет утечек работает в light mode без HPROF и автоматически переходит в heap mode при `--heap-dump` или `--heap-evidence`: там появляется Leak Explorer с цепочкой GC root -> holder -> retained object и сравнением new/worse/same/better/resolved.
+Рядом с основным HTML создаются дополнительные автономные страницы: `report-math.html` / `compare-math.html`, `report-leaks.html` / `compare-leaks.html`, а при наличии owner/flow-сигналов еще `report-influence.html` / `compare-influence.html`. Отчет утечек работает в light mode без HPROF и автоматически переходит в heap mode при `--heap-dump` или `--heap-evidence`: там появляется Leak Explorer с цепочкой GC root -> holder -> retained object, alternative paths, чеклистом расследования, chain fingerprint и сравнением new/worse/same/better/resolved.
 
 ## Релизы
 

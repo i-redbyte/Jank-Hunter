@@ -474,7 +474,17 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-Основной HTML даст ссылку на `report-leaks.html`. Без дампа это light report с retained object, holder, screen/flow/step, возрастом и рекомендациями; с дампом включается heap mode с Leak Explorer: графом GC root -> holder field -> retained object, retained size и sample доминируемых классов.
+Основной HTML даст ссылку на `report-leaks.html`. Без дампа это light report с retained object, holder, screen/flow/step, возрастом и рекомендациями; с дампом включается heap mode с Leak Explorer: графом GC root -> holder field -> retained object, retained size, alternative paths и sample доминируемых классов.
+
+Быстрый debug/QA цикл:
+
+```bash
+../cli/scripts/collect-android-leak-report.sh \
+  --package com.example.app \
+  --out /tmp/jankhunter-leaks
+```
+
+Скрипт работает с debuggable-приложением через `adb run-as`, поэтому не требует root. В sample-app есть отдельный Leak Lab flow: кнопки создают Activity/View binding/listener/cache утечки, clean object и candidate regression burst для демонстрации `compare-leaks.html`.
 
 Heap dump останавливает VM на время записи, поэтому держите режим выключенным по умолчанию и используйте лимиты для больших приложений.
 

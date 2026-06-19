@@ -135,6 +135,7 @@ type LeakDelta struct {
 	EstimatedBeforeKB uint64
 	EstimatedAfterKB  uint64
 	DeltaEstimatedKB  int64
+	MatchConfidence   string
 	Explanation       string
 	Recommendation    string
 	PlainText         string
@@ -299,6 +300,18 @@ func BuildLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 }
 
 func LeakFingerprint(suspect MemoryLeakSuspect) string {
+	if suspect.ChainFingerprint != "" {
+		return "chain\x00" + suspect.ChainFingerprint
+	}
+	if len(suspect.ReferencePath) > 0 {
+		return "path\x00" + heapChainFingerprint(
+			suspect.ClassName,
+			suspect.Holder,
+			suspect.HolderField,
+			suspect.GCRootCategory,
+			suspect.ReferencePath,
+		)
+	}
 	parts := []string{
 		strings.ToLower(strings.TrimSpace(suspect.ClassName)),
 		strings.ToLower(strings.TrimSpace(suspect.Holder)),
@@ -393,11 +406,34 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 		EstimatedBeforeKB: sizeBefore,
 		EstimatedAfterKB:  sizeAfter,
 		DeltaEstimatedKB:  int64(sizeAfter) - int64(sizeBefore),
+		MatchConfidence:   leakMatchConfidence(before, hasBefore, after, hasAfter),
 	}
 	delta.Explanation = leakDeltaExplanation(delta)
 	delta.Recommendation = leakDeltaRecommendation(delta)
 	delta.PlainText = leakDeltaPlainText(delta)
 	return delta
+}
+
+func leakMatchConfidence(before MemoryLeakSuspect, hasBefore bool, after MemoryLeakSuspect, hasAfter bool) string {
+	if !hasBefore || !hasAfter {
+		if (hasBefore && before.HeapEvidence) || (hasAfter && after.HeapEvidence) {
+			return "medium: fingerprint heap-цепочки уникален для одной стороны"
+		}
+		return "medium: fingerprint найден только в одной версии"
+	}
+	if before.ChainFingerprint != "" && before.ChainFingerprint == after.ChainFingerprint {
+		if before.HeapEvidence || after.HeapEvidence {
+			return "high: совпал нормализованный heap-chain fingerprint"
+		}
+		return "high: совпал нормализованный runtime-chain fingerprint"
+	}
+	if before.ClassName == after.ClassName && before.Holder != "" && before.Holder == after.Holder {
+		return "medium: совпали class и holder"
+	}
+	if before.ClassName == after.ClassName {
+		return "low: совпал только class, уточните ownerHint или heap evidence"
+	}
+	return "low: сопоставление построено по fallback fingerprint"
 }
 
 func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
@@ -417,6 +453,9 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		detail := step.FieldName
 		if detail == "" {
 			detail = step.Kind
+		}
+		if kind == "root" && suspect.GCRootCategory != "" {
+			detail = suspect.GCRootCategory
 		}
 		if _, ok := seen[id]; !ok {
 			nodes = append(nodes, LeakGraphNode{ID: id, Label: label, Detail: detail, Kind: kind, Depth: index})
@@ -654,9 +693,17 @@ func leakPlainText(suspect MemoryLeakSuspect) string {
 		suspect.Screen,
 		suspect.Flow,
 		suspect.Step,
+		suspect.GCRoot,
+		suspect.GCRootCategory,
+		suspect.HolderField,
+		suspect.ChainFingerprint,
 		suspect.Impact,
 		suspect.Recommendation,
 		suspect.Evidence,
+		strings.Join(suspect.AlternativePathSummaries, " "),
+		strings.Join(suspect.InvestigationSteps, " "),
+		strings.Join(suspect.FixExamples, " "),
+		strings.Join(suspect.VerificationSteps, " "),
 	}, " ")
 }
 
@@ -667,6 +714,7 @@ func leakDeltaPlainText(delta LeakDelta) string {
 		leakPlainText(delta.Candidate),
 		delta.Explanation,
 		delta.Recommendation,
+		delta.MatchConfidence,
 	}, " ")
 }
 

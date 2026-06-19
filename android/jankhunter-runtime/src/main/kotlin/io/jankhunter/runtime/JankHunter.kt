@@ -668,6 +668,12 @@ object JankHunter {
     fun watchObject(instance: Any?, description: String?, ownerHint: String?) {
         val retainedBy = firstContextValue(ownerHint, contextTracker.ownerOrNull())
         val tuple = captureContext(ownerOverride = retainedBy)
+        if (instance != null && objectRetentionWatcher != null) {
+            recordCounter("jankhunter.object_watcher.watch.count", 1)
+            if (retainedBy != null) {
+                recordCounter("owner.${metricOwner(retainedBy)}.object_watcher.watch.count", 1)
+            }
+        }
         objectRetentionWatcher?.watch(instance, description, retainedBy, tuple)
     }
 

@@ -184,9 +184,13 @@ type MemoryLeakSuspect struct {
 	HeapEvidence             bool
 	HeapSource               string
 	GCRoot                   string
+	GCRootCategory           string
+	ChainFingerprint         string
 	HolderField              string
 	RetainedObjectCount      uint64
 	ReferencePath            []HeapPathElement
+	AlternativePaths         [][]HeapPathElement
+	AlternativePathSummaries []string
 	RetainedClassSample      []string
 	RetainedSizeConfidence   string
 	RetainedSizeExplanation  string
@@ -196,6 +200,9 @@ type MemoryLeakSuspect struct {
 	LeakChainConfidence      string
 	LeakChainSummary         string
 	LeakChainActions         []string
+	InvestigationSteps       []string
+	FixExamples              []string
+	VerificationSteps        []string
 	Score                    float64
 	Severity                 string
 	ObjectKind               string
@@ -214,17 +221,20 @@ type HeapEvidence struct {
 }
 
 type HeapLeakEvidence struct {
-	ClassName           string            `json:"class_name"`
-	Holder              string            `json:"holder,omitempty"`
-	HolderField         string            `json:"holder_field,omitempty"`
-	GCRoot              string            `json:"gc_root,omitempty"`
-	RetainedSizeKB      uint64            `json:"retained_size_kb,omitempty"`
-	RetainedSizeBytes   uint64            `json:"retained_size_bytes,omitempty"`
-	RetainedObjectCount uint64            `json:"retained_object_count,omitempty"`
-	ReferencePath       []HeapPathElement `json:"reference_path,omitempty"`
-	DominatorTree       []string          `json:"dominator_tree,omitempty"`
-	Source              string            `json:"source,omitempty"`
-	Confidence          string            `json:"confidence,omitempty"`
+	ClassName           string              `json:"class_name"`
+	Holder              string              `json:"holder,omitempty"`
+	HolderField         string              `json:"holder_field,omitempty"`
+	GCRoot              string              `json:"gc_root,omitempty"`
+	GCRootCategory      string              `json:"gc_root_category,omitempty"`
+	ChainFingerprint    string              `json:"chain_fingerprint,omitempty"`
+	RetainedSizeKB      uint64              `json:"retained_size_kb,omitempty"`
+	RetainedSizeBytes   uint64              `json:"retained_size_bytes,omitempty"`
+	RetainedObjectCount uint64              `json:"retained_object_count,omitempty"`
+	ReferencePath       []HeapPathElement   `json:"reference_path,omitempty"`
+	AlternativePaths    [][]HeapPathElement `json:"alternative_paths,omitempty"`
+	DominatorTree       []string            `json:"dominator_tree,omitempty"`
+	Source              string              `json:"source,omitempty"`
+	Confidence          string              `json:"confidence,omitempty"`
 }
 
 type HeapPathElement struct {
@@ -425,12 +435,25 @@ type ThresholdConfig struct {
 	MaxSeverity   string                     `json:"max_severity"`
 	MinConfidence string                     `json:"min_confidence"`
 	Metrics       map[string]MetricThreshold `json:"metrics"`
+	Leaks         LeakThreshold              `json:"leaks"`
 }
 
 type MetricThreshold struct {
 	MaxSeverity      string  `json:"max_severity"`
 	MaxRegressionAbs float64 `json:"max_regression_abs"`
 	MaxRegressionPct float64 `json:"max_regression_pct"`
+}
+
+type LeakThreshold struct {
+	MaxCandidateTotal  int  `json:"max_candidate_total"`
+	MaxNew             int  `json:"max_new"`
+	MaxWorse           int  `json:"max_worse"`
+	MaxHigh            int  `json:"max_high"`
+	MaxRuntimeOnly     int  `json:"max_runtime_only"`
+	FailOnNew          bool `json:"fail_on_new"`
+	FailOnWorse        bool `json:"fail_on_worse"`
+	FailOnNewHigh      bool `json:"fail_on_new_high"`
+	RequireHeapForHigh bool `json:"require_heap_for_high"`
 }
 
 type GateResult struct {

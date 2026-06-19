@@ -83,11 +83,20 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	if leak.GCRoot != "sticky class" {
 		t.Fatalf("GC root = %q", leak.GCRoot)
 	}
+	if leak.GCRootCategory != "class/static" {
+		t.Fatalf("GC root category = %q", leak.GCRootCategory)
+	}
+	if leak.ChainFingerprint == "" {
+		t.Fatalf("expected chain fingerprint: %+v", leak)
+	}
 	if leak.RetainedObjectCount != 2 || leak.RetainedSizeBytes != 64 || leak.RetainedSizeKB != 1 {
 		t.Fatalf("retained size/count mismatch: %+v", leak)
 	}
 	if len(leak.ReferencePath) < 3 || len(leak.DominatorTree) == 0 {
 		t.Fatalf("expected reference path and dominator sample: %+v", leak)
+	}
+	if len(leak.AlternativePaths) == 0 {
+		t.Fatalf("expected alternative reference path: %+v", leak)
 	}
 }
 
@@ -125,23 +134,29 @@ func syntheticLeakHprof() []byte {
 	activityName := builder.string("com.app.LeakedActivity")
 	childName := builder.string("com.app.Child")
 	leakedField := builder.string("leakedActivity")
+	alternateField := builder.string("alternateActivity")
 	childField := builder.string("child")
 
 	const (
-		holderClassID   = uint32(0x100)
-		activityClassID = uint32(0x200)
-		childClassID    = uint32(0x300)
-		activityID      = uint32(0x1001)
-		childID         = uint32(0x1002)
+		holderClassID    = uint32(0x100)
+		alternateClassID = uint32(0x180)
+		activityClassID  = uint32(0x200)
+		childClassID     = uint32(0x300)
+		activityID       = uint32(0x1001)
+		childID          = uint32(0x1002)
 	)
 	builder.loadClass(holderClassID, holderName)
+	builder.loadClass(alternateClassID, holderName)
 	builder.loadClass(activityClassID, activityName)
 	builder.loadClass(childClassID, childName)
 
 	var heap bytes.Buffer
 	heap.WriteByte(0x05)
 	writeU4(&heap, holderClassID)
+	heap.WriteByte(0x05)
+	writeU4(&heap, alternateClassID)
 	builder.classDump(&heap, holderClassID, 16, []miniStaticField{{nameID: leakedField, valueID: activityID}}, nil)
+	builder.classDump(&heap, alternateClassID, 16, []miniStaticField{{nameID: alternateField, valueID: activityID}}, nil)
 	builder.classDump(&heap, activityClassID, 48, nil, []miniField{{nameID: childField, typ: hprofTypeObject}})
 	builder.classDump(&heap, childClassID, 16, nil, nil)
 	builder.instanceDump(&heap, activityID, activityClassID, []uint32{childID})

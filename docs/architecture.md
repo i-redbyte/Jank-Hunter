@@ -239,6 +239,8 @@ The retained-object watcher is a lightweight signal, not a heap analyzer:
 
 It never records `object.toString()`, fields, heap dumps, headers, bodies, tokens, or user data.
 
+Heap-backed leak analysis intentionally stays on the CLI side. The Android runtime may save bounded HPROF artifacts in debug/QA builds, but it does not parse heap object graphs in-process. The CLI links runtime retained classes to HPROF/evidence, classifies GC roots, computes a normalized chain fingerprint, keeps alternative reference paths, estimates retained size/count, and renders the standalone leak report. This keeps host app risk low while allowing heavier offline diagnostics.
+
 ## CLI Report Flow
 
 ```mermaid

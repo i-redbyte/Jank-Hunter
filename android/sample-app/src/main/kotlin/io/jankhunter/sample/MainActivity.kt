@@ -59,6 +59,10 @@ class MainActivity : Activity() {
             text = "Memory Leak Demo: idle"
             textSize = 14f
         }
+        val leakGuide = TextView(this).apply {
+            text = "Leak Lab: create baseline with Clean object, then candidate with Activity/View/Listener/Cache leaks. Pull logs with cli/scripts/collect-android-leak-report.sh."
+            textSize = 13f
+        }
         val jankButton = Button(this).apply {
             text = "Record UI Stall"
             setOnClickListener {
@@ -171,6 +175,42 @@ class MainActivity : Activity() {
                 leakStatus.text = "Memory Leak Demo: clean probe watched without retaining"
             }
         }
+        val regressionBurstButton = Button(this).apply {
+            text = "Leak Demo: Candidate regression burst"
+            setOnClickListener {
+                JankHunter.withFlow("sample.memory_leak.compare_candidate") {
+                    repeat(2) { index ->
+                        JankHunter.markFlowStep("activity_and_binding_burst_$index")
+                        JankHunter.withOwner("sample.memory_leak.regression_burst") {
+                            val activity = LeakedActivityScreen(clicks.incrementAndGet())
+                            val binding = LeakedBindingSnapshot(screen = this@MainActivity, payload = ByteArray(160 * 1024))
+                            retainedSamples += activity
+                            retainedSamples += binding
+                            JankHunter.watchObject(
+                                activity,
+                                "io.jankhunter.sample.LeakedCheckoutActivity",
+                                "sample.memory_leak.regression_burst",
+                            )
+                            JankHunter.watchObject(
+                                binding,
+                                "io.jankhunter.sample.LeakedCheckoutBinding",
+                                "sample.memory_leak.regression_burst",
+                            )
+                        }
+                    }
+                }
+                JankHunter.recordCounter("sample.memory_leak.regression_burst.watch.count", 4)
+                JankHunter.flush()
+                leakStatus.text = "Memory Leak Demo: candidate regression burst watched"
+            }
+        }
+        val flushDiagnosticsButton = Button(this).apply {
+            text = "Flush Diagnostics"
+            setOnClickListener {
+                JankHunter.flush()
+                leakStatus.text = "Leak Lab: flushed. Wait retained delay, then pull .jhlog/heap evidence."
+            }
+        }
         val jsonPlaceholderButton = Button(this).apply {
             text = "Fetch JSONPlaceholder"
             setOnClickListener {
@@ -202,6 +242,7 @@ class MainActivity : Activity() {
             addView(status, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(networkStatus, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(leakStatus, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(leakGuide, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(jankButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(workerButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(watchButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -210,6 +251,8 @@ class MainActivity : Activity() {
             addView(listenerLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(cacheLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(cleanObjectButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(regressionBurstButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(flushDiagnosticsButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(jsonPlaceholderButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(httpBinButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }

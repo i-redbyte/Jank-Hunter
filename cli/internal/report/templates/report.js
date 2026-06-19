@@ -339,5 +339,20 @@
     if (buttons[0]) {
       activate(buttons[0].dataset.leakTarget);
     }
+    explorer.querySelectorAll('[data-leak-node]').forEach((node) => {
+      const selectNode = () => {
+        const svg = node.closest('svg');
+        if (!svg) return;
+        svg.querySelectorAll('[data-leak-node]').forEach((other) => {
+          other.classList.toggle('is-selected', other === node);
+        });
+      };
+      node.addEventListener('click', selectNode);
+      node.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        selectNode();
+      });
+    });
   });
 })();

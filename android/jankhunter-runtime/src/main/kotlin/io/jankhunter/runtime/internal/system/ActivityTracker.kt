@@ -105,7 +105,11 @@ internal class ActivityTracker(
             }
         }
         jankStatsHandles.remove(activity)?.uninstall()
-        JankHunter.watchActivity(activity, "lifecycle.destroyed.$screenName")
+        JankHunter.withFlow("jankhunter.lifecycle.activity") {
+            JankHunter.markFlowStep("destroyed")
+            JankHunter.recordCounter("jankhunter.object_watcher.activity_destroyed.watch.count", 1)
+            JankHunter.watchActivity(activity, "lifecycle.destroyed.$screenName")
+        }
     }
 
     fun close() {

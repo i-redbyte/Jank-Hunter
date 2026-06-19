@@ -987,6 +987,77 @@ func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
 	}
 }
 
+func TestEvaluateGateFailsOnLeakRegressionThresholds(t *testing.T) {
+	comparison := Compare(
+		Summary{
+			LogCount:   5,
+			EventCount: 500,
+			MemoryLeaks: []MemoryLeakSuspect{
+				{
+					ClassName:        "com.app.checkout.CheckoutActivity",
+					Holder:           "CheckoutPresenter",
+					Count:            1,
+					MaxAgeMS:         10_000,
+					Score:            4,
+					Severity:         "medium",
+					ChainFingerprint: "runtime:checkout-activity",
+				},
+			},
+		},
+		Summary{
+			LogCount:   5,
+			EventCount: 500,
+			MemoryLeaks: []MemoryLeakSuspect{
+				{
+					ClassName:           "com.app.checkout.CheckoutActivity",
+					Holder:              "CheckoutPresenter",
+					Count:               8,
+					MaxAgeMS:            70_000,
+					EstimatedRetainedKB: 20 * 1024,
+					Score:               22,
+					Severity:            "high",
+					ChainFingerprint:    "runtime:checkout-activity",
+				},
+				{
+					ClassName:        "com.app.payment.PaymentActivity",
+					Holder:           "PaymentSingleton",
+					Count:            1,
+					MaxAgeMS:         30_000,
+					Score:            17,
+					Severity:         "high",
+					ChainFingerprint: "runtime:payment-activity",
+				},
+			},
+		},
+	)
+
+	result := EvaluateGate(comparison, ThresholdConfig{
+		Leaks: LeakThreshold{
+			FailOnNew:          true,
+			FailOnWorse:        true,
+			FailOnNewHigh:      true,
+			MaxCandidateTotal:  1,
+			MaxHigh:            1,
+			RequireHeapForHigh: true,
+		},
+	})
+	if !result.Failed {
+		t.Fatalf("expected leak gate failure")
+	}
+	failures := strings.Join(result.Failures, "\n")
+	for _, want := range []string{
+		"candidate_total=2",
+		"fail_on_new=true",
+		"fail_on_worse=true",
+		"new high severity",
+		"high severity without heap evidence",
+	} {
+		if !strings.Contains(failures, want) {
+			t.Fatalf("expected failure containing %q, got %q", want, failures)
+		}
+	}
+}
+
 func sampleSetFromValues(values ...uint64) uint64SampleSet {
 	var set uint64SampleSet
 	for _, value := range values {

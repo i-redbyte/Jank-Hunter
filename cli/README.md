@@ -152,7 +152,14 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает пользовательский класс-держатель, поле ссылки, retained size и мини-дерево доминирования. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания.
+`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
+
+Как читать leak report:
+
+- `Light mode` означает, что SDK увидел retained object, но точного GC root пока нет. Смотрите `holder`, `screen`, `flow`, `step`, возраст и рекомендации.
+- `Heap mode` означает, что CLI связал retained object с HPROF/evidence и показывает `GC root -> holder field -> retained object`.
+- `chain_fingerprint` используется для стабильного сравнения версий: переименование holder-а не ломает match, если нормализованная цепочка та же.
+- `alternative_paths` показывает дополнительные цепочки, через которые объект тоже достижим. Это важно для сложных утечек, где фикс одной ссылки не освобождает объект.
 
 Можно передать уже подготовленный JSON evidence вместо HPROF:
 
@@ -171,12 +178,21 @@ jankhunter inspect logs/*.jhlog \
     "holder": "com.app.checkout.CheckoutPresenter",
     "holder_field": "com.app.checkout.CheckoutPresenter.activity",
     "gc_root": "sticky class",
+    "gc_root_category": "class/static",
+    "chain_fingerprint": "com.app.checkout.CheckoutActivity|class/static|com.app.checkout.CheckoutPresenter|static activity",
     "retained_size_kb": 8192,
     "retained_object_count": 4,
     "reference_path": [
       {"class_name": "GC root: sticky class", "kind": "gc_root"},
       {"class_name": "com.app.checkout.CheckoutPresenter", "kind": "root_object"},
       {"class_name": "com.app.checkout.CheckoutActivity", "field_name": "activity", "kind": "field"}
+    ],
+    "alternative_paths": [
+      [
+        {"class_name": "GC root: thread object", "kind": "gc_root"},
+        {"class_name": "com.app.checkout.Worker", "kind": "root_object"},
+        {"class_name": "com.app.checkout.CheckoutActivity", "field_name": "callback", "kind": "field"}
+      ]
     ]
   }]
 }
@@ -249,9 +265,22 @@ jankhunter compare \
     "HTTP p95": {"max_regression_pct": 12},
     "UI jank rate": {"max_regression_abs": 1.5},
     "Retained objects": {"max_severity": "ok"}
+  },
+  "leaks": {
+    "max_candidate_total": 10,
+    "max_new": 0,
+    "max_worse": 0,
+    "max_high": 0,
+    "max_runtime_only": 5,
+    "fail_on_new": true,
+    "fail_on_worse": true,
+    "fail_on_new_high": true,
+    "require_heap_for_high": true
   }
 }
 ```
+
+Поля `max_new: 0` и `max_worse: 0` сами по себе не включают проверку "ноль новых/ухудшенных", потому что ноль используется как значение по умолчанию. Для строгого режима используйте `fail_on_new` и `fail_on_worse`.
 
 Запуск:
 
@@ -286,6 +315,15 @@ jankhunter problems logs/*.jhlog --format json --out problems.json
 
 CSV содержит drill-down строки `класс -> метод -> экран/флоу/шаг/маршрут -> доказательства -> рекомендация`. В реестре есть категории `ANR-risk`, `OOM-risk`, `GC pressure`, `duplicate network`, `lifecycle leak`, `log spam`, `main-thread IO` и базовые группы отчета.
 
+Для отдельного leak-реестра:
+
+```bash
+jankhunter problems logs/*.jhlog --dataset leaks --out leaks.csv
+jankhunter problems logs/*.jhlog --dataset leaks --format json --out leaks.json
+```
+
+`leaks.csv` включает `gc_root_category`, `chain_fingerprint`, `alternative_paths`, `investigation_steps`, `fix_examples` и `verification_steps`, поэтому его можно прикладывать к PR или CI artifacts без HTML.
+
 ## Как забрать логи с Android
 
 По умолчанию runtime пишет:
@@ -305,6 +343,17 @@ adb exec-out run-as "$APP_ID" tar -C files/jankhunter -cf - . | tar -xf - -C log
 
 jankhunter inspect logs/*.jhlog --out report.html
 ```
+
+Для debug/QA сценария с heap dump можно использовать готовый helper:
+
+```bash
+cli/scripts/collect-android-leak-report.sh \
+  --package com.myapp \
+  --out /tmp/jankhunter-leaks \
+  --cli ./cli/bin/jankhunter
+```
+
+Скрипт забирает `files/jankhunter` через `adb run-as`, находит `.jhlog` и `.hprof`, запускает `inspect` и кладет рядом `report.html`, `report-leaks.html`, `report-math.html` и дополнительные страницы.
 
 Если лог получили через FileProvider/share sheet, просто положите файл в папку и передайте его CLI:
 

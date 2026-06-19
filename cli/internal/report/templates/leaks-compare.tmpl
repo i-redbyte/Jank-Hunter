@@ -87,9 +87,17 @@
           </div>
           {{leakGraphSVG $delta.Graph}}
           <div class="leak-explain-grid">
-            <div><strong>Дельта</strong><p>score {{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}} ({{printf "%+.1f" $delta.DeltaScore}}), count {{$delta.CountBefore}} → {{$delta.CountAfter}} ({{printf "%+d" $delta.DeltaCount}}), возраст {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}.</p></div>
+            <div><strong>Дельта</strong><p>score {{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}} ({{printf "%+.1f" $delta.DeltaScore}}), count {{$delta.CountBefore}} → {{$delta.CountAfter}} ({{printf "%+d" $delta.DeltaCount}}), возраст {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}. Match: {{$delta.MatchConfidence}}.</p></div>
             <div><strong>Что проверить</strong><p>{{$delta.Recommendation}}</p></div>
           </div>
+          <div class="leak-checklist-grid">
+            <div><strong>План расследования</strong>{{range $suspect.InvestigationSteps}}<span>{{.}}</span>{{end}}</div>
+            <div><strong>Примеры фикса</strong>{{range $suspect.FixExamples}}<span>{{.}}</span>{{end}}</div>
+            <div><strong>Проверка после фикса</strong>{{range $suspect.VerificationSteps}}<span>{{.}}</span>{{end}}</div>
+          </div>
+          {{if $suspect.AlternativePathSummaries}}
+          <div class="leak-alt-paths"><strong>Альтернативные цепочки</strong>{{range $suspect.AlternativePathSummaries}}<span>{{.}}</span>{{end}}</div>
+          {{end}}
           <div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range $suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
         </article>
         {{end}}
@@ -136,7 +144,7 @@
             <td>{{printf "%.1f" .ScoreBefore}} → {{printf "%.1f" .ScoreAfter}}<div class="muted">{{printf "%+.1f" .DeltaScore}}</div></td>
             <td>{{.CountBefore}} → {{.CountAfter}}<div class="muted">{{printf "%+d" .DeltaCount}} · {{humanDuration .AgeBeforeMS}} → {{humanDuration .AgeAfterMS}}</div></td>
             <td>{{dataSize .EstimatedBeforeKB}} → {{dataSize .EstimatedAfterKB}}<div class="muted">{{printf "%+d KB" .DeltaEstimatedKB}}</div></td>
-            <td>{{.Explanation}}</td>
+            <td>{{.Explanation}}<div class="muted">{{.MatchConfidence}}</div></td>
             <td>{{.Recommendation}}</td>
           </tr>
           {{else}}<tr><td colspan="8" class="muted">Дельт утечек нет.</td></tr>{{end}}
