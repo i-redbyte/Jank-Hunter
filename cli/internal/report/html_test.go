@@ -89,7 +89,7 @@ func TestWriteReports(t *testing.T) {
 
 	dir := t.TempDir()
 	inspectPath := filepath.Join(dir, "inspect.html")
-	if err := WriteInspect(inspectPath, summary); err != nil {
+	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Флоу и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Разбор утечек памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала утечек памяти", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Мини-дерево доминирования", "leak-dominator", "4.0 MB", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`, "approx-badge", "p95 рассчитан по reservoir-сэмплу: 20000 из 21000 запросов", "HTTP p95 флоу рассчитан по reservoir-сэмплу")
@@ -97,37 +97,38 @@ func TestWriteReports(t *testing.T) {
 	assertHTMLNotContains(t, inspectPath, "Drill-down")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
-	if err := WriteMathInspect(mathInspectPath, sampleMathReport(summary)); err != nil {
+	if err := WriteMathInspectWithOptions(mathInspectPath, sampleMathReport(summary), ReportOptions{}); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
 	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция флоу и причин", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
-	if err := WriteCompareReport(
+	if err := WriteCompareReportWithOptions(
 		comparePath,
 		comparison,
 		[]LogReport{{Name: "old/sample.jhlog", Anchor: "baseline-log-1", Summary: summary}},
 		[]LogReport{{Name: "new/sample.jhlog", Anchor: "candidate-log-1", Summary: summary}},
+		ReportOptions{},
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
 	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение утечек памяти", "Шкала сравнения", "Шкала реестра кода", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "Шкала утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение флоу и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
-	if err := WriteMathCompare(mathComparePath, sampleCompareMathReport(comparison, summary)); err != nil {
+	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{}); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
 	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение флоу и причин", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение утечек памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала утечек памяти", "Оценка удержанного размера", "Мини-дерево доминирования", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Граф причинности")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
-	if err := WriteInfluence(influencePath, sampleInfluence(), "Граф влияния кода"); err != nil {
+	if err := WriteInfluenceWithOptions(influencePath, sampleInfluence(), "Граф влияния кода", ReportOptions{}); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
 	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Горячие пути", "Горячие методы", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom")
 
 	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
-	if err := WriteInstrumentationDiagnostics(diagnosticsPath, sampleInstrumentationDiagnostics()); err != nil {
+	if err := WriteInstrumentationDiagnosticsWithOptions(diagnosticsPath, sampleInstrumentationDiagnostics(), ReportOptions{}); err != nil {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
 	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие hooks", "Решения matcher-а", "Annotation scopes", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl")
@@ -205,17 +206,18 @@ func TestWriteReportsRussian(t *testing.T) {
 
 	dir := t.TempDir()
 	inspectPath := filepath.Join(dir, "inspect-ru.html")
-	if err := WriteInspect(inspectPath, summary); err != nil {
+	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "Сетевые маршруты", "Флоу и причины", "Эвристический итог", "λ Анализ")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
-	if err := WriteCompareReport(
+	if err := WriteCompareReportWithOptions(
 		comparePath,
 		analyze.Compare(summary, summary),
 		[]LogReport{{Name: "old/sample.jhlog", Anchor: "baseline-log-1", Summary: summary}},
 		[]LogReport{{Name: "new/sample.jhlog", Anchor: "candidate-log-1", Summary: summary}},
+		ReportOptions{},
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}

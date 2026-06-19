@@ -133,10 +133,6 @@ func (c *robustCollector) resolveOwner(dict map[uint64]string, id uint64) string
 	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
-func (s *robustSampleSet) add(value float64) {
-	s.addWeighted(value, 1)
-}
-
 func (s *robustSampleSet) addWeighted(value float64, weight uint64) {
 	if weight == 0 {
 		return

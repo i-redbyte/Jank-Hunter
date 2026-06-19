@@ -8,19 +8,17 @@ import (
 const (
 	defaultMaxGraphIndexEdges          = 150_000
 	defaultMaxRelevantGraphEdges       = 2_500
-	defaultMaxShortestPathVisitedNodes = 20_000
 	defaultMaxStrongComponentNodes     = 10_000
 	defaultMaxHotPathSources           = 80
 	defaultMaxHotPathExploredPerSource = 2_048
 )
 
 type GraphIndexBudget struct {
-	MaxEdges              int
-	MaxRelevantEdges      int
-	MaxShortestPathVisits int
-	MaxSCCNodes           int
-	MaxHotPathSources     int
-	MaxHotPathExplored    int
+	MaxEdges           int
+	MaxRelevantEdges   int
+	MaxSCCNodes        int
+	MaxHotPathSources  int
+	MaxHotPathExplored int
 }
 
 type ClassGraphIndex struct {
@@ -167,46 +165,6 @@ func (i *ClassGraphIndex) RelevantEdges(selected map[string]struct{}, runtimeTar
 		return out[a].From < out[b].From
 	})
 	return out
-}
-
-func (i *ClassGraphIndex) ShortestPath(from string, to string, maxDepth int) []ClassGraphEdge {
-	if i == nil || maxDepth <= 0 {
-		return nil
-	}
-	from = normalizeClassName(from)
-	to = normalizeClassName(to)
-	if from == "" || to == "" || from == to {
-		return nil
-	}
-	type pathState struct {
-		node  string
-		edges []ClassGraphEdge
-	}
-	maxVisits := i.budget.MaxShortestPathVisits
-	seen := map[string]struct{}{from: {}}
-	queue := []pathState{{node: from}}
-	for len(queue) > 0 {
-		if maxVisits > 0 && len(seen) >= maxVisits {
-			return nil
-		}
-		current := queue[0]
-		queue = queue[1:]
-		if len(current.edges) >= maxDepth {
-			continue
-		}
-		for _, edge := range i.Outgoing[current.node] {
-			nextEdges := append(append([]ClassGraphEdge{}, current.edges...), edge)
-			if edge.To == to {
-				return nextEdges
-			}
-			if _, ok := seen[edge.To]; ok {
-				continue
-			}
-			seen[edge.To] = struct{}{}
-			queue = append(queue, pathState{node: edge.To, edges: nextEdges})
-		}
-	}
-	return nil
 }
 
 func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycle {
@@ -576,9 +534,6 @@ func normalizeGraphIndexBudget(budget GraphIndexBudget) GraphIndexBudget {
 	}
 	if budget.MaxRelevantEdges <= 0 {
 		budget.MaxRelevantEdges = defaultMaxRelevantGraphEdges
-	}
-	if budget.MaxShortestPathVisits <= 0 {
-		budget.MaxShortestPathVisits = defaultMaxShortestPathVisitedNodes
 	}
 	if budget.MaxSCCNodes <= 0 {
 		budget.MaxSCCNodes = defaultMaxStrongComponentNodes

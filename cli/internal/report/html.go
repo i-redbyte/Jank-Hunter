@@ -28,10 +28,6 @@ type ReportOptions struct {
 	InstrumentationDiagnosticsAvailable bool
 }
 
-func WriteInspect(path string, summary analyze.Summary) error {
-	return WriteInspectWithOptions(path, summary, ReportOptions{})
-}
-
 func WriteInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
 	lang := reportLanguage()
 	return execute(path, inspectTemplate, map[string]any{
@@ -44,10 +40,6 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
 		"PresentationMode":      options.PresentationMode,
 	})
-}
-
-func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
-	return WriteCompareReportWithOptions(path, comparison, baselineLogs, candidateLogs, ReportOptions{})
 }
 
 func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport, options ReportOptions) error {
@@ -66,10 +58,6 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 	})
 }
 
-func WriteMathInspect(path string, mathReport mathanalysis.MathReport) error {
-	return WriteMathInspectWithOptions(path, mathReport, ReportOptions{})
-}
-
 func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport, options ReportOptions) error {
 	return execute(path, mathInspectTemplate, map[string]any{
 		"GeneratedAt":         time.Now().Format(time.RFC3339),
@@ -78,10 +66,6 @@ func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Summary.Influence),
 		"PresentationMode":    options.PresentationMode,
 	})
-}
-
-func WriteMathCompare(path string, mathReport mathanalysis.CompareMathReport) error {
-	return WriteMathCompareWithOptions(path, mathReport, ReportOptions{})
 }
 
 func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMathReport, options ReportOptions) error {
@@ -110,10 +94,6 @@ func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareRepo
 	})
 }
 
-func WriteInfluence(path string, influence analyze.InfluenceSummary, title string) error {
-	return WriteInfluenceWithOptions(path, influence, title, ReportOptions{})
-}
-
 func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
 	return execute(path, influenceTemplate, map[string]any{
 		"GeneratedAt":      time.Now().Format(time.RFC3339),
@@ -121,10 +101,6 @@ func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, 
 		"Influence":        influence,
 		"PresentationMode": options.PresentationMode,
 	})
-}
-
-func WriteInstrumentationDiagnostics(path string, diagnostics analyze.InstrumentationDiagnostics) error {
-	return WriteInstrumentationDiagnosticsWithOptions(path, diagnostics, ReportOptions{})
 }
 
 func WriteInstrumentationDiagnosticsWithOptions(

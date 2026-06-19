@@ -12,7 +12,7 @@ import (
 func TestSummarizeRobustSetComputesDeterministicStats(t *testing.T) {
 	set := &robustSampleSet{}
 	for i := 1; i <= 100; i++ {
-		set.add(float64(i))
+		set.addWeighted(float64(i), 1)
 	}
 
 	stat := summarizeRobustSet(robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}, set)
@@ -160,7 +160,7 @@ func TestAnalyzeInspectRobustStatsHonorClassFilter(t *testing.T) {
 func robustSet(values ...float64) *robustSampleSet {
 	set := &robustSampleSet{}
 	for _, value := range values {
-		set.add(value)
+		set.addWeighted(value, 1)
 	}
 	return set
 }

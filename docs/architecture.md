@@ -338,7 +338,7 @@ Future SDK extension work should make instrumentation easier to grow without add
 - `InstrumentationRule` and explicit rule priority for hook dispatch;
 - bridges and factories for integration families such as OkHttp, coroutines, Handler and Executor;
 - gates and diagnostics for fail-open unsupported signatures;
-- mergeable CLI aggregators and lightweight graph indexes for large logs.
+- mergeable CLI aggregators and bounded graph analysis for large logs.
 
 The full implementation prompt and phased checklist live in [sdk-architecture-evolution-prompt.md](sdk-architecture-evolution-prompt.md).
 

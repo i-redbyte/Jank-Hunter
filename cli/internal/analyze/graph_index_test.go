@@ -46,21 +46,13 @@ func TestClassGraphIndexDeduplicatesCyclesAndRepeatedLookups(t *testing.T) {
 	assertGraphEdge(t, edges, "feature.B", "feature.A")
 }
 
-func TestClassGraphIndexShortestPathAndCycles(t *testing.T) {
+func TestClassGraphIndexCycles(t *testing.T) {
 	index := NewClassGraphIndex([]ClassGraphEdge{
 		{From: "feature.A", To: "feature.B", Count: 1},
 		{From: "feature.B", To: "feature.C", Count: 2},
 		{From: "feature.C", To: "feature.A", Count: 3},
 		{From: "feature.C", To: "feature.D", Count: 4},
 	})
-
-	path := index.ShortestPath("feature.A", "feature.D", 4)
-	if got := len(path); got != 3 {
-		t.Fatalf("len(path) = %d, want 3: %+v", got, path)
-	}
-	if path[0].From != "feature.A" || path[2].To != "feature.D" {
-		t.Fatalf("unexpected path: %+v", path)
-	}
 
 	cycles := index.StronglyConnectedComponents(8)
 	if len(cycles) != 1 {
@@ -143,13 +135,13 @@ func TestClassGraphIndexPrunesLargeSparseGraphByWeight(t *testing.T) {
 	}
 }
 
-func TestClassGraphIndexBudgetsRelevantEdgesAndShortestPath(t *testing.T) {
+func TestClassGraphIndexBudgetsRelevantEdges(t *testing.T) {
 	index := NewClassGraphIndexWithBudget([]ClassGraphEdge{
 		{From: "feature.A", To: "feature.B", Count: 10},
 		{From: "feature.B", To: "feature.C", Count: 8},
 		{From: "feature.D", To: "feature.A", Count: 6},
 		{From: "feature.E", To: "feature.A", Count: 4},
-	}, GraphIndexBudget{MaxRelevantEdges: 2, MaxShortestPathVisits: 2})
+	}, GraphIndexBudget{MaxRelevantEdges: 2})
 
 	edges := index.RelevantEdges(map[string]struct{}{"feature.A": {}}, nil)
 	if len(edges) != 2 {
@@ -159,11 +151,6 @@ func TestClassGraphIndexBudgetsRelevantEdgesAndShortestPath(t *testing.T) {
 		if edge.Count < 6 {
 			t.Fatalf("low-priority relevant edge survived budget: %+v", edges)
 		}
-	}
-
-	path := index.ShortestPath("feature.A", "feature.C", 4)
-	if path != nil {
-		t.Fatalf("ShortestPath should respect visit budget, got %+v", path)
 	}
 }
 
