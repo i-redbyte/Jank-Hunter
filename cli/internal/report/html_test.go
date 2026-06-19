@@ -253,6 +253,24 @@ func TestInfluenceReportPath(t *testing.T) {
 	}
 }
 
+func TestLeakReportPath(t *testing.T) {
+	tests := map[string]string{
+		"report.html":                         "report-leaks.html",
+		"/tmp/report.html":                    "/tmp/report-leaks.html",
+		"/tmp/report-math.html":               "/tmp/report-leaks.html",
+		"/tmp/report-influence.html":          "/tmp/report-leaks.html",
+		"/tmp/report-diagnostics.html":        "/tmp/report-leaks.html",
+		"/tmp/report.with.dots.html":          "/tmp/report.with.dots-leaks.html",
+		"/tmp/report.with.dots-influence.htm": "/tmp/report.with.dots-leaks.htm",
+		"/tmp/report-math":                    "/tmp/report-leaks.html",
+	}
+	for input, want := range tests {
+		if got := LeakReportPath(input); got != want {
+			t.Fatalf("LeakReportPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestDiagnosticsReportPath(t *testing.T) {
 	tests := map[string]string{
 		"report.html":                         "report-diagnostics.html",

@@ -92,15 +92,17 @@ const buildReportSet = (name, logCount, presentation = false) => {
   const reports = [
     { set: name, type: "inspect", path: inspectPath },
     { set: name, type: "inspect-math", path: inspectPath.replace(/\.html$/, "-math.html") },
+    { set: name, type: "inspect-leaks", path: inspectPath.replace(/\.html$/, "-leaks.html") },
     { set: name, type: "inspect-influence", path: inspectPath.replace(/\.html$/, "-influence.html") },
     { set: name, type: "inspect-diagnostics", path: inspectPath.replace(/\.html$/, "-diagnostics.html") },
     { set: name, type: "compare", path: comparePath },
     { set: name, type: "compare-math", path: comparePath.replace(/\.html$/, "-math.html") },
+    { set: name, type: "compare-leaks", path: comparePath.replace(/\.html$/, "-leaks.html") },
     { set: name, type: "compare-influence", path: comparePath.replace(/\.html$/, "-influence.html") },
     { set: name, type: "compare-diagnostics", path: comparePath.replace(/\.html$/, "-diagnostics.html") },
   ].filter((report) => existsSync(report.path));
 
-  for (const required of ["inspect", "inspect-math", "inspect-influence", "inspect-diagnostics", "compare", "compare-math", "compare-influence", "compare-diagnostics"]) {
+  for (const required of ["inspect", "inspect-math", "inspect-leaks", "inspect-influence", "inspect-diagnostics", "compare", "compare-math", "compare-leaks", "compare-influence", "compare-diagnostics"]) {
     if (!reports.some((report) => report.type === required)) {
       throw new Error(`В snapshot-наборе ${name} не создан отчет ${required}`);
     }

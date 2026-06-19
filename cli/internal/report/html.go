@@ -24,6 +24,7 @@ type LogReport struct {
 type ReportOptions struct {
 	PresentationMode                    bool
 	DisableMathLink                     bool
+	DisableLeakLink                     bool
 	InstrumentationDiagnosticsAvailable bool
 }
 
@@ -38,6 +39,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"Summary":               summary,
 		"Analysis":              inspectAnalysis(summary, lang),
 		"MathReportHref":        mathReportHrefForOptions(path, options),
+		"LeakReportHref":        leakReportHrefForOptions(path, options),
 		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, summary.Influence),
 		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
 		"PresentationMode":      options.PresentationMode,
@@ -61,6 +63,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"CandidateLogs":         candidateLogs,
 		"Analysis":              compareAnalysis(comparison, lang),
 		"MathReportHref":        mathReportHrefForOptions(path, options),
+		"LeakReportHref":        leakReportHrefForOptions(path, options),
 		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
 		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
 		"PresentationMode":      options.PresentationMode,
@@ -92,6 +95,30 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Comparison.Candidate.Influence),
 		"PresentationMode":    options.PresentationMode,
+	})
+}
+
+func WriteLeakInspect(path string, leakReport analyze.LeakReport) error {
+	return WriteLeakInspectWithOptions(path, leakReport, ReportOptions{})
+}
+
+func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, options ReportOptions) error {
+	return execute(path, leaksInspectTemplate, map[string]any{
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"LeakReport":       leakReport,
+		"PresentationMode": options.PresentationMode,
+	})
+}
+
+func WriteLeakCompare(path string, leakReport analyze.LeakCompareReport) error {
+	return WriteLeakCompareWithOptions(path, leakReport, ReportOptions{})
+}
+
+func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareReport, options ReportOptions) error {
+	return execute(path, leaksCompareTemplate, map[string]any{
+		"GeneratedAt":      time.Now().Format(time.RFC3339),
+		"LeakReport":       leakReport,
+		"PresentationMode": options.PresentationMode,
 	})
 }
 
@@ -141,6 +168,32 @@ func mathReportHrefForOptions(path string, options ReportOptions) string {
 		return ""
 	}
 	return MathReportHref(path)
+}
+
+func LeakReportPath(path string) string {
+	ext := filepath.Ext(path)
+	if ext != "" {
+		base := strings.TrimSuffix(path, ext)
+		base = strings.TrimSuffix(base, "-math")
+		base = strings.TrimSuffix(base, "-influence")
+		base = strings.TrimSuffix(base, "-diagnostics")
+		return base + "-leaks" + ext
+	}
+	path = strings.TrimSuffix(path, "-math")
+	path = strings.TrimSuffix(path, "-influence")
+	path = strings.TrimSuffix(path, "-diagnostics")
+	return path + "-leaks.html"
+}
+
+func LeakReportHref(path string) string {
+	return filepath.Base(LeakReportPath(path))
+}
+
+func leakReportHrefForOptions(path string, options ReportOptions) string {
+	if options.DisableLeakLink {
+		return ""
+	}
+	return LeakReportHref(path)
 }
 
 func InfluenceReportPath(path string) string {
@@ -313,6 +366,9 @@ func reportTemplateFuncs() template.FuncMap {
 		"codeProblemSeverities":      codeProblemSeverityStats,
 		"leakObjectKindOptions":      leakObjectKindOptions,
 		"leakObjectKindLabel":        leakObjectKindLabel,
+		"leakGraphSVG":               leakGraphSVG,
+		"leakModeLabel":              leakModeLabel,
+		"leakDeltaStatusClass":       leakDeltaStatusClass,
 		"codeProblemCompareRows":     codeProblemCompareRows,
 		"memoryLeakSearchText":       memoryLeakSearchText,
 		"memoryLeakCompareRows":      memoryLeakCompareRows,
@@ -1952,6 +2008,156 @@ func topIntegralScore(scores []mathanalysis.IntegralScore) (mathanalysis.Integra
 		}
 	}
 	return best, true
+}
+
+func leakModeLabel(mode string) string {
+	switch mode {
+	case analyze.LeakModeHeap:
+		return "Heap mode"
+	default:
+		return "Light mode"
+	}
+}
+
+func leakDeltaStatusClass(status string) string {
+	switch status {
+	case analyze.LeakDeltaNew, analyze.LeakDeltaWorse, analyze.LeakDeltaRegressed:
+		return "sev-high"
+	case analyze.LeakDeltaBetter, analyze.LeakDeltaResolved, analyze.LeakDeltaImproved:
+		return "sev-ok"
+	default:
+		return "sev-medium"
+	}
+}
+
+func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
+	if len(graph.Nodes) == 0 {
+		return template.HTML(`<div class="leak-graph-empty">Нет данных для графа.</div>`)
+	}
+	const (
+		nodeW   = 168.0
+		nodeH   = 58.0
+		gapX    = 46.0
+		topY    = 48.0
+		bandY   = 98.0
+		leftX   = 24.0
+		minH    = 250.0
+		maxCols = 8
+	)
+	mainNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
+	retainedNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		if node.Kind == "retained" {
+			retainedNodes = append(retainedNodes, node)
+			continue
+		}
+		mainNodes = append(mainNodes, node)
+	}
+	if len(mainNodes) == 0 {
+		mainNodes = graph.Nodes
+	}
+	cols := len(mainNodes)
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > maxCols {
+		cols = maxCols
+	}
+	width := math.Max(760, leftX*2+float64(cols)*(nodeW+gapX))
+	retainedRows := math.Ceil(float64(len(retainedNodes)) / 3)
+	height := math.Max(minH, topY+nodeH+84+retainedRows*72)
+	positions := map[string]graphPoint{}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, `<svg class="leak-graph-svg" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(graph.Title))
+	builder.WriteString(`<defs><linearGradient id="leakEdgeGradient" x1="0" x2="1"><stop offset="0" stop-color="#6ff7ff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient><marker id="leakArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6ff7ff"/></marker></defs>`)
+	fmt.Fprintf(&builder, `<text x="24" y="24" class="leak-graph-title">%s</text>`, template.HTMLEscapeString(graph.Title))
+	for index, node := range mainNodes {
+		x := leftX + float64(index%maxCols)*(nodeW+gapX)
+		y := topY + float64(index/maxCols)*bandY
+		positions[node.ID] = graphPoint{x: x, y: y}
+	}
+	target := positions[graph.TargetID]
+	if graph.TargetID == "" {
+		target = positions[mainNodes[len(mainNodes)-1].ID]
+	}
+	for index, node := range retainedNodes {
+		col := index % 3
+		row := index / 3
+		x := math.Min(width-nodeW-24, math.Max(24, target.x-120+float64(col)*(nodeW+18)))
+		y := target.y + nodeH + 64 + float64(row)*72
+		positions[node.ID] = graphPoint{x: x, y: y}
+	}
+	for _, edge := range graph.Edges {
+		from, okFrom := positions[edge.From]
+		to, okTo := positions[edge.To]
+		if !okFrom || !okTo {
+			continue
+		}
+		x1 := from.x + nodeW
+		y1 := from.y + nodeH/2
+		x2 := to.x
+		y2 := to.y + nodeH/2
+		if to.y > from.y+nodeH {
+			x1 = from.x + nodeW/2
+			y1 = from.y + nodeH
+			x2 = to.x + nodeW/2
+			y2 = to.y
+		}
+		midX := (x1 + x2) / 2
+		midY := (y1 + y2) / 2
+		fmt.Fprintf(&builder, `<path class="leak-graph-edge edge-%s" d="M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f" marker-end="url(#leakArrow)"/>`, graphClass(edge.Kind), x1, y1, midX, y1, midX, y2, x2, y2)
+		if edge.Label != "" {
+			fmt.Fprintf(&builder, `<text x="%.1f" y="%.1f" class="leak-graph-edge-label">%s</text>`, midX, midY-5, template.HTMLEscapeString(shortGraphLabel(edge.Label, 24)))
+		}
+	}
+	for _, node := range graph.Nodes {
+		point, ok := positions[node.ID]
+		if !ok {
+			continue
+		}
+		classes := "leak-graph-node node-" + graphClass(node.Kind)
+		if node.ID == graph.TargetID {
+			classes += " is-target"
+		}
+		if node.ID == graph.RootID {
+			classes += " is-root"
+		}
+		fmt.Fprintf(&builder, `<g class="%s" transform="translate(%.1f %.1f)">`, classes, point.x, point.y)
+		fmt.Fprintf(&builder, `<rect width="%.0f" height="%.0f" rx="8"/>`, nodeW, nodeH)
+		fmt.Fprintf(&builder, `<text x="12" y="22" class="node-title">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Label, 26)))
+		fmt.Fprintf(&builder, `<text x="12" y="43" class="node-detail">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Detail, 30)))
+		builder.WriteString(`</g>`)
+	}
+	builder.WriteString(`</svg>`)
+	return template.HTML(builder.String())
+}
+
+func graphClass(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var out strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out.WriteRune(r)
+		case r >= '0' && r <= '9':
+			out.WriteRune(r)
+		default:
+			out.WriteByte('-')
+		}
+	}
+	if out.Len() == 0 {
+		return "unknown"
+	}
+	return out.String()
+}
+
+func shortGraphLabel(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len([]rune(value)) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:limit-1]) + "…"
 }
 
 func sparklineSVG(series mathanalysis.Series) template.HTML {

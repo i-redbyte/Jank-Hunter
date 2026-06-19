@@ -2,6 +2,7 @@ package io.jankhunter.runtime.internal.system
 
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.JankHunterContext
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -9,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
 
-class ObjectRetentionWatcher(
+internal class ObjectRetentionWatcher(
     retainedDelayMs: Long,
     private val forceGcBeforeReport: Boolean = false,
     private val clock: () -> Long = { SystemClock.elapsedRealtime() },
@@ -17,8 +18,8 @@ class ObjectRetentionWatcher(
         Runtime.getRuntime().gc()
         System.runFinalization()
     },
-    private val reporter: (String?, String?, Long, Long) -> Unit = { className, ownerHint, ageMs, count ->
-        JankHunter.recordRetained(className, ownerHint, ageMs, count)
+    private val reporter: (String?, String?, JankHunterContext?, Long, Long) -> Unit = { className, ownerHint, context, ageMs, count ->
+        JankHunter.recordWatchedRetained(className, ownerHint, context, ageMs, count)
     },
 ) {
     private val delayMs = max(1_000L, retainedDelayMs)
@@ -42,22 +43,28 @@ class ObjectRetentionWatcher(
         watched.clear()
     }
 
-    fun watch(instance: Any?, description: String?, ownerHint: String?) {
+    fun watch(instance: Any?, description: String?, ownerHint: String?, context: JankHunterContext?) {
         if (instance == null || !running.get()) return
-        addWatched(instance, description, ownerHint)
+        addWatched(instance, description, ownerHint, context)
     }
 
-    internal fun watchForTest(instance: Any, description: String?, ownerHint: String? = null) {
-        addWatched(instance, description, ownerHint)
+    internal fun watchForTest(
+        instance: Any,
+        description: String?,
+        ownerHint: String? = null,
+        context: JankHunterContext? = null,
+    ) {
+        addWatched(instance, description, ownerHint, context)
     }
 
-    private fun addWatched(instance: Any, description: String?, ownerHint: String?) {
+    private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?) {
         watched.add(
             WatchedReference(
                 instance,
                 queue,
                 safeClassName(instance, description),
                 ownerHint?.takeIf { it.isNotBlank() },
+                context,
                 clock(),
             ),
         )
@@ -113,7 +120,7 @@ class ObjectRetentionWatcher(
             }
 
             val key = ref.className + "\u0000" + ref.ownerHint.orEmpty()
-            groups.getOrPut(key) { RetainedGroup(ref.className, ref.ownerHint) }.add(ageMs)
+            groups.getOrPut(key) { RetainedGroup(ref.className, ref.ownerHint, ref.context) }.add(ageMs)
             ref.removed = true
             shouldCompact = true
         }
@@ -126,7 +133,7 @@ class ObjectRetentionWatcher(
             requestGc()
         }
         for (group in groups.values) {
-            reporter(group.className, group.ownerHint, group.maxAgeMs, group.count)
+            reporter(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count)
         }
     }
 
@@ -150,6 +157,7 @@ class ObjectRetentionWatcher(
     private class RetainedGroup(
         val className: String,
         val ownerHint: String?,
+        val context: JankHunterContext?,
     ) {
         var count = 0L
             private set
@@ -169,6 +177,7 @@ class ObjectRetentionWatcher(
         queue: ReferenceQueue<Any>,
         val className: String,
         val ownerHint: String?,
+        val context: JankHunterContext?,
         val watchStartedMs: Long,
     ) : WeakReference<Any>(referent, queue) {
         var firstRetainedAtMs = 0L

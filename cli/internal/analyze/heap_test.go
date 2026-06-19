@@ -36,10 +36,10 @@ func TestInspectAppliesHeapEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectFilesWithOptions() error = %v", err)
 	}
-	if len(summary.MemoryLeaks) != 1 {
-		t.Fatalf("unexpected memory leaks: %+v", summary.MemoryLeaks)
+	leak, ok := memoryLeakByClass(summary.MemoryLeaks, "com.app.checkout.CheckoutActivity")
+	if !ok {
+		t.Fatalf("heap-backed CheckoutActivity leak missing: %+v", summary.MemoryLeaks)
 	}
-	leak := summary.MemoryLeaks[0]
 	if !leak.HeapEvidence {
 		t.Fatalf("expected heap evidence: %+v", leak)
 	}

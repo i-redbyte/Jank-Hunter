@@ -1207,6 +1207,9 @@ func (c *collector) finish() Summary {
 		summary.RetainedAgeBuckets = append(summary.RetainedAgeBuckets, NamedValue{Name: bucket, Value: value})
 	}
 	summary.MemoryLeaks = buildMemoryLeakSuspects(c.memoryLeakStats, summary.LowMemoryCount, summary.MemoryMaxKB, c.heap)
+	if c.heap != nil {
+		summary.Warnings = append(summary.Warnings, c.heap.Warnings...)
+	}
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})

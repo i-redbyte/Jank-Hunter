@@ -186,6 +186,8 @@ type MemoryLeakSuspect struct {
 	GCRoot                   string
 	HolderField              string
 	RetainedObjectCount      uint64
+	ReferencePath            []HeapPathElement
+	RetainedClassSample      []string
 	RetainedSizeConfidence   string
 	RetainedSizeExplanation  string
 	DominatorPath            []string

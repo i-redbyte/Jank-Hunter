@@ -654,6 +654,23 @@ object JankHunter {
         maybeDumpRetainedHeap(className, retainedOwner, ageMs, count)
     }
 
+    internal fun recordWatchedRetained(
+        className: String?,
+        holder: String?,
+        context: JankHunterContext?,
+        ageMs: Long,
+        count: Long,
+    ) {
+        if (context == null) {
+            recordRetained(className, holder, ageMs, count)
+            return
+        }
+        val retainedOwner = firstContextValue(firstContextValue(holder, context.owner), className)
+        callWithContext(context, retainedOwner) {
+            recordRetained(className, holder, ageMs, count)
+        }
+    }
+
     @JvmStatic
     fun watchObject(instance: Any?, description: String? = null) {
         watchObject(instance, description, null)
@@ -662,7 +679,8 @@ object JankHunter {
     @JvmStatic
     fun watchObject(instance: Any?, description: String?, ownerHint: String?) {
         val retainedBy = firstContextValue(ownerHint, contextTracker.ownerOrNull())
-        objectRetentionWatcher?.watch(instance, description, retainedBy)
+        val tuple = captureContext(ownerOverride = retainedBy)
+        objectRetentionWatcher?.watch(instance, description, retainedBy, tuple)
     }
 
     @JvmStatic

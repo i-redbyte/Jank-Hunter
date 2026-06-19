@@ -7,6 +7,7 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import io.jankhunter.okhttp3.JankHunterEventListenerFactory
 import io.jankhunter.runtime.JankHunter
@@ -38,7 +39,7 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun createContent(): LinearLayout {
+    private fun createContent(): ScrollView {
         val density = resources.displayMetrics.density
         val padding = (24 * density).toInt()
 
@@ -52,6 +53,10 @@ class MainActivity : Activity() {
         }
         val networkStatus = TextView(this).apply {
             text = "Network: idle"
+            textSize = 14f
+        }
+        val leakStatus = TextView(this).apply {
+            text = "Memory Leak Demo: idle"
             textSize = 14f
         }
         val jankButton = Button(this).apply {
@@ -85,6 +90,87 @@ class MainActivity : Activity() {
                 JankHunter.recordCounter("sample.retained.watch.count", 1)
             }
         }
+        val activityLeakButton = Button(this).apply {
+            text = "Leak Demo: Activity reference"
+            setOnClickListener {
+                recordLeakDemo(
+                    step = "activity_reference",
+                    owner = "sample.memory_leak.activity_registry",
+                    className = "io.jankhunter.sample.LeakedCheckoutActivity",
+                    status = leakStatus,
+                ) {
+                    LeakedActivityScreen(clicks.incrementAndGet())
+                }
+            }
+        }
+        val bindingLeakButton = Button(this).apply {
+            text = "Leak Demo: View binding"
+            setOnClickListener {
+                recordLeakDemo(
+                    step = "view_binding",
+                    owner = "sample.memory_leak.binding_cache",
+                    className = "io.jankhunter.sample.LeakedCheckoutBinding",
+                    status = leakStatus,
+                ) {
+                    LeakedBindingSnapshot(screen = this@MainActivity, payload = ByteArray(96 * 1024))
+                }
+            }
+        }
+        val listenerLeakButton = Button(this).apply {
+            text = "Leak Demo: Listener callback"
+            setOnClickListener {
+                recordLeakDemo(
+                    step = "listener_callback",
+                    owner = "sample.memory_leak.listener_registry",
+                    className = "io.jankhunter.sample.LeakedPaymentListener",
+                    status = leakStatus,
+                ) {
+                    LeakedPaymentListener {
+                        leakStatus.text = "Memory Leak Demo: callback still registered"
+                    }
+                }
+            }
+        }
+        val cacheLeakButton = Button(this).apply {
+            text = "Leak Demo: Cache entries"
+            setOnClickListener {
+                JankHunter.withFlow("sample.memory_leak.demo") {
+                    JankHunter.markFlowStep("cache_entries")
+                    JankHunter.withOwner("sample.memory_leak.checkout_cache") {
+                        repeat(3) { index ->
+                            val entry = LeakedCacheEntry(index = index, payload = ByteArray(128 * 1024))
+                            retainedSamples += entry
+                            JankHunter.watchObject(
+                                entry,
+                                "io.jankhunter.sample.LeakedCheckoutCacheEntry",
+                                "sample.memory_leak.checkout_cache",
+                            )
+                        }
+                    }
+                }
+                JankHunter.recordCounter("sample.memory_leak.cache.watch.count", 3)
+                JankHunter.flush()
+                leakStatus.text = "Memory Leak Demo: retained cache entries watched"
+            }
+        }
+        val cleanObjectButton = Button(this).apply {
+            text = "Leak Demo: Clean object"
+            setOnClickListener {
+                JankHunter.withFlow("sample.memory_leak.demo") {
+                    JankHunter.markFlowStep("clean_object")
+                    JankHunter.withOwner("sample.memory_leak.cleaned_scope") {
+                        JankHunter.watchObject(
+                            CleanedLeakProbe(),
+                            "io.jankhunter.sample.CleanedLeakProbe",
+                            "sample.memory_leak.cleaned_scope",
+                        )
+                    }
+                }
+                JankHunter.recordCounter("sample.memory_leak.clean.watch.count", 1)
+                JankHunter.flush()
+                leakStatus.text = "Memory Leak Demo: clean probe watched without retaining"
+            }
+        }
         val jsonPlaceholderButton = Button(this).apply {
             text = "Fetch JSONPlaceholder"
             setOnClickListener {
@@ -108,19 +194,48 @@ class MainActivity : Activity() {
             }
         }
 
-        return LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(padding, padding, padding, padding)
             addView(title, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(status, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(networkStatus, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(leakStatus, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(jankButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(workerButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(watchButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(activityLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(bindingLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(listenerLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(cacheLeakButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(cleanObjectButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(jsonPlaceholderButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addView(httpBinButton, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
+        return ScrollView(this).apply {
+            addView(content, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    private fun recordLeakDemo(
+        step: String,
+        owner: String,
+        className: String,
+        status: TextView,
+        factory: () -> Any,
+    ) {
+        JankHunter.withFlow("sample.memory_leak.demo") {
+            JankHunter.markFlowStep(step)
+            JankHunter.withOwner(owner) {
+                val sample = factory()
+                retainedSamples += sample
+                JankHunter.watchObject(sample, className, owner)
+            }
+        }
+        JankHunter.recordCounter("sample.memory_leak.watch.count", 1)
+        JankHunter.flush()
+        status.text = "Memory Leak Demo: $step watched"
     }
 
     private fun runNetworkCall(label: String, owner: String, url: String, status: TextView) {
@@ -165,4 +280,22 @@ class MainActivity : Activity() {
     }
 
     private data class RetainedSample(val id: Int)
+
+    private data class LeakedActivityScreen(val id: Int)
+
+    private data class LeakedBindingSnapshot(
+        val screen: Activity,
+        val payload: ByteArray,
+    )
+
+    private class LeakedPaymentListener(
+        val onPaymentStateChanged: () -> Unit,
+    )
+
+    private data class LeakedCacheEntry(
+        val index: Int,
+        val payload: ByteArray,
+    )
+
+    private class CleanedLeakProbe
 }

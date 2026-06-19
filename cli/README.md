@@ -71,9 +71,11 @@ make build
 ```text
 /tmp/report.html
 /tmp/report-math.html
+/tmp/report-leaks.html
 /tmp/report-influence.html
 /tmp/compare.html
 /tmp/compare-math.html
+/tmp/compare-leaks.html
 /tmp/compare-influence.html
 ```
 
@@ -150,7 +152,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает пользовательский класс-держатель, поле ссылки, retained size и мини-дерево доминирования. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS.
+`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает пользовательский класс-держатель, поле ссылки, retained size и мини-дерево доминирования. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания.
 
 Можно передать уже подготовленный JSON evidence вместо HPROF:
 
@@ -201,6 +203,7 @@ jankhunter compare \
 - детали каждого лога внутри раскрывающихся карточек;
 - эвристический итог;
 - отдельный `compare-math.html`;
+- отдельный `compare-leaks.html` со статусами `new`, `worse`, `same`, `better`, `resolved`;
 - отдельный `compare-influence.html` для графа влияния кандидата.
 
 С owner-map:
@@ -315,6 +318,7 @@ jankhunter inspect ~/Downloads/*.jhlog --out ~/Downloads/jankhunter-report.html
 
 ```text
 report-math.html
+report-leaks.html
 report-influence.html
 report-diagnostics.html
 ```
@@ -323,6 +327,7 @@ report-diagnostics.html
 
 ```text
 compare-math.html
+compare-leaks.html
 compare-influence.html
 compare-diagnostics.html
 ```

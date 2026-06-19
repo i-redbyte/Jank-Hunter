@@ -216,16 +216,21 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.Processes) != 1 || summary.Processes[0].Name != "main" {
 		t.Fatalf("unexpected processes: %+v", summary.Processes)
 	}
-	if len(summary.RetainedClasses) != 1 || summary.RetainedClasses[0].Name != "com.app.checkout.CheckoutActivity" {
+	retainedClasses := namedValuesByName(summary.RetainedClasses)
+	if len(retainedClasses) != 4 || retainedClasses["com.app.checkout.CheckoutActivity"].Value != 2 || retainedClasses["com.app.checkout.CheckoutCacheEntry"].Value != 3 {
 		t.Fatalf("unexpected retained classes: %+v", summary.RetainedClasses)
 	}
-	if len(summary.RetainedAgeBuckets) != 1 || summary.RetainedAgeBuckets[0].Name != "10s-30s" {
+	retainedBuckets := namedValuesByName(summary.RetainedAgeBuckets)
+	if len(retainedBuckets) != 2 || retainedBuckets["10s-30s"].Value != 5 || retainedBuckets["30s-60s"].Value != 2 {
 		t.Fatalf("unexpected retained age buckets: %+v", summary.RetainedAgeBuckets)
 	}
-	if len(summary.MemoryLeaks) != 1 {
+	if len(summary.MemoryLeaks) != 4 {
 		t.Fatalf("unexpected memory leak suspects: %+v", summary.MemoryLeaks)
 	}
-	leak := summary.MemoryLeaks[0]
+	leak, ok := memoryLeakByClass(summary.MemoryLeaks, "com.app.checkout.CheckoutActivity")
+	if !ok {
+		t.Fatalf("CheckoutActivity leak missing: %+v", summary.MemoryLeaks)
+	}
 	if leak.ClassName != "com.app.checkout.CheckoutActivity" || leak.Holder != "CheckoutPresenter.render" {
 		t.Fatalf("unexpected memory leak attribution: %+v", leak)
 	}
@@ -996,6 +1001,15 @@ func namedValuesByName(values []NamedValue) map[string]NamedValue {
 		out[value.Name] = value
 	}
 	return out
+}
+
+func memoryLeakByClass(values []MemoryLeakSuspect, className string) (MemoryLeakSuspect, bool) {
+	for _, value := range values {
+		if value.ClassName == className {
+			return value, true
+		}
+	}
+	return MemoryLeakSuspect{}, false
 }
 
 func deltasByName(values []Delta) map[string]Delta {

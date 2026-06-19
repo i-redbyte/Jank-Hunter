@@ -243,8 +243,12 @@ func runCompare(args []string) error {
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
 	baseOptions := reportOptions
 	baseOptions.DisableMathLink = true
+	baseOptions.DisableLeakLink = true
 	if err := report.WriteInspectWithOptions(out, summary, baseOptions); err != nil {
 		return err
+	}
+	if err := report.WriteLeakInspectWithOptions(report.LeakReportPath(out), analyze.BuildLeakReport(summary), reportOptions); err != nil {
+		warnReportGeneration("отчет утечек inspect не записан", err)
 	}
 	if summary.Influence.Available {
 		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода", reportOptions); err != nil {
@@ -286,8 +290,12 @@ func writeCompareReportSet(
 ) error {
 	baseOptions := reportOptions
 	baseOptions.DisableMathLink = true
+	baseOptions.DisableLeakLink = true
 	if err := report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, baseOptions); err != nil {
 		return err
+	}
+	if err := report.WriteLeakCompareWithOptions(report.LeakReportPath(out), analyze.BuildLeakCompareReport(comparison), reportOptions); err != nil {
+		warnReportGeneration("отчет утечек compare не записан", err)
 	}
 	if comparison.Candidate.Influence.Available {
 		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {

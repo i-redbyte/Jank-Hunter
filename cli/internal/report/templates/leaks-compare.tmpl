@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: сравнение утечек</title>
+  <style>{{baseCSS}}</style>
+</head>
+<body class="leak-page{{if .PresentationMode}} presentation-page{{end}}">
+<header class="hero">
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
+      <div class="eyebrow">Jank Hunter · leak compare</div>
+      <h1>Сравнение утечек памяти</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · доверие {{confidenceLabel .LeakReport.Confidence}} · автономный HTML</div>
+      <div class="hero-actions"><a class="math-link" href="#explorer">Открыть дельты утечек</a></div>
+    </div>
+    <div class="report-hero-lower">
+      <div class="report-hero-context">
+        <div class="env-card">
+          <div class="env-title">{{.LeakReport.Stats.ChangeLabel}}</div>
+          <strong class="env-device">{{.LeakReport.Verdict}}</strong>
+          <div class="env-subtitle">baseline {{.LeakReport.Stats.BaselineTotal}} · candidate {{.LeakReport.Stats.CandidateTotal}}</div>
+        </div>
+      </div>
+      <div class="report-hero-control">
+        <div class="hero-meta">
+          <div class="chip">Новые <strong>{{.LeakReport.Stats.New}}</strong></div>
+          <div class="chip">Хуже <strong>{{.LeakReport.Stats.Worse}}</strong></div>
+          <div class="chip">Исчезли <strong>{{.LeakReport.Stats.Resolved}}</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#summary">Сводка</a>
+  <a href="#explorer">Граф</a>
+  <a href="#registry">Дельты</a>
+  <a href="#cohorts">Когорты</a>
+</nav>
+<main>
+  <section id="summary" class="panel">
+    <div class="panel-head">
+      <div><h2>Итог сравнения</h2><div class="panel-kicker">Сравнение учитывает fingerprint утечки, count, max age, score, retained size и наличие heap evidence.</div></div>
+      <span class="pill {{leakDeltaStatusClass .LeakReport.Stats.OverallStatus}}">{{.LeakReport.Stats.ChangeLabel}}</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">Количество</div><div class="value">{{.LeakReport.Stats.BaselineTotal}} → {{.LeakReport.Stats.CandidateTotal}}</div><div class="hint">{{.LeakReport.Stats.ChangeLabel}}</div></div>
+      <div class="metric"><div class="label">Новые</div><div class="value">{{.LeakReport.Stats.New}}</div><div class="hint">усилились {{.LeakReport.Stats.Worse}}</div></div>
+      <div class="metric"><div class="label">Улучшения</div><div class="value">{{.LeakReport.Stats.Resolved}}</div><div class="hint">стало легче {{.LeakReport.Stats.Better}}</div></div>
+      <div class="metric"><div class="label">Heap evidence</div><div class="value">{{.LeakReport.Stats.HeapConfirmedBefore}} → {{.LeakReport.Stats.HeapConfirmedAfter}}</div><div class="hint">точность цепочек</div></div>
+      <div class="metric"><div class="label">Retained count</div><div class="value">{{.LeakReport.Stats.BaselineRetained}} → {{.LeakReport.Stats.CandidateRetained}}</div><div class="hint">runtime retained objects</div></div>
+      <div class="metric"><div class="label">Retained size</div><div class="value">{{dataSize .LeakReport.Stats.BaselineEstimatedKB}} → {{dataSize .LeakReport.Stats.CandidateEstimatedKB}}</div><div class="hint">оценка/heap</div></div>
+    </div>
+    {{range .LeakReport.Warnings}}<p class="warning">{{.}}</p>{{end}}
+  </section>
+
+  <section id="explorer" class="panel">
+    <div class="panel-head">
+      <div><h2>Leak Delta Explorer</h2><div class="panel-kicker">Выберите дельту: справа будет граф кандидата, а для resolved — граф baseline, чтобы было видно, что именно исчезло.</div></div>
+      <span class="pill">baseline → candidate</span>
+    </div>
+    {{if .LeakReport.Deltas}}
+    <div class="leak-explorer" data-leak-explorer>
+      <div class="leak-selector" aria-label="Список дельт утечек">
+        {{range $index, $delta := .LeakReport.Deltas}}
+        {{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}
+        <button type="button" data-leak-select data-leak-target="leak-delta-{{$index}}" class="leak-select">
+          <span class="problem-score {{severityClass $delta.Severity}}">{{$delta.StatusLabel}}</span>
+          <strong>{{$suspect.ClassName}}</strong>
+          <span>{{$suspect.Holder}}</span>
+          <small>score {{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}} · count {{$delta.CountBefore}} → {{$delta.CountAfter}}</small>
+        </button>
+        {{end}}
+      </div>
+      <div class="leak-graph-stage">
+        {{range $index, $delta := .LeakReport.Deltas}}
+        {{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}
+        <article id="leak-delta-{{$index}}" class="leak-graph-panel" data-leak-panel>
+          <div class="leak-panel-head">
+            <div>
+              <h3>{{$suspect.ClassName}}</h3>
+              <p>{{$delta.Explanation}}</p>
+            </div>
+            <span class="pill {{leakDeltaStatusClass $delta.Status}}">{{$delta.StatusLabel}}</span>
+          </div>
+          {{leakGraphSVG $delta.Graph}}
+          <div class="leak-explain-grid">
+            <div><strong>Дельта</strong><p>score {{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}} ({{printf "%+.1f" $delta.DeltaScore}}), count {{$delta.CountBefore}} → {{$delta.CountAfter}} ({{printf "%+d" $delta.DeltaCount}}), возраст {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}.</p></div>
+            <div><strong>Что проверить</strong><p>{{$delta.Recommendation}}</p></div>
+          </div>
+          <div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range $suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
+        </article>
+        {{end}}
+      </div>
+    </div>
+    {{else}}
+    <p class="help-text">Утечек нет ни в baseline, ни в candidate.</p>
+    {{end}}
+  </section>
+
+  <section id="registry" class="panel">
+    <div class="panel-head">
+      <div><h2>Дельты утечек</h2><div class="panel-kicker">Таблица показывает новые, усилившиеся, ослабевшие и исчезнувшие fingerprint’ы.</div></div>
+    </div>
+    <div class="code-registry" data-code-registry>
+      <div class="registry-toolbar">
+        <input type="search" data-code-registry-search placeholder="Фильтр по объекту, holder, статусу или рекомендации" aria-label="Фильтр дельт утечек">
+        <select data-code-registry-severity aria-label="Фильтр по риску">
+          <option value="">Все уровни риска</option>
+          <option value="high">Критично</option>
+          <option value="medium">Предупреждение</option>
+          <option value="ok">Норма</option>
+        </select>
+        <select data-code-registry-category aria-label="Фильтр по статусу">
+          <option value="">Все статусы</option>
+          <option value="new">Новые</option>
+          <option value="worse">Хуже</option>
+          <option value="same">Без изменений</option>
+          <option value="better">Легче</option>
+          <option value="resolved">Исчезли</option>
+        </select>
+        <span class="registry-counter" data-code-registry-count></span>
+      </div>
+      <div class="problem-empty">По текущим фильтрам дельт не найдено.</div>
+      <table class="code-problem-table leak-table">
+        <thead><tr><th><button type="button" data-code-sort="severity">Статус</button></th><th><button type="button" data-code-sort="class">Объект</button></th><th>Holder</th><th>Score</th><th>Count / age</th><th>Retained size</th><th>Объяснение</th><th>Что проверить</th></tr></thead>
+        <tbody>
+          {{range .LeakReport.Deltas}}
+          {{$suspect := .Candidate}}{{if not .HasCandidate}}{{$suspect = .Baseline}}{{end}}
+          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{$suspect.ClassName}}" data-categories="{{.Status}}" data-search="{{.PlainText}}">
+            <td><span class="problem-score {{severityClass .Severity}}">{{.StatusLabel}}</span></td>
+            <td><code>{{$suspect.ClassName}}</code><div class="muted">{{leakObjectKindLabel $suspect.ObjectKind}}</div></td>
+            <td><code>{{$suspect.Holder}}</code><div class="muted">{{$suspect.HolderQuality}}</div></td>
+            <td>{{printf "%.1f" .ScoreBefore}} → {{printf "%.1f" .ScoreAfter}}<div class="muted">{{printf "%+.1f" .DeltaScore}}</div></td>
+            <td>{{.CountBefore}} → {{.CountAfter}}<div class="muted">{{printf "%+d" .DeltaCount}} · {{humanDuration .AgeBeforeMS}} → {{humanDuration .AgeAfterMS}}</div></td>
+            <td>{{dataSize .EstimatedBeforeKB}} → {{dataSize .EstimatedAfterKB}}<div class="muted">{{printf "%+d KB" .DeltaEstimatedKB}}</div></td>
+            <td>{{.Explanation}}</td>
+            <td>{{.Recommendation}}</td>
+          </tr>
+          {{else}}<tr><td colspan="8" class="muted">Дельт утечек нет.</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="cohorts" class="panel">
+    <div class="panel-head"><div><h2>Когорты и доверие</h2><div class="panel-kicker">Перед выводом о регрессии проверьте, что baseline и candidate собраны на похожих версиях, устройствах, процессах и сценариях.</div></div></div>
+    <p class="help-text">Доверие сравнения: {{confidenceLabel .LeakReport.Confidence}}. Если когорты отличаются, сначала повторите прогон в одинаковых условиях.</p>
+    {{range .LeakReport.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="help-text">Предупреждений по когортам нет.</p>{{end}}
+  </section>
+</main>
+<script>{{reportJS}}</script>
+</body>
+</html>

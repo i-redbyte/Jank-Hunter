@@ -16,8 +16,8 @@ class ObjectRetentionWatcherTest {
             forceGcBeforeReport = true,
             clock = { now },
             requestGc = { gcRequests++ },
-            reporter = { className, ownerHint, ageMs, count ->
-                reports += Report(className, ownerHint, ageMs, count)
+            reporter = { className, ownerHint, context, ageMs, count ->
+                reports += Report(className, ownerHint, context, ageMs, count)
             },
         )
         val first = Any()
@@ -32,7 +32,7 @@ class ObjectRetentionWatcherTest {
 
         now = 1_600L
         watcher.checkRetained()
-        assertEquals(listOf(Report("com.example.LeakyOwner", "com.example.Holder", 1_600L, 2L)), reports)
+        assertEquals(listOf(Report("com.example.LeakyOwner", "com.example.Holder", null, 1_600L, 2L)), reports)
     }
 
     @Test
@@ -42,8 +42,8 @@ class ObjectRetentionWatcherTest {
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = 1_000L,
             clock = { now },
-            reporter = { className, ownerHint, ageMs, count ->
-                reports += Report(className, ownerHint, ageMs, count)
+            reporter = { className, ownerHint, context, ageMs, count ->
+                reports += Report(className, ownerHint, context, ageMs, count)
             },
         )
         val retained = List(1_000) { Any() }
@@ -60,12 +60,44 @@ class ObjectRetentionWatcherTest {
         now = 1_500L
         watcher.checkRetained()
         assertEquals(0, watcher.watchedCountForTest())
-        assertEquals(listOf(Report("com.example.BusyScreen", "com.example.Holder", 1_500L, 1_000L)), reports)
+        assertEquals(listOf(Report("com.example.BusyScreen", "com.example.Holder", null, 1_500L, 1_000L)), reports)
+    }
+
+    @Test
+    fun keepsWatchTimeContextForRetainedReport() {
+        var now = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = 1_000L,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count ->
+                reports += Report(className, ownerHint, context, ageMs, count)
+            },
+        )
+        val retained = Any()
+        val context = JankHunterContext(
+            screen = "LeakDemoScreen",
+            owner = "sample.memory_leak.listener_registry",
+            flow = "sample.memory_leak.demo",
+            step = "listener_callback",
+        )
+        watcher.watchForTest(retained, "com.example.ListenerLeak", "sample.memory_leak.listener_registry", context)
+
+        now = 1_000L
+        watcher.checkRetained()
+        now = 1_500L
+        watcher.checkRetained()
+
+        assertEquals(
+            listOf(Report("com.example.ListenerLeak", "sample.memory_leak.listener_registry", context, 1_500L, 1L)),
+            reports,
+        )
     }
 
     private data class Report(
         val className: String?,
         val ownerHint: String?,
+        val context: JankHunterContext?,
         val ageMs: Long,
         val count: Long,
     )

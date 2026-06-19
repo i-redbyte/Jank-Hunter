@@ -311,4 +311,33 @@
     });
     apply();
   });
+
+  document.querySelectorAll('[data-leak-explorer]').forEach((explorer) => {
+    const buttons = Array.from(explorer.querySelectorAll('[data-leak-select]'));
+    const panels = Array.from(explorer.querySelectorAll('[data-leak-panel]'));
+    const activate = (targetID) => {
+      let matched = false;
+      panels.forEach((panel) => {
+        const active = panel.id === targetID;
+        panel.hidden = !active;
+        panel.classList.toggle('is-active', active);
+        if (active) matched = true;
+      });
+      buttons.forEach((button) => {
+        const active = button.dataset.leakTarget === targetID;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', String(active));
+      });
+      if (!matched && panels[0]) {
+        activate(panels[0].id);
+      }
+      scheduleTableMeasure();
+    };
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => activate(button.dataset.leakTarget));
+    });
+    if (buttons[0]) {
+      activate(buttons[0].dataset.leakTarget);
+    }
+  });
 })();

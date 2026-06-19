@@ -23,6 +23,12 @@ var influenceTemplate string
 //go:embed templates/diagnostics.tmpl
 var diagnosticsTemplate string
 
+//go:embed templates/leaks-inspect.tmpl
+var leaksInspectTemplate string
+
+//go:embed templates/leaks-compare.tmpl
+var leaksCompareTemplate string
+
 //go:embed templates/inspect.tmpl
 var inspectTemplate string
 

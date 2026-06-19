@@ -104,6 +104,8 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 		GCRoot:                   gcRoot,
 		HolderField:              holderField,
 		RetainedObjectCount:      retainedObjectCount,
+		ReferencePath:            cloneHeapPath(heapPath(heap)),
+		RetainedClassSample:      append([]string(nil), heapDominatorTree(heap)...),
 		RetainedSizeConfidence:   sizeConfidence,
 		RetainedSizeExplanation:  retainedSizeExplanation(estimatedRetainedKB, sizeConfidence, objectKind, heap),
 		DominatorPath:            dominatorPath,
@@ -122,6 +124,27 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 		Recommendation:           retainedRecommendation(className, holder, holderQuality),
 		Evidence:                 retainedEvidence(item, lowMemoryCount, maxPSSKB, estimatedRetainedKB, sizeConfidence, heap),
 	}
+}
+
+func heapPath(heap *HeapLeakEvidence) []HeapPathElement {
+	if heap == nil {
+		return nil
+	}
+	return heap.ReferencePath
+}
+
+func heapDominatorTree(heap *HeapLeakEvidence) []string {
+	if heap == nil {
+		return nil
+	}
+	return heap.DominatorTree
+}
+
+func cloneHeapPath(path []HeapPathElement) []HeapPathElement {
+	if len(path) == 0 {
+		return nil
+	}
+	return append([]HeapPathElement(nil), path...)
 }
 
 func retainedScore(item memoryLeakStats, userOwned, systemRetained bool, lowMemoryCount int, maxPSSKB uint64) float64 {

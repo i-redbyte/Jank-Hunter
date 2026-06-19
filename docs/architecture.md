@@ -231,6 +231,7 @@ The JankStats bridge is reflection-only:
 The retained-object watcher is a lightweight signal, not a heap analyzer:
 
 - stores weak references and safe class/owner labels;
+- stores the watch-time screen/flow/step context, but not object fields or stringified object state;
 - checks once after `retainedObjectDelayMs`;
 - optionally requests lightweight GC for debug/QA;
 - checks again before reporting;
@@ -257,7 +258,7 @@ flowchart LR
 
 `inspect` and `compare` stream files instead of loading every event into memory. The analyzer keeps bounded maps and duration samples needed for p95/route/screen/owner reporting.
 
-The CLI command surface is registered through command objects in `cmd/jankhunter`, while analyzers stay in `internal/analyze`. Artifact loaders validate schema versions up front. Influence analysis builds class and method graph indexes, then computes relevant edges, multi-hop shortest explanation paths, method hotspots, SCC cycles and hot paths for the standalone graph report.
+The CLI command surface is registered through command objects in `cmd/jankhunter`, while analyzers stay in `internal/analyze`. Artifact loaders validate schema versions up front. Influence analysis builds class and method graph indexes, then computes relevant edges, multi-hop shortest explanation paths, method hotspots, SCC cycles and hot paths for the standalone graph report. Leak analysis is also offline: `report-leaks.html` works from runtime retained signals, while heap-enhanced mode uses HPROF/heap evidence to render a GC-root reference graph and compare leak fingerprints as new/worse/same/better/resolved.
 
 Compare includes:
 

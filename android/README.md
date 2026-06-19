@@ -474,6 +474,8 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
+Основной HTML даст ссылку на `report-leaks.html`. Без дампа это light report с retained object, holder, screen/flow/step, возрастом и рекомендациями; с дампом включается heap mode с Leak Explorer: графом GC root -> holder field -> retained object, retained size и sample доминируемых классов.
+
 Heap dump останавливает VM на время записи, поэтому держите режим выключенным по умолчанию и используйте лимиты для больших приложений.
 
 ## Что с overhead
