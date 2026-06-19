@@ -10,7 +10,7 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
-import java.io.File
+import java.nio.file.Files
 
 class InstrumentationAnnotationsTest {
     @Test
@@ -47,31 +47,30 @@ class InstrumentationAnnotationsTest {
 
     @Test
     fun ignoreAnnotationSkipsClassGraphEdges() {
-        val graph = File.createTempFile("jankhunter-ignored-graph", ".jsonl")
-        graph.delete()
+        val graph = Files.createTempDirectory("jankhunter-ignored-graph").toFile()
 
         instrument(
             ownerFixture(
                 methodIgnored = true,
                 calleeOwner = "com/example/FeedRepository",
             ),
-            classGraphPath = graph.absolutePath,
+            classGraphDirectory = graph.absolutePath,
         )
 
-        assertFalse(graph.exists())
+        assertTrue(InstrumentationArtifactFiles.readJsonlLines(graph).isEmpty())
     }
 
     @Test
     fun classGraphKeepsEdgesForInstrumentedMethods() {
-        val graph = File.createTempFile("jankhunter-class-graph", ".jsonl")
-        graph.delete()
+        val graph = Files.createTempDirectory("jankhunter-class-graph").toFile()
 
         instrument(
             ownerFixture(calleeOwner = "com/example/FeedRepository"),
-            classGraphPath = graph.absolutePath,
+            classGraphDirectory = graph.absolutePath,
         )
 
-        assertTrue(graph.readText().contains("\"calleeClass\":\"com.example.FeedRepository\""))
+        val text = InstrumentationArtifactFiles.readJsonlLines(graph).joinToString("\n")
+        assertTrue(text.contains("\"calleeClass\":\"com.example.FeedRepository\""))
     }
 
     @Test
@@ -123,7 +122,7 @@ class InstrumentationAnnotationsTest {
         assertEquals(1, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
     }
 
-    private fun instrument(bytes: ByteArray, classGraphPath: String = ""): ByteArray {
+    private fun instrument(bytes: ByteArray, classGraphDirectory: String = ""): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
@@ -139,11 +138,11 @@ class InstrumentationAnnotationsTest {
                     coroutines = false,
                     flowInteractions = false,
                     logSpam = false,
-                    classGraph = classGraphPath.isNotBlank(),
+                    classGraph = classGraphDirectory.isNotBlank(),
                     runtimeCallGraph = false,
-                    classGraphPath = classGraphPath,
-                    instrumentationDiagnosticsPath = "",
-                    ownerMapPath = "",
+                    classGraphDirectory = classGraphDirectory,
+                    instrumentationDiagnosticsDirectory = "",
+                    ownerMapEntriesDirectory = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

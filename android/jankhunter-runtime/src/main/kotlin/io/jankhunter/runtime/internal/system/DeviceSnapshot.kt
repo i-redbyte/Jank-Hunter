@@ -20,6 +20,22 @@ internal object DeviceSnapshots {
     @Volatile
     private var cached: DeviceSnapshot? = null
 
+    fun redacted(): DeviceSnapshot {
+        return DeviceSnapshot(
+            displayName = "redacted",
+            androidRelease = "redacted",
+            securityPatch = "redacted",
+            primaryAbi = "redacted",
+            supportedAbis = "redacted",
+            manufacturer = "redacted",
+            brand = "redacted",
+            hardware = "redacted",
+            board = "redacted",
+            product = "redacted",
+            rooted = false,
+        )
+    }
+
     fun current(): DeviceSnapshot {
         cached?.let { return it }
         return synchronized(this) {

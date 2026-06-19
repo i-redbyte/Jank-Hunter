@@ -118,15 +118,9 @@ internal class InstrumentationDiagnosticsClassBuilder(
 }
 
 internal object InstrumentationDiagnosticsWriter {
-    @Synchronized
-    fun prepare(path: String) {
-        InstrumentationArtifactFiles.prepare(path)
-    }
-
-    @Synchronized
-    fun append(path: String, record: InstrumentationDiagnosticsRecord) {
-        if (path.isBlank()) return
-        InstrumentationArtifactFiles.append(path, toJsonLine(record))
+    fun write(directoryPath: String, record: InstrumentationDiagnosticsRecord) {
+        if (directoryPath.isBlank()) return
+        InstrumentationArtifactFiles.writeClassShard(directoryPath, record.className, toJsonLine(record))
     }
 
     private fun toJsonLine(record: InstrumentationDiagnosticsRecord): String {

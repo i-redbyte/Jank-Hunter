@@ -18,6 +18,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
     private val retainedHeapDumpEnabled = builder.retainedHeapDumpEnabled
+    private val retainedHeapDumpPrivacyApproved = builder.retainedHeapDumpPrivacyApproved
     private val retainedHeapDumpMinIntervalMs = builder.retainedHeapDumpMinIntervalMs
     private val retainedHeapDumpMaxCount = builder.retainedHeapDumpMaxCount
     private val retainedHeapDumpMinRetainedAgeMs = builder.retainedHeapDumpMinRetainedAgeMs
@@ -48,6 +49,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val mainProcessOnly = builder.mainProcessOnly
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
+    private val deviceInfoEnabled = builder.deviceInfoEnabled
 
     fun enabled(): Boolean = enabled
 
@@ -71,7 +73,9 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
-    fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled
+    fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled && retainedHeapDumpPrivacyApproved
+
+    fun retainedHeapDumpPrivacyApproved(): Boolean = retainedHeapDumpPrivacyApproved
 
     fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs.coerceAtLeast(0L)
 
@@ -133,9 +137,11 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun redactProcessName(processName: String?): String? = processNameRedactor.redact(processName)
 
+    fun deviceInfoEnabled(): Boolean = deviceInfoEnabled
+
     fun isProcessAllowed(processName: String, mainProcessName: String): Boolean {
+        if (allowedProcesses.isNotEmpty()) return processName in allowedProcesses
         if (mainProcessOnly && processName != mainProcessName) return false
-        if (allowedProcesses.isNotEmpty() && processName !in allowedProcesses) return false
         return true
     }
 
@@ -152,6 +158,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
         internal var retainedHeapDumpEnabled = false
+        internal var retainedHeapDumpPrivacyApproved = false
         internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
         internal var retainedHeapDumpMaxCount = 1
         internal var retainedHeapDumpMinRetainedAgeMs = 30_000L
@@ -179,9 +186,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxHandlerWrappersPerRunnable = 32
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
-        internal var mainProcessOnly = false
+        internal var mainProcessOnly = true
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
+        internal var deviceInfoEnabled = true
 
         fun enabled(value: Boolean) = apply { enabled = value }
 
@@ -206,6 +214,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun retainedObjectForceGcEnabled(value: Boolean) = apply { retainedObjectForceGcEnabled = value }
 
         fun retainedHeapDumpEnabled(value: Boolean) = apply { retainedHeapDumpEnabled = value }
+
+        fun retainedHeapDumpPrivacyApproved(value: Boolean) = apply { retainedHeapDumpPrivacyApproved = value }
 
         fun retainedHeapDumpMinIntervalMs(value: Long) = apply { retainedHeapDumpMinIntervalMs = value }
 
@@ -271,6 +281,8 @@ class JankHunterConfig private constructor(builder: Builder) {
             processNameRedactor = value
         }
 
+        fun deviceInfoEnabled(value: Boolean) = apply { deviceInfoEnabled = value }
+
         fun build(): JankHunterConfig = JankHunterConfig(this)
     }
 
@@ -287,6 +299,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
         const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
         const val META_RETAINED_HEAP_DUMP_ENABLED = "io.jankhunter.retained_heap_dump_enabled"
+        const val META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED = "io.jankhunter.retained_heap_dump_privacy_approved"
         const val META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS = "io.jankhunter.retained_heap_dump_min_interval_ms"
         const val META_RETAINED_HEAP_DUMP_MAX_COUNT = "io.jankhunter.retained_heap_dump_max_count"
         const val META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS =
@@ -314,6 +327,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = "io.jankhunter.max_handler_wrappers_per_runnable"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
+        const val META_DEVICE_INFO_ENABLED = "io.jankhunter.device_info_enabled"
 
         @JvmStatic
         fun builder(): Builder = Builder()
@@ -337,6 +351,9 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
                 .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
                 .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, false))
+                .retainedHeapDumpPrivacyApproved(
+                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, false),
+                )
                 .retainedHeapDumpMinIntervalMs(
                     metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L),
                 )
@@ -373,8 +390,9 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .maxHandlerWrappersPerRunnable(
                     metadataInt(metadata, META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32),
                 )
-                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, false))
+                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, true))
                 .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
+                .deviceInfoEnabled(metadataBoolean(metadata, META_DEVICE_INFO_ENABLED, defaultEnabled))
                 .build()
         }
 

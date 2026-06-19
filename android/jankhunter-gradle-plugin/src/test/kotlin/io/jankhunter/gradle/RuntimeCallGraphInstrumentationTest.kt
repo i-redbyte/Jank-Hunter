@@ -8,7 +8,7 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
-import java.io.File
+import java.nio.file.Files
 
 class RuntimeCallGraphInstrumentationTest {
     @Test
@@ -24,38 +24,17 @@ class RuntimeCallGraphInstrumentationTest {
 
     @Test
     fun runtimeCallGraphWritesOwnerMapEntries() {
-        val ownerMap = File.createTempFile("jankhunter-owner-map", ".json")
-        ownerMap.writeText(
-            OwnerMapWriter.metadataRecord(
-                variantName = "debug",
-                methodCounters = false,
-                okhttp = false,
-                webSockets = false,
-                handlers = false,
-                executors = false,
-                coroutines = false,
-                flowInteractions = false,
-                logSpam = false,
-                classGraph = false,
-                runtimeCallGraph = true,
-                generatedOwners = true,
-                allowEmptyIncludePackages = false,
-                includeWholeApplication = false,
-                androidNamespace = "example",
-                includePackages = listOf("example"),
-                excludePackages = emptyList(),
-            ) + "\n",
-        )
+        val ownerMapEntries = Files.createTempDirectory("jankhunter-owner-map").toFile()
 
-        instrumentRuntimeCallGraph(throwingFixture(), ownerMap.absolutePath)
+        instrumentRuntimeCallGraph(throwingFixture(), ownerMapEntries.absolutePath)
 
-        val text = ownerMap.readText()
+        val text = InstrumentationArtifactFiles.readJsonlLines(ownerMapEntries).joinToString("\n")
         assertTrue(text.contains("\"kind\":\"entry\""))
         assertTrue(text.contains("\"owner\":\"example.Throwing.parent\""))
         assertTrue(text.contains("\"owner\":\"example.Throwing.child\""))
     }
 
-    private fun instrumentRuntimeCallGraph(bytes: ByteArray, ownerMapPath: String = ""): ByteArray {
+    private fun instrumentRuntimeCallGraph(bytes: ByteArray, ownerMapEntriesDirectory: String = ""): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
@@ -73,9 +52,9 @@ class RuntimeCallGraphInstrumentationTest {
                     logSpam = false,
                     classGraph = false,
                     runtimeCallGraph = true,
-                    classGraphPath = "",
-                    instrumentationDiagnosticsPath = "",
-                    ownerMapPath = ownerMapPath,
+                    classGraphDirectory = "",
+                    instrumentationDiagnosticsDirectory = "",
+                    ownerMapEntriesDirectory = ownerMapEntriesDirectory,
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

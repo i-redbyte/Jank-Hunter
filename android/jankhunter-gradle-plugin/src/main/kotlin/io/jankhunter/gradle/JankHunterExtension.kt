@@ -7,6 +7,7 @@ open class JankHunterExtension {
     var autoInit: Boolean = true
     val instrument: Instrumentation = Instrumentation()
     val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
+    val releaseSafety: ReleaseSafety = ReleaseSafety()
 
     fun instrument(action: Action<Instrumentation>) {
         action.execute(instrument)
@@ -14,6 +15,10 @@ open class JankHunterExtension {
 
     fun retainedHeapDump(action: Action<RetainedHeapDump>) {
         action.execute(retainedHeapDump)
+    }
+
+    fun releaseSafety(action: Action<ReleaseSafety>) {
+        action.execute(releaseSafety)
     }
 
     open class Instrumentation {
@@ -56,8 +61,19 @@ open class JankHunterExtension {
 
     open class RetainedHeapDump {
         var enabled: Boolean = false
+        var privacyApproved: Boolean = false
         var minIntervalMs: Long = 10 * 60_000L
         var maxCount: Int = 1
         var minRetainedAgeMs: Long = 30_000L
+    }
+
+    open class ReleaseSafety {
+        var allowInstrumentation: Boolean = false
+        var allowDependencyInstrumentation: Boolean = false
+        var privacyReviewed: Boolean = false
+        var allowDeviceInfo: Boolean = false
+        var allowHeapDumps: Boolean = false
+        var allowSecondaryProcesses: Boolean = false
+        var performanceBudgetEvidence: String? = null
     }
 }

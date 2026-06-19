@@ -7,14 +7,12 @@ import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Label
 import org.objectweb.asm.Opcodes
-import java.io.File
+import java.nio.file.Files
 
 class InstrumentationDiagnosticsTest {
     @Test
     fun classVisitorWritesInstrumentationDiagnosticsJsonl() {
-        val diagnostics = File.createTempFile("jankhunter-diagnostics", ".jsonl")
-        diagnostics.deleteOnExit()
-        InstrumentationDiagnosticsWriter.prepare(diagnostics.absolutePath)
+        val diagnostics = Files.createTempDirectory("jankhunter-diagnostics").toFile()
 
         val reader = ClassReader(fixture())
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
@@ -33,15 +31,15 @@ class InstrumentationDiagnosticsTest {
                     logSpam = true,
                     classGraph = false,
                     runtimeCallGraph = false,
-                    classGraphPath = "",
-                    instrumentationDiagnosticsPath = diagnostics.absolutePath,
-                    ownerMapPath = "",
+                    classGraphDirectory = "",
+                    instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
+                    ownerMapEntriesDirectory = "",
                 ),
             ),
             0,
         )
 
-        val text = diagnostics.readText()
+        val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
         assertTrue(text.contains("\"format\":1"))
         assertTrue(text.contains("\"class\":\"example.Diagnostics\""))
         assertTrue(text.contains("\"methods\":1"))

@@ -78,6 +78,13 @@ func TestWriteSampleReadFile(t *testing.T) {
 	}
 }
 
+func TestFormatMagicGolden(t *testing.T) {
+	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 6}
+	if !bytes.Equal(Magic, want) {
+		t.Fatalf("magic = %v, want %v", Magic, want)
+	}
+}
+
 func TestReadFileSupportsCompressedBinaryBody(t *testing.T) {
 	rawPath := filepath.Join(t.TempDir(), "raw.jhlog")
 	if err := WriteSample(rawPath); err != nil {
@@ -414,6 +421,23 @@ func TestStreamFileWithWarningsToleratesPartialBinaryTail(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(warnings, "\n"), "ignored partial trailing compact event") {
 		t.Fatalf("unexpected warnings: %+v", warnings)
+	}
+}
+
+func TestReadFileRejectsPreviousBinaryVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "previous.jhlog")
+	previous := append([]byte{}, Magic...)
+	previous[7] = byte(FormatVersion - 1)
+	if err := os.WriteFile(path, previous, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := ReadFile(path)
+	if err == nil {
+		t.Fatalf("expected previous version error")
+	}
+	if !strings.Contains(err.Error(), "unsupported jhlog version") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

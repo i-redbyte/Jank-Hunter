@@ -21,6 +21,7 @@ class JankHunterConfigTest {
             .retainedObjectDelayMs(321)
             .retainedObjectForceGcEnabled(true)
             .retainedHeapDumpEnabled(true)
+            .retainedHeapDumpPrivacyApproved(true)
             .retainedHeapDumpMinIntervalMs(987)
             .retainedHeapDumpMaxCount(3)
             .retainedHeapDumpMinRetainedAgeMs(654)
@@ -48,6 +49,7 @@ class JankHunterConfigTest {
             .mainProcessOnly(true)
             .allowedProcesses(listOf("com.example", "com.example:remote"))
             .processNameRedactor { "redacted.$it" }
+            .deviceInfoEnabled(false)
             .build()
 
         assertFalse(config.enabled())
@@ -62,6 +64,7 @@ class JankHunterConfigTest {
         assertEquals(321, config.retainedObjectDelayMs())
         assertTrue(config.retainedObjectForceGcEnabled())
         assertTrue(config.retainedHeapDumpEnabled())
+        assertTrue(config.retainedHeapDumpPrivacyApproved())
         assertEquals(987, config.retainedHeapDumpMinIntervalMs())
         assertEquals(3, config.retainedHeapDumpMaxCount())
         assertEquals(654, config.retainedHeapDumpMinRetainedAgeMs())
@@ -89,6 +92,7 @@ class JankHunterConfigTest {
         assertTrue(config.mainProcessOnly())
         assertEquals(setOf("com.example", "com.example:remote"), config.allowedProcesses())
         assertEquals("redacted.com.example", config.redactProcessName("com.example"))
+        assertFalse(config.deviceInfoEnabled())
     }
 
     @Test
@@ -103,13 +107,15 @@ class JankHunterConfigTest {
         assertTrue(config.objectWatcherEnabled())
         assertFalse(config.retainedObjectForceGcEnabled())
         assertFalse(config.retainedHeapDumpEnabled())
+        assertFalse(config.retainedHeapDumpPrivacyApproved())
         assertEquals(10 * 60_000L, config.retainedHeapDumpMinIntervalMs())
         assertEquals(1, config.retainedHeapDumpMaxCount())
         assertEquals(30_000L, config.retainedHeapDumpMinRetainedAgeMs())
         assertTrue(config.fpsMonitorEnabled())
         assertFalse(config.jankStatsEnabled())
-        assertFalse(config.mainProcessOnly())
+        assertTrue(config.mainProcessOnly())
         assertTrue(config.allowedProcesses().isEmpty())
+        assertTrue(config.deviceInfoEnabled())
         assertEquals(2048, config.maxQueueSize())
         assertEquals(5L * 1024L * 1024L, config.maxLogBytes())
         assertEquals(25L * 1024L * 1024L, config.maxLogDirectoryBytes())
@@ -139,6 +145,20 @@ class JankHunterConfigTest {
 
         assertEquals(1, zero.maxQueueSize())
         assertEquals(1, negative.maxQueueSize())
+    }
+
+    @Test
+    fun retainedHeapDumpRequiresExplicitPrivacyApproval() {
+        val unapproved = JankHunterConfig.builder()
+            .retainedHeapDumpEnabled(true)
+            .build()
+        val approved = JankHunterConfig.builder()
+            .retainedHeapDumpEnabled(true)
+            .retainedHeapDumpPrivacyApproved(true)
+            .build()
+
+        assertFalse(unapproved.retainedHeapDumpEnabled())
+        assertTrue(approved.retainedHeapDumpEnabled())
     }
 
     @Test

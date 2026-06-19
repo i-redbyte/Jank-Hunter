@@ -5,15 +5,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.nio.file.Files
 
 class ClassGraphWriterTest {
     @Test
-    fun writesJsonlClassGraphRecords() {
-        val file = File.createTempFile("jankhunter-class-graph", ".jsonl")
-        file.delete()
+    fun writesJsonlClassGraphShardRecords() {
+        val directory = Files.createTempDirectory("jankhunter-class-graph").toFile()
 
-        ClassGraphWriter.append(
-            file.absolutePath,
+        ClassGraphWriter.write(
+            directory.absolutePath,
             "com/example/FeedPresenter",
             mapOf(
                 ClassGraphEdgeKey(
@@ -24,7 +24,7 @@ class ClassGraphWriterTest {
             ),
         )
 
-        val text = file.readText()
+        val text = InstrumentationArtifactFiles.readJsonlLines(directory).joinToString("\n")
         assertTrue(text.contains("\"class\":\"com.example.FeedPresenter\""))
         assertTrue(text.contains("\"calleeClass\":\"com.example.FeedRepository\""))
         assertTrue(text.contains("\"calleeMethod\":\"refresh\""))
@@ -33,13 +33,12 @@ class ClassGraphWriterTest {
     }
 
     @Test
-    fun prepareDeletesStaleRowsForRepeatedBuildPath() {
-        val file = File.createTempFile("jankhunter-class-graph", ".jsonl")
-        file.delete()
+    fun repeatedClassShardWriteReplacesPriorClassRecord() {
+        val directory = Files.createTempDirectory("jankhunter-class-graph").toFile()
 
-        ClassGraphWriter.append(
-            file.absolutePath,
-            "com/example/First",
+        ClassGraphWriter.write(
+            directory.absolutePath,
+            "com/example/Presenter",
             mapOf(
                 ClassGraphEdgeKey(
                     caller = "first()V",
@@ -48,12 +47,10 @@ class ClassGraphWriterTest {
                 ) to 1,
             ),
         )
-        file.appendText("""{"class":"stale"}""" + "\n")
 
-        ClassGraphWriter.prepare(file.absolutePath)
-        ClassGraphWriter.append(
-            file.absolutePath,
-            "com/example/Second",
+        ClassGraphWriter.write(
+            directory.absolutePath,
+            "com/example/Presenter",
             mapOf(
                 ClassGraphEdgeKey(
                     caller = "second()V",
@@ -63,10 +60,9 @@ class ClassGraphWriterTest {
             ),
         )
 
-        val text = file.readText()
-        assertFalse(text.contains("stale"))
-        assertFalse(text.contains("com.example.First"))
-        assertTrue(text.contains("\"class\":\"com.example.Second\""))
+        val text = InstrumentationArtifactFiles.readJsonlLines(directory).joinToString("\n")
+        assertFalse(text.contains("first()V"))
+        assertTrue(text.contains("second()V"))
         assertEquals(1, text.lines().filter(String::isNotBlank).size)
     }
 

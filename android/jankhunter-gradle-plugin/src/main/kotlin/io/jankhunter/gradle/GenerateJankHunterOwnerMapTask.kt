@@ -1,11 +1,16 @@
 package io.jankhunter.gradle
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 
 abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
@@ -60,6 +65,11 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     @get:Input
     abstract val excludePackages: ListProperty<String>
 
+    @get:InputDirectory
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val entriesDirectory: DirectoryProperty
+
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
@@ -67,27 +77,59 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     fun write() {
         val file = outputFile.get().asFile
         file.parentFile.mkdirs()
-        file.writeText(
-            OwnerMapWriter.metadataRecord(
-                variantName = variantName.get(),
-                methodCounters = methodCounters.getOrElse(false),
-                okhttp = okhttp.getOrElse(false),
-                webSockets = webSockets.getOrElse(false),
-                handlers = handlers.getOrElse(false),
-                executors = executors.getOrElse(false),
-                coroutines = coroutines.getOrElse(false),
-                flowInteractions = flowInteractions.getOrElse(false),
-                logSpam = logSpam.getOrElse(false),
-                classGraph = classGraph.getOrElse(false),
-                runtimeCallGraph = runtimeCallGraph.getOrElse(false),
-                generatedOwners = generatedOwners.getOrElse(false),
-                allowEmptyIncludePackages = allowEmptyIncludePackages.getOrElse(false),
-                includeWholeApplication = includeWholeApplication.getOrElse(false),
-                androidNamespace = androidNamespace.getOrElse(""),
-                includePackages = includePackages.getOrElse(emptyList()),
-                excludePackages = excludePackages.getOrElse(emptyList()),
-            ) + "\n",
+        val lines = buildList {
+            add(metadataLine())
+            entriesDirectory.orNull?.asFile?.let { entriesDir ->
+                addAll(InstrumentationArtifactFiles.readJsonlLines(entriesDir))
+            }
+        }
+        file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+    }
+
+    private fun metadataLine(): String {
+        return OwnerMapWriter.metadataRecord(
+            variantName = variantName.get(),
+            methodCounters = methodCounters.getOrElse(false),
+            okhttp = okhttp.getOrElse(false),
+            webSockets = webSockets.getOrElse(false),
+            handlers = handlers.getOrElse(false),
+            executors = executors.getOrElse(false),
+            coroutines = coroutines.getOrElse(false),
+            flowInteractions = flowInteractions.getOrElse(false),
+            logSpam = logSpam.getOrElse(false),
+            classGraph = classGraph.getOrElse(false),
+            runtimeCallGraph = runtimeCallGraph.getOrElse(false),
+            generatedOwners = generatedOwners.getOrElse(false),
+            allowEmptyIncludePackages = allowEmptyIncludePackages.getOrElse(false),
+            includeWholeApplication = includeWholeApplication.getOrElse(false),
+            androidNamespace = androidNamespace.getOrElse(""),
+            includePackages = includePackages.getOrElse(emptyList()),
+            excludePackages = excludePackages.getOrElse(emptyList()),
         )
+    }
+}
+
+abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
+    @get:InputDirectory
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val classGraphDirectory: DirectoryProperty
+
+    @get:InputDirectory
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val diagnosticsDirectory: DirectoryProperty
+
+    @get:OutputFile
+    abstract val classGraphOutputFile: RegularFileProperty
+
+    @get:OutputFile
+    abstract val diagnosticsOutputFile: RegularFileProperty
+
+    @TaskAction
+    fun merge() {
+        InstrumentationArtifactFiles.mergeJsonl(classGraphDirectory.orNull?.asFile, classGraphOutputFile.get().asFile)
+        InstrumentationArtifactFiles.mergeJsonl(diagnosticsDirectory.orNull?.asFile, diagnosticsOutputFile.get().asFile)
     }
 }
 
@@ -154,10 +196,14 @@ internal object OwnerMapWriter {
         }
     }
 
-    @Synchronized
-    fun appendEntry(path: String, entry: OwnerMapEntry) {
-        if (path.isBlank() || entry.id.isBlank() || entry.owner.isBlank()) return
-        InstrumentationArtifactFiles.append(path, entryRecord(entry) + "\n")
+    fun writeEntries(directoryPath: String, className: String, entries: List<OwnerMapEntry>) {
+        if (directoryPath.isBlank() || entries.isEmpty()) return
+        val body = entries
+            .asSequence()
+            .filter { it.id.isNotBlank() && it.owner.isNotBlank() }
+            .sortedWith(compareBy<OwnerMapEntry> { it.className }.thenBy { it.methodName }.thenBy { it.descriptor })
+            .joinToString(separator = "\n", postfix = "\n") { entryRecord(it) }
+        InstrumentationArtifactFiles.writeClassShard(directoryPath, className, body)
     }
 
     fun entryRecord(entry: OwnerMapEntry): String {

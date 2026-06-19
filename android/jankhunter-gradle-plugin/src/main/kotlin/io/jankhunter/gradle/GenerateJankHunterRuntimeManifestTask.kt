@@ -17,6 +17,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val retainedHeapDumpEnabled: Property<Boolean>
 
     @get:Input
+    abstract val retainedHeapDumpPrivacyApproved: Property<Boolean>
+
+    @get:Input
     abstract val retainedHeapDumpMinIntervalMs: Property<Long>
 
     @get:Input
@@ -24,6 +27,12 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
 
     @get:Input
     abstract val retainedHeapDumpMinRetainedAgeMs: Property<Long>
+
+    @get:Input
+    abstract val mainProcessOnly: Property<Boolean>
+
+    @get:Input
+    abstract val deviceInfoEnabled: Property<Boolean>
 
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
@@ -51,6 +60,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                         android:value="${retainedHeapDumpEnabled.get()}"
                         tools:replace="android:value" />
                     <meta-data
+                        android:name="io.jankhunter.retained_heap_dump_privacy_approved"
+                        android:value="${retainedHeapDumpPrivacyApproved.get()}"
+                        tools:replace="android:value" />
+                    <meta-data
                         android:name="io.jankhunter.retained_heap_dump_min_interval_ms"
                         android:value="${retainedHeapDumpMinIntervalMs.get()}"
                         tools:replace="android:value" />
@@ -61,6 +74,14 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms"
                         android:value="${retainedHeapDumpMinRetainedAgeMs.get()}"
+                        tools:replace="android:value" />
+                    <meta-data
+                        android:name="io.jankhunter.main_process_only"
+                        android:value="${mainProcessOnly.get()}"
+                        tools:replace="android:value" />
+                    <meta-data
+                        android:name="io.jankhunter.device_info_enabled"
+                        android:value="${deviceInfoEnabled.get()}"
                         tools:replace="android:value" />
                 </application>
             </manifest>

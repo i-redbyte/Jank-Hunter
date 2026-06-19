@@ -60,6 +60,7 @@ class JankHunterExtensionTest {
         val retainedHeapDump = JankHunterExtension.RetainedHeapDump()
 
         assertEquals(false, retainedHeapDump.enabled)
+        assertEquals(false, retainedHeapDump.privacyApproved)
         assertEquals(10 * 60_000L, retainedHeapDump.minIntervalMs)
         assertEquals(1, retainedHeapDump.maxCount)
         assertEquals(30_000L, retainedHeapDump.minRetainedAgeMs)
@@ -71,14 +72,29 @@ class JankHunterExtensionTest {
 
         extension.retainedHeapDump {
             it.enabled = true
+            it.privacyApproved = true
             it.minIntervalMs = 123_000L
             it.maxCount = 2
             it.minRetainedAgeMs = 45_000L
         }
 
         assertEquals(true, extension.retainedHeapDump.enabled)
+        assertEquals(true, extension.retainedHeapDump.privacyApproved)
         assertEquals(123_000L, extension.retainedHeapDump.minIntervalMs)
         assertEquals(2, extension.retainedHeapDump.maxCount)
         assertEquals(45_000L, extension.retainedHeapDump.minRetainedAgeMs)
+    }
+
+    @Test
+    fun releaseSafetyDslIsExplicitByDefault() {
+        val releaseSafety = JankHunterExtension.ReleaseSafety()
+
+        assertEquals(false, releaseSafety.allowInstrumentation)
+        assertEquals(false, releaseSafety.allowDependencyInstrumentation)
+        assertEquals(false, releaseSafety.privacyReviewed)
+        assertEquals(false, releaseSafety.allowDeviceInfo)
+        assertEquals(false, releaseSafety.allowHeapDumps)
+        assertEquals(false, releaseSafety.allowSecondaryProcesses)
+        assertEquals(null, releaseSafety.performanceBudgetEvidence)
     }
 }

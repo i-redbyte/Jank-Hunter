@@ -1,6 +1,6 @@
 package jhlog
 
-const FormatVersion = 5
+const FormatVersion = 6
 
 var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 

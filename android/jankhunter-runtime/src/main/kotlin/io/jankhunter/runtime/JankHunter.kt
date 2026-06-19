@@ -1,5 +1,6 @@
 package io.jankhunter.runtime
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -146,7 +147,11 @@ object JankHunter {
             writer = asyncWriter
 
             val identity = appIdentity(appContext)
-            val device = DeviceSnapshots.current()
+            val device = if (providedConfig.deviceInfoEnabled()) {
+                DeviceSnapshots.current()
+            } else {
+                DeviceSnapshots.redacted()
+            }
             asyncWriter.session(
                 identity.versionName,
                 identity.versionCode,
@@ -993,7 +998,16 @@ object JankHunter {
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
 
-    private fun isAppForeground(): Boolean = runtimeState.appForeground.get()
+    private fun isAppForeground(): Boolean {
+        if (runtimeState.appForeground.get()) return true
+        return try {
+            val info = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(info)
+            info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     private fun foregroundFlag(): Long = if (isAppForeground()) BinaryLogWriter.FLAG_APP_FOREGROUND else 0L
 

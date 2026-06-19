@@ -738,7 +738,7 @@ class BinaryLogWriter(
             return flags
         }
 
-        private const val FORMAT_VERSION = 5
+        private const val FORMAT_VERSION = 6
         private const val IO_BUFFER_BYTES = 32 * 1024
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4

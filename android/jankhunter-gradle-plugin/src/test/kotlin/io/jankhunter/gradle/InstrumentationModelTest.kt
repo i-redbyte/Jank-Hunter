@@ -368,9 +368,9 @@ class InstrumentationModelTest {
             logSpam = logSpam,
             classGraph = classGraph,
             runtimeCallGraph = runtimeCallGraph,
-            classGraphPath = "",
-            instrumentationDiagnosticsPath = "",
-            ownerMapPath = "",
+            classGraphDirectory = "",
+            instrumentationDiagnosticsDirectory = "",
+            ownerMapEntriesDirectory = "",
         )
     }
 }

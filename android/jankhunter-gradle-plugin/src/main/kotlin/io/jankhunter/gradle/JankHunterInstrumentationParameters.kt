@@ -37,13 +37,13 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val runtimeCallGraph: Property<Boolean>
 
     @get:Input
-    val classGraphPath: Property<String>
+    val classGraphDirectory: Property<String>
 
     @get:Input
-    val instrumentationDiagnosticsPath: Property<String>
+    val instrumentationDiagnosticsDirectory: Property<String>
 
     @get:Input
-    val ownerMapPath: Property<String>
+    val ownerMapEntriesDirectory: Property<String>
 
     @get:Input
     val allowEmptyIncludePackages: Property<Boolean>

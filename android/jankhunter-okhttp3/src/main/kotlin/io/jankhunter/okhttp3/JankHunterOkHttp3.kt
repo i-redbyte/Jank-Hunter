@@ -21,6 +21,10 @@ object JankHunterOkHttp3 {
             EventListenerFactoryLookup.Unavailable -> {
                 JankHunter.recordCounter("jankhunter.okhttp.event_listener_factory.lookup_failed.count", 1)
             }
+            is EventListenerFactoryLookup.Unsupported -> {
+                JankHunter.recordCounter("jankhunter.okhttp.event_listener_factory.lookup_failed.count", 1)
+                JankHunter.recordCounter("jankhunter.okhttp.event_listener_factory.${lookup.reason}.count", 1)
+            }
         }
         return builder
     }
@@ -33,9 +37,16 @@ object JankHunterOkHttp3 {
 
     private fun eventListenerFactory(builder: OkHttpClient.Builder): EventListenerFactoryLookup {
         return runCatching {
-            val field = builder.javaClass.getDeclaredField("eventListenerFactory")
+            val field = generateSequence<Class<*>>(builder.javaClass) { it.superclass }
+                .flatMap { it.declaredFields.asSequence() }
+                .firstOrNull { field ->
+                    field.name == "eventListenerFactory" &&
+                        EventListener.Factory::class.java.isAssignableFrom(field.type)
+                }
+                ?: return EventListenerFactoryLookup.Unsupported("unsupported_builder_layout")
             field.isAccessible = true
-            EventListenerFactoryLookup.Found(field.get(builder) as? EventListener.Factory)
+            val factory = field.get(builder) ?: return EventListenerFactoryLookup.Found(null)
+            EventListenerFactoryLookup.Found(factory as EventListener.Factory)
         }.getOrElse {
             EventListenerFactoryLookup.Unavailable
         }
@@ -44,5 +55,6 @@ object JankHunterOkHttp3 {
     private sealed class EventListenerFactoryLookup {
         data class Found(val factory: EventListener.Factory?) : EventListenerFactoryLookup()
         data object Unavailable : EventListenerFactoryLookup()
+        data class Unsupported(val reason: String) : EventListenerFactoryLookup()
     }
 }

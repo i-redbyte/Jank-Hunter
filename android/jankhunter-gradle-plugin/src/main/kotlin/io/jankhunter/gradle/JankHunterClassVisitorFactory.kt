@@ -28,9 +28,9 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             logSpam = params.logSpam.getOrElse(false),
             classGraph = params.classGraph.getOrElse(false),
             runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
-            classGraphPath = params.classGraphPath.getOrElse(""),
-            instrumentationDiagnosticsPath = params.instrumentationDiagnosticsPath.getOrElse(""),
-            ownerMapPath = params.ownerMapPath.getOrElse(""),
+            classGraphDirectory = params.classGraphDirectory.getOrElse(""),
+            instrumentationDiagnosticsDirectory = params.instrumentationDiagnosticsDirectory.getOrElse(""),
+            ownerMapEntriesDirectory = params.ownerMapEntriesDirectory.getOrElse(""),
         )
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordInstrumented(
@@ -85,9 +85,9 @@ internal data class HookConfig(
     val logSpam: Boolean,
     val classGraph: Boolean,
     val runtimeCallGraph: Boolean,
-    val classGraphPath: String,
-    val instrumentationDiagnosticsPath: String,
-    val ownerMapPath: String,
+    val classGraphDirectory: String,
+    val instrumentationDiagnosticsDirectory: String,
+    val ownerMapEntriesDirectory: String,
 ) {
     fun progressLabel(): String {
         return buildList {
@@ -111,6 +111,7 @@ internal class JankHunterClassVisitor(
     private val config: HookConfig,
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
+    private val ownerMapEntries = mutableListOf<OwnerMapEntry>()
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
 
@@ -149,17 +150,22 @@ internal class JankHunterClassVisitor(
             classAnnotations.snapshot(),
             name == "<init>",
             diagnostics,
-        ) { calleeOwner, calleeName ->
-            recordStaticEdge(name, descriptor, calleeOwner, calleeName)
-        }
+            recordOwnerMapEntry = ownerMapEntries::add,
+            recordStaticEdge = { calleeOwner, calleeName ->
+                recordStaticEdge(name, descriptor, calleeOwner, calleeName)
+            },
+        )
     }
 
     override fun visitEnd() {
         if (config.classGraph) {
-            ClassGraphWriter.append(config.classGraphPath, className, edges)
+            ClassGraphWriter.write(config.classGraphDirectory, className, edges)
         }
-        InstrumentationDiagnosticsWriter.append(
-            config.instrumentationDiagnosticsPath,
+        if (ownerMapEntries.isNotEmpty()) {
+            OwnerMapWriter.writeEntries(config.ownerMapEntriesDirectory, className, ownerMapEntries)
+        }
+        InstrumentationDiagnosticsWriter.write(
+            config.instrumentationDiagnosticsDirectory,
             diagnostics.finish(),
         )
         super.visitEnd()
@@ -192,6 +198,7 @@ private class JankHunterMethodVisitor(
     private val classAnnotations: JankAnnotationMetadata,
     private val constructor: Boolean,
     private val diagnostics: InstrumentationDiagnosticsClassBuilder,
+    private val recordOwnerMapEntry: (OwnerMapEntry) -> Unit,
     private val recordStaticEdge: (String, String) -> Unit,
 ) : AdviceAdapter(Opcodes.ASM9, next, access, methodName, methodDescriptor) {
     private val generatedOwnerLabel = OwnerIds.ownerLabel(className, methodName, methodDescriptor)
@@ -369,8 +376,7 @@ private class JankHunterMethodVisitor(
     override fun visitEnd() {
         val ignored = instrumentationIgnored()
         if (!ignored && shouldInstrumentMethod() && (config.methodCounters || config.runtimeCallGraph)) {
-            OwnerMapWriter.appendEntry(
-                config.ownerMapPath,
+            recordOwnerMapEntry(
                 OwnerMapEntry(
                     id = OwnerIds.ownerHash(className, methodName, methodDescriptor),
                     owner = OwnerIds.readableOwner(className, methodName),
@@ -456,15 +462,9 @@ internal data class ClassGraphEdgeKey(
 )
 
 internal object ClassGraphWriter {
-    @Synchronized
-    fun prepare(path: String) {
-        InstrumentationArtifactFiles.prepare(path)
-    }
-
-    @Synchronized
-    fun append(path: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
-        if (path.isBlank() || edges.isEmpty()) return
-        InstrumentationArtifactFiles.append(path, record(className.replace('/', '.'), edges))
+    fun write(directoryPath: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
+        if (directoryPath.isBlank() || edges.isEmpty()) return
+        InstrumentationArtifactFiles.writeClassShard(directoryPath, className, record(className.replace('/', '.'), edges))
     }
 
     fun isApplicationLike(owner: String): Boolean {

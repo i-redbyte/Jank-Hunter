@@ -15,9 +15,12 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         ).get()
         task.outputFile.set(project.layout.buildDirectory.file("jankhunter/AndroidManifest.xml"))
         task.retainedHeapDumpEnabled.set(true)
+        task.retainedHeapDumpPrivacyApproved.set(true)
         task.retainedHeapDumpMinIntervalMs.set(123_000L)
         task.retainedHeapDumpMaxCount.set(2)
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
+        task.mainProcessOnly.set(true)
+        task.deviceInfoEnabled.set(false)
 
         task.writeManifest()
 
@@ -25,12 +28,16 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertFalse(manifest.contains("io.jankhunter.enabled"))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_enabled"))
         assertTrue(manifest.contains("""android:value="true""""))
+        assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_privacy_approved"))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_interval_ms"))
         assertTrue(manifest.contains("""android:value="123000""""))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_max_count"))
         assertTrue(manifest.contains("""android:value="2""""))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_retained_age_ms"))
         assertTrue(manifest.contains("""android:value="45000""""))
+        assertTrue(manifest.contains("io.jankhunter.main_process_only"))
+        assertTrue(manifest.contains("io.jankhunter.device_info_enabled"))
+        assertTrue(manifest.contains("""android:value="false""""))
         assertTrue(manifest.contains("""tools:replace="android:value""""))
     }
 
@@ -44,9 +51,12 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.outputFile.set(project.layout.buildDirectory.file("jankhunter/AndroidManifest.xml"))
         task.runtimeEnabled.set(false)
         task.retainedHeapDumpEnabled.set(false)
+        task.retainedHeapDumpPrivacyApproved.set(false)
         task.retainedHeapDumpMinIntervalMs.set(123_000L)
         task.retainedHeapDumpMaxCount.set(2)
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
+        task.mainProcessOnly.set(true)
+        task.deviceInfoEnabled.set(true)
 
         task.writeManifest()
 

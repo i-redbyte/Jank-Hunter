@@ -18,4 +18,11 @@ class VariantBuildTypeMatcherTest {
         assertFalse(VariantBuildTypeMatcher.isEnabled("qaDebugRelease", listOf("debug")))
         assertFalse(VariantBuildTypeMatcher.isEnabled("freeRelease", listOf("debug")))
     }
+
+    @Test
+    fun identifiesReleaseLikeVariantsForSafetyGate() {
+        assertTrue(VariantBuildTypeMatcher.isReleaseLike("release"))
+        assertTrue(VariantBuildTypeMatcher.isReleaseLike("paidRelease"))
+        assertFalse(VariantBuildTypeMatcher.isReleaseLike("releaseCandidateDebug"))
+    }
 }
