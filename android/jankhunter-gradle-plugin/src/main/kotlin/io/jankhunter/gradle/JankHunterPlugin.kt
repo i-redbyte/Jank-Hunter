@@ -44,6 +44,7 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) return@onVariants
+            val logBucket = normalizedLogBucket(extension.logBucket)
             val releaseVariant = VariantBuildTypeMatcher.isReleaseLike(variant.name)
             if (releaseVariant) {
                 validateReleaseSafety(project, extension, variant.name)
@@ -54,7 +55,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.releaseSafety.allowDependencyInstrumentation,
             )
             val shouldGenerateRuntimeManifest = generateRuntimeManifest &&
-                (extension.retainedHeapDump.enabled || !extension.autoInit || releaseVariant)
+                (extension.retainedHeapDump.enabled || !extension.autoInit || releaseVariant || logBucket != "daily")
             if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
@@ -70,6 +71,7 @@ class JankHunterPlugin : Plugin<Project> {
                     it.retainedHeapDumpMinRetainedAgeMs.set(extension.retainedHeapDump.minRetainedAgeMs)
                     it.mainProcessOnly.set(!extension.releaseSafety.allowSecondaryProcesses)
                     it.deviceInfoEnabled.set(!releaseVariant || extension.releaseSafety.allowDeviceInfo)
+                    it.logBucket.set(logBucket)
                 }
                 variant.sources.manifests.addGeneratedManifestFile(
                     runtimeManifest,
@@ -196,7 +198,7 @@ class JankHunterPlugin : Plugin<Project> {
                     "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
                     "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                     "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
-                    "ownerMapTask={} mergeArtifactsTask={}",
+                    "logBucket={} ownerMapTask={} mergeArtifactsTask={}",
                 variant.name,
                 extension.instrument.methodCounters,
                 extension.instrument.okhttp,
@@ -219,6 +221,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.retainedHeapDump.minRetainedAgeMs,
                 effectiveInstrumentationScope,
                 generateRuntimeManifest,
+                logBucket,
                 ownerMap.name,
                 mergeArtifacts.name,
             )
@@ -237,6 +240,14 @@ class JankHunterPlugin : Plugin<Project> {
 
     private fun Project.progressLabel(variantName: String): String {
         return if (path == ":") ":$variantName" else "$path:$variantName"
+    }
+
+    private fun normalizedLogBucket(value: String): String {
+        val normalized = value.trim().lowercase(Locale.US)
+        if (normalized == "daily" || normalized == "session") return normalized
+        throw GradleException(
+            "jankHunter.logBucket must be either 'daily' or 'session', but was '$value'.",
+        )
     }
 
     private fun effectiveInstrumentationScope(

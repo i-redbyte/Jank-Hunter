@@ -1,11 +1,13 @@
 package io.jankhunter.runtime.internal.io
 
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterLogBucket
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -143,13 +145,113 @@ class AsyncLogWriterTest {
         }
     }
 
+    @Test
+    fun dailyBucketCreatesNewSegmentForEveryRuntimeStart() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            val config = JankHunterConfig.builder()
+                .flushIntervalMs(1)
+                .logCompressionEnabled(false)
+                .logBucket(JankHunterLogBucket.DAILY)
+                .build()
+            val nowMs = { 1_800_000_000_000L }
+
+            AsyncLogWriter.open(directory, config, "main", nowMs).apply {
+                counter("first.daily.runtime", 1)
+                close()
+            }
+            AsyncLogWriter.open(directory, config, "main", nowMs).apply {
+                counter("second.daily.runtime", 1)
+                close()
+            }
+
+            val files = logFiles(directory).sortedBy { it.name }
+            assertEquals(files.joinToString { it.name }, 2, files.size)
+            assertTrue(files.all { it.name.startsWith("daily-main-") })
+            assertTrue(files[0].name.endsWith("-1.jhlog"))
+            assertTrue(files[1].name.endsWith("-2.jhlog"))
+
+            val text = logText(directory)
+            assertTrue(text.contains("first.daily.runtime"))
+            assertTrue(text.contains("second.daily.runtime"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun dailyBucketRollsOverWhenLocalDayChanges() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            var nowMs = 1_800_000_000_000L
+            val config = JankHunterConfig.builder()
+                .flushIntervalMs(1)
+                .logCompressionEnabled(false)
+                .logBucket(JankHunterLogBucket.DAILY)
+                .build()
+
+            AsyncLogWriter.open(directory, config, "main") { nowMs }.apply {
+                counter("first.day", 1)
+                close()
+            }
+            nowMs += TimeUnit.HOURS.toMillis(26)
+            AsyncLogWriter.open(directory, config, "main") { nowMs }.apply {
+                counter("second.day", 1)
+                close()
+            }
+
+            val bucketPrefixes = logFiles(directory)
+                .map { it.name.substringBeforeLast("-") }
+                .toSet()
+            assertEquals(bucketPrefixes.joinToString(), 2, bucketPrefixes.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun sessionBucketKeepsRuntimeStartsInSeparateSessionBuckets() {
+        val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
+        try {
+            var nowMs = 1_800_000_000_000L
+            val config = JankHunterConfig.builder()
+                .flushIntervalMs(1)
+                .logCompressionEnabled(false)
+                .logBucket(JankHunterLogBucket.SESSION)
+                .build()
+
+            AsyncLogWriter.open(directory, config, "main") { nowMs }.apply {
+                counter("first.session.runtime", 1)
+                close()
+            }
+            nowMs += 1L
+            AsyncLogWriter.open(directory, config, "main") { nowMs }.apply {
+                counter("second.session.runtime", 1)
+                close()
+            }
+
+            val bucketPrefixes = logFiles(directory)
+                .onEach { file -> assertTrue(file.name.startsWith("session-main-")) }
+                .map { it.name.substringBeforeLast("-") }
+                .toSet()
+            assertEquals(bucketPrefixes.joinToString(), 2, bucketPrefixes.size)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private fun logText(directory: java.io.File): String {
-        return directory
-            .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
-            .orEmpty()
+        return logFiles(directory)
             .joinToString(separator = "\n") { file ->
                 file.readBytes().toString(StandardCharsets.ISO_8859_1)
             }
+    }
+
+    private fun logFiles(directory: java.io.File): List<java.io.File> {
+        return directory
+            .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
+            .orEmpty()
+            .toList()
     }
 
     private fun enqueue(asyncWriter: AsyncLogWriter, action: AsyncLogWriter.Action) {

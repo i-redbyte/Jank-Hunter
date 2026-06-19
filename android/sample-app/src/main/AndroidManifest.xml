@@ -20,6 +20,9 @@
         <meta-data
             android:name="io.jankhunter.max_log_directory_bytes"
             android:value="26214400" />
+        <meta-data
+            android:name="io.jankhunter.log_bucket"
+            android:value="daily" />
 
         <activity
             android:name=".MainActivity"

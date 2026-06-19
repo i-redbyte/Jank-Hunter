@@ -34,6 +34,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     @get:Input
     abstract val deviceInfoEnabled: Property<Boolean>
 
+    @get:Input
+    abstract val logBucket: Property<String>
+
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
@@ -82,6 +85,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.device_info_enabled"
                         android:value="${deviceInfoEnabled.get()}"
+                        tools:replace="android:value" />
+                    <meta-data
+                        android:name="io.jankhunter.log_bucket"
+                        android:value="${logBucket.get()}"
                         tools:replace="android:value" />
                 </application>
             </manifest>

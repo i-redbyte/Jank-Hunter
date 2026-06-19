@@ -21,6 +21,7 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
         task.mainProcessOnly.set(true)
         task.deviceInfoEnabled.set(false)
+        task.logBucket.set("daily")
 
         task.writeManifest()
 
@@ -37,6 +38,8 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("""android:value="45000""""))
         assertTrue(manifest.contains("io.jankhunter.main_process_only"))
         assertTrue(manifest.contains("io.jankhunter.device_info_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.log_bucket"))
+        assertTrue(manifest.contains("""android:value="daily""""))
         assertTrue(manifest.contains("""android:value="false""""))
         assertTrue(manifest.contains("""tools:replace="android:value""""))
     }
@@ -57,12 +60,14 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
         task.mainProcessOnly.set(true)
         task.deviceInfoEnabled.set(true)
+        task.logBucket.set("session")
 
         task.writeManifest()
 
         val manifest = task.outputFile.get().asFile.readText()
         assertTrue(manifest.contains("io.jankhunter.enabled"))
         assertTrue(manifest.contains("""android:value="false""""))
+        assertTrue(manifest.contains("""android:value="session""""))
         assertTrue(manifest.contains("""tools:replace="android:value""""))
     }
 }

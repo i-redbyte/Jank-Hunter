@@ -4,6 +4,24 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import java.io.File
+import java.util.Locale
+
+enum class JankHunterLogBucket {
+    SESSION,
+    DAILY,
+    ;
+
+    companion object {
+        @JvmStatic
+        fun from(value: String?): JankHunterLogBucket? {
+            return when (value?.trim()?.lowercase(Locale.US)) {
+                "session" -> SESSION
+                "daily" -> DAILY
+                else -> null
+            }
+        }
+    }
+}
 
 class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
@@ -32,6 +50,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxLogBytes = builder.maxLogBytes
     private val maxLogDirectoryBytes = builder.maxLogDirectoryBytes
     private val logCompressionEnabled = builder.logCompressionEnabled
+    private val logBucket = builder.logBucket
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
@@ -104,6 +123,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun logCompressionEnabled(): Boolean = logCompressionEnabled
 
+    fun logBucket(): JankHunterLogBucket = logBucket
+
     fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
 
     fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceAtLeast(1)
@@ -175,6 +196,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxLogBytes = 5L * 1024L * 1024L
         internal var maxLogDirectoryBytes = 25L * 1024L * 1024L
         internal var logCompressionEnabled = true
+        internal var logBucket = JankHunterLogBucket.DAILY
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = 256
         internal var flushIntervalMs = 5_000L
@@ -246,6 +268,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun maxLogDirectoryBytes(value: Long) = apply { maxLogDirectoryBytes = value }
 
         fun logCompressionEnabled(value: Boolean) = apply { logCompressionEnabled = value }
+
+        fun logBucket(value: JankHunterLogBucket) = apply { logBucket = value }
 
         fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
 
@@ -319,6 +343,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
         const val META_MAX_LOG_DIRECTORY_BYTES = "io.jankhunter.max_log_directory_bytes"
         const val META_LOG_COMPRESSION_ENABLED = "io.jankhunter.log_compression_enabled"
+        const val META_LOG_BUCKET = "io.jankhunter.log_bucket"
         const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
         const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
@@ -379,6 +404,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                     metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L),
                 )
                 .logCompressionEnabled(metadataBoolean(metadata, META_LOG_COMPRESSION_ENABLED, true))
+                .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.DAILY))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(metadataInt(metadata, META_MAX_DICTIONARY_VALUE_BYTES, 256))
                 .flushIntervalMs(metadataLong(metadata, META_FLUSH_INTERVAL_MS, 5_000L))
@@ -423,6 +449,14 @@ class JankHunterConfig private constructor(builder: Builder) {
             return coerceMetadataInt(metadataValue(metadata, key), defaultValue)
         }
 
+        internal fun metadataLogBucket(
+            metadata: Bundle?,
+            key: String,
+            defaultValue: JankHunterLogBucket,
+        ): JankHunterLogBucket {
+            return coerceMetadataLogBucket(metadataValue(metadata, key), defaultValue)
+        }
+
         internal fun coerceMetadataBoolean(value: Any?, defaultValue: Boolean): Boolean {
             return when (value) {
                 is Boolean -> value
@@ -448,6 +482,17 @@ class JankHunterConfig private constructor(builder: Builder) {
             return when (value) {
                 is Number -> value.toInt()
                 is String -> value.trim().toIntOrNull() ?: defaultValue
+                else -> defaultValue
+            }
+        }
+
+        internal fun coerceMetadataLogBucket(
+            value: Any?,
+            defaultValue: JankHunterLogBucket,
+        ): JankHunterLogBucket {
+            return when (value) {
+                is JankHunterLogBucket -> value
+                is String -> JankHunterLogBucket.from(value) ?: defaultValue
                 else -> defaultValue
             }
         }

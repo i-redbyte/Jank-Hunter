@@ -329,8 +329,10 @@ jankhunter problems logs/*.jhlog --dataset leaks --format json --out leaks.json
 По умолчанию runtime пишет:
 
 ```text
-context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
+context.filesDir/jankhunter/daily-<process>-<yyyyMMdd>-<segment>.jhlog
 ```
+
+Дневной bucket - дефолт Android runtime: повторные старты SDK в течение одного локального дня создают новые сегменты с общим префиксом `daily-...`, а `inspect logs/*.jhlog` собирает их в один отчет. Для QA-сценария “один runtime-start = один bucket” на Android можно выбрать `JankHunterLogBucket.SESSION`, тогда файлы будут называться `session-<process>-<startMs>-<segment>.jhlog`.
 
 Через adb:
 

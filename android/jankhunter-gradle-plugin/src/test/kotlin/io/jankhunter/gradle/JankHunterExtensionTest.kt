@@ -68,6 +68,17 @@ class JankHunterExtensionTest {
     }
 
     @Test
+    fun logBucketDefaultsToDailyReports() {
+        val extension = JankHunterExtension()
+
+        assertEquals("daily", extension.logBucket)
+
+        extension.logBucket = "session"
+
+        assertEquals("session", extension.logBucket)
+    }
+
+    @Test
     fun retainedHeapDumpDslAcceptsRuntimeLimits() {
         val extension = JankHunterExtension()
 

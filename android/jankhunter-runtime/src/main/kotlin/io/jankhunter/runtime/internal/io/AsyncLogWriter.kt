@@ -2,8 +2,12 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterLogBucket
 import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -14,6 +18,7 @@ internal class AsyncLogWriter private constructor(
     private val directory: File,
     private val config: JankHunterConfig,
     private val processFileSuffix: String,
+    private val currentTimeMs: () -> Long,
 ) {
     private val queue = ArrayBlockingQueue<Action>(config.maxQueueSize())
     private val accepting = AtomicBoolean(true)
@@ -22,8 +27,11 @@ internal class AsyncLogWriter private constructor(
     private val dropped = AtomicLong()
     private val pendingIoErrors = AtomicLong()
     private val pendingIoLostEvents = AtomicLong()
-    private val filePrefix = "session-$processFileSuffix-"
-    private var nextSegmentId = 1L
+    private val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.US)
+    private val sessionStartedAtMs = currentTimeMs()
+    private val retentionPrefix = "${bucketName(config.logBucket())}-$processFileSuffix-"
+    private var bucketPrefix = currentBucketPrefix()
+    private var nextSegmentId = nextSegmentIdAfterExisting(bucketPrefix)
     private var writer = openSegment()
     private var lastFlushAtMs = SystemClock.elapsedRealtime()
     @Volatile
@@ -405,8 +413,10 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun rotateIfNeeded() {
+        val bucketChanged = refreshBucketPrefixIfNeeded()
         val maxLogBytes = config.maxLogBytes()
-        if (maxLogBytes <= 0 || writer.bytesWritten() < maxLogBytes) return
+        val maxSegmentReached = maxLogBytes > 0 && writer.bytesWritten() >= maxLogBytes
+        if (!bucketChanged && !maxSegmentReached) return
 
         writer.close()
         writer = openSegment()
@@ -437,6 +447,7 @@ internal class AsyncLogWriter private constructor(
         } catch (_: IOException) {
         }
         try {
+            refreshBucketPrefixIfNeeded()
             writer = openSegment()
             lastFlushAtMs = SystemClock.elapsedRealtime()
             bootstrap?.write(writer)
@@ -470,7 +481,7 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun openSegment(): BinaryLogWriter {
-        val file = File(directory, "$filePrefix${System.currentTimeMillis()}-${nextSegmentId++}.jhlog")
+        val file = File(directory, "$bucketPrefix-${nextSegmentId++}.jhlog")
         return BinaryLogWriter(
             file,
             config.maxDictionaryEntries(),
@@ -480,7 +491,48 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun enforceRetention() {
-        LogRetention.enforce(directory, filePrefix, writer.file, config.maxLogDirectoryBytes())
+        LogRetention.enforce(directory, retentionPrefix, writer.file, config.maxLogDirectoryBytes())
+    }
+
+    private fun refreshBucketPrefixIfNeeded(): Boolean {
+        val nextBucketPrefix = currentBucketPrefix()
+        if (nextBucketPrefix == bucketPrefix) return false
+
+        bucketPrefix = nextBucketPrefix
+        nextSegmentId = nextSegmentIdAfterExisting(bucketPrefix)
+        return true
+    }
+
+    private fun currentBucketPrefix(): String {
+        return when (config.logBucket()) {
+            JankHunterLogBucket.SESSION -> "session-$processFileSuffix-$sessionStartedAtMs"
+            JankHunterLogBucket.DAILY -> {
+                val day = dayFormat.format(Date(currentTimeMs()))
+                "daily-$processFileSuffix-$day"
+            }
+        }
+    }
+
+    private fun nextSegmentIdAfterExisting(prefix: String): Long {
+        return directory
+            .listFiles { file ->
+                file.isFile &&
+                    file.name.startsWith("$prefix-") &&
+                    file.name.endsWith(".jhlog")
+            }
+            .orEmpty()
+            .mapNotNull { file -> segmentId(file.name, prefix) }
+            .maxOrNull()
+            ?.plus(1L)
+            ?: 1L
+    }
+
+    private fun segmentId(fileName: String, prefix: String): Long? {
+        if (!fileName.startsWith("$prefix-") || !fileName.endsWith(".jhlog")) return null
+        return fileName
+            .removePrefix("$prefix-")
+            .removeSuffix(".jhlog")
+            .toLongOrNull()
     }
 
     private data class SessionBootstrap(
@@ -532,13 +584,29 @@ internal class AsyncLogWriter private constructor(
         private const val CLOSE_JOIN_POLL_MS = 250L
 
         fun open(directory: File, config: JankHunterConfig, processFileSuffix: String): AsyncLogWriter {
+            return open(directory, config, processFileSuffix) { System.currentTimeMillis() }
+        }
+
+        internal fun open(
+            directory: File,
+            config: JankHunterConfig,
+            processFileSuffix: String,
+            currentTimeMs: () -> Long,
+        ): AsyncLogWriter {
             if (!directory.exists() && !directory.mkdirs()) {
                 error("Cannot create Jank Hunter log directory: $directory")
             }
             return try {
-                AsyncLogWriter(directory, config, processFileSuffix)
+                AsyncLogWriter(directory, config, processFileSuffix, currentTimeMs)
             } catch (e: IOException) {
                 throw IllegalStateException("Cannot open Jank Hunter log file", e)
+            }
+        }
+
+        private fun bucketName(bucket: JankHunterLogBucket): String {
+            return when (bucket) {
+                JankHunterLogBucket.SESSION -> "session"
+                JankHunterLogBucket.DAILY -> "daily"
             }
         }
     }

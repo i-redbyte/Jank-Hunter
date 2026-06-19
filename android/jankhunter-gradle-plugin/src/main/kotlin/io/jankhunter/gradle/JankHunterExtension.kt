@@ -5,6 +5,7 @@ import org.gradle.api.Action
 open class JankHunterExtension {
     val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
     var autoInit: Boolean = true
+    var logBucket: String = "daily"
     val instrument: Instrumentation = Instrumentation()
     val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
     val releaseSafety: ReleaseSafety = ReleaseSafety()

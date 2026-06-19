@@ -38,6 +38,7 @@ Runtime стартует через `ContentProvider`. Если приложен
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
 <meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
 <meta-data android:name="io.jankhunter.log_compression_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.log_bucket" android:value="daily" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 ```
 
@@ -57,6 +58,7 @@ val config = JankHunterConfig.builder()
     .maxLogBytes(5 * 1024 * 1024)
     .maxLogDirectoryBytes(25 * 1024 * 1024)
     .logCompressionEnabled(true)
+    .logBucket(JankHunterLogBucket.DAILY)
     .flushIntervalMs(5_000)
     .build()
 
@@ -81,7 +83,7 @@ val enabledForUser = featureFlags.isEnabled("jank_hunter_runtime")
 JankHunter.setRuntimeEnabled(enabledForUser, "remote_config")
 ```
 
-При `false` runtime аккуратно flush-ит накопленное, останавливает collectors, закрывает writer и перестает оборачивать новые runtime hooks. При `true` он снова открывает `.jhlog`, записывает session metadata и запускает collectors без перезапуска приложения.
+При `false` runtime аккуратно flush-ит накопленное, останавливает collectors, закрывает writer и перестает оборачивать новые runtime hooks. При `true` он снова открывает сегмент `.jhlog`, записывает session metadata и запускает collectors без перезапуска приложения. В дневном bucket-режиме такие повторные старты попадают в общий набор `daily-<process>-<yyyyMMdd>-*.jhlog`, поэтому один день легко собрать в один HTML-отчет через `inspect logs/*.jhlog`.
 
 Вручную через builder:
 
@@ -163,17 +165,19 @@ class FeedRepository {
 По умолчанию:
 
 ```text
-context.filesDir/jankhunter/session-<process>-<timestamp>-<segment>.jhlog
+context.filesDir/jankhunter/daily-<process>-<yyyyMMdd>-<segment>.jhlog
 ```
 
 Например:
 
 ```text
-/data/data/com.myapp/files/jankhunter/session-main-1781410978146-1.jhlog
-/data/data/com.myapp/files/jankhunter/session-remote-1781410978146-1.jhlog
+/data/data/com.myapp/files/jankhunter/daily-main-20260620-1.jhlog
+/data/data/com.myapp/files/jankhunter/daily-remote-20260620-1.jhlog
 ```
 
-Каждый сегмент `.jhlog` ограничен `max_log_bytes`. Когда суммарный размер папки становится больше `max_log_directory_bytes`, Jank Hunter удаляет самые старые завершенные сегменты и продолжает писать в текущий файл. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
+По умолчанию используется `JankHunterLogBucket.DAILY`: повторные runtime-start в один локальный день получают общий bucket-префикс и новые сегменты внутри него. Это не append в старый файл: каждый `.jhlog` сохраняет собственный словарь строк, а CLI объединяет набор файлов в один отчет. Для строгого режима “один runtime-start = один bucket” можно задать `JankHunterLogBucket.SESSION`, тогда имя будет `session-<process>-<startMs>-<segment>.jhlog`.
+
+Каждый сегмент `.jhlog` ограничен `max_log_bytes`. Когда суммарный размер папки становится больше `max_log_directory_bytes`, Jank Hunter удаляет самые старые завершенные сегменты текущего bucket-типа и продолжает писать в текущий файл. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
 
 Путь можно поменять:
 
@@ -388,6 +392,7 @@ jankHunter {
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("qa")
     autoInit = true
+    logBucket = "daily"
 
     retainedHeapDump {
         enabled = true
