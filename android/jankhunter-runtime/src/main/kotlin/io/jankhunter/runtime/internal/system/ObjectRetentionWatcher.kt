@@ -48,15 +48,6 @@ internal class ObjectRetentionWatcher(
         addWatched(instance, description, ownerHint, context)
     }
 
-    internal fun watchForTest(
-        instance: Any,
-        description: String?,
-        ownerHint: String? = null,
-        context: JankHunterContext? = null,
-    ) {
-        addWatched(instance, description, ownerHint, context)
-    }
-
     private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?) {
         watched.add(
             WatchedReference(
@@ -147,8 +138,6 @@ internal class ObjectRetentionWatcher(
         }
         survivors.forEach(watched::add)
     }
-
-    internal fun watchedCountForTest(): Int = watched.count { !it.removed }
 
     private fun safeClassName(instance: Any, description: String?): String {
         return description?.takeIf { it.isNotBlank() } ?: instance.javaClass.name

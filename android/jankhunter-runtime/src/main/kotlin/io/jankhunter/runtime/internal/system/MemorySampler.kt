@@ -1,13 +1,12 @@
 package io.jankhunter.runtime.internal.system
 
 import android.content.Context
-import android.os.Build
 import android.os.Debug
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.atomic.AtomicBoolean
 
-class MemorySampler(
+internal class MemorySampler(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val intervalMs: Long,
 ) {
@@ -71,13 +70,9 @@ class MemorySampler(
     }
 
     private fun readRuntimeStat(key: String): String? {
-        return if (Build.VERSION.SDK_INT >= 23) {
-            try {
-                Debug.getRuntimeStat(key)
-            } catch (_: Exception) {
-                null
-            }
-        } else {
+        return try {
+            Debug.getRuntimeStat(key)
+        } catch (_: Exception) {
             null
         }
     }

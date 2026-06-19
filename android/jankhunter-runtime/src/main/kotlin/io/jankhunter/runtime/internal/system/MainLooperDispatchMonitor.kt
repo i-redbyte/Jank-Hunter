@@ -7,7 +7,7 @@ import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-class MainLooperDispatchMonitor(
+internal class MainLooperDispatchMonitor(
     thresholdMs: Long,
     private val getMessageLogging: () -> Printer? = ::readMainLooperPrinter,
     private val setMessageLogging: (Printer?) -> Unit = { printer ->

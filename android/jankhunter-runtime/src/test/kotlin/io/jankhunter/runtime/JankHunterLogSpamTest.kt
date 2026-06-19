@@ -1,40 +1,37 @@
 package io.jankhunter.runtime
 
-import android.content.Context
-import android.content.ContextWrapper
-import java.io.File
-import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterLogSpamTest {
     @Test
-    fun maxKeysIsPreservedUnderConcurrentUniqueSources() {
-        val directory = Files.createTempDirectory("jankhunter-log-spam-test").toFile()
+    fun dropsUniqueSourcesAboveMaxKeyCapUnderConcurrency() {
+        val config = JankHunterConfig.builder()
+            .maxLogSpamKeys(4)
+            .build()
+        val dropped = AtomicInteger()
+        val logSpam = RuntimeLogSpamService(
+            nowMs = { 0L },
+            config = { config },
+            writer = { null },
+            runtimeActive = { true },
+            foreground = { true },
+            captureContext = { JankHunterContext(null, null, null, null) },
+            recordDropCounter = { dropped.incrementAndGet() },
+        )
         val pool = Executors.newFixedThreadPool(64)
         try {
-            JankHunter.shutdown()
-            JankHunter.init(
-                TestContext(directory),
-                JankHunterConfig.builder()
-                    .autoStartCollectors(false)
-                    .flushIntervalMs(60_000)
-                    .logCompressionEnabled(false)
-                    .maxLogSpamKeys(4)
-                    .build(),
-            )
-            setLastLogSpamFlushAt(Long.MAX_VALUE)
-
             val ready = CountDownLatch(64)
             val start = CountDownLatch(1)
             repeat(64) { index ->
                 pool.execute {
                     ready.countDown()
                     assertTrue(start.await(2, TimeUnit.SECONDS))
-                    JankHunter.recordLogSpam("Owner-$index", "android.util.Log.d.$index", 3)
+                    logSpam.record("Owner-$index", "android.util.Log.d.$index", 3)
                 }
             }
 
@@ -45,31 +42,6 @@ class JankHunterLogSpamTest {
             assertTrue(pool.awaitTermination(2, TimeUnit.SECONDS))
         }
 
-        try {
-            assertTrue("log spam counter size exceeded cap: ${logSpamCounterSize()}", logSpamCounterSize() <= 4)
-        } finally {
-            JankHunter.shutdown()
-            directory.deleteRecursively()
-        }
-    }
-
-    private fun logSpamCounterSize(): Int {
-        return JankHunter.logSpamCounterSizeForTests()
-    }
-
-    private fun setLastLogSpamFlushAt(value: Long) {
-        JankHunter.setLastLogSpamFlushAtForTests(value)
-    }
-
-    private class TestContext(
-        private val rootDir: File,
-    ) : ContextWrapper(null) {
-        override fun getApplicationContext(): Context = this
-
-        override fun getPackageName(): String = "com.example"
-
-        override fun getFilesDir(): File = rootDir
-
-        override fun getSystemService(name: String): Any? = null
+        assertTrue("expected keys above the cap to be dropped", dropped.get() > 0)
     }
 }

@@ -6,7 +6,7 @@ import android.os.Build
 import io.jankhunter.runtime.JankHunter
 import kotlin.math.max
 
-object ProcessExitReporter {
+internal object ProcessExitReporter {
     fun report(context: Context) {
         if (Build.VERSION.SDK_INT < 30) return
 

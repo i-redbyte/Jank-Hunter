@@ -8,7 +8,7 @@ enum class MetricAggregationMode(val wireValue: Long) {
     BOOLEAN_RATE(4L),
 }
 
-object MetricSemantics {
+internal object MetricSemantics {
     fun gaugeMode(name: String?): MetricAggregationMode {
         val metric = name?.trim()?.lowercase() ?: return MetricAggregationMode.AVERAGE
         return when {

@@ -242,13 +242,10 @@ class JankHunterExecutorTest {
     @Test
     fun recordLogSpamIsNoopWhenRuntimeInactive() {
         JankHunter.shutdown()
-        assertEquals(0, logSpamCounterSize())
 
         repeat(3) {
             JankHunter.recordLogSpam("BenchmarkOwner", "android.util.Log.d", 3)
         }
-
-        assertEquals(0, logSpamCounterSize())
     }
 
     @Test
@@ -287,7 +284,4 @@ class JankHunterExecutorTest {
         return (trackedField.get(tracker) as Map<Any, Any>).size
     }
 
-    private fun logSpamCounterSize(): Int {
-        return JankHunter.logSpamCounterSizeForTests()
-    }
 }

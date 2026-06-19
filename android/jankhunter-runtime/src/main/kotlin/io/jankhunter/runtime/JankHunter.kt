@@ -371,7 +371,7 @@ object JankHunter {
         ownerName: String?,
     ): Boolean {
         return postWrappedHandlerRunnable(handler, runnable, token, ownerName) {
-            handler.postDelayed(it, token, delayMillis)
+            handler.postAtTime(it, token, SystemClock.uptimeMillis() + delayMillis)
         }
     }
 
@@ -427,6 +427,7 @@ object JankHunter {
 
     @JvmStatic
     fun hasHandlerCallbacks(handler: Handler, runnable: Runnable): Boolean {
+        if (Build.VERSION.SDK_INT < 29) return false
         if (handler.hasCallbacks(runnable)) return true
         if (!isRuntimeActiveForHooks()) return false
         return handlerWrappers.wrappers(handler, runnable, null).any { handler.hasCallbacks(it) }
@@ -783,12 +784,6 @@ object JankHunter {
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
         logSpam.record(ownerName, source, level)
-    }
-
-    internal fun logSpamCounterSizeForTests(): Int = logSpam.counterSizeForTests()
-
-    internal fun setLastLogSpamFlushAtForTests(value: Long) {
-        logSpam.setLastFlushAtForTests(value)
     }
 
     internal fun captureContext(

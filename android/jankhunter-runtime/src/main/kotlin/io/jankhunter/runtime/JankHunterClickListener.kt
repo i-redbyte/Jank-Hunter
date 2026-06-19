@@ -3,7 +3,7 @@ package io.jankhunter.runtime
 import android.os.SystemClock
 import android.view.View
 
-class JankHunterClickListener internal constructor(
+internal class JankHunterClickListener internal constructor(
     private val delegate: View.OnClickListener,
     private val ownerName: String?,
 ) : View.OnClickListener {

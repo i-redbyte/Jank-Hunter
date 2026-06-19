@@ -2,7 +2,7 @@ package io.jankhunter.runtime.internal.system
 
 import kotlin.math.abs
 
-class AdaptiveRuntimeSampler(
+internal class AdaptiveRuntimeSampler(
     private val memoryStableIntervalMs: Long,
     private val contextStableIntervalMs: Long,
 ) {

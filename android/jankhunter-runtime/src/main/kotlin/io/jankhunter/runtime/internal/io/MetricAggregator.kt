@@ -3,7 +3,7 @@ package io.jankhunter.runtime.internal.io
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-class MetricAggregator(
+internal class MetricAggregator(
     private val maxKeys: Int,
 ) {
     private val counters = ConcurrentHashMap<String, AtomicLong>()
@@ -24,7 +24,7 @@ class MetricAggregator(
                     dropped.incrementAndGet()
                     return
                 }
-                counters.computeIfAbsent(key) { AtomicLong() }
+                AtomicLong().also { counters[key] = it }
             }
         }
         counter.addAndGet(value)
@@ -42,7 +42,7 @@ class MetricAggregator(
                     dropped.incrementAndGet()
                     return
                 }
-                gauges.computeIfAbsent(key) { GaugeStats() }
+                GaugeStats().also { gauges[key] = it }
             }
         }
         gauge.add(value, mode)

@@ -14,13 +14,13 @@ class JankHunterJankStatsTest {
         val handle = JankHunterJankStats.Handle(fake, registry)
 
         registry.add(handle)
-        assertEquals(1, registry.liveCount())
 
         handle.uninstall()
 
         assertFalse(fake.trackingEnabledState)
         assertEquals(1, fake.setTrackingEnabledCalls)
-        assertEquals(0, registry.liveCount())
+        registry.uninstallAll()
+        assertEquals(1, fake.setTrackingEnabledCalls)
     }
 
     @Test
@@ -35,7 +35,9 @@ class JankHunterJankStatsTest {
 
         assertFalse(first.trackingEnabledState)
         assertFalse(second.trackingEnabledState)
-        assertEquals(0, registry.liveCount())
+        registry.uninstallAll()
+        assertEquals(1, first.setTrackingEnabledCalls)
+        assertEquals(1, second.setTrackingEnabledCalls)
     }
 
     @Test
@@ -46,7 +48,7 @@ class JankHunterJankStatsTest {
         waitForGc(reference)
 
         assertNull("registry kept a manual JankStats handle strongly", reference.get())
-        assertEquals(0, registry.liveCount())
+        registry.uninstallAll()
     }
 
     private fun registerAndDropHandle(

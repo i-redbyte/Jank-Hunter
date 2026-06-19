@@ -6,7 +6,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 
 @Suppress("UNCHECKED_CAST")
-class JankHunterCoroutineFunction2 internal constructor(
+internal class JankHunterCoroutineFunction2 internal constructor(
     private val delegate: Function2<Any?, Any?, Any?>,
     private val ownerName: String?,
 ) : Function2<Any?, Any?, Any?> {

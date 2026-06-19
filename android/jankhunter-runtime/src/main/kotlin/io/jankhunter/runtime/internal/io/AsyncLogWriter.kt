@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class AsyncLogWriter private constructor(
+internal class AsyncLogWriter private constructor(
     private val directory: File,
     private val config: JankHunterConfig,
     private val processFileSuffix: String,
@@ -483,10 +483,6 @@ class AsyncLogWriter private constructor(
         LogRetention.enforce(directory, filePrefix, writer.file, config.maxLogDirectoryBytes())
     }
 
-    internal fun enqueueForTest(action: Action) {
-        offer(action)
-    }
-
     private data class SessionBootstrap(
         val appVersion: String?,
         val build: String?,
@@ -527,7 +523,7 @@ class AsyncLogWriter private constructor(
         }
     }
 
-    fun interface Action {
+    internal fun interface Action {
         @Throws(IOException::class)
         fun write(writer: BinaryLogWriter)
     }

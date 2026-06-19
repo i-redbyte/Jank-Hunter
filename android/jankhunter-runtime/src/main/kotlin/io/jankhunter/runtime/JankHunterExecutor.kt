@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-class JankHunterExecutor internal constructor(
+internal class JankHunterExecutor internal constructor(
     private val delegate: Executor,
     private val name: String?,
     private val ownerName: String?,
@@ -27,7 +27,7 @@ class JankHunterExecutor internal constructor(
     }
 }
 
-class JankHunterExecutorService internal constructor(
+internal class JankHunterExecutorService internal constructor(
     private val delegate: ExecutorService,
     private val name: String?,
     private val ownerName: String?,
@@ -55,7 +55,7 @@ class JankHunterExecutorService internal constructor(
 
 }
 
-class JankHunterScheduledExecutorService internal constructor(
+internal class JankHunterScheduledExecutorService internal constructor(
     private val delegate: ScheduledExecutorService,
     private val name: String?,
     private val ownerName: String?,

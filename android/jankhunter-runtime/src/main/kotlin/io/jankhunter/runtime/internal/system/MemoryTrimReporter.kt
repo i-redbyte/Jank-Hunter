@@ -5,7 +5,7 @@ import android.content.res.Configuration
 import io.jankhunter.runtime.JankHunter
 
 @Suppress("DEPRECATION")
-class MemoryTrimReporter : ComponentCallbacks2 {
+internal class MemoryTrimReporter : ComponentCallbacks2 {
     override fun onTrimMemory(level: Int) {
         JankHunter.recordCounter("memory.trim.level.$level.count", 1)
         JankHunter.recordGauge("memory.trim.last_level", level.toLong())

@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 
-class MainThreadWatchdog(
+internal class MainThreadWatchdog(
     private val thresholdMs: Long,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())

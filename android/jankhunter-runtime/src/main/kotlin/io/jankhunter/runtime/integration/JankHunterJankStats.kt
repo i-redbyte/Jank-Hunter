@@ -114,11 +114,6 @@ object JankHunterJankStats {
             }
         }
 
-        internal fun liveCount(): Int {
-            cleanup()
-            return references.count { it.get() != null }
-        }
-
         private fun cleanup() {
             for (reference in references) {
                 if (reference.get() == null) {

@@ -2,7 +2,7 @@ package io.jankhunter.runtime
 
 import android.os.SystemClock
 
-class JankHunterRunnable internal constructor(
+internal class JankHunterRunnable internal constructor(
     private val delegate: Runnable,
     private val ownerName: String?,
 ) : Runnable {

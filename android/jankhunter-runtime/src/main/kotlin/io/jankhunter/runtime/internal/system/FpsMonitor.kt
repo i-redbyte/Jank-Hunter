@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.floor
 import kotlin.math.max
 
-class FpsMonitor(
+internal class FpsMonitor(
     windowMs: Long,
     jankFrameThresholdMs: Long,
 ) : Choreographer.FrameCallback {

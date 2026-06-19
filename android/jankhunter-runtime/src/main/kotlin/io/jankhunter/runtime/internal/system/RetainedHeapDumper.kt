@@ -5,7 +5,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-class RetainedHeapDumper(
+internal class RetainedHeapDumper(
     private val directory: File,
     private val minIntervalMs: Long,
     maxDumpCount: Int,

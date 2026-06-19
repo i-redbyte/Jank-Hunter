@@ -7,7 +7,7 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.integration.JankHunterJankStats
 
-class ActivityTracker(
+internal class ActivityTracker(
     private val jankStatsEnabled: Boolean = false,
 ) : Application.ActivityLifecycleCallbacks {
     private var startedActivities = 0

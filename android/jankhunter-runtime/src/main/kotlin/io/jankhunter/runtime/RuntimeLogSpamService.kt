@@ -67,12 +67,6 @@ internal class RuntimeLogSpamService(
         lastFlushAtMs.set(0L)
     }
 
-    fun counterSizeForTests(): Int = counters.size
-
-    fun setLastFlushAtForTests(value: Long) {
-        lastFlushAtMs.set(value)
-    }
-
     private fun admitCounter(key: LogSpamKey): AtomicLong? {
         return synchronized(keyAdmissionLock) {
             counters[key] ?: run {

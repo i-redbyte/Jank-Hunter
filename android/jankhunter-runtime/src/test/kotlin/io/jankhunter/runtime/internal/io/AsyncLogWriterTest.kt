@@ -53,7 +53,7 @@ class AsyncLogWriterTest {
             val actionStarted = CountDownLatch(1)
             val releaseAction = CountDownLatch(1)
 
-            asyncWriter.enqueueForTest { writer ->
+            enqueue(asyncWriter) { writer ->
                 actionStarted.countDown()
                 if (!releaseAction.await(1, TimeUnit.SECONDS)) {
                     throw java.io.IOException("test action was not released")
@@ -94,7 +94,7 @@ class AsyncLogWriterTest {
             val actionStarted = CountDownLatch(1)
             val releaseAction = CountDownLatch(1)
 
-            asyncWriter.enqueueForTest { writer ->
+            enqueue(asyncWriter) { writer ->
                 actionStarted.countDown()
                 releaseAction.await(5, TimeUnit.SECONDS)
                 writer.counter("released.after.timeout", 1)
@@ -150,6 +150,13 @@ class AsyncLogWriterTest {
             .joinToString(separator = "\n") { file ->
                 file.readBytes().toString(StandardCharsets.ISO_8859_1)
             }
+    }
+
+    private fun enqueue(asyncWriter: AsyncLogWriter, action: AsyncLogWriter.Action) {
+        val offer = AsyncLogWriter::class.java.getDeclaredMethod("offer", AsyncLogWriter.Action::class.java).apply {
+            isAccessible = true
+        }
+        offer.invoke(asyncWriter, action)
     }
 
     @Test

@@ -17,7 +17,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-class SystemContextSampler(
+internal class SystemContextSampler(
     context: Context,
     private val intervalMs: Long,
 ) {
@@ -184,9 +184,7 @@ class SystemContextSampler(
         val power = powerManager ?: return
         JankHunter.recordGauge("device.power_save_mode", if (power.isPowerSaveMode) 1L else 0L)
         JankHunter.recordGauge("device.interactive", if (power.isInteractive) 1L else 0L)
-        if (Build.VERSION.SDK_INT >= 23) {
-            JankHunter.recordGauge("device.idle_mode", if (power.isDeviceIdleMode) 1L else 0L)
-        }
+        JankHunter.recordGauge("device.idle_mode", if (power.isDeviceIdleMode) 1L else 0L)
         if (Build.VERSION.SDK_INT >= 29) {
             JankHunter.recordGauge("device.thermal.status", power.currentThermalStatus.toLong())
         }
