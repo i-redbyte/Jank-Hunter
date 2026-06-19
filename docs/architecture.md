@@ -134,6 +134,7 @@ Android runtime components use a small number of clear ownership rules:
 - samplers run on background scheduling and avoid blocking the main thread;
 - `flush()` is best-effort and intended for QA/test boundaries;
 - `shutdown()` stops collectors, flushes, and closes lifecycle-owned JankStats handles.
+- `setRuntimeEnabled(false, reason)` is a dynamic feature-flag gate: it flushes, stops collectors, closes the writer, and keeps the application context/config so diagnostics can be re-enabled without app restart.
 
 When the queue is full, the runtime drops events instead of blocking the host app and records dropped-event counters when possible.
 

@@ -51,6 +51,32 @@ class JankHunterInitDiagnosticsTest {
         assertFalse(JankHunter.isStarted())
     }
 
+    @Test
+    fun initCanBindRuntimeDisabledConfigForFeatureFlags() {
+        val filesDir = File(tempDir(), "files").apply { mkdirs() }
+        val context = FailingLogDirectoryContext(filesDir)
+
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .runtimeEnabled(false)
+                .autoStartCollectors(false)
+                .build(),
+        )
+
+        val diagnostics = JankHunter.initDiagnostics()
+        assertEquals("runtime_disabled", diagnostics.status)
+        assertEquals("com.example", diagnostics.processName)
+        assertFalse(JankHunter.isStarted())
+        assertFalse(JankHunter.isRuntimeEnabled())
+    }
+
+    @Test
+    fun runtimeEnableWithoutInitReturnsFalse() {
+        assertFalse(JankHunter.setRuntimeEnabled(true, "remote_config"))
+        assertEquals("runtime_enable_missing_init", JankHunter.initDiagnostics().status)
+    }
+
     private fun tempDir(): File = Files.createTempDirectory("jankhunter-init-diagnostics-test").toFile()
 
     private class FailingLogDirectoryContext(

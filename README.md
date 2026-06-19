@@ -103,7 +103,7 @@ help
 quit
 ```
 
-`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`.
+`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`. Сам sample теперь работает как Jank Hunter Playground: внутри есть guided baseline/candidate сценарии, Leak Lab, performance lab и переключатель runtime feature flag.
 
 Для своего приложения базовое подключение обычно выглядит так:
 

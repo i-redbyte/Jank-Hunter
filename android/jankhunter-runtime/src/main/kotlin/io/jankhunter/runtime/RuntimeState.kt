@@ -20,12 +20,16 @@ internal class RuntimeState {
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
     val appForeground = AtomicBoolean(false)
+    val runtimeEnabled = AtomicBoolean(true)
 
     @Volatile
     var writer: AsyncLogWriter? = null
 
     @Volatile
     var config: JankHunterConfig? = null
+
+    @Volatile
+    var initContext: Context? = null
 
     @Volatile
     var watchdog: MainThreadWatchdog? = null

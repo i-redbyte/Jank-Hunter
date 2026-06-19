@@ -9,6 +9,9 @@
             android:name="io.jankhunter.enabled"
             android:value="true" />
         <meta-data
+            android:name="io.jankhunter.runtime_enabled"
+            android:value="true" />
+        <meta-data
             android:name="io.jankhunter.flush_interval_ms"
             android:value="1000" />
         <meta-data

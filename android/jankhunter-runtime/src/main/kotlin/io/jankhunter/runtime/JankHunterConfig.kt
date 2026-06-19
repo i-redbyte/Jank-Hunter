@@ -7,6 +7,7 @@ import java.io.File
 
 class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
+    private val runtimeEnabled = builder.runtimeEnabled
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
     private val memorySampleIntervalMs = builder.memorySampleIntervalMs
@@ -52,6 +53,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val deviceInfoEnabled = builder.deviceInfoEnabled
 
     fun enabled(): Boolean = enabled
+
+    fun runtimeEnabled(): Boolean = runtimeEnabled
 
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
@@ -147,6 +150,7 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     class Builder {
         internal var enabled = true
+        internal var runtimeEnabled = true
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
         internal var memorySampleIntervalMs = 10_000L
@@ -192,6 +196,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var deviceInfoEnabled = true
 
         fun enabled(value: Boolean) = apply { enabled = value }
+
+        fun runtimeEnabled(value: Boolean) = apply { runtimeEnabled = value }
 
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 
@@ -288,6 +294,7 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     companion object {
         const val META_ENABLED = "io.jankhunter.enabled"
+        const val META_RUNTIME_ENABLED = "io.jankhunter.runtime_enabled"
         const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
         const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
         const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
@@ -338,6 +345,7 @@ class JankHunterConfig private constructor(builder: Builder) {
             val defaultEnabled = isDebuggable(context)
             return builder()
                 .enabled(metadataBoolean(metadata, META_ENABLED, defaultEnabled))
+                .runtimeEnabled(metadataBoolean(metadata, META_RUNTIME_ENABLED, true))
                 .autoStartCollectors(metadataBoolean(metadata, META_AUTO_START_COLLECTORS, true))
                 .mainThreadStallThresholdMs(metadataLong(metadata, META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
                 .memorySampleIntervalMs(metadataLong(metadata, META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L))

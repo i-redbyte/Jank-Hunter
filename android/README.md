@@ -22,6 +22,7 @@ Runtime стартует через `ContentProvider`. Если приложен
 
 ```xml
 <meta-data android:name="io.jankhunter.enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.runtime_enabled" android:value="true" />
 ```
 
 Чаще полезно сразу задать пороги и лимиты:
@@ -61,6 +62,38 @@ val config = JankHunterConfig.builder()
 
 JankHunter.init(context, config)
 ```
+
+## Dynamic runtime feature flag
+
+`io.jankhunter.enabled` - жесткий install switch. Если он `false`, SDK не инициализируется и не сможет включиться обратно без явного `JankHunter.init(...)`.
+
+Для продуктовых feature flags используйте отдельный runtime switch:
+
+```xml
+<meta-data android:name="io.jankhunter.enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.runtime_enabled" android:value="false" />
+```
+
+Так SDK сохраняет application context и конфиг, но не поднимает writer/collectors до разрешения флага. Когда Remote Config, QA menu или собственная система фиче-флагов скажет включить диагностику:
+
+```kotlin
+val enabledForUser = featureFlags.isEnabled("jank_hunter_runtime")
+JankHunter.setRuntimeEnabled(enabledForUser, "remote_config")
+```
+
+При `false` runtime аккуратно flush-ит накопленное, останавливает collectors, закрывает writer и перестает оборачивать новые runtime hooks. При `true` он снова открывает `.jhlog`, записывает session metadata и запускает collectors без перезапуска приложения.
+
+Вручную через builder:
+
+```kotlin
+val config = JankHunterConfig.builder()
+    .enabled(true)
+    .runtimeEnabled(false)
+    .build()
+JankHunter.init(context, config)
+```
+
+Текущий статус можно проверить через `JankHunter.isRuntimeEnabled()` и `JankHunter.isStarted()`. В sample-app есть отдельный блок `Feature flag`, который демонстрирует этот режим.
 
 ## Автоподключение в проект
 

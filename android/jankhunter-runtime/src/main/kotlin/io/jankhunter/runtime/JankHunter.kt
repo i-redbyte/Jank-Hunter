@@ -108,7 +108,6 @@ object JankHunter {
             return
         }
 
-        var acquiredStart = false
         var processNameForDiagnostics: String? = null
         var directoryForDiagnostics: File? = null
         try {
@@ -120,60 +119,21 @@ object JankHunter {
                 recordInitStatus("process_not_allowed", attempt, processName)
                 return
             }
-            if (!coordinator.tryMarkStarted()) {
-                recordInitStatus("already_started", attempt, processName)
+
+            runtimeState.initContext = appContext
+            config = providedConfig
+            runtimeState.runtimeEnabled.set(providedConfig.runtimeEnabled())
+            if (!providedConfig.runtimeEnabled()) {
+                recordInitStatus("runtime_disabled", attempt, processName)
                 return
             }
-            acquiredStart = true
-
-            config = providedConfig
-            metrics.configure(providedConfig.maxMetricAggregationKeys())
-            runtimeCallGraph.resetFlushState()
-            sampling.configure(providedConfig)
-
-            val directory = providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
-            directoryForDiagnostics = directory
-            val redactedProcessName = providedConfig.redactProcessName(processName)
-                ?.takeIf { it.isNotBlank() }
-                ?: "unknown"
-            val asyncWriter = AsyncLogWriter.open(
-                directory,
-                providedConfig,
-                ProcessNames.safeFileSuffix(redactedProcessName, mainProcessName),
-            )
-            writer = asyncWriter
-
-            val identity = appIdentity(appContext)
-            val device = if (providedConfig.deviceInfoEnabled()) {
-                DeviceSnapshots.current()
-            } else {
-                DeviceSnapshots.redacted()
-            }
-            asyncWriter.session(
-                identity.versionName,
-                identity.versionCode,
-                device.displayName,
-                Build.VERSION.SDK_INT,
-                redactedProcessName,
-                device.androidRelease,
-                device.securityPatch,
-                device.primaryAbi,
-                device.supportedAbis,
-                device.manufacturer,
-                device.brand,
-                device.hardware,
-                device.board,
-                device.product,
-                device.rooted,
-            )
-
-            collectors.start(appContext, providedConfig, directory)
-            recordInitStatus("started", attempt, processName, directory)
+            directoryForDiagnostics = runtimeLogDirectory(appContext, providedConfig)
+            directoryForDiagnostics = startRuntime(appContext, providedConfig, attempt, processName)
         } catch (throwable: Throwable) {
-            if (acquiredStart) {
-                shutdown()
+            if (started.get() || writer != null) {
+                stopRuntime(clearInit = true)
             } else {
-                resetState()
+                resetRuntimeState(clearInit = true)
             }
             recordInitFailure(throwable, attempt, processNameForDiagnostics, directoryForDiagnostics)
         }
@@ -181,6 +141,59 @@ object JankHunter {
 
     @JvmStatic
     fun isStarted(): Boolean = started.get()
+
+    @JvmStatic
+    fun isRuntimeEnabled(): Boolean = runtimeState.runtimeEnabled.get()
+
+    @JvmStatic
+    fun setRuntimeEnabled(enabled: Boolean): Boolean {
+        return setRuntimeEnabled(enabled, null)
+    }
+
+    @JvmStatic
+    fun setRuntimeEnabled(enabled: Boolean, reason: String?): Boolean {
+        runtimeState.runtimeEnabled.set(enabled)
+        if (!enabled) {
+            if (started.get()) {
+                recordCounter("jankhunter.runtime.disabled.count", 1)
+                recordRuntimeToggleReason("disabled", reason)
+                stopRuntime(clearInit = false)
+            }
+            recordRuntimeDisabledStatus()
+            return true
+        }
+
+        if (started.get()) {
+            recordCounter("jankhunter.runtime.enabled.noop.count", 1)
+            recordRuntimeToggleReason("enabled_noop", reason)
+            return true
+        }
+
+        val appContext = runtimeState.initContext
+        val currentConfig = config
+        if (appContext == null || currentConfig == null || !currentConfig.enabled()) {
+            recordInitStatus("runtime_enable_missing_init", initAttempts.get())
+            return false
+        }
+
+        val attempt = initAttempts.incrementAndGet()
+        var processNameForDiagnostics: String? = null
+        var directoryForDiagnostics: File? = null
+        return try {
+            val processName = ProcessNames.current(appContext)
+            processNameForDiagnostics = processName
+            directoryForDiagnostics = runtimeLogDirectory(appContext, currentConfig)
+            directoryForDiagnostics = startRuntime(appContext, currentConfig, attempt, processName)
+            recordCounter("jankhunter.runtime.enabled.count", 1)
+            recordRuntimeToggleReason("enabled", reason)
+            flush()
+            true
+        } catch (throwable: Throwable) {
+            stopRuntime(clearInit = false)
+            recordInitFailure(throwable, attempt, processNameForDiagnostics, directoryForDiagnostics)
+            false
+        }
+    }
 
     @JvmStatic
     fun initDiagnostics(): JankHunterInitDiagnostics = initDiagnostics
@@ -195,6 +208,67 @@ object JankHunter {
 
     @JvmStatic
     fun shutdown() {
+        stopRuntime(clearInit = true)
+    }
+
+    private fun startRuntime(
+        appContext: Context,
+        providedConfig: JankHunterConfig,
+        attempt: Long,
+        processName: String,
+    ): File {
+        val mainProcessName = appContext.packageName
+        if (!coordinator.tryMarkStarted()) {
+            recordInitStatus("already_started", attempt, processName)
+            return runtimeLogDirectory(appContext, providedConfig)
+        }
+
+        config = providedConfig
+        metrics.configure(providedConfig.maxMetricAggregationKeys())
+        runtimeCallGraph.resetFlushState()
+        sampling.configure(providedConfig)
+
+        val directory = runtimeLogDirectory(appContext, providedConfig)
+        val redactedProcessName = providedConfig.redactProcessName(processName)
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+        val asyncWriter = AsyncLogWriter.open(
+            directory,
+            providedConfig,
+            ProcessNames.safeFileSuffix(redactedProcessName, mainProcessName),
+        )
+        writer = asyncWriter
+
+        val identity = appIdentity(appContext)
+        val device = if (providedConfig.deviceInfoEnabled()) {
+            DeviceSnapshots.current()
+        } else {
+            DeviceSnapshots.redacted()
+        }
+        asyncWriter.session(
+            identity.versionName,
+            identity.versionCode,
+            device.displayName,
+            Build.VERSION.SDK_INT,
+            redactedProcessName,
+            device.androidRelease,
+            device.securityPatch,
+            device.primaryAbi,
+            device.supportedAbis,
+            device.manufacturer,
+            device.brand,
+            device.hardware,
+            device.board,
+            device.product,
+            device.rooted,
+        )
+
+        collectors.start(appContext, providedConfig, directory)
+        recordInitStatus("started", attempt, processName, directory)
+        return directory
+    }
+
+    private fun stopRuntime(clearInit: Boolean) {
         swallow {
             flushLogSpam(force = true)
             flushMetrics(force = true)
@@ -202,10 +276,10 @@ object JankHunter {
         }
         collectors.stop()
         swallow { writer?.close() }
-        resetState()
+        resetRuntimeState(clearInit)
     }
 
-    private fun resetState() {
+    private fun resetRuntimeState(clearInit: Boolean) {
         collectors.reset()
         writer = null
         contextTracker.resetRecordedContext()
@@ -215,6 +289,11 @@ object JankHunter {
         runtimeCallGraph.clear()
         handlerWrappers.clear()
         coordinator.markStopped()
+        if (clearInit) {
+            config = null
+            runtimeState.initContext = null
+            runtimeState.runtimeEnabled.set(true)
+        }
     }
 
     private inline fun swallow(block: () -> Unit) {
@@ -240,6 +319,25 @@ object JankHunter {
         logDirectory: File?,
     ) {
         coordinator.recordInitFailure(throwable, attempt, processName, logDirectory)
+    }
+
+    private fun recordRuntimeDisabledStatus() {
+        val appContext = runtimeState.initContext
+        val processName = appContext?.let { runCatching { ProcessNames.current(it) }.getOrNull() }
+        val directory = config?.logDirectory() ?: appContext?.filesDir?.let { File(it, "jankhunter") }
+        recordInitStatus("runtime_disabled", initAttempts.get(), processName, directory)
+    }
+
+    private fun recordRuntimeToggleReason(state: String, reason: String?) {
+        val cleanReason = reason
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::metricOwner)
+            ?: "manual"
+        recordCounter("jankhunter.runtime.$state.reason.$cleanReason.count", 1)
+    }
+
+    private fun runtimeLogDirectory(appContext: Context, providedConfig: JankHunterConfig): File {
+        return providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
     }
 
     @JvmStatic

@@ -10,6 +10,7 @@ class JankHunterConfigTest {
     fun builderKeepsExplicitRuntimePolicy() {
         val config = JankHunterConfig.builder()
             .enabled(false)
+            .runtimeEnabled(false)
             .autoStartCollectors(false)
             .mainThreadStallThresholdMs(123)
             .memorySampleIntervalMs(456)
@@ -53,6 +54,7 @@ class JankHunterConfigTest {
             .build()
 
         assertFalse(config.enabled())
+        assertFalse(config.runtimeEnabled())
         assertFalse(config.autoStartCollectors())
         assertEquals(123, config.mainThreadStallThresholdMs())
         assertEquals(456, config.memorySampleIntervalMs())
@@ -100,6 +102,7 @@ class JankHunterConfigTest {
         val config = JankHunterConfig.builder().build()
 
         assertTrue(config.enabled())
+        assertTrue(config.runtimeEnabled())
         assertTrue(config.autoStartCollectors())
         assertTrue(config.systemSamplerEnabled())
         assertFalse(config.mainLooperDispatchMonitorEnabled())

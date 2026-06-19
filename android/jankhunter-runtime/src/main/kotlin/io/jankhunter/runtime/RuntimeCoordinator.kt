@@ -15,7 +15,7 @@ internal class RuntimeCoordinator(
     }
 
     fun isActiveForHooks(): Boolean {
-        return state.started.get() && state.writer != null
+        return state.runtimeEnabled.get() && state.started.get() && state.writer != null
     }
 
     fun recordInitStatus(
