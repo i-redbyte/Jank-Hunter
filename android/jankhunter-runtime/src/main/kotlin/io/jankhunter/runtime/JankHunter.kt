@@ -35,8 +35,7 @@ object JankHunter {
     private val started get() = runtimeState.started
     private val initAttempts get() = runtimeState.initAttempts
     private val contextTracker = ContextTracker()
-    private val runtimeEvents = RuntimeEventBus()
-    private val coordinator = RuntimeCoordinator(runtimeState, runtimeEvents, ::nowMs)
+    private val coordinator = RuntimeCoordinator(runtimeState, ::nowMs)
     private val collectors = RuntimeCollectorService(runtimeState)
     private val metrics = RuntimeMetricsService(
         DEFAULT_MAX_METRIC_AGGREGATION_KEYS,
@@ -44,7 +43,6 @@ object JankHunter {
         { writer },
         { config },
         { ensureContextRecorded() },
-        runtimeEvents,
     )
     private val sampling = RuntimeSamplingService(::nowMs)
     private val logSpam = RuntimeLogSpamService(
@@ -55,7 +53,6 @@ object JankHunter {
         { isAppForeground() },
         { ownerName -> captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull())) },
         { recordCounter("jankhunter.log_spam.dropped_keys.count", 1) },
-        runtimeEvents,
     )
     private val runtimeCallGraph = RuntimeCallGraph(
         nowMs = ::nowMs,
@@ -196,17 +193,8 @@ object JankHunter {
         }
     }
 
-    internal fun addRuntimeObserver(observer: RuntimeObserver): RuntimeSubscription {
-        return runtimeEvents.add(observer)
-    }
-
-    internal fun removeRuntimeObserver(observer: RuntimeObserver) {
-        runtimeEvents.remove(observer)
-    }
-
     @JvmStatic
     fun shutdown() {
-        runtimeEvents.emit(RuntimeEvent.ShutdownStarted)
         swallow {
             flushLogSpam(force = true)
             flushMetrics(force = true)
@@ -215,7 +203,6 @@ object JankHunter {
         collectors.stop()
         swallow { writer?.close() }
         resetState()
-        runtimeEvents.emit(RuntimeEvent.ShutdownFinished)
     }
 
     private fun resetState() {

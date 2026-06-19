@@ -45,22 +45,6 @@ type metricNetworkSignal struct {
 	ok     bool
 }
 
-func detectNetworkLoops(paths []string, options analyze.Options, scale timelineScale) ([]NetworkLoopFinding, error) {
-	if !scale.hasData {
-		return nil, nil
-	}
-	collector := newNetworkLoopCollector(options, scale)
-	for _, path := range paths {
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			collector.add(event, dict)
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return selectNetworkLoops(collector.findings()), nil
-}
-
 func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *networkLoopCollector {
 	return &networkLoopCollector{
 		filter:     normalizeTimelineFilter(options.Filter),

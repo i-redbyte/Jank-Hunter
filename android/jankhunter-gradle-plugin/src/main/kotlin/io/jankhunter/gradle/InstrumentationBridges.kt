@@ -107,26 +107,6 @@ internal object VersionedBridgeCatalog {
         }
     }
 
-    fun matchHandler(call: MethodCall): VersionedBridgeMatch? {
-        return handlers.firstNotNullOfOrNull { it.match(call) }
-    }
-
-    fun matchExecutor(call: MethodCall): VersionedBridgeMatch? {
-        return executors.firstNotNullOfOrNull { it.match(call) }
-    }
-
-    fun matchCoroutine(call: MethodCall): VersionedBridgeMatch? {
-        return coroutines.firstNotNullOfOrNull { it.match(call) }
-    }
-
-    fun matchFlow(call: MethodCall): VersionedBridgeMatch? {
-        return flows.firstNotNullOfOrNull { it.match(call) }
-    }
-
-    fun matchLogSpam(call: MethodCall): VersionedBridgeMatch? {
-        return logSpam.firstNotNullOfOrNull { it.match(call) }
-    }
-
     fun all(): List<VersionedInstrumentationBridge> = registry.all()
 }
 

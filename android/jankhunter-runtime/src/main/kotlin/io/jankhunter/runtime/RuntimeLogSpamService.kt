@@ -12,7 +12,6 @@ internal class RuntimeLogSpamService(
     private val foreground: () -> Boolean,
     private val captureContext: (String?) -> JankHunterContext,
     private val recordDropCounter: () -> Unit,
-    private val events: RuntimeEventBus,
 ) {
     private val counters = ConcurrentHashMap<LogSpamKey, AtomicLong>()
     private val keyAdmissionLock = Any()
@@ -61,7 +60,6 @@ internal class RuntimeLogSpamService(
                 counters.remove(key, counter)
             }
         }
-        events.emit(RuntimeEvent.LogSpamFlushed(force))
     }
 
     fun reset() {

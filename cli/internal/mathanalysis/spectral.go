@@ -22,15 +22,6 @@ type periodicDefinition struct {
 	points []float64
 }
 
-func buildPeriodicAnalysis(paths []string, options analyze.Options, timeline []TimelineBucket, scale timelineScale) ([]PeriodicSignal, []SpectralPeak, error) {
-	routeDefinitions, err := routePeriodicDefinitions(paths, options, scale)
-	if err != nil {
-		return nil, nil, err
-	}
-	periodic, spectral := buildPeriodicAnalysisWithRouteDefinitions(timeline, scale, routeDefinitions)
-	return periodic, spectral, nil
-}
-
 func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale timelineScale, routeDefinitions []periodicDefinition) ([]PeriodicSignal, []SpectralPeak) {
 	definitions := timelinePeriodicDefinitions(timeline)
 	definitions = append(definitions, routeDefinitions...)
@@ -80,22 +71,6 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 		out = append(out, periodicDefinition{name: def.name, unit: def.unit, points: points})
 	}
 	return out
-}
-
-func routePeriodicDefinitions(paths []string, options analyze.Options, scale timelineScale) ([]periodicDefinition, error) {
-	if !scale.hasData || scale.bucketCount == 0 {
-		return nil, nil
-	}
-	collector := newRouteSeriesCollector(options, scale)
-	for _, path := range paths {
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			collector.add(event, dict)
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return collector.definitions(3), nil
 }
 
 func newRouteSeriesCollector(options analyze.Options, scale timelineScale) *routeSeriesCollector {

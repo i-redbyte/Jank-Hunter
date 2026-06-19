@@ -214,7 +214,6 @@ type hprofParser struct {
 	targets    map[string]struct{}
 	edgeCount  int
 	truncated  bool
-	warnings   []string
 }
 
 type hprofClass struct {

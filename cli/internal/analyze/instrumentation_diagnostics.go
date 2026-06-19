@@ -278,7 +278,7 @@ type instrumentationAnnotationKey struct {
 func skippedSummaries(records []instrumentationSkippedRecord) []InstrumentationSkippedSummary {
 	out := make([]InstrumentationSkippedSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationSkippedSummary{Reason: record.Reason, Count: record.Count})
+		out = append(out, InstrumentationSkippedSummary(record))
 	}
 	sortSkippedSummaries(out)
 	return out
@@ -287,14 +287,7 @@ func skippedSummaries(records []instrumentationSkippedRecord) []InstrumentationS
 func hookSummaries(records []instrumentationHookRecord) []InstrumentationHookSummary {
 	out := make([]InstrumentationHookSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationHookSummary{
-			Intent:    record.Intent,
-			Signature: record.Signature,
-			Bridge:    record.Bridge,
-			Method:    record.Method,
-			Line:      record.Line,
-			Count:     record.Count,
-		})
+		out = append(out, InstrumentationHookSummary(record))
 	}
 	sortHookSummaries(out)
 	return out
@@ -303,15 +296,7 @@ func hookSummaries(records []instrumentationHookRecord) []InstrumentationHookSum
 func decisionSummaries(records []instrumentationDecisionRecord) []InstrumentationDecisionSummary {
 	out := make([]InstrumentationDecisionSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationDecisionSummary{
-			Kind:   record.Kind,
-			Module: record.Module,
-			Family: record.Family,
-			Reason: record.Reason,
-			Method: record.Method,
-			Line:   record.Line,
-			Count:  record.Count,
-		})
+		out = append(out, InstrumentationDecisionSummary(record))
 	}
 	sortDecisionSummaries(out)
 	return out
@@ -320,13 +305,7 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 func annotationSummaries(records []instrumentationAnnotationRecord) []InstrumentationAnnotationSummary {
 	out := make([]InstrumentationAnnotationSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationAnnotationSummary{
-			Owner:  record.Owner,
-			Screen: record.Screen,
-			Flow:   record.Flow,
-			Trace:  record.Trace,
-			Count:  record.Count,
-		})
+		out = append(out, InstrumentationAnnotationSummary(record))
 	}
 	sortAnnotationSummaries(out)
 	return out

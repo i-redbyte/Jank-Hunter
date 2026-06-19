@@ -4,51 +4,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.objectweb.asm.Opcodes
-import org.objectweb.asm.Type
 
 class InstrumentationModelTest {
     @Test
-    fun descriptorIteratorTracksWideSlots() {
-        val args = DescriptorArgumentIterator(
-            "(ILjava/lang/String;JDLjava/lang/Object;[I)V",
-            startSlot = 1,
-        ).toList()
-
-        assertEquals(6, args.size)
-        assertEquals(0, args[0].index)
-        assertEquals(Type.INT_TYPE, args[0].type)
-        assertEquals(1, args[0].slotIndex)
-        assertEquals(2, args[1].slotIndex)
-        assertEquals(3, args[2].slotIndex)
-        assertEquals(Type.LONG_TYPE, args[2].type)
-        assertEquals(5, args[3].slotIndex)
-        assertEquals(Type.DOUBLE_TYPE, args[3].type)
-        assertEquals(7, args[4].slotIndex)
-        assertEquals(8, args[5].slotIndex)
-    }
-
-    @Test
-    fun methodCallNormalizesOpcodeSourceBits() {
-        val call = MethodCall(
-            opcode = Opcodes.INVOKEVIRTUAL or Opcodes.SOURCE_DEPRECATED,
-            owner = "example/Foo",
-            name = "bar",
-            descriptor = "()V",
-            isInterface = false,
-        )
-
-        assertEquals(InvocationKind.Virtual, call.invocationKind)
-    }
-
-    @Test
     fun signatureSpecMatchesOnlyKnownVariants() {
-        val call = MethodCall(
-            opcode = Opcodes.INVOKEVIRTUAL,
+        val call = methodCall(
             owner = "okhttp3/OkHttpClient\$Builder",
             name = "eventListenerFactory",
             descriptor = "(Lokhttp3/EventListener\$Factory;)Lokhttp3/OkHttpClient\$Builder;",
-            isInterface = false,
         )
 
         assertTrue(HookSignatureCatalog.okHttpEventListenerFactory.matches(call))
@@ -69,68 +32,56 @@ class InstrumentationModelTest {
 
         assertIntent(
             HookIntent.WrapOkHttpEventListenerFactory,
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "okhttp3/OkHttpClient\$Builder",
                 name = "eventListenerFactory",
                 descriptor = "(Lokhttp3/EventListener\$Factory;)Lokhttp3/OkHttpClient\$Builder;",
-                isInterface = false,
             ),
             config,
         )
         assertIntent(
             HookIntent.WrapWebSocketListener,
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "okhttp3/OkHttpClient",
                 name = "newWebSocket",
                 descriptor = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
-                isInterface = false,
             ),
             config,
         )
         assertIntent(
             HookIntent.HandlerRunnable(HandlerRunnableKind.RUNNABLE_LONG_DELAY),
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "android/os/Handler",
                 name = "postDelayed",
                 descriptor = "(Ljava/lang/Runnable;J)Z",
-                isInterface = false,
             ),
             config,
         )
         assertIntent(
             HookIntent.ExecutorCallable(ExecutorCallableKind.SINGLE_CALLABLE),
-            MethodCall(
-                opcode = Opcodes.INVOKEINTERFACE,
+            methodCall(
                 owner = "java/util/concurrent/ExecutorService",
                 name = "submit",
                 descriptor = "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;",
-                isInterface = true,
             ),
             config,
         )
         assertIntent(
             HookIntent.CoroutineBlock(CoroutineBlockKind.FUNCTION2_BEFORE_CONTINUATION),
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "kotlinx/coroutines/BuildersKt",
                 name = "withContext",
                 descriptor = "(Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;" +
                     "Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
-                isInterface = false,
             ),
             config,
         )
         assertIntent(
             HookIntent.LogSpam("android.util.Log.d", 3),
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "android/util/Log",
                 name = "d",
                 descriptor = "(Ljava/lang/String;Ljava/lang/String;)I",
-                isInterface = false,
             ),
             config,
         )
@@ -139,12 +90,10 @@ class InstrumentationModelTest {
     @Test
     fun resolverReportsVersionedBridgeForAllHookFamilies() {
         val okHttpDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "okhttp3/OkHttpClient\$Builder",
                 name = "build",
                 descriptor = "()Lokhttp3/OkHttpClient;",
-                isInterface = false,
             ),
             testHookConfig(okhttp = true),
         )
@@ -153,12 +102,10 @@ class InstrumentationModelTest {
         assertEquals("okhttp3.builder.build.v3", okHttpDecision.signatureId)
 
         val handlerDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "android/os/Handler",
                 name = "post",
                 descriptor = "(Ljava/lang/Runnable;)Z",
-                isInterface = false,
             ),
             testHookConfig(handlers = true),
         )
@@ -166,12 +113,10 @@ class InstrumentationModelTest {
         assertEquals("android.handler.bridge.v1", handlerDecision.bridgeId)
 
         val executorDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKEINTERFACE,
+            methodCall(
                 owner = "java/util/concurrent/Executor",
                 name = "execute",
                 descriptor = "(Ljava/lang/Runnable;)V",
-                isInterface = true,
             ),
             testHookConfig(executors = true),
         )
@@ -179,14 +124,12 @@ class InstrumentationModelTest {
         assertEquals("jdk.executor.bridge.v1", executorDecision.bridgeId)
 
         val coroutineDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "kotlinx/coroutines/BuildersKt",
                 name = "launch\$default",
                 descriptor = "(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;" +
                     "Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)" +
                     "Lkotlinx/coroutines/Job;",
-                isInterface = false,
             ),
             testHookConfig(coroutines = true),
         )
@@ -195,12 +138,10 @@ class InstrumentationModelTest {
         assertEquals("kotlinx.coroutines.builders.default_function2.v1", coroutineDecision.signatureId)
 
         val flowDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "android/view/View",
                 name = "setOnClickListener",
                 descriptor = "(Landroid/view/View\$OnClickListener;)V",
-                isInterface = false,
             ),
             testHookConfig(flowInteractions = true),
         )
@@ -208,12 +149,10 @@ class InstrumentationModelTest {
         assertEquals("android.view.flow.bridge.v1", flowDecision.bridgeId)
 
         val logSpamDecision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "android/util/Log",
                 name = "d",
                 descriptor = "(Ljava/lang/String;Ljava/lang/String;)I",
-                isInterface = false,
             ),
             testHookConfig(logSpam = true),
         )
@@ -260,13 +199,22 @@ class InstrumentationModelTest {
     }
 
     @Test
+    fun ownerLabelsAreStableAndReadable() {
+        val first = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")
+        val second = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")
+        val differentDescriptor = OwnerIds.ownerLabel("com/example/Foo", "load", "(I)V")
+
+        assertEquals(first, second)
+        assertTrue(first.startsWith("com.example.Foo.load#"))
+        assertFalse(first == differentDescriptor)
+    }
+
+    @Test
     fun resolverRespectsDisabledGates() {
-        val call = MethodCall(
-            opcode = Opcodes.INVOKEVIRTUAL,
+        val call = methodCall(
             owner = "android/os/Handler",
             name = "post",
             descriptor = "(Ljava/lang/Runnable;)Z",
-            isInterface = false,
         )
 
         val decision = HookIntentResolver.resolve(call, testHookConfig())
@@ -277,12 +225,10 @@ class InstrumentationModelTest {
 
     @Test
     fun resolverKeepsWebSocketGateSeparateFromOkHttpGate() {
-        val call = MethodCall(
-            opcode = Opcodes.INVOKEVIRTUAL,
+        val call = methodCall(
             owner = "okhttp3/OkHttpClient",
             name = "newWebSocket",
             descriptor = "(Lokhttp3/Request;Lokhttp3/WebSocketListener;)Lokhttp3/WebSocket;",
-            isInterface = false,
         )
 
         val disabled = HookIntentResolver.resolve(call, testHookConfig(okhttp = true))
@@ -294,12 +240,10 @@ class InstrumentationModelTest {
     @Test
     fun resolverReportsUnsupportedKnownOwnerSignature() {
         val decision = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKEVIRTUAL,
+            methodCall(
                 owner = "android/os/Handler",
                 name = "post",
                 descriptor = "(Ljava/lang/Runnable;Ljava/lang/Object;)Z",
-                isInterface = false,
             ),
             testHookConfig(handlers = true),
         )
@@ -312,12 +256,10 @@ class InstrumentationModelTest {
     @Test
     fun logSpamBridgeRejectsUnknownDescriptors() {
         val supported = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "android/util/Log",
                 name = "w",
                 descriptor = "(Ljava/lang/String;Ljava/lang/Throwable;)I",
-                isInterface = false,
             ),
             testHookConfig(logSpam = true),
         )
@@ -325,12 +267,10 @@ class InstrumentationModelTest {
         assertEquals("android.log.bridge.v1", supported.bridgeId)
 
         val unsupported = HookIntentResolver.resolve(
-            MethodCall(
-                opcode = Opcodes.INVOKESTATIC,
+            methodCall(
                 owner = "android/util/Log",
                 name = "d",
                 descriptor = "(Ljava/lang/Object;)V",
-                isInterface = false,
             ),
             testHookConfig(logSpam = true),
         )
@@ -343,6 +283,10 @@ class InstrumentationModelTest {
         require(decision is HookDecision.Matched) { "Expected matched hook for $call but got $decision" }
         assertEquals(expected, decision.intent)
         assertTrue(decision.signatureId.isNotBlank())
+    }
+
+    private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {
+        return MethodCall(owner = owner, name = name, descriptor = descriptor)
     }
 
     private fun testHookConfig(

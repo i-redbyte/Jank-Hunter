@@ -12,7 +12,6 @@ internal class RuntimeMetricsService(
     private val writer: () -> AsyncLogWriter?,
     private val config: () -> JankHunterConfig?,
     private val ensureContextRecorded: () -> Unit,
-    private val events: RuntimeEventBus,
 ) {
     private val lastFlushAtMs = AtomicLong(0L)
 
@@ -77,7 +76,6 @@ internal class RuntimeMetricsService(
                 asyncWriter.gauge(name, value, count, sum, max, mode)
             }
         })
-        events.emit(RuntimeEvent.MetricsFlushed(force))
     }
 
     private fun shouldAggregate(): Boolean {

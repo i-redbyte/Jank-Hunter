@@ -259,41 +259,6 @@ type Log struct {
 	Warnings []string
 }
 
-func TypeName(t EventType) string {
-	switch t {
-	case EventDictionary:
-		return "dictionary"
-	case EventSession:
-		return "session"
-	case EventContext:
-		return "context"
-	case EventHTTP:
-		return "http"
-	case EventUIWindow:
-		return "ui_window"
-	case EventStall:
-		return "main_thread_stall"
-	case EventMemory:
-		return "memory"
-	case EventRetained:
-		return "retained_object"
-	case EventCounter:
-		return "counter"
-	case EventGauge:
-		return "gauge"
-	case EventFlow:
-		return "flow_context"
-	case EventLogSpam:
-		return "log_spam"
-	case EventProblem:
-		return "problem_window"
-	case EventRuntimeCall:
-		return "runtime_call"
-	default:
-		return "unknown"
-	}
-}
-
 func NetworkName(n NetworkKind) string {
 	switch n {
 	case NetworkOffline:
@@ -306,23 +271,6 @@ func NetworkName(n NetworkKind) string {
 		return "ethernet"
 	case NetworkVPN:
 		return "vpn"
-	default:
-		return "unknown"
-	}
-}
-
-func StatusName(s StatusClass) string {
-	switch s {
-	case Status1xx:
-		return "1xx"
-	case Status2xx:
-		return "2xx"
-	case Status3xx:
-		return "3xx"
-	case Status4xx:
-		return "4xx"
-	case Status5xx:
-		return "5xx"
 	default:
 		return "unknown"
 	}

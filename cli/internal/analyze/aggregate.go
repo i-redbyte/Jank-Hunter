@@ -1850,13 +1850,6 @@ func apiNumber(sdk string) string {
 	return strings.TrimPrefix(sdk, "api-")
 }
 
-func yesNo(value bool) string {
-	if value {
-		return "yes"
-	}
-	return "no"
-}
-
 func yesNoRU(value bool) string {
 	if value {
 		return "да"

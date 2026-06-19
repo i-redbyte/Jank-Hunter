@@ -46,10 +46,6 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 	})
 }
 
-func WriteCompare(path string, comparison analyze.Comparison) error {
-	return WriteCompareReport(path, comparison, nil, nil)
-}
-
 func WriteCompareReport(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport) error {
 	return WriteCompareReportWithOptions(path, comparison, baselineLogs, candidateLogs, ReportOptions{})
 }
@@ -98,20 +94,12 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 	})
 }
 
-func WriteLeakInspect(path string, leakReport analyze.LeakReport) error {
-	return WriteLeakInspectWithOptions(path, leakReport, ReportOptions{})
-}
-
 func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, options ReportOptions) error {
 	return execute(path, leaksInspectTemplate, map[string]any{
 		"GeneratedAt":      time.Now().Format(time.RFC3339),
 		"LeakReport":       leakReport,
 		"PresentationMode": options.PresentationMode,
 	})
-}
-
-func WriteLeakCompare(path string, leakReport analyze.LeakCompareReport) error {
-	return WriteLeakCompareWithOptions(path, leakReport, ReportOptions{})
 }
 
 func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareReport, options ReportOptions) error {

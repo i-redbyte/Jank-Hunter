@@ -28,23 +28,6 @@ type robustSampleSet struct {
 
 type robustSampleMap map[robustKey]*robustSampleSet
 
-func collectRobustSamples(paths []string, options analyze.Options) (robustSampleMap, error) {
-	collector := &robustCollector{
-		filter:   normalizeTimelineFilter(options.Filter),
-		ownerMap: options.OwnerMap,
-		samples:  robustSampleMap{},
-	}
-	for _, path := range paths {
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			collector.add(event, dict)
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return collector.samples, nil
-}
-
 type robustCollector struct {
 	filter   analyze.Filter
 	ownerMap map[string]string

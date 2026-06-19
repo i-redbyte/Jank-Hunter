@@ -1,8 +1,5 @@
 package io.jankhunter.gradle
 
-import org.objectweb.asm.Opcodes
-import org.objectweb.asm.Type
-
 internal data class CallerMethod(
     val className: String,
     val methodName: String,
@@ -10,81 +7,12 @@ internal data class CallerMethod(
 )
 
 internal data class MethodCall(
-    val opcode: Int,
     val owner: String,
     val name: String,
     val descriptor: String,
-    val isInterface: Boolean,
     val caller: CallerMethod? = null,
     val line: Int? = null,
-) {
-    val invocationKind: InvocationKind
-        get() = InvocationKind.fromOpcode(opcode)
-
-    fun arguments(startSlot: Int = 0): DescriptorArgumentIterator {
-        return DescriptorArgumentIterator(descriptor, startSlot)
-    }
-}
-
-internal enum class InvocationKind {
-    Static,
-    Virtual,
-    Interface,
-    Special,
-    Dynamic,
-    Unknown,
-    ;
-
-    companion object {
-        fun fromOpcode(opcode: Int): InvocationKind {
-            return when (opcode and SOURCE_MASK.inv()) {
-                Opcodes.INVOKESTATIC -> Static
-                Opcodes.INVOKEVIRTUAL -> Virtual
-                Opcodes.INVOKEINTERFACE -> Interface
-                Opcodes.INVOKESPECIAL -> Special
-                Opcodes.INVOKEDYNAMIC -> Dynamic
-                else -> Unknown
-            }
-        }
-
-        private const val SOURCE_MASK = Opcodes.SOURCE_MASK
-    }
-}
-
-internal data class DescriptorArgument(
-    val index: Int,
-    val type: Type,
-    val slotIndex: Int,
-) {
-    val size: Int
-        get() = type.size
-}
-
-internal class DescriptorArgumentIterator(
-    descriptor: String,
-    private val startSlot: Int = 0,
-) : Iterator<DescriptorArgument>, Iterable<DescriptorArgument> {
-    private val types = Type.getArgumentTypes(descriptor)
-    private var index = 0
-    private var nextSlot = startSlot
-
-    override fun iterator(): Iterator<DescriptorArgument> = this
-
-    override fun hasNext(): Boolean = index < types.size
-
-    override fun next(): DescriptorArgument {
-        if (!hasNext()) throw NoSuchElementException()
-        val type = types[index]
-        val argument = DescriptorArgument(
-            index = index,
-            type = type,
-            slotIndex = nextSlot,
-        )
-        index += 1
-        nextSlot += type.size
-        return argument
-    }
-}
+)
 
 internal enum class ArgumentRole {
     Builder,
@@ -451,10 +379,6 @@ internal object HookSignatureCatalog {
         ),
     )
 
-    fun matchIntent(call: MethodCall, signatures: List<IntentSignature>): HookDecision.Matched? {
-        val matched = signatures.firstOrNull { it.spec.matches(call) } ?: return null
-        return HookDecision.Matched(matched.intent, matched.spec.id)
-    }
 }
 
 internal class InstrumentationModuleRegistry(

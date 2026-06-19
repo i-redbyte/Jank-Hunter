@@ -319,11 +319,9 @@ private class JankHunterMethodVisitor(
         }
         recordStaticEdge(owner, name)
         val call = MethodCall(
-            opcode = opcodeAndSource,
             owner = owner,
             name = name,
             descriptor = descriptor,
-            isInterface = isInterface,
             caller = CallerMethod(className, methodName, methodDescriptor),
             line = currentLine,
         )
@@ -502,108 +500,6 @@ internal object ClassGraphWriter {
             .replace("\r", "\\r")
     }
 
-}
-
-internal object InstrumentationHooks {
-    fun isOkHttpEventListenerFactory(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchOkHttp(
-            methodCall(owner, name, descriptor),
-            setOf(HookIntent.WrapOkHttpEventListenerFactory.id),
-        ) != null
-    }
-
-    fun isOkHttpBuild(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchOkHttp(
-            methodCall(owner, name, descriptor),
-            setOf(HookIntent.InstallOkHttpEventListenerFactory.id),
-        ) != null
-    }
-
-    fun isOkHttpNewWebSocket(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchOkHttp(
-            methodCall(owner, name, descriptor),
-            setOf(HookIntent.WrapWebSocketListener.id),
-        ) != null
-    }
-
-    fun handlerRunnableKind(owner: String, name: String, descriptor: String): HandlerRunnableKind? {
-        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.HandlerRunnable }
-            ?.kind
-    }
-
-    fun handlerRemoveCallbacksKind(owner: String, name: String, descriptor: String): HandlerRemoveCallbacksKind? {
-        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.HandlerRemoveCallbacks }
-            ?.kind
-    }
-
-    fun isHandlerRemoveCallbacksAndMessages(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
-            ?.intent == HookIntent.HandlerRemoveCallbacksAndMessages
-    }
-
-    fun isHandlerHasCallbacks(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
-            ?.intent == HookIntent.HandlerHasCallbacks
-    }
-
-    fun isHandlerMessageSend(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchHandler(methodCall(owner, name, descriptor))
-            ?.intent == HookIntent.HandlerMessageSend
-    }
-
-    fun executorRunnableKind(owner: String, name: String, descriptor: String): ExecutorRunnableKind? {
-        return VersionedBridgeCatalog.matchExecutor(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.ExecutorRunnable }
-            ?.kind
-    }
-
-    fun executorCallableKind(owner: String, name: String, descriptor: String): ExecutorCallableKind? {
-        return VersionedBridgeCatalog.matchExecutor(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.ExecutorCallable }
-            ?.kind
-    }
-
-    fun coroutineBlockKind(owner: String, name: String, descriptor: String): CoroutineBlockKind? {
-        return VersionedBridgeCatalog.matchCoroutine(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.CoroutineBlock }
-            ?.kind
-    }
-
-    fun isViewSetOnClickListener(owner: String, name: String, descriptor: String): Boolean {
-        return VersionedBridgeCatalog.matchFlow(methodCall(owner, name, descriptor)) != null
-    }
-
-    fun logSpamLevel(owner: String, name: String, descriptor: String): Int? {
-        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.LogSpam }
-            ?.level
-    }
-
-    fun logSpamSource(owner: String, name: String, descriptor: String): String {
-        return VersionedBridgeCatalog.matchLogSpam(methodCall(owner, name, descriptor))
-            ?.intent
-            ?.let { it as? HookIntent.LogSpam }
-            ?.source
-            ?: owner.replace('/', '.') + ".$name"
-    }
-
-    private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {
-        return MethodCall(
-            opcode = Opcodes.INVOKEVIRTUAL,
-            owner = owner,
-            name = name,
-            descriptor = descriptor,
-            isInterface = false,
-        )
-    }
 }
 
 internal enum class HandlerRunnableKind {

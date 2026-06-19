@@ -10,10 +10,9 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-const (
-	DefaultBucketMS    uint64 = 1000
-	maxTimelineBuckets        = 50_000
-)
+const DefaultBucketMS uint64 = 1000
+
+const maxTimelineBuckets = 50_000
 
 type timelineScale struct {
 	baseMS      uint64
@@ -54,56 +53,6 @@ type timelineStreamState struct {
 	lastTx         uint64
 	hasRxTx        bool
 	currentNetwork string
-}
-
-func buildTimeline(paths []string, options analyze.Options) ([]TimelineBucket, []Series, timelineScale, error) {
-	scale, err := detectMathTimeScale(paths, options)
-	if err != nil {
-		return nil, nil, timelineScale{}, err
-	}
-	collector := &timelineCollector{
-		filter:   normalizeTimelineFilter(options.Filter),
-		ownerMap: options.OwnerMap,
-		scale:    scale,
-		buckets:  map[uint64]*timelineBucketAgg{},
-	}
-	for _, path := range paths {
-		state := &timelineStreamState{}
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			collector.add(event, dict, state)
-			return nil
-		}); err != nil {
-			return nil, nil, timelineScale{}, err
-		}
-	}
-	timeline := collector.finish()
-	return timeline, timelineSeries(timeline, scale.bucketMSOrDefault()), scale, nil
-}
-
-func detectMathTimeScale(paths []string, options analyze.Options) (timelineScale, error) {
-	filter := normalizeTimelineFilter(options.Filter)
-	var minMS uint64
-	var maxMS uint64
-	hasData := false
-	for _, path := range paths {
-		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			timeMS, ok := mathScaleEventTimeMS(event, dict, filter, options.OwnerMap)
-			if !ok {
-				return nil
-			}
-			if !hasData || timeMS < minMS {
-				minMS = timeMS
-			}
-			if !hasData || timeMS > maxMS {
-				maxMS = timeMS
-			}
-			hasData = true
-			return nil
-		}); err != nil {
-			return timelineScale{}, err
-		}
-	}
-	return newTimelineScale(minMS, maxMS, hasData), nil
 }
 
 func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {

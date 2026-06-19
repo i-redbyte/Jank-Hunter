@@ -23,13 +23,6 @@ internal object AsmProgressReporter {
         tracker(label).recordInstrumented(className, hooks)
     }
 
-    internal fun resetForTests() {
-        trackers.clear()
-        synchronized(outputLock) {
-            lastLineLength = 0
-        }
-    }
-
     private fun tracker(label: String): AsmProgressTracker {
         return trackers.computeIfAbsent(label) { key ->
             AsmProgressTracker(key, ::printLine)

@@ -4,7 +4,6 @@ import java.io.File
 
 internal class RuntimeCoordinator(
     private val state: RuntimeState,
-    private val events: RuntimeEventBus,
     private val nowMs: () -> Long,
 ) {
     fun tryMarkStarted(): Boolean {
@@ -34,7 +33,6 @@ internal class RuntimeCoordinator(
             failures = state.initFailures.get(),
         )
         state.initDiagnostics = diagnostics
-        events.emit(RuntimeEvent.InitStatus(diagnostics))
     }
 
     fun recordInitFailure(
@@ -55,6 +53,5 @@ internal class RuntimeCoordinator(
             failures = failures,
         )
         state.initDiagnostics = diagnostics
-        events.emit(RuntimeEvent.InitFailure(diagnostics))
     }
 }
