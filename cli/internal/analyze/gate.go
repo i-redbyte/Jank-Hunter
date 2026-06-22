@@ -22,7 +22,11 @@ func LoadThresholdConfig(path string) (ThresholdConfig, error) {
 }
 
 func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
-	if config.MaxSeverity == "" && config.MinConfidence == "" && len(config.Metrics) == 0 && !hasLeakThreshold(config.Leaks) {
+	if config.MaxSeverity == "" &&
+		config.MinConfidence == "" &&
+		!config.RequireCleanCohorts &&
+		len(config.Metrics) == 0 &&
+		!hasLeakThreshold(config.Leaks) {
 		return GateResult{}
 	}
 	var failures []string
@@ -42,7 +46,20 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 	if config.MinConfidence != "" && len(comparison.Deltas) > 0 {
 		confidence := comparison.Deltas[0].Confidence
 		if confidenceRank(confidence) < confidenceRank(config.MinConfidence) {
-			failures = append(failures, fmt.Sprintf("confidence=%s below %s", confidence, config.MinConfidence))
+			failures = append(failures, fmt.Sprintf(
+				"confidence=%s below %s (baseline logs/events=%d/%d, candidate logs/events=%d/%d; collect 5+ logs and 500+ events per cohort for high confidence)",
+				confidence,
+				config.MinConfidence,
+				comparison.Baseline.LogCount,
+				comparison.Baseline.EventCount,
+				comparison.Candidate.LogCount,
+				comparison.Candidate.EventCount,
+			))
+		}
+	}
+	if config.RequireCleanCohorts && len(comparison.Warnings) > 0 {
+		for _, warning := range comparison.Warnings {
+			failures = append(failures, "cohort mismatch: "+warning)
 		}
 	}
 	failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)

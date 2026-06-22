@@ -41,6 +41,7 @@ Usage:
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 `)
 }
@@ -238,6 +239,74 @@ func runCompare(args []string) error {
 		}
 	}
 	return nil
+}
+
+func runScorecard(args []string) error {
+	builder, remaining, err := takeAnalysisOptionsBuilder(args)
+	if err != nil {
+		return err
+	}
+	baselineRaw, remaining, err := takeStringFlag(remaining, "baseline", "")
+	if err != nil {
+		return err
+	}
+	candidateRaw, remaining, err := takeStringFlag(remaining, "candidate", "")
+	if err != nil {
+		return err
+	}
+	baselineHeap, remaining, err := takeHeapInputFlags(remaining, "baseline-heap-dump", "baseline-heap-evidence")
+	if err != nil {
+		return err
+	}
+	candidateHeap, remaining, err := takeHeapInputFlags(remaining, "candidate-heap-dump", "candidate-heap-evidence")
+	if err != nil {
+		return err
+	}
+	out, _, err := takeStringFlag(remaining, "out", "")
+	if err != nil {
+		return err
+	}
+	baselinePaths := expandComma(baselineRaw)
+	candidatePaths := expandComma(candidateRaw)
+	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
+		return fmt.Errorf("scorecard needs --baseline and --candidate")
+	}
+	options, err := builder.build()
+	if err != nil {
+		return err
+	}
+	baselineOptions, err := baselineHeap.apply("baseline", baselinePaths, options)
+	if err != nil {
+		return err
+	}
+	candidateOptions, err := candidateHeap.apply("candidate", candidatePaths, options)
+	if err != nil {
+		return err
+	}
+	baseline, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
+	if err != nil {
+		return err
+	}
+	candidate, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
+	if err != nil {
+		return err
+	}
+	scorecard := analyze.BuildValidationScorecard(
+		baselinePaths,
+		candidatePaths,
+		analyze.Compare(baseline, candidate),
+	)
+	if out == "" {
+		return printJSON(scorecard)
+	}
+	file, err := os.Create(out)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(scorecard)
 }
 
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {

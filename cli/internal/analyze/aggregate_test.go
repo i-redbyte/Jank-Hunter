@@ -933,6 +933,32 @@ func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
 	if !result.Failed {
 		t.Fatalf("expected confidence gate failure")
 	}
+	if got := strings.Join(result.Failures, "\n"); !strings.Contains(got, "baseline logs/events=1/10") {
+		t.Fatalf("confidence failure is not diagnostic enough: %q", got)
+	}
+}
+
+func TestEvaluateGateFailsOnDirtyCohortsWhenRequired(t *testing.T) {
+	comparison := Compare(
+		Summary{
+			LogCount:   5,
+			EventCount: 500,
+			Devices:    []NamedValue{{Name: "Pixel 8", Value: 5}},
+		},
+		Summary{
+			LogCount:   5,
+			EventCount: 500,
+			Devices:    []NamedValue{{Name: "Pixel 5", Value: 5}},
+		},
+	)
+
+	result := EvaluateGate(comparison, ThresholdConfig{RequireCleanCohorts: true})
+	if !result.Failed {
+		t.Fatalf("expected cohort gate failure")
+	}
+	if got := strings.Join(result.Failures, "\n"); !strings.Contains(got, "cohort mismatch") {
+		t.Fatalf("expected cohort mismatch failure, got %q", got)
+	}
 }
 
 func TestEvaluateGateFailsOnLeakRegressionThresholds(t *testing.T) {

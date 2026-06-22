@@ -261,6 +261,7 @@ jankhunter compare \
 {
   "max_severity": "medium",
   "min_confidence": "medium",
+  "require_clean_cohorts": true,
   "metrics": {
     "HTTP p95": {"max_regression_pct": 12},
     "UI jank rate": {"max_regression_abs": 1.5},
@@ -293,6 +294,23 @@ jankhunter compare \
 ```
 
 Если gate падает, команда возвращает exit code `1`. HTML при этом сохраняется, чтобы было что открыть и посмотреть.
+
+`require_clean_cohorts: true` заставляет gate падать, если baseline/candidate собраны на разных версиях приложения, SDK, устройствах, процессах, сетях или других когортах. Это лучше включать для release/PR gate: иначе можно принять за регрессию обычную разницу окружений.
+
+## scorecard
+
+Scorecard нужен для validation sprint: он превращает baseline/candidate артефакты в JSON с оценками data quality, retained-signal coverage, heap actionability, compare stability, CI-readiness и junior readability.
+
+```bash
+jankhunter scorecard \
+  --baseline "old/*.jhlog" \
+  --candidate "new/*.jhlog" \
+  --baseline-heap-dump old/heap.hprof \
+  --candidate-heap-dump new/heap.hprof \
+  --out scorecard.json
+```
+
+Смотрите `summary.go_no_go` и `summary.next_actions`: там будет честный статус `go`, `qa_only` или `blocked`, а также список действий вроде “соберите 5+ логов на когорту”, “добавьте heap evidence” или “выровняйте устройства/SDK”.
 
 ## export
 

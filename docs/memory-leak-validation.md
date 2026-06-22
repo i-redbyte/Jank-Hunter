@@ -28,6 +28,7 @@ This document defines how to validate Jank Hunter leak detection against LeakCan
 7. Export LeakCanary result for the same scenario.
 8. Repeat for candidate APK.
 9. Run `jankhunter compare` with baseline/candidate logs and heap dumps.
+10. Run `jankhunter scorecard` on the same artifacts and attach `scorecard.json` to the validation notes.
 
 ## Metrics To Record
 
@@ -44,6 +45,23 @@ This document defines how to validate Jank Hunter leak detection against LeakCan
 ## Accuracy Scorecard
 
 Use [memory-leak-validation-scorecard.json](memory-leak-validation-scorecard.json) for every real app run. Keep one completed copy per app/version pair and attach the generated Jank Hunter HTML, CLI JSON, LeakCanary export/screenshots, and raw `.jhlog`/`.hprof` artifacts.
+
+The CLI can generate the machine-readable readiness scorecard from collected artifacts:
+
+```bash
+jankhunter scorecard \
+  --baseline "baseline/*.jhlog" \
+  --candidate "candidate/*.jhlog" \
+  --baseline-heap-dump baseline/heap.hprof \
+  --candidate-heap-dump candidate/heap.hprof \
+  --out scorecard.json
+```
+
+Use `summary.go_no_go` as the current validation status:
+
+- `go` means the dataset is strong enough for CI/release gates for the tested app class.
+- `qa_only` means the reports are useful, but confidence/cohorts/heap evidence still need work.
+- `blocked` means do not claim LeakCanary parity yet; follow `summary.next_actions`.
 
 Recommended scoring:
 

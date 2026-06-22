@@ -124,6 +124,35 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	assertFileContains(t, mathFindingsPath, "section,severity,title,detail,evidence,recommendation")
 }
 
+func TestScorecardWritesValidationJSON(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	scorecardPath := filepath.Join(dir, "scorecard.json")
+	if err := runScorecard([]string{
+		"--baseline", samplePath,
+		"--candidate", samplePath,
+		"--out", scorecardPath,
+	}); err != nil {
+		t.Fatalf("runScorecard() error = %v", err)
+	}
+
+	assertFileContains(
+		t,
+		scorecardPath,
+		`"purpose": "Real-world validation readiness scorecard for Jank Hunter Android logs."`,
+		`"data_quality"`,
+		`"heap_actionability"`,
+		`"weighted_score_0_to_10"`,
+		`"go_no_go"`,
+	)
+}
+
 func TestPresentationModeWritesLinkedReports(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 

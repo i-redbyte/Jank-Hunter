@@ -263,6 +263,7 @@ object JankHunter {
             device.product,
             device.rooted,
         )
+        recordRuntimeStartMetadata(asyncWriter, providedConfig, attempt)
 
         collectors.start(appContext, providedConfig, directory)
         recordInitStatus("started", attempt, processName, directory)
@@ -335,6 +336,23 @@ object JankHunter {
             ?.let(::metricOwner)
             ?: "manual"
         recordCounter("jankhunter.runtime.$state.reason.$cleanReason.count", 1)
+    }
+
+    private fun recordRuntimeStartMetadata(
+        asyncWriter: AsyncLogWriter,
+        providedConfig: JankHunterConfig,
+        attempt: Long,
+    ) {
+        asyncWriter.counter("jankhunter.runtime.session.start.count", 1)
+        asyncWriter.counter("jankhunter.runtime.log_bucket.${logBucketMetricName(providedConfig.logBucket())}.count", 1)
+        asyncWriter.gauge("jankhunter.runtime.init_attempt", attempt)
+    }
+
+    private fun logBucketMetricName(bucket: JankHunterLogBucket): String {
+        return when (bucket) {
+            JankHunterLogBucket.DAILY -> "daily"
+            JankHunterLogBucket.SESSION -> "session"
+        }
     }
 
     private fun runtimeLogDirectory(appContext: Context, providedConfig: JankHunterConfig): File {

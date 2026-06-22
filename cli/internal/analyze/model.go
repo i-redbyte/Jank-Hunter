@@ -436,10 +436,11 @@ type Comparison struct {
 }
 
 type ThresholdConfig struct {
-	MaxSeverity   string                     `json:"max_severity"`
-	MinConfidence string                     `json:"min_confidence"`
-	Metrics       map[string]MetricThreshold `json:"metrics"`
-	Leaks         LeakThreshold              `json:"leaks"`
+	MaxSeverity         string                     `json:"max_severity"`
+	MinConfidence       string                     `json:"min_confidence"`
+	RequireCleanCohorts bool                       `json:"require_clean_cohorts"`
+	Metrics             map[string]MetricThreshold `json:"metrics"`
+	Leaks               LeakThreshold              `json:"leaks"`
 }
 
 type MetricThreshold struct {
