@@ -32,7 +32,7 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 	if summary.EventCount < 50 {
 		builder.add("medium", text(lang, "Low sample size", "Малая выборка"), text(lang,
 			"The run is small, so the verdict is useful as smoke-test feedback but not as a release-quality performance conclusion.",
-			"Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное перфоманс-заключение для релиза.",
+			"Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное заключение о производительности для релиза.",
 		))
 		builder.recommend(text(lang,
 			"Collect several runs per scenario before trusting small deltas.",
@@ -276,7 +276,7 @@ func (b analysisBuilder) finish() ReportAnalysis {
 	status := text(b.lang, "Healthy", "Все хорошо")
 	summary := text(b.lang,
 		"No serious performance problems were detected by the current heuristic thresholds.",
-		"Текущие эвристические пороги не нашли серьезных перфоманс-проблем.",
+		"Текущие эвристические пороги не нашли серьезных проблем производительности.",
 	)
 	switch b.severity {
 	case "high":

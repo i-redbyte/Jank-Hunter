@@ -25,7 +25,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}
 	assertFileContains(t, inspectPath, "λ Анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Разбор утечек памяти")
 	assertFileContains(t, filepath.Join(dir, "report-math.html"), "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Что измеряет")
-	assertFileContains(t, filepath.Join(dir, "report-leaks.html"), "Отчет по утечкам памяти", "Leak Explorer", "Light mode", "Вероятная цепочка удержания")
+	assertFileContains(t, filepath.Join(dir, "report-leaks.html"), "Отчет по утечкам памяти", "Проводник утечек", "Легкий режим", "Вероятная цепочка удержания")
 
 	diagnosticsPath := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
 	writeDiagnosticsFixture(t, diagnosticsPath)
@@ -46,7 +46,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}
 	assertFileContains(t, comparePath, "λ Анализ", `href="compare-math.html"`, "Утечки памяти", `href="compare-leaks.html"`, "Сравнение утечек памяти")
 	assertFileContains(t, filepath.Join(dir, "compare-math.html"), "Математический анализ сравнения", "Качество сравнения", "Сравнение утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
-	assertFileContains(t, filepath.Join(dir, "compare-leaks.html"), "Сравнение утечек памяти", "Leak Delta Explorer", "количество утечек такое же")
+	assertFileContains(t, filepath.Join(dir, "compare-leaks.html"), "Сравнение утечек памяти", "Проводник дельт утечек", "количество утечек такое же")
 
 	customComparePath := filepath.Join(dir, "another.custom.name.html")
 	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--out", customComparePath}); err != nil {
@@ -97,7 +97,7 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	if err := runProblems([]string{samplePath, "--out", csvPath}); err != nil {
 		t.Fatalf("runProblems(csv) error = %v", err)
 	}
-	assertFileContains(t, csvPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation", "lifecycle leak")
+	assertFileContains(t, csvPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation", "Утечка жизненного цикла")
 
 	jsonPath := filepath.Join(dir, "problems.json")
 	if err := runProblems([]string{samplePath, "--format", "json", "--out", jsonPath}); err != nil {

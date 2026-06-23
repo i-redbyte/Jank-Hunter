@@ -28,6 +28,7 @@ type Filter struct {
 type Options struct {
 	Filter                     Filter
 	OwnerMap                   map[string]string
+	ObfuscationMap             *NameMapping
 	ClassGraph                 *ClassGraph
 	InstrumentationDiagnostics *InstrumentationDiagnostics
 	HeapEvidence               *HeapEvidence

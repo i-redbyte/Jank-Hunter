@@ -89,7 +89,7 @@ func TestLoadHprofHeapEvidenceFindsRootPathAndRetainedSize(t *testing.T) {
 	if leak.ChainFingerprint == "" {
 		t.Fatalf("expected chain fingerprint: %+v", leak)
 	}
-	if leak.LeakPattern != "Activity удерживается static/singleton цепочкой" {
+	if leak.LeakPattern != "Activity удерживается цепочкой статического поля или одиночки" {
 		t.Fatalf("unexpected leak pattern: %+v", leak)
 	}
 	if !strings.Contains(leak.Confidence, "сильным ссылкам") {
@@ -136,7 +136,7 @@ func TestBetterHeapLeakPrefersActionablePathUnlessSizeDominates(t *testing.T) {
 			{ClassName: "com.app.CheckoutPresenter", Kind: "root_object"},
 			{ClassName: "com.app.LeakedActivity", FieldName: "activity", Kind: "field"},
 		},
-		LeakPattern: "Activity удерживается static/singleton цепочкой",
+		LeakPattern: "Activity удерживается цепочкой статического поля или одиночки",
 	}
 	noisyLarge := HeapLeakEvidence{
 		ClassName:      "com.app.LeakedActivity",
@@ -182,7 +182,7 @@ func TestBestHeapEvidencePrefersActionablePathForSameRuntimeLeak(t *testing.T) {
 				{ClassName: "com.app.CheckoutPresenter", Kind: "root_object"},
 				{ClassName: "com.app.LeakedActivity", FieldName: "activity", Kind: "field"},
 			},
-			LeakPattern: "Activity удерживается static/singleton цепочкой",
+			LeakPattern: "Activity удерживается цепочкой статического поля или одиночки",
 		},
 	}}
 
@@ -212,10 +212,10 @@ func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
 	if evidence == nil || len(evidence.Leaks) != 1 {
 		t.Fatalf("unexpected evidence: %+v", evidence)
 	}
-	if !warningContains(evidence.Warnings, "Точный retained size ограничен") {
+	if !warningContains(evidence.Warnings, "Точный удержанный размер ограничен") {
 		t.Fatalf("expected retained-size limit warning: %+v", evidence.Warnings)
 	}
-	if !strings.Contains(evidence.Leaks[0].Confidence, "retained size ограничен") {
+	if !strings.Contains(evidence.Leaks[0].Confidence, "удержанный размер ограничен") {
 		t.Fatalf("expected limited confidence on best leak: %+v", evidence.Leaks[0])
 	}
 }

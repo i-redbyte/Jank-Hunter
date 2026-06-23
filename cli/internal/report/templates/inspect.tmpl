@@ -42,7 +42,7 @@
   <a href="#overview">Обзор</a>
   <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
-  <a href="#flows">Флоу</a>
+  <a href="#flows">Сценарии</a>
   <a href="#code-problems">Реестр кода</a>
   <a href="#owners">Источники</a>
   <a href="#memory-leaks">Утечки</a>
@@ -65,13 +65,13 @@
       <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{if gt .Summary.UIFrames 0}}{{printf "%.2f" .Summary.UIJankPct}}%{{else}}нет данных{{end}}</div><div class="hint">{{.Summary.UIJank}} / {{.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">{{tip "Средний FPS" "Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах."}}</div><div class="value">{{if gt .Summary.UIFrames 0}}{{printf "%.1f" .Summary.UIAvgFPS}}{{else}}нет данных{{end}}</div><div class="hint">{{if gt .Summary.UIFrames 0}}минимум {{printf "%.1f" .Summary.UIMinFPS}}{{else}}нет UI-окон{{end}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{if gt .Summary.StallCount 0}}{{.Summary.StallMaxMS}} мс{{else}}нет данных{{end}}</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
-      <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{if gt .Summary.MemoryCount 0}}{{.Summary.MemoryMaxKB}} KB{{else}}нет данных{{end}}</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
+      <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{if gt .Summary.MemoryCount 0}}{{.Summary.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
       <div class="metric"><div class="label">{{tip "RX UID за прогон" "Принятый сетевой трафик UID приложения между первым и последним снимком контекста. Помогает увидеть тяжелую сетевую активность внутри прогона."}}</div><div class="value">{{if gt .Summary.ContextCount 0}}{{.Summary.TrafficRxMax}}{{else}}нет данных{{end}}</div><div class="hint">{{if gt .Summary.ContextCount 0}}TX за прогон {{.Summary.TrafficTxMax}}{{else}}нет контекста{{end}}</div></div>
     </div>
     <div class="report-guide">
-      <div class="guide-card"><strong>Как читать отчет</strong>Сначала смотрите общий статус и красные/желтые находки, затем открывайте разделы флоу, источников и граф влияния. Так проще перейти от симптома к коду.</div>
+      <div class="guide-card"><strong>Как читать отчет</strong>Сначала смотрите общий статус и красные/желтые находки, затем открывайте разделы сценариев, источников и граф влияния. Так проще перейти от симптома к коду.</div>
       <div class="guide-card"><strong>Что важно</strong>Один показатель редко объясняет проблему. Ищите совпадение во времени: UI-подтормаживания, паузы главного потока, сетевые хвосты, память и спам логами.</div>
-      <div class="guide-card"><strong>Что исправлять</strong>Начинайте с источников с высоким вкладом и понятным контекстом: экран, флоу, шаг, маршрут или класс. Неочевидные пики лучше подтвердить профилировщиком.</div>
+      <div class="guide-card"><strong>Что исправлять</strong>Начинайте с источников с высоким вкладом и понятным контекстом: экран, сценарий, шаг, маршрут или класс. Неочевидные пики лучше подтвердить профилировщиком.</div>
     </div>
     {{range .Summary.Warnings}}<p class="warning">{{.}}</p>{{end}}
     <h3>Индикаторы здоровья</h3>
@@ -82,7 +82,7 @@
     </div>
     {{if .Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
-    <p class="help-text">Короткий срез “злых” узлов: классы получают вес по паузам главного потока, сети, памяти, лог-спаму, проблемным окнам и флоу. Подробная карта связей вынесена в отдельный отчет.</p>
+    <p class="help-text">Короткий срез “злых” узлов: классы получают вес по паузам главного потока, сети, памяти, лог-спаму, проблемным окнам и сценариям. Подробная карта связей вынесена в отдельный отчет.</p>
     <div class="grid influence-grid">
       {{range topInfluenceNodes .Summary.Influence 6}}
       <div class="metric influence-tile" data-tip="{{.ClassName}} · {{join .Reasons ", "}}">
@@ -117,7 +117,7 @@
     {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
-        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, сценарию, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
         <select data-code-registry-severity aria-label="Фильтр по риску">
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
@@ -148,10 +148,10 @@
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} флоу{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} сценариев{{end}}</small></summary>
                 <div class="code-problem-detail-body">
                   <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
-                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                   <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
                   <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
                   {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong><div class="problem-drilldown">{{range .DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
@@ -218,13 +218,13 @@
 
   <section id="flows" class="panel">
     <div class="panel-head">
-      <div><h2>Флоу и причины</h2><div class="panel-kicker">Связка экран → флоу → шаг → источник показывает, где совпали сеть, паузы, UI, память и спам логами.</div></div>
+      <div><h2>Сценарии и причины</h2><div class="panel-kicker">Связка экран → сценарий → шаг → источник показывает, где совпали сеть, паузы, UI, память и спам логами.</div></div>
     </div>
     <details class="fold" open>
-      <summary>Детали флоу</summary>
+      <summary>Детали сценариев</summary>
       <div class="fold-body">
         <table>
-          <tr><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник</th><th>Маршрут</th><th>HTTP</th><th>Ошибки</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Макс. пауза</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th><th>Маршрут</th><th>HTTP</th><th>Ошибки</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Макс. пауза</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
           {{range .Summary.Flows}}
           <tr>
             <td><code>{{.Screen}}</code></td>
@@ -234,22 +234,22 @@
             <td><code>{{.RouteSample}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
-            <td><span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 флоу рассчитан по reservoir-сэмплу">≈</span>{{end}}</span></td>
+            <td><span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 сценария рассчитан по reservoir-сэмплу">≈</span>{{end}}</span></td>
             <td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td>
             <td>{{.StallCount}}</td>
             <td>{{.StallMaxMS}} мс</td>
             <td>{{.LogSpam}}</td>
             <td>{{.ProblemCount}}</td>
-            <td>{{.MemoryMaxKB}} KB</td>
+            <td>{{.MemoryMaxKB}} КБ</td>
           </tr>
-          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста флоу. Включите API флоу или ASM-опцию flowInteractions, чтобы увидеть цепочки причин.</td></tr>{{end}}
+          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста сценария. Включите API сценариев или ASM-опцию flowInteractions, чтобы увидеть цепочки причин.</td></tr>{{end}}
         </table>
 
         <div class="split">
           <div>
             <h3>{{tip "Спам логами" "Счетчик частых вызовов android.util.Log.* и Timber.*. Текст логов не сохраняется: пишется только источник, уровень, контекст и количество вызовов."}}</h3>
             <table>
-              <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник работ</th></tr>
+              <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник работ</th></tr>
               {{range .Summary.LogSpam}}
               <tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
               {{else}}<tr><td colspan="7" class="muted">Нет событий спама логами.</td></tr>{{end}}
@@ -258,7 +258,7 @@
           <div>
             <h3>{{tip "Проблемные окна" "Агрегированные окна, где уже заметна причина: медленный HTTP, пауза главного потока, UI-подтормаживания, удержанные объекты или спам логами."}}</h3>
             <table>
-              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Источник</th></tr>
+              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th></tr>
               {{range .Summary.ProblemWindows}}
               <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
               {{else}}<tr><td colspan="9" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}
@@ -267,7 +267,7 @@
         </div>
         <h3>Вызовы выполнения</h3>
         <table>
-          <tr><th>Экран</th><th>Флоу</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Summary.RuntimeCalls}}
           <tr><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
           {{else}}<tr><td colspan="8" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
@@ -306,7 +306,7 @@
     {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
-        <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, флоу или рекомендации" aria-label="Фильтр реестра утечек памяти">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, держателю, экрану, сценарию или рекомендации" aria-label="Фильтр реестра утечек памяти">
         <select data-code-registry-severity aria-label="Фильтр утечек по риску">
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
@@ -330,7 +330,7 @@
             <th>Контекст</th>
             <th><button type="button" data-code-sort="score">Оценка</button></th>
             <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th>
-            <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения из контекста выполнения: экран, флоу, шаг, держатель и удержанный объект. Точный корень GC требует дампа памяти."}}</th>
+            <th>{{tip "Мини-дерево доминирования" "Вероятная цепочка владения из контекста выполнения: экран, сценарий, шаг, держатель и удержанный объект. Точный корень GC требует дампа памяти."}}</th>
             <th>Влияние</th>
             <th>Что проверить</th>
             <th>Доказательства</th>
@@ -343,7 +343,7 @@
             <td><div class="problem-location"><code>{{.ClassName}}</code></div></td>
             <td><div class="leak-object-kind">{{leakObjectKindLabel .ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
             <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
-            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>флоу <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
             <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>

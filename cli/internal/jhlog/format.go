@@ -1,6 +1,6 @@
 package jhlog
 
-const FormatVersion = 6
+const FormatVersion = 7
 
 var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 
@@ -40,6 +40,7 @@ const (
 	FlagHasOwner             Flag = 1 << 11
 	FlagHasFlow              Flag = 1 << 12
 	FlagHasStep              Flag = 1 << 13
+	FlagSameContext          Flag = 1 << 14
 )
 
 type DictKind uint64

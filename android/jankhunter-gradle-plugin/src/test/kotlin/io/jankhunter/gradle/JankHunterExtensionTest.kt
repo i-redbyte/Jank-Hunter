@@ -33,13 +33,16 @@ class JankHunterExtensionTest {
     }
 
     @Test
-    fun wholeApplicationIncludeIsOptIn() {
+    fun instrumentationDefaultsToBroadDiagnostics() {
         val instrumentation = JankHunterExtension.Instrumentation()
 
         assertEquals(false, instrumentation.includeWholeApplication)
         assertEquals(false, instrumentation.asmProgressLog)
         assertEquals(true, instrumentation.classGraph)
-        assertEquals(false, instrumentation.runtimeCallGraph)
+        assertEquals(true, instrumentation.runtimeCallGraph)
+        assertEquals(true, instrumentation.coroutines)
+        assertEquals(true, instrumentation.allowEmptyIncludePackages)
+        assertEquals(false, instrumentation.methodCounters)
         assertEquals(true, instrumentation.lifecycleLeaks)
     }
 
@@ -57,25 +60,59 @@ class JankHunterExtensionTest {
     }
 
     @Test
-    fun retainedHeapDumpDslIsOptInByDefault() {
+    fun retainedHeapDumpDslIsEnabledByDefaultForDiagnostics() {
         val retainedHeapDump = JankHunterExtension.RetainedHeapDump()
 
-        assertEquals(false, retainedHeapDump.enabled)
-        assertEquals(false, retainedHeapDump.privacyApproved)
+        assertEquals(true, retainedHeapDump.enabled)
+        assertEquals(true, retainedHeapDump.privacyApproved)
         assertEquals(10 * 60_000L, retainedHeapDump.minIntervalMs)
         assertEquals(1, retainedHeapDump.maxCount)
         assertEquals(30_000L, retainedHeapDump.minRetainedAgeMs)
     }
 
     @Test
-    fun logBucketDefaultsToDailyReports() {
+    fun logBucketDefaultsToOneRuntimeSession() {
         val extension = JankHunterExtension()
 
-        assertEquals("daily", extension.logBucket)
-
-        extension.logBucket = "session"
-
         assertEquals("session", extension.logBucket)
+
+        extension.logBucket = "daily"
+
+        assertEquals("daily", extension.logBucket)
+    }
+
+    @Test
+    fun runtimeDslExposesScenarioThresholdsAndCollectors() {
+        val extension = JankHunterExtension()
+
+        assertEquals(700L, extension.runtime.mainThreadStallThresholdMs)
+        assertEquals(250L, extension.runtime.ownerBlockThresholdMs)
+        assertEquals(1_000L, extension.runtime.httpSlowThresholdMs)
+        assertEquals(32L, extension.runtime.jankFrameThresholdMs)
+        assertEquals(32L, extension.runtime.uiWindowP95ThresholdMs)
+        assertEquals(true, extension.runtime.mainLooperDispatchMonitor)
+        assertEquals(true, extension.runtime.jankStats)
+        assertEquals(true, extension.runtime.mainProcessOnly)
+
+        extension.runtime {
+            it.mainThreadStallThresholdMs = 900L
+            it.ownerBlockThresholdMs = 120L
+            it.httpSlowThresholdMs = 2_000L
+            it.jankFrameThresholdMs = 24L
+            it.uiWindowP95ThresholdMs = 40L
+            it.mainLooperDispatchMonitor = false
+            it.jankStats = false
+            it.mainProcessOnly = false
+        }
+
+        assertEquals(900L, extension.runtime.mainThreadStallThresholdMs)
+        assertEquals(120L, extension.runtime.ownerBlockThresholdMs)
+        assertEquals(2_000L, extension.runtime.httpSlowThresholdMs)
+        assertEquals(24L, extension.runtime.jankFrameThresholdMs)
+        assertEquals(40L, extension.runtime.uiWindowP95ThresholdMs)
+        assertEquals(false, extension.runtime.mainLooperDispatchMonitor)
+        assertEquals(false, extension.runtime.jankStats)
+        assertEquals(false, extension.runtime.mainProcessOnly)
     }
 
     @Test

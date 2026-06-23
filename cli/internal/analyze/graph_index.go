@@ -507,7 +507,7 @@ func stringsKey(values []string) string {
 
 func hotPathReason(runtimeTarget bool) string {
 	if runtimeTarget {
-		return "ведет к классу с runtime-симптомами"
+		return "ведет к классу с симптомами выполнения"
 	}
 	return "сильная статическая связь рядом с проблемной зоной"
 }

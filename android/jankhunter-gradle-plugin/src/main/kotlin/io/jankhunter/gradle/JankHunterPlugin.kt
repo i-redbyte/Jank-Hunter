@@ -54,8 +54,22 @@ class JankHunterPlugin : Plugin<Project> {
                 releaseVariant,
                 extension.releaseSafety.allowDependencyInstrumentation,
             )
+            val effectiveMainProcessOnly = extension.runtime.mainProcessOnly ||
+                (releaseVariant && !extension.releaseSafety.allowSecondaryProcesses)
+            val runtimeThresholdsCustomized = extension.runtime.mainThreadStallThresholdMs != DEFAULT_MAIN_THREAD_STALL_THRESHOLD_MS ||
+                extension.runtime.ownerBlockThresholdMs != DEFAULT_OWNER_BLOCK_THRESHOLD_MS ||
+                extension.runtime.httpSlowThresholdMs != DEFAULT_HTTP_SLOW_THRESHOLD_MS ||
+                extension.runtime.jankFrameThresholdMs != DEFAULT_JANK_FRAME_THRESHOLD_MS ||
+                extension.runtime.uiWindowP95ThresholdMs != DEFAULT_UI_WINDOW_P95_THRESHOLD_MS
             val shouldGenerateRuntimeManifest = generateRuntimeManifest &&
-                (extension.retainedHeapDump.enabled || !extension.autoInit || releaseVariant || logBucket != "daily")
+                (extension.retainedHeapDump.enabled ||
+                    extension.runtime.mainLooperDispatchMonitor ||
+                    extension.runtime.jankStats ||
+                    runtimeThresholdsCustomized ||
+                    !extension.runtime.mainProcessOnly ||
+                    !extension.autoInit ||
+                    releaseVariant ||
+                    logBucket != "session")
             if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
@@ -64,12 +78,19 @@ class JankHunterPlugin : Plugin<Project> {
                     if (!extension.autoInit) {
                         it.runtimeEnabled.set(false)
                     }
+                    it.mainThreadStallThresholdMs.set(extension.runtime.mainThreadStallThresholdMs)
+                    it.ownerBlockThresholdMs.set(extension.runtime.ownerBlockThresholdMs)
+                    it.httpSlowThresholdMs.set(extension.runtime.httpSlowThresholdMs)
+                    it.mainLooperDispatchMonitorEnabled.set(extension.runtime.mainLooperDispatchMonitor)
                     it.retainedHeapDumpEnabled.set(extension.retainedHeapDump.enabled)
                     it.retainedHeapDumpPrivacyApproved.set(extension.retainedHeapDump.privacyApproved)
                     it.retainedHeapDumpMinIntervalMs.set(extension.retainedHeapDump.minIntervalMs)
                     it.retainedHeapDumpMaxCount.set(extension.retainedHeapDump.maxCount)
                     it.retainedHeapDumpMinRetainedAgeMs.set(extension.retainedHeapDump.minRetainedAgeMs)
-                    it.mainProcessOnly.set(!extension.releaseSafety.allowSecondaryProcesses)
+                    it.jankStatsEnabled.set(extension.runtime.jankStats)
+                    it.jankFrameThresholdMs.set(extension.runtime.jankFrameThresholdMs)
+                    it.uiWindowP95ThresholdMs.set(extension.runtime.uiWindowP95ThresholdMs)
+                    it.mainProcessOnly.set(effectiveMainProcessOnly)
                     it.deviceInfoEnabled.set(!releaseVariant || extension.releaseSafety.allowDeviceInfo)
                     it.logBucket.set(logBucket)
                 }
@@ -311,6 +332,11 @@ class JankHunterPlugin : Plugin<Project> {
 
     private companion object {
         private const val PERFORMANCE_BUDGET_MARKER = "jankhunter_release_performance_budget_v1"
+        private const val DEFAULT_MAIN_THREAD_STALL_THRESHOLD_MS = 700L
+        private const val DEFAULT_OWNER_BLOCK_THRESHOLD_MS = 250L
+        private const val DEFAULT_HTTP_SLOW_THRESHOLD_MS = 1_000L
+        private const val DEFAULT_JANK_FRAME_THRESHOLD_MS = 32L
+        private const val DEFAULT_UI_WINDOW_P95_THRESHOLD_MS = 32L
     }
 }
 

@@ -71,10 +71,10 @@ func memoryLeakSuspectFromStats(item memoryLeakStats, lowMemoryCount int, maxPSS
 	var alternativePaths [][]HeapPathElement
 	if heapEvidence {
 		estimatedRetainedKB = firstPositive(heap.RetainedSizeKB, estimatedRetainedKB)
-		sizeConfidence = firstNonEmpty(heap.Confidence, "высокое: рассчитано из heap dump")
+		sizeConfidence = firstNonEmpty(heap.Confidence, "высокое: рассчитано из дампа памяти")
 		dominatorPath = heapDominatorPath(*heap, className)
-		dominatorConfidence = "высокое: путь найден в heap dump до GC root"
-		chainConfidence = "высокое: runtime retained-событие связано с heap-путем до GC root"
+		dominatorConfidence = "высокое: путь найден в дампе памяти до корня GC"
+		chainConfidence = "высокое: событие удержания из выполнения связано с путем из дампа памяти до корня GC"
 		chainSummary = retainedHeapChainSummary(*heap, holder, className, objectKind)
 		chainActions = retainedHeapChainActions(*heap, chainActions)
 		retainedObjectCount = heap.RetainedObjectCount
@@ -302,10 +302,10 @@ func retainedImpact(className string, item memoryLeakStats, lowMemoryCount int, 
 			parts = append(parts, "Паттерн: "+heap.LeakPattern+".")
 		}
 		if heap.RetainedObjectCount > 0 {
-			parts = append(parts, fmt.Sprintf("В heap dump доминируемых объектов: %d.", heap.RetainedObjectCount))
+			parts = append(parts, fmt.Sprintf("В дампе памяти доминируемых объектов: %d.", heap.RetainedObjectCount))
 		}
 		if heap.GCRoot != "" {
-			parts = append(parts, "GC root: "+heap.GCRoot+".")
+			parts = append(parts, "Корень GC: "+heap.GCRoot+".")
 		}
 	}
 	if estimatedRetainedKB > 0 {
@@ -325,12 +325,12 @@ func retainedImpact(className string, item memoryLeakStats, lowMemoryCount int, 
 
 func retainedRecommendation(className, holder, holderQuality string) string {
 	if holderQuality == "держатель не определен" || strings.HasPrefix(holderQuality, "автоматическая проверка") {
-		return "Проверьте владельцев ссылок на этот объект: singleton, static/cache, корутинные задачи, слушатели, обратные вызовы, adapter, ViewModel и DI scope. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
+		return "Проверьте владельцев ссылок на этот объект: одиночки, статические поля и кеши, корутинные задачи, слушатели, обратные вызовы, adapter, ViewModel и область DI. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
 	}
 	if isLikelySystemClass(className) {
 		return fmt.Sprintf("Проверьте пользовательский держатель %s: не хранит ли он Context/View/Activity дольше жизненного цикла.", holder)
 	}
-	return fmt.Sprintf("Проверьте %s: очистку слушателей и обратных вызовов, отмену корутинных задач, слабые или сбрасываемые ссылки, scope DI и отмену фоновой работы при уходе экрана.", holder)
+	return fmt.Sprintf("Проверьте %s: очистку слушателей и обратных вызовов, отмену корутинных задач, слабые или сбрасываемые ссылки, область DI и отмену фоновой работы при уходе экрана.", holder)
 }
 
 func retainedEvidence(item memoryLeakStats, lowMemoryCount int, maxPSSKB, estimatedRetainedKB uint64, sizeConfidence string, heap *HeapLeakEvidence) string {
@@ -339,12 +339,12 @@ func retainedEvidence(item memoryLeakStats, lowMemoryCount int, maxPSSKB, estima
 		fmt.Sprintf("макс. возраст=%s", formatDurationMS(item.maxAgeMs)),
 	}
 	if heap != nil {
-		parts = append(parts, "heap=есть")
+		parts = append(parts, "дамп=есть")
 		if heap.Source != "" {
-			parts = append(parts, "heap source="+heap.Source)
+			parts = append(parts, "источник дампа="+heap.Source)
 		}
 		if heap.GCRoot != "" {
-			parts = append(parts, "GC root="+heap.GCRoot)
+			parts = append(parts, "корень GC="+heap.GCRoot)
 		}
 		if heap.HolderField != "" {
 			parts = append(parts, "поле="+heap.HolderField)
@@ -353,10 +353,10 @@ func retainedEvidence(item memoryLeakStats, lowMemoryCount int, maxPSSKB, estima
 			parts = append(parts, "паттерн="+heap.LeakPattern)
 		}
 		if len(heap.ReferenceMatchers) > 0 {
-			parts = append(parts, "reference matchers="+strings.Join(heap.ReferenceMatchers, ","))
+			parts = append(parts, "совпавшие правила ссылок="+strings.Join(heap.ReferenceMatchers, ","))
 		}
 		if heap.RetainedObjectCount > 0 {
-			parts = append(parts, fmt.Sprintf("dominated objects=%d", heap.RetainedObjectCount))
+			parts = append(parts, fmt.Sprintf("доминируемые объекты=%d", heap.RetainedObjectCount))
 		}
 	}
 	if estimatedRetainedKB > 0 {
@@ -367,7 +367,7 @@ func retainedEvidence(item memoryLeakStats, lowMemoryCount int, maxPSSKB, estima
 		parts = append(parts, "экран="+item.screen)
 	}
 	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "флоу="+item.flow)
+		parts = append(parts, "сценарий="+item.flow)
 	}
 	if item.step != "" && item.step != "unknown" {
 		parts = append(parts, "шаг="+item.step)
@@ -447,14 +447,14 @@ func retainedSizeConfidence(item memoryLeakStats, holderQuality string, maxPSSKB
 
 func retainedSizeExplanation(sizeKB uint64, confidence, objectKind string, heap *HeapLeakEvidence) string {
 	if sizeKB == 0 {
-		return "Размер не рассчитан: в логе нет достаточных runtime-сигналов."
+		return "Размер не рассчитан: в логе нет достаточных сигналов выполнения."
 	}
 	if heap != nil {
 		source := heap.Source
 		if source == "" {
-			source = "heap dump"
+			source = "дамп памяти"
 		}
-		return fmt.Sprintf("Размер взят из анализа %s: retained size=%s. Доверие: %s.", source, formatDataSize(sizeKB), confidence)
+		return fmt.Sprintf("Размер взят из анализа %s: удержанный размер=%s. Доверие: %s.", source, formatDataSize(sizeKB), confidence)
 	}
 	return fmt.Sprintf("Это не точный размер удержанной кучи из дампа памяти, а оценка по типу объекта %q, числу удержаний, возрасту и PSS процесса. Доверие: %s.", objectKind, confidence)
 }
@@ -465,7 +465,7 @@ func retainedDominatorPath(item memoryLeakStats, holder, className string) []str
 		path = append(path, "экран: "+item.screen)
 	}
 	if item.flow != "" && item.flow != "unknown" {
-		path = append(path, "флоу: "+item.flow)
+		path = append(path, "сценарий: "+item.flow)
 	}
 	if item.step != "" && item.step != "unknown" {
 		path = append(path, "шаг: "+item.step)
@@ -490,21 +490,21 @@ func retainedDominatorConfidence(holderQuality string, path []string) string {
 		return "низкое: нужен дамп кучи или ownerHint"
 	}
 	if strings.HasPrefix(holderQuality, "автоматическая проверка") {
-		return "среднее: известен lifecycle-контекст"
+		return "среднее: известен контекст жизненного цикла"
 	}
 	return "среднее: путь собран из контекста выполнения"
 }
 
 func retainedDominatorExplanation(confidence string, heap *HeapLeakEvidence) string {
 	if heap != nil {
-		details := []string{"Путь построен из heap dump и показывает цепочку ссылок от GC root до удержанного объекта."}
+		details := []string{"Путь построен из дампа памяти и показывает цепочку ссылок от корня GC до удержанного объекта."}
 		if len(heap.DominatorTree) > 0 {
 			details = append(details, "В мини-дереве доминирования: "+strings.Join(heap.DominatorTree, ", ")+".")
 		}
 		details = append(details, "Доверие: "+confidence+".")
 		return strings.Join(details, " ")
 	}
-	return "Мини-дерево показывает вероятную цепочку доминирования по контексту выполнения. Это помогает быстрее найти владельца ссылки, но точный корень GC и размер удержанной кучи появятся только при анализе дампа памяти. Доверие: " + confidence + "."
+	return "Мини-дерево показывает вероятную цепочку доминирования по контексту выполнения. Это помогает быстрее найти владельца ссылки, но точный корень GC и размер удержанной памяти появятся только при анализе дампа памяти. Доверие: " + confidence + "."
 }
 
 func retainedLeakChainConfidence(item memoryLeakStats, holderQuality string, userOwned bool) string {
@@ -521,7 +521,7 @@ func retainedLeakChainConfidence(item memoryLeakStats, holderQuality string, use
 	case userOwned:
 		return "среднее: есть пользовательский держатель"
 	default:
-		return "ориентировочное: цепочка построена по runtime-сигналам"
+		return "ориентировочное: цепочка построена по сигналам выполнения"
 	}
 }
 
@@ -543,7 +543,7 @@ func retainedLeakChainSummary(item memoryLeakStats, holder, className, objectKin
 		parts = append(parts, "Экран: "+item.screen+".")
 	}
 	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "Флоу: "+item.flow+".")
+		parts = append(parts, "Сценарий: "+item.flow+".")
 	}
 	if item.step != "" && item.step != "unknown" {
 		parts = append(parts, "Шаг: "+item.step+".")
@@ -560,43 +560,43 @@ func retainedLeakChainActions(item memoryLeakStats, holder, className, objectKin
 		actions = append(actions, "Добавьте ownerHint в watchObject/watchActivity или оберните подозрительный участок в withOwner.")
 	case holderClass != "":
 		if holderMethod != "" {
-			actions = append(actions, fmt.Sprintf("Проверьте %s.%s: какие поля, кеши, listeners или callbacks сохраняют %s.", holderClass, holderMethod, className))
+			actions = append(actions, fmt.Sprintf("Проверьте %s.%s: какие поля, кеши, слушатели или обратные вызовы сохраняют %s.", holderClass, holderMethod, className))
 		} else {
-			actions = append(actions, fmt.Sprintf("Проверьте поля, кеши, listeners и callbacks внутри %s.", holderClass))
+			actions = append(actions, fmt.Sprintf("Проверьте поля, кеши, слушатели и обратные вызовы внутри %s.", holderClass))
 		}
 	}
 	switch objectKind {
 	case "экран / Activity", "Fragment", "Context":
-		actions = append(actions, "Проверьте lifecycle: очистку ссылок в onDestroy/onDestroyView и отсутствие Activity/Context в singleton, static, DI singleton и долгих задачах.")
+		actions = append(actions, "Проверьте жизненный цикл: очистку ссылок в onDestroy/onDestroyView и отсутствие Activity/Context в одиночках, статических полях, одиночках DI и долгих задачах.")
 	case "ViewModel":
-		actions = append(actions, "Проверьте onCleared: отмену coroutine Job/Flow subscription, очистку LiveData observers/callbacks и отсутствие ссылок на View/Activity.")
+		actions = append(actions, "Проверьте onCleared: отмену корутинных задач и Flow-подписок, очистку наблюдателей LiveData и обратных вызовов, отсутствие ссылок на View/Activity.")
 	case "Service":
-		actions = append(actions, "Проверьте onDestroy сервиса: отмену foreground/background work, unregisterReceiver, callbacks и release долгоживущих ресурсов.")
+		actions = append(actions, "Проверьте onDestroy сервиса: отмену передней и фоновой работы, unregisterReceiver, обратные вызовы и освобождение долгоживущих ресурсов.")
 	case "Dialog":
-		actions = append(actions, "Проверьте dismiss/onStop/onDestroy: listener/window/decorView ссылки должны очищаться, а callback не должен держать Activity.")
+		actions = append(actions, "Проверьте dismiss/onStop/onDestroy: ссылки слушателя, окна и decorView должны очищаться, а обратный вызов не должен держать Activity.")
 	case "RecyclerView ViewHolder", "adapter":
-		actions = append(actions, "Проверьте RecyclerView cleanup: onViewRecycled/onViewDetachedFromWindow/onDetachedFromRecyclerView должны очищать binding, listeners, observers и adapter callbacks.")
+		actions = append(actions, "Проверьте очистку RecyclerView: onViewRecycled/onViewDetachedFromWindow/onDetachedFromRecyclerView должны очищать привязку view, слушателей, наблюдателей и обратные вызовы адаптера.")
 	case "View / binding":
-		actions = append(actions, "Проверьте binding/View ссылки: сброс в onDestroyView, adapter/listener cleanup и отсутствие View в фоновых callbacks.")
+		actions = append(actions, "Проверьте ссылки binding/View: сброс в onDestroyView, очистку адаптера и слушателя, отсутствие View в фоновых обратных вызовах.")
 	case "ресурс":
 		actions = append(actions, "Проверьте закрытие Cursor/Stream/Closeable и отмену работы при уходе экрана.")
 	case "системный объект":
-		actions = append(actions, "Системный объект считайте симптомом: ищите пользовательский holder, который дольше жизненного цикла держит ссылку на него.")
+		actions = append(actions, "Системный объект считайте симптомом: ищите пользовательский держатель, который дольше жизненного цикла держит ссылку на него.")
 	default:
-		actions = append(actions, "Проверьте коллекции, кеши, coroutine Job, Flow subscription и observer/listener, которые живут дольше экрана.")
+		actions = append(actions, "Проверьте коллекции, кеши, корутинные задачи, Flow-подписки, наблюдателей и слушателей, которые живут дольше экрана.")
 	}
 	if item.maxAgeMs >= 30_000 {
-		actions = append(actions, "Возраст удержания больше 30 секунд: проверьте долгие coroutine/executor задачи и отмену при закрытии флоу.")
+		actions = append(actions, "Возраст удержания больше 30 секунд: проверьте долгие корутинные задачи, задачи исполнителя и отмену при закрытии сценария.")
 	}
 	if item.count >= 3 {
-		actions = append(actions, "Удержание повторяется: ищите накопление в списках, кешах, подписках или повторной регистрации listener без снятия.")
+		actions = append(actions, "Удержание повторяется: ищите накопление в списках, кешах, подписках или повторной регистрации слушателя без снятия.")
 	}
 	return uniqueStrings(actions)
 }
 
 func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectKind string, heap *HeapLeakEvidence) []string {
 	steps := []string{
-		"Откройте Leak Explorer и начните с первого app-класса после GC root или runtime owner.",
+		"Откройте проводник утечек и начните с первого класса приложения после корня GC или владельца из событий выполнения.",
 	}
 	if heap != nil {
 		if heap.HolderField != "" {
@@ -606,37 +606,37 @@ func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectK
 			steps = append(steps, "Проверьте конкретный паттерн: "+heap.LeakPattern+".")
 		}
 		if heap.GCRootCategory != "" {
-			steps = append(steps, "Проверьте категорию GC root: "+heap.GCRootCategory+"; она подсказывает, искать static/singleton, поток, JNI или системный callback.")
+			steps = append(steps, "Проверьте категорию корня GC: "+heap.GCRootCategory+"; она подсказывает, искать статическое поле, одиночку, поток, JNI или системный обратный вызов.")
 		}
 		if len(heap.AlternativePaths) > 0 {
-			steps = append(steps, "Посмотрите альтернативные пути: если их несколько, фиксите самого долгоживущего владельца, а не только первый field.")
+			steps = append(steps, "Посмотрите альтернативные пути: если их несколько, исправляйте самого долгоживущего владельца, а не только первое поле.")
 		}
 	} else if holder == "" || holder == "unknown" || holder == "не определен" {
-		steps = append(steps, "Повторите сценарий с ownerHint или withOwner, чтобы light mode связал объект с владельцем ссылки.")
+		steps = append(steps, "Повторите сценарий с ownerHint или withOwner, чтобы легкий режим связал объект с владельцем ссылки.")
 	}
 	if item.screen != "" && item.screen != "unknown" {
-		steps = append(steps, "Воспроизведите экран "+item.screen+" и проверьте, что объект исчезает после закрытия экрана и retained-delay.")
+		steps = append(steps, "Воспроизведите экран "+item.screen+" и проверьте, что объект исчезает после закрытия экрана и задержки удержания.")
 	}
 	switch objectKind {
 	case "экран / Activity", "Fragment", "Context":
-		steps = append(steps, "Проверьте lifecycle boundary: onDestroy/onDestroyView, отписку observers/listeners и отмену фоновой работы.")
+		steps = append(steps, "Проверьте границу жизненного цикла: onDestroy/onDestroyView, отписку наблюдателей и слушателей, отмену фоновой работы.")
 	case "ViewModel":
-		steps = append(steps, "Проверьте ViewModel.onCleared: все coroutine scope, Flow/LiveData подписки и callbacks должны завершаться или отвязываться.")
+		steps = append(steps, "Проверьте ViewModel.onCleared: все корутинные области, Flow/LiveData подписки и обратные вызовы должны завершаться или отвязываться.")
 	case "Service":
-		steps = append(steps, "Проверьте Service.onDestroy и stopSelf/stopForeground путь: не остается ли активный поток, receiver, binder callback или singleton reference.")
+		steps = append(steps, "Проверьте путь Service.onDestroy и stopSelf/stopForeground: не остается ли активный поток, receiver, binder-обратный вызов или ссылка из одиночки.")
 	case "Dialog":
-		steps = append(steps, "Проверьте dismiss/onStop/onDestroy: window/decorView/listener ссылки не должны переживать закрытие dialog.")
+		steps = append(steps, "Проверьте dismiss/onStop/onDestroy: ссылки окна, decorView и слушателей не должны переживать закрытие диалога.")
 	case "RecyclerView ViewHolder", "adapter":
-		steps = append(steps, "Проверьте RecyclerView lifecycle: binding/listener/observer очищаются при recycle/detach, adapter не держит экран после detach.")
+		steps = append(steps, "Проверьте жизненный цикл RecyclerView: binding, слушатель и наблюдатель очищаются при recycle/detach, адаптер не держит экран после detach.")
 	case "View / binding":
-		steps = append(steps, "Проверьте, что binding/View не хранится после onDestroyView и не попадает в adapter/listener/cache.")
+		steps = append(steps, "Проверьте, что binding/View не хранится после onDestroyView и не попадает в адаптер, слушатель или кеш.")
 	case "ресурс":
 		steps = append(steps, "Проверьте close/cancel/dispose для ресурса и его владельца.")
 	default:
 		if strings.Contains(strings.ToLower(className), "listener") || strings.Contains(strings.ToLower(holder), "listener") {
-			steps = append(steps, "Проверьте регистрацию listener/callback: у каждой регистрации должна быть симметричная отписка.")
+			steps = append(steps, "Проверьте регистрацию слушателя или обратного вызова: у каждой регистрации должна быть симметричная отписка.")
 		} else {
-			steps = append(steps, "Проверьте коллекции, кеши, singleton/DI scope и долгоживущие callbacks.")
+			steps = append(steps, "Проверьте коллекции, кеши, одиночки, области DI и долгоживущие обратные вызовы.")
 		}
 	}
 	return uniqueStrings(steps)
@@ -645,34 +645,34 @@ func retainedInvestigationSteps(item memoryLeakStats, holder, className, objectK
 func retainedFixExamples(holder, objectKind string, heap *HeapLeakEvidence) []string {
 	examples := []string{}
 	if heap != nil && heap.HolderField != "" {
-		examples = append(examples, "Очистите "+heap.HolderField+" на lifecycle boundary или замените сильную ссылку на WeakReference, если владелец обязан жить дольше.")
+		examples = append(examples, "Очистите "+heap.HolderField+" на границе жизненного цикла или замените сильную ссылку на WeakReference, если владелец обязан жить дольше.")
 	}
 	if heap != nil && heap.LeakPattern != "" {
-		examples = append(examples, "Зафиксируйте паттерн \""+heap.LeakPattern+"\" регрессионным сценарием: объект должен исчезнуть после retained-delay и повторного heap dump.")
+		examples = append(examples, "Зафиксируйте паттерн \""+heap.LeakPattern+"\" регрессионным сценарием: объект должен исчезнуть после задержки удержания и повторного дампа памяти.")
 	}
 	switch objectKind {
 	case "экран / Activity", "Context":
-		examples = append(examples, "Не храните Activity/Context в singleton/static; передавайте applicationContext только для app-wide зависимостей.")
-		examples = append(examples, "Отменяйте coroutine/executor work в onDestroy или scope владельца экрана.")
+		examples = append(examples, "Не храните Activity/Context в одиночке или статическом поле; передавайте applicationContext только для зависимостей всего приложения.")
+		examples = append(examples, "Отменяйте корутинную работу и задачи исполнителя в onDestroy или области владельца экрана.")
 	case "Fragment":
-		examples = append(examples, "Очищайте view binding в onDestroyView и отписывайте observers, привязанные к view lifecycle.")
+		examples = append(examples, "Очищайте view binding в onDestroyView и отписывайте наблюдателей, привязанных к жизненному циклу view.")
 	case "ViewModel":
-		examples = append(examples, "В onCleared отменяйте jobs/scopes и очищайте callbacks; не храните Activity/View/Fragment в ViewModel.")
+		examples = append(examples, "В onCleared отменяйте задачи и области, очищайте обратные вызовы; не храните Activity/View/Fragment в ViewModel.")
 	case "Service":
-		examples = append(examples, "В onDestroy снимайте receivers/listeners, останавливайте foreground работу и закрывайте binder/native ресурсы.")
+		examples = append(examples, "В onDestroy снимайте receivers и слушателей, останавливайте переднюю работу и закрывайте binder/native ресурсы.")
 	case "Dialog":
-		examples = append(examples, "Перед dismiss/onDestroy сбрасывайте listeners и callbacks, которые держат Activity или decorView.")
+		examples = append(examples, "Перед dismiss/onDestroy сбрасывайте слушателей и обратные вызовы, которые держат Activity или decorView.")
 	case "RecyclerView ViewHolder", "adapter":
-		examples = append(examples, "В onViewRecycled/onViewDetachedFromWindow очищайте binding/listeners; в adapter detach очищайте callbacks на экран.")
+		examples = append(examples, "В onViewRecycled/onViewDetachedFromWindow очищайте binding и слушателей; при detach адаптера очищайте обратные вызовы на экран.")
 	case "View / binding":
-		examples = append(examples, "Сбрасывайте adapter/listener callbacks, которые держат View или binding после закрытия экрана.")
+		examples = append(examples, "Сбрасывайте обратные вызовы адаптера и слушателей, которые держат View или binding после закрытия экрана.")
 	case "ресурс":
 		examples = append(examples, "Используйте use/try-finally и закрывайте Cursor/Stream/Closeable при отмене сценария.")
 	default:
-		examples = append(examples, "Для cache/listener храните remove/clear рядом с add/register и покрывайте это lifecycle-тестом.")
+		examples = append(examples, "Для кеша или слушателя держите remove/clear рядом с add/register и покрывайте это тестом жизненного цикла.")
 	}
 	if holder != "" && holder != "unknown" && holder != "не определен" {
-		examples = append(examples, "Добавьте тест или debug assertion, что "+holder+" после cleanup не содержит ссылку на удержанный объект.")
+		examples = append(examples, "Добавьте тест или отладочную проверку, что "+holder+" после очистки не содержит ссылку на удержанный объект.")
 	}
 	return uniqueStrings(examples)
 }
@@ -680,12 +680,12 @@ func retainedFixExamples(holder, objectKind string, heap *HeapLeakEvidence) []st
 func retainedVerificationSteps(heapEvidence bool) []string {
 	steps := []string{
 		"Повторите тот же пользовательский сценарий после фикса.",
-		"Сравните baseline/candidate через compare-leaks.html и убедитесь, что fingerprint стал better или resolved.",
+		"Сравните базовый и проверяемый прогоны через compare-leaks.html и убедитесь, что отпечаток стал слабее или исчез.",
 	}
 	if heapEvidence {
-		steps = append(steps, "Снимите новый HPROF и проверьте, что путь до GC root исчез или retained size заметно упал.")
+		steps = append(steps, "Снимите новый HPROF и проверьте, что путь до корня GC исчез или удержанный размер заметно упал.")
 	} else {
-		steps = append(steps, "Если light mode всё ещё показывает удержание, повторите прогон с --heap-dump или --heap-evidence.")
+		steps = append(steps, "Если легкий режим всё ещё показывает удержание, повторите прогон с --heap-dump или --heap-evidence.")
 	}
 	return steps
 }
@@ -753,23 +753,23 @@ func heapDominatorPath(heap HeapLeakEvidence, className string) []string {
 }
 
 func retainedHeapChainSummary(heap HeapLeakEvidence, holder, className, objectKind string) string {
-	parts := []string{fmt.Sprintf("Удержан %s %s, цепочка подтверждена heap dump.", objectKind, className)}
+	parts := []string{fmt.Sprintf("Удержан %s %s, цепочка подтверждена дампом памяти.", objectKind, className)}
 	if heap.GCRoot != "" {
-		parts = append(parts, "GC root: "+heap.GCRoot+".")
+		parts = append(parts, "Корень GC: "+heap.GCRoot+".")
 	}
 	if heap.GCRootCategory != "" {
-		parts = append(parts, "Категория root: "+heap.GCRootCategory+".")
+		parts = append(parts, "Категория корня: "+heap.GCRootCategory+".")
 	}
 	if heap.Holder != "" {
 		parts = append(parts, "Пользовательский держатель: "+heap.Holder+".")
 	} else if holder != "" && holder != "unknown" && holder != "не определен" {
-		parts = append(parts, "Держатель из runtime-контекста: "+holder+".")
+		parts = append(parts, "Держатель из контекста выполнения: "+holder+".")
 	}
 	if heap.HolderField != "" {
 		parts = append(parts, "Поле/ссылка: "+heap.HolderField+".")
 	}
 	if heap.RetainedSizeKB > 0 {
-		parts = append(parts, "Retained size: "+formatDataSize(heap.RetainedSizeKB)+".")
+		parts = append(parts, "Удержанный размер: "+formatDataSize(heap.RetainedSizeKB)+".")
 	}
 	if heap.RetainedObjectCount > 0 {
 		parts = append(parts, fmt.Sprintf("Доминатор удерживает %d объект(ов).", heap.RetainedObjectCount))
@@ -783,25 +783,25 @@ func retainedHeapChainSummary(heap HeapLeakEvidence, holder, className, objectKi
 func retainedHeapChainActions(heap HeapLeakEvidence, fallback []string) []string {
 	actions := make([]string, 0, len(fallback)+2)
 	if heap.HolderField != "" {
-		actions = append(actions, "Начните с поля "+heap.HolderField+": очистите ссылку на lifecycle boundary или перенесите владельца в более короткий scope.")
+		actions = append(actions, "Начните с поля "+heap.HolderField+": очистите ссылку на границе жизненного цикла или перенесите владельца в более короткую область.")
 	}
 	if heap.GCRoot != "" {
-		actions = append(actions, "Проверьте, почему цепочка живет от GC root "+heap.GCRoot+": static/singleton, thread local, активный поток, JNI или системный callback.")
+		actions = append(actions, "Проверьте, почему цепочка живет от корня GC "+heap.GCRoot+": статическое поле, одиночка, thread-local, активный поток, JNI или системный обратный вызов.")
 	}
 	if heap.GCRootCategory != "" {
 		switch heap.GCRootCategory {
 		case "class/static":
-			actions = append(actions, "Категория class/static: ищите companion object, object singleton, static field, DI singleton или global cache.")
+			actions = append(actions, "Категория class/static: ищите companion object, object singleton, статическое поле, одиночку DI или глобальный кеш.")
 		case "thread":
 			actions = append(actions, "Категория thread: проверьте активные Runnable/Coroutine/Executor/Handler задачи и ThreadLocal.")
 		case "jni":
-			actions = append(actions, "Категория JNI: проверьте native/global references и сторонние SDK callbacks.")
+			actions = append(actions, "Категория JNI: проверьте native/global references и обратные вызовы сторонних SDK.")
 		case "monitor":
 			actions = append(actions, "Категория monitor: проверьте синхронизацию и объекты, удерживаемые заблокированными потоками.")
 		}
 	}
 	if len(heap.ReferenceMatchers) > 0 {
-		actions = append(actions, "Reference matchers подсказали область риска: "+strings.Join(heap.ReferenceMatchers, ", ")+". Проверьте соответствующий framework/listener/context cleanup.")
+		actions = append(actions, "Правила совпадения ссылок подсказали область риска: "+strings.Join(heap.ReferenceMatchers, ", ")+". Проверьте соответствующую очистку фреймворка, слушателя или контекста.")
 	}
 	actions = append(actions, fallback...)
 	return uniqueStrings(actions)

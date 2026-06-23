@@ -204,11 +204,11 @@ func BuildLeakReport(summary Summary) LeakReport {
 		Warnings: leakWarnings(summary.Warnings),
 	}
 	if mode == LeakModeHeap {
-		report.ModeTitle = "Heap mode"
-		report.ModeHint = "Есть HPROF/heap evidence: отчет показывает подтвержденные пути от GC root, поля-ссылки, retained size и граф цепочки удержания."
+		report.ModeTitle = "Режим дампа памяти"
+		report.ModeHint = "Есть HPROF или доказательства из дампа памяти: отчет показывает подтвержденные пути от корня GC, поля-ссылки, удержанный размер и граф цепочки удержания."
 	} else {
-		report.ModeTitle = "Light mode"
-		report.ModeHint = "Heap dump не передан: отчет показывает retained-сигналы runtime, ownerHint/flow-контекст и вероятную цепочку. Точный GC root и поле ссылки появятся после --heap-dump или --heap-evidence."
+		report.ModeTitle = "Легкий режим"
+		report.ModeHint = "Дамп памяти не передан: отчет показывает сигналы удержания из событий выполнения, контекст владельца и сценария, а также вероятную цепочку. Точный корень GC и поле ссылки появятся после --heap-dump или --heap-evidence."
 	}
 	return report
 }
@@ -417,23 +417,23 @@ func buildLeakDelta(key string, before MemoryLeakSuspect, hasBefore bool, after 
 func leakMatchConfidence(before MemoryLeakSuspect, hasBefore bool, after MemoryLeakSuspect, hasAfter bool) string {
 	if !hasBefore || !hasAfter {
 		if (hasBefore && before.HeapEvidence) || (hasAfter && after.HeapEvidence) {
-			return "medium: fingerprint heap-цепочки уникален для одной стороны"
+			return "среднее: отпечаток цепочки из дампа памяти уникален для одной стороны"
 		}
-		return "medium: fingerprint найден только в одной версии"
+		return "среднее: отпечаток найден только в одной версии"
 	}
 	if before.ChainFingerprint != "" && before.ChainFingerprint == after.ChainFingerprint {
 		if before.HeapEvidence || after.HeapEvidence {
-			return "high: совпал нормализованный heap-chain fingerprint"
+			return "высокое: совпал нормализованный отпечаток цепочки из дампа памяти"
 		}
-		return "high: совпал нормализованный runtime-chain fingerprint"
+		return "высокое: совпал нормализованный отпечаток цепочки выполнения"
 	}
 	if before.ClassName == after.ClassName && before.Holder != "" && before.Holder == after.Holder {
-		return "medium: совпали class и holder"
+		return "среднее: совпали класс и держатель"
 	}
 	if before.ClassName == after.ClassName {
-		return "low: совпал только class, уточните ownerHint или heap evidence"
+		return "низкое: совпал только класс, уточните ownerHint или добавьте доказательства из дампа памяти"
 	}
-	return "low: сопоставление построено по fallback fingerprint"
+	return "низкое: сопоставление построено по резервному отпечатку"
 }
 
 func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
@@ -490,13 +490,13 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 			Depth:  len(suspect.ReferencePath) + 1,
 		})
 		if targetID != "" {
-			edges = append(edges, LeakGraphEdge{From: targetID, To: id, Label: "retains", Kind: "retained"})
+			edges = append(edges, LeakGraphEdge{From: targetID, To: id, Label: "удерживает", Kind: "retained"})
 		}
 	}
 	return LeakGraph{
 		Mode:        LeakModeHeap,
 		Title:       "Подтвержденная цепочка ссылок",
-		Subtitle:    "Путь построен из heap dump: от GC root к удержанному объекту, затем sample доминируемых классов.",
+		Subtitle:    "Путь построен из дампа памяти: от корня GC к удержанному объекту, затем выборка доминируемых классов.",
 		Nodes:       nodes,
 		Edges:       edges,
 		RootID:      rootID,
@@ -508,7 +508,7 @@ func heapLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 func runtimeLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 	labels := suspect.DominatorPath
 	if len(labels) == 0 {
-		labels = []string{"runtime retained signal", "удержанный объект: " + suspect.ClassName}
+		labels = []string{"сигнал удержания из выполнения", "удержанный объект: " + suspect.ClassName}
 	}
 	nodes := make([]LeakGraphNode, 0, len(labels))
 	edges := make([]LeakGraphEdge, 0, len(labels)-1)
@@ -518,7 +518,7 @@ func runtimeLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		switch {
 		case strings.HasPrefix(label, "экран:"):
 			kind = "screen"
-		case strings.HasPrefix(label, "флоу:"):
+		case strings.HasPrefix(label, "сценарий:"), strings.HasPrefix(label, "флоу:"):
 			kind = "flow"
 		case strings.HasPrefix(label, "шаг:"):
 			kind = "step"
@@ -527,15 +527,15 @@ func runtimeLeakGraph(suspect MemoryLeakSuspect) LeakGraph {
 		case strings.HasPrefix(label, "удержанный объект:"):
 			kind = "target"
 		}
-		nodes = append(nodes, LeakGraphNode{ID: id, Label: label, Detail: "runtime signal", Kind: kind, Depth: index})
+		nodes = append(nodes, LeakGraphNode{ID: id, Label: label, Detail: "сигнал выполнения", Kind: kind, Depth: index})
 		if index > 0 {
-			edges = append(edges, LeakGraphEdge{From: fmt.Sprintf("runtime-%d", index-1), To: id, Label: "context", Kind: "runtime"})
+			edges = append(edges, LeakGraphEdge{From: fmt.Sprintf("runtime-%d", index-1), To: id, Label: "контекст", Kind: "runtime"})
 		}
 	}
 	return LeakGraph{
 		Mode:     LeakModeLight,
 		Title:    "Вероятная цепочка удержания",
-		Subtitle: "Heap dump не передан: граф показывает runtime-контекст и ownerHint, а не точные ссылки объектов.",
+		Subtitle: "Дамп памяти не передан: граф показывает контекст выполнения и ownerHint, а не точные ссылки объектов.",
 		Nodes:    nodes,
 		Edges:    edges,
 		RootID:   "runtime-0",
@@ -563,9 +563,9 @@ func leakReportVerdict(stats LeakReportStats) string {
 	case stats.TotalSuspects == 0:
 		return "Подозрений на утечки памяти нет."
 	case stats.High > 0:
-		return fmt.Sprintf("Найдено %d подозрений, из них %d высокого риска. Начните с строк, где есть Activity/Fragment/Context, heap evidence или большой возраст удержания.", stats.TotalSuspects, stats.High)
+		return fmt.Sprintf("Найдено %d подозрений, из них %d высокого риска. Начните со строк, где есть Activity/Fragment/Context, доказательства из дампа памяти или большой возраст удержания.", stats.TotalSuspects, stats.High)
 	case stats.Medium > 0:
-		return fmt.Sprintf("Найдено %d подозрений, явных критичных утечек нет. Проверьте повторяемые удержания и добавьте heap dump для точной цепочки.", stats.TotalSuspects)
+		return fmt.Sprintf("Найдено %d подозрений, явных критичных утечек нет. Проверьте повторяемые удержания и добавьте дамп памяти для точной цепочки.", stats.TotalSuspects)
 	default:
 		return fmt.Sprintf("Найдено %d слабых сигналов удержания. Это стоит мониторить, но без роста возраста/количества риск низкий.", stats.TotalSuspects)
 	}
@@ -667,15 +667,15 @@ func leakDeltaStatusRank(status string) int {
 func leakDeltaExplanation(delta LeakDelta) string {
 	switch delta.Status {
 	case LeakDeltaNew:
-		return fmt.Sprintf("В baseline такой fingerprint не встречался, а в candidate удержан %s. Это вероятная новая lifecycle-регрессия.", delta.Candidate.ClassName)
+		return fmt.Sprintf("В базовом прогоне такой отпечаток не встречался, а в проверяемом прогоне удержан %s. Это вероятная новая регрессия жизненного цикла.", delta.Candidate.ClassName)
 	case LeakDeltaWorse:
-		return fmt.Sprintf("Подозрение уже было в baseline, но стало сильнее: score %+0.1f, count %+d, возраст %+d мс, размер %+d KB.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
+		return fmt.Sprintf("Подозрение уже было в базовом прогоне, но стало сильнее: оценка %+0.1f, количество %+d, возраст %+d мс, размер %+d КБ.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
 	case LeakDeltaBetter:
-		return fmt.Sprintf("Сигнал стал слабее: score %+0.1f, count %+d, возраст %+d мс, размер %+d KB.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
+		return fmt.Sprintf("Сигнал стал слабее: оценка %+0.1f, количество %+d, возраст %+d мс, размер %+d КБ.", delta.DeltaScore, delta.DeltaCount, delta.DeltaAgeMS, delta.DeltaEstimatedKB)
 	case LeakDeltaResolved:
-		return fmt.Sprintf("В candidate этот fingerprint не найден. Если сценарий и когорты совпадают, утечка %s, вероятно, исправлена.", delta.Baseline.ClassName)
+		return fmt.Sprintf("В проверяемом прогоне этот отпечаток не найден. Если сценарий и когорты совпадают, утечка %s, вероятно, исправлена.", delta.Baseline.ClassName)
 	default:
-		return "Сигнал остался примерно на том же уровне: проверьте, что сценарии baseline/candidate действительно одинаковые."
+		return "Сигнал остался примерно на том же уровне: проверьте, что сценарии базового и проверяемого прогонов действительно одинаковые."
 	}
 }
 
@@ -683,7 +683,7 @@ func leakDeltaRecommendation(delta LeakDelta) string {
 	if delta.HasCandidate {
 		return delta.Candidate.Recommendation
 	}
-	return "Сохраните этот fingerprint в regressions watchlist: если он вернется в candidate, проверяйте тот же holder/flow и lifecycle cleanup."
+	return "Сохраните этот отпечаток в списке отслеживания регрессий: если он вернется в проверяемом прогоне, проверяйте тот же держатель, сценарий и очистку жизненного цикла."
 }
 
 func leakPlainText(suspect MemoryLeakSuspect) string {

@@ -169,7 +169,9 @@ type collector struct {
 	summary             Summary
 	filter              Filter
 	ownerMap            map[string]string
+	nameMap             *NameMapping
 	classGraph          *ClassGraph
+	diagnostics         *InstrumentationDiagnostics
 	heap                *HeapEvidence
 	seenEvent           bool
 	firstTime           uint64
@@ -186,6 +188,7 @@ type collector struct {
 	logTrafficLastTx    uint64
 	totalTrafficRxBytes uint64
 	totalTrafficTxBytes uint64
+	dictionaryOverflow  int
 
 	httpDurations  uint64SampleSet
 	routeDurations map[string]*uint64SampleSet
@@ -244,8 +247,10 @@ func newCollector(title string, logCount int, options Options) *collector {
 		summary:            Summary{Title: title, LogCount: logCount},
 		filter:             normalizeFilter(options.Filter),
 		ownerMap:           options.OwnerMap,
-		classGraph:         options.ClassGraph,
-		heap:               options.HeapEvidence,
+		nameMap:            options.ObfuscationMap,
+		classGraph:         DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
+		diagnostics:        options.InstrumentationDiagnostics,
+		heap:               DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
 		routeDurations:     map[string]*uint64SampleSet{},
 		routeFailures:      map[string]int{},
 		routeRx:            map[string]uint64{},
@@ -583,6 +588,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 	}
 	switch {
+	case event.Dictionary != nil:
+		if event.Dictionary.Value == "__jh_dictionary_overflow__" {
+			c.dictionaryOverflow++
+		}
 	case event.Session != nil:
 		c.resetAttribution()
 		c.currentAppVersion = jhlog.Resolve(dict, event.Session.AppVersionID)
@@ -740,7 +749,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			flow.MemoryMaxKB = event.Memory.PSSKB
 		}
 	case event.Retained != nil:
-		className := jhlog.Resolve(dict, event.Retained.ClassID)
+		className := c.deobfuscate(jhlog.Resolve(dict, event.Retained.ClassID))
 		holder := c.resolveOwner(dict, event.Retained.HolderID)
 		owner := c.resolveOwner(dict, event.Retained.OwnerID)
 		context := c.eventContext(
@@ -893,7 +902,14 @@ func (c *collector) markCohort() {
 }
 
 func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
+	return c.deobfuscate(ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id)))
+}
+
+func (c *collector) deobfuscate(value string) string {
+	if c.nameMap == nil {
+		return value
+	}
+	return c.nameMap.Deobfuscate(value)
 }
 
 func (c *collector) flowKey(screenOverride, ownerOverride string) string {
@@ -982,7 +998,7 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 		return
 	}
 	for _, leak := range c.heap.Leaks {
-		className := attrValue(leak.ClassName)
+		className := attrValue(c.deobfuscate(leak.ClassName))
 		if className == "unknown" || c.hasMemoryLeakClass(className) {
 			continue
 		}
@@ -990,7 +1006,7 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 		if count == 0 {
 			count = 1
 		}
-		holder := firstKnown(leak.Holder, leak.HolderField)
+		holder := c.deobfuscate(firstKnown(leak.Holder, leak.HolderField))
 		if !c.matchesFilters("", FlowStats{}, []string{className}, holder) {
 			continue
 		}
@@ -1200,6 +1216,7 @@ func (c *collector) finish() Summary {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "low_memory_samples", Value: uint64(summary.LowMemoryCount)})
 	}
 	summary.Environment = c.runEnvironment(summary)
+	summary.Warnings = append(summary.Warnings, c.telemetryHealthWarnings(summary)...)
 	summary.Warnings = append(summary.Warnings, c.sampleWarnings(summary)...)
 	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
 
@@ -1226,6 +1243,82 @@ func (c *collector) finish() Summary {
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
 	return summary
+}
+
+func (c *collector) telemetryHealthWarnings(summary Summary) []string {
+	var warnings []string
+	for _, item := range []struct {
+		name  string
+		label string
+	}{
+		{"jankhunter.events_dropped.count", "очередь writer отбросила события"},
+		{"jankhunter.writer_io_error.count", "writer видел ошибки записи"},
+		{"jankhunter.writer_event_lost_on_io.count", "writer потерял события после ошибки записи"},
+		{"jankhunter.metric_aggregation.dropped.count", "агрегатор метрик отбросил ключи из-за лимита кардинальности"},
+		{"jankhunter.log_spam.dropped_keys.count", "агрегатор спама логами отбросил ключи из-за лимита кардинальности"},
+		{"jankhunter.runtime_call_graph.dropped.count", "runtime-граф вызовов отбросил ребра из-за лимита или рассинхронизации стека"},
+		{"jankhunter.handler_wrapper.dropped_entries.count", "реестр Handler-оберток отбросил записи из-за лимита"},
+		{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр Handler-оберток отбросил wrapper из-за лимита"},
+	} {
+		if value := c.counterValues[item.name]; value > 0 {
+			warnings = append(warnings, fmt.Sprintf("Качество сбора: %s: %d.", item.label, value))
+		}
+	}
+	if c.dictionaryOverflow > 0 {
+		warnings = append(warnings, fmt.Sprintf("Качество сбора: словарь .jhlog переполнен, overflow-записей: %d; часть имен стала неразличимой.", c.dictionaryOverflow))
+	}
+	diagnostics := c.diagnostics
+	if diagnostics == nil || !diagnostics.Available {
+		warnings = append(warnings, "Качество сбора: ASM-диагностика не передана; нельзя подтвердить, какие bytecode hooks реально сработали.")
+	} else {
+		if diagnostics.ClassCount == 0 {
+			warnings = append(warnings, "Качество сбора: ASM-диагностика пустая, значит instrument matcher не увидел классы или артефакт не был собран.")
+		}
+		if diagnostics.ClassCount > 0 && diagnostics.HookCount == 0 && diagnostics.AnnotatedMethodCount == 0 {
+			warnings = append(warnings, "Качество сбора: ASM прошел по классам, но не нашел hooks или аннотации; проверьте include/exclude, версии библиотек и включенные bridge-флаги.")
+		}
+		if unsupported := unsupportedDecisionCount(diagnostics); unsupported > 0 {
+			warnings = append(warnings, fmt.Sprintf("Качество сбора: ASM встретил неподдержанные сигнатуры hooks: %d; часть телеметрии могла не попасть в лог.", unsupported))
+		}
+	}
+	if totalProblemWindows(summary) > 0 && unknownProblemOwnerRate(summary.ProblemWindows) >= 0.8 {
+		warnings = append(warnings, "Качество сбора: большинство проблемных окон не имеют понятного owner; добавьте ownerHint/withOwner или проверьте owner-map.")
+	}
+	if summary.EventCount > 0 && len(summary.Processes) == 1 && summary.Processes[0].Name == "unknown" {
+		warnings = append(warnings, "Качество сбора: процесс неизвестен; проверьте session-события и mainProcessOnly/allowedProcesses.")
+	}
+	return warnings
+}
+
+func unsupportedDecisionCount(diagnostics *InstrumentationDiagnostics) uint64 {
+	var total uint64
+	if diagnostics == nil {
+		return 0
+	}
+	for _, decision := range diagnostics.Decisions {
+		if decision.Kind == "unsupported" || decision.Reason == "unsupported_signature" {
+			total += decision.Count
+		}
+	}
+	return total
+}
+
+func unknownProblemOwnerRate(problems []ProblemWindowStats) float64 {
+	var total uint64
+	var unknown uint64
+	for _, problem := range problems {
+		if problem.Count == 0 {
+			continue
+		}
+		total += problem.Count
+		if problem.Owner == "" || problem.Owner == "unknown" {
+			unknown += problem.Count
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(unknown) / float64(total)
 }
 
 func (c *collector) sampleWarnings(summary Summary) []string {
@@ -1263,7 +1356,7 @@ func (c *collector) filterWarnings(summary Summary) []string {
 	}
 	return []string{
 		fmt.Sprintf(
-			"Фильтр применен к событиям с маршрутом, экраном, источником или классом; %s не несут полного runtime-контекста и показаны глобально.",
+			"Фильтр применен к событиям с маршрутом, экраном, источником или классом; %s не несут полного контекста выполнения и показаны глобально.",
 			strings.Join(globalSignals, " и "),
 		),
 	}
@@ -1309,8 +1402,8 @@ func Compare(baseline, candidate Summary) Comparison {
 		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
 		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
-		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "KB", true, minUint64(uint64(baseline.MemoryCount), uint64(candidate.MemoryCount))),
-		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "KB", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "КБ", true, minUint64(uint64(baseline.MemoryCount), uint64(candidate.MemoryCount))),
+		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "КБ", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("UID RX delta", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("UID TX delta", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "шт", true, minUint64(baseline.Retained, candidate.Retained)),
@@ -1714,17 +1807,17 @@ func minUint64(a, b uint64) uint64 {
 }
 
 func formatMB(kb uint64) string {
-	return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+	return fmt.Sprintf("%.1f МБ", float64(kb)/1024)
 }
 
 func formatDataSize(kb uint64) string {
 	if kb == 0 {
-		return "unknown"
+		return "неизвестно"
 	}
 	if kb >= 1024*1024 {
-		return fmt.Sprintf("%.1f GB", float64(kb)/(1024*1024))
+		return fmt.Sprintf("%.1f ГБ", float64(kb)/(1024*1024))
 	}
-	return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+	return fmt.Sprintf("%.1f МБ", float64(kb)/1024)
 }
 
 func unknownIfEmpty(value string) string {

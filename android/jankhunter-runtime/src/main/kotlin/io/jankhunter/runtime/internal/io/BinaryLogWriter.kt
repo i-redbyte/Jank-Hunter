@@ -25,6 +25,7 @@ class BinaryLogWriter(
     private var lastTimestampMs = 0L
     private var logicalBytesWritten = file.length()
     private var closed = false
+    private var lastContext: ContextIds? = null
 
     init {
         if (file.length() == 0L) {
@@ -205,14 +206,15 @@ class BinaryLogWriter(
         val stepId = idFor(DICT_STEP, step)
         val classId = idFor(DICT_CLASS, className)
         val holderId = idFor(DICT_OWNER, holder)
-        val flags = foregroundFlag(foreground) or contextFlags(screenId, ownerId, flowId, stepId)
+        val context = ContextIds(screenId, ownerId, flowId, stepId)
+        val flags = foregroundFlag(foreground) or compactContextFlags(context)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
             .uvarint(classId)
             .uvarint(holderId)
             .uvarint(nonNegative(ageMs))
             .uvarint(nonNegative(count))
-        record(EVENT_RETAINED, flags, payload)
+        recordContext(EVENT_RETAINED, flags, payload, context)
     }
 
     @Synchronized
@@ -285,10 +287,11 @@ class BinaryLogWriter(
         val ownerId = idFor(DICT_OWNER, owner)
         val flowId = idFor(DICT_FLOW, flow)
         val stepId = idFor(DICT_STEP, step)
-        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val context = ContextIds(screenId, ownerId, flowId, stepId)
+        val flags = compactContextFlags(context)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
-        record(EVENT_FLOW, flags, payload)
+        recordContext(EVENT_FLOW, flags, payload, context)
     }
 
     @Synchronized
@@ -306,13 +309,14 @@ class BinaryLogWriter(
         val flowId = idFor(DICT_FLOW, flow)
         val stepId = idFor(DICT_STEP, step)
         val sourceId = idFor(DICT_LOG_SOURCE, source)
-        val flags = contextFlags(screenId, ownerId, flowId, stepId)
+        val context = ContextIds(screenId, ownerId, flowId, stepId)
+        val flags = compactContextFlags(context)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
             .uvarint(sourceId)
             .uvarint(level.toLong())
             .uvarint(count)
-        record(EVENT_LOG_SPAM, flags, payload)
+        recordContext(EVENT_LOG_SPAM, flags, payload, context)
     }
 
     @Synchronized
@@ -332,14 +336,15 @@ class BinaryLogWriter(
         val flowId = idFor(DICT_FLOW, flow)
         val stepId = idFor(DICT_STEP, step)
         val kindId = idFor(DICT_METRIC, kind)
-        val flags = foregroundFlag(foreground) or contextFlags(screenId, ownerId, flowId, stepId)
+        val context = ContextIds(screenId, ownerId, flowId, stepId)
+        val flags = foregroundFlag(foreground) or compactContextFlags(context)
         val payload = Payload()
             .optionalContext(flags, screenId, ownerId, flowId, stepId)
             .uvarint(kindId)
             .uvarint(nonNegative(windowMs).coerceAtLeast(1L))
             .uvarint(nonNegative(count))
             .uvarint(nonNegative(maxMs))
-        record(EVENT_PROBLEM, flags, payload)
+        recordContext(EVENT_PROBLEM, flags, payload, context)
     }
 
     @Synchronized
@@ -358,14 +363,15 @@ class BinaryLogWriter(
         val flowId = idFor(DICT_FLOW, flow)
         val stepId = idFor(DICT_STEP, step)
         val calleeId = idFor(DICT_OWNER, callee)
-        val flags = contextFlags(screenId, callerId, flowId, stepId)
+        val context = ContextIds(screenId, callerId, flowId, stepId)
+        val flags = compactContextFlags(context)
         val payload = Payload()
             .optionalContext(flags, screenId, callerId, flowId, stepId)
             .uvarint(calleeId)
             .uvarint(nonNegative(count))
             .uvarint(nonNegative(totalMs))
             .uvarint(nonNegative(maxMs))
-        record(EVENT_RUNTIME_CALL, flags, payload)
+        recordContext(EVENT_RUNTIME_CALL, flags, payload, context)
     }
 
     private fun foregroundFlag(foreground: Boolean): Long = if (foreground) FLAG_APP_FOREGROUND else 0L
@@ -374,6 +380,11 @@ class BinaryLogWriter(
 
     private fun clampDuration(value: Long, durationMs: Long): Long {
         return nonNegative(value).coerceAtMost(durationMs)
+    }
+
+    private fun compactContextFlags(context: ContextIds): Long {
+        if (lastContext == context) return FLAG_SAME_CONTEXT
+        return contextFlags(context.screenId, context.ownerId, context.flowId, context.stepId)
     }
 
     private fun metric(
@@ -427,6 +438,11 @@ class BinaryLogWriter(
         logicalBytesWritten += written + payload.size
     }
 
+    private fun recordContext(eventType: Int, flags: Long, payload: Payload, context: ContextIds) {
+        record(eventType, flags, payload)
+        lastContext = context
+    }
+
     private fun ensureOpen() {
         if (closed) {
             throw IOException("BinaryLogWriter is closed")
@@ -444,6 +460,13 @@ class BinaryLogWriter(
             out.close()
         }
     }
+
+    private data class ContextIds(
+        val screenId: Long,
+        val ownerId: Long,
+        val flowId: Long,
+        val stepId: Long,
+    )
 
     private class Payload {
         private var data = ByteArray(64)
@@ -465,6 +488,7 @@ class BinaryLogWriter(
         }
 
         fun optionalContext(flags: Long, screenId: Long, ownerId: Long, flowId: Long, stepId: Long): Payload {
+            if (flags and FLAG_SAME_CONTEXT != 0L) return this
             if (flags and FLAG_HAS_SCREEN != 0L) uvarint(screenId)
             if (flags and FLAG_HAS_OWNER != 0L) uvarint(ownerId)
             if (flags and FLAG_HAS_FLOW != 0L) uvarint(flowId)
@@ -609,7 +633,8 @@ class BinaryLogWriter(
         const val FLAG_HAS_OWNER: Long = 1L shl 11
         const val FLAG_HAS_FLOW: Long = 1L shl 12
         const val FLAG_HAS_STEP: Long = 1L shl 13
-        private const val FLAG_KNOWN_MASK: Long = (1L shl 14) - 1L
+        const val FLAG_SAME_CONTEXT: Long = 1L shl 14
+        private const val FLAG_KNOWN_MASK: Long = (1L shl 15) - 1L
 
         private val MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'L'.code.toByte(), 'O'.code.toByte(), 'G'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte(), FORMAT_VERSION.toByte())
 
@@ -738,7 +763,7 @@ class BinaryLogWriter(
             return flags
         }
 
-        private const val FORMAT_VERSION = 6
+        private const val FORMAT_VERSION = 7
         private const val IO_BUFFER_BYTES = 32 * 1024
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4

@@ -249,20 +249,39 @@ type IntegralDelta struct {
 type MarkovModel struct {
 	States                  []MarkovBucketState
 	Transitions             []MarkovTransition
+	SampleCount             int
+	TransitionEventCount    int
+	BadEpisodeCount         int
+	Confidence              string
+	ConfidenceReason        string
 	HealthyToBadCount       int
 	BadToHealthyProbability float64
 	ExpectedRecoveryWindows float64
+	ExpectedRecoveryMS      float64
+	TotalDurationMS         uint64
+	BadStateDurationMS      uint64
+	BadStateExposure        float64
+	StateExposures          []MarkovStateExposure
 	StickyStates            []MarkovStickyState
+	ContextStickyStates     []MarkovContextStickyState
 }
 
 type MarkovBucketState struct {
-	TimeMS  uint64
-	State   string
-	Reason  string
-	Route   string
-	Owner   string
-	Screen  string
-	Network string
+	TimeMS       uint64
+	DurationMS   uint64
+	State        string
+	Reason       string
+	Contributors []MarkovSymptomWeight
+	Route        string
+	Owner        string
+	Screen       string
+	Network      string
+}
+
+type MarkovSymptomWeight struct {
+	State  string
+	Weight float64
+	Reason string
 }
 
 type MarkovTransition struct {
@@ -274,6 +293,20 @@ type MarkovTransition struct {
 
 type MarkovStickyState struct {
 	State       string
+	Count       int
+	Probability float64
+}
+
+type MarkovStateExposure struct {
+	State      string
+	Windows    int
+	DurationMS uint64
+	Exposure   float64
+}
+
+type MarkovContextStickyState struct {
+	State       string
+	Context     string
 	Count       int
 	Probability float64
 }
@@ -483,7 +516,7 @@ func dataQualityFindings(summary analyze.Summary) []Finding {
 			Severity:       "high",
 			Title:          "Нет событий для математического анализа",
 			Detail:         "Лог не содержит событий, поэтому отчет показывает только структуру будущих разделов.",
-			Recommendation: "Проверьте, что runtime писал .jhlog во время сценария, и повторите команду inspect с непустым логом.",
+			Recommendation: "Проверьте, что события выполнения писались в .jhlog во время сценария, и повторите команду inspect с непустым логом.",
 		})
 	case summary.HTTPCount < 5 && summary.UIFrames < 300 && summary.ContextCount < 3:
 		findings = append(findings, Finding{
@@ -555,7 +588,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			ID:       "quality",
 			Title:    "Качество данных",
 			Status:   sectionStatus(findings),
-			Summary:  fmt.Sprintf("Логи=%d, события=%d, длительность=%d ms, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d.", summary.LogCount, summary.EventCount, summary.DurationMS, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
+			Summary:  fmt.Sprintf("Логи=%d, события=%d, длительность=%d мс, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d.", summary.LogCount, summary.EventCount, summary.DurationMS, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
 			Findings: findings,
 		},
 		{

@@ -266,7 +266,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.memoryKB += leak.EstimatedRetainedKB
 		node.addFlow(leak.Flow)
 		node.addScreen(leak.Screen)
-		node.addReason("heap evidence утечки")
+		node.addReason("доказательства утечки из дампа памяти")
 		node.score += leak.Score * 0.45
 	}
 	for _, call := range summary.RuntimeCalls {

@@ -119,10 +119,10 @@ func TestCodeProblemRegistryDoesNotTreatRetainedAgeAsMemory(t *testing.T) {
 			feedActivity = row
 		}
 	}
-	if strings.Contains(feedActivity.Evidence, "память=60000 KB") {
+	if strings.Contains(feedActivity.Evidence, "память=60000 КБ") {
 		t.Fatalf("retained age leaked into memory evidence: %+v", feedActivity)
 	}
-	if !strings.Contains(feedActivity.Evidence, "память=4096 KB") {
+	if !strings.Contains(feedActivity.Evidence, "память=4096 КБ") {
 		t.Fatalf("heap retained size missing from evidence: %+v", feedActivity)
 	}
 }

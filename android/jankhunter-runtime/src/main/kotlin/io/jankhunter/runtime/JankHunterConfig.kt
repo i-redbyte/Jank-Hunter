@@ -28,6 +28,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val runtimeEnabled = builder.runtimeEnabled
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
+    private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
+    private val httpSlowThresholdMs = builder.httpSlowThresholdMs
     private val memorySampleIntervalMs = builder.memorySampleIntervalMs
     private val systemSamplerEnabled = builder.systemSamplerEnabled
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
@@ -46,6 +48,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val jankStatsEnabled = builder.jankStatsEnabled
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
+    private val uiWindowP95ThresholdMs = builder.uiWindowP95ThresholdMs
     private val maxQueueSize = builder.maxQueueSize
     private val maxLogBytes = builder.maxLogBytes
     private val maxLogDirectoryBytes = builder.maxLogDirectoryBytes
@@ -78,6 +81,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
     fun mainThreadStallThresholdMs(): Long = mainThreadStallThresholdMs.coerceAtLeast(1L)
+
+    fun ownerBlockThresholdMs(): Long = ownerBlockThresholdMs.coerceAtLeast(1L)
+
+    fun httpSlowThresholdMs(): Long = httpSlowThresholdMs.coerceAtLeast(1L)
 
     fun memorySampleIntervalMs(): Long = memorySampleIntervalMs.coerceAtLeast(1L)
 
@@ -114,6 +121,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun fpsWindowMs(): Long = fpsWindowMs.coerceAtLeast(1L)
 
     fun jankFrameThresholdMs(): Long = jankFrameThresholdMs.coerceAtLeast(1L)
+
+    fun uiWindowP95ThresholdMs(): Long = uiWindowP95ThresholdMs.coerceAtLeast(1L)
 
     fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
 
@@ -174,29 +183,32 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var runtimeEnabled = true
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
+        internal var ownerBlockThresholdMs = 250L
+        internal var httpSlowThresholdMs = 1_000L
         internal var memorySampleIntervalMs = 10_000L
         internal var systemSamplerEnabled = true
         internal var systemSampleIntervalMs = 15_000L
-        internal var mainLooperDispatchMonitorEnabled = false
+        internal var mainLooperDispatchMonitorEnabled = true
         internal var processExitInfoEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
-        internal var retainedHeapDumpEnabled = false
-        internal var retainedHeapDumpPrivacyApproved = false
+        internal var retainedHeapDumpEnabled = true
+        internal var retainedHeapDumpPrivacyApproved = true
         internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
         internal var retainedHeapDumpMaxCount = 1
         internal var retainedHeapDumpMinRetainedAgeMs = 30_000L
         internal var retainedHeapDumpDirectory: File? = null
         internal var fpsMonitorEnabled = true
-        internal var jankStatsEnabled = false
+        internal var jankStatsEnabled = true
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
+        internal var uiWindowP95ThresholdMs = 32L
         internal var maxQueueSize = 2048
         internal var maxLogBytes = 5L * 1024L * 1024L
         internal var maxLogDirectoryBytes = 25L * 1024L * 1024L
         internal var logCompressionEnabled = true
-        internal var logBucket = JankHunterLogBucket.DAILY
+        internal var logBucket = JankHunterLogBucket.SESSION
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = 256
         internal var flushIntervalMs = 5_000L
@@ -224,6 +236,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 
         fun mainThreadStallThresholdMs(value: Long) = apply { mainThreadStallThresholdMs = value }
+
+        fun ownerBlockThresholdMs(value: Long) = apply { ownerBlockThresholdMs = value }
+
+        fun httpSlowThresholdMs(value: Long) = apply { httpSlowThresholdMs = value }
 
         fun memorySampleIntervalMs(value: Long) = apply { memorySampleIntervalMs = value }
 
@@ -260,6 +276,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun fpsWindowMs(value: Long) = apply { fpsWindowMs = value }
 
         fun jankFrameThresholdMs(value: Long) = apply { jankFrameThresholdMs = value }
+
+        fun uiWindowP95ThresholdMs(value: Long) = apply { uiWindowP95ThresholdMs = value }
 
         fun maxQueueSize(value: Int) = apply { maxQueueSize = value }
 
@@ -321,6 +339,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_RUNTIME_ENABLED = "io.jankhunter.runtime_enabled"
         const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
         const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
+        const val META_OWNER_BLOCK_THRESHOLD_MS = "io.jankhunter.owner_block_threshold_ms"
+        const val META_HTTP_SLOW_THRESHOLD_MS = "io.jankhunter.http_slow_threshold_ms"
         const val META_MEMORY_SAMPLE_INTERVAL_MS = "io.jankhunter.memory_sample_interval_ms"
         const val META_SYSTEM_SAMPLER_ENABLED = "io.jankhunter.system_sampler_enabled"
         const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
@@ -339,6 +359,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_JANKSTATS_ENABLED = "io.jankhunter.jankstats_enabled"
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
+        const val META_UI_WINDOW_P95_THRESHOLD_MS = "io.jankhunter.ui_window_p95_threshold_ms"
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
         const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
         const val META_MAX_LOG_DIRECTORY_BYTES = "io.jankhunter.max_log_directory_bytes"
@@ -373,19 +394,21 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .runtimeEnabled(metadataBoolean(metadata, META_RUNTIME_ENABLED, true))
                 .autoStartCollectors(metadataBoolean(metadata, META_AUTO_START_COLLECTORS, true))
                 .mainThreadStallThresholdMs(metadataLong(metadata, META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
+                .ownerBlockThresholdMs(metadataLong(metadata, META_OWNER_BLOCK_THRESHOLD_MS, 250L))
+                .httpSlowThresholdMs(metadataLong(metadata, META_HTTP_SLOW_THRESHOLD_MS, 1_000L))
                 .memorySampleIntervalMs(metadataLong(metadata, META_MEMORY_SAMPLE_INTERVAL_MS, 10_000L))
                 .systemSamplerEnabled(metadataBoolean(metadata, META_SYSTEM_SAMPLER_ENABLED, true))
                 .systemSampleIntervalMs(metadataLong(metadata, META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L))
                 .mainLooperDispatchMonitorEnabled(
-                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false),
+                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, true),
                 )
                 .processExitInfoEnabled(metadataBoolean(metadata, META_PROCESS_EXIT_INFO_ENABLED, true))
                 .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
                 .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
                 .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
-                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, false))
+                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, true))
                 .retainedHeapDumpPrivacyApproved(
-                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, false),
+                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, true),
                 )
                 .retainedHeapDumpMinIntervalMs(
                     metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L),
@@ -395,16 +418,17 @@ class JankHunterConfig private constructor(builder: Builder) {
                     metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_RETAINED_AGE_MS, 30_000L),
                 )
                 .fpsMonitorEnabled(metadataBoolean(metadata, META_FPS_MONITOR_ENABLED, true))
-                .jankStatsEnabled(metadataBoolean(metadata, META_JANKSTATS_ENABLED, false))
+                .jankStatsEnabled(metadataBoolean(metadata, META_JANKSTATS_ENABLED, true))
                 .fpsWindowMs(metadataLong(metadata, META_FPS_WINDOW_MS, 1_000L))
                 .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
+                .uiWindowP95ThresholdMs(metadataLong(metadata, META_UI_WINDOW_P95_THRESHOLD_MS, 32L))
                 .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
                 .maxLogBytes(metadataLong(metadata, META_MAX_LOG_BYTES, 5L * 1024L * 1024L))
                 .maxLogDirectoryBytes(
                     metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L),
                 )
                 .logCompressionEnabled(metadataBoolean(metadata, META_LOG_COMPRESSION_ENABLED, true))
-                .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.DAILY))
+                .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.SESSION))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(metadataInt(metadata, META_MAX_DICTIONARY_VALUE_BYTES, 256))
                 .flushIntervalMs(metadataLong(metadata, META_FLUSH_INTERVAL_MS, 5_000L))

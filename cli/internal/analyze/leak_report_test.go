@@ -69,7 +69,7 @@ func TestCompareLeakSuspectsMatchesByChainFingerprint(t *testing.T) {
 	if deltas[0].Status != LeakDeltaSame {
 		t.Fatalf("status = %q, want same; delta=%+v", deltas[0].Status, deltas[0])
 	}
-	if !strings.Contains(deltas[0].MatchConfidence, "heap-chain fingerprint") {
+	if !strings.Contains(deltas[0].MatchConfidence, "отпечаток цепочки из дампа памяти") {
 		t.Fatalf("unexpected match confidence: %q", deltas[0].MatchConfidence)
 	}
 }

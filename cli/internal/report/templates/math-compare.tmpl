@@ -52,7 +52,7 @@
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать сравнение</strong>Положительная дельта у задержек, памяти, подтормаживаний, ошибок и спама обычно означает ухудшение кандидата. Смотрите серьезность вместе с доверием и размером выборки.</div>
-      <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Флоу и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Сценарии и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
       <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
     </div>
     {{scoreGuide "compare"}}
@@ -69,7 +69,7 @@
         {{end}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
-            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+            <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, сценарию, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
             <select data-code-registry-severity aria-label="Фильтр по риску">
               <option value="">Все уровни риска</option>
               <option value="high">Критично</option>
@@ -102,10 +102,10 @@
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
                 <td>
                   <details class="code-problem-details">
-                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} сценариев{{end}}</small></summary>
                     <div class="code-problem-detail-body">
                       <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
-                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                       <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
                       <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
                       {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
@@ -166,7 +166,7 @@
                 <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
-                <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+                <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>сценарий <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
                 <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
                 <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
                 <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
@@ -189,7 +189,7 @@
     </table>
     {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
     {{end}}
-    <h3>Сравнение флоу и причин</h3>
+    <h3>Сравнение сценариев и причин</h3>
     <table class="timeline-table">
       <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
       {{range flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
@@ -201,7 +201,7 @@
         <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
         <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
       </tr>
-      {{else}}<tr><td colspan="12" class="muted">Нет событий контекста флоу для математического сравнения.</td></tr>{{end}}
+      {{else}}<tr><td colspan="12" class="muted">Нет событий контекста сценария для математического сравнения.</td></tr>{{end}}
     </table>
     <h3>Находки</h3>
     <div class="finding-list">
@@ -360,6 +360,20 @@
           </tr>
           {{else}}<tr><td colspan="6" class="muted">Нет значимых марковских дельт.</td></tr>{{end}}
           {{if hiddenMarkovDeltas $math.MarkovDeltas}}<tr><td colspan="6" class="muted">Скрыто спокойных марковских дельт: {{hiddenMarkovDeltas $math.MarkovDeltas}}.</td></tr>{{end}}
+        </table>
+        <h3>Экспозиция плохих состояний кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>Состояние</th><th>Доля времени</th><th>Длительность</th><th>Окна</th></tr>
+          {{range $math.Candidate.Markov.StateExposures}}
+          <tr><td>{{markovState .State}}</td><td>{{printf "%.1f" (percent01 .Exposure)}}%</td><td>{{humanDuration .DurationMS}}</td><td>{{.Windows}}</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">У кандидата нет плохих состояний.</td></tr>{{end}}
+        </table>
+        <h3>Контекстная липкость кандидата</h3>
+        <table class="timeline-table">
+          <tr><th>Состояние</th><th>Контекст</th><th>Количество</th><th>Вероятность</th></tr>
+          {{range $math.Candidate.Markov.ContextStickyStates}}
+          <tr><td>{{markovState .State}}</td><td>{{.Context}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
+          {{else}}<tr><td colspan="4" class="muted">У кандидата нет липких контекстов.</td></tr>{{end}}
         </table>
         <h3>Переходы кандидата</h3>
         <table class="timeline-table">

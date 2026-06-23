@@ -45,7 +45,7 @@
   <a href="#memory-leaks">Утечки</a>
   <a href="#regressions">Регрессии</a>
   <a href="#changes">Где изменилось</a>
-  <a href="#flows">Флоу</a>
+  <a href="#flows">Сценарии</a>
   <a href="#drilldown">Детали логов</a>
   <a href="#cohorts">Когорты</a>
   <a href="#analysis">Итог</a>
@@ -75,7 +75,7 @@
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.MemoryMaxKB}} KB</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.MemoryMaxKB}} KB</strong></div></div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.MemoryMaxKB}} КБ</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.MemoryMaxKB}} КБ</strong></div></div>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">
@@ -84,14 +84,14 @@
         <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Флоу и причины" "Сумма агрегированных проблемных окон и спама логами по кортежам контекста флоу. Рост показывает, что кандидат чаще попадает в объяснимые проблемные участки сценария."}}</div>
+        <div class="compare-pair-title">{{tip "Сценарии и причины" "Сумма агрегированных проблемных окон и спама логами по кортежам контекста сценария. Рост показывает, что кандидат чаще попадает в объяснимые проблемные участки сценария."}}</div>
         <div class="compare-values"><div class="compare-value"><span>Проблемы</span><strong>{{summaryProblems .Comparison.Baseline}} → {{summaryProblems .Comparison.Candidate}}</strong></div><div class="compare-value"><span>Спам логами</span><strong>{{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}}</strong></div></div>
-        <div class="compare-delta">Флоу {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
+        <div class="compare-delta">Сценарии {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
       </div>
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать сравнение</strong>Рост задержек, ошибок, памяти, подтормаживаний и спама логами обычно означает ухудшение кандидата. Доверие и выборка показывают, насколько этому можно верить.</div>
-      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Флоу”: там видно конкретный маршрут, экран или источник, который изменился.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Сценарии”: там видно конкретный маршрут, экран или источник, который изменился.</div>
       <div class="guide-card"><strong>Когда эскалировать</strong>Критичные регрессии с повторяемостью, сетевые циклы или рост интегральной нагрузки лучше сразу превращать в задачу на исправление.</div>
     </div>
     {{scoreGuide "compare"}}
@@ -131,7 +131,7 @@
     {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
-        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, флоу, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
+        <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, сценарию, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
         <select data-code-registry-severity aria-label="Фильтр по риску">
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
@@ -164,10 +164,10 @@
             <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} флоу{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} сценариев{{end}}</small></summary>
                 <div class="code-problem-detail-body">
                   <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
-                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>флоу <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
                   <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
                   <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
                   {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong><div class="problem-drilldown">{{range .Candidate.DrillDown}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
@@ -233,7 +233,7 @@
             <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
             <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
             <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
-            <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>флоу <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>сценарий <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
             <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
             <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
@@ -337,10 +337,10 @@
 
   <section id="flows" class="panel">
     <div class="panel-head">
-      <div><h2>Сравнение флоу и причин</h2><div class="panel-kicker">Экран, флоу, шаг и источник сопоставлены между базой и кандидатом по проблемным окнам, спаму логами, HTTP, UI и паузам.</div></div>
+      <div><h2>Сравнение сценариев и причин</h2><div class="panel-kicker">Экран, сценарий, шаг и источник сопоставлены между базой и кандидатом по проблемным окнам, спаму логами, HTTP, UI и паузам.</div></div>
     </div>
     <details class="fold" open>
-      <summary>Детали флоу</summary>
+      <summary>Детали сценариев</summary>
       <div class="fold-body">
         <table>
           <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
@@ -354,7 +354,7 @@
             <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
             <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
           </tr>
-          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста флоу для сравнения.</td></tr>{{end}}
+          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста сценария для сравнения.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -377,7 +377,7 @@
           <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
-          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Сценарии и причины</h3><table><tr><th>Экран / сценарий / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет сценариев.</td></tr>{{end}}</table></div>
           <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>
       </div>
@@ -396,7 +396,7 @@
           <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{.Screen}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
-          <div><h3>Флоу и причины</h3><table><tr><th>Экран / флоу / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет флоу.</td></tr>{{end}}</table></div>
+          <div><h3>Сценарии и причины</h3><table><tr><th>Экран / сценарий / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет сценариев.</td></tr>{{end}}</table></div>
           <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>
       </div>

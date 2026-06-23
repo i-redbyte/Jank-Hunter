@@ -335,19 +335,19 @@ func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 	}{
 		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
 		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
-		{name: "HTTP p95", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.HTTPP95DurationMS) }},
-		{name: "HTTP среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.HTTPAvgDurationMS) }},
+		{name: "HTTP p95", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPP95DurationMS) }},
+		{name: "HTTP среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPAvgDurationMS) }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
-		{name: "DNS среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
+		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
 		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Среднее время соединения", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
-		{name: "Средний TTFB", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
+		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
+		{name: "Средний TTFB", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
 		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
 		{name: "UI кадры", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.UIFrames) }},
 		{name: "Паузы главного потока", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.StallCount) }},
-		{name: "Макс. пауза", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
-		{name: "PSS", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }},
-		{name: "Свободная RAM", unit: "KB", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }},
+		{name: "Макс. пауза", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
+		{name: "PSS", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }},
+		{name: "Свободная RAM", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }},
 		{name: "Дельта RX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficRxBytes) }},
 		{name: "Дельта TX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficTxBytes) }},
 	}
@@ -386,7 +386,7 @@ func timelineSummary(timeline []TimelineBucket, series []Series) string {
 	if len(timeline) < 3 {
 		return "Недостаточно данных для надежного анализа: нужно хотя бы несколько временных интервалов одного сценария."
 	}
-	return fmt.Sprintf("Построено %d временных интервалов по %d ms и %d рядов сигналов.", len(timeline), timelineBucketMS(timeline, series), len(series))
+	return fmt.Sprintf("Построено %d временных интервалов по %d мс и %d рядов сигналов.", len(timeline), timelineBucketMS(timeline, series), len(series))
 }
 
 func timelineFindings(timeline []TimelineBucket) []Finding {
@@ -401,7 +401,7 @@ func timelineFindings(timeline []TimelineBucket) []Finding {
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Таймлайн сигналов построен",
-		Detail:   fmt.Sprintf("Временные интервалы по %d ms готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и FFT.", timelineBucketMS(timeline, nil)),
+		Detail:   fmt.Sprintf("Временные интервалы по %d мс готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и быстрого преобразования Фурье.", timelineBucketMS(timeline, nil)),
 	}}
 }
 
@@ -416,7 +416,7 @@ func compareTimelineSummary(baselineTimeline, candidateTimeline []TimelineBucket
 	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
 		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных интервалов."
 	}
-	return fmt.Sprintf("База: %d временных интервалов по %d ms, кандидат: %d временных интервалов по %d ms.", len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
+	return fmt.Sprintf("База: %d временных интервалов по %d мс, кандидат: %d временных интервалов по %d мс.", len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
 }
 
 func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucket) []Finding {

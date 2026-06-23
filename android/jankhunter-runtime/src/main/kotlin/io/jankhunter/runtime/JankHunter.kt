@@ -263,6 +263,7 @@ object JankHunter {
             device.product,
             device.rooted,
         )
+        installCrashFlushHandler()
         recordRuntimeStartMetadata(asyncWriter, providedConfig, attempt)
 
         collectors.start(appContext, providedConfig, directory)
@@ -278,6 +279,7 @@ object JankHunter {
         }
         collectors.stop()
         swallow { writer?.close() }
+        restoreCrashFlushHandler()
         resetRuntimeState(clearInit)
     }
 
@@ -296,6 +298,35 @@ object JankHunter {
             runtimeState.initContext = null
             runtimeState.runtimeEnabled.set(true)
         }
+    }
+
+    private fun installCrashFlushHandler() {
+        val current = Thread.getDefaultUncaughtExceptionHandler()
+        if (current === runtimeState.crashFlushHandler) {
+            return
+        }
+        runtimeState.previousCrashHandler = current
+        val handler = Thread.UncaughtExceptionHandler { thread, throwable ->
+            swallow {
+                writer?.counter("jankhunter.runtime.crash.count", 1)
+                flushLogSpam(force = true)
+                flushMetrics(force = true)
+                runtimeCallGraph.flush(force = true, writer)
+                writer?.flushBlocking(flushTimeoutMs())
+            }
+            runtimeState.previousCrashHandler?.uncaughtException(thread, throwable) ?: throw throwable
+        }
+        runtimeState.crashFlushHandler = handler
+        Thread.setDefaultUncaughtExceptionHandler(handler)
+    }
+
+    private fun restoreCrashFlushHandler() {
+        val handler = runtimeState.crashFlushHandler
+        if (handler != null && Thread.getDefaultUncaughtExceptionHandler() === handler) {
+            Thread.setDefaultUncaughtExceptionHandler(runtimeState.previousCrashHandler)
+        }
+        runtimeState.crashFlushHandler = null
+        runtimeState.previousCrashHandler = null
     }
 
     private inline fun swallow(block: () -> Unit) {
@@ -368,7 +399,7 @@ object JankHunter {
             }
         } finally {
             val duration = nowMs() - start
-            if (duration >= 250) {
+            if (duration >= ownerBlockThresholdMs()) {
                 recordStall(ownerName, "explicit_owner_block", duration)
             }
         }
@@ -383,7 +414,7 @@ object JankHunter {
             }
         } finally {
             val duration = nowMs() - start
-            if (duration >= 250) {
+            if (duration >= ownerBlockThresholdMs()) {
                 recordStall(ownerName, "explicit_owner_block", duration)
             }
         }
@@ -721,7 +752,7 @@ object JankHunter {
             flags or foregroundFlag(),
         )
         val failed = flags and BinaryLogWriter.FLAG_HTTP_FAILED != 0L || statusClass >= 5
-        if (failed || durationMs >= SLOW_HTTP_THRESHOLD_MS) {
+        if (failed || durationMs >= httpSlowThresholdMs()) {
             recordProblemWindow("http_slow_or_failed", durationMs, 1, durationMs, attributedOwner)
         }
     }
@@ -941,7 +972,7 @@ object JankHunter {
         val attributedScreen = firstContextValue(screen, contextTracker.currentScreen())
         ensureContextRecorded(screenOverride = attributedScreen)
         writer?.uiWindow(attributedScreen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms, foreground = isAppForeground())
-        if (jankCount > 0 || p95Ms >= UI_PROBLEM_FRAME_THRESHOLD_MS) {
+        if (jankCount > 0 || p95Ms >= uiWindowP95ThresholdMs()) {
             recordProblemWindow("ui_jank", windowMs, jankCount.coerceAtLeast(1L), p95Ms)
         }
     }
@@ -984,7 +1015,7 @@ object JankHunter {
         if (durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS) {
             recordGauge("owner.$owner.$kind.duration_ms", durationMs)
         }
-        if (failed || durationMs >= WRAPPED_WORK_PROBLEM_THRESHOLD_MS) {
+        if (failed || durationMs >= ownerBlockThresholdMs()) {
             recordProblemWindow("wrapped_$kind", durationMs, 1, durationMs, ownerName)
         }
     }
@@ -1186,6 +1217,12 @@ object JankHunter {
 
     private fun foregroundFlag(): Long = if (isAppForeground()) BinaryLogWriter.FLAG_APP_FOREGROUND else 0L
 
+    private fun ownerBlockThresholdMs(): Long = config?.ownerBlockThresholdMs() ?: DEFAULT_OWNER_BLOCK_THRESHOLD_MS
+
+    private fun httpSlowThresholdMs(): Long = config?.httpSlowThresholdMs() ?: DEFAULT_HTTP_SLOW_THRESHOLD_MS
+
+    private fun uiWindowP95ThresholdMs(): Long = config?.uiWindowP95ThresholdMs() ?: DEFAULT_UI_WINDOW_P95_THRESHOLD_MS
+
     private fun metricOwner(ownerName: String?): String {
         return ownerName
             ?.takeIf { it.isNotBlank() }
@@ -1215,9 +1252,9 @@ object JankHunter {
     )
 
     private const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L
-    private const val WRAPPED_WORK_PROBLEM_THRESHOLD_MS = 250L
-    private const val SLOW_HTTP_THRESHOLD_MS = 1000L
-    private const val UI_PROBLEM_FRAME_THRESHOLD_MS = 32L
+    private const val DEFAULT_OWNER_BLOCK_THRESHOLD_MS = 250L
+    private const val DEFAULT_HTTP_SLOW_THRESHOLD_MS = 1000L
+    private const val DEFAULT_UI_WINDOW_P95_THRESHOLD_MS = 32L
     private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
     private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096

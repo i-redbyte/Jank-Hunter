@@ -347,16 +347,17 @@ func reportTemplateFuncs() template.FuncMap {
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
-		"routeCompareRows":  routeCompareRows,
-		"screenCompareRows": screenCompareRows,
-		"ownerCompareRows":  ownerCompareRows,
-		"flowCompareRows":   flowCompareRows,
-		"flowKeyLabel":      flowKeyLabel,
-		"summaryLogSpam":    summaryLogSpamTotal,
-		"summaryProblems":   summaryProblemTotal,
-		"signedMS":          signedMS,
-		"signedDuration":    signedDuration,
-		"signedFloat":       signedFloat,
+		"influenceRoleLabel": influenceRoleLabel,
+		"routeCompareRows":   routeCompareRows,
+		"screenCompareRows":  screenCompareRows,
+		"ownerCompareRows":   ownerCompareRows,
+		"flowCompareRows":    flowCompareRows,
+		"flowKeyLabel":       flowKeyLabel,
+		"summaryLogSpam":     summaryLogSpamTotal,
+		"summaryProblems":    summaryProblemTotal,
+		"signedMS":           signedMS,
+		"signedDuration":     signedDuration,
+		"signedFloat":        signedFloat,
 		"bucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroTimelineBucket(bucket) {
 				return "bucket-zero"
@@ -472,11 +473,11 @@ func humanDuration(ms uint64) string {
 func humanDataSizeKB(kb uint64) string {
 	switch {
 	case kb >= 1024*1024:
-		return fmt.Sprintf("%.1f GB", float64(kb)/1024/1024)
+		return fmt.Sprintf("%.1f ГБ", float64(kb)/1024/1024)
 	case kb >= 1024:
-		return fmt.Sprintf("%.1f MB", float64(kb)/1024)
+		return fmt.Sprintf("%.1f МБ", float64(kb)/1024)
 	default:
-		return fmt.Sprintf("%d KB", kb)
+		return fmt.Sprintf("%d КБ", kb)
 	}
 }
 
@@ -672,7 +673,7 @@ func metricHelp(name string) string {
 	case strings.Contains(lower, "queue") || strings.Contains(lower, "executor"):
 		return "Очередь или исполнитель задач. Рост значения означает накопление работы; если рядом падает FPS или растут паузы главного потока, очередь может быть причиной задержек."
 	case strings.Contains(lower, "network") || strings.Contains(lower, "http") || strings.Contains(lower, "retry") || strings.Contains(lower, "connect"):
-		return "Пользовательская сетевая метрика. Высокие значения стоит сопоставлять с HTTP p95, DNS/connect/TTFB и сетевыми циклами."
+		return "Пользовательская сетевая метрика. Высокие значения стоит сопоставлять с HTTP p95, DNS, соединением, TTFB и сетевыми циклами."
 	case strings.Contains(lower, "jank") || strings.Contains(lower, "frame"):
 		return "Метрика кадров или подтормаживаний. Чем выше значение рядом с пользовательским действием, тем выше риск видимой просадки интерфейса."
 	default:
@@ -699,7 +700,7 @@ func memoryMetricHelp(name string) string {
 func integralHelp(id string) string {
 	switch id {
 	case "network_failure_burn":
-		return "Сетевое выгорание — накопленная стоимость повторяющихся сетевых проблем: HTTP-ошибок, DNS/connect всплесков и найденных сетевых циклов. Чем выше значение, тем дольше и дороже сеть мешала сценарию."
+		return "Сетевое выгорание — накопленная стоимость повторяющихся сетевых проблем: HTTP-ошибок, всплесков DNS и соединения, а также найденных сетевых циклов. Чем выше значение, тем дольше и дороже сеть мешала сценарию."
 	case "memory_pressure_area":
 		return "Площадь давления памяти объединяет рост PSS относительно базового уровня и длительность низкого запаса свободной RAM. Это не расшифровка PSS, а интегральная оценка риска GC, вытеснения кэшей и убийства процесса."
 	case "recovery_debt":
@@ -720,9 +721,9 @@ func integralCriteria(id string) string {
 	case "latency_pain_area":
 		return "Норма до 500 мс*с, предупреждение от 500, критично от 2000. Считается только хвост HTTP p95 выше инженерного порога 300 мс."
 	case "network_failure_burn":
-		return "Норма до 5 усл.ед., предупреждение от 5, критично от 20. Больше означает повторяемые сетевые ошибки, DNS/connect всплески или цикл запросов."
+		return "Норма до 5 усл.ед., предупреждение от 5, критично от 20. Больше означает повторяемые сетевые ошибки, всплески DNS и соединения или цикл запросов."
 	case "memory_pressure_area":
-		return "Норма до 128 MB*с, предупреждение от 128, критично от 1024. Больше означает длительный рост PSS или долгий период низкой свободной RAM."
+		return "Норма до 128 МБ*с, предупреждение от 128, критично от 1024. Больше означает длительный рост PSS или долгий период низкой свободной RAM."
 	case "recovery_debt":
 		return "Норма до 8 с^2, предупреждение от 8, критично от 30. Больше означает, что плохие окна шли сериями и пользователь дольше оставался в деградации."
 	default:
@@ -735,9 +736,9 @@ func scoreHelp(kind string) string {
 	case "change":
 		return "Оценка точки изменения показывает, насколько сильный сдвиг сигнала виден на фоне локального шума. Примерно до 3 — слабый сигнал, 3–6 — заметный, выше 6 — сильный. Для задержек, памяти и подтормаживаний больше обычно хуже."
 	case "influence":
-		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей флоу. 0–5 низкий риск, 5–15 средний, выше 15 высокий."
+		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей сценария. 0–5 низкий риск, 5–15 средний, выше 15 высокий."
 	case "network_burn":
-		return "Выгорание — условная накопленная стоимость сетевого цикла: учитывает периодичность, повторяемость, ошибки, DNS/connect и длительность окна. До 5 обычно терпимо, 5–20 требует проверки, выше 20 критично для сценария."
+		return "Выгорание — условная накопленная стоимость сетевого цикла: учитывает периодичность, повторяемость, ошибки, DNS, соединение и длительность окна. До 5 обычно терпимо, 5–20 требует проверки, выше 20 критично для сценария."
 	case "confidence":
 		return "Доверие лежит в диапазоне 0..1. Чем ближе к 1, тем лучше сигнал подтвержден повторяемостью, количеством наблюдений или совпадением нескольких методов."
 	case "path_cost":
@@ -752,7 +753,7 @@ func scoreHelp(kind string) string {
 func scoreGuideHTML(kind string) template.HTML {
 	switch kind {
 	case "code":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Оценка показывает приоритет расследования внутри текущего прогона. Она растет от совпадения сетевых хвостов, пауз главного потока, подтормаживаний UI, памяти, логов, флоу и графа влияния.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Оценка показывает приоритет расследования внутри текущего прогона. Она растет от совпадения сетевых хвостов, пауз главного потока, подтормаживаний UI, памяти, логов, сценария и графа влияния.</p></div></div>`)
 	case "leak":
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала утечек памяти</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: критично</span><p>Риск дополнительно повышают возраст удержания от 15 секунд, повторяемость, удержанный размер от 4 МБ и связь с пользовательским держателем.</p></div></div>`)
 	case "math":
@@ -779,13 +780,13 @@ var codeProblemCategoryFilterOptions = []string{
 	"Логи",
 	"Выполнение",
 	"Граф влияния",
-	"ANR-risk",
-	"OOM-risk",
-	"GC pressure",
-	"duplicate network",
-	"lifecycle leak",
-	"log spam",
-	"main-thread IO",
+	"Риск ANR",
+	"Риск OOM",
+	"Давление GC",
+	"Дублирование сети",
+	"Утечка жизненного цикла",
+	"Спам логами",
+	"Ввод-вывод на главном потоке",
 }
 
 func codeProblemCategoryOptions(items []analyze.CodeProblemStats) template.HTML {
@@ -1051,7 +1052,7 @@ func codeProblemDrillPath(drill analyze.CodeProblemDrillDown) string {
 		context = append(context, "экран "+drill.Screen)
 	}
 	if drill.Flow != "" {
-		context = append(context, "флоу "+drill.Flow)
+		context = append(context, "сценарий "+drill.Flow)
 	}
 	if drill.Step != "" {
 		context = append(context, "шаг "+drill.Step)
@@ -1421,7 +1422,7 @@ func compareDeltaValue(value string) string {
 		" ms", " мс",
 		" count", " шт",
 		" bytes", " байт",
-		" kb", " KB",
+		" kb", " КБ",
 		" fps", " FPS",
 		" pp", " п.п.",
 		"same", "без изменений",
@@ -1444,7 +1445,7 @@ func compareDeltaInterval(value string) string {
 		" ms", " мс",
 		" count", " шт",
 		" bytes", " байт",
-		" kb", " KB",
+		" kb", " КБ",
 		" fps", " FPS",
 		" pp", " п.п.",
 	)
@@ -1739,10 +1740,10 @@ func flowStatsKey(flow analyze.FlowStats) string {
 
 func flowKeyLabel(screen, flow, step, owner string) string {
 	parts := []string{
-		firstNonEmpty(screen, "unknown"),
-		firstNonEmpty(flow, "unknown"),
-		firstNonEmpty(step, "unknown"),
-		firstNonEmpty(owner, "unknown"),
+		firstNonEmpty(screen, "неизвестно"),
+		firstNonEmpty(flow, "неизвестно"),
+		firstNonEmpty(step, "неизвестно"),
+		firstNonEmpty(owner, "неизвестно"),
 	}
 	return strings.Join(parts, " / ")
 }
@@ -1878,7 +1879,7 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Главный источник", Detail: fmt.Sprintf("Наибольший вклад у %s: оценка %.2f. Используйте это как приоритет для просмотра карты источников и трассировок.", owner.Owner, owner.Score)})
 	}
 	if flow, ok := topProblemFlow(report.Summary); ok {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: flowCardSeverity(flow), Title: "Флоу с причинами", Detail: fmt.Sprintf("%s: проблем %d, спам логами %d, HTTP p95 %d мс, макс. пауза %d мс.", flowKeyLabel(flow.Screen, flow.Flow, flow.Step, flow.Owner), flow.ProblemCount, flow.LogSpam, flow.HTTPP95MS, flow.StallMaxMS)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: flowCardSeverity(flow), Title: "Сценарий с причинами", Detail: fmt.Sprintf("%s: проблем %d, спам логами %d, HTTP p95 %d мс, макс. пауза %d мс.", flowKeyLabel(flow.Screen, flow.Flow, flow.Step, flow.Owner), flow.ProblemCount, flow.LogSpam, flow.HTTPP95MS, flow.StallMaxMS)})
 	}
 	if score, ok := topIntegralScore(report.IntegralScores); ok {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: score.Severity, Title: score.Title, Detail: fmt.Sprintf("%.1f %s. %s", score.Value, score.Unit, score.Explanation)})
@@ -1922,7 +1923,7 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Граф причинности изменился", Detail: delta.Summary})
 	}
 	if row, ok := topFlowDelta(report.Comparison.Baseline, report.Comparison.Candidate); ok && row.Severity != "ok" {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Флоу ухудшился", Detail: fmt.Sprintf("%s: Δ проблем %d, Δ спама %d, Δ HTTP p95 %d мс, Δ UI %+.2f п.п.", flowKeyLabel(row.Screen, row.Flow, row.Step, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Сценарий ухудшился", Detail: fmt.Sprintf("%s: Δ проблем %d, Δ спама %d, Δ HTTP p95 %d мс, Δ UI %+.2f п.п.", flowKeyLabel(row.Screen, row.Flow, row.Step, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
 	}
 	if len(summary.Cards) == 0 {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующей регрессии начните с разделов робастных дельт, сетевых циклов и графа причинности."})
@@ -1994,9 +1995,9 @@ func topIntegralScore(scores []mathanalysis.IntegralScore) (mathanalysis.Integra
 func leakModeLabel(mode string) string {
 	switch mode {
 	case analyze.LeakModeHeap:
-		return "Heap mode"
+		return "режим дампа кучи"
 	default:
-		return "Light mode"
+		return "легкий режим"
 	}
 }
 
@@ -2537,7 +2538,7 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 	}
 	out.WriteString(`</svg>`)
 	if len(edges) == 0 {
-		out.WriteString(`<div class="help-text">В этом прогоне видны проблемные узлы, но между выбранными классами нет подтвержденных связей. Передайте статический ` + "`--class-graph`" + ` или включите ` + "`runtimeCallGraph`" + `, чтобы получить ребра.</div>`)
+		out.WriteString(`<div class="help-text">В этом прогоне видны проблемные узлы, но между выбранными классами нет подтвержденных связей. Передайте статический ` + "`--class-graph`" + ` или включите сбор графа вызовов выполнения (` + "`runtimeCallGraph`" + `), чтобы получить ребра.</div>`)
 	}
 	if influence.ShownNodes > len(nodes) || influence.ShownEdges > len(edges) {
 		fmt.Fprintf(&out, `<div class="help-text">Показаны ключевые узлы и связи: %d из %d узлов, %d из %d ребер. Полная детализация находится в таблицах ниже.</div>`, len(nodes), influence.ShownNodes, len(edges), influence.ShownEdges)
@@ -2583,6 +2584,17 @@ func influenceStatusLabel(value string) string {
 		return "статическая связь без проявления"
 	default:
 		return "нет данных"
+	}
+}
+
+func influenceRoleLabel(value string) string {
+	switch value {
+	case "caller":
+		return "вызывающий"
+	case "callee":
+		return "вызываемый"
+	default:
+		return value
 	}
 }
 

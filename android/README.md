@@ -38,7 +38,7 @@ Runtime стартует через `ContentProvider`. Если приложен
 <meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
 <meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
 <meta-data android:name="io.jankhunter.log_compression_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.log_bucket" android:value="daily" />
+<meta-data android:name="io.jankhunter.log_bucket" android:value="session" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 ```
 
@@ -49,16 +49,23 @@ val config = JankHunterConfig.builder()
     .enabled(true)
     .autoStartCollectors(true)
     .mainThreadStallThresholdMs(700)
+    .ownerBlockThresholdMs(250)
+    .httpSlowThresholdMs(1_000)
     .memorySampleIntervalMs(10_000)
     .systemSamplerEnabled(true)
     .systemSampleIntervalMs(15_000)
+    .mainLooperDispatchMonitorEnabled(true)
+    .retainedHeapDumpEnabled(true)
+    .retainedHeapDumpPrivacyApproved(true)
     .fpsMonitorEnabled(true)
+    .jankStatsEnabled(true)
     .jankFrameThresholdMs(32)
+    .uiWindowP95ThresholdMs(32)
     .maxQueueSize(2048)
     .maxLogBytes(5 * 1024 * 1024)
     .maxLogDirectoryBytes(25 * 1024 * 1024)
     .logCompressionEnabled(true)
-    .logBucket(JankHunterLogBucket.DAILY)
+    .logBucket(JankHunterLogBucket.SESSION)
     .flushIntervalMs(5_000)
     .build()
 
@@ -83,7 +90,7 @@ val enabledForUser = featureFlags.isEnabled("jank_hunter_runtime")
 JankHunter.setRuntimeEnabled(enabledForUser, "remote_config")
 ```
 
-При `false` runtime аккуратно flush-ит накопленное, останавливает collectors, закрывает writer и перестает оборачивать новые runtime hooks. При `true` он снова открывает сегмент `.jhlog`, записывает session metadata и запускает collectors без перезапуска приложения. В дневном bucket-режиме такие повторные старты попадают в общий набор `daily-<process>-<yyyyMMdd>-*.jhlog`, поэтому один день легко собрать в один HTML-отчет через `inspect logs/*.jhlog`.
+При `false` runtime аккуратно flush-ит накопленное, останавливает collectors, закрывает writer и перестает оборачивать новые runtime hooks. При `true` он снова открывает сегмент `.jhlog`, записывает metadata сессии и запускает collectors без перезапуска приложения. По умолчанию используется сессионный bucket: один runtime-start пишет в `session-<process>-<startMs>-*.jhlog`, а сворачивание приложения только сбрасывает буфер на диск и не закрывает сессию.
 
 Вручную через builder:
 
@@ -165,17 +172,17 @@ class FeedRepository {
 По умолчанию:
 
 ```text
-context.filesDir/jankhunter/daily-<process>-<yyyyMMdd>-<segment>.jhlog
+context.filesDir/jankhunter/session-<process>-<startMs>-<segment>.jhlog
 ```
 
 Например:
 
 ```text
-/data/data/com.myapp/files/jankhunter/daily-main-20260620-1.jhlog
-/data/data/com.myapp/files/jankhunter/daily-remote-20260620-1.jhlog
+/data/data/com.myapp/files/jankhunter/session-main-1782338123456-1.jhlog
+/data/data/com.myapp/files/jankhunter/session-remote-1782338123456-1.jhlog
 ```
 
-По умолчанию используется `JankHunterLogBucket.DAILY`: повторные runtime-start в один локальный день получают общий bucket-префикс и новые сегменты внутри него. Это не append в старый файл: каждый `.jhlog` сохраняет собственный словарь строк, а CLI объединяет набор файлов в один отчет. Для строгого режима “один runtime-start = один bucket” можно задать `JankHunterLogBucket.SESSION`, тогда имя будет `session-<process>-<startMs>-<segment>.jhlog`.
+По умолчанию используется `JankHunterLogBucket.SESSION`: один запуск runtime получает собственный bucket-префикс и сегменты внутри него. Это защищает длинный QA-сеанс от разрыва на background/foreground: при уходе в фон runtime делает flush, но продолжает ту же сессию после возврата. Если нужен дневной набор с общим префиксом, можно задать `JankHunterLogBucket.DAILY`.
 
 Каждый сегмент `.jhlog` ограничен `max_log_bytes`. Когда суммарный размер папки становится больше `max_log_directory_bytes`, Jank Hunter удаляет самые старые завершенные сегменты текущего bucket-типа и продолжает писать в текущий файл. По умолчанию тело `.jhlog` сжимается потоковым gzip после magic-заголовка, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
 
@@ -392,7 +399,7 @@ jankHunter {
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("qa")
     autoInit = true
-    logBucket = "daily"
+    logBucket = "session"
 
     retainedHeapDump {
         enabled = true
@@ -410,9 +417,9 @@ jankHunter {
         flowInteractions = true
         logSpam = true
         classGraph = true
-        runtimeCallGraph = false
+        runtimeCallGraph = true
         methodCounters = false
-        allowEmptyIncludePackages = false
+        allowEmptyIncludePackages = true
         asmProgressLog = false
 
         includePackages("com.myapp.feature", "com.myapp.data")
@@ -449,7 +456,7 @@ jankHunter {
 - `flowInteractions` - оборачивает `View.setOnClickListener` и создает flow для клика, если явный flow еще не задан;
 - `logSpam` - считает вызовы `android.util.Log.*` и Timber по class/method/level, не сохраняя текст логов;
 - `classGraph` - во время ASM-прохода пишет статический граф вызовов классов в отдельный файл. Байткод приложения ради этого не меняется;
-- `runtimeCallGraph` - опционально добавляет легкие enter/exit hooks и пишет агрегированные runtime-связи `caller -> callee`;
+- `runtimeCallGraph` - добавляет легкие enter/exit hooks и пишет агрегированные runtime-связи `caller -> callee`; включен по умолчанию, а `methodCounters` остается выключенным;
 - `methodCounters` - пишет счетчики входа в методы, по умолчанию выключено.
 
 Для каждого variant plugin пишет owner-map, class graph и diagnostics artifact:
@@ -467,20 +474,23 @@ CLI принимает их так:
 ```bash
 jankhunter inspect logs/*.jhlog \
   --owner-map build/generated/jankhunter/debug/owner-map.json \
+  --mapping app/build/outputs/mapping/debug/mapping.txt \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 
+`--mapping` принимает R8/ProGuard `mapping.txt` и раскрывает сокращенные имена классов в событиях, графе влияния и доказательствах удержания памяти. Если mapping не передан, отчет все равно строится, но после обфускации часть классов и owner-строк может выглядеть как `a.b.c`.
+
 `class-graph.jsonl` нужен для отдельного отчета `report-influence.html`: там видно, какие классы стали “злыми” узлами, через какие связи они влияют на другие классы и где это подтвердилось runtime-сигналами. Узел без runtime-доказательств не считается виновником: он просто связан со статическим графом, но в конкретном прогоне мог не выполниться.
 
 `instrumentation-diagnostics.jsonl` нужен для отдельного отчета `report-diagnostics.html`: там видно, какие ASM hooks реально совпали с байткодом, какие versioned bridges сработали, какие методы пропущены, какие gates выключили релевантные hooks, какие сигнатуры оказались unsupported, и какие `@JankFlow` / `@JankScreen` / `@JankTrace` scopes попадут в runtime attribution.
 
-`runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения это лучше включать после smoke-сборки и сначала на ограниченные include-пакеты или на `includeWholeApplication = true` с хорошим списком exclude.
+`runtimeCallGraph = true` добавляет runtime-ребра между реально выполненными методами. Лог не пишет каждое событие вызова: runtime держит счетчики по `screen + caller + flow + step + callee`, а в `.jhlog` сбрасывает агрегаты пачками. Для большого приложения сначала проверьте overhead на smoke-сборке и при необходимости ограничьте include-пакеты или расширьте exclude-list.
 
 ## Heap dump для утечек
 
-В Gradle plugin heap dump выключен по умолчанию и включается только явно для выбранных debug/QA variant. В новом `jankHunter { ... }` блок настроек сразу лежит рядом с instrumentation-настройками, чтобы его можно было быстро включить и задать лимиты:
+В Gradle plugin heap dump включен по умолчанию для диагностических debug/QA variant и ограничен лимитами. В новом `jankHunter { ... }` блок настроек лежит рядом с instrumentation-настройками, чтобы его можно было быстро ужесточить или выключить:
 
 ```kotlin
 jankHunter {
@@ -493,7 +503,7 @@ jankHunter {
 }
 ```
 
-В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если блок не указан или `enabled = false`, SDK остается в легком режиме без HPROF.
+В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если задать `enabled = false`, SDK остается в легком режиме без HPROF.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 
@@ -524,7 +534,7 @@ jankhunter inspect logs/*.jhlog \
 
 Скрипт работает с debuggable-приложением через `adb run-as`, поэтому не требует root. В sample-app есть отдельный Leak Lab flow: кнопки создают Activity/View binding/listener/cache утечки, clean object и candidate regression burst для демонстрации `compare-leaks.html`. Debug-сборка sample также подключает LeakCanary и через `LeakCanary benchmark` отправляет те же объекты в `AppWatcher`, чтобы сравнить LeakCanary heap report с Jank Hunter HTML. Подробный чеклист: [../docs/leakcanary-comparison.md](../docs/leakcanary-comparison.md).
 
-Heap dump останавливает VM на время записи, поэтому держите режим выключенным по умолчанию и используйте лимиты для больших приложений.
+Heap dump останавливает VM на время записи, поэтому для больших приложений держите строгие лимиты (`maxCount`, `minIntervalMs`, `minRetainedAgeMs`) или явно выключайте режим в сценариях, где пауза недопустима.
 
 ## Что с overhead
 
@@ -532,11 +542,11 @@ Heap dump останавливает VM на время записи, поэто
 
 Практические правила:
 
-- начинайте с runtime + OkHttp + FPS + memory/system sampler;
+- начинайте с runtime + OkHttp + FPS + memory/system sampler и проверяйте overhead расширенных мостов на smoke-сборке;
 - ASM включайте сначала на `com.myapp.feature` / `com.myapp.data`, потом расширяйте;
 - `includeWholeApplication = true` используйте осознанно и с `excludePackages`;
 - `classGraph` можно оставлять включенным: он работает на build-time и не добавляет runtime-вызовы;
-- `runtimeCallGraph` включайте осознанно: он агрегирует вызовы, но все равно добавляет enter/exit hook в выбранные методы;
+- `runtimeCallGraph` включен по умолчанию и агрегирует вызовы, но все равно добавляет enter/exit hook в выбранные методы; при росте overhead сужайте include/exclude;
 - `main_looper_dispatch_monitor_enabled` держите выключенным, пока реально не нужен;
 - `methodCounters` не включайте на весь проект без причины;
 - `coroutines` включайте после smoke-сборки, потому что это широкий bytecode hook.

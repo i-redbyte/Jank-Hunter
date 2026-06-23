@@ -137,12 +137,13 @@ Owner map и class graph от Android Gradle plugin:
 ```bash
 jankhunter inspect logs/*.jhlog \
   --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
+  --mapping ../android/sample-app/build/outputs/mapping/debug/mapping.txt \
   --class-graph ../android/sample-app/build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics ../android/sample-app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 
-`--owner-map` читает JSONL v2 от Gradle plugin и раскрывает generated owner hash-и в человекочитаемые `class.method`, `--class-graph` добавляет статические связи, горячие пути и method-level hotspots, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет с matched hooks и disabled/unsupported decisions. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
+`--owner-map` читает JSONL v2 от Gradle plugin и раскрывает generated owner hash-и в человекочитаемые `class.method`, `--mapping` принимает R8/ProGuard `mapping.txt` и раскрывает обфусцированные классы, `--class-graph` добавляет статические связи, горячие пути и method-level hotspots, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет с matched hooks и disabled/unsupported decisions. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
 
 Heap evidence для точных цепочек утечек:
 
@@ -229,6 +230,7 @@ jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
   --owner-map owner-map.json \
+  --mapping mapping.txt \
   --class-graph class-graph.jsonl \
   --out compare.html
 ```
@@ -347,10 +349,10 @@ jankhunter problems logs/*.jhlog --dataset leaks --format json --out leaks.json
 По умолчанию runtime пишет:
 
 ```text
-context.filesDir/jankhunter/daily-<process>-<yyyyMMdd>-<segment>.jhlog
+context.filesDir/jankhunter/session-<process>-<startMs>-<segment>.jhlog
 ```
 
-Дневной bucket - дефолт Android runtime: повторные старты SDK в течение одного локального дня создают новые сегменты с общим префиксом `daily-...`, а `inspect logs/*.jhlog` собирает их в один отчет. Для QA-сценария “один runtime-start = один bucket” на Android можно выбрать `JankHunterLogBucket.SESSION`, тогда файлы будут называться `session-<process>-<startMs>-<segment>.jhlog`.
+Сессионный bucket - дефолт Android runtime: один runtime-start создает общий префикс `session-...`, а ротация по размеру добавляет новые сегменты внутри той же сессии. Сворачивание/разворачивание приложения не начинает новый лог: runtime только сбрасывает буфер на диск. Для дневного объединения можно выбрать `JankHunterLogBucket.DAILY`, тогда файлы будут называться `daily-<process>-<yyyyMMdd>-<segment>.jhlog`.
 
 Через adb:
 
@@ -424,12 +426,13 @@ compare-diagnostics.html
 ```bash
 jankhunter inspect logs/*.jhlog \
   --owner-map build/generated/jankhunter/debug/owner-map.json \
+  --mapping app/build/outputs/mapping/debug/mapping.txt \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
   --out report.html
 ```
 
-Если `--class-graph` не передан, CLI все равно покажет runtime-подозреваемых и runtime-вызовы из `.jhlog`, но без build-time ребер между классами. Статический узел без runtime-доказательств означает не “виноват”, а “связан с кодом, но в этом прогоне не проявился”.
+Если `--class-graph` не передан, CLI все равно покажет runtime-подозреваемых и runtime-вызовы из `.jhlog`, но без build-time ребер между классами. Если `--mapping` не передан после R8/ProGuard, отчет сохранит сокращенные имена вида `a.b.c`. Статический узел без runtime-доказательств означает не “виноват”, а “связан с кодом, но в этом прогоне не проявился”.
 
 ## `.jhlog` коротко
 
@@ -439,7 +442,7 @@ jankhunter inspect logs/*.jhlog \
 - строки лежат в dictionary records;
 - события дальше используют короткие ID;
 - boolean-сигналы пишутся в flags/bitmask;
-- контекст `screen/owner/flow/step` пишется только когда поле реально есть;
+- контекст `screen/owner/flow/step` пишется только когда поле реально есть, а повтор соседнего контекста кодируется одним флагом `same-context`;
 - runtime call graph хранится как агрегаты `caller_id -> callee_id`, а не как сырые вызовы;
 - `context.battery_temp_deci_c` хранится signed zigzag-varint, поэтому отрицательная температура батареи остается корректной величиной;
 - metric events для gauges несут `value/count/sum/max/mode`, чтобы CLI мог объединять Android-side flush-окна взвешенно, а не усреднять уже усредненные значения;
@@ -456,7 +459,7 @@ Gauge aggregation mode хранится рядом с metric event:
 
 Пользовательские negative gauges сейчас не пишутся как signed metric values: runtime считает их ошибочным input и увеличивает `jankhunter.metric.invalid_negative.gauge.count`. Если нужна отрицательная физическая величина, она должна иметь отдельный typed event или signed context field, как `battery_temp_deci_c`.
 
-До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=5`.
+До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=7`.
 
 ## Проверки
 

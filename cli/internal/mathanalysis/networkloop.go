@@ -126,8 +126,8 @@ func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string
 	}
 	if event.HTTP.ConnectMS > 0 {
 		tokens := append([]string{"connect_high"}, baseTokens...)
-		c.addPoint("connect:global", "Connect всплески", "connect", route, owner, index, 1, tokens...)
-		c.addPoint("connect:route:"+route, "Connect маршрут "+route, "connect", route, owner, index, 1, tokens...)
+		c.addPoint("connect:global", "Всплески соединения", "connect", route, owner, index, 1, tokens...)
+		c.addPoint("connect:route:"+route, "Соединение маршрута "+route, "connect", route, owner, index, 1, tokens...)
 	}
 	if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
 		tokens := append([]string{"http_failed"}, baseTokens...)
@@ -631,9 +631,9 @@ func networkLoopStatus(loops []NetworkLoopFinding) string {
 
 func networkLoopSummary(loops []NetworkLoopFinding) string {
 	if len(loops) == 0 {
-		return "Сетевых циклов по DNS, connect, reconnect, websocket и всплескам маршрутов не найдено."
+		return "Сетевых циклов по DNS, соединениям, переподключениям, WebSocket и всплескам маршрутов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d кандидатов сетевых циклов: скользящие MAD-всплески подтверждены автокорреляцией, DFT и повторяющимся паттерном.", len(loops))
+	return fmt.Sprintf("Найдено %d кандидатов сетевых циклов: скользящие MAD-всплески подтверждены автокорреляцией, преобразованием Фурье и повторяющимся паттерном.", len(loops))
 }
 
 func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
@@ -641,7 +641,7 @@ func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
 		return []Finding{{
 			Severity: "ok",
 			Title:    "Сетевые циклы не найдены",
-			Detail:   "Повторяющихся DNS/connect/reconnect или всплесков маршрута/источника с достаточным доверием нет.",
+			Detail:   "Повторяющихся DNS-запросов, соединений, переподключений или всплесков маршрута/источника с достаточным доверием нет.",
 		}}
 	}
 	worst := loops[0]
@@ -684,7 +684,7 @@ func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменился сетевой цикл",
 				Detail:         delta.Summary,
-				Recommendation: "Проверьте маршрут, источник, DNS/connect/retry и WebSocket-события с тем же периодом; для Android смотрите OkHttp EventListener и владельца coroutine/refresh.",
+				Recommendation: "Проверьте маршрут, источник, DNS, соединения, повторы и WebSocket-события с тем же периодом; для Android смотрите OkHttp EventListener и владельца корутины или обновления.",
 			}}
 		}
 	}
@@ -835,7 +835,7 @@ func networkMetricTitle(kind, route, owner string) string {
 	case "connect":
 		return "Метрика соединения" + target
 	case "retry":
-		return "Метрика retry/reconnect" + target
+		return "Метрика повторов/переподключений" + target
 	case "websocket":
 		return "WebSocket-метрика" + target
 	case "failure":
@@ -868,17 +868,17 @@ func networkLoopProbableCause(kind, route, owner string) string {
 	target := networkLoopTarget(route, owner)
 	switch kind {
 	case "dns":
-		return "Вероятная причина: периодический DNS resolve или потеря DNS cache" + target + ". Проверьте TTL/cache, OkHttp DNS и сетевой слой."
+		return "Вероятная причина: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL/кеш, OkHttp DNS и сетевой слой."
 	case "connect":
-		return "Вероятная причина: повторные connect/TLS попытки" + target + ". Проверьте connection pool, прокси/VPN, TLS и reachability."
+		return "Вероятная причина: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети."
 	case "retry":
-		return "Вероятная причина: retry/reconnect контур" + target + ". Проверьте backoff, cancellation и владельца refresh."
+		return "Вероятная причина: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления."
 	case "websocket":
-		return "Вероятная причина: шторм WebSocket-переподключений" + target + ". Проверьте lifecycle, heartbeat и backoff переподключения."
+		return "Вероятная причина: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения."
 	case "failure":
-		return "Вероятная причина: повторяющиеся сетевые ошибки" + target + ". Проверьте статус backend, обработку IOException и retry policy."
+		return "Вероятная причина: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и политику повторов."
 	case "owner":
-		return "Вероятная причина: источник регулярно запускает сетевую работу" + target + ". Проверьте coroutine/job scheduling и debounce."
+		return "Вероятная причина: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин/задач и подавление частых повторов."
 	case "route":
 		return "Вероятная причина: периодический polling или шквал запросов" + target + ". Проверьте таймеры, refresh и cache policy."
 	default:
@@ -1041,13 +1041,13 @@ func networkLoopTokenLabel(token string) string {
 	case "dns_high":
 		return "DNS-всплеск"
 	case "connect_high":
-		return "connect-всплеск"
+		return "всплеск соединений"
 	case "reconnect_high":
-		return "retry/reconnect-всплеск"
+		return "всплеск повторов/переподключений"
 	case "websocket_reconnect":
-		return "websocket-переподключение"
+		return "WebSocket-переподключение"
 	case "websocket_failure":
-		return "websocket-ошибка"
+		return "WebSocket-ошибка"
 	case "http_5xx":
 		return "HTTP 5xx"
 	case "http_failed":
@@ -1067,11 +1067,11 @@ func networkLoopKindLabel(kind string) string {
 	case "dns":
 		return "фаза: DNS"
 	case "connect":
-		return "фаза: connect"
+		return "фаза: соединение"
 	case "retry":
-		return "фаза: retry/reconnect"
+		return "фаза: повторы/переподключения"
 	case "websocket":
-		return "фаза: websocket"
+		return "фаза: WebSocket"
 	case "failure":
 		return "фаза: сетевые ошибки"
 	case "owner":

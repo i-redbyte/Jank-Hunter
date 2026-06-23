@@ -15,7 +15,7 @@ func TestSummarizeRobustSetComputesDeterministicStats(t *testing.T) {
 		set.addWeighted(float64(i), 1)
 	}
 
-	stat := summarizeRobustSet(robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}, set)
+	stat := summarizeRobustSet(robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "мс"}, set)
 
 	assertFloat(t, stat.Median, 50.5)
 	assertFloat(t, stat.P90, 90)
@@ -32,7 +32,7 @@ func TestSummarizeRobustSetComputesDeterministicStats(t *testing.T) {
 }
 
 func TestCompareRobustSamplesComputesCliffsDelta(t *testing.T) {
-	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "мс"}
 	baseline := robustSampleMap{key: robustSet(1, 2, 3)}
 	candidate := robustSampleMap{key: robustSet(2, 3, 4)}
 
@@ -55,7 +55,7 @@ func TestCompareRobustSamplesComputesCliffsDelta(t *testing.T) {
 }
 
 func TestCompareRobustSamplesCalibratesHighConfidenceRegression(t *testing.T) {
-	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "мс"}
 	baseValues := make([]float64, 0, 80)
 	candidateValues := make([]float64, 0, 80)
 	for i := 0; i < 80; i++ {
@@ -78,7 +78,7 @@ func TestCompareRobustSamplesCalibratesHighConfidenceRegression(t *testing.T) {
 }
 
 func TestCompareRobustSamplesAvoidsHighSeverityForTinySample(t *testing.T) {
-	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "ms"}
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "мс"}
 	deltas := compareRobustSamples(
 		robustSampleMap{key: robustSet(100, 101, 102)},
 		robustSampleMap{key: robustSet(220, 221, 222)},

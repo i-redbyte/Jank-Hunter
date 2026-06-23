@@ -111,8 +111,9 @@ func readBinary(r io.Reader, source string, version uint8) (Log, error) {
 		Kinds:   map[uint64]DictKind{},
 	}
 	var currentMS uint64
+	decodeState := compactDecodeState{}
 	for {
-		event, deltaMS, err := readCompactEvent(reader, source)
+		event, deltaMS, err := readCompactEvent(reader, source, &decodeState)
 		if errors.Is(err, io.EOF) {
 			return log, nil
 		}
@@ -147,8 +148,9 @@ func streamBinary(
 	reader := bufio.NewReader(r)
 	var currentMS uint64
 	eventCount := 0
+	decodeState := compactDecodeState{}
 	for {
-		event, deltaMS, err := readCompactEvent(reader, source)
+		event, deltaMS, err := readCompactEvent(reader, source, &decodeState)
 		if errors.Is(err, io.EOF) {
 			return log, nil
 		}
@@ -183,7 +185,12 @@ func normalizeFirstMetadataDelta(event Event, deltaMS uint64, eventCount int) ui
 	}
 }
 
-func readCompactEvent(reader *bufio.Reader, source string) (Event, uint64, error) {
+type compactDecodeState struct {
+	lastContext contextTuple
+	hasContext  bool
+}
+
+func readCompactEvent(reader *bufio.Reader, source string, decodeState *compactDecodeState) (Event, uint64, error) {
 	header, err := reader.ReadByte()
 	if err != nil {
 		return Event{}, 0, err
@@ -218,13 +225,13 @@ func readCompactEvent(reader *bufio.Reader, source string) (Event, uint64, error
 		if _, err := io.ReadFull(reader, payload); err != nil {
 			return Event{}, 0, fmt.Errorf("payload: %w", err)
 		}
-		if err := decodePayload(payload, &event); err != nil {
+		if err := decodePayload(payload, &event, decodeState); err != nil {
 			warning := err.Error()
 			event.Warnings = append(event.Warnings, warning)
 		}
 		return event, deltaMS, nil
 	}
-	if err := decodeFixedCompactPayload(reader, &event); err != nil {
+	if err := decodeFixedCompactPayload(reader, &event, decodeState); err != nil {
 		return Event{}, 0, fmt.Errorf("payload: %w", err)
 	}
 	return event, deltaMS, nil
@@ -252,7 +259,7 @@ func readCompactDelta(reader io.ByteReader, code byte) (uint64, error) {
 	}
 }
 
-func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
+func decodeFixedCompactPayload(reader io.ByteReader, event *Event, decodeState *compactDecodeState) error {
 	read := func() (uint64, error) {
 		return binary.ReadUvarint(reader)
 	}
@@ -289,7 +296,7 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event) error {
 		}
 		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
 	case EventRetained:
-		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
@@ -329,7 +336,7 @@ func toleratePartial(log Log, source, stage string, err error) (Log, error) {
 	return log, fmt.Errorf("%s: read %s: %w", source, stage, err)
 }
 
-func decodePayload(payload []byte, event *Event) error {
+func decodePayload(payload []byte, event *Event, decodeState *compactDecodeState) error {
 	reader := bytes.NewReader(payload)
 	read := func() (uint64, error) {
 		return binary.ReadUvarint(reader)
@@ -452,7 +459,7 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
 	case EventRetained:
-		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
@@ -480,13 +487,13 @@ func decodePayload(payload []byte, event *Event) error {
 		}
 		event.Metric = metricFromValues(values)
 	case EventFlow:
-		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
 		event.Flow = &FlowEvent{ScreenID: screenID, OwnerID: ownerID, FlowID: flowID, StepID: stepID}
 	case EventLogSpam:
-		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
@@ -504,7 +511,7 @@ func decodePayload(payload []byte, event *Event) error {
 			Count:    values[2],
 		}
 	case EventProblem:
-		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
@@ -523,7 +530,7 @@ func decodePayload(payload []byte, event *Event) error {
 			MaxMS:    values[3],
 		}
 	case EventRuntimeCall:
-		screenID, callerID, flowID, stepID, err := readContextIDs(read, event.Flags)
+		screenID, callerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
 			return err
 		}
@@ -547,7 +554,14 @@ func decodePayload(payload []byte, event *Event) error {
 	return nil
 }
 
-func readContextIDs(read func() (uint64, error), flags uint64) (screenID, ownerID, flowID, stepID uint64, err error) {
+func readContextIDs(read func() (uint64, error), flags uint64, decodeState *compactDecodeState) (screenID, ownerID, flowID, stepID uint64, err error) {
+	if flags&uint64(FlagSameContext) != 0 {
+		if decodeState == nil || !decodeState.hasContext {
+			return 0, 0, 0, 0, fmt.Errorf("same-context flag without prior context")
+		}
+		context := decodeState.lastContext
+		return context.screenID, context.ownerID, context.flowID, context.stepID, nil
+	}
 	if flags&uint64(FlagHasScreen) != 0 {
 		if screenID, err = read(); err != nil {
 			return 0, 0, 0, 0, err
@@ -567,6 +581,10 @@ func readContextIDs(read func() (uint64, error), flags uint64) (screenID, ownerI
 		if stepID, err = read(); err != nil {
 			return 0, 0, 0, 0, err
 		}
+	}
+	if decodeState != nil {
+		decodeState.lastContext = contextTuple{screenID: screenID, ownerID: ownerID, flowID: flowID, stepID: stepID}
+		decodeState.hasContext = true
 	}
 	return screenID, ownerID, flowID, stepID, nil
 }

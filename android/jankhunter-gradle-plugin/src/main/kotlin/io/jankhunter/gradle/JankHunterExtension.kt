@@ -5,10 +5,15 @@ import org.gradle.api.Action
 open class JankHunterExtension {
     val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
     var autoInit: Boolean = true
-    var logBucket: String = "daily"
+    var logBucket: String = "session"
+    val runtime: Runtime = Runtime()
     val instrument: Instrumentation = Instrumentation()
     val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
     val releaseSafety: ReleaseSafety = ReleaseSafety()
+
+    fun runtime(action: Action<Runtime>) {
+        action.execute(runtime)
+    }
 
     fun instrument(action: Action<Instrumentation>) {
         action.execute(instrument)
@@ -27,14 +32,14 @@ open class JankHunterExtension {
         var webSockets: Boolean = true
         var handlers: Boolean = true
         var executors: Boolean = true
-        var coroutines: Boolean = false
+        var coroutines: Boolean = true
         var flowInteractions: Boolean = true
         var lifecycleLeaks: Boolean = true
         var logSpam: Boolean = true
         var classGraph: Boolean = true
-        var runtimeCallGraph: Boolean = false
+        var runtimeCallGraph: Boolean = true
         var methodCounters: Boolean = false
-        var allowEmptyIncludePackages: Boolean = false
+        var allowEmptyIncludePackages: Boolean = true
         var includeWholeApplication: Boolean = false
         var asmProgressLog: Boolean = false
         val includePackages: MutableSet<String> = linkedSetOf()
@@ -62,11 +67,22 @@ open class JankHunterExtension {
     }
 
     open class RetainedHeapDump {
-        var enabled: Boolean = false
-        var privacyApproved: Boolean = false
+        var enabled: Boolean = true
+        var privacyApproved: Boolean = true
         var minIntervalMs: Long = 10 * 60_000L
         var maxCount: Int = 1
         var minRetainedAgeMs: Long = 30_000L
+    }
+
+    open class Runtime {
+        var mainThreadStallThresholdMs: Long = 700L
+        var ownerBlockThresholdMs: Long = 250L
+        var httpSlowThresholdMs: Long = 1_000L
+        var jankFrameThresholdMs: Long = 32L
+        var uiWindowP95ThresholdMs: Long = 32L
+        var mainLooperDispatchMonitor: Boolean = true
+        var jankStats: Boolean = true
+        var mainProcessOnly: Boolean = true
     }
 
     open class ReleaseSafety {

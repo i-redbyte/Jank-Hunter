@@ -50,13 +50,13 @@
 
   <section id="nodes" class="panel">
     <div class="panel-head">
-      <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и флоу.</div></div>
+      <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и сценарии.</div></div>
     </div>
     <details class="fold influence-table-fold">
       <summary><span>Показать проблемные классы</span><span class="method-kind">{{len .Influence.TopNodes}} классов</span></summary>
       <div class="fold-body">
         <table class="influence-table influence-node-table">
-          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Флоу / экраны</th></tr>
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Сценарии / экраны</th></tr>
           {{range .Influence.TopNodes}}
           <tr>
             <td><code>{{.ClassName}}</code></td>
@@ -101,16 +101,16 @@
 
   <section id="paths" class="panel">
     <div class="panel-head">
-      <div><h2>Горячие пути</h2><div class="panel-kicker">BFS-цепочки из статического графа, усиленные runtime-симптомами и весом вызовов.</div></div>
+      <div><h2>Горячие пути</h2><div class="panel-kicker">Цепочки обхода в ширину из статического графа, усиленные симптомами выполнения и весом вызовов.</div></div>
     </div>
     <details class="fold influence-table-fold" open>
       <summary><span>Показать горячие пути</span><span class="method-kind">{{len .Influence.HotPaths}} путей</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Путь</th><th>Вес</th><th>Runtime</th><th>Пояснение</th></tr>
+          <tr><th>Путь</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
           {{range .Influence.HotPaths}}
           <tr><td><code>{{join .Nodes " → "}}</code></td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTarget}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Нет горячих путей. Нужен `--class-graph` и runtime-симптомы.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Нет горячих путей. Нужен `--class-graph` и симптомы выполнения.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -118,16 +118,16 @@
 
   <section id="methods" class="panel">
     <div class="panel-head">
-      <div><h2>Горячие методы</h2><div class="panel-kicker">Method-level индекс показывает caller/callee методы рядом с runtime-симптомами и сильными статическими связями.</div></div>
+      <div><h2>Горячие методы</h2><div class="panel-kicker">Индекс на уровне методов показывает вызывающие и вызываемые методы рядом с симптомами выполнения и сильными статическими связями.</div></div>
     </div>
     <details class="fold influence-table-fold" open>
       <summary><span>Показать горячие методы</span><span class="method-kind">{{len .Influence.MethodHotspots}} методов</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Класс</th><th>Метод</th><th>Роль</th><th>Вызовы</th><th>Вес</th><th>Runtime</th></tr>
+          <tr><th>Класс</th><th>Метод</th><th>Роль</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th></tr>
           {{range .Influence.MethodHotspots}}
-          <tr><td><code>{{.ClassName}}</code></td><td><code>{{.Method}}</code></td><td>{{.Role}}</td><td>{{.Count}}</td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
-          {{else}}<tr><td colspan="6" class="muted">Нет method-level данных. Передайте class graph с caller/callee methods.</td></tr>{{end}}
+          <tr><td><code>{{.ClassName}}</code></td><td><code>{{.Method}}</code></td><td>{{influenceRoleLabel .Role}}</td><td>{{.Count}}</td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет данных на уровне методов. Передайте граф классов с вызывающими и вызываемыми методами.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -141,7 +141,7 @@
       <summary><span>Показать циклы</span><span class="method-kind">{{len .Influence.Cycles}} циклов</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Компонента</th><th>Вес</th><th>Затронута runtime</th></tr>
+          <tr><th>Компонента</th><th>Вес</th><th>Затронуто выполнение</th></tr>
           {{range .Influence.Cycles}}
           <tr><td><code>{{join .Nodes " ↔ "}}</code></td><td>{{.Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
           {{else}}<tr><td colspan="3" class="muted">Сильносвязных циклов не найдено или статический граф не передан.</td></tr>{{end}}

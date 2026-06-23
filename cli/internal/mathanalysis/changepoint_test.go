@@ -45,7 +45,7 @@ func TestCompareChangePointsReportsAppearedAndDisappeared(t *testing.T) {
 		Signal:   "HTTP p95",
 		TimeMS:   3000,
 		Delta:    300,
-		Unit:     "ms",
+		Unit:     "мс",
 		Score:    6,
 		Severity: "high",
 	}}

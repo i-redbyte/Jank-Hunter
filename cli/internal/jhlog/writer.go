@@ -9,8 +9,10 @@ import (
 )
 
 type Writer struct {
-	w      io.Writer
-	lastMS uint64
+	w           io.Writer
+	lastMS      uint64
+	lastContext contextTuple
+	hasContext  bool
 }
 
 func NewWriter(w io.Writer) (*Writer, error) {
@@ -34,8 +36,9 @@ func Create(path string) (*os.File, *Writer, error) {
 }
 
 func (w *Writer) WriteEvent(event Event) error {
+	flags := w.compactEventFlags(event)
 	var payload bytes.Buffer
-	if err := encodePayload(&payload, event); err != nil {
+	if err := encodePayload(&payload, event, flags); err != nil {
 		return err
 	}
 
@@ -45,12 +48,32 @@ func (w *Writer) WriteEvent(event Event) error {
 	}
 	w.lastMS = event.TimeMS
 
-	flags := compactEventFlags(event)
 	if err := writeCompactHeader(w.w, event.Type, delta, flags, needsPayloadLength(event.Type), uint64(payload.Len())); err != nil {
 		return err
 	}
-	_, err := w.w.Write(payload.Bytes())
-	return err
+	if _, err := w.w.Write(payload.Bytes()); err != nil {
+		return err
+	}
+	w.rememberContext(event)
+	return nil
+}
+
+func (w *Writer) compactEventFlags(event Event) uint64 {
+	flags := compactEventFlags(event)
+	if context, ok := eventContextTuple(event); ok && w.hasContext && w.lastContext == context {
+		flags &^= contextFlagMask
+		flags |= uint64(FlagSameContext)
+	}
+	return flags
+}
+
+func (w *Writer) rememberContext(event Event) {
+	context, ok := eventContextTuple(event)
+	if !ok {
+		return
+	}
+	w.lastContext = context
+	w.hasContext = true
 }
 
 func compactEventFlags(event Event) uint64 {
@@ -87,8 +110,42 @@ func compactEventFlags(event Event) uint64 {
 	return flags
 }
 
+const contextFlagMask = uint64(FlagHasScreen | FlagHasOwner | FlagHasFlow | FlagHasStep)
+
+type contextTuple struct {
+	screenID uint64
+	ownerID  uint64
+	flowID   uint64
+	stepID   uint64
+}
+
 type contextIDs interface {
 	contextIDs() (screenID, ownerID, flowID, stepID uint64)
+}
+
+func eventContextTuple(event Event) (contextTuple, bool) {
+	switch event.Type {
+	case EventFlow:
+		return contextTupleFrom(event.Flow), event.Flow != nil
+	case EventRetained:
+		return contextTupleFrom(event.Retained), event.Retained != nil
+	case EventLogSpam:
+		return contextTupleFrom(event.LogSpam), event.LogSpam != nil
+	case EventProblem:
+		return contextTupleFrom(event.Problem), event.Problem != nil
+	case EventRuntimeCall:
+		return contextTupleFrom(event.RuntimeCall), event.RuntimeCall != nil
+	default:
+		return contextTuple{}, false
+	}
+}
+
+func contextTupleFrom(context contextIDs) contextTuple {
+	if context == nil {
+		return contextTuple{}
+	}
+	screenID, ownerID, flowID, stepID := context.contextIDs()
+	return contextTuple{screenID: screenID, ownerID: ownerID, flowID: flowID, stepID: stepID}
 }
 
 func compactContextFlags(context contextIDs) uint64 {
@@ -112,7 +169,7 @@ func compactContextFlags(context contextIDs) uint64 {
 	return flags
 }
 
-func encodePayload(w io.Writer, event Event) error {
+func encodePayload(w io.Writer, event Event, flags uint64) error {
 	switch event.Type {
 	case EventDictionary:
 		if event.Dictionary == nil {
@@ -227,7 +284,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("retained payload is nil")
 		}
-		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+		if err := writeContextIDs(w, flags, p); err != nil {
 			return err
 		}
 		for _, value := range []uint64{p.ClassID, p.HolderID, p.AgeMS, p.Count} {
@@ -262,7 +319,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("flow payload is nil")
 		}
-		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+		if err := writeContextIDs(w, flags, p); err != nil {
 			return err
 		}
 	case EventLogSpam:
@@ -270,7 +327,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("log spam payload is nil")
 		}
-		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+		if err := writeContextIDs(w, flags, p); err != nil {
 			return err
 		}
 		for _, value := range []uint64{p.SourceID, p.Level, p.Count} {
@@ -283,7 +340,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("problem payload is nil")
 		}
-		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+		if err := writeContextIDs(w, flags, p); err != nil {
 			return err
 		}
 		for _, value := range []uint64{p.KindID, p.WindowMS, p.Count, p.MaxMS} {
@@ -296,7 +353,7 @@ func encodePayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("runtime call payload is nil")
 		}
-		if err := writeContextIDs(w, compactEventFlags(event), p); err != nil {
+		if err := writeContextIDs(w, flags, p); err != nil {
 			return err
 		}
 		for _, value := range []uint64{p.CalleeID, p.Count, p.TotalMS, p.MaxMS} {
@@ -346,6 +403,9 @@ func (p *RuntimeCallEvent) contextIDs() (uint64, uint64, uint64, uint64) {
 }
 
 func writeContextIDs(w io.Writer, flags uint64, context contextIDs) error {
+	if flags&uint64(FlagSameContext) != 0 {
+		return nil
+	}
 	screenID, ownerID, flowID, stepID := context.contextIDs()
 	values := []struct {
 		flag  Flag

@@ -190,7 +190,7 @@ func loadHprofHeapEvidence(path string, targetClasses []string) (*HeapEvidence, 
 	if len(targets) == 0 {
 		return &HeapEvidence{
 			Sources:  []string{path},
-			Warnings: []string{"HPROF пропущен: в runtime-логе нет retained-классов для связывания с дампом памяти."},
+			Warnings: []string{"HPROF пропущен: в логе выполнения нет удержанных классов для связывания с дампом памяти."},
 		}, nil
 	}
 	parser := newHprofParser(path, targets)
@@ -349,7 +349,7 @@ func (p *hprofParser) readHeader(reader *bufio.Reader) error {
 		}
 	}
 	if !strings.HasPrefix(string(header), "JAVA PROFILE ") {
-		return fmt.Errorf("%s is not a Java HPROF heap dump", p.path)
+		return fmt.Errorf("%s не является Java HPROF дампом памяти", p.path)
 	}
 	idSizeRaw, err := readU4(reader)
 	if err != nil {
@@ -832,7 +832,7 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF %s разобран частично: достигнут безопасный лимит %d объектов или %d ссылок.", p.path, maxHprofObjects, maxHprofEdges))
 	}
 	if len(p.roots) == 0 {
-		evidence.Warnings = append(evidence.Warnings, "HPROF не содержит распознанных GC roots.")
+		evidence.Warnings = append(evidence.Warnings, "HPROF не содержит распознанных корней GC.")
 		return evidence
 	}
 	parent := p.rootBFS()
@@ -849,7 +849,7 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		if len(ids) > maxHprofTargets {
 			ids = ids[:maxHprofTargets]
-			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Класс %s: для retained size использованы первые %d достижимых объектов.", className, maxHprofTargets))
+			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Класс %s: для удержанного размера использованы первые %d достижимых объектов.", className, maxHprofTargets))
 		}
 		best := HeapLeakEvidence{ClassName: className, Source: p.path}
 		for _, id := range ids {
@@ -902,10 +902,10 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		evidence.Leaks = append(evidence.Leaks, best)
 	}
 	if limitedRetainedTargets > 0 {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Точный retained size ограничен: для %d объектов использована безопасная оценка, чтобы большой HPROF не зависал.", limitedRetainedTargets))
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Точный удержанный размер ограничен: для %d объектов использована безопасная оценка, чтобы большой HPROF не зависал.", limitedRetainedTargets))
 	}
 	if skippedEvidenceTargets > 0 {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF содержит слишком много retained-кандидатов: пропущено %d объектов после лимита %d.", skippedEvidenceTargets, maxHprofEvidenceTargets))
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF содержит слишком много кандидатов удержания: пропущено %d объектов после лимита %d.", skippedEvidenceTargets, maxHprofEvidenceTargets))
 	}
 	sort.Slice(evidence.Leaks, func(i, j int) bool {
 		if evidence.Leaks[i].RetainedSizeKB == evidence.Leaks[j].RetainedSizeKB {
@@ -1306,7 +1306,7 @@ func heapLeakActionabilityScore(leak HeapLeakEvidence) int {
 	case "jni", "monitor":
 		score += 2
 	}
-	if leak.LeakPattern != "" && leak.LeakPattern != "Сильная цепочка GC root удерживает объект" {
+	if leak.LeakPattern != "" && leak.LeakPattern != "Сильная цепочка от корня GC удерживает объект" {
 		score += 4
 	}
 	if len(leak.ReferenceMatchers) > 0 {
@@ -1439,10 +1439,10 @@ func ignoredReferenceField(nodeClass, fieldOwner, fieldName string) bool {
 func heapEvidenceConfidence(exact bool, matchers []string) string {
 	parts := []string{"высокое: путь найден в HPROF по сильным ссылкам"}
 	if !exact {
-		parts[0] = "среднее+: путь найден в HPROF по сильным ссылкам, retained size ограничен безопасным лимитом"
+		parts[0] = "среднее+: путь найден в HPROF по сильным ссылкам, удержанный размер ограничен безопасным лимитом"
 	}
 	if len(matchers) > 0 {
-		parts = append(parts, "reference matchers: "+strings.Join(matchers, ", "))
+		parts = append(parts, "совпавшие правила ссылок: "+strings.Join(matchers, ", "))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -1501,9 +1501,9 @@ func heapLeakPattern(className, holder, holderField, rootCategory string, path [
 	case strings.Contains(lowerClass, "activity") && strings.Contains(lowerField, "mcontext"):
 		return "View/Context цепочка удерживает Activity"
 	case strings.Contains(lowerClass, "activity") && rootCategory == "class/static":
-		return "Activity удерживается static/singleton цепочкой"
+		return "Activity удерживается цепочкой статического поля или одиночки"
 	case strings.Contains(lowerClass, "fragment") && rootCategory == "class/static":
-		return "Fragment удерживается static/singleton цепочкой"
+		return "Fragment удерживается цепочкой статического поля или одиночки"
 	case strings.Contains(lowerClass, "viewmodel"):
 		return "ViewModel живет после onCleared"
 	case strings.Contains(lowerClass, "service"):
@@ -1517,14 +1517,14 @@ func heapLeakPattern(className, holder, holderField, rootCategory string, path [
 	case strings.Contains(lowerClass, "view") || strings.Contains(lowerClass, "binding"):
 		return "View/binding живет после onDestroyView или detach"
 	case rootCategory == "thread":
-		return "Активный поток/очередь удерживает lifecycle-объект"
+		return "Активный поток или очередь удерживает объект жизненного цикла"
 	case strings.Contains(lowerHolder, "listener") || strings.Contains(lowerField, "listener") ||
 		strings.Contains(lowerHolder, "callback") || strings.Contains(lowerField, "callback"):
-		return "Listener/callback удерживает объект после lifecycle cleanup"
+		return "Слушатель или обратный вызов удерживает объект после очистки жизненного цикла"
 	case pathContainsClass(path, "kotlinx.coroutines") || pathContainsClass(path, "java.util.concurrent"):
-		return "Coroutine/executor задача удерживает объект"
+		return "Корутина или задача исполнителя удерживает объект"
 	default:
-		return "Сильная цепочка GC root удерживает объект"
+		return "Сильная цепочка от корня GC удерживает объект"
 	}
 }
 

@@ -85,7 +85,7 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 		if bucket.NetworkSample != "" {
 			networkID := causalNodeID("network", bucket.NetworkSample)
 			b.addNode(networkID, "сеть: "+bucket.NetworkSample, "network")
-			b.addUndirectedEdge(networkID, stateID, "network-state", strength*0.7, "сетевая когорта совпала с состоянием")
+			b.addUndirectedEdge(networkID, stateID, "сеть -> состояние", strength*0.7, "сетевая когорта совпала с состоянием")
 		}
 	}
 }
@@ -104,9 +104,9 @@ func (b *causalGraphBuilder) addNetworkPhaseEdges(routeID string, bucket Timelin
 	}
 	if bucket.ConnectCount > 0 {
 		phaseID := causalNodeID("phase", "connect")
-		b.addNode(phaseID, "фаза: connect", "phase")
-		b.addUndirectedEdge(routeID, phaseID, "route-phase", strength+float64(bucket.ConnectCount)*0.3, "connect активность маршрута")
-		b.addUndirectedEdge(phaseID, causalNodeID("symptom", "network_slow"), "phase-symptom", strength+0.5, "connect всплеск связан с сетевым симптомом")
+		b.addNode(phaseID, "фаза: соединение", "phase")
+		b.addUndirectedEdge(routeID, phaseID, "route-phase", strength+float64(bucket.ConnectCount)*0.3, "активность соединения маршрута")
+		b.addUndirectedEdge(phaseID, causalNodeID("symptom", "network_slow"), "phase-symptom", strength+0.5, "всплеск соединения связан с сетевым симптомом")
 	}
 	if bucket.HTTPFailed > 0 {
 		b.addUndirectedEdge(routeID, causalNodeID("symptom", "network_slow"), "route-symptom", strength+float64(bucket.HTTPFailed), "ошибки маршрута связаны с сетевым симптомом")
@@ -136,7 +136,7 @@ func (b *causalGraphBuilder) addNetworkLoops(loops []NetworkLoopFinding) {
 				b.addUndirectedEdge(symptomID, causalNodeID("phase", "DNS"), "loop-phase", strength, "паттерн цикла содержит DNS")
 			}
 			if token == "connect_high" || token == "reconnect_high" || token == "websocket_reconnect" {
-				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "паттерн цикла содержит reconnect/connect")
+				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "паттерн цикла содержит повторное соединение или соединение")
 			}
 		}
 	}

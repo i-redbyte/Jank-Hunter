@@ -29,7 +29,7 @@ func detectChangePoints(timeline []TimelineBucket) []ChangePoint {
 	signals := []changeSignal{
 		{
 			name:       "HTTP p95",
-			unit:       "ms",
+			unit:       "мс",
 			minDelta:   100,
 			noiseFloor: 50,
 			badWhenUp:  true,
@@ -49,7 +49,7 @@ func detectChangePoints(timeline []TimelineBucket) []ChangePoint {
 		},
 		{
 			name:       "PSS памяти",
-			unit:       "KB",
+			unit:       "КБ",
 			minDelta:   10 * 1024,
 			noiseFloor: 4 * 1024,
 			badWhenUp:  true,
@@ -365,7 +365,7 @@ func compareChangePointFindings(deltas []ChangePointDelta) []Finding {
 				Severity:       delta.Severity,
 				Title:          "Изменилась точка изменения",
 				Detail:         delta.Summary,
-				Recommendation: "Сопоставьте этот момент с таймлайном, маршрутом, источником и lifecycle-событиями рядом с точкой.",
+				Recommendation: "Сопоставьте этот момент с таймлайном, маршрутом, источником и событиями жизненного цикла рядом с точкой.",
 			}}
 		}
 	}
@@ -411,11 +411,11 @@ func changePointRecommendation(signal changeSignal, delta float64) string {
 	case "HTTP p95":
 		return "Проверьте маршруты и источники рядом с точкой: возможен переход сети в медленный режим или всплеск серверной задержки."
 	case "Доля подтормаживаний UI":
-		return "Проверьте переходы экранов, работу главного потока и метрики executor/coroutine рядом с этим временем."
+		return "Проверьте переходы экранов, работу главного потока и метрики исполнителей/корутин рядом с этим временем."
 	case "PSS памяти":
-		return "Проверьте удержанные объекты, давление GC/heap и lifecycle-события рядом с ростом базового уровня памяти."
+		return "Проверьте удержанные объекты, давление сборщика мусора/кучи и события жизненного цикла рядом с ростом базового уровня памяти."
 	case "HTTP ошибки":
-		return "Проверьте DNS, соединения, retry/reconnect метрики и ошибки конкретного маршрута вокруг этого окна."
+		return "Проверьте DNS, соединения, метрики повторов/переподключений и ошибки конкретного маршрута вокруг этого окна."
 	default:
 		return "Проверьте соседние события и источники работ вокруг этой точки изменения."
 	}

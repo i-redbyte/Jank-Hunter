@@ -65,5 +65,11 @@ internal class RuntimeState {
     var activityTracker: ActivityTracker? = null
 
     @Volatile
+    var crashFlushHandler: Thread.UncaughtExceptionHandler? = null
+
+    @Volatile
+    var previousCrashHandler: Thread.UncaughtExceptionHandler? = null
+
+    @Volatile
     var initDiagnostics = JankHunterInitDiagnostics(status = "not_started")
 }

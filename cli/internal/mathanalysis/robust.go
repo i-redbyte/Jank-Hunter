@@ -43,13 +43,13 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 			return
 		}
 		duration := float64(event.HTTP.DurationMS)
-		c.addValue("Маршрут", route, "HTTP задержка", "ms", duration)
-		c.addValue("Источник", owner, "HTTP задержка", "ms", duration)
+		c.addValue("Маршрут", route, "HTTP задержка", "мс", duration)
+		c.addValue("Источник", owner, "HTTP задержка", "мс", duration)
 		if event.HTTP.DNSMS > 0 {
-			c.addValue("Маршрут", route, "DNS задержка", "ms", float64(event.HTTP.DNSMS))
+			c.addValue("Маршрут", route, "DNS задержка", "мс", float64(event.HTTP.DNSMS))
 		}
 		if event.HTTP.ConnectMS > 0 {
-			c.addValue("Маршрут", route, "Connect задержка", "ms", float64(event.HTTP.ConnectMS))
+			c.addValue("Маршрут", route, "Задержка соединения", "мс", float64(event.HTTP.ConnectMS))
 		}
 	case event.UIWindow != nil:
 		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
@@ -57,7 +57,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 			return
 		}
 		if event.UIWindow.P95MS > 0 {
-			c.addValue("Экран", screen, "UI p95 кадра", "ms", float64(event.UIWindow.P95MS))
+			c.addValue("Экран", screen, "UI p95 кадра", "мс", float64(event.UIWindow.P95MS))
 		}
 		if event.UIWindow.FrameCount > 0 {
 			c.addValue("Экран", screen, "Доля подтормаживаний UI", "%", jankRate(event.UIWindow.JankCount, event.UIWindow.FrameCount))
@@ -67,19 +67,19 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
-		c.addValue("Источник", owner, "Пауза главного потока", "ms", float64(event.Stall.DurationMS))
+		c.addValue("Источник", owner, "Пауза главного потока", "мс", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
 		className := jhlog.Resolve(dict, event.Retained.ClassID)
 		if !timelineContainsFilter(className, c.filter.ClassContains) {
 			return
 		}
-		c.addValue("Источник", className, "Возраст удержанного объекта", "ms", float64(event.Retained.AgeMS))
+		c.addValue("Источник", className, "Возраст удержанного объекта", "мс", float64(event.Retained.AgeMS))
 	case event.Memory != nil:
-		c.addValue("Память", "процесс", "PSS", "KB", float64(event.Memory.PSSKB))
-		c.addValue("Память", "процесс", "Куча Java", "KB", float64(event.Memory.JavaHeapKB))
-		c.addValue("Память", "процесс", "Нативная куча", "KB", float64(event.Memory.NativeHeapKB))
+		c.addValue("Память", "процесс", "PSS", "КБ", float64(event.Memory.PSSKB))
+		c.addValue("Память", "процесс", "Куча Java", "КБ", float64(event.Memory.JavaHeapKB))
+		c.addValue("Память", "процесс", "Нативная куча", "КБ", float64(event.Memory.NativeHeapKB))
 	case event.Context != nil:
-		c.addValue("Контекст", "устройство", "Доступная память", "KB", float64(event.Context.AvailMemoryKB))
+		c.addValue("Контекст", "устройство", "Доступная память", "КБ", float64(event.Context.AvailMemoryKB))
 		if event.Context.BatteryPct > 0 {
 			c.addValue("Контекст", "устройство", "Батарея", "%", float64(event.Context.BatteryPct))
 		}

@@ -211,8 +211,8 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	}
 	if !environmentHasItem(summary.Environment, "Батарея", "82%") ||
 		!environmentHasItem(summary.Environment, "Сеть", "wifi") ||
-		!environmentHasItem(summary.Environment, "Свободная RAM", "1.9 GB") ||
-		!environmentHasItem(summary.Environment, "Свободное хранилище", "45.8 GB") {
+		!environmentHasItem(summary.Environment, "Свободная RAM", "1.9 ГБ") ||
+		!environmentHasItem(summary.Environment, "Свободное хранилище", "45.8 ГБ") {
 		t.Fatalf("environment labels should be Russian: %+v", summary.Environment)
 	}
 	if !environmentItemDetailContains(summary.Environment, "Сеть", "валидирована да") ||

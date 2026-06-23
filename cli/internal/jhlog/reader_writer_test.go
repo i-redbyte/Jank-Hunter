@@ -79,7 +79,7 @@ func TestWriteSampleReadFile(t *testing.T) {
 }
 
 func TestFormatMagicGolden(t *testing.T) {
-	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 6}
+	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
@@ -214,6 +214,8 @@ func TestFlowLogSpamAndProblemUseContextFlags(t *testing.T) {
 	var flow *FlowEvent
 	var spam *LogSpamEvent
 	var problem *ProblemEvent
+	var spamFlags uint64
+	var problemFlags uint64
 	for _, event := range log.Events {
 		if event.Flow != nil {
 			flow = event.Flow
@@ -223,19 +225,27 @@ func TestFlowLogSpamAndProblemUseContextFlags(t *testing.T) {
 		}
 		if event.LogSpam != nil {
 			spam = event.LogSpam
+			spamFlags = event.Flags
 		}
 		if event.Problem != nil {
 			problem = event.Problem
+			problemFlags = event.Flags
 		}
 	}
 	if flow == nil || flow.ScreenID != 1 || flow.OwnerID != 2 || flow.FlowID != 3 || flow.StepID != 0 {
 		t.Fatalf("flow did not round-trip: %+v", flow)
 	}
-	if spam == nil || spam.SourceID != 4 || spam.Level != 5 || spam.Count != 9 {
+	if spam == nil || spam.ScreenID != 1 || spam.OwnerID != 2 || spam.FlowID != 3 || spam.SourceID != 4 || spam.Level != 5 || spam.Count != 9 {
 		t.Fatalf("log spam did not round-trip: %+v", spam)
 	}
-	if problem == nil || problem.KindID != 5 || problem.WindowMS != 5000 || problem.MaxMS != 9 {
+	if spamFlags&uint64(FlagSameContext) == 0 {
+		t.Fatalf("expected same-context flag for log spam, got %08b", spamFlags)
+	}
+	if problem == nil || problem.ScreenID != 1 || problem.OwnerID != 2 || problem.FlowID != 3 || problem.KindID != 5 || problem.WindowMS != 5000 || problem.MaxMS != 9 {
 		t.Fatalf("problem did not round-trip: %+v", problem)
+	}
+	if problemFlags&uint64(FlagSameContext) == 0 {
+		t.Fatalf("expected same-context flag for problem, got %08b", problemFlags)
 	}
 }
 

@@ -15,13 +15,13 @@ const (
 	codeCategoryLogs       = "Логи"
 	codeCategoryRuntime    = "Выполнение"
 	codeCategoryInfluence  = "Граф влияния"
-	codeCategoryANR        = "ANR-risk"
-	codeCategoryOOM        = "OOM-risk"
-	codeCategoryGCPressure = "GC pressure"
-	codeCategoryDuplicate  = "duplicate network"
-	codeCategoryLifecycle  = "lifecycle leak"
-	codeCategoryLogSpam    = "log spam"
-	codeCategoryMainIO     = "main-thread IO"
+	codeCategoryANR        = "Риск ANR"
+	codeCategoryOOM        = "Риск OOM"
+	codeCategoryGCPressure = "Давление GC"
+	codeCategoryDuplicate  = "Дублирование сети"
+	codeCategoryLifecycle  = "Утечка жизненного цикла"
+	codeCategoryLogSpam    = "Спам логами"
+	codeCategoryMainIO     = "Ввод-вывод на главном потоке"
 )
 
 type codeProblemAccumulator struct {
@@ -152,7 +152,7 @@ func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
 			item.maxMS = maxUint64(item.maxMS, flow.HTTPP95MS)
 			score := scoreDuration(flow.HTTPP95MS, 900) + scoreCount(uint64(flow.HTTPFailed), 3)
 			item.addSignal(CodeProblemSignal{
-				Name:     "HTTP в флоу",
+				Name:     "HTTP в сценарии",
 				Category: codeCategoryNetwork,
 				Severity: severityFromNetwork(flow.HTTPP95MS, flow.HTTPFailed),
 				Score:    score,
@@ -171,7 +171,7 @@ func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
 				Count:    flow.UIJank,
 				Value:    flow.UIFrames,
 				Unit:     "кадров",
-				Detail:   fmt.Sprintf("В флоу медленных кадров %d из %d (%.2f%%).", flow.UIJank, flow.UIFrames, flow.UIJankPct),
+				Detail:   fmt.Sprintf("В сценарии медленных кадров %d из %d (%.2f%%).", flow.UIJank, flow.UIFrames, flow.UIJankPct),
 			})
 		}
 		if flow.StallCount > 0 || flow.StallMaxMS > 0 {
@@ -185,7 +185,7 @@ func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
 				Score:    scoreDuration(flow.StallMaxMS, 500) + scoreCount(uint64(flow.StallCount), 4),
 				Count:    uint64(flow.StallCount),
 				MaxMS:    flow.StallMaxMS,
-				Detail:   fmt.Sprintf("Максимальная пауза в флоу: %d мс.", flow.StallMaxMS),
+				Detail:   fmt.Sprintf("Максимальная пауза в сценарии: %d мс.", flow.StallMaxMS),
 			})
 		}
 		if flow.LogSpam > 0 {
@@ -216,12 +216,12 @@ func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
 			item.addCategory(codeCategoryOOM)
 			item.memoryKB = maxUint64(item.memoryKB, flow.MemoryMaxKB)
 			item.addSignal(CodeProblemSignal{
-				Name:     "Память в флоу",
+				Name:     "Память в сценарии",
 				Category: codeCategoryMemory,
 				Severity: severityFromKB(flow.MemoryMaxKB, 256*1024, 768*1024),
 				Score:    scoreDuration(flow.MemoryMaxKB, 256*1024),
 				Value:    flow.MemoryMaxKB,
-				Unit:     "KB",
+				Unit:     "КБ",
 				Detail:   "В этом контексте был высокий PSS процесса.",
 			})
 		}
@@ -335,7 +335,7 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			detail += " Паттерн: " + leak.LeakPattern + "."
 		}
 		if leak.HeapEvidence {
-			detail += " Heap dump подтвердил путь до GC root"
+			detail += " Дамп памяти подтвердил путь до корня GC"
 			if leak.GCRoot != "" {
 				detail += " " + leak.GCRoot
 			}
@@ -714,7 +714,7 @@ func codeProblemImpact(categories []string, runtimeEvidence bool) string {
 		case codeCategoryLogs:
 			parts = append(parts, "создает шум логами и лишнюю работу в горячем сценарии")
 		case codeCategoryRuntime:
-			parts = append(parts, "утяжеляет цепочку выполнения в измеренном флоу")
+			parts = append(parts, "утяжеляет цепочку выполнения в измеренном сценарии")
 		case codeCategoryInfluence:
 			parts = append(parts, "связан с другими узлами графа влияния")
 		case codeCategoryANR:
@@ -726,9 +726,9 @@ func codeProblemImpact(categories []string, runtimeEvidence bool) string {
 		case codeCategoryDuplicate:
 			parts = append(parts, "может дублировать сетевые запросы или повторять один маршрут без дедупликации")
 		case codeCategoryLifecycle:
-			parts = append(parts, "похож на lifecycle leak: объект живет дольше экрана или флоу")
+			parts = append(parts, "похож на утечку жизненного цикла: объект живет дольше экрана или сценария")
 		case codeCategoryLogSpam:
-			parts = append(parts, "создает log spam в горячем пути")
+			parts = append(parts, "создает спам логами в горячем пути")
 		case codeCategoryMainIO:
 			parts = append(parts, "указывает на риск IO на главном потоке")
 		}
@@ -749,31 +749,31 @@ func codeProblemRecommendation(categories []string) string {
 		case codeCategoryNetwork:
 			recommendations = append(recommendations, "проверьте дедупликацию запросов, кеширование, таймауты и повторные фоновые циклы")
 		case codeCategoryUI:
-			recommendations = append(recommendations, "проверьте render/bind, тяжелые layout-операции и работу при скролле")
+			recommendations = append(recommendations, "проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле")
 		case codeCategoryMainThread:
-			recommendations = append(recommendations, "перенесите тяжелую работу с главного потока и проверьте dispatch/click/listener цепочку")
+			recommendations = append(recommendations, "перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей")
 		case codeCategoryMemory:
-			recommendations = append(recommendations, "проверьте владельцев ссылок, lifecycle, кеши и рост PSS рядом с GC")
+			recommendations = append(recommendations, "проверьте владельцев ссылок, жизненный цикл, кеши и рост PSS рядом с GC")
 		case codeCategoryLogs:
 			recommendations = append(recommendations, "уменьшите частоту логирования или вынесите шумные debug-логи из горячего пути")
 		case codeCategoryRuntime:
 			recommendations = append(recommendations, "проверьте цепочку вызовов и стоимость вызываемого метода")
 		case codeCategoryInfluence:
-			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с runtime-доказательствами")
+			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с доказательствами выполнения")
 		case codeCategoryANR:
 			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока")
 		case codeCategoryOOM:
 			recommendations = append(recommendations, "проверьте рост heap/PSS, лимиты кешей, bitmap/buffer allocations и жизненный цикл владельцев")
 		case codeCategoryGCPressure:
-			recommendations = append(recommendations, "уменьшите churn аллокаций в горячем пути и проверьте повторные коллекции/создание временных объектов")
+			recommendations = append(recommendations, "уменьшите текучесть аллокаций в горячем пути и проверьте повторные сборки/создание временных объектов")
 		case codeCategoryDuplicate:
-			recommendations = append(recommendations, "добавьте дедупликацию in-flight запросов, кеширование ответа или debounce повторного запуска флоу")
+			recommendations = append(recommendations, "добавьте дедупликацию запросов в работе, кеширование ответа или задержку повторного запуска сценария")
 		case codeCategoryLifecycle:
-			recommendations = append(recommendations, "проверьте очистку listeners/callbacks/binding и отмену coroutine/executor задач на lifecycle boundary")
+			recommendations = append(recommendations, "проверьте очистку слушателей, обратных вызовов и binding, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла")
 		case codeCategoryLogSpam:
 			recommendations = append(recommendations, "ограничьте частоту логов, уберите debug-логи из горячего пути или агрегируйте события")
 		case codeCategoryMainIO:
-			recommendations = append(recommendations, "вынесите disk/network IO с главного потока и проверьте StrictMode violations")
+			recommendations = append(recommendations, "вынесите дисковый и сетевой ввод-вывод с главного потока и проверьте нарушения StrictMode")
 		}
 	}
 	if len(recommendations) == 0 {
@@ -803,7 +803,7 @@ func codeProblemEvidence(a *codeProblemAccumulator) string {
 		parts = append(parts, fmt.Sprintf("удержано=%d", a.retained))
 	}
 	if a.memoryKB > 0 {
-		parts = append(parts, fmt.Sprintf("память=%d KB", a.memoryKB))
+		parts = append(parts, fmt.Sprintf("память=%d КБ", a.memoryKB))
 	}
 	if a.runtimeCalls > 0 {
 		parts = append(parts, fmt.Sprintf("вызовов=%d", a.runtimeCalls))
@@ -812,7 +812,7 @@ func codeProblemEvidence(a *codeProblemAccumulator) string {
 		parts = append(parts, fmt.Sprintf("макс=%d мс", a.maxMS))
 	}
 	if len(parts) == 0 {
-		return "runtime-доказательства ограничены."
+		return "доказательства выполнения ограничены."
 	}
 	return strings.Join(parts, ", ")
 }
@@ -1012,10 +1012,10 @@ func influenceDetail(node InfluenceNode) string {
 		parts = append(parts, "причины: "+strings.Join(node.Reasons, ", "))
 	}
 	if len(node.Flows) > 0 {
-		parts = append(parts, "флоу: "+strings.Join(node.Flows, ", "))
+		parts = append(parts, "сценарии: "+strings.Join(node.Flows, ", "))
 	}
 	if node.RuntimeEvidence {
-		parts = append(parts, "есть runtime-доказательства")
+		parts = append(parts, "есть доказательства выполнения")
 	} else {
 		parts = append(parts, "только статический след")
 	}

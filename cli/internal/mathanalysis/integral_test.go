@@ -52,7 +52,7 @@ func TestCompareIntegralScoresReportsRegression(t *testing.T) {
 		ID:       "latency_pain_area",
 		Title:    "Площадь сетевой задержки",
 		Formula:  "Σ max(0, HTTP p95 - 300ms) * Δt",
-		Unit:     "ms*с",
+		Unit:     "мс*с",
 		Value:    100,
 		Severity: "ok",
 	}}
@@ -60,7 +60,7 @@ func TestCompareIntegralScoresReportsRegression(t *testing.T) {
 		ID:       "latency_pain_area",
 		Title:    "Площадь сетевой задержки",
 		Formula:  "Σ max(0, HTTP p95 - 300ms) * Δt",
-		Unit:     "ms*с",
+		Unit:     "мс*с",
 		Value:    700,
 		Severity: "medium",
 	}}

@@ -37,11 +37,11 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--owner-map owner-map.json] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 `)
 }
@@ -451,6 +451,7 @@ func compareCLILabel(name string) string {
 type analysisOptionsBuilder struct {
 	filter          analyze.Filter
 	ownerMapPath    string
+	mappingPath     string
 	classGraphPath  string
 	diagnosticsPath string
 }
@@ -461,6 +462,10 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 		return analysisOptionsBuilder{}, nil, err
 	}
 	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	mappingPath, remaining, err := takeStringFlag(remaining, "mapping", "")
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
@@ -475,6 +480,7 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	return analysisOptionsBuilder{
 		filter:          filter,
 		ownerMapPath:    ownerMapPath,
+		mappingPath:     mappingPath,
 		classGraphPath:  classGraphPath,
 		diagnosticsPath: diagnosticsPath,
 	}, remaining, nil
@@ -482,6 +488,10 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 
 func (b analysisOptionsBuilder) build() (analyze.Options, error) {
 	ownerMap, err := analyze.LoadOwnerMap(b.ownerMapPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	nameMapping, err := analyze.LoadNameMapping(b.mappingPath)
 	if err != nil {
 		return analyze.Options{}, err
 	}
@@ -496,6 +506,7 @@ func (b analysisOptionsBuilder) build() (analyze.Options, error) {
 	return analyze.Options{
 		Filter:                     b.filter,
 		OwnerMap:                   ownerMap,
+		ObfuscationMap:             nameMapping,
 		ClassGraph:                 classGraph,
 		InstrumentationDiagnostics: diagnostics,
 	}, nil

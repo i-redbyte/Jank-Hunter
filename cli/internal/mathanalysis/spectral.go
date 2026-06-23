@@ -58,9 +58,9 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
 		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
-		{name: "DNS среднее", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
+		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
 		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Среднее время соединения", unit: "ms", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
+		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
 	}
 	out := make([]periodicDefinition, 0, len(defs))
 	for _, def := range defs {
@@ -372,7 +372,7 @@ func periodicSignalSummary(signal PeriodicSignal) string {
 		parts = append(parts, fmt.Sprintf("главный спектральный период %.1fs", seconds(signal.Peaks[0].PeriodMS)))
 	}
 	if signal.Approximated {
-		parts = append(parts, "DFT посчитан по ограниченной равномерной выборке")
+		parts = append(parts, "преобразование Фурье посчитано по ограниченной равномерной выборке")
 	}
 	return strings.Join(parts, "; ")
 }
@@ -391,13 +391,13 @@ func periodicStatus(signals []PeriodicSignal) string {
 
 func periodicSummary(signals []PeriodicSignal) string {
 	if len(signals) == 0 {
-		return "Недостаточно данных для автокорреляции и DFT/FFT анализа."
+		return "Недостаточно данных для автокорреляции и преобразования Фурье."
 	}
 	peaks := 0
 	for _, signal := range signals {
 		peaks += len(signal.Peaks)
 	}
-	return fmt.Sprintf("Проанализировано %d сигналов: лаги автокорреляции, DFT с окном Ханна, спектральная энтропия и %d спектральных пиков.", len(signals), peaks)
+	return fmt.Sprintf("Проанализировано %d сигналов: лаги автокорреляции, преобразование Фурье с окном Ханна, спектральная энтропия и %d спектральных пиков.", len(signals), peaks)
 }
 
 func periodicFindings(signals []PeriodicSignal) []Finding {
