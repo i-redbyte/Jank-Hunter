@@ -8,7 +8,7 @@ import javax.swing.Icon
 class JankHunterRunConfigurationType : ConfigurationType {
     override fun getDisplayName(): String = "Jank Hunter"
 
-    override fun getConfigurationTypeDescription(): String = "Run Jank Hunter CLI"
+    override fun getConfigurationTypeDescription(): String = "Run Jank Hunter analysis for Android jank logs and reports"
 
     override fun getIcon(): Icon? = null
 

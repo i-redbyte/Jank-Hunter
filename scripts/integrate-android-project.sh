@@ -370,7 +370,7 @@ detect_app_module() {
     fi
   done < <(
     find "$TARGET_ROOT" \
-      \( -path "$TARGET_ROOT/.gradle" -o -path "$TARGET_ROOT/build" -o -path "$TARGET_ROOT/.jankhunter" \) -prune \
+      \( -path "$TARGET_ROOT/.gradle" -o -path "$TARGET_ROOT/build" -o -path "$TARGET_ROOT/.jankhunter" -o -path "$TARGET_ROOT/.jankhunter-backups" \) -prune \
       -o \( -name build.gradle.kts -o -name build.gradle \) -type f -print | sort
   )
 
@@ -1093,11 +1093,10 @@ publish_artifacts_if_needed() {
   local plugin_pom="$MAVEN_REPO_ABS/io/jankhunter/android/io.jankhunter.android.gradle.plugin/$VERSION/io.jankhunter.android.gradle.plugin-$VERSION.pom"
 
   if [[ -f "$runtime_aar" && -f "$annotations_jar" && -f "$okhttp_aar" && -f "$plugin_pom" ]]; then
-    log "Jank Hunter artifacts already exist in $MAVEN_REPO_ABS"
-    return
+    log "refreshing Jank Hunter artifacts in $MAVEN_REPO_ABS"
+  else
+    log "publishing Jank Hunter artifacts into $MAVEN_REPO_ABS"
   fi
-
-  log "publishing Jank Hunter artifacts into $MAVEN_REPO_ABS"
   run_cmd mkdir -p "$MAVEN_REPO_ABS"
   if [[ "$DRY_RUN" -eq 0 ]]; then
     if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew publishToMavenLocal -PjankHunterBuildToolsVersion="$RESOLVED_ANDROID_BUILD_TOOLS_VERSION" -Dmaven.repo.local="$MAVEN_REPO_ABS" --no-daemon --stacktrace); then
@@ -1120,11 +1119,10 @@ prepare_aar_artifacts_if_needed() {
   local plugin_target="$AAR_DIR_ABS/jankhunter-gradle-plugin-$VERSION.jar"
 
   if [[ -f "$runtime_target" && -f "$annotations_target" && -f "$okhttp_target" && -f "$plugin_target" ]]; then
-    log "Jank Hunter AAR/JAR artifacts already exist in $AAR_DIR_ABS"
-    return
+    log "refreshing Jank Hunter AAR/JAR artifacts in $AAR_DIR_ABS"
+  else
+    log "building and copying Jank Hunter AAR/JAR artifacts into $AAR_DIR_ABS"
   fi
-
-  log "building and copying Jank Hunter AAR/JAR artifacts into $AAR_DIR_ABS"
   run_cmd mkdir -p "$AAR_DIR_ABS"
   if [[ "$DRY_RUN" -eq 0 ]]; then
     if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew :jankhunter-runtime:assembleRelease :jankhunter-okhttp3:assembleRelease :jankhunter-annotations:jar :jankhunter-gradle-plugin:jar -PjankHunterBuildToolsVersion="$RESOLVED_ANDROID_BUILD_TOOLS_VERSION" --no-daemon --stacktrace); then

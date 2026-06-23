@@ -141,6 +141,11 @@ class JankHunterPlugin : Plugin<Project> {
                 it.includePackages.set(effectiveIncludePackages)
                 it.excludePackages.set(extension.instrument.excludePackages.toList())
                 it.entriesDirectory.set(ownerMapEntriesDirectory)
+                it.entryFiles.from(ownerMapEntriesDirectory.map { directory ->
+                    directory.asFileTree.matching { pattern ->
+                        pattern.include("**/*.jsonl")
+                    }
+                })
                 it.outputFile.set(
                     project.layout.buildDirectory.file("generated/jankhunter/${variant.name}/owner-map.json"),
                 )
@@ -158,26 +163,31 @@ class JankHunterPlugin : Plugin<Project> {
             ) {
                 it.classGraphDirectory.set(classGraphDirectory)
                 it.diagnosticsDirectory.set(diagnosticsDirectory)
+                it.classGraphFiles.from(classGraphDirectory.map { directory ->
+                    directory.asFileTree.matching { pattern ->
+                        pattern.include("**/*.jsonl")
+                    }
+                })
+                it.diagnosticsFiles.from(diagnosticsDirectory.map { directory ->
+                    directory.asFileTree.matching { pattern ->
+                        pattern.include("**/*.jsonl")
+                    }
+                })
                 it.classGraphOutputFile.set(classGraphOutput)
                 it.diagnosticsOutputFile.set(instrumentationDiagnosticsOutput)
             }
-            val okHttpClasspathValidation = project.tasks.register(
-                "validate${variant.name.capitalized()}JankHunterOkHttpClasspath",
-            ) {
-                it.inputs.property("okhttp", extension.instrument.okhttp)
-                it.inputs.property("webSockets", extension.instrument.webSockets)
-                it.doLast {
-                    JankHunterDependencyValidator.validateOkHttpHelper(
-                        project,
-                        variant.name,
-                        hooksEnabled = extension.instrument.okhttp || extension.instrument.webSockets,
-                    )
-                }
-            }
-            project.tasks.matching { it.name == "pre${variant.name.capitalized()}Build" }.configureEach {
-                it.dependsOn(okHttpClasspathValidation)
+            project.afterEvaluate {
+                JankHunterDependencyValidator.validateDeclaredOkHttpHelper(
+                    project,
+                    variant.name,
+                    hooksEnabled = extension.instrument.okhttp || extension.instrument.webSockets,
+                )
             }
             project.tasks.matching { it.name == "assemble${variant.name.capitalized()}" }.configureEach {
+                it.finalizedBy(ownerMap)
+                it.finalizedBy(mergeArtifacts)
+            }
+            project.tasks.matching { it.name == "transform${variant.name.capitalized()}ClassesWithAsm" }.configureEach {
                 it.finalizedBy(ownerMap)
                 it.finalizedBy(mergeArtifacts)
             }

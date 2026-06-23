@@ -2,13 +2,20 @@ package io.jankhunter.gradle
 
 import org.gradle.api.GradleException
 import org.gradle.api.Project
-import org.gradle.api.artifacts.Configuration
+import org.gradle.api.artifacts.ProjectDependency
 
 internal object JankHunterDependencyValidator {
-    fun validateOkHttpHelper(project: Project, variantName: String, hooksEnabled: Boolean) {
+    fun validateDeclaredOkHttpHelper(project: Project, variantName: String, hooksEnabled: Boolean) {
+        validateOkHttpHelper(
+            variantName = variantName,
+            hooksEnabled = hooksEnabled,
+            displayNames = declaredDependencyDisplayNames(project, variantName),
+        )
+    }
+
+    fun validateOkHttpHelper(variantName: String, hooksEnabled: Boolean, displayNames: Iterable<String>) {
         if (!hooksEnabled) return
 
-        val displayNames = classpathComponents(project, variantName)
         if (!hasOkHttp(displayNames) || hasJankHunterOkHttp3(displayNames)) return
 
         throw GradleException(
@@ -23,6 +30,9 @@ internal object JankHunterDependencyValidator {
         return displayNames.any { name ->
             val normalized = name.lowercase()
             normalized.contains("com.squareup.okhttp3:okhttp") ||
+                normalized == "okhttp.jar" ||
+                normalized.startsWith("okhttp-") ||
+                normalized.contains("/okhttp-") ||
                 normalized.contains("project :okhttp") ||
                 normalized.contains("project ':okhttp")
         }
@@ -34,17 +44,32 @@ internal object JankHunterDependencyValidator {
         }
     }
 
-    private fun classpathComponents(project: Project, variantName: String): Set<String> {
-        return listOfNotNull(
-            project.configurations.findByName("${variantName}RuntimeClasspath"),
-            project.configurations.findByName("${variantName}CompileClasspath"),
-        ).flatMapTo(linkedSetOf()) { configuration ->
-            configuration.componentDisplayNames()
-        }
-    }
-
-    private fun Configuration.componentDisplayNames(): Set<String> {
-        return incoming.resolutionResult.allComponents
-            .mapTo(linkedSetOf()) { it.id.displayName }
+    private fun declaredDependencyDisplayNames(project: Project, variantName: String): Set<String> {
+        val variantPrefix = variantName.replaceFirstChar { it.titlecase() }
+        val configurationNames = listOf(
+            "api",
+            "implementation",
+            "compileOnly",
+            "runtimeOnly",
+            "${variantName}Api",
+            "${variantName}Implementation",
+            "${variantName}CompileOnly",
+            "${variantName}RuntimeOnly",
+            "${variantPrefix}Api",
+            "${variantPrefix}Implementation",
+            "${variantPrefix}CompileOnly",
+            "${variantPrefix}RuntimeOnly",
+        )
+        return configurationNames
+            .asSequence()
+            .mapNotNull { project.configurations.findByName(it) }
+            .flatMap { it.dependencies.asSequence() }
+            .mapTo(linkedSetOf()) { dependency ->
+                when (dependency) {
+                    is ProjectDependency -> "project ${dependency.path}"
+                    else -> listOfNotNull(dependency.group, dependency.name, dependency.version)
+                        .joinToString(":")
+                }
+            }
     }
 }

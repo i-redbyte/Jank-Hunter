@@ -65,8 +65,10 @@ intellijPlatform {
         version = providers.gradleProperty("pluginVersion")
 
         description = """
-            <p>Runs the Jank Hunter CLI from Android Studio or IntelliJ IDEA, captures console output,
-            and opens generated reports inside the IDE or in the system browser.</p>
+            <p><b>Jank Hunter for Android</b> brings Android jank investigation into Android Studio and IntelliJ IDEA.</p>
+            <p>Run the local Jank Hunter CLI, validate <code>.jhlog</code> inputs, discover Android Gradle Plugin artifacts,
+            collect logs from connected devices, inspect or compare captures, open HTML reports, and review detected
+            problems with source navigation directly in the IDE.</p>
         """.trimIndent()
 
         changeNotes = """

@@ -10,6 +10,7 @@ class JankHunterDependencyValidatorTest {
         val components = listOf(
             "project :app",
             "com.squareup.okhttp3:okhttp:3.12.13",
+            "okhttp-3.12.13.jar",
             "io.jankhunter:jankhunter-okhttp3:1.0.0",
         )
 

@@ -1,12 +1,14 @@
 package io.jankhunter.gradle
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
-import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
@@ -68,10 +70,13 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     @get:Input
     abstract val excludePackages: ListProperty<String>
 
-    @get:InputDirectory
+    @get:Internal
+    abstract val entriesDirectory: DirectoryProperty
+
+    @get:InputFiles
     @get:Optional
     @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val entriesDirectory: DirectoryProperty
+    val entryFiles: ConfigurableFileCollection = project.objects.fileCollection()
 
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
@@ -114,15 +119,21 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
 }
 
 abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
-    @get:InputDirectory
-    @get:Optional
-    @get:PathSensitive(PathSensitivity.RELATIVE)
+    @get:Internal
     abstract val classGraphDirectory: DirectoryProperty
 
-    @get:InputDirectory
+    @get:InputFiles
     @get:Optional
     @get:PathSensitive(PathSensitivity.RELATIVE)
+    val classGraphFiles: ConfigurableFileCollection = project.objects.fileCollection()
+
+    @get:Internal
     abstract val diagnosticsDirectory: DirectoryProperty
+
+    @get:InputFiles
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val diagnosticsFiles: ConfigurableFileCollection = project.objects.fileCollection()
 
     @get:OutputFile
     abstract val classGraphOutputFile: RegularFileProperty
