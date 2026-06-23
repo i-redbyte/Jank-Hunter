@@ -364,6 +364,24 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return ""
 		},
+		"networkBucketClass": func(bucket mathanalysis.TimelineBucket) string {
+			if zeroNetworkBucket(bucket) {
+				return "bucket-zero"
+			}
+			return ""
+		},
+		"uiBucketClass": func(bucket mathanalysis.TimelineBucket) string {
+			if zeroUIBucket(bucket) {
+				return "bucket-zero"
+			}
+			return ""
+		},
+		"memoryBucketClass": func(bucket mathanalysis.TimelineBucket) string {
+			if zeroMemoryBucket(bucket) {
+				return "bucket-zero"
+			}
+			return ""
+		},
 		"robustGroups":                 robustStatGroups,
 		"robustDeltaGroups":            robustDeltaGroups,
 		"causalGraphSVG":               causalGraphSVG,
@@ -502,6 +520,32 @@ func zeroTimelineBucket(bucket mathanalysis.TimelineBucket) bool {
 		bucket.StallCount == 0 &&
 		bucket.StallMaxMS == 0 &&
 		bucket.MemoryPSSKB == 0 &&
+		bucket.AvailableMemoryKB == 0 &&
+		bucket.TrafficRxBytes == 0 &&
+		bucket.TrafficTxBytes == 0
+}
+
+func zeroNetworkBucket(bucket mathanalysis.TimelineBucket) bool {
+	return bucket.HTTPCount == 0 &&
+		bucket.HTTPFailed == 0 &&
+		bucket.HTTPAvgDurationMS == 0 &&
+		bucket.HTTPP95DurationMS == 0 &&
+		bucket.DNSCount == 0 &&
+		bucket.DNSDurationMS == 0 &&
+		bucket.ConnectCount == 0 &&
+		bucket.ConnectDurationMS == 0 &&
+		bucket.TTFBMS == 0
+}
+
+func zeroUIBucket(bucket mathanalysis.TimelineBucket) bool {
+	return bucket.UIFrames == 0 &&
+		bucket.UIJankyFrames == 0 &&
+		bucket.StallCount == 0 &&
+		bucket.StallMaxMS == 0
+}
+
+func zeroMemoryBucket(bucket mathanalysis.TimelineBucket) bool {
+	return bucket.MemoryPSSKB == 0 &&
 		bucket.AvailableMemoryKB == 0 &&
 		bucket.TrafficRxBytes == 0 &&
 		bucket.TrafficTxBytes == 0

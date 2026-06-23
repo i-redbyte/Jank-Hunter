@@ -113,15 +113,11 @@
     {{end}}
   </section>
 
-  <section id="code-problems" class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>Реестр проблем кода кандидата</h2>
-        <div class="panel-kicker">Сравнение проблемных классов и методов кандидата с базой: новые точки, усиление оценки и текущие доказательства.</div>
-      </div>
-      <span class="pill">кандидат против базы</span>
-    </div>
-    <p class="help-text">Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
+  <section id="code-problems" class="panel code-registry-panel">
+    <details class="fold code-registry-fold" open>
+      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{len .Comparison.Candidate.CodeProblems}} строк · кандидат против базы</span></summary>
+      <div class="fold-body">
+    <p class="help-text">Сравнение проблемных классов и методов кандидата с базой: новые точки, усиление оценки и текущие доказательства. Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
     {{scoreGuide "code"}}
     {{with codeProblemCategories .Comparison.Candidate.CodeProblems}}
     <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -180,6 +176,8 @@
         </tbody>
       </table>
     </div>
+      </div>
+    </details>
   </section>
 
   <section id="memory-leaks" class="panel">

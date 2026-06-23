@@ -51,11 +51,20 @@
 .section-overview-card.sev-ok { border-left-color: var(--ok); }
 .section-overview-title {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px;
   align-items: start;
   color: var(--ink);
   font-weight: 850;
+}
+.section-overview-title > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.section-overview-title .section-status {
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 .section-overview-summary {
   color: var(--muted);

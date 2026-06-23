@@ -448,9 +448,9 @@ func (b *codeProblemBuilder) addInfluence(influence InfluenceSummary) {
 		item.uiJank += node.UIJank
 		item.retained += node.Retained
 		item.addSignal(CodeProblemSignal{
-			Name:     "Узел графа влияния",
+			Name:     "Класс в графе влияния",
 			Category: codeCategoryInfluence,
-			Severity: node.Severity,
+			Severity: influenceProblemSeverity(node),
 			Score:    node.Score * 0.35,
 			Detail:   influenceDetail(node),
 		})
@@ -683,11 +683,18 @@ func normalizeMethodName(value string) string {
 
 func codeProblemSeverity(score float64, signals []CodeProblemSignal) string {
 	severity := "ok"
+	hasNonInfluenceSignal := false
 	for _, signal := range signals {
 		severity = maxSeverity(severity, signal.Severity)
+		if signal.Category != codeCategoryInfluence {
+			hasNonInfluenceSignal = true
+		}
 	}
 	switch {
 	case score >= 18:
+		if !hasNonInfluenceSignal {
+			return "medium"
+		}
 		return "high"
 	case score >= 7:
 		if severity == "ok" {
@@ -716,7 +723,7 @@ func codeProblemImpact(categories []string, runtimeEvidence bool) string {
 		case codeCategoryRuntime:
 			parts = append(parts, "утяжеляет цепочку выполнения в измеренном сценарии")
 		case codeCategoryInfluence:
-			parts = append(parts, "связан с другими узлами графа влияния")
+			parts = append(parts, "попал в граф влияния рядом с симптомами; это подсказка для расследования, а не самостоятельное доказательство бага")
 		case codeCategoryANR:
 			parts = append(parts, "создает риск ANR из-за долгой работы или цепочки на главном потоке")
 		case codeCategoryOOM:
@@ -759,7 +766,7 @@ func codeProblemRecommendation(categories []string) string {
 		case codeCategoryRuntime:
 			recommendations = append(recommendations, "проверьте цепочку вызовов и стоимость вызываемого метода")
 		case codeCategoryInfluence:
-			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с доказательствами выполнения")
+			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с доказательствами выполнения; приоритет выше, если рядом есть паузы, сеть, память или runtime-вызовы")
 		case codeCategoryANR:
 			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока")
 		case codeCategoryOOM:
@@ -812,9 +819,9 @@ func codeProblemEvidence(a *codeProblemAccumulator) string {
 		parts = append(parts, fmt.Sprintf("макс=%d мс", a.maxMS))
 	}
 	if len(parts) == 0 {
-		return "доказательства выполнения ограничены."
+		return "Доказательства выполнения ограничены: отчет видит только слабую связь с графом или статический след."
 	}
-	return strings.Join(parts, ", ")
+	return "Сводка сигналов: " + strings.Join(parts, ", ") + "."
 }
 
 func ownerKindForCodeProblem(kind string) string {
@@ -1008,6 +1015,7 @@ func codeProblemSeverityRank(value string) int {
 
 func influenceDetail(node InfluenceNode) string {
 	parts := []string{}
+	parts = append(parts, "класс связан с симптомами через граф влияния; сам по себе этот сигнал не доказывает дефект")
 	if len(node.Reasons) > 0 {
 		parts = append(parts, "причины: "+strings.Join(node.Reasons, ", "))
 	}
@@ -1020,6 +1028,17 @@ func influenceDetail(node InfluenceNode) string {
 		parts = append(parts, "только статический след")
 	}
 	return strings.Join(parts, "; ")
+}
+
+func influenceProblemSeverity(node InfluenceNode) string {
+	switch {
+	case node.RuntimeEvidence && node.Score >= 30:
+		return "high"
+	case node.Score >= 7 || node.Severity == "high" || node.Severity == "medium":
+		return "medium"
+	default:
+		return "ok"
+	}
 }
 
 func uniqueStrings(values []string) []string {

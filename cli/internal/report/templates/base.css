@@ -1082,7 +1082,7 @@ main {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.45;
-  white-space: normal;
+  white-space: pre-line;
   overflow-wrap: break-word;
   word-break: normal;
   pointer-events: none;
@@ -1093,6 +1093,35 @@ main {
 .jh-tooltip.is-visible {
   opacity: 1;
   transform: translate3d(0, 0, 0);
+}
+.fold-summary-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.explain-note {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(111,247,255,0.26);
+  border-radius: 8px;
+  background: rgba(111,247,255,0.055);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.explain-note strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--ink);
+}
+.explain-note p {
+  margin: 6px 0 0;
+}
+.explain-note code {
+  color: #d8fcff;
 }
 .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .triad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -1537,6 +1566,10 @@ th code {
   padding: 13px 14px;
   color: #d8fcff;
   font-weight: 800;
+}
+.fold > summary > span:first-child {
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 .fold > summary::-webkit-details-marker { display: none; }
 .fold > summary::after {

@@ -99,15 +99,11 @@
     {{end}}
   </section>
 
-  <section id="code-problems" class="panel">
-    <div class="panel-head">
-      <div>
-        <h2>Реестр проблем кода</h2>
-        <div class="panel-kicker">Ранжированный список классов и методов, где сошлись риск АНР, сеть, память, UI, спам логами, удержания и граф влияния.</div>
-      </div>
-      <span class="pill">сортировка и фильтры</span>
-    </div>
-    <p class="help-text">Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода. Чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
+  <section id="code-problems" class="panel code-registry-panel">
+    <details class="fold code-registry-fold" open>
+      <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{len .Summary.CodeProblems}} строк · сортировка и фильтры</span></summary>
+      <div class="fold-body">
+    <p class="help-text">Ранжированный список классов и методов, где сошлись риск АНР, сеть, память, UI, спам логами, удержания и граф влияния. Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода: чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
     {{scoreGuide "code"}}
     {{with codeProblemCategories .Summary.CodeProblems}}
     <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -164,6 +160,8 @@
         </tbody>
       </table>
     </div>
+      </div>
+    </details>
   </section>
 
   <section id="network" class="panel">

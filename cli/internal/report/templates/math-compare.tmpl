@@ -57,7 +57,7 @@
     </div>
     {{scoreGuide "compare"}}
     <details id="code-problems" class="fold code-registry-fold" open>
-      <summary><span>Реестр проблем кода кандидата</span></summary>
+      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{len .Math.Candidate.Summary.CodeProblems}} строк</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
         {{scoreGuide "code"}}

@@ -572,14 +572,28 @@ func warningFindings(prefix string, warnings []string, recommendation string) []
 			title = fmt.Sprintf("%s: предупреждение о качестве данных", prefix)
 			warning = fmt.Sprintf("%s: %s", prefix, warning)
 		}
+		findingRecommendation := warningRecommendation(warning, recommendation)
 		findings = append(findings, Finding{
 			Severity:       "medium",
 			Title:          title,
 			Detail:         warning,
-			Recommendation: recommendation,
+			Recommendation: findingRecommendation,
 		})
 	}
 	return findings
+}
+
+func warningRecommendation(warning string, fallback string) string {
+	switch {
+	case strings.Contains(warning, "ASM-диагностика не передана"):
+		return "Передайте в CLI артефакт ASM-диагностики через --instrumentation-diagnostics <path>/instrumentation-diagnostics.jsonl. Если файла нет, пересоберите приложение после интеграции Jank Hunter, проверьте includeWholeApplication=true или includePackages, затем повторите inspect/compare."
+	case strings.Contains(warning, "ASM-диагностика пустая"):
+		return "Пересоберите Android-модуль с включенным instrumentation, проверьте include/exclude пакетов и убедитесь, что Gradle-задача действительно создала instrumentation-diagnostics.jsonl."
+	case strings.Contains(warning, "ASM прошел по классам, но не нашел hooks"):
+		return "Проверьте include/exclude пакетов, включенные bridge-флаги и версии библиотек. После пересборки передайте свежий instrumentation-diagnostics.jsonl в CLI."
+	default:
+		return fallback
+	}
 }
 
 func inspectSections(summary analyze.Summary, findings []Finding, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) []MathSection {

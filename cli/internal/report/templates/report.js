@@ -49,6 +49,27 @@
     runIdle(step);
   };
 
+  const normalizeTooltipText = (text) =>
+    (text || '')
+      .replace(/[ \t\r\f\v]+/g, ' ')
+      .replace(/ *\n */g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+  const readableTooltipText = (node) => {
+    if (!node) return '';
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll('script, style, .cell-toggle').forEach((element) => element.remove());
+    clone.querySelectorAll('br').forEach((element) => element.replaceWith('\n'));
+    clone.querySelectorAll('h1, h2, h3, h4, h5, h6, p, div, summary, li, tr').forEach((element) => {
+      element.insertAdjacentText('afterend', '\n');
+    });
+    clone.querySelectorAll('strong, em, small, code, span, td, th, button').forEach((element) => {
+      element.insertAdjacentText('afterend', ' ');
+    });
+    return normalizeTooltipText(clone.textContent);
+  };
+
   document.querySelectorAll('code').forEach((node) => {
     const text = node.textContent.trim();
     if (text && !node.title) node.title = text;
@@ -58,7 +79,8 @@
   });
 
   forEachChunk(Array.from(document.querySelectorAll('td, th')), 300, (node) => {
-    const text = node.textContent.trim().replace(/\\s+/g, ' ');
+    if (node.querySelector('details, table, canvas, svg, input, select, textarea, .cell-toggle')) return;
+    const text = readableTooltipText(node);
     if (text.length > 80 && !node.dataset.tip) {
       node.dataset.tip = text;
     }
@@ -69,7 +91,7 @@
     forEachChunk(cells, 180, (cell) => {
       if (cell.dataset.cellEnhanced === 'true') return;
       if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
-      const text = cell.textContent.trim().replace(/\\s+/g, ' ');
+      const text = cell.textContent.trim().replace(/\s+/g, ' ');
       const overflows = cell.scrollWidth > cell.clientWidth + 4 || cell.scrollHeight > 180;
       if (text.length < 120 && !overflows) return;
       const clip = document.createElement('div');
@@ -127,7 +149,7 @@
   };
 
   const placeTooltip = (target) => {
-    const text = target.dataset.tip || target.getAttribute('aria-label') || target.title || '';
+    const text = normalizeTooltipText(target.dataset.tip || target.getAttribute('aria-label') || target.title || '');
     if (!text) {
       hideTooltip();
       return;

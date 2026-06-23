@@ -63,7 +63,7 @@
     </div>
     {{scoreGuide "math"}}
     <details id="code-problems" class="fold code-registry-fold" open>
-      <summary><span>Реестр проблем кода</span></summary>
+      <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{len .Math.Summary.CodeProblems}} строк</span></summary>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, сценарии и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
         {{scoreGuide "code"}}
@@ -171,6 +171,11 @@
       <summary><span>Атрибуция сценариев и причин</span></summary>
       <div class="fold-body">
         <p class="help-text">Здесь собраны длинные таблицы связки “экран → сценарий → шаг → источник → маршрут/пауза/память/спам”. Блок свернут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
+        <div class="explain-note">
+          <strong>Как читать этот блок</strong>
+          <p>Одна строка — это место, где отчет смог связать симптомы с контекстом: экраном, сценарием, шагом и источником работ. Если в колонке стоит <code>unknown</code>, лог не передал имя сценария, шага или owner: это не ошибка само по себе, но такая строка хуже объясняет причину.</p>
+          <p>Чтобы убрать <code>unknown</code>, добавьте в сбор имена сценариев/шагов через API Jank Hunter или включите ASM-опцию <code>flowInteractions</code>, а для источников проверьте <code>owner-map</code> и <code>withOwner/ownerHint</code>.</p>
+        </div>
         <h3>Сценарии и причины</h3>
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
@@ -189,6 +194,10 @@
           </div>
         </div>
         <h3>Вызовы выполнения</h3>
+        <div class="explain-note">
+          <strong>Зачем здесь вызовы</strong>
+          <p>Это не список “все плохо”. Таблица показывает измеренные ребра цепочки выполнения, которые попали в горячий сценарий: кто вызвал, кого вызвал, сколько раз и сколько времени это заняло. Приоритетны строки с большим “Итого” или “Макс.”, особенно если тот же класс есть в реестре проблем кода.</p>
+        </div>
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Math.Summary.RuntimeCalls}}
@@ -197,7 +206,7 @@
         </table>
         {{if .Math.Summary.Influence.Available}}
         <h3>Граф влияния кода</h3>
-        <p class="help-text">Этот блок связывает математические симптомы с классами: оценка растет от сетевых хвостов, пауз главного потока, UI-подтормаживаний, памяти, спама логами и радиуса сценария. Статические связи между классами доступны при передаче `--class-graph`.</p>
+        <p class="help-text">Этот блок связывает математические симптомы с классами. “Узел графа влияния” означает, что класс оказался рядом с симптомами или связан с ними через статический/измеренный граф. Это подсказка для расследования, а не доказательство бага без соседних runtime-сигналов. Статические связи между классами доступны при передаче <code>--class-graph</code>.</p>
         <table class="timeline-table">
           <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Сценарии</th></tr>
           {{range topInfluenceNodes .Math.Summary.Influence 8}}
@@ -258,7 +267,7 @@
             <table class="timeline-table">
               <tr><th>Время</th><th>HTTP</th><th>Ошибки</th><th>HTTP средн.</th><th>HTTP p95</th><th>DNS кол-во</th><th>DNS средн.</th><th>Соед. кол-во</th><th>Соед. средн.</th><th>TTFB средн.</th></tr>
               {{range $math.Timeline}}
-              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
+              <tr class="{{networkBucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{.HTTPAvgDurationMS}} мс</td><td>{{.HTTPP95DurationMS}} мс</td><td>{{.DNSCount}}</td><td>{{.DNSDurationMS}} мс</td><td>{{.ConnectCount}}</td><td>{{.ConnectDurationMS}} мс</td><td>{{.TTFBMS}} мс</td></tr>
               {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
             </table>
           </div>
@@ -267,7 +276,7 @@
             <table class="timeline-table">
             <tr><th>Время</th><th>UI кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Паузы главного потока</th><th>Макс. пауза</th></tr>
               {{range $math.Timeline}}
-              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
+              <tr class="{{uiBucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%</td><td>{{.StallCount}}</td><td>{{.StallMaxMS}} мс</td></tr>
               {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
             </table>
           </div>
@@ -276,7 +285,7 @@
             <table class="timeline-table">
               <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</th><th>Свободная RAM</th><th>RX дельта</th><th>TX дельта</th></tr>
               {{range $math.Timeline}}
-              <tr class="{{bucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} КБ</td><td>{{.AvailableMemoryKB}} КБ</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
+              <tr class="{{memoryBucketClass .}}"><td>{{bucketRange .}}</td><td>{{.MemoryPSSKB}} КБ</td><td>{{.AvailableMemoryKB}} КБ</td><td>{{.TrafficRxBytes}}</td><td>{{.TrafficTxBytes}}</td></tr>
               {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
             </table>
           </div>
@@ -373,6 +382,11 @@
         <p class="muted">Интегрирование прямоугольное: для каждого временного интервала берется значение сигнала и умножается на длительность интервала Δt. Чем дольше длится деградация, тем больше итоговая площадь.</p>
         {{end}}
         {{if eq .ID "markov"}}
+        <div class="explain-note">
+          <strong>Как читать состояния</strong>
+          <p><code>Здоровое</code> — интервал без заметных симптомов по текущим порогам. <code>Восстановление</code> — первый спокойный интервал после плохого состояния: это хороший знак, но если плохие состояния часто возвращаются, причину все равно надо искать выше по таблицам.</p>
+          <p>Матрица переходов отвечает на вопрос “куда обычно попадает следующий временной интервал”. Например, переход <code>Давление памяти → Восстановление</code> показывает, что после всплеска памяти сигнал вернулся ниже порога.</p>
+        </div>
         <h3>Сводка состояний</h3>
         <table class="timeline-table">
           <tr><th>Уверенность</th><th>Плохая экспозиция</th><th>Здоровые -> плохие</th><th>Восстановление</th><th>Ожидаемое восстановление</th><th>Липкие состояния</th></tr>
@@ -414,6 +428,7 @@
           {{if hiddenMarkovStates $math.Markov.States}}<tr><td colspan="5" class="muted">Скрыто спокойных интервалов: {{hiddenMarkovStates $math.Markov.States}}.</td></tr>{{end}}
         </table>
         <h3>Матрица переходов</h3>
+        <p class="help-text">Смотрите на повторяющиеся переходы из здорового состояния в плохие и на вероятность восстановления. Высокое восстановление хорошо, но частые входы в плохие состояния означают нестабильный сценарий.</p>
         <table class="timeline-table">
           <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
           {{range significantMarkovTransitions $math.Markov.Transitions}}
