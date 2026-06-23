@@ -1,0 +1,40 @@
+<idea-plugin>
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow
+        id="Jank Hunter"
+        anchor="bottom"
+        icon="/icons/jankHunter.svg"
+        factoryClass="io.jankhunter.plugin.ui.JankHunterToolWindowFactory"/>
+
+    <applicationConfigurable
+        instance="io.jankhunter.plugin.settings.JankHunterConfigurable"
+        displayName="Jank Hunter"/>
+
+    <configurationType implementation="io.jankhunter.plugin.run.JankHunterRunConfigurationType"/>
+
+    <notificationGroup
+        id="Jank Hunter"
+        displayType="BALLOON"/>
+  </extensions>
+
+  <actions>
+    <action
+        id="JankHunter.ShowToolWindow"
+        class="io.jankhunter.plugin.actions.OpenJankHunterToolWindowAction"
+        text="Jank Hunter"
+        description="Open the Jank Hunter tool window"
+        icon="/icons/jankHunter.svg">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+    </action>
+
+    <action
+        id="JankHunter.InspectClassEvidence"
+        class="io.jankhunter.plugin.actions.InspectClassEvidenceAction"
+        text="Inspect Jank Hunter Evidence For Class"
+        description="Open Jank Hunter filtered to the current class">
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
+  </actions>
+</idea-plugin>
