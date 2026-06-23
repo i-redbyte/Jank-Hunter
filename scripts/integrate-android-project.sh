@@ -11,12 +11,14 @@ fi
 JANKHUNTER_ROOT="$DEFAULT_JANKHUNTER_ROOT"
 TARGET_ROOT=""
 MAVEN_DIR=".jankhunter/maven"
+AAR_DIR=".jankhunter/lib"
 CLI_DIR=".jankhunter/bin"
 ANDROID_SDK_DIR=""
 RESOLVED_ANDROID_SDK_DIR=""
 ANDROID_BUILD_TOOLS_VERSION=""
 RESOLVED_ANDROID_BUILD_TOOLS_VERSION=""
 DRY_RUN=0
+USE_AAR=0
 SKIP_PUBLISH=0
 SKIP_CLI_BUILD=0
 SKIP_LOCAL_PROPERTIES=0
@@ -54,6 +56,10 @@ Common options:
   --runtime-call-graph          Enable runtime caller -> callee graph hooks.
   --build-type debug            Enabled build type. Can be repeated or comma-separated.
   --maven-dir PATH              Local Maven repo inside target project. Default: .jankhunter/maven.
+  --use-aar, --useAar           Copy Jank Hunter runtime/OkHttp AARs, annotations JAR and Gradle
+                                plugin JAR into the target project instead of adding a local Maven
+                                dependency repository. Default artifact dir: .jankhunter/lib.
+  --aar-dir PATH                Target artifact directory for --use-aar. Default: .jankhunter/lib.
   --cli-dir PATH                Target directory for CLI binary. Default: .jankhunter/bin.
   --android-sdk PATH            Android SDK path for target local.properties. If omitted, the
                                 script uses ANDROID_HOME, ANDROID_SDK_ROOT, or ~/Library/Android/sdk.
@@ -63,12 +69,12 @@ Common options:
   --dry-run                     Print what would be changed without writing files.
 
 Advanced:
-  --skip-publish                Do not publish Jank Hunter artifacts into the target Maven repo.
+  --skip-publish                Do not publish/copy Jank Hunter Android artifacts.
   --skip-cli-build              Do not build/copy the jankhunter CLI binary.
   --skip-local-properties       Do not create or update target local.properties. Gradle still gets
                                 the resolved SDK path through ANDROID_HOME during publishing.
   --no-asm-progress-log         Disable one-line ASM progress log in generated config.
-  --no-gitignore                Do not add the local Maven repo to target .gitignore.
+  --no-gitignore                Do not update target .gitignore.
 
 Example:
   scripts/integrate-android-project.sh \
@@ -168,6 +174,14 @@ while [[ $# -gt 0 ]]; do
       MAVEN_DIR="${2:-}"
       shift 2
       ;;
+    --use-aar|--useAar)
+      USE_AAR=1
+      shift
+      ;;
+    --aar-dir)
+      AAR_DIR="${2:-}"
+      shift 2
+      ;;
     --cli-dir)
       CLI_DIR="${2:-}"
       shift 2
@@ -245,14 +259,27 @@ TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd)"
 [[ -f "$JANKHUNTER_ROOT/android/gradlew" ]] || fail "Jank Hunter Android Gradle wrapper not found: $JANKHUNTER_ROOT/android/gradlew"
 [[ -f "$JANKHUNTER_ROOT/cli/Makefile" ]] || fail "Jank Hunter CLI Makefile not found: $JANKHUNTER_ROOT/cli/Makefile"
 [[ -d "$TARGET_ROOT" ]] || fail "target project does not exist: $TARGET_ROOT"
+[[ -n "$MAVEN_DIR" ]] || fail "--maven-dir cannot be empty"
+[[ -n "$AAR_DIR" ]] || fail "--aar-dir cannot be empty"
+[[ -n "$CLI_DIR" ]] || fail "--cli-dir cannot be empty"
 
 VERSION="$(awk -F= '$1 == "jankHunterVersion" { print $2; exit }' "$JANKHUNTER_ROOT/android/gradle.properties")"
 GROUP="$(awk -F= '$1 == "jankHunterGroup" { print $2; exit }' "$JANKHUNTER_ROOT/android/gradle.properties")"
 [[ -n "$VERSION" ]] || fail "could not read jankHunterVersion from android/gradle.properties"
 [[ -n "$GROUP" ]] || fail "could not read jankHunterGroup from android/gradle.properties"
 
-MAVEN_REPO_ABS="$TARGET_ROOT/$MAVEN_DIR"
-CLI_DIR_ABS="$TARGET_ROOT/$CLI_DIR"
+target_abs_path() {
+  local path="$1"
+  if [[ "$path" == /* ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s\n' "$TARGET_ROOT/$path"
+  fi
+}
+
+MAVEN_REPO_ABS="$(target_abs_path "$MAVEN_DIR")"
+AAR_DIR_ABS="$(target_abs_path "$AAR_DIR")"
+CLI_DIR_ABS="$(target_abs_path "$CLI_DIR")"
 BACKUP_ROOT="$TARGET_ROOT/.jankhunter-backups/$(date +%Y%m%d-%H%M%S)"
 
 run_cmd() {
@@ -632,8 +659,7 @@ gradle_string_args() {
   local out=""
   local value escaped
   for value in "$@"; do
-    escaped="${value//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
+    escaped="$(gradle_escape_string "$value")"
     if [[ -n "$out" ]]; then
       out+=", "
     fi
@@ -642,11 +668,28 @@ gradle_string_args() {
   printf '%s' "$out"
 }
 
+gradle_escape_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "$value"
+}
+
 patch_settings_file() {
   local file="$1"
   local plugin_block dependency_block
-  plugin_block=$'    // Jank Hunter plugin repository\n    repositories {\n        maven { url = uri(".jankhunter/maven") }\n    }\n'
-  dependency_block=$'    // Jank Hunter dependency repository\n    repositories {\n        maven { url = uri(".jankhunter/maven") }\n    }\n'
+  local maven_repo_path
+  maven_repo_path="$(gradle_escape_string "$MAVEN_DIR")"
+  plugin_block="    // Jank Hunter plugin repository
+    repositories {
+        maven { url = uri(\"$maven_repo_path\") }
+    }
+"
+  dependency_block="    // Jank Hunter dependency repository
+    repositories {
+        maven { url = uri(\"$maven_repo_path\") }
+    }
+"
 
   if grep -q 'Jank Hunter plugin repository' "$file" && grep -q 'Jank Hunter dependency repository' "$file"; then
     log "settings already contains Jank Hunter repositories"
@@ -682,12 +725,19 @@ patch_settings_file() {
 }
 
 patch_gitignore() {
-  [[ "$ADD_GITIGNORE" -eq 1 ]] || return
+  [[ "$ADD_GITIGNORE" -eq 1 ]] || return 0
   local file="$TARGET_ROOT/.gitignore"
   local needs_jankhunter=1
   local needs_local_properties=1
+  local jankhunter_ignore_entry=".jankhunter/"
+  local jankhunter_ignore_comment="# Jank Hunter local Maven repo and generated CLI"
 
-  if [[ -f "$file" ]] && grep -q '^\.jankhunter/$' "$file"; then
+  if [[ "$USE_AAR" -eq 1 ]]; then
+    jankhunter_ignore_entry="${CLI_DIR%/}/"
+    jankhunter_ignore_comment="# Jank Hunter generated CLI"
+  fi
+
+  if [[ -f "$file" ]] && grep -Fxq "$jankhunter_ignore_entry" "$file"; then
     needs_jankhunter=0
   fi
   if [[ -f "$file" ]] && grep -q '^local\.properties$' "$file"; then
@@ -704,7 +754,7 @@ patch_gitignore() {
   {
     [[ -f "$file" ]] && cat "$file"
     if [[ "$needs_jankhunter" -eq 1 ]]; then
-      printf '\n# Jank Hunter local Maven repo and generated CLI\n.jankhunter/\n'
+      printf '\n%s\n%s\n' "$jankhunter_ignore_comment" "$jankhunter_ignore_entry"
     fi
     if [[ "$needs_local_properties" -eq 1 ]]; then
       printf '\n# Local Android SDK path\nlocal.properties\n'
@@ -850,20 +900,64 @@ patch_module_build_file() {
   local dsl="groovy"
   [[ "$file" == *.kts ]] && dsl="kts"
 
-  local plugin_line annotations_dep runtime_dep okhttp_dep jh_block includes excludes build_type
-  if [[ "$dsl" == "kts" ]]; then
-    plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
-    annotations_dep="    compileOnly(\"$GROUP:jankhunter-annotations:$VERSION\")"
-    runtime_dep="    debugImplementation(\"$GROUP:jankhunter-runtime:$VERSION\")"
-    okhttp_dep="    debugImplementation(\"$GROUP:jankhunter-okhttp3:$VERSION\")"
+  local plugin_line plugin_apply_line plugin_buildscript_block annotations_dep runtime_dep okhttp_dep jh_block includes excludes build_type
+  local artifact_base
+  artifact_base="$(gradle_escape_string "$AAR_DIR")"
+  if [[ "$USE_AAR" -eq 1 ]]; then
+    if [[ "$dsl" == "kts" ]]; then
+      plugin_apply_line='apply(plugin = "io.jankhunter.android")'
+      plugin_buildscript_block="buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath(files(rootProject.file(\"$artifact_base/jankhunter-gradle-plugin-$VERSION.jar\")))
+        classpath(\"org.ow2.asm:asm-commons:9.7.1\")
+    }
+}
+
+"
+      annotations_dep="    compileOnly(files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\")))"
+      runtime_dep="    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\")))"
+      okhttp_dep="    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\")))"
+    else
+      plugin_apply_line="apply plugin: 'io.jankhunter.android'"
+      plugin_buildscript_block="buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath files(rootProject.file(\"$artifact_base/jankhunter-gradle-plugin-$VERSION.jar\"))
+        classpath \"org.ow2.asm:asm-commons:9.7.1\"
+    }
+}
+
+"
+      annotations_dep="    compileOnly files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\"))"
+      runtime_dep="    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\"))"
+      okhttp_dep="    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\"))"
+    fi
   else
-    plugin_line="    id 'io.jankhunter.android' version '$VERSION'"
-    annotations_dep="    compileOnly \"$GROUP:jankhunter-annotations:$VERSION\""
-    runtime_dep="    debugImplementation \"$GROUP:jankhunter-runtime:$VERSION\""
-    okhttp_dep="    debugImplementation \"$GROUP:jankhunter-okhttp3:$VERSION\""
+    if [[ "$dsl" == "kts" ]]; then
+      plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
+      annotations_dep="    compileOnly(\"$GROUP:jankhunter-annotations:$VERSION\")"
+      runtime_dep="    debugImplementation(\"$GROUP:jankhunter-runtime:$VERSION\")"
+      okhttp_dep="    debugImplementation(\"$GROUP:jankhunter-okhttp3:$VERSION\")"
+    else
+      plugin_line="    id 'io.jankhunter.android' version '$VERSION'"
+      annotations_dep="    compileOnly \"$GROUP:jankhunter-annotations:$VERSION\""
+      runtime_dep="    debugImplementation \"$GROUP:jankhunter-runtime:$VERSION\""
+      okhttp_dep="    debugImplementation \"$GROUP:jankhunter-okhttp3:$VERSION\""
+    fi
   fi
 
-  jh_block=$'\n\njankHunter {\n'
+  if [[ "$USE_AAR" -eq 1 && "$dsl" == "kts" ]]; then
+    jh_block=$'\n\nextensions.getByType(io.jankhunter.gradle.JankHunterExtension::class.java).apply {\n'
+  else
+    jh_block=$'\n\njankHunter {\n'
+  fi
   for build_type in "${BUILD_TYPES[@]}"; do
     jh_block+="    enabledBuildTypes.add(\"$build_type\")"$'\n'
   done
@@ -918,29 +1012,60 @@ patch_module_build_file() {
     return
   fi
 
-  PLUGIN_LINE="$plugin_line" perl -0pi -e '
-    my $line = $ENV{"PLUGIN_LINE"};
-    if (index($_, "io.jankhunter.android") < 0) {
-      if ($_ =~ /plugins\s*\{/) {
-        s/(plugins\s*\{)/$1\n$line/s;
-      } else {
-        $_ = "plugins {\n$line\n}\n\n" . $_;
-      }
-    }
-  ' "$file"
+  if [[ "$USE_AAR" -eq 1 ]]; then
+    JH_GROUP="$GROUP" perl -0pi -e '
+      my $group = quotemeta($ENV{"JH_GROUP"});
+      s/^[ \t]*id\s*(?:\(|\s+)[\x27"]io\.jankhunter\.android[\x27"].*?\n//mg;
+      s/^[ \t]*(?:compileOnly|debugImplementation)\s*(?:\(\s*)?[\x27"]$group:jankhunter-(?:annotations|runtime|okhttp3):[^\x27"]+[\x27"]\s*\)?[ \t]*\n//mg;
+    ' "$file"
 
-  if ! grep -q "$GROUP:jankhunter-runtime" "$file"; then
-    ANNOTATIONS_DEP="$annotations_dep" RUNTIME_DEP="$runtime_dep" OKHTTP_DEP="$okhttp_dep" perl -0pi -e '
-      my $deps = $ENV{"ANNOTATIONS_DEP"} . "\n" . $ENV{"RUNTIME_DEP"} . "\n" . $ENV{"OKHTTP_DEP"} . "\n";
-      if ($_ =~ /dependencies\s*\{/) {
-        s/(dependencies\s*\{)/$1\n$deps/s;
-      } else {
-        $_ .= "\n\ndependencies {\n$deps}\n";
+    PLUGIN_BUILDSCRIPT_BLOCK="$plugin_buildscript_block" perl -0pi -e '
+      my $block = $ENV{"PLUGIN_BUILDSCRIPT_BLOCK"};
+      if (index($_, "jankhunter-gradle-plugin") < 0) {
+        if ($_ =~ /\A((?:(?:[ \t]*import[^\n]*|[ \t]*)\n)*)/) {
+          substr($_, length($1), 0) = $block;
+        } else {
+          $_ = $block . $_;
+        }
+      }
+    ' "$file"
+
+    if ! grep -q "io.jankhunter.android" "$file"; then
+      printf '\n%s\n' "$plugin_apply_line" >> "$file"
+    fi
+  else
+    PLUGIN_LINE="$plugin_line" perl -0pi -e '
+      my $line = $ENV{"PLUGIN_LINE"};
+      if (index($_, "io.jankhunter.android") < 0) {
+        if ($_ =~ /plugins\s*\{/) {
+          s/(plugins\s*\{)/$1\n$line/s;
+        } else {
+          $_ = "plugins {\n$line\n}\n\n" . $_;
+        }
       }
     ' "$file"
   fi
 
-  if ! grep -q "$GROUP:jankhunter-annotations" "$file"; then
+  local runtime_marker="$GROUP:jankhunter-runtime"
+  if [[ "$USE_AAR" -eq 1 ]]; then
+    runtime_marker="jankhunter-runtime-$VERSION.aar"
+  fi
+  if ! grep -Fq "$runtime_marker" "$file"; then
+    if [[ "$USE_AAR" -eq 1 ]]; then
+      printf '\n\ndependencies {\n%s\n%s\n%s\n}\n' "$annotations_dep" "$runtime_dep" "$okhttp_dep" >> "$file"
+    else
+      ANNOTATIONS_DEP="$annotations_dep" RUNTIME_DEP="$runtime_dep" OKHTTP_DEP="$okhttp_dep" perl -0pi -e '
+        my $deps = $ENV{"ANNOTATIONS_DEP"} . "\n" . $ENV{"RUNTIME_DEP"} . "\n" . $ENV{"OKHTTP_DEP"} . "\n";
+        if ($_ =~ /dependencies\s*\{/) {
+          s/(dependencies\s*\{)/$1\n$deps/s;
+        } else {
+          $_ .= "\n\ndependencies {\n$deps}\n";
+        }
+      ' "$file"
+    fi
+  fi
+
+  if [[ "$USE_AAR" -eq 0 ]] && ! grep -q "$GROUP:jankhunter-annotations" "$file"; then
     ANNOTATIONS_DEP="$annotations_dep" perl -0pi -e '
       my $dep = $ENV{"ANNOTATIONS_DEP"} . "\n";
       if ($_ =~ /dependencies\s*\{/) {
@@ -951,7 +1076,7 @@ patch_module_build_file() {
     ' "$file"
   fi
 
-  if ! grep -q 'jankHunter[[:space:]]*{' "$file"; then
+  if ! grep -Eq 'jankHunter[[:space:]]*\{|JankHunterExtension::class[.]java' "$file"; then
     printf '%s' "$jh_block" >> "$file"
   fi
 }
@@ -983,6 +1108,49 @@ publish_artifacts_if_needed() {
   fi
 }
 
+prepare_aar_artifacts_if_needed() {
+  [[ "$SKIP_PUBLISH" -eq 0 ]] || {
+    log "skipping AAR/JAR artifact build and copy"
+    return
+  }
+
+  local runtime_target="$AAR_DIR_ABS/jankhunter-runtime-$VERSION.aar"
+  local annotations_target="$AAR_DIR_ABS/jankhunter-annotations-$VERSION.jar"
+  local okhttp_target="$AAR_DIR_ABS/jankhunter-okhttp3-$VERSION.aar"
+  local plugin_target="$AAR_DIR_ABS/jankhunter-gradle-plugin-$VERSION.jar"
+
+  if [[ -f "$runtime_target" && -f "$annotations_target" && -f "$okhttp_target" && -f "$plugin_target" ]]; then
+    log "Jank Hunter AAR/JAR artifacts already exist in $AAR_DIR_ABS"
+    return
+  fi
+
+  log "building and copying Jank Hunter AAR/JAR artifacts into $AAR_DIR_ABS"
+  run_cmd mkdir -p "$AAR_DIR_ABS"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    if ! (cd "$JANKHUNTER_ROOT/android" && ANDROID_HOME="$RESOLVED_ANDROID_SDK_DIR" ANDROID_SDK_ROOT="$RESOLVED_ANDROID_SDK_DIR" ./gradlew :jankhunter-runtime:assembleRelease :jankhunter-okhttp3:assembleRelease :jankhunter-annotations:jar :jankhunter-gradle-plugin:jar -PjankHunterBuildToolsVersion="$RESOLVED_ANDROID_BUILD_TOOLS_VERSION" --no-daemon --stacktrace); then
+      fail "failed to build Jank Hunter AAR/JAR artifacts. Android SDK: $RESOLVED_ANDROID_SDK_DIR, Build Tools: $RESOLVED_ANDROID_BUILD_TOOLS_VERSION"
+    fi
+
+    local runtime_source="$JANKHUNTER_ROOT/android/jankhunter-runtime/build/outputs/aar/jankhunter-runtime-release.aar"
+    local annotations_source="$JANKHUNTER_ROOT/android/jankhunter-annotations/build/libs/jankhunter-annotations-$VERSION.jar"
+    local okhttp_source="$JANKHUNTER_ROOT/android/jankhunter-okhttp3/build/outputs/aar/jankhunter-okhttp3-release.aar"
+    local plugin_source="$JANKHUNTER_ROOT/android/jankhunter-gradle-plugin/build/libs/jankhunter-gradle-plugin-$VERSION.jar"
+
+    [[ -f "$runtime_source" ]] || fail "runtime AAR was not produced: $runtime_source"
+    [[ -f "$annotations_source" ]] || fail "annotations JAR was not produced: $annotations_source"
+    [[ -f "$okhttp_source" ]] || fail "OkHttp AAR was not produced: $okhttp_source"
+    [[ -f "$plugin_source" ]] || fail "Gradle plugin JAR was not produced: $plugin_source"
+
+    cp "$runtime_source" "$runtime_target"
+    cp "$annotations_source" "$annotations_target"
+    cp "$okhttp_source" "$okhttp_target"
+    cp "$plugin_source" "$plugin_target"
+  else
+    log "would run: cd $JANKHUNTER_ROOT/android && ANDROID_HOME=$RESOLVED_ANDROID_SDK_DIR ./gradlew :jankhunter-runtime:assembleRelease :jankhunter-okhttp3:assembleRelease :jankhunter-annotations:jar :jankhunter-gradle-plugin:jar -PjankHunterBuildToolsVersion=$RESOLVED_ANDROID_BUILD_TOOLS_VERSION --no-daemon --stacktrace"
+    log "would copy AAR/JAR artifacts to $AAR_DIR_ABS"
+  fi
+}
+
 build_cli_if_needed() {
   [[ "$SKIP_CLI_BUILD" -eq 0 ]] || {
     log "skipping CLI build"
@@ -1008,7 +1176,7 @@ build_cli_if_needed() {
 }
 
 verify_target_project() {
-  [[ "$VERIFY" -eq 1 ]] || return
+  [[ "$VERIFY" -eq 1 ]] || return 0
   local gradlew="$TARGET_ROOT/gradlew"
   [[ -x "$gradlew" ]] || gradlew="gradle"
   local tasks=()
@@ -1046,15 +1214,29 @@ SETTINGS_FILE="$(detect_settings_file)"
 log "Jank Hunter: $JANKHUNTER_ROOT"
 log "Target: $TARGET_ROOT"
 log "Version: $GROUP:$VERSION"
-log "Local Maven repo: $MAVEN_REPO_ABS"
+if [[ "$USE_AAR" -eq 1 ]]; then
+  log "Artifact mode: embedded AAR/JAR"
+  log "AAR/JAR artifacts: $AAR_DIR_ABS"
+else
+  log "Artifact mode: local Maven"
+  log "Local Maven repo: $MAVEN_REPO_ABS"
+fi
 log "CLI binary: $CLI_DIR_ABS/jankhunter"
 log "Modules: ${MODULES[*]}"
 
 prepare_jankhunter_android_sdk
-publish_artifacts_if_needed
+if [[ "$USE_AAR" -eq 1 ]]; then
+  prepare_aar_artifacts_if_needed
+else
+  publish_artifacts_if_needed
+fi
 build_cli_if_needed
 patch_target_local_properties
-patch_settings_file "$SETTINGS_FILE"
+if [[ "$USE_AAR" -eq 1 ]]; then
+  log "using embedded AAR/JAR mode; target settings repositories are unchanged"
+else
+  patch_settings_file "$SETTINGS_FILE"
+fi
 patch_gitignore
 
 for module in "${MODULES[@]}"; do
@@ -1066,5 +1248,10 @@ verify_target_project
 
 log "done"
 log "Backups: $BACKUP_ROOT"
+if [[ "$USE_AAR" -eq 1 ]]; then
+  log "AAR/JAR artifacts: $AAR_DIR_ABS"
+else
+  log "Local Maven repo: $MAVEN_REPO_ABS"
+fi
 log "CLI: $CLI_DIR_ABS/jankhunter"
 log "Next: build the target app and inspect generated owner-map/class-graph under each patched module build/generated/jankhunter/<variant>/"

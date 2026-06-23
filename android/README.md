@@ -126,13 +126,15 @@ scripts/integrate-android-project.sh \
 
 Что делает скрипт:
 
-- публикует Jank Hunter в локальный Maven repo целевого проекта: `.jankhunter/maven`;
+- по умолчанию публикует Jank Hunter в локальный Maven repo целевого проекта: `.jankhunter/maven`;
 - собирает CLI и кладет бинарник в `.jankhunter/bin/jankhunter`;
 - прописывает Android SDK в `local.properties` через `sdk.dir`;
 - добавляет этот repo в `settings.gradle` или `settings.gradle.kts`;
 - подключает `io.jankhunter.android`, `jankhunter-annotations`, `jankhunter-runtime` и `jankhunter-okhttp3` в указанный модуль;
 - добавляет `jankHunter { ... }` с безопасными дефолтами для debug-сборки;
 - оставляет backup измененных файлов в `.jankhunter-backups/<timestamp>`.
+
+Для проекта, который нужно коммитить и собирать без локального Maven-репозитория, передайте `--use-aar` или `--useAar`. Тогда скрипт соберет AAR/JAR-артефакты, положит их в `.jankhunter/lib`, подключит Gradle-плагин через локальный JAR, а runtime/OkHttp/annotations - как файловые зависимости. В этом режиме `settings.gradle(.kts)` не меняется, а `.jankhunter/lib` не добавляется в `.gitignore`, чтобы эти файлы можно было хранить в репозитории приложения.
 
 Обычно `--module` указывать не нужно: скрипт сам ранжирует app-кандидаты и выбирает основной app по Android application plugin или alias, launchable manifest, manifest `android:name`, `Application` subclass, `applicationId`, совпадению с именем проекта, имени модуля и штрафу для test/benchmark/sample-модулей. Если проект совсем нестандартный, можно переопределить выбор через `--module :mobile:app`. Для нескольких Android-модулей флаг можно повторять. Для большого проекта удобно начать с `--include-package`, а `--include-whole-application` включать только когда понятен список `excludePackages`.
 

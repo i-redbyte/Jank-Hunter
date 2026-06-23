@@ -141,6 +141,14 @@ scripts/integrate-android-project.sh \
 
 Скрипт публикует Android-артефакты Jank Hunter в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в найденный app-модуль и создает `jankHunter { ... }` конфиг. App-модуль определяется автоматически: скрипт ранжирует кандидатов по Android application plugin или alias, launchable manifest, manifest `android:name`, `Application` subclass, `applicationId`, совпадению с именем проекта, имени модуля и отбрасывает вниз test/benchmark/sample-модули. Перед публикацией он также передает найденный Android SDK и установленную версию Build Tools в Gradle-сборку Jank Hunter, поэтому чистый clone без `ANDROID_HOME` тоже должен собраться на macOS. Перед правками целевого проекта скрипт оставляет backup в `.jankhunter-backups/`.
 
+Если проект нужно перенести в GitLab без локального Maven-репозитория, включите файловое подключение артефактов:
+
+```bash
+scripts/integrate-android-project.sh ~/work/MyApp --use-aar
+```
+
+В этом режиме скрипт собирает `jankhunter-runtime` и `jankhunter-okhttp3` как AAR, `jankhunter-annotations` и Gradle-плагин как JAR, кладет их в `~/work/MyApp/.jankhunter/lib` и подключает из app-модуля как файловые зависимости. `settings.gradle(.kts)` при этом не получает Jank Hunter Maven repo. Каталог `.jankhunter/lib` специально не добавляется в `.gitignore`, поэтому его можно коммитить вместе с приложением; сгенерированный CLI в `.jankhunter/bin` по-прежнему считается локальным артефактом.
+
 Если Android SDK лежит не в стандартном месте, передайте путь явно:
 
 ```bash
