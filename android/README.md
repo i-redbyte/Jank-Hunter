@@ -87,6 +87,12 @@ JankHunter.init(context, config)
 
 ```kotlin
 val enabledForUser = featureFlags.isEnabled("jank_hunter_runtime")
+JankHunter.setRuntimeEnabled(enabledForUser)
+```
+
+Второй параметр опционален и по умолчанию равен `manual`. Передавайте его, только если хотите видеть источник переключения в служебных counters:
+
+```kotlin
 JankHunter.setRuntimeEnabled(enabledForUser, "remote_config")
 ```
 

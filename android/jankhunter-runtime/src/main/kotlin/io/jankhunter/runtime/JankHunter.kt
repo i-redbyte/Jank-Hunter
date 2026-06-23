@@ -32,6 +32,8 @@ data class JankHunterInitDiagnostics(
 )
 
 object JankHunter {
+    private const val DEFAULT_RUNTIME_TOGGLE_REASON = "manual"
+
     private val runtimeState = RuntimeState()
     private val started get() = runtimeState.started
     private val initAttempts get() = runtimeState.initAttempts
@@ -147,12 +149,8 @@ object JankHunter {
     fun isRuntimeEnabled(): Boolean = runtimeState.runtimeEnabled.get()
 
     @JvmStatic
-    fun setRuntimeEnabled(enabled: Boolean): Boolean {
-        return setRuntimeEnabled(enabled, null)
-    }
-
-    @JvmStatic
-    fun setRuntimeEnabled(enabled: Boolean, reason: String?): Boolean {
+    @JvmOverloads
+    fun setRuntimeEnabled(enabled: Boolean, reason: String? = DEFAULT_RUNTIME_TOGGLE_REASON): Boolean {
         runtimeState.runtimeEnabled.set(enabled)
         if (!enabled) {
             if (started.get()) {
@@ -365,7 +363,7 @@ object JankHunter {
         val cleanReason = reason
             ?.takeIf { it.isNotBlank() }
             ?.let(::metricOwner)
-            ?: "manual"
+            ?: DEFAULT_RUNTIME_TOGGLE_REASON
         recordCounter("jankhunter.runtime.$state.reason.$cleanReason.count", 1)
     }
 
