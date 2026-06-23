@@ -99,10 +99,6 @@ func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pss
 	return state, MarkovStateLabel(state), contributors
 }
 
-func bucketInsideNetworkLoop(bucket TimelineBucket, loops []NetworkLoopFinding) bool {
-	return markovNetworkLoopConfidence(bucket, loops) >= 0.35
-}
-
 func markovNetworkLoopConfidence(bucket TimelineBucket, loops []NetworkLoopFinding) float64 {
 	var confidence float64
 	for _, loop := range loops {
