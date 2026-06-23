@@ -97,9 +97,9 @@ func TestCompareRobustSamplesAvoidsHighSeverityForTinySample(t *testing.T) {
 func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 	path := writeRobustFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	route := findRobustStat(report.RobustStats, "Маршрут", "GET /feed", "HTTP задержка")
@@ -138,11 +138,11 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 func TestAnalyzeInspectRobustStatsHonorClassFilter(t *testing.T) {
 	path := writeRobustFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{
 		Filter: analyze.Filter{ClassContains: "CheckoutActivity"},
 	})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	checkout := findRobustStat(report.RobustStats, "Источник", "com.app.CheckoutActivity", "Возраст удержанного объекта")

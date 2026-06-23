@@ -9,15 +9,15 @@ import (
 	"testing"
 )
 
-func TestWriteSampleReadFile(t *testing.T) {
+func TestWriteSampleStreamsBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	if len(log.Events) == 0 {
 		t.Fatalf("expected events")
@@ -85,7 +85,7 @@ func TestFormatMagicGolden(t *testing.T) {
 	}
 }
 
-func TestReadFileSupportsCompressedBinaryBody(t *testing.T) {
+func TestStreamFileSupportsCompressedBinaryBody(t *testing.T) {
 	rawPath := filepath.Join(t.TempDir(), "raw.jhlog")
 	if err := WriteSample(rawPath); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -117,9 +117,9 @@ func TestReadFileSupportsCompressedBinaryBody(t *testing.T) {
 		t.Fatalf("Close(file) error = %v", err)
 	}
 
-	log, err := ReadFile(compressedPath)
+	log, err := readLog(compressedPath)
 	if err != nil {
-		t.Fatalf("ReadFile(compressed) error = %v", err)
+		t.Fatalf("readLog(compressed) error = %v", err)
 	}
 	if len(log.Events) == 0 || log.Dict[20] != "GET /feed" {
 		t.Fatalf("compressed body did not decode sample log: events=%d dict[20]=%q", len(log.Events), log.Dict[20])
@@ -160,9 +160,9 @@ func TestSessionRootedUsesFlags(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	if len(log.Events) != 1 || log.Events[0].Session == nil {
 		t.Fatalf("expected one session event, got %#v", log.Events)
@@ -207,9 +207,9 @@ func TestFlowLogSpamAndProblemUseContextFlags(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	var flow *FlowEvent
 	var spam *LogSpamEvent
@@ -287,9 +287,9 @@ func TestRuntimeCallUsesCompactContextFlags(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	var runtimeCall *RuntimeCallEvent
 	var flags uint64
@@ -348,9 +348,9 @@ func TestRetainedUsesCompactContextFlags(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	var retained *RetainedEvent
 	var flags uint64
@@ -371,7 +371,7 @@ func TestRetainedUsesCompactContextFlags(t *testing.T) {
 	}
 }
 
-func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
+func TestStreamReadToleratesPartialBinaryTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -387,9 +387,9 @@ func TestReadFileToleratesPartialBinaryTail(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	if len(log.Events) == 0 {
 		t.Fatalf("expected preserved events")
@@ -434,7 +434,7 @@ func TestStreamFileWithWarningsToleratesPartialBinaryTail(t *testing.T) {
 	}
 }
 
-func TestReadFileRejectsPreviousBinaryVersion(t *testing.T) {
+func TestStreamReadRejectsPreviousBinaryVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "previous.jhlog")
 	previous := append([]byte{}, Magic...)
 	previous[7] = byte(FormatVersion - 1)
@@ -442,7 +442,7 @@ func TestReadFileRejectsPreviousBinaryVersion(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := ReadFile(path)
+	_, err := readLog(path)
 	if err == nil {
 		t.Fatalf("expected previous version error")
 	}
@@ -451,7 +451,7 @@ func TestReadFileRejectsPreviousBinaryVersion(t *testing.T) {
 	}
 }
 
-func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
+func TestStreamReadRejectsFutureBinaryVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "future.jhlog")
 	future := append([]byte{}, Magic...)
 	future[7] = byte(FormatVersion + 1)
@@ -459,7 +459,7 @@ func TestReadFileRejectsFutureBinaryVersion(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	_, err := ReadFile(path)
+	_, err := readLog(path)
 	if err == nil {
 		t.Fatalf("expected future version error")
 	}
@@ -502,9 +502,9 @@ func TestDictionaryValueCodecsDecodeBCD(t *testing.T) {
 		t.Fatalf("ordinary text dictionary value should remain UTF-8")
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	if got := log.Dict[1]; got != "1234567890123" {
 		t.Fatalf("dict[1] = %q", got)
@@ -550,9 +550,9 @@ func TestMetricAggregationMetadataRoundTrip(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	var metric *MetricEvent
 	for _, event := range log.Events {
@@ -602,9 +602,9 @@ func TestContextBooleansUseFlags(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	log, err := ReadFile(path)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
+		t.Fatalf("readLog() error = %v", err)
 	}
 	if len(log.Events) != 1 || log.Events[0].Context == nil {
 		t.Fatalf("expected one context event, got %#v", log.Events)
@@ -631,4 +631,23 @@ func TestContextBooleansUseFlags(t *testing.T) {
 		context.TotalStorageKB != 16384 {
 		t.Fatalf("context payload did not round-trip: %+v", context)
 	}
+}
+
+func readLog(path string) (Log, error) {
+	log := Log{
+		Source:  path,
+		Version: FormatVersion,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]DictKind{},
+	}
+	warnings, err := StreamFileWithWarnings(path, func(event Event, _ map[uint64]string) error {
+		if event.Dictionary != nil {
+			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
+			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+		}
+		log.Events = append(log.Events, event)
+		return nil
+	})
+	log.Warnings = warnings
+	return log, err
 }

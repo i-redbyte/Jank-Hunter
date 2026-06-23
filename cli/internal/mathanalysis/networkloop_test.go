@@ -12,9 +12,9 @@ import (
 func TestAnalyzeInspectDetectsDNSNetworkLoop(t *testing.T) {
 	path := writeDNSLoopFixture(t, true)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	loop := findNetworkLoop(report.NetworkLoops, func(loop NetworkLoopFinding) bool {
@@ -39,9 +39,9 @@ func TestAnalyzeInspectDetectsDNSNetworkLoop(t *testing.T) {
 func TestAnalyzeInspectDetectsDNSNetworkLoopWithAbsoluteOffset(t *testing.T) {
 	path := writeDNSLoopFixtureWithBase(t, true, 12*60*60*1000)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	loop := findNetworkLoop(report.NetworkLoops, func(loop NetworkLoopFinding) bool {
@@ -63,9 +63,9 @@ func TestAnalyzeInspectDetectsDNSNetworkLoopWithAbsoluteOffset(t *testing.T) {
 func TestAnalyzeInspectDetectsMetricOnlyReconnectLoop(t *testing.T) {
 	path := writeReconnectLoopFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	loop := findNetworkLoop(report.NetworkLoops, func(loop NetworkLoopFinding) bool {
@@ -84,9 +84,9 @@ func TestAnalyzeCompareReportsAppearedNetworkLoop(t *testing.T) {
 	baseline := writeDNSLoopFixture(t, false)
 	candidate := writeDNSLoopFixture(t, true)
 
-	report, err := AnalyzeCompare([]string{baseline}, []string{candidate}, analyze.Options{})
+	report, err := analyzeCompareForTest(t, []string{baseline}, []string{candidate}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeCompare() error = %v", err)
+		t.Fatalf("analyzeCompareForTest() error = %v", err)
 	}
 
 	for _, delta := range report.NetworkLoopDeltas {

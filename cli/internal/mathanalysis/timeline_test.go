@@ -11,9 +11,9 @@ import (
 func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	path := writeTimelineFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	if got, want := len(report.Timeline), 4; got != want {
@@ -97,9 +97,9 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 func TestAnalyzeInspectTimelineHonorsFilters(t *testing.T) {
 	path := writeTimelineFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{Filter: analyze.Filter{RouteContains: "/missing"}})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{Filter: analyze.Filter{RouteContains: "/missing"}})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 	for _, bucket := range report.Timeline {
 		if bucket.HTTPCount != 0 {
@@ -114,9 +114,9 @@ func TestAnalyzeInspectTimelineHonorsFilters(t *testing.T) {
 func TestAnalyzeInspectNormalizesAbsoluteTimelineOffset(t *testing.T) {
 	path := writeAbsoluteOffsetTimelineFixture(t)
 
-	report, err := AnalyzeInspect([]string{path}, analyze.Options{})
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
 	if err != nil {
-		t.Fatalf("AnalyzeInspect() error = %v", err)
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
 	}
 
 	if got, want := len(report.Timeline), 4; got != want {

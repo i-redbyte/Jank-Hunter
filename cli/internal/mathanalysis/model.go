@@ -370,14 +370,6 @@ type GraphPath struct {
 	Confidence float64
 }
 
-func AnalyzeInspect(paths []string, options analyze.Options) (MathReport, error) {
-	summary, err := analyze.InspectFilesWithOptions(titleFromPaths(paths), paths, options)
-	if err != nil {
-		return MathReport{}, err
-	}
-	return AnalyzeInspectWithSummary(paths, options, summary)
-}
-
 func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary analyze.Summary) (MathReport, error) {
 	inputs, err := analyzeMathInputs(paths, options)
 	if err != nil {
@@ -390,27 +382,6 @@ func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary 
 	markov := buildMarkovModel(inputs.Timeline, inputs.NetworkLoops)
 	causalGraph := buildCausalGraph(inputs.Timeline, inputs.NetworkLoops, markov)
 	return buildInspectReport(summary, paths, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
-}
-
-func AnalyzeCompare(baselinePaths, candidatePaths []string, options analyze.Options) (CompareMathReport, error) {
-	baselineOptions := options
-	candidateOptions := options
-	if options.BaselineHeapEvidence != nil {
-		baselineOptions.HeapEvidence = options.BaselineHeapEvidence
-	}
-	if options.CandidateHeapEvidence != nil {
-		candidateOptions.HeapEvidence = options.CandidateHeapEvidence
-	}
-
-	baselineSummary, err := analyze.InspectFilesWithOptions("baseline", baselinePaths, baselineOptions)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	candidateSummary, err := analyze.InspectFilesWithOptions("candidate", candidatePaths, candidateOptions)
-	if err != nil {
-		return CompareMathReport{}, err
-	}
-	return AnalyzeCompareWithSummaries(baselinePaths, candidatePaths, options, baselineSummary, candidateSummary)
 }
 
 func AnalyzeCompareWithSummaries(

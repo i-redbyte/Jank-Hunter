@@ -6,7 +6,7 @@ import com.intellij.openapi.project.Project
 import io.jankhunter.plugin.ui.JankHunterToolWindow
 
 @Service(Service.Level.PROJECT)
-class JankHunterProjectService(private val project: Project) {
+class JankHunterProjectService {
     private var toolWindow: JankHunterToolWindow? = null
     private var pendingClassFilter: String? = null
 

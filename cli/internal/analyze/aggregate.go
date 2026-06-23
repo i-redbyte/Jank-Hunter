@@ -14,31 +14,6 @@ import (
 
 const maxAggregateSamplesPerSignal = 20_000
 
-func Inspect(title string, logs []jhlog.Log) Summary {
-	return InspectWithFilter(title, logs, Filter{})
-}
-
-func InspectWithFilter(title string, logs []jhlog.Log, filter Filter) Summary {
-	collector := newCollector(title, len(logs), Options{Filter: filter})
-	for _, log := range logs {
-		collector.startLog()
-		collector.summary.Dictionary += len(log.Dict)
-		for _, event := range log.Events {
-			collector.add(log.Dict, event)
-		}
-		collector.finishLog()
-	}
-	return collector.finish()
-}
-
-func InspectFiles(title string, paths []string) (Summary, error) {
-	return InspectFilesWithFilter(title, paths, Filter{})
-}
-
-func InspectFilesWithFilter(title string, paths []string, filter Filter) (Summary, error) {
-	return InspectFilesWithOptions(title, paths, Options{Filter: filter})
-}
-
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
 	collector := newCollector(title, len(paths), options)
 	for _, path := range paths {

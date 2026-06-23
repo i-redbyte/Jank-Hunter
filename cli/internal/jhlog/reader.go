@@ -14,39 +14,6 @@ import (
 
 const firstMetadataDeltaUptimeThresholdMS uint64 = 60_000
 
-func ReadFile(path string) (Log, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return Log{}, err
-	}
-	defer file.Close()
-
-	var prefix [8]byte
-	n, err := io.ReadFull(file, prefix[:])
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return Log{}, err
-	}
-	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
-		version := prefix[7]
-		if version != FormatVersion {
-			return Log{}, fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
-		}
-		body, closeBody, err := compressedBinaryBody(file)
-		if err != nil {
-			return Log{}, fmt.Errorf("%s: compressed jhlog body: %w", path, err)
-		}
-		if closeBody != nil {
-			defer closeBody.Close()
-		}
-		return readBinary(body, path, version)
-	}
-
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return Log{}, err
-	}
-	return readJSONL(file, path)
-}
-
 func StreamFile(path string, handle func(Event, map[uint64]string) error) error {
 	_, err := StreamFileWithWarnings(path, handle)
 	return err
@@ -100,37 +67,6 @@ func compressedBinaryBody(r io.Reader) (io.Reader, io.Closer, error) {
 		return nil, nil, err
 	}
 	return reader, nil, nil
-}
-
-func readBinary(r io.Reader, source string, version uint8) (Log, error) {
-	reader := bufio.NewReader(r)
-	log := Log{
-		Source:  source,
-		Version: version,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]DictKind{},
-	}
-	var currentMS uint64
-	decodeState := compactDecodeState{}
-	for {
-		event, deltaMS, err := readCompactEvent(reader, source, &decodeState)
-		if errors.Is(err, io.EOF) {
-			return log, nil
-		}
-		if err != nil {
-			return toleratePartial(log, source, "compact event", err)
-		}
-		deltaMS = normalizeFirstMetadataDelta(event, deltaMS, len(log.Events))
-		currentMS += deltaMS
-		event.TimeMS = currentMS
-		event.DeltaMS = deltaMS
-		event.Source = source
-		if event.Dictionary != nil {
-			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
-			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
-		}
-		log.Events = append(log.Events, event)
-	}
 }
 
 func streamBinary(
@@ -741,36 +677,6 @@ const (
 	dictValueCodecBCDISODate uint64 = 2
 )
 
-func readJSONL(r io.Reader, source string) (Log, error) {
-	log := Log{
-		Source:  source,
-		Version: FormatVersion,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]DictKind{},
-	}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024), 8*1024*1024)
-	line := 0
-	for scanner.Scan() {
-		line++
-		raw := bytes.TrimSpace(scanner.Bytes())
-		if len(raw) == 0 {
-			continue
-		}
-		var event Event
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return log, fmt.Errorf("%s:%d: decode jsonl: %w", source, line, err)
-		}
-		event.Source = source
-		if event.Dictionary != nil {
-			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
-			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
-		}
-		log.Events = append(log.Events, event)
-	}
-	return log, scanner.Err()
-}
-
 func streamJSONL(r io.Reader, source string, handle func(Event, map[uint64]string) error) error {
 	log := Log{
 		Source:  source,
@@ -801,14 +707,4 @@ func streamJSONL(r io.Reader, source string, handle func(Event, map[uint64]strin
 		}
 	}
 	return scanner.Err()
-}
-
-func ExportJSONL(log Log, w io.Writer) error {
-	encoder := json.NewEncoder(w)
-	for _, event := range log.Events {
-		if err := encoder.Encode(event); err != nil {
-			return err
-		}
-	}
-	return nil
 }

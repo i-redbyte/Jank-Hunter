@@ -15,12 +15,9 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if err := jhlog.WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
-	log, err := jhlog.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
+	log := readJhlogForTest(t, path)
 
-	summary := Inspect("sample", []jhlog.Log{log})
+	summary := inspectLogsForTest("sample", []jhlog.Log{log})
 	if summary.UIAvgFPS <= 0 {
 		t.Fatalf("UIAvgFPS = %.2f, want > 0", summary.UIAvgFPS)
 	}
@@ -151,9 +148,9 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{path})
+	summary, err := inspectFilesForTest("sample", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if summary.EventCount == 0 || summary.HTTPCount != 3 {
 		t.Fatalf("unexpected summary: %+v", summary)
@@ -233,25 +230,25 @@ func TestInspectFilesFiltersRetainedObjectsByClass(t *testing.T) {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 
-	matching, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "CheckoutActivity"})
+	matching, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{ClassContains: "CheckoutActivity"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(class match) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(class match) error = %v", err)
 	}
 	if len(matching.MemoryLeaks) != 1 || matching.MemoryLeaks[0].ClassName != "com.app.checkout.CheckoutActivity" {
 		t.Fatalf("expected checkout leak with class filter: %+v", matching.MemoryLeaks)
 	}
 
-	nonMatching, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "FeedActivity"})
+	nonMatching, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{ClassContains: "FeedActivity"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(class miss) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(class miss) error = %v", err)
 	}
 	if len(nonMatching.MemoryLeaks) != 0 || nonMatching.Retained != 0 {
 		t.Fatalf("expected retained objects to be filtered by class: leaks=%+v retained=%d", nonMatching.MemoryLeaks, nonMatching.Retained)
 	}
 
-	ownerOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{OwnerContains: "CheckoutActivity"})
+	ownerOnly, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{OwnerContains: "CheckoutActivity"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(owner class name) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(owner class name) error = %v", err)
 	}
 	if ownerOnly.Retained != 0 {
 		t.Fatalf("owner filter should not match retained class names: retained=%d leaks=%+v", ownerOnly.Retained, ownerOnly.MemoryLeaks)
@@ -301,9 +298,9 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{path})
+	summary, err := inspectFilesForTest("sample", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if summary.DurationMS != 120_000 {
 		t.Fatalf("DurationMS = %d, want 120000", summary.DurationMS)
@@ -311,7 +308,7 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 }
 
 func TestInspectMultipleLogsSumsPerLogDuration(t *testing.T) {
-	summary := Inspect("sample", []jhlog.Log{
+	summary := inspectLogsForTest("sample", []jhlog.Log{
 		{Events: []jhlog.Event{
 			{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
 			{Type: jhlog.EventHTTP, TimeMS: 120_000, HTTP: &jhlog.HTTPEvent{DurationMS: 100, Status: jhlog.Status2xx}},
@@ -331,7 +328,7 @@ func TestInspectMultipleLogsSumsPerLogDuration(t *testing.T) {
 }
 
 func TestInspectTrafficUsesPerLogDelta(t *testing.T) {
-	summary := Inspect("sample", []jhlog.Log{
+	summary := inspectLogsForTest("sample", []jhlog.Log{
 		{Events: []jhlog.Event{
 			{Type: jhlog.EventContext, TimeMS: 0, Context: &jhlog.ContextEvent{RxBytes: 1_000, TxBytes: 2_000}},
 			{Type: jhlog.EventContext, TimeMS: 1_000, Context: &jhlog.ContextEvent{RxBytes: 1_250, TxBytes: 2_300}},
@@ -372,9 +369,9 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{path})
+	summary, err := inspectFilesForTest("sample", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if summary.HTTPP95MS != 1000 {
 		t.Fatalf("HTTPP95MS = %d, want 1000", summary.HTTPP95MS)
@@ -411,9 +408,9 @@ func TestInspectKeepsOwnerKindsSeparate(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{path})
+	summary, err := inspectFilesForTest("sample", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	byKind := map[string]OwnerStats{}
 	for _, owner := range summary.Owners {
@@ -480,9 +477,9 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{path})
+	summary, err := inspectFilesForTest("sample", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if summary.HTTPCount != total {
 		t.Fatalf("HTTPCount = %d, want %d", summary.HTTPCount, total)
@@ -553,9 +550,9 @@ func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
 		t.Fatalf("Close(second) error = %v", err)
 	}
 
-	summary, err := InspectFiles("sample", []string{first, second})
+	summary, err := inspectFilesForTest("sample", []string{first, second})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if len(summary.Flows) != 1 {
 		t.Fatalf("Flows = %+v, want exactly one HTTP flow", summary.Flows)
@@ -601,9 +598,9 @@ func TestInspectFilesAppliesRouteFilter(t *testing.T) {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 
-	summary, err := InspectFilesWithFilter("sample", []string{path}, Filter{RouteContains: "/checkout"})
+	summary, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{RouteContains: "/checkout"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter() error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest() error = %v", err)
 	}
 	if summary.HTTPCount != 1 {
 		t.Fatalf("HTTPCount = %d, want 1", summary.HTTPCount)
@@ -619,9 +616,9 @@ func TestInspectFilesWarnsWhenFilterKeepsGlobalSignals(t *testing.T) {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
 
-	summary, err := InspectFilesWithFilter("sample", []string{path}, Filter{RouteContains: "/checkout"})
+	summary, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{RouteContains: "/checkout"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter() error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest() error = %v", err)
 	}
 	if len(summary.Warnings) == 0 {
 		t.Fatalf("expected global signal warning")
@@ -650,9 +647,9 @@ func TestInspectFilesPropagatesStreamWarnings(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	summary, err := InspectFiles("partial", []string{path})
+	summary, err := inspectFilesForTest("partial", []string{path})
 	if err != nil {
-		t.Fatalf("InspectFiles() error = %v", err)
+		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if summary.EventCount == 0 {
 		t.Fatalf("expected preserved events")
@@ -698,9 +695,9 @@ func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	feedOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{ScreenContains: "FeedScreen"})
+	feedOnly, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{ScreenContains: "FeedScreen"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(screen) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(screen) error = %v", err)
 	}
 	if len(feedOnly.LogSpam) != 1 || feedOnly.LogSpam[0].Screen != "FeedScreen" {
 		t.Fatalf("screen filter leaked log spam: %+v", feedOnly.LogSpam)
@@ -712,9 +709,9 @@ func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 		t.Fatalf("screen filter leaked runtime calls: %+v", feedOnly.RuntimeCalls)
 	}
 
-	loggerOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{ClassContains: "FeedLogger"})
+	loggerOnly, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{ClassContains: "FeedLogger"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(class) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(class) error = %v", err)
 	}
 	if len(loggerOnly.LogSpam) != 1 || loggerOnly.LogSpam[0].Source != "FeedLogger.render" {
 		t.Fatalf("class filter did not select log source: %+v", loggerOnly.LogSpam)
@@ -723,9 +720,9 @@ func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 		t.Fatalf("class filter leaked non-matching signals: problems=%+v runtime=%+v", loggerOnly.ProblemWindows, loggerOnly.RuntimeCalls)
 	}
 
-	calleeOnly, err := InspectFilesWithFilter("sample", []string{path}, Filter{OwnerContains: "FeedCallee"})
+	calleeOnly, err := inspectFilesWithFilterForTest("sample", []string{path}, Filter{OwnerContains: "FeedCallee"})
 	if err != nil {
-		t.Fatalf("InspectFilesWithFilter(owner callee) error = %v", err)
+		t.Fatalf("inspectFilesWithFilterForTest(owner callee) error = %v", err)
 	}
 	if len(calleeOnly.RuntimeCalls) != 1 || calleeOnly.RuntimeCalls[0].Callee != "FeedCallee" {
 		t.Fatalf("owner filter did not match runtime callee: %+v", calleeOnly.RuntimeCalls)
@@ -748,7 +745,7 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 		},
 	}
 
-	summary := Inspect("jankstats", []jhlog.Log{log})
+	summary := inspectLogsForTest("jankstats", []jhlog.Log{log})
 	if len(summary.JankStats) != 2 {
 		t.Fatalf("unexpected jankstats metrics: %+v", summary.JankStats)
 	}
@@ -812,7 +809,7 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 		},
 	}
 
-	summary := Inspect("metrics", []jhlog.Log{log})
+	summary := inspectLogsForTest("metrics", []jhlog.Log{log})
 	gauges := namedValuesByName(summary.Gauges)
 	if got := gauges["memory.pss"]; got.Value != 166 || got.Extra != "avg=166 max=260 samples=6" {
 		t.Fatalf("memory.pss = %+v", got)
@@ -1064,4 +1061,49 @@ func warningsContain(warnings []string, fragment string) bool {
 		}
 	}
 	return false
+}
+
+func inspectLogsForTest(title string, logs []jhlog.Log) Summary {
+	collector := newCollector(title, len(logs), Options{})
+	for _, log := range logs {
+		collector.startLog()
+		collector.summary.Dictionary += len(log.Dict)
+		for _, event := range log.Events {
+			collector.add(log.Dict, event)
+		}
+		collector.finishLog()
+	}
+	return collector.finish()
+}
+
+func inspectFilesForTest(title string, paths []string) (Summary, error) {
+	return InspectFilesWithOptions(title, paths, Options{})
+}
+
+func inspectFilesWithFilterForTest(title string, paths []string, filter Filter) (Summary, error) {
+	return InspectFilesWithOptions(title, paths, Options{Filter: filter})
+}
+
+func readJhlogForTest(t *testing.T, path string) jhlog.Log {
+	t.Helper()
+
+	log := jhlog.Log{
+		Source:  path,
+		Version: jhlog.FormatVersion,
+		Dict:    map[uint64]string{},
+		Kinds:   map[uint64]jhlog.DictKind{},
+	}
+	warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
+		if event.Dictionary != nil {
+			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
+			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+		}
+		log.Events = append(log.Events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamFileWithWarnings(%q) error = %v", path, err)
+	}
+	log.Warnings = warnings
+	return log
 }

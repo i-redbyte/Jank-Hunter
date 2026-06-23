@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,13 +196,16 @@ func TestExportStreamsSampleJSONL(t *testing.T) {
 		t.Fatalf("runExport() error = %v", err)
 	}
 
-	log, err := jhlog.ReadFile(samplePath)
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
 	var expected bytes.Buffer
-	if err := jhlog.ExportJSONL(log, &expected); err != nil {
-		t.Fatalf("ExportJSONL() error = %v", err)
+	encoder := json.NewEncoder(&expected)
+	warnings, err := jhlog.StreamFileWithWarnings(samplePath, func(event jhlog.Event, _ map[uint64]string) error {
+		return encoder.Encode(event)
+	})
+	if err != nil {
+		t.Fatalf("StreamFileWithWarnings() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected export fixture warnings: %+v", warnings)
 	}
 	actual, err := os.ReadFile(exportPath)
 	if err != nil {
