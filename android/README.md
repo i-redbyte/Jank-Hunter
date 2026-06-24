@@ -404,6 +404,7 @@ plugins {
 
 ```kotlin
 jankHunter {
+    enabled = true
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("qa")
     autoInit = true
@@ -435,6 +436,16 @@ jankHunter {
     }
 }
 ```
+
+Если нужно временно собрать приложение без bytecode-внедрения Jank Hunter, выключите весь Gradle-вклад плагина:
+
+```kotlin
+jankHunter {
+    enabled = false
+}
+```
+
+При `enabled = false` плагин не регистрирует ASM transform, owner-map/class-graph/diagnostics tasks и generated runtime manifest для variant. Это build-time kill switch. Для остановки сбора уже внутри запущенного приложения используйте runtime-флаг `JankHunter.setRuntimeEnabled(false)`.
 
 Если модулей очень много:
 
@@ -511,7 +522,7 @@ jankHunter {
 }
 ```
 
-В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если задать `enabled = false`, SDK остается в легком режиме без HPROF.
+В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если задать `retainedHeapDump.enabled = false`, SDK остается в легком режиме без HPROF.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 

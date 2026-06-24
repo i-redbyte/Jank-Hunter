@@ -961,6 +961,7 @@ patch_module_build_file() {
   for build_type in "${BUILD_TYPES[@]}"; do
     jh_block+="    enabledBuildTypes.add(\"$build_type\")"$'\n'
   done
+  jh_block+=$'    enabled = true\n'
   jh_block+=$'    autoInit = true\n\n'
   jh_block+=$'    retainedHeapDump {\n'
   jh_block+=$'        enabled = true\n'

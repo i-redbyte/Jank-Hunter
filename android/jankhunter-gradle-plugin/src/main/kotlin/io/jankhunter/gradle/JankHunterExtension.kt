@@ -3,6 +3,7 @@ package io.jankhunter.gradle
 import org.gradle.api.Action
 
 open class JankHunterExtension {
+    var enabled: Boolean = true
     val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
     var autoInit: Boolean = true
     var logBucket: String = "session"

@@ -142,6 +142,7 @@ android {
 }
 
 jankHunter {
+    enabled = true
     enabledBuildTypes.add("debug")
     retainedHeapDump {
         enabled = true
@@ -185,6 +186,7 @@ android {
 }
 
 jankHunter {
+    enabled = true
     enabledBuildTypes.add("debug")
     retainedHeapDump {
         enabled = true

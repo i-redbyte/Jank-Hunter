@@ -20,6 +20,17 @@ class VariantBuildTypeMatcherTest {
     }
 
     @Test
+    fun disabledPluginDoesNotMatchEnabledBuildType() {
+        assertFalse(
+            VariantBuildTypeMatcher.isEnabled(
+                variantName = "debug",
+                enabledBuildTypes = listOf("debug"),
+                pluginEnabled = false,
+            ),
+        )
+    }
+
+    @Test
     fun identifiesReleaseLikeVariantsForSafetyGate() {
         assertTrue(VariantBuildTypeMatcher.isReleaseLike("release"))
         assertTrue(VariantBuildTypeMatcher.isReleaseLike("paidRelease"))

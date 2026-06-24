@@ -117,7 +117,7 @@ dependencies {
 }
 ```
 
-Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`. ASM умеет автоматически подключать слушатель OkHttp при `OkHttpClient.Builder.build()` и оборачивать `Handler.post*` так, чтобы `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks` продолжали работать с исходным `Runnable`.
+Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если нужно временно собрать проект без внедрения Jank Hunter, выставьте `jankHunter { enabled = false }`. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`. ASM умеет автоматически подключать слушатель OkHttp при `OkHttpClient.Builder.build()` и оборачивать `Handler.post*` так, чтобы `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks` продолжали работать с исходным `Runnable`.
 
 Подробности по Android лежат в [android/README.md](android/README.md), по CLI - в [cli/README.md](cli/README.md).
 

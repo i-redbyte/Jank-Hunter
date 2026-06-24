@@ -6,6 +6,17 @@ import org.junit.Test
 
 class JankHunterExtensionTest {
     @Test
+    fun extensionDslCanDisablePluginForBuild() {
+        val extension = JankHunterExtension()
+
+        assertEquals(true, extension.enabled)
+
+        extension.enabled = false
+
+        assertEquals(false, extension.enabled)
+    }
+
+    @Test
     fun instrumentationDslAcceptsPackageLists() {
         val instrumentation = JankHunterExtension.Instrumentation()
 

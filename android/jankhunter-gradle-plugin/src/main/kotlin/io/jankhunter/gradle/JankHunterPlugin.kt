@@ -43,7 +43,15 @@ class JankHunterPlugin : Plugin<Project> {
         }
 
         androidComponents.onVariants { variant ->
-            if (!extension.isVariantEnabled(variant.name)) return@onVariants
+            if (!extension.isVariantEnabled(variant.name)) {
+                if (!extension.enabled) {
+                    project.logger.lifecycle(
+                        "Jank Hunter variant {} skipped because jankHunter.enabled=false.",
+                        variant.name,
+                    )
+                }
+                return@onVariants
+            }
             val logBucket = normalizedLogBucket(extension.logBucket)
             val releaseVariant = VariantBuildTypeMatcher.isReleaseLike(variant.name)
             if (releaseVariant) {
@@ -260,7 +268,11 @@ class JankHunterPlugin : Plugin<Project> {
     }
 
     private fun JankHunterExtension.isVariantEnabled(variantName: String): Boolean {
-        return VariantBuildTypeMatcher.isEnabled(variantName, enabledBuildTypes)
+        return VariantBuildTypeMatcher.isEnabled(
+            variantName = variantName,
+            enabledBuildTypes = enabledBuildTypes,
+            pluginEnabled = enabled,
+        )
     }
 
     private fun String.capitalized(): String {
@@ -351,7 +363,12 @@ class JankHunterPlugin : Plugin<Project> {
 }
 
 internal object VariantBuildTypeMatcher {
-    fun isEnabled(variantName: String, enabledBuildTypes: Iterable<String>): Boolean {
+    fun isEnabled(
+        variantName: String,
+        enabledBuildTypes: Iterable<String>,
+        pluginEnabled: Boolean = true,
+    ): Boolean {
+        if (!pluginEnabled) return false
         val normalizedVariant = variantName.lowercase(Locale.US)
         return enabledBuildTypes
             .map { it.trim().lowercase(Locale.US) }
