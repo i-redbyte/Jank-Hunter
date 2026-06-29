@@ -116,6 +116,12 @@ jankhunter inspect logs/*.jhlog --out report.html
 jankhunter inspect logs/main/*.jhlog logs/remote/*.jhlog --out report.html
 ```
 
+Если в glob попало несколько Android session-файлов одного процесса
+(`session-<process>-<start>-<segment>.jhlog`), `inspect` по умолчанию оставляет только
+последнюю session-группу. Это защищает отчет от старых session-файлов, которые runtime
+мог сохранить в директории логов. Чтобы явно проанализировать все session-файлы вместе,
+передайте `--all-sessions`.
+
 Фильтры:
 
 ```bash
@@ -153,7 +159,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--heap-dump` строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Когда есть несколько близких путей, CLI выбирает primary path по actionability: app-holder, holder field, GC root category, leak pattern и reference matcher hints важнее шумной system-only цепочки близкого размера. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
+Если рядом с переданными `.jhlog` лежит `retained-*.hprof`, CLI подключит его автоматически. `--heap-dump` нужен, когда дамп лежит отдельно или нужно выбрать конкретный HPROF. HPROF строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Когда есть несколько близких путей, CLI выбирает primary path по actionability: app-holder, holder field, GC root category, leak pattern и reference matcher hints важнее шумной system-only цепочки близкого размера. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
 
 Как читать leak report:
 

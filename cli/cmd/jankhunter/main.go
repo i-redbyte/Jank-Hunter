@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
@@ -37,7 +38,7 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--all-sessions] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
@@ -75,6 +76,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	allSessions, remaining, err := takeBoolFlag(remaining, "all-sessions")
+	if err != nil {
+		return err
+	}
 	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
 		return err
@@ -83,6 +88,7 @@ func runInspect(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
+	paths, sessionWarnings := selectLatestSessionLogs(paths, allSessions)
 	options, err := builder.build()
 	if err != nil {
 		return err
@@ -99,6 +105,7 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
+	summary.Warnings = append(sessionWarnings, summary.Warnings...)
 	if jsonOut {
 		if err := printJSON(summary); err != nil {
 			return err
@@ -117,6 +124,78 @@ func runInspect(args []string) error {
 		printReportPath(jsonOut, out)
 	}
 	return nil
+}
+
+type sessionLogPath struct {
+	group   string
+	startMS uint64
+}
+
+func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []string) {
+	if allSessions || len(paths) < 2 {
+		return paths, nil
+	}
+	sessionByPath := map[string]sessionLogPath{}
+	latestByGroup := map[string]uint64{}
+	for _, path := range paths {
+		session, ok := parseSessionLogPath(path)
+		if !ok {
+			continue
+		}
+		sessionByPath[path] = session
+		if session.startMS > latestByGroup[session.group] {
+			latestByGroup[session.group] = session.startMS
+		}
+	}
+	if len(sessionByPath) == 0 {
+		return paths, nil
+	}
+	selected := make([]string, 0, len(paths))
+	skipped := make([]string, 0)
+	for _, path := range paths {
+		session, ok := sessionByPath[path]
+		if !ok || session.startMS == latestByGroup[session.group] {
+			selected = append(selected, path)
+			continue
+		}
+		skipped = append(skipped, path)
+	}
+	if len(skipped) == 0 {
+		return paths, nil
+	}
+	return selected, []string{
+		fmt.Sprintf(
+			"Inspect обнаружил несколько Jank Hunter session-файлов для одного процесса и оставил только последнюю session-группу; старые файлы исключены из отчета: %s. Чтобы анализировать все session-файлы вместе, передайте --all-sessions.",
+			strings.Join(skipped, ", "),
+		),
+	}
+}
+
+func parseSessionLogPath(path string) (sessionLogPath, bool) {
+	base := filepath.Base(path)
+	if !strings.HasSuffix(base, ".jhlog") {
+		return sessionLogPath{}, false
+	}
+	name := strings.TrimSuffix(base, ".jhlog")
+	parts := strings.Split(name, "-")
+	if len(parts) < 4 || parts[0] != "session" {
+		return sessionLogPath{}, false
+	}
+	startMS, err := strconv.ParseUint(parts[len(parts)-2], 10, 64)
+	if err != nil {
+		return sessionLogPath{}, false
+	}
+	if _, err := strconv.ParseUint(parts[len(parts)-1], 10, 64); err != nil {
+		return sessionLogPath{}, false
+	}
+	process := strings.Join(parts[1:len(parts)-2], "-")
+	if process == "" {
+		return sessionLogPath{}, false
+	}
+	return sessionLogPath{
+		group:   filepath.Dir(path) + string(os.PathSeparator) + "session-" + process,
+		startMS: startMS,
+	}, true
 }
 
 func runCompare(args []string) error {
@@ -540,8 +619,13 @@ func (h heapInputFlags) apply(title string, paths []string, options analyze.Opti
 func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
 	heapEvidencePaths := expandComma(heapEvidenceRaw)
 	heapDumpPaths := expandComma(heapDumpRaw)
+	autoDiscoveredHeapDumps := false
 	if len(heapEvidencePaths) == 0 && len(heapDumpPaths) == 0 {
-		return options, nil
+		heapDumpPaths = discoverHeapDumpsNearLogs(paths)
+		autoDiscoveredHeapDumps = len(heapDumpPaths) > 0
+		if !autoDiscoveredHeapDumps {
+			return options, nil
+		}
 	}
 	targetClasses := []string{}
 	if len(heapDumpPaths) > 0 {
@@ -557,8 +641,70 @@ func optionsWithHeapEvidence(title string, paths []string, options analyze.Optio
 	if err != nil {
 		return options, err
 	}
+	if autoDiscoveredHeapDumps {
+		evidence.Warnings = append(
+			[]string{
+				fmt.Sprintf(
+					"CLI автоматически подключил HPROF рядом с Jank Hunter логами: %s. Чтобы использовать другой дамп памяти, передайте --heap-dump явно.",
+					strings.Join(heapDumpPaths, ", "),
+				),
+			},
+			evidence.Warnings...,
+		)
+	}
 	options.HeapEvidence = evidence
 	return options, nil
+}
+
+func discoverHeapDumpsNearLogs(paths []string) []string {
+	logDirs := linkedStringSet{}
+	for _, path := range paths {
+		if strings.EqualFold(filepath.Ext(path), ".jhlog") {
+			logDirs.add(filepath.Dir(path))
+		}
+	}
+	if len(logDirs.values) == 0 {
+		return nil
+	}
+	heapDumps := linkedStringSet{}
+	for _, dir := range logDirs.values {
+		addHeapDumpMatches(&heapDumps, filepath.Join(dir, "*.hprof"))
+		addHeapDumpMatches(&heapDumps, filepath.Join(dir, "heap-dumps", "*.hprof"))
+	}
+	return heapDumps.values
+}
+
+func addHeapDumpMatches(out *linkedStringSet, pattern string) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+	for _, match := range matches {
+		info, err := os.Stat(match)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		out.add(match)
+	}
+}
+
+type linkedStringSet struct {
+	seen   map[string]struct{}
+	values []string
+}
+
+func (s *linkedStringSet) add(value string) {
+	if value == "" {
+		return
+	}
+	if s.seen == nil {
+		s.seen = map[string]struct{}{}
+	}
+	if _, ok := s.seen[value]; ok {
+		return
+	}
+	s.seen[value] = struct{}{}
+	s.values = append(s.values, value)
 }
 
 func buildLogReports(group string, paths []string, options analyze.Options) ([]report.LogReport, error) {

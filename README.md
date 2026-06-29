@@ -179,7 +179,7 @@ CLI строит два основных режима:
 - `compare` - baseline против candidate, чтобы увидеть регрессии, когорты и конкретные места, где стало хуже.
 - `scorecard` - JSON-оценка validation readiness: качество данных, heap actionability, стабильность leak-compare, CI-ready статус и следующие действия.
 
-Рядом с основным HTML создаются дополнительные автономные страницы: `report-math.html` / `compare-math.html`, `report-leaks.html` / `compare-leaks.html`, а при наличии owner/flow-сигналов еще `report-influence.html` / `compare-influence.html`. Отчет утечек работает в light mode без HPROF и автоматически переходит в heap mode при `--heap-dump` или `--heap-evidence`: там появляется Leak Explorer с цепочкой GC root -> holder -> retained object, alternative paths, чеклистом расследования, chain fingerprint и сравнением new/worse/same/better/resolved.
+Рядом с основным HTML создаются дополнительные автономные страницы: `report-math.html` / `compare-math.html`, `report-leaks.html` / `compare-leaks.html`, а при наличии owner/flow-сигналов еще `report-influence.html` / `compare-influence.html`. Отчет утечек работает в light mode без HPROF и автоматически переходит в heap mode, если рядом с `.jhlog` лежит `retained-*.hprof` или передан `--heap-dump` / `--heap-evidence`: там появляется Leak Explorer с цепочкой GC root -> holder -> retained object, alternative paths, чеклистом расследования, chain fingerprint и сравнением new/worse/same/better/resolved.
 
 ## Релизы
 

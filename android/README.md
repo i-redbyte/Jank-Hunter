@@ -533,11 +533,11 @@ jankHunter {
 <meta-data android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms" android:value="30000" />
 ```
 
-При подтвержденном retained object runtime сохранит `.hprof` в `files/jankhunter/heap-dumps/` и запишет counters/gauges `jankhunter.heap_dump.*` в `.jhlog`. Дальше передайте дамп в CLI:
+При подтвержденном retained object runtime сохранит `retained-*.hprof` рядом с `.jhlog` в `files/jankhunter/` и запишет counters/gauges `jankhunter.heap_dump.*` в `.jhlog`. Если HPROF лежит рядом с логами, CLI подключит его автоматически; для внешнего дампа передайте путь явно:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
-  --heap-dump heap-dumps/retained-*.hprof \
+  --heap-dump retained-*.hprof \
   --out report.html
 ```
 

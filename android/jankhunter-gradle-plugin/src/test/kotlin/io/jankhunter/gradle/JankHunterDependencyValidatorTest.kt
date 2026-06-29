@@ -40,4 +40,31 @@ class JankHunterDependencyValidatorTest {
         assertTrue(JankHunterDependencyValidator.hasOkHttp(components))
         assertTrue(JankHunterDependencyValidator.hasJankHunterOkHttp3(components))
     }
+
+    @Test
+    fun detectsFileHelperDependency() {
+        val components = listOf(
+            "com.squareup.okhttp3:okhttp:3.12.13",
+            "jankhunter-okhttp3-1.0.0.aar",
+        )
+
+        assertTrue(JankHunterDependencyValidator.hasOkHttp(components))
+        assertTrue(JankHunterDependencyValidator.hasJankHunterOkHttp3(components))
+    }
+
+    @Test
+    fun includesBuildTypeDependencyConfigurationsForFlavorVariant() {
+        val configurationNames = JankHunterDependencyValidator.candidateConfigurationNames(
+            variantName = "vkteamsStoreDebug",
+            availableConfigurationNames = listOf(
+                "debugImplementation",
+                "debugRuntimeOnly",
+                "releaseImplementation",
+            ),
+        )
+
+        assertTrue(configurationNames.contains("debugImplementation"))
+        assertTrue(configurationNames.contains("debugRuntimeOnly"))
+        assertFalse(configurationNames.contains("releaseImplementation"))
+    }
 }

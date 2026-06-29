@@ -39,17 +39,20 @@ class MetricAggregatorTest {
     }
 
     @Test
-    fun reportsDroppedKeysWhenHotMetricCardinalityExceedsLimit() {
-        val aggregator = MetricAggregator(maxKeys = 1)
+    fun evictsLeastRecentlyUsedKeysWhenHotMetricCardinalityExceedsLimit() {
+        val aggregator = MetricAggregator(maxKeys = 2)
         val sink = RecordingSink()
 
         aggregator.counter("first", 1)
         aggregator.counter("second", 1)
-        aggregator.gauge("third", 10)
+        aggregator.counter("first", 1)
+        aggregator.counter("third", 1)
         aggregator.flush(sink)
 
-        assertEquals(1L, sink.counters["first"])
-        assertEquals(2L, sink.counters["jankhunter.metric_aggregation.dropped.count"])
+        assertEquals(2L, sink.counters["first"])
+        assertEquals(1L, sink.counters["third"])
+        assertEquals(null, sink.counters["second"])
+        assertEquals(1L, sink.counters["jankhunter.metric_aggregation.dropped.count"])
     }
 
     @Test

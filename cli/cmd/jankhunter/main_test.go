@@ -70,6 +70,70 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	}
 }
 
+func TestSelectLatestSessionLogsKeepsLatestSessionPerProcess(t *testing.T) {
+	dir := t.TempDir()
+	oldMain1 := filepath.Join(dir, "session-main-1000-1.jhlog")
+	oldMain2 := filepath.Join(dir, "session-main-1000-2.jhlog")
+	newMain1 := filepath.Join(dir, "session-main-2000-1.jhlog")
+	newMain2 := filepath.Join(dir, "session-main-2000-2.jhlog")
+	oldRemote := filepath.Join(dir, "session-remote-process-1500-1.jhlog")
+	newRemote := filepath.Join(dir, "session-remote-process-2500-1.jhlog")
+	daily := filepath.Join(dir, "daily-main-2026-06-30-1.jhlog")
+
+	paths := []string{oldMain1, oldMain2, newMain1, newMain2, oldRemote, newRemote, daily}
+	selected, warnings := selectLatestSessionLogs(paths, false)
+
+	expected := []string{newMain1, newMain2, newRemote, daily}
+	if !sameStrings(selected, expected) {
+		t.Fatalf("selected = %#v, want %#v", selected, expected)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %#v, want one warning", warnings)
+	}
+	for _, skipped := range []string{oldMain1, oldMain2, oldRemote} {
+		if !strings.Contains(warnings[0], skipped) {
+			t.Fatalf("warning %q does not mention skipped file %q", warnings[0], skipped)
+		}
+	}
+
+	all, warnings := selectLatestSessionLogs(paths, true)
+	if !sameStrings(all, paths) {
+		t.Fatalf("all sessions = %#v, want %#v", all, paths)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("all sessions warnings = %#v, want none", warnings)
+	}
+}
+
+func TestDiscoverHeapDumpsNearLogs(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "session-main-2000-1.jhlog")
+	if err := os.WriteFile(logPath, []byte("jhlog"), 0o600); err != nil {
+		t.Fatalf("WriteFile(log) error = %v", err)
+	}
+	rootHeap := filepath.Join(dir, "retained-1.hprof")
+	if err := os.WriteFile(rootHeap, []byte("hprof"), 0o600); err != nil {
+		t.Fatalf("WriteFile(root heap) error = %v", err)
+	}
+	heapDumpDir := filepath.Join(dir, "heap-dumps")
+	if err := os.Mkdir(heapDumpDir, 0o700); err != nil {
+		t.Fatalf("Mkdir(heap-dumps) error = %v", err)
+	}
+	legacyHeap := filepath.Join(heapDumpDir, "retained-legacy.hprof")
+	if err := os.WriteFile(legacyHeap, []byte("hprof"), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy heap) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("skip"), 0o600); err != nil {
+		t.Fatalf("WriteFile(notes) error = %v", err)
+	}
+
+	discovered := discoverHeapDumpsNearLogs([]string{logPath, logPath})
+	expected := []string{rootHeap, legacyHeap}
+	if !sameStrings(discovered, expected) {
+		t.Fatalf("heap dumps = %#v, want %#v", discovered, expected)
+	}
+}
+
 func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	var buffer bytes.Buffer
 	registry := newCommandRegistry(&buffer)
@@ -83,6 +147,18 @@ func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	if err := registry.run([]string{"missing"}); err == nil {
 		t.Fatal("registry accepted unknown command")
 	}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestProblemsExportsCSVAndJSON(t *testing.T) {
