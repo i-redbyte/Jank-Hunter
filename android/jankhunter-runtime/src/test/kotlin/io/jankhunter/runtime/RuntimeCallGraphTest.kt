@@ -30,7 +30,6 @@ class RuntimeCallGraphTest {
             directory,
             JankHunterConfig.builder()
                 .autoStartCollectors(false)
-                .logCompressionEnabled(false)
                 .build(),
             "main",
         )
@@ -68,7 +67,6 @@ class RuntimeCallGraphTest {
             JankHunterConfig.builder()
                 .autoStartCollectors(false)
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build(),
             "main",
         )

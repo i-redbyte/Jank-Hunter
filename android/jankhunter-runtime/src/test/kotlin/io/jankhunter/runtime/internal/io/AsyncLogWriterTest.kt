@@ -2,10 +2,15 @@ package io.jankhunter.runtime.internal.io
 
 import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.JankHunterLogBucket
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.EOFException
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,7 +25,6 @@ class AsyncLogWriterTest {
             val config = JankHunterConfig.builder()
                 .maxQueueSize(512)
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
 
@@ -29,12 +33,7 @@ class AsyncLogWriterTest {
             }
             asyncWriter.close()
 
-            val text = directory
-                .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
-                .orEmpty()
-                .joinToString(separator = "\n") { file ->
-                    file.readBytes().toString(StandardCharsets.ISO_8859_1)
-                }
+            val text = logText(directory)
             assertTrue(text.contains("closequeue0"))
             assertTrue(text.contains("closequeue127"))
         } finally {
@@ -49,7 +48,6 @@ class AsyncLogWriterTest {
             val config = JankHunterConfig.builder()
                 .maxQueueSize(16)
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
             val actionStarted = CountDownLatch(1)
@@ -90,7 +88,6 @@ class AsyncLogWriterTest {
             val config = JankHunterConfig.builder()
                 .maxQueueSize(16)
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
             val actionStarted = CountDownLatch(1)
@@ -121,7 +118,6 @@ class AsyncLogWriterTest {
         try {
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
 
@@ -130,12 +126,7 @@ class AsyncLogWriterTest {
             assertTrue(asyncWriter.flushBlocking())
             asyncWriter.close()
 
-            val text = directory
-                .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
-                .orEmpty()
-                .joinToString(separator = "\n") { file ->
-                    file.readBytes().toString(StandardCharsets.ISO_8859_1)
-            }
+            val text = logText(directory)
             assertTrue(text.contains("jankhunter.metric.invalid_negative.counter.count"))
             assertTrue(text.contains("jankhunter.metric.invalid_negative.gauge.count"))
             assertFalse(text.contains("badnegativecounter"))
@@ -151,7 +142,6 @@ class AsyncLogWriterTest {
         try {
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(1)
-                .logCompressionEnabled(false)
                 .logBucket(JankHunterLogBucket.DAILY)
                 .build()
             val nowMs = { 1_800_000_000_000L }
@@ -186,7 +176,6 @@ class AsyncLogWriterTest {
             var nowMs = 1_800_000_000_000L
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(1)
-                .logCompressionEnabled(false)
                 .logBucket(JankHunterLogBucket.DAILY)
                 .build()
 
@@ -216,7 +205,6 @@ class AsyncLogWriterTest {
             var nowMs = 1_800_000_000_000L
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(1)
-                .logCompressionEnabled(false)
                 .logBucket(JankHunterLogBucket.SESSION)
                 .build()
 
@@ -240,14 +228,32 @@ class AsyncLogWriterTest {
         }
     }
 
-    private fun logText(directory: java.io.File): String {
+    private fun logText(directory: File): String {
         return logFiles(directory)
             .joinToString(separator = "\n") { file ->
-                file.readBytes().toString(StandardCharsets.ISO_8859_1)
+                logFileText(file)
             }
     }
 
-    private fun logFiles(directory: java.io.File): List<java.io.File> {
+    private fun logFileText(file: File): String {
+        val bytes = file.readBytes()
+        if (bytes.size <= MAGIC_SIZE) return ""
+        val gzipIn = GZIPInputStream(ByteArrayInputStream(bytes, MAGIC_SIZE, bytes.size - MAGIC_SIZE))
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        try {
+            while (true) {
+                val read = gzipIn.read(buffer)
+                if (read < 0) break
+                out.write(buffer, 0, read)
+            }
+        } catch (_: EOFException) {
+            // flushBlocking can expose a valid gzip prefix before close writes the trailer.
+        }
+        return String(out.toByteArray(), StandardCharsets.ISO_8859_1)
+    }
+
+    private fun logFiles(directory: File): List<File> {
         return directory
             .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
             .orEmpty()
@@ -267,19 +273,13 @@ class AsyncLogWriterTest {
         try {
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(60_000)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
 
             asyncWriter.counter("before.close", 1)
             assertTrue(asyncWriter.flushBlocking())
 
-            val text = directory
-                .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
-                .orEmpty()
-                .joinToString(separator = "\n") { file ->
-                    file.readBytes().toString(StandardCharsets.ISO_8859_1)
-                }
+            val text = logText(directory)
             assertTrue(text.contains("before.close"))
 
             asyncWriter.close()
@@ -294,7 +294,6 @@ class AsyncLogWriterTest {
         try {
             val config = JankHunterConfig.builder()
                 .flushIntervalMs(1)
-                .logCompressionEnabled(false)
                 .build()
             val asyncWriter = AsyncLogWriter.open(directory, config, "main")
             val writerField = AsyncLogWriter::class.java.getDeclaredField("writer").apply {
@@ -306,16 +305,15 @@ class AsyncLogWriterTest {
             assertTrue(asyncWriter.flushBlocking())
             asyncWriter.close()
 
-            val text = directory
-                .listFiles { file -> file.isFile && file.name.endsWith(".jhlog") }
-                .orEmpty()
-                .joinToString(separator = "\n") { file ->
-                    file.readBytes().toString(StandardCharsets.ISO_8859_1)
-                }
+            val text = logText(directory)
             assertTrue(text.contains("jankhunter.writer_io_error.count"))
             assertTrue(text.contains("afterclosedwriter"))
         } finally {
             directory.deleteRecursively()
         }
+    }
+
+    private companion object {
+        const val MAGIC_SIZE = 8
     }
 }

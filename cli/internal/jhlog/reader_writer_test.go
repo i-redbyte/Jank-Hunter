@@ -3,6 +3,7 @@ package jhlog
 import (
 	"bytes"
 	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,55 +86,78 @@ func TestFormatMagicGolden(t *testing.T) {
 	}
 }
 
-func TestStreamFileSupportsCompressedBinaryBody(t *testing.T) {
-	rawPath := filepath.Join(t.TempDir(), "raw.jhlog")
-	if err := WriteSample(rawPath); err != nil {
+func readCompressedBody(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	if len(raw) < len(Magic) {
+		t.Fatalf("file too small for magic: %d", len(raw))
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(raw[len(Magic):]))
+	if err != nil {
+		t.Fatalf("NewReader(%s body) error = %v", path, err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll(%s body) error = %v", path, err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close(%s gzip body) error = %v", path, err)
+	}
+	return body
+}
+
+func TestStreamFileRequiresCompressedBinaryBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.jhlog")
+	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
 	}
-	raw, err := os.ReadFile(rawPath)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile(raw) error = %v", err)
+		t.Fatalf("ReadFile(sample) error = %v", err)
 	}
 	if len(raw) <= len(Magic) {
 		t.Fatalf("expected sample body")
 	}
-
-	compressedPath := filepath.Join(t.TempDir(), "compressed.jhlog")
-	file, err := os.Create(compressedPath)
-	if err != nil {
-		t.Fatalf("Create(compressed) error = %v", err)
-	}
-	if _, err := file.Write(Magic); err != nil {
-		t.Fatalf("Write(magic) error = %v", err)
-	}
-	gzipWriter := gzip.NewWriter(file)
-	if _, err := gzipWriter.Write(raw[len(Magic):]); err != nil {
-		t.Fatalf("Write(gzip body) error = %v", err)
-	}
-	if err := gzipWriter.Close(); err != nil {
-		t.Fatalf("Close(gzip) error = %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close(file) error = %v", err)
+	if raw[len(Magic)] != 0x1f || raw[len(Magic)+1] != 0x8b {
+		t.Fatalf("sample body is not gzip-compressed")
 	}
 
-	log, err := readLog(compressedPath)
+	log, err := readLog(path)
 	if err != nil {
-		t.Fatalf("readLog(compressed) error = %v", err)
+		t.Fatalf("readLog(sample) error = %v", err)
 	}
 	if len(log.Events) == 0 || log.Dict[20] != "GET /feed" {
 		t.Fatalf("compressed body did not decode sample log: events=%d dict[20]=%q", len(log.Events), log.Dict[20])
 	}
 
 	streamed := 0
-	if err := StreamFile(compressedPath, func(Event, map[uint64]string) error {
+	if err := StreamFile(path, func(Event, map[uint64]string) error {
 		streamed++
 		return nil
 	}); err != nil {
-		t.Fatalf("StreamFile(compressed) error = %v", err)
+		t.Fatalf("StreamFile(sample) error = %v", err)
 	}
 	if streamed != len(log.Events) {
 		t.Fatalf("streamed events = %d, want %d", streamed, len(log.Events))
+	}
+}
+
+func TestStreamFileRejectsUncompressedBinaryBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "uncompressed.jhlog")
+	raw := append(append([]byte{}, Magic...), byte(EventSession))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := readLog(path)
+	if err == nil {
+		t.Fatalf("expected uncompressed body error")
+	}
+	if !strings.Contains(err.Error(), "compressed jhlog body") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -488,17 +512,14 @@ func TestDictionaryValueCodecsDecodeBCD(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(raw) error = %v", err)
-	}
-	if bytes.Contains(raw, []byte("1234567890123")) {
+	body := readCompressedBody(t, path)
+	if bytes.Contains(body, []byte("1234567890123")) {
 		t.Fatalf("decimal dictionary value was written as raw UTF-8")
 	}
-	if bytes.Contains(raw, []byte("2026-06-13")) {
+	if bytes.Contains(body, []byte("2026-06-13")) {
 		t.Fatalf("ISO date dictionary value was written as raw UTF-8")
 	}
-	if !bytes.Contains(raw, []byte("com.myapp.feature.FeedRepository")) {
+	if !bytes.Contains(body, []byte("com.myapp.feature.FeedRepository")) {
 		t.Fatalf("ordinary text dictionary value should remain UTF-8")
 	}
 

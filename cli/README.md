@@ -453,7 +453,7 @@ jankhunter inspect logs/*.jhlog \
 - `context.battery_temp_deci_c` хранится signed zigzag-varint, поэтому отрицательная температура батареи остается корректной величиной;
 - metric events для gauges несут `value/count/sum/max/mode`, чтобы CLI мог объединять Android-side flush-окна взвешенно, а не усреднять уже усредненные значения;
 - числовые строки и даты в словаре BCD-пакуются, когда это короче обычной строки;
-- Android runtime по умолчанию сжимает тело файла gzip-потоком после magic-заголовка, CLI читает и сжатый, и старый несжатый body;
+- Android runtime всегда сжимает тело файла gzip-потоком после magic-заголовка с максимальным уровнем deflate, CLI ожидает gzip-body для текущего бинарного формата;
 - события Handler/OkHttp не пишут повторяющиеся строки: owner/route/flow остаются в словаре, а события ссылаются на короткие ID.
 
 Gauge aggregation mode хранится рядом с metric event:
@@ -465,7 +465,7 @@ Gauge aggregation mode хранится рядом с metric event:
 
 Пользовательские negative gauges сейчас не пишутся как signed metric values: runtime считает их ошибочным input и увеличивает `jankhunter.metric.invalid_negative.gauge.count`. Если нужна отрицательная физическая величина, она должна иметь отдельный typed event или signed context field, как `battery_temp_deci_c`.
 
-До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=7`.
+До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=8`.
 
 ## Проверки
 

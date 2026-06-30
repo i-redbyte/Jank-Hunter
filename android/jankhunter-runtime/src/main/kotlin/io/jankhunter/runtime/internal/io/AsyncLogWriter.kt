@@ -486,7 +486,6 @@ internal class AsyncLogWriter private constructor(
             file,
             config.maxDictionaryEntries(),
             config.maxDictionaryValueBytes(),
-            config.logCompressionEnabled(),
         )
     }
 

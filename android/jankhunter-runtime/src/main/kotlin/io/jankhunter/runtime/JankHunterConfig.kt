@@ -52,7 +52,6 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxQueueSize = builder.maxQueueSize
     private val maxLogBytes = builder.maxLogBytes
     private val maxLogDirectoryBytes = builder.maxLogDirectoryBytes
-    private val logCompressionEnabled = builder.logCompressionEnabled
     private val logBucket = builder.logBucket
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
@@ -130,8 +129,6 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxLogDirectoryBytes(): Long = maxLogDirectoryBytes.coerceAtLeast(1L)
 
-    fun logCompressionEnabled(): Boolean = logCompressionEnabled
-
     fun logBucket(): JankHunterLogBucket = logBucket
 
     fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
@@ -207,7 +204,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxQueueSize = 2048
         internal var maxLogBytes = 5L * 1024L * 1024L
         internal var maxLogDirectoryBytes = 25L * 1024L * 1024L
-        internal var logCompressionEnabled = true
         internal var logBucket = JankHunterLogBucket.SESSION
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = 256
@@ -285,8 +281,6 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun maxLogDirectoryBytes(value: Long) = apply { maxLogDirectoryBytes = value }
 
-        fun logCompressionEnabled(value: Boolean) = apply { logCompressionEnabled = value }
-
         fun logBucket(value: JankHunterLogBucket) = apply { logBucket = value }
 
         fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
@@ -363,7 +357,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
         const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
         const val META_MAX_LOG_DIRECTORY_BYTES = "io.jankhunter.max_log_directory_bytes"
-        const val META_LOG_COMPRESSION_ENABLED = "io.jankhunter.log_compression_enabled"
         const val META_LOG_BUCKET = "io.jankhunter.log_bucket"
         const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
         const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
@@ -427,7 +420,6 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .maxLogDirectoryBytes(
                     metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L),
                 )
-                .logCompressionEnabled(metadataBoolean(metadata, META_LOG_COMPRESSION_ENABLED, true))
                 .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.SESSION))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(metadataInt(metadata, META_MAX_DICTIONARY_VALUE_BYTES, 256))

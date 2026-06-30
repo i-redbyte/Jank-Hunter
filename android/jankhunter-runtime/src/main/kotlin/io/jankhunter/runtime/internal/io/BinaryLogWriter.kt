@@ -8,6 +8,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 import kotlin.math.max
 
@@ -15,11 +16,10 @@ class BinaryLogWriter(
     internal val file: File,
     maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
     maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
-    compressionEnabled: Boolean = false,
 ) : Closeable {
     private val fileOut = FileOutputStream(file, true)
     private val bufferedOut = BufferedOutputStream(fileOut, 32 * 1024)
-    private val compressedOut: GZIPOutputStream?
+    private val compressedOut: GZIPOutputStream
     private val out: OutputStream
     private val dictionary = DictionaryIds(maxDictionaryEntries, maxDictionaryValueBytes)
     private var lastTimestampMs = 0L
@@ -33,12 +33,8 @@ class BinaryLogWriter(
             bufferedOut.flush()
             logicalBytesWritten += MAGIC.size
         }
-        compressedOut = if (compressionEnabled) {
-            GZIPOutputStream(bufferedOut, IO_BUFFER_BYTES, true)
-        } else {
-            null
-        }
-        out = compressedOut ?: bufferedOut
+        compressedOut = BestCompressionGzipOutputStream(bufferedOut, IO_BUFFER_BYTES)
+        out = compressedOut
     }
 
     @Synchronized
@@ -70,24 +66,24 @@ class BinaryLogWriter(
         deviceRooted: Boolean,
         appForeground: Boolean = true,
     ) {
-        val appVersionId = idFor(DICT_APP_VERSION, appVersion)
-        val buildId = idFor(DICT_BUILD, build)
-        val deviceId = idFor(DICT_DEVICE, device)
-        val processId = idFor(DICT_PROCESS, processName)
-        val androidReleaseId = idFor(DICT_GENERIC, androidRelease)
-        val securityPatchId = idFor(DICT_GENERIC, securityPatch)
-        val primaryAbiId = idFor(DICT_GENERIC, primaryAbi)
-        val supportedAbisId = idFor(DICT_GENERIC, supportedAbis)
-        val manufacturerId = idFor(DICT_GENERIC, manufacturer)
-        val brandId = idFor(DICT_GENERIC, brand)
-        val hardwareId = idFor(DICT_GENERIC, hardware)
-        val boardId = idFor(DICT_GENERIC, board)
-        val productId = idFor(DICT_GENERIC, product)
+        val appVersionId = optionalIdFor(DICT_APP_VERSION, appVersion)
+        val buildId = optionalIdFor(DICT_BUILD, build)
+        val deviceId = optionalIdFor(DICT_DEVICE, device)
+        val processId = optionalIdFor(DICT_PROCESS, processName)
+        val androidReleaseId = optionalIdFor(DICT_GENERIC, androidRelease)
+        val securityPatchId = optionalIdFor(DICT_GENERIC, securityPatch)
+        val primaryAbiId = optionalIdFor(DICT_GENERIC, primaryAbi)
+        val supportedAbisId = optionalIdFor(DICT_GENERIC, supportedAbis)
+        val manufacturerId = optionalIdFor(DICT_GENERIC, manufacturer)
+        val brandId = optionalIdFor(DICT_GENERIC, brand)
+        val hardwareId = optionalIdFor(DICT_GENERIC, hardware)
+        val boardId = optionalIdFor(DICT_GENERIC, board)
+        val productId = optionalIdFor(DICT_GENERIC, product)
         val payload = Payload()
             .uvarint(appVersionId)
             .uvarint(buildId)
             .uvarint(deviceId)
-            .uvarint(sdkInt.toLong())
+            .uvarint(nonNegative(sdkInt.toLong()))
             .uvarint(processId)
             .uvarint(androidReleaseId)
             .uvarint(securityPatchId)
@@ -135,7 +131,7 @@ class BinaryLogWriter(
             .uvarint(networkKind.coerceIn(0, 5).toLong())
             .uvarint(batteryPct.coerceIn(0, 100).toLong())
             .uvarint(nonNegative(availMemoryKb))
-            .uvarint(batteryState.toLong())
+            .uvarint(nonNegative(batteryState.toLong()))
             .svarint(batteryTempDeciC.toLong())
             .uvarint(nonNegative(rxBytes))
             .uvarint(nonNegative(txBytes))
@@ -397,13 +393,21 @@ class BinaryLogWriter(
         mode: MetricAggregationMode,
     ) {
         val metricId = idFor(DICT_METRIC, name)
+        val values = longArrayOf(metricId, value, count, sum, max, mode.wireValue)
+        val defaultMode = if (eventType == EVENT_GAUGE) {
+            MetricAggregationMode.AVERAGE.wireValue
+        } else {
+            MetricAggregationMode.UNKNOWN.wireValue
+        }
+        val defaults = longArrayOf(0L, 0L, 1L, value, value, defaultMode)
+        var last = values.lastIndex
+        while (last >= 2 && values[last] == defaults[last]) {
+            last--
+        }
         val payload = Payload()
-            .uvarint(metricId)
-            .uvarint(value)
-            .uvarint(count)
-            .uvarint(sum)
-            .uvarint(max)
-            .uvarint(mode.wireValue)
+        for (index in 0..last) {
+            payload.uvarint(values[index])
+        }
         record(eventType, 0L, payload)
     }
 
@@ -418,6 +422,11 @@ class BinaryLogWriter(
             record(EVENT_DICTIONARY, 0L, payload)
         }
         return result.id
+    }
+
+    private fun optionalIdFor(kind: Int, rawValue: String?): Long {
+        val value = rawValue?.takeIf { it.isNotEmpty() } ?: return 0L
+        return idFor(kind, value)
     }
 
     private fun record(eventType: Int, flags: Long, payload: Payload) {
@@ -454,7 +463,7 @@ class BinaryLogWriter(
         if (closed) return
         closed = true
         try {
-            compressedOut?.finish()
+            compressedOut.finish()
             out.flush()
         } finally {
             out.close()
@@ -467,6 +476,12 @@ class BinaryLogWriter(
         val flowId: Long,
         val stepId: Long,
     )
+
+    private class BestCompressionGzipOutputStream(out: OutputStream, size: Int) : GZIPOutputStream(out, size, true) {
+        init {
+            def.setLevel(Deflater.BEST_COMPRESSION)
+        }
+    }
 
     private class Payload {
         private var data = ByteArray(64)
@@ -484,7 +499,7 @@ class BinaryLogWriter(
         }
 
         fun svarint(value: Long): Payload {
-            return uvarint((value shl 1) xor (value shr 63))
+            return uvarint(svarintValue(value))
         }
 
         fun optionalContext(flags: Long, screenId: Long, ownerId: Long, flowId: Long, stepId: Long): Payload {
@@ -672,6 +687,10 @@ class BinaryLogWriter(
         private const val DICTIONARY_VALUE_BCD_DECIMAL = 1
         private const val DICTIONARY_VALUE_BCD_ISO_DATE = 2
 
+        private fun svarintValue(value: Long): Long {
+            return (value shl 1) xor (value shr 63)
+        }
+
         private fun writeUvarint(out: OutputStream, rawValue: Long): Int {
             var value = rawValue.coerceAtLeast(0L)
             var count = 0
@@ -763,7 +782,7 @@ class BinaryLogWriter(
             return flags
         }
 
-        private const val FORMAT_VERSION = 7
+        private const val FORMAT_VERSION = 8
         private const val IO_BUFFER_BYTES = 32 * 1024
         private const val COMPACT_EVENT_TYPE_MASK = 0x0f
         private const val COMPACT_HEADER_HAS_FLAGS = 1 shl 4

@@ -2,6 +2,7 @@ package jhlog
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 
 type Writer struct {
 	w           io.Writer
+	closeBody   io.Closer
 	lastMS      uint64
 	lastContext contextTuple
 	hasContext  bool
@@ -19,10 +21,14 @@ func NewWriter(w io.Writer) (*Writer, error) {
 	if _, err := w.Write(Magic); err != nil {
 		return nil, err
 	}
-	return &Writer{w: w}, nil
+	gzipWriter, err := gzip.NewWriterLevel(w, gzip.BestCompression)
+	if err != nil {
+		return nil, err
+	}
+	return &Writer{w: gzipWriter, closeBody: gzipWriter}, nil
 }
 
-func Create(path string) (*os.File, *Writer, error) {
+func Create(path string) (io.Closer, *Writer, error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return nil, nil, err
@@ -32,7 +38,21 @@ func Create(path string) (*os.File, *Writer, error) {
 		_ = file.Close()
 		return nil, nil, err
 	}
-	return file, writer, nil
+	return logFile{file: file, writer: writer}, writer, nil
+}
+
+type logFile struct {
+	file   *os.File
+	writer *Writer
+}
+
+func (f logFile) Close() error {
+	bodyErr := f.writer.Close()
+	fileErr := f.file.Close()
+	if bodyErr != nil {
+		return bodyErr
+	}
+	return fileErr
 }
 
 func (w *Writer) WriteEvent(event Event) error {
@@ -56,6 +76,15 @@ func (w *Writer) WriteEvent(event Event) error {
 	}
 	w.rememberContext(event)
 	return nil
+}
+
+func (w *Writer) Close() error {
+	if w.closeBody == nil {
+		return nil
+	}
+	err := w.closeBody.Close()
+	w.closeBody = nil
+	return err
 }
 
 func (w *Writer) compactEventFlags(event Event) uint64 {
@@ -309,7 +338,11 @@ func encodePayload(w io.Writer, event Event, flags uint64) error {
 		if max == 0 {
 			max = p.Value
 		}
-		for _, value := range []uint64{p.MetricID, p.Value, count, sum, max, uint64(p.Mode)} {
+		values := trimMetricValues(
+			[]uint64{p.MetricID, p.Value, count, sum, max, uint64(p.Mode)},
+			event.Type,
+		)
+		for _, value := range values {
 			if err := writeUvarint(w, value); err != nil {
 				return err
 			}
@@ -425,6 +458,22 @@ func writeContextIDs(w io.Writer, flags uint64, context contextIDs) error {
 		}
 	}
 	return nil
+}
+
+func trimMetricValues(values []uint64, eventType EventType) []uint64 {
+	defaults := []uint64{0, 0, 1, values[1], values[1], uint64(defaultMetricMode(eventType))}
+	last := len(values) - 1
+	for last >= 2 && values[last] == defaults[last] {
+		last--
+	}
+	return values[:last+1]
+}
+
+func defaultMetricMode(eventType EventType) MetricMode {
+	if eventType == EventGauge {
+		return MetricModeAverage
+	}
+	return MetricModeUnknown
 }
 
 func hasNonZero(values []uint64) bool {

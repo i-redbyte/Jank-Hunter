@@ -36,7 +36,7 @@ func StreamFileWithWarnings(path string, handle func(Event, map[uint64]string) e
 		if version != FormatVersion {
 			return nil, fmt.Errorf("%s: unsupported jhlog version %d, cli supports current pre-release version %d", path, version, FormatVersion)
 		}
-		body, closeBody, err := compressedBinaryBody(file)
+		body, closeBody, err := gzipBinaryBody(file)
 		if err != nil {
 			return nil, fmt.Errorf("%s: compressed jhlog body: %w", path, err)
 		}
@@ -53,20 +53,13 @@ func StreamFileWithWarnings(path string, handle func(Event, map[uint64]string) e
 	return nil, streamJSONL(file, path, handle)
 }
 
-func compressedBinaryBody(r io.Reader) (io.Reader, io.Closer, error) {
+func gzipBinaryBody(r io.Reader) (io.Reader, io.Closer, error) {
 	reader := bufio.NewReader(r)
-	probe, err := reader.Peek(2)
-	if err == nil && len(probe) == 2 && probe[0] == 0x1f && probe[1] == 0x8b {
-		gzipReader, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, nil, err
-		}
-		return gzipReader, gzipReader, nil
-	}
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+	gzipReader, err := gzip.NewReader(reader)
+	if err != nil {
 		return nil, nil, err
 	}
-	return reader, nil, nil
+	return gzipReader, gzipReader, nil
 }
 
 func streamBinary(
@@ -255,7 +248,7 @@ func decodeFixedCompactPayload(reader io.ByteReader, event *Event, decodeState *
 		if err != nil {
 			return err
 		}
-		event.Metric = metricFromValues(values)
+		event.Metric = metricFromValues(values, event.Type)
 	case EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
 		return fmt.Errorf("compact event type %d requires payload length", event.Type)
 	default:
@@ -421,7 +414,7 @@ func decodePayload(payload []byte, event *Event, decodeState *compactDecodeState
 		if len(values) < 2 {
 			return fmt.Errorf("metric payload has %d values, expected at least 2", len(values))
 		}
-		event.Metric = metricFromValues(values)
+		event.Metric = metricFromValues(values, event.Type)
 	case EventFlow:
 		screenID, ownerID, flowID, stepID, err := readContextIDs(read, event.Flags, decodeState)
 		if err != nil {
@@ -537,13 +530,14 @@ func readN(read func() (uint64, error), count int) ([]uint64, error) {
 	return values, nil
 }
 
-func metricFromValues(values []uint64) *MetricEvent {
+func metricFromValues(values []uint64, eventType EventType) *MetricEvent {
 	event := &MetricEvent{
 		MetricID: values[0],
 		Value:    values[1],
 		Count:    1,
 		Sum:      values[1],
 		Max:      values[1],
+		Mode:     defaultMetricMode(eventType),
 	}
 	if len(values) > 2 {
 		event.Count = values[2]

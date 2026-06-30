@@ -23,7 +23,6 @@ class RuntimeCoordinatorTest {
                 directory,
                 JankHunterConfig.builder()
                     .autoStartCollectors(false)
-                    .logCompressionEnabled(false)
                     .build(),
                 "main",
             )

@@ -138,7 +138,7 @@ class JankHunterRuntimeBenchmarkTest {
         val file = File.createTempFile("jankhunter-benchmark-", ".jhlog")
         val elapsedNs = try {
             measureNanoTime {
-                BinaryLogWriter(file, compressionEnabled = false).use { writer ->
+                BinaryLogWriter(file).use { writer ->
                     repeat(count) {
                         writer.counter("benchmark.counter", 1)
                         writer.gauge("benchmark.gauge", it.toLong())
