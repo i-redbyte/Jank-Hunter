@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.JankHunterLogBucket
 import java.io.File
@@ -29,6 +30,7 @@ internal class AsyncLogWriter private constructor(
     private val pendingIoLostEvents = AtomicLong()
     private val dayFormat = SimpleDateFormat("yyyyMMdd", Locale.US)
     private val sessionStartedAtMs = currentTimeMs()
+    private val binaryStorage: JankHunterBinaryStorage? = config.binaryStorage()
     private val retentionPrefix = "${bucketName(config.logBucket())}-$processFileSuffix-"
     private var bucketPrefix = currentBucketPrefix()
     private var nextSegmentId = nextSegmentIdAfterExisting(bucketPrefix)
@@ -414,7 +416,7 @@ internal class AsyncLogWriter private constructor(
 
     private fun rotateIfNeeded() {
         val bucketChanged = refreshBucketPrefixIfNeeded()
-        val maxLogBytes = config.maxLogBytes()
+        val maxLogBytes = maxSegmentBytes()
         val maxSegmentReached = maxLogBytes > 0 && writer.bytesWritten() >= maxLogBytes
         if (!bucketChanged && !maxSegmentReached) return
 
@@ -481,7 +483,16 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun openSegment(): BinaryLogWriter {
-        val file = File(directory, "$bucketPrefix-${nextSegmentId++}.jhlog")
+        val fileName = "$bucketPrefix-${nextSegmentId++}.jhlog"
+        val storage = binaryStorage
+        if (storage != null) {
+            return BinaryLogWriter(
+                storage.openWriter(fileName),
+                config.maxDictionaryEntries(),
+                config.maxDictionaryValueBytes(),
+            )
+        }
+        val file = File(directory, fileName)
         return BinaryLogWriter(
             file,
             config.maxDictionaryEntries(),
@@ -490,7 +501,23 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun enforceRetention() {
-        LogRetention.enforce(directory, retentionPrefix, writer.file, config.maxLogDirectoryBytes())
+        val storage = binaryStorage
+        if (storage != null) {
+            storage.enforceRetention(writer.path)
+        } else {
+            writer.file?.let { file ->
+                LogRetention.enforce(directory, retentionPrefix, file, config.maxLogDirectoryBytes())
+            }
+        }
+    }
+
+    private fun maxSegmentBytes(): Long {
+        val storageLimit = binaryStorage?.fileSizeLimitBytes ?: 0L
+        return if (storageLimit > 0L) {
+            storageLimit
+        } else {
+            config.maxLogBytes()
+        }
     }
 
     private fun refreshBucketPrefixIfNeeded(): Boolean {
@@ -513,6 +540,22 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun nextSegmentIdAfterExisting(prefix: String): Long {
+        return existingSegmentNames(prefix)
+            .mapNotNull { fileName -> segmentId(fileName, prefix) }
+            .maxOrNull()
+            ?.plus(1L)
+            ?: 1L
+    }
+
+    private fun existingSegmentNames(prefix: String): List<String> {
+        val storage = binaryStorage
+        if (storage != null) {
+            return storage.listFiles()
+                .map { path -> path.substringAfterLast('/') }
+                .filter { fileName ->
+                    fileName.startsWith("$prefix-") && fileName.endsWith(".jhlog")
+                }
+        }
         return directory
             .listFiles { file ->
                 file.isFile &&
@@ -520,10 +563,7 @@ internal class AsyncLogWriter private constructor(
                     file.name.endsWith(".jhlog")
             }
             .orEmpty()
-            .mapNotNull { file -> segmentId(file.name, prefix) }
-            .maxOrNull()
-            ?.plus(1L)
-            ?: 1L
+            .map { file -> file.name }
     }
 
     private fun segmentId(fileName: String, prefix: String): Long? {
@@ -592,7 +632,7 @@ internal class AsyncLogWriter private constructor(
             processFileSuffix: String,
             currentTimeMs: () -> Long,
         ): AsyncLogWriter {
-            if (!directory.exists() && !directory.mkdirs()) {
+            if (config.binaryStorage() == null && !directory.exists() && !directory.mkdirs()) {
                 error("Cannot create Jank Hunter log directory: $directory")
             }
             return try {

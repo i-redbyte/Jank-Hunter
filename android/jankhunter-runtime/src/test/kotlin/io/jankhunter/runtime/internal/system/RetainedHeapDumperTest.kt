@@ -1,12 +1,47 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.JankHunterBinaryArtifact
+import io.jankhunter.runtime.JankHunterBinaryStorage
+import io.jankhunter.runtime.JankHunterBinaryWriter
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RetainedHeapDumperTest {
+    @Test
+    fun writesHprofThroughExternalBinaryArtifactLifecycle() {
+        val root = Files.createTempDirectory("jankhunter-heap-external").toFile()
+        try {
+            val fallbackDirectory = File(root, "fallback")
+            val storage = ArtifactStorage(File(root, "storage"))
+            val dumper = RetainedHeapDumper(
+                directory = fallbackDirectory,
+                binaryStorage = storage,
+                minIntervalMs = 0L,
+                maxDumpCount = 1,
+                clock = { 1_000L },
+                wallClock = { 42L },
+                dumpHprof = { path -> File(path).writeBytes(ByteArray(16) { 7 }) },
+            )
+
+            val result = dumper.maybeDump("External", "Owner", 5_000L, 1L)
+
+            assertTrue(result is RetainedHeapDumper.Result.Dumped)
+            val dumped = result as RetainedHeapDumper.Result.Dumped
+            assertTrue(dumped.file.absolutePath.startsWith(storage.directory.absolutePath))
+            assertEquals(16L, dumped.file.length())
+            assertEquals(1, storage.commits)
+            assertEquals(0, storage.aborts)
+            assertEquals(listOf(dumped.file.absolutePath), storage.retentionProtectedPaths)
+            assertFalse("external storage must avoid creating fallback directory", fallbackDirectory.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun writesHprofThroughInjectedDumperAndAppliesSafeFileName() {
         var now = 1_000L
@@ -135,4 +170,47 @@ class RetainedHeapDumperTest {
     }
 
     private fun tempDir(): File = Files.createTempDirectory("jankhunter-heap-dumper-test").toFile()
+
+    private class ArtifactStorage(
+        val directory: File,
+    ) : JankHunterBinaryStorage {
+        override val fileSizeLimitBytes: Long = Long.MAX_VALUE
+        override val archivesSizeLimitBytes: Long = Long.MAX_VALUE
+        val retentionProtectedPaths = mutableListOf<String?>()
+        var commits = 0
+        var aborts = 0
+
+        override fun openWriter(fileName: String): JankHunterBinaryWriter {
+            error("not used by retained heap dumper")
+        }
+
+        override fun createArtifact(fileName: String): JankHunterBinaryArtifact {
+            directory.mkdirs()
+            val file = File(directory, fileName)
+            return object : JankHunterBinaryArtifact {
+                override val path: String = file.absolutePath
+
+                override fun commit() {
+                    commits++
+                    enforceRetention(path)
+                }
+
+                override fun abort() {
+                    aborts++
+                    file.delete()
+                }
+            }
+        }
+
+        override fun enforceRetention(protectedPath: String?) {
+            retentionProtectedPaths += protectedPath
+        }
+
+        override fun listFiles(): List<String> {
+            return directory
+                .listFiles { file -> file.isFile }
+                .orEmpty()
+                .map { file -> file.absolutePath }
+        }
+    }
 }

@@ -63,6 +63,15 @@ class JankHunterProjectService(private val project: Project) {
         return view
     }
 
+    fun toggleFloatingWindow() {
+        val currentDialog = floatingWindow
+        if (currentDialog != null && currentDialog.isDisplayable && currentDialog.isVisible) {
+            currentDialog.dispose()
+            return
+        }
+        showFloatingWindow()
+    }
+
     fun inspectClass(className: String) {
         val current = toolWindow ?: showFloatingWindow()
         current.applyClassFilter(className)

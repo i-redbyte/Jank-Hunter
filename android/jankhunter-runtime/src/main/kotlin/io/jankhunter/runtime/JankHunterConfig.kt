@@ -72,6 +72,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
     private val deviceInfoEnabled = builder.deviceInfoEnabled
+    private val binaryStorage = builder.binaryStorage
 
     fun enabled(): Boolean = enabled
 
@@ -169,6 +170,61 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun deviceInfoEnabled(): Boolean = deviceInfoEnabled
 
+    fun binaryStorage(): JankHunterBinaryStorage? = binaryStorage
+
+    fun toBuilder(): Builder {
+        return Builder()
+            .enabled(enabled)
+            .runtimeEnabled(runtimeEnabled)
+            .autoStartCollectors(autoStartCollectors)
+            .mainThreadStallThresholdMs(mainThreadStallThresholdMs)
+            .ownerBlockThresholdMs(ownerBlockThresholdMs)
+            .httpSlowThresholdMs(httpSlowThresholdMs)
+            .memorySampleIntervalMs(memorySampleIntervalMs)
+            .systemSamplerEnabled(systemSamplerEnabled)
+            .systemSampleIntervalMs(systemSampleIntervalMs)
+            .mainLooperDispatchMonitorEnabled(mainLooperDispatchMonitorEnabled)
+            .processExitInfoEnabled(processExitInfoEnabled)
+            .objectWatcherEnabled(objectWatcherEnabled)
+            .retainedObjectDelayMs(retainedObjectDelayMs)
+            .retainedObjectForceGcEnabled(retainedObjectForceGcEnabled)
+            .retainedHeapDumpEnabled(retainedHeapDumpEnabled)
+            .retainedHeapDumpPrivacyApproved(retainedHeapDumpPrivacyApproved)
+            .retainedHeapDumpMinIntervalMs(retainedHeapDumpMinIntervalMs)
+            .retainedHeapDumpMaxCount(retainedHeapDumpMaxCount)
+            .retainedHeapDumpMinRetainedAgeMs(retainedHeapDumpMinRetainedAgeMs)
+            .retainedHeapDumpDirectory(retainedHeapDumpDirectory)
+            .fpsMonitorEnabled(fpsMonitorEnabled)
+            .jankStatsEnabled(jankStatsEnabled)
+            .fpsWindowMs(fpsWindowMs)
+            .jankFrameThresholdMs(jankFrameThresholdMs)
+            .uiWindowP95ThresholdMs(uiWindowP95ThresholdMs)
+            .maxQueueSize(maxQueueSize)
+            .maxLogBytes(maxLogBytes)
+            .maxLogDirectoryBytes(maxLogDirectoryBytes)
+            .logBucket(logBucket)
+            .maxDictionaryEntries(maxDictionaryEntries)
+            .maxDictionaryValueBytes(maxDictionaryValueBytes)
+            .flushIntervalMs(flushIntervalMs)
+            .adaptiveSamplingEnabled(adaptiveSamplingEnabled)
+            .adaptiveMemoryStableIntervalMs(adaptiveMemoryStableIntervalMs)
+            .adaptiveContextStableIntervalMs(adaptiveContextStableIntervalMs)
+            .metricAggregationEnabled(metricAggregationEnabled)
+            .metricAggregationWindowMs(metricAggregationWindowMs)
+            .maxMetricAggregationKeys(maxMetricAggregationKeys)
+            .maxLogSpamKeys(maxLogSpamKeys)
+            .maxRuntimeCallGraphKeys(maxRuntimeCallGraphKeys)
+            .maxHandlerTrackingEntries(maxHandlerTrackingEntries)
+            .maxHandlerWrappersPerRunnable(maxHandlerWrappersPerRunnable)
+            .routeRedactor(routeRedactor)
+            .logDirectory(logDirectory)
+            .mainProcessOnly(mainProcessOnly)
+            .allowedProcesses(allowedProcesses)
+            .processNameRedactor(processNameRedactor)
+            .deviceInfoEnabled(deviceInfoEnabled)
+            .binaryStorage(binaryStorage)
+    }
+
     fun isProcessAllowed(processName: String, mainProcessName: String): Boolean {
         if (allowedProcesses.isNotEmpty()) return processName in allowedProcesses
         if (mainProcessOnly && processName != mainProcessName) return false
@@ -224,6 +280,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
         internal var deviceInfoEnabled = true
+        internal var binaryStorage: JankHunterBinaryStorage? = null
 
         fun enabled(value: Boolean) = apply { enabled = value }
 
@@ -324,6 +381,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         }
 
         fun deviceInfoEnabled(value: Boolean) = apply { deviceInfoEnabled = value }
+
+        fun binaryStorage(value: JankHunterBinaryStorage?) = apply { binaryStorage = value }
 
         fun build(): JankHunterConfig = JankHunterConfig(this)
     }

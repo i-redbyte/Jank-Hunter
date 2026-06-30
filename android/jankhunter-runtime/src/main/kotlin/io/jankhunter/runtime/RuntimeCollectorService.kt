@@ -49,6 +49,7 @@ internal class RuntimeCollectorService(
             if (config.retainedHeapDumpEnabled()) {
                 state.retainedHeapDumper = RetainedHeapDumper(
                     config.retainedHeapDumpDirectory() ?: logDirectory,
+                    config.binaryStorage(),
                     config.retainedHeapDumpMinIntervalMs(),
                     config.retainedHeapDumpMaxCount(),
                     config.retainedHeapDumpMinRetainedAgeMs(),

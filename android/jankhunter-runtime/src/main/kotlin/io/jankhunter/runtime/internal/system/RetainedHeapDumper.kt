@@ -1,12 +1,14 @@
 package io.jankhunter.runtime.internal.system
 
 import android.os.Debug
+import io.jankhunter.runtime.JankHunterBinaryStorage
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 internal class RetainedHeapDumper(
     private val directory: File,
+    private val binaryStorage: JankHunterBinaryStorage? = null,
     private val minIntervalMs: Long,
     maxDumpCount: Int,
     minRetainedAgeMs: Long = 0L,
@@ -45,17 +47,37 @@ internal class RetainedHeapDumper(
             return Result.Skipped("max_count")
         }
         return try {
-            directory.mkdirs()
-            val file = File(
-                directory,
-                "retained-${wallClock()}-${safeName(className)}-${nextCount}.hprof",
-            )
-            dumpHprof(file.absolutePath)
+            val fileName = "retained-${wallClock()}-${safeName(className)}-${nextCount}.hprof"
+            val file = dumpToFile(fileName)
             Result.Dumped(file, safeName(className), safeName(holder), ageMs, count)
         } catch (error: Throwable) {
             dumpCount.decrementAndGet()
             lastDumpAtMs.compareAndSet(now, last)
             Result.Failed(error.javaClass.simpleName ?: "error")
+        }
+    }
+
+    private fun dumpToFile(fileName: String): File {
+        val storage = binaryStorage
+        if (storage == null) {
+            directory.mkdirs()
+            val file = File(directory, fileName)
+            dumpHprof(file.absolutePath)
+            return file
+        }
+
+        val artifact = storage.createArtifact(fileName)
+        var committed = false
+        try {
+            val file = File(artifact.path)
+            dumpHprof(file.absolutePath)
+            artifact.commit()
+            committed = true
+            return file
+        } finally {
+            if (!committed) {
+                runCatching { artifact.abort() }
+            }
         }
     }
 

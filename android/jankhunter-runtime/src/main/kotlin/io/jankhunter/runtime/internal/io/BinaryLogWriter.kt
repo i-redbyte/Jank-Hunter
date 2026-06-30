@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterBinaryWriter
 import java.io.BufferedOutputStream
 import java.io.Closeable
 import java.io.File
@@ -12,29 +13,62 @@ import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 import kotlin.math.max
 
-class BinaryLogWriter(
-    internal val file: File,
+class BinaryLogWriter private constructor(
+    internal val file: File?,
+    internal val path: String,
+    output: OutputStream,
+    initialBytesWritten: Long,
     maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
     maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
 ) : Closeable {
-    private val fileOut = FileOutputStream(file, true)
-    private val bufferedOut = BufferedOutputStream(fileOut, 32 * 1024)
+    constructor(
+        file: File,
+        maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
+        maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
+    ) : this(
+        file = file,
+        path = file.absolutePath,
+        output = FileOutputStream(file, true),
+        initialBytesWritten = file.length(),
+        maxDictionaryEntries = maxDictionaryEntries,
+        maxDictionaryValueBytes = maxDictionaryValueBytes,
+    )
+
+    internal constructor(
+        writer: JankHunterBinaryWriter,
+        maxDictionaryEntries: Int = DictionaryIds.DEFAULT_MAX_REGULAR_ENTRIES,
+        maxDictionaryValueBytes: Int = DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
+    ) : this(
+        file = null,
+        path = writer.path,
+        output = ExternalBinaryOutputStream(writer),
+        initialBytesWritten = writer.bytesWritten(),
+        maxDictionaryEntries = maxDictionaryEntries,
+        maxDictionaryValueBytes = maxDictionaryValueBytes,
+    )
+
+    private val bufferedOut = BufferedOutputStream(output, IO_BUFFER_BYTES)
     private val compressedOut: GZIPOutputStream
     private val out: OutputStream
     private val dictionary = DictionaryIds(maxDictionaryEntries, maxDictionaryValueBytes)
     private var lastTimestampMs = 0L
-    private var logicalBytesWritten = file.length()
+    private var logicalBytesWritten = initialBytesWritten
     private var closed = false
     private var lastContext: ContextIds? = null
 
     init {
-        if (file.length() == 0L) {
-            bufferedOut.write(MAGIC)
-            bufferedOut.flush()
-            logicalBytesWritten += MAGIC.size
+        try {
+            if (initialBytesWritten == 0L) {
+                bufferedOut.write(MAGIC)
+                bufferedOut.flush()
+                logicalBytesWritten += MAGIC.size
+            }
+            compressedOut = BestCompressionGzipOutputStream(bufferedOut, IO_BUFFER_BYTES)
+            out = compressedOut
+        } catch (error: Throwable) {
+            runCatching { bufferedOut.close() }
+            throw error
         }
-        compressedOut = BestCompressionGzipOutputStream(bufferedOut, IO_BUFFER_BYTES)
-        out = compressedOut
     }
 
     @Synchronized
@@ -476,6 +510,44 @@ class BinaryLogWriter(
         val flowId: Long,
         val stepId: Long,
     )
+
+    private class ExternalBinaryOutputStream(
+        private val writer: JankHunterBinaryWriter,
+    ) : OutputStream() {
+        override fun write(oneByte: Int) {
+            writeExternal {
+                writer.writeByte(oneByte.toByte())
+            }
+        }
+
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            writeExternal {
+                writer.writeBytes(buffer, offset, length)
+            }
+        }
+
+        override fun flush() {
+            writeExternal {
+                writer.flush()
+            }
+        }
+
+        override fun close() {
+            writeExternal {
+                writer.close()
+            }
+        }
+
+        private inline fun writeExternal(action: () -> Unit) {
+            try {
+                action()
+            } catch (error: IOException) {
+                throw error
+            } catch (error: Throwable) {
+                throw IOException("External Jank Hunter binary writer failed", error)
+            }
+        }
+    }
 
     private class BestCompressionGzipOutputStream(out: OutputStream, size: Int) : GZIPOutputStream(out, size, true) {
         init {

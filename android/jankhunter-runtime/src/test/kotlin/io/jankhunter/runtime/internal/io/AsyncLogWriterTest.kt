@@ -1,11 +1,15 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.JankHunterBinaryArtifact
+import io.jankhunter.runtime.JankHunterBinaryStorage
+import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.JankHunterLogBucket
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -18,6 +22,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AsyncLogWriterTest {
+    @Test
+    fun externalBinaryStorageReceivesSegmentsAndOwnsRotationLimit() {
+        val root = Files.createTempDirectory("jankhunter-external-storage").toFile()
+        try {
+            val fallbackDirectory = File(root, "fallback")
+            val storage = TestBinaryStorage(
+                directory = File(root, "storage"),
+                fileSizeLimitBytes = 128L,
+            )
+            val config = JankHunterConfig.builder()
+                .binaryStorage(storage)
+                .maxLogBytes(1024L * 1024L)
+                .flushIntervalMs(1)
+                .build()
+            val asyncWriter = AsyncLogWriter.open(fallbackDirectory, config, "main")
+
+            repeat(24) { index ->
+                asyncWriter.counter("external.storage.counter.$index", index.toLong())
+            }
+            assertTrue(asyncWriter.flushBlocking())
+            asyncWriter.close()
+
+            val files = storage.files().filter { it.name.endsWith(".jhlog") }.sortedBy { it.name }
+            assertTrue("expected rotation to create multiple external segments", files.size > 1)
+            assertFalse("external storage must avoid creating fallback directory", fallbackDirectory.exists())
+            assertTrue(storage.retentionProtectedPaths.any { it?.endsWith(".jhlog") == true })
+            assertTrue(logText(storage.directory).contains("external.storage.counter.23"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun closeDrainsQueuedWritesBeforeReturning() {
         val directory = Files.createTempDirectory("jankhunter-async-writer").toFile()
@@ -265,6 +301,79 @@ class AsyncLogWriterTest {
             isAccessible = true
         }
         offer.invoke(asyncWriter, action)
+    }
+
+    private class TestBinaryStorage(
+        val directory: File,
+        override val fileSizeLimitBytes: Long = Long.MAX_VALUE,
+        override val archivesSizeLimitBytes: Long = Long.MAX_VALUE,
+    ) : JankHunterBinaryStorage {
+        val retentionProtectedPaths = mutableListOf<String?>()
+
+        override fun openWriter(fileName: String): JankHunterBinaryWriter {
+            directory.mkdirs()
+            return TestBinaryWriter(File(directory, fileName))
+        }
+
+        override fun createArtifact(fileName: String): JankHunterBinaryArtifact {
+            directory.mkdirs()
+            val file = File(directory, fileName)
+            return object : JankHunterBinaryArtifact {
+                override val path: String = file.absolutePath
+
+                override fun commit() {
+                    enforceRetention(path)
+                }
+
+                override fun abort() {
+                    file.delete()
+                }
+            }
+        }
+
+        override fun enforceRetention(protectedPath: String?) {
+            retentionProtectedPaths += protectedPath
+        }
+
+        override fun listFiles(): List<String> {
+            return files().map { file -> file.absolutePath }
+        }
+
+        fun files(): List<File> {
+            return directory
+                .listFiles { file -> file.isFile }
+                .orEmpty()
+                .toList()
+        }
+    }
+
+    private class TestBinaryWriter(
+        private val file: File,
+    ) : JankHunterBinaryWriter {
+        private val output = FileOutputStream(file, true)
+        private var bytesWritten = file.length()
+
+        override val path: String = file.absolutePath
+
+        override fun bytesWritten(): Long = bytesWritten
+
+        override fun writeByte(byte: Byte) {
+            output.write(byte.toInt())
+            bytesWritten += 1L
+        }
+
+        override fun writeBytes(bytes: ByteArray, offset: Int, length: Int) {
+            output.write(bytes, offset, length)
+            bytesWritten += length.toLong()
+        }
+
+        override fun flush() {
+            output.flush()
+        }
+
+        override fun close() {
+            output.close()
+        }
     }
 
     @Test

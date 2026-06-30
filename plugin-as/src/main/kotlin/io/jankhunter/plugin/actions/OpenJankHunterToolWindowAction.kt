@@ -7,6 +7,6 @@ import io.jankhunter.plugin.services.JankHunterProjectService
 class OpenJankHunterToolWindowAction : DumbAwareAction() {
     override fun actionPerformed(event: AnActionEvent) {
         val project = event.project ?: return
-        JankHunterProjectService.getInstance(project).showFloatingWindow()
+        JankHunterProjectService.getInstance(project).toggleFloatingWindow()
     }
 }
