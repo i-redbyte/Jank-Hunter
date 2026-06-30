@@ -2,12 +2,6 @@
   <depends>com.intellij.modules.platform</depends>
 
   <extensions defaultExtensionNs="com.intellij">
-    <toolWindow
-        id="Jank Hunter"
-        anchor="bottom"
-        icon="/icons/jankHunter.svg"
-        factoryClass="io.jankhunter.plugin.ui.JankHunterToolWindowFactory"/>
-
     <applicationConfigurable
         instance="io.jankhunter.plugin.settings.JankHunterConfigurable"
         displayName="Jank Hunter"/>

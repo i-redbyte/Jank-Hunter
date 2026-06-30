@@ -35,9 +35,13 @@ object JankHunterArtifactDiscovery {
         val candidates = buildList {
             addAll(
                 listOfNotNull(
+                    basePath?.resolve(".jankhunter/bin/jankhunter"),
                     basePath?.resolve("cli/bin/jankhunter"),
                     basePath?.resolve("../cli/bin/jankhunter")?.normalize(),
                     basePath?.resolve("../../cli/bin/jankhunter")?.normalize(),
+                    System.getProperty("user.home")?.let { Path.of(it).resolve(".jankhunter/bin/jankhunter") },
+                    Path.of("/opt/homebrew/bin/jankhunter"),
+                    Path.of("/usr/local/bin/jankhunter"),
                 ),
             )
             System.getenv("PATH")

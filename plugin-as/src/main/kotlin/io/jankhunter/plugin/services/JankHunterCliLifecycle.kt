@@ -23,9 +23,13 @@ object JankHunterCliLifecycle {
     fun localCliFile(project: Project): File? {
         val base = project.basePath ?: return null
         return listOf(
+            File(base, ".jankhunter/bin/jankhunter"),
             File(base, "cli/bin/jankhunter"),
             File(base, "../cli/bin/jankhunter").canonicalFile,
             File(base, "../../cli/bin/jankhunter").canonicalFile,
+            File(System.getProperty("user.home"), ".jankhunter/bin/jankhunter"),
+            File("/opt/homebrew/bin/jankhunter"),
+            File("/usr/local/bin/jankhunter"),
         ).firstOrNull { it.parentFile?.isDirectory == true }
     }
 

@@ -73,6 +73,39 @@ object JankHunterAdbIntegration {
         }
     }
 
+    fun pullAppPrivateLogs(
+        project: Project,
+        deviceSerial: String,
+        packageName: String,
+        localDirectory: File,
+        onText: (String) -> Unit,
+        onDone: (Boolean, List<File>) -> Unit,
+    ) {
+        localDirectory.mkdirs()
+        val adb = shellQuote(findAdb(project))
+        val serial = if (deviceSerial.isBlank()) "" else "-s ${shellQuote(deviceSerial)} "
+        val packageArg = shellQuote(packageName)
+        val localArg = shellQuote(localDirectory.path)
+        val command = "$adb ${serial}exec-out run-as $packageArg sh -c " +
+            shellQuote("cd files/jankhunter 2>/dev/null && tar cf - .") +
+            " | tar -xf - -C $localArg"
+        startShell(command, onText) { ok ->
+            val files = localDirectory
+                .walkTopDown()
+                .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
+                .sortedByDescending(File::lastModified)
+                .toList()
+            onDone(ok && files.isNotEmpty(), files)
+        }
+    }
+
+    fun listAppPrivateLogs(project: Project, deviceSerial: String, packageName: String): String {
+        val args = mutableListOf<String>()
+        if (deviceSerial.isNotBlank()) args += listOf("-s", deviceSerial)
+        args += listOf("shell", "run-as", packageName, "sh", "-c", "ls -la files/jankhunter 2>/dev/null")
+        return runBlocking(project, args)
+    }
+
     fun listRemoteLogs(project: Project, deviceSerial: String, remoteDirectory: String): String {
         val args = mutableListOf<String>()
         if (deviceSerial.isNotBlank()) args += listOf("-s", deviceSerial)
@@ -104,6 +137,30 @@ object JankHunterAdbIntegration {
         }
     }
 
+    private fun startShell(command: String, onText: (String) -> Unit, onDone: (Boolean) -> Unit) {
+        val commandLine = GeneralCommandLine("sh")
+            .withParameters("-c", command)
+            .withCharset(StandardCharsets.UTF_8)
+        try {
+            val handler = OSProcessHandler(commandLine)
+            handler.addProcessListener(
+                object : ProcessListener {
+                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                        onText(event.text)
+                    }
+
+                    override fun processTerminated(event: ProcessEvent) {
+                        onDone(event.exitCode == 0)
+                    }
+                },
+            )
+            handler.startNotify()
+        } catch (error: ExecutionException) {
+            onText("ADB run-as error: ${error.message}\n")
+            onDone(false)
+        }
+    }
+
     private fun runBlocking(project: Project, args: List<String>): String =
         runCatching {
             val process = GeneralCommandLine(findAdb(project))
@@ -115,4 +172,7 @@ object JankHunterAdbIntegration {
             process.waitFor()
             out + err
         }.getOrDefault("")
+
+    private fun shellQuote(value: String): String =
+        "'" + value.replace("'", "'\\''") + "'"
 }

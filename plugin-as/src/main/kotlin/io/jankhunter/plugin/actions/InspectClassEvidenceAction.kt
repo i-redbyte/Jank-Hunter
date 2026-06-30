@@ -3,7 +3,6 @@ package io.jankhunter.plugin.actions
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.project.DumbAwareAction
-import com.intellij.openapi.wm.ToolWindowManager
 import io.jankhunter.plugin.services.JankHunterProjectService
 
 class InspectClassEvidenceAction : DumbAwareAction() {
@@ -18,7 +17,6 @@ class InspectClassEvidenceAction : DumbAwareAction() {
         val offset = editor.caretModel.offset.coerceIn(0, documentText.length)
         val className = classNameNearOffset(documentText, offset) ?: return
         JankHunterProjectService.getInstance(project).inspectClass(className)
-        ToolWindowManager.getInstance(project).getToolWindow("Jank Hunter")?.show()
     }
 
     private fun classNameNearOffset(text: String, offset: Int): String? {

@@ -3,11 +3,17 @@ package io.jankhunter.plugin.services
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.WindowManager
 import io.jankhunter.plugin.ui.JankHunterToolWindow
+import java.awt.BorderLayout
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
+import javax.swing.JDialog
 
 @Service(Service.Level.PROJECT)
-class JankHunterProjectService {
+class JankHunterProjectService(private val project: Project) {
     private var toolWindow: JankHunterToolWindow? = null
+    private var floatingWindow: JDialog? = null
     private var pendingClassFilter: String? = null
 
     fun register(toolWindow: JankHunterToolWindow) {
@@ -24,13 +30,42 @@ class JankHunterProjectService {
         }
     }
 
-    fun inspectClass(className: String) {
-        val current = toolWindow
-        if (current != null) {
-            current.applyClassFilter(className)
-        } else {
-            pendingClassFilter = className
+    fun showFloatingWindow(): JankHunterToolWindow {
+        val currentDialog = floatingWindow
+        val currentView = toolWindow
+        if (currentDialog != null && currentDialog.isDisplayable && currentView != null) {
+            currentDialog.isVisible = true
+            currentDialog.toFront()
+            return currentView
         }
+
+        val view = JankHunterToolWindow(project)
+        val parent = WindowManager.getInstance().suggestParentWindow(project)
+        val dialog = JDialog(parent, "Jank Hunter", java.awt.Dialog.ModalityType.MODELESS).apply {
+            contentPane.layout = BorderLayout()
+            contentPane.add(view.component, BorderLayout.CENTER)
+            setSize(920, 720)
+            setLocationRelativeTo(parent)
+            defaultCloseOperation = JDialog.DISPOSE_ON_CLOSE
+            addWindowListener(
+                object : WindowAdapter() {
+                    override fun windowClosed(event: WindowEvent) {
+                        view.dispose()
+                        if (floatingWindow === this@apply) {
+                            floatingWindow = null
+                        }
+                    }
+                },
+            )
+        }
+        floatingWindow = dialog
+        dialog.isVisible = true
+        return view
+    }
+
+    fun inspectClass(className: String) {
+        val current = toolWindow ?: showFloatingWindow()
+        current.applyClassFilter(className)
     }
 
     companion object {
