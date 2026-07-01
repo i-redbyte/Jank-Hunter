@@ -44,7 +44,7 @@ internal class AsyncLogWriter private constructor(
     }
 
     init {
-        enforceRetention()
+        cleanupOldFiles()
     }
 
     fun session(
@@ -425,7 +425,7 @@ internal class AsyncLogWriter private constructor(
         lastFlushAtMs = SystemClock.elapsedRealtime()
         bootstrap?.write(writer)
         writePendingIoErrors()
-        enforceRetention()
+        cleanupOldFiles()
     }
 
     private fun flushIfNeeded(force: Boolean) {
@@ -454,7 +454,7 @@ internal class AsyncLogWriter private constructor(
             lastFlushAtMs = SystemClock.elapsedRealtime()
             bootstrap?.write(writer)
             writePendingIoErrors()
-            enforceRetention()
+            cleanupOldFiles()
         } catch (_: IOException) {
             pendingIoErrors.incrementAndGet()
         }
@@ -500,10 +500,10 @@ internal class AsyncLogWriter private constructor(
         )
     }
 
-    private fun enforceRetention() {
+    private fun cleanupOldFiles() {
         val storage = binaryStorage
         if (storage != null) {
-            storage.enforceRetention(writer.path)
+            storage.cleanup(writer.path)
         } else {
             writer.file?.let { file ->
                 LogRetention.enforce(directory, retentionPrefix, file, config.maxLogDirectoryBytes())

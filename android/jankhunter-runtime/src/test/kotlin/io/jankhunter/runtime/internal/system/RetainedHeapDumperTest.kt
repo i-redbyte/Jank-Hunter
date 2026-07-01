@@ -192,7 +192,7 @@ class RetainedHeapDumperTest {
 
                 override fun commit() {
                     commits++
-                    enforceRetention(path)
+                    cleanup(path)
                 }
 
                 override fun abort() {
@@ -202,7 +202,7 @@ class RetainedHeapDumperTest {
             }
         }
 
-        override fun enforceRetention(protectedPath: String?) {
+        override fun cleanup(protectedPath: String?) {
             retentionProtectedPaths += protectedPath
         }
 

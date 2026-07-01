@@ -10,7 +10,7 @@ interface JankHunterBinaryStorage {
 
     fun createArtifact(fileName: String): JankHunterBinaryArtifact
 
-    fun enforceRetention(protectedPath: String? = null)
+    fun cleanup(protectedPath: String? = null)
 
     fun listFiles(): List<String>
 }

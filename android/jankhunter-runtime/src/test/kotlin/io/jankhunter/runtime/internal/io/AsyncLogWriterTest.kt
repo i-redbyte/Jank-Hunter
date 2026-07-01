@@ -352,7 +352,7 @@ class AsyncLogWriterTest {
                 override val path: String = file.absolutePath
 
                 override fun commit() {
-                    enforceRetention(path)
+                    cleanup(path)
                 }
 
                 override fun abort() {
@@ -361,7 +361,7 @@ class AsyncLogWriterTest {
             }
         }
 
-        override fun enforceRetention(protectedPath: String?) {
+        override fun cleanup(protectedPath: String?) {
             retentionProtectedPaths += protectedPath
         }
 
