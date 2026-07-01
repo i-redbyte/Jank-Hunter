@@ -35,8 +35,8 @@ Runtime стартует через `ContentProvider`. Если приложен
 <meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
 <meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
 <meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
-<meta-data android:name="io.jankhunter.max_log_bytes" android:value="5242880" />
-<meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="26214400" />
+<meta-data android:name="io.jankhunter.max_log_bytes" android:value="524288" />
+<meta-data android:name="io.jankhunter.max_log_directory_bytes" android:value="2097152" />
 <meta-data android:name="io.jankhunter.log_bucket" android:value="session" />
 <meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
 ```
@@ -54,15 +54,15 @@ val config = JankHunterConfig.builder()
     .systemSamplerEnabled(true)
     .systemSampleIntervalMs(15_000)
     .mainLooperDispatchMonitorEnabled(true)
-    .retainedHeapDumpEnabled(true)
-    .retainedHeapDumpPrivacyApproved(true)
+    .retainedHeapDumpEnabled(false)
+    .retainedHeapDumpPrivacyApproved(false)
     .fpsMonitorEnabled(true)
     .jankStatsEnabled(true)
     .jankFrameThresholdMs(32)
     .uiWindowP95ThresholdMs(32)
     .maxQueueSize(2048)
-    .maxLogBytes(5 * 1024 * 1024)
-    .maxLogDirectoryBytes(25 * 1024 * 1024)
+    .maxLogBytes(512 * 1024)
+    .maxLogDirectoryBytes(2 * 1024 * 1024)
     .logBucket(JankHunterLogBucket.SESSION)
     .flushIntervalMs(5_000)
     .build()
@@ -190,7 +190,7 @@ context.filesDir/jankhunter/session-<process>-<startMs>-<segment>.jhlog
 
 По умолчанию используется `JankHunterLogBucket.SESSION`: один запуск runtime получает собственный bucket-префикс и сегменты внутри него. Это защищает длинный QA-сеанс от разрыва на background/foreground: при уходе в фон runtime делает flush, но продолжает ту же сессию после возврата. Если нужен дневной набор с общим префиксом, можно задать `JankHunterLogBucket.DAILY`.
 
-Каждый сегмент `.jhlog` ограничен `max_log_bytes`. Когда суммарный размер папки становится больше `max_log_directory_bytes`, Jank Hunter удаляет самые старые завершенные сегменты текущего bucket-типа и продолжает писать в текущий файл. Тело `.jhlog` всегда сжимается потоковым gzip после magic-заголовка с максимальным уровнем deflate, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
+Каждый сегмент `.jhlog` ограничен `max_log_bytes` (`512KB` по умолчанию). Когда суммарный размер папки становится больше `max_log_directory_bytes` (`2MB` по умолчанию), Jank Hunter удаляет самые старые завершенные сегменты текущего bucket-типа и продолжает писать в текущий файл. Тело `.jhlog` всегда сжимается потоковым gzip после magic-заголовка с максимальным уровнем deflate, поэтому длинные QA-сессии занимают меньше места на диске и быстрее вытаскиваются через `adb`.
 
 Путь можно поменять:
 
@@ -507,7 +507,7 @@ jankhunter inspect logs/*.jhlog \
 
 ## Heap dump для утечек
 
-В Gradle plugin heap dump включен по умолчанию для диагностических debug/QA variant и ограничен лимитами. В новом `jankHunter { ... }` блок настроек лежит рядом с instrumentation-настройками, чтобы его можно было быстро ужесточить или выключить:
+Heap dump выключен по умолчанию: `.jhlog` остается легким логом, а HPROF пишется только после явного opt-in. В новом `jankHunter { ... }` блок настроек лежит рядом с instrumentation-настройками, чтобы его можно было быстро включить для короткой диагностической QA-сессии или оставить выключенным для долгоживущих приложений:
 
 ```kotlin
 jankHunter {
@@ -520,12 +520,13 @@ jankHunter {
 }
 ```
 
-В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если задать `retainedHeapDump.enabled = false`, SDK остается в легком режиме без HPROF.
+В app-модуле плагин сам проставит runtime meta-data, и `AutoInitProvider` соберет такой же конфиг, как при ручном `JankHunterConfig.builder().retainedHeapDumpEnabled(true).retainedHeapDumpPrivacyApproved(true)`. В library-модулях плагин только инструментирует классы текущего модуля и не добавляет runtime manifest-настройки в consuming app. `minRetainedAgeMs` не дает снимать HPROF по слишком молодым объектам. Если `retainedHeapDump.enabled = false`, SDK остается в легком режиме без HPROF.
 
 Если Gradle plugin не используется или нужен ручной override, можно включить те же настройки через manifest:
 
 ```xml
 <meta-data android:name="io.jankhunter.retained_heap_dump_enabled" android:value="true" />
+<meta-data android:name="io.jankhunter.retained_heap_dump_privacy_approved" android:value="true" />
 <meta-data android:name="io.jankhunter.retained_heap_dump_min_interval_ms" android:value="600000" />
 <meta-data android:name="io.jankhunter.retained_heap_dump_max_count" android:value="1" />
 <meta-data android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms" android:value="30000" />

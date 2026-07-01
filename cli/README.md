@@ -1,6 +1,6 @@
 # Jank Hunter CLI
 
-`jankhunter` - консольная утилита для `.jhlog` файлов. Она читает логи с Android-устройства и делает отчеты: одиночный прогон через `inspect`, сравнение двух прогонов через `compare`, экспорт событий через `export`.
+`jankhunter` - консольная утилита для `.jhlog` файлов. Она читает логи с Android-устройства и делает отчеты: одиночный прогон через `inspect`, сравнение двух прогонов через `compare`, экспорт событий через `export` и профиль размера через `size`.
 
 CLI работает локально. Никакой backend не нужен: на выходе обычный HTML-файл, который можно открыть в браузере или положить в CI artifacts.
 
@@ -63,6 +63,7 @@ make release VERSION=1.0.0
 make build
 ./bin/jankhunter sample --out /tmp/sample.jhlog
 ./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
+./bin/jankhunter size /tmp/sample.jhlog
 ./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
 ```
 
@@ -329,6 +330,17 @@ jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
 ```
 
 Это удобно, если нужно быстро проверить сырые события или скормить их другому инструменту.
+
+## size
+
+Профиль размера логов по типам событий:
+
+```bash
+jankhunter size logs/*.jhlog
+jankhunter size logs/*.jhlog --json
+```
+
+Команда показывает размер файла, распакованного тела, степень сжатия и вклад каждого типа событий. Это первый инструмент для поиска шумных сигналов перед изменением формата или семплинга.
 
 ## problems
 

@@ -512,12 +512,13 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun maxSegmentBytes(): Long {
-        val storageLimit = binaryStorage?.fileSizeLimitBytes ?: 0L
-        return if (storageLimit > 0L) {
-            storageLimit
-        } else {
-            config.maxLogBytes()
-        }
+        return minPositiveLimit(config.maxLogBytes(), binaryStorage?.fileSizeLimitBytes ?: 0L)
+    }
+
+    private fun minPositiveLimit(first: Long, second: Long): Long {
+        if (first <= 0L) return second
+        if (second <= 0L) return first
+        return minOf(first, second)
     }
 
     private fun refreshBucketPrefixIfNeeded(): Boolean {

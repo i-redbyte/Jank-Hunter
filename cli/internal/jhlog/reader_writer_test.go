@@ -161,6 +161,34 @@ func TestStreamFileRejectsUncompressedBinaryBody(t *testing.T) {
 	}
 }
 
+func TestProfileFilesReportsBinaryEventTypeSizes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.jhlog")
+	if err := WriteSample(path); err != nil {
+		t.Fatalf("WriteSample() error = %v", err)
+	}
+
+	profile, err := ProfileFiles([]string{path})
+	if err != nil {
+		t.Fatalf("ProfileFiles() error = %v", err)
+	}
+	if len(profile.Files) != 1 {
+		t.Fatalf("profile files = %d, want 1", len(profile.Files))
+	}
+	if profile.Files[0].Format != "binary-gzip" || profile.Files[0].FileBytes == 0 || profile.Files[0].BodyBytes == 0 {
+		t.Fatalf("unexpected file profile: %+v", profile.Files[0])
+	}
+	rows := map[EventType]SizeProfileType{}
+	for _, row := range profile.Types {
+		rows[row.Type] = row
+	}
+	for _, eventType := range []EventType{EventDictionary, EventHTTP, EventGauge} {
+		row := rows[eventType]
+		if row.Events == 0 || row.Bytes == 0 {
+			t.Fatalf("missing size row for %s: %+v", EventTypeName(eventType), row)
+		}
+	}
+}
+
 func TestSessionRootedUsesFlags(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session-rooted.jhlog")
 	file, writer, err := Create(path)

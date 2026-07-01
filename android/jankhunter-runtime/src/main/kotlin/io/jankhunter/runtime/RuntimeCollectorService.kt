@@ -35,11 +35,16 @@ internal class RuntimeCollectorService(
             appContext.registerComponentCallbacks(it)
             state.componentCallbackContext = appContext
         }
-        state.memorySampler = MemorySampler(appContext, config.memorySampleIntervalMs()).also { it.start() }
+        state.memorySampler = MemorySampler(
+            appContext,
+            config.memorySampleIntervalMs(),
+            JankHunter::isAppForegroundForSampling,
+        ).also { it.start() }
         if (config.systemSamplerEnabled()) {
             state.systemContextSampler = SystemContextSampler(
                 appContext,
                 config.systemSampleIntervalMs(),
+                JankHunter::isAppForegroundForSampling,
             ).also { it.start() }
         }
         if (config.processExitInfoEnabled()) {

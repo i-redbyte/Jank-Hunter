@@ -246,8 +246,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
-        internal var retainedHeapDumpEnabled = true
-        internal var retainedHeapDumpPrivacyApproved = true
+        internal var retainedHeapDumpEnabled = false
+        internal var retainedHeapDumpPrivacyApproved = false
         internal var retainedHeapDumpMinIntervalMs = 10 * 60_000L
         internal var retainedHeapDumpMaxCount = 1
         internal var retainedHeapDumpMinRetainedAgeMs = 30_000L
@@ -258,8 +258,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var jankFrameThresholdMs = 32L
         internal var uiWindowP95ThresholdMs = 32L
         internal var maxQueueSize = 2048
-        internal var maxLogBytes = 5L * 1024L * 1024L
-        internal var maxLogDirectoryBytes = 25L * 1024L * 1024L
+        internal var maxLogBytes = 512L * 1024L
+        internal var maxLogDirectoryBytes = 2L * 1024L * 1024L
         internal var logBucket = JankHunterLogBucket.SESSION
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = 256
@@ -458,9 +458,9 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
                 .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
                 .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
-                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, true))
+                .retainedHeapDumpEnabled(metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_ENABLED, false))
                 .retainedHeapDumpPrivacyApproved(
-                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, true),
+                    metadataBoolean(metadata, META_RETAINED_HEAP_DUMP_PRIVACY_APPROVED, false),
                 )
                 .retainedHeapDumpMinIntervalMs(
                     metadataLong(metadata, META_RETAINED_HEAP_DUMP_MIN_INTERVAL_MS, 10 * 60_000L),
@@ -475,9 +475,9 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
                 .uiWindowP95ThresholdMs(metadataLong(metadata, META_UI_WINDOW_P95_THRESHOLD_MS, 32L))
                 .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
-                .maxLogBytes(metadataLong(metadata, META_MAX_LOG_BYTES, 5L * 1024L * 1024L))
+                .maxLogBytes(metadataLong(metadata, META_MAX_LOG_BYTES, 512L * 1024L))
                 .maxLogDirectoryBytes(
-                    metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 25L * 1024L * 1024L),
+                    metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 2L * 1024L * 1024L),
                 )
                 .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.SESSION))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))

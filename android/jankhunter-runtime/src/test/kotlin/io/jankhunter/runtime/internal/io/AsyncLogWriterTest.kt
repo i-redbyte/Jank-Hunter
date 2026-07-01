@@ -23,7 +23,7 @@ import org.junit.Test
 
 class AsyncLogWriterTest {
     @Test
-    fun externalBinaryStorageReceivesSegmentsAndOwnsRotationLimit() {
+    fun externalBinaryStorageReceivesSegmentsAndHonorsTighterStorageLimit() {
         val root = Files.createTempDirectory("jankhunter-external-storage").toFile()
         try {
             val fallbackDirectory = File(root, "fallback")
@@ -49,6 +49,36 @@ class AsyncLogWriterTest {
             assertFalse("external storage must avoid creating fallback directory", fallbackDirectory.exists())
             assertTrue(storage.retentionProtectedPaths.any { it?.endsWith(".jhlog") == true })
             assertTrue(logText(storage.directory).contains("external.storage.counter.23"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun externalBinaryStorageCannotRaiseConfiguredSegmentLimit() {
+        val root = Files.createTempDirectory("jankhunter-external-storage").toFile()
+        try {
+            val fallbackDirectory = File(root, "fallback")
+            val storage = TestBinaryStorage(
+                directory = File(root, "storage"),
+                fileSizeLimitBytes = 1024L * 1024L,
+            )
+            val config = JankHunterConfig.builder()
+                .binaryStorage(storage)
+                .maxLogBytes(128L)
+                .flushIntervalMs(1)
+                .build()
+            val asyncWriter = AsyncLogWriter.open(fallbackDirectory, config, "main")
+
+            repeat(24) { index ->
+                asyncWriter.counter("external.config.limit.counter.$index", index.toLong())
+            }
+            assertTrue(asyncWriter.flushBlocking())
+            asyncWriter.close()
+
+            val files = storage.files().filter { it.name.endsWith(".jhlog") }
+            assertTrue("config maxLogBytes must cap external storage segments", files.size > 1)
+            assertFalse("external storage must avoid creating fallback directory", fallbackDirectory.exists())
         } finally {
             root.deleteRecursively()
         }

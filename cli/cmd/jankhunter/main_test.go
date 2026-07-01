@@ -292,6 +292,21 @@ func TestExportStreamsSampleJSONL(t *testing.T) {
 	}
 }
 
+func TestSizeProfilesSampleLog(t *testing.T) {
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	if err := runSize([]string{samplePath}); err != nil {
+		t.Fatalf("runSize() error = %v", err)
+	}
+	if err := runSize([]string{samplePath, "--json"}); err != nil {
+		t.Fatalf("runSize(json) error = %v", err)
+	}
+}
+
 func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
 		"--route", "feed",

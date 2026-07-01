@@ -104,7 +104,7 @@ class JankHunterConfigTest {
     }
 
     @Test
-    fun defaultsAreDebugCollectorFriendly() {
+    fun defaultsAreLongRunningAppFriendly() {
         val config = JankHunterConfig.builder().build()
 
         assertTrue(config.enabled())
@@ -118,8 +118,8 @@ class JankHunterConfigTest {
         assertTrue(config.processExitInfoEnabled())
         assertTrue(config.objectWatcherEnabled())
         assertFalse(config.retainedObjectForceGcEnabled())
-        assertTrue(config.retainedHeapDumpEnabled())
-        assertTrue(config.retainedHeapDumpPrivacyApproved())
+        assertFalse(config.retainedHeapDumpEnabled())
+        assertFalse(config.retainedHeapDumpPrivacyApproved())
         assertEquals(10 * 60_000L, config.retainedHeapDumpMinIntervalMs())
         assertEquals(1, config.retainedHeapDumpMaxCount())
         assertEquals(30_000L, config.retainedHeapDumpMinRetainedAgeMs())
@@ -131,8 +131,8 @@ class JankHunterConfigTest {
         assertTrue(config.allowedProcesses().isEmpty())
         assertTrue(config.deviceInfoEnabled())
         assertEquals(2048, config.maxQueueSize())
-        assertEquals(5L * 1024L * 1024L, config.maxLogBytes())
-        assertEquals(25L * 1024L * 1024L, config.maxLogDirectoryBytes())
+        assertEquals(512L * 1024L, config.maxLogBytes())
+        assertEquals(2L * 1024L * 1024L, config.maxLogDirectoryBytes())
         assertEquals(JankHunterLogBucket.SESSION, config.logBucket())
         assertEquals(8192, config.maxDictionaryEntries())
         assertEquals(256, config.maxDictionaryValueBytes())

@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class MemorySampler(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val intervalMs: Long,
+    private val foreground: () -> Boolean = { true },
 ) {
     private val running = AtomicBoolean(false)
     private val gcStats = RuntimeGcStats(::readRuntimeStat) { SystemClock.elapsedRealtime() }
@@ -36,12 +37,33 @@ internal class MemorySampler(
             val nativeHeapKb = Debug.getNativeHeapAllocatedSize() / 1024L
             JankHunter.recordMemory(info.totalPss.toLong(), javaHeapKb, nativeHeapKb)
             recordHeapPressure(runtime, nativeHeapKb)
+            sleepUntilNextSample()
+        }
+    }
+
+    private fun sleepUntilNextSample() {
+        val startedAtMs = SystemClock.elapsedRealtime()
+        while (running.get()) {
+            val remainingMs = currentIntervalMs() - (SystemClock.elapsedRealtime() - startedAtMs)
+            if (remainingMs <= 0L) return
             try {
-                Thread.sleep(intervalMs)
+                Thread.sleep(minOf(remainingMs, STATE_POLL_MS))
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
+                return
             }
         }
+    }
+
+    private fun currentIntervalMs(): Long {
+        val foregroundInterval = intervalMs.coerceAtLeast(1_000L)
+        if (foreground()) return foregroundInterval
+        val backgroundInterval = if (foregroundInterval > Long.MAX_VALUE / BACKGROUND_INTERVAL_MULTIPLIER) {
+            Long.MAX_VALUE
+        } else {
+            foregroundInterval * BACKGROUND_INTERVAL_MULTIPLIER
+        }
+        return maxOf(MIN_BACKGROUND_INTERVAL_MS, backgroundInterval)
     }
 
     private fun recordHeapPressure(runtime: Runtime, nativeHeapKb: Long) {
@@ -75,5 +97,11 @@ internal class MemorySampler(
         } catch (_: Exception) {
             null
         }
+    }
+
+    private companion object {
+        private const val BACKGROUND_INTERVAL_MULTIPLIER = 12L
+        private const val MIN_BACKGROUND_INTERVAL_MS = 2 * 60_000L
+        private const val STATE_POLL_MS = 5_000L
     }
 }

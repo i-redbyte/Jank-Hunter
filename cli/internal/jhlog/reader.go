@@ -119,7 +119,12 @@ type compactDecodeState struct {
 	hasContext  bool
 }
 
-func readCompactEvent(reader *bufio.Reader, source string, decodeState *compactDecodeState) (Event, uint64, error) {
+type compactEventReader interface {
+	io.Reader
+	io.ByteReader
+}
+
+func readCompactEvent(reader compactEventReader, source string, decodeState *compactDecodeState) (Event, uint64, error) {
 	header, err := reader.ReadByte()
 	if err != nil {
 		return Event{}, 0, err

@@ -33,6 +33,7 @@ func newCommandRegistry(out io.Writer) commandRegistry {
 	registry.register(commandFunc{name: "inspect", run: runInspect})
 	registry.register(commandFunc{name: "compare", run: runCompare})
 	registry.register(commandFunc{name: "export", run: runExport})
+	registry.register(commandFunc{name: "size", run: runSize})
 	registry.register(commandFunc{name: "problems", run: runProblems})
 	registry.register(commandFunc{name: "scorecard", run: runScorecard})
 	registry.register(commandFunc{name: "version", run: func([]string) error {

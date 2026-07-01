@@ -41,6 +41,7 @@ Usage:
   jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--all-sessions] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
+  jankhunter size <logs...> [--json]
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
@@ -783,6 +784,81 @@ func runExport(args []string) error {
 		}
 	}
 	return nil
+}
+
+func runSize(args []string) error {
+	jsonOut, remaining, err := takeBoolFlag(args, "json")
+	if err != nil {
+		return err
+	}
+	paths := expandArgs(remaining)
+	if len(paths) == 0 {
+		return fmt.Errorf("size needs at least one log file")
+	}
+	profile, err := jhlog.ProfileFiles(paths)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		return printJSON(profile)
+	}
+	printSizeProfile(profile)
+	return nil
+}
+
+func printSizeProfile(profile jhlog.SizeProfile) {
+	var totalFileBytes uint64
+	var totalBodyBytes uint64
+	var totalEvents uint64
+	for _, file := range profile.Files {
+		totalFileBytes += file.FileBytes
+		totalBodyBytes += file.BodyBytes
+		totalEvents += file.Events
+	}
+	fmt.Printf(
+		"logs=%d events=%d file=%s body=%s compression=%.1fx\n",
+		len(profile.Files),
+		totalEvents,
+		formatByteSize(totalFileBytes),
+		formatByteSize(totalBodyBytes),
+		compressionRatio(totalBodyBytes+uint64(len(jhlog.Magic))*uint64(len(profile.Files)), totalFileBytes),
+	)
+	fmt.Printf("%-14s %10s %10s %10s %8s %7s\n", "type", "events", "bytes", "avg", "body%", "files")
+	for _, row := range profile.Types {
+		fmt.Printf(
+			"%-14s %10d %10s %10.1f %7.1f%% %7d\n",
+			row.Name,
+			row.Events,
+			formatByteSize(row.Bytes),
+			row.AvgBytes,
+			row.Percent,
+			row.Files,
+		)
+	}
+	for _, warning := range profile.Warnings {
+		fmt.Printf("warning: %s\n", warning)
+	}
+}
+
+func compressionRatio(bodyBytes uint64, fileBytes uint64) float64 {
+	if fileBytes == 0 {
+		return 0
+	}
+	return float64(bodyBytes) / float64(fileBytes)
+}
+
+func formatByteSize(value uint64) string {
+	units := []string{"B", "KB", "MB", "GB"}
+	scaled := float64(value)
+	unit := 0
+	for scaled >= 1024 && unit < len(units)-1 {
+		scaled /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%dB", value)
+	}
+	return fmt.Sprintf("%.1f%s", scaled, units[unit])
 }
 
 func runProblems(args []string) error {

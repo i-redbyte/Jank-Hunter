@@ -722,6 +722,8 @@ object JankHunter {
         runtimeState.appForeground.set(foreground)
     }
 
+    internal fun isAppForegroundForSampling(): Boolean = isAppForeground()
+
     @JvmStatic
     fun recordHttp(
         owner: String?,
@@ -766,7 +768,6 @@ object JankHunter {
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
         if (!shouldRecordMemorySample(pssKb, javaHeapKb, nativeHeapKb)) {
-            recordCounter("jankhunter.memory_sample.skipped.count", 1)
             return
         }
         ensureContextRecorded()
@@ -935,7 +936,6 @@ object JankHunter {
                 networkVpn,
             )
         ) {
-            recordCounter("jankhunter.context_sample.skipped.count", 1)
             return
         }
         writer?.context(
