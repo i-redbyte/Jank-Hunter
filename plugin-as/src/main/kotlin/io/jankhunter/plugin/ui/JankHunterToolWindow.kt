@@ -465,7 +465,9 @@ class JankHunterToolWindow(
         addRow(form, row++, "Package", packageField, "package")
         addWideRow(form, row++, buildModePanel(), "mode")
         addRow(form, row++, "CLI", buildCliPanel(), "cli")
-        addRow(form, row++, "Logs", buildLocalLogsPanel(), "logsDirectory")
+        addRow(form, row++, "Logs folder", buildLocalLogsPanel(), "logsDirectory")
+        addRow(form, row++, "Report input", logsField, "logs")
+        addRow(form, row++, "Report logs", inspectLogScopeCombo, "inspectLogScope")
         addRow(form, row++, "Output", outputField, "output")
         addWideRow(form, row++, buildOptionsPanel(), "options")
         addFormFiller(form, row)
@@ -475,8 +477,6 @@ class JankHunterToolWindow(
     private fun buildLogsPanel(): JComponent {
         val form = JPanel(GridBagLayout())
         var row = 0
-        addRow(form, row++, "Logs / globs", logsField, "logs")
-        addRow(form, row++, "Inspect scope", inspectLogScopeCombo, "inspectLogScope")
         addRow(form, row++, "Baseline", baselineField, "baseline")
         addRow(form, row++, "Baseline scope", baselineLogScopeCombo, "baselineLogScope")
         addRow(form, row++, "Candidate", candidateField, "candidate")
@@ -1695,10 +1695,10 @@ class JankHunterToolWindow(
         scanArtifactsButton.toolTipText = hint("Просканировать проект и обновить список owner-map/class-graph/diagnostics/mapping.")
         applyArtifactsButton.toolTipText = hint("Заполнить поля артефактов выбранным набором.")
         logsField.toolTipText = hint(
-            "Файлы .jhlog для inspect/problems. Можно выбрать несколько файлов, указать glob-маски или перечислить пути через запятую.",
+            "Файлы .jhlog для отчета. Один файл, несколько выбранных файлов, glob-маски или пути через запятую.",
         )
         inspectLogScopeCombo.toolTipText = hint(
-            "Как собрать inspect: один самый новый лог, последняя session-группа или все выбранные логи с --all-sessions.",
+            "Как собрать inspect: один самый новый лог, последняя session-группа или все перечисленные в Report input логи с --all-sessions.",
         )
         baselineField.toolTipText = hint("Базовый прогон для compare/scorecard. Поддерживаются несколько файлов и glob-маски.")
         baselineLogScopeCombo.toolTipText = hint(

@@ -13,7 +13,7 @@ enum class JankHunterLogScope(
         "Keep the CLI default behavior: latest session group per process, older session files are skipped.",
     ),
     ALL_SELECTED(
-        "All selected logs",
+        "All selected logs (--all-sessions)",
         "Aggregate every selected .jhlog. Inspect adds --all-sessions so session files are not dropped.",
     );
 

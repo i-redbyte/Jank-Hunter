@@ -106,5 +106,5 @@ object JankHunterCliLifecycle {
         return 0
     }
 
-    private const val PLUGIN_EXPECTED_CLI_VERSION = "1.0.0"
+    private const val PLUGIN_EXPECTED_CLI_VERSION = "1.0.1"
 }

@@ -3,7 +3,7 @@ BIN_DIR ?= bin
 DIST ?= dist
 TOOLS_DIR ?= .tools
 GO_VERSION ?= 1.22.12
-VERSION ?= 1.0.0
+VERSION ?= 1.0.1
 PLATFORMS ?= darwin/amd64 darwin/arm64 linux/amd64 linux/arm64
 PREFIX ?= /usr/local
 
