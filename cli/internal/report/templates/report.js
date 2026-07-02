@@ -337,18 +337,42 @@
   document.querySelectorAll('[data-leak-explorer]').forEach((explorer) => {
     const buttons = Array.from(explorer.querySelectorAll('[data-leak-select]'));
     const panels = Array.from(explorer.querySelectorAll('[data-leak-panel]'));
+    const panelIDs = new Set(panels.map((panel) => panel.id));
+    const linkedRows = Array.from(document.querySelectorAll('[data-leak-row]'))
+      .filter((row) => panelIDs.has(row.dataset.leakTarget || ''));
+    const tablist = explorer.querySelector('.leak-selector');
+    if (tablist) tablist.setAttribute('role', 'tablist');
     const activate = (targetID) => {
       let matched = false;
       panels.forEach((panel) => {
         const active = panel.id === targetID;
         panel.hidden = !active;
         panel.classList.toggle('is-active', active);
+        panel.setAttribute('aria-hidden', String(!active));
+        panel.querySelectorAll('[data-leak-node]').forEach((node) => {
+          if (active) {
+            if (node.dataset.tipCache && !node.dataset.tip) {
+              node.dataset.tip = node.dataset.tipCache;
+            }
+            node.tabIndex = 0;
+          } else {
+            if (node.dataset.tip) {
+              node.dataset.tipCache = node.dataset.tip;
+              delete node.dataset.tip;
+            }
+            node.tabIndex = -1;
+          }
+        });
         if (active) matched = true;
       });
       buttons.forEach((button) => {
         const active = button.dataset.leakTarget === targetID;
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+      });
+      linkedRows.forEach((row) => {
+        row.classList.toggle('is-active', row.dataset.leakTarget === targetID);
       });
       if (!matched && panels[0]) {
         activate(panels[0].id);
@@ -357,6 +381,22 @@
     };
     buttons.forEach((button) => {
       button.addEventListener('click', () => activate(button.dataset.leakTarget));
+    });
+    linkedRows.forEach((row) => {
+      if (row.dataset.leakRowEnhanced === 'true') return;
+      row.dataset.leakRowEnhanced = 'true';
+      row.tabIndex = 0;
+      row.addEventListener('click', () => {
+        const fold = explorer.closest('details');
+        if (fold && !fold.open) fold.open = true;
+        activate(row.dataset.leakTarget);
+        explorer.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      });
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        row.click();
+      });
     });
     if (buttons[0]) {
       activate(buttons[0].dataset.leakTarget);

@@ -134,6 +134,68 @@ func TestWriteReports(t *testing.T) {
 	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl")
 }
 
+func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
+	summary := analyze.Summary{
+		Title: "leaks.jhlog",
+		MemoryLeaks: []analyze.MemoryLeakSuspect{{
+			ClassName:           "com.app.checkout.SuperLongCheckoutActivityNameThatMustWrapInsideGraphNode",
+			Holder:              "CheckoutPresenter",
+			Screen:              "Checkout",
+			Flow:                "checkout.pay",
+			Step:                "destroyed",
+			Count:               1,
+			MaxAgeMS:            45_000,
+			EstimatedRetainedKB: 8192,
+			DominatorPath: []string{
+				"экран: Checkout",
+				"сценарий: checkout.pay",
+				"держатель: CheckoutPresenter",
+				"удержанный объект: com.app.checkout.SuperLongCheckoutActivityNameThatMustWrapInsideGraphNode",
+			},
+			LeakChainSummary: "Удержан экран Checkout после destroy.",
+			Severity:         "high",
+			ObjectKind:       "экран / Activity",
+			HolderQuality:    "вероятный держатель из контекста",
+			Impact:           "Удержана Activity.",
+			Recommendation:   "Очистите ссылки presenter-а на Activity.",
+			Evidence:         "кол-во=1 · макс. возраст=45 сек",
+		}},
+	}
+
+	dir := t.TempDir()
+	inspectPath := filepath.Join(dir, "report-leaks.html")
+	if err := WriteLeakInspectWithOptions(inspectPath, analyze.BuildLeakReport(summary), ReportOptions{}); err != nil {
+		t.Fatalf("WriteLeakInspectWithOptions() error = %v", err)
+	}
+	assertHTMLContains(
+		t,
+		inspectPath,
+		`<details id="explorer" class="fold leak-report-fold" open>`,
+		`<details id="registry" class="fold leak-report-fold" open>`,
+		`data-leak-target="leak-1"`,
+		`data-leak-row`,
+		`role="tab"`,
+		`linkedRows`,
+		`scrollIntoView`,
+		`tipCache`,
+		`.leak-graph-panel[hidden]`,
+		`y="34" class="node-title"`,
+	)
+
+	comparePath := filepath.Join(dir, "compare-leaks.html")
+	if err := WriteLeakCompareWithOptions(comparePath, analyze.BuildLeakCompareReport(analyze.Compare(analyze.Summary{}, summary)), ReportOptions{}); err != nil {
+		t.Fatalf("WriteLeakCompareWithOptions() error = %v", err)
+	}
+	assertHTMLContains(
+		t,
+		comparePath,
+		`<details id="explorer" class="fold leak-report-fold" open>`,
+		`<details id="registry" class="fold leak-report-fold" open>`,
+		`data-leak-target="leak-delta-0"`,
+		`data-leak-row`,
+	)
+}
+
 func TestCodeProblemCategoryOptions(t *testing.T) {
 	html := string(codeProblemCategoryOptions([]analyze.CodeProblemStats{
 		{Categories: []string{"Новая категория"}},

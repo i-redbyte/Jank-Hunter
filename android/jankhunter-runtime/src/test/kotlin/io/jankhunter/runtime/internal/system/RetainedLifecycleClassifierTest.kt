@@ -16,7 +16,7 @@ class RetainedLifecycleClassifierTest {
         assertTrue(target.instance is CheckoutBinding)
         assertEquals(CheckoutBinding::class.java.name, target.description)
         assertEquals("CheckoutOwner", target.ownerHint)
-        assertEquals("jankhunter.lifecycle.fragment_binding", target.flow)
+        assertEquals("lifecycle.autowatch.fragment_binding", target.flow)
         assertEquals("onDestroyView", target.step)
     }
 
@@ -31,7 +31,7 @@ class RetainedLifecycleClassifierTest {
         assertTrue(target.instance === viewModel)
         assertEquals(CheckoutViewModel::class.java.name, target.description)
         assertTrue(target.ownerHint.startsWith("lifecycle.onCleared."))
-        assertEquals("jankhunter.lifecycle.viewmodel", target.flow)
+        assertEquals("lifecycle.autowatch.viewmodel", target.flow)
     }
 
     @Test
@@ -43,7 +43,7 @@ class RetainedLifecycleClassifierTest {
         assertEquals(1, targets.size)
         val target = targets.single()
         assertTrue(target.instance is CheckoutBinding)
-        assertEquals("jankhunter.lifecycle.viewholder_binding", target.flow)
+        assertEquals("lifecycle.autowatch.viewholder_binding", target.flow)
         assertEquals("onViewRecycled", target.step)
         assertTrue(target.ownerHint.contains("CheckoutViewHolder.binding"))
     }
@@ -57,7 +57,7 @@ class RetainedLifecycleClassifierTest {
         assertEquals(1, targets.size)
         val target = targets.single()
         assertTrue(target.instance === adapter)
-        assertEquals("jankhunter.lifecycle.recycler_adapter", target.flow)
+        assertEquals("lifecycle.autowatch.recycler_adapter", target.flow)
         assertEquals("onDetachedFromRecyclerView", target.step)
     }
 

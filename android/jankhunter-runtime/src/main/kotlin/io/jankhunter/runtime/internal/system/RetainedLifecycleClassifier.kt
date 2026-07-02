@@ -29,7 +29,9 @@ internal object RetainedLifecycleClassifier {
             event == "onDestroy" && instance is Activity -> activityDestroyTargets(instance, className, explicitOwner)
             event == "onDestroy" && isFragmentLike(instance) -> single(instance, className, explicitOwner, "fragment", event)
             event == "onCleared" && isViewModelLike(instance) -> single(instance, className, explicitOwner, "viewmodel", event)
-            event == "onDetachedFromWindow" && instance is View -> single(instance, className, explicitOwner, "view", event)
+            event == "onDetachedFromWindow" && instance is View && !isFrameworkLifecycleClass(className) -> {
+                single(instance, className, explicitOwner, "view", event)
+            }
             event == "onDestroy" && instance is Service -> single(instance, className, explicitOwner, "service", event)
             event in setOf("onStop", "onDestroy") && instance is Dialog -> dialogTargets(instance, className, explicitOwner, event)
             event in setOf("onViewRecycled", "onViewDetachedFromWindow") && isViewHolderLike(instance) -> {
@@ -143,10 +145,12 @@ internal object RetainedLifecycleClassifier {
             instance = instance,
             description = description,
             ownerHint = ownerHint ?: "lifecycle.$event.$cleanSource",
-            flow = "jankhunter.lifecycle.$kind",
+            flow = lifecycleFlow(kind),
             step = event,
         )
     }
+
+    private fun lifecycleFlow(kind: String): String = "lifecycle.autowatch.$kind"
 
     private fun currentFragmentView(fragment: Any): View? {
         return runCatching {
@@ -226,6 +230,12 @@ internal object RetainedLifecycleClassifier {
     private fun isBindingLike(instance: Any): Boolean {
         val name = instance.javaClass.name
         return name.endsWith("Binding") || name.contains(".databinding.") || name.contains("ViewBinding")
+    }
+
+    private fun isFrameworkLifecycleClass(className: String): Boolean {
+        return className.startsWith("android.") ||
+            className.startsWith("androidx.") ||
+            className.startsWith("com.android.")
     }
 
     private fun ancestryNames(type: Class<*>): Sequence<String> {

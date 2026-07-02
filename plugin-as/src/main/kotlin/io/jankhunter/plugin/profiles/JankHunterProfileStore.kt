@@ -2,19 +2,24 @@ package io.jankhunter.plugin.profiles
 
 import com.google.gson.GsonBuilder
 import com.intellij.openapi.project.Project
+import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 import java.io.File
 
 data class JankHunterProfileFile(
+    val defaults: JankHunterStoredProfile? = null,
     val profiles: MutableMap<String, JankHunterStoredProfile> = linkedMapOf(),
 )
 
 data class JankHunterStoredProfile(
     val mode: String = JankHunterMode.INSPECT.name,
     val logs: String = "",
+    val inspectLogScope: String = JankHunterLogScope.ALL_SELECTED.name,
     val baseline: String = "",
+    val baselineLogScope: String = JankHunterLogScope.ALL_SELECTED.name,
     val candidate: String = "",
+    val candidateLogScope: String = JankHunterLogScope.ALL_SELECTED.name,
     val output: String = "",
     val ownerMap: String = "",
     val mapping: String = "",
@@ -40,8 +45,11 @@ data class JankHunterStoredProfile(
             mode = runCatching { JankHunterMode.valueOf(mode) }.getOrDefault(JankHunterMode.INSPECT),
             cliPath = cliPath,
             logs = logs,
+            inspectLogScope = parseLogScope(inspectLogScope),
             baseline = baseline,
+            baselineLogScope = parseLogScope(baselineLogScope),
             candidate = candidate,
+            candidateLogScope = parseLogScope(candidateLogScope),
             output = output,
             ownerMap = ownerMap,
             mapping = mapping,
@@ -68,8 +76,11 @@ data class JankHunterStoredProfile(
             JankHunterStoredProfile(
                 mode = request.mode.name,
                 logs = request.logs,
+                inspectLogScope = request.inspectLogScope.name,
                 baseline = request.baseline,
+                baselineLogScope = request.baselineLogScope.name,
                 candidate = request.candidate,
+                candidateLogScope = request.candidateLogScope.name,
                 output = request.output,
                 ownerMap = request.ownerMap,
                 mapping = request.mapping,
@@ -90,6 +101,9 @@ data class JankHunterStoredProfile(
                 json = request.json,
                 presentation = request.presentation,
             )
+
+        private fun parseLogScope(value: String): JankHunterLogScope =
+            runCatching { JankHunterLogScope.valueOf(value) }.getOrDefault(JankHunterLogScope.ALL_SELECTED)
     }
 }
 
@@ -113,21 +127,34 @@ class JankHunterProfileStore(private val project: Project) {
         target.writeText(gson.toJson(profileFile.withDefaults()))
     }
 
+    fun loadDefaults(cliPath: String): JankHunterRunRequest? =
+        load().defaults?.toRequest(cliPath)
+
+    fun saveDefaults(request: JankHunterRunRequest) {
+        val current = load()
+        save(
+            JankHunterProfileFile(
+                defaults = JankHunterStoredProfile.fromRequest(request),
+                profiles = current.profiles,
+            ),
+        )
+    }
+
     fun saveProfile(name: String, request: JankHunterRunRequest) {
-        val profiles = load()
-        profiles.profiles[name] = JankHunterStoredProfile.fromRequest(request)
-        save(profiles)
+        val current = load()
+        current.profiles[name] = JankHunterStoredProfile.fromRequest(request)
+        save(current)
     }
 
     private fun JankHunterProfileFile.withDefaults(): JankHunterProfileFile {
-        val defaults = defaults()
-        defaults.profiles.putAll(profiles)
-        return defaults
+        val defaultFile = defaults()
+        defaultFile.profiles.putAll(profiles)
+        return defaultFile.copy(defaults = defaults)
     }
 
     private fun defaults(): JankHunterProfileFile =
         JankHunterProfileFile(
-            linkedMapOf(
+            profiles = linkedMapOf(
                 "debug" to JankHunterStoredProfile(mode = JankHunterMode.INSPECT.name, presentation = false),
                 "release" to JankHunterStoredProfile(mode = JankHunterMode.COMPARE.name, presentation = true),
                 "ci" to JankHunterStoredProfile(mode = JankHunterMode.SCORECARD.name, json = true, format = "json"),

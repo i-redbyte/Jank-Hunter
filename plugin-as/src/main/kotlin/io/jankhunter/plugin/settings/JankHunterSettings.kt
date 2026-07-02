@@ -6,6 +6,7 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
 import io.jankhunter.plugin.execution.JankHunterMode
+import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 
 @Service(Service.Level.APP)
@@ -21,10 +22,14 @@ class JankHunterSettings : PersistentStateComponent<JankHunterSettings.State> {
 
     class State {
         var cliPath: String = ""
+        var logsDirectory: String = ""
+        var packageName: String = ""
+        var remoteLogsPath: String = ""
         var outputDirectory: String = ""
         var openReportInIde: Boolean = true
         var openReportExternally: Boolean = false
         var presentationMode: Boolean = false
+        var lastRun: RecentRun? = null
         var recentRuns: MutableList<RecentRun> = mutableListOf()
     }
 
@@ -34,13 +39,17 @@ class JankHunterSettings : PersistentStateComponent<JankHunterSettings.State> {
 }
 
 class RecentRun {
+    var projectPath: String = ""
     var timestamp: String = ""
     var commandLine: String = ""
     var mode: String = JankHunterMode.INSPECT.name
     var cliPath: String = ""
     var logs: String = ""
+    var inspectLogScope: String = JankHunterLogScope.ALL_SELECTED.name
     var baseline: String = ""
+    var baselineLogScope: String = JankHunterLogScope.ALL_SELECTED.name
     var candidate: String = ""
+    var candidateLogScope: String = JankHunterLogScope.ALL_SELECTED.name
     var output: String = ""
     var ownerMap: String = ""
     var mapping: String = ""
@@ -66,8 +75,11 @@ class RecentRun {
             mode = runCatching { JankHunterMode.valueOf(mode) }.getOrDefault(JankHunterMode.INSPECT),
             cliPath = cliPath,
             logs = logs,
+            inspectLogScope = parseLogScope(inspectLogScope),
             baseline = baseline,
+            baselineLogScope = parseLogScope(baselineLogScope),
             candidate = candidate,
+            candidateLogScope = parseLogScope(candidateLogScope),
             output = output,
             ownerMap = ownerMap,
             mapping = mapping,
@@ -90,15 +102,24 @@ class RecentRun {
         )
 
     companion object {
-        fun fromRequest(timestamp: String, commandLine: String, request: JankHunterRunRequest): RecentRun =
+        fun fromRequest(
+            timestamp: String,
+            commandLine: String,
+            request: JankHunterRunRequest,
+            projectPath: String = "",
+        ): RecentRun =
             RecentRun().apply {
+                this.projectPath = projectPath
                 this.timestamp = timestamp
                 this.commandLine = commandLine
                 mode = request.mode.name
                 cliPath = request.cliPath
                 logs = request.logs
+                inspectLogScope = request.inspectLogScope.name
                 baseline = request.baseline
+                baselineLogScope = request.baselineLogScope.name
                 candidate = request.candidate
+                candidateLogScope = request.candidateLogScope.name
                 output = request.output
                 ownerMap = request.ownerMap
                 mapping = request.mapping
@@ -119,5 +140,8 @@ class RecentRun {
                 json = request.json
                 presentation = request.presentation
             }
+
+        private fun parseLogScope(value: String): JankHunterLogScope =
+            runCatching { JankHunterLogScope.valueOf(value) }.getOrDefault(JankHunterLogScope.ALL_SELECTED)
     }
 }

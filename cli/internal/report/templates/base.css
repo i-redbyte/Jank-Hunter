@@ -515,6 +515,17 @@ main {
   word-break: break-word;
   white-space: normal;
 }
+[data-leak-row] {
+  cursor: pointer;
+}
+[data-leak-row].is-active td {
+  background: rgba(98,255,168,0.055);
+  box-shadow: inset 3px 0 0 rgba(98,255,168,0.62);
+}
+[data-leak-row]:focus-visible {
+  outline: 2px solid rgba(126,247,255,0.62);
+  outline-offset: -2px;
+}
 .leak-object-kind {
   color: var(--cyan);
   font-size: 12px;
@@ -596,6 +607,11 @@ main {
   gap: 16px;
   align-items: start;
 }
+.leak-report-fold .fold-body {
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
 .leak-selector {
   display: grid;
   gap: 8px;
@@ -605,12 +621,14 @@ main {
 }
 .leak-select {
   appearance: none;
+  position: relative;
   display: grid;
   gap: 5px;
   width: 100%;
   min-height: 84px;
-  padding: 10px 12px;
+  padding: 10px 12px 10px 14px;
   border: 1px solid rgba(126,247,255,0.18);
+  border-left-width: 4px;
   border-radius: 8px;
   color: var(--ink);
   background: rgba(111,247,255,0.045);
@@ -618,13 +636,30 @@ main {
   font: inherit;
   cursor: pointer;
 }
+.leak-select::after {
+  content: "#" attr(data-leak-rank);
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: rgba(164,183,201,0.56);
+  font: 800 10px/1 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
 .leak-select:hover,
 .leak-select:focus-visible,
 .leak-select.is-active {
   outline: none;
   border-color: rgba(126,247,255,0.56);
+  border-left-color: var(--ok);
   background: rgba(111,247,255,0.10);
   box-shadow: 0 0 0 3px rgba(111,247,255,0.08);
+}
+.leak-select.is-active {
+  background:
+    linear-gradient(90deg, rgba(98,255,168,0.12), rgba(111,247,255,0.08)),
+    rgba(111,247,255,0.055);
+}
+.leak-select.is-active::after {
+  color: var(--ok);
 }
 .leak-select strong,
 .leak-select span,
@@ -650,6 +685,16 @@ main {
   display: grid;
   gap: 14px;
   min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(126,247,255,0.18);
+  border-left: 4px solid rgba(98,255,168,0.52);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(111,247,255,0.055), rgba(255,255,255,0.022)),
+    rgba(5,9,18,0.30);
+}
+.leak-graph-panel[hidden] {
+  display: none !important;
 }
 .leak-panel-head {
   display: grid;
@@ -730,11 +775,11 @@ main {
 }
 .leak-graph-node .node-title {
   fill: var(--ink);
-  font: 850 11px/1 Inter, "SF Pro Text", sans-serif;
+  font: 850 10.5px/1 Inter, "SF Pro Text", sans-serif;
 }
 .leak-graph-node .node-detail {
   fill: var(--muted);
-  font: 700 10px/1 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font: 700 9.5px/1 "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
 }
 .leak-graph-empty {
   padding: 18px;

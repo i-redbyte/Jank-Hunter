@@ -2061,13 +2061,13 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		return template.HTML(`<div class="leak-graph-empty">Нет данных для графа.</div>`)
 	}
 	const (
-		nodeW   = 168.0
-		nodeH   = 58.0
-		gapX    = 46.0
+		nodeW   = 196.0
+		nodeH   = 76.0
+		gapX    = 48.0
 		topY    = 48.0
-		bandY   = 98.0
+		bandY   = 120.0
 		leftX   = 24.0
-		minH    = 250.0
+		minH    = 300.0
 		maxCols = 8
 	)
 	mainNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
@@ -2090,8 +2090,12 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		cols = maxCols
 	}
 	width := math.Max(760, leftX*2+float64(cols)*(nodeW+gapX))
+	mainRows := math.Ceil(float64(len(mainNodes)) / maxCols)
+	if mainRows < 1 {
+		mainRows = 1
+	}
 	retainedRows := math.Ceil(float64(len(retainedNodes)) / 3)
-	height := math.Max(minH, topY+nodeH+84+retainedRows*72)
+	height := math.Max(minH, topY+mainRows*bandY+nodeH+84+retainedRows*90)
 	positions := map[string]graphPoint{}
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `<svg class="leak-graph-svg" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(graph.Title))
@@ -2110,7 +2114,7 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		col := index % 3
 		row := index / 3
 		x := math.Min(width-nodeW-24, math.Max(24, target.x-120+float64(col)*(nodeW+18)))
-		y := target.y + nodeH + 64 + float64(row)*72
+		y := target.y + nodeH + 64 + float64(row)*90
 		positions[node.ID] = graphPoint{x: x, y: y}
 	}
 	for _, edge := range graph.Edges {
@@ -2162,8 +2166,18 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		)
 		fmt.Fprintf(&builder, `<title>%s</title>`, template.HTMLEscapeString(tip))
 		fmt.Fprintf(&builder, `<rect width="%.0f" height="%.0f" rx="8"/>`, nodeW, nodeH)
-		fmt.Fprintf(&builder, `<text x="12" y="22" class="node-title">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Label, 26)))
-		fmt.Fprintf(&builder, `<text x="12" y="43" class="node-detail">%s</text>`, template.HTMLEscapeString(shortGraphLabel(node.Detail, 30)))
+		textY := 21.0
+		for _, line := range graphLabelLines(node.Label, 30, 2) {
+			fmt.Fprintf(&builder, `<text x="12" y="%.0f" class="node-title">%s</text>`, textY, template.HTMLEscapeString(line))
+			textY += 13
+		}
+		if node.Detail != "" {
+			textY += 3
+			for _, line := range graphLabelLines(node.Detail, 34, 2) {
+				fmt.Fprintf(&builder, `<text x="12" y="%.0f" class="node-detail">%s</text>`, textY, template.HTMLEscapeString(line))
+				textY += 12
+			}
+		}
 		builder.WriteString(`</g>`)
 	}
 	builder.WriteString(`</svg>`)
@@ -2196,6 +2210,58 @@ func shortGraphLabel(value string, limit int) string {
 	}
 	runes := []rune(value)
 	return string(runes[:limit-1]) + "…"
+}
+
+func graphLabelLines(value string, limit int, maxLines int) []string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" || limit <= 0 || maxLines <= 0 {
+		return nil
+	}
+	runes := []rune(value)
+	lines := make([]string, 0, maxLines)
+	for len(runes) > 0 && len(lines) < maxLines {
+		if len(runes) <= limit {
+			lines = append(lines, string(runes))
+			break
+		}
+		if len(lines) == maxLines-1 {
+			lines = append(lines, shortGraphLabel(string(runes), limit))
+			break
+		}
+		cut := graphLineBreak(runes, limit)
+		line := strings.Trim(string(runes[:cut]), " ./#_$-→:")
+		if line == "" {
+			line = string(runes[:cut])
+		}
+		lines = append(lines, line)
+		runes = []rune(strings.TrimLeft(string(runes[cut:]), " ./#_$-→:"))
+	}
+	return lines
+}
+
+func graphLineBreak(runes []rune, limit int) int {
+	if len(runes) <= limit {
+		return len(runes)
+	}
+	lower := limit / 2
+	if lower < 8 {
+		lower = 8
+	}
+	for i := limit; i >= lower; i-- {
+		if graphBreakRune(runes[i-1]) {
+			return i
+		}
+	}
+	return limit
+}
+
+func graphBreakRune(r rune) bool {
+	switch r {
+	case '.', '/', '$', '#', '_', '-', ' ', '→', ':':
+		return true
+	default:
+		return false
+	}
 }
 
 func sparklineSVG(series mathanalysis.Series) template.HTML {

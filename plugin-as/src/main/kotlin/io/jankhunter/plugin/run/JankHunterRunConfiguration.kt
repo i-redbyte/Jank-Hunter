@@ -9,6 +9,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.InvalidDataException
 import com.intellij.openapi.util.WriteExternalException
 import io.jankhunter.plugin.execution.JankHunterMode
+import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 import org.jdom.Element
 
@@ -20,8 +21,11 @@ class JankHunterRunConfiguration(
     var mode: JankHunterMode = JankHunterMode.INSPECT
     var cliPath: String = ""
     var logs: String = ""
+    var inspectLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED
     var baseline: String = ""
+    var baselineLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED
     var candidate: String = ""
+    var candidateLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED
     var output: String = ""
     var ownerMap: String = ""
     var mapping: String = ""
@@ -52,8 +56,11 @@ class JankHunterRunConfiguration(
             mode = mode,
             cliPath = cliPath,
             logs = logs,
+            inspectLogScope = inspectLogScope,
             baseline = baseline,
+            baselineLogScope = baselineLogScope,
             candidate = candidate,
+            candidateLogScope = candidateLogScope,
             output = output,
             ownerMap = ownerMap,
             mapping = mapping,
@@ -79,8 +86,11 @@ class JankHunterRunConfiguration(
         mode = request.mode
         cliPath = request.cliPath
         logs = request.logs
+        inspectLogScope = request.inspectLogScope
         baseline = request.baseline
+        baselineLogScope = request.baselineLogScope
         candidate = request.candidate
+        candidateLogScope = request.candidateLogScope
         output = request.output
         ownerMap = request.ownerMap
         mapping = request.mapping
@@ -109,8 +119,11 @@ class JankHunterRunConfiguration(
         data.setAttribute("mode", mode.name)
         data.setAttribute("cliPath", cliPath)
         data.setAttribute("logs", logs)
+        data.setAttribute("inspectLogScope", inspectLogScope.name)
         data.setAttribute("baseline", baseline)
+        data.setAttribute("baselineLogScope", baselineLogScope.name)
         data.setAttribute("candidate", candidate)
+        data.setAttribute("candidateLogScope", candidateLogScope.name)
         data.setAttribute("output", output)
         data.setAttribute("ownerMap", ownerMap)
         data.setAttribute("mapping", mapping)
@@ -141,8 +154,11 @@ class JankHunterRunConfiguration(
             .getOrDefault(JankHunterMode.INSPECT)
         cliPath = data.getAttributeValue("cliPath", "")
         logs = data.getAttributeValue("logs", "")
+        inspectLogScope = parseLogScope(data.getAttributeValue("inspectLogScope"), JankHunterLogScope.ALL_SELECTED)
         baseline = data.getAttributeValue("baseline", "")
+        baselineLogScope = parseLogScope(data.getAttributeValue("baselineLogScope"), JankHunterLogScope.ALL_SELECTED)
         candidate = data.getAttributeValue("candidate", "")
+        candidateLogScope = parseLogScope(data.getAttributeValue("candidateLogScope"), JankHunterLogScope.ALL_SELECTED)
         output = data.getAttributeValue("output", "")
         ownerMap = data.getAttributeValue("ownerMap", "")
         mapping = data.getAttributeValue("mapping", "")
@@ -163,4 +179,7 @@ class JankHunterRunConfiguration(
         json = data.getAttributeValue("json", "false").toBoolean()
         presentation = data.getAttributeValue("presentation", "false").toBoolean()
     }
+
+    private fun parseLogScope(value: String?, fallback: JankHunterLogScope): JankHunterLogScope =
+        runCatching { JankHunterLogScope.valueOf(value ?: fallback.name) }.getOrDefault(fallback)
 }

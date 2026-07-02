@@ -11,8 +11,11 @@ data class JankHunterRunRequest(
     val mode: JankHunterMode,
     val cliPath: String,
     val logs: String,
+    val inspectLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED,
     val baseline: String,
+    val baselineLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED,
     val candidate: String,
+    val candidateLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED,
     val output: String,
     val ownerMap: String,
     val mapping: String,
@@ -105,10 +108,11 @@ object JankHunterCommandBuilder {
 
         when (request.mode) {
             JankHunterMode.INSPECT -> {
-                val logs = pathList(request.logs)
+                val logs = scopedPathList(project, request.logs, request.inspectLogScope)
                 require(logs.isNotEmpty()) { "Inspect: укажите хотя бы один .jhlog файл или glob-маску." }
                 addAnalysisFlags()
                 addInspectHeapFlags()
+                if (request.inspectLogScope == JankHunterLogScope.ALL_SELECTED) args += "--all-sessions"
                 if (request.json) args += "--json"
                 if (request.presentation) args += "--presentation"
                 addFlag("out", ensureOutput("html"))
@@ -116,8 +120,8 @@ object JankHunterCommandBuilder {
             }
 
             JankHunterMode.COMPARE -> {
-                val baseline = pathList(request.baseline)
-                val candidate = pathList(request.candidate)
+                val baseline = scopedPathList(project, request.baseline, request.baselineLogScope)
+                val candidate = scopedPathList(project, request.candidate, request.candidateLogScope)
                 require(baseline.isNotEmpty()) { "Compare: укажите baseline .jhlog файлы или glob-маски." }
                 require(candidate.isNotEmpty()) { "Compare: укажите candidate .jhlog файлы или glob-маски." }
                 addAnalysisFlags()
@@ -142,8 +146,8 @@ object JankHunterCommandBuilder {
             }
 
             JankHunterMode.SCORECARD -> {
-                val baseline = pathList(request.baseline)
-                val candidate = pathList(request.candidate)
+                val baseline = scopedPathList(project, request.baseline, request.baselineLogScope)
+                val candidate = scopedPathList(project, request.candidate, request.candidateLogScope)
                 require(baseline.isNotEmpty()) { "Scorecard: укажите baseline .jhlog файлы или glob-маски." }
                 require(candidate.isNotEmpty()) { "Scorecard: укажите candidate .jhlog файлы или glob-маски." }
                 addAnalysisFlags()
@@ -206,4 +210,58 @@ object JankHunterCommandBuilder {
     }
 
     private fun pathList(raw: String): List<String> = JankHunterInputPaths.pathList(raw)
+
+    private fun scopedPathList(project: Project, raw: String, scope: JankHunterLogScope): List<String> {
+        val parts = pathList(raw)
+        if (parts.isEmpty()) return emptyList()
+        return when (scope) {
+            JankHunterLogScope.ALL_SELECTED -> parts
+            JankHunterLogScope.LATEST_LOG -> latestExistingLog(project, raw)?.let { listOf(it) } ?: parts.take(1)
+            JankHunterLogScope.LATEST_SESSION_GROUP -> latestSessionGroup(project, raw).ifEmpty { parts }
+        }
+    }
+
+    private fun latestExistingLog(project: Project, raw: String): String? =
+        JankHunterInputPaths.expandExistingFiles(project, raw)
+            .maxByOrNull { it.toFile().lastModified() }
+            ?.toString()
+
+    private fun latestSessionGroup(project: Project, raw: String): List<String> {
+        val files = JankHunterInputPaths.expandExistingFiles(project, raw)
+            .sortedBy { it.toString() }
+        if (files.isEmpty()) return emptyList()
+        val latestByGroup = linkedMapOf<String, Long>()
+        val sessionByPath = linkedMapOf<String, SessionLogPath>()
+        files.forEach { path ->
+            val session = parseSessionLogPath(path.toFile()) ?: return@forEach
+            sessionByPath[path.toString()] = session
+            latestByGroup[session.group] = maxOf(latestByGroup[session.group] ?: Long.MIN_VALUE, session.startMs)
+        }
+        if (sessionByPath.isEmpty()) return files.map { it.toString() }
+        return files
+            .filter { path ->
+                val session = sessionByPath[path.toString()]
+                session == null || latestByGroup[session.group] == session.startMs
+            }
+            .map { it.toString() }
+    }
+
+    private fun parseSessionLogPath(file: File): SessionLogPath? {
+        val name = file.name.removeSuffix(".jhlog")
+        if (!file.name.endsWith(".jhlog") || !name.startsWith("session-")) return null
+        val parts = name.split('-')
+        if (parts.size < 4) return null
+        val startMs = parts[parts.size - 2].toLongOrNull() ?: return null
+        parts.last().toLongOrNull() ?: return null
+        val process = parts.subList(1, parts.size - 2).joinToString("-").takeIf { it.isNotBlank() } ?: return null
+        return SessionLogPath(
+            group = File(file.parentFile ?: File("."), "session-$process").path,
+            startMs = startMs,
+        )
+    }
+
+    private data class SessionLogPath(
+        val group: String,
+        val startMs: Long,
+    )
 }

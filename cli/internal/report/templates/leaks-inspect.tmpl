@@ -56,16 +56,15 @@
     <p class="help-text">{{.LeakReport.ModeHint}}</p>
   </section>
 
-  <section id="explorer" class="panel">
-    <div class="panel-head">
-      <div><h2>Проводник утечек</h2><div class="panel-kicker">Выберите удержанный объект: справа появится цепочка удержания. В режиме дампа кучи это путь от корня GC; в легком режиме — вероятная цепочка выполнения.</div></div>
-      <span class="pill">граф ссылок</span>
-    </div>
+  <details id="explorer" class="fold leak-report-fold" open>
+    <summary><span>Проводник утечек</span><span class="fold-summary-meta">{{len .LeakReport.Items}} сценариев · граф ссылок</span></summary>
+    <div class="fold-body">
+      <p class="help-text">Выберите удержанный объект: справа появится цепочка удержания. В режиме дампа кучи это путь от корня GC; в легком режиме — вероятная цепочка выполнения.</p>
     {{if .LeakReport.Items}}
     <div class="leak-explorer" data-leak-explorer>
       <div class="leak-selector" aria-label="Список утечек">
         {{range .LeakReport.Items}}
-        <button type="button" data-leak-select data-leak-target="leak-{{.Rank}}" class="leak-select">
+        <button type="button" data-leak-select data-leak-target="leak-{{.Rank}}" data-leak-rank="{{.Rank}}" class="leak-select" role="tab" aria-controls="leak-{{.Rank}}">
           <span class="problem-score {{severityClass .Suspect.Severity}}">{{severityLabel .Suspect.Severity}}</span>
           <strong>{{.Suspect.ClassName}}</strong>
           <span>{{.Suspect.Holder}}</span>
@@ -105,12 +104,13 @@
     {{else}}
     <p class="help-text">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что наблюдатель выполнения включен и сценарий дожил до задержки удержания.</p>
     {{end}}
-  </section>
-
-  <section id="registry" class="panel">
-    <div class="panel-head">
-      <div><h2>Реестр утечек</h2><div class="panel-kicker">Таблица для сортировки и фильтрации: объект, держатель, контекст, размер, цепочка и доказательства.</div></div>
     </div>
+  </details>
+
+  <details id="registry" class="fold leak-report-fold" open>
+    <summary><span>Реестр утечек</span><span class="fold-summary-meta">{{len .LeakReport.Items}} строк · сортировка и фильтры</span></summary>
+    <div class="fold-body">
+    <p class="help-text">Таблица для сортировки и фильтрации: объект, держатель, контекст, размер, цепочка и доказательства.</p>
     {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -132,7 +132,7 @@
         <thead><tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>Удержанный размер</th><th>Цепочка</th><th>Что проверить</th><th>Доказательства</th></tr></thead>
         <tbody>
           {{range .LeakReport.Items}}
-          <tr data-code-problem-row data-score="{{printf "%.1f" .Suspect.Score}}" data-severity="{{.Suspect.Severity}}" data-class="{{.Suspect.ClassName}}" data-categories="{{.Suspect.ObjectKind}}" data-search="{{.PlainText}}">
+          <tr data-code-problem-row data-leak-row data-leak-target="leak-{{.Rank}}" data-score="{{printf "%.1f" .Suspect.Score}}" data-severity="{{.Suspect.Severity}}" data-class="{{.Suspect.ClassName}}" data-categories="{{.Suspect.ObjectKind}}" data-search="{{.PlainText}}">
             <td><span class="problem-score {{severityClass .Suspect.Severity}}">{{severityLabel .Suspect.Severity}}</span></td>
             <td><code>{{.Suspect.ClassName}}</code></td>
             <td>{{leakObjectKindLabel .Suspect.ObjectKind}}</td>
@@ -148,7 +148,8 @@
         </tbody>
       </table>
     </div>
-  </section>
+    </div>
+  </details>
 
   <section id="warnings" class="panel">
     <div class="panel-head"><div><h2>Ограничения анализа</h2><div class="panel-kicker">Отчет явно показывает, где данные точные, а где это подсказка из выполнения.</div></div></div>

@@ -56,17 +56,16 @@
     {{range .LeakReport.Warnings}}<p class="warning">{{.}}</p>{{end}}
   </section>
 
-  <section id="explorer" class="panel">
-    <div class="panel-head">
-      <div><h2>Проводник дельт утечек</h2><div class="panel-kicker">Выберите дельту: справа будет граф кандидата, а для исчезнувших утечек — граф базы, чтобы было видно, что именно исчезло.</div></div>
-      <span class="pill">база → кандидат</span>
-    </div>
+  <details id="explorer" class="fold leak-report-fold" open>
+    <summary><span>Проводник дельт утечек</span><span class="fold-summary-meta">{{len .LeakReport.Deltas}} дельт · база → кандидат</span></summary>
+    <div class="fold-body">
+      <p class="help-text">Выберите дельту: справа будет граф кандидата, а для исчезнувших утечек — граф базы, чтобы было видно, что именно исчезло.</p>
     {{if .LeakReport.Deltas}}
     <div class="leak-explorer" data-leak-explorer>
       <div class="leak-selector" aria-label="Список дельт утечек">
         {{range $index, $delta := .LeakReport.Deltas}}
         {{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}
-        <button type="button" data-leak-select data-leak-target="leak-delta-{{$index}}" class="leak-select">
+        <button type="button" data-leak-select data-leak-target="leak-delta-{{$index}}" data-leak-rank="{{$index}}" class="leak-select" role="tab" aria-controls="leak-delta-{{$index}}">
           <span class="problem-score {{severityClass $delta.Severity}}">{{$delta.StatusLabel}}</span>
           <strong>{{$suspect.ClassName}}</strong>
           <span>{{$suspect.Holder}}</span>
@@ -107,12 +106,13 @@
     {{else}}
     <p class="help-text">Утечек нет ни в базе, ни в кандидате.</p>
     {{end}}
-  </section>
-
-  <section id="registry" class="panel">
-    <div class="panel-head">
-      <div><h2>Дельты утечек</h2><div class="panel-kicker">Таблица показывает новые, усилившиеся, ослабевшие и исчезнувшие отпечатки.</div></div>
     </div>
+  </details>
+
+  <details id="registry" class="fold leak-report-fold" open>
+    <summary><span>Дельты утечек</span><span class="fold-summary-meta">{{len .LeakReport.Deltas}} строк · сортировка и фильтры</span></summary>
+    <div class="fold-body">
+    <p class="help-text">Таблица показывает новые, усилившиеся, ослабевшие и исчезнувшие отпечатки.</p>
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
         <input type="search" data-code-registry-search placeholder="Фильтр по объекту, держателю, статусу или рекомендации" aria-label="Фильтр дельт утечек">
@@ -136,23 +136,24 @@
       <table class="code-problem-table leak-table">
         <thead><tr><th><button type="button" data-code-sort="severity">Статус</button></th><th><button type="button" data-code-sort="class">Объект</button></th><th>Держатель</th><th>Оценка</th><th>Количество / возраст</th><th>Удержанный размер</th><th>Объяснение</th><th>Что проверить</th></tr></thead>
         <tbody>
-          {{range .LeakReport.Deltas}}
-          {{$suspect := .Candidate}}{{if not .HasCandidate}}{{$suspect = .Baseline}}{{end}}
-          <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{$suspect.ClassName}}" data-categories="{{.Status}}" data-search="{{.PlainText}}">
-            <td><span class="problem-score {{severityClass .Severity}}">{{.StatusLabel}}</span></td>
+          {{range $index, $delta := .LeakReport.Deltas}}
+          {{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}
+          <tr data-code-problem-row data-leak-row data-leak-target="leak-delta-{{$index}}" data-score="{{printf "%.1f" $delta.DeltaScore}}" data-severity="{{$delta.Severity}}" data-class="{{$suspect.ClassName}}" data-categories="{{$delta.Status}}" data-search="{{$delta.PlainText}}">
+            <td><span class="problem-score {{severityClass $delta.Severity}}">{{$delta.StatusLabel}}</span></td>
             <td><code>{{$suspect.ClassName}}</code><div class="muted">{{leakObjectKindLabel $suspect.ObjectKind}}</div></td>
             <td><code>{{$suspect.Holder}}</code><div class="muted">{{$suspect.HolderQuality}}</div></td>
-            <td>{{printf "%.1f" .ScoreBefore}} → {{printf "%.1f" .ScoreAfter}}<div class="muted">{{printf "%+.1f" .DeltaScore}}</div></td>
-            <td>{{.CountBefore}} → {{.CountAfter}}<div class="muted">{{printf "%+d" .DeltaCount}} · {{humanDuration .AgeBeforeMS}} → {{humanDuration .AgeAfterMS}}</div></td>
-            <td>{{dataSize .EstimatedBeforeKB}} → {{dataSize .EstimatedAfterKB}}<div class="muted">{{printf "%+d КБ" .DeltaEstimatedKB}}</div></td>
-            <td>{{.Explanation}}<div class="muted">{{.MatchConfidence}}</div></td>
-            <td>{{.Recommendation}}</td>
+            <td>{{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}}<div class="muted">{{printf "%+.1f" $delta.DeltaScore}}</div></td>
+            <td>{{$delta.CountBefore}} → {{$delta.CountAfter}}<div class="muted">{{printf "%+d" $delta.DeltaCount}} · {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}</div></td>
+            <td>{{dataSize $delta.EstimatedBeforeKB}} → {{dataSize $delta.EstimatedAfterKB}}<div class="muted">{{printf "%+d КБ" $delta.DeltaEstimatedKB}}</div></td>
+            <td>{{$delta.Explanation}}<div class="muted">{{$delta.MatchConfidence}}</div></td>
+            <td>{{$delta.Recommendation}}</td>
           </tr>
           {{else}}<tr><td colspan="8" class="muted">Дельт утечек нет.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
-  </section>
+    </div>
+  </details>
 
   <section id="cohorts" class="panel">
     <div class="panel-head"><div><h2>Когорты и доверие</h2><div class="panel-kicker">Перед выводом о регрессии проверьте, что база и кандидат собраны на похожих версиях, устройствах, процессах и сценариях.</div></div></div>

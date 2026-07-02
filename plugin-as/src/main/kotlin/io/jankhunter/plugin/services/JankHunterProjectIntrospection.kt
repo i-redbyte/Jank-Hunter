@@ -29,6 +29,7 @@ object JankHunterProjectIntrospection {
     fun detect(project: Project): JankHunterTargetProject? {
         val root = project.basePath?.let(::File)?.takeIf(File::isDirectory) ?: return null
         val buildFiles = root.walkTopDown()
+            .maxDepth(5)
             .onEnter { file -> file.name !in skippedDirectories }
             .filter { file -> file.isFile && file.name in setOf("build.gradle", "build.gradle.kts") }
             .toList()

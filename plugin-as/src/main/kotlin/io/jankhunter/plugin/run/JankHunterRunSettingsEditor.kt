@@ -5,6 +5,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
+import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterMode
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
@@ -19,8 +20,11 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
     private val mode = JComboBox(JankHunterMode.entries.toTypedArray())
     private val cliPath = TextFieldWithBrowseButton()
     private val logs = JBTextField()
+    private val inspectLogScope = JComboBox(JankHunterLogScope.entries.toTypedArray())
     private val baseline = JBTextField()
+    private val baselineLogScope = JComboBox(JankHunterLogScope.entries.toTypedArray())
     private val candidate = JBTextField()
+    private val candidateLogScope = JComboBox(JankHunterLogScope.entries.toTypedArray())
     private val output = JBTextField()
     private val ownerMap = JBTextField()
     private val mapping = JBTextField()
@@ -42,8 +46,11 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         add(row++, "Mode", mode)
         add(row++, "CLI", cliPath)
         add(row++, "Logs", logs)
+        add(row++, "Inspect scope", inspectLogScope)
         add(row++, "Baseline", baseline)
+        add(row++, "Baseline scope", baselineLogScope)
         add(row++, "Candidate", candidate)
+        add(row++, "Candidate scope", candidateLogScope)
         add(row++, "Output", output)
         add(row++, "Owner map", ownerMap)
         add(row++, "Mapping", mapping)
@@ -65,8 +72,11 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         mode.selectedItem = configuration.mode
         cliPath.text = configuration.cliPath
         logs.text = configuration.logs
+        inspectLogScope.selectedItem = configuration.inspectLogScope
         baseline.text = configuration.baseline
+        baselineLogScope.selectedItem = configuration.baselineLogScope
         candidate.text = configuration.candidate
+        candidateLogScope.selectedItem = configuration.candidateLogScope
         output.text = configuration.output
         ownerMap.text = configuration.ownerMap
         mapping.text = configuration.mapping
@@ -88,8 +98,11 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         configuration.mode = mode.selectedItem as? JankHunterMode ?: JankHunterMode.INSPECT
         configuration.cliPath = cliPath.text
         configuration.logs = logs.text
+        configuration.inspectLogScope = inspectLogScope.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
         configuration.baseline = baseline.text
+        configuration.baselineLogScope = baselineLogScope.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
         configuration.candidate = candidate.text
+        configuration.candidateLogScope = candidateLogScope.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
         configuration.output = output.text
         configuration.ownerMap = ownerMap.text
         configuration.mapping = mapping.text
