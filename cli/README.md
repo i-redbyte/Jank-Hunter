@@ -1,40 +1,33 @@
-# Jank Hunter CLI
+# Командная Утилита Jank Hunter
 
-`jankhunter` - консольная утилита для `.jhlog` файлов. Она читает логи с Android-устройства и делает отчеты: одиночный прогон через `inspect`, сравнение двух прогонов через `compare`, экспорт событий через `export` и профиль размера через `size`.
+`jankhunter` это локальная командная утилита для `.jhlog` файлов. Она читает логи с Android-устройства и создаёт отчёты по одному прогону, сравнению двух прогонов, утечкам памяти, математическому разбору, графу влияния кода и диагностике ASM-внедрения.
 
-CLI работает локально. Никакой backend не нужен: на выходе обычный HTML-файл, который можно открыть в браузере или положить в CI artifacts.
+Сервер не нужен. На выходе обычные HTML, CSV, JSON или JSONL файлы, которые можно открыть в браузере, приложить к задаче или сохранить в файлах проверки сборки.
 
 ## Установка
 
-Самый простой вариант:
+Сборка:
 
 ```bash
 make build
 ```
 
-Готовый бинарник будет здесь:
+Готовый файл:
 
 ```text
 bin/jankhunter
 ```
 
-Если Go не установлен, Makefile сам скачает Go в локальную папку:
+Если Go не найден, Makefile скачает Go `1.22.12` в локальный каталог:
 
 ```text
 cli/.tools/go
 ```
 
-Системный Go при этом не трогается.
-
-Поставить команду в систему:
+Установка команды:
 
 ```bash
 make install
-```
-
-По умолчанию установка идет в `/usr/local/bin`. Если нужны права попроще:
-
-```bash
 make install PREFIX="$HOME/.local"
 ```
 
@@ -44,84 +37,105 @@ make install PREFIX="$HOME/.local"
 jankhunter version
 ```
 
-Сборка под другую платформу:
+Текущие значения:
+
+```text
+Jank Hunter CLI 1.0.1
+.jhlog format 8
+```
+
+Сборка под другую систему:
 
 ```bash
 make build BUILD_OS=linux BUILD_ARCH=amd64 OUT=bin/jankhunter-linux-amd64
 make build BUILD_OS=darwin BUILD_ARCH=arm64 OUT=bin/jankhunter-darwin-arm64
 ```
 
-Архивы для нескольких платформ:
+Архивы по списку `PLATFORMS` из Makefile:
 
 ```bash
-make release VERSION=1.0.0
+make release VERSION=1.0.1
 ```
 
-## Быстрая проверка
+## Быстрая Проверка
 
 ```bash
 make build
 ./bin/jankhunter sample --out /tmp/sample.jhlog
 ./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
-./bin/jankhunter size /tmp/sample.jhlog
 ./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
+./bin/jankhunter size /tmp/sample.jhlog
 ```
 
-После этого появятся:
+После `inspect` рядом с основным отчётом могут появиться:
 
 ```text
 /tmp/report.html
 /tmp/report-math.html
 /tmp/report-leaks.html
 /tmp/report-influence.html
+/tmp/report-diagnostics.html
+```
+
+После `compare`:
+
+```text
 /tmp/compare.html
 /tmp/compare-math.html
 /tmp/compare-leaks.html
 /tmp/compare-influence.html
+/tmp/compare-diagnostics.html
 ```
 
-Для демо и ревью с командой добавьте `--presentation`: основной отчет, математическая страница и граф влияния получают presentation mode с более крупными акцентами и печатным CSS.
+`*-diagnostics.html` создаётся, когда передан `--instrumentation-diagnostics`.
+
+Для доклада или обсуждения с командой можно включить более крупные акценты:
 
 ```bash
 jankhunter inspect logs/*.jhlog --presentation --out report.html
 jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --presentation --out compare.html
 ```
 
-Основной отчет открывается как обычный HTML. Математический отчет открывается из зеленой кнопки `λ Анализ`, граф влияния кода - из кнопки `Граф влияния`, если в логах есть owner/flow-сигналы.
+## Команды
 
-## inspect
+Краткая карта:
 
-`inspect` нужен, когда есть один лог или пачка логов и нужно понять, что происходило в прогоне.
+- `sample`: создаёт пример `.jhlog`.
+- `inspect`: разбирает один или несколько логов.
+- `compare`: сравнивает базовый и проверяемый прогоны.
+- `problems`: выгружает проблемные места в CSV или JSON.
+- `scorecard`: строит JSON-оценку качества данных и готовности сравнения.
+- `export`: пишет сырые события в JSONL.
+- `size`: показывает профиль размера логов.
+- `version`: печатает версию утилиты и формат `.jhlog`.
+
+Справка:
+
+```bash
+jankhunter help
+```
+
+## Inspect
+
+Один или несколько логов:
 
 ```bash
 jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-Что будет в отчете:
+Что видно в отчёте:
 
-- быстрый верхний срез: HTTP p95, UI, FPS, память, трафик;
-- контекст устройства: Android, ABI, батарея, сеть/VPN, RAM, storage, рут-доступ;
-- маршруты HTTP;
-- экраны и подтормаживания UI;
-- источники работ: owners/classes/stack hints;
-- память и retained objects;
-- counters/gauges;
-- когорты;
-- эвристический итог внизу;
-- отдельная страница математического анализа;
-- отдельный граф влияния кода, где классы связаны с runtime-проблемами и build-time ASM-графом.
-
-Несколько логов можно передавать сразу:
-
-```bash
-jankhunter inspect logs/main/*.jhlog logs/remote/*.jhlog --out report.html
-```
-
-Если в glob попало несколько Android session-файлов одного процесса
-(`session-<process>-<start>-<segment>.jhlog`), `inspect` по умолчанию оставляет только
-последнюю session-группу. Это защищает отчет от старых session-файлов, которые runtime
-мог сохранить в директории логов. Чтобы явно проанализировать все session-файлы вместе,
-передайте `--all-sessions`.
+- верхний срез: сеть, плавность, частота кадров, память, паузы главного потока и трафик;
+- сведения об устройстве: Android, API, патч безопасности, ABI, сеть, VPN, батарея, память, хранилище и root-доступ;
+- маршруты HTTP и WebSocket-сигналы;
+- экраны и окна кадров;
+- источники работ, классы и подсказки по стеку;
+- удержанные объекты и отчёт утечек;
+- пользовательские счётчики и числовые метрики;
+- проблемные окна и спам логами;
+- граф влияния кода;
+- математический разбор;
+- итоговая эвристика.
 
 Фильтры:
 
@@ -130,6 +144,7 @@ jankhunter inspect logs/*.jhlog \
   --route /feed \
   --screen Feed \
   --owner FeedRepository \
+  --class CheckoutPresenter \
   --out feed-report.html
 ```
 
@@ -139,7 +154,15 @@ JSON вместо HTML:
 jankhunter inspect logs/*.jhlog --json > inspect.json
 ```
 
-Owner map и class graph от Android Gradle plugin:
+По умолчанию, если в список попали несколько файлов вида `session-<process>-<start>-<segment>.jhlog`, `inspect` берёт последнюю группу сессии для каждого процесса. Это защищает отчёт от старых хвостов, которые остались в каталоге. Чтобы разобрать всё вместе:
+
+```bash
+jankhunter inspect logs/*.jhlog --all-sessions --out report.html
+```
+
+## Данные Gradle-Плагина
+
+Для раскрытия владельцев, классов и диагностики сборки передавайте файлы из Android-сборки:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
@@ -150,9 +173,24 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-`--owner-map` читает JSONL v2 от Gradle plugin и раскрывает generated owner hash-и в человекочитаемые `class.method`, `--mapping` принимает R8/ProGuard `mapping.txt` и раскрывает обфусцированные классы, `--class-graph` добавляет статические связи, горячие пути и method-level hotspots, а `--instrumentation-diagnostics` открывает отдельный ASM-отчет с matched hooks и disabled/unsupported decisions. Рядом с `report.html` появятся `report-influence.html` и `report-diagnostics.html`.
+Что дают флаги:
 
-Heap evidence для точных цепочек утечек:
+- `--owner-map`: раскрывает сгенерированные владельцы в `class.method`.
+- `--mapping`: раскрывает сокращённые имена после R8 или ProGuard.
+- `--class-graph`: добавляет статические связи, горячие пути и узлы графа влияния.
+- `--instrumentation-diagnostics`: добавляет отчёт о совпавших и пропущенных ASM-перехватчиках.
+
+## Утечки Памяти
+
+Лёгкий режим не требует HPROF:
+
+```bash
+jankhunter inspect logs/*.jhlog --out report.html
+```
+
+В этом случае `report-leaks.html` покажет удержанные объекты из `.jhlog`, вероятного держателя, экран, сценарий, шаг, возраст и рекомендации.
+
+Если рядом лежит `retained-*.hprof`, утилита подключит его сама. Для явного пути:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
@@ -160,16 +198,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-Если рядом с переданными `.jhlog` лежит `retained-*.hprof`, CLI подключит его автоматически. `--heap-dump` нужен, когда дамп лежит отдельно или нужно выбрать конкретный HPROF. HPROF строит путь от GC root до retained-класса из runtime-событий `watchObject`/`watchActivity`, показывает категорию GC root, пользовательский класс-держатель, поле ссылки, retained size, мини-дерево доминирования и альтернативные цепочки удержания. Когда есть несколько близких путей, CLI выбирает primary path по actionability: app-holder, holder field, GC root category, leak pattern и reference matcher hints важнее шумной system-only цепочки близкого размера. Если дамп слишком большой или цепочка не найдена, отчет остается в легком режиме с оценкой по runtime/PSS. При `--out report.html` рядом создается `report-leaks.html`: без heap evidence это junior-friendly light report, а с heap evidence - Leak Explorer с интерактивным графом цепочки удержания, чеклистом расследования, примерами фикса и шагами верификации.
-
-Как читать leak report:
-
-- `Light mode` означает, что SDK увидел retained object, но точного GC root пока нет. Смотрите `holder`, `screen`, `flow`, `step`, возраст и рекомендации.
-- `Heap mode` означает, что CLI связал retained object с HPROF/evidence и показывает `GC root -> holder field -> retained object`.
-- `chain_fingerprint` используется для стабильного сравнения версий: переименование holder-а не ломает match, если нормализованная цепочка та же.
-- `alternative_paths` показывает дополнительные цепочки, через которые объект тоже достижим. Это важно для сложных утечек, где фикс одной ссылки не освобождает объект.
-
-Можно передать уже подготовленный JSON evidence вместо HPROF:
+Можно передать уже подготовленные доказательства в JSON:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
@@ -177,7 +206,7 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-Минимальная форма JSON:
+Минимальный пример:
 
 ```json
 {
@@ -206,9 +235,11 @@ jankhunter inspect logs/*.jhlog \
 }
 ```
 
-## compare
+С HPROF отчёт строит путь `GC root -> holder field -> retained object`, показывает размер удержания, альтернативные пути, чеклист расследования, примеры исправления и шаги проверки.
 
-`compare` нужен, когда есть база и кандидат. Например: сборка до изменения и сборка после изменения.
+## Compare
+
+Базовый и проверяемый прогоны:
 
 ```bash
 jankhunter compare \
@@ -217,20 +248,18 @@ jankhunter compare \
   --out compare.html
 ```
 
-В compare-отчете есть:
+В отчёте есть:
 
 - сводная панель базы и кандидата;
-- матрица регрессий по категориям: сеть, UI, память, контекст;
-- подсказки по метрикам;
-- блок `Где изменилось` с парными таблицами маршрутов, экранов и источников;
-- проверка когорт, чтобы не сравнивать разные устройства/SDK/сети как будто это один и тот же прогон;
-- детали каждого лога внутри раскрывающихся карточек;
-- эвристический итог;
-- отдельный `compare-math.html`;
-- отдельный `compare-leaks.html` со статусами `new`, `worse`, `same`, `better`, `resolved`;
-- отдельный `compare-influence.html` для графа влияния кандидата.
+- матрица регрессий по сети, плавности, памяти, контексту и проблемным окнам;
+- проверка когорт: устройство, сеть, версия приложения, SDK, процесс;
+- таблицы «где изменилось»;
+- сравнение утечек со статусами `new`, `worse`, `same`, `better`, `resolved`;
+- математическое сравнение;
+- граф влияния кандидата;
+- подробности каждого лога.
 
-С owner-map:
+С файлами Gradle-плагина:
 
 ```bash
 jankhunter compare \
@@ -239,6 +268,7 @@ jankhunter compare \
   --owner-map owner-map.json \
   --mapping mapping.txt \
   --class-graph class-graph.jsonl \
+  --instrumentation-diagnostics instrumentation-diagnostics.jsonl \
   --out compare.html
 ```
 
@@ -251,7 +281,7 @@ jankhunter compare \
   --json > compare.json
 ```
 
-Heap evidence для сравнения передается отдельно для базы и кандидата:
+Дампы памяти можно передать отдельно:
 
 ```bash
 jankhunter compare \
@@ -262,9 +292,9 @@ jankhunter compare \
   --out compare.html
 ```
 
-## CI gate
+## Пороговая Проверка
 
-Для CI можно задать пороги:
+Для проверки сборки можно задать пороги:
 
 ```json
 {
@@ -290,8 +320,6 @@ jankhunter compare \
 }
 ```
 
-Поля `max_new: 0` и `max_worse: 0` сами по себе не включают проверку "ноль новых/ухудшенных", потому что ноль используется как значение по умолчанию. Для строгого режима используйте `fail_on_new` и `fail_on_worse`.
-
 Запуск:
 
 ```bash
@@ -302,13 +330,13 @@ jankhunter compare \
   --out compare.html
 ```
 
-Если gate падает, команда возвращает exit code `1`. HTML при этом сохраняется, чтобы было что открыть и посмотреть.
+Если проверка падает, команда возвращает код `1`, но HTML всё равно сохраняется. Это удобно: сборка сказала «ку», а отчёт объяснил почему.
 
-`require_clean_cohorts: true` заставляет gate падать, если baseline/candidate собраны на разных версиях приложения, SDK, устройствах, процессах, сетях или других когортах. Это лучше включать для release/PR gate: иначе можно принять за регрессию обычную разницу окружений.
+Поля `max_new: 0` и `max_worse: 0` сами по себе не включают строгий режим, потому что ноль является значением по умолчанию. Для строгой проверки используйте `fail_on_new` и `fail_on_worse`.
 
-## scorecard
+## Scorecard
 
-Scorecard нужен для validation sprint: он превращает baseline/candidate артефакты в JSON с оценками data quality, retained-signal coverage, heap actionability, compare stability, CI-readiness и junior readability.
+`scorecard` нужен для оценки готовности данных и сравнения:
 
 ```bash
 jankhunter scorecard \
@@ -319,60 +347,58 @@ jankhunter scorecard \
   --out scorecard.json
 ```
 
-Смотрите `summary.go_no_go` и `summary.next_actions`: там будет честный статус `go`, `qa_only` или `blocked`, а также список действий вроде “соберите 5+ логов на когорту”, “добавьте heap evidence” или “выровняйте устройства/SDK”.
+Смотрите поля `summary.go_no_go` и `summary.next_actions`. Там будет статус `go`, `qa_only` или `blocked`, а также список следующих действий: собрать больше логов на когорту, добавить HPROF, выровнять устройства или включить дополнительные доказательства.
 
-## export
+## Problems
 
-Экспорт событий в JSONL:
-
-```bash
-jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
-```
-
-Это удобно, если нужно быстро проверить сырые события или скормить их другому инструменту.
-
-## size
-
-Профиль размера логов по типам событий:
-
-```bash
-jankhunter size logs/*.jhlog
-jankhunter size logs/*.jhlog --json
-```
-
-Команда показывает размер файла, распакованного тела, степень сжатия и вклад каждого типа событий. Это первый инструмент для поиска шумных сигналов перед изменением формата или семплинга.
-
-## problems
-
-Экспорт реестра проблем кода для обсуждения с командой:
+Реестр проблем кода:
 
 ```bash
 jankhunter problems logs/*.jhlog --out problems.csv
 jankhunter problems logs/*.jhlog --format json --out problems.json
 ```
 
-CSV содержит drill-down строки `класс -> метод -> экран/флоу/шаг/маршрут -> доказательства -> рекомендация`. В реестре есть категории `ANR-risk`, `OOM-risk`, `GC pressure`, `duplicate network`, `lifecycle leak`, `log spam`, `main-thread IO` и базовые группы отчета.
-
-Для отдельного leak-реестра:
+Наборы данных:
 
 ```bash
+jankhunter problems logs/*.jhlog --dataset code-problems --out problems.csv
 jankhunter problems logs/*.jhlog --dataset leaks --out leaks.csv
-jankhunter problems logs/*.jhlog --dataset leaks --format json --out leaks.json
+jankhunter problems logs/*.jhlog --dataset influence --out influence.csv
+jankhunter problems logs/*.jhlog --dataset math-findings --out math.csv
 ```
 
-`leaks.csv` включает `gc_root_category`, `chain_fingerprint`, `alternative_paths`, `investigation_steps`, `fix_examples` и `verification_steps`, поэтому его можно прикладывать к PR или CI artifacts без HTML.
+`code-problems` содержит строки вида `класс -> метод -> экран/сценарий/шаг/маршрут -> доказательства -> рекомендация`.
 
-## Как забрать логи с Android
+`leaks` добавляет `gc_root_category`, `chain_fingerprint`, `alternative_paths`, `investigation_steps`, `fix_examples` и `verification_steps`.
 
-По умолчанию runtime пишет:
+Этот режим полезен для задачи в системе отслеживания, обзора изменений и плагина для Android Studio.
+
+## Export И Size
+
+Сырые события:
+
+```bash
+jankhunter export logs/*.jhlog --out events.jsonl
+```
+
+Размер логов и вклад типов событий:
+
+```bash
+jankhunter size logs/*.jhlog
+jankhunter size logs/*.jhlog --json
+```
+
+`size` показывает размер файла, распакованного тела, степень сжатия и вклад каждого типа событий. Если лог растёт как пепелац без тормозов, начинать стоит отсюда.
+
+## Как Забрать Логи С Android
+
+По умолчанию Android-библиотека пишет:
 
 ```text
 context.filesDir/jankhunter/session-<process>-<startMs>-<segment>.jhlog
 ```
 
-Сессионный bucket - дефолт Android runtime: один runtime-start создает общий префикс `session-...`, а ротация по размеру добавляет новые сегменты внутри той же сессии. Сворачивание/разворачивание приложения не начинает новый лог: runtime только сбрасывает буфер на диск. Для дневного объединения можно выбрать `JankHunterLogBucket.DAILY`, тогда файлы будут называться `daily-<process>-<yyyyMMdd>-<segment>.jhlog`.
-
-Через adb:
+Через `adb`:
 
 ```bash
 APP_ID=com.myapp
@@ -384,7 +410,7 @@ adb exec-out run-as "$APP_ID" tar -C files/jankhunter -cf - . | tar -xf - -C log
 jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-Для debug/QA сценария с heap dump можно использовать готовый helper:
+Готовый помощник для отладочного приложения и отчёта утечек:
 
 ```bash
 cli/scripts/collect-android-leak-report.sh \
@@ -393,53 +419,29 @@ cli/scripts/collect-android-leak-report.sh \
   --cli ./cli/bin/jankhunter
 ```
 
-Скрипт забирает `files/jankhunter` через `adb run-as`, находит `.jhlog` и `.hprof`, запускает `inspect` и кладет рядом `report.html`, `report-leaks.html`, `report-math.html` и дополнительные страницы.
+Скрипт забирает `files/jankhunter`, находит `.jhlog` и `.hprof`, запускает `inspect` и кладёт рядом HTML-страницы.
 
-Если лог получили через FileProvider/share sheet, просто положите файл в папку и передайте его CLI:
+## Математический Отчёт
 
-```bash
-jankhunter inspect ~/Downloads/*.jhlog --out ~/Downloads/jankhunter-report.html
-```
+`report-math.html` и `compare-math.html` добавляют более тяжёлые методы:
 
-## Математический отчет
-
-Для `inspect --out report.html` рядом создается:
-
-```text
-report-math.html
-report-leaks.html
-report-influence.html
-report-diagnostics.html
-```
-
-Для `compare --out compare.html`:
-
-```text
-compare-math.html
-compare-leaks.html
-compare-influence.html
-compare-diagnostics.html
-```
-
-Там лежат более тяжелые методы:
-
-- временные бакеты и sparklines;
+- временные интервалы и мини-графики;
 - робастная статистика;
 - точки изменения;
-- автокорреляция и DFT peaks;
+- автокорреляция и пики преобразования Фурье;
 - сетевые циклы;
-- интегральные оценки боли;
+- интегральная нагрузка;
 - Марковская модель состояний;
 - граф причинности;
 - справка по каждому методу.
 
-Основная идея такая: сначала смотрим обычный отчет, потом открываем `λ Анализ`, если нужно понять глубже, откуда взялась проблема.
+Главная идея: сначала смотрим обычный отчёт, потом открываем `λ Анализ`, если нужно понять не только «что болит», но и «почему оно болит именно так».
 
-## Граф влияния кода
+## Граф Влияния
 
-`report-influence.html` и `compare-influence.html` показывают классы, которые чаще всего связаны с проблемами: паузами главного потока, сетевыми хвостами, UI-подтормаживаниями, ростом памяти, удержанными объектами и спамом логами.
+`report-influence.html` и `compare-influence.html` показывают классы, которые чаще всего совпали с симптомами: паузами главного потока, сетевыми хвостами, рывками интерфейса, ростом памяти, удержанными объектами и спамом логами.
 
-Лучший режим - передать и `.jhlog`, и build-time class graph:
+Лучший режим:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
@@ -450,34 +452,43 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-Если `--class-graph` не передан, CLI все равно покажет runtime-подозреваемых и runtime-вызовы из `.jhlog`, но без build-time ребер между классами. Если `--mapping` не передан после R8/ProGuard, отчет сохранит сокращенные имена вида `a.b.c`. Статический узел без runtime-доказательств означает не “виноват”, а “связан с кодом, но в этом прогоне не проявился”.
+Если `--class-graph` не передан, отчёт всё равно покажет подозреваемые классы из `.jhlog`, но без статических связей между классами. Если после R8 или ProGuard не передан `--mapping`, имена могут выглядеть как `a.b.c`.
 
-## `.jhlog` коротко
+## ASM-Диагностика
+
+`report-diagnostics.html` показывает:
+
+- классы, попавшие в сопоставитель;
+- сработавшие перехватчики;
+- неподдержанные сигнатуры;
+- пропущенные методы;
+- области аннотаций `@JankFlow`, `@JankScreen`, `@JankTrace`, `@JankOwner`;
+- предупреждения о неполных или ошибочных строках диагностики.
+
+Это первый раздел, куда стоит идти, если вы ожидали перехватчик, а в отчёте нет нужного сигнала.
+
+## Формат `.jhlog`
 
 Формат бинарный и компактный:
 
-- timestamp хранится как delta-ms, а не полной датой в каждом событии;
-- строки лежат в dictionary records;
-- события дальше используют короткие ID;
-- boolean-сигналы пишутся в flags/bitmask;
-- контекст `screen/owner/flow/step` пишется только когда поле реально есть, а повтор соседнего контекста кодируется одним флагом `same-context`;
-- runtime call graph хранится как агрегаты `caller_id -> callee_id`, а не как сырые вызовы;
-- `context.battery_temp_deci_c` хранится signed zigzag-varint, поэтому отрицательная температура батареи остается корректной величиной;
-- metric events для gauges несут `value/count/sum/max/mode`, чтобы CLI мог объединять Android-side flush-окна взвешенно, а не усреднять уже усредненные значения;
-- числовые строки и даты в словаре BCD-пакуются, когда это короче обычной строки;
-- Android runtime всегда сжимает тело файла gzip-потоком после magic-заголовка с максимальным уровнем deflate, CLI ожидает gzip-body для текущего бинарного формата;
-- события Handler/OkHttp не пишут повторяющиеся строки: owner/route/flow остаются в словаре, а события ссылаются на короткие ID.
+- время хранится как смещение в миллисекундах;
+- строки лежат в словаре;
+- события ссылаются на короткие числовые идентификаторы;
+- контекст `screen/owner/flow/step` пишется только когда он есть;
+- повтор соседнего контекста кодируется флагом `same-context`;
+- граф вызовов времени выполнения хранится агрегатами `caller_id -> callee_id`;
+- числовые строки и даты в словаре упаковываются, когда это короче обычной строки;
+- тело файла сжимается gzip после magic-заголовка;
+- текущая схема: `FormatVersion=8`.
 
-Gauge aggregation mode хранится рядом с metric event:
+Семантика числовых метрик:
 
-- `AVERAGE` - обычные числовые gauge-метрики; CLI складывает `sum/count` и показывает weighted average плюс max;
-- `LAST` - идентификаторы и последние уровни (`*.last_id`, `*.last_level`, `*.core_count`, `*.max_kb`), где среднее не имеет смысла;
-- `STATE` - enum/state метрики вроде battery status, plugged, health, thermal status, process exit reason/importance;
-- `BOOLEAN_RATE` - boolean gauge-метрики; в отчете значение означает процент `true` за окно.
+- `AVERAGE`: среднее значение, утилита объединяет `sum/count`.
+- `LAST`: последние уровни и идентификаторы, где среднее бессмысленно.
+- `STATE`: состояния вроде батареи, теплового режима или причины завершения процесса.
+- `BOOLEAN_RATE`: доля `true` за окно.
 
-Пользовательские negative gauges сейчас не пишутся как signed metric values: runtime считает их ошибочным input и увеличивает `jankhunter.metric.invalid_negative.gauge.count`. Если нужна отрицательная физическая величина, она должна иметь отдельный typed event или signed context field, как `battery_temp_deci_c`.
-
-До фиксации первой стабильной версии формат можно ломать и улучшать. Сейчас CLI читает текущую схему `FormatVersion=8`.
+Отрицательные пользовательские gauge-значения не пишутся как обычные числовые метрики. Библиотека считает их ошибкой ввода и увеличивает `jankhunter.metric.invalid_negative.gauge.count`.
 
 ## Проверки
 
@@ -487,9 +498,10 @@ make build
 ./bin/jankhunter sample --out /tmp/sample.jhlog
 ./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
 ./bin/jankhunter export /tmp/sample.jhlog --out /tmp/sample.jsonl
+npm run visual-regression
 ```
 
-Для чистки сборочных артефактов:
+Очистка сборочных файлов:
 
 ```bash
 make clean

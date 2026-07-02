@@ -1,65 +1,76 @@
 # Jank Hunter
 
-Jank Hunter помогает поймать то, что обычно сложно доказать словами: дерганый UI, длинные паузы главного потока, медленную сеть, рост памяти, удержанные объекты, слишком шумные логи и странные различия между двумя сборками.
+Jank Hunter помогает поймать то, что обычно ускользает в стиле «у меня всё плавно»: рывки интерфейса, длинные паузы главного потока, медленную сеть, рост памяти, удержанные объекты, шумные логи и регрессии между двумя прогонами.
 
-Идея простая: Android-приложение пишет компактный `.jhlog`, а CLI на машине разработчика превращает его в нормальный HTML-отчет. Без сервера, без базы, без загрузки данных наружу.
+Схема простая. Android-приложение пишет компактный `.jhlog`, а локальная утилита `jankhunter` превращает его в набор автономных HTML-отчётов. Сервер не нужен, база не нужна, данные никуда не отправляются. Всё остаётся на машине разработчика или в файлах проверки сборки. Почти как гравицапа, только без необходимости искать чатланина с визой.
 
-## Что внутри
+## Что В Репозитории
 
-- `android/` - Android runtime, OkHttp-интеграция, Gradle plugin с ASM-инструментацией и sample app.
-- `cli/` - утилита `jankhunter`, которая читает `.jhlog`, строит inspect/compare отчеты, экспортирует JSONL и умеет работать в CI.
+- `android/`: Android-библиотеки, аннотации, модуль `jankhunter-runtime`, интеграция с OkHttp, Gradle-плагин с ASM-внедрением и пример приложения.
+- `cli/`: утилита `jankhunter`, которая читает `.jhlog`, строит отчёты, выгружает таблицы проблем и выдаёт оценку готовности для проверок.
+- `plugin-as/`: плагин для Android Studio и IntelliJ IDEA. Он запускает `jankhunter`, подтягивает логи с устройства, открывает отчёты и показывает таблицу проблем с переходом в исходники.
+- `scripts/`: помощники для подключения Jank Hunter к существующему Android-проекту, проверки Gradle-плагина и сквозного прогона на устройстве.
+- `assets/readme/`: свежие снимки HTML-отчётов, снятые из текущего кода.
 
-Отчеты автономные: обычный HTML с CSS внутри. Их можно открыть локально, приложить к задаче, положить в CI artifacts или отправить команде.
+## Как Выглядят Отчёты
 
-## Как выглядят отчеты
+Снимки ниже собраны командой `npm run visual-regression` из каталога `cli/`. Это не макеты, а реальные HTML-страницы, которые создаёт утилита.
 
-Скриншоты ниже сняты с тестового `.jhlog`, который генерируется командой `jankhunter sample`. Это не мокапы: такие же HTML-файлы CLI кладет рядом с реальным логом.
+### Один Прогон
 
-### Основной отчет
+Верх отчёта даёт контекст устройства, число событий, длительность прогона и быстрые переходы к дополнительным страницам.
 
-Первый экран показывает контекст устройства, длительность прогона, быстрые действия и общую рамку отчета.
+![Верх inspect-отчёта](assets/readme/inspect-hero.webp)
 
-![Первый экран inspect-отчета](assets/readme/inspect-hero.webp)
+Матрица сигналов показывает задержки сети, рывки интерфейса, частоту кадров, паузы главного потока, память и краткий срез графа влияния.
 
-Матрица ключевых сигналов дает быстрый срез по сети, UI, памяти, паузам главного потока и трафику.
+![Матрица сигналов](assets/readme/inspect-signals.webp)
 
-![Матрица ключевых сигналов](assets/readme/inspect-signals.webp)
+Раздел сценариев связывает экран, пользовательский путь, шаг, источник работы и симптомы. Это место, где фраза «где-то тормозит» наконец получает адрес прописки.
 
-Раздел флоу связывает экран, пользовательский сценарий, шаг, источник работ и симптомы. Он нужен, чтобы не просто увидеть просадку, а понять, где она проявилась.
+![Сценарии и причины](assets/readme/inspect-flows.webp)
 
-![Флоу и причины](assets/readme/inspect-flows.webp)
+### Утечки Памяти
 
-### Математический анализ
+`report-leaks.html` работает в лёгком режиме даже без дампа памяти. Если рядом есть `retained-*.hprof` или передан `--heap-dump`, отчёт добавляет путь от корня сборщика мусора до удержанного объекта.
 
-Математический отчет открывается из основного отчета кнопкой `λ Анализ`. Вверху он собирает качество данных, главные риски и подсказки, куда смотреть дальше.
+![Проводник утечек](assets/readme/leaks-explorer.webp)
+
+### Математический Разбор
+
+Математическая страница не заменяет обычный отчёт, а помогает понять форму проблемы: качество данных, устойчивость распределений, точки изменения, повторяемость, интегральную нагрузку и причинные связи.
 
 ![Сводка математического анализа](assets/readme/math-summary.webp)
 
-Сетевые циклы ищут повторяющуюся сетевую активность, которая может разгонять задержки, батарею, трафик и нагрузку на приложение.
+Сетевые циклы ищут повторяющиеся маршруты и всплески. Если циклов нет, отчёт честно пишет «готово», без шаманского танца вокруг нулей.
 
 ![Сетевые циклы](assets/readme/math-network-loops.webp)
 
-Интегральная нагрузка показывает не только пик, а накопленную “площадь” проблемы во времени: UI-подтормаживания, сетевые хвосты, давление памяти и долг восстановления.
+Интегральная нагрузка считает не только пик, но и накопленную площадь боли во времени: рывки интерфейса, сетевые хвосты, память и восстановление.
 
 ![Интегральная нагрузка](assets/readme/math-integral.webp)
 
-Граф причинности связывает симптомы, маршруты, фазы сети, источники работ и экраны. Он помогает пройти от “что болит” к “где искать код”.
+Граф причинности связывает симптомы, маршруты, фазы сети, источники работ и экраны. Он помогает идти от признака к месту в коде, а не гадать по кофейной гуще.
 
 ![Граф причинности](assets/readme/math-causal-graph.webp)
 
-### Граф влияния кода
+### Код, Внедрение И Сравнение
 
-Отдельный отчет по влиянию показывает проблемные классы и связи между ними. Узлы можно выделять: отчет подсветит связанные пути, соседей и остов.
+Граф влияния показывает классы, которые чаще всего совпали с проблемами. Узлы и связи нужны для ранжирования расследования, а не для автоматического приговора.
 
 ![Граф влияния кода](assets/readme/influence-graph.webp)
 
-### Сравнение прогонов
+ASM-диагностика показывает, какие перехватчики реально совпали с байткодом, какие решения сопоставителя сработали и какие сигнатуры оказались неподдержанными.
 
-`compare` нужен для проверки регрессий между baseline и candidate. Он показывает, какие сигналы изменились, насколько им можно доверять и где искать источник отличий.
+![ASM-диагностика](assets/readme/diagnostics-overview.webp)
+
+`compare` сравнивает базовый и проверяемый прогоны: задержки, плавность, память, трафик, удержанные объекты, когорты и проблемные классы.
 
 ![Сравнение прогонов](assets/readme/compare-overview.webp)
 
-## Быстрый старт CLI
+## Быстрый Старт
+
+Соберите утилиту и создайте демонстрационный лог:
 
 ```bash
 cd cli
@@ -69,30 +80,25 @@ make build
 ./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
 ```
 
-`make build` сам скачает Go в `cli/.tools/go`, если Go не найден в системе. После сборки бинарник лежит в `cli/bin/jankhunter`.
+`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Текущая версия утилиты: `1.0.1`, формат `.jhlog`: `8`.
 
-Установка в систему:
+Установка команды:
 
 ```bash
 cd cli
 make install
-```
-
-Если не хочется ставить в `/usr/local/bin`:
-
-```bash
 make install PREFIX="$HOME/.local"
 ```
 
-## Быстрый старт Android
+## Пример Android-Приложения
 
-Для локальной проверки можно собрать и запустить sample app:
+Для живой проверки можно запустить пример приложения:
 
 ```bash
 ./run-sample-app.sh
 ```
 
-Скрипт поднимет или использует уже запущенный emulator/device, установит sample app и даст интерактивные команды:
+Скрипт найдёт устройство или запустит эмулятор, установит пример и даст команды:
 
 ```text
 log
@@ -103,11 +109,13 @@ help
 quit
 ```
 
-`log` и `stop` вытаскивают `.jhlog` из приложения и генерируют HTML-отчет в `tmp/sample-app-.../pull-.../report.html`. Сам sample теперь работает как Jank Hunter Playground: внутри есть guided baseline/candidate сценарии, Leak Lab, LeakCanary benchmark, performance lab и переключатель runtime feature flag.
+Команды `log`, `report` и `stop` забирают `.jhlog` через `adb run-as` и создают HTML-отчёт в `tmp/sample-app-.../pull-.../report.html`.
 
-Debug-сборка sample дополнительно подключает LeakCanary и зеркалирует те же retained objects в оба инструмента. Методика сравнения лежит в [docs/leakcanary-comparison.md](docs/leakcanary-comparison.md).
+Пример приложения сейчас работает как маленький полигон: чистый базовый прогон, шумный кандидат, переключатель сбора, лаборатория производительности, лаборатория утечек, сравнение с LeakCanary и сценарии для `compare`.
 
-Для своего приложения базовое подключение обычно выглядит так:
+## Подключение К Своему Приложению
+
+Минимальный набор зависимостей обычно выглядит так:
 
 ```kotlin
 dependencies {
@@ -117,17 +125,38 @@ dependencies {
 }
 ```
 
-Gradle plugin подключайте только на debug/QA сборки и сначала ограничивайте include-пакеты. Если нужно временно собрать проект без внедрения Jank Hunter, выставьте `jankHunter { enabled = false }`. Если проект огромный и перечислять модули больно, есть `includeWholeApplication = true` плюс `excludePackages(...)`. ASM умеет автоматически подключать слушатель OkHttp при `OkHttpClient.Builder.build()` и оборачивать `Handler.post*` так, чтобы `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks` продолжали работать с исходным `Runnable`.
+Gradle-плагин подключайте сначала только к отладочным или проверочным сборкам и ограничивайте пакеты:
 
-Подробности по Android лежат в [android/README.md](android/README.md), по CLI - в [cli/README.md](cli/README.md).
+```kotlin
+plugins {
+    id("io.jankhunter.android")
+}
 
-Автоподключение в существующий Android-проект на macOS:
+jankHunter {
+    enabledBuildTypes.add("debug")
+
+    instrument {
+        includePackages("com.myapp.feature", "com.myapp.data")
+        excludePackages("com.myapp.generated", "com.myapp.di")
+        okhttp = true
+        handlers = true
+        executors = true
+        coroutines = true
+        flowInteractions = true
+        logSpam = true
+        classGraph = true
+        runtimeCallGraph = true
+    }
+}
+```
+
+Если нужно быстро подключить существующий проект на macOS:
 
 ```bash
 scripts/integrate-android-project.sh ~/work/MyApp
 ```
 
-Если нужно сразу сузить ASM и включить runtime-граф вызовов:
+С ограничением ASM и включённым графом вызовов времени выполнения:
 
 ```bash
 scripts/integrate-android-project.sh \
@@ -139,73 +168,71 @@ scripts/integrate-android-project.sh \
   --runtime-call-graph
 ```
 
-Скрипт публикует Android-артефакты Jank Hunter в `~/work/MyApp/.jankhunter/maven`, собирает CLI в `~/work/MyApp/.jankhunter/bin/jankhunter`, добавляет Maven repo в `settings.gradle(.kts)`, прописывает `sdk.dir` в `local.properties`, подключает Gradle plugin/dependencies в найденный app-модуль и создает `jankHunter { ... }` конфиг. App-модуль определяется автоматически: скрипт ранжирует кандидатов по Android application plugin или alias, launchable manifest, manifest `android:name`, `Application` subclass, `applicationId`, совпадению с именем проекта, имени модуля и отбрасывает вниз test/benchmark/sample-модули. Перед публикацией он также передает найденный Android SDK и установленную версию Build Tools в Gradle-сборку Jank Hunter, поэтому чистый clone без `ANDROID_HOME` тоже должен собраться на macOS. Перед правками целевого проекта скрипт оставляет backup в `.jankhunter-backups/`.
+Скрипт публикует Android-модули Jank Hunter в `.jankhunter/maven`, собирает `jankhunter` в `.jankhunter/bin`, добавляет репозиторий в настройки Gradle, прописывает `sdk.dir`, подключает зависимости и создаёт `jankHunter { ... }`. Перед правками он кладёт копии изменяемых файлов в `.jankhunter-backups/`.
 
-Если проект нужно перенести в GitLab без локального Maven-репозитория, включите файловое подключение артефактов:
+Для проектов, где локальный Maven-репозиторий неудобен, есть режим файловых AAR/JAR:
 
 ```bash
 scripts/integrate-android-project.sh ~/work/MyApp --use-aar
 ```
 
-В этом режиме скрипт собирает `jankhunter-runtime` и `jankhunter-okhttp3` как AAR, `jankhunter-annotations` и Gradle-плагин как JAR, кладет их в `~/work/MyApp/.jankhunter/lib` и подключает из app-модуля как файловые зависимости. `settings.gradle(.kts)` при этом не получает Jank Hunter Maven repo. Каталог `.jankhunter/lib` специально не добавляется в `.gitignore`, поэтому его можно коммитить вместе с приложением; сгенерированный CLI в `.jankhunter/bin` по-прежнему считается локальным артефактом.
+В этом режиме файлы кладутся в `.jankhunter/lib`, и этот каталог можно коммитить вместе с приложением.
 
-Если Android SDK лежит не в стандартном месте, передайте путь явно:
+## Что Собирается
 
-```bash
-scripts/integrate-android-project.sh ~/work/MyApp --android-sdk "$ANDROID_HOME"
+- HTTP: длительность, DNS, соединение, время до первого байта, ошибки, байты, маршрут и владелец работы.
+- WebSocket: события через обёртку слушателя.
+- Интерфейс: окна кадров, частота кадров, доля медленных кадров, экраны.
+- Главный поток: длинные паузы, источники работ и подозрительные окна.
+- Память: PSS, Java heap, native heap, свободная память, удержанные объекты и, при явном разрешении, HPROF.
+- Устройство: Android, API, патч безопасности, ABI, сеть, VPN, батарея, хранилище, признак root-доступа.
+- Пользовательские счётчики и числовые метрики.
+- Атрибуция: `JankHunter.withOwner(...)`, `@JankOwner`, `@JankIgnore`, `@JankScreen`, `@JankFlow`, `@JankTrace`.
+- Граф влияния: классы, сценарии, проблемные окна, спам логами, связи времени выполнения и статический граф ASM.
+- Диагностика внедрения: совпавшие перехватчики, пропуски, неподдержанные сигнатуры и области аннотаций.
+
+## Что Создаёт Утилита
+
+Для одного прогона:
+
+```text
+report.html
+report-math.html
+report-leaks.html
+report-influence.html
+report-diagnostics.html
 ```
 
-Если нужно зафиксировать конкретную установленную версию Build Tools:
+Для сравнения:
 
-```bash
-scripts/integrate-android-project.sh ~/work/MyApp --android-build-tools 35.0.0
+```text
+compare.html
+compare-math.html
+compare-leaks.html
+compare-influence.html
+compare-diagnostics.html
 ```
 
-## Что собирается
+`report-diagnostics.html` и `compare-diagnostics.html` появляются, когда передан `--instrumentation-diagnostics`.
 
-- HTTP: длительность запроса, DNS/connect/TTFB, ошибки, байты, route, owner.
-- UI: FPS, доля медленных кадров, p95/p99 кадра, экраны.
-- Главный поток: длинные паузы и источники работ.
-- Память: PSS, Java/native heap, свободная RAM, retained objects и опциональный HPROF/heap evidence для пути до GC root, holder field и retained size.
-- Контекст устройства: Android/API/security patch, ABI, сеть/VPN, батарея, storage, рут-доступ.
-- Пользовательские counters/gauges.
-- Owner attribution: ручной `JankHunter.withOwner(...)`, ASM-generated owners и lightweight-аннотации `@JankOwner` / `@JankIgnore`.
-- Граф влияния кода: классы, флоу, проблемные окна, лог-спам, runtime-вызовы и build-time ASM-связи между классами.
-- ASM-интеграция: rule/spec/intent pipeline для OkHttp/WebSocket, Handler, Executor, builders корутин, click-flow, log spam и статического class graph.
+Отдельные команды:
 
-CLI строит два основных режима:
-
-- `inspect` - один лог или набор логов, чтобы понять текущий прогон.
-- `compare` - baseline против candidate, чтобы увидеть регрессии, когорты и конкретные места, где стало хуже.
-- `scorecard` - JSON-оценка validation readiness: качество данных, heap actionability, стабильность leak-compare, CI-ready статус и следующие действия.
-
-Рядом с основным HTML создаются дополнительные автономные страницы: `report-math.html` / `compare-math.html`, `report-leaks.html` / `compare-leaks.html`, а при наличии owner/flow-сигналов еще `report-influence.html` / `compare-influence.html`. Отчет утечек работает в light mode без HPROF и автоматически переходит в heap mode, если рядом с `.jhlog` лежит `retained-*.hprof` или передан `--heap-dump` / `--heap-evidence`: там появляется Leak Explorer с цепочкой GC root -> holder -> retained object, alternative paths, чеклистом расследования, chain fingerprint и сравнением new/worse/same/better/resolved.
-
-## Релизы
-
-GitHub Actions собирает релиз по тегу `v*` или вручную из workflow `Release`.
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-В GitHub Release попадают:
-
-- `jankhunter-android-sdk-<version>-maven.zip` - локальный Maven-репозиторий с annotations, runtime, OkHttp-интеграцией, Gradle plugin и plugin marker;
-- `jankhunter_<version>_darwin_amd64.tar.gz` - CLI для macOS Intel;
-- `jankhunter_<version>_darwin_arm64.tar.gz` - CLI для macOS Apple Silicon;
-- `checksums.txt` - SHA-256 суммы релизных файлов.
-
-Для ручного релиза откройте `Actions -> Release -> Run workflow` и укажите версию без `v`, например `1.0.0`.
+- `inspect`: один лог или группа логов.
+- `compare`: базовый прогон против проверяемого.
+- `problems`: CSV или JSON с проблемными местами.
+- `scorecard`: JSON-оценка готовности данных и сравнения.
+- `export`: сырые события в JSONL.
+- `size`: профиль размера `.jhlog`.
+- `version`: версия утилиты и формат лога.
 
 ## Проверки
 
-CLI:
+Командная утилита:
 
 ```bash
 cd cli
 make test
+npm run visual-regression
 ```
 
 Android:
@@ -215,28 +242,39 @@ cd android
 ./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
-Gradle plugin как внешний потребитель через локальный Maven:
+Проверка Gradle-плагина как внешнего потребителя:
 
 ```bash
 scripts/gradle-plugin-smoke.sh
 ```
 
-End-to-end через emulator/device:
+Сквозной прогон на устройстве или эмуляторе:
 
 ```bash
 ./scripts/android-e2e.sh
 ```
 
-Он собирает sample app, запускает instrumentation test, вытаскивает `.jhlog` и кладет отчет в:
+Он собирает пример приложения, запускает проверку на устройстве, забирает `.jhlog` и кладёт отчёт в `reports/android-e2e/report.html`.
 
-```text
-reports/android-e2e/report.html
+## Релизы
+
+GitHub Actions собирает релиз по тегу `v*` или вручную из действия `Release`:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
-## Важные принципы
+В выпуск попадают:
 
-- Не грузить приложение тяжелой диагностикой на каждом событии.
-- Писать high-frequency данные агрегатами.
-- Держать runtime без лишних зависимостей.
-- Все спорное включать явно: ASM, корутины, JankStats, release-сборки.
-- Сначала компактный машинный лог, потом удобный человеческий отчет на стороне CLI.
+- `jankhunter-android-sdk-<version>-maven.zip`: локальный Maven-репозиторий с аннотациями, Android-библиотекой, OkHttp-интеграцией, Gradle-плагином и маркером плагина.
+- `jankhunter_<version>_darwin_amd64.tar.gz`: утилита для macOS Intel.
+- `jankhunter_<version>_darwin_arm64.tar.gz`: утилита для macOS Apple Silicon.
+- `checksums.txt`: суммы SHA-256.
+
+## Принципы
+
+- Высокочастотные данные пишутся агрегатами, а не потоком мелких событий.
+- Всё тяжёлое включается явно: ASM, дампы памяти, расширенные перехватчики и релизные сборки.
+- Отладочный прогон должен быть полезным без сервера и без особой церемонии.
+- Отчёт должен вести от симптома к месту в коде. Если он просто говорит «всё плохо», это не отчёт, а пацак без гравицапы.

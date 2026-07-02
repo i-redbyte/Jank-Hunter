@@ -1,23 +1,39 @@
-# Jank Hunter for Android
+# Jank Hunter Для Android Studio
 
-В этой директории находится плагин IntelliJ Platform для запуска локального Jank Hunter CLI из Android Studio или IntelliJ IDEA.
+В этой директории находится плагин для Android Studio и IntelliJ IDEA. Он запускает локальную утилиту `jankhunter`, помогает выбрать `.jhlog`, подтянуть файлы с устройства, открыть HTML-отчёты и разобрать таблицу проблем прямо в среде разработки.
 
-Плагин умеет:
+Плагин не заменяет командную строку. Он нужен для тех моментов, когда хочется нажать кнопку, увидеть отчёт, перейти в исходник и не устраивать охоту на файл в десяти вкладках терминала.
 
-- запускать `inspect`, `compare`, `problems`, `scorecard`, `sample` и `version` из tool window;
-- работать как обычная Run Configuration IDE;
-- запускать Gradle-сценарии для sample app, connected tests и сборки Jank Hunter artifacts;
-- находить Android Gradle plugin artifacts: `owner-map`, `class-graph`, `instrumentation-diagnostics`, `mapping.txt`;
-- работать с ADB: искать устройства, подтягивать `.jhlog` с устройства и запускать сценарий `collect logs -> inspect`;
-- показывать `problems.csv`/`problems.json` в таблице с фильтрами, группировкой и переходом в исходники;
-- открывать HTML-отчеты внутри IDE или в браузере по умолчанию;
-- хранить project-level профили в `.jankhunter/plugin.json`.
+## Что Умеет
+
+- Запускает режимы `inspect`, `compare`, `problems`, `scorecard`, `sample` и `version`.
+- Работает как отдельное окно инструмента `Jank Hunter`.
+- Работает как обычная конфигурация запуска.
+- Находит файлы Android Gradle-плагина: `owner-map.json`, `class-graph.jsonl`, `instrumentation-diagnostics.jsonl`, `mapping.txt`.
+- Поддерживает HPROF и JSON-доказательства утечек для одного прогона, базы и кандидата.
+- Умеет выбирать область логов: все выбранные файлы, самый новый лог или последняя группа `session-*`.
+- Может забрать `.jhlog` с подключенного устройства через `adb run-as` и сразу собрать отчёт.
+- Открывает HTML внутри среды разработки или в обычном браузере.
+- Загружает `problems.csv` и `problems.json` в таблицу с фильтрами, группировкой и переходом в исходники.
+- Хранит настройки проекта в `.jankhunter/plugin.json`.
+- Имеет готовые профили: быстрый разбор, разбор с кучей памяти, сравнение с кучей памяти, CSV проблем и JSON-оценка для проверки сборки.
+
+Да, кнопок много. Но лучше так, чем снова искать, где лежит «тот самый лог, который точно был тут минуту назад».
 
 ## Требования
 
-- IntelliJ IDEA 2026.1.3 или другая IDE на IntelliJ Platform с JBR 21.
-- Встроенный Gradle wrapper из этой директории. Системный Gradle не нужен.
-- Собранный бинарник Jank Hunter CLI, обычно `../cli/bin/jankhunter`, или команда `jankhunter`, доступная через `PATH`.
+- IntelliJ IDEA `2026.1.3` или другая среда на IntelliJ Platform с JBR 21.
+- Встроенный Gradle wrapper из этой директории.
+- Собранная утилита `jankhunter`, обычно `../cli/bin/jankhunter`, или команда `jankhunter`, доступная через `PATH`.
+
+Версия плагина задаётся в `gradle.properties`:
+
+```text
+pluginVersion=0.1.1
+platformVersion=2026.1.3
+pluginSinceBuild=253
+pluginUntilBuild=261.*
+```
 
 ## Сборка
 
@@ -25,56 +41,177 @@
 ./gradlew buildPlugin
 ```
 
-ZIP-файл плагина будет создан здесь:
+ZIP-файл появится в:
 
 ```text
 build/distributions/
 ```
 
-## Запуск в sandbox IDE
-
-```bash
-./gradlew runIde
-```
-
-По умолчанию Gradle использует локальную IDE по пути:
-
-```text
-/Applications/IntelliJ IDEA.app
-```
-
-Если этого пути нет, сборка использует зависимость IntelliJ IDEA `2026.1.3`.
-
-Чтобы запустить sandbox на другой IDE, передайте путь явно:
-
-```bash
-./gradlew runIde -PlocalIdePath="/Applications/Android Studio.app"
-```
-
-## Настройка CLI
-
-Сначала соберите CLI:
-
-```bash
-cd ../cli
-make build
-```
-
-Затем откройте tool window `Jank Hunter`. Если плагин не нашел CLI автоматически, укажите путь в поле `CLI`:
-
-```text
-../cli/bin/jankhunter
-```
-
-Кнопка `Check CLI` проверяет наличие CLI и выводит `jankhunter version`. Кнопка `Build CLI` запускает `make build` для локального CLI.
-
-## Проверки
-
-Перед установкой или публикацией полезно прогнать:
+Проверка:
 
 ```bash
 ./gradlew test buildPlugin
 ./gradlew verifyPlugin
 ```
 
-`verifyPlugin` проверяет собранный ZIP против локальной IntelliJ IDEA из `localIdePath`.
+`verifyPlugin` проверяет собранный ZIP против локальной среды из `localIdePath`, если путь существует. Иначе используется текущая проверочная среда из Gradle-настроек.
+
+## Запуск В Песочнице
+
+```bash
+./gradlew runIde
+```
+
+По умолчанию Gradle смотрит на:
+
+```text
+/Applications/IntelliJ IDEA.app
+```
+
+Если нужен Android Studio:
+
+```bash
+./gradlew runIde -PlocalIdePath="/Applications/Android Studio.app"
+```
+
+## Настройка Утилиты
+
+Сначала соберите команду:
+
+```bash
+cd ../cli
+make build
+```
+
+Затем откройте окно `Jank Hunter`. Если путь не найден автоматически, укажите его в поле `CLI`:
+
+```text
+../cli/bin/jankhunter
+```
+
+Кнопка `Check CLI` запускает `jankhunter version`. Кнопка `Build CLI` выполняет `make build` в каталоге `../cli`.
+
+Настройки по умолчанию хранятся на уровне приложения, а проектные профили лежат здесь:
+
+```text
+.jankhunter/plugin.json
+```
+
+## Основной Сценарий
+
+1. Соберите приложение с Android Gradle-плагином Jank Hunter или подключите Android-библиотеку вручную.
+2. Получите `.jhlog` из приложения.
+3. В окне `Jank Hunter` выберите режим `Inspect`.
+4. Укажите логи, при необходимости `owner-map`, `class-graph`, `instrumentation-diagnostics`, `mapping.txt` и HPROF.
+5. Нажмите `Run`.
+6. Откройте HTML-отчёт или таблицу проблем.
+
+Для сравнения выберите `Compare`, заполните базовый и кандидатный прогон, затем укажите общий `owner-map` и, если есть, дампы памяти для обеих сторон.
+
+Для проверки сборки выберите `Scorecard`: результатом будет JSON со статусом готовности и следующими действиями.
+
+## Подтягивание Логов С Устройства
+
+В блоке устройства укажите пакет приложения и каталог логов:
+
+```text
+/sdcard/Android/data/io.jankhunter.sample/files/jankhunter
+```
+
+Для отладочных приложений плагин использует `adb run-as`, поэтому root-доступ не нужен. Кнопка `Pull + Generate` забирает `.jhlog`, кладёт их в рабочий каталог проекта и запускает `inspect`.
+
+Если приложение не отладочное или `run-as` недоступен, используйте общий доступ Android, копирование файла вручную или другой путь, разрешённый вашим проектом.
+
+## Таблица Проблем
+
+Режим `Problems` вызывает:
+
+```bash
+jankhunter problems ...
+```
+
+Поддерживаются наборы:
+
+```text
+code-problems
+leaks
+influence
+math-findings
+```
+
+CSV и JSON открываются в таблице. Можно фильтровать по классу, методу, категории, риску, экрану, сценарию и маршруту. Двойной щелчок или кнопка открытия исходника переводит к найденному классу или методу, если файл есть в проекте.
+
+Это не волшебный телепорт, но для обычного «покажи, где болит» работает заметно быстрее ручного поиска.
+
+## Профили
+
+Профиль сохраняет поля формы: режим, пути к логам, базу, кандидата, файлы Gradle-плагина, дампы памяти, фильтры, формат вывода и режим показа.
+
+Встроенные профили:
+
+- `debug`: быстрый `inspect`.
+- `release`: `compare` с крупными HTML-акцентами.
+- `ci`: `scorecard` в JSON.
+- `local heap`: `inspect` с полями для HPROF.
+
+Кнопки `Load` и `Save` читают и сохраняют выбранный профиль. Кнопка сохранения по умолчанию обновляет `.jankhunter/plugin.json`.
+
+## Конфигурация Запуска
+
+Плагин добавляет тип конфигурации `Jank Hunter`. Его удобно использовать, когда в проекте есть повторяемые проверки:
+
+- разобрать последний лог после ручного сценария;
+- сравнить две папки логов;
+- выгрузить `problems.csv`;
+- собрать `scorecard.json` для проверки перед отправкой изменений.
+
+Все поля совпадают с окном инструмента. Команда строится тем же `JankHunterCommandBuilder`, поэтому поведение одинаковое.
+
+## Действия В Среде
+
+В меню `Tools` появляется пункт `Jank Hunter`. Он открывает окно инструмента. Также добавлено действие в контекстном меню редактора: `Inspect Jank Hunter Evidence For Class`. Оно помогает быстро подставить текущий класс в фильтр отчёта.
+
+Горячая клавиша по умолчанию:
+
+```text
+Control Alt J
+```
+
+## Структура Каталога
+
+```text
+plugin-as/
+  build.gradle.kts
+  gradle.properties
+  src/main/kotlin/io/jankhunter/plugin/
+  src/main/resources/META-INF/plugin.xml
+  src/main/resources/icons/
+  src/test/kotlin/io/jankhunter/plugin/
+```
+
+Основные области кода:
+
+- `execution/`: построение команд и проверка входных путей.
+- `ui/`: окно инструмента.
+- `run/`: конфигурации запуска.
+- `problems/`: разбор CSV/JSON и переход в исходники.
+- `services/`: запуск процессов, Gradle, `adb`, уведомления и поиск файлов проекта.
+- `settings/`: настройки приложения.
+- `profiles/`: проектные профили.
+
+## Проверки
+
+```bash
+./gradlew test
+./gradlew buildPlugin
+./gradlew verifyPlugin
+```
+
+Если нужно проверить связку с утилитой, сначала выполните:
+
+```bash
+cd ../cli
+make build
+```
+
+Затем запустите плагин через `runIde` и выполните `Check CLI`, `Sample`, `Inspect` и `Problems CSV` на демонстрационном `.jhlog`.
