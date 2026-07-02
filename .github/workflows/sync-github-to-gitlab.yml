@@ -1,0 +1,54 @@
+name: Sync GitHub to GitLab
+ 
+on:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+ 
+permissions:
+  contents: read
+ 
+jobs:
+  sync-to-gitlab:
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Sync GitHub master to GitLab master
+        env:
+          GITLAB_SYNC_TOKEN: ${{ secrets.GITLAB_SYNC_TOKEN }}
+        run: |
+          set -eu
+ 
+          git init repo
+          cd repo
+ 
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+ 
+          git remote add github https://github.com/i-redbyte/Jank-Hunter.git
+          git remote add gitlab https://oauth2:${GITLAB_SYNC_TOKEN}@gitlab.corp.mail.ru/il.sokolov/Jank-Hunter.git
+ 
+          git fetch github +refs/heads/master:refs/remotes/github/master
+          git fetch gitlab +refs/heads/master:refs/remotes/gitlab/master
+ 
+          github_sha="$(git rev-parse refs/remotes/github/master)"
+          gitlab_sha="$(git rev-parse refs/remotes/gitlab/master)"
+ 
+          echo "GitHub master: ${github_sha}"
+          echo "GitLab master: ${gitlab_sha}"
+ 
+          if [ "$github_sha" = "$gitlab_sha" ]; then
+            echo "GitLab is already up to date."
+            exit 0
+          fi
+ 
+          if git merge-base --is-ancestor "$gitlab_sha" "$github_sha"; then
+            git push gitlab "refs/remotes/github/master:refs/heads/master"
+            exit 0
+          fi
+ 
+          echo "GitLab has commits that are not in GitHub. Not overwriting."
+          exit 1
