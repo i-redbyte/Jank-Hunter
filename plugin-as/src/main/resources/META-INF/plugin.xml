@@ -19,7 +19,7 @@
         class="io.jankhunter.plugin.actions.OpenJankHunterToolWindowAction"
         text="Jank Hunter"
         description="Open Android jank analysis with Jank Hunter"
-        icon="/icons/jankHunter.svg">
+        icon="/icons/jankHunter.png">
       <add-to-group group-id="ToolsMenu" anchor="last"/>
       <keyboard-shortcut keymap="$default" first-keystroke="control alt J"/>
     </action>
