@@ -182,6 +182,7 @@ class JankHunterToolWindow(
     private var lastOutputPath: String? = null
     private var lastHtmlOutputPath: String? = null
     private var lastRunRequest: JankHunterRunRequest? = null
+    private var autoHeapDumpPath: String? = null
     @Volatile
     private var disposed = false
 
@@ -778,6 +779,7 @@ class JankHunterToolWindow(
         classGraphField.text = request.classGraph
         diagnosticsField.text = request.diagnostics
         heapDumpField.text = request.heapDump
+        autoHeapDumpPath = null
         heapEvidenceField.text = request.heapEvidence
         baselineHeapDumpField.text = request.baselineHeapDump
         baselineHeapEvidenceField.text = request.baselineHeapEvidence
@@ -1093,6 +1095,7 @@ class JankHunterToolWindow(
         if (selectedMode() != JankHunterMode.COMPARE && selectedMode() != JankHunterMode.SCORECARD) {
             selectMode(JankHunterMode.INSPECT)
         }
+        logsDirectory()?.takeIf { it.isDirectory }?.let(::syncHeapDumpFromLogsDirectory)
         runRequest(collectRequest())
     }
 
@@ -1116,9 +1119,7 @@ class JankHunterToolWindow(
 
         val heapDump = dir.walkTopDown()
             .firstOrNull { file -> file.isFile && file.extension.equals("hprof", ignoreCase = true) }
-        if (heapDump != null && heapDumpField.text.isBlank()) {
-            heapDumpField.text = heapDump.path
-        }
+        syncHeapDumpFromLogsDirectory(dir, heapDump)
 
         if (showMessage) {
             val message = if (logs.isEmpty()) {
@@ -1129,6 +1130,40 @@ class JankHunterToolWindow(
             Messages.showInfoMessage(project, message, "Jank Hunter")
         }
         return logs
+    }
+
+    private fun syncHeapDumpFromLogsDirectory(dir: File) {
+        val heapDump = dir.walkTopDown()
+            .firstOrNull { file -> file.isFile && file.extension.equals("hprof", ignoreCase = true) }
+        syncHeapDumpFromLogsDirectory(dir, heapDump)
+    }
+
+    private fun syncHeapDumpFromLogsDirectory(dir: File, heapDump: File?) {
+        val current = heapDumpField.text.trim()
+        if (heapDump != null) {
+            if (current.isBlank() || current == autoHeapDumpPath || !File(current).isFile) {
+                heapDumpField.text = heapDump.path
+                autoHeapDumpPath = heapDump.path
+            }
+            return
+        }
+
+        if (shouldClearMissingHeapDump(current, dir)) {
+            heapDumpField.text = ""
+            autoHeapDumpPath = null
+        }
+    }
+
+    private fun shouldClearMissingHeapDump(path: String, logsDir: File): Boolean {
+        if (path.isBlank()) return false
+        val file = File(path)
+        if (file.isFile) return false
+        if (path == autoHeapDumpPath) return true
+        if (!file.extension.equals("hprof", ignoreCase = true)) return false
+        if (file.name.startsWith("retained-", ignoreCase = true)) return true
+        return runCatching {
+            file.toPath().normalize().startsWith(logsDir.toPath().normalize())
+        }.getOrDefault(false)
     }
 
     private fun ensureLogsDirectoryForPull(): File? {
@@ -1177,6 +1212,7 @@ class JankHunterToolWindow(
                 openInIdeCheckBox.isSelected = true
                 openExternalCheckBox.isSelected = false
                 heapDumpField.text = ""
+                autoHeapDumpPath = null
                 heapEvidenceField.text = ""
                 outputField.text = ""
             }
@@ -1353,7 +1389,8 @@ class JankHunterToolWindow(
         }
         val localDir = ensureLogsDirectoryForPull() ?: return
         consoleArea.text = ""
-        appendConsole("$ adb exec-out run-as $packageName tar files/jankhunter -> ${localDir.path}\n\n")
+        val serial = device?.serial?.takeIf(String::isNotBlank)?.let { "-s $it " }.orEmpty()
+        appendConsole("$ adb ${serial}exec-out run-as $packageName sh -c 'cd files/jankhunter && tar -cf - .' -> ${localDir.path}\n\n")
         JankHunterAdbIntegration.pullAppPrivateLogs(
             project,
             device?.serial.orEmpty(),
@@ -1363,7 +1400,8 @@ class JankHunterToolWindow(
             onDone = { ok, files ->
                 ApplicationManager.getApplication().invokeLater {
                     appendConsole("\nADB run-as pull finished: $ok, logs=${files.size}\n")
-                    if (files.isNotEmpty()) {
+                    syncHeapDumpFromLogsDirectory(localDir)
+                    if (ok && files.isNotEmpty()) {
                         logsField.text = applyLogScope(files, selectedInspectLogScope()).joinToString(", ") { it.path }
                     }
                     if (ok && openInspect && files.isNotEmpty()) {

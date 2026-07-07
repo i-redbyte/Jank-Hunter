@@ -5,9 +5,12 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import java.io.File
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import kotlin.concurrent.thread
 
 data class JankHunterDevice(val serial: String, val label: String) {
     override fun toString(): String = label
@@ -82,19 +85,23 @@ object JankHunterAdbIntegration {
         onDone: (Boolean, List<File>) -> Unit,
     ) {
         localDirectory.mkdirs()
-        val adb = shellQuote(findAdb(project))
-        val serial = if (deviceSerial.isBlank()) "" else "-s ${shellQuote(deviceSerial)} "
-        val packageArg = shellQuote(packageName)
-        val localArg = shellQuote(localDirectory.path)
-        val command = "$adb ${serial}exec-out run-as $packageArg sh -c " +
-            shellQuote("cd files/jankhunter 2>/dev/null && tar cf - .") +
-            " | tar -xf - -C $localArg"
-        startShell(command, onText) { ok ->
+        val before = snapshotJhlogs(localDirectory)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val ok = runCatching {
+                pullRunAsTar(project, deviceSerial, packageName, localDirectory, onText)
+            }.getOrElse { error ->
+                onText("ADB run-as pull error: ${error.message.orEmpty()}\n")
+                false
+            }
             val files = localDirectory
                 .walkTopDown()
                 .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
+                .filter { ok || before[relativeFileKey(localDirectory, it)] != it.lastModified() }
                 .sortedByDescending(File::lastModified)
                 .toList()
+            if (ok && files.isEmpty()) {
+                onText("ADB run-as pull succeeded, but no .jhlog files were found in ${localDirectory.path}.\n")
+            }
             onDone(ok && files.isNotEmpty(), files)
         }
     }
@@ -137,28 +144,71 @@ object JankHunterAdbIntegration {
         }
     }
 
-    private fun startShell(command: String, onText: (String) -> Unit, onDone: (Boolean) -> Unit) {
-        val commandLine = GeneralCommandLine("sh")
-            .withParameters("-c", command)
+    private fun pullRunAsTar(
+        project: Project,
+        deviceSerial: String,
+        packageName: String,
+        localDirectory: File,
+        onText: (String) -> Unit,
+    ): Boolean {
+        val adbArgs = mutableListOf<String>()
+        if (deviceSerial.isNotBlank()) adbArgs += listOf("-s", deviceSerial)
+        adbArgs += listOf(
+            "exec-out",
+            "run-as",
+            packageName,
+            "sh",
+            "-c",
+            "cd files/jankhunter 2>/dev/null && tar -cf - .",
+        )
+        val adbCommand = GeneralCommandLine(findAdb(project))
+            .withParameters(adbArgs)
             .withCharset(StandardCharsets.UTF_8)
-        try {
-            val handler = OSProcessHandler(commandLine)
-            handler.addProcessListener(
-                object : ProcessListener {
-                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                        onText(event.text)
-                    }
+        val tarCommand = GeneralCommandLine("tar")
+            .withParameters("-xf", "-", "-C", localDirectory.path)
+            .withCharset(StandardCharsets.UTF_8)
 
-                    override fun processTerminated(event: ProcessEvent) {
-                        onDone(event.exitCode == 0)
-                    }
-                },
-            )
-            handler.startNotify()
-        } catch (error: ExecutionException) {
-            onText("ADB run-as error: ${error.message}\n")
-            onDone(false)
+        val adbProcess = adbCommand.createProcess()
+        val tarProcess = tarCommand.createProcess()
+        val adbErr = StringBuilder()
+        val tarOut = StringBuilder()
+        val tarErr = StringBuilder()
+        val readers = listOf(
+            readTextAsync(adbProcess.errorStream, adbErr),
+            readTextAsync(tarProcess.inputStream, tarOut),
+            readTextAsync(tarProcess.errorStream, tarErr),
+        )
+
+        val copyError = runCatching {
+            adbProcess.inputStream.use { input ->
+                tarProcess.outputStream.use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }.exceptionOrNull()
+        if (copyError != null) {
+            runCatching { adbProcess.destroy() }
         }
+
+        val adbExit = adbProcess.waitFor()
+        val tarExit = tarProcess.waitFor()
+        readers.forEach { it.join() }
+
+        appendIfNotBlank(onText, adbErr)
+        appendIfNotBlank(onText, tarOut)
+        appendIfNotBlank(onText, tarErr)
+        if (copyError != null) {
+            onText("ADB tar stream copy failed: ${copyError.message.orEmpty()}\n")
+        }
+        if (adbExit != 0) {
+            onText(
+                "ADB run-as exited with code $adbExit. Проверьте package, debuggable-сборку и наличие files/jankhunter.\n",
+            )
+        }
+        if (tarExit != 0) {
+            onText("Local tar exited with code $tarExit while unpacking run-as output.\n")
+        }
+        return adbExit == 0 && tarExit == 0 && copyError == null
     }
 
     private fun runBlocking(project: Project, args: List<String>): String =
@@ -173,6 +223,29 @@ object JankHunterAdbIntegration {
             out + err
         }.getOrDefault("")
 
-    private fun shellQuote(value: String): String =
-        "'" + value.replace("'", "'\\''") + "'"
+    private fun readTextAsync(stream: InputStream, target: StringBuilder): Thread =
+        thread(start = true, isDaemon = true) {
+            stream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+                val buffer = CharArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = reader.read(buffer)
+                    if (read < 0) break
+                    target.append(buffer, 0, read)
+                }
+            }
+        }
+
+    private fun appendIfNotBlank(onText: (String) -> Unit, text: StringBuilder) {
+        val value = text.toString()
+        if (value.isNotBlank()) onText(value)
+    }
+
+    private fun snapshotJhlogs(directory: File): Map<String, Long> =
+        directory
+            .walkTopDown()
+            .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
+            .associate { relativeFileKey(directory, it) to it.lastModified() }
+
+    private fun relativeFileKey(root: File, file: File): String =
+        runCatching { file.relativeTo(root).path }.getOrDefault(file.path)
 }
