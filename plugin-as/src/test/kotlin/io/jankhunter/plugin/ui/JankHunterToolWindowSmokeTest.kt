@@ -51,6 +51,27 @@ class JankHunterToolWindowSmokeTest : BasePlatformTestCase() {
         }
     }
 
+    fun testRefreshLogsForGenerateRecoversMovedDownloadsFolder() {
+        withTempLogDir { dir ->
+            val stale = File(dir, "logs 2/jankhunter/session-main-1000-1.jhlog")
+            val actualDir = File(dir, "logs (2)/jankhunter").apply { mkdirs() }
+            val actual = File(actualDir, "session-main-2000-1.jhlog").apply { writeText("{}\n") }
+            val emptyConfiguredDir = File(dir, "plugin").apply { mkdirs() }
+            val view = JankHunterToolWindow(project, enableBrowser = false)
+            try {
+                view.textField("logsDirectoryField").text = emptyConfiguredDir.path
+                view.textField("logsField").text = stale.path
+
+                view.refreshLogsForGenerate()
+
+                assertEquals(actual.path, view.textField("logsField").text)
+                assertEquals(actualDir.path, view.textField("logsDirectoryField").text)
+            } finally {
+                view.dispose()
+            }
+        }
+    }
+
     private fun JankHunterToolWindow.textField(name: String): TextFieldWithBrowseButton {
         val field = JankHunterToolWindow::class.java.getDeclaredField(name)
         field.isAccessible = true
@@ -64,6 +85,12 @@ class JankHunterToolWindowSmokeTest : BasePlatformTestCase() {
         )
         method.isAccessible = true
         method.invoke(this, false)
+    }
+
+    private fun JankHunterToolWindow.refreshLogsForGenerate() {
+        val method = JankHunterToolWindow::class.java.getDeclaredMethod("refreshLogsForGenerate")
+        method.isAccessible = true
+        method.invoke(this)
     }
 
     private fun withTempLogDir(block: (File) -> Unit) {

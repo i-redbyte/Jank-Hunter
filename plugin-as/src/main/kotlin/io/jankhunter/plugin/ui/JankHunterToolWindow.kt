@@ -30,6 +30,7 @@ import io.jankhunter.plugin.execution.JankHunterArtifactDiscovery
 import io.jankhunter.plugin.execution.JankHunterArtifactSet
 import io.jankhunter.plugin.execution.JankHunterCommand
 import io.jankhunter.plugin.execution.JankHunterCommandBuilder
+import io.jankhunter.plugin.execution.JankHunterInputPaths
 import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterPreset
@@ -1082,11 +1083,9 @@ class JankHunterToolWindow(
     }
 
     private fun generateReportFromLogs() {
+        refreshLogsForGenerate()
         if (logsField.text.isBlank()) {
-            val files = fillLogsFromDirectory(showMessage = false)
-            if (files.isEmpty()) {
-                chooseLogsDirectory()
-            }
+            chooseLogsDirectory()
         }
         if (logsField.text.isBlank()) {
             Messages.showInfoMessage(project, "Укажите папку или файлы .jhlog перед генерацией отчета.", "Jank Hunter")
@@ -1097,6 +1096,77 @@ class JankHunterToolWindow(
         }
         logsDirectory()?.takeIf { it.isDirectory }?.let(::syncHeapDumpFromLogsDirectory)
         runRequest(collectRequest())
+    }
+
+    private fun refreshLogsForGenerate() {
+        if (logsField.text.isBlank()) {
+            val files = fillLogsFromDirectory(showMessage = false)
+            if (files.isEmpty()) return
+            return
+        }
+
+        if (hasExistingLogInput()) {
+            return
+        }
+
+        val files = fillLogsFromDirectory(showMessage = false)
+        if (files.isNotEmpty()) {
+            return
+        }
+
+        val nearby = findNearbyLogsForMissingInput(logsField.text)
+        if (nearby.isEmpty()) {
+            return
+        }
+
+        val scoped = applyLogScope(nearby, selectedInspectLogScope())
+        logsField.text = scoped.joinToString(", ") { it.path }
+        scoped.firstOrNull()?.parentFile?.let { dir ->
+            logsDirectoryField.text = dir.path
+            syncHeapDumpFromLogsDirectory(dir)
+        }
+    }
+
+    private fun hasExistingLogInput(): Boolean =
+        JankHunterInputPaths.expandExistingFiles(project, logsField.text)
+            .any { path -> path.toString().endsWith(".jhlog", ignoreCase = true) }
+
+    private fun findNearbyLogsForMissingInput(raw: String): List<File> {
+        val roots = linkedSetOf<File>()
+        JankHunterInputPaths.pathList(raw).forEach { part ->
+            val resolved = runCatching { JankHunterInputPaths.resolvePath(project, part).toFile() }.getOrNull()
+                ?: return@forEach
+            nearestExistingLogSearchRoot(resolved.parentFile ?: resolved)?.let(roots::add)
+        }
+        return roots
+            .asSequence()
+            .flatMap { root ->
+                root.walkTopDown()
+                    .maxDepth(6)
+                    .filter { file -> file.isFile && file.extension.equals("jhlog", ignoreCase = true) }
+            }
+            .distinctBy { file -> runCatching { file.canonicalPath }.getOrDefault(file.path) }
+            .sortedByDescending(File::lastModified)
+            .take(50)
+            .toList()
+    }
+
+    private fun nearestExistingLogSearchRoot(start: File?): File? {
+        var current = start
+        while (current != null) {
+            if (current.isDirectory) {
+                return current.takeIf(::isSafeLogRecoveryRoot)
+            }
+            current = current.parentFile
+        }
+        return null
+    }
+
+    private fun isSafeLogRecoveryRoot(dir: File): Boolean {
+        val path = dir.toPath().normalize().toString()
+        if (path == File.separator) return false
+        val home = File(System.getProperty("user.home")).toPath().normalize().toString()
+        return path != home
     }
 
     private fun fillLogsFromDirectory(showMessage: Boolean): List<File> {
