@@ -6,7 +6,7 @@
   <title>Jank Hunter: ASM диагностика</title>
   <style>{{baseCSS}}</style>
 </head>
-<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -93,7 +93,7 @@
       <table>
         <tr><th>Источник</th><th>Экран</th><th>Сценарий</th><th>Трасса</th><th>Методы</th></tr>
         {{range .Diagnostics.Annotations}}
-        <tr><td><code>{{.Owner}}</code></td><td>{{.Screen}}</td><td><code>{{.Flow}}</code></td><td><code>{{.Trace}}</code></td><td>{{.Count}}</td></tr>
+        <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{contextHint .Screen "screen"}}</td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Trace "trace"}}</code></td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="5" class="muted">Области аннотаций не найдены.</td></tr>{{end}}
       </table>
     </div>

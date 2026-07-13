@@ -21,6 +21,7 @@ allprojects {
         "jankhunter-runtime" -> "Dependency-light Android runtime for local jank, network, memory, and leak diagnostics."
         "jankhunter-annotations" -> "Dependency-light annotations for Jank Hunter attribution and instrumentation control."
         "jankhunter-okhttp3" -> "Optional OkHttp 3 integration for Jank Hunter network telemetry."
+        "jankhunter-android-sdk" -> "Single Android SDK dependency for Jank Hunter runtime, annotations, and OkHttp helpers."
         "jankhunter-gradle-plugin" -> "Gradle/ASM instrumentation plugin for Jank Hunter Android builds."
         else -> "Jank Hunter Android component."
     }
@@ -77,9 +78,11 @@ subprojects {
                         maven {
                             name = "RemoteRelease"
                             url = uri(releaseRepositoryUrl)
-                            credentials(PasswordCredentials::class) {
-                                username = providers.environmentVariable("MAVEN_REPOSITORY_USERNAME").orNull ?: ""
-                                password = providers.environmentVariable("MAVEN_REPOSITORY_PASSWORD").orNull ?: ""
+                            if (!releaseRepositoryUrl.startsWith("file:")) {
+                                credentials(PasswordCredentials::class) {
+                                    username = providers.environmentVariable("MAVEN_REPOSITORY_USERNAME").orNull ?: ""
+                                    password = providers.environmentVariable("MAVEN_REPOSITORY_PASSWORD").orNull ?: ""
+                                }
                             }
                         }
                     }

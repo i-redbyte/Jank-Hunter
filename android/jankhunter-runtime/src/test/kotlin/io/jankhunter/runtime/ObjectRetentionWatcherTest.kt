@@ -8,6 +8,13 @@ import org.junit.Test
 
 class ObjectRetentionWatcherTest {
     @Test
+    fun retainedHolderFallsBackToClassNameWhenHolderIsMissing() {
+        assertEquals("com.example.Owner", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "com.example.Owner"))
+        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", null))
+        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "unknown"))
+    }
+
+    @Test
     fun groupsRetainedObjectsAfterRepeatedCheckAndGcRequest() {
         var now = 0L
         var gcRequests = 0

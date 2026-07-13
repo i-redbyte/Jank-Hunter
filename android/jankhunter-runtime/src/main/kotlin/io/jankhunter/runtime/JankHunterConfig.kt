@@ -71,7 +71,6 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val mainProcessOnly = builder.mainProcessOnly
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
-    private val deviceInfoEnabled = builder.deviceInfoEnabled
     private val binaryStorage = builder.binaryStorage
 
     fun enabled(): Boolean = enabled
@@ -168,8 +167,6 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun redactProcessName(processName: String?): String? = processNameRedactor.redact(processName)
 
-    fun deviceInfoEnabled(): Boolean = deviceInfoEnabled
-
     fun binaryStorage(): JankHunterBinaryStorage? = binaryStorage
 
     fun toBuilder(): Builder {
@@ -221,7 +218,6 @@ class JankHunterConfig private constructor(builder: Builder) {
             .mainProcessOnly(mainProcessOnly)
             .allowedProcesses(allowedProcesses)
             .processNameRedactor(processNameRedactor)
-            .deviceInfoEnabled(deviceInfoEnabled)
             .binaryStorage(binaryStorage)
     }
 
@@ -279,7 +275,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var mainProcessOnly = true
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
-        internal var deviceInfoEnabled = true
         internal var binaryStorage: JankHunterBinaryStorage? = null
 
         fun enabled(value: Boolean) = apply { enabled = value }
@@ -380,8 +375,6 @@ class JankHunterConfig private constructor(builder: Builder) {
             processNameRedactor = value
         }
 
-        fun deviceInfoEnabled(value: Boolean) = apply { deviceInfoEnabled = value }
-
         fun binaryStorage(value: JankHunterBinaryStorage?) = apply { binaryStorage = value }
 
         fun build(): JankHunterConfig = JankHunterConfig(this)
@@ -432,7 +425,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = "io.jankhunter.max_handler_wrappers_per_runnable"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
-        const val META_DEVICE_INFO_ENABLED = "io.jankhunter.device_info_enabled"
 
         @JvmStatic
         fun builder(): Builder = Builder()
@@ -501,7 +493,6 @@ class JankHunterConfig private constructor(builder: Builder) {
                 )
                 .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, true))
                 .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
-                .deviceInfoEnabled(metadataBoolean(metadata, META_DEVICE_INFO_ENABLED, defaultEnabled))
                 .build()
         }
 

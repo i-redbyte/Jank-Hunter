@@ -25,5 +25,6 @@ rootProject.name = "JankHunterAndroid"
 include(":jankhunter-runtime")
 include(":jankhunter-annotations")
 include(":jankhunter-okhttp3")
+include(":jankhunter-android-sdk")
 include(":jankhunter-gradle-plugin")
 include(":sample-app")

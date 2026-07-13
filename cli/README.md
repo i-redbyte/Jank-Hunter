@@ -96,6 +96,13 @@ jankhunter inspect logs/*.jhlog --presentation --out report.html
 jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --presentation --out compare.html
 ```
 
+Фон отчетов по умолчанию статичный. Если нужен декоративный сканирующий фон, включите его явно:
+
+```bash
+jankhunter inspect logs/*.jhlog --animated-background --out report.html
+jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --animated-background --out compare.html
+```
+
 ## Команды
 
 Краткая карта:

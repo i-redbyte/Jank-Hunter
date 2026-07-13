@@ -163,9 +163,7 @@ jankHunter {
 
 dependencies {
     implementation(project(":feature"))
-    compileOnly("$group:jankhunter-annotations:$version")
-    debugImplementation("$group:jankhunter-runtime:$version")
-    debugImplementation("$group:jankhunter-okhttp3:$version")
+    implementation("com.squareup.okhttp3:okhttp:3.12.13")
 }
 EOF
 
@@ -340,7 +338,9 @@ main() {
   local group_path
   group_path="$(printf '%s' "$group" | tr '.' '/')"
   local plugin_module="$maven_repo/$group_path/jankhunter-gradle-plugin/$version/jankhunter-gradle-plugin-$version.module"
+  local sdk_module="$maven_repo/$group_path/jankhunter-android-sdk/$version/jankhunter-android-sdk-$version.module"
   [[ -f "$plugin_module" ]] || fail "Published plugin metadata was not found: $plugin_module"
+  [[ -f "$sdk_module" ]] || fail "Published Android SDK metadata was not found: $sdk_module"
   grep -q '"org.gradle.jvm.version": 17' "$plugin_module" ||
     fail "Published Gradle plugin metadata is not Java 17-compatible: $plugin_module"
 

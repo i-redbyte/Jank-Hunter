@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/datavalue"
 	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
 
@@ -23,6 +24,7 @@ type LogReport struct {
 
 type ReportOptions struct {
 	PresentationMode                    bool
+	AnimatedBackground                  bool
 	DisableMathLink                     bool
 	DisableLeakLink                     bool
 	InstrumentationDiagnosticsAvailable bool
@@ -39,6 +41,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, summary.Influence),
 		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
 		"PresentationMode":      options.PresentationMode,
+		"AnimatedBackground":    options.AnimatedBackground,
 	})
 }
 
@@ -55,6 +58,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
 		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
 		"PresentationMode":      options.PresentationMode,
+		"AnimatedBackground":    options.AnimatedBackground,
 	})
 }
 
@@ -65,6 +69,7 @@ func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Summary.Influence),
 		"PresentationMode":    options.PresentationMode,
+		"AnimatedBackground":  options.AnimatedBackground,
 	})
 }
 
@@ -75,31 +80,35 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Comparison.Candidate.Influence),
 		"PresentationMode":    options.PresentationMode,
+		"AnimatedBackground":  options.AnimatedBackground,
 	})
 }
 
 func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, options ReportOptions) error {
 	return execute(path, leaksInspectTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"LeakReport":       leakReport,
-		"PresentationMode": options.PresentationMode,
+		"GeneratedAt":        time.Now().Format(time.RFC3339),
+		"LeakReport":         leakReport,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
 func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareReport, options ReportOptions) error {
 	return execute(path, leaksCompareTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"LeakReport":       leakReport,
-		"PresentationMode": options.PresentationMode,
+		"GeneratedAt":        time.Now().Format(time.RFC3339),
+		"LeakReport":         leakReport,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
 func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
 	return execute(path, influenceTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"Title":            title,
-		"Influence":        influence,
-		"PresentationMode": options.PresentationMode,
+		"GeneratedAt":        time.Now().Format(time.RFC3339),
+		"Title":              title,
+		"Influence":          influence,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
@@ -109,9 +118,10 @@ func WriteInstrumentationDiagnosticsWithOptions(
 	options ReportOptions,
 ) error {
 	return execute(path, diagnosticsTemplate, map[string]any{
-		"GeneratedAt":      time.Now().Format(time.RFC3339),
-		"Diagnostics":      diagnostics,
-		"PresentationMode": options.PresentationMode,
+		"GeneratedAt":        time.Now().Format(time.RFC3339),
+		"Diagnostics":        diagnostics,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
@@ -433,12 +443,34 @@ func reportTemplateFuncs() template.FuncMap {
 			return value != "" && value != "ok"
 		},
 		"fallback": func(value string, fallback string) string {
-			if value == "" {
+			if isUnknownReportValue(value) {
 				return fallback
 			}
 			return value
 		},
+		"contextValue": contextValue,
+		"contextHint":  contextValueHint,
+		"reportValue":  reportValue,
+		"reportHint":   reportValueHint,
+		"cohortValue":  cohortValue,
+		"cohortHint":   cohortValueHint,
+		"flowKeyHint":  flowKeyLabelHint,
+		"bodyClass":    bodyClass,
 	}
+}
+
+func bodyClass(base string, presentation bool, animated bool) string {
+	classes := make([]string, 0, 3)
+	for _, className := range strings.Fields(base) {
+		classes = append(classes, className)
+	}
+	if presentation {
+		classes = append(classes, "presentation-page")
+	}
+	if animated {
+		classes = append(classes, "animated-background")
+	}
+	return strings.Join(classes, " ")
 }
 
 func clampPct(value float64) float64 {
@@ -503,6 +535,10 @@ func tooltipHTML(label, body string) template.HTML {
 	escapedLabel := template.HTMLEscapeString(label)
 	escapedBody := template.HTMLEscapeString(body)
 	return template.HTML(fmt.Sprintf(`<span class="explain" tabindex="0" data-tip="%s">%s</span>`, escapedBody, escapedLabel))
+}
+
+func inlineHTMLText(value string) template.HTML {
+	return template.HTML(template.HTMLEscapeString(value))
 }
 
 func zeroTimelineBucket(bucket mathanalysis.TimelineBucket) bool {
@@ -1783,13 +1819,177 @@ func flowStatsKey(flow analyze.FlowStats) string {
 }
 
 func flowKeyLabel(screen, flow, step, owner string) string {
-	parts := []string{
-		firstNonEmpty(screen, "неизвестно"),
-		firstNonEmpty(flow, "неизвестно"),
-		firstNonEmpty(step, "неизвестно"),
-		firstNonEmpty(owner, "неизвестно"),
+	parts := compactReportParts(screen, flow, step, owner)
+	if len(parts) == 0 {
+		return "контекст не задан"
 	}
 	return strings.Join(parts, " / ")
+}
+
+func flowKeyLabelHint(screen, flow, step, owner string) template.HTML {
+	label := flowKeyLabel(screen, flow, step, owner)
+	hint := flowContextHint(screen, flow, step, owner)
+	if hint == "" {
+		return inlineHTMLText(label)
+	}
+	return tooltipHTML(label, hint)
+}
+
+func contextValue(value string) string {
+	return reportValue(value, "нет данных")
+}
+
+func contextValueHint(value string, field string) template.HTML {
+	return reportValueHint(value, "нет данных", field)
+}
+
+func reportValue(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if isUnknownReportValue(value) {
+		return fallback
+	}
+	return value
+}
+
+func reportValueHint(value string, fallback string, field string) template.HTML {
+	label := reportValue(value, fallback)
+	if !valueNeedsMissingHint(value, field) {
+		return inlineHTMLText(label)
+	}
+	if hint := missingDataHint(field); hint != "" {
+		return tooltipHTML(label, hint)
+	}
+	return inlineHTMLText(label)
+}
+
+func valueNeedsMissingHint(value string, field string) bool {
+	if isUnknownReportValue(value) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "session", "device", "app", "build", "sdk", "android", "process", "network":
+		normalized := datavalue.NormalizeUnknown(value)
+		return strings.Contains(normalized, "неизвест") || strings.Contains(normalized, "нет данных")
+	default:
+		return false
+	}
+}
+
+func compactReportParts(values ...string) []string {
+	parts := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if isUnknownReportValue(value) {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		parts = append(parts, value)
+	}
+	return parts
+}
+
+func isUnknownReportValue(value string) bool {
+	return datavalue.IsUnknown(value)
+}
+
+func cohortValue(value string) string {
+	value = strings.TrimSpace(value)
+	if isUnknownReportValue(value) {
+		return "неизвестно"
+	}
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return "неизвестно"
+	}
+	for i, field := range fields {
+		key, raw, ok := strings.Cut(field, "=")
+		if !ok {
+			fields[i] = reportValue(field, "неизвестно")
+			continue
+		}
+		fields[i] = key + "=" + reportValue(raw, "неизвестно")
+	}
+	return strings.Join(fields, " ")
+}
+
+func cohortValueHint(value string) template.HTML {
+	label := cohortValue(value)
+	if !cohortHasMissingPart(value) {
+		return inlineHTMLText(label)
+	}
+	return tooltipHTML(label, missingDataHint("cohort"))
+}
+
+func cohortHasMissingPart(value string) bool {
+	if isUnknownReportValue(value) {
+		return true
+	}
+	for _, field := range strings.Fields(value) {
+		_, raw, ok := strings.Cut(field, "=")
+		if ok && isUnknownReportValue(raw) {
+			return true
+		}
+	}
+	return false
+}
+
+func flowContextHint(screen, flow, step, owner string) string {
+	missing := make([]string, 0, 4)
+	if isUnknownReportValue(screen) {
+		missing = append(missing, "экран: "+missingDataHint("screen"))
+	}
+	if isUnknownReportValue(flow) {
+		missing = append(missing, "сценарий: "+missingDataHint("flow"))
+	}
+	if isUnknownReportValue(step) {
+		missing = append(missing, "шаг: "+missingDataHint("step"))
+	}
+	if isUnknownReportValue(owner) {
+		missing = append(missing, "источник: "+missingDataHint("owner"))
+	}
+	return strings.Join(missing, "\n\n")
+}
+
+func missingDataHint(field string) string {
+	switch strings.ToLower(strings.TrimSpace(field)) {
+	case "screen":
+		return "Экран берется из Activity lifecycle callbacks. Если он не записался, ActivityTracker не подключился к Application, событие произошло до первого Activity callback или лог создан старой версией SDK."
+	case "flow":
+		return "Сценарий появляется из startFlow/withFlow, @JankFlow или ASM flowInteractions. Если его нет, этот участок не был размечен как сценарий или instrumentation не попал в пакет."
+	case "step", "trace":
+		return "Шаг появляется из markFlowStep/withFlowStep, @JankTrace или ASM flowInteractions. Если его нет, конкретный участок сценария не был размечен."
+	case "owner":
+		return "Источник приходит из ASM owner-map, @JankOwner/@JankHunterTrace, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции или owner-map не был передан в CLI."
+	case "log-source":
+		return "Источник логов берется из Log/Timber bytecode hook. Если его нет, вызов прошел без ASM-инструментации или сигнатура logger не поддержана текущим bridge."
+	case "route", "network-route":
+		return "Маршрут берется из OkHttp/HTTP instrumentation. Если он отсутствует при сетевых симптомах, проверьте instrument.okhttp, includePackages, scope ALL и поддержку версии OkHttp bridge."
+	case "call", "caller", "callee":
+		return "Узел графа вызовов берется из runtimeCallGraph instrumentation. Если его нет, вызов не попал в инструментированные пакеты, owner-map не был передан в CLI или ребро было отброшено лимитом."
+	case "stack":
+		return "Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра или событие записано старой версией runtime."
+	case "holder":
+		return "Держатель утечки восстанавливается из ownerHint, текущего owner или className. Если он не определен, watchObject был вызван без ownerHint и без активного контекста; для старых логов CLI пытается восстановить держатель из className."
+	case "device", "session":
+		return "Метаданные устройства пишутся session-событием при старте runtime. Если они пустые, JankHunter не успел стартовать до событий, init прошел без Application context или лог создан старой версией SDK."
+	case "app", "build":
+		return "Версия приложения берется из PackageInfo при старте runtime. Если ее нет, session-событие не записалось или PackageInfo был недоступен в этом процессе."
+	case "sdk", "android":
+		return "Версия Android и SDK пишутся device snapshot при старте runtime. Если их нет, session-событие не попало в лог или лог создан старой версией SDK."
+	case "process":
+		return "Имя процесса пишется session-событием. Если его нет, runtime не смог получить processName в этом процессе или session metadata не попала в лог."
+	case "network":
+		return "Тип сети пишется context snapshot через ConnectivityManager/NetworkCapabilities. Если его нет, snapshot не успел выполниться или система не вернула активную сеть."
+	case "cohort":
+		return "Когорта собирается из device/app/build/process/network metadata. Неизвестная часть означает, что соответствующее session/context-событие не попало в лог."
+	default:
+		return ""
+	}
 }
 
 func flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta int64, jankDelta float64) string {
@@ -2061,14 +2261,17 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		return template.HTML(`<div class="leak-graph-empty">Нет данных для графа.</div>`)
 	}
 	const (
-		nodeW   = 196.0
-		nodeH   = 76.0
-		gapX    = 48.0
-		topY    = 48.0
-		bandY   = 120.0
-		leftX   = 24.0
-		minH    = 300.0
-		maxCols = 8
+		nodeW         = 260.0
+		nodeH         = 96.0
+		gapX          = 58.0
+		topY          = 60.0
+		bandY         = 150.0
+		leftX         = 32.0
+		minH          = 340.0
+		maxCols       = 4
+		edgeInset     = 14.0
+		retainedGapX  = 24.0
+		retainedBandY = 112.0
 	)
 	mainNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
 	retainedNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
@@ -2089,18 +2292,25 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 	if cols > maxCols {
 		cols = maxCols
 	}
-	width := math.Max(760, leftX*2+float64(cols)*(nodeW+gapX))
+	width := math.Max(1080, leftX*2+float64(cols)*nodeW+float64(cols-1)*gapX)
 	mainRows := math.Ceil(float64(len(mainNodes)) / maxCols)
 	if mainRows < 1 {
 		mainRows = 1
 	}
 	retainedRows := math.Ceil(float64(len(retainedNodes)) / 3)
-	height := math.Max(minH, topY+mainRows*bandY+nodeH+84+retainedRows*90)
+	height := math.Max(minH, topY+mainRows*bandY+nodeH+96+retainedRows*retainedBandY)
 	positions := map[string]graphPoint{}
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `<svg class="leak-graph-svg" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(graph.Title))
-	builder.WriteString(`<defs><linearGradient id="leakEdgeGradient" x1="0" x2="1"><stop offset="0" stop-color="#6ff7ff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient><marker id="leakArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6ff7ff"/></marker></defs>`)
-	fmt.Fprintf(&builder, `<text x="24" y="24" class="leak-graph-title">%s</text>`, template.HTMLEscapeString(graph.Title))
+	arrowID := "leakArrow-" + graphClass(firstNonEmpty(graph.TargetID, graph.RootID, graph.Title))
+	gradientID := "leakEdgeGradient-" + graphClass(firstNonEmpty(graph.TargetID, graph.RootID, graph.Title))
+	fmt.Fprintf(
+		&builder,
+		`<defs><linearGradient id="%s" x1="0" x2="1"><stop offset="0" stop-color="#6ff7ff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.88"/></marker></defs>`,
+		template.HTMLEscapeString(gradientID),
+		template.HTMLEscapeString(arrowID),
+	)
+	fmt.Fprintf(&builder, `<text x="32" y="30" class="leak-graph-title">%s</text>`, template.HTMLEscapeString(graph.Title))
 	for index, node := range mainNodes {
 		x := leftX + float64(index%maxCols)*(nodeW+gapX)
 		y := topY + float64(index/maxCols)*bandY
@@ -2113,8 +2323,8 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 	for index, node := range retainedNodes {
 		col := index % 3
 		row := index / 3
-		x := math.Min(width-nodeW-24, math.Max(24, target.x-120+float64(col)*(nodeW+18)))
-		y := target.y + nodeH + 64 + float64(row)*90
+		x := math.Min(width-nodeW-leftX, math.Max(leftX, target.x-150+float64(col)*(nodeW+retainedGapX)))
+		y := target.y + nodeH + 76 + float64(row)*retainedBandY
 		positions[node.ID] = graphPoint{x: x, y: y}
 	}
 	for _, edge := range graph.Edges {
@@ -2123,21 +2333,25 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		if !okFrom || !okTo {
 			continue
 		}
-		x1 := from.x + nodeW
+		x1 := from.x + nodeW + edgeInset
 		y1 := from.y + nodeH/2
-		x2 := to.x
+		x2 := to.x - edgeInset
 		y2 := to.y + nodeH/2
 		if to.y > from.y+nodeH {
 			x1 = from.x + nodeW/2
-			y1 = from.y + nodeH
+			y1 = from.y + nodeH + edgeInset
 			x2 = to.x + nodeW/2
-			y2 = to.y
+			y2 = to.y - edgeInset
+		}
+		if x2 < x1 && math.Abs(to.y-from.y) < nodeH {
+			x1 = from.x - edgeInset
+			x2 = to.x + nodeW + edgeInset
 		}
 		midX := (x1 + x2) / 2
 		midY := (y1 + y2) / 2
-		fmt.Fprintf(&builder, `<path class="leak-graph-edge edge-%s" d="M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f" marker-end="url(#leakArrow)"/>`, graphClass(edge.Kind), x1, y1, midX, y1, midX, y2, x2, y2)
+		fmt.Fprintf(&builder, `<path class="leak-graph-edge edge-%s" style="stroke:url(#%s)" d="M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f" marker-end="url(#%s)"/>`, graphClass(edge.Kind), template.HTMLEscapeString(gradientID), x1, y1, midX, y1, midX, y2, x2, y2, template.HTMLEscapeString(arrowID))
 		if edge.Label != "" {
-			fmt.Fprintf(&builder, `<text x="%.1f" y="%.1f" class="leak-graph-edge-label">%s</text>`, midX, midY-5, template.HTMLEscapeString(shortGraphLabel(edge.Label, 24)))
+			fmt.Fprintf(&builder, `<text x="%.1f" y="%.1f" text-anchor="middle" class="leak-graph-edge-label">%s</text>`, midX, midY-10, template.HTMLEscapeString(shortGraphLabel(edge.Label, 18)))
 		}
 	}
 	for _, node := range graph.Nodes {
@@ -2166,16 +2380,16 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		)
 		fmt.Fprintf(&builder, `<title>%s</title>`, template.HTMLEscapeString(tip))
 		fmt.Fprintf(&builder, `<rect width="%.0f" height="%.0f" rx="8"/>`, nodeW, nodeH)
-		textY := 21.0
-		for _, line := range graphLabelLines(node.Label, 30, 2) {
-			fmt.Fprintf(&builder, `<text x="12" y="%.0f" class="node-title">%s</text>`, textY, template.HTMLEscapeString(line))
-			textY += 13
+		textY := 24.0
+		for _, line := range graphLabelLines(node.Label, 32, 2) {
+			fmt.Fprintf(&builder, `<text x="14" y="%.0f" class="node-title">%s</text>`, textY, template.HTMLEscapeString(line))
+			textY += 15
 		}
 		if node.Detail != "" {
-			textY += 3
-			for _, line := range graphLabelLines(node.Detail, 34, 2) {
-				fmt.Fprintf(&builder, `<text x="12" y="%.0f" class="node-detail">%s</text>`, textY, template.HTMLEscapeString(line))
-				textY += 12
+			textY += 4
+			for _, line := range graphLabelLines(node.Detail, 38, 2) {
+				fmt.Fprintf(&builder, `<text x="14" y="%.0f" class="node-detail">%s</text>`, textY, template.HTMLEscapeString(line))
+				textY += 14
 			}
 		}
 		builder.WriteString(`</g>`)

@@ -38,8 +38,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--all-sessions] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
@@ -74,6 +74,10 @@ func runInspect(args []string) error {
 		return err
 	}
 	presentation, remaining, err := takeBoolFlag(remaining, "presentation")
+	if err != nil {
+		return err
+	}
+	animatedBackground, remaining, err := takeBoolFlag(remaining, "animated-background")
 	if err != nil {
 		return err
 	}
@@ -117,6 +121,7 @@ func runInspect(args []string) error {
 	if out != "" {
 		reportOptions := report.ReportOptions{
 			PresentationMode:                    presentation,
+			AnimatedBackground:                  animatedBackground,
 			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
 		}
 		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
@@ -228,6 +233,10 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	animatedBackground, remaining, err := takeBoolFlag(remaining, "animated-background")
+	if err != nil {
+		return err
+	}
 	thresholdsPath, remaining, err := takeStringFlag(remaining, "thresholds", "")
 	if err != nil {
 		return err
@@ -293,6 +302,7 @@ func runCompare(args []string) error {
 	if out != "" {
 		reportOptions := report.ReportOptions{
 			PresentationMode:                    presentation,
+			AnimatedBackground:                  animatedBackground,
 			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
 		}
 		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions)

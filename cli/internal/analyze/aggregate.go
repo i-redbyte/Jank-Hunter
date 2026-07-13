@@ -9,10 +9,28 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/i-redbyte/jank-hunter/cli/internal/datavalue"
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
 const maxAggregateSamplesPerSignal = 20_000
+
+type qualityCounterWarning struct {
+	name  string
+	label string
+}
+
+var runtimeQualityCounterWarnings = []qualityCounterWarning{
+	{"jankhunter.events_dropped.count", "очередь writer отбросила события"},
+	{"jankhunter.writer_io_error.count", "writer видел ошибки записи"},
+	{"jankhunter.writer_event_lost_on_io.count", "writer потерял события после ошибки записи"},
+	{"jankhunter.metric_aggregation.dropped.count", "агрегатор метрик отбросил ключи из-за лимита кардинальности"},
+	{"jankhunter.log_spam.dropped_keys.count", "агрегатор спама логами отбросил ключи из-за лимита кардинальности"},
+	{"jankhunter.runtime_call_graph.dropped.count", "runtime-граф вызовов отбросил ребра из-за лимита или рассинхронизации стека"},
+	{"jankhunter.handler_wrapper.dropped_entries.count", "реестр Handler-оберток отбросил записи из-за лимита"},
+	{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр Handler-оберток отбросил wrapper из-за лимита"},
+	{"jankhunter.activity_tracker.unavailable.count", "Activity lifecycle tracker не подключился, поэтому screen мог остаться неизвестным"},
+}
 
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
 	collector := newCollector(title, len(paths), options)
@@ -949,7 +967,7 @@ func (c *collector) gauge(name string) *gaugeStats {
 
 func (c *collector) addMemoryLeakSuspect(className, holder string, context FlowStats, ageMs, count uint64) {
 	className = attrValue(className)
-	holder = attrValue(holder)
+	holder = firstKnown(holder, context.Owner, className)
 	key := strings.Join([]string{className, holder, context.Screen, context.Flow, context.Step}, "\x00")
 	stats := c.memoryLeakStats[key]
 	if stats == nil {
@@ -1221,20 +1239,15 @@ func (c *collector) finish() Summary {
 }
 
 func (c *collector) telemetryHealthWarnings(summary Summary) []string {
+	warnings := c.runtimeQualityWarnings()
+	warnings = append(warnings, c.instrumentationQualityWarnings()...)
+	warnings = append(warnings, c.attributionQualityWarnings(summary)...)
+	return warnings
+}
+
+func (c *collector) runtimeQualityWarnings() []string {
 	var warnings []string
-	for _, item := range []struct {
-		name  string
-		label string
-	}{
-		{"jankhunter.events_dropped.count", "очередь writer отбросила события"},
-		{"jankhunter.writer_io_error.count", "writer видел ошибки записи"},
-		{"jankhunter.writer_event_lost_on_io.count", "writer потерял события после ошибки записи"},
-		{"jankhunter.metric_aggregation.dropped.count", "агрегатор метрик отбросил ключи из-за лимита кардинальности"},
-		{"jankhunter.log_spam.dropped_keys.count", "агрегатор спама логами отбросил ключи из-за лимита кардинальности"},
-		{"jankhunter.runtime_call_graph.dropped.count", "runtime-граф вызовов отбросил ребра из-за лимита или рассинхронизации стека"},
-		{"jankhunter.handler_wrapper.dropped_entries.count", "реестр Handler-оберток отбросил записи из-за лимита"},
-		{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр Handler-оберток отбросил wrapper из-за лимита"},
-	} {
+	for _, item := range runtimeQualityCounterWarnings {
 		if value := c.counterValues[item.name]; value > 0 {
 			warnings = append(warnings, fmt.Sprintf("Качество сбора: %s: %d.", item.label, value))
 		}
@@ -1242,6 +1255,11 @@ func (c *collector) telemetryHealthWarnings(summary Summary) []string {
 	if c.dictionaryOverflow > 0 {
 		warnings = append(warnings, fmt.Sprintf("Качество сбора: словарь .jhlog переполнен, overflow-записей: %d; часть имен стала неразличимой.", c.dictionaryOverflow))
 	}
+	return warnings
+}
+
+func (c *collector) instrumentationQualityWarnings() []string {
+	var warnings []string
 	diagnostics := c.diagnostics
 	if diagnostics == nil || !diagnostics.Available {
 		warnings = append(warnings, "Качество сбора: ASM-диагностика не передана; нельзя подтвердить, какие bytecode hooks реально сработали.")
@@ -1256,10 +1274,24 @@ func (c *collector) telemetryHealthWarnings(summary Summary) []string {
 			warnings = append(warnings, fmt.Sprintf("Качество сбора: ASM встретил неподдержанные сигнатуры hooks: %d; часть телеметрии могла не попасть в лог.", unsupported))
 		}
 	}
+	return warnings
+}
+
+func (c *collector) attributionQualityWarnings(summary Summary) []string {
+	var warnings []string
 	if totalProblemWindows(summary) > 0 && unknownProblemOwnerRate(summary.ProblemWindows) >= 0.8 {
 		warnings = append(warnings, "Качество сбора: большинство проблемных окон не имеют понятного owner; добавьте ownerHint/withOwner или проверьте owner-map.")
 	}
-	if summary.EventCount > 0 && len(summary.Processes) == 1 && summary.Processes[0].Name == "unknown" {
+	if len(summary.Flows) > 0 && unknownFlowContextRate(summary.Flows) >= 0.8 {
+		warnings = append(warnings, "Качество сбора: большинство сценариев не имеют screen/flow/step/owner; проверьте автотрекинг Activity, @JankHunterTrace/withFlow/withOwner и ASM owner-map.")
+	}
+	if summary.EventCount > 0 && datavalue.IsUnknown(c.currentDevice) {
+		warnings = append(warnings, "Качество сбора: модель устройства не записана в session-событие; проверьте JankHunter init и device snapshot при старте runtime.")
+	}
+	if summary.EventCount > 0 && datavalue.IsUnknown(c.currentAppVersion) && datavalue.IsUnknown(c.currentBuild) {
+		warnings = append(warnings, "Качество сбора: версия приложения не записана в session-событие; проверьте PackageInfo/versionName/versionCode на старте runtime.")
+	}
+	if summary.EventCount > 0 && len(summary.Processes) == 1 && datavalue.IsUnknown(summary.Processes[0].Name) {
 		warnings = append(warnings, "Качество сбора: процесс неизвестен; проверьте session-события и mainProcessOnly/allowedProcesses.")
 	}
 	return warnings
@@ -1286,8 +1318,30 @@ func unknownProblemOwnerRate(problems []ProblemWindowStats) float64 {
 			continue
 		}
 		total += problem.Count
-		if problem.Owner == "" || problem.Owner == "unknown" {
+		if datavalue.IsUnknown(problem.Owner) {
 			unknown += problem.Count
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(unknown) / float64(total)
+}
+
+func unknownFlowContextRate(flows []FlowStats) float64 {
+	var total uint64
+	var unknown uint64
+	for _, flow := range flows {
+		count := uint64(flow.HTTPCount) + uint64(flow.StallCount) + flow.LogSpam + flow.ProblemCount + uint64(flow.UIWindows)
+		if count == 0 {
+			count = 1
+		}
+		total += count
+		if datavalue.IsUnknown(flow.Screen) &&
+			datavalue.IsUnknown(flow.Flow) &&
+			datavalue.IsUnknown(flow.Step) &&
+			datavalue.IsUnknown(flow.Owner) {
+			unknown += count
 		}
 	}
 	if total == 0 {
@@ -1352,18 +1406,18 @@ func (c *collector) runEnvironment(summary Summary) RunEnvironment {
 	process := unknownIfEmpty(c.currentProcess)
 
 	return RunEnvironment{
-		Title:    device,
-		Subtitle: fmt.Sprintf("%s · %s · процесс %s", osValue(c.currentAndroid, c.currentSDK), appBuildValue(app, build), process),
+		Title:    datavalue.HumanUnknown(device, "неизвестное устройство"),
+		Subtitle: fmt.Sprintf("%s · %s · процесс %s", osValue(c.currentAndroid, c.currentSDK), appBuildValue(app, build), datavalue.HumanUnknown(process, "неизвестен")),
 		Items: []InfoItem{
 			{Label: "Батарея", Value: batteryValue(summary.BatteryLastPct), Detail: batteryDetail(summary)},
-			{Label: "Сеть", Value: network, Detail: networkDetail(summary)},
+			{Label: "Сеть", Value: datavalue.HumanUnknown(network, "неизвестно"), Detail: networkDetail(summary)},
 			{Label: "Свободная RAM", Value: formatDataSize(summary.AvailMemoryLastKB), Detail: memoryDetail(summary)},
 			{Label: "Свободное хранилище", Value: formatDataSize(summary.FreeStorageKB), Detail: storageDetail(summary)},
 			{Label: "Android", Value: osValue(c.currentAndroid, c.currentSDK), Detail: androidDetail(c.currentSDK, c.currentPatch)},
 			{Label: "Рут-доступ", Value: rootValue(summary.DeviceRootKnown, summary.DeviceRooted), Detail: rootDetail(summary.DeviceRootKnown, summary.DeviceRooted)},
-			{Label: "CPU ABI", Value: abi, Detail: fmt.Sprintf("поддерживаются %s", abis)},
-			{Label: "Железо", Value: hardware, Detail: fmt.Sprintf("плата %s · продукт %s", board, product)},
-			{Label: "Бренд", Value: manufacturer, Detail: fmt.Sprintf("бренд %s", brand)},
+			{Label: "CPU ABI", Value: datavalue.HumanUnknown(abi, "неизвестно"), Detail: fmt.Sprintf("поддерживаются %s", datavalue.HumanUnknown(abis, "неизвестно"))},
+			{Label: "Железо", Value: datavalue.HumanUnknown(hardware, "неизвестно"), Detail: fmt.Sprintf("плата %s · продукт %s", datavalue.HumanUnknown(board, "неизвестна"), datavalue.HumanUnknown(product, "неизвестен"))},
+			{Label: "Бренд", Value: datavalue.HumanUnknown(manufacturer, "неизвестно"), Detail: fmt.Sprintf("бренд %s", datavalue.HumanUnknown(brand, "неизвестен"))},
 		},
 	}
 }
@@ -1630,13 +1684,30 @@ func sortNamed(values []NamedValue) {
 
 func namedSummary(values []NamedValue) string {
 	if len(values) == 0 {
-		return "unknown"
+		return "неизвестно"
 	}
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
-		parts = append(parts, fmt.Sprintf("%s:%d", value.Name, value.Value))
+		parts = append(parts, fmt.Sprintf("%s:%d", humanSummaryName(value.Name), value.Value))
 	}
 	return strings.Join(parts, ",")
+}
+
+func humanSummaryName(value string) string {
+	value = datavalue.HumanUnknown(value, "неизвестно")
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return "неизвестно"
+	}
+	for i, field := range fields {
+		key, raw, ok := strings.Cut(field, "=")
+		if !ok {
+			fields[i] = datavalue.HumanUnknown(field, "неизвестно")
+			continue
+		}
+		fields[i] = key + "=" + datavalue.HumanUnknown(raw, "неизвестно")
+	}
+	return strings.Join(fields, " ")
 }
 
 func retainedAgeBucket(ageMs uint64) string {
@@ -1805,25 +1876,34 @@ func unknownIfEmpty(value string) string {
 func osValue(release string, sdk string) string {
 	release = unknownIfEmpty(release)
 	sdk = unknownIfEmpty(sdk)
-	if release == "unknown" {
-		return sdk
+	switch {
+	case release == "unknown" && sdk == "unknown":
+		return "Android неизвестен"
+	case release == "unknown":
+		return fmt.Sprintf("Android API %s", apiNumber(sdk))
+	case sdk == "unknown":
+		return fmt.Sprintf("Android %s", release)
+	default:
+		return fmt.Sprintf("Android %s", release)
 	}
-	return fmt.Sprintf("Android %s", release)
 }
 
 func appBuildValue(app string, build string) string {
 	if app == "unknown" && build == "unknown" {
-		return "unknown build"
+		return "версия приложения неизвестна"
 	}
 	if build == "unknown" {
 		return app
+	}
+	if app == "unknown" {
+		return fmt.Sprintf("версия неизвестна (%s)", build)
 	}
 	return fmt.Sprintf("%s (%s)", app, build)
 }
 
 func batteryValue(pct uint64) string {
 	if pct == 0 {
-		return "unknown"
+		return "неизвестно"
 	}
 	return fmt.Sprintf("%d%%", pct)
 }
@@ -1897,6 +1977,9 @@ func androidDetail(sdk string, patch string) string {
 }
 
 func apiNumber(sdk string) string {
+	if sdk == "unknown" {
+		return "неизвестен"
+	}
 	return strings.TrimPrefix(sdk, "api-")
 }
 

@@ -53,7 +53,6 @@ class JankHunterConfigTest {
             .mainProcessOnly(true)
             .allowedProcesses(listOf("com.example", "com.example:remote"))
             .processNameRedactor { "redacted.$it" }
-            .deviceInfoEnabled(false)
             .build()
 
         assertFalse(config.enabled())
@@ -100,7 +99,6 @@ class JankHunterConfigTest {
         assertTrue(config.mainProcessOnly())
         assertEquals(setOf("com.example", "com.example:remote"), config.allowedProcesses())
         assertEquals("redacted.com.example", config.redactProcessName("com.example"))
-        assertFalse(config.deviceInfoEnabled())
     }
 
     @Test
@@ -129,7 +127,6 @@ class JankHunterConfigTest {
         assertEquals(32L, config.uiWindowP95ThresholdMs())
         assertTrue(config.mainProcessOnly())
         assertTrue(config.allowedProcesses().isEmpty())
-        assertTrue(config.deviceInfoEnabled())
         assertEquals(2048, config.maxQueueSize())
         assertEquals(512L * 1024L, config.maxLogBytes())
         assertEquals(2L * 1024L * 1024L, config.maxLogDirectoryBytes())

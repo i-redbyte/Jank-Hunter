@@ -179,7 +179,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 		`scrollIntoView`,
 		`tipCache`,
 		`.leak-graph-panel[hidden]`,
-		`y="34" class="node-title"`,
+		`class="node-title"`,
 	)
 
 	comparePath := filepath.Join(dir, "compare-leaks.html")
@@ -223,6 +223,82 @@ func TestLeakObjectKindOptions(t *testing.T) {
 	if got := leakObjectKindLabel("экран / Activity"); got != "Экран / Activity" {
 		t.Fatalf("leakObjectKindLabel() = %q", got)
 	}
+}
+
+func TestFlowKeyLabelHidesUnknownParts(t *testing.T) {
+	if got, want := flowKeyLabel("unknown", "unknown", "unknown", "unknown"), "контекст не задан"; got != want {
+		t.Fatalf("flowKeyLabel(all unknown) = %q, want %q", got, want)
+	}
+	if got, want := flowKeyLabel("Feed", "unknown", "Feed", "FeedOwner"), "Feed / FeedOwner"; got != want {
+		t.Fatalf("flowKeyLabel(deduplicated) = %q, want %q", got, want)
+	}
+	if got, want := reportValue("unknown unknown", "нет данных"), "нет данных"; got != want {
+		t.Fatalf("reportValue(unknown unknown) = %q, want %q", got, want)
+	}
+	if got := string(contextValueHint("unknown", "screen")); !strings.Contains(got, "Activity lifecycle callbacks") {
+		t.Fatalf("contextValueHint(screen) = %q, want Activity lifecycle hint", got)
+	}
+	if got := string(flowKeyLabelHint("unknown", "unknown", "unknown", "unknown")); !strings.Contains(got, "owner-map") {
+		t.Fatalf("flowKeyLabelHint(all unknown) = %q, want attribution hint", got)
+	}
+}
+
+func TestWriteReportsHideUnknownPlaceholders(t *testing.T) {
+	summary := analyze.Summary{
+		Title:      "sample.jhlog",
+		LogCount:   1,
+		EventCount: 1,
+		Environment: analyze.RunEnvironment{
+			Title:    "unknown",
+			Subtitle: "unknown build",
+			Items: []analyze.InfoItem{
+				{Label: "Устройство", Value: "unknown", Detail: "unknown unknown"},
+			},
+		},
+		Flows: []analyze.FlowStats{
+			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", RouteSample: "unknown", ProblemCount: 1},
+		},
+		LogSpam: []analyze.LogSpamStats{
+			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", Source: "unknown", Level: "warn", Count: 1},
+		},
+		ProblemWindows: []analyze.ProblemWindowStats{
+			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", Kind: "ui_jank", Windows: 1, Count: 1, TotalWindowMS: 16, MaxMS: 16},
+		},
+		RuntimeCalls: []analyze.RuntimeCallStats{
+			{Screen: "unknown", Flow: "unknown", Step: "unknown", Caller: "unknown", Callee: "unknown", Count: 1, TotalMS: 16, MaxMS: 16},
+		},
+		Owners: []analyze.OwnerStats{
+			{Owner: "unknown", Kind: "handler", Count: 1, MaxMS: 16, StackHint: "unknown unknown"},
+		},
+		AppVersions: []analyze.NamedValue{{Name: "unknown", Value: 1}},
+		Builds:      []analyze.NamedValue{{Name: "unknown build", Value: 1}},
+		Devices:     []analyze.NamedValue{{Name: "unknown unknown", Value: 1}},
+		SDKs:        []analyze.NamedValue{{Name: "unknown", Value: 1}},
+		Processes:   []analyze.NamedValue{{Name: "unknown", Value: 1}},
+		Network:     []analyze.NamedValue{{Name: "unknown", Value: 1}},
+		Cohorts:     []analyze.NamedValue{{Name: "device=unknown app=unknown build=unknown", Value: 1}},
+	}
+
+	dir := t.TempDir()
+	inspectPath := filepath.Join(dir, "inspect.html")
+	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{}); err != nil {
+		t.Fatalf("WriteInspectWithOptions() error = %v", err)
+	}
+	assertHTMLContains(t, inspectPath, "неизвестное устройство", "контекст выполнения недоступен", "нет данных", "Activity lifecycle callbacks", "owner-map", "session-событием")
+	assertHTMLNotContains(t, inspectPath, "unknown unknown", "unknown build", ">unknown<", "<code>unknown</code>")
+
+	comparePath := filepath.Join(dir, "compare.html")
+	if err := WriteCompareReportWithOptions(
+		comparePath,
+		analyze.Compare(summary, summary),
+		[]LogReport{{Name: "base.jhlog", Anchor: "baseline-log-1", Summary: summary}},
+		[]LogReport{{Name: "candidate.jhlog", Anchor: "candidate-log-1", Summary: summary}},
+		ReportOptions{},
+	); err != nil {
+		t.Fatalf("WriteCompareReportWithOptions() error = %v", err)
+	}
+	assertHTMLContains(t, comparePath, "неизвестная база", "неизвестный кандидат", "контекст недоступен", "нет данных")
+	assertHTMLNotContains(t, comparePath, "unknown unknown", "unknown build", ">unknown<", "<code>unknown</code>")
 }
 
 func TestWriteReportsCanHideMathLink(t *testing.T) {
@@ -594,8 +670,10 @@ func assertHTMLNotContains(t *testing.T, path string, needles ...string) {
 	}
 	html := string(data)
 	for _, needle := range needles {
-		if strings.Contains(html, needle) {
-			t.Fatalf("%s unexpectedly contains %q", path, needle)
+		if index := strings.Index(html, needle); index >= 0 {
+			start := max(0, index-120)
+			end := min(len(html), index+len(needle)+120)
+			t.Fatalf("%s unexpectedly contains %q near %q", path, needle, html[start:end])
 		}
 	}
 }

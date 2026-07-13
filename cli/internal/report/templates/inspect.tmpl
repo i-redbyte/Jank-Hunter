@@ -6,7 +6,7 @@
   <title>Jank Hunter: отчет</title>
   <style>{{baseCSS}}</style>
 </head>
-<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
@@ -18,11 +18,11 @@
       <div class="report-hero-context">
       <div class="env-card">
         <div class="env-title">Контекст устройства</div>
-        <strong class="env-device">{{fallback .Summary.Environment.Title "неизвестное устройство"}}</strong>
-        <div class="env-subtitle">{{fallback .Summary.Environment.Subtitle "контекст выполнения недоступен"}}</div>
+        <strong class="env-device">{{reportHint .Summary.Environment.Title "неизвестное устройство" "device"}}</strong>
+        <div class="env-subtitle">{{reportHint .Summary.Environment.Subtitle "контекст выполнения недоступен" "session"}}</div>
         <div class="env-grid">
           {{range .Summary.Environment.Items}}
-          <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{.Value}}</div><div class="env-detail">{{.Detail}}</div></div>
+          <div class="env-item"><div class="env-label">{{.Label}}</div><div class="env-value">{{reportHint .Value "неизвестно" "session"}}</div><div class="env-detail">{{reportHint .Detail "нет данных" "session"}}</div></div>
           {{else}}<div class="env-item"><div class="env-label">Контекст</div><div class="env-value">неизвестно</div><div class="env-detail">Нет метаданных сессии и контекста.</div></div>{{end}}
         </div>
       </div>
@@ -180,7 +180,7 @@
         <table>
           <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Средний TTFB</th><th>RX</th><th>TX</th><th>Источник</th></tr>
           {{range .Summary.Routes}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td><span class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</span></td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{.OwnerSample}}</code></td></tr>
+          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td><span class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</span></td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{contextHint .OwnerSample "owner"}}</code></td></tr>
           {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
       </div>
@@ -196,7 +196,7 @@
       <div class="fold-body">
         <div class="chart-list">
           {{range .Summary.Screens}}
-          <div class="chart-row"><code>{{.Screen}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
+          <div class="chart-row"><code>{{contextHint .Screen "screen"}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
           {{else}}<div class="muted">Нет событий UI-окон.</div>{{end}}
         </div>
         <h3>Таблица экранов</h3>
@@ -204,7 +204,7 @@
           <tr><th>Экран</th><th>Окна</th><th>Кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Средний FPS</th><th>Мин. FPS</th><th>p95 кадра</th><th>Макс. p99</th></tr>
           {{range .Summary.Screens}}
           <tr>
-            <td><code>{{.Screen}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
+            <td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
             <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
             <td>{{printf "%.1f" .AvgFPS}}</td><td>{{printf "%.1f" .MinFPS}}</td><td>{{.P95MS}} мс</td><td>{{.MaxP99MS}} мс</td>
           </tr>
@@ -225,11 +225,11 @@
           <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th><th>Маршрут</th><th>HTTP</th><th>Ошибки</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Макс. пауза</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
           {{range .Summary.Flows}}
           <tr>
-            <td><code>{{.Screen}}</code></td>
-            <td><code>{{.Flow}}</code></td>
-            <td><code>{{.Step}}</code></td>
-            <td><code>{{.Owner}}</code></td>
-            <td><code>{{.RouteSample}}</code></td>
+            <td><code>{{contextHint .Screen "screen"}}</code></td>
+            <td><code>{{contextHint .Flow "flow"}}</code></td>
+            <td><code>{{contextHint .Step "step"}}</code></td>
+            <td><code>{{contextHint .Owner "owner"}}</code></td>
+            <td><code>{{contextHint .RouteSample "route"}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
             <td><span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 сценария рассчитан по reservoir-сэмплу">≈</span>{{end}}</span></td>
@@ -249,7 +249,7 @@
             <table>
               <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник работ</th></tr>
               {{range .Summary.LogSpam}}
-              <tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
+              <tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
               {{else}}<tr><td colspan="7" class="muted">Нет событий спама логами.</td></tr>{{end}}
             </table>
           </div>
@@ -258,7 +258,7 @@
             <table>
               <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th></tr>
               {{range .Summary.ProblemWindows}}
-              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Owner}}</code></td></tr>
+              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
               {{else}}<tr><td colspan="9" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}
             </table>
           </div>
@@ -267,7 +267,7 @@
         <table>
           <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Summary.RuntimeCalls}}
-          <tr><td><code>{{.Screen}}</code></td><td><code>{{.Flow}}</code></td><td><code>{{.Step}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          <tr><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
           {{else}}<tr><td colspan="8" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
       </div>
@@ -284,7 +284,7 @@
         <table>
           <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
           {{range .Summary.Owners}}
-          <tr><td><code>{{.Owner}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><code>{{.StackHint}}</code></td></tr>
+          <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .StackHint "stack"}}</code></td></tr>
           {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
       </div>
@@ -340,8 +340,8 @@
             <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
             <td><div class="problem-location"><code>{{.ClassName}}</code></div></td>
             <td><div class="leak-object-kind">{{leakObjectKindLabel .ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
-            <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
-            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+            <td><code>{{contextHint .Holder "holder"}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
+            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{contextHint .Screen "screen"}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{contextHint .Flow "flow"}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{contextHint .Step "step"}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
             <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
@@ -423,16 +423,16 @@
       <summary>Детали контекста</summary>
       <div class="fold-body">
         <div class="triad">
-          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{reportHint .Name "неизвестно" "app"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{reportHint .Name "неизвестно" "sdk"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{reportHint .Name "неизвестно" "device"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
         </div>
         <h3>Разбивка по процессам</h3>
-        <table><tr><th>Процесс</th><th>Сессии</th></tr>{{range .Summary.Processes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</table>
+        <table><tr><th>Процесс</th><th>Сессии</th></tr>{{range .Summary.Processes}}<tr><td><code>{{reportHint .Name "неизвестно" "process"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</table>
         <h3>Сэмплы сети</h3>
-        <table><tr><th>Сеть</th><th>Сэмплы</th></tr>{{range .Summary.Network}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет событий контекста.</td></tr>{{end}}</table>
+        <table><tr><th>Сеть</th><th>Сэмплы</th></tr>{{range .Summary.Network}}<tr><td><code>{{reportHint .Name "неизвестно" "network"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет событий контекста.</td></tr>{{end}}</table>
         <h3>Объединенные когорты</h3>
-        <table><tr><th>Когорта</th><th>События</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+        <table><tr><th>Когорта</th><th>События</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{cohortHint .Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
       </div>
     </details>
   </section>

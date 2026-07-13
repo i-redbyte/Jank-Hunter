@@ -260,6 +260,35 @@ func TestPresentationModeWritesLinkedReports(t *testing.T) {
 	}
 }
 
+func TestAnimatedBackgroundFlagDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	plainPath := filepath.Join(dir, "plain.html")
+	if err := runInspect([]string{samplePath, "--out", plainPath}); err != nil {
+		t.Fatalf("runInspect(plain) error = %v", err)
+	}
+	assertFileNotContains(t, plainPath, `class="animated-background"`)
+	assertFileNotContains(t, filepath.Join(dir, "plain-leaks.html"), `class="leak-page animated-background"`)
+
+	animatedPath := filepath.Join(dir, "animated.html")
+	if err := runInspect([]string{samplePath, "--animated-background", "--out", animatedPath}); err != nil {
+		t.Fatalf("runInspect(animated) error = %v", err)
+	}
+	assertFileContains(t, animatedPath, `class="animated-background"`)
+	assertFileContains(t, filepath.Join(dir, "animated-leaks.html"), `class="leak-page animated-background"`)
+
+	comparePath := filepath.Join(dir, "animated-compare.html")
+	if err := runCompare([]string{"--baseline", samplePath, "--candidate", samplePath, "--animated-background", "--out", comparePath}); err != nil {
+		t.Fatalf("runCompare(animated) error = %v", err)
+	}
+	assertFileContains(t, comparePath, `class="animated-background"`)
+	assertFileContains(t, filepath.Join(dir, "animated-compare-leaks.html"), `class="leak-page animated-background"`)
+}
+
 func TestExportStreamsSampleJSONL(t *testing.T) {
 	dir := t.TempDir()
 	samplePath := filepath.Join(dir, "sample.jhlog")
@@ -370,6 +399,20 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 	for _, needle := range needles {
 		if !strings.Contains(text, needle) {
 			t.Fatalf("%s does not contain %q", path, needle)
+		}
+	}
+}
+
+func assertFileNotContains(t *testing.T, path string, needles ...string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	text := string(data)
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			t.Fatalf("%s contains %q", path, needle)
 		}
 	}
 }

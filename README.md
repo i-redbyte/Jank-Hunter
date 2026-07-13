@@ -6,7 +6,7 @@ Jank Hunter помогает поймать то, что обычно ускол
 
 ## Что В Репозитории
 
-- `android/`: Android-библиотеки, аннотации, модуль `jankhunter-runtime`, интеграция с OkHttp, Gradle-плагин с ASM-внедрением и пример приложения.
+- `android/`: единый Android SDK-артефакт, runtime, аннотации, интеграция с OkHttp, Gradle-плагин с ASM-внедрением и пример приложения.
 - `cli/`: утилита `jankhunter`, которая читает `.jhlog`, строит отчёты, выгружает таблицы проблем и выдаёт оценку готовности для проверок.
 - `plugin-as/`: плагин для Android Studio и IntelliJ IDEA. Он запускает `jankhunter`, подтягивает логи с устройства, открывает отчёты и показывает таблицу проблем с переходом в исходники.
 - `scripts/`: помощники для подключения Jank Hunter к существующему Android-проекту, проверки Gradle-плагина и сквозного прогона на устройстве.
@@ -115,25 +115,20 @@ quit
 
 ## Подключение К Своему Приложению
 
-Минимальный набор зависимостей обычно выглядит так:
-
-```kotlin
-dependencies {
-    compileOnly("io.jankhunter:jankhunter-annotations:1.0.0")
-    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.0")
-    debugImplementation("io.jankhunter:jankhunter-okhttp3:1.0.0")
-}
-```
-
-Gradle-плагин подключайте сначала только к отладочным или проверочным сборкам и ограничивайте пакеты:
+Минимальное подключение обычно выглядит так:
 
 ```kotlin
 plugins {
-    id("io.jankhunter.android")
+    id("io.jankhunter.android") version "1.0.0"
 }
+```
 
+Gradle-плагин сам добавляет `jankhunter-annotations` и единый `jankhunter-android-sdk` в отладочные или проверочные сборки. Начинайте с ограниченного набора пакетов:
+
+```kotlin
 jankHunter {
     enabledBuildTypes.add("debug")
+    verboseLogs = false
 
     instrument {
         includePackages("com.myapp.feature", "com.myapp.data")
@@ -147,6 +142,14 @@ jankHunter {
         classGraph = true
         runtimeCallGraph = true
     }
+}
+```
+
+Если Gradle-плагин временно нельзя использовать, можно подключить SDK вручную:
+
+```kotlin
+dependencies {
+    debugImplementation("io.jankhunter:jankhunter-android-sdk:1.0.0")
 }
 ```
 
