@@ -6,7 +6,7 @@
   <title>Jank Hunter: граф влияния кода</title>
   <style>{{baseCSS}}{{mathCSS}}</style>
 </head>
-<body{{if .PresentationMode}} class="presentation-page"{{end}}>
+<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>

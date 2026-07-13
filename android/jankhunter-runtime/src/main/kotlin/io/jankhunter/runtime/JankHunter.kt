@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import android.app.ActivityManager
+import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -114,7 +115,7 @@ object JankHunter {
         var processNameForDiagnostics: String? = null
         var directoryForDiagnostics: File? = null
         try {
-            val appContext = context.applicationContext ?: context
+            val appContext = runtimeContext(context)
             val processName = ProcessNames.current(appContext)
             processNameForDiagnostics = processName
             val mainProcessName = appContext.packageName
@@ -239,11 +240,7 @@ object JankHunter {
         writer = asyncWriter
 
         val identity = appIdentity(appContext)
-        val device = if (providedConfig.deviceInfoEnabled()) {
-            DeviceSnapshots.current()
-        } else {
-            DeviceSnapshots.redacted()
-        }
+        val device = DeviceSnapshots.current()
         asyncWriter.session(
             identity.versionName,
             identity.versionCode,
@@ -386,6 +383,12 @@ object JankHunter {
 
     private fun runtimeLogDirectory(appContext: Context, providedConfig: JankHunterConfig): File {
         return providedConfig.logDirectory() ?: File(appContext.filesDir, "jankhunter")
+    }
+
+    private fun runtimeContext(context: Context): Context {
+        return (context.applicationContext as? Application)
+            ?: (context as? Application)
+            ?: (context.applicationContext ?: context)
     }
 
     @JvmStatic
@@ -781,12 +784,22 @@ object JankHunter {
 
     @JvmStatic
     fun recordRetained(className: String?, holder: String?, ageMs: Long, count: Long) {
-        val retainedOwner = firstContextValue(holder, className)
-        val tuple = captureContext(ownerOverride = retainedOwner)
+        val retainedHolder = effectiveRetainedHolder(className, holder)
+        val tuple = captureContext(ownerOverride = retainedHolder)
         ensureContextRecorded(screenOverride = tuple.screen, ownerOverride = tuple.owner)
-        writer?.retained(tuple.screen, tuple.owner, tuple.flow, tuple.step, className, holder, ageMs, count, foreground = isAppForeground())
-        recordProblemWindow("retained_object", ageMs, count.coerceAtLeast(1L), ageMs, retainedOwner)
-        maybeDumpRetainedHeap(className, retainedOwner, ageMs, count)
+        writer?.retained(
+            tuple.screen,
+            tuple.owner,
+            tuple.flow,
+            tuple.step,
+            className,
+            retainedHolder,
+            ageMs,
+            count,
+            foreground = isAppForeground(),
+        )
+        recordProblemWindow("retained_object", ageMs, count.coerceAtLeast(1L), ageMs, retainedHolder)
+        maybeDumpRetainedHeap(className, retainedHolder, ageMs, count)
     }
 
     internal fun recordWatchedRetained(
@@ -800,9 +813,10 @@ object JankHunter {
             recordRetained(className, holder, ageMs, count)
             return
         }
-        val retainedOwner = firstContextValue(firstContextValue(holder, context.owner), className)
-        callWithContext(context, retainedOwner) {
-            recordRetained(className, holder, ageMs, count)
+        val explicitOrContextHolder = firstContextValue(holder, context.owner)
+        val retainedHolder = effectiveRetainedHolder(className, explicitOrContextHolder)
+        callWithContext(context, retainedHolder) {
+            recordRetained(className, retainedHolder, ageMs, count)
         }
     }
 
@@ -1226,6 +1240,10 @@ object JankHunter {
             ?.takeIf { it.isNotBlank() }
             ?.replace(OWNER_WHITESPACE, "_")
             ?: "unknown"
+    }
+
+    internal fun effectiveRetainedHolder(className: String?, holder: String?): String? {
+        return firstContextValue(holder, className)
     }
 
     private fun appIdentity(context: Context): AppIdentity {

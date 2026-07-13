@@ -51,6 +51,8 @@ class JankHunterExtensionTest {
         assertEquals(false, instrumentation.asmProgressLog)
         assertEquals(true, instrumentation.classGraph)
         assertEquals(true, instrumentation.runtimeCallGraph)
+        assertEquals(true, instrumentation.handlers)
+        assertEquals(true, instrumentation.executors)
         assertEquals(true, instrumentation.coroutines)
         assertEquals(true, instrumentation.allowEmptyIncludePackages)
         assertEquals(false, instrumentation.methodCounters)
@@ -90,6 +92,17 @@ class JankHunterExtensionTest {
         extension.logBucket = "daily"
 
         assertEquals("daily", extension.logBucket)
+    }
+
+    @Test
+    fun verboseLogsControlsGradleLifecycleMessages() {
+        val extension = JankHunterExtension()
+
+        assertEquals(true, extension.verboseLogs)
+
+        extension.verboseLogs = false
+
+        assertEquals(false, extension.verboseLogs)
     }
 
     @Test
@@ -150,9 +163,7 @@ class JankHunterExtensionTest {
         val releaseSafety = JankHunterExtension.ReleaseSafety()
 
         assertEquals(false, releaseSafety.allowInstrumentation)
-        assertEquals(false, releaseSafety.allowDependencyInstrumentation)
         assertEquals(false, releaseSafety.privacyReviewed)
-        assertEquals(false, releaseSafety.allowDeviceInfo)
         assertEquals(false, releaseSafety.allowHeapDumps)
         assertEquals(false, releaseSafety.allowSecondaryProcesses)
         assertEquals(null, releaseSafety.performanceBudgetEvidence)

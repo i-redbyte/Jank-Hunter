@@ -13,6 +13,7 @@ class JankHunterPlugin : Plugin<Project> {
         val extension = project.extensions.create("jankHunter", JankHunterExtension::class.java)
 
         project.pluginManager.withPlugin("com.android.application") {
+            JankHunterAutomaticDependencies.configure(project, extension, addAndroidSdk = true)
             configureAndroidProject(
                 project,
                 extension,
@@ -21,6 +22,7 @@ class JankHunterPlugin : Plugin<Project> {
             )
         }
         project.pluginManager.withPlugin("com.android.library") {
+            JankHunterAutomaticDependencies.configure(project, extension, addAndroidSdk = false)
             configureAndroidProject(
                 project,
                 extension,
@@ -44,7 +46,7 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) {
-                if (!extension.enabled) {
+                if (!extension.enabled && extension.verboseLogs) {
                     project.logger.lifecycle(
                         "Jank Hunter variant {} skipped because jankHunter.enabled=false.",
                         variant.name,
@@ -57,27 +59,8 @@ class JankHunterPlugin : Plugin<Project> {
             if (releaseVariant) {
                 validateReleaseSafety(project, extension, variant.name)
             }
-            val effectiveInstrumentationScope = effectiveInstrumentationScope(
-                instrumentationScope,
-                releaseVariant,
-                extension.releaseSafety.allowDependencyInstrumentation,
-            )
-            val effectiveMainProcessOnly = extension.runtime.mainProcessOnly ||
-                (releaseVariant && !extension.releaseSafety.allowSecondaryProcesses)
-            val runtimeThresholdsCustomized = extension.runtime.mainThreadStallThresholdMs != DEFAULT_MAIN_THREAD_STALL_THRESHOLD_MS ||
-                extension.runtime.ownerBlockThresholdMs != DEFAULT_OWNER_BLOCK_THRESHOLD_MS ||
-                extension.runtime.httpSlowThresholdMs != DEFAULT_HTTP_SLOW_THRESHOLD_MS ||
-                extension.runtime.jankFrameThresholdMs != DEFAULT_JANK_FRAME_THRESHOLD_MS ||
-                extension.runtime.uiWindowP95ThresholdMs != DEFAULT_UI_WINDOW_P95_THRESHOLD_MS
-            val shouldGenerateRuntimeManifest = generateRuntimeManifest &&
-                (extension.retainedHeapDump.enabled ||
-                    extension.runtime.mainLooperDispatchMonitor ||
-                    extension.runtime.jankStats ||
-                    runtimeThresholdsCustomized ||
-                    !extension.runtime.mainProcessOnly ||
-                    !extension.autoInit ||
-                    releaseVariant ||
-                    logBucket != "session")
+            val effectiveInstrumentationScope = instrumentationScope
+            val shouldGenerateRuntimeManifest = generateRuntimeManifest
             if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
@@ -98,8 +81,7 @@ class JankHunterPlugin : Plugin<Project> {
                     it.jankStatsEnabled.set(extension.runtime.jankStats)
                     it.jankFrameThresholdMs.set(extension.runtime.jankFrameThresholdMs)
                     it.uiWindowP95ThresholdMs.set(extension.runtime.uiWindowP95ThresholdMs)
-                    it.mainProcessOnly.set(effectiveMainProcessOnly)
-                    it.deviceInfoEnabled.set(!releaseVariant || extension.releaseSafety.allowDeviceInfo)
+                    it.mainProcessOnly.set(extension.runtime.mainProcessOnly)
                     it.logBucket.set(logBucket)
                 }
                 variant.sources.manifests.addGeneratedManifestFile(
@@ -230,40 +212,42 @@ class JankHunterPlugin : Plugin<Project> {
                 FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,
             )
 
-            project.logger.lifecycle(
-                "Jank Hunter variant {} configured. " +
-                    "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
-                    "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
-                    "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
-                    "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
-                    "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
-                    "logBucket={} ownerMapTask={} mergeArtifactsTask={}",
-                variant.name,
-                extension.instrument.methodCounters,
-                extension.instrument.okhttp,
-                extension.instrument.webSockets,
-                extension.instrument.handlers,
-                extension.instrument.executors,
-                extension.instrument.coroutines,
-                extension.instrument.flowInteractions,
-                extension.instrument.lifecycleLeaks,
-                extension.instrument.logSpam,
-                extension.instrument.classGraph,
-                extension.instrument.runtimeCallGraph,
-                extension.instrument.allowEmptyIncludePackages,
-                extension.instrument.includeWholeApplication,
-                extension.instrument.asmProgressLog,
-                extension.autoInit,
-                extension.retainedHeapDump.enabled,
-                extension.retainedHeapDump.minIntervalMs,
-                extension.retainedHeapDump.maxCount,
-                extension.retainedHeapDump.minRetainedAgeMs,
-                effectiveInstrumentationScope,
-                generateRuntimeManifest,
-                logBucket,
-                ownerMap.name,
-                mergeArtifacts.name,
-            )
+            if (extension.verboseLogs) {
+                project.logger.lifecycle(
+                    "Jank Hunter variant {} configured. " +
+                        "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
+                        "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
+                        "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
+                        "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
+                        "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
+                        "logBucket={} ownerMapTask={} mergeArtifactsTask={}",
+                    variant.name,
+                    extension.instrument.methodCounters,
+                    extension.instrument.okhttp,
+                    extension.instrument.webSockets,
+                    extension.instrument.handlers,
+                    extension.instrument.executors,
+                    extension.instrument.coroutines,
+                    extension.instrument.flowInteractions,
+                    extension.instrument.lifecycleLeaks,
+                    extension.instrument.logSpam,
+                    extension.instrument.classGraph,
+                    extension.instrument.runtimeCallGraph,
+                    extension.instrument.allowEmptyIncludePackages,
+                    extension.instrument.includeWholeApplication,
+                    extension.instrument.asmProgressLog,
+                    extension.autoInit,
+                    extension.retainedHeapDump.enabled,
+                    extension.retainedHeapDump.minIntervalMs,
+                    extension.retainedHeapDump.maxCount,
+                    extension.retainedHeapDump.minRetainedAgeMs,
+                    effectiveInstrumentationScope,
+                    generateRuntimeManifest,
+                    logBucket,
+                    ownerMap.name,
+                    mergeArtifacts.name,
+                )
+            }
         }
     }
 
@@ -293,16 +277,6 @@ class JankHunterPlugin : Plugin<Project> {
         )
     }
 
-    private fun effectiveInstrumentationScope(
-        requestedScope: InstrumentationScope,
-        releaseVariant: Boolean,
-        allowReleaseDependencyInstrumentation: Boolean,
-    ): InstrumentationScope {
-        if (requestedScope != InstrumentationScope.ALL) return requestedScope
-        if (!releaseVariant || allowReleaseDependencyInstrumentation) return requestedScope
-        return InstrumentationScope.PROJECT
-    }
-
     private fun validateReleaseSafety(project: Project, extension: JankHunterExtension, variantName: String) {
         val safety = extension.releaseSafety
         if (!safety.allowInstrumentation) {
@@ -330,6 +304,12 @@ class JankHunterPlugin : Plugin<Project> {
                     "jankHunter.releaseSafety.allowHeapDumps=true.",
             )
         }
+        if (!extension.runtime.mainProcessOnly && !safety.allowSecondaryProcesses) {
+            throw GradleException(
+                "runtime.mainProcessOnly=false for release-like variant '$variantName' requires " +
+                    "jankHunter.releaseSafety.allowSecondaryProcesses=true.",
+            )
+        }
     }
 
     private fun validatePerformanceBudget(project: Project, evidencePath: String?, variantName: String) {
@@ -354,11 +334,6 @@ class JankHunterPlugin : Plugin<Project> {
 
     private companion object {
         private const val PERFORMANCE_BUDGET_MARKER = "jankhunter_release_performance_budget_v1"
-        private const val DEFAULT_MAIN_THREAD_STALL_THRESHOLD_MS = 700L
-        private const val DEFAULT_OWNER_BLOCK_THRESHOLD_MS = 250L
-        private const val DEFAULT_HTTP_SLOW_THRESHOLD_MS = 1_000L
-        private const val DEFAULT_JANK_FRAME_THRESHOLD_MS = 32L
-        private const val DEFAULT_UI_WINDOW_P95_THRESHOLD_MS = 32L
     }
 }
 

@@ -21,9 +21,11 @@ internal object JankHunterDependencyValidator {
 
         throw GradleException(
             "Jank Hunter okhttp/webSockets ASM hooks are enabled for variant '$variantName', " +
-                "and OkHttp is present on the classpath, but io.jankhunter:jankhunter-okhttp3 is missing. " +
-                "Add debugImplementation(\"io.jankhunter:jankhunter-okhttp3:<version>\") " +
-                "or disable jankHunter.instrument.okhttp/webSockets.",
+            "and OkHttp is present on the classpath, but io.jankhunter:jankhunter-okhttp3 is missing. " +
+            "Add the io.jankhunter.android Gradle plugin automatic dependencies, " +
+            "debugImplementation(\"io.jankhunter:jankhunter-android-sdk:<version>\"), " +
+            "or debugImplementation(\"io.jankhunter:jankhunter-okhttp3:<version>\") " +
+            "or disable jankHunter.instrument.okhttp/webSockets.",
         )
     }
 
@@ -41,7 +43,8 @@ internal object JankHunterDependencyValidator {
 
     fun hasJankHunterOkHttp3(displayNames: Iterable<String>): Boolean {
         return displayNames.any { name ->
-            name.lowercase().contains("jankhunter-okhttp3")
+            val normalized = name.lowercase()
+            normalized.contains("jankhunter-okhttp3") || normalized.contains("jankhunter-android-sdk")
         }
     }
 

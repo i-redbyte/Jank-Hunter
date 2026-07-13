@@ -19,6 +19,18 @@ class JankHunterDependencyValidatorTest {
     }
 
     @Test
+    fun acceptsAndroidSdkAsOkHttpHelperCarrier() {
+        val components = listOf(
+            "project :app",
+            "com.squareup.okhttp3:okhttp:3.12.13",
+            "io.jankhunter:jankhunter-android-sdk:1.0.0",
+        )
+
+        assertTrue(JankHunterDependencyValidator.hasOkHttp(components))
+        assertTrue(JankHunterDependencyValidator.hasJankHunterOkHttp3(components))
+    }
+
+    @Test
     fun doesNotRequireHelperWhenOkHttpIsAbsent() {
         val components = listOf(
             "project :app",

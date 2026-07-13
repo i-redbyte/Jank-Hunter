@@ -24,6 +24,8 @@ internal class RuntimeCollectorService(
             state.activityTracker = ActivityTracker(config.jankStatsEnabled()).also {
                 appContext.registerActivityLifecycleCallbacks(it)
             }
+        } else {
+            JankHunter.recordCounter("jankhunter.activity_tracker.unavailable.count", 1)
         }
         state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs()).also { it.start() }
         if (config.mainLooperDispatchMonitorEnabled()) {

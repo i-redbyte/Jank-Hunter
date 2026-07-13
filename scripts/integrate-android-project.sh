@@ -900,7 +900,7 @@ patch_module_build_file() {
   local dsl="groovy"
   [[ "$file" == *.kts ]] && dsl="kts"
 
-  local plugin_line plugin_apply_line plugin_buildscript_block annotations_dep runtime_dep okhttp_dep jh_block includes excludes build_type
+  local plugin_line plugin_apply_line plugin_buildscript_block aar_dependencies_block jh_block includes excludes build_type
   local artifact_base
   artifact_base="$(gradle_escape_string "$AAR_DIR")"
   if [[ "$USE_AAR" -eq 1 ]]; then
@@ -918,9 +918,10 @@ patch_module_build_file() {
 }
 
 "
-      annotations_dep="    compileOnly(files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\")))"
-      runtime_dep="    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\")))"
-      okhttp_dep="    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\")))"
+      aar_dependencies_block="    compileOnly(files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\")))
+    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\")))
+    debugImplementation(files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\")))
+"
     else
       plugin_apply_line="apply plugin: 'io.jankhunter.android'"
       plugin_buildscript_block="buildscript {
@@ -935,21 +936,16 @@ patch_module_build_file() {
 }
 
 "
-      annotations_dep="    compileOnly files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\"))"
-      runtime_dep="    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\"))"
-      okhttp_dep="    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\"))"
+      aar_dependencies_block="    compileOnly files(rootProject.file(\"$artifact_base/jankhunter-annotations-$VERSION.jar\"))
+    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-runtime-$VERSION.aar\"))
+    debugImplementation files(rootProject.file(\"$artifact_base/jankhunter-okhttp3-$VERSION.aar\"))
+"
     fi
   else
     if [[ "$dsl" == "kts" ]]; then
       plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
-      annotations_dep="    compileOnly(\"$GROUP:jankhunter-annotations:$VERSION\")"
-      runtime_dep="    debugImplementation(\"$GROUP:jankhunter-runtime:$VERSION\")"
-      okhttp_dep="    debugImplementation(\"$GROUP:jankhunter-okhttp3:$VERSION\")"
     else
       plugin_line="    id 'io.jankhunter.android' version '$VERSION'"
-      annotations_dep="    compileOnly \"$GROUP:jankhunter-annotations:$VERSION\""
-      runtime_dep="    debugImplementation \"$GROUP:jankhunter-runtime:$VERSION\""
-      okhttp_dep="    debugImplementation \"$GROUP:jankhunter-okhttp3:$VERSION\""
     fi
   fi
 
@@ -963,6 +959,11 @@ patch_module_build_file() {
   done
   jh_block+=$'    enabled = true\n'
   jh_block+=$'    autoInit = true\n\n'
+  if [[ "$USE_AAR" -eq 1 ]]; then
+    jh_block+=$'    dependencies {\n'
+    jh_block+=$'        enabled = false\n'
+    jh_block+=$'    }\n\n'
+  fi
   jh_block+=$'    retainedHeapDump {\n'
   jh_block+=$'        enabled = true\n'
   jh_block+=$'        minIntervalMs = 600_000\n'
@@ -1013,11 +1014,14 @@ patch_module_build_file() {
     return
   fi
 
+  JH_GROUP="$GROUP" perl -0pi -e '
+    my $group = quotemeta($ENV{"JH_GROUP"});
+    s/^[ \t]*(?:compileOnly|debugImplementation)\s*(?:\(\s*)?[\x27"]$group:jankhunter-(?:annotations|runtime|okhttp3|android-sdk):[^\x27"]+[\x27"]\s*\)?[ \t]*\n//mg;
+  ' "$file"
+
   if [[ "$USE_AAR" -eq 1 ]]; then
-    JH_GROUP="$GROUP" perl -0pi -e '
-      my $group = quotemeta($ENV{"JH_GROUP"});
+    perl -0pi -e '
       s/^[ \t]*id\s*(?:\(|\s+)[\x27"]io\.jankhunter\.android[\x27"].*?\n//mg;
-      s/^[ \t]*(?:compileOnly|debugImplementation)\s*(?:\(\s*)?[\x27"]$group:jankhunter-(?:annotations|runtime|okhttp3):[^\x27"]+[\x27"]\s*\)?[ \t]*\n//mg;
     ' "$file"
 
     PLUGIN_BUILDSCRIPT_BLOCK="$plugin_buildscript_block" perl -0pi -e '
@@ -1047,34 +1051,11 @@ patch_module_build_file() {
     ' "$file"
   fi
 
-  local runtime_marker="$GROUP:jankhunter-runtime"
   if [[ "$USE_AAR" -eq 1 ]]; then
-    runtime_marker="jankhunter-runtime-$VERSION.aar"
-  fi
-  if ! grep -Fq "$runtime_marker" "$file"; then
-    if [[ "$USE_AAR" -eq 1 ]]; then
-      printf '\n\ndependencies {\n%s\n%s\n%s\n}\n' "$annotations_dep" "$runtime_dep" "$okhttp_dep" >> "$file"
-    else
-      ANNOTATIONS_DEP="$annotations_dep" RUNTIME_DEP="$runtime_dep" OKHTTP_DEP="$okhttp_dep" perl -0pi -e '
-        my $deps = $ENV{"ANNOTATIONS_DEP"} . "\n" . $ENV{"RUNTIME_DEP"} . "\n" . $ENV{"OKHTTP_DEP"} . "\n";
-        if ($_ =~ /dependencies\s*\{/) {
-          s/(dependencies\s*\{)/$1\n$deps/s;
-        } else {
-          $_ .= "\n\ndependencies {\n$deps}\n";
-        }
-      ' "$file"
+    local runtime_marker="jankhunter-runtime-$VERSION.aar"
+    if ! grep -Fq "$runtime_marker" "$file"; then
+      printf '\n\ndependencies {\n%s}\n' "$aar_dependencies_block" >> "$file"
     fi
-  fi
-
-  if [[ "$USE_AAR" -eq 0 ]] && ! grep -q "$GROUP:jankhunter-annotations" "$file"; then
-    ANNOTATIONS_DEP="$annotations_dep" perl -0pi -e '
-      my $dep = $ENV{"ANNOTATIONS_DEP"} . "\n";
-      if ($_ =~ /dependencies\s*\{/) {
-        s/(dependencies\s*\{)/$1\n$dep/s;
-      } else {
-        $_ .= "\n\ndependencies {\n$dep}\n";
-      }
-    ' "$file"
   fi
 
   if ! grep -Eq 'jankHunter[[:space:]]*\{|JankHunterExtension::class[.]java' "$file"; then
@@ -1091,9 +1072,10 @@ publish_artifacts_if_needed() {
   local runtime_aar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-runtime/$VERSION/jankhunter-runtime-$VERSION.aar"
   local annotations_jar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-annotations/$VERSION/jankhunter-annotations-$VERSION.jar"
   local okhttp_aar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-okhttp3/$VERSION/jankhunter-okhttp3-$VERSION.aar"
+  local sdk_aar="$MAVEN_REPO_ABS/$GROUP_PATH/jankhunter-android-sdk/$VERSION/jankhunter-android-sdk-$VERSION.aar"
   local plugin_pom="$MAVEN_REPO_ABS/io/jankhunter/android/io.jankhunter.android.gradle.plugin/$VERSION/io.jankhunter.android.gradle.plugin-$VERSION.pom"
 
-  if [[ -f "$runtime_aar" && -f "$annotations_jar" && -f "$okhttp_aar" && -f "$plugin_pom" ]]; then
+  if [[ -f "$runtime_aar" && -f "$annotations_jar" && -f "$okhttp_aar" && -f "$sdk_aar" && -f "$plugin_pom" ]]; then
     log "refreshing Jank Hunter artifacts in $MAVEN_REPO_ABS"
   else
     log "publishing Jank Hunter artifacts into $MAVEN_REPO_ABS"

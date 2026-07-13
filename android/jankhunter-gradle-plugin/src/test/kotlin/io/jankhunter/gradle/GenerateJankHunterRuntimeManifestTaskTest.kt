@@ -27,7 +27,6 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
-        task.deviceInfoEnabled.set(false)
         task.logBucket.set("daily")
 
         task.writeManifest()
@@ -51,10 +50,8 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_retained_age_ms"))
         assertTrue(manifest.contains("""android:value="45000""""))
         assertTrue(manifest.contains("io.jankhunter.main_process_only"))
-        assertTrue(manifest.contains("io.jankhunter.device_info_enabled"))
         assertTrue(manifest.contains("io.jankhunter.log_bucket"))
         assertTrue(manifest.contains("""android:value="daily""""))
-        assertTrue(manifest.contains("""android:value="false""""))
         assertTrue(manifest.contains("""tools:replace="android:value""""))
     }
 
@@ -80,7 +77,6 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
-        task.deviceInfoEnabled.set(true)
         task.logBucket.set("session")
 
         task.writeManifest()

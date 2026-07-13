@@ -431,6 +431,42 @@ func TestInspectKeepsOwnerKindsSeparate(t *testing.T) {
 	}
 }
 
+func TestInspectInfersRetainedHolderFromOwnerOrClass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retained-holder-fallback.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	events := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 1, Value: "com.example.LeakyActivity"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 2, Value: "com.example.LeakyView"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "com.example.LeakOwner"}},
+		{Type: jhlog.EventRetained, TimeMS: 1, Retained: &jhlog.RetainedEvent{ClassID: 1, OwnerID: 3, AgeMS: 10_000, Count: 1}},
+		{Type: jhlog.EventRetained, TimeMS: 2, Retained: &jhlog.RetainedEvent{ClassID: 2, AgeMS: 12_000, Count: 1}},
+	}
+	for _, event := range events {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(%d) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	summary, err := inspectFilesForTest("sample", []string{path})
+	if err != nil {
+		t.Fatalf("inspectFilesForTest() error = %v", err)
+	}
+	activity, ok := memoryLeakByClass(summary.MemoryLeaks, "com.example.LeakyActivity")
+	if !ok || activity.Holder != "com.example.LeakOwner" {
+		t.Fatalf("expected holder inferred from retained owner, got %+v", activity)
+	}
+	view, ok := memoryLeakByClass(summary.MemoryLeaks, "com.example.LeakyView")
+	if !ok || view.Holder != "com.example.LeakyView" {
+		t.Fatalf("expected holder inferred from retained class, got %+v", view)
+	}
+}
+
 func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bounded-aggregate.jhlog")
 	file, writer, err := jhlog.Create(path)

@@ -7,10 +7,16 @@ open class JankHunterExtension {
     val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
     var autoInit: Boolean = true
     var logBucket: String = "session"
+    var verboseLogs: Boolean = true
+    val dependencies: Dependencies = Dependencies()
     val runtime: Runtime = Runtime()
     val instrument: Instrumentation = Instrumentation()
     val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
     val releaseSafety: ReleaseSafety = ReleaseSafety()
+
+    fun dependencies(action: Action<Dependencies>) {
+        action.execute(dependencies)
+    }
 
     fun runtime(action: Action<Runtime>) {
         action.execute(runtime)
@@ -67,6 +73,14 @@ open class JankHunterExtension {
         }
     }
 
+    open class Dependencies {
+        var enabled: Boolean = true
+        var group: String? = null
+        var version: String? = null
+        var addAnnotations: Boolean = true
+        var addAndroidSdk: Boolean = true
+    }
+
     open class RetainedHeapDump {
         var enabled: Boolean = false
         var privacyApproved: Boolean = false
@@ -88,9 +102,7 @@ open class JankHunterExtension {
 
     open class ReleaseSafety {
         var allowInstrumentation: Boolean = false
-        var allowDependencyInstrumentation: Boolean = false
         var privacyReviewed: Boolean = false
-        var allowDeviceInfo: Boolean = false
         var allowHeapDumps: Boolean = false
         var allowSecondaryProcesses: Boolean = false
         var performanceBudgetEvidence: String? = null

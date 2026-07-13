@@ -6,7 +6,7 @@
   <title>Jank Hunter: математическое сравнение</title>
   <style>{{baseCSS}}{{mathCSS}}</style>
 </head>
-<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
+<body class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -166,7 +166,7 @@
                 <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
-                <td><div class="problem-context">{{if .Candidate.Screen}}<div>экран <code>{{.Candidate.Screen}}</code></div>{{end}}{{if .Candidate.Flow}}<div>сценарий <code>{{.Candidate.Flow}}</code></div>{{end}}{{if .Candidate.Step}}<div>шаг <code>{{.Candidate.Step}}</code></div>{{end}}</div></td>
+                <td><div class="problem-context">{{with reportValue .Candidate.Screen ""}}<div>экран <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Flow ""}}<div>сценарий <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Step ""}}<div>шаг <code>{{.}}</code></div>{{end}}</div></td>
                 <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
                 <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
                 <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
@@ -194,7 +194,7 @@
       <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
       {{range flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
       <tr>
-        <td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td>
+        <td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td>
         <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
         <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
         <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
@@ -314,7 +314,7 @@
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td>
             <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
-            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{contextHint .Owner "owner"}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
             <td>{{if .BaselinePeriodMS}}{{printf "%.1fs" (seconds .BaselinePeriodMS)}}{{else}}-{{end}}</td>
             <td>{{if .CandidatePeriodMS}}{{printf "%.1fs" (seconds .CandidatePeriodMS)}}{{else}}-{{end}}</td>
             <td>{{printf "%.1f" .BaselineBurn}}</td>

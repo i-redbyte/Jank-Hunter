@@ -6,7 +6,7 @@
   <title>Jank Hunter: математический анализ</title>
   <style>{{baseCSS}}{{mathCSS}}</style>
 </head>
-<body class="math-page{{if .PresentationMode}} presentation-page{{end}}">
+<body class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -173,24 +173,24 @@
         <p class="help-text">Здесь собраны длинные таблицы связки “экран → сценарий → шаг → источник → маршрут/пауза/память/спам”. Блок свернут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
         <div class="explain-note">
           <strong>Как читать этот блок</strong>
-          <p>Одна строка — это место, где отчет смог связать симптомы с контекстом: экраном, сценарием, шагом и источником работ. Если в колонке стоит <code>unknown</code>, лог не передал имя сценария, шага или owner: это не ошибка само по себе, но такая строка хуже объясняет причину.</p>
-          <p>Чтобы убрать <code>unknown</code>, добавьте в сбор имена сценариев/шагов через API Jank Hunter или включите ASM-опцию <code>flowInteractions</code>, а для источников проверьте <code>owner-map</code> и <code>withOwner/ownerHint</code>.</p>
+          <p>Одна строка — это место, где отчет смог связать симптомы с контекстом: экраном, сценарием, шагом и источником работ. Если в колонке написано “нет данных” или “контекст не задан”, лог не передал имя сценария, шага или owner: это не ошибка само по себе, но такая строка хуже объясняет причину.</p>
+          <p>Чтобы заполнить контекст, добавьте в сбор имена сценариев/шагов через API Jank Hunter или включите ASM-опцию <code>flowInteractions</code>, а для источников проверьте <code>owner-map</code> и <code>withOwner/ownerHint</code>.</p>
         </div>
         <h3>Сценарии и причины</h3>
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
           {{range .Math.Summary.Flows}}
-          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td><td><code>{{.RouteSample}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
+          <tr><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
           {{else}}<tr><td colspan="9" class="muted">Нет событий контекста сценария. Для причинной математики включите API сценариев или ASM-опцию flowInteractions.</td></tr>{{end}}
         </table>
         <div class="split">
           <div>
             <h3>Спам логами</h3>
-            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{.Source}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
           </div>
           <div>
             <h3>Проблемные окна</h3>
-            <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyLabel .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
           </div>
         </div>
         <h3>Вызовы выполнения</h3>
@@ -201,7 +201,7 @@
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Math.Summary.RuntimeCalls}}
-          <tr><td><code>{{flowKeyLabel .Screen .Flow .Step ""}}</code></td><td><code>{{.Caller}}</code></td><td><code>{{.Callee}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          <tr><td><code>{{flowKeyHint .Screen .Flow .Step ""}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
         {{if .Math.Summary.Influence.Available}}
@@ -352,7 +352,7 @@
           {{range $math.NetworkLoops}}
           <tr>
             <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
-            <td>{{if .Owner}}<code>{{.Owner}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
+            <td>{{if .Owner}}<code>{{contextHint .Owner "owner"}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
             <td>{{printf "%.1fs" (seconds .PeriodMS)}}</td>
             <td>{{printf "%.2f" .Confidence}}</td>
             <td>{{printf "%.1f" .BurnScore}}</td>
@@ -422,7 +422,7 @@
             <td>{{markovState .State}}</td>
             <td>{{.Reason}}</td>
             <td>{{range .Contributors}}<div>{{markovState .State}} · {{printf "%.0f" (percent01 .Weight)}}%<div class="muted">{{.Reason}}</div></div>{{else}}<span class="muted">нет</span>{{end}}</td>
-            <td>{{if .Screen}}экран <code>{{.Screen}}</code><br>{{end}}{{if .Route}}маршрут <code>{{.Route}}</code><br>{{end}}{{if .Owner}}источник <code>{{.Owner}}</code><br>{{end}}{{if .Network}}сеть <code>{{.Network}}</code>{{end}}</td>
+            <td>{{if .Screen}}экран <code>{{contextHint .Screen "screen"}}</code><br>{{end}}{{if .Route}}маршрут <code>{{contextHint .Route "route"}}</code><br>{{end}}{{if .Owner}}источник <code>{{contextHint .Owner "owner"}}</code><br>{{end}}{{if .Network}}сеть <code>{{reportHint .Network "неизвестно" "network"}}</code>{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="5" class="muted">Нет значимых плохих или восстановительных интервалов.</td></tr>{{end}}
           {{if hiddenMarkovStates $math.Markov.States}}<tr><td colspan="5" class="muted">Скрыто спокойных интервалов: {{hiddenMarkovStates $math.Markov.States}}.</td></tr>{{end}}
@@ -452,7 +452,7 @@
         <table class="timeline-table">
           <tr><th>Ранг</th><th>Источник</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th></tr>
           {{range $math.CausalGraph.OwnerScores}}
-          <tr><td>{{.Rank}}</td><td><code>{{.Owner}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
+          <tr><td>{{.Rank}}</td><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
           {{else}}<tr><td colspan="3" class="muted">Источники не выделены.</td></tr>{{end}}
         </table>
         <h3>Ребра графа</h3>

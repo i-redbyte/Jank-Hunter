@@ -6,7 +6,7 @@
   <title>Jank Hunter: утечки памяти</title>
   <style>{{baseCSS}}</style>
 </head>
-<body class="leak-page{{if .PresentationMode}} presentation-page{{end}}">
+<body class="{{bodyClass "leak-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
