@@ -13,21 +13,21 @@ class JankHunterPlugin : Plugin<Project> {
         val extension = project.extensions.create("jankHunter", JankHunterExtension::class.java)
 
         project.pluginManager.withPlugin("com.android.application") {
-            JankHunterAutomaticDependencies.configure(project, extension, addAndroidSdk = true)
-            configureAndroidProject(
-                project,
-                extension,
-                instrumentationScope = InstrumentationScope.ALL,
-                generateRuntimeManifest = true,
-            )
-        }
-        project.pluginManager.withPlugin("com.android.library") {
-            JankHunterAutomaticDependencies.configure(project, extension, addAndroidSdk = false)
+            JankHunterAutomaticDependencies.addAnnotations(project)
             configureAndroidProject(
                 project,
                 extension,
                 instrumentationScope = InstrumentationScope.PROJECT,
-                generateRuntimeManifest = false,
+                applicationProject = true,
+            )
+        }
+        project.pluginManager.withPlugin("com.android.library") {
+            JankHunterAutomaticDependencies.addAnnotations(project)
+            configureAndroidProject(
+                project,
+                extension,
+                instrumentationScope = InstrumentationScope.PROJECT,
+                applicationProject = false,
             )
         }
     }
@@ -36,7 +36,7 @@ class JankHunterPlugin : Plugin<Project> {
         project: Project,
         extension: JankHunterExtension,
         instrumentationScope: InstrumentationScope,
-        generateRuntimeManifest: Boolean,
+        applicationProject: Boolean,
     ) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
         if (androidComponents == null) {
@@ -46,7 +46,7 @@ class JankHunterPlugin : Plugin<Project> {
 
         androidComponents.onVariants { variant ->
             if (!extension.isVariantEnabled(variant.name)) {
-                if (!extension.enabled && extension.verboseLogs) {
+                if (!extension.enabled.getOrElse(true) && extension.verboseLogs.getOrElse(false)) {
                     project.logger.lifecycle(
                         "Jank Hunter variant {} skipped because jankHunter.enabled=false.",
                         variant.name,
@@ -54,21 +54,27 @@ class JankHunterPlugin : Plugin<Project> {
                 }
                 return@onVariants
             }
-            val logBucket = normalizedLogBucket(extension.logBucket)
+            if (applicationProject) {
+                JankHunterAutomaticDependencies.addRuntime(project, variant.name)
+                configureBuildBanner(project, variant.name)
+            }
+            val maxSessionLogSizeMiB = validatedPositiveMiB(
+                "jankHunter.maxSessionLogSizeMiB",
+                extension.maxSessionLogSizeMiB.get(),
+            )
             val releaseVariant = VariantBuildTypeMatcher.isReleaseLike(variant.name)
             if (releaseVariant) {
                 validateReleaseSafety(project, extension, variant.name)
             }
+            val symbolNamespace = JankHunterSymbolNamespace.current()
             val effectiveInstrumentationScope = instrumentationScope
-            val shouldGenerateRuntimeManifest = generateRuntimeManifest
+            val shouldGenerateRuntimeManifest = applicationProject
             if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
                     "generate${variant.name.capitalized()}JankHunterRuntimeManifest",
                     GenerateJankHunterRuntimeManifestTask::class.java,
                 ) {
-                    if (!extension.autoInit) {
-                        it.runtimeEnabled.set(false)
-                    }
+                    it.autoInit.set(extension.autoInit)
                     it.mainThreadStallThresholdMs.set(extension.runtime.mainThreadStallThresholdMs)
                     it.ownerBlockThresholdMs.set(extension.runtime.ownerBlockThresholdMs)
                     it.httpSlowThresholdMs.set(extension.runtime.httpSlowThresholdMs)
@@ -82,7 +88,14 @@ class JankHunterPlugin : Plugin<Project> {
                     it.jankFrameThresholdMs.set(extension.runtime.jankFrameThresholdMs)
                     it.uiWindowP95ThresholdMs.set(extension.runtime.uiWindowP95ThresholdMs)
                     it.mainProcessOnly.set(extension.runtime.mainProcessOnly)
-                    it.logBucket.set(logBucket)
+                    it.sessionLogSizeLimitEnabled.set(extension.sessionLogSizeLimitEnabled)
+                    it.maxSessionLogSizeMiB.set(maxSessionLogSizeMiB)
+                    it.symbolNamespace.set(symbolNamespace)
+                    it.outputFile.set(
+                        project.layout.buildDirectory.file(
+                            "generated/jankhunterRuntimeManifest/${variant.name}/AndroidManifest.xml",
+                        ),
+                    )
                 }
                 variant.sources.manifests.addGeneratedManifestFile(
                     runtimeManifest,
@@ -91,27 +104,39 @@ class JankHunterPlugin : Plugin<Project> {
             }
 
             val artifactRoot = project.layout.buildDirectory.dir(
-                "intermediates/jankhunter/${variant.name}/instrumentation-artifacts",
+                ArtifactSchemas.instrumentationArtifactsPath(variant.name),
             )
             val ownerMapEntriesDirectory = artifactRoot.map { it.dir("owner-map-entries") }
             val classGraphDirectory = artifactRoot.map { it.dir("class-graph") }
             val diagnosticsDirectory = artifactRoot.map { it.dir("diagnostics") }
-            val includeWholeApplication = extension.instrument.includeWholeApplication
-            val manualIncludes = extension.instrument.includePackages.toList()
+            val dependencyInjectionCatalogDirectory = artifactRoot.map { it.dir("dependency-injection") }
+            val dependencyInjectionAnalysisEnabled =
+                extension.dependencyInjectionAnalysis.getOrElse(JankHunterFeatureMode.DISABLED) ==
+                    JankHunterFeatureMode.ENABLED
+            val runtimeHooksEnabled = extension.instrument.hasRuntimeHooksEnabled()
+            val manualIncludes = extension.instrument.includePackages.getOrElse(emptySet())
+            val effectiveExcludePackages = extension.instrument.excludePackages.map { packages ->
+                InstrumentationPackages.normalizedPackages(packages)
+            }
             val androidNamespace = variant.namespace.orElse("")
             val effectiveIncludePackages = androidNamespace.map { namespace ->
-                InstrumentationPackages.effectiveIncludes(
+                val includes = InstrumentationPackages.effectiveIncludes(
                     manualIncludes,
-                    includeWholeApplication,
                     namespace,
                 )
+                if (includes.isEmpty()) {
+                    throw GradleException(
+                        "Jank Hunter cannot determine a safe instrumentation boundary for variant " +
+                            "'${variant.name}'. Set the Android namespace or add " +
+                            "jankHunter.instrument.includePackages(...).",
+                    )
+                }
+                includes
             }
-
             val ownerMap = project.tasks.register(
                 "generate${variant.name.capitalized()}JankHunterOwnerMap",
                 GenerateJankHunterOwnerMapTask::class.java,
             ) {
-                it.outputs.upToDateWhen { false }
                 it.variantName.set(variant.name)
                 it.methodCounters.set(extension.instrument.methodCounters)
                 it.okhttp.set(extension.instrument.okhttp)
@@ -124,12 +149,11 @@ class JankHunterPlugin : Plugin<Project> {
                 it.logSpam.set(extension.instrument.logSpam)
                 it.classGraph.set(extension.instrument.classGraph)
                 it.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
-                it.generatedOwners.set(extension.instrument.methodCounters || extension.instrument.runtimeCallGraph)
-                it.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
-                it.includeWholeApplication.set(includeWholeApplication)
+                it.generatedOwners.set(runtimeHooksEnabled)
+                it.symbolNamespace.set(symbolNamespace)
                 it.androidNamespace.set(androidNamespace)
                 it.includePackages.set(effectiveIncludePackages)
-                it.excludePackages.set(extension.instrument.excludePackages.toList())
+                it.excludePackages.set(effectiveExcludePackages)
                 it.entriesDirectory.set(ownerMapEntriesDirectory)
                 it.entryFiles.from(ownerMapEntriesDirectory.map { directory ->
                     directory.asFileTree.matching { pattern ->
@@ -146,6 +170,9 @@ class JankHunterPlugin : Plugin<Project> {
             )
             val instrumentationDiagnosticsOutput = project.layout.buildDirectory.file(
                 "generated/jankhunter/${variant.name}/instrumentation-diagnostics.jsonl",
+            )
+            val dependencyInjectionCatalogOutput = project.layout.buildDirectory.file(
+                "generated/jankhunter/${variant.name}/di-catalog.jsonl",
             )
             val mergeArtifacts = project.tasks.register(
                 "merge${variant.name.capitalized()}JankHunterInstrumentationArtifacts",
@@ -166,34 +193,60 @@ class JankHunterPlugin : Plugin<Project> {
                 it.classGraphOutputFile.set(classGraphOutput)
                 it.diagnosticsOutputFile.set(instrumentationDiagnosticsOutput)
             }
-            project.afterEvaluate {
-                JankHunterDependencyValidator.validateDeclaredOkHttpHelper(
+            val mergeDependencyInjectionCatalog = project.tasks.register(
+                "merge${variant.name.capitalized()}JankHunterDependencyInjectionCatalog",
+                MergeJankHunterDependencyInjectionCatalogTask::class.java,
+            ) {
+                it.analysisEnabled.set(dependencyInjectionAnalysisEnabled)
+                it.variantName.set(variant.name)
+                it.shardsDirectory.set(dependencyInjectionCatalogDirectory)
+                it.shardFiles.from(dependencyInjectionCatalogDirectory.map { directory ->
+                    directory.asFileTree.matching { pattern ->
+                        pattern.include("**/*.jsonl")
+                    }
+                })
+                it.outputFile.set(dependencyInjectionCatalogOutput)
+            }
+            if (applicationProject) {
+                JankHunterDependencyValidator.validateDeclaredRuntime(
                     project,
                     variant.name,
-                    hooksEnabled = extension.instrument.okhttp || extension.instrument.webSockets,
+                    hooksEnabled = runtimeHooksEnabled,
                 )
             }
+            val okHttpHelperAvailable = JankHunterDependencyValidator.validateDeclaredOkHttpHelper(
+                project,
+                variant.name,
+                hooksEnabled = extension.instrument.okhttp.get() || extension.instrument.webSockets.get(),
+            )
             project.tasks.matching { it.name == "assemble${variant.name.capitalized()}" }.configureEach {
                 it.finalizedBy(ownerMap)
                 it.finalizedBy(mergeArtifacts)
+                it.finalizedBy(mergeDependencyInjectionCatalog)
             }
             project.tasks.matching { it.name == "transform${variant.name.capitalized()}ClassesWithAsm" }.configureEach {
                 it.finalizedBy(ownerMap)
                 it.finalizedBy(mergeArtifacts)
+                it.finalizedBy(mergeDependencyInjectionCatalog)
             }
 
             variant.instrumentation.transformClassesWith(
                 JankHunterClassVisitorFactory::class.java,
                 effectiveInstrumentationScope,
             ) { params ->
+                params.embeddedSymbols.set(
+                    extension.symbolMode.map { mode -> mode == JankHunterSymbolMode.EMBEDDED },
+                )
+                params.dependencyInjectionAnalysis.set(dependencyInjectionAnalysisEnabled)
                 params.methodCounters.set(extension.instrument.methodCounters)
                 params.okhttp.set(extension.instrument.okhttp)
                 params.webSockets.set(extension.instrument.webSockets)
+                params.okHttpHelperAvailable.set(okHttpHelperAvailable)
                 params.handlers.set(extension.instrument.handlers)
                 params.executors.set(extension.instrument.executors)
                 params.coroutines.set(extension.instrument.coroutines)
                 params.flowInteractions.set(extension.instrument.flowInteractions)
-                params.lifecycleLeaks.set(extension.instrument.lifecycleLeaks)
+                params.lifecycleLeaks.set(false)
                 params.logSpam.set(extension.instrument.logSpam)
                 params.classGraph.set(extension.instrument.classGraph)
                 params.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
@@ -202,48 +255,68 @@ class JankHunterPlugin : Plugin<Project> {
                     diagnosticsDirectory.map { it.asFile.absolutePath },
                 )
                 params.ownerMapEntriesDirectory.set(ownerMapEntriesDirectory.map { it.asFile.absolutePath })
-                params.allowEmptyIncludePackages.set(extension.instrument.allowEmptyIncludePackages)
+                params.dependencyInjectionCatalogDirectory.set(
+                    dependencyInjectionCatalogDirectory.map { it.asFile.absolutePath },
+                )
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel(variant.name))
                 params.includePackages.set(effectiveIncludePackages)
-                params.excludePackages.set(extension.instrument.excludePackages.toList())
+                params.excludePackages.set(effectiveExcludePackages)
+            }
+            variant.instrumentation.transformClassesWith(
+                JankHunterLifecycleClassVisitorFactory::class.java,
+                if (applicationProject) InstrumentationScope.ALL else InstrumentationScope.PROJECT,
+            ) { params ->
+                params.enabled.set(extension.instrument.lifecycleLeaks)
+                params.instrumentationDiagnosticsDirectory.set(
+                    diagnosticsDirectory.map { directory ->
+                        directory.dir("lifecycle").asFile.absolutePath
+                    },
+                )
+                params.asmProgressLog.set(extension.instrument.asmProgressLog)
+                params.progressLabel.set(project.progressLabel("${variant.name}:lifecycle"))
+                params.includePackages.set(effectiveIncludePackages)
+                params.excludePackages.set(effectiveExcludePackages)
             }
             variant.instrumentation.setAsmFramesComputationMode(
                 FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,
             )
 
-            if (extension.verboseLogs) {
+            if (extension.verboseLogs.getOrElse(false)) {
                 project.logger.lifecycle(
                     "Jank Hunter variant {} configured. " +
                         "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
                         "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
-                        "allowEmptyIncludePackages={} includeWholeApplication={} asmProgressLog={} autoInit={} " +
+                        "dependencyInjectionAnalysis={} " +
+                        "asmProgressLog={} autoInit={} " +
                         "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
-                        "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generateRuntimeManifest={} " +
-                        "logBucket={} ownerMapTask={} mergeArtifactsTask={}",
+                        "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generatedRuntimeManifest={} " +
+                        "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} symbolMode={} " +
+                        "ownerMapTask={} mergeArtifactsTask={}",
                     variant.name,
-                    extension.instrument.methodCounters,
-                    extension.instrument.okhttp,
-                    extension.instrument.webSockets,
-                    extension.instrument.handlers,
-                    extension.instrument.executors,
-                    extension.instrument.coroutines,
-                    extension.instrument.flowInteractions,
-                    extension.instrument.lifecycleLeaks,
-                    extension.instrument.logSpam,
-                    extension.instrument.classGraph,
-                    extension.instrument.runtimeCallGraph,
-                    extension.instrument.allowEmptyIncludePackages,
-                    extension.instrument.includeWholeApplication,
-                    extension.instrument.asmProgressLog,
-                    extension.autoInit,
-                    extension.retainedHeapDump.enabled,
-                    extension.retainedHeapDump.minIntervalMs,
-                    extension.retainedHeapDump.maxCount,
-                    extension.retainedHeapDump.minRetainedAgeMs,
+                    extension.instrument.methodCounters.get(),
+                    extension.instrument.okhttp.get(),
+                    extension.instrument.webSockets.get(),
+                    extension.instrument.handlers.get(),
+                    extension.instrument.executors.get(),
+                    extension.instrument.coroutines.get(),
+                    extension.instrument.flowInteractions.get(),
+                    extension.instrument.lifecycleLeaks.get(),
+                    extension.instrument.logSpam.get(),
+                    extension.instrument.classGraph.get(),
+                    extension.instrument.runtimeCallGraph.get(),
+                    extension.dependencyInjectionAnalysis.get(),
+                    extension.instrument.asmProgressLog.get(),
+                    extension.autoInit.get(),
+                    extension.retainedHeapDump.enabled.get(),
+                    extension.retainedHeapDump.minIntervalMs.get(),
+                    extension.retainedHeapDump.maxCount.get(),
+                    extension.retainedHeapDump.minRetainedAgeMs.get(),
                     effectiveInstrumentationScope,
-                    generateRuntimeManifest,
-                    logBucket,
+                    shouldGenerateRuntimeManifest,
+                    extension.sessionLogSizeLimitEnabled.get(),
+                    maxSessionLogSizeMiB,
+                    extension.symbolMode.get(),
                     ownerMap.name,
                     mergeArtifacts.name,
                 )
@@ -254,9 +327,44 @@ class JankHunterPlugin : Plugin<Project> {
     private fun JankHunterExtension.isVariantEnabled(variantName: String): Boolean {
         return VariantBuildTypeMatcher.isEnabled(
             variantName = variantName,
-            enabledBuildTypes = enabledBuildTypes,
-            pluginEnabled = enabled,
+            enabledBuildTypes = enabledBuildTypes.getOrElse(emptySet()),
+            pluginEnabled = enabled.getOrElse(true),
         )
+    }
+
+    internal fun configureBuildBanner(project: Project, variantName: String) {
+        val bannerService = project.gradle.sharedServices.registerIfAbsent(
+            BUILD_BANNER_SERVICE_NAME,
+            JankHunterBuildBannerService::class.java,
+        ) {
+            it.parameters.versionName.set(JankHunterDependencyCoordinates.load().version)
+        }
+        val capitalizedVariant = variantName.capitalized()
+        val bannerTask = project.tasks.register(
+            "print${capitalizedVariant}JankHunterBuildBanner",
+            PrintJankHunterBuildBannerTask::class.java,
+        ) {
+            it.bannerService.set(bannerService)
+            it.usesService(bannerService)
+        }
+        project.tasks.matching { it.name == "pre${capitalizedVariant}Build" }.configureEach {
+            it.dependsOn(bannerTask)
+        }
+    }
+
+    private fun JankHunterExtension.Instrumentation.hasRuntimeHooksEnabled(): Boolean {
+        return methodCounters.getOrElse(false) ||
+            okhttp.getOrElse(false) ||
+            webSockets.getOrElse(false) ||
+            handlers.getOrElse(false) ||
+            executors.getOrElse(false) ||
+            coroutines.getOrElse(false) ||
+            flowInteractions.getOrElse(false) ||
+            lifecycleLeaks.getOrElse(false) ||
+            logSpam.getOrElse(false) ||
+            // Annotation context boundaries are emitted while classGraph scans methods.
+            classGraph.getOrElse(false) ||
+            runtimeCallGraph.getOrElse(false)
     }
 
     private fun String.capitalized(): String {
@@ -269,42 +377,45 @@ class JankHunterPlugin : Plugin<Project> {
         return if (path == ":") ":$variantName" else "$path:$variantName"
     }
 
-    private fun normalizedLogBucket(value: String): String {
-        val normalized = value.trim().lowercase(Locale.US)
-        if (normalized == "daily" || normalized == "session") return normalized
-        throw GradleException(
-            "jankHunter.logBucket must be either 'daily' or 'session', but was '$value'.",
-        )
+    private fun validatedPositiveMiB(name: String, value: Int): Int {
+        if (value > 0) return value
+        throw GradleException("$name must be greater than zero, but was $value.")
     }
 
     private fun validateReleaseSafety(project: Project, extension: JankHunterExtension, variantName: String) {
         val safety = extension.releaseSafety
-        if (!safety.allowInstrumentation) {
+        if (!safety.allowInstrumentation.getOrElse(false)) {
             throw GradleException(
                 "Jank Hunter instrumentation is enabled for release-like variant '$variantName'. " +
                     "Set jankHunter.releaseSafety.allowInstrumentation=true after an explicit release review.",
             )
         }
-        if (!safety.privacyReviewed) {
+        if (!safety.privacyReviewed.getOrElse(false)) {
             throw GradleException(
                 "Jank Hunter release instrumentation for '$variantName' requires " +
                     "jankHunter.releaseSafety.privacyReviewed=true.",
             )
         }
-        validatePerformanceBudget(project, safety.performanceBudgetEvidence, variantName)
-        if (extension.retainedHeapDump.enabled && !extension.retainedHeapDump.privacyApproved) {
+        validatePerformanceBudget(project, safety.performanceBudgetEvidence.orNull, variantName)
+        if (
+            extension.retainedHeapDump.enabled.getOrElse(false) &&
+            !extension.retainedHeapDump.privacyApproved.getOrElse(false)
+        ) {
             throw GradleException(
                 "retainedHeapDump.enabled=true for '$variantName' requires " +
                     "jankHunter.retainedHeapDump.privacyApproved=true.",
             )
         }
-        if (extension.retainedHeapDump.enabled && !safety.allowHeapDumps) {
+        if (extension.retainedHeapDump.enabled.getOrElse(false) && !safety.allowHeapDumps.getOrElse(false)) {
             throw GradleException(
                 "retainedHeapDump.enabled=true for release-like variant '$variantName' requires " +
                     "jankHunter.releaseSafety.allowHeapDumps=true.",
             )
         }
-        if (!extension.runtime.mainProcessOnly && !safety.allowSecondaryProcesses) {
+        if (
+            !extension.runtime.mainProcessOnly.getOrElse(true) &&
+            !safety.allowSecondaryProcesses.getOrElse(false)
+        ) {
             throw GradleException(
                 "runtime.mainProcessOnly=false for release-like variant '$variantName' requires " +
                     "jankHunter.releaseSafety.allowSecondaryProcesses=true.",
@@ -333,6 +444,7 @@ class JankHunterPlugin : Plugin<Project> {
     }
 
     private companion object {
+        private const val BUILD_BANNER_SERVICE_NAME = "io.jankhunter.build-banner"
         private const val PERFORMANCE_BUDGET_MARKER = "jankhunter_release_performance_budget_v1"
     }
 }

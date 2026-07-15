@@ -30,6 +30,10 @@ class RuntimeCoordinatorTest {
 
             state.runtimeEnabled.set(false)
             assertFalse(coordinator.isActiveForHooks())
+
+            state.runtimeEnabled.set(true)
+            state.writer?.close()
+            assertFalse(coordinator.isActiveForHooks())
         } finally {
             state.writer?.close()
             directory.deleteRecursively()

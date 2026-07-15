@@ -138,6 +138,25 @@ func TestAnalyzeInspectNormalizesAbsoluteTimelineOffset(t *testing.T) {
 	}
 }
 
+func TestAnalyzeInspectOverlaysIndependentRunsByRelativeTime(t *testing.T) {
+	first := writeRunOffsetTimelineFixture(t, "first.jhlog", 1, 60*60*1000)
+	second := writeRunOffsetTimelineFixture(t, "second.jhlog", 2, 21*24*60*60*1000)
+
+	report, err := analyzeInspectForTest(t, []string{first, second}, analyze.Options{})
+	if err != nil {
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
+	}
+	if got, want := len(report.Timeline), 4; got != want {
+		t.Fatalf("len(Timeline) = %d, want %d; timeline=%+v", got, want, report.Timeline)
+	}
+	if got, want := report.Timeline[0].HTTPCount, 2; got != want {
+		t.Fatalf("bucket0 HTTPCount = %d, want overlaid runs=%d", got, want)
+	}
+	if got, want := report.Timeline[3].HTTPCount, 2; got != want {
+		t.Fatalf("bucket3 HTTPCount = %d, want overlaid runs=%d", got, want)
+	}
+}
+
 func TestTimelineScaleCapsHugeRanges(t *testing.T) {
 	baseMS := uint64(12 * 60 * 60 * 1000)
 	maxMS := baseMS + 14*24*60*60*1000
@@ -158,6 +177,18 @@ func TestTimelineScaleCapsHugeRanges(t *testing.T) {
 	}
 	if _, ok := scale.index(maxMS); !ok {
 		t.Fatalf("scale should index max timestamp")
+	}
+}
+
+func TestTimelineUint64ArithmeticSaturatesAndHandlesCounterReset(t *testing.T) {
+	if got, want := safeCounterDelta(100, 7), uint64(7); got != want {
+		t.Fatalf("safeCounterDelta(reset) = %d, want %d", got, want)
+	}
+	if got, want := saturatingAddUint64(maxUint64Value-2, 3), maxUint64Value; got != want {
+		t.Fatalf("saturatingAddUint64() = %d, want %d", got, want)
+	}
+	if bucketMS := chooseTimelineBucketMS(maxUint64Value); bucketMS == 0 {
+		t.Fatal("chooseTimelineBucketMS(max uint64) returned zero")
 	}
 }
 
@@ -208,10 +239,16 @@ func writeTimelineFixture(t *testing.T) string {
 }
 
 func writeAbsoluteOffsetTimelineFixture(t *testing.T) string {
+	return writeRunOffsetTimelineFixture(t, "absolute-offset.jhlog", 0, uint64(12*60*60*1000))
+}
+
+func writeRunOffsetTimelineFixture(t *testing.T, name string, runByte byte, baseMS uint64) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "absolute-offset.jhlog")
-	file, writer, err := jhlog.Create(path)
+	path := filepath.Join(t.TempDir(), name)
+	header := jhlog.DefaultSegmentHeader()
+	header.RunID[0] = runByte
+	file, writer, err := jhlog.CreateWithHeader(path, header)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -224,7 +261,6 @@ func writeAbsoluteOffsetTimelineFixture(t *testing.T) string {
 		}
 	}
 
-	baseMS := uint64(12 * 60 * 60 * 1000)
 	for _, timeMS := range []uint64{baseMS + 100, baseMS + 3_100} {
 		event := jhlog.Event{
 			Type:   jhlog.EventHTTP,

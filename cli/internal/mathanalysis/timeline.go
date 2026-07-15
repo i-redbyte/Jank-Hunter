@@ -14,6 +14,8 @@ const DefaultBucketMS uint64 = 1000
 
 const maxTimelineBuckets = 50_000
 
+const maxUint64Value = ^uint64(0)
+
 type timelineScale struct {
 	baseMS      uint64
 	bucketMS    uint64
@@ -23,7 +25,7 @@ type timelineScale struct {
 
 type timelineCollector struct {
 	filter   analyze.Filter
-	ownerMap map[string]string
+	ownerMap *analyze.OwnerMap
 	scale    timelineScale
 	buckets  map[uint64]*timelineBucketAgg
 }
@@ -55,14 +57,14 @@ type timelineStreamState struct {
 	currentNetwork string
 }
 
-func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
 	if timeMS, ok := timelineEventTimeMS(event, dict, filter, ownerMap); ok {
 		return timeMS, true
 	}
 	return networkLoopEventTimeMS(event, dict, filter, ownerMap)
 }
 
-func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)
@@ -121,7 +123,11 @@ func chooseTimelineBucketMS(durationMS uint64) uint64 {
 	if durationMS/DefaultBucketMS+1 <= uint64(maxTimelineBuckets) {
 		return DefaultBucketMS
 	}
-	minBucketMS := (durationMS + uint64(maxTimelineBuckets-2)) / uint64(maxTimelineBuckets-1)
+	divisor := uint64(maxTimelineBuckets - 1)
+	minBucketMS := durationMS / divisor
+	if durationMS%divisor != 0 {
+		minBucketMS++
+	}
 	if minBucketMS < DefaultBucketMS {
 		minBucketMS = DefaultBucketMS
 	}
@@ -135,7 +141,14 @@ func chooseTimelineBucketMS(durationMS uint64) uint64 {
 		}
 	}
 	hourMS := uint64(3_600_000)
-	return ((minBucketMS + hourMS - 1) / hourMS) * hourMS
+	hours := minBucketMS / hourMS
+	if minBucketMS%hourMS != 0 {
+		hours++
+	}
+	if hours > maxUint64Value/hourMS {
+		return maxUint64Value
+	}
+	return hours * hourMS
 }
 
 func (s timelineScale) index(timeMS uint64) (uint64, bool) {
@@ -176,21 +189,21 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		agg.addSample(agg.owners, owner)
 		agg.bucket.HTTPCount++
 		agg.httpDurations = append(agg.httpDurations, event.HTTP.DurationMS)
-		agg.httpTotalMS += event.HTTP.DurationMS
+		agg.httpTotalMS = saturatingAddUint64(agg.httpTotalMS, event.HTTP.DurationMS)
 		if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
 			agg.bucket.HTTPFailed++
 		}
 		if event.HTTP.DNSMS > 0 {
 			agg.bucket.DNSCount++
-			agg.dnsTotalMS += event.HTTP.DNSMS
+			agg.dnsTotalMS = saturatingAddUint64(agg.dnsTotalMS, event.HTTP.DNSMS)
 		}
 		if event.HTTP.ConnectMS > 0 {
 			agg.bucket.ConnectCount++
-			agg.connectTotalMS += event.HTTP.ConnectMS
+			agg.connectTotalMS = saturatingAddUint64(agg.connectTotalMS, event.HTTP.ConnectMS)
 		}
 		if event.HTTP.TTFBMS > 0 {
-			agg.ttfbTotalMS += event.HTTP.TTFBMS
-			agg.ttfbCount++
+			agg.ttfbTotalMS = saturatingAddUint64(agg.ttfbTotalMS, event.HTTP.TTFBMS)
+			agg.ttfbCount = saturatingAddUint64(agg.ttfbCount, 1)
 		}
 	case event.UIWindow != nil:
 		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
@@ -202,8 +215,8 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			return
 		}
 		agg.addSample(agg.screens, screen)
-		agg.bucket.UIFrames += event.UIWindow.FrameCount
-		agg.bucket.UIJankyFrames += event.UIWindow.JankCount
+		agg.bucket.UIFrames = saturatingAddUint64(agg.bucket.UIFrames, event.UIWindow.FrameCount)
+		agg.bucket.UIJankyFrames = saturatingAddUint64(agg.bucket.UIJankyFrames, event.UIWindow.JankCount)
 	case event.Stall != nil:
 		owner := c.resolveOwner(dict, event.Stall.OwnerID)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
@@ -239,12 +252,14 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			agg.hasAvailableMemory = true
 		}
 		if state.hasRxTx {
-			if event.Context.RxBytes >= state.lastRx {
-				agg.bucket.TrafficRxBytes += event.Context.RxBytes - state.lastRx
-			}
-			if event.Context.TxBytes >= state.lastTx {
-				agg.bucket.TrafficTxBytes += event.Context.TxBytes - state.lastTx
-			}
+			agg.bucket.TrafficRxBytes = saturatingAddUint64(
+				agg.bucket.TrafficRxBytes,
+				safeCounterDelta(state.lastRx, event.Context.RxBytes),
+			)
+			agg.bucket.TrafficTxBytes = saturatingAddUint64(
+				agg.bucket.TrafficTxBytes,
+				safeCounterDelta(state.lastTx, event.Context.TxBytes),
+			)
 		}
 		state.lastRx = event.Context.RxBytes
 		state.lastTx = event.Context.TxBytes
@@ -263,7 +278,7 @@ func (c *timelineCollector) bucket(timeMS uint64) *timelineBucketAgg {
 		agg = &timelineBucketAgg{
 			bucket: TimelineBucket{
 				StartMS: startMS,
-				EndMS:   startMS + c.scale.bucketMS,
+				EndMS:   saturatingAddUint64(startMS, c.scale.bucketMS),
 			},
 			routes:   map[string]int{},
 			owners:   map[string]int{},
@@ -282,7 +297,7 @@ func (c *timelineCollector) finish() []TimelineBucket {
 	out := make([]TimelineBucket, 0, c.scale.bucketCount)
 	for index := uint64(0); index < uint64(c.scale.bucketCount); index++ {
 		startMS := index * c.scale.bucketMS
-		bucket := TimelineBucket{StartMS: startMS, EndMS: startMS + c.scale.bucketMS}
+		bucket := TimelineBucket{StartMS: startMS, EndMS: saturatingAddUint64(startMS, c.scale.bucketMS)}
 		if agg := c.buckets[index]; agg != nil {
 			bucket = agg.bucket
 			if bucket.HTTPCount > 0 {
@@ -458,7 +473,7 @@ func (c *timelineCollector) resolveOwner(dict map[uint64]string, id uint64) stri
 	return resolveTimelineOwner(c.ownerMap, dict, id)
 }
 
-func resolveTimelineOwner(ownerMap map[string]string, dict map[uint64]string, id uint64) string {
+func resolveTimelineOwner(ownerMap *analyze.OwnerMap, dict map[uint64]string, id uint64) string {
 	return analyze.ResolveOwnerAlias(ownerMap, jhlog.Resolve(dict, id))
 }
 
@@ -481,4 +496,21 @@ func jankRate(jankyFrames, frames uint64) float64 {
 		return 0
 	}
 	return float64(jankyFrames) * 100 / float64(frames)
+}
+
+func safeCounterDelta(previous, current uint64) uint64 {
+	if current >= previous {
+		return current - previous
+	}
+	// Android counters can reset when the kernel UID accounting source is
+	// recreated. In that case the current value is the only safe post-reset
+	// contribution; unsigned subtraction would otherwise wrap.
+	return current
+}
+
+func saturatingAddUint64(left, right uint64) uint64 {
+	if right > maxUint64Value-left {
+		return maxUint64Value
+	}
+	return left + right
 }

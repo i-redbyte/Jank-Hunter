@@ -19,21 +19,4 @@ internal object ProcessNames {
             ?.processName
         return processName?.takeIf { it.isNotBlank() } ?: context.packageName
     }
-
-    fun safeFileSuffix(processName: String?, packageName: String): String {
-        val normalized = displayName(processName, packageName)
-            .replace(SAFE_FILE_SUFFIX_UNSAFE_CHARS, "_")
-            .trim('_', '.', '-')
-            .take(80)
-        return normalized.takeIf { it.isNotBlank() } ?: "unknown"
-    }
-
-    private fun displayName(processName: String?, packageName: String): String {
-        val name = processName?.takeIf { it.isNotBlank() } ?: return "unknown"
-        if (name == packageName) return "main"
-        if (name.startsWith("$packageName:")) return name.removePrefix("$packageName:")
-        return name
-    }
-
-    private val SAFE_FILE_SUFFIX_UNSAFE_CHARS = Regex("[^A-Za-z0-9._-]")
 }

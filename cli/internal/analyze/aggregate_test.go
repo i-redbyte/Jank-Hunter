@@ -1,6 +1,8 @@
 package analyze
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,19 +56,17 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if len(summary.CodeProblems[0].Signals) == 0 {
 		t.Fatalf("top code problem has no signals: %+v", summary.CodeProblems[0])
 	}
-	if !codeProblemsHaveSignal(summary.CodeProblems, "Подозрение утечки памяти") {
+	if !codeProblemsHaveSignal(summary.CodeProblems, "Сигнал удержания памяти") {
 		t.Fatalf("expected memory leak signal in code problem registry: %+v", summary.CodeProblems)
 	}
 }
 
-func TestInspectFilesAppliesOwnerMap(t *testing.T) {
+func TestLoadOwnerMapResolvesNamespacedStableOwner(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "sample.jhlog")
-	if err := jhlog.WriteSample(logPath); err != nil {
-		t.Fatalf("WriteSample() error = %v", err)
-	}
 	mapPath := filepath.Join(dir, "owner-map.json")
-	if err := os.WriteFile(mapPath, []byte(`{"format":1,"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
+	data := `{"format":4,"kind":"metadata","variant":"debug","idAlgorithm":"fnv1a64-canonical-stable-v1","generatedOwners":true,"symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0000000000001234","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	ownerMap, err := LoadOwnerMap(mapPath)
@@ -74,38 +74,46 @@ func TestInspectFilesAppliesOwnerMap(t *testing.T) {
 		t.Fatalf("LoadOwnerMap() error = %v", err)
 	}
 
-	summary, err := InspectFilesWithOptions("sample", []string{logPath}, Options{OwnerMap: ownerMap})
-	if err != nil {
-		t.Fatalf("InspectFilesWithOptions() error = %v", err)
-	}
-	found := false
-	for _, owner := range summary.Owners {
-		if owner.Owner == "feed owner" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("owner map was not applied: %+v", summary.Owners)
+	collector := collector{ownerMap: ownerMap}
+	got := collector.resolveOwnerRef(nil, jhlog.StableSymbolInNamespace(0x1234, ownerMap.SymbolNamespace))
+	if got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("resolveOwnerRef() = %q", got)
 	}
 }
 
 func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
-	dir := t.TempDir()
-	mapPath := filepath.Join(dir, "owner-map.json")
-	if err := os.WriteFile(mapPath, []byte(`{"owners":{"FeedRepository.refresh":"feed owner"}}`), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+	validNamespace := "aabb0000000000000000000000000000"
+	tests := map[string]string{
+		"missing format":       `{"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
+		"old format":           `{"format":3,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
+		"missing namespace":    `{"format":4,"kind":"metadata"}`,
+		"short namespace":      `{"format":4,"kind":"metadata","symbolNamespace":"aabb"}`,
+		"uppercase namespace":  `{"format":4,"kind":"metadata","symbolNamespace":"AABB0000000000000000000000000000"}`,
+		"whitespace namespace": `{"format":4,"kind":"metadata","symbolNamespace":" ` + validNamespace + `"}`,
+		"namespace on entry": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
+			`{"format":4,"kind":"entry","symbolNamespace":"` + validNamespace + `","id":"stable:0x0123456789abcdef","owner":"com.app.Owner.call"}`,
+		"conflicting namespace": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
+			`{"format":4,"kind":"metadata","symbolNamespace":"ccdd0000000000000000000000000000"}`,
 	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			mapPath := filepath.Join(t.TempDir(), "owner-map.json")
+			if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
 
-	if _, err := LoadOwnerMap(mapPath); err == nil {
-		t.Fatal("LoadOwnerMap() accepted owner map without format")
+			if _, err := LoadOwnerMap(mapPath); err == nil {
+				t.Fatalf("LoadOwnerMap() accepted %s owner map", name)
+			}
+		})
 	}
 }
 
 func TestLoadOwnerMapReadsJSONLEntries(t *testing.T) {
 	dir := t.TempDir()
 	mapPath := filepath.Join(dir, "owner-map.json")
-	data := `{"format":2,"kind":"metadata","variant":"debug","generatedOwners":true}` + "\n" +
-		`{"format":2,"kind":"entry","id":"abc123","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
+	data := `{"format":4,"kind":"metadata","variant":"debug","generatedOwners":true,"symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
 	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -114,31 +122,228 @@ func TestLoadOwnerMapReadsJSONLEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOwnerMap() error = %v", err)
 	}
-	if got := ownerMap["abc123"]; got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("ownerMap[abc123] = %q", got)
+	if got := ownerMap.Entries["stable:0x0123456789abcdef"]; got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("ownerMap[stable ID] = %q", got)
 	}
-	if got := ownerMap["jh:abc123"]; got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("ownerMap[jh:abc123] = %q", got)
+	if len(ownerMap.Entries) != 1 {
+		t.Fatalf("ownerMap contains unexpected aliases: %+v", ownerMap)
 	}
 }
 
-func TestResolveOwnerAliasSupportsFullOwnerHashAndJhPrefix(t *testing.T) {
-	ownerMap := map[string]string{
-		"abc123": "com.app.FeedRepository.refresh",
-		"manual": "manual owner",
+func TestLoadOwnerMapsMergesModuleEntriesWithSharedNamespace(t *testing.T) {
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "app-owner-map.json")
+	featurePath := filepath.Join(dir, "feature-owner-map.json")
+	const namespace = "aabb0000000000000000000000000000"
+	appData := `{"format":4,"kind":"metadata","symbolNamespace":"` + namespace + `"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0000000000000001","owner":"com.app.MainActivity.render"}` + "\n"
+	featureData := `{"format":4,"kind":"metadata","symbolNamespace":"` + namespace + `"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0000000000000002","owner":"com.app.feed.FeedPresenter.load"}` + "\n"
+	if err := os.WriteFile(appPath, []byte(appData), 0o600); err != nil {
+		t.Fatalf("WriteFile(app) error = %v", err)
+	}
+	if err := os.WriteFile(featurePath, []byte(featureData), 0o600); err != nil {
+		t.Fatalf("WriteFile(feature) error = %v", err)
+	}
+
+	ownerMap, err := LoadOwnerMaps([]string{appPath, featurePath})
+	if err != nil {
+		t.Fatalf("LoadOwnerMaps() error = %v", err)
+	}
+	if got := hexOrEmpty(ownerMap.SymbolNamespace); got != namespace {
+		t.Fatalf("symbolNamespace = %q, want %q", got, namespace)
+	}
+	if got := ownerMap.Entries["stable:0x0000000000000001"]; got != "com.app.MainActivity.render" {
+		t.Fatalf("app owner = %q", got)
+	}
+	if got := ownerMap.Entries["stable:0x0000000000000002"]; got != "com.app.feed.FeedPresenter.load" {
+		t.Fatalf("feature owner = %q", got)
+	}
+	if len(ownerMap.Entries) != 2 {
+		t.Fatalf("merged entries = %+v", ownerMap.Entries)
+	}
+}
+
+func TestLoadOwnerMapsAllowsIdenticalCrossModuleEntries(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "app-owner-map.json")
+	secondPath := filepath.Join(dir, "feature-owner-map.json")
+	const data = `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.shared.Dispatcher.run"}` + "\n"
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+
+	ownerMap, err := LoadOwnerMaps([]string{firstPath, secondPath})
+	if err != nil {
+		t.Fatalf("LoadOwnerMaps() error = %v", err)
+	}
+	if len(ownerMap.Entries) != 1 || ownerMap.Entries["stable:0x0123456789abcdef"] != "com.shared.Dispatcher.run" {
+		t.Fatalf("ownerMap = %+v", ownerMap)
+	}
+}
+
+func TestLoadOwnerMapsRejectsDifferentNamespaces(t *testing.T) {
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "app-owner-map.json")
+	featurePath := filepath.Join(dir, "feature-owner-map.json")
+	if err := os.WriteFile(appPath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(app) error = %v", err)
+	}
+	if err := os.WriteFile(featurePath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"ccdd0000000000000000000000000000"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(feature) error = %v", err)
+	}
+
+	_, err := LoadOwnerMaps([]string{appPath, featurePath})
+	if err == nil ||
+		!strings.Contains(err.Error(), appPath) ||
+		!strings.Contains(err.Error(), featurePath) ||
+		!strings.Contains(err.Error(), "aabb") ||
+		!strings.Contains(err.Error(), "ccdd") {
+		t.Fatalf("LoadOwnerMaps() error = %v, want source-aware namespace mismatch", err)
+	}
+}
+
+func TestLoadOwnerMapsRejectsConflictingStableIDs(t *testing.T) {
+	dir := t.TempDir()
+	appPath := filepath.Join(dir, "app-owner-map.json")
+	featurePath := filepath.Join(dir, "feature-owner-map.json")
+	const metadata = `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n"
+	appData := metadata + `{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.First.call"}` + "\n"
+	featureData := metadata + `{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.Second.call"}` + "\n"
+	if err := os.WriteFile(appPath, []byte(appData), 0o600); err != nil {
+		t.Fatalf("WriteFile(app) error = %v", err)
+	}
+	if err := os.WriteFile(featurePath, []byte(featureData), 0o600); err != nil {
+		t.Fatalf("WriteFile(feature) error = %v", err)
+	}
+
+	_, err := LoadOwnerMaps([]string{appPath, featurePath})
+	if err == nil ||
+		!strings.Contains(err.Error(), appPath) ||
+		!strings.Contains(err.Error(), featurePath) ||
+		!strings.Contains(err.Error(), "stable:0x0123456789abcdef") ||
+		!strings.Contains(err.Error(), "com.app.First.call") ||
+		!strings.Contains(err.Error(), "com.app.Second.call") {
+		t.Fatalf("LoadOwnerMaps() error = %v, want source-aware stable ID conflict", err)
+	}
+}
+
+func TestLoadOwnerMapsRejectsInvalidMapWithoutPartialResult(t *testing.T) {
+	dir := t.TempDir()
+	validPath := filepath.Join(dir, "valid-owner-map.json")
+	invalidPath := filepath.Join(dir, "invalid-owner-map.json")
+	if err := os.WriteFile(validPath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(valid) error = %v", err)
+	}
+	if err := os.WriteFile(invalidPath, []byte(`{"format":3,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(invalid) error = %v", err)
+	}
+
+	ownerMap, err := LoadOwnerMaps([]string{validPath, invalidPath})
+	if err == nil || ownerMap != nil || !strings.Contains(err.Error(), invalidPath) || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("LoadOwnerMaps() = (%+v, %v), want fail-closed invalid-map error", ownerMap, err)
+	}
+}
+
+func TestLoadOwnerMapRejectsNonCanonicalEntryID(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
+	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789ABCDEF","owner":"com.app.FeedRepository.refresh"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadOwnerMap(mapPath)
+	if err == nil || !strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("LoadOwnerMap() error = %v, want non-canonical ID error", err)
+	}
+}
+
+func TestLoadOwnerMapRejectsConflictingStableIDs(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
+	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.First.call"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.Second.call"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadOwnerMap(mapPath)
+	if err == nil || !strings.Contains(err.Error(), "line 3") || !strings.Contains(err.Error(), "conflicting owner map entry") {
+		t.Fatalf("LoadOwnerMap() error = %v, want line-aware conflict", err)
+	}
+}
+
+func TestLoadOwnerMapAllowsIdenticalDuplicateStableIDs(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
+	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	ownerMap, err := LoadOwnerMap(mapPath)
+	if err != nil {
+		t.Fatalf("LoadOwnerMap() error = %v", err)
+	}
+	if len(ownerMap.Entries) != 1 || ownerMap.Entries["stable:0x0123456789abcdef"] != "com.app.FeedRepository.refresh" {
+		t.Fatalf("ownerMap = %+v", ownerMap)
+	}
+}
+
+func TestResolveOwnerAliasRequiresMatchingStableNamespace(t *testing.T) {
+	ownerMap := &OwnerMap{
+		Entries: map[string]string{
+			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
+			"manual":                    "manual owner",
+		},
+		SymbolNamespace: append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
 	}
 
 	if got := ResolveOwnerAlias(ownerMap, "manual"); got != "manual owner" {
 		t.Fatalf("manual alias = %q", got)
 	}
-	if got := ResolveOwnerAlias(ownerMap, "com.app.Generated#abc123"); got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("hash alias = %q", got)
+	if got := ResolveOwnerAlias(ownerMap, "stable:aabb0000000000000000000000000000:0x0123456789abcdef"); got != "com.app.FeedRepository.refresh" {
+		t.Fatalf("namespaced stable alias = %q", got)
 	}
-	if got := ResolveOwnerAlias(ownerMap, "jh:abc123"); got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("jh hash alias = %q", got)
+	if got := ResolveOwnerAlias(ownerMap, "stable:ccdd0000000000000000000000000000:0x0123456789abcdef"); got != "stable:ccdd0000000000000000000000000000:0x0123456789abcdef" {
+		t.Fatalf("mismatched namespaced alias = %q", got)
 	}
 	if got := ResolveOwnerAlias(ownerMap, "unknown"); got != "unknown" {
 		t.Fatalf("unknown alias = %q", got)
+	}
+}
+
+func TestInspectFilesRejectsOwnerMapFromAnotherSymbolNamespace(t *testing.T) {
+	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
+	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
+		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n"
+	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	ownerMap, err := LoadOwnerMap(mapPath)
+	if err != nil {
+		t.Fatalf("LoadOwnerMap() error = %v", err)
+	}
+
+	logPath := filepath.Join(t.TempDir(), "different-build.jhlog")
+	header := jhlog.DefaultSegmentHeader()
+	header.SymbolNamespace = append([]byte{0xcc, 0xdd}, make([]byte, 14)...)
+	file, _, err := jhlog.CreateWithHeader(logPath, header)
+	if err != nil {
+		t.Fatalf("CreateWithHeader() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	_, err = InspectFilesWithOptions("mismatch", []string{logPath}, Options{OwnerMap: ownerMap})
+	if err == nil || !strings.Contains(err.Error(), "aabb") || !strings.Contains(err.Error(), "ccdd") {
+		t.Fatalf("InspectFilesWithOptions() error = %v, want explicit namespace mismatch", err)
 	}
 }
 
@@ -154,6 +359,55 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	}
 	if summary.EventCount == 0 || summary.HTTPCount != 3 {
 		t.Fatalf("unexpected summary: %+v", summary)
+	}
+	counters := namedValuesByName(summary.Counters)
+	for _, name := range []string{
+		"com.app.feed.FeedRepository.refresh",
+		"com.app.checkout.CheckoutPresenter.render",
+		"com.app.checkout.CheckoutRepository.load",
+	} {
+		if counters[name].Value != 1 {
+			t.Fatalf("embedded stable counter %q was not resolved without owner-map: %+v", name, summary.Counters)
+		}
+	}
+	for _, counter := range summary.Counters {
+		if strings.HasPrefix(counter.Name, "stable:") {
+			t.Fatalf("self-contained sample leaked unresolved stable ID: %+v", counter)
+		}
+	}
+	if len(summary.RuntimeCalls) != 1 ||
+		summary.RuntimeCalls[0].Caller != "com.app.checkout.CheckoutButton.onClick" ||
+		summary.RuntimeCalls[0].Callee != "com.app.checkout.CheckoutRepository.load" {
+		t.Fatalf("embedded runtime edge was not resolved without owner-map: %+v", summary.RuntimeCalls)
+	}
+	var firstEventMS uint64
+	var lastEventMS uint64
+	streamResult, err := jhlog.StreamFileWithResult(path, func(event jhlog.Event, _ map[uint64]string) error {
+		if !event.Type.IsSemanticData() {
+			return nil
+		}
+		if firstEventMS == 0 || event.TimeMS < firstEventMS {
+			firstEventMS = event.TimeMS
+		}
+		if event.TimeMS > lastEventMS {
+			lastEventMS = event.TimeMS
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamFileWithResult() error = %v", err)
+	}
+	if uint64(summary.EventCount) != streamResult.Events || summary.DataRecordCount != streamResult.DataRecords {
+		t.Fatalf("semantic accounting summary=%+v stream=%+v", summary, streamResult)
+	}
+	if summary.TotalRecordCount != summary.DataRecordCount+summary.DictionaryRecords+summary.ControlRecords {
+		t.Fatalf("summary record classes do not add up: %+v", summary)
+	}
+	if summary.DurationMS != lastEventMS-firstEventMS {
+		t.Fatalf("duration=%d, semantic event range=%d..%d", summary.DurationMS, firstEventMS, lastEventMS)
+	}
+	if !summary.CollectionQuality.Complete || summary.CollectionQuality.Level != "high" || summary.CollectionQuality.UnsealedSegments != 0 {
+		t.Fatalf("sample collection quality = %+v", summary.CollectionQuality)
 	}
 	if summary.Dictionary == 0 {
 		t.Fatalf("expected dictionary count")
@@ -222,6 +476,177 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.Cohorts) == 0 {
 		t.Fatalf("expected cohorts")
 	}
+}
+
+func TestValidateSegmentChainsRejectsDuplicatesAndIdentityChanges(t *testing.T) {
+	header := collectionTestHeader(7, 0)
+	sealed := func(source string, value jhlog.SegmentHeader) jhlog.StreamResult {
+		return jhlog.StreamResult{
+			Source:  source,
+			Version: jhlog.FormatVersion,
+			Header:  value,
+			Status:  jhlog.SegmentStatusClosedClean,
+			Sealed:  true,
+		}
+	}
+
+	if _, err := validateSegmentChains([]jhlog.StreamResult{
+		sealed("first.jhlog", header),
+		sealed("duplicate.jhlog", header),
+	}); err == nil || !strings.Contains(err.Error(), "duplicate segment index") {
+		t.Fatalf("duplicate segment error = %v", err)
+	}
+
+	changed := collectionTestHeader(7, 1)
+	changed.ProcessName = "remote"
+	if _, err := validateSegmentChains([]jhlog.StreamResult{
+		sealed("first.jhlog", header),
+		sealed("changed.jhlog", changed),
+	}); err == nil || !strings.Contains(err.Error(), "changes process_name") {
+		t.Fatalf("identity mismatch error = %v", err)
+	}
+}
+
+func TestValidateSegmentChainsReportsGaps(t *testing.T) {
+	first := collectionTestHeader(9, 0)
+	third := collectionTestHeader(9, 2)
+	issues, err := validateSegmentChains([]jhlog.StreamResult{
+		{Source: "first.jhlog", Version: jhlog.FormatVersion, Header: first, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
+		{Source: "third.jhlog", Version: jhlog.FormatVersion, Header: third, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !warningsContain(issues, "разрыв segment chain: 0 → 2") {
+		t.Fatalf("chain issues = %+v", issues)
+	}
+}
+
+func TestCollectionQualityTreatsSizeLimitAsIncompleteWithApparentSuccessor(t *testing.T) {
+	collector := newCollector("size limit", 2, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source:        "size-limited.jhlog",
+		Version:       jhlog.FormatVersion,
+		Header:        collectionTestHeader(12, 0),
+		Status:        jhlog.SegmentStatusClosedClean,
+		Sealed:        true,
+		LatestQuality: &quality,
+		SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndSizeLimit},
+	})
+	collector.addStreamResult(jhlog.StreamResult{
+		Source:        "apparent-successor.jhlog",
+		Version:       jhlog.FormatVersion,
+		Header:        collectionTestHeader(12, 1),
+		Status:        jhlog.SegmentStatusClosedClean,
+		Sealed:        true,
+		LatestQuality: &quality,
+		SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndNormal},
+	})
+	if err := collector.validateSegmentIdentityConsistency(); err != nil {
+		t.Fatal(err)
+	}
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.Level != "medium" || got.Complete {
+		t.Fatalf("size-limited quality = %+v", got)
+	}
+	reasons := strings.Join(got.Reasons, "\n")
+	if !strings.Contains(reasons, "достиг лимита размера") || !strings.Contains(reasons, "сбор завершён раньше") {
+		t.Fatalf("size-limited reasons = %q", reasons)
+	}
+	for _, stale := range []string{"следующ", "продолж", "segment chain"} {
+		if strings.Contains(strings.ToLower(reasons), stale) {
+			t.Fatalf("size-limited reasons contain stale continuation wording %q: %q", stale, reasons)
+		}
+	}
+}
+
+func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T) {
+	t.Run("live clean snapshot", func(t *testing.T) {
+		collector := newCollector("live", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source:        "active.jhlog",
+			Version:       jhlog.FormatVersion,
+			Header:        collectionTestHeader(9, 0),
+			Status:        jhlog.SegmentStatusOpenClean,
+			TailBytes:     0,
+			LatestQuality: &quality,
+		})
+		if err := collector.validateSegmentIdentityConsistency(); err != nil {
+			t.Fatal(err)
+		}
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.Level != "high" || got.Complete || got.UnsealedSegments != 1 ||
+			!warningsContain(got.Notices, "снимок активной сессии") || len(got.Reasons) != 0 {
+			t.Fatalf("live snapshot quality = %+v", got)
+		}
+	})
+
+	t.Run("unsealed", func(t *testing.T) {
+		collector := newCollector("unsealed", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source:        "open.jhlog",
+			Version:       jhlog.FormatVersion,
+			Header:        collectionTestHeader(10, 0),
+			Status:        jhlog.SegmentStatusOpenWithTail,
+			TailBytes:     17,
+			LatestQuality: &quality,
+		})
+		if err := collector.validateSegmentIdentityConsistency(); err != nil {
+			t.Fatal(err)
+		}
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.Level != "low" || got.Complete || got.UnsealedSegments != 1 || !warningsContain(got.Reasons, "не запечатан") {
+			t.Fatalf("unsealed quality = %+v", got)
+		}
+	})
+
+	t.Run("lossy", func(t *testing.T) {
+		collector := newCollector("lossy", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+			jhlog.QualityAcceptedEventTotal: 1_000,
+			jhlog.QualityWrittenEventTotal:  900,
+			jhlog.QualityQueueFullTotal:     10,
+		}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source:        "lossy.jhlog",
+			Version:       jhlog.FormatVersion,
+			Header:        collectionTestHeader(11, 0),
+			Status:        jhlog.SegmentStatusClosedClean,
+			Sealed:        true,
+			LatestQuality: &quality,
+		})
+		if err := collector.validateSegmentIdentityConsistency(); err != nil {
+			t.Fatal(err)
+		}
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.Level != "low" || got.KnownLostEvents != 110 || !warningsContain(got.Reasons, "потерю как минимум 110 событий") {
+			t.Fatalf("lossy quality = %+v", got)
+		}
+	})
+}
+
+func collectionTestHeader(session byte, segmentIndex uint64) jhlog.SegmentHeader {
+	header := jhlog.DefaultSegmentHeader()
+	header.RunID[0] = 1
+	header.ProcessInstanceID[0] = 2
+	header.SessionID[0] = session
+	header.SegmentIndex = segmentIndex
+	header.OSPID = 42
+	header.CollectorStartElapsedUS = 1_000
+	header.SegmentStartElapsedUS = 1_000 + segmentIndex*100
+	header.SegmentStartUnixMS = 2_000 + segmentIndex*100
+	header.IdentitySource = 1
+	header.ProcessName = "main"
+	header.SymbolNamespace = []byte{3}
+	return header
 }
 
 func TestInspectFilesFiltersRetainedObjectsByClass(t *testing.T) {
@@ -302,8 +727,10 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
-	if summary.DurationMS != 120_000 {
-		t.Fatalf("DurationMS = %d, want 120000", summary.DurationMS)
+	// Dictionary records are transport metadata, so the observed duration
+	// starts at the first semantic session record rather than the dictionary.
+	if summary.DurationMS != 119_999 {
+		t.Fatalf("DurationMS = %d, want 119999", summary.DurationMS)
 	}
 }
 
@@ -356,9 +783,9 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "FeedRepository.refresh"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 4, Value: "feed.refresh"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 5, Value: "network"}},
-		{Type: jhlog.EventFlow, TimeMS: 1, Flow: &jhlog.FlowEvent{ScreenID: 2, OwnerID: 3, FlowID: 4, StepID: 5}},
-		{Type: jhlog.EventHTTP, TimeMS: 2, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 100, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 3, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 1000, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventFlow, TimeMS: 1, Attribution: attributionForTest(2, 3, 4, 5), Flow: &jhlog.FlowEvent{ScreenID: 2, OwnerID: 3, FlowID: 4, StepID: 5}},
+		{Type: jhlog.EventHTTP, TimeMS: 2, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{OwnerID: 3, RouteID: 1, DurationMS: 100, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 3, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{OwnerID: 3, RouteID: 1, DurationMS: 1000, Status: jhlog.Status2xx}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
@@ -545,7 +972,7 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 	}
 }
 
-func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
+func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.jhlog")
 	firstFile, firstWriter, err := jhlog.Create(first)
@@ -557,7 +984,7 @@ func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 2, Value: "CheckoutPresenter.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 3, Value: "checkout.open"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 4, Value: "render_list"}},
-		{Type: jhlog.EventFlow, TimeMS: 1, Flow: &jhlog.FlowEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, StepID: 4}},
+		{Type: jhlog.EventFlow, TimeMS: 1, Attribution: attributionForTest(1, 2, 3, 4), Flow: &jhlog.FlowEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, StepID: 4}},
 	}
 	for _, event := range firstEvents {
 		if err := firstWriter.WriteEvent(event); err != nil {
@@ -590,12 +1017,21 @@ func TestInspectFilesResetsFlowContextBetweenLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
-	if len(summary.Flows) != 1 {
-		t.Fatalf("Flows = %+v, want exactly one HTTP flow", summary.Flows)
+	if len(summary.Flows) != 2 {
+		t.Fatalf("Flows = %+v, want a semantic flow transition and an unattributed HTTP flow", summary.Flows)
 	}
-	flow := summary.Flows[0]
-	if flow.Screen != "unknown" || flow.Flow != "unknown" || flow.Step != "unknown" || flow.Owner != "unknown" {
-		t.Fatalf("second log inherited stale flow context: %+v", flow)
+	var httpFlow *FlowStats
+	for index := range summary.Flows {
+		if summary.Flows[index].HTTPCount > 0 {
+			httpFlow = &summary.Flows[index]
+			break
+		}
+	}
+	if httpFlow == nil {
+		t.Fatalf("HTTP flow missing: %+v", summary.Flows)
+	}
+	if httpFlow.Screen != "unknown" || httpFlow.Flow != "unknown" || httpFlow.Step != "unknown" || httpFlow.Owner != "unknown" {
+		t.Fatalf("HTTP inherited stale flow context: %+v", httpFlow)
 	}
 }
 
@@ -667,20 +1103,22 @@ func TestInspectFilesWarnsWhenFilterKeepsGlobalSignals(t *testing.T) {
 	}
 }
 
-func TestInspectFilesPropagatesStreamWarnings(t *testing.T) {
+func TestInspectFilesExposesOpenTailWithoutCorruptionWarning(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.jhlog")
-	if err := jhlog.WriteSample(path); err != nil {
-		t.Fatalf("WriteSample() error = %v", err)
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	var output bytes.Buffer
+	writer, err := jhlog.NewWriter(&output)
 	if err != nil {
-		t.Fatalf("OpenFile() error = %v", err)
+		t.Fatalf("NewWriter() error = %v", err)
 	}
-	if _, err := file.Write([]byte{byte(jhlog.EventHTTP), 0x80}); err != nil {
-		t.Fatalf("Write() error = %v", err)
+	if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventMemory, TimeMS: 1, Memory: &jhlog.MemoryEvent{PSSKB: 42}}); err != nil {
+		t.Fatalf("WriteEvent() error = %v", err)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	output.Write([]byte{'J', 'H', 'C', '9', 32, 0, 1})
+	if err := os.WriteFile(path, output.Bytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
 	summary, err := inspectFilesForTest("partial", []string{path})
@@ -690,9 +1128,128 @@ func TestInspectFilesPropagatesStreamWarnings(t *testing.T) {
 	if summary.EventCount == 0 {
 		t.Fatalf("expected preserved events")
 	}
-	warning := strings.Join(summary.Warnings, "\n")
-	if !strings.Contains(warning, "ignored partial trailing compact event") {
-		t.Fatalf("expected partial-tail warning, got %+v", summary.Warnings)
+	if len(summary.CollectionSegments) != 1 || summary.CollectionSegments[0].Status != string(jhlog.SegmentStatusOpenWithTail) || summary.CollectionSegments[0].TailBytes != 7 {
+		t.Fatalf("segment status = %+v", summary.CollectionSegments)
+	}
+	if warning := strings.Join(summary.Warnings, "\n"); strings.Contains(warning, "ignored partial trailing compact event") || strings.Contains(warning, "corrupt") {
+		t.Fatalf("active uncommitted tail was reported as corruption: %+v", summary.Warnings)
+	}
+}
+
+func TestLegacyProblemWindowsAreDeduplicatedPerLog(t *testing.T) {
+	dict := map[uint64]string{
+		1: "FeedScreen",
+		2: "FeedOwner",
+		3: "feed.open",
+		4: "render",
+		5: "main_thread_stall",
+	}
+	context := attributionForTest(1, 2, 3, 4)
+	legacy := jhlog.Event{
+		Type:        jhlog.EventProblem,
+		TimeMS:      20,
+		Attribution: context,
+		Problem: &jhlog.ProblemEvent{
+			ScreenID: 1,
+			OwnerID:  2,
+			FlowID:   3,
+			StepID:   4,
+			KindID:   5,
+			WindowMS: 5_000,
+			Count:    7,
+			MaxMS:    80,
+		},
+	}
+	logs := []jhlog.Log{
+		{
+			Dict: dict,
+			Events: []jhlog.Event{
+				{
+					Type:        jhlog.EventStall,
+					TimeMS:      10,
+					Attribution: context,
+					Stall:       &jhlog.StallEvent{OwnerID: 2, DurationMS: 80},
+				},
+				legacy,
+			},
+		},
+		{
+			Dict:   dict,
+			Events: []jhlog.Event{legacy},
+		},
+	}
+
+	summary := inspectLogsForTest("legacy problem dedup", logs)
+	if len(summary.ProblemWindows) != 1 {
+		t.Fatalf("problem windows = %+v", summary.ProblemWindows)
+	}
+	problem := summary.ProblemWindows[0]
+	if problem.Kind != "main_thread_stall" || problem.Count != 8 || problem.Windows != 2 || problem.MaxMS != 80 {
+		t.Fatalf("problem window = %+v, want canonical count 1 plus unmatched legacy count 7", problem)
+	}
+}
+
+func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
+	cases := []struct {
+		name            string
+		reason          jhlog.SegmentEndReason
+		wantReason      string
+		warningFragment string
+	}{
+		{name: "normal", reason: jhlog.SegmentEndNormal, wantReason: "normal"},
+		{name: "size limit", reason: jhlog.SegmentEndSizeLimit, wantReason: "size_limit", warningFragment: "достиг лимита размера"},
+		{name: "io error", reason: jhlog.SegmentEndIOError, wantReason: "io_error", warningFragment: "из-за ошибки ввода-вывода"},
+		{name: "shutdown", reason: jhlog.SegmentEndShutdown, wantReason: "shutdown"},
+		{name: "future", reason: 99, wantReason: "unknown(99)", warningFragment: "неизвестной причиной 99"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "reason.jhlog")
+			writeJhlogWithEndReason(t, path, test.reason)
+			summary, err := inspectFilesForTest(test.name, []string{path})
+			if err != nil {
+				t.Fatalf("inspectFilesForTest() error = %v", err)
+			}
+			if len(summary.CollectionSegments) != 1 {
+				t.Fatalf("segments = %+v", summary.CollectionSegments)
+			}
+			segment := summary.CollectionSegments[0]
+			if segment.EndReason != test.wantReason || segment.EndReasonCode != uint64(test.reason) {
+				t.Fatalf("segment reason = %q/%d, want %q/%d", segment.EndReason, segment.EndReasonCode, test.wantReason, test.reason)
+			}
+			warnings := strings.Join(summary.Warnings, "\n")
+			if test.warningFragment == "" {
+				for _, unexpected := range []string{"достиг лимита размера", "из-за ошибки ввода-вывода", "неизвестной причиной"} {
+					if strings.Contains(warnings, unexpected) {
+						t.Fatalf("normal end reason produced warning %q", warnings)
+					}
+				}
+			} else if !strings.Contains(warnings, test.warningFragment) {
+				t.Fatalf("warnings %q do not contain %q", warnings, test.warningFragment)
+			}
+			if test.reason == jhlog.SegmentEndSizeLimit {
+				for _, stale := range []string{"следующ", "продолж", "segment chain"} {
+					if strings.Contains(strings.ToLower(warnings), stale) {
+						t.Fatalf("size-limit warning contains stale continuation wording %q: %q", stale, warnings)
+					}
+				}
+			}
+		})
+	}
+}
+
+func writeJhlogWithEndReason(t *testing.T, path string, reason jhlog.SegmentEndReason) {
+	t.Helper()
+	var output bytes.Buffer
+	writer, err := jhlog.NewWriter(&output)
+	if err != nil {
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+	if err := writer.CloseWithReason(reason); err != nil {
+		t.Fatalf("CloseWithReason(%d) error = %v", reason, err)
+	}
+	if err := os.WriteFile(path, output.Bytes(), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 }
 
@@ -784,6 +1341,103 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 	summary := inspectLogsForTest("jankstats", []jhlog.Log{log})
 	if len(summary.JankStats) != 2 {
 		t.Fatalf("unexpected jankstats metrics: %+v", summary.JankStats)
+	}
+}
+
+func TestInspectResolvesStableCounterMetricThroughOwnerMap(t *testing.T) {
+	const stableID = 0x0123456789abcdef
+	log := jhlog.Log{
+		Dict: map[uint64]string{
+			1: "custom.metric",
+		},
+		Events: []jhlog.Event{
+			{
+				Type: jhlog.EventCounter,
+				Metric: &jhlog.MetricEvent{
+					MetricRef: jhlog.StableSymbolInNamespace(
+						stableID,
+						append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
+					),
+					Value: 2,
+				},
+			},
+			{
+				Type: jhlog.EventCounter,
+				Metric: &jhlog.MetricEvent{
+					MetricID: 1,
+					Value:    3,
+				},
+			},
+		},
+	}
+	collector := newCollector("stable counter", 1, Options{OwnerMap: &OwnerMap{
+		Entries: map[string]string{
+			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
+		},
+		SymbolNamespace: append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
+	}})
+	collector.startLog()
+	for _, event := range log.Events {
+		collector.add(log.Dict, event)
+	}
+	collector.finishLog()
+	summary := collector.finish()
+
+	counters := namedValuesByName(summary.Counters)
+	if got := counters["com.app.FeedRepository.refresh"].Value; got != 2 {
+		t.Fatalf("stable method counter = %d, want 2; counters = %+v", got, summary.Counters)
+	}
+	if got := counters["custom.metric"].Value; got != 3 {
+		t.Fatalf("local counter = %d, want 3; counters = %+v", got, summary.Counters)
+	}
+}
+
+func TestExternalStableLogRequiresExplicitCLIOptIn(t *testing.T) {
+	const stableID = 0x0123456789abcdef
+	namespace := append([]byte{0xaa, 0xbb}, make([]byte, 14)...)
+	header := jhlog.DefaultSegmentHeader()
+	header.SymbolNamespace = namespace
+	path := filepath.Join(t.TempDir(), "external-symbols.jhlog")
+	closer, writer, err := jhlog.CreateWithHeader(path, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteEvent(jhlog.Event{
+		Type:   jhlog.EventCounter,
+		Metric: &jhlog.MetricEvent{MetricRef: jhlog.StableSymbol(stableID), Value: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := InspectFilesWithOptions("external", []string{path}, Options{}); err == nil ||
+		!strings.Contains(err.Error(), "--external-symbols") {
+		t.Fatalf("missing owner-map error = %v", err)
+	}
+	ownerMap := &OwnerMap{
+		Entries: map[string]string{
+			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
+		},
+		SymbolNamespace: namespace,
+	}
+	if _, err := InspectFilesWithOptions("external", []string{path}, Options{
+		OwnerMap:                       ownerMap,
+		RequireExplicitExternalSymbols: true,
+	}); err == nil || !strings.Contains(err.Error(), "--external-symbols") {
+		t.Fatalf("implicit external mode error = %v", err)
+	}
+	summary, err := InspectFilesWithOptions("external", []string{path}, Options{
+		OwnerMap:                       ownerMap,
+		ExternalSymbols:                true,
+		RequireExplicitExternalSymbols: true,
+	})
+	if err != nil {
+		t.Fatalf("explicit external mode error = %v", err)
+	}
+	if got := namedValuesByName(summary.Counters)["com.app.FeedRepository.refresh"].Value; got != 2 {
+		t.Fatalf("resolved external counter = %d, want 2", got)
 	}
 }
 
@@ -971,6 +1625,35 @@ func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
 	}
 }
 
+func TestEvaluateGateExplainsCollectionQualityConfidenceCap(t *testing.T) {
+	baseline := Summary{
+		LogCount:   5,
+		EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level:   "low",
+			Reasons: []string{"quality snapshots фиксируют потерю как минимум 14508 событий"},
+		},
+	}
+	candidate := Summary{
+		LogCount:   5,
+		EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level:    "high",
+			Complete: true,
+		},
+	}
+	result := EvaluateGate(Compare(baseline, candidate), ThresholdConfig{MinConfidence: "high"})
+	if !result.Failed {
+		t.Fatal("expected collection-quality confidence failure")
+	}
+	failure := strings.Join(result.Failures, "\n")
+	for _, fragment := range []string{"baseline=low", "candidate=high", "14508 событий"} {
+		if !strings.Contains(failure, fragment) {
+			t.Fatalf("confidence failure %q does not contain %q", failure, fragment)
+		}
+	}
+}
+
 func TestEvaluateGateFailsOnDirtyCohortsWhenRequired(t *testing.T) {
 	comparison := Compare(
 		Summary{
@@ -991,6 +1674,79 @@ func TestEvaluateGateFailsOnDirtyCohortsWhenRequired(t *testing.T) {
 	}
 	if got := strings.Join(result.Failures, "\n"); !strings.Contains(got, "cohort mismatch") {
 		t.Fatalf("expected cohort mismatch failure, got %q", got)
+	}
+}
+
+func TestRequireCleanCohortsDoesNotMisclassifyCollectionLoss(t *testing.T) {
+	baseline := Summary{LogCount: 5, EventCount: 500}
+	candidate := Summary{
+		LogCount:   5,
+		EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level:   "medium",
+			Reasons: []string{"словарь деградировал: overflow=1, truncated=0"},
+		},
+	}
+	comparison := Compare(baseline, candidate)
+	if len(comparison.CohortWarnings) != 0 || len(comparison.QualityWarnings) == 0 {
+		t.Fatalf("warning classes = cohort:%+v quality:%+v", comparison.CohortWarnings, comparison.QualityWarnings)
+	}
+	result := EvaluateGate(comparison, ThresholdConfig{RequireCleanCohorts: true})
+	if result.Failed {
+		t.Fatalf("collection loss was treated as cohort mismatch: %+v", result.Failures)
+	}
+}
+
+func TestValidationScorecardSerializesCollectionQuality(t *testing.T) {
+	baseline := Summary{
+		LogCount:   5,
+		EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level:           "low",
+			Complete:        false,
+			ChainValid:      true,
+			KnownLostEvents: 14508,
+			Reasons:         []string{"quality snapshots фиксируют потерю как минимум 14508 событий"},
+		},
+	}
+	candidate := Summary{
+		LogCount:   5,
+		EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level:      "high",
+			Complete:   true,
+			ChainValid: true,
+		},
+	}
+	scorecard := BuildValidationScorecard(
+		[]string{"baseline.jhlog"},
+		[]string{"candidate.jhlog"},
+		Compare(baseline, candidate),
+	)
+	if scorecard.DataQuality.BaselineCollectionQuality.KnownLostEvents != 14508 ||
+		len(scorecard.DataQuality.CohortWarnings) != 0 ||
+		len(scorecard.DataQuality.QualityWarnings) == 0 {
+		t.Fatalf("scorecard quality = %+v", scorecard.DataQuality)
+	}
+	if !strings.Contains(scorecard.Scores["data_quality"].Evidence, "14508 событий") ||
+		!warningsContain(scorecard.Scores["data_quality"].NextActions, "14508 событий") {
+		t.Fatalf("quality evidence/actions = %+v", scorecard.Scores["data_quality"])
+	}
+	if scorecard.Summary.GoNoGo != "blocked" {
+		t.Fatalf("go/no-go = %q, want blocked for low collection quality", scorecard.Summary.GoNoGo)
+	}
+	raw, err := json.Marshal(scorecard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`"baseline_collection_quality":{"level":"low"`,
+		`"known_lost_events":14508`,
+		`"candidate_collection_quality":{"level":"high"`,
+	} {
+		if !bytes.Contains(raw, []byte(fragment)) {
+			t.Fatalf("scorecard JSON %s does not contain %s", raw, fragment)
+		}
 	}
 }
 
@@ -1090,6 +1846,21 @@ func deltasByName(values []Delta) map[string]Delta {
 	return out
 }
 
+func TestSignedUint64DeltaFloatDoesNotWrapThroughInt64(t *testing.T) {
+	maximum := ^uint64(0)
+	if got, want := signedUint64DeltaFloat(0, maximum), float64(maximum); got != want {
+		t.Fatalf("positive delta = %v, want %v", got, want)
+	}
+	if got, want := signedUint64DeltaFloat(maximum, 0), -float64(maximum); got != want {
+		t.Fatalf("negative delta = %v, want %v", got, want)
+	}
+
+	result := delta("counter", maximum, 0, "count", false, 1)
+	if result.ChangeAbs >= 0 || result.RegressionAbs <= 0 || result.ChangePct != -100 {
+		t.Fatalf("extreme delta wrapped or lost sign: %+v", result)
+	}
+}
+
 func warningsContain(warnings []string, fragment string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, fragment) {
@@ -1129,17 +1900,34 @@ func readJhlogForTest(t *testing.T, path string) jhlog.Log {
 		Dict:    map[uint64]string{},
 		Kinds:   map[uint64]jhlog.DictKind{},
 	}
-	warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
+	result, err := jhlog.StreamFileWithResult(path, func(event jhlog.Event, _ map[uint64]string) error {
 		if event.Dictionary != nil {
-			log.Dict[event.Dictionary.ID] = event.Dictionary.Value
-			log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+			if event.Dictionary.Kind == jhlog.DictStableSymbol {
+				log.Events = append(log.Events, event)
+			} else {
+				log.Dict[event.Dictionary.ID] = event.Dictionary.Value
+				log.Kinds[event.Dictionary.ID] = event.Dictionary.Kind
+			}
 		}
-		log.Events = append(log.Events, event)
+		if event.Type.IsSemanticData() {
+			log.Events = append(log.Events, event)
+		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("StreamFileWithWarnings(%q) error = %v", path, err)
+		t.Fatalf("StreamFileWithResult(%q) error = %v", path, err)
 	}
-	log.Warnings = warnings
+	log.Warnings = result.Warnings
+	log.Result = result
 	return log
+}
+
+func attributionForTest(screenID, ownerID, flowID, stepID uint64) jhlog.AttributionContext {
+	return jhlog.AttributionContext{
+		Present: true,
+		Screen:  jhlog.LocalSymbol(screenID),
+		Owner:   jhlog.LocalSymbol(ownerID),
+		Flow:    jhlog.LocalSymbol(flowID),
+		Step:    jhlog.LocalSymbol(stepID),
+	}
 }

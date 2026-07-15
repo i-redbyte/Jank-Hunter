@@ -21,6 +21,7 @@ repositories {
 dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
 
     intellijPlatform {
         val localIde = providers.gradleProperty("localIdePath").orNull
@@ -32,7 +33,12 @@ dependencies {
         } else {
             intellijIdea(providers.gradleProperty("platformVersion").get())
         }
-        testFramework(TestFrameworkType.Platform)
+        // The selected local IDE already ships the matching test framework. Keeping it bundled
+        // avoids a redundant remote artifact lookup and guarantees ABI parity with that IDE.
+        testFramework(TestFrameworkType.Bundled)
+        // Pin the verifier so Gradle can resolve the executable deterministically from Maven
+        // Central without querying JetBrains' latest-version endpoint during every build.
+        pluginVerifier("1.408")
     }
 }
 
@@ -58,6 +64,9 @@ tasks.test {
 
 intellijPlatform {
     buildSearchableOptions = false
+    // The plugin builds its Swing UI in Kotlin and has no IntelliJ GUI Designer .form files.
+    // Bytecode instrumentation would only add a remote java-compiler dependency and build work.
+    instrumentCode = false
 
     pluginConfiguration {
         id = providers.gradleProperty("pluginId")
@@ -80,7 +89,6 @@ intellijPlatform {
 
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild")
-            untilBuild = providers.gradleProperty("pluginUntilBuild")
         }
 
         vendor {
@@ -89,6 +97,9 @@ intellijPlatform {
     }
 
     pluginVerification {
+        // Jank Hunter has no Marketplace plugin dependencies. Offline verification keeps the
+        // result deterministic and prevents a local/CI network outage from masking ABI checks.
+        freeArgs.add("-offline")
         ides {
             val localIde = providers.gradleProperty("localIdePath").orNull
                 ?.trim()

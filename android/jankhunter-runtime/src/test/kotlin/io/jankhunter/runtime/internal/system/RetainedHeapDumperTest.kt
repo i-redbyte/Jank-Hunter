@@ -192,7 +192,7 @@ class RetainedHeapDumperTest {
 
                 override fun commit() {
                     commits++
-                    cleanup(path)
+                    cleanup(setOf(path))
                 }
 
                 override fun abort() {
@@ -202,8 +202,8 @@ class RetainedHeapDumperTest {
             }
         }
 
-        override fun cleanup(protectedPath: String?) {
-            retentionProtectedPaths += protectedPath
+        override fun cleanup(protectedPaths: Set<String>) {
+            retentionProtectedPaths += protectedPaths
         }
 
         override fun listFiles(): List<String> {

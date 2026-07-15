@@ -19,7 +19,6 @@ class JankHunterLogSpamTest {
             config = { config },
             writer = { null },
             runtimeActive = { true },
-            foreground = { true },
             captureContext = { JankHunterContext(null, null, null, null) },
             recordDropCounter = { dropped.incrementAndGet() },
         )

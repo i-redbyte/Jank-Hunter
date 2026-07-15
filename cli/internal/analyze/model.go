@@ -27,13 +27,18 @@ type Filter struct {
 
 type Options struct {
 	Filter                     Filter
-	OwnerMap                   map[string]string
+	OwnerMap                   *OwnerMap
 	ObfuscationMap             *NameMapping
 	ClassGraph                 *ClassGraph
 	InstrumentationDiagnostics *InstrumentationDiagnostics
+	DependencyInjectionCatalog *DependencyInjectionCatalog
 	HeapEvidence               *HeapEvidence
 	BaselineHeapEvidence       *HeapEvidence
 	CandidateHeapEvidence      *HeapEvidence
+	// ExternalSymbols opts into resolving stable ASM IDs from OwnerMap instead of the log.
+	ExternalSymbols bool
+	// RequireExplicitExternalSymbols is enabled by the CLI to prevent silent broken reports.
+	RequireExplicitExternalSymbols bool
 }
 
 type RouteStats struct {
@@ -181,8 +186,16 @@ type MemoryLeakSuspect struct {
 	Step                     string
 	Count                    uint64
 	MaxAgeMS                 uint64
+	EvidenceKind             string
+	EvidenceLabel            string
+	EvidenceConfidence       string
+	TimeOnlyCount            uint64
+	AfterExplicitGCCount     uint64
+	DataQuality              string
+	QualityWarnings          []string
 	EstimatedRetainedKB      uint64
 	HeapEvidence             bool
+	HeapCandidate            bool
 	HeapSource               string
 	GCRoot                   string
 	GCRootCategory           string
@@ -249,10 +262,53 @@ type HeapPathElement struct {
 	Kind      string `json:"kind,omitempty"`
 }
 
+type CollectionSegment struct {
+	Source            string
+	Version           uint8
+	Status            string
+	Sealed            bool
+	TailBytes         uint64
+	TotalRecords      uint64
+	DataRecords       uint64
+	DictionaryRecords uint64
+	ControlRecords    uint64
+	RunID             string
+	ProcessInstanceID string
+	SessionID         string
+	SegmentIndex      uint64
+	ProcessName       string
+	EndReason         string
+	EndReasonCode     uint64
+	QualitySequence   uint64
+	QualityCounters   []NamedValue
+}
+
+type CollectionQuality struct {
+	Level                  string   `json:"level"`
+	Complete               bool     `json:"complete"`
+	ChainValid             bool     `json:"chain_valid"`
+	SealedSegments         int      `json:"sealed_segments"`
+	UnsealedSegments       int      `json:"unsealed_segments"`
+	SegmentsWithQuality    int      `json:"segments_with_quality"`
+	SegmentsWithoutQuality int      `json:"segments_without_quality"`
+	AcceptedEvents         uint64   `json:"accepted_events"`
+	WrittenEvents          uint64   `json:"written_events"`
+	KnownLostEvents        uint64   `json:"known_lost_events"`
+	DictionaryOverflow     uint64   `json:"dictionary_overflow"`
+	DictionaryTruncated    uint64   `json:"dictionary_truncated"`
+	ChainIssues            []string `json:"chain_issues,omitempty"`
+	Notices                []string `json:"notices,omitempty"`
+	Reasons                []string `json:"reasons,omitempty"`
+}
+
 type Summary struct {
 	Title              string
 	LogCount           int
 	EventCount         int
+	TotalRecordCount   uint64
+	DataRecordCount    uint64
+	DictionaryRecords  uint64
+	ControlRecords     uint64
 	DurationMS         uint64
 	Dictionary         int
 	HTTPCount          int
@@ -290,6 +346,8 @@ type Summary struct {
 	Retained           uint64
 	Environment        RunEnvironment
 	Warnings           []string
+	CollectionSegments []CollectionSegment
+	CollectionQuality  CollectionQuality
 
 	Routes             []RouteStats
 	Screens            []ScreenStats
@@ -430,10 +488,12 @@ type Delta struct {
 }
 
 type Comparison struct {
-	Baseline  Summary
-	Candidate Summary
-	Deltas    []Delta
-	Warnings  []string
+	Baseline        Summary
+	Candidate       Summary
+	Deltas          []Delta
+	Warnings        []string
+	CohortWarnings  []string
+	QualityWarnings []string
 }
 
 type ThresholdConfig struct {

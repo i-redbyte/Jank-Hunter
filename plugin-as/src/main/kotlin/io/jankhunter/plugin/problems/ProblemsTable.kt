@@ -1,6 +1,6 @@
 package io.jankhunter.plugin.problems
 
-data class ProblemsTable(
+internal data class ProblemsTable(
     val columns: List<String>,
     val rows: List<Map<String, String>>,
 ) {

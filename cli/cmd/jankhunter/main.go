@@ -6,18 +6,22 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
+	"runtime/debug"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/atomicfile"
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-var version = "1.0.1"
+var version = "1.0.2"
 
 func main() {
+	configureCLIGarbageCollector()
 	err := newCommandRegistry(os.Stdout).run(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jankhunter:", err)
@@ -26,6 +30,15 @@ func main() {
 		}
 		os.Exit(1)
 	}
+}
+
+// The CLI favors bounded peak memory over retaining a larger heap between collections.
+func configureCLIGarbageCollector() func() {
+	if _, explicit := os.LookupEnv("GOGC"); explicit {
+		return func() {}
+	}
+	previous := debug.SetGCPercent(35)
+	return func() { debug.SetGCPercent(previous) }
 }
 
 func printVersion(out io.Writer) {
@@ -38,12 +51,12 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--owner-map owner-map.json] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 `)
 }
@@ -89,7 +102,10 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths := expandArgs(remaining)
+	paths, err := resolveLogArgs(remaining)
+	if err != nil {
+		return err
+	}
 	if len(paths) == 0 {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
@@ -120,9 +136,8 @@ func runInspect(args []string) error {
 	}
 	if out != "" {
 		reportOptions := report.ReportOptions{
-			PresentationMode:                    presentation,
-			AnimatedBackground:                  animatedBackground,
-			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
+			PresentationMode:   presentation,
+			AnimatedBackground: animatedBackground,
 		}
 		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
 			return err
@@ -132,35 +147,58 @@ func runInspect(args []string) error {
 	return nil
 }
 
-type sessionLogPath struct {
-	group   string
-	startMS uint64
+type latestProcessSession struct {
+	name       jhlog.SessionLogFilename
+	sessionIDs map[jhlog.ID128]struct{}
 }
 
 func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []string) {
 	if allSessions || len(paths) < 2 {
 		return paths, nil
 	}
-	sessionByPath := map[string]sessionLogPath{}
-	latestByGroup := map[string]uint64{}
+	headerByPath := map[string]jhlog.SegmentHeader{}
+	latestByProcess := map[string]latestProcessSession{}
 	for _, path := range paths {
-		session, ok := parseSessionLogPath(path)
+		name, ok := jhlog.ParseSessionLogFilename(path)
 		if !ok {
 			continue
 		}
-		sessionByPath[path] = session
-		if session.startMS > latestByGroup[session.group] {
-			latestByGroup[session.group] = session.startMS
+		header, err := jhlog.ReadSessionHeader(path)
+		if err != nil {
+			// Keep the file in the input set. The normal analyzer path will return
+			// the full integrity error instead of silently hiding a broken log.
+			continue
+		}
+		headerByPath[path] = header
+
+		latest, exists := latestByProcess[header.ProcessName]
+		switch {
+		case !exists || name.Compare(latest.name) > 0:
+			latestByProcess[header.ProcessName] = latestProcessSession{
+				name:       name,
+				sessionIDs: map[jhlog.ID128]struct{}{header.SessionID: struct{}{}},
+			}
+		case name.Compare(latest.name) == 0:
+			// Equal canonical keys can occur when files from multiple devices or
+			// directories are passed together. Retaining every tied session avoids
+			// an input-order-dependent data loss decision.
+			latest.sessionIDs[header.SessionID] = struct{}{}
+			latestByProcess[header.ProcessName] = latest
 		}
 	}
-	if len(sessionByPath) == 0 {
+	if len(headerByPath) == 0 {
 		return paths, nil
 	}
 	selected := make([]string, 0, len(paths))
 	skipped := make([]string, 0)
 	for _, path := range paths {
-		session, ok := sessionByPath[path]
-		if !ok || session.startMS == latestByGroup[session.group] {
+		header, ok := headerByPath[path]
+		latest, hasLatest := latestByProcess[header.ProcessName]
+		if !ok || !hasLatest {
+			selected = append(selected, path)
+			continue
+		}
+		if _, keep := latest.sessionIDs[header.SessionID]; keep {
 			selected = append(selected, path)
 			continue
 		}
@@ -171,37 +209,10 @@ func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []stri
 	}
 	return selected, []string{
 		fmt.Sprintf(
-			"Inspect обнаружил несколько Jank Hunter session-файлов для одного процесса и оставил только последнюю session-группу; старые файлы исключены из отчета: %s. Чтобы анализировать все session-файлы вместе, передайте --all-sessions.",
+			"Inspect обнаружил несколько Jank Hunter session для одного процесса и по дате и числовому индексу canonical-имени оставил только последнюю; старые файлы исключены из отчета: %s. Identity процесса и session прочитаны из v9 header. Чтобы анализировать все session вместе, передайте --all-sessions.",
 			strings.Join(skipped, ", "),
 		),
 	}
-}
-
-func parseSessionLogPath(path string) (sessionLogPath, bool) {
-	base := filepath.Base(path)
-	if !strings.HasSuffix(base, ".jhlog") {
-		return sessionLogPath{}, false
-	}
-	name := strings.TrimSuffix(base, ".jhlog")
-	parts := strings.Split(name, "-")
-	if len(parts) < 4 || parts[0] != "session" {
-		return sessionLogPath{}, false
-	}
-	startMS, err := strconv.ParseUint(parts[len(parts)-2], 10, 64)
-	if err != nil {
-		return sessionLogPath{}, false
-	}
-	if _, err := strconv.ParseUint(parts[len(parts)-1], 10, 64); err != nil {
-		return sessionLogPath{}, false
-	}
-	process := strings.Join(parts[1:len(parts)-2], "-")
-	if process == "" {
-		return sessionLogPath{}, false
-	}
-	return sessionLogPath{
-		group:   filepath.Dir(path) + string(os.PathSeparator) + "session-" + process,
-		startMS: startMS,
-	}, true
 }
 
 func runCompare(args []string) error {
@@ -245,10 +256,19 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
-	baselinePaths := expandComma(baselineRaw)
-	candidatePaths := expandComma(candidateRaw)
+	baselinePaths, err := resolveLogComma(baselineRaw)
+	if err != nil {
+		return fmt.Errorf("resolve baseline logs: %w", err)
+	}
+	candidatePaths, err := resolveLogComma(candidateRaw)
+	if err != nil {
+		return fmt.Errorf("resolve candidate logs: %w", err)
+	}
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("compare needs --baseline and --candidate")
+	}
+	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
+		return err
 	}
 	options, err := builder.build()
 	if err != nil {
@@ -301,15 +321,14 @@ func runCompare(args []string) error {
 	}
 	if out != "" {
 		reportOptions := report.ReportOptions{
-			PresentationMode:                    presentation,
-			AnimatedBackground:                  animatedBackground,
-			InstrumentationDiagnosticsAvailable: diagnosticsAvailable(options),
+			PresentationMode:   presentation,
+			AnimatedBackground: animatedBackground,
 		}
-		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions)
+		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions, baseline)
 		if err != nil {
 			return err
 		}
-		candidateReports, err := buildLogReports("candidate", candidatePaths, candidateOptions)
+		candidateReports, err := buildLogReports("candidate", candidatePaths, candidateOptions, candidate)
 		if err != nil {
 			return err
 		}
@@ -356,10 +375,19 @@ func runScorecard(args []string) error {
 	if err != nil {
 		return err
 	}
-	baselinePaths := expandComma(baselineRaw)
-	candidatePaths := expandComma(candidateRaw)
+	baselinePaths, err := resolveLogComma(baselineRaw)
+	if err != nil {
+		return fmt.Errorf("resolve baseline logs: %w", err)
+	}
+	candidatePaths, err := resolveLogComma(candidateRaw)
+	if err != nil {
+		return fmt.Errorf("resolve candidate logs: %w", err)
+	}
 	if len(baselinePaths) == 0 || len(candidatePaths) == 0 {
 		return fmt.Errorf("scorecard needs --baseline and --candidate")
+	}
+	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
+		return err
 	}
 	options, err := builder.build()
 	if err != nil {
@@ -389,50 +417,100 @@ func runScorecard(args []string) error {
 	if out == "" {
 		return printJSON(scorecard)
 	}
-	file, err := os.Create(out)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(scorecard)
+	return atomicfile.Write(out, 0o644, func(file *os.File) error {
+		encoder := json.NewEncoder(file)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(scorecard)
+	})
 }
 
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
-	baseOptions := reportOptions
-	baseOptions.DisableMathLink = true
-	baseOptions.DisableLeakLink = true
-	if err := report.WriteInspectWithOptions(out, summary, baseOptions); err != nil {
-		return err
+	return writeSingleHTMLReport(out, func(renderPath string) error {
+		return writeInspectReportSetUsing(renderPath, summary, paths, options, reportOptions, inspectReportSetWriters{
+			primary: report.WriteInspectWithOptions,
+			math:    report.WriteMathInspectWithOptions,
+		})
+	})
+}
+
+type inspectPrimaryWriter func(string, analyze.Summary, report.ReportOptions) error
+
+type inspectMathWriter func(string, mathanalysis.MathReport, report.ReportOptions) error
+
+type inspectReportSetWriters struct {
+	primary inspectPrimaryWriter
+	math    inspectMathWriter
+}
+
+func writeInspectReportSetUsing(
+	out string,
+	summary analyze.Summary,
+	paths []string,
+	options analyze.Options,
+	reportOptions report.ReportOptions,
+	writers inspectReportSetWriters,
+) error {
+	if writers.primary == nil || writers.math == nil {
+		return fmt.Errorf("inspect report writers are not configured")
 	}
-	if err := report.WriteLeakInspectWithOptions(report.LeakReportPath(out), analyze.BuildLeakReport(summary), reportOptions); err != nil {
-		warnReportGeneration("отчет утечек inspect не записан", err)
+	reportPaths := report.PathsFor(out)
+	if reportOptions.GeneratedAt == "" {
+		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
+	}
+	companionOptions := reportOptions
+	companionOptions.Links = reportPaths.MainLink()
+	links := report.ReportLinks{}
+	var generationWarnings []string
+
+	if err := report.WriteLeakInspectWithOptions(reportPaths.Leaks, analyze.BuildLeakReport(summary), companionOptions); err != nil {
+		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек inspect не записан", err))
+	} else {
+		links.Leaks = filepath.Base(reportPaths.Leaks)
 	}
 	if summary.Influence.Available {
-		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), summary.Influence, "Граф влияния кода", reportOptions); err != nil {
-			return err
+		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, summary.Influence, "Граф влияния кода", companionOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("граф влияния inspect не записан", err))
+		} else {
+			links.Influence = filepath.Base(reportPaths.Influence)
 		}
 	}
 	if diagnosticsAvailable(options) {
 		if err := report.WriteInstrumentationDiagnosticsWithOptions(
-			report.DiagnosticsReportPath(out),
+			reportPaths.Diagnostics,
 			*options.InstrumentationDiagnostics,
-			reportOptions,
+			companionOptions,
 		); err != nil {
-			return err
+			generationWarnings = append(generationWarnings, warnReportGeneration("ASM-диагностика inspect не записана", err))
+		} else {
+			links.Diagnostics = filepath.Base(reportPaths.Diagnostics)
+		}
+	}
+	if dependencyInjectionAvailable(options) {
+		if err := report.WriteDependencyInjectionWithOptions(
+			reportPaths.DependencyInjection,
+			analyze.BuildDependencyInjectionReport(options.DependencyInjectionCatalog, summary),
+			companionOptions,
+		); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("DI-каталог inspect не записан", err))
+		} else {
+			links.DependencyInjection = filepath.Base(reportPaths.DependencyInjection)
 		}
 	}
 	mathReport, err := mathanalysis.AnalyzeInspectWithSummary(paths, options, summary)
 	if err != nil {
-		warnReportGeneration("математический отчет inspect не создан", err)
-		return nil
+		generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет inspect не создан", err))
+	} else {
+		mathOptions := companionOptions
+		mathOptions.Links.Influence = links.Influence
+		if err := writers.math(reportPaths.Math, mathReport, mathOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет inspect не записан", err))
+		} else {
+			links.Math = filepath.Base(reportPaths.Math)
+		}
 	}
-	if err := report.WriteMathInspectWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
-		warnReportGeneration("математический отчет inspect не записан", err)
-		return nil
-	}
-	return report.WriteInspectWithOptions(out, summary, reportOptions)
+	summary.Warnings = append(append([]string(nil), summary.Warnings...), generationWarnings...)
+	reportOptions.Links = links
+	return writers.primary(reportPaths.Main, summary, reportOptions)
 }
 
 func writeCompareReportSet(
@@ -447,27 +525,75 @@ func writeCompareReportSet(
 	options analyze.Options,
 	reportOptions report.ReportOptions,
 ) error {
-	baseOptions := reportOptions
-	baseOptions.DisableMathLink = true
-	baseOptions.DisableLeakLink = true
-	if err := report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, baseOptions); err != nil {
-		return err
+	return writeSingleHTMLReport(out, func(renderPath string) error {
+		return writeCompareReportSetFiles(
+			renderPath,
+			comparison,
+			baselineReports,
+			candidateReports,
+			baselinePaths,
+			candidatePaths,
+			baselineOptions,
+			candidateOptions,
+			options,
+			reportOptions,
+		)
+	})
+}
+
+func writeCompareReportSetFiles(
+	out string,
+	comparison analyze.Comparison,
+	baselineReports []report.LogReport,
+	candidateReports []report.LogReport,
+	baselinePaths []string,
+	candidatePaths []string,
+	baselineOptions analyze.Options,
+	candidateOptions analyze.Options,
+	options analyze.Options,
+	reportOptions report.ReportOptions,
+) error {
+	reportPaths := report.PathsFor(out)
+	if reportOptions.GeneratedAt == "" {
+		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
 	}
-	if err := report.WriteLeakCompareWithOptions(report.LeakReportPath(out), analyze.BuildLeakCompareReport(comparison), reportOptions); err != nil {
-		warnReportGeneration("отчет утечек compare не записан", err)
+	companionOptions := reportOptions
+	companionOptions.Links = reportPaths.MainLink()
+	links := report.ReportLinks{}
+	var generationWarnings []string
+
+	if err := report.WriteLeakCompareWithOptions(reportPaths.Leaks, analyze.BuildLeakCompareReport(comparison), companionOptions); err != nil {
+		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек compare не записан", err))
+	} else {
+		links.Leaks = filepath.Base(reportPaths.Leaks)
 	}
 	if comparison.Candidate.Influence.Available {
-		if err := report.WriteInfluenceWithOptions(report.InfluenceReportPath(out), comparison.Candidate.Influence, "Граф влияния кода: кандидат", reportOptions); err != nil {
-			return err
+		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, comparison.Candidate.Influence, "Граф влияния кода: кандидат", companionOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("граф влияния compare не записан", err))
+		} else {
+			links.Influence = filepath.Base(reportPaths.Influence)
 		}
 	}
 	if diagnosticsAvailable(options) {
 		if err := report.WriteInstrumentationDiagnosticsWithOptions(
-			report.DiagnosticsReportPath(out),
+			reportPaths.Diagnostics,
 			*options.InstrumentationDiagnostics,
-			reportOptions,
+			companionOptions,
 		); err != nil {
-			return err
+			generationWarnings = append(generationWarnings, warnReportGeneration("ASM-диагностика compare не записана", err))
+		} else {
+			links.Diagnostics = filepath.Base(reportPaths.Diagnostics)
+		}
+	}
+	if dependencyInjectionAvailable(options) {
+		if err := report.WriteDependencyInjectionWithOptions(
+			reportPaths.DependencyInjection,
+			analyze.BuildDependencyInjectionReport(options.DependencyInjectionCatalog, comparison.Candidate),
+			companionOptions,
+		); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("DI-каталог compare не записан", err))
+		} else {
+			links.DependencyInjection = filepath.Base(reportPaths.DependencyInjection)
 		}
 	}
 	mathOptions := options
@@ -481,18 +607,80 @@ func writeCompareReportSet(
 		comparison.Candidate,
 	)
 	if err != nil {
-		warnReportGeneration("математический отчет compare не создан", err)
-		return nil
+		generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет compare не создан", err))
+	} else {
+		mathReportOptions := companionOptions
+		mathReportOptions.Links.Influence = links.Influence
+		if err := report.WriteMathCompareWithOptions(reportPaths.Math, mathReport, mathReportOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет compare не записан", err))
+		} else {
+			links.Math = filepath.Base(reportPaths.Math)
+		}
 	}
-	if err := report.WriteMathCompareWithOptions(report.MathReportPath(out), mathReport, reportOptions); err != nil {
-		warnReportGeneration("математический отчет compare не записан", err)
-		return nil
-	}
-	return report.WriteCompareReportWithOptions(out, comparison, baselineReports, candidateReports, reportOptions)
+	comparison.Warnings = append(append([]string(nil), comparison.Warnings...), generationWarnings...)
+	reportOptions.Links = links
+	return report.WriteCompareReportWithOptions(reportPaths.Main, comparison, baselineReports, candidateReports, reportOptions)
 }
 
-func warnReportGeneration(message string, err error) {
-	fmt.Fprintf(os.Stderr, "warning: %s: %v\n", message, err)
+func writeSingleHTMLReport(out string, writePages func(string) error) error {
+	temporaryDirectory, err := os.MkdirTemp("", "jankhunter-report-")
+	if err != nil {
+		return fmt.Errorf("create temporary report directory: %w", err)
+	}
+	defer os.RemoveAll(temporaryDirectory)
+
+	renderPath := filepath.Join(temporaryDirectory, filepath.Base(out))
+	if err := writePages(renderPath); err != nil {
+		return err
+	}
+	pages, err := readReportBundlePages(renderPath)
+	if err != nil {
+		return err
+	}
+	if err := report.WriteBundle(out, pages); err != nil {
+		return fmt.Errorf("write single HTML report: %w", err)
+	}
+	return nil
+}
+
+func readReportBundlePages(mainPath string) ([]report.BundlePage, error) {
+	paths := report.PathsFor(mainPath)
+	candidates := []struct {
+		id       string
+		title    string
+		path     string
+		required bool
+	}{
+		{id: "overview", title: "Обзор", path: paths.Main, required: true},
+		{id: "math", title: "Математический анализ", path: paths.Math},
+		{id: "leaks", title: "Утечки памяти", path: paths.Leaks},
+		{id: "influence", title: "Граф влияния", path: paths.Influence},
+		{id: "diagnostics", title: "ASM диагностика", path: paths.Diagnostics},
+		{id: "dependency-injection", title: "DI-каталог", path: paths.DependencyInjection},
+	}
+	pages := make([]report.BundlePage, 0, len(candidates))
+	for _, candidate := range candidates {
+		document, err := os.ReadFile(candidate.path)
+		if err != nil {
+			if !candidate.required && os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read generated report page %s: %w", candidate.path, err)
+		}
+		pages = append(pages, report.BundlePage{
+			ID:    candidate.id,
+			Title: candidate.title,
+			Href:  filepath.Base(candidate.path),
+			HTML:  document,
+		})
+	}
+	return pages, nil
+}
+
+func warnReportGeneration(message string, err error) string {
+	warning := fmt.Sprintf("Генерация отчета: %s: %v", message, err)
+	fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	return warning
 }
 
 func compareCLILabel(name string) string {
@@ -540,10 +728,13 @@ func compareCLILabel(name string) string {
 
 type analysisOptionsBuilder struct {
 	filter          analyze.Filter
-	ownerMapPath    string
+	externalSymbols bool
+	artifactsDir    string
+	ownerMapPaths   []string
 	mappingPath     string
 	classGraphPath  string
 	diagnosticsPath string
+	diCatalogPath   string
 }
 
 func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
@@ -551,7 +742,15 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
-	ownerMapPath, remaining, err := takeStringFlag(remaining, "owner-map", "")
+	externalSymbols, remaining, err := takeBoolFlag(remaining, "external-symbols")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	artifactsDir, remaining, err := takeStringFlag(remaining, "artifacts-dir", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	ownerMapPaths, remaining, err := takeStringFlags(remaining, "owner-map")
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
@@ -567,17 +766,31 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
+	diCatalogPath, remaining, err := takeStringFlag(remaining, "di-catalog", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
 	return analysisOptionsBuilder{
 		filter:          filter,
-		ownerMapPath:    ownerMapPath,
+		externalSymbols: externalSymbols,
+		artifactsDir:    artifactsDir,
+		ownerMapPaths:   ownerMapPaths,
 		mappingPath:     mappingPath,
 		classGraphPath:  classGraphPath,
 		diagnosticsPath: diagnosticsPath,
+		diCatalogPath:   diCatalogPath,
 	}, remaining, nil
 }
 
 func (b analysisOptionsBuilder) build() (analyze.Options, error) {
-	ownerMap, err := analyze.LoadOwnerMap(b.ownerMapPath)
+	b, err := b.withResolvedArtifacts()
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	if b.externalSymbols && len(b.ownerMapPaths) == 0 {
+		return analyze.Options{}, fmt.Errorf("--external-symbols requires --artifacts-dir or at least one --owner-map")
+	}
+	ownerMap, err := analyze.LoadOwnerMaps(b.ownerMapPaths)
 	if err != nil {
 		return analyze.Options{}, err
 	}
@@ -593,17 +806,169 @@ func (b analysisOptionsBuilder) build() (analyze.Options, error) {
 	if err != nil {
 		return analyze.Options{}, err
 	}
+	diCatalog, err := analyze.LoadDependencyInjectionCatalog(b.diCatalogPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
 	return analyze.Options{
-		Filter:                     b.filter,
-		OwnerMap:                   ownerMap,
-		ObfuscationMap:             nameMapping,
-		ClassGraph:                 classGraph,
-		InstrumentationDiagnostics: diagnostics,
+		Filter:                         b.filter,
+		OwnerMap:                       ownerMap,
+		ObfuscationMap:                 nameMapping,
+		ClassGraph:                     classGraph,
+		InstrumentationDiagnostics:     diagnostics,
+		DependencyInjectionCatalog:     diCatalog,
+		ExternalSymbols:                b.externalSymbols,
+		RequireExplicitExternalSymbols: true,
 	}, nil
+}
+
+type androidArtifactBundle struct {
+	directory      string
+	ownerMap       string
+	classGraph     string
+	diagnostics    string
+	diCatalog      string
+	lastModifiedAt time.Time
+}
+
+func (b analysisOptionsBuilder) withResolvedArtifacts() (analysisOptionsBuilder, error) {
+	directory := strings.TrimSpace(b.artifactsDir)
+	if directory == "" && b.externalSymbols && len(b.ownerMapPaths) == 0 {
+		directory = discoverAndroidArtifactDirectory(integratedProjectRoots())
+	}
+	if directory == "" {
+		return b, nil
+	}
+	bundle, err := loadAndroidArtifactBundle(directory)
+	if err != nil {
+		if b.artifactsDir == "" {
+			return b, nil
+		}
+		return b, err
+	}
+	if len(b.ownerMapPaths) == 0 {
+		b.ownerMapPaths = []string{bundle.ownerMap}
+	}
+	if b.classGraphPath == "" {
+		b.classGraphPath = bundle.classGraph
+	}
+	if b.diagnosticsPath == "" {
+		b.diagnosticsPath = bundle.diagnostics
+	}
+	if b.diCatalogPath == "" && bundle.diCatalog != "" {
+		b.diCatalogPath = bundle.diCatalog
+	}
+	return b, nil
+}
+
+func integratedProjectRoots() []string {
+	roots := linkedStringSet{}
+	if executable, err := os.Executable(); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+			executable = resolved
+		}
+		binDirectory := filepath.Dir(executable)
+		integrationDirectory := filepath.Dir(binDirectory)
+		if filepath.Base(binDirectory) == "bin" && filepath.Base(integrationDirectory) == ".jankhunter" {
+			roots.add(filepath.Dir(integrationDirectory))
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for current, depth := cwd, 0; depth < 8; depth++ {
+			candidate := filepath.Join(current, ".jankhunter", "bin", "jankhunter")
+			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+				roots.add(current)
+				break
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+	return roots.values
+}
+
+func discoverAndroidArtifactDirectory(projectRoots []string) string {
+	var bundles []androidArtifactBundle
+	for _, root := range projectRoots {
+		modulePattern := root
+		for depth := 0; depth <= 4; depth++ {
+			pattern := filepath.Join(modulePattern, "build", "generated", "jankhunter", "*")
+			matches, _ := filepath.Glob(pattern)
+			for _, match := range matches {
+				if bundle, err := loadAndroidArtifactBundle(match); err == nil {
+					bundles = append(bundles, bundle)
+				}
+			}
+			modulePattern = filepath.Join(modulePattern, "*")
+		}
+	}
+	if len(bundles) == 0 {
+		return ""
+	}
+	sort.Slice(bundles, func(left, right int) bool {
+		if bundles[left].lastModifiedAt.Equal(bundles[right].lastModifiedAt) {
+			return bundles[left].directory < bundles[right].directory
+		}
+		return bundles[left].lastModifiedAt.After(bundles[right].lastModifiedAt)
+	})
+	return bundles[0].directory
+}
+
+func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) {
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return androidArtifactBundle{}, fmt.Errorf("resolve --artifacts-dir %q: %w", directory, err)
+	}
+	bundle := androidArtifactBundle{
+		directory:  absolute,
+		ownerMap:   filepath.Join(absolute, "owner-map.json"),
+		classGraph: filepath.Join(absolute, "class-graph.jsonl"),
+		diagnostics: filepath.Join(
+			absolute,
+			"instrumentation-diagnostics.jsonl",
+		),
+	}
+	for _, required := range []struct {
+		label string
+		path  string
+	}{
+		{label: "owner-map.json", path: bundle.ownerMap},
+		{label: "class-graph.jsonl", path: bundle.classGraph},
+		{label: "instrumentation-diagnostics.jsonl", path: bundle.diagnostics},
+	} {
+		label := required.label
+		path := required.path
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.IsDir() || info.Size() == 0 {
+			return androidArtifactBundle{}, fmt.Errorf(
+				"invalid Jank Hunter --artifacts-dir %q: required %s is missing or empty",
+				directory,
+				label,
+			)
+		}
+		if info.ModTime().After(bundle.lastModifiedAt) {
+			bundle.lastModifiedAt = info.ModTime()
+		}
+	}
+	diCatalog := filepath.Join(absolute, "di-catalog.jsonl")
+	if info, statErr := os.Stat(diCatalog); statErr == nil && !info.IsDir() && info.Size() > 0 {
+		bundle.diCatalog = diCatalog
+		if info.ModTime().After(bundle.lastModifiedAt) {
+			bundle.lastModifiedAt = info.ModTime()
+		}
+	}
+	return bundle, nil
 }
 
 func diagnosticsAvailable(options analyze.Options) bool {
 	return options.InstrumentationDiagnostics != nil && options.InstrumentationDiagnostics.Available
+}
+
+func dependencyInjectionAvailable(options analyze.Options) bool {
+	return options.DependencyInjectionCatalog != nil && options.DependencyInjectionCatalog.Available
 }
 
 type heapInputFlags struct {
@@ -628,11 +993,20 @@ func (h heapInputFlags) apply(title string, paths []string, options analyze.Opti
 }
 
 func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
-	heapEvidencePaths := expandComma(heapEvidenceRaw)
-	heapDumpPaths := expandComma(heapDumpRaw)
+	heapEvidencePaths, err := canonicalizeFileInputs(expandComma(heapEvidenceRaw), "heap evidence")
+	if err != nil {
+		return options, err
+	}
+	heapDumpPaths, err := canonicalizeFileInputs(expandComma(heapDumpRaw), "heap dump")
+	if err != nil {
+		return options, err
+	}
 	autoDiscoveredHeapDumps := false
 	if len(heapEvidencePaths) == 0 && len(heapDumpPaths) == 0 {
-		heapDumpPaths = discoverHeapDumpsNearLogs(paths)
+		heapDumpPaths, err = canonicalizeFileInputs(discoverHeapDumpsNearLogs(paths), "auto-discovered heap dump")
+		if err != nil {
+			return options, err
+		}
 		autoDiscoveredHeapDumps = len(heapDumpPaths) > 0
 		if !autoDiscoveredHeapDumps {
 			return options, nil
@@ -646,8 +1020,13 @@ func optionsWithHeapEvidence(title string, paths []string, options analyze.Optio
 		}
 		targetClasses = analyze.HeapTargetClasses(preliminary)
 	}
-	heapInputs := append([]string{}, heapEvidencePaths...)
-	heapInputs = append(heapInputs, heapDumpPaths...)
+	heapInputs, err := canonicalizeFileInputs(
+		append(append([]string{}, heapEvidencePaths...), heapDumpPaths...),
+		"heap input",
+	)
+	if err != nil {
+		return options, err
+	}
 	evidence, err := analyze.LoadHeapEvidenceFiles(heapInputs, targetClasses)
 	if err != nil {
 		return options, err
@@ -718,12 +1097,16 @@ func (s *linkedStringSet) add(value string) {
 	s.values = append(s.values, value)
 }
 
-func buildLogReports(group string, paths []string, options analyze.Options) ([]report.LogReport, error) {
+func buildLogReports(group string, paths []string, options analyze.Options, combined analyze.Summary) ([]report.LogReport, error) {
 	reports := make([]report.LogReport, 0, len(paths))
 	for i, path := range paths {
-		summary, err := analyze.InspectFilesWithOptions(path, []string{path}, options)
-		if err != nil {
-			return nil, err
+		summary := combined
+		if len(paths) != 1 {
+			var err error
+			summary, err = analyze.InspectFilesWithOptions(path, []string{path}, options)
+			if err != nil {
+				return nil, err
+			}
 		}
 		reports = append(reports, report.LogReport{
 			Name:    path,
@@ -766,23 +1149,24 @@ func runExport(args []string) error {
 	if format != "jsonl" {
 		return fmt.Errorf("unsupported export format %q", format)
 	}
-	paths := expandArgs(remaining)
+	paths, err := resolveLogArgs(remaining)
+	if err != nil {
+		return err
+	}
 	if len(paths) == 0 {
 		return fmt.Errorf("export needs at least one log file")
 	}
-	var writer *os.File
 	if out == "" {
-		writer = os.Stdout
-	} else {
-		file, err := os.Create(out)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		writer = file
+		return writeExportEvents(os.Stdout, paths)
 	}
+	return atomicfile.Write(out, 0o644, func(file *os.File) error {
+		return writeExportEvents(file, paths)
+	})
+}
+
+func writeExportEvents(writer io.Writer, paths []string) error {
+	encoder := json.NewEncoder(writer)
 	for _, path := range paths {
-		encoder := json.NewEncoder(writer)
 		warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
 			return encoder.Encode(event)
 		})
@@ -801,7 +1185,10 @@ func runSize(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths := expandArgs(remaining)
+	paths, err := resolveLogArgs(remaining)
+	if err != nil {
+		return err
+	}
 	if len(paths) == 0 {
 		return fmt.Errorf("size needs at least one log file")
 	}
@@ -820,15 +1207,24 @@ func printSizeProfile(profile jhlog.SizeProfile) {
 	var totalFileBytes uint64
 	var totalBodyBytes uint64
 	var totalEvents uint64
+	var totalRecords uint64
+	var totalDictionary uint64
+	var totalControl uint64
 	for _, file := range profile.Files {
 		totalFileBytes += file.FileBytes
 		totalBodyBytes += file.BodyBytes
 		totalEvents += file.Events
+		totalRecords += file.Records
+		totalDictionary += file.Dictionary
+		totalControl += file.Control
 	}
 	fmt.Printf(
-		"logs=%d events=%d file=%s body=%s compression=%.1fx\n",
+		"logs=%d events=%d records=%d dictionary=%d control=%d file=%s body=%s compression=%.1fx\n",
 		len(profile.Files),
 		totalEvents,
+		totalRecords,
+		totalDictionary,
+		totalControl,
 		formatByteSize(totalFileBytes),
 		formatByteSize(totalBodyBytes),
 		compressionRatio(totalBodyBytes+uint64(len(jhlog.Magic))*uint64(len(profile.Files)), totalFileBytes),
@@ -896,7 +1292,10 @@ func runProblems(args []string) error {
 	if err != nil {
 		return err
 	}
-	paths := expandArgs(remaining)
+	paths, err := resolveLogArgs(remaining)
+	if err != nil {
+		return err
+	}
 	if len(paths) == 0 {
 		return fmt.Errorf("problems needs at least one log file")
 	}
@@ -920,23 +1319,20 @@ func runProblems(args []string) error {
 		}
 		mathReport = &report
 	}
-	writer := os.Stdout
-	if out != "" {
-		file, err := os.Create(out)
-		if err != nil {
-			return err
+	write := func(writer io.Writer) error {
+		switch strings.ToLower(format) {
+		case "json":
+			return writeProblemsDatasetJSON(writer, dataset, summary, mathReport)
+		case "csv":
+			return writeProblemsDatasetCSV(writer, dataset, summary, mathReport)
+		default:
+			return fmt.Errorf("unsupported problems format %q", format)
 		}
-		defer file.Close()
-		writer = file
 	}
-	switch strings.ToLower(format) {
-	case "json":
-		return writeProblemsDatasetJSON(writer, dataset, summary, mathReport)
-	case "csv":
-		return writeProblemsDatasetCSV(writer, dataset, summary, mathReport)
-	default:
-		return fmt.Errorf("unsupported problems format %q", format)
+	if out == "" {
+		return write(os.Stdout)
 	}
+	return atomicfile.Write(out, 0o644, func(file *os.File) error { return write(file) })
 }
 
 func takeStringFlag(args []string, name, fallback string) (string, []string, error) {
@@ -960,6 +1356,37 @@ func takeStringFlag(args []string, name, fallback string) (string, []string, err
 		}
 	}
 	return fallback, args, nil
+}
+
+func takeStringFlags(args []string, name string) ([]string, []string, error) {
+	long := "--" + name
+	short := "-" + name
+	values := make([]string, 0, 1)
+	remaining := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == long || arg == short:
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("%s needs a value", long)
+			}
+			value := args[i+1]
+			if value == "" {
+				return nil, nil, fmt.Errorf("%s needs a non-empty value", long)
+			}
+			values = append(values, value)
+			i++
+		case strings.HasPrefix(arg, long+"="):
+			value := strings.TrimPrefix(arg, long+"=")
+			if value == "" {
+				return nil, nil, fmt.Errorf("%s needs a non-empty value", long)
+			}
+			values = append(values, value)
+		default:
+			remaining = append(remaining, arg)
+		}
+	}
+	return values, remaining, nil
 }
 
 func takeBoolFlag(args []string, name string) (bool, []string, error) {
@@ -1030,11 +1457,102 @@ func expandOne(pattern string) []string {
 	return []string{pattern}
 }
 
-func printSummary(summary analyze.Summary) {
-	fmt.Printf("logs: %d events: %d duration: %dms\n", summary.LogCount, summary.EventCount, summary.DurationMS)
-	for _, warning := range summary.Warnings {
-		fmt.Printf("warning: %s\n", warning)
+type canonicalLogInput struct {
+	path string
+	info os.FileInfo
+}
+
+func resolveLogArgs(args []string) ([]string, error) {
+	return canonicalizeLogInputs(expandArgs(args))
+}
+
+func resolveLogComma(raw string) ([]string, error) {
+	return canonicalizeLogInputs(expandComma(raw))
+}
+
+func canonicalizeLogInputs(paths []string) ([]string, error) {
+	return canonicalizeFileInputs(paths, "log")
+}
+
+func canonicalizeFileInputs(paths []string, kind string) ([]string, error) {
+	resolved := make([]canonicalLogInput, 0, len(paths))
+	for _, input := range paths {
+		absolute, err := filepath.Abs(filepath.Clean(input))
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s path %q: %w", kind, input, err)
+		}
+		canonical, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s path %q: %w", kind, input, err)
+		}
+		canonical = filepath.Clean(canonical)
+		info, err := os.Stat(canonical)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s path %q: %w", kind, canonical, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("%s input %q is not a regular file", kind, canonical)
+		}
+		duplicate := false
+		for _, existing := range resolved {
+			if os.SameFile(existing.info, info) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		resolved = append(resolved, canonicalLogInput{path: canonical, info: info})
 	}
+	out := make([]string, len(resolved))
+	for index := range resolved {
+		out[index] = resolved[index].path
+	}
+	return out, nil
+}
+
+func rejectLogInputOverlap(leftName string, left []string, rightName string, right []string) error {
+	leftFiles := make([]canonicalLogInput, 0, len(left))
+	for _, path := range left {
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("stat %s log %q: %w", leftName, path, err)
+		}
+		leftFiles = append(leftFiles, canonicalLogInput{path: path, info: info})
+	}
+	for _, path := range right {
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("stat %s log %q: %w", rightName, path, err)
+		}
+		for _, candidate := range leftFiles {
+			if os.SameFile(candidate.info, info) {
+				return fmt.Errorf(
+					"%s and %s log sets overlap: %q and %q refer to the same file; use independent runs for comparison",
+					leftName,
+					rightName,
+					candidate.path,
+					path,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func printSummary(summary analyze.Summary) {
+	fmt.Printf(
+		"logs: %d data_events: %d data_records: %d total_records: %d dictionary_records: %d control_records: %d duration: %dms\n",
+		summary.LogCount,
+		summary.EventCount,
+		summary.DataRecordCount,
+		summary.TotalRecordCount,
+		summary.DictionaryRecords,
+		summary.ControlRecords,
+		summary.DurationMS,
+	)
+	quality := summary.CollectionQuality
 	fmt.Printf("http: count=%d failed=%d p95=%dms\n", summary.HTTPCount, summary.HTTPFailed, summary.HTTPP95MS)
 	fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
 	if len(summary.AppVersions) > 0 {
@@ -1066,6 +1584,28 @@ func printSummary(summary analyze.Summary) {
 	}
 	if len(summary.Owners) > 0 {
 		fmt.Printf("top_owners: %s\n", ownerValues(summary.Owners, 5))
+	}
+	fmt.Printf(
+		"collection_quality: level=%s complete=%t chain_valid=%t sealed=%d unsealed=%d accepted=%d written=%d known_lost=%d dictionary_overflow=%d dictionary_truncated=%d\n",
+		quality.Level,
+		quality.Complete,
+		quality.ChainValid,
+		quality.SealedSegments,
+		quality.UnsealedSegments,
+		quality.AcceptedEvents,
+		quality.WrittenEvents,
+		quality.KnownLostEvents,
+		quality.DictionaryOverflow,
+		quality.DictionaryTruncated,
+	)
+	if len(quality.Notices) > 0 || len(summary.Warnings) > 0 {
+		fmt.Println("collection_quality_details:")
+		for _, notice := range quality.Notices {
+			fmt.Printf("info: Качество сбора: %s.\n", notice)
+		}
+		for _, warning := range summary.Warnings {
+			fmt.Printf("warning: %s\n", warning)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 package io.jankhunter.runtime.internal.io
 
-enum class MetricAggregationMode(val wireValue: Long) {
+internal enum class MetricAggregationMode(val wireValue: Long) {
     UNKNOWN(0L),
     AVERAGE(1L),
     LAST(2L),

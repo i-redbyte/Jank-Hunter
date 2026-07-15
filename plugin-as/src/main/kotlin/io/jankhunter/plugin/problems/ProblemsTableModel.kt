@@ -2,7 +2,7 @@ package io.jankhunter.plugin.problems
 
 import javax.swing.table.AbstractTableModel
 
-class ProblemsTableModel : AbstractTableModel() {
+internal class ProblemsTableModel : AbstractTableModel() {
     private var table: ProblemsTable = ProblemsTable(emptyList(), emptyList())
 
     fun setTable(next: ProblemsTable) {

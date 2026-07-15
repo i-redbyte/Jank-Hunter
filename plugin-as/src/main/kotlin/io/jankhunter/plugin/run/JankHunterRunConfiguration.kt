@@ -8,8 +8,8 @@ import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.InvalidDataException
 import com.intellij.openapi.util.WriteExternalException
-import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterLogScope
+import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 import org.jdom.Element
 
@@ -31,6 +31,7 @@ class JankHunterRunConfiguration(
     var mapping: String = ""
     var classGraph: String = ""
     var diagnostics: String = ""
+    var diCatalog: String = ""
     var heapDump: String = ""
     var heapEvidence: String = ""
     var baselineHeapDump: String = ""
@@ -66,6 +67,7 @@ class JankHunterRunConfiguration(
             mapping = mapping,
             classGraph = classGraph,
             diagnostics = diagnostics,
+            diCatalog = diCatalog,
             heapDump = heapDump,
             heapEvidence = heapEvidence,
             baselineHeapDump = baselineHeapDump,
@@ -96,6 +98,7 @@ class JankHunterRunConfiguration(
         mapping = request.mapping
         classGraph = request.classGraph
         diagnostics = request.diagnostics
+        diCatalog = request.diCatalog
         heapDump = request.heapDump
         heapEvidence = request.heapEvidence
         baselineHeapDump = request.baselineHeapDump
@@ -129,6 +132,7 @@ class JankHunterRunConfiguration(
         data.setAttribute("mapping", mapping)
         data.setAttribute("classGraph", classGraph)
         data.setAttribute("diagnostics", diagnostics)
+        data.setAttribute("diCatalog", diCatalog)
         data.setAttribute("heapDump", heapDump)
         data.setAttribute("heapEvidence", heapEvidence)
         data.setAttribute("baselineHeapDump", baselineHeapDump)
@@ -164,6 +168,7 @@ class JankHunterRunConfiguration(
         mapping = data.getAttributeValue("mapping", "")
         classGraph = data.getAttributeValue("classGraph", "")
         diagnostics = data.getAttributeValue("diagnostics", "")
+        diCatalog = data.getAttributeValue("diCatalog", "")
         heapDump = data.getAttributeValue("heapDump", "")
         heapEvidence = data.getAttributeValue("heapEvidence", "")
         baselineHeapDump = data.getAttributeValue("baselineHeapDump", "")

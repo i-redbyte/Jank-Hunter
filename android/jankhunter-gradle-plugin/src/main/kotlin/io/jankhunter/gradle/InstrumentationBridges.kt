@@ -9,7 +9,7 @@ internal data class VersionedBridgeSignature(
     private val descriptorMatcher: (MethodCall) -> Boolean,
 ) {
     fun matches(call: MethodCall): Boolean {
-        return call.owner in owners &&
+        return call.matchesOwner(owners) &&
             call.name in names &&
             descriptorMatcher(call)
     }
@@ -27,6 +27,28 @@ internal data class VersionedBridgeSignature(
                 names = spec.names,
                 roles = spec.roles,
                 descriptorMatcher = { call -> call.descriptor in spec.descriptors },
+            )
+        }
+
+        fun covariantObjectReturn(signature: IntentSignature): VersionedBridgeSignature {
+            val spec = signature.spec
+            val parameterDescriptors = spec.descriptors.mapTo(linkedSetOf()) { descriptor ->
+                descriptor.substring(0, descriptor.lastIndexOf(')') + 1)
+            }
+            return VersionedBridgeSignature(
+                id = spec.id,
+                intent = signature.intent,
+                owners = spec.owners,
+                names = spec.names,
+                roles = spec.roles,
+                descriptorMatcher = { call ->
+                    val argumentsEnd = call.descriptor.lastIndexOf(')')
+                    argumentsEnd >= 0 &&
+                        call.descriptor.substring(0, argumentsEnd + 1) in parameterDescriptors &&
+                        call.descriptor.substring(argumentsEnd + 1).let { result ->
+                            result.startsWith('L') && result.endsWith(';')
+                        }
+                },
             )
         }
     }
@@ -55,7 +77,7 @@ internal interface VersionedInstrumentationBridge {
 
     fun relevant(call: MethodCall): Boolean {
         return signatures.any { signature ->
-            call.owner in signature.owners && call.name in signature.names
+            call.matchesOwner(signature.owners) && call.name in signature.names
         }
     }
 
@@ -224,11 +246,21 @@ private object AndroidHandlerBridge : VersionedInstrumentationBridge {
 }
 
 private object JdkExecutorBridge : VersionedInstrumentationBridge {
-    override val id: String = "jdk.executor.bridge.v1"
+    override val id: String = "jdk.executor.bridge.v2"
     override val family: String = "executor"
     override val signatures: List<VersionedBridgeSignature> =
-        HookSignatureCatalog.executorRunnableSignatures.map(VersionedBridgeSignature::exact) +
-            HookSignatureCatalog.executorCallableSignatures.map(VersionedBridgeSignature::exact)
+        HookSignatureCatalog.executorRunnableSignatures.map(::executorSignature) +
+            HookSignatureCatalog.executorCallableSignatures.map(::executorSignature)
+
+    private fun executorSignature(signature: IntentSignature): VersionedBridgeSignature {
+        return if (signature.spec.names == setOf("submit")) {
+            // ExecutorService permits covariant Future implementations. Guava's
+            // ListeningExecutorService therefore emits ListenableFuture in the call descriptor.
+            VersionedBridgeSignature.covariantObjectReturn(signature)
+        } else {
+            VersionedBridgeSignature.exact(signature)
+        }
+    }
 }
 
 private object AndroidViewFlowBridge : VersionedInstrumentationBridge {

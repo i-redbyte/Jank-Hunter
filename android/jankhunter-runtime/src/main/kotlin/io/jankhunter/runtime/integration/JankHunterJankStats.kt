@@ -1,180 +1,151 @@
 package io.jankhunter.runtime.integration
 
 import android.view.Window
-import io.jankhunter.runtime.JankHunter
-import java.lang.ref.WeakReference
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
 import java.lang.reflect.Proxy
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
 
-object JankHunterJankStats {
-    private val handleRegistry = HandleRegistry()
+/** Reflection-only bridge into the optional AndroidX JankStats dependency. */
+internal object JankHunterJankStats {
+    private val frameAccessors = ConcurrentHashMap<Class<*>, FrameAccessors>()
+    private val reflectionBridge by lazy(LazyThreadSafetyMode.PUBLICATION, ::loadReflectionBridge)
 
-    @JvmStatic
-    fun install(window: Window?): Handle? = install(window, JankHunter.currentScreen())
-
-    @JvmStatic
-    fun install(window: Window?, screenName: String?): Handle? {
+    fun install(
+        window: Window?,
+        onFrame: (FrameData) -> Unit,
+    ): Handle? {
         if (window == null) return null
+        val bridge = reflectionBridge ?: return null
 
         return try {
-            val jankStatsClass = Class.forName("androidx.metrics.performance.JankStats")
-            val listenerClass = Class.forName("androidx.metrics.performance.JankStats\$OnFrameListener")
             val proxy = Proxy.newProxyInstance(
-                listenerClass.classLoader,
-                arrayOf(listenerClass),
+                bridge.listenerClass.classLoader,
+                arrayOf(bridge.listenerClass),
             ) { _, method, args ->
                 if (method.name == "onFrame" && args?.isNotEmpty() == true) {
-                    args[0]?.let { recordFrameData(it, screenName) }
+                    try {
+                        args[0]?.let(::readFrameData)?.let(onFrame)
+                    } catch (throwable: Throwable) {
+                        throwable.rethrowIfFatal()
+                    }
                 }
                 null
             }
 
-            val instance: Any = jankStatsClass
-                .getMethod("createAndTrack", Window::class.java, listenerClass)
-                .invoke(null, window, proxy) ?: return null
-            Handle(instance, handleRegistry).also {
-                handleRegistry.add(it)
-                JankHunter.recordCounter("jankstats.install.count", 1)
-            }
-        } catch (_: Throwable) {
+            val instance = bridge.createAndTrack.invoke(null, window, proxy) ?: return null
+            Handle(instance)
+        } catch (throwable: Throwable) {
+            throwable.rethrowIfFatal()
             null
         }
     }
 
-    @JvmStatic
-    fun uninstallAll() {
-        handleRegistry.uninstallAll()
-    }
-
-    class Handle internal constructor(
+    internal class Handle(
         private val instance: Any,
-        private val registry: HandleRegistry? = handleRegistry,
     ) {
         @Volatile
         private var installed = true
 
-        fun addState(key: String?, value: String?) {
-            invokeState("addState", key, value)
-        }
-
-        fun removeState(key: String?) {
-            invokeState("removeState", key, null)
-        }
-
-        fun uninstall() {
+        @Synchronized
+        fun setTrackingEnabled(enabled: Boolean) {
             if (!installed) return
-            installed = false
             try {
                 instance.javaClass
                     .getMethod("setTrackingEnabled", Boolean::class.javaPrimitiveType)
-                    .invoke(instance, false)
-            } catch (_: Throwable) {
+                    .invoke(instance, enabled)
+            } catch (throwable: Throwable) {
+                throwable.rethrowIfFatal()
             }
-            registry?.remove(this)
-            JankHunter.recordCounter("jankstats.uninstall.count", 1)
         }
 
-        private fun invokeState(methodName: String, key: String?, value: String?) {
-            val safeKey = key?.takeIf { it.isNotBlank() } ?: return
-            try {
-                if (value == null) {
-                    instance.javaClass.getMethod(methodName, String::class.java).invoke(instance, safeKey)
-                } else {
-                    instance.javaClass
-                        .getMethod(methodName, String::class.java, String::class.java)
-                        .invoke(instance, safeKey, value)
-                }
-            } catch (_: Throwable) {
-            }
+        @Synchronized
+        fun uninstall() {
+            if (!installed) return
+            setTrackingEnabled(false)
+            installed = false
         }
     }
 
-    internal class HandleRegistry {
-        private val references = CopyOnWriteArrayList<WeakReference<Handle>>()
+    internal data class FrameData(
+        val isJank: Boolean,
+        val durationNanos: Long,
+    )
 
-        fun add(handle: Handle) {
-            cleanup()
-            references += WeakReference(handle)
-        }
-
-        fun remove(handle: Handle) {
-            for (reference in references) {
-                val current = reference.get()
-                if (current == null || current === handle) {
-                    references.remove(reference)
-                }
-            }
-        }
-
-        fun uninstallAll() {
-            val snapshot = references.toList()
-            references.clear()
-            for (reference in snapshot) {
-                reference.get()?.uninstall()
-            }
-        }
-
-        private fun cleanup() {
-            for (reference in references) {
-                if (reference.get() == null) {
-                    references.remove(reference)
-                }
-            }
-        }
-    }
-
-    private fun recordFrameData(frameData: Any, screenName: String?) {
+    private fun readFrameData(frameData: Any): FrameData {
         val type = frameData.javaClass
-        val isJank = (type.tryInvoke(frameData, "isJank") as? Boolean) == true
-        val durationNanos = (type.tryInvoke(frameData, "getFrameDurationUiNanos") as? Long) ?: 0L
-        val screen = metricPart(screenName ?: JankHunter.currentScreen())
-
-        JankHunter.recordCounter("jankstats.frame.count", 1)
-        JankHunter.recordCounter("jankstats.screen.$screen.frame.count", 1)
-        if (isJank) {
-            JankHunter.recordCounter("jankstats.frame.jank.count", 1)
-            JankHunter.recordCounter("jankstats.screen.$screen.jank.count", 1)
+        val accessors = frameAccessors[type] ?: run {
+            val created = FrameAccessors(
+                isJank = type.methodOrNull("isJank"),
+                durationNanos = type.methodOrNull("getFrameDurationUiNanos"),
+            )
+            frameAccessors.putIfAbsent(type, created) ?: created
         }
-        if (durationNanos > 0) {
-            val durationMs = durationNanos / 1_000_000L
-            JankHunter.recordGauge("jankstats.frame.duration_ms", durationMs)
-            JankHunter.recordGauge("jankstats.screen.$screen.duration_ms", durationMs)
-        }
-        recordStates(frameData, isJank)
+        return FrameData(
+            isJank = (accessors.isJank.safeInvoke(frameData) as? Boolean) == true,
+            durationNanos = (accessors.durationNanos.safeInvoke(frameData) as? Long) ?: 0L,
+        )
     }
 
-    private fun recordStates(frameData: Any, isJank: Boolean) {
-        val states = frameData.javaClass.tryInvoke(frameData, "getStates") as? Iterable<*> ?: return
-        for (state in states) {
-            if (state == null) continue
-            val type = state.javaClass
-            val key = metricPart(type.tryInvoke(state, "getKey") as? String)
-            val value = metricPart(type.tryInvoke(state, "getValue") as? String)
-            if (key == "unknown" && value == "unknown") continue
-            JankHunter.recordCounter("jankstats.state.$key.$value.frame.count", 1)
-            if (isJank) {
-                JankHunter.recordCounter("jankstats.state.$key.$value.jank.count", 1)
-            }
-        }
-    }
+    private data class FrameAccessors(
+        val isJank: Method?,
+        val durationNanos: Method?,
+    )
 
-    private fun Class<*>.tryInvoke(target: Any, methodName: String): Any? {
+    private fun Class<*>.methodOrNull(name: String): Method? {
         return try {
-            getMethod(methodName).invoke(target)
-        } catch (_: Throwable) {
+            getMethod(name)
+        } catch (throwable: Throwable) {
+            throwable.rethrowIfFatal()
             null
         }
     }
 
-    private fun metricPart(value: String?): String {
-        return value
-            ?.takeIf { it.isNotBlank() }
-            ?.replace(METRIC_PART_UNSAFE_CHARS, "_")
-            ?.trim('_', '.', '-')
-            ?.take(80)
-            ?.takeIf { it.isNotBlank() }
-            ?: "unknown"
+    private fun Method?.safeInvoke(target: Any): Any? {
+        return try {
+            this?.invoke(target)
+        } catch (throwable: Throwable) {
+            throwable.rethrowIfFatal()
+            null
+        }
     }
 
-    private val METRIC_PART_UNSAFE_CHARS = Regex("[^A-Za-z0-9._-]")
+    private fun loadReflectionBridge(): ReflectionBridge? {
+        return try {
+            val jankStatsClass = Class.forName("androidx.metrics.performance.JankStats")
+            val listenerClass = Class.forName("androidx.metrics.performance.JankStats\$OnFrameListener")
+            ReflectionBridge(
+                listenerClass = listenerClass,
+                createAndTrack = jankStatsClass.getMethod(
+                    "createAndTrack",
+                    Window::class.java,
+                    listenerClass,
+                ),
+            )
+        } catch (throwable: Throwable) {
+            throwable.rethrowIfFatal()
+            null
+        }
+    }
+
+    private data class ReflectionBridge(
+        val listenerClass: Class<*>,
+        val createAndTrack: Method,
+    )
+
+    private fun Throwable.rethrowIfFatal() {
+        val fatal = when (this) {
+            is VirtualMachineError,
+            is ThreadDeath -> this
+            is InvocationTargetException -> targetException?.let { target ->
+                when (target) {
+                    is VirtualMachineError,
+                    is ThreadDeath -> target
+                    else -> null
+                }
+            }
+            else -> null
+        }
+        if (fatal != null) throw fatal
+    }
 }

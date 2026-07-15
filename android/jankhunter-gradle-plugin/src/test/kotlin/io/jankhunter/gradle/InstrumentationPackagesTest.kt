@@ -7,36 +7,33 @@ import org.junit.Test
 
 class InstrumentationPackagesTest {
     @Test
-    fun keepsManualIncludesWhenWholeApplicationIsDisabled() {
+    fun alwaysKeepsNamespaceAsSafeProjectBoundary() {
         val includes = InstrumentationPackages.effectiveIncludes(
             manualIncludes = listOf("com.myapp.feature", " com.myapp.data. "),
-            includeWholeApplication = false,
             androidNamespace = "com.myapp",
         )
 
-        assertEquals(listOf("com.myapp.feature", "com.myapp.data"), includes)
+        assertEquals(linkedSetOf("com.myapp", "com.myapp.feature", "com.myapp.data"), includes)
     }
 
     @Test
-    fun addsAndroidNamespaceWhenWholeApplicationIsEnabled() {
+    fun deduplicatesNormalizedAndroidNamespace() {
         val includes = InstrumentationPackages.effectiveIncludes(
             manualIncludes = listOf("com.myapp.feature", "com.myapp"),
-            includeWholeApplication = true,
             androidNamespace = " com.myapp. ",
         )
 
-        assertEquals(listOf("com.myapp.feature", "com.myapp"), includes)
+        assertEquals(linkedSetOf("com.myapp", "com.myapp.feature"), includes)
     }
 
     @Test
     fun ignoresBlankNamespace() {
         val includes = InstrumentationPackages.effectiveIncludes(
             manualIncludes = emptyList(),
-            includeWholeApplication = true,
             androidNamespace = " ",
         )
 
-        assertEquals(emptyList<String>(), includes)
+        assertEquals(emptySet<String>(), includes)
     }
 
     @Test

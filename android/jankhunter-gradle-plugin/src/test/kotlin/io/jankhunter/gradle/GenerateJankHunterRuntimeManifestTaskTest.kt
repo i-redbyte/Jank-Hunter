@@ -14,6 +14,7 @@ class GenerateJankHunterRuntimeManifestTaskTest {
             GenerateJankHunterRuntimeManifestTask::class.java,
         ).get()
         task.outputFile.set(project.layout.buildDirectory.file("jankhunter/AndroidManifest.xml"))
+        task.autoInit.set(true)
         task.mainThreadStallThresholdMs.set(700L)
         task.ownerBlockThresholdMs.set(250L)
         task.httpSlowThresholdMs.set(1_000L)
@@ -27,12 +28,18 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
-        task.logBucket.set("daily")
+        task.sessionLogSizeLimitEnabled.set(true)
+        task.maxSessionLogSizeMiB.set(16)
+        task.symbolNamespace.set("0123456789abcdef0123456789abcdef")
 
         task.writeManifest()
 
         val manifest = task.outputFile.get().asFile.readText()
-        assertFalse(manifest.contains("io.jankhunter.enabled"))
+        assertTrue(manifest.contains("io.jankhunter.enabled"))
+        assertTrue(manifest.contains("io.jankhunter.runtime.JankHunterAutoInitProvider"))
+        assertTrue(manifest.contains("""android:authorities="${'$'}{applicationId}.jankhunter-init""""))
+        assertTrue(manifest.contains("""android:exported="false""""))
+        assertTrue(manifest.contains("""android:initOrder="100""""))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_enabled"))
         assertTrue(manifest.contains("io.jankhunter.main_thread_stall_threshold_ms"))
         assertTrue(manifest.contains("io.jankhunter.owner_block_threshold_ms"))
@@ -50,20 +57,25 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_retained_age_ms"))
         assertTrue(manifest.contains("""android:value="45000""""))
         assertTrue(manifest.contains("io.jankhunter.main_process_only"))
-        assertTrue(manifest.contains("io.jankhunter.log_bucket"))
-        assertTrue(manifest.contains("""android:value="daily""""))
-        assertTrue(manifest.contains("""tools:replace="android:value""""))
+        assertTrue(manifest.contains("io.jankhunter.session_log_size_limit_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.max_session_log_size_mib"))
+        assertTrue(manifest.contains("""android:value="16""""))
+        assertFalse(manifest.contains("io.jankhunter.max_session_log_bytes"))
+        assertFalse(manifest.contains("io.jankhunter.max_session_logs_bytes"))
+        assertTrue(manifest.contains("io.jankhunter.symbol_namespace"))
+        assertTrue(manifest.contains("0123456789abcdef0123456789abcdef"))
+        assertFalse(manifest.contains("tools:replace"))
     }
 
     @Test
-    fun writesRuntimeDisabledMetadataWhenAutoInitIsDisabled() {
+    fun keepsRuntimeMetadataButOmitsProviderWhenAutoInitIsDisabled() {
         val project = ProjectBuilder.builder().build()
         val task = project.tasks.register(
             "generateRuntimeManifest",
             GenerateJankHunterRuntimeManifestTask::class.java,
         ).get()
         task.outputFile.set(project.layout.buildDirectory.file("jankhunter/AndroidManifest.xml"))
-        task.runtimeEnabled.set(false)
+        task.autoInit.set(false)
         task.mainThreadStallThresholdMs.set(700L)
         task.ownerBlockThresholdMs.set(250L)
         task.httpSlowThresholdMs.set(1_000L)
@@ -77,14 +89,24 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
-        task.logBucket.set("session")
+        task.sessionLogSizeLimitEnabled.set(false)
+        task.maxSessionLogSizeMiB.set(32)
+        task.symbolNamespace.set("0123456789abcdef0123456789abcdef")
 
         task.writeManifest()
 
         val manifest = task.outputFile.get().asFile.readText()
         assertTrue(manifest.contains("io.jankhunter.enabled"))
+        assertTrue(manifest.contains("""android:value="true""""))
+        assertFalse(manifest.contains("io.jankhunter.runtime.JankHunterAutoInitProvider"))
+        assertTrue(manifest.contains("io.jankhunter.session_log_size_limit_enabled"))
         assertTrue(manifest.contains("""android:value="false""""))
-        assertTrue(manifest.contains("""android:value="session""""))
-        assertTrue(manifest.contains("""tools:replace="android:value""""))
+        assertTrue(manifest.contains("io.jankhunter.max_session_log_size_mib"))
+        assertTrue(manifest.contains("""android:value="32""""))
+        assertFalse(manifest.contains("io.jankhunter.max_session_log_bytes"))
+        assertFalse(manifest.contains("io.jankhunter.max_session_logs_bytes"))
+        assertTrue(manifest.contains("io.jankhunter.symbol_namespace"))
+        assertTrue(manifest.contains("0123456789abcdef0123456789abcdef"))
+        assertFalse(manifest.contains("tools:replace"))
     }
 }

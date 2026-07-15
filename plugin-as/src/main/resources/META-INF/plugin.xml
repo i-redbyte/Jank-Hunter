@@ -16,7 +16,7 @@
   <actions>
     <action
         id="JankHunter.ShowToolWindow"
-        class="io.jankhunter.plugin.actions.OpenJankHunterToolWindowAction"
+        class="io.jankhunter.plugin.actions.JankHunterOpenToolWindowAction"
         text="Jank Hunter"
         description="Open Android jank analysis with Jank Hunter"
         icon="/icons/jankHunter.png">
@@ -26,7 +26,7 @@
 
     <action
         id="JankHunter.InspectClassEvidence"
-        class="io.jankhunter.plugin.actions.InspectClassEvidenceAction"
+        class="io.jankhunter.plugin.actions.JankHunterInspectClassEvidenceAction"
         text="Inspect Jank Hunter Evidence For Class"
         description="Open Jank Hunter evidence for the current class">
       <add-to-group group-id="EditorPopupMenu" anchor="last"/>

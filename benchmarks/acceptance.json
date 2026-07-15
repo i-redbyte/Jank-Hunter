@@ -1,0 +1,47 @@
+{
+  "schema": 3,
+  "fixture": {
+    "profile": "representative",
+    "minimum_events": 51000,
+    "minimum_dictionary_entries": 7500,
+    "forbidden_warning_fragments": [
+      "ignored partial",
+      "Качество сбора:",
+      "отбросила события",
+      "ошибки записи",
+      "потерял события",
+      "runtime-граф вызовов отбросил",
+      "словарь .jhlog переполнен"
+    ]
+  },
+  "required_surfaces": [
+    "go_benchmarks",
+    "android_runtime",
+    "android_artifacts",
+    "cli",
+    "reports"
+  ],
+  "required_report_suffixes": [
+    ".html",
+    "-math.html",
+    "-leaks.html",
+    "-influence.html",
+    "-diagnostics.html"
+  ],
+  "relative_regression_limits": {
+    "android_runtime_ns_per_op": 0.15,
+    "android_artifact_bytes": 0.03,
+    "go_ns_per_op": 0.15,
+    "go_bytes_per_op": 0.10,
+    "go_allocs_per_op": 0.10,
+    "cli_wall_ms": 0.15,
+    "cli_peak_rss_bytes": 0.10,
+    "report_bundle_bytes": 0.05
+  },
+  "absolute_targets": {
+    "inspect_report_peak_rss_bytes": 67108864,
+    "inspect_report_bundle_bytes": 5242880,
+    "inspect_report_wall_ms": 2000,
+    "compare_report_wall_ms": 4000
+  }
+}

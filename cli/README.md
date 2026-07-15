@@ -40,8 +40,8 @@ jankhunter version
 Текущие значения:
 
 ```text
-Jank Hunter CLI 1.0.1
-.jhlog format 8
+Jank Hunter CLI 1.0.2
+.jhlog format 9
 ```
 
 Сборка под другую систему:
@@ -54,40 +54,35 @@ make build BUILD_OS=darwin BUILD_ARCH=arm64 OUT=bin/jankhunter-darwin-arm64
 Архивы по списку `PLATFORMS` из Makefile:
 
 ```bash
-make release VERSION=1.0.1
+make release VERSION=1.0.2
 ```
 
 ## Быстрая Проверка
 
 ```bash
 make build
-./bin/jankhunter sample --out /tmp/sample.jhlog
-./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/report.html
-./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/compare.html
-./bin/jankhunter size /tmp/sample.jhlog
+./bin/jankhunter sample --out /tmp/baseline.jhlog
+./bin/jankhunter sample --out /tmp/candidate.jhlog
+./bin/jankhunter inspect /tmp/baseline.jhlog --out /tmp/report.html
+./bin/jankhunter compare --baseline /tmp/baseline.jhlog --candidate /tmp/candidate.jhlog --out /tmp/compare.html
+./bin/jankhunter size /tmp/baseline.jhlog
 ```
 
-После `inspect` рядом с основным отчётом могут появиться:
+После `inspect` создаётся один самодостаточный отчёт:
 
 ```text
 /tmp/report.html
-/tmp/report-math.html
-/tmp/report-leaks.html
-/tmp/report-influence.html
-/tmp/report-diagnostics.html
 ```
 
-После `compare`:
+После `compare` — также один файл:
 
 ```text
 /tmp/compare.html
-/tmp/compare-math.html
-/tmp/compare-leaks.html
-/tmp/compare-influence.html
-/tmp/compare-diagnostics.html
 ```
 
-`*-diagnostics.html` создаётся, когда передан `--instrumentation-diagnostics`.
+Обзор, математический анализ, утечки и граф влияния доступны во вкладках внутри HTML.
+`--instrumentation-diagnostics` добавляет вкладку «ASM диагностика», а `--di-catalog` —
+вкладку «DI-каталог». Внешние ресурсы и соседние HTML-файлы отчёту не нужны.
 
 Для доклада или обсуждения с командой можно включить более крупные акценты:
 
@@ -161,31 +156,84 @@ JSON вместо HTML:
 jankhunter inspect logs/*.jhlog --json > inspect.json
 ```
 
-По умолчанию, если в список попали несколько файлов вида `session-<process>-<start>-<segment>.jhlog`, `inspect` берёт последнюю группу сессии для каждого процесса. Это защищает отчёт от старых хвостов, которые остались в каталоге. Чтобы разобрать всё вместе:
+По умолчанию, если в список попали несколько файлов вида `jh-session-log.YYYY-MM-DD.<index>.jhlog`, `inspect` определяет сессию и процесс по v9 identity внутри файла и берёт последнюю сессию для каждого процесса. Одна сессия хранится в одном файле: terminal-запись `SIZE_LIMIT` завершает сбор этой сессии и не создаёт следующий сегмент. Чтобы разобрать все выбранные сессии вместе:
 
 ```bash
 jankhunter inspect logs/*.jhlog --all-sessions --out report.html
 ```
 
+Если файл выгружен во время продолжающегося сбора после `JankHunter.flush()`, его статус
+`open_clean` нормален: CLI читает снимок до последнего целого чанка, не снижает уровень доверия
+и сообщает, что FINAL seal появится при завершении runtime. Служебные notices и реальные
+предупреждения качества находятся в закрытом разделе в самом конце HTML и в конце text output.
+
 ## Данные Gradle-Плагина
 
-Для раскрытия владельцев, классов и диагностики сборки передавайте файлы из Android-сборки:
+Обычный `.jhlog` самодостаточен: имена реально выполненных ASM-методов и runtime-рёбра
+раскрываются системным CLI без доступа к проекту и его build-директории. Gradle artifacts ниже
+нужны только для расширенного developer-анализа: статического class graph, ASM-диагностики,
+DI-каталога и mapping после R8/ProGuard.
+
+Для раскрытия владельцев, классов и диагностики сборки достаточно передать каталог варианта:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --artifacts-dir ../android/sample-app/build/generated/jankhunter/debug \
+  --out report.html
+```
+
+Автопоиск Gradle artifacts выключен в стандартном режиме. Он включается только явным
+developer-ключом `--external-symbols`; CLI из `<project>/.jankhunter/bin` тогда ищет полный набор
+`*/build/generated/jankhunter/<variant>/` внутри проекта и выбирает самый свежий. Для системного
+CLI или нескольких вариантов передавайте `--artifacts-dir` явно.
+
+Компактный внешний режим должен быть включён ещё при сборке приложения через
+`JankHunterSymbolMode.STABLE_EXTERNAL`. Анализ такого лога запускается только явно:
+
+```bash
+jankhunter inspect logs/*.jhlog \
+  --external-symbols \
+  --artifacts-dir ../android/sample-app/build/generated/jankhunter/debug \
+  --out report.html
+```
+
+Без `--external-symbols` CLI остановится с понятной ошибкой вместо отчёта с именами
+`stable:...`. Без `--artifacts-dir`/`--owner-map` внешний режим также не запускается.
+
+Отдельные файлы по-прежнему можно передать вручную; явные file-флаги имеют приоритет над
+значениями из каталога:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
   --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
+  --owner-map ../feature-feed/build/generated/jankhunter/debug/owner-map.json \
   --mapping ../android/sample-app/build/outputs/mapping/debug/mapping.txt \
   --class-graph ../android/sample-app/build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics ../android/sample-app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
+  --di-catalog ../android/sample-app/build/generated/jankhunter/debug/di-catalog.jsonl \
   --out report.html
 ```
 
 Что дают флаги:
 
-- `--owner-map`: раскрывает сгенерированные владельцы в `class.method`.
+- `--artifacts-dir`: одним каталогом подключает owner-map, class graph, ASM diagnostics и доступный DI catalog.
+- `--external-symbols`: разрешает developer-only логи, где имена методов вынесены в owner-map;
+  требует matching `--artifacts-dir` или хотя бы один `--owner-map`.
+- `--owner-map`: раскрывает сгенерированные владельцы в `class.method`. Флаг повторяется для
+  каждого инструментированного Android-модуля, например отдельно для `app` и `feature-feed`.
+  Все карты обязаны иметь один 16-байтный `symbolNamespace`, совпадающий с каждым входным
+  `.jhlog`; CLI также отклоняет один stable ID, связанный с разными владельцами в разных картах.
+  Обе проверки fail-closed: отчёт при несовместимом или неоднозначном наборе не создаётся.
+  Namespace описывает stable-ID algorithm и owner-map schema, а не revision исходников, поэтому
+  для полного раскрытия имён передавайте карты всех модулей именно от анализируемой версии.
 - `--mapping`: раскрывает сокращённые имена после R8 или ProGuard.
 - `--class-graph`: добавляет статические связи, горячие пути и узлы графа влияния.
 - `--instrumentation-diagnostics`: добавляет отчёт о совпавших и пропущенных ASM-перехватчиках.
+- `--di-catalog`: добавляет фиолетовую вкладку «DI-каталог» с build-time связями Dagger/Hilt/Koin.
+
+В DI-отчёте действует жёсткая семантическая граница: «Build-time DI-связь. Это не ссылка
+удержания, не runtime-вызов и не доказательство утечки. DI-данные не влияют на score, severity
+или evidence». Каталог также не участвует в графе влияния, leak analysis, compare delta или gate.
 
 ## Утечки Памяти
 
@@ -195,7 +243,15 @@ jankhunter inspect logs/*.jhlog \
 jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-В этом случае `report-leaks.html` покажет удержанные объекты из `.jhlog`, вероятного держателя, экран, сценарий, шаг, возраст и рекомендации.
+В этом случае вкладка «Утечки памяти» в `report.html` покажет удержанные объекты из `.jhlog`, вероятного держателя, экран, сценарий, шаг, возраст и рекомендации.
+
+Runtime-сигналы разделены по силе доказательства:
+
+- `time_only`: объект оставался жив после заданной задержки; GC не подтвержден, это только повод для проверки.
+- `after_explicit_gc`: объект остался достижим после запрошенного явного GC; сигнал сильнее, но без цепочки ссылок все еще не доказывает утечку.
+- `confirmed_hprof/path`: анализ HPROF нашел путь от распознанного корня GC до объекта. Это подтверждает удержание в момент дампа, а ожидаемость ссылки нужно проверить по жизненному циклу.
+
+Потери runtime-событий, переполнение словаря и усечение HPROF явно снижают confidence соответствующих строк отчета.
 
 Если рядом лежит `retained-*.hprof`, утилита подключит его сама. Для явного пути:
 
@@ -402,8 +458,10 @@ jankhunter size logs/*.jhlog --json
 По умолчанию Android-библиотека пишет:
 
 ```text
-context.filesDir/jankhunter/session-<process>-<startMs>-<segment>.jhlog
+context.filesDir/jankhunter/jh-session-log.YYYY-MM-DD.<index>.jhlog
 ```
+
+Одна сессия сбора пишется в один append-only файл. При достижении лимита размера writer записывает terminal `SIZE_LIMIT`, запечатывает этот же файл и завершает сессию без файла-продолжения.
 
 Через `adb`:
 
@@ -426,11 +484,11 @@ cli/scripts/collect-android-leak-report.sh \
   --cli ./cli/bin/jankhunter
 ```
 
-Скрипт забирает `files/jankhunter`, находит `.jhlog` и `.hprof`, запускает `inspect` и кладёт рядом HTML-страницы.
+Скрипт забирает `files/jankhunter`, находит `.jhlog` и `.hprof`, запускает `inspect` и создаёт один самодостаточный HTML.
 
 ## Математический Отчёт
 
-`report-math.html` и `compare-math.html` добавляют более тяжёлые методы:
+Вкладка «Математический анализ» в `report.html` и `compare.html` добавляет более тяжёлые методы:
 
 - временные интервалы и мини-графики;
 - робастная статистика;
@@ -446,7 +504,7 @@ cli/scripts/collect-android-leak-report.sh \
 
 ## Граф Влияния
 
-`report-influence.html` и `compare-influence.html` показывают классы, которые чаще всего совпали с симптомами: паузами главного потока, сетевыми хвостами, рывками интерфейса, ростом памяти, удержанными объектами и спамом логами.
+Вкладка «Граф влияния» в `report.html` и `compare.html` показывает классы, которые чаще всего совпали с симптомами: паузами главного потока, сетевыми хвостами, рывками интерфейса, ростом памяти, удержанными объектами и спамом логами.
 
 Лучший режим:
 
@@ -456,6 +514,7 @@ jankhunter inspect logs/*.jhlog \
   --mapping app/build/outputs/mapping/debug/mapping.txt \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
+  --di-catalog build/generated/jankhunter/debug/di-catalog.jsonl \
   --out report.html
 ```
 
@@ -463,30 +522,33 @@ jankhunter inspect logs/*.jhlog \
 
 ## ASM-Диагностика
 
-`report-diagnostics.html` показывает:
+Вкладка «ASM диагностика» показывает:
 
 - классы, попавшие в сопоставитель;
 - сработавшие перехватчики;
 - неподдержанные сигнатуры;
 - пропущенные методы;
-- области аннотаций `@JankFlow`, `@JankScreen`, `@JankTrace`, `@JankOwner`;
+- области аннотаций `@JankHunterFlow`, `@JankHunterScreen`, `@JankHunterTrace`, `@JankHunterOwner`;
 - предупреждения о неполных или ошибочных строках диагностики.
 
 Это первый раздел, куда стоит идти, если вы ожидали перехватчик, а в отчёте нет нужного сигнала.
 
 ## Формат `.jhlog`
 
-Формат бинарный и компактный:
+Формат бинарный, chunked и рассчитан на безопасное чтение активного файла:
 
-- время хранится как смещение в миллисекундах;
+- время и thread ID фиксируются producer-потоком до постановки события в очередь;
 - строки лежат в словаре;
-- события ссылаются на короткие числовые идентификаторы;
-- контекст `screen/owner/flow/step` пишется только когда он есть;
-- повтор соседнего контекста кодируется флагом `same-context`;
+- события length-delimited и ссылаются на локальные либо стабильные symbol IDs;
+- по умолчанию stable ASM IDs имеют встроенные определения `stable ID -> class.method`,
+  отделённые от лимитированного runtime-словаря;
+- контекст `screen/owner/flow/step` атомарно входит в событие;
+- повтор контекста внутри chunk кодируется флагом `same-context`;
 - граф вызовов времени выполнения хранится агрегатами `caller_id -> callee_id`;
-- числовые строки и даты в словаре упаковываются, когда это короче обычной строки;
-- тело файла сжимается gzip после magic-заголовка;
-- текущая схема: `FormatVersion=8`.
+- каждый chunk имеет CRC, независимый gzip payload и commit trailer;
+- незакоммиченный хвост активного файла отделяется от реального повреждения;
+- loss/overflow/truncation публикуются накопительными quality snapshots;
+- текущая схема: `FormatVersion=9`.
 
 Семантика числовых метрик:
 

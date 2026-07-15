@@ -30,7 +30,7 @@ type robustSampleMap map[robustKey]*robustSampleSet
 
 type robustCollector struct {
 	filter   analyze.Filter
-	ownerMap map[string]string
+	ownerMap *analyze.OwnerMap
 	samples  robustSampleMap
 }
 

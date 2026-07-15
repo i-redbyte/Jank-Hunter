@@ -1,22 +1,28 @@
 package io.jankhunter.gradle
 
 import org.gradle.api.Action
+import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
+import javax.inject.Inject
 
-open class JankHunterExtension {
-    var enabled: Boolean = true
-    val enabledBuildTypes: MutableSet<String> = linkedSetOf("debug")
-    var autoInit: Boolean = true
-    var logBucket: String = "session"
-    var verboseLogs: Boolean = true
-    val dependencies: Dependencies = Dependencies()
-    val runtime: Runtime = Runtime()
-    val instrument: Instrumentation = Instrumentation()
-    val retainedHeapDump: RetainedHeapDump = RetainedHeapDump()
-    val releaseSafety: ReleaseSafety = ReleaseSafety()
+open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
+    val enabled: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+    val enabledBuildTypes: SetProperty<String> = objects.setProperty(String::class.java).convention(setOf("debug"))
+    val dependencyInjectionAnalysis: Property<JankHunterFeatureMode> =
+        objects.property(JankHunterFeatureMode::class.java).convention(JankHunterFeatureMode.DISABLED)
+    val autoInit: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+    val sessionLogSizeLimitEnabled: Property<Boolean> =
+        objects.property(Boolean::class.java).convention(true)
+    val maxSessionLogSizeMiB: Property<Int> = objects.property(Int::class.java).convention(16)
+    val verboseLogs: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+    val symbolMode: Property<JankHunterSymbolMode> =
+        objects.property(JankHunterSymbolMode::class.java).convention(JankHunterSymbolMode.EMBEDDED)
 
-    fun dependencies(action: Action<Dependencies>) {
-        action.execute(dependencies)
-    }
+    val runtime: Runtime = objects.newInstance(Runtime::class.java)
+    val instrument: Instrumentation = objects.newInstance(Instrumentation::class.java)
+    val retainedHeapDump: RetainedHeapDump = objects.newInstance(RetainedHeapDump::class.java)
+    val releaseSafety: ReleaseSafety = objects.newInstance(ReleaseSafety::class.java)
 
     fun runtime(action: Action<Runtime>) {
         action.execute(runtime)
@@ -34,30 +40,28 @@ open class JankHunterExtension {
         action.execute(releaseSafety)
     }
 
-    open class Instrumentation {
-        var okhttp: Boolean = true
-        var webSockets: Boolean = true
-        var handlers: Boolean = true
-        var executors: Boolean = true
-        var coroutines: Boolean = true
-        var flowInteractions: Boolean = true
-        var lifecycleLeaks: Boolean = true
-        var logSpam: Boolean = true
-        var classGraph: Boolean = true
-        var runtimeCallGraph: Boolean = true
-        var methodCounters: Boolean = false
-        var allowEmptyIncludePackages: Boolean = true
-        var includeWholeApplication: Boolean = false
-        var asmProgressLog: Boolean = false
-        val includePackages: MutableSet<String> = linkedSetOf()
-        val excludePackages: MutableSet<String> = linkedSetOf()
+    open class Instrumentation @Inject constructor(objects: ObjectFactory) {
+        val okhttp: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val webSockets: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val handlers: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val executors: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val coroutines: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val flowInteractions: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val lifecycleLeaks: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val logSpam: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val classGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val runtimeCallGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val methodCounters: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val asmProgressLog: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val includePackages: SetProperty<String> = objects.setProperty(String::class.java).convention(emptySet())
+        val excludePackages: SetProperty<String> = objects.setProperty(String::class.java).convention(emptySet())
 
         fun includePackages(vararg values: String) {
             includePackages(values.asIterable())
         }
 
         fun includePackages(values: Iterable<String>) {
-            addPackages(includePackages, values)
+            includePackages.addAll(normalizedPackages(values))
         }
 
         fun excludePackages(vararg values: String) {
@@ -65,46 +69,38 @@ open class JankHunterExtension {
         }
 
         fun excludePackages(values: Iterable<String>) {
-            addPackages(excludePackages, values)
+            excludePackages.addAll(normalizedPackages(values))
         }
 
-        private fun addPackages(target: MutableSet<String>, values: Iterable<String>) {
-            values.mapNotNullTo(target) { it.trim().takeIf(String::isNotEmpty) }
+        private fun normalizedPackages(values: Iterable<String>): Set<String> {
+            return values.mapNotNullTo(linkedSetOf()) { it.trim().takeIf(String::isNotEmpty) }
         }
     }
 
-    open class Dependencies {
-        var enabled: Boolean = true
-        var group: String? = null
-        var version: String? = null
-        var addAnnotations: Boolean = true
-        var addAndroidSdk: Boolean = true
+    open class RetainedHeapDump @Inject constructor(objects: ObjectFactory) {
+        val enabled: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val privacyApproved: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val minIntervalMs: Property<Long> = objects.property(Long::class.java).convention(10 * 60_000L)
+        val maxCount: Property<Int> = objects.property(Int::class.java).convention(1)
+        val minRetainedAgeMs: Property<Long> = objects.property(Long::class.java).convention(30_000L)
     }
 
-    open class RetainedHeapDump {
-        var enabled: Boolean = false
-        var privacyApproved: Boolean = false
-        var minIntervalMs: Long = 10 * 60_000L
-        var maxCount: Int = 1
-        var minRetainedAgeMs: Long = 30_000L
+    open class Runtime @Inject constructor(objects: ObjectFactory) {
+        val mainThreadStallThresholdMs: Property<Long> = objects.property(Long::class.java).convention(700L)
+        val ownerBlockThresholdMs: Property<Long> = objects.property(Long::class.java).convention(250L)
+        val httpSlowThresholdMs: Property<Long> = objects.property(Long::class.java).convention(1_000L)
+        val jankFrameThresholdMs: Property<Long> = objects.property(Long::class.java).convention(32L)
+        val uiWindowP95ThresholdMs: Property<Long> = objects.property(Long::class.java).convention(32L)
+        val mainLooperDispatchMonitor: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val jankStats: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val mainProcessOnly: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
     }
 
-    open class Runtime {
-        var mainThreadStallThresholdMs: Long = 700L
-        var ownerBlockThresholdMs: Long = 250L
-        var httpSlowThresholdMs: Long = 1_000L
-        var jankFrameThresholdMs: Long = 32L
-        var uiWindowP95ThresholdMs: Long = 32L
-        var mainLooperDispatchMonitor: Boolean = true
-        var jankStats: Boolean = true
-        var mainProcessOnly: Boolean = true
-    }
-
-    open class ReleaseSafety {
-        var allowInstrumentation: Boolean = false
-        var privacyReviewed: Boolean = false
-        var allowHeapDumps: Boolean = false
-        var allowSecondaryProcesses: Boolean = false
-        var performanceBudgetEvidence: String? = null
+    open class ReleaseSafety @Inject constructor(objects: ObjectFactory) {
+        val allowInstrumentation: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val privacyReviewed: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val allowHeapDumps: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val allowSecondaryProcesses: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val performanceBudgetEvidence: Property<String> = objects.property(String::class.java)
     }
 }

@@ -53,7 +53,7 @@ flowchart LR
     B --> D
     D --> G["AsyncLogWriter"]
     G --> H["BinaryLogWriter"]
-    H --> I["session-<process>-<timestamp>-<segment>.jhlog"]
+    H --> I["jh-session-log.YYYY-MM-DD.<index>.jhlog"]
     J["Config / manifest metadata"] --> C
     J --> G
 ```
@@ -62,25 +62,25 @@ High-frequency sources aggregate before enqueueing. UI frames become `ui_window`
 
 ## Event Format
 
-`.jhlog` is a compact pre-release binary format:
+`.jhlog v9` is a chunked, append-only pre-release binary format:
 
 ```text
-magic/version
-record*
+file header: magic/version + bounded identity payload + CRC32
+committed chunk*:
+  fixed header: codec/final flags, sequence, stored/raw sizes, record count, raw CRC32
+  independently raw or gzip-compressed payload
+  commit trailer mirroring sequence, sizes, and CRC32
 
 record:
-  header: byte
-    bits 0..3: event_type
-    bit 4: flags follow
-    bit 5: payload_len follows
-    bits 6..7: timestamp_delta_ms encoding
-  timestamp_delta_ms: 0 bytes, uint8, uint16le, or uvarint
-  flags: uvarint, only when the header bit is set
-  payload_len: uvarint, only for variable-length payloads
-  payload: event-specific uvarints and dictionary ids
+  length-delimited envelope
+  type + envelope flags
+  optional signed producer-time delta, producer thread, atomic attribution, attributes
+  event-specific SymbolRef/uvarint payload
 ```
 
-The timestamp stored on every event is a monotonic delta from the previous event. Hot paths therefore usually spend 1-3 bytes on time: one compact header byte plus zero, one, or two delta bytes. Fixed-schema events such as HTTP, UI windows, memory, retained objects, counters, gauges, and context samples omit payload length; variable and append-friendly events keep it. Context booleans such as low-memory, metered, validated, and VPN plus the session rooted-device signal are stored in the event flags bitmask instead of being duplicated as payload uvarints. Context battery temperature is stored as signed zigzag-varint because sub-zero Celsius values are valid data, not invalid counters.
+Producer time is captured before bounded-queue admission. Signed microsecond deltas permit events from different threads to reach the writer out of timestamp order. Time and `SAME_CONTEXT` state reset at every chunk boundary, and every record is length-delimited so a current reader can skip future record types safely. Context booleans such as low-memory, metered, validated, VPN, and the rooted-device signal stay in the event-attribute bitmask. Battery temperature uses signed zigzag-varint because sub-zero Celsius values are valid data.
+
+A chunk is readable only after its complete commit trailer, mirrored metadata, decompression, size, record count, and CRC checks succeed. Copying an active file is therefore safe: a partial next header, payload, or trailer is an `open_with_tail` snapshot, while invalid committed bytes remain corruption. A clean terminal chunk contains exactly the latest quality snapshot and `SEGMENT_END`.
 
 Metric payloads keep enough aggregation metadata for CLI-side merges:
 
@@ -96,7 +96,7 @@ Gauge `mode` prevents semantically different signals from being averaged togethe
 - `STATE` for enum/state gauges such as battery status, plugged, health, thermal status, process exit reason, and trim level;
 - `BOOLEAN_RATE` for boolean gauges where the report value is the percentage of `true` samples.
 
-The CLI merges Android-side metric windows by `sum/count` for `AVERAGE`, by latest value for `LAST`/`STATE`, and by true-count percentage for `BOOLEAN_RATE`. Negative custom gauges are rejected by the runtime and surfaced through `jankhunter.metric.invalid_negative.gauge.count`; signed values need a typed event or an explicitly signed context field.
+The CLI merges Android-side metric windows by `sum/count` for `AVERAGE`, by latest value for `LAST`/`STATE`, and by true-count percentage for `BOOLEAN_RATE`. Negative custom gauges are rejected by the runtime and surfaced through the cumulative `invalid_metric_total` quality counter; signed values need a typed event or an explicitly signed context field.
 
 String-heavy values are dictionary encoded:
 
@@ -106,17 +106,10 @@ String-heavy values are dictionary encoded:
 - class names;
 - stack hints;
 - metrics;
-- app version/build/device/process metadata;
-- static device snapshot values such as Android release, security patch, CPU ABI, hardware identifiers, and the rooted-device signal.
+- app version/build/device metadata;
+- static device snapshot values such as Android release, security patch, CPU ABI, and hardware identifiers.
 
-Dictionary values keep the log binary but still preserve text when it is needed for reports:
-
-- ordinary text is `length + UTF-8 bytes`;
-- special compact values use sentinel `length=0`, then `codec`, then a codec-specific payload;
-- `codec=1` stores decimal-only strings as digit count plus packed BCD bytes;
-- `codec=2` stores ISO dates in `YYYY-MM-DD` form as four fixed BCD bytes.
-
-The writer chooses BCD only when it is smaller than UTF-8, so class names, routes, owners, and stack hints remain plain UTF-8 dictionary values while numeric identifiers and dates can be tighter.
+Each dictionary definition carries `kind`, local id, encoding, byte length, and data. The Android writer currently emits bounded UTF-8 values (`encoding=0`). Event payloads reference them through typed `SymbolRef` values; stable build-time symbols use the namespace stored in the file header and are never collapsed into an ambiguous local id.
 
 Pre-release format policy:
 
@@ -129,7 +122,7 @@ Pre-release format policy:
 Android runtime components use a small number of clear ownership rules:
 
 - public API calls are cheap and enqueue events into a bounded queue;
-- `AsyncLogWriter` owns file IO, size-based segment rotation and cyclic retention on a background executor;
+- `AsyncLogWriter` owns one append-only file per collection session, size sealing, and cyclic retention on a background executor;
 - main-thread watchdog and `Choreographer` callbacks observe UI latency but write aggregates;
 - samplers run on background scheduling and avoid blocking the main thread;
 - `flush()` is best-effort and intended for QA/test boundaries;
@@ -150,16 +143,16 @@ Policy is evaluated before the writer starts:
 
 - `mainProcessOnly` permits only the package-name process;
 - `allowedProcesses` permits an explicit raw process list;
-- `processNameRedactor` changes persisted metadata and filenames but not policy matching.
+- `processNameRedactor` changes persisted header metadata but not policy matching; canonical filenames never contain process names.
 
-Each process writes a separate namespace:
+Filenames deliberately contain no process name:
 
 ```text
-session-main-<timestamp>-<segment>.jhlog
-session-remote-<timestamp>-<segment>.jhlog
+jh-session-log.2026-07-14.41.jhlog
+jh-session-log.2026-07-14.42.jhlog
 ```
 
-The CLI reports process breakdown and adds process-mix deltas during compare.
+The local date is fixed when collection starts; the decimal index is monotonic and never reused. Run, process, and session identity lives in the v9 header. The CLI reads that identity from file contents, reports the process breakdown, and adds process-mix deltas during compare.
 
 ## Attribution Model
 
@@ -223,9 +216,9 @@ Diagnostics records matched hooks plus disabled/unsupported/skipped decisions, w
 The JankStats bridge is reflection-only:
 
 - no AndroidX dependency in core;
-- manual install returns a handle;
-- `jankStatsEnabled` enables lifecycle auto-install when AndroidX JankStats is already present;
-- data is recorded as `jankstats.*` counters/gauges so reports do not double-count `ui_window` frames.
+- `jankStatsEnabled` enables lifecycle-owned auto-install when AndroidX JankStats is already present;
+- the bridge is internal and feeds the same `FpsMonitor` window aggregator as the fallback;
+- JankStats owns an active window while it is resumed; `Choreographer` resumes only when no tracked window is active, so frames and metrics cannot be duplicated.
 
 ## Retained-Object Model
 
@@ -287,8 +280,8 @@ Runtime overhead is controlled by:
 - slow-path gauges for wrapped work;
 - sampled/limited stack hints;
 - local file IO on a background thread;
-- log rotation by segment byte size;
-- cyclic log retention by per-process directory byte budget.
+- terminal sealing of the current session file at `maxSessionLogBytes`, without rollover or recovery into a continuation file;
+- cyclic retention of older sealed sessions by `maxSessionLogsBytes`, while the active file remains protected.
 
 Default guidance:
 

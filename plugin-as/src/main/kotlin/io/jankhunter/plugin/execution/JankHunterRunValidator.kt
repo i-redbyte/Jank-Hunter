@@ -22,16 +22,31 @@ object JankHunterRunValidator {
 
         validateCli(command.executable, errors)
         validateModeInputs(project, request, errors, warnings)
-        validateArtifact(project, "owner-map", request.ownerMap, errors)
-        validateArtifact(project, "mapping", request.mapping, errors)
-        validateArtifact(project, "class-graph", request.classGraph, errors)
-        validateArtifact(project, "instrumentation-diagnostics", request.diagnostics, errors)
-        validateArtifact(project, "heap-dump", request.heapDump, errors)
-        validateArtifact(project, "heap-evidence", request.heapEvidence, errors)
-        validateArtifact(project, "baseline-heap-dump", request.baselineHeapDump, errors)
-        validateArtifact(project, "baseline-heap-evidence", request.baselineHeapEvidence, errors)
-        validateArtifact(project, "candidate-heap-dump", request.candidateHeapDump, errors)
-        validateArtifact(project, "candidate-heap-evidence", request.candidateHeapEvidence, errors)
+        if (request.mode in analysisModes) {
+            validateArtifact(project, "owner-map", request.ownerMap, errors)
+            validateArtifact(project, "mapping", request.mapping, errors)
+            validateArtifact(project, "class-graph", request.classGraph, errors)
+            validateArtifact(project, "instrumentation-diagnostics", request.diagnostics, errors)
+            validateArtifact(project, "di-catalog", request.diCatalog, errors)
+        }
+        when (request.mode) {
+            JankHunterMode.INSPECT,
+            JankHunterMode.PROBLEMS -> {
+                validateArtifact(project, "heap-dump", request.heapDump, errors)
+                validateArtifact(project, "heap-evidence", request.heapEvidence, errors)
+            }
+
+            JankHunterMode.COMPARE,
+            JankHunterMode.SCORECARD -> {
+                validateArtifact(project, "baseline-heap-dump", request.baselineHeapDump, errors)
+                validateArtifact(project, "baseline-heap-evidence", request.baselineHeapEvidence, errors)
+                validateArtifact(project, "candidate-heap-dump", request.candidateHeapDump, errors)
+                validateArtifact(project, "candidate-heap-evidence", request.candidateHeapEvidence, errors)
+            }
+
+            JankHunterMode.SAMPLE,
+            JankHunterMode.VERSION -> Unit
+        }
         validateOutput(command.outputPath, errors)
 
         return JankHunterValidationResult(errors, warnings)
@@ -147,4 +162,11 @@ object JankHunterRunValidator {
             errors += "Файл результата существует, но недоступен для записи: $outputPath"
         }
     }
+
+    private val analysisModes = setOf(
+        JankHunterMode.INSPECT,
+        JankHunterMode.COMPARE,
+        JankHunterMode.PROBLEMS,
+        JankHunterMode.SCORECARD,
+    )
 }

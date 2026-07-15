@@ -6,61 +6,121 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeCallGraphTest {
     @Test
-    fun nonLifoExitDoesNotRecordFalseEdge() {
-        val now = AtomicLong(1L)
-        val graph = RuntimeCallGraph(
-            nowMs = { now.getAndIncrement() },
-            captureContext = { ownerOverride ->
-                JankHunterContext(
-                    screen = "screen",
-                    owner = ownerOverride,
-                    flow = "flow",
-                    step = "step",
-                )
-            },
-            maxKeys = { 8 },
-        )
-        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph").toFile()
-        val writer = AsyncLogWriter.open(
-            directory,
-            JankHunterConfig.builder()
-                .autoStartCollectors(false)
-                .build(),
-            "main",
-        )
+    fun exitPopsPrimitiveStackWithoutWriter() {
+        val graph = graph()
+        val parent = graph.enter(0L, enabled = true)
+        val child = graph.enter(-1L, enabled = true)
+
+        graph.exit(child, -1L, writer = null)
+        assertEquals(1, graph.currentThreadDepthForTest())
+
+        graph.exit(parent, 0L, writer = null)
+        assertEquals(0, graph.currentThreadDepthForTest())
+    }
+
+    @Test
+    fun epochInvalidatesStaleTokenAndStack() {
+        val graph = graph()
+        val stale = graph.enter(42L, enabled = true)
+
+        graph.resetFlushState()
+        graph.exit(stale, 42L, writer = null)
+
+        assertEquals(0, graph.currentThreadDepthForTest())
+        assertNotEquals(stale, graph.enter(42L, enabled = true))
+    }
+
+    @Test
+    fun zeroAndNegativeStableIdsAreAdmitted() = withWriter { writer ->
+        val graph = graph()
+        val parent = graph.enter(0L, enabled = true)
+        val child = graph.enter(Long.MIN_VALUE, enabled = true)
+
+        graph.exit(child, Long.MIN_VALUE, writer)
+        graph.exit(parent, 0L, writer)
+
+        assertEquals(1, graph.entryCountForTest())
+    }
+
+    @Test
+    fun nonLifoExitDoesNotRecordFalseEdge() = withWriter { writer ->
+        val graph = graph()
+        val parent = graph.enter(1L, enabled = true)
+        graph.enter(2L, enabled = true)
+
+        graph.exit(parent, 1L, writer)
+
+        assertEquals(0, graph.entryCountForTest())
+        assertEquals(0, graph.currentThreadDepthForTest())
+    }
+
+    @Test
+    fun maxKeysIsPreservedUnderConcurrentUniqueEdges() = withWriter { writer ->
+        val graph = graph(maxKeys = 4)
+        val pool = Executors.newFixedThreadPool(8)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(64)
         try {
-            val parent = graph.enter("parent", enabled = true)
-            graph.enter("child", enabled = true)
+            repeat(64) { index ->
+                pool.execute {
+                    start.await()
+                    try {
+                        val parent = graph.enter(1L, enabled = true)
+                        val child = graph.enter(index.toLong() + 2L, enabled = true)
+                        graph.exit(child, index.toLong() + 2L, writer)
+                        graph.exit(parent, 1L, writer)
+                    } finally {
+                        done.countDown()
+                    }
+                }
+            }
 
-            graph.exit(parent, "parent", writer)
-
-            assertTrue("non-LIFO exit recorded an edge", counterSize(graph) == 0)
+            start.countDown()
+            assertTrue(done.await(2, TimeUnit.SECONDS))
+            assertTrue("entry count exceeded cap: ${graph.entryCountForTest()}", graph.entryCountForTest() <= 4)
         } finally {
-            writer.close()
-            directory.deleteRecursively()
+            pool.shutdownNow()
         }
     }
 
     @Test
-    fun maxKeysIsPreservedUnderConcurrentUniqueEdges() {
+    fun oneFlushPassRemovesAtMostOneBoundedBatch() = withWriter { writer ->
+        val graph = graph(maxKeys = 512)
+        repeat(300) { index ->
+            val parentId = index.toLong() * 2L
+            val childId = parentId + 1L
+            val parent = graph.enter(parentId, enabled = true)
+            val child = graph.enter(childId, enabled = true)
+            graph.exit(child, childId, writer)
+            graph.exit(parent, parentId, writer)
+        }
+        val before = graph.entryCountForTest()
+
+        graph.flush(force = true, writer)
+
+        val removed = before - graph.entryCountForTest()
+        assertTrue("flush was not bounded: removed=$removed", removed in 1..128)
+    }
+
+    private fun graph(maxKeys: Int = 32): RuntimeCallGraph {
         val now = AtomicLong(1L)
-        val graph = RuntimeCallGraph(
+        return RuntimeCallGraph(
             nowMs = { now.getAndIncrement() },
-            captureContext = { ownerOverride ->
-                JankHunterContext(
-                    screen = "screen",
-                    owner = ownerOverride,
-                    flow = "flow",
-                    step = "step",
-                )
+            captureContext = {
+                JankHunterContext(screen = "screen", owner = null, flow = "flow", step = "step")
             },
-            maxKeys = { 4 },
+            maxKeys = { maxKeys },
         )
+    }
+
+    private fun withWriter(block: (AsyncLogWriter) -> Unit) {
         val directory = Files.createTempDirectory("jankhunter-runtime-call-graph").toFile()
         val writer = AsyncLogWriter.open(
             directory,
@@ -70,39 +130,11 @@ class RuntimeCallGraphTest {
                 .build(),
             "main",
         )
-        val pool = Executors.newFixedThreadPool(8)
-        val start = CountDownLatch(1)
-        val done = CountDownLatch(64)
         try {
-            repeat(64) { index ->
-                pool.execute {
-                    start.await()
-                    try {
-                        val parent = graph.enter("caller", enabled = true)
-                        val child = graph.enter("callee-$index", enabled = true)
-                        graph.exit(child, "callee-$index", writer)
-                        graph.exit(parent, "caller", writer)
-                    } finally {
-                        done.countDown()
-                    }
-                }
-            }
-
-            start.countDown()
-            assertTrue(done.await(2, TimeUnit.SECONDS))
-            assertTrue("counter size exceeded cap: ${counterSize(graph)}", counterSize(graph) <= 4)
+            block(writer)
         } finally {
-            pool.shutdownNow()
             writer.close()
             directory.deleteRecursively()
         }
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun counterSize(graph: RuntimeCallGraph): Int {
-        val field = RuntimeCallGraph::class.java.getDeclaredField("counters").apply {
-            isAccessible = true
-        }
-        return (field.get(graph) as Map<Any, Any>).size
     }
 }

@@ -13,34 +13,41 @@ import (
 )
 
 const (
-	hprofTagString            = 0x01
-	hprofTagLoadClass         = 0x02
-	hprofTagHeapDump          = 0x0c
-	hprofTagHeapDumpSeg       = 0x1c
-	hprofSubClassDump         = 0x20
-	hprofSubInstanceDump      = 0x21
-	hprofSubObjectArray       = 0x22
-	hprofSubPrimitiveArr      = 0x23
-	hprofSubHeapDumpInfo      = 0xfe
-	hprofTypeObject           = 2
-	hprofTypeBoolean          = 4
-	hprofTypeChar             = 5
-	hprofTypeFloat            = 6
-	hprofTypeDouble           = 7
-	hprofTypeByte             = 8
-	hprofTypeShort            = 9
-	hprofTypeInt              = 10
-	hprofTypeLong             = 11
-	maxHprofObjects           = 250_000
-	maxHprofEdges             = 1_500_000
-	maxHprofTargets           = 2_000
-	maxHprofPathElements      = 48
-	maxRetainedTreeSample     = 8
-	maxHprofExactTargets      = 512
-	maxHprofEvidenceTargets   = 4_096
-	maxHprofRetainedVisits    = 5_000_000
-	maxHprofAlternativePaths  = 3
-	maxHprofAlternativeStates = 6_000
+	hprofTagString             = 0x01
+	hprofTagLoadClass          = 0x02
+	hprofTagHeapDump           = 0x0c
+	hprofTagHeapDumpSeg        = 0x1c
+	hprofSubClassDump          = 0x20
+	hprofSubInstanceDump       = 0x21
+	hprofSubObjectArray        = 0x22
+	hprofSubPrimitiveArr       = 0x23
+	hprofSubPrimitiveArrNoData = 0xc3
+	hprofSubHeapDumpInfo       = 0xfe
+	hprofTypeObject            = 2
+	hprofTypeBoolean           = 4
+	hprofTypeChar              = 5
+	hprofTypeFloat             = 6
+	hprofTypeDouble            = 7
+	hprofTypeByte              = 8
+	hprofTypeShort             = 9
+	hprofTypeInt               = 10
+	hprofTypeLong              = 11
+	maxHprofStrings            = 500_000
+	maxHprofStringBytes        = 64 << 20
+	maxHprofStringRecordBytes  = 1 << 20
+	maxHprofClasses            = 100_000
+	maxHprofClassFields        = 1_500_000
+	maxHprofRoots              = 500_000
+	maxHprofObjects            = 250_000
+	maxHprofEdges              = 1_500_000
+	maxHprofTargets            = 2_000
+	maxHprofPathElements       = 48
+	maxRetainedTreeSample      = 8
+	maxHprofExactTargets       = 512
+	maxHprofEvidenceTargets    = 4_096
+	maxHprofRetainedVisits     = 5_000_000
+	maxHprofAlternativePaths   = 3
+	maxHprofAlternativeStates  = 6_000
 )
 
 func LoadHeapEvidenceFiles(paths []string, targetClasses []string) (*HeapEvidence, error) {
@@ -178,7 +185,7 @@ func normalizeHeapLeak(leak *HeapLeakEvidence) {
 		heapChainFingerprint(leak.ClassName, leak.Holder, leak.HolderField, leak.GCRootCategory, leak.ReferencePath),
 	)
 	if leak.RetainedSizeKB == 0 && leak.RetainedSizeBytes > 0 {
-		leak.RetainedSizeKB = (leak.RetainedSizeBytes + 1023) / 1024
+		leak.RetainedSizeKB = bytesToKB(leak.RetainedSizeBytes)
 	}
 	if leak.RetainedObjectCount == 0 && leak.RetainedSizeKB > 0 {
 		leak.RetainedObjectCount = 1
@@ -213,16 +220,44 @@ func targetClassSet(targetClasses []string) map[string]struct{} {
 }
 
 type hprofParser struct {
-	path       string
-	idSize     int
-	strings    map[uint64]string
-	classNames map[uint64]string
-	classes    map[uint64]*hprofClass
-	nodes      map[uint64]*heapNode
-	roots      []heapRoot
-	targets    map[string]struct{}
-	edgeCount  int
-	truncated  bool
+	path                string
+	idSize              int
+	strings             map[uint64]string
+	classNames          map[uint64]string
+	classes             map[uint64]*hprofClass
+	nodes               map[uint64]*heapNode
+	roots               []heapRoot
+	targets             map[string]struct{}
+	edgeCount           int
+	stringBytes         uint64
+	classFieldCount     int
+	limits              hprofLimits
+	degradationWarnings []string
+	degradationKeys     map[string]struct{}
+}
+
+type hprofLimits struct {
+	strings           int
+	stringBytes       uint64
+	stringRecordBytes uint64
+	classes           int
+	classFields       int
+	roots             int
+	nodes             int
+	edges             int
+}
+
+func defaultHprofLimits() hprofLimits {
+	return hprofLimits{
+		strings:           maxHprofStrings,
+		stringBytes:       maxHprofStringBytes,
+		stringRecordBytes: maxHprofStringRecordBytes,
+		classes:           maxHprofClasses,
+		classFields:       maxHprofClassFields,
+		roots:             maxHprofRoots,
+		nodes:             maxHprofObjects,
+		edges:             maxHprofEdges,
+	}
 }
 
 type hprofClass struct {
@@ -231,7 +266,6 @@ type hprofClass struct {
 	superID      uint64
 	instanceSize uint64
 	fields       []hprofField
-	staticEdges  []heapEdge
 }
 
 type hprofField struct {
@@ -270,18 +304,21 @@ type heapReverseStep struct {
 }
 
 type hprofReader struct {
-	r    io.Reader
-	read uint64
+	r     io.Reader
+	read  uint64
+	limit uint64
 }
 
 func newHprofParser(path string, targets map[string]struct{}) *hprofParser {
 	return &hprofParser{
-		path:       path,
-		strings:    map[uint64]string{},
-		classNames: map[uint64]string{},
-		classes:    map[uint64]*hprofClass{},
-		nodes:      map[uint64]*heapNode{},
-		targets:    targets,
+		path:            path,
+		strings:         map[uint64]string{},
+		classNames:      map[uint64]string{},
+		classes:         map[uint64]*hprofClass{},
+		nodes:           map[uint64]*heapNode{},
+		targets:         targets,
+		limits:          defaultHprofLimits(),
+		degradationKeys: map[string]struct{}{},
 	}
 }
 
@@ -304,32 +341,32 @@ func (p *hprofParser) parse() error {
 		if err != nil {
 			return fmt.Errorf("read HPROF record: %w", err)
 		}
-		limited := &hprofReader{r: io.LimitReader(reader, int64(length))}
+		recordLength, err := checkedInt64(uint64(length), "HPROF record length")
+		if err != nil {
+			return err
+		}
+		limited := &hprofReader{
+			r:     io.LimitReader(reader, recordLength),
+			limit: uint64(length),
+		}
 		switch tag {
 		case hprofTagString:
 			if err := p.parseStringRecord(limited, length); err != nil {
-				return err
+				return fmt.Errorf("parse HPROF string record in %s: %w", p.path, err)
 			}
 		case hprofTagLoadClass:
 			if err := p.parseLoadClassRecord(limited); err != nil {
-				return err
+				return fmt.Errorf("parse HPROF class mapping in %s: %w", p.path, err)
 			}
 		case hprofTagHeapDump, hprofTagHeapDumpSeg:
 			if err := p.parseHeapDump(limited, length); err != nil {
-				return err
-			}
-		default:
-			if _, err := io.Copy(io.Discard, limited); err != nil {
-				return err
+				return fmt.Errorf("parse HPROF heap record in %s: %w", p.path, err)
 			}
 		}
-		if limited.read < uint64(length) {
-			if _, err := io.CopyN(io.Discard, reader, int64(uint64(length)-limited.read)); err != nil {
-				return err
-			}
+		if err := limited.skip(limited.remaining()); err != nil {
+			return fmt.Errorf("consume HPROF record 0x%02x in %s: %w", tag, p.path, err)
 		}
 	}
-	p.materializeClassStaticEdges()
 	return nil
 }
 
@@ -355,7 +392,10 @@ func (p *hprofParser) readHeader(reader *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("read HPROF id size: %w", err)
 	}
-	p.idSize = int(idSizeRaw)
+	p.idSize, err = checkedInt(uint64(idSizeRaw), "HPROF id size")
+	if err != nil {
+		return err
+	}
 	if p.idSize <= 0 || p.idSize > 8 {
 		return fmt.Errorf("unsupported HPROF id size %d", p.idSize)
 	}
@@ -381,18 +421,56 @@ func readHprofRecordHeader(reader *bufio.Reader) (byte, uint32, error) {
 }
 
 func (p *hprofParser) parseStringRecord(reader *hprofReader, length uint32) error {
-	if uint32(p.idSize) > length {
+	idSize := uint64(p.idSize)
+	if idSize > uint64(length) {
 		return fmt.Errorf("invalid HPROF string record length %d", length)
 	}
 	id, err := reader.readID(p.idSize)
 	if err != nil {
 		return err
 	}
-	data := make([]byte, int(length)-p.idSize)
-	if _, err := io.ReadFull(reader, data); err != nil {
+	dataLength := uint64(length) - idSize
+	if err := reader.require(dataLength); err != nil {
+		return fmt.Errorf("invalid HPROF string payload: %w", err)
+	}
+	_, exists := p.strings[id]
+	if !exists && len(p.strings) >= p.limits.strings {
+		p.degrade("strings", fmt.Sprintf(
+			"Достигнут лимит строк HPROF (%d): последующие строки прочитаны, но не сохранены.",
+			p.limits.strings,
+		))
+		return reader.skip(dataLength)
+	}
+	if dataLength > p.limits.stringRecordBytes {
+		p.degrade("string-record-bytes", fmt.Sprintf(
+			"Строка HPROF превышает безопасный лимит одной записи (%d байт): значение прочитано, но не сохранено.",
+			p.limits.stringRecordBytes,
+		))
+		return reader.skip(dataLength)
+	}
+	previousSize := uint64(len(p.strings[id]))
+	totalWithoutPrevious := p.stringBytes
+	if previousSize <= totalWithoutPrevious {
+		totalWithoutPrevious -= previousSize
+	}
+	totalStringBytes, err := checkedAddUint64(totalWithoutPrevious, dataLength, "HPROF string storage")
+	if err != nil || totalStringBytes > p.limits.stringBytes {
+		p.degrade("string-bytes", fmt.Sprintf(
+			"Достигнут общий лимит памяти строк HPROF (%d байт): последующие значения прочитаны, но не сохранены.",
+			p.limits.stringBytes,
+		))
+		return reader.skip(dataLength)
+	}
+	dataSize, err := checkedInt(dataLength, "HPROF string payload length")
+	if err != nil {
 		return err
 	}
+	data := make([]byte, dataSize)
+	if _, err := io.ReadFull(reader, data); err != nil {
+		return fmt.Errorf("read HPROF string payload: %w", err)
+	}
 	p.strings[id] = strings.ReplaceAll(string(data), "/", ".")
+	p.stringBytes = totalStringBytes
 	return nil
 }
 
@@ -412,6 +490,10 @@ func (p *hprofParser) parseLoadClassRecord(reader *hprofReader) error {
 		return err
 	}
 	if name := p.strings[nameID]; name != "" {
+		if _, exists := p.classNames[classID]; !exists && len(p.classNames) >= p.limits.classes {
+			p.degradeClassLimit()
+			return nil
+		}
 		p.classNames[classID] = name
 	}
 	return nil
@@ -438,7 +520,11 @@ func (p *hprofParser) parseHeapDump(reader *hprofReader, length uint32) error {
 			}
 		case hprofSubPrimitiveArr:
 			if err := p.parsePrimitiveArrayDump(reader); err != nil {
-				return err
+				return fmt.Errorf("primitive array subrecord 0x%02x at offset %d: %w", subtag, reader.read, err)
+			}
+		case hprofSubPrimitiveArrNoData:
+			if err := p.parsePrimitiveArrayNoDataDump(reader); err != nil {
+				return fmt.Errorf("primitive array subrecord 0x%02x at offset %d: %w", subtag, reader.read, err)
 			}
 		case hprofSubHeapDumpInfo:
 			if _, err := reader.readU4(); err != nil {
@@ -448,7 +534,11 @@ func (p *hprofParser) parseHeapDump(reader *hprofReader, length uint32) error {
 				return err
 			}
 		default:
-			if p.parseRoot(subtag, reader) {
+			handled, err := p.parseRoot(subtag, reader)
+			if err != nil {
+				return fmt.Errorf("root subrecord 0x%02x at offset %d: %w", subtag, reader.read, err)
+			}
+			if handled {
 				continue
 			}
 			return fmt.Errorf("unsupported HPROF heap subrecord 0x%02x in %s", subtag, p.path)
@@ -457,14 +547,13 @@ func (p *hprofParser) parseHeapDump(reader *hprofReader, length uint32) error {
 	return nil
 }
 
-func (p *hprofParser) parseRoot(subtag byte, reader *hprofReader) bool {
-	kind := hprofRootKind(subtag)
-	if kind == "" {
-		return false
+func (p *hprofParser) parseRoot(subtag byte, reader *hprofReader) (bool, error) {
+	if !isHprofRootSubtag(subtag) {
+		return false, nil
 	}
 	id, err := reader.readID(p.idSize)
 	if err != nil {
-		return false
+		return true, err
 	}
 	switch subtag {
 	case 0x01:
@@ -481,14 +570,37 @@ func (p *hprofParser) parseRoot(subtag byte, reader *hprofReader) bool {
 		if err == nil {
 			_, err = reader.readU4()
 		}
+	case 0x8e:
+		_, err = reader.readU4()
+		if err == nil {
+			_, err = reader.readU4()
+		}
 	}
 	if err != nil {
+		return true, err
+	}
+	if subtag == 0x90 || id == 0 {
+		return true, nil
+	}
+	if len(p.roots) >= p.limits.roots {
+		p.degrade("roots", fmt.Sprintf(
+			"Достигнут лимит корней GC в HPROF (%d): последующие корни прочитаны, но не сохранены.",
+			p.limits.roots,
+		))
+		return true, nil
+	}
+	p.roots = append(p.roots, heapRoot{id: id, kind: hprofRootKind(subtag)})
+	return true, nil
+}
+
+func isHprofRootSubtag(subtag byte) bool {
+	switch subtag {
+	case 0xff, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x90:
+		return true
+	default:
 		return false
 	}
-	if id != 0 {
-		p.roots = append(p.roots, heapRoot{id: id, kind: kind})
-	}
-	return true
 }
 
 func hprofRootKind(subtag byte) string {
@@ -513,15 +625,15 @@ func hprofRootKind(subtag byte) string {
 		return "thread object"
 	case 0x89:
 		return "interned string"
-	case 0x8b:
-		return "finalizing"
-	case 0x8d:
-		return "debugger"
-	case 0x8e:
-		return "reference cleanup"
-	case 0x90:
-		return "VM internal"
 	case 0x8a:
+		return "finalizing"
+	case 0x8b:
+		return "debugger"
+	case 0x8c:
+		return "reference cleanup"
+	case 0x8d:
+		return "VM internal"
+	case 0x8e:
 		return "JNI monitor"
 	default:
 		return ""
@@ -561,17 +673,29 @@ func (p *hprofParser) parseClassDump(reader *hprofReader) error {
 		if err != nil {
 			return err
 		}
-		if err := reader.skip(p.valueSize(typ)); err != nil {
+		valueSize, err := p.valueSize(typ)
+		if err != nil {
+			return fmt.Errorf("invalid constant pool value type: %w", err)
+		}
+		if err := reader.skip(valueSize); err != nil {
 			return err
 		}
 	}
 	name := p.className(classID)
-	class := &hprofClass{
-		id:           classID,
-		name:         name,
-		superID:      superID,
-		instanceSize: uint64(instanceSize),
+	_, classExists := p.classes[classID]
+	storeClass := classExists || len(p.classes) < p.limits.classes
+	var class *hprofClass
+	if storeClass {
+		class = &hprofClass{
+			id:           classID,
+			name:         name,
+			superID:      superID,
+			instanceSize: uint64(instanceSize),
+		}
+	} else {
+		p.degradeClassLimit()
 	}
+	classNode := p.ensureNode(classID, name, uint64(p.idSize)*2)
 	staticCount, err := reader.readU2()
 	if err != nil {
 		return err
@@ -592,15 +716,15 @@ func (p *hprofParser) parseClassDump(reader *hprofReader) error {
 				return err
 			}
 			if value != 0 {
-				class.staticEdges = append(class.staticEdges, heapEdge{
-					to:    value,
-					label: "static " + emptyFieldName(fieldName),
-					kind:  "static",
-				})
+				p.addEdge(classNode, value, "static "+emptyFieldName(fieldName), "static")
 			}
 			continue
 		}
-		if err := reader.skip(p.valueSize(typ)); err != nil {
+		valueSize, err := p.valueSize(typ)
+		if err != nil {
+			return fmt.Errorf("invalid static field value type: %w", err)
+		}
+		if err := reader.skip(valueSize); err != nil {
 			return err
 		}
 	}
@@ -617,14 +741,28 @@ func (p *hprofParser) parseClassDump(reader *hprofReader) error {
 		if err != nil {
 			return err
 		}
-		class.fields = append(class.fields, hprofField{
-			name:  emptyFieldName(p.strings[nameID]),
-			typ:   typ,
-			owner: name,
-		})
+		if _, err := p.valueSize(typ); err != nil {
+			return fmt.Errorf("invalid instance field value type: %w", err)
+		}
+		if storeClass {
+			if p.classFieldCount < p.limits.classFields {
+				class.fields = append(class.fields, hprofField{
+					name:  emptyFieldName(p.strings[nameID]),
+					typ:   typ,
+					owner: name,
+				})
+				p.classFieldCount++
+			} else {
+				p.degrade("class-fields", fmt.Sprintf(
+					"Достигнут лимит полей классов HPROF (%d): последующие поля прочитаны, но не сохранены.",
+					p.limits.classFields,
+				))
+			}
+		}
 	}
-	p.classes[classID] = class
-	p.ensureNode(classID, class.name, uint64(p.idSize)*2)
+	if storeClass {
+		p.classes[classID] = class
+	}
 	return nil
 }
 
@@ -644,29 +782,47 @@ func (p *hprofParser) parseInstanceDump(reader *hprofReader) error {
 	if err != nil {
 		return err
 	}
-	node := p.ensureNode(objectID, p.className(classID), p.instanceShallowSize(classID, dataLength))
+	if err := reader.require(uint64(dataLength)); err != nil {
+		return fmt.Errorf("invalid instance payload length %d: %w", dataLength, err)
+	}
+	className := p.className(classID)
+	node := p.ensureNode(objectID, className, p.instanceShallowSize(classID, dataLength))
 	fields := p.instanceFields(classID)
-	consumed := uint32(0)
+	consumed := uint64(0)
 	for _, field := range fields {
-		size := uint32(p.valueSize(field.typ))
-		if consumed+size > dataLength {
-			break
+		size, err := p.valueSize(field.typ)
+		if err != nil {
+			return fmt.Errorf("invalid field %s.%s: %w", field.owner, field.name, err)
+		}
+		next, err := checkedAddUint64(consumed, size, "HPROF instance field payload")
+		if err != nil {
+			return err
+		}
+		if next > uint64(dataLength) {
+			return fmt.Errorf(
+				"invalid HPROF instance payload for object 0x%x: field %s.%s requires %d bytes, only %d remain",
+				objectID,
+				field.owner,
+				field.name,
+				size,
+				uint64(dataLength)-consumed,
+			)
 		}
 		if field.typ == hprofTypeObject {
 			target, err := reader.readID(p.idSize)
 			if err != nil {
 				return err
 			}
-			if target != 0 && !ignoredReferenceField(node.className, field.owner, field.name) {
+			if target != 0 && !ignoredReferenceField(className, field.owner, field.name) {
 				p.addEdge(node, target, field.name, "field")
 			}
-		} else if err := reader.skip(int(size)); err != nil {
+		} else if err := reader.skip(size); err != nil {
 			return err
 		}
-		consumed += size
+		consumed = next
 	}
-	if consumed < dataLength {
-		if err := reader.skip(int(dataLength - consumed)); err != nil {
+	if consumed < uint64(dataLength) {
+		if err := reader.skip(uint64(dataLength) - consumed); err != nil {
 			return err
 		}
 	}
@@ -689,20 +845,54 @@ func (p *hprofParser) parseObjectArrayDump(reader *hprofReader) error {
 	if err != nil {
 		return err
 	}
-	node := p.ensureNode(arrayID, p.arrayClassName(classID), uint64(p.idSize)*uint64(length)+16)
-	for i := 0; i < int(length); i++ {
+	payloadSize, err := checkedMulUint64(uint64(length), uint64(p.idSize), "HPROF object array payload")
+	if err != nil {
+		return err
+	}
+	if err := reader.require(payloadSize); err != nil {
+		return fmt.Errorf("invalid object array length %d: %w", length, err)
+	}
+	shallowSize, err := checkedAddUint64(payloadSize, 16, "HPROF object array shallow size")
+	if err != nil {
+		return err
+	}
+	node := p.ensureNode(arrayID, p.arrayClassName(classID), shallowSize)
+	if node == nil || p.hasDegradation("edges") {
+		return reader.skip(payloadSize)
+	}
+	if length > 0 && p.edgeCount >= p.limits.edges {
+		p.degradeEdgeLimit()
+		return reader.skip(payloadSize)
+	}
+	for i := uint64(0); i < uint64(length); i++ {
 		target, err := reader.readID(p.idSize)
 		if err != nil {
 			return err
 		}
 		if target != 0 {
 			p.addEdge(node, target, fmt.Sprintf("[%d]", i), "array")
+			if p.hasDegradation("edges") {
+				remainingElements := uint64(length) - i - 1
+				remainingBytes, err := checkedMulUint64(remainingElements, uint64(p.idSize), "remaining HPROF object array payload")
+				if err != nil {
+					return err
+				}
+				return reader.skip(remainingBytes)
+			}
 		}
 	}
 	return nil
 }
 
 func (p *hprofParser) parsePrimitiveArrayDump(reader *hprofReader) error {
+	return p.parsePrimitiveArray(reader, true)
+}
+
+func (p *hprofParser) parsePrimitiveArrayNoDataDump(reader *hprofReader) error {
+	return p.parsePrimitiveArray(reader, false)
+}
+
+func (p *hprofParser) parsePrimitiveArray(reader *hprofReader, hasData bool) error {
 	arrayID, err := reader.readID(p.idSize)
 	if err != nil {
 		return err
@@ -718,21 +908,34 @@ func (p *hprofParser) parsePrimitiveArrayDump(reader *hprofReader) error {
 	if err != nil {
 		return err
 	}
-	size := uint64(p.valueSize(typ))*uint64(length) + 16
-	p.ensureNode(arrayID, primitiveArrayName(typ), size)
-	return reader.skip(int(uint64(p.valueSize(typ)) * uint64(length)))
-}
-
-func (p *hprofParser) materializeClassStaticEdges() {
-	for _, class := range p.classes {
-		node := p.ensureNode(class.id, class.name, uint64(p.idSize)*2)
-		for _, edge := range class.staticEdges {
-			p.addEdge(node, edge.to, edge.label, edge.kind)
+	elementSize, err := p.primitiveValueSize(typ)
+	if err != nil {
+		return err
+	}
+	payloadSize, err := checkedMulUint64(uint64(length), elementSize, "HPROF primitive array payload")
+	if err != nil {
+		return err
+	}
+	shallowSize, err := checkedAddUint64(payloadSize, 16, "HPROF primitive array shallow size")
+	if err != nil {
+		return err
+	}
+	if hasData {
+		if err := reader.require(payloadSize); err != nil {
+			return fmt.Errorf("invalid primitive array length %d for type 0x%02x: %w", length, typ, err)
 		}
 	}
+	p.ensureNode(arrayID, primitiveArrayName(typ), shallowSize)
+	if !hasData {
+		return nil
+	}
+	return reader.skip(payloadSize)
 }
 
 func (p *hprofParser) ensureNode(id uint64, className string, shallowSize uint64) *heapNode {
+	if id == 0 {
+		return nil
+	}
 	if node := p.nodes[id]; node != nil {
 		if node.className == "" || strings.HasPrefix(node.className, "unknown") {
 			node.className = className
@@ -742,9 +945,12 @@ func (p *hprofParser) ensureNode(id uint64, className string, shallowSize uint64
 		}
 		return node
 	}
-	if len(p.nodes) >= maxHprofObjects {
-		p.truncated = true
-		return &heapNode{id: id, className: className, shallowSize: shallowSize}
+	if len(p.nodes) >= p.limits.nodes {
+		p.degrade("nodes", fmt.Sprintf(
+			"Достигнут лимит объектов HPROF (%d): последующие объекты прочитаны, но не добавлены в runtime-граф.",
+			p.limits.nodes,
+		))
+		return nil
 	}
 	node := &heapNode{id: id, className: className, shallowSize: shallowSize}
 	p.nodes[id] = node
@@ -752,11 +958,11 @@ func (p *hprofParser) ensureNode(id uint64, className string, shallowSize uint64
 }
 
 func (p *hprofParser) addEdge(node *heapNode, to uint64, label, kind string) {
-	if node == nil || p.truncated || node.id == 0 || to == 0 {
+	if node == nil || node.id == 0 || to == 0 {
 		return
 	}
-	if p.edgeCount >= maxHprofEdges {
-		p.truncated = true
+	if p.edgeCount >= p.limits.edges {
+		p.degradeEdgeLimit()
 		return
 	}
 	node.edges = append(node.edges, heapEdge{to: to, label: label, kind: kind})
@@ -809,28 +1015,93 @@ func (p *hprofParser) instanceFields(classID uint64) []hprofField {
 	return out
 }
 
-func (p *hprofParser) valueSize(typ byte) int {
+func (p *hprofParser) valueSize(typ byte) (uint64, error) {
 	switch typ {
 	case hprofTypeObject:
-		return p.idSize
+		return uint64(p.idSize), nil
 	case hprofTypeBoolean, hprofTypeByte:
-		return 1
+		return 1, nil
 	case hprofTypeChar, hprofTypeShort:
-		return 2
+		return 2, nil
 	case hprofTypeFloat, hprofTypeInt:
-		return 4
+		return 4, nil
 	case hprofTypeDouble, hprofTypeLong:
-		return 8
+		return 8, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("unsupported HPROF value type 0x%02x", typ)
 	}
+}
+
+func (p *hprofParser) primitiveValueSize(typ byte) (uint64, error) {
+	if typ == hprofTypeObject {
+		return 0, fmt.Errorf("object type is invalid for an HPROF primitive array")
+	}
+	return p.valueSize(typ)
+}
+
+func (p *hprofParser) degradeClassLimit() {
+	p.degrade("classes", fmt.Sprintf(
+		"Достигнут лимит классов HPROF (%d): последующие описания классов и сопоставления имен прочитаны, но не сохранены.",
+		p.limits.classes,
+	))
+}
+
+func (p *hprofParser) degradeEdgeLimit() {
+	p.degrade("edges", fmt.Sprintf(
+		"Достигнут лимит ссылок HPROF (%d): последующие ссылки прочитаны, но не добавлены в runtime-граф.",
+		p.limits.edges,
+	))
+}
+
+func (p *hprofParser) degrade(key, warning string) {
+	if p.degradationKeys == nil {
+		p.degradationKeys = map[string]struct{}{}
+	}
+	if _, exists := p.degradationKeys[key]; exists {
+		return
+	}
+	p.degradationKeys[key] = struct{}{}
+	p.degradationWarnings = append(p.degradationWarnings, warning)
+}
+
+func (p *hprofParser) hasDegradation(key string) bool {
+	_, exists := p.degradationKeys[key]
+	return exists
+}
+
+func (p *hprofParser) applyParseQuality(evidence *HeapEvidence) {
+	if evidence == nil || len(p.degradationWarnings) == 0 {
+		return
+	}
+	evidence.Warnings = append(append([]string(nil), p.degradationWarnings...), evidence.Warnings...)
+	for i := range evidence.Leaks {
+		evidence.Leaks[i].Confidence = lowerHprofConfidence(evidence.Leaks[i].Confidence)
+	}
+}
+
+func lowerHprofConfidence(confidence string) string {
+	const reason = "граф HPROF неполон из-за безопасных ограничений парсера"
+	confidence = strings.TrimSpace(confidence)
+	if confidence == "" {
+		return "среднее: " + reason
+	}
+	if strings.Contains(confidence, reason) {
+		return confidence
+	}
+	switch {
+	case strings.HasPrefix(confidence, "высокое:"):
+		confidence = "среднее:" + strings.TrimPrefix(confidence, "высокое:")
+	case strings.HasPrefix(confidence, "среднее+:"):
+		confidence = "низкое+:" + strings.TrimPrefix(confidence, "среднее+:")
+	case strings.HasPrefix(confidence, "среднее:"):
+		confidence = "низкое+:" + strings.TrimPrefix(confidence, "среднее:")
+	}
+	return confidence + "; " + reason
 }
 
 func (p *hprofParser) evidence() *HeapEvidence {
 	evidence := &HeapEvidence{Sources: []string{p.path}}
-	if p.truncated {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF %s разобран частично: достигнут безопасный лимит %d объектов или %d ссылок.", p.path, maxHprofObjects, maxHprofEdges))
-	}
+	defer p.applyParseQuality(evidence)
 	if len(p.roots) == 0 {
 		evidence.Warnings = append(evidence.Warnings, "HPROF не содержит распознанных корней GC.")
 		return evidence
@@ -849,7 +1120,10 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		if len(ids) > maxHprofTargets {
 			ids = ids[:maxHprofTargets]
-			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Класс %s: для удержанного размера использованы первые %d достижимых объектов.", className, maxHprofTargets))
+			p.degrade("target-objects", fmt.Sprintf(
+				"HPROF содержит больше %d достижимых target-объектов одного класса: размер и пути рассчитаны по ограниченной выборке.",
+				maxHprofTargets,
+			))
 		}
 		best := HeapLeakEvidence{ClassName: className, Source: p.path}
 		for _, id := range ids {
@@ -880,7 +1154,7 @@ func (p *hprofParser) evidence() *HeapEvidence {
 				GCRoot:              root,
 				GCRootCategory:      rootCategory,
 				ChainFingerprint:    heapChainFingerprint(className, holder, holderField, rootCategory, path),
-				RetainedSizeKB:      (retainedSize + 1023) / 1024,
+				RetainedSizeKB:      bytesToKB(retainedSize),
 				RetainedSizeBytes:   retainedSize,
 				RetainedObjectCount: retainedCount,
 				ReferencePath:       path,
@@ -902,10 +1176,17 @@ func (p *hprofParser) evidence() *HeapEvidence {
 		evidence.Leaks = append(evidence.Leaks, best)
 	}
 	if limitedRetainedTargets > 0 {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("Точный удержанный размер ограничен: для %d объектов использована безопасная оценка, чтобы большой HPROF не зависал.", limitedRetainedTargets))
+		p.degrade("retained-traversal", fmt.Sprintf(
+			"Точный удержанный размер ограничен: для %d объектов использована безопасная оценка, чтобы большой HPROF не зависал.",
+			limitedRetainedTargets,
+		))
 	}
 	if skippedEvidenceTargets > 0 {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("HPROF содержит слишком много кандидатов удержания: пропущено %d объектов после лимита %d.", skippedEvidenceTargets, maxHprofEvidenceTargets))
+		p.degrade("evidence-targets", fmt.Sprintf(
+			"HPROF содержит слишком много кандидатов удержания: пропущено %d объектов после лимита %d.",
+			skippedEvidenceTargets,
+			maxHprofEvidenceTargets,
+		))
 	}
 	sort.Slice(evidence.Leaks, func(i, j int) bool {
 		if evidence.Leaks[i].RetainedSizeKB == evidence.Leaks[j].RetainedSizeKB {
@@ -1001,11 +1282,11 @@ func (p *hprofParser) retainedSizeForLimited(target uint64, rootIDs []uint64, bu
 		if node == nil {
 			continue
 		}
-		count++
+		count = saturatingUint64Sum(count, 1)
 		if node.shallowSize > 0 {
-			size += node.shallowSize
+			size = saturatingUint64Sum(size, node.shallowSize)
 		}
-		classes[node.className]++
+		classes[node.className] = saturatingUint64Sum(classes[node.className], 1)
 	}
 	if size == 0 {
 		if node := p.nodes[target]; node != nil && node.shallowSize > 0 {
@@ -1151,6 +1432,12 @@ func (p *hprofParser) referencePath(parent map[uint64]heapParent, target uint64)
 		})
 		current = step.from
 	}
+	if step, ok := parent[current]; ok && step.hasAny && step.from != 0 && len(reversed) >= maxHprofPathElements {
+		p.degrade("reference-path-depth", fmt.Sprintf(
+			"Цепочка HPROF превысила лимит глубины %d: показан только ограниченный фрагмент пути.",
+			maxHprofPathElements,
+		))
+	}
 	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
@@ -1208,6 +1495,12 @@ func (p *hprofParser) alternativeReferencePaths(
 			}
 			queue = append(queue, state{id: incomingEdge.from, steps: nextSteps})
 		}
+	}
+	if visitedStates >= maxHprofAlternativeStates && len(out) < maxHprofAlternativePaths {
+		p.degrade("alternative-path-search", fmt.Sprintf(
+			"Поиск альтернативных HPROF-путей достиг лимита %d состояний: список путей может быть неполным.",
+			maxHprofAlternativeStates,
+		))
 	}
 	return out
 }
@@ -1617,6 +1910,20 @@ func (r *hprofReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func (r *hprofReader) remaining() uint64 {
+	if r.read >= r.limit {
+		return 0
+	}
+	return r.limit - r.read
+}
+
+func (r *hprofReader) require(n uint64) error {
+	if n > r.remaining() {
+		return fmt.Errorf("need %d bytes, only %d remain in the HPROF record", n, r.remaining())
+	}
+	return nil
+}
+
 func (r *hprofReader) readByte() (byte, error) {
 	var b [1]byte
 	_, err := io.ReadFull(r, b[:])
@@ -1647,12 +1954,59 @@ func (r *hprofReader) readID(idSize int) (uint64, error) {
 	return binary.BigEndian.Uint64(buf[:]), nil
 }
 
-func (r *hprofReader) skip(n int) error {
-	if n <= 0 {
+func (r *hprofReader) skip(n uint64) error {
+	if n == 0 {
 		return nil
 	}
-	_, err := io.CopyN(io.Discard, r, int64(n))
-	return err
+	if err := r.require(n); err != nil {
+		return err
+	}
+	count, err := checkedInt64(n, "HPROF skip length")
+	if err != nil {
+		return err
+	}
+	if _, err := io.CopyN(io.Discard, r, count); err != nil {
+		return fmt.Errorf("skip %d HPROF bytes: %w", n, err)
+	}
+	return nil
+}
+
+func checkedInt(value uint64, description string) (int, error) {
+	maxInt := uint64(^uint(0) >> 1)
+	if value > maxInt {
+		return 0, fmt.Errorf("%s %d overflows int", description, value)
+	}
+	return int(value), nil
+}
+
+func checkedInt64(value uint64, description string) (int64, error) {
+	const maxInt64 = uint64(^uint64(0) >> 1)
+	if value > maxInt64 {
+		return 0, fmt.Errorf("%s %d overflows int64", description, value)
+	}
+	return int64(value), nil
+}
+
+func checkedAddUint64(left, right uint64, description string) (uint64, error) {
+	if ^uint64(0)-left < right {
+		return 0, fmt.Errorf("%s overflows uint64: %d + %d", description, left, right)
+	}
+	return left + right, nil
+}
+
+func checkedMulUint64(left, right uint64, description string) (uint64, error) {
+	if left != 0 && right > ^uint64(0)/left {
+		return 0, fmt.Errorf("%s overflows uint64: %d * %d", description, left, right)
+	}
+	return left * right, nil
+}
+
+func bytesToKB(value uint64) uint64 {
+	kilobytes := value / 1024
+	if value%1024 != 0 {
+		kilobytes++
+	}
+	return kilobytes
 }
 
 func readU4(reader io.Reader) (uint32, error) {

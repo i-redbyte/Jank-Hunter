@@ -1,68 +1,43 @@
 package io.jankhunter.gradle
 
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Dependency
 import org.gradle.api.artifacts.ProjectDependency
 
 internal object JankHunterAutomaticDependencies {
-    private const val ANDROID_SDK_ARTIFACT = "jankhunter-android-sdk"
     private const val ANNOTATIONS_ARTIFACT = "jankhunter-annotations"
+    private const val RUNTIME_ARTIFACT = "jankhunter-runtime"
 
-    fun configure(project: Project, extension: JankHunterExtension, addAndroidSdk: Boolean) {
-        project.afterEvaluate {
-            if (!extension.enabled || !extension.dependencies.enabled) return@afterEvaluate
+    fun addAnnotations(project: Project) {
+        project.addJankHunterDependencyIfMissing(
+            configurationName = "compileOnly",
+            artifactId = ANNOTATIONS_ARTIFACT,
+        )
+    }
 
-            val defaultCoordinates = JankHunterDependencyCoordinates.load()
-            val group = extension.dependencies.group.normalizedOr(defaultCoordinates.group)
-            val version = extension.dependencies.version.normalizedOr(defaultCoordinates.version)
-
-            if (extension.dependencies.addAnnotations) {
-                project.addJankHunterDependencyIfMissing(
-                    configurationName = "compileOnly",
-                    group = group,
-                    artifactId = ANNOTATIONS_ARTIFACT,
-                    version = version,
-                )
-            }
-
-            if (addAndroidSdk && extension.dependencies.addAndroidSdk) {
-                extension.enabledBuildTypes
-                    .map { it.trim() }
-                    .filter(String::isNotEmpty)
-                    .map(::implementationConfigurationName)
-                    .distinct()
-                    .forEach { configurationName ->
-                        project.addJankHunterDependencyIfMissing(
-                            configurationName = configurationName,
-                            group = group,
-                            artifactId = ANDROID_SDK_ARTIFACT,
-                            version = version,
-                        )
-                    }
-            }
-        }
+    fun addRuntime(project: Project, variantName: String) {
+        if (JankHunterDependencyValidator.hasDeclaredAndroidSdk(project, variantName)) return
+        project.addJankHunterDependencyIfMissing(
+            configurationName = implementationConfigurationName(variantName),
+            artifactId = RUNTIME_ARTIFACT,
+        )
     }
 
     private fun Project.addJankHunterDependencyIfMissing(
         configurationName: String,
-        group: String,
         artifactId: String,
-        version: String,
     ) {
+        val coordinates = JankHunterDependencyCoordinates.load()
         val configuration = configurations.findByName(configurationName)
-        if (configuration == null) {
-            logger.warn(
-                "Jank Hunter could not add {}:{}:{} because configuration '{}' was not found.",
-                group,
-                artifactId,
-                version,
-                configurationName,
+            ?: throw GradleException(
+                "Jank Hunter could not add ${coordinates.group}:$artifactId:${coordinates.version} because " +
+                    "required configuration '$configurationName' was not found.",
             )
-            return
-        }
-        if (configuration.dependencies.any { it.matchesJankHunterDependency(group, artifactId) }) return
+        if (configuration.dependencies.any { it.matchesJankHunterDependency(coordinates.group, artifactId) }) return
 
-        val notation = localProjectDependency(artifactId) ?: "$group:$artifactId:$version"
+        val notation = localProjectDependency(artifactId) ?:
+            "${coordinates.group}:$artifactId:${coordinates.version}"
         dependencies.add(configurationName, notation)
     }
 
@@ -79,11 +54,7 @@ internal object JankHunterAutomaticDependencies {
         return this.group == group && name == artifactId
     }
 
-    internal fun implementationConfigurationName(buildType: String): String {
-        return "${buildType}Implementation"
-    }
-
-    private fun String?.normalizedOr(defaultValue: String): String {
-        return this?.trim()?.takeIf(String::isNotEmpty) ?: defaultValue
+    internal fun implementationConfigurationName(variantName: String): String {
+        return "${variantName}Implementation"
     }
 }

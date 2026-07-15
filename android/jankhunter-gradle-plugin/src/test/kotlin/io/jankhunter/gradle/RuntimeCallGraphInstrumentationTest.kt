@@ -30,11 +30,32 @@ class RuntimeCallGraphInstrumentationTest {
 
         val text = InstrumentationArtifactFiles.readJsonlLines(ownerMapEntries).joinToString("\n")
         assertTrue(text.contains("\"kind\":\"entry\""))
+        assertTrue(text.contains("\"id\":\"stable:0x"))
         assertTrue(text.contains("\"owner\":\"example.Throwing.parent\""))
         assertTrue(text.contains("\"owner\":\"example.Throwing.child\""))
     }
 
-    private fun instrumentRuntimeCallGraph(bytes: ByteArray, ownerMapEntriesDirectory: String = ""): ByteArray {
+    @Test
+    fun embeddedSymbolsAreTheDefaultInjectedAbi() {
+        val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture()))
+
+        assertTrue(stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
+        assertTrue(!stats.enterDescriptors.contains("(J)J"))
+    }
+
+    @Test
+    fun externalSymbolsKeepTheCompactInjectedAbi() {
+        val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture(), embeddedSymbols = false))
+
+        assertTrue(stats.enterDescriptors.contains("(J)J"))
+        assertTrue(!stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
+    }
+
+    private fun instrumentRuntimeCallGraph(
+        bytes: ByteArray,
+        ownerMapEntriesDirectory: String = "",
+        embeddedSymbols: Boolean = true,
+    ): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         reader.accept(
@@ -42,6 +63,7 @@ class RuntimeCallGraphInstrumentationTest {
                 writer,
                 "example.Throwing",
                 HookConfig(
+                    embeddedSymbols = embeddedSymbols,
                     methodCounters = false,
                     okhttp = false,
                     webSockets = false,
@@ -94,7 +116,10 @@ class RuntimeCallGraphInstrumentationTest {
                             descriptor: String,
                             isInterface: Boolean,
                         ) {
-                            if (owner != "io/jankhunter/runtime/JankHunter" || methodName != "exitMethod") return
+                            if (owner == "io/jankhunter/runtime/JankHunterHooks" && methodName == "enterMethod") {
+                                stats.enterDescriptors += descriptor
+                            }
+                            if (owner != "io/jankhunter/runtime/JankHunterHooks" || methodName != "exitMethod") return
                             when (name) {
                                 "parent" -> stats.parentExitCalls++
                                 "child" -> stats.childExitCalls++
@@ -140,5 +165,6 @@ class RuntimeCallGraphInstrumentationTest {
         var parentExitCalls: Int = 0,
         var childCatchAllHandlers: Int = 0,
         var childExitCalls: Int = 0,
+        val enterDescriptors: MutableSet<String> = linkedSetOf(),
     )
 }

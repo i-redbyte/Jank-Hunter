@@ -2,135 +2,220 @@ package io.jankhunter.runtime.internal.system
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Choreographer
 import io.jankhunter.runtime.JankHunter
-import java.util.Arrays
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.floor
 import kotlin.math.max
 
+/**
+ * Canonical UI frame pipeline.
+ *
+ * JankStats supplies real frame durations whenever it is tracking a resumed window. Choreographer
+ * is enabled only as a fallback, so a frame can never be admitted by both sources.
+ */
 internal class FpsMonitor(
     windowMs: Long,
     jankFrameThresholdMs: Long,
+    choreographerFallbackEnabled: Boolean = true,
 ) : Choreographer.FrameCallback {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val running = AtomicBoolean(false)
-    private val windowNanos = max(250L, windowMs) * 1_000_000L
+    private val runState = CollectorRunState()
+    private val sourceSelector = FrameSourceSelector(choreographerFallbackEnabled)
+    private val windowNanos = millisecondsToNanos(max(250L, windowMs))
     private val jankFrameThresholdMs = max(1L, jankFrameThresholdMs)
 
     private var choreographer: Choreographer? = null
+    private var callbackPosted = false
+    private var windowScreen: String? = null
     private var windowStartNanos = 0L
-    private var lastFrameTimeNanos = 0L
+    private var lastFallbackFrameNanos = 0L
     private var frameCount = 0L
     private var jankCount = 0L
     private var deadlineMissCount = 0L
     private var maxFrameOverrunMs = 0L
     private var maxFrameDurationMs = 0L
-    private var frameDurationsMs = LongArray(180)
-    private var durationCount = 0
+    private val durationHistogram = FrameDurationHistogram()
 
     fun start() {
-        if (!running.compareAndSet(false, true)) return
+        val expectedGeneration = runState.start() ?: return
         mainHandler.post {
+            if (!isCurrent(expectedGeneration)) return@post
             choreographer = Choreographer.getInstance()
-            reset()
-            choreographer?.postFrameCallback(this)
+            resetWindow()
+            updateFallbackRegistration()
         }
     }
 
     fun stop() {
-        running.set(false)
+        if (!runState.stop()) return
         mainHandler.post {
-            choreographer?.removeFrameCallback(this)
-            reset()
+            removeFallbackCallback()
+            sourceSelector.updateJankStats(false)
+            resetWindow()
+            choreographer = null
+        }
+    }
+
+    fun setJankStatsActive(active: Boolean, sourceChanged: Boolean = false) {
+        runOnMain {
+            if (!runState.isRunning()) return@runOnMain
+            val activeChanged = sourceSelector.updateJankStats(active)
+            if (!activeChanged && !sourceChanged) return@runOnMain
+            resetWindow()
+            if (activeChanged) {
+                updateFallbackRegistration()
+                JankHunter.recordGauge("ui.frame.source.jankstats", if (active) 1L else 0L)
+            }
+        }
+    }
+
+    fun onJankStatsFrame(screen: String?, durationNanos: Long, isJank: Boolean) {
+        runOnMain {
+            if (!runState.isRunning() || !sourceSelector.useJankStats()) return@runOnMain
+            recordFrame(
+                screen = screen,
+                frameTimeNanos = SystemClock.elapsedRealtimeNanos(),
+                durationMs = durationNanos.coerceAtLeast(0L) / NANOS_PER_MS,
+                isJank = isJank,
+            )
         }
     }
 
     override fun doFrame(frameTimeNanos: Long) {
-        if (!running.get()) return
+        callbackPosted = false
+        if (!shouldUseFallback()) return
 
-        if (windowStartNanos == 0L) {
-            windowStartNanos = frameTimeNanos
-            lastFrameTimeNanos = frameTimeNanos
-            postNext()
-            return
-        }
-
-        val frameDurationMs = max(0L, (frameTimeNanos - lastFrameTimeNanos) / 1_000_000L)
-        lastFrameTimeNanos = frameTimeNanos
-        frameCount++
-        if (frameDurationMs >= jankFrameThresholdMs) {
-            jankCount++
-            deadlineMissCount++
-            maxFrameOverrunMs = max(maxFrameOverrunMs, frameDurationMs - jankFrameThresholdMs)
-        }
-        maxFrameDurationMs = max(maxFrameDurationMs, frameDurationMs)
-        recordDuration(frameDurationMs)
-
-        val elapsedNanos = frameTimeNanos - windowStartNanos
-        if (elapsedNanos >= windowNanos) {
-            val windowMs = max(1L, elapsedNanos / 1_000_000L)
-            JankHunter.recordUiWindow(
-                JankHunter.currentScreen(),
-                windowMs,
-                frameCount,
-                jankCount,
-                percentile(50),
-                percentile(95),
-                percentile(99),
+        val previousFrameNanos = lastFallbackFrameNanos
+        lastFallbackFrameNanos = frameTimeNanos
+        if (previousFrameNanos != 0L) {
+            val durationMs = ((frameTimeNanos - previousFrameNanos).coerceAtLeast(0L)) / NANOS_PER_MS
+            recordFrame(
+                screen = JankHunter.currentScreen(),
+                frameTimeNanos = frameTimeNanos,
+                durationMs = durationMs,
+                isJank = durationMs >= jankFrameThresholdMs,
             )
-            JankHunter.recordGauge("ui.fps_x100", (frameCount * 100_000L) / windowMs)
-            JankHunter.recordGauge("ui.frame_deadline_miss.count", deadlineMissCount)
-            JankHunter.recordGauge("ui.frame_overrun.max_ms", maxFrameOverrunMs)
-            JankHunter.recordGauge("ui.frame_duration.max_ms", maxFrameDurationMs)
-            resetWindow(frameTimeNanos)
+        } else {
+            windowStartNanos = frameTimeNanos
         }
-
-        postNext()
+        postFallbackCallback()
     }
 
-    private fun postNext() {
-        val local = choreographer
-        if (local != null && running.get()) {
+    private fun recordFrame(
+        screen: String?,
+        frameTimeNanos: Long,
+        durationMs: Long,
+        isJank: Boolean,
+    ) {
+        if (windowScreen != null && screen != null && windowScreen != screen) {
+            resetWindow(frameTimeNanos)
+        }
+        if (windowScreen == null) {
+            windowScreen = screen
+        }
+        if (windowStartNanos == 0L) {
+            val durationNanos = millisecondsToNanos(durationMs)
+            windowStartNanos = if (durationNanos >= frameTimeNanos) 1L else frameTimeNanos - durationNanos
+        }
+        val safeDurationMs = durationMs.coerceAtLeast(0L)
+        frameCount++
+        if (isJank) {
+            jankCount++
+            deadlineMissCount++
+            maxFrameOverrunMs = max(maxFrameOverrunMs, safeDurationMs - jankFrameThresholdMs)
+        }
+        maxFrameDurationMs = max(maxFrameDurationMs, safeDurationMs)
+        durationHistogram.add(safeDurationMs)
+
+        val elapsedNanos = (frameTimeNanos - windowStartNanos).coerceAtLeast(0L)
+        if (elapsedNanos < windowNanos) return
+
+        val elapsedMs = max(1L, elapsedNanos / NANOS_PER_MS)
+        durationHistogram.calculatePercentiles()
+        JankHunter.recordUiWindow(
+            windowScreen,
+            elapsedMs,
+            frameCount,
+            jankCount,
+            durationHistogram.p50Ms,
+            durationHistogram.p95Ms,
+            durationHistogram.p99Ms,
+        )
+        JankHunter.recordGauge("ui.fps_x100", saturatedFpsX100(frameCount, elapsedMs))
+        JankHunter.recordGauge("ui.frame_deadline_miss.count", deadlineMissCount)
+        JankHunter.recordGauge("ui.frame_overrun.max_ms", maxFrameOverrunMs)
+        JankHunter.recordGauge("ui.frame_duration.max_ms", maxFrameDurationMs)
+        resetWindow(frameTimeNanos)
+        windowScreen = screen
+    }
+
+    private fun updateFallbackRegistration() {
+        if (shouldUseFallback()) {
+            postFallbackCallback()
+        } else {
+            removeFallbackCallback()
+        }
+    }
+
+    private fun shouldUseFallback(): Boolean {
+        return runState.isRunning() && sourceSelector.useFallback()
+    }
+
+    private fun postFallbackCallback() {
+        val local = choreographer ?: return
+        if (!callbackPosted && shouldUseFallback()) {
+            callbackPosted = true
             local.postFrameCallback(this)
         }
     }
 
-    private fun reset() {
-        windowStartNanos = 0L
-        lastFrameTimeNanos = 0L
-        frameCount = 0L
-        jankCount = 0L
-        deadlineMissCount = 0L
-        maxFrameOverrunMs = 0L
-        maxFrameDurationMs = 0L
-        durationCount = 0
-    }
-
-    private fun resetWindow(frameTimeNanos: Long) {
-        windowStartNanos = frameTimeNanos
-        frameCount = 0L
-        jankCount = 0L
-        deadlineMissCount = 0L
-        maxFrameOverrunMs = 0L
-        maxFrameDurationMs = 0L
-        durationCount = 0
-    }
-
-    private fun recordDuration(value: Long) {
-        if (durationCount == frameDurationsMs.size) {
-            frameDurationsMs = Arrays.copyOf(frameDurationsMs, frameDurationsMs.size * 2)
+    private fun removeFallbackCallback() {
+        if (callbackPosted) {
+            choreographer?.removeFrameCallback(this)
+            callbackPosted = false
         }
-        frameDurationsMs[durationCount++] = value
+        lastFallbackFrameNanos = 0L
     }
 
-    private fun percentile(percentile: Int): Long {
-        if (durationCount == 0) return 0L
-        val copy = Arrays.copyOf(frameDurationsMs, durationCount)
-        Arrays.sort(copy)
-        var index = floor((copy.size - 1) * (percentile / 100.0)).toInt()
-        if (index < 0) index = 0
-        if (index >= copy.size) index = copy.size - 1
-        return copy[index]
+    private fun resetWindow(frameTimeNanos: Long = 0L) {
+        windowStartNanos = frameTimeNanos
+        windowScreen = null
+        lastFallbackFrameNanos = 0L
+        frameCount = 0L
+        jankCount = 0L
+        deadlineMissCount = 0L
+        maxFrameOverrunMs = 0L
+        maxFrameDurationMs = 0L
+        durationHistogram.clear()
+    }
+
+    private fun saturatedFpsX100(frames: Long, elapsedMs: Long): Long {
+        return if (frames > Long.MAX_VALUE / FPS_SCALE) {
+            Long.MAX_VALUE / elapsedMs
+        } else {
+            frames * FPS_SCALE / elapsedMs
+        }
+    }
+
+    private fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post(block)
+        }
+    }
+
+    private fun isCurrent(expectedGeneration: Long): Boolean {
+        return runState.isCurrent(expectedGeneration)
+    }
+
+    private fun millisecondsToNanos(milliseconds: Long): Long {
+        val positive = milliseconds.coerceAtLeast(0L)
+        return if (positive > Long.MAX_VALUE / NANOS_PER_MS) Long.MAX_VALUE else positive * NANOS_PER_MS
+    }
+
+    private companion object {
+        private const val NANOS_PER_MS = 1_000_000L
+        private const val FPS_SCALE = 100_000L
     }
 }

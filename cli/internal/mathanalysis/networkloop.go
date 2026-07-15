@@ -30,7 +30,7 @@ type networkLoopSignal struct {
 
 type networkLoopCollector struct {
 	filter     analyze.Filter
-	ownerMap   map[string]string
+	ownerMap   *analyze.OwnerMap
 	bucketMS   uint64
 	bucketSize int
 	scale      timelineScale
@@ -56,7 +56,7 @@ func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *netw
 	}
 }
 
-func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap map[string]string) (uint64, bool) {
+func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
 		route := jhlog.Resolve(dict, event.HTTP.RouteID)

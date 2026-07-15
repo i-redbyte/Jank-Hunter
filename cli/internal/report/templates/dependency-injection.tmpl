@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: DI-каталог</title>
+  <style>{{baseCSS}}</style>
+</head>
+<body class="{{bodyClass "di-page" .PresentationMode .AnimatedBackground}}">
+<header class="hero di-hero">
+  <div class="hero-grid">
+    <div>
+      <div class="eyebrow">Jank Hunter · dependency injection</div>
+      <h1>DI-каталог</h1>
+      <div class="subhead">{{.DependencyInjection.Source}} · variant {{if .DependencyInjection.Variant}}{{.DependencyInjection.Variant}}{{else}}не указан{{end}} · создан {{.GeneratedAt}}</div>
+      <div class="di-disclaimer"><span class="di-badge">DI · BUILD TIME</span><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
+      {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
+    </div>
+    <div class="hero-side">
+      <div class="env-card di-summary-card">
+        <div class="env-title">Покрытие DI</div>
+        <strong class="env-device">{{.DependencyInjection.ClassCount}} классов</strong>
+        <div class="env-subtitle">{{.DependencyInjection.EdgeCount}} направленных связей consumer → dependency</div>
+        <div class="env-grid">
+          <div class="env-item"><div class="env-label">Показано классов</div><div class="env-value">{{.DependencyInjection.ShownClassCount}}</div><div class="env-detail">{{if .DependencyInjection.ClassesTruncated}}список ограничен{{else}}полный список{{end}}</div></div>
+          <div class="env-item"><div class="env-label">Показано связей</div><div class="env-value">{{.DependencyInjection.ShownEdgeCount}}</div><div class="env-detail">{{if .DependencyInjection.EdgesTruncated}}список ограничен{{else}}полный список{{end}}</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav di-nav">
+  <a href="#overview">Обзор</a>
+  <a href="#classes">DI-классы</a>
+  <a href="#edges">DI-связи</a>
+  <a href="#coverage">Ограничения</a>
+</nav>
+<main>
+  <section id="overview" class="panel di-panel">
+    <div class="panel-head">
+      <div><h2>Build-time карта зависимостей</h2><div class="panel-kicker">Каталог построен из аннотаций и безопасно распознаваемых generated-сигнатур, без запуска приложения и без runtime tracing.</div></div>
+      <span class="di-badge">DI · BUILD TIME</span>
+    </div>
+    <div class="grid">
+      {{range .DependencyInjection.Frameworks}}
+      <div class="metric di-framework-card"><div class="label">{{.Name}}</div><div class="value">{{.Classes}}</div><div class="hint">классов · {{.Edges}} связей</div></div>
+      {{else}}<div class="muted">DI framework records не найдены.</div>{{end}}
+    </div>
+    <div class="report-guide di-guide">
+      <div class="guide-card"><strong>Направление</strong>Каждая запись читается как consumer → dependency: левому классу для создания или injection нужен правый.</div>
+      <div class="guide-card"><strong>Наблюдение</strong>Фиолетовая пометка «встречается отдельно» означает только совпадение имени с runtime или memory-отчётом.</div>
+      <div class="guide-card"><strong>Изоляция</strong>DI catalog не передаётся в расчёты проблем, утечек, влияния, confidence или регрессионных gate.</div>
+    </div>
+  </section>
+
+  <section id="classes" class="panel di-panel">
+    <div class="panel-head">
+      <div><h2>DI-классы</h2><div class="panel-kicker">Роли, scopes и components получены из build-time metadata. Generated-классы помечены отдельно и не инструментируются Jank Hunter runtime hooks.</div></div>
+    </div>
+    <div class="table-scroll">
+      <table class="di-class-table">
+        <tr><th>Класс</th><th>Framework</th><th>Роли</th><th>Scope / component</th><th>Отдельное наблюдение</th></tr>
+        {{range .DependencyInjection.Classes}}
+        <tr class="di-class-row">
+          <td><div class="di-class-name"><span class="di-badge">DI</span>{{if .Generated}}<span class="di-badge di-generated">GENERATED</span>{{end}}<code>{{.Name}}</code></div></td>
+          <td><span class="di-framework">{{.Framework}}</span></td>
+          <td>{{range .Roles}}<span class="di-role">{{.}}</span>{{else}}<span class="muted">не определена</span>{{end}}</td>
+          <td>{{range .Scopes}}<div><code>{{.}}</code></div>{{end}}{{range .Components}}<div><code>{{.}}</code></div>{{end}}{{if and (not .Scopes) (not .Components)}}<span class="muted">нет metadata</span>{{end}}</td>
+          <td>{{range .Observed}}<div class="di-observed">{{.}}</div>{{else}}<span class="muted">не сопоставлен с сигналами прогона</span>{{end}}</td>
+        </tr>
+        {{else}}<tr><td colspan="5" class="muted">DI-классы не найдены.</td></tr>{{end}}
+      </table>
+    </div>
+  </section>
+
+  <section id="edges" class="panel di-panel">
+    <div class="panel-head">
+      <div><h2>DI-связи</h2><div class="panel-kicker">Фиолетовая стрелка означает только build-time wiring. Resolution показывает источник уверенности: declaration или подтверждённый generated binding.</div></div>
+      <span class="di-badge">CONSUMER → DEPENDENCY</span>
+    </div>
+    <div class="di-disclaimer compact"><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
+    <div class="table-scroll">
+      <table class="di-edge-table">
+        <tr><th>Consumer</th><th></th><th>Dependency</th><th>Тип / framework</th><th>Место</th><th>Resolution</th></tr>
+        {{range .DependencyInjection.Edges}}
+        <tr class="di-edge-row">
+          <td><code>{{.Consumer}}</code>{{if .ConsumerObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
+          <td class="di-arrow" aria-label="зависит от">→</td>
+          <td><code>{{.Dependency}}</code>{{if .DependencyObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
+          <td><span class="di-role">{{.InjectionKind}}</span><div class="muted">{{.Framework}}</div>{{range .Qualifiers}}<div><code>{{.}}</code></div>{{end}}</td>
+          <td><code>{{.Site}}</code></td>
+          <td><span class="di-resolution">{{.Resolution}}</span></td>
+        </tr>
+        {{else}}<tr><td colspan="6" class="muted">Надёжно подтверждённые DI-связи не найдены; классы и роли всё равно сохранены в каталоге.</td></tr>{{end}}
+      </table>
+    </div>
+  </section>
+
+  <section id="coverage" class="panel di-panel">
+    <div class="panel-head"><div><h2>Покрытие и ограничения</h2><div class="panel-kicker">Jank Hunter намеренно предпочитает пропустить неоднозначную связь, а не выдать ложное доказательство.</div></div></div>
+    <div class="report-guide di-guide">
+      <div class="guide-card"><strong>Dagger / Hilt</strong>Поддержаны @Inject, @Provides, @Binds, entry points, InstallIn, Factory.newInstance и MembersInjector.</div>
+      <div class="guide-card"><strong>Koin</strong>Поддержаны annotations и KSP-generated роли. Произвольный Kotlin runtime DSL без статического контракта не интерпретируется.</div>
+      <div class="guide-card"><strong>Runtime impact</strong>Generated DI-классы проходят только read-only ASM scan: hooks и Jank Hunter marker в них не добавляются.</div>
+    </div>
+    {{range .DependencyInjection.Warnings}}<p class="warning di-warning">{{.}}</p>{{end}}
+  </section>
+</main>
+<script>{{reportJS}}</script>
+</body>
+</html>

@@ -262,7 +262,7 @@
       if (key === 'severity') return severityRank[row.dataset.severity] || 0;
       if (key === 'class') return row.dataset.class || '';
       if (key === 'category') return row.dataset.categories || '';
-      return row.dataset.search || '';
+      return row.dataset.search || row.textContent || '';
     };
     const compareValues = (a, b) => {
       const av = valueFor(a, sortKey);
@@ -280,7 +280,8 @@
       });
       let visible = 0;
       sorted.forEach((row) => {
-        const matchesQuery = !query || (row.dataset.search || '').includes(query);
+        const searchableText = (row.dataset.search || row.textContent || '').toLowerCase();
+        const matchesQuery = !query || searchableText.includes(query);
         const matchesSeverity = !severityValue || row.dataset.severity === severityValue;
         const matchesCategory = !categoryValue || (row.dataset.categories || '').split('|').includes(categoryValue);
         const hidden = !(matchesQuery && matchesSeverity && matchesCategory);

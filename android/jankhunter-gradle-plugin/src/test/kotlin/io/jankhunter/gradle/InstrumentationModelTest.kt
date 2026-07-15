@@ -88,6 +88,28 @@ class InstrumentationModelTest {
     }
 
     @Test
+    fun executorSubmitAcceptsGuavaCovariantFutureReturn() {
+        val decision = HookIntentResolver.resolve(
+            methodCall(
+                owner = "com/google/common/util/concurrent/ListeningExecutorService",
+                ownerHierarchy = setOf(
+                    "com/google/common/util/concurrent/ListeningExecutorService",
+                    "java/util/concurrent/ExecutorService",
+                ),
+                name = "submit",
+                descriptor = "(Ljava/lang/Runnable;)" +
+                    "Lcom/google/common/util/concurrent/ListenableFuture;",
+            ),
+            testHookConfig(executors = true),
+        )
+
+        require(decision is HookDecision.Matched)
+        assertEquals(HookIntent.ExecutorRunnable(ExecutorRunnableKind.SINGLE_RUNNABLE), decision.intent)
+        assertEquals("jdk.executor.bridge.v2", decision.bridgeId)
+        assertEquals("jdk.executor.submit.runnable", decision.signatureId)
+    }
+
+    @Test
     fun resolverReportsVersionedBridgeForAllHookFamilies() {
         val okHttpDecision = HookIntentResolver.resolve(
             methodCall(
@@ -121,7 +143,7 @@ class InstrumentationModelTest {
             testHookConfig(executors = true),
         )
         require(executorDecision is HookDecision.Matched)
-        assertEquals("jdk.executor.bridge.v1", executorDecision.bridgeId)
+        assertEquals("jdk.executor.bridge.v2", executorDecision.bridgeId)
 
         val coroutineDecision = HookIntentResolver.resolve(
             methodCall(
@@ -169,7 +191,7 @@ class InstrumentationModelTest {
 
         assertTrue("okhttp3.bridge.v3" in bridgeIds)
         assertTrue("android.handler.bridge.v1" in bridgeIds)
-        assertTrue("jdk.executor.bridge.v1" in bridgeIds)
+        assertTrue("jdk.executor.bridge.v2" in bridgeIds)
         assertTrue("kotlinx.coroutines.bridge.v1" in bridgeIds)
         assertTrue("android.view.flow.bridge.v1" in bridgeIds)
         assertTrue("android.log.bridge.v1" in bridgeIds)
@@ -199,14 +221,31 @@ class InstrumentationModelTest {
     }
 
     @Test
-    fun ownerLabelsAreStableAndReadable() {
-        val first = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")
-        val second = OwnerIds.ownerLabel("com/example/Foo", "load", "()V")
-        val differentDescriptor = OwnerIds.ownerLabel("com/example/Foo", "load", "(I)V")
+    fun stableMethodIdsUseCanonicalNullSeparatedFNV64() {
+        val first = OwnerIds.methodId("com/example/Foo", "load", "()V")
+        val second = OwnerIds.methodId("com.example.Foo", "load", "()V")
+        val differentDescriptor = OwnerIds.methodId("com/example/Foo", "load", "(I)V")
 
         assertEquals(first, second)
-        assertTrue(first.startsWith("com.example.Foo.load#"))
+        assertEquals("stable:0x865bbc6d7b314f77", OwnerIds.canonical(first))
+        assertEquals("com.example.Foo.load", OwnerIds.readableOwner("com/example/Foo", "load"))
         assertFalse(first == differentDescriptor)
+    }
+
+    @Test
+    fun resolverMatchesKnownApiThroughReceiverHierarchy() {
+        val call = methodCall(
+            owner = "com/example/TracingHandler",
+            name = "post",
+            descriptor = "(Ljava/lang/Runnable;)Z",
+            ownerHierarchy = setOf("com/example/TracingHandler", "android/os/Handler"),
+        )
+
+        assertIntent(
+            HookIntent.HandlerRunnable(HandlerRunnableKind.SINGLE_RUNNABLE),
+            call,
+            testHookConfig(handlers = true),
+        )
     }
 
     @Test
@@ -285,8 +324,13 @@ class InstrumentationModelTest {
         assertTrue(decision.signatureId.isNotBlank())
     }
 
-    private fun methodCall(owner: String, name: String, descriptor: String): MethodCall {
-        return MethodCall(owner = owner, name = name, descriptor = descriptor)
+    private fun methodCall(
+        owner: String,
+        name: String,
+        descriptor: String,
+        ownerHierarchy: Set<String> = setOf(owner),
+    ): MethodCall {
+        return MethodCall(owner = owner, name = name, descriptor = descriptor, ownerHierarchy = ownerHierarchy)
     }
 
     private fun testHookConfig(

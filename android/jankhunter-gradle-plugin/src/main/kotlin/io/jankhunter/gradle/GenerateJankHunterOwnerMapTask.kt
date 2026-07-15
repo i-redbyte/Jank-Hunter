@@ -1,11 +1,13 @@
 package io.jankhunter.gradle
 
+import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
-import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
@@ -56,19 +58,16 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val generatedOwners: Property<Boolean>
 
     @get:Input
-    abstract val allowEmptyIncludePackages: Property<Boolean>
-
-    @get:Input
-    abstract val includeWholeApplication: Property<Boolean>
+    abstract val symbolNamespace: Property<String>
 
     @get:Input
     abstract val androidNamespace: Property<String>
 
     @get:Input
-    abstract val includePackages: ListProperty<String>
+    abstract val includePackages: SetProperty<String>
 
     @get:Input
-    abstract val excludePackages: ListProperty<String>
+    abstract val excludePackages: SetProperty<String>
 
     @get:Internal
     abstract val entriesDirectory: DirectoryProperty
@@ -85,11 +84,13 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     fun write() {
         val file = outputFile.get().asFile
         file.parentFile.mkdirs()
+        val entries = entriesDirectory.orNull?.asFile
+            ?.let(InstrumentationArtifactFiles::readJsonlLines)
+            .orEmpty()
+        OwnerMapWriter.validateNoCollisions(entries)
         val lines = buildList {
             add(metadataLine())
-            entriesDirectory.orNull?.asFile?.let { entriesDir ->
-                addAll(InstrumentationArtifactFiles.readJsonlLines(entriesDir))
-            }
+            addAll(entries)
         }
         file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
     }
@@ -109,11 +110,10 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
             classGraph = classGraph.getOrElse(false),
             runtimeCallGraph = runtimeCallGraph.getOrElse(false),
             generatedOwners = generatedOwners.getOrElse(false),
-            allowEmptyIncludePackages = allowEmptyIncludePackages.getOrElse(false),
-            includeWholeApplication = includeWholeApplication.getOrElse(false),
+            symbolNamespace = symbolNamespace.get(),
             androidNamespace = androidNamespace.getOrElse(""),
-            includePackages = includePackages.getOrElse(emptyList()),
-            excludePackages = excludePackages.getOrElse(emptyList()),
+            includePackages = includePackages.getOrElse(emptySet()),
+            excludePackages = excludePackages.getOrElse(emptySet()),
         )
     }
 }
@@ -149,7 +149,7 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
 }
 
 internal data class OwnerMapEntry(
-    val id: String,
+    val id: Long,
     val owner: String,
     val className: String,
     val methodName: String,
@@ -171,11 +171,10 @@ internal object OwnerMapWriter {
         classGraph: Boolean,
         runtimeCallGraph: Boolean,
         generatedOwners: Boolean,
-        allowEmptyIncludePackages: Boolean,
-        includeWholeApplication: Boolean,
+        symbolNamespace: String,
         androidNamespace: String,
-        includePackages: List<String>,
-        excludePackages: List<String>,
+        includePackages: Set<String>,
+        excludePackages: Set<String>,
     ): String {
         return buildString {
             append("{\"format\":")
@@ -183,9 +182,16 @@ internal object OwnerMapWriter {
             append(",\"kind\":\"metadata\"")
             append(",\"variant\":\"")
             append(escape(variantName))
-            append("\",\"idAlgorithm\":\"fnv1a64(class.method+descriptor)\"")
+            append("\",\"idAlgorithm\":\"")
+            append(escape(OwnerIds.STABLE_ID_ALGORITHM))
+            append("\",\"idEncoding\":\"")
+            append(escape(OwnerIds.STABLE_ID_ENCODING))
+            append('"')
             append(",\"generatedOwners\":")
             append(generatedOwners)
+            append(",\"symbolNamespace\":\"")
+            append(escape(symbolNamespace))
+            append('"')
             append(",\"hooks\":{")
             appendHook("methodCounters", methodCounters, first = true)
             appendHook("okhttp", okhttp)
@@ -199,10 +205,6 @@ internal object OwnerMapWriter {
             appendHook("classGraph", classGraph)
             appendHook("runtimeCallGraph", runtimeCallGraph)
             append('}')
-            append(",\"allowEmptyIncludePackages\":")
-            append(allowEmptyIncludePackages)
-            append(",\"includeWholeApplication\":")
-            append(includeWholeApplication)
             append(",\"androidNamespace\":\"")
             append(escape(androidNamespace))
             append("\",\"includePackages\":")
@@ -217,7 +219,7 @@ internal object OwnerMapWriter {
         if (directoryPath.isBlank() || entries.isEmpty()) return
         val body = entries
             .asSequence()
-            .filter { it.id.isNotBlank() && it.owner.isNotBlank() }
+            .filter { it.owner.isNotBlank() }
             .sortedWith(compareBy<OwnerMapEntry> { it.className }.thenBy { it.methodName }.thenBy { it.descriptor })
             .joinToString(separator = "\n", postfix = "\n") { entryRecord(it) }
         InstrumentationArtifactFiles.writeClassShard(directoryPath, className, body)
@@ -229,7 +231,7 @@ internal object OwnerMapWriter {
             append(ArtifactSchemas.OWNER_MAP_FORMAT)
             append(",\"kind\":\"entry\"")
             append(",\"id\":\"")
-            append(escape(entry.id))
+            append(OwnerIds.canonical(entry.id))
             append("\",\"owner\":\"")
             append(escape(entry.owner))
             append("\",\"class\":\"")
@@ -242,6 +244,67 @@ internal object OwnerMapWriter {
         }
     }
 
+    fun validateNoCollisions(records: Iterable<String>) {
+        val symbolsById = mutableMapOf<String, OwnerMapSymbol>()
+        val parser = JsonSlurper()
+        records.forEachIndexed { index, record ->
+            val fields = parseRecord(parser, record, index)
+            val kind = fields.requiredString("kind", index)
+            if (kind != "entry") {
+                throw invalidRecord(index, "unsupported kind '$kind'")
+            }
+            val format = fields["format"]
+            if (format != ArtifactSchemas.OWNER_MAP_FORMAT) {
+                throw invalidRecord(
+                    index,
+                    "field 'format' must be ${ArtifactSchemas.OWNER_MAP_FORMAT}",
+                )
+            }
+            val id = fields.requiredString("id", index)
+            if (!STABLE_ID.matches(id)) {
+                throw invalidRecord(index, "field 'id' is not a stable method id")
+            }
+            val symbol = OwnerMapSymbol(
+                owner = fields.requiredNonBlankString("owner", index),
+                className = fields.requiredNonBlankString("class", index),
+                methodName = fields.requiredNonBlankString("method", index),
+                descriptor = fields.requiredNonBlankString("descriptor", index),
+            )
+            val previous = symbolsById.putIfAbsent(id, symbol)
+            if (previous != null && previous != symbol) {
+                throw GradleException(
+                    "Jank Hunter stable method id collision for $id: '$previous' and '$symbol'. " +
+                        "Instrumentation stopped rather than publishing an ambiguous owner map.",
+                )
+            }
+        }
+    }
+
+    private fun parseRecord(parser: JsonSlurper, record: String, index: Int): Map<*, *> {
+        val parsed = try {
+            parser.parseText(record)
+        } catch (cause: RuntimeException) {
+            throw invalidRecord(index, "malformed JSON", cause)
+        }
+        return parsed as? Map<*, *>
+            ?: throw invalidRecord(index, "expected a JSON object")
+    }
+
+    private fun Map<*, *>.requiredString(field: String, index: Int): String {
+        return this[field] as? String
+            ?: throw invalidRecord(index, "field '$field' must be a string")
+    }
+
+    private fun Map<*, *>.requiredNonBlankString(field: String, index: Int): String {
+        return requiredString(field, index).takeIf(String::isNotBlank)
+            ?: throw invalidRecord(index, "field '$field' must not be blank")
+    }
+
+    private fun invalidRecord(index: Int, detail: String, cause: Throwable? = null): GradleException {
+        val message = "Invalid Jank Hunter owner-map record ${index + 1}: $detail."
+        return if (cause == null) GradleException(message) else GradleException(message, cause)
+    }
+
     private fun StringBuilder.appendHook(name: String, value: Boolean, first: Boolean = false) {
         if (!first) append(',')
         append('"')
@@ -250,8 +313,8 @@ internal object OwnerMapWriter {
         append(value)
     }
 
-    private fun array(values: List<String>): String {
-        return values.joinToString(prefix = "[", postfix = "]") { "\"${escape(it)}\"" }
+    private fun array(values: Set<String>): String {
+        return values.sorted().joinToString(prefix = "[", postfix = "]") { "\"${escape(it)}\"" }
     }
 
     private fun escape(value: String): String {
@@ -261,4 +324,13 @@ internal object OwnerMapWriter {
             .replace("\n", "\\n")
             .replace("\r", "\\r")
     }
+
+    private data class OwnerMapSymbol(
+        val owner: String,
+        val className: String,
+        val methodName: String,
+        val descriptor: String,
+    )
+
+    private val STABLE_ID = Regex("stable:0x[0-9a-f]{16}")
 }

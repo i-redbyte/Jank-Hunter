@@ -12,7 +12,12 @@ internal data class MethodCall(
     val descriptor: String,
     val caller: CallerMethod? = null,
     val line: Int? = null,
+    val ownerHierarchy: Set<String> = setOf(owner),
 )
+
+internal fun MethodCall.matchesOwner(owners: Set<String>): Boolean {
+    return ownerHierarchy.any(owners::contains)
+}
 
 internal enum class ArgumentRole {
     Builder,
@@ -52,7 +57,7 @@ internal data class SignatureSpec(
     )
 
     fun matches(call: MethodCall): Boolean {
-        return call.owner in owners &&
+        return call.matchesOwner(owners) &&
             call.name in names &&
             call.descriptor in descriptors
     }

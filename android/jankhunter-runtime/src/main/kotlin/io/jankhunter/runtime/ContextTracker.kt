@@ -12,8 +12,7 @@ internal class ContextTracker(
     @Volatile
     private var screen = initialScreen
 
-    @Volatile
-    private var lastContextKey = ""
+    private var lastRecordedContext: JankHunterContext? = null
 
     fun currentOwner(): String = owner.get() ?: "unknown"
 
@@ -25,9 +24,8 @@ internal class ContextTracker(
 
     fun ownerOrNull(): String? = owner.get()
 
-    fun setScreen(screenName: String?): String {
+    fun setScreen(screenName: String?) {
         screen = screenName?.takeIf { it.isNotEmpty() } ?: "unknown"
-        return screen
     }
 
     fun startFlow(flowName: String?): JankHunterFlow {
@@ -102,33 +100,36 @@ internal class ContextTracker(
         val previousOwner = owner.get()
         val previousFlow = flow.get()
         val previousStep = flowStep.get()
-        setThreadLocal(screenOverride, context.screen)
-        setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
-        setThreadLocal(flow, context.flow)
-        setThreadLocal(flowStep, context.step)
-        onContextChanged()
+        RuntimeHookGuard.run {
+            setThreadLocal(screenOverride, context.screen)
+            setThreadLocal(owner, normalizedContextValue(firstContextValue(ownerName, context.owner)))
+            setThreadLocal(flow, context.flow)
+            setThreadLocal(flowStep, context.step)
+        }
+        RuntimeHookGuard.run(onContextChanged)
         try {
             return block()
         } finally {
-            setThreadLocal(screenOverride, previousScreenOverride)
-            setThreadLocal(owner, previousOwner)
-            setThreadLocal(flow, previousFlow)
-            setThreadLocal(flowStep, previousStep)
-            onContextChanged()
+            RuntimeHookGuard.run { setThreadLocal(screenOverride, previousScreenOverride) }
+            RuntimeHookGuard.run { setThreadLocal(owner, previousOwner) }
+            RuntimeHookGuard.run { setThreadLocal(flow, previousFlow) }
+            RuntimeHookGuard.run { setThreadLocal(flowStep, previousStep) }
+            RuntimeHookGuard.run(onContextChanged)
         }
     }
 
     fun shouldRecord(tuple: JankHunterContext): Boolean {
-        val key = tuple.key()
         synchronized(lock) {
-            if (key == lastContextKey) return false
-            lastContextKey = key
+            if (tuple == lastRecordedContext) return false
+            lastRecordedContext = tuple
             return true
         }
     }
 
     fun resetRecordedContext() {
-        lastContextKey = ""
+        synchronized(lock) {
+            lastRecordedContext = null
+        }
     }
 
     private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {
@@ -145,9 +146,7 @@ internal data class JankHunterContext(
     val owner: String?,
     val flow: String?,
     val step: String?,
-) {
-    fun key(): String = listOf(screen.orEmpty(), owner.orEmpty(), flow.orEmpty(), step.orEmpty()).joinToString("\u0001")
-}
+)
 
 internal fun firstContextValue(primary: String?, fallback: String?): String? {
     return normalizedContextValue(primary) ?: normalizedContextValue(fallback)

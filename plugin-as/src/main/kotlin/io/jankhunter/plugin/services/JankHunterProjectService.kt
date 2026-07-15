@@ -1,5 +1,6 @@
 package io.jankhunter.plugin.services
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
@@ -11,7 +12,7 @@ import java.awt.event.WindowEvent
 import javax.swing.JDialog
 
 @Service(Service.Level.PROJECT)
-class JankHunterProjectService(private val project: Project) {
+class JankHunterProjectService(private val project: Project) : Disposable {
     private var toolWindow: JankHunterToolWindow? = null
     private var floatingWindow: JDialog? = null
     private var pendingClassFilter: String? = null
@@ -75,6 +76,16 @@ class JankHunterProjectService(private val project: Project) {
     fun inspectClass(className: String) {
         val current = toolWindow ?: showFloatingWindow()
         current.applyClassFilter(className)
+    }
+
+    override fun dispose() {
+        val view = toolWindow
+        val dialog = floatingWindow
+        toolWindow = null
+        floatingWindow = null
+        pendingClassFilter = null
+        view?.dispose()
+        dialog?.dispose()
     }
 
     companion object {

@@ -6,16 +6,38 @@ internal class RuntimeCoordinator(
     private val state: RuntimeState,
     private val nowMs: () -> Long,
 ) {
-    fun tryMarkStarted(): Boolean {
-        return state.started.compareAndSet(false, true)
+    fun isStopped(): Boolean = state.lifecycle == RuntimeLifecycle.STOPPED
+
+    fun isStarting(): Boolean = state.lifecycle == RuntimeLifecycle.STARTING
+
+    fun tryBeginStart(): Boolean {
+        if (state.lifecycle != RuntimeLifecycle.STOPPED) return false
+        state.started.set(false)
+        state.lifecycle = RuntimeLifecycle.STARTING
+        return true
+    }
+
+    fun markStarted() {
+        state.lifecycle = RuntimeLifecycle.STARTED
+        state.started.set(true)
+    }
+
+    fun beginStop(): Boolean {
+        state.started.set(false)
+        if (state.lifecycle == RuntimeLifecycle.STOPPED && state.writer == null) return false
+        state.lifecycle = RuntimeLifecycle.STOPPING
+        return true
     }
 
     fun markStopped() {
         state.started.set(false)
+        state.lifecycle = RuntimeLifecycle.STOPPED
     }
 
     fun isActiveForHooks(): Boolean {
-        return state.runtimeEnabled.get() && state.started.get() && state.writer != null
+        return state.runtimeEnabled.get() &&
+            state.started.get() &&
+            state.writer?.isAcceptingEvents() == true
     }
 
     fun recordInitStatus(

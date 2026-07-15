@@ -9,7 +9,19 @@ internal class JankHunterHandlerRunnable internal constructor(
     private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
 
     override fun run() {
-        val start = SystemClock.elapsedRealtime()
+        try {
+            if (!JankHunter.isRuntimeActiveForCallbacks()) {
+                delegate.run()
+                return
+            }
+            runWithTelemetry()
+        } finally {
+            JankHunter.unregisterHandlerRunnable(delegate, this)
+        }
+    }
+
+    private fun runWithTelemetry() {
+        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
             JankHunter.callWithContext(capturedContext, ownerName) {
@@ -19,13 +31,14 @@ internal class JankHunterHandlerRunnable internal constructor(
             failed = true
             throw throwable
         } finally {
-            JankHunter.unregisterHandlerRunnable(delegate, this)
-            JankHunter.recordWrappedWork(
-                ownerName,
-                "handler_runnable",
-                SystemClock.elapsedRealtime() - start,
-                failed,
-            )
+            RuntimeHookGuard.run {
+                val durationMs = if (start > 0L) {
+                    (SystemClock.elapsedRealtime() - start).coerceAtLeast(0L)
+                } else {
+                    0L
+                }
+                JankHunter.recordWrappedWork(ownerName, "handler_runnable", durationMs, failed)
+            }
         }
     }
 }

@@ -6,9 +6,12 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.File
 
-object ProblemsParser {
+internal object ProblemsParser {
     fun parse(file: File): ProblemsTable {
         if (!file.isFile) return ProblemsTable(emptyList(), emptyList())
+        require(file.length() <= MAX_INPUT_BYTES) {
+            "Problems file is too large for the IDE table (${file.length()} bytes, limit $MAX_INPUT_BYTES)"
+        }
         return when (file.extension.lowercase()) {
             "csv" -> parseCsv(file.readText())
             "json" -> parseJson(file.readText())
@@ -148,4 +151,6 @@ object ProblemsParser {
         }
         return rows
     }
+
+    private const val MAX_INPUT_BYTES = 64L * 1024L * 1024L
 }

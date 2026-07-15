@@ -1,5 +1,7 @@
 package io.jankhunter.plugin.run
 
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
@@ -30,8 +32,13 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
     private val mapping = JBTextField()
     private val classGraph = JBTextField()
     private val diagnostics = JBTextField()
+    private val diCatalog = JBTextField()
     private val heapDump = JBTextField()
     private val heapEvidence = JBTextField()
+    private val baselineHeapDump = JBTextField()
+    private val baselineHeapEvidence = JBTextField()
+    private val candidateHeapDump = JBTextField()
+    private val candidateHeapEvidence = JBTextField()
     private val route = JBTextField()
     private val screen = JBTextField()
     private val owner = JBTextField()
@@ -56,8 +63,13 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         add(row++, "Mapping", mapping)
         add(row++, "Class graph", classGraph)
         add(row++, "Diagnostics", diagnostics)
+        add(row++, "DI catalog", diCatalog)
         add(row++, "Heap dump", heapDump)
         add(row++, "Heap evidence", heapEvidence)
+        add(row++, "Baseline heap dump", baselineHeapDump)
+        add(row++, "Baseline heap evidence", baselineHeapEvidence)
+        add(row++, "Candidate heap dump", candidateHeapDump)
+        add(row++, "Candidate heap evidence", candidateHeapEvidence)
         add(row++, "Route", route)
         add(row++, "Screen", screen)
         add(row++, "Owner", owner)
@@ -66,6 +78,14 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         add(row++, "Format", format)
         add(row++, "", json)
         add(row++, "", presentation)
+
+        cliPath.addActionListener {
+            FileChooser.chooseFile(
+                FileChooserDescriptor(true, false, false, false, false, false),
+                project,
+                null,
+            )?.let { selected -> cliPath.text = selected.path }
+        }
     }
 
     override fun resetEditorFrom(configuration: JankHunterRunConfiguration) {
@@ -82,8 +102,13 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         mapping.text = configuration.mapping
         classGraph.text = configuration.classGraph
         diagnostics.text = configuration.diagnostics
+        diCatalog.text = configuration.diCatalog
         heapDump.text = configuration.heapDump
         heapEvidence.text = configuration.heapEvidence
+        baselineHeapDump.text = configuration.baselineHeapDump
+        baselineHeapEvidence.text = configuration.baselineHeapEvidence
+        candidateHeapDump.text = configuration.candidateHeapDump
+        candidateHeapEvidence.text = configuration.candidateHeapEvidence
         route.text = configuration.route
         screen.text = configuration.screen
         owner.text = configuration.owner
@@ -108,8 +133,13 @@ class JankHunterRunSettingsEditor(private val project: Project) : SettingsEditor
         configuration.mapping = mapping.text
         configuration.classGraph = classGraph.text
         configuration.diagnostics = diagnostics.text
+        configuration.diCatalog = diCatalog.text
         configuration.heapDump = heapDump.text
         configuration.heapEvidence = heapEvidence.text
+        configuration.baselineHeapDump = baselineHeapDump.text
+        configuration.baselineHeapEvidence = baselineHeapEvidence.text
+        configuration.candidateHeapDump = candidateHeapDump.text
+        configuration.candidateHeapEvidence = candidateHeapEvidence.text
         configuration.route = route.text
         configuration.screen = screen.text
         configuration.owner = owner.text

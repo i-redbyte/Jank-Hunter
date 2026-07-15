@@ -10,23 +10,37 @@ internal class JankHunterClickListener internal constructor(
     private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
 
     override fun onClick(view: View) {
-        val start = SystemClock.elapsedRealtime()
+        if (!JankHunter.isRuntimeActiveForCallbacks()) {
+            delegate.onClick(view)
+            return
+        }
+        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
         JankHunter.callWithContext(capturedContext, ownerName) {
-            val flowToken = if (JankHunter.currentFlow() == "unknown") {
-                JankHunter.startFlow("click.${ownerName ?: "unknown"}")
+            val currentFlow = RuntimeHookGuard.value("unknown") { JankHunter.currentFlow() }
+            val flowToken = if (currentFlow == "unknown") {
+                RuntimeHookGuard.value<JankHunterFlow?>(null) {
+                    JankHunter.startFlow("click.${ownerName ?: "unknown"}")
+                }
             } else {
                 null
             }
             var failed = false
             try {
-                JankHunter.markFlowStep("click")
+                RuntimeHookGuard.run { JankHunter.markFlowStep("click") }
                 delegate.onClick(view)
             } catch (throwable: Throwable) {
                 failed = true
                 throw throwable
             } finally {
-                JankHunter.recordClick(ownerName, SystemClock.elapsedRealtime() - start, failed)
-                JankHunter.endFlow(flowToken)
+                RuntimeHookGuard.run {
+                    val durationMs = if (start > 0L) {
+                        (SystemClock.elapsedRealtime() - start).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    }
+                    JankHunter.recordClick(ownerName, durationMs, failed)
+                }
+                RuntimeHookGuard.run { JankHunter.endFlow(flowToken) }
             }
         }
     }

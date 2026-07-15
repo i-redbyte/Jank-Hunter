@@ -18,8 +18,8 @@ class InstrumentationAnnotationsTest {
         val instrumented = instrument(ownerFixture(classOwner = "FeedOwner"))
         val strings = collectMethodStrings(instrumented, "load")
 
-        assertTrue(strings.contains("owner.FeedOwner"))
-        assertFalse(strings.any { it.startsWith("owner.example.Annotated.load#") })
+        assertTrue(strings.contains("FeedOwner"))
+        assertFalse(strings.any { it.startsWith("example.Annotated.load#") })
     }
 
     @Test
@@ -27,22 +27,22 @@ class InstrumentationAnnotationsTest {
         val instrumented = instrument(ownerFixture(classOwner = "ClassOwner", methodOwner = "MethodOwner"))
         val strings = collectMethodStrings(instrumented, "load")
 
-        assertTrue(strings.contains("owner.MethodOwner"))
-        assertFalse(strings.contains("owner.ClassOwner"))
+        assertTrue(strings.contains("MethodOwner"))
+        assertFalse(strings.contains("ClassOwner"))
     }
 
     @Test
     fun ignoreAnnotationSkipsMethodInstrumentation() {
         val instrumented = instrument(ownerFixture(methodIgnored = true))
 
-        assertEquals(0, countRuntimeCalls(instrumented, "recordCounter"))
+        assertEquals(0, countRuntimeCalls(instrumented, "recordMethodCall"))
     }
 
     @Test
     fun classIgnoreAnnotationSkipsMethodInstrumentation() {
         val instrumented = instrument(ownerFixture(classIgnored = true))
 
-        assertEquals(0, countRuntimeCalls(instrumented, "recordCounter"))
+        assertEquals(0, countRuntimeCalls(instrumented, "recordMethodCall"))
     }
 
     @Test
@@ -103,15 +103,21 @@ class InstrumentationAnnotationsTest {
     }
 
     @Test
-    fun constructorAnnotationsEnterRuntimeContextAfterSuperCall() {
+    fun constructorsRemainUntouchedEvenWhenAnnotated() {
         val instrumented = instrument(ownerFixture(constructorTrace = "create"))
 
         val strings = collectMethodStrings(instrumented, "<init>")
 
-        assertTrue(strings.contains("FeedOwner"))
-        assertTrue(strings.contains("create"))
-        assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
-        assertEquals(2, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+        assertTrue(strings.isEmpty())
+        assertEquals(0, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
+        assertEquals(0, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+    }
+
+    @Test
+    fun classInitializersRemainUntouched() {
+        val instrumented = instrument(ownerFixture())
+
+        assertEquals(0, countRuntimeCallsInMethod(instrumented, "<clinit>", "recordMethodCall"))
     }
 
     @Test
@@ -173,6 +179,13 @@ class InstrumentationAnnotationsTest {
         }
         if (classIgnored) {
             writer.visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
+        }
+
+        writer.visitMethod(Opcodes.ACC_STATIC, "<clinit>", "()V", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
         }
 
         writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
@@ -265,7 +278,7 @@ class InstrumentationAnnotationsTest {
                             descriptor: String,
                             isInterface: Boolean,
                         ) {
-                            if (owner == "io/jankhunter/runtime/JankHunter" && methodName == targetMethod) {
+                            if (owner == "io/jankhunter/runtime/JankHunterHooks" && methodName == targetMethod) {
                                 count += 1
                             }
                         }
@@ -299,7 +312,7 @@ class InstrumentationAnnotationsTest {
                             descriptor: String,
                             isInterface: Boolean,
                         ) {
-                            if (owner == "io/jankhunter/runtime/JankHunter" &&
+                            if (owner == "io/jankhunter/runtime/JankHunterHooks" &&
                                 methodName == runtimeMethod
                             ) {
                                 count += 1
@@ -348,10 +361,10 @@ class InstrumentationAnnotationsTest {
     }
 
     private companion object {
-        private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankOwner;"
-        private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankScreen;"
-        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankFlow;"
-        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankTrace;"
-        private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankIgnore;"
+        private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOwner;"
+        private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
+        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
+        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+        private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterIgnore;"
     }
 }

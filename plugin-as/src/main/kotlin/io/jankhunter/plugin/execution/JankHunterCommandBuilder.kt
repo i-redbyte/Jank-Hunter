@@ -21,6 +21,7 @@ data class JankHunterRunRequest(
     val mapping: String,
     val classGraph: String,
     val diagnostics: String,
+    val diCatalog: String,
     val heapDump: String,
     val heapEvidence: String,
     val baselineHeapDump: String,
@@ -81,6 +82,7 @@ object JankHunterCommandBuilder {
             addFlag("mapping", request.mapping)
             addFlag("class-graph", request.classGraph)
             addFlag("instrumentation-diagnostics", request.diagnostics)
+            addFlag("di-catalog", request.diCatalog)
             addFlag("route", request.route)
             addFlag("screen", request.screen)
             addFlag("owner", request.owner)
@@ -217,51 +219,11 @@ object JankHunterCommandBuilder {
         return when (scope) {
             JankHunterLogScope.ALL_SELECTED -> parts
             JankHunterLogScope.LATEST_LOG -> latestExistingLog(project, raw)?.let { listOf(it) } ?: parts.take(1)
-            JankHunterLogScope.LATEST_SESSION_GROUP -> latestSessionGroup(project, raw).ifEmpty { parts }
         }
     }
 
     private fun latestExistingLog(project: Project, raw: String): String? =
-        JankHunterInputPaths.expandExistingFiles(project, raw)
-            .maxByOrNull { it.toFile().lastModified() }
-            ?.toString()
-
-    private fun latestSessionGroup(project: Project, raw: String): List<String> {
-        val files = JankHunterInputPaths.expandExistingFiles(project, raw)
-            .sortedBy { it.toString() }
-        if (files.isEmpty()) return emptyList()
-        val latestByGroup = linkedMapOf<String, Long>()
-        val sessionByPath = linkedMapOf<String, SessionLogPath>()
-        files.forEach { path ->
-            val session = parseSessionLogPath(path.toFile()) ?: return@forEach
-            sessionByPath[path.toString()] = session
-            latestByGroup[session.group] = maxOf(latestByGroup[session.group] ?: Long.MIN_VALUE, session.startMs)
-        }
-        if (sessionByPath.isEmpty()) return files.map { it.toString() }
-        return files
-            .filter { path ->
-                val session = sessionByPath[path.toString()]
-                session == null || latestByGroup[session.group] == session.startMs
-            }
-            .map { it.toString() }
-    }
-
-    private fun parseSessionLogPath(file: File): SessionLogPath? {
-        val name = file.name.removeSuffix(".jhlog")
-        if (!file.name.endsWith(".jhlog") || !name.startsWith("session-")) return null
-        val parts = name.split('-')
-        if (parts.size < 4) return null
-        val startMs = parts[parts.size - 2].toLongOrNull() ?: return null
-        parts.last().toLongOrNull() ?: return null
-        val process = parts.subList(1, parts.size - 2).joinToString("-").takeIf { it.isNotBlank() } ?: return null
-        return SessionLogPath(
-            group = File(file.parentFile ?: File("."), "session-$process").path,
-            startMs = startMs,
-        )
-    }
-
-    private data class SessionLogPath(
-        val group: String,
-        val startMs: Long,
-    )
+        JankHunterSessionLogFiles.latest(
+            JankHunterInputPaths.expandExistingFiles(project, raw).map { it.toFile() },
+        )?.toPath()?.normalize()?.toString()
 }

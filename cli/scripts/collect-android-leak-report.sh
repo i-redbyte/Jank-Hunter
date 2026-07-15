@@ -22,7 +22,7 @@ Options:
 The script pulls files/jankhunter from a debuggable app via `run-as`, then runs:
   jankhunter inspect <pulled .jhlog> --heap-dump <pulled .hprof> --out <report>
 
-It produces report.html plus report-leaks.html, report-math.html and other companion reports.
+It produces one self-contained report.html with overview, leaks, math and other available tabs.
 USAGE
 }
 
