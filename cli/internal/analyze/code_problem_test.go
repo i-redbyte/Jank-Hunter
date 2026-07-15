@@ -1,7 +1,10 @@
 package analyze
 
 import (
+	"fmt"
+	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -24,6 +27,12 @@ func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 			Windows: 1,
 			Count:   2,
 			MaxMS:   2_500,
+		}, {
+			Owner:   "com.app.FeedRepository.load",
+			Kind:    "http_slow_or_failed",
+			Windows: 1,
+			Count:   1,
+			MaxMS:   1_200,
 		}},
 		MemoryLeaks: []MemoryLeakSuspect{{
 			ClassName:           "com.app.FeedActivity",
@@ -125,4 +134,69 @@ func TestCodeProblemRegistryDoesNotTreatRetainedAgeAsMemory(t *testing.T) {
 	if !strings.Contains(feedActivity.Evidence, "память=4096 КБ") {
 		t.Fatalf("heap retained size missing from evidence: %+v", feedActivity)
 	}
+}
+
+func TestCodeProblemFinishMatchesMaterializeAllSelection(t *testing.T) {
+	optimized := codeProblemSelectionFixture()
+	reference := codeProblemSelectionFixture()
+
+	got := optimized.finish()
+	want := finishCodeProblemsMaterializeAllForTest(&reference)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("optimized top problems differ from materialize-all reference\ngot:  %+v\nwant: %+v", got, want)
+	}
+	if len(got) != 200 || cap(got) != len(got) {
+		t.Fatalf("bounded result len/cap = %d/%d, want 200/200", len(got), cap(got))
+	}
+}
+
+func codeProblemSelectionFixture() codeProblemBuilder {
+	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	for index := range 260 {
+		className := fmt.Sprintf("com.app.problem.Class%03d", index)
+		method := fmt.Sprintf("method%02d", index%17)
+		item := builder.item(className, method, className+"."+method)
+		item.addContext(
+			fmt.Sprintf("screen-%d", index%4),
+			fmt.Sprintf("flow-%d", index%7),
+			fmt.Sprintf("step-%d", index%3),
+			fmt.Sprintf("route-%d", index%5),
+		)
+		item.addSignal(CodeProblemSignal{
+			Name:     fmt.Sprintf("signal-%d", index%3),
+			Category: codeCategoryRuntime,
+			Severity: "medium",
+			Score:    float64((index*37)%53)/10 + 0.04,
+			Count:    uint64(index + 1),
+			Detail:   fmt.Sprintf("evidence-%03d", index),
+		})
+	}
+	return builder
+}
+
+// finishCodeProblemsMaterializeAllForTest preserves the pre-optimization
+// algorithm so the bounded implementation must select and serialize exactly
+// the same top rows, including rounded-score ties.
+func finishCodeProblemsMaterializeAllForTest(builder *codeProblemBuilder) []CodeProblemStats {
+	out := make([]CodeProblemStats, 0, len(builder.items))
+	for _, item := range builder.items {
+		row := item.toStats()
+		if row.Score <= 0 && len(row.Signals) == 0 {
+			continue
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			if out[i].ClassName == out[j].ClassName {
+				return out[i].Method < out[j].Method
+			}
+			return out[i].ClassName < out[j].ClassName
+		}
+		return out[i].Score > out[j].Score
+	})
+	if len(out) > 200 {
+		out = out[:200]
+	}
+	return out
 }

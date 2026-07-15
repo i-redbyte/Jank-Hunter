@@ -33,7 +33,8 @@ class SampleEndToEndLogTest {
                         .autoStartCollectors(true)
                         .flushIntervalMs(100)
                         .retainedObjectDelayMs(100)
-                        .maxLogBytes(262_144)
+                        .sessionLogSizeLimitEnabled(true)
+                        .maxSessionLogSizeMiB(16)
                         .logDirectory(logDir)
                         .build(),
                 )

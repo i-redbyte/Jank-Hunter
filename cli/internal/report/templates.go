@@ -23,6 +23,9 @@ var influenceTemplate string
 //go:embed templates/diagnostics.tmpl
 var diagnosticsTemplate string
 
+//go:embed templates/dependency-injection.tmpl
+var dependencyInjectionTemplate string
+
 //go:embed templates/leaks-inspect.tmpl
 var leaksInspectTemplate string
 
@@ -34,3 +37,15 @@ var inspectTemplate string
 
 //go:embed templates/compare.tmpl
 var compareTemplate string
+
+var (
+	cachedInspectTemplate             = newCachedReportTemplate("inspect", inspectTemplate)
+	cachedCompareTemplate             = newCachedReportTemplate("compare", compareTemplate)
+	cachedMathInspectTemplate         = newCachedReportTemplate("math-inspect", mathInspectTemplate)
+	cachedMathCompareTemplate         = newCachedReportTemplate("math-compare", mathCompareTemplate)
+	cachedLeaksInspectTemplate        = newCachedReportTemplate("leaks-inspect", leaksInspectTemplate)
+	cachedLeaksCompareTemplate        = newCachedReportTemplate("leaks-compare", leaksCompareTemplate)
+	cachedInfluenceTemplate           = newCachedReportTemplate("influence", influenceTemplate)
+	cachedDiagnosticsTemplate         = newCachedReportTemplate("diagnostics", diagnosticsTemplate)
+	cachedDependencyInjectionTemplate = newCachedReportTemplate("dependency-injection", dependencyInjectionTemplate)
+)

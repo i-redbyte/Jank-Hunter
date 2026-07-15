@@ -68,11 +68,7 @@ internal object RuntimeDecoratorFactory {
     }
 
     private inline fun <T> failOpen(original: T, create: () -> T): T {
-        return try {
-            create()
-        } catch (throwable: Throwable) {
-            original
-        }
+        return RuntimeHookGuard.value(original, create)
     }
 
     private fun hasAdditionalTypeContract(value: Any, plainType: Class<*>): Boolean {
@@ -88,4 +84,3 @@ internal object RuntimeDecoratorFactory {
         return false
     }
 }
-

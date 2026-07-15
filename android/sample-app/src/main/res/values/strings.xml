@@ -82,7 +82,7 @@
     <string name="status_retained_object_queued">удержанный объект отправлен</string>
     <string name="status_cache_burst_queued">cache burst отправлен</string>
     <string name="status_comparison_hint_shown">подсказка по сравнению показана</string>
-    <string name="status_compare_hint">Jank Hunter: заберите report-leaks.html. LeakCanary: подождите несколько секунд, сверните приложение и откройте notification или launcher report.</string>
+    <string name="status_compare_hint">Jank Hunter: заберите report.html и откройте вкладку «Утечки памяти». LeakCanary: подождите несколько секунд, сверните приложение и откройте notification или launcher report.</string>
     <string name="leakcanary_debug_status">LeakCanary debug: ВКЛ · threshold retained = 1 · notification / launcher report</string>
     <string name="leakcanary_release_status">LeakCanary release: не входит в сборку; для benchmark используйте debug</string>
     <string name="leakcanary_status_line">%1$s · %2$s</string>

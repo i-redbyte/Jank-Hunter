@@ -27,6 +27,32 @@ func TestShortestGraphPathUsesLowerCostRoute(t *testing.T) {
 	}
 }
 
+func TestShortestGraphPathChoosesStableLexicographicEqualCostRoute(t *testing.T) {
+	nodes := map[string]CausalNode{
+		"symptom:jank": {ID: "symptom:jank", Label: "symptom", Kind: "symptom"},
+		"state:alpha":  {ID: "state:alpha", Label: "alpha", Kind: "state"},
+		"state:zeta":   {ID: "state:zeta", Label: "zeta", Kind: "state"},
+		"owner:Feed":   {ID: "owner:Feed", Label: "owner", Kind: "owner"},
+	}
+	edges := []CausalEdge{
+		{From: "symptom:jank", To: "state:zeta", Weight: 0.5},
+		{From: "state:zeta", To: "owner:Feed", Weight: 1.5},
+		{From: "symptom:jank", To: "state:alpha", Weight: 1},
+		{From: "state:alpha", To: "owner:Feed", Weight: 1},
+	}
+
+	for iteration := range 200 {
+		path, ok := shortestGraphPath(nodes, edges, "symptom:jank", "owner:Feed")
+		if !ok {
+			t.Fatalf("iteration %d: shortestGraphPath() returned no path", iteration)
+		}
+		if got, want := path.Nodes, []string{"symptom", "alpha", "owner"}; !equalStrings(got, want) {
+			t.Fatalf("iteration %d: path.Nodes = %v, want %v", iteration, got, want)
+		}
+		assertFloat(t, path.Cost, 2)
+	}
+}
+
 func TestFloydWarshallGraphPathsFindsAllPairsPath(t *testing.T) {
 	nodes := []CausalNode{
 		{ID: "symptom:network_slow", Label: "симптом: медленная сеть", Kind: "symptom"},
@@ -67,4 +93,16 @@ func TestBuildCausalGraphConnectsSymptomToOwner(t *testing.T) {
 		}
 	}
 	t.Fatalf("causal graph did not connect network symptom to owner: %+v", graph.Paths)
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

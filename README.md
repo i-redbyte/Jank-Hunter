@@ -6,7 +6,7 @@ Jank Hunter помогает поймать то, что обычно ускол
 
 ## Что В Репозитории
 
-- `android/`: единый Android SDK-артефакт, runtime, аннотации, интеграция с OkHttp, Gradle-плагин с ASM-внедрением и пример приложения.
+- `android/`: runtime, аннотации, опциональная интеграция с OkHttp, Gradle-плагин с ASM-внедрением и пример приложения.
 - `cli/`: утилита `jankhunter`, которая читает `.jhlog`, строит отчёты, выгружает таблицы проблем и выдаёт оценку готовности для проверок.
 - `plugin-as/`: плагин для Android Studio и IntelliJ IDEA. Он запускает `jankhunter`, подтягивает логи с устройства, открывает отчёты и показывает таблицу проблем с переходом в исходники.
 - `scripts/`: помощники для подключения Jank Hunter к существующему Android-проекту, проверки Gradle-плагина и сквозного прогона на устройстве.
@@ -14,7 +14,7 @@ Jank Hunter помогает поймать то, что обычно ускол
 
 ## Как Выглядят Отчёты
 
-Снимки ниже собраны командой `npm run visual-regression` из каталога `cli/`. Это не макеты, а реальные HTML-страницы, которые создаёт утилита.
+Снимки ниже собраны командой `npm run visual-regression` из каталога `cli/`. Это не макеты, а реальные вкладки самодостаточного HTML, который создаёт утилита.
 
 ### Один Прогон
 
@@ -32,7 +32,7 @@ Jank Hunter помогает поймать то, что обычно ускол
 
 ### Утечки Памяти
 
-`report-leaks.html` работает в лёгком режиме даже без дампа памяти. Если рядом есть `retained-*.hprof` или передан `--heap-dump`, отчёт добавляет путь от корня сборщика мусора до удержанного объекта.
+Вкладка «Утечки памяти» в `report.html` работает в лёгком режиме даже без дампа памяти. Если рядом есть `retained-*.hprof` или передан `--heap-dump`, отчёт добавляет путь от корня сборщика мусора до удержанного объекта.
 
 ![Проводник утечек](assets/readme/leaks-explorer.webp)
 
@@ -75,12 +75,13 @@ ASM-диагностика показывает, какие перехватчи
 ```bash
 cd cli
 make build
-./bin/jankhunter sample --out /tmp/sample.jhlog
-./bin/jankhunter inspect /tmp/sample.jhlog --out /tmp/jankhunter-report.html
-./bin/jankhunter compare --baseline /tmp/sample.jhlog --candidate /tmp/sample.jhlog --out /tmp/jankhunter-compare.html
+./bin/jankhunter sample --out /tmp/baseline.jhlog
+./bin/jankhunter sample --out /tmp/candidate.jhlog
+./bin/jankhunter inspect /tmp/baseline.jhlog --out /tmp/jankhunter-report.html
+./bin/jankhunter compare --baseline /tmp/baseline.jhlog --candidate /tmp/candidate.jhlog --out /tmp/jankhunter-compare.html
 ```
 
-`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Текущая версия утилиты: `1.0.1`, формат `.jhlog`: `8`.
+`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Текущая версия утилиты: `1.0.1`, формат `.jhlog`: `9`.
 
 Установка команды:
 
@@ -118,40 +119,59 @@ quit
 Минимальное подключение обычно выглядит так:
 
 ```kotlin
+import io.jankhunter.gradle.JankHunterFeatureMode
+
 plugins {
     id("io.jankhunter.android") version "1.0.0"
 }
+
+dependencies {
+    implementation("io.jankhunter:jankhunter-android-sdk:1.0.0")
+}
 ```
 
-Gradle-плагин сам добавляет `jankhunter-annotations` и единый `jankhunter-android-sdk` в отладочные или проверочные сборки. Начинайте с ограниченного набора пакетов:
+`jankhunter-android-sdk` — единственная пользовательская dependency; runtime, annotations и
+OkHttp/WebSocket support приходят транзитивно. ASM обрабатывает только классы текущего модуля
+внутри его Android `namespace`; ручные include-пакеты могут безопасно расширить эту границу внутри модуля:
 
 ```kotlin
 jankHunter {
     enabledBuildTypes.add("debug")
     verboseLogs = false
+    sessionLogSizeLimitEnabled = true
+    maxSessionLogSizeMiB = 16
+    // Отдельный build-time каталог Dagger/Hilt/Koin; по умолчанию DISABLED.
+    dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
 
     instrument {
         includePackages("com.myapp.feature", "com.myapp.data")
         excludePackages("com.myapp.generated", "com.myapp.di")
-        okhttp = true
         handlers = true
         executors = true
-        coroutines = true
+        // Opt-in: добавляет wrapper-объекты на coroutine builders.
+        coroutines = false
         flowInteractions = true
         logSpam = true
         classGraph = true
-        runtimeCallGraph = true
+        // Глубокий runtime-граф — только для короткой целевой диагностики.
+        runtimeCallGraph = false
     }
 }
 ```
 
-Если Gradle-плагин временно нельзя использовать, можно подключить SDK вручную:
+MainLooper `Printer` и coroutine ASM по умолчанию выключены. Для UI-кадров JankStats имеет
+приоритет, а Choreographer работает только как fallback, поэтому один кадр не попадает в отчёт
+дважды.
 
-```kotlin
-dependencies {
-    debugImplementation("io.jankhunter:jankhunter-android-sdk:1.0.0")
-}
-```
+Каждая сессия сбора создаёт один файл `jh-session-log.YYYY-MM-DD.<index>.jhlog`.
+Внутренний ограничитель по умолчанию включён и запечатывает файл при 16 МиБ; его можно
+настроить через `sessionLogSizeLimitEnabled` и `maxSessionLogSizeMiB`. Лимит пользовательского
+`JankHunterBinaryStorage` действует всегда, а встроенное хранилище держит до 64 МиБ закрытых
+сессий. Process/session identity находится внутри заголовка `.jhlog v9`, а не в имени файла.
+
+OkHttp/WebSocket hooks используют support из `jankhunter-android-sdk`; дополнительных зависимостей для них нет.
+
+Без Gradle-плагина можно вручную подключить `jankhunter-runtime` и вызвать `JankHunter.init(...)`, но ASM-внедрения и автоматически сгенерированного `JankHunterAutoInitProvider` в таком режиме не будет.
 
 Если нужно быстро подключить существующий проект на macOS:
 
@@ -173,14 +193,6 @@ scripts/integrate-android-project.sh \
 
 Скрипт публикует Android-модули Jank Hunter в `.jankhunter/maven`, собирает `jankhunter` в `.jankhunter/bin`, добавляет репозиторий в настройки Gradle, прописывает `sdk.dir`, подключает зависимости и создаёт `jankHunter { ... }`. Перед правками он кладёт копии изменяемых файлов в `.jankhunter-backups/`.
 
-Для проектов, где локальный Maven-репозиторий неудобен, есть режим файловых AAR/JAR:
-
-```bash
-scripts/integrate-android-project.sh ~/work/MyApp --use-aar
-```
-
-В этом режиме файлы кладутся в `.jankhunter/lib`, и этот каталог можно коммитить вместе с приложением.
-
 ## Что Собирается
 
 - HTTP: длительность, DNS, соединение, время до первого байта, ошибки, байты, маршрут и владелец работы.
@@ -190,33 +202,30 @@ scripts/integrate-android-project.sh ~/work/MyApp --use-aar
 - Память: PSS, Java heap, native heap, свободная память, удержанные объекты и, при явном разрешении, HPROF.
 - Устройство: Android, API, патч безопасности, ABI, сеть, VPN, батарея, хранилище, признак root-доступа.
 - Пользовательские счётчики и числовые метрики.
-- Атрибуция: `JankHunter.withOwner(...)`, `@JankOwner`, `@JankIgnore`, `@JankScreen`, `@JankFlow`, `@JankTrace`.
+- Атрибуция: `JankHunter.withOwner(...)`, `@JankHunterOwner`, `@JankHunterIgnore`, `@JankHunterScreen`, `@JankHunterFlow`, `@JankHunterTrace`.
 - Граф влияния: классы, сценарии, проблемные окна, спам логами, связи времени выполнения и статический граф ASM.
 - Диагностика внедрения: совпавшие перехватчики, пропуски, неподдержанные сигнатуры и области аннотаций.
+- DI-каталог по явному opt-in: build-time связи Dagger/Hilt/Koin без runtime tracing generated-кода.
 
 ## Что Создаёт Утилита
 
-Для одного прогона:
+Для одного прогона создаётся один самодостаточный файл:
 
 ```text
 report.html
-report-math.html
-report-leaks.html
-report-influence.html
-report-diagnostics.html
 ```
 
-Для сравнения:
+Для сравнения — также один файл:
 
 ```text
 compare.html
-compare-math.html
-compare-leaks.html
-compare-influence.html
-compare-diagnostics.html
 ```
 
-`report-diagnostics.html` и `compare-diagnostics.html` появляются, когда передан `--instrumentation-diagnostics`.
+Обзор, математический анализ, утечки и граф влияния встроены во вкладки этого HTML. Флаг
+`--instrumentation-diagnostics` добавляет вкладку «ASM диагностика», а `--di-catalog` — вкладку
+«DI-каталог». DI-связи не являются ссылками удержания или runtime-вызовами и не влияют на score,
+severity, evidence, граф влияния или анализ утечек. Файл можно передавать отдельно: внешние ресурсы
+и соседние HTML ему не нужны.
 
 Отдельные команды:
 
@@ -270,7 +279,7 @@ git push origin v1.0.1
 
 В выпуск попадают:
 
-- `jankhunter-android-sdk-<version>-maven.zip`: локальный Maven-репозиторий с аннотациями, Android-библиотекой, OkHttp-интеграцией, Gradle-плагином и маркером плагина.
+- архив локального Maven-репозитория с отдельными артефактами runtime, annotations, опциональной OkHttp-интеграции, Gradle-плагина и маркера плагина.
 - `jankhunter_<version>_darwin_amd64.tar.gz`: утилита для macOS Intel.
 - `jankhunter_<version>_darwin_arm64.tar.gz`: утилита для macOS Apple Silicon.
 - `checksums.txt`: суммы SHA-256.

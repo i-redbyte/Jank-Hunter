@@ -8,20 +8,20 @@ import org.junit.Test
 
 class LogRetentionTest {
     @Test
-    fun deletesOldestSegmentsForCurrentProcessUntilBudgetFits() {
+    fun deletesOldestCanonicalSessionUntilBudgetFits() {
         val directory = Files.createTempDirectory("jankhunter-retention").toFile()
         try {
-            val oldMain = segment(directory, "session-main-100-1.jhlog", bytes = 10, modifiedAt = 100)
-            val newerMain = segment(directory, "session-main-200-2.jhlog", bytes = 10, modifiedAt = 200)
-            val current = segment(directory, "session-main-300-3.jhlog", bytes = 10, modifiedAt = 300)
-            val remote = segment(directory, "session-remote-100-1.jhlog", bytes = 100, modifiedAt = 100)
+            val oldest = segment(directory, SessionLogName.create("2027-01-01", 0L), bytes = 10, modifiedAt = 100)
+            val newer = segment(directory, SessionLogName.create("2027-01-01", 1L), bytes = 10, modifiedAt = 200)
+            val current = segment(directory, SessionLogName.create("2027-01-02", 0L), bytes = 10, modifiedAt = 300)
+            val unrelated = segment(directory, "unrelated.jhlog", bytes = 100, modifiedAt = 100)
 
-            LogRetention.enforce(directory, "session-main-", current, maxDirectoryBytes = 25)
+            SessionLogRetention.enforce(directory, current, historyLimitBytes = 25)
 
-            assertFalse(oldMain.exists())
-            assertTrue(newerMain.exists())
+            assertFalse(oldest.exists())
+            assertTrue(newer.exists())
             assertTrue(current.exists())
-            assertTrue(remote.exists())
+            assertTrue(unrelated.exists())
         } finally {
             directory.deleteRecursively()
         }
@@ -31,9 +31,9 @@ class LogRetentionTest {
     fun keepsCurrentSegmentWhenBudgetIsSmallerThanCurrentFile() {
         val directory = Files.createTempDirectory("jankhunter-retention").toFile()
         try {
-            val current = segment(directory, "session-main-100-1.jhlog", bytes = 32, modifiedAt = 100)
+            val current = segment(directory, SessionLogName.create("2027-01-01", 0L), bytes = 32, modifiedAt = 100)
 
-            LogRetention.enforce(directory, "session-main-", current, maxDirectoryBytes = 8)
+            SessionLogRetention.enforce(directory, current, historyLimitBytes = 8)
 
             assertTrue(current.exists())
         } finally {

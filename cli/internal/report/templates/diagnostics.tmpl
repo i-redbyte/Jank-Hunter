@@ -20,10 +20,11 @@
         <strong class="env-device">{{.Diagnostics.ClassCount}} классов</strong>
         <div class="env-subtitle">Методы {{.Diagnostics.MethodCount}} · перехватчиков {{.Diagnostics.HookCount}} · аннотаций {{.Diagnostics.AnnotatedMethodCount}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Игнорировано</div><div class="env-value">{{.Diagnostics.IgnoredMethodCount}}</div><div class="env-detail">методов с @JankIgnore или игнором на уровне класса</div></div>
+          <div class="env-item"><div class="env-label">Игнорировано</div><div class="env-value">{{.Diagnostics.IgnoredMethodCount}}</div><div class="env-detail">методов с @JankHunterIgnore или игнором на уровне класса</div></div>
           <div class="env-item"><div class="env-label">Топ-классы</div><div class="env-value">{{len .Diagnostics.TopClasses}}</div><div class="env-detail">ограниченный список для стабильного HTML</div></div>
         </div>
       </div>
+      {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
     </div>
   </div>
 </header>
@@ -48,7 +49,7 @@
       <div class="metric"><div class="label">Классы</div><div class="value">{{.Diagnostics.ClassCount}}</div><div class="hint">попали в сопоставитель инструментирования</div></div>
       <div class="metric"><div class="label">Методы</div><div class="value">{{.Diagnostics.MethodCount}}</div><div class="hint">безопасные, пропущенные и игнорированные вместе</div></div>
       <div class="metric"><div class="label">Перехватчики</div><div class="value">{{.Diagnostics.HookCount}}</div><div class="hint">сумма срабатываний перехватчиков байткода</div></div>
-      <div class="metric"><div class="label">Аннотации</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankFlow / @JankScreen / @JankTrace / @JankOwner</div></div>
+      <div class="metric"><div class="label">Аннотации</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankHunterFlow / @JankHunterScreen / @JankHunterTrace / @JankHunterOwner</div></div>
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Зачем смотреть</strong>Если ожидаемый перехватчик не попал в таблицу, сигнатура библиотеки изменилась или вызов ушел через другую перегрузку.</div>

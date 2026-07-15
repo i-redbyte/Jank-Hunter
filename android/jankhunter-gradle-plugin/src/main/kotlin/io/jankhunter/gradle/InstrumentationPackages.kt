@@ -16,15 +16,20 @@ internal object InstrumentationPackages {
 
     fun effectiveIncludes(
         manualIncludes: Iterable<String>,
-        includeWholeApplication: Boolean,
         androidNamespace: String?,
-    ): List<String> {
+    ): Set<String> {
         val packages = linkedSetOf<String>()
-        addPackages(packages, manualIncludes)
-        if (includeWholeApplication) {
-            addPackage(packages, androidNamespace)
+        // Namespace is the safe, deterministic project boundary. Manual includes may extend
+        // it inside InstrumentationScope.PROJECT, but an empty DSL must never mean "everything".
+        addPackage(packages, androidNamespace)
+        packages.addAll(normalizedPackages(manualIncludes))
+        return packages
+    }
+
+    fun normalizedPackages(values: Iterable<String>): Set<String> {
+        return values.mapNotNullTo(linkedSetOf()) { value ->
+            normalizePackage(value).takeIf(String::isNotEmpty)
         }
-        return packages.toList()
     }
 
     fun normalizePackage(value: String): String {
@@ -44,10 +49,6 @@ internal object InstrumentationPackages {
             simpleName == "Manifest" ||
             simpleName.startsWith("Manifest$") ||
             simpleName == "BR"
-    }
-
-    private fun addPackages(target: MutableSet<String>, values: Iterable<String>) {
-        values.forEach { addPackage(target, it) }
     }
 
     private fun addPackage(target: MutableSet<String>, value: String?) {

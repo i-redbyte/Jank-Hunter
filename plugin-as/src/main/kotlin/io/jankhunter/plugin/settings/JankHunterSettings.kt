@@ -5,8 +5,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
-import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterLogScope
+import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 
 @Service(Service.Level.APP)
@@ -24,13 +24,12 @@ class JankHunterSettings : PersistentStateComponent<JankHunterSettings.State> {
         var cliPath: String = ""
         var logsDirectory: String = ""
         var packageName: String = ""
-        var remoteLogsPath: String = ""
         var outputDirectory: String = ""
         var openReportInIde: Boolean = true
         var openReportExternally: Boolean = false
         var presentationMode: Boolean = false
-        var lastRun: RecentRun? = null
-        var recentRuns: MutableList<RecentRun> = mutableListOf()
+        var lastRun: JankHunterRecentRun? = null
+        var recentRuns: MutableList<JankHunterRecentRun> = mutableListOf()
     }
 
     companion object {
@@ -38,7 +37,7 @@ class JankHunterSettings : PersistentStateComponent<JankHunterSettings.State> {
     }
 }
 
-class RecentRun {
+class JankHunterRecentRun {
     var projectPath: String = ""
     var timestamp: String = ""
     var commandLine: String = ""
@@ -55,6 +54,7 @@ class RecentRun {
     var mapping: String = ""
     var classGraph: String = ""
     var diagnostics: String = ""
+    var diCatalog: String = ""
     var heapDump: String = ""
     var heapEvidence: String = ""
     var baselineHeapDump: String = ""
@@ -85,6 +85,7 @@ class RecentRun {
             mapping = mapping,
             classGraph = classGraph,
             diagnostics = diagnostics,
+            diCatalog = diCatalog,
             heapDump = heapDump,
             heapEvidence = heapEvidence,
             baselineHeapDump = baselineHeapDump,
@@ -107,8 +108,8 @@ class RecentRun {
             commandLine: String,
             request: JankHunterRunRequest,
             projectPath: String = "",
-        ): RecentRun =
-            RecentRun().apply {
+        ): JankHunterRecentRun =
+            JankHunterRecentRun().apply {
                 this.projectPath = projectPath
                 this.timestamp = timestamp
                 this.commandLine = commandLine
@@ -125,6 +126,7 @@ class RecentRun {
                 mapping = request.mapping
                 classGraph = request.classGraph
                 diagnostics = request.diagnostics
+                diCatalog = request.diCatalog
                 heapDump = request.heapDump
                 heapEvidence = request.heapEvidence
                 baselineHeapDump = request.baselineHeapDump

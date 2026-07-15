@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
-import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,40 +31,17 @@ internal class SystemContextSampler(
         readSystemStat = { readFirstLine(PROC_STAT) },
     )
     private val running = AtomicBoolean(false)
-    private var thread: Thread? = null
+    private var maintenance: MaintenanceHandle? = null
 
-    fun start() {
+    fun start(scheduler: RuntimeMaintenanceScheduler) {
         if (!running.compareAndSet(false, true)) return
-        thread = Thread({ loop() }, "JankHunterSystemSampler").apply {
-            isDaemon = true
-            start()
-        }
+        maintenance = scheduler.schedule(delayMs = ::currentIntervalMs) { sampleOnce() }
     }
 
     fun stop() {
         running.set(false)
-        thread?.interrupt()
-    }
-
-    private fun loop() {
-        while (running.get()) {
-            sampleOnce()
-            sleepUntilNextSample()
-        }
-    }
-
-    private fun sleepUntilNextSample() {
-        val startedAtMs = SystemClock.elapsedRealtime()
-        while (running.get()) {
-            val remainingMs = currentIntervalMs() - (SystemClock.elapsedRealtime() - startedAtMs)
-            if (remainingMs <= 0L) return
-            try {
-                Thread.sleep(minOf(remainingMs, STATE_POLL_MS))
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return
-            }
-        }
+        maintenance?.cancel()
+        maintenance = null
     }
 
     private fun currentIntervalMs(): Long {
@@ -80,6 +56,7 @@ internal class SystemContextSampler(
     }
 
     private fun sampleOnce() {
+        if (!running.get()) return
         val memory = readMemory()
         val battery = readBattery()
         val network = readNetwork()
@@ -280,6 +257,5 @@ internal class SystemContextSampler(
         private const val PROC_STAT = "/proc/stat"
         private const val BACKGROUND_INTERVAL_MULTIPLIER = 12L
         private const val MIN_BACKGROUND_INTERVAL_MS = 2 * 60_000L
-        private const val STATE_POLL_MS = 5_000L
     }
 }

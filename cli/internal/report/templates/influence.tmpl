@@ -24,6 +24,7 @@
           <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
         </div>
       </div>
+      {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
     </div>
   </div>
 </header>

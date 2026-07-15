@@ -1,17 +1,19 @@
 package report
 
 import (
-	"bytes"
 	"fmt"
 	"html/template"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/atomicfile"
 	"github.com/i-redbyte/jank-hunter/cli/internal/datavalue"
 	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
@@ -22,91 +24,141 @@ type LogReport struct {
 	Summary analyze.Summary
 }
 
+type logReportGroup struct {
+	Title string
+	Empty string
+	Logs  []LogReport
+}
+
 type ReportOptions struct {
-	PresentationMode                    bool
-	AnimatedBackground                  bool
-	DisableMathLink                     bool
-	DisableLeakLink                     bool
-	InstrumentationDiagnosticsAvailable bool
+	PresentationMode   bool
+	AnimatedBackground bool
+	GeneratedAt        string
+	Links              ReportLinks
+}
+
+// ReportLinks contains only artifacts that were successfully generated. Keeping links explicit
+// prevents a standalone writer from advertising files that do not exist and lets the CLI omit a
+// failed optional companion without rendering the primary report twice.
+type ReportLinks struct {
+	Main                string
+	Math                string
+	Leaks               string
+	Influence           string
+	Diagnostics         string
+	DependencyInjection string
+}
+
+type ReportPaths struct {
+	Main                string
+	Math                string
+	Leaks               string
+	Influence           string
+	Diagnostics         string
+	DependencyInjection string
+}
+
+func PathsFor(primary string) ReportPaths {
+	return ReportPaths{
+		Main:                primary,
+		Math:                companionReportPath(primary, "math"),
+		Leaks:               companionReportPath(primary, "leaks"),
+		Influence:           companionReportPath(primary, "influence"),
+		Diagnostics:         companionReportPath(primary, "diagnostics"),
+		DependencyInjection: companionReportPath(primary, "di"),
+	}
+}
+
+func (p ReportPaths) MainLink() ReportLinks {
+	return ReportLinks{Main: filepath.Base(p.Main)}
 }
 
 func WriteInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
 	lang := reportLanguage()
-	return execute(path, inspectTemplate, map[string]any{
-		"GeneratedAt":           time.Now().Format(time.RFC3339),
-		"Summary":               summary,
-		"Analysis":              inspectAnalysis(summary, lang),
-		"MathReportHref":        mathReportHrefForOptions(path, options),
-		"LeakReportHref":        leakReportHrefForOptions(path, options),
-		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, summary.Influence),
-		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
-		"PresentationMode":      options.PresentationMode,
-		"AnimatedBackground":    options.AnimatedBackground,
+	return execute(path, cachedInspectTemplate, map[string]any{
+		"GeneratedAt":                   options.generatedAt(),
+		"Summary":                       summary,
+		"Analysis":                      inspectAnalysis(summary, lang),
+		"MathReportHref":                options.Links.Math,
+		"LeakReportHref":                options.Links.Leaks,
+		"InfluenceReportHref":           options.Links.Influence,
+		"DiagnosticsReportHref":         options.Links.Diagnostics,
+		"DependencyInjectionReportHref": options.Links.DependencyInjection,
+		"PresentationMode":              options.PresentationMode,
+		"AnimatedBackground":            options.AnimatedBackground,
 	})
 }
 
 func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport, options ReportOptions) error {
 	lang := reportLanguage()
-	return execute(path, compareTemplate, map[string]any{
-		"GeneratedAt":           time.Now().Format(time.RFC3339),
-		"Comparison":            comparison,
-		"BaselineLogs":          baselineLogs,
-		"CandidateLogs":         candidateLogs,
-		"Analysis":              compareAnalysis(comparison, lang),
-		"MathReportHref":        mathReportHrefForOptions(path, options),
-		"LeakReportHref":        leakReportHrefForOptions(path, options),
-		"InfluenceReportHref":   InfluenceReportHrefIfAvailable(path, comparison.Candidate.Influence),
-		"DiagnosticsReportHref": DiagnosticsReportHrefForOptions(path, options),
-		"PresentationMode":      options.PresentationMode,
-		"AnimatedBackground":    options.AnimatedBackground,
+	return execute(path, cachedCompareTemplate, map[string]any{
+		"GeneratedAt": options.generatedAt(),
+		"Comparison":  comparison,
+		"LogGroups": []logReportGroup{
+			{Title: "Логи базы", Empty: "Детали логов базы не встроены.", Logs: baselineLogs},
+			{Title: "Логи кандидата", Empty: "Детали логов кандидата не встроены.", Logs: candidateLogs},
+		},
+		"Analysis":                      compareAnalysis(comparison, lang),
+		"MathReportHref":                options.Links.Math,
+		"LeakReportHref":                options.Links.Leaks,
+		"InfluenceReportHref":           options.Links.Influence,
+		"DiagnosticsReportHref":         options.Links.Diagnostics,
+		"DependencyInjectionReportHref": options.Links.DependencyInjection,
+		"PresentationMode":              options.PresentationMode,
+		"AnimatedBackground":            options.AnimatedBackground,
 	})
 }
 
 func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport, options ReportOptions) error {
-	return execute(path, mathInspectTemplate, map[string]any{
-		"GeneratedAt":         time.Now().Format(time.RFC3339),
+	return execute(path, cachedMathInspectTemplate, map[string]any{
+		"GeneratedAt":         options.generatedAt(),
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
-		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Summary.Influence),
+		"MainReportHref":      options.Links.Main,
+		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
 	})
 }
 
 func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMathReport, options ReportOptions) error {
-	return execute(path, mathCompareTemplate, map[string]any{
-		"GeneratedAt":         time.Now().Format(time.RFC3339),
+	return execute(path, cachedMathCompareTemplate, map[string]any{
+		"GeneratedAt":         options.generatedAt(),
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
-		"InfluenceReportHref": InfluenceReportHrefIfAvailable(path, mathReport.Comparison.Candidate.Influence),
+		"MainReportHref":      options.Links.Main,
+		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
 	})
 }
 
 func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, options ReportOptions) error {
-	return execute(path, leaksInspectTemplate, map[string]any{
-		"GeneratedAt":        time.Now().Format(time.RFC3339),
+	return execute(path, cachedLeaksInspectTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
 		"LeakReport":         leakReport,
+		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
 func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareReport, options ReportOptions) error {
-	return execute(path, leaksCompareTemplate, map[string]any{
-		"GeneratedAt":        time.Now().Format(time.RFC3339),
+	return execute(path, cachedLeaksCompareTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
 		"LeakReport":         leakReport,
+		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
 func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
-	return execute(path, influenceTemplate, map[string]any{
-		"GeneratedAt":        time.Now().Format(time.RFC3339),
+	return execute(path, cachedInfluenceTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
 		"Title":              title,
 		"Influence":          influence,
+		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
 	})
@@ -117,115 +169,144 @@ func WriteInstrumentationDiagnosticsWithOptions(
 	diagnostics analyze.InstrumentationDiagnostics,
 	options ReportOptions,
 ) error {
-	return execute(path, diagnosticsTemplate, map[string]any{
-		"GeneratedAt":        time.Now().Format(time.RFC3339),
+	return execute(path, cachedDiagnosticsTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
 		"Diagnostics":        diagnostics,
+		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
 	})
 }
 
+func WriteDependencyInjectionWithOptions(
+	path string,
+	dependencyInjection analyze.DependencyInjectionReport,
+	options ReportOptions,
+) error {
+	return execute(path, cachedDependencyInjectionTemplate, map[string]any{
+		"GeneratedAt":         options.generatedAt(),
+		"DependencyInjection": dependencyInjection,
+		"MainReportHref":      options.Links.Main,
+		"PresentationMode":    options.PresentationMode,
+		"AnimatedBackground":  options.AnimatedBackground,
+	})
+}
+
 func MathReportPath(path string) string {
-	ext := filepath.Ext(path)
-	if ext == "" {
-		return path + "-math.html"
-	}
-	return strings.TrimSuffix(path, ext) + "-math" + ext
+	return canonicalCompanionReportPath(path, "math")
 }
 
 func MathReportHref(path string) string {
 	return filepath.Base(MathReportPath(path))
 }
 
-func mathReportHrefForOptions(path string, options ReportOptions) string {
-	if options.DisableMathLink {
-		return ""
-	}
-	return MathReportHref(path)
-}
-
 func LeakReportPath(path string) string {
-	ext := filepath.Ext(path)
-	if ext != "" {
-		base := strings.TrimSuffix(path, ext)
-		base = strings.TrimSuffix(base, "-math")
-		base = strings.TrimSuffix(base, "-influence")
-		base = strings.TrimSuffix(base, "-diagnostics")
-		return base + "-leaks" + ext
-	}
-	path = strings.TrimSuffix(path, "-math")
-	path = strings.TrimSuffix(path, "-influence")
-	path = strings.TrimSuffix(path, "-diagnostics")
-	return path + "-leaks.html"
+	return canonicalCompanionReportPath(path, "leaks")
 }
 
 func LeakReportHref(path string) string {
 	return filepath.Base(LeakReportPath(path))
 }
 
-func leakReportHrefForOptions(path string, options ReportOptions) string {
-	if options.DisableLeakLink {
-		return ""
-	}
-	return LeakReportHref(path)
-}
-
 func InfluenceReportPath(path string) string {
-	ext := filepath.Ext(path)
-	if ext != "" {
-		base := strings.TrimSuffix(path, ext)
-		base = strings.TrimSuffix(base, "-math")
-		return base + "-influence" + ext
-	}
-	path = strings.TrimSuffix(path, "-math")
-	return path + "-influence.html"
+	return canonicalCompanionReportPath(path, "influence")
 }
 
 func InfluenceReportHref(path string) string {
 	return filepath.Base(InfluenceReportPath(path))
 }
 
-func InfluenceReportHrefIfAvailable(path string, influence analyze.InfluenceSummary) string {
-	if !influence.Available {
-		return ""
-	}
-	return InfluenceReportHref(path)
-}
-
 func DiagnosticsReportPath(path string) string {
-	ext := filepath.Ext(path)
-	if ext != "" {
-		base := strings.TrimSuffix(path, ext)
-		base = strings.TrimSuffix(base, "-math")
-		base = strings.TrimSuffix(base, "-influence")
-		return base + "-diagnostics" + ext
-	}
-	path = strings.TrimSuffix(path, "-math")
-	path = strings.TrimSuffix(path, "-influence")
-	return path + "-diagnostics.html"
+	return canonicalCompanionReportPath(path, "diagnostics")
 }
 
 func DiagnosticsReportHref(path string) string {
 	return filepath.Base(DiagnosticsReportPath(path))
 }
 
-func DiagnosticsReportHrefForOptions(path string, options ReportOptions) string {
-	if !options.InstrumentationDiagnosticsAvailable {
-		return ""
-	}
-	return DiagnosticsReportHref(path)
+func DependencyInjectionReportPath(path string) string {
+	return canonicalCompanionReportPath(path, "di")
 }
 
-func execute(path, source string, data any) error {
-	tmpl, err := template.New("report").Funcs(reportTemplateFuncs()).Parse(source)
+func DependencyInjectionReportHref(path string) string {
+	return filepath.Base(DependencyInjectionReportPath(path))
+}
+
+func companionReportPath(primary, suffix string) string {
+	ext := filepath.Ext(primary)
+	if ext == "" {
+		return primary + "-" + suffix + ".html"
+	}
+	return strings.TrimSuffix(primary, ext) + "-" + suffix + ext
+}
+
+func canonicalCompanionReportPath(path, suffix string) string {
+	ext := filepath.Ext(path)
+	base := path
+	if ext == "" {
+		ext = ".html"
+	} else {
+		base = strings.TrimSuffix(path, ext)
+	}
+	for {
+		trimmed := false
+		for _, known := range []string{"math", "leaks", "influence", "diagnostics", "di"} {
+			knownSuffix := "-" + known
+			if strings.HasSuffix(base, knownSuffix) {
+				base = strings.TrimSuffix(base, knownSuffix)
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
+	return base + "-" + suffix + ext
+}
+
+func (o ReportOptions) generatedAt() string {
+	if o.GeneratedAt != "" {
+		return o.GeneratedAt
+	}
+	return time.Now().Format(time.RFC3339)
+}
+
+type cachedReportTemplate struct {
+	name   string
+	source string
+	once   sync.Once
+	tmpl   *template.Template
+	err    error
+}
+
+var sharedReportTemplateFuncs = reportTemplateFuncs()
+
+func newCachedReportTemplate(name, source string) *cachedReportTemplate {
+	return &cachedReportTemplate{name: name, source: source}
+}
+
+func (c *cachedReportTemplate) parsed() (*template.Template, error) {
+	c.once.Do(func() {
+		c.tmpl, c.err = template.New(c.name).Funcs(sharedReportTemplateFuncs).Parse(c.source)
+	})
+	if c.err != nil {
+		return nil, fmt.Errorf("parse %s report template: %w", c.name, c.err)
+	}
+	return c.tmpl, nil
+}
+
+func execute(path string, cached *cachedReportTemplate, data any) error {
+	tmpl, err := cached.parsed()
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return err
-	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	return atomicfile.Write(path, 0o644, func(file *os.File) error {
+		if err := tmpl.Execute(file, data); err != nil {
+			return fmt.Errorf("render %s report: %w", cached.name, err)
+		}
+		return nil
+	})
 }
 
 func reportTemplateFuncs() template.FuncMap {
@@ -331,20 +412,20 @@ func reportTemplateFuncs() template.FuncMap {
 		"integralCriteria":           integralCriteria,
 		"ownerKind":                  ownerKindLabel,
 		"problemKind":                problemKindLabel,
-		"codeProblemSearchText":      codeProblemSearchText,
 		"codeProblemLocation":        codeProblemLocation,
 		"codeProblemDrillPath":       codeProblemDrillPath,
 		"codeProblemMetric":          codeProblemMetric,
 		"codeProblemCategoryOptions": codeProblemCategoryOptions,
 		"codeProblemCategories":      codeProblemCategoryStats,
 		"codeProblemSeverities":      codeProblemSeverityStats,
+		"limitRows":                  limitRows,
+		"rowLimitNote":               rowLimitNote,
 		"leakObjectKindOptions":      leakObjectKindOptions,
 		"leakObjectKindLabel":        leakObjectKindLabel,
 		"leakGraphSVG":               leakGraphSVG,
 		"leakModeLabel":              leakModeLabel,
 		"leakDeltaStatusClass":       leakDeltaStatusClass,
 		"codeProblemCompareRows":     codeProblemCompareRows,
-		"memoryLeakSearchText":       memoryLeakSearchText,
 		"memoryLeakCompareRows":      memoryLeakCompareRows,
 		"deltaGroups":                compareDeltaGroups,
 		"deltaLabel":                 compareDeltaLabel,
@@ -362,18 +443,11 @@ func reportTemplateFuncs() template.FuncMap {
 		"screenCompareRows":  screenCompareRows,
 		"ownerCompareRows":   ownerCompareRows,
 		"flowCompareRows":    flowCompareRows,
-		"flowKeyLabel":       flowKeyLabel,
 		"summaryLogSpam":     summaryLogSpamTotal,
 		"summaryProblems":    summaryProblemTotal,
 		"signedMS":           signedMS,
 		"signedDuration":     signedDuration,
 		"signedFloat":        signedFloat,
-		"bucketClass": func(bucket mathanalysis.TimelineBucket) string {
-			if zeroTimelineBucket(bucket) {
-				return "bucket-zero"
-			}
-			return ""
-		},
 		"networkBucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroNetworkBucket(bucket) {
 				return "bucket-zero"
@@ -439,23 +513,18 @@ func reportTemplateFuncs() template.FuncMap {
 		"percent01": func(value float64) float64 {
 			return value * 100
 		},
-		"notOK": func(value string) bool {
-			return value != "" && value != "ok"
-		},
 		"fallback": func(value string, fallback string) string {
 			if isUnknownReportValue(value) {
 				return fallback
 			}
 			return value
 		},
-		"contextValue": contextValue,
-		"contextHint":  contextValueHint,
-		"reportValue":  reportValue,
-		"reportHint":   reportValueHint,
-		"cohortValue":  cohortValue,
-		"cohortHint":   cohortValueHint,
-		"flowKeyHint":  flowKeyLabelHint,
-		"bodyClass":    bodyClass,
+		"contextHint": contextValueHint,
+		"reportValue": reportValue,
+		"reportHint":  reportValueHint,
+		"cohortHint":  cohortValueHint,
+		"flowKeyHint": flowKeyLabelHint,
+		"bodyClass":   bodyClass,
 	}
 }
 
@@ -539,26 +608,6 @@ func tooltipHTML(label, body string) template.HTML {
 
 func inlineHTMLText(value string) template.HTML {
 	return template.HTML(template.HTMLEscapeString(value))
-}
-
-func zeroTimelineBucket(bucket mathanalysis.TimelineBucket) bool {
-	return bucket.HTTPCount == 0 &&
-		bucket.HTTPFailed == 0 &&
-		bucket.HTTPAvgDurationMS == 0 &&
-		bucket.HTTPP95DurationMS == 0 &&
-		bucket.DNSCount == 0 &&
-		bucket.DNSDurationMS == 0 &&
-		bucket.ConnectCount == 0 &&
-		bucket.ConnectDurationMS == 0 &&
-		bucket.TTFBMS == 0 &&
-		bucket.UIFrames == 0 &&
-		bucket.UIJankyFrames == 0 &&
-		bucket.StallCount == 0 &&
-		bucket.StallMaxMS == 0 &&
-		bucket.MemoryPSSKB == 0 &&
-		bucket.AvailableMemoryKB == 0 &&
-		bucket.TrafficRxBytes == 0 &&
-		bucket.TrafficTxBytes == 0
 }
 
 func zeroNetworkBucket(bucket mathanalysis.TimelineBucket) bool {
@@ -833,9 +882,9 @@ func scoreHelp(kind string) string {
 func scoreGuideHTML(kind string) template.HTML {
 	switch kind {
 	case "code":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Оценка показывает приоритет расследования внутри текущего прогона. Она растет от совпадения сетевых хвостов, пауз главного потока, подтормаживаний UI, памяти, логов, сценария и графа влияния.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Каждое семейство событий оценивается один раз через канонический сигнал: проблемное окно, удержание, лог или runtime-вызов. Производные owner/flow/граф представляют контекст и повторно score не увеличивают.</p></div></div>`)
 	case "leak":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала утечек памяти</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: критично</span><p>Риск дополнительно повышают возраст удержания от 15 секунд, повторяемость, удержанный размер от 4 МБ и связь с пользовательским держателем.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сигналов удержания</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: высокий приоритет</span><p>time_only получает меньший вес, after_explicit_gc — средний, confirmed_hprof/path — полный. Оценка задает порядок расследования и сама по себе не доказывает утечку.</p></div></div>`)
 	case "math":
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: заметный сигнал</span><span class="score-band sev-high">6+: сильный сигнал</span><p>Для задержек, памяти, подтормаживаний и сетевых циклов больше обычно хуже. Доверие 0..1 показывает, насколько вывод подтвержден данными.</p></div></div>`)
 	case "compare":
@@ -1084,39 +1133,39 @@ func codeProblemLocation(row analyze.CodeProblemStats) string {
 	return row.ClassName + "." + row.Method
 }
 
-func codeProblemSearchText(row analyze.CodeProblemStats) string {
-	parts := []string{
-		row.ClassName,
-		row.Method,
-		row.Owner,
-		row.Severity,
-		row.Impact,
-		row.Recommendation,
-		row.Evidence,
+// limitRows bounds presentation-only evidence in autonomous HTML reports. The complete slices
+// remain in the analysis model (and therefore in JSON output and all aggregate calculations),
+// while the report keeps the highest-ranked rows because analyzers sort these collections before
+// rendering. Accepting any slice keeps the policy uniform across report-only view types without
+// copying the often large backing arrays.
+func limitRows(rows any, limit int) any {
+	value := reflect.ValueOf(rows)
+	if !value.IsValid() || value.Kind() != reflect.Slice {
+		return rows
 	}
-	parts = append(parts, row.Categories...)
-	parts = append(parts, row.Problems...)
-	parts = append(parts, row.Screens...)
-	parts = append(parts, row.Flows...)
-	parts = append(parts, row.Steps...)
-	parts = append(parts, row.Routes...)
-	for _, signal := range row.Signals {
-		parts = append(parts, signal.Name, signal.Category, signal.Detail)
+	if limit < 0 {
+		limit = 0
 	}
-	for _, drill := range row.DrillDown {
-		parts = append(parts,
-			drill.ClassName,
-			drill.Method,
-			drill.Screen,
-			drill.Flow,
-			drill.Step,
-			drill.Route,
-			drill.Evidence,
-			drill.Recommendation,
-		)
-		parts = append(parts, drill.Signals...)
+	if value.Len() <= limit {
+		return rows
 	}
-	return strings.ToLower(strings.Join(parts, " "))
+	return value.Slice(0, limit).Interface()
+}
+
+func rowLimitNote(label string, total, limit int) template.HTML {
+	if limit < 0 {
+		limit = 0
+	}
+	if total <= limit {
+		return ""
+	}
+	return template.HTML(fmt.Sprintf(
+		`<p class="report-limit-note"><strong>%s:</strong> показано %d из %d наиболее значимых строк; еще %d учтены в сводных метриках и оценках. Полный машинный набор доступен в JSON-выводе команды с <code>--json</code>.</p>`,
+		template.HTMLEscapeString(label),
+		limit,
+		total,
+		total-limit,
+	))
 }
 
 func codeProblemDrillPath(drill analyze.CodeProblemDrillDown) string {
@@ -1170,29 +1219,6 @@ func codeProblemMetric(signal analyze.CodeProblemSignal) string {
 	return strings.Join(parts, " · ")
 }
 
-func memoryLeakSearchText(item analyze.MemoryLeakSuspect) string {
-	return strings.ToLower(strings.Join([]string{
-		item.ClassName,
-		item.Holder,
-		item.Screen,
-		item.Flow,
-		item.Step,
-		item.ObjectKind,
-		item.HolderQuality,
-		item.HeapSource,
-		item.GCRoot,
-		item.HolderField,
-		item.LeakPattern,
-		strings.Join(item.ReferenceMatchers, " "),
-		item.LeakChainConfidence,
-		item.LeakChainSummary,
-		strings.Join(item.LeakChainActions, " "),
-		item.Impact,
-		item.Recommendation,
-		item.Evidence,
-	}, " "))
-}
-
 type memoryLeakCompareRow struct {
 	Candidate     analyze.MemoryLeakSuspect
 	BaselineScore float64
@@ -1225,7 +1251,7 @@ func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow
 			if severity == "ok" {
 				severity = "medium"
 			}
-		case delta >= 8 || row.Count >= before.Count+5 || row.MaxAgeMS >= before.MaxAgeMS+30_000:
+		case delta >= 8 || row.Count >= saturatingAddUint64(before.Count, 5) || row.MaxAgeMS >= saturatingAddUint64(before.MaxAgeMS, 30_000):
 			status = "утечка усилилась"
 			severity = "high"
 		case delta >= 3 || row.Count > before.Count || row.MaxAgeMS > before.MaxAgeMS:
@@ -1243,8 +1269,8 @@ func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow
 			BaselineCount: before.Count,
 			BaselineAgeMS: before.MaxAgeMS,
 			DeltaScore:    math.Round(delta*10) / 10,
-			DeltaCount:    int64(row.Count) - int64(before.Count),
-			DeltaAgeMS:    int64(row.MaxAgeMS) - int64(before.MaxAgeMS),
+			DeltaCount:    saturatingSignedDelta(row.Count, before.Count),
+			DeltaAgeMS:    saturatingSignedDelta(row.MaxAgeMS, before.MaxAgeMS),
 			Status:        status,
 			Severity:      severity,
 		})
@@ -1588,7 +1614,7 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 	for name := range names {
 		b := base[name]
 		c := cand[name]
-		delta := int64(c.P95MS) - int64(b.P95MS)
+		delta := saturatingSignedDelta(c.P95MS, b.P95MS)
 		rows = append(rows, routeCompareRow{
 			Route:             name,
 			BaselineCount:     b.Count,
@@ -1607,8 +1633,8 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
 			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
 		}
-		if absInt64(rows[i].DeltaP95MS) != absInt64(rows[j].DeltaP95MS) {
-			return absInt64(rows[i].DeltaP95MS) > absInt64(rows[j].DeltaP95MS)
+		if int64Magnitude(rows[i].DeltaP95MS) != int64Magnitude(rows[j].DeltaP95MS) {
+			return int64Magnitude(rows[i].DeltaP95MS) > int64Magnitude(rows[j].DeltaP95MS)
 		}
 		return rows[i].Route < rows[j].Route
 	})
@@ -1705,7 +1731,7 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 		b := base[name]
 		c := cand[name]
 		kind := firstNonEmpty(c.Kind, b.Kind)
-		delta := int64(c.MaxMS) - int64(b.MaxMS)
+		delta := saturatingSignedDelta(c.MaxMS, b.MaxMS)
 		rows = append(rows, ownerCompareRow{
 			Owner:            name,
 			Kind:             kind,
@@ -1723,8 +1749,8 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
 			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
 		}
-		if absInt64(rows[i].DeltaMaxMS) != absInt64(rows[j].DeltaMaxMS) {
-			return absInt64(rows[i].DeltaMaxMS) > absInt64(rows[j].DeltaMaxMS)
+		if int64Magnitude(rows[i].DeltaMaxMS) != int64Magnitude(rows[j].DeltaMaxMS) {
+			return int64Magnitude(rows[i].DeltaMaxMS) > int64Magnitude(rows[j].DeltaMaxMS)
 		}
 		return rows[i].Owner < rows[j].Owner
 	})
@@ -1772,10 +1798,10 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 	for key := range keys {
 		b := base[key]
 		c := cand[key]
-		problemDelta := int64(c.ProblemCount) - int64(b.ProblemCount)
-		logDelta := int64(c.LogSpam) - int64(b.LogSpam)
-		httpDelta := int64(c.HTTPP95MS) - int64(b.HTTPP95MS)
-		stallDelta := int64(c.StallMaxMS) - int64(b.StallMaxMS)
+		problemDelta := saturatingSignedDelta(c.ProblemCount, b.ProblemCount)
+		logDelta := saturatingSignedDelta(c.LogSpam, b.LogSpam)
+		httpDelta := saturatingSignedDelta(c.HTTPP95MS, b.HTTPP95MS)
+		stallDelta := saturatingSignedDelta(c.StallMaxMS, b.StallMaxMS)
 		jankDelta := c.UIJankPct - b.UIJankPct
 		rows = append(rows, flowCompareRow{
 			Screen:              firstNonEmpty(c.Screen, b.Screen),
@@ -1804,14 +1830,21 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
 			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
 		}
-		left := absInt64(rows[i].DeltaProblems)*10_000 + absInt64(rows[i].DeltaLogSpam)*10 + absInt64(rows[i].DeltaStallMaxMS) + absInt64(rows[i].DeltaHTTPP95MS)
-		right := absInt64(rows[j].DeltaProblems)*10_000 + absInt64(rows[j].DeltaLogSpam)*10 + absInt64(rows[j].DeltaStallMaxMS) + absInt64(rows[j].DeltaHTTPP95MS)
+		left := flowDeltaSortScore(rows[i])
+		right := flowDeltaSortScore(rows[j])
 		if left != right {
 			return left > right
 		}
 		return flowKeyLabel(rows[i].Screen, rows[i].Flow, rows[i].Step, rows[i].Owner) < flowKeyLabel(rows[j].Screen, rows[j].Flow, rows[j].Step, rows[j].Owner)
 	})
 	return rows
+}
+
+func flowDeltaSortScore(row flowCompareRow) uint64 {
+	score := saturatingMulUint64(int64Magnitude(row.DeltaProblems), 10_000)
+	score = saturatingAddUint64(score, saturatingMulUint64(int64Magnitude(row.DeltaLogSpam), 10))
+	score = saturatingAddUint64(score, int64Magnitude(row.DeltaStallMaxMS))
+	return saturatingAddUint64(score, int64Magnitude(row.DeltaHTTPP95MS))
 }
 
 func flowStatsKey(flow analyze.FlowStats) string {
@@ -1833,10 +1866,6 @@ func flowKeyLabelHint(screen, flow, step, owner string) template.HTML {
 		return inlineHTMLText(label)
 	}
 	return tooltipHTML(label, hint)
-}
-
-func contextValue(value string) string {
-	return reportValue(value, "нет данных")
 }
 
 func contextValueHint(value string, field string) template.HTML {
@@ -1960,17 +1989,17 @@ func missingDataHint(field string) string {
 	case "screen":
 		return "Экран берется из Activity lifecycle callbacks. Если он не записался, ActivityTracker не подключился к Application, событие произошло до первого Activity callback или лог создан старой версией SDK."
 	case "flow":
-		return "Сценарий появляется из startFlow/withFlow, @JankFlow или ASM flowInteractions. Если его нет, этот участок не был размечен как сценарий или instrumentation не попал в пакет."
+		return "Сценарий появляется из startFlow/withFlow, @JankHunterFlow или ASM flowInteractions. Если его нет, этот участок не был размечен как сценарий или instrumentation не попал в пакет."
 	case "step", "trace":
-		return "Шаг появляется из markFlowStep/withFlowStep, @JankTrace или ASM flowInteractions. Если его нет, конкретный участок сценария не был размечен."
+		return "Шаг появляется из markFlowStep/withFlowStep, @JankHunterTrace или ASM flowInteractions. Если его нет, конкретный участок сценария не был размечен."
 	case "owner":
-		return "Источник приходит из ASM owner-map, @JankOwner/@JankHunterTrace, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции или owner-map не был передан в CLI."
+		return "Источник приходит из встроенных ASM-символов, @JankHunterOwner/@JankHunterTrace, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции; для developer-режима STABLE_EXTERNAL дополнительно нужен owner-map."
 	case "log-source":
 		return "Источник логов берется из Log/Timber bytecode hook. Если его нет, вызов прошел без ASM-инструментации или сигнатура logger не поддержана текущим bridge."
 	case "route", "network-route":
 		return "Маршрут берется из OkHttp/HTTP instrumentation. Если он отсутствует при сетевых симптомах, проверьте instrument.okhttp, includePackages, scope ALL и поддержку версии OkHttp bridge."
 	case "call", "caller", "callee":
-		return "Узел графа вызовов берется из runtimeCallGraph instrumentation. Если его нет, вызов не попал в инструментированные пакеты, owner-map не был передан в CLI или ребро было отброшено лимитом."
+		return "Узел графа вызовов берется из runtimeCallGraph instrumentation. Если его нет, вызов не попал в инструментированные пакеты, ребро было отброшено лимитом или для developer-режима STABLE_EXTERNAL не передан owner-map."
 	case "stack":
 		return "Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра или событие записано старой версией runtime."
 	case "holder":
@@ -2005,7 +2034,7 @@ func flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta int64, jank
 func summaryLogSpamTotal(summary analyze.Summary) uint64 {
 	var total uint64
 	for _, item := range summary.LogSpam {
-		total += item.Count
+		total = saturatingAddUint64(total, item.Count)
 	}
 	return total
 }
@@ -2013,7 +2042,7 @@ func summaryLogSpamTotal(summary analyze.Summary) uint64 {
 func summaryProblemTotal(summary analyze.Summary) uint64 {
 	var total uint64
 	for _, item := range summary.ProblemWindows {
-		total += item.Count
+		total = saturatingAddUint64(total, item.Count)
 	}
 	return total
 }
@@ -2066,9 +2095,8 @@ func signedDuration(value int64) string {
 	sign := "+"
 	if value < 0 {
 		sign = "-"
-		value = -value
 	}
-	return sign + humanDuration(uint64(value))
+	return sign + humanDuration(int64Magnitude(value))
 }
 
 func signedFloat(value float64, unit string) string {
@@ -2078,11 +2106,55 @@ func signedFloat(value float64, unit string) string {
 	return fmt.Sprintf("%+.2f %s", value, unit)
 }
 
-func absInt64(value int64) int64 {
-	if value < 0 {
-		return -value
+const (
+	maxSignedInt64 = int64(^uint64(0) >> 1)
+	minSignedInt64 = -maxSignedInt64 - 1
+)
+
+func saturatingSignedDelta(after, before uint64) int64 {
+	if after >= before {
+		difference := after - before
+		if difference > uint64(maxSignedInt64) {
+			return maxSignedInt64
+		}
+		return int64(difference)
 	}
-	return value
+	difference := before - after
+	if difference > uint64(maxSignedInt64) {
+		return minSignedInt64
+	}
+	return -int64(difference)
+}
+
+func int64Magnitude(value int64) uint64 {
+	if value >= 0 {
+		return uint64(value)
+	}
+	return uint64(-(value + 1)) + 1
+}
+
+func saturatingAddUint64(left, right uint64) uint64 {
+	if ^uint64(0)-left < right {
+		return ^uint64(0)
+	}
+	return left + right
+}
+
+func saturatingMulUint64(left, right uint64) uint64 {
+	if left == 0 || right == 0 {
+		return 0
+	}
+	if left > ^uint64(0)/right {
+		return ^uint64(0)
+	}
+	return left * right
+}
+
+func nonNegativeInt(value int) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value)
 }
 
 type heuristicCard struct {
@@ -2192,7 +2264,12 @@ func topProblemFlow(summary analyze.Summary) (analyze.FlowStats, bool) {
 }
 
 func flowProblemScore(flow analyze.FlowStats) uint64 {
-	return flow.ProblemCount*10_000 + flow.LogSpam*10 + uint64(flow.StallCount)*1_000 + flow.StallMaxMS + flow.HTTPP95MS + uint64(flow.UIJank)
+	score := saturatingMulUint64(flow.ProblemCount, 10_000)
+	score = saturatingAddUint64(score, saturatingMulUint64(flow.LogSpam, 10))
+	score = saturatingAddUint64(score, saturatingMulUint64(nonNegativeInt(flow.StallCount), 1_000))
+	score = saturatingAddUint64(score, flow.StallMaxMS)
+	score = saturatingAddUint64(score, flow.HTTPP95MS)
+	return saturatingAddUint64(score, flow.UIJank)
 }
 
 func flowCardSeverity(flow analyze.FlowStats) string {
@@ -2256,19 +2333,19 @@ func leakDeltaStatusClass(status string) string {
 	}
 }
 
-func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
+func leakGraphSVG(namespace string, graph analyze.LeakGraph) template.HTML {
 	if len(graph.Nodes) == 0 {
 		return template.HTML(`<div class="leak-graph-empty">Нет данных для графа.</div>`)
 	}
 	const (
-		nodeW         = 260.0
+		nodeW         = 280.0
 		nodeH         = 96.0
-		gapX          = 58.0
+		gapX          = 190.0
 		topY          = 60.0
-		bandY         = 150.0
+		bandY         = 180.0
 		leftX         = 32.0
 		minH          = 340.0
-		maxCols       = 4
+		maxCols       = 3
 		edgeInset     = 14.0
 		retainedGapX  = 24.0
 		retainedBandY = 112.0
@@ -2302,8 +2379,10 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 	positions := map[string]graphPoint{}
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `<svg class="leak-graph-svg" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(graph.Title))
-	arrowID := "leakArrow-" + graphClass(firstNonEmpty(graph.TargetID, graph.RootID, graph.Title))
-	gradientID := "leakEdgeGradient-" + graphClass(firstNonEmpty(graph.TargetID, graph.RootID, graph.Title))
+	scope := graphClass(firstNonEmpty(namespace, "leak-graph"))
+	identity := graphClass(firstNonEmpty(graph.TargetID, graph.RootID, graph.Title))
+	arrowID := "leak-arrow-" + scope + "-" + identity
+	gradientID := "leak-edge-gradient-" + scope + "-" + identity
 	fmt.Fprintf(
 		&builder,
 		`<defs><linearGradient id="%s" x1="0" x2="1"><stop offset="0" stop-color="#6ff7ff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.88"/></marker></defs>`,
@@ -2351,7 +2430,34 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		midY := (y1 + y2) / 2
 		fmt.Fprintf(&builder, `<path class="leak-graph-edge edge-%s" style="stroke:url(#%s)" d="M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f" marker-end="url(#%s)"/>`, graphClass(edge.Kind), template.HTMLEscapeString(gradientID), x1, y1, midX, y1, midX, y2, x2, y2, template.HTMLEscapeString(arrowID))
 		if edge.Label != "" {
-			fmt.Fprintf(&builder, `<text x="%.1f" y="%.1f" text-anchor="middle" class="leak-graph-edge-label">%s</text>`, midX, midY-10, template.HTMLEscapeString(shortGraphLabel(edge.Label, 18)))
+			label := template.HTMLEscapeString(edge.Label)
+			shortLabel := shortGraphLabel(edge.Label, 24)
+			labelX := midX
+			labelY := math.Min(y1, y2) - 14
+			anchor := "middle"
+			if math.Abs(y2-y1) > nodeH/2 {
+				labelX = midX + 20
+				labelY = midY - 10
+				anchor = "start"
+			}
+			labelWidth := math.Min(176, math.Max(48, float64(len([]rune(shortLabel)))*6.8+14))
+			backdropX := labelX - labelWidth/2
+			if anchor == "start" {
+				backdropX = labelX - 7
+			}
+			fmt.Fprintf(
+				&builder,
+				`<rect x="%.1f" y="%.1f" width="%.1f" height="18" rx="5" class="leak-graph-edge-label-bg"/><text x="%.1f" y="%.1f" text-anchor="%s" class="leak-graph-edge-label" aria-label="%s"><title>%s</title>%s</text>`,
+				backdropX,
+				labelY-13,
+				labelWidth,
+				labelX,
+				labelY,
+				anchor,
+				label,
+				label,
+				template.HTMLEscapeString(shortLabel),
+			)
 		}
 	}
 	for _, node := range graph.Nodes {
@@ -2381,13 +2487,13 @@ func leakGraphSVG(graph analyze.LeakGraph) template.HTML {
 		fmt.Fprintf(&builder, `<title>%s</title>`, template.HTMLEscapeString(tip))
 		fmt.Fprintf(&builder, `<rect width="%.0f" height="%.0f" rx="8"/>`, nodeW, nodeH)
 		textY := 24.0
-		for _, line := range graphLabelLines(node.Label, 32, 2) {
+		for _, line := range graphLabelLines(node.Label, 30, 2) {
 			fmt.Fprintf(&builder, `<text x="14" y="%.0f" class="node-title">%s</text>`, textY, template.HTMLEscapeString(line))
 			textY += 15
 		}
 		if node.Detail != "" {
 			textY += 4
-			for _, line := range graphLabelLines(node.Detail, 38, 2) {
+			for _, line := range graphLabelLines(node.Detail, 34, 2) {
 				fmt.Fprintf(&builder, `<text x="14" y="%.0f" class="node-detail">%s</text>`, textY, template.HTMLEscapeString(line))
 				textY += 14
 			}
@@ -2793,7 +2899,9 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 	out.WriteString(`<div class="influence-tools" role="toolbar" aria-label="Режим выделения графа"><button type="button" data-influence-mode="node">Вершина</button><button type="button" class="is-active" data-influence-mode="paths">Пути</button><button type="button" data-influence-mode="tree">Остов</button><button type="button" data-influence-reset>Сброс</button></div>`)
 	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
 	fmt.Fprintf(&out, `<svg class="influence-graph" viewBox="0 0 %.0f %.0f" role="img" aria-label="Граф влияния кода">`, width, height)
-	out.WriteString(`<defs><marker id="influence-arrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.78"></path></marker><marker id="influence-arrow-confirmed" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#62ffa8" opacity="0.88"></path></marker></defs>`)
+	const influenceArrowID = "influence-arrow-report"
+	const influenceConfirmedArrowID = "influence-arrow-confirmed-report"
+	fmt.Fprintf(&out, `<defs><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.78"></path></marker><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#62ffa8" opacity="0.88"></path></marker></defs>`, influenceArrowID, influenceConfirmedArrowID)
 	out.WriteString(`<text class="influence-layer-label" x="52" y="34">Источники вызовов</text>`)
 	out.WriteString(`<text class="influence-layer-label" x="413" y="34">Связующие классы</text>`)
 	out.WriteString(`<text class="influence-layer-label" x="774" y="34">Проблемные узлы</text>`)
@@ -2810,9 +2918,9 @@ func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
 			className += " confirmed"
 		}
 		path := influenceEdgePath(from, to, nodeColumns[edge.From], nodeColumns[edge.To], nodeW, nodeH, width)
-		markerID := "influence-arrow"
+		markerID := influenceArrowID
 		if edge.RuntimeConfirmed {
-			markerID = "influence-arrow-confirmed"
+			markerID = influenceConfirmedArrowID
 		}
 		fmt.Fprintf(&out, `<path class="%s" data-from="%s" data-to="%s" d="%s" opacity="%.2f" stroke-width="%.2f" marker-end="url(#%s)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></path>`,
 			className,

@@ -34,7 +34,10 @@ internal object DeviceSnapshots {
             .filter { it.isNotBlank() && it != "unknown" }
             .joinToString(" ")
             .ifBlank { "unknown" }
-        val abis = Build.SUPPORTED_ABIS
+        // Android declares this array non-null, but vendor/platform stubs can still return null.
+        // Metadata collection must never prevent the runtime writer from starting.
+        val supportedAbis = runCatching { Build.SUPPORTED_ABIS }.getOrNull().orEmpty()
+        val abis = supportedAbis
             .filter { it.isNotBlank() }
             .joinToString(",")
             .ifBlank { "unknown" }
@@ -42,7 +45,7 @@ internal object DeviceSnapshots {
             displayName = displayName,
             androidRelease = Build.VERSION.RELEASE.clean(),
             securityPatch = Build.VERSION.SECURITY_PATCH.clean(),
-            primaryAbi = Build.SUPPORTED_ABIS.firstOrNull().clean(),
+            primaryAbi = supportedAbis.firstOrNull().clean(),
             supportedAbis = abis,
             manufacturer = manufacturer,
             brand = Build.BRAND.clean(),

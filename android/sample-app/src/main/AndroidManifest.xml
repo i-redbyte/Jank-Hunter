@@ -15,14 +15,11 @@
             android:name="io.jankhunter.flush_interval_ms"
             android:value="1000" />
         <meta-data
-            android:name="io.jankhunter.max_log_bytes"
-            android:value="524288" />
+            android:name="io.jankhunter.session_log_size_limit_enabled"
+            android:value="true" />
         <meta-data
-            android:name="io.jankhunter.max_log_directory_bytes"
-            android:value="2097152" />
-        <meta-data
-            android:name="io.jankhunter.log_bucket"
-            android:value="daily" />
+            android:name="io.jankhunter.max_session_log_size_mib"
+            android:value="16" />
 
         <activity
             android:name=".MainActivity"

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func LoadThresholdConfig(path string) (ThresholdConfig, error) {
@@ -47,23 +48,34 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 		confidence := comparison.Deltas[0].Confidence
 		if confidenceRank(confidence) < confidenceRank(config.MinConfidence) {
 			failures = append(failures, fmt.Sprintf(
-				"confidence=%s below %s (baseline logs/events=%d/%d, candidate logs/events=%d/%d; collect 5+ logs and 500+ events per cohort for high confidence)",
+				"confidence=%s below %s (baseline logs/events=%d/%d, candidate logs/events=%d/%d; collection quality: %s, %s; collect 5+ logs and 500+ events per cohort and resolve collection-quality reasons for high confidence)",
 				confidence,
 				config.MinConfidence,
 				comparison.Baseline.LogCount,
 				comparison.Baseline.EventCount,
 				comparison.Candidate.LogCount,
 				comparison.Candidate.EventCount,
+				collectionQualityGateDetail("baseline", comparison.Baseline),
+				collectionQualityGateDetail("candidate", comparison.Candidate),
 			))
 		}
 	}
-	if config.RequireCleanCohorts && len(comparison.Warnings) > 0 {
-		for _, warning := range comparison.Warnings {
+	if config.RequireCleanCohorts && len(comparison.CohortWarnings) > 0 {
+		for _, warning := range comparison.CohortWarnings {
 			failures = append(failures, "cohort mismatch: "+warning)
 		}
 	}
 	failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)
 	return GateResult{Failed: len(failures) > 0, Failures: failures}
+}
+
+func collectionQualityGateDetail(label string, summary Summary) string {
+	level := collectionConfidenceCap(summary)
+	reasons := "no reported loss"
+	if len(summary.CollectionQuality.Reasons) > 0 {
+		reasons = strings.Join(summary.CollectionQuality.Reasons, "; ")
+	}
+	return fmt.Sprintf("%s=%s [%s]", label, level, reasons)
 }
 
 func evaluateLeakGate(comparison Comparison, config LeakThreshold) []string {

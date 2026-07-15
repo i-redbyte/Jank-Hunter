@@ -1,11 +1,17 @@
 package io.jankhunter.gradle
 
 import com.android.build.api.instrumentation.InstrumentationParameters
-import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 
 interface JankHunterInstrumentationParameters : InstrumentationParameters {
+    @get:Input
+    val embeddedSymbols: Property<Boolean>
+
+    @get:Input
+    val dependencyInjectionAnalysis: Property<Boolean>
+
     @get:Input
     val methodCounters: Property<Boolean>
 
@@ -14,6 +20,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
 
     @get:Input
     val webSockets: Property<Boolean>
+
+    @get:Input
+    val okHttpHelperAvailable: Property<Boolean>
 
     @get:Input
     val handlers: Property<Boolean>
@@ -49,7 +58,7 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val ownerMapEntriesDirectory: Property<String>
 
     @get:Input
-    val allowEmptyIncludePackages: Property<Boolean>
+    val dependencyInjectionCatalogDirectory: Property<String>
 
     @get:Input
     val asmProgressLog: Property<Boolean>
@@ -58,8 +67,8 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val progressLabel: Property<String>
 
     @get:Input
-    val includePackages: ListProperty<String>
+    val includePackages: SetProperty<String>
 
     @get:Input
-    val excludePackages: ListProperty<String>
+    val excludePackages: SetProperty<String>
 }

@@ -3,25 +3,8 @@ package io.jankhunter.runtime
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import io.jankhunter.runtime.internal.io.DictionaryIds
 import java.io.File
-import java.util.Locale
-
-enum class JankHunterLogBucket {
-    SESSION,
-    DAILY,
-    ;
-
-    companion object {
-        @JvmStatic
-        fun from(value: String?): JankHunterLogBucket? {
-            return when (value?.trim()?.lowercase(Locale.US)) {
-                "session" -> SESSION
-                "daily" -> DAILY
-                else -> null
-            }
-        }
-    }
-}
 
 class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
@@ -50,9 +33,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
     private val uiWindowP95ThresholdMs = builder.uiWindowP95ThresholdMs
     private val maxQueueSize = builder.maxQueueSize
-    private val maxLogBytes = builder.maxLogBytes
-    private val maxLogDirectoryBytes = builder.maxLogDirectoryBytes
-    private val logBucket = builder.logBucket
+    private val sessionLogSizeLimitEnabled = builder.sessionLogSizeLimitEnabled
+    private val maxSessionLogSizeMiB = builder.maxSessionLogSizeMiB
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
@@ -72,6 +54,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val allowedProcesses = builder.allowedProcesses.toSet()
     private val processNameRedactor = builder.processNameRedactor
     private val binaryStorage = builder.binaryStorage
+    private val symbolNamespace = builder.symbolNamespace.copyOf()
 
     fun enabled(): Boolean = enabled
 
@@ -125,11 +108,15 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
 
-    fun maxLogBytes(): Long = maxLogBytes.coerceAtLeast(1L)
+    fun sessionLogSizeLimitEnabled(): Boolean = sessionLogSizeLimitEnabled
 
-    fun maxLogDirectoryBytes(): Long = maxLogDirectoryBytes.coerceAtLeast(1L)
+    fun maxSessionLogSizeMiB(): Int = maxSessionLogSizeMiB.coerceAtLeast(1)
 
-    fun logBucket(): JankHunterLogBucket = logBucket
+    internal fun sessionLogSizeLimitBytes(): Long {
+        if (!sessionLogSizeLimitEnabled) return 0L
+        val sizeMiB = maxSessionLogSizeMiB().toLong()
+        return sizeMiB.coerceAtMost(Long.MAX_VALUE / BYTES_PER_MIB) * BYTES_PER_MIB
+    }
 
     fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
 
@@ -169,6 +156,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun binaryStorage(): JankHunterBinaryStorage? = binaryStorage
 
+    internal fun symbolNamespace(): ByteArray = symbolNamespace.copyOf()
+
     fun toBuilder(): Builder {
         return Builder()
             .enabled(enabled)
@@ -197,9 +186,8 @@ class JankHunterConfig private constructor(builder: Builder) {
             .jankFrameThresholdMs(jankFrameThresholdMs)
             .uiWindowP95ThresholdMs(uiWindowP95ThresholdMs)
             .maxQueueSize(maxQueueSize)
-            .maxLogBytes(maxLogBytes)
-            .maxLogDirectoryBytes(maxLogDirectoryBytes)
-            .logBucket(logBucket)
+            .sessionLogSizeLimitEnabled(sessionLogSizeLimitEnabled)
+            .maxSessionLogSizeMiB(maxSessionLogSizeMiB)
             .maxDictionaryEntries(maxDictionaryEntries)
             .maxDictionaryValueBytes(maxDictionaryValueBytes)
             .flushIntervalMs(flushIntervalMs)
@@ -219,6 +207,7 @@ class JankHunterConfig private constructor(builder: Builder) {
             .allowedProcesses(allowedProcesses)
             .processNameRedactor(processNameRedactor)
             .binaryStorage(binaryStorage)
+            .symbolNamespace(symbolNamespace)
     }
 
     fun isProcessAllowed(processName: String, mainProcessName: String): Boolean {
@@ -237,7 +226,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var memorySampleIntervalMs = 10_000L
         internal var systemSamplerEnabled = true
         internal var systemSampleIntervalMs = 15_000L
-        internal var mainLooperDispatchMonitorEnabled = true
+        internal var mainLooperDispatchMonitorEnabled = false
         internal var processExitInfoEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
@@ -254,11 +243,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var jankFrameThresholdMs = 32L
         internal var uiWindowP95ThresholdMs = 32L
         internal var maxQueueSize = 2048
-        internal var maxLogBytes = 512L * 1024L
-        internal var maxLogDirectoryBytes = 2L * 1024L * 1024L
-        internal var logBucket = JankHunterLogBucket.SESSION
+        internal var sessionLogSizeLimitEnabled = true
+        internal var maxSessionLogSizeMiB = 16
         internal var maxDictionaryEntries = 8192
-        internal var maxDictionaryValueBytes = 256
+        internal var maxDictionaryValueBytes = DictionaryIds.DEFAULT_MAX_VALUE_BYTES
         internal var flushIntervalMs = 5_000L
         internal var adaptiveSamplingEnabled = true
         internal var adaptiveMemoryStableIntervalMs = 60_000L
@@ -276,6 +264,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
         internal var binaryStorage: JankHunterBinaryStorage? = null
+        internal var symbolNamespace: ByteArray = ByteArray(0)
 
         fun enabled(value: Boolean) = apply { enabled = value }
 
@@ -329,11 +318,9 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun maxQueueSize(value: Int) = apply { maxQueueSize = value }
 
-        fun maxLogBytes(value: Long) = apply { maxLogBytes = value }
+        fun sessionLogSizeLimitEnabled(value: Boolean) = apply { sessionLogSizeLimitEnabled = value }
 
-        fun maxLogDirectoryBytes(value: Long) = apply { maxLogDirectoryBytes = value }
-
-        fun logBucket(value: JankHunterLogBucket) = apply { logBucket = value }
+        fun maxSessionLogSizeMiB(value: Int) = apply { maxSessionLogSizeMiB = value }
 
         fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
 
@@ -377,6 +364,10 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun binaryStorage(value: JankHunterBinaryStorage?) = apply { binaryStorage = value }
 
+        internal fun symbolNamespace(value: ByteArray?) = apply {
+            symbolNamespace = value?.takeIf { it.size == SYMBOL_NAMESPACE_BYTES }?.copyOf() ?: ByteArray(0)
+        }
+
         fun build(): JankHunterConfig = JankHunterConfig(this)
     }
 
@@ -407,9 +398,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
         const val META_UI_WINDOW_P95_THRESHOLD_MS = "io.jankhunter.ui_window_p95_threshold_ms"
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
-        const val META_MAX_LOG_BYTES = "io.jankhunter.max_log_bytes"
-        const val META_MAX_LOG_DIRECTORY_BYTES = "io.jankhunter.max_log_directory_bytes"
-        const val META_LOG_BUCKET = "io.jankhunter.log_bucket"
+        const val META_SESSION_LOG_SIZE_LIMIT_ENABLED = "io.jankhunter.session_log_size_limit_enabled"
+        const val META_MAX_SESSION_LOG_SIZE_MIB = "io.jankhunter.max_session_log_size_mib"
         const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
         const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
@@ -425,6 +415,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = "io.jankhunter.max_handler_wrappers_per_runnable"
         const val META_MAIN_PROCESS_ONLY = "io.jankhunter.main_process_only"
         const val META_ALLOWED_PROCESSES = "io.jankhunter.allowed_processes"
+        const val META_SYMBOL_NAMESPACE = "io.jankhunter.symbol_namespace"
 
         @JvmStatic
         fun builder(): Builder = Builder()
@@ -444,7 +435,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .systemSamplerEnabled(metadataBoolean(metadata, META_SYSTEM_SAMPLER_ENABLED, true))
                 .systemSampleIntervalMs(metadataLong(metadata, META_SYSTEM_SAMPLE_INTERVAL_MS, 15_000L))
                 .mainLooperDispatchMonitorEnabled(
-                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, true),
+                    metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false),
                 )
                 .processExitInfoEnabled(metadataBoolean(metadata, META_PROCESS_EXIT_INFO_ENABLED, true))
                 .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
@@ -467,13 +458,18 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
                 .uiWindowP95ThresholdMs(metadataLong(metadata, META_UI_WINDOW_P95_THRESHOLD_MS, 32L))
                 .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
-                .maxLogBytes(metadataLong(metadata, META_MAX_LOG_BYTES, 512L * 1024L))
-                .maxLogDirectoryBytes(
-                    metadataLong(metadata, META_MAX_LOG_DIRECTORY_BYTES, 2L * 1024L * 1024L),
+                .sessionLogSizeLimitEnabled(
+                    metadataBoolean(metadata, META_SESSION_LOG_SIZE_LIMIT_ENABLED, true),
                 )
-                .logBucket(metadataLogBucket(metadata, META_LOG_BUCKET, JankHunterLogBucket.SESSION))
+                .maxSessionLogSizeMiB(metadataInt(metadata, META_MAX_SESSION_LOG_SIZE_MIB, 16))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
-                .maxDictionaryValueBytes(metadataInt(metadata, META_MAX_DICTIONARY_VALUE_BYTES, 256))
+                .maxDictionaryValueBytes(
+                    metadataInt(
+                        metadata,
+                        META_MAX_DICTIONARY_VALUE_BYTES,
+                        DictionaryIds.DEFAULT_MAX_VALUE_BYTES,
+                    ),
+                )
                 .flushIntervalMs(metadataLong(metadata, META_FLUSH_INTERVAL_MS, 5_000L))
                 .adaptiveSamplingEnabled(metadataBoolean(metadata, META_ADAPTIVE_SAMPLING_ENABLED, true))
                 .adaptiveMemoryStableIntervalMs(
@@ -493,6 +489,21 @@ class JankHunterConfig private constructor(builder: Builder) {
                 )
                 .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, true))
                 .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
+                .symbolNamespace(decodeSymbolNamespace(metadataString(metadata, META_SYMBOL_NAMESPACE)))
+                .build()
+        }
+
+        internal fun symbolNamespaceFromManifest(context: Context): ByteArray {
+            val metadata = metadata(context)
+            return decodeSymbolNamespace(metadataString(metadata, META_SYMBOL_NAMESPACE))
+        }
+
+        internal fun withBuildSymbolNamespace(
+            config: JankHunterConfig,
+            buildSymbolNamespace: ByteArray,
+        ): JankHunterConfig {
+            return config.toBuilder()
+                .symbolNamespace(buildSymbolNamespace)
                 .build()
         }
 
@@ -513,14 +524,6 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         internal fun metadataInt(metadata: Bundle?, key: String, defaultValue: Int): Int {
             return coerceMetadataInt(metadataValue(metadata, key), defaultValue)
-        }
-
-        internal fun metadataLogBucket(
-            metadata: Bundle?,
-            key: String,
-            defaultValue: JankHunterLogBucket,
-        ): JankHunterLogBucket {
-            return coerceMetadataLogBucket(metadataValue(metadata, key), defaultValue)
         }
 
         internal fun coerceMetadataBoolean(value: Any?, defaultValue: Boolean): Boolean {
@@ -552,14 +555,26 @@ class JankHunterConfig private constructor(builder: Builder) {
             }
         }
 
-        internal fun coerceMetadataLogBucket(
-            value: Any?,
-            defaultValue: JankHunterLogBucket,
-        ): JankHunterLogBucket {
-            return when (value) {
-                is JankHunterLogBucket -> value
-                is String -> JankHunterLogBucket.from(value) ?: defaultValue
-                else -> defaultValue
+        internal fun decodeSymbolNamespace(raw: String?): ByteArray {
+            val value = raw.orEmpty()
+            if (value.length != SYMBOL_NAMESPACE_HEX_CHARS) {
+                return ByteArray(0)
+            }
+            val decoded = ByteArray(value.length / 2)
+            for (index in decoded.indices) {
+                val high = value[index * 2].hexDigit()
+                val low = value[index * 2 + 1].hexDigit()
+                if (high < 0 || low < 0) return ByteArray(0)
+                decoded[index] = ((high shl 4) or low).toByte()
+            }
+            return decoded
+        }
+
+        private fun Char.hexDigit(): Int {
+            return when (this) {
+                in '0'..'9' -> code - '0'.code
+                in 'a'..'f' -> code - 'a'.code + 10
+                else -> -1
             }
         }
 
@@ -589,5 +604,9 @@ class JankHunterConfig private constructor(builder: Builder) {
             val flags = context.applicationInfo?.flags ?: 0
             return flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         }
+
+        private const val BYTES_PER_MIB = 1_048_576L
+        private const val SYMBOL_NAMESPACE_BYTES = 16
+        private const val SYMBOL_NAMESPACE_HEX_CHARS = SYMBOL_NAMESPACE_BYTES * 2
     }
 }

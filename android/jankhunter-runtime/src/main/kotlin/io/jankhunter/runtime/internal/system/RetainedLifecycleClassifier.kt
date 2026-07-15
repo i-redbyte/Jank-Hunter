@@ -26,22 +26,19 @@ internal object RetainedLifecycleClassifier {
         val explicitOwner = ownerHint?.takeIf { it.isNotBlank() }
         return when {
             event == "onDestroyView" && isFragmentLike(instance) -> fragmentViewTargets(instance, className, explicitOwner)
-            event == "onDestroy" && instance is Activity -> activityDestroyTargets(instance, className, explicitOwner)
+            event == "onDestroy" && instance is Activity && !isChangingConfigurations(instance) -> {
+                activityDestroyTargets(instance, className, explicitOwner)
+            }
             event == "onDestroy" && isFragmentLike(instance) -> single(instance, className, explicitOwner, "fragment", event)
             event == "onCleared" && isViewModelLike(instance) -> single(instance, className, explicitOwner, "viewmodel", event)
-            event == "onDetachedFromWindow" && instance is View && !isFrameworkLifecycleClass(className) -> {
-                single(instance, className, explicitOwner, "view", event)
-            }
             event == "onDestroy" && instance is Service -> single(instance, className, explicitOwner, "service", event)
-            event in setOf("onStop", "onDestroy") && instance is Dialog -> dialogTargets(instance, className, explicitOwner, event)
-            event in setOf("onViewRecycled", "onViewDetachedFromWindow") && isViewHolderLike(instance) -> {
-                viewHolderTargets(instance, className, explicitOwner, event)
-            }
-            event == "onDetachedFromRecyclerView" && isRecyclerAdapterLike(instance) -> {
-                single(instance, className, explicitOwner, "recycler_adapter", event)
-            }
+            event == "onDestroy" && instance is Dialog -> dialogTargets(instance, className, explicitOwner, event)
             else -> emptyList()
         }
+    }
+
+    private fun isChangingConfigurations(activity: Activity): Boolean {
+        return runCatching { activity.isChangingConfigurations }.getOrDefault(false)
     }
 
     private fun single(
@@ -105,29 +102,6 @@ internal object RetainedLifecycleClassifier {
                 "$fragmentClassName.${field.name}",
             )
             if (out.size >= MAX_ASSOCIATED_TARGETS) break
-        }
-        return out
-    }
-
-    private fun viewHolderTargets(viewHolder: Any, className: String, ownerHint: String?, event: String): List<RetainedLifecycleTarget> {
-        val out = ArrayList<RetainedLifecycleTarget>()
-        val seen = Collections.newSetFromMap(java.util.IdentityHashMap<Any, Boolean>())
-        for (field in lifecycleCandidateFields(viewHolder.javaClass)) {
-            val value = runCatching {
-                field.isAccessible = true
-                field.get(viewHolder)
-            }.getOrNull() ?: continue
-            if (value === viewHolder || !seen.add(value)) continue
-            val kind = when {
-                value is View -> "viewholder_view"
-                isBindingLike(value) -> "viewholder_binding"
-                else -> continue
-            }
-            out += target(value, value.javaClass.name, ownerHint, kind, event, "$className.${field.name}")
-            if (out.size >= MAX_ASSOCIATED_TARGETS) break
-        }
-        if (out.isEmpty()) {
-            out += target(viewHolder, className, ownerHint, "viewholder", event, className)
         }
         return out
     }
@@ -213,29 +187,9 @@ internal object RetainedLifecycleClassifier {
         } || instance.javaClass.name.contains("ViewModel")
     }
 
-    private fun isViewHolderLike(instance: Any): Boolean {
-        return ancestryNames(instance.javaClass).any {
-            it == "androidx.recyclerview.widget.RecyclerView.ViewHolder" ||
-                it == "android.support.v7.widget.RecyclerView.ViewHolder"
-        } || instance.javaClass.name.contains("ViewHolder")
-    }
-
-    private fun isRecyclerAdapterLike(instance: Any): Boolean {
-        return ancestryNames(instance.javaClass).any {
-            it == "androidx.recyclerview.widget.RecyclerView.Adapter" ||
-                it == "android.support.v7.widget.RecyclerView.Adapter"
-        } || instance.javaClass.name.contains("Adapter")
-    }
-
     private fun isBindingLike(instance: Any): Boolean {
         val name = instance.javaClass.name
         return name.endsWith("Binding") || name.contains(".databinding.") || name.contains("ViewBinding")
-    }
-
-    private fun isFrameworkLifecycleClass(className: String): Boolean {
-        return className.startsWith("android.") ||
-            className.startsWith("androidx.") ||
-            className.startsWith("com.android.")
     }
 
     private fun ancestryNames(type: Class<*>): Sequence<String> {

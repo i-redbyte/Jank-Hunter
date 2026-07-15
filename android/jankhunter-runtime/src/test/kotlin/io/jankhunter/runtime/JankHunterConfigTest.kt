@@ -1,5 +1,6 @@
 package io.jankhunter.runtime
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,9 +35,8 @@ class JankHunterConfigTest {
             .jankFrameThresholdMs(11)
             .uiWindowP95ThresholdMs(22)
             .maxQueueSize(99)
-            .maxLogBytes(1024)
-            .maxLogDirectoryBytes(4096)
-            .logBucket(JankHunterLogBucket.SESSION)
+            .sessionLogSizeLimitEnabled(false)
+            .maxSessionLogSizeMiB(8)
             .maxDictionaryEntries(1234)
             .maxDictionaryValueBytes(64)
             .flushIntervalMs(12)
@@ -80,9 +80,9 @@ class JankHunterConfigTest {
         assertEquals(11, config.jankFrameThresholdMs())
         assertEquals(22, config.uiWindowP95ThresholdMs())
         assertEquals(99, config.maxQueueSize())
-        assertEquals(1024, config.maxLogBytes())
-        assertEquals(4096, config.maxLogDirectoryBytes())
-        assertEquals(JankHunterLogBucket.SESSION, config.logBucket())
+        assertFalse(config.sessionLogSizeLimitEnabled())
+        assertEquals(8, config.maxSessionLogSizeMiB())
+        assertEquals(0L, config.sessionLogSizeLimitBytes())
         assertEquals(1234, config.maxDictionaryEntries())
         assertEquals(64, config.maxDictionaryValueBytes())
         assertEquals(12, config.flushIntervalMs())
@@ -112,7 +112,7 @@ class JankHunterConfigTest {
         assertEquals(700L, config.mainThreadStallThresholdMs())
         assertEquals(250L, config.ownerBlockThresholdMs())
         assertEquals(1_000L, config.httpSlowThresholdMs())
-        assertTrue(config.mainLooperDispatchMonitorEnabled())
+        assertFalse(config.mainLooperDispatchMonitorEnabled())
         assertTrue(config.processExitInfoEnabled())
         assertTrue(config.objectWatcherEnabled())
         assertFalse(config.retainedObjectForceGcEnabled())
@@ -128,11 +128,11 @@ class JankHunterConfigTest {
         assertTrue(config.mainProcessOnly())
         assertTrue(config.allowedProcesses().isEmpty())
         assertEquals(2048, config.maxQueueSize())
-        assertEquals(512L * 1024L, config.maxLogBytes())
-        assertEquals(2L * 1024L * 1024L, config.maxLogDirectoryBytes())
-        assertEquals(JankHunterLogBucket.SESSION, config.logBucket())
+        assertTrue(config.sessionLogSizeLimitEnabled())
+        assertEquals(16, config.maxSessionLogSizeMiB())
+        assertEquals(16L * 1024L * 1024L, config.sessionLogSizeLimitBytes())
         assertEquals(8192, config.maxDictionaryEntries())
-        assertEquals(256, config.maxDictionaryValueBytes())
+        assertEquals(1024, config.maxDictionaryValueBytes())
         assertTrue(config.adaptiveSamplingEnabled())
         assertEquals(60_000L, config.adaptiveMemoryStableIntervalMs())
         assertEquals(60_000L, config.adaptiveContextStableIntervalMs())
@@ -143,6 +143,75 @@ class JankHunterConfigTest {
         assertEquals(4096, config.maxRuntimeCallGraphKeys())
         assertEquals(4096, config.maxHandlerTrackingEntries())
         assertEquals(32, config.maxHandlerWrappersPerRunnable())
+    }
+
+    @Test
+    fun sessionLimitManifestKeysUseTheCanonicalApiNames() {
+        assertEquals(
+            "io.jankhunter.session_log_size_limit_enabled",
+            JankHunterConfig.META_SESSION_LOG_SIZE_LIMIT_ENABLED,
+        )
+        assertEquals("io.jankhunter.max_session_log_size_mib", JankHunterConfig.META_MAX_SESSION_LOG_SIZE_MIB)
+        assertEquals("io.jankhunter.symbol_namespace", JankHunterConfig.META_SYMBOL_NAMESPACE)
+
+        val configMethods = JankHunterConfig::class.java.methods.mapTo(mutableSetOf()) { it.name }
+        val builderMethods = JankHunterConfig.Builder::class.java.methods.mapTo(mutableSetOf()) { it.name }
+        assertFalse("maxSessionLogBytes" in configMethods)
+        assertFalse("maxSessionLogsBytes" in configMethods)
+        assertFalse("maxSessionLogBytes" in builderMethods)
+        assertFalse("maxSessionLogsBytes" in builderMethods)
+    }
+
+    @Test
+    fun sessionLogMiBConversionDoesNotOverflow() {
+        val config = JankHunterConfig.builder()
+            .maxSessionLogSizeMiB(Int.MAX_VALUE)
+            .build()
+
+        assertEquals(
+            Int.MAX_VALUE.toLong() * 1024L * 1024L,
+            config.sessionLogSizeLimitBytes(),
+        )
+    }
+
+    @Test
+    fun symbolNamespaceIsStrictlyDecodedAndDefensivelyCopied() {
+        val expected = byteArrayOf(
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88.toByte(), 0x99.toByte(), 0xaa.toByte(), 0xbb.toByte(),
+            0xcc.toByte(), 0xdd.toByte(), 0xee.toByte(), 0xff.toByte(),
+        )
+        val source = JankHunterConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeff")
+        val config = JankHunterConfig.builder().symbolNamespace(source).build()
+        source.fill(0)
+
+        assertArrayEquals(expected, config.symbolNamespace())
+        val exposed = config.symbolNamespace()
+        exposed.fill(0)
+        assertArrayEquals(expected, config.toBuilder().build().symbolNamespace())
+        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("abc"))
+        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeGG"))
+        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("00112233445566778899AABBCCDDEEFF"))
+        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("0011aaff"))
+        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace(" 00112233445566778899aabbccddeeff"))
+    }
+
+    @Test
+    fun buildNamespaceOverridesOpaqueNamespaceWithoutChangingManualRuntimePolicy() {
+        val forged = ByteArray(16) { 0x7f }
+        val buildNamespace = ByteArray(16) { index -> index.toByte() }
+        val manual = JankHunterConfig.builder()
+            .runtimeEnabled(false)
+            .mainThreadStallThresholdMs(321L)
+            .symbolNamespace(forged)
+            .build()
+
+        val effective = JankHunterConfig.withBuildSymbolNamespace(manual, buildNamespace)
+        buildNamespace.fill(0)
+
+        assertFalse(effective.runtimeEnabled())
+        assertEquals(321L, effective.mainThreadStallThresholdMs())
+        assertArrayEquals(ByteArray(16) { index -> index.toByte() }, effective.symbolNamespace())
     }
 
     @Test
@@ -187,8 +256,7 @@ class JankHunterConfigTest {
             .fpsWindowMs(0)
             .jankFrameThresholdMs(-1)
             .uiWindowP95ThresholdMs(-2)
-            .maxLogBytes(0)
-            .maxLogDirectoryBytes(-1)
+            .maxSessionLogSizeMiB(0)
             .maxDictionaryEntries(-1)
             .maxDictionaryValueBytes(0)
             .flushIntervalMs(0)
@@ -213,8 +281,8 @@ class JankHunterConfigTest {
         assertEquals(1, config.fpsWindowMs())
         assertEquals(1, config.jankFrameThresholdMs())
         assertEquals(1, config.uiWindowP95ThresholdMs())
-        assertEquals(1, config.maxLogBytes())
-        assertEquals(1, config.maxLogDirectoryBytes())
+        assertEquals(1, config.maxSessionLogSizeMiB())
+        assertEquals(1024L * 1024L, config.sessionLogSizeLimitBytes())
         assertEquals(0, config.maxDictionaryEntries())
         assertEquals(1, config.maxDictionaryValueBytes())
         assertEquals(1, config.flushIntervalMs())
@@ -242,18 +310,6 @@ class JankHunterConfigTest {
         assertEquals(9L, JankHunterConfig.coerceMetadataLong("not-a-number", 9L))
         assertEquals(9, JankHunterConfig.coerceMetadataInt("not-a-number", 9))
         assertTrue(JankHunterConfig.coerceMetadataBoolean("maybe", true))
-        assertEquals(
-            JankHunterLogBucket.SESSION,
-            JankHunterConfig.coerceMetadataLogBucket("session", JankHunterLogBucket.DAILY),
-        )
-        assertEquals(
-            JankHunterLogBucket.DAILY,
-            JankHunterConfig.coerceMetadataLogBucket("DAILY", JankHunterLogBucket.SESSION),
-        )
-        assertEquals(
-            JankHunterLogBucket.SESSION,
-            JankHunterConfig.coerceMetadataLogBucket("unknown", JankHunterLogBucket.SESSION),
-        )
     }
 
     @Test

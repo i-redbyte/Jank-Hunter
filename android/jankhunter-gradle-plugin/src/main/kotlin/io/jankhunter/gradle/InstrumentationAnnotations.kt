@@ -54,11 +54,11 @@ internal object JankAnnotationParser {
         }
     }
 
-    private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankOwner;"
-    private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankTrace;"
-    private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankFlow;"
-    private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankScreen;"
-    private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankIgnore;"
+    private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOwner;"
+    private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+    private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
+    private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
+    private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterIgnore;"
 }
 
 private class StringValueAnnotationVisitor(

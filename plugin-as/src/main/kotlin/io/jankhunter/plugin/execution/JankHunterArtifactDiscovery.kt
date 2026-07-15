@@ -13,9 +13,10 @@ data class JankHunterArtifactSet(
     val mapping: String = "",
     val classGraph: String = "",
     val diagnostics: String = "",
+    val diCatalog: String = "",
 ) {
     val isEmpty: Boolean
-        get() = ownerMap.isBlank() && mapping.isBlank() && classGraph.isBlank() && diagnostics.isBlank()
+        get() = ownerMap.isBlank() && mapping.isBlank() && classGraph.isBlank() && diagnostics.isBlank() && diCatalog.isBlank()
 
     fun displayName(): String = if (variant.isBlank()) "detected" else variant
 }
@@ -67,33 +68,50 @@ object JankHunterArtifactDiscovery {
 
     fun findArtifactSets(root: File): List<JankHunterArtifactSet> {
         val grouped = linkedMapOf<String, MutableArtifactSet>()
-
-        root.walkTopDown()
-            .onEnter { file -> file.name !in skippedDirectories }
-            .filter { it.isFile }
-            .forEach { file ->
+        findBuildDirectories(root).forEach { buildDirectory ->
+            val module = buildDirectory.parentFile
+                ?.relativeToOrNull(root)
+                ?.invariantSeparatorsPath
+                .orEmpty()
+                .ifBlank { ":" }
+            val generatedRoot = File(buildDirectory, "generated/jankhunter")
+            walkFiles(generatedRoot).forEach { file ->
+                val variant = file.relativeToOrNull(generatedRoot)
+                    ?.invariantSeparatorsPath
+                    ?.substringBefore('/')
+                    .orEmpty()
+                val key = "$module|$variant"
+                val artifacts = grouped.getOrPut(key) { MutableArtifactSet(displayVariant(module, variant)) }
                 when (file.name) {
-                    "owner-map.json" -> grouped.getOrPut(variantFromGenerated(file), ::MutableArtifactSet).ownerMap = file.path
-                    "class-graph.jsonl" -> grouped.getOrPut(variantFromGenerated(file), ::MutableArtifactSet).classGraph = file.path
-                    "instrumentation-diagnostics.jsonl" -> {
-                        grouped.getOrPut(variantFromGenerated(file), ::MutableArtifactSet).diagnostics = file.path
-                    }
-                    "mapping.txt" -> {
-                        if (file.invariantPath().contains("/build/outputs/mapping/")) {
-                            grouped.getOrPut(variantFromMapping(file), ::MutableArtifactSet).mapping = file.path
-                        }
-                    }
+                    "owner-map.json" -> artifacts.ownerMap = file.path
+                    "class-graph.jsonl" -> artifacts.classGraph = file.path
+                    "instrumentation-diagnostics.jsonl" -> artifacts.diagnostics = file.path
+                    "di-catalog.jsonl" -> artifacts.diCatalog = file.path
                 }
             }
 
+            val mappingRoot = File(buildDirectory, "outputs/mapping")
+            walkFiles(mappingRoot)
+                .filter { file -> file.name == "mapping.txt" }
+                .forEach { file ->
+                    val variant = file.relativeToOrNull(mappingRoot)
+                        ?.invariantSeparatorsPath
+                        ?.substringBefore('/')
+                        .orEmpty()
+                    val key = "$module|$variant"
+                    grouped.getOrPut(key) { MutableArtifactSet(displayVariant(module, variant)) }.mapping = file.path
+                }
+        }
+
         return grouped
-            .map { (variant, mutable) ->
+            .map { (_, mutable) ->
                 JankHunterArtifactSet(
-                    variant = variant,
+                    variant = mutable.variant,
                     ownerMap = mutable.ownerMap,
                     mapping = mutable.mapping,
                     classGraph = mutable.classGraph,
                     diagnostics = mutable.diagnostics,
+                    diCatalog = mutable.diCatalog,
                 )
             }
             .filterNot(JankHunterArtifactSet::isEmpty)
@@ -107,24 +125,13 @@ object JankHunterArtifactDiscovery {
     fun findRecentLogs(project: Project, limit: Int = 20): List<String> {
         val root = project.basePath?.let { File(it) }?.takeIf { it.isDirectory } ?: return emptyList()
         return root.walkTopDown()
+            .maxDepth(MAX_LOG_SEARCH_DEPTH)
             .onEnter { file -> file.name !in skippedDirectories }
-            .filter { it.isFile && it.extension == "jhlog" }
+            .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
             .sortedByDescending { it.lastModified() }
             .take(limit)
             .map { it.path }
             .toList()
-    }
-
-    private fun variantFromGenerated(file: File): String {
-        val parts = file.invariantPath().split('/')
-        val marker = parts.windowed(3).indexOfFirst { it == listOf("build", "generated", "jankhunter") }
-        return if (marker >= 0) parts.getOrNull(marker + 3).orEmpty() else ""
-    }
-
-    private fun variantFromMapping(file: File): String {
-        val parts = file.invariantPath().split('/')
-        val marker = parts.windowed(3).indexOfFirst { it == listOf("build", "outputs", "mapping") }
-        return if (marker >= 0) parts.getOrNull(marker + 3).orEmpty() else ""
     }
 
     private fun score(set: JankHunterArtifactSet): Int {
@@ -133,24 +140,63 @@ object JankHunterArtifactDiscovery {
         if (set.classGraph.isNotBlank()) score += 3
         if (set.diagnostics.isNotBlank()) score += 2
         if (set.mapping.isNotBlank()) score += 1
+        if (set.diCatalog.isNotBlank()) score += 2
         if (set.variant.contains("debug", ignoreCase = true)) score += 2
         return score
     }
 
     private fun latestModified(set: JankHunterArtifactSet): Long =
-        listOf(set.ownerMap, set.mapping, set.classGraph, set.diagnostics)
+        listOf(set.ownerMap, set.mapping, set.classGraph, set.diagnostics, set.diCatalog)
             .asSequence()
             .filter(String::isNotBlank)
             .mapNotNull { path -> runCatching { Files.getLastModifiedTime(Path.of(path)).toMillis() }.getOrNull() }
             .maxOrNull()
             ?: 0L
 
-    private fun File.invariantPath(): String = invariantSeparatorsPath
+    private fun findBuildDirectories(root: File): List<File> {
+        val result = mutableListOf<File>()
+        root.walkTopDown()
+            .maxDepth(MAX_MODULE_SEARCH_DEPTH)
+            .onEnter { directory ->
+                when {
+                    Thread.currentThread().isInterrupted -> false
+                    directory != root && directory.name in skippedDirectories -> false
+                    directory.name == "build" -> {
+                        result += directory
+                        false
+                    }
+                    else -> true
+                }
+            }
+            .forEach { }
+        return result
+    }
 
-    private class MutableArtifactSet {
+    private fun walkFiles(root: File): Sequence<File> {
+        if (!root.isDirectory) return emptySequence()
+        return root.walkTopDown()
+            .maxDepth(MAX_ARTIFACT_SEARCH_DEPTH)
+            .onEnter { !Thread.currentThread().isInterrupted }
+            .filter(File::isFile)
+    }
+
+    private fun displayVariant(module: String, variant: String): String =
+        listOf(module.takeUnless { it == ":" }.orEmpty(), variant)
+            .filter(String::isNotBlank)
+            .joinToString(":")
+            .ifBlank { "detected" }
+
+    private fun File.relativeToOrNull(base: File): File? = runCatching { relativeTo(base) }.getOrNull()
+
+    private class MutableArtifactSet(val variant: String) {
         var ownerMap: String = ""
         var mapping: String = ""
         var classGraph: String = ""
         var diagnostics: String = ""
+        var diCatalog: String = ""
     }
+
+    private const val MAX_MODULE_SEARCH_DEPTH = 8
+    private const val MAX_ARTIFACT_SEARCH_DEPTH = 6
+    private const val MAX_LOG_SEARCH_DEPTH = 10
 }

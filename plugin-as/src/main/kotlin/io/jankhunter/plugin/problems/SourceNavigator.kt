@@ -3,9 +3,12 @@ package io.jankhunter.plugin.problems
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import java.io.File
 
-object SourceNavigator {
+internal data class SourceLocation(val file: VirtualFile, val line: Int)
+
+internal object SourceNavigator {
     private val skippedDirectories = setOf(
         ".git",
         ".gradle",
@@ -16,13 +19,20 @@ object SourceNavigator {
         "tmp",
     )
 
-    fun open(project: Project, row: Map<String, String>): Boolean {
-        val className = classNameFrom(row) ?: return false
+    /** Performs filesystem discovery and must be called away from the Swing event-dispatch thread. */
+    fun find(project: Project, row: Map<String, String>): SourceLocation? {
+        val className = classNameFrom(row) ?: return null
         val method = methodFrom(row)
-        val source = findSourceFile(project, className) ?: return false
+        val source = findSourceFile(project, className) ?: return null
         val line = findLine(source, className, method)
-        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(source) ?: return false
-        OpenFileDescriptor(project, virtualFile, line.coerceAtLeast(0), 0).navigate(true)
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(source) ?: return null
+        return SourceLocation(virtualFile, line.coerceAtLeast(0))
+    }
+
+    /** Opens a previously resolved source location on the Swing event-dispatch thread. */
+    fun open(project: Project, location: SourceLocation): Boolean {
+        if (!location.file.isValid) return false
+        OpenFileDescriptor(project, location.file, location.line, 0).navigate(true)
         return true
     }
 
@@ -67,8 +77,10 @@ object SourceNavigator {
         val expectedNames = setOf("$simpleName.kt", "$simpleName.java")
 
         val nameMatches = root.walkTopDown()
-            .onEnter { file -> file.name !in skippedDirectories }
+            .maxDepth(MAX_SOURCE_SEARCH_DEPTH)
+            .onEnter { file -> !Thread.currentThread().isInterrupted && file.name !in skippedDirectories }
             .filter { it.isFile && it.name in expectedNames }
+            .take(MAX_SOURCE_CANDIDATES)
             .toList()
         if (nameMatches.size == 1) return nameMatches.first()
 
@@ -94,4 +106,7 @@ object SourceNavigator {
         val classLine = lines.indexOfFirst { line -> classRegex.containsMatchIn(line) }
         return classLine.takeIf { it >= 0 } ?: 0
     }
+
+    private const val MAX_SOURCE_SEARCH_DEPTH = 12
+    private const val MAX_SOURCE_CANDIDATES = 100
 }

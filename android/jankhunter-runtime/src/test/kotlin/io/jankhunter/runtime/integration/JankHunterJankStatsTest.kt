@@ -1,70 +1,73 @@
 package io.jankhunter.runtime.integration
 
-import java.lang.ref.WeakReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterJankStatsTest {
     @Test
-    fun uninstallRemovesLiveHandleFromWeakRegistry() {
-        val registry = JankHunterJankStats.HandleRegistry()
+    fun uninstallDisablesTrackingOnlyOnce() {
         val fake = FakeJankStats()
-        val handle = JankHunterJankStats.Handle(fake, registry)
+        val handle = JankHunterJankStats.Handle(fake)
 
-        registry.add(handle)
-
+        handle.uninstall()
         handle.uninstall()
 
         assertFalse(fake.trackingEnabledState)
         assertEquals(1, fake.setTrackingEnabledCalls)
-        registry.uninstallAll()
+    }
+
+    @Test
+    fun uninstalledHandleCannotBeReenabled() {
+        val fake = FakeJankStats()
+        val handle = JankHunterJankStats.Handle(fake)
+
+        handle.uninstall()
+        handle.setTrackingEnabled(true)
+
+        assertFalse(fake.trackingEnabledState)
         assertEquals(1, fake.setTrackingEnabledCalls)
     }
 
     @Test
-    fun uninstallAllClearsRegistryAndUninstallsLiveHandles() {
-        val registry = JankHunterJankStats.HandleRegistry()
-        val first = FakeJankStats()
-        val second = FakeJankStats()
-        registry.add(JankHunterJankStats.Handle(first, registry))
-        registry.add(JankHunterJankStats.Handle(second, registry))
+    fun uninstallAndReenableAreSerializedAcrossThreads() {
+        val fake = BlockingFakeJankStats()
+        val handle = JankHunterJankStats.Handle(fake)
+        val reenableStarted = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        val uninstall = executor.submit { handle.uninstall() }
+        try {
+            assertTrue(fake.disableEntered.await(2, TimeUnit.SECONDS))
+            val reenable = executor.submit {
+                reenableStarted.countDown()
+                handle.setTrackingEnabled(true)
+            }
+            assertTrue(reenableStarted.await(2, TimeUnit.SECONDS))
+            fake.allowDisable.countDown()
+            uninstall.get(2, TimeUnit.SECONDS)
+            reenable.get(2, TimeUnit.SECONDS)
+        } finally {
+            fake.allowDisable.countDown()
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+        }
 
-        registry.uninstallAll()
-
-        assertFalse(first.trackingEnabledState)
-        assertFalse(second.trackingEnabledState)
-        registry.uninstallAll()
-        assertEquals(1, first.setTrackingEnabledCalls)
-        assertEquals(1, second.setTrackingEnabledCalls)
+        assertFalse(fake.trackingEnabledState)
+        assertEquals(1, fake.setTrackingEnabledCalls.get())
     }
 
     @Test
-    fun weakRegistryDoesNotKeepManualHandleAlive() {
-        val registry = JankHunterJankStats.HandleRegistry()
-        val reference = registerAndDropHandle(registry)
+    fun fatalErrorsFromReflectedJankStatsAreNotSuppressed() {
+        val handle = JankHunterJankStats.Handle(FatalFakeJankStats())
 
-        waitForGc(reference)
-
-        assertNull("registry kept a manual JankStats handle strongly", reference.get())
-        registry.uninstallAll()
-    }
-
-    private fun registerAndDropHandle(
-        registry: JankHunterJankStats.HandleRegistry,
-    ): WeakReference<JankHunterJankStats.Handle> {
-        val handle = JankHunterJankStats.Handle(FakeJankStats(), registry)
-        registry.add(handle)
-        return WeakReference(handle)
-    }
-
-    private fun waitForGc(reference: WeakReference<*>) {
-        repeat(40) {
-            if (reference.get() == null) return
-            System.gc()
-            System.runFinalization()
-            Thread.sleep(10)
+        assertThrows(FatalTestError::class.java) {
+            handle.setTrackingEnabled(true)
         }
     }
 
@@ -77,4 +80,30 @@ class JankHunterJankStatsTest {
             setTrackingEnabledCalls++
         }
     }
+
+    class BlockingFakeJankStats {
+        val disableEntered = CountDownLatch(1)
+        val allowDisable = CountDownLatch(1)
+        val setTrackingEnabledCalls = AtomicInteger()
+
+        @Volatile
+        var trackingEnabledState = true
+
+        fun setTrackingEnabled(enabled: Boolean) {
+            setTrackingEnabledCalls.incrementAndGet()
+            if (!enabled) {
+                disableEntered.countDown()
+                assertTrue(allowDisable.await(2, TimeUnit.SECONDS))
+            }
+            trackingEnabledState = enabled
+        }
+    }
+
+    class FatalFakeJankStats {
+        fun setTrackingEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
+            throw FatalTestError()
+        }
+    }
+
+    class FatalTestError : VirtualMachineError()
 }

@@ -9,7 +9,6 @@ internal class RuntimeLogSpamService(
     private val config: () -> JankHunterConfig?,
     private val writer: () -> AsyncLogWriter?,
     private val runtimeActive: () -> Boolean,
-    private val foreground: () -> Boolean,
     private val captureContext: (String?) -> JankHunterContext,
     private val recordDropCounter: () -> Unit,
 ) {
@@ -41,19 +40,6 @@ internal class RuntimeLogSpamService(
             val count = counter.getAndSet(0)
             if (count <= 0) return@forEach
             asyncWriter.logSpam(key.screen, key.owner, key.flow, key.step, key.source, key.level, count)
-            if (count >= LOG_SPAM_PROBLEM_COUNT) {
-                asyncWriter.problemWindow(
-                    key.screen,
-                    key.owner,
-                    key.flow,
-                    key.step,
-                    "log_spam",
-                    LOG_SPAM_FLUSH_MS,
-                    count,
-                    count,
-                    foreground = foreground(),
-                )
-            }
         }
         counters.forEach { (key, counter) ->
             if (counter.get() == 0L) {
@@ -91,7 +77,6 @@ internal class RuntimeLogSpamService(
 
     private companion object {
         private const val LOG_SPAM_FLUSH_MS = 5000L
-        private const val LOG_SPAM_PROBLEM_COUNT = 50L
         private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
     }
 }

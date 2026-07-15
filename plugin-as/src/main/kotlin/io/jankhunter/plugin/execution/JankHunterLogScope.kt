@@ -5,12 +5,8 @@ enum class JankHunterLogScope(
     val description: String,
 ) {
     LATEST_LOG(
-        "One latest log",
-        "Use only the newest .jhlog file from the selected inputs.",
-    ),
-    LATEST_SESSION_GROUP(
-        "Latest session group",
-        "Keep the CLI default behavior: latest session group per process, older session files are skipped.",
+        "Latest session log",
+        "Use the greatest date and numeric index from canonical jh-session-log.YYYY-MM-DD.<index>.jhlog names.",
     ),
     ALL_SELECTED(
         "All selected logs (--all-sessions)",

@@ -11,6 +11,7 @@ import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
+import io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.io.File
 
@@ -18,10 +19,22 @@ internal class RuntimeCollectorService(
     private val state: RuntimeState,
 ) {
     fun start(appContext: Context, config: JankHunterConfig, logDirectory: File) {
+        val maintenanceScheduler = RuntimeMaintenanceScheduler()
+        state.maintenanceScheduler = maintenanceScheduler
         if (!config.autoStartCollectors()) return
+        if (config.fpsMonitorEnabled() || config.jankStatsEnabled()) {
+            state.fpsMonitor = FpsMonitor(
+                config.fpsWindowMs(),
+                config.jankFrameThresholdMs(),
+                choreographerFallbackEnabled = config.fpsMonitorEnabled(),
+            ).also { it.start() }
+        }
         if (appContext is Application) {
             state.application = appContext
-            state.activityTracker = ActivityTracker(config.jankStatsEnabled()).also {
+            state.activityTracker = ActivityTracker(
+                config.jankStatsEnabled(),
+                state.fpsMonitor,
+            ).also {
                 appContext.registerActivityLifecycleCallbacks(it)
             }
         } else {
@@ -41,19 +54,22 @@ internal class RuntimeCollectorService(
             appContext,
             config.memorySampleIntervalMs(),
             JankHunter::isAppForegroundForSampling,
-        ).also { it.start() }
+        ).also { it.start(maintenanceScheduler) }
         if (config.systemSamplerEnabled()) {
             state.systemContextSampler = SystemContextSampler(
                 appContext,
                 config.systemSampleIntervalMs(),
                 JankHunter::isAppForegroundForSampling,
-            ).also { it.start() }
+            ).also { it.start(maintenanceScheduler) }
         }
         if (config.processExitInfoEnabled()) {
-            ProcessExitReporter.report(appContext)
+            maintenanceScheduler.execute {
+                ProcessExitReporter.report(appContext)
+            }
         }
         if (config.objectWatcherEnabled()) {
-            if (config.retainedHeapDumpEnabled()) {
+            val heapDumpEnabled = config.retainedHeapDumpEnabled()
+            if (heapDumpEnabled) {
                 state.retainedHeapDumper = RetainedHeapDumper(
                     config.retainedHeapDumpDirectory() ?: logDirectory,
                     config.binaryStorage(),
@@ -65,13 +81,9 @@ internal class RuntimeCollectorService(
             state.objectRetentionWatcher = ObjectRetentionWatcher(
                 config.retainedObjectDelayMs(),
                 config.retainedObjectForceGcEnabled(),
-            ).also { it.start() }
-        }
-        if (config.fpsMonitorEnabled()) {
-            state.fpsMonitor = FpsMonitor(
-                config.fpsWindowMs(),
-                config.jankFrameThresholdMs(),
-            ).also { it.start() }
+                heapDumpMinRetainedAgeMs = config.retainedHeapDumpMinRetainedAgeMs(),
+                heapDumpReporter = if (heapDumpEnabled) JankHunter::dumpWatchedRetainedHeap else null,
+            ).also { it.start(maintenanceScheduler) }
         }
     }
 
@@ -93,10 +105,12 @@ internal class RuntimeCollectorService(
         swallow { state.systemContextSampler?.stop() }
         swallow { state.objectRetentionWatcher?.stop() }
         swallow { state.fpsMonitor?.stop() }
+        swallow { state.maintenanceScheduler?.shutdown() }
     }
 
     fun reset() {
         state.activityTracker = null
+        state.mainThreadContext = null
         state.application = null
         state.watchdog = null
         state.dispatchMonitor = null
@@ -104,6 +118,7 @@ internal class RuntimeCollectorService(
         state.componentCallbackContext = null
         state.memorySampler = null
         state.systemContextSampler = null
+        state.maintenanceScheduler = null
         state.objectRetentionWatcher = null
         state.retainedHeapDumper = null
         state.fpsMonitor = null

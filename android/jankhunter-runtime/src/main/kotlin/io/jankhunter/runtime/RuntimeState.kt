@@ -11,16 +11,21 @@ import io.jankhunter.runtime.internal.system.MemorySampler
 import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
+import io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 internal class RuntimeState {
+    val lifecycleLock = Any()
     val started = AtomicBoolean(false)
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
     val appForeground = AtomicBoolean(false)
     val runtimeEnabled = AtomicBoolean(true)
+
+    @Volatile
+    var lifecycle = RuntimeLifecycle.STOPPED
 
     @Volatile
     var writer: AsyncLogWriter? = null
@@ -30,6 +35,9 @@ internal class RuntimeState {
 
     @Volatile
     var initContext: Context? = null
+
+    @Volatile
+    var mainThreadContext: JankHunterContext? = null
 
     @Volatile
     var watchdog: MainThreadWatchdog? = null
@@ -48,6 +56,9 @@ internal class RuntimeState {
 
     @Volatile
     var systemContextSampler: SystemContextSampler? = null
+
+    @Volatile
+    var maintenanceScheduler: RuntimeMaintenanceScheduler? = null
 
     @Volatile
     var objectRetentionWatcher: ObjectRetentionWatcher? = null
@@ -72,4 +83,11 @@ internal class RuntimeState {
 
     @Volatile
     var initDiagnostics = JankHunterInitDiagnostics(status = "not_started")
+}
+
+internal enum class RuntimeLifecycle {
+    STOPPED,
+    STARTING,
+    STARTED,
+    STOPPING,
 }

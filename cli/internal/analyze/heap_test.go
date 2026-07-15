@@ -52,7 +52,7 @@ func TestInspectAppliesHeapEvidence(t *testing.T) {
 	if leak.DominatorTreeConfidence == "" || leak.LeakChainConfidence == "" {
 		t.Fatalf("expected heap confidence strings: %+v", leak)
 	}
-	if len(summary.CodeProblems) == 0 || !codeProblemsHaveSignal(summary.CodeProblems, "Подозрение утечки памяти") {
+	if len(summary.CodeProblems) == 0 || !codeProblemsHaveSignal(summary.CodeProblems, "Подтвержденный путь удержания HPROF") {
 		t.Fatalf("expected code registry to include heap-backed leak: %+v", summary.CodeProblems)
 	}
 }
@@ -220,6 +220,178 @@ func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
 	}
 }
 
+func TestHprofAndroidRootTagsAreConsumedAndClassified(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	expected := map[uint64]string{
+		0x101: "finalizing",
+		0x102: "debugger",
+		0x103: "reference cleanup",
+		0x104: "VM internal",
+		0x105: "JNI monitor",
+		0x106: "sticky class",
+	}
+	for index, subtag := range []byte{0x8a, 0x8b, 0x8c, 0x8d, 0x8e} {
+		heap.WriteByte(subtag)
+		writeU4(&heap, uint32(0x101+index))
+		if subtag == 0x8e {
+			writeU4(&heap, 17)
+			writeU4(&heap, 23)
+		}
+	}
+	// A root after JNI monitor proves that both trailing u4 fields were consumed.
+	heap.WriteByte(0x05)
+	writeU4(&heap, 0x106)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
+	if len(parser.roots) != len(expected) {
+		t.Fatalf("roots = %+v, want %d roots", parser.roots, len(expected))
+	}
+	for _, root := range parser.roots {
+		want, exists := expected[root.id]
+		if !exists || root.kind != want {
+			t.Fatalf("root 0x%x kind = %q, want %q; roots=%+v", root.id, root.kind, want, parser.roots)
+		}
+	}
+}
+
+func TestHprofUnreachableRootIsConsumedButNotRetained(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	heap.WriteByte(0x90)
+	writeU4(&heap, 0x201)
+	heap.WriteByte(0x05)
+	writeU4(&heap, 0x202)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
+	if len(parser.roots) != 1 || parser.roots[0].id != 0x202 || parser.roots[0].kind != "sticky class" {
+		t.Fatalf("unreachable object must not become a GC root: %+v", parser.roots)
+	}
+}
+
+func TestHprofPrimitiveArrayNoDataKeepsNextSubrecordAligned(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	heap.WriteByte(hprofSubPrimitiveArrNoData)
+	writeU4(&heap, 0x301)
+	writeU4(&heap, 0)
+	writeU4(&heap, 3)
+	heap.WriteByte(hprofTypeInt)
+	heap.WriteByte(0x05)
+	writeU4(&heap, 0x302)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := parseMiniHprof(t, builder.bytes(), defaultHprofLimits())
+	node := parser.nodes[0x301]
+	if node == nil || node.className != "int[]" || node.shallowSize != 28 {
+		t.Fatalf("primitive array without data = %+v, want int[3] with 28-byte shallow size", node)
+	}
+	if len(parser.roots) != 1 || parser.roots[0].id != 0x302 {
+		t.Fatalf("subrecord after primitive array without data is misaligned: %+v", parser.roots)
+	}
+}
+
+func TestHprofTruncatedRootReturnsRootDiagnostic(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	heap.WriteByte(0x8e)
+	writeU4(&heap, 0x401)
+	// JNI monitor also requires thread serial and stack depth.
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	path := writeMiniHprof(t, builder.bytes())
+	parser := newHprofParser(path, map[string]struct{}{"com.app.Target": {}})
+	err := parser.parse()
+	if err == nil {
+		t.Fatal("parse() error = nil, want truncated JNI monitor diagnostic")
+	}
+	if !strings.Contains(err.Error(), "root subrecord 0x8e") || strings.Contains(err.Error(), "unsupported HPROF heap subrecord") {
+		t.Fatalf("parse() error = %q, want root-specific truncation diagnostic", err)
+	}
+}
+
+func TestHprofIndependentCapsPreserveAlignmentAndLowerConfidence(t *testing.T) {
+	tests := []struct {
+		name        string
+		warningPart string
+		limit       func(*hprofLimits)
+	}{
+		{
+			name:        "strings",
+			warningPart: "лимит строк HPROF",
+			limit:       func(limits *hprofLimits) { limits.strings = 5 },
+		},
+		{
+			name:        "classes",
+			warningPart: "лимит классов HPROF",
+			limit:       func(limits *hprofLimits) { limits.classes = 3 },
+		},
+		{
+			name:        "roots",
+			warningPart: "лимит корней GC",
+			limit:       func(limits *hprofLimits) { limits.roots = 1 },
+		},
+		{
+			name:        "nodes",
+			warningPart: "лимит объектов HPROF",
+			limit:       func(limits *hprofLimits) { limits.nodes = 5 },
+		},
+		{
+			name:        "edges",
+			warningPart: "лимит ссылок HPROF",
+			limit:       func(limits *hprofLimits) { limits.edges = 2 },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			limits := defaultHprofLimits()
+			test.limit(&limits)
+			parser := parseMiniHprof(t, syntheticLeakHprof(), limits)
+			evidence := parser.evidence()
+			if evidence == nil || len(evidence.Leaks) != 1 {
+				t.Fatalf("cap must preserve enough aligned data for the leak finding: %+v", evidence)
+			}
+			if !warningContains(evidence.Warnings, test.warningPart) {
+				t.Fatalf("warnings = %+v, want %q", evidence.Warnings, test.warningPart)
+			}
+			confidence := evidence.Leaks[0].Confidence
+			if strings.HasPrefix(confidence, "высокое:") || !strings.Contains(confidence, "граф HPROF неполон") {
+				t.Fatalf("confidence was not lowered after %s cap: %q", test.name, confidence)
+			}
+		})
+	}
+}
+
+func TestHprofInvalidArrayLengthFailsWithoutAllocation(t *testing.T) {
+	builder := newMiniHprof()
+	var heap bytes.Buffer
+	heap.WriteByte(hprofSubPrimitiveArr)
+	writeU4(&heap, 0x501)
+	writeU4(&heap, 0)
+	writeU4(&heap, ^uint32(0))
+	heap.WriteByte(hprofTypeLong)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	path := writeMiniHprof(t, builder.bytes())
+	parser := newHprofParser(path, map[string]struct{}{"com.app.Target": {}})
+	err := parser.parse()
+	if err == nil {
+		t.Fatal("parse() error = nil, want invalid primitive array length")
+	}
+	if !strings.Contains(err.Error(), "invalid primitive array length") || !strings.Contains(err.Error(), "need 34359738360 bytes") {
+		t.Fatalf("parse() error = %q, want bounded length diagnostic", err)
+	}
+	if _, err := checkedMulUint64(^uint64(0), 2, "test payload"); err == nil {
+		t.Fatal("checkedMulUint64() error = nil, want overflow diagnostic")
+	}
+	if _, err := checkedAddUint64(^uint64(0), 1, "test shallow size"); err == nil {
+		t.Fatal("checkedAddUint64() error = nil, want overflow diagnostic")
+	}
+}
+
 func syntheticLeakHprof() []byte {
 	builder := newMiniHprof()
 	holderName := builder.string("com.app.LeakHolder")
@@ -310,6 +482,25 @@ func newMiniHprof() *miniHprof {
 	writeU4(&builder.out, 4)
 	writeU8(&builder.out, 0)
 	return builder
+}
+
+func writeMiniHprof(t *testing.T, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "mini.hprof")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
+func parseMiniHprof(t *testing.T, data []byte, limits hprofLimits) *hprofParser {
+	t.Helper()
+	parser := newHprofParser(writeMiniHprof(t, data), map[string]struct{}{"com.app.LeakedActivity": {}})
+	parser.limits = limits
+	if err := parser.parse(); err != nil {
+		t.Fatalf("parse() error = %v", err)
+	}
+	return parser
 }
 
 func (b *miniHprof) bytes() []byte {

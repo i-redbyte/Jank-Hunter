@@ -35,30 +35,21 @@ class RetainedLifecycleClassifierTest {
     }
 
     @Test
-    fun recyclerViewHolderRecycleWatchesBindingField() {
+    fun recyclerViewHolderRecycleIsNotAValidRetentionBoundary() {
         val viewHolder = CheckoutViewHolder()
 
         val targets = RetainedLifecycleClassifier.targets(viewHolder, "onViewRecycled", null)
 
-        assertEquals(1, targets.size)
-        val target = targets.single()
-        assertTrue(target.instance is CheckoutBinding)
-        assertEquals("lifecycle.autowatch.viewholder_binding", target.flow)
-        assertEquals("onViewRecycled", target.step)
-        assertTrue(target.ownerHint.contains("CheckoutViewHolder.binding"))
+        assertTrue(targets.isEmpty())
     }
 
     @Test
-    fun recyclerAdapterDetachWatchesAdapterItself() {
+    fun recyclerAdapterDetachIsNotAValidRetentionBoundary() {
         val adapter = CheckoutAdapter()
 
         val targets = RetainedLifecycleClassifier.targets(adapter, "onDetachedFromRecyclerView", null)
 
-        assertEquals(1, targets.size)
-        val target = targets.single()
-        assertTrue(target.instance === adapter)
-        assertEquals("lifecycle.autowatch.recycler_adapter", target.flow)
-        assertEquals("onDetachedFromRecyclerView", target.step)
+        assertTrue(targets.isEmpty())
     }
 
     private class CheckoutFragment {

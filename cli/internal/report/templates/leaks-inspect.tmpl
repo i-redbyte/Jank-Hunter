@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Jank Hunter: утечки памяти</title>
+  <title>Jank Hunter: удержания памяти</title>
   <style>{{baseCSS}}</style>
 </head>
 <body class="{{bodyClass "leak-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
-      <div class="eyebrow">Jank Hunter · утечки памяти</div>
-      <h1>Отчет по утечкам памяти</h1>
+      <div class="eyebrow">Jank Hunter · удержания памяти</div>
+      <h1>Удержания и возможные утечки памяти</h1>
       <div class="subhead">создан {{.GeneratedAt}} · {{leakModeLabel .LeakReport.Mode}} · автономный HTML</div>
-      <div class="hero-actions"><a class="math-link" href="#explorer">Открыть проводник утечек</a></div>
+      <div class="hero-actions">{{if .MainReportHref}}<a class="math-link" href="{{.MainReportHref}}">← Обзор</a>{{end}}<a class="math-link" href="#explorer">Открыть проводник утечек</a></div>
     </div>
     <div class="report-hero-lower">
       <div class="report-hero-context">
@@ -26,7 +26,8 @@
       <div class="report-hero-control">
         <div class="hero-meta">
           <div class="chip">Подозрения <strong>{{.LeakReport.Stats.TotalSuspects}}</strong></div>
-          <div class="chip">Дамп <strong>{{.LeakReport.Stats.HeapConfirmed}}</strong></div>
+          <div class="chip">HPROF-путь <strong>{{.LeakReport.Stats.HeapConfirmed}}</strong></div>
+          <div class="chip">После GC <strong>{{.LeakReport.Stats.AfterExplicitGC}}</strong></div>
           <div class="chip">Высокий риск <strong>{{.LeakReport.Stats.High}}</strong></div>
         </div>
       </div>
@@ -42,16 +43,16 @@
 <main>
   <section id="summary" class="panel">
     <div class="panel-head">
-      <div><h2>Краткий вердикт</h2><div class="panel-kicker">Легкий режим всегда доступен. Режим дампа кучи включается автоматически, когда CLI получил HPROF или JSON с доказательствами кучи.</div></div>
+      <div><h2>Краткий вердикт</h2><div class="panel-kicker">time_only — жизнь после задержки; after_explicit_gc — жизнь после запрошенного GC; confirmed_hprof/path — найденный путь от корня GC.</div></div>
       <span class="pill">{{leakModeLabel .LeakReport.Mode}}</span>
     </div>
     <div class="grid">
       <div class="metric"><div class="label">Всего подозрений</div><div class="value">{{.LeakReport.Stats.TotalSuspects}}</div><div class="hint">удержаний {{.LeakReport.Stats.TotalRetained}}</div></div>
       <div class="metric"><div class="label">Критичные</div><div class="value">{{.LeakReport.Stats.High}}</div><div class="hint">предупреждений {{.LeakReport.Stats.Medium}}, норма {{.LeakReport.Stats.OK}}</div></div>
-      <div class="metric"><div class="label">Подтверждены дампом</div><div class="value">{{.LeakReport.Stats.HeapConfirmed}}</div><div class="hint">только выполнение {{.LeakReport.Stats.RuntimeOnly}}</div></div>
+      <div class="metric"><div class="label">Уровни evidence</div><div class="value">{{.LeakReport.Stats.HeapConfirmed}}</div><div class="hint">HPROF-путь · после GC {{.LeakReport.Stats.AfterExplicitGC}} · только время {{.LeakReport.Stats.TimeOnly}}</div></div>
       <div class="metric"><div class="label">Оценка удержания</div><div class="value">{{dataSize .LeakReport.Stats.EstimatedRetainedKB}}</div><div class="hint">макс. возраст {{humanDuration .LeakReport.Stats.MaxAgeMS}}</div></div>
       <div class="metric"><div class="label">Классы</div><div class="value">{{.LeakReport.Stats.UniqueClasses}}</div><div class="hint">держателей {{.LeakReport.Stats.UniqueHolders}}</div></div>
-      <div class="metric"><div class="label">Без держателя</div><div class="value">{{.LeakReport.Stats.UnknownHolder}}</div><div class="hint">добавьте ownerHint для точности</div></div>
+      <div class="metric"><div class="label">Качество снижено</div><div class="value">{{.LeakReport.Stats.DegradedQuality}}</div><div class="hint">без держателя {{.LeakReport.Stats.UnknownHolder}}</div></div>
     </div>
     <p class="help-text">{{.LeakReport.ModeHint}}</p>
   </section>
@@ -59,11 +60,12 @@
   <details id="explorer" class="fold leak-report-fold" open>
     <summary><span>Проводник утечек</span><span class="fold-summary-meta">{{len .LeakReport.Items}} сценариев · граф ссылок</span></summary>
     <div class="fold-body">
-      <p class="help-text">Выберите удержанный объект: справа появится цепочка удержания. В режиме дампа кучи это путь от корня GC; в легком режиме — вероятная цепочка выполнения.</p>
+      <p class="help-text">Выберите объект: справа появится найденный HPROF-путь либо контекст наблюдения. Контекст выполнения не является цепочкой ссылок и не доказывает утечку.</p>
+      {{rowLimitNote "Интерактивные графы удержаний" (len .LeakReport.Items) 24}}
     {{if .LeakReport.Items}}
     <div class="leak-explorer" data-leak-explorer>
       <div class="leak-selector" aria-label="Список утечек">
-        {{range .LeakReport.Items}}
+        {{range limitRows .LeakReport.Items 24}}
         <button type="button" data-leak-select data-leak-target="leak-{{.Rank}}" data-leak-rank="{{.Rank}}" class="leak-select" role="tab" aria-controls="leak-{{.Rank}}">
           <span class="problem-score {{severityClass .Suspect.Severity}}">{{severityLabel .Suspect.Severity}}</span>
           <strong>{{.Suspect.ClassName}}</strong>
@@ -73,16 +75,18 @@
         {{end}}
       </div>
       <div class="leak-graph-stage">
-        {{range .LeakReport.Items}}
+        {{range limitRows .LeakReport.Items 24}}
         <article id="leak-{{.Rank}}" class="leak-graph-panel" data-leak-panel>
           <div class="leak-panel-head">
             <div>
               <h3>{{.Suspect.ClassName}}</h3>
               <p>{{.Suspect.LeakChainSummary}}</p>
             </div>
-            <span class="pill">{{if .Suspect.HeapEvidence}}доказательство из дампа{{else}}сигнал выполнения{{end}}</span>
+            <span class="pill">{{.Suspect.EvidenceKind}}</span>
           </div>
-          {{leakGraphSVG .Graph}}
+          <div class="leak-graph-scroll" tabindex="0" role="region" aria-label="{{.Graph.Title}}">
+            {{leakGraphSVG (printf "inspect-leak-%d" .Rank) .Graph}}
+          </div>
           <div class="leak-explain-grid">
             <div><strong>Что это значит</strong><p>{{.Suspect.Impact}}</p></div>
             <div><strong>Что проверить</strong><p>{{.Suspect.Recommendation}}</p></div>
@@ -96,13 +100,13 @@
           {{if .Suspect.AlternativePathSummaries}}
           <div class="leak-alt-paths"><strong>Альтернативные цепочки</strong>{{range .Suspect.AlternativePathSummaries}}<span>{{.}}</span>{{end}}</div>
           {{end}}
-          <div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
+          <div class="leak-chain-actions"><strong>{{if .Suspect.HeapEvidence}}Быстрые проверки HPROF-цепочки{{else}}Проверки runtime-контекста{{end}}</strong>{{range .Suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
         </article>
         {{end}}
       </div>
     </div>
     {{else}}
-    <p class="help-text">Подозрений на утечки памяти нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что наблюдатель выполнения включен и сценарий дожил до задержки удержания.</p>
+    <p class="help-text">Сигналов удержания нет. Если вы ожидаете увидеть Activity/Fragment, проверьте, что наблюдатель включен и сценарий дожил до задержки удержания.</p>
     {{end}}
     </div>
   </details>
@@ -110,7 +114,7 @@
   <details id="registry" class="fold leak-report-fold" open>
     <summary><span>Реестр утечек</span><span class="fold-summary-meta">{{len .LeakReport.Items}} строк · сортировка и фильтры</span></summary>
     <div class="fold-body">
-    <p class="help-text">Таблица для сортировки и фильтрации: объект, держатель, контекст, размер, цепочка и доказательства.</p>
+    <p class="help-text">Таблица для сортировки и фильтрации: объект, вероятный держатель, runtime-контекст, размер, HPROF-цепочка и доказательства.</p>
     {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -131,8 +135,8 @@
       <table class="code-problem-table leak-table">
         <thead><tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>Удержанный размер</th><th>Цепочка</th><th>Что проверить</th><th>Доказательства</th></tr></thead>
         <tbody>
-          {{range .LeakReport.Items}}
-          <tr data-code-problem-row data-leak-row data-leak-target="leak-{{.Rank}}" data-score="{{printf "%.1f" .Suspect.Score}}" data-severity="{{.Suspect.Severity}}" data-class="{{.Suspect.ClassName}}" data-categories="{{.Suspect.ObjectKind}}" data-search="{{.PlainText}}">
+          {{range $index, $item := .LeakReport.Items}}
+          <tr data-code-problem-row {{if lt $index 24}}data-leak-row data-leak-target="leak-{{.Rank}}"{{end}} data-score="{{printf "%.1f" .Suspect.Score}}" data-severity="{{.Suspect.Severity}}" data-class="{{.Suspect.ClassName}}" data-categories="{{.Suspect.ObjectKind}}">
             <td><span class="problem-score {{severityClass .Suspect.Severity}}">{{severityLabel .Suspect.Severity}}</span></td>
             <td><code>{{.Suspect.ClassName}}</code></td>
             <td>{{leakObjectKindLabel .Suspect.ObjectKind}}</td>
@@ -142,7 +146,7 @@
             <td>{{dataSize .Suspect.EstimatedRetainedKB}}<div class="muted">{{.Suspect.RetainedSizeConfidence}}</div></td>
             <td><div class="leak-dominator">{{range .Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
             <td>{{.Suspect.Recommendation}}</td>
-            <td>{{.Suspect.Evidence}}{{if .Suspect.LeakPattern}}<div class="muted">паттерн: {{.Suspect.LeakPattern}}</div>{{end}}{{if .Suspect.GCRootCategory}}<div class="muted">категория корня: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
+            <td><strong>{{.Suspect.EvidenceLabel}}</strong><div class="muted">{{.Suspect.EvidenceConfidence}}</div>{{.Suspect.Evidence}}{{range .Suspect.QualityWarnings}}<div class="warning">{{.}}</div>{{end}}{{if .Suspect.LeakPattern}}<div class="muted">паттерн: {{.Suspect.LeakPattern}}</div>{{end}}{{if .Suspect.GCRootCategory}}<div class="muted">категория корня: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Подозрений нет.</td></tr>{{end}}
         </tbody>
@@ -154,7 +158,7 @@
   <section id="warnings" class="panel">
     <div class="panel-head"><div><h2>Ограничения анализа</h2><div class="panel-kicker">Отчет явно показывает, где данные точные, а где это подсказка из выполнения.</div></div></div>
     {{range .LeakReport.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="help-text">Дополнительных предупреждений от анализа дампа и выполнения нет.</p>{{end}}
-    <div class="leak-limitations">Легкий режим не читает поля объектов и не знает точный корень GC. Режим дампа кучи требует HPROF или доказательств кучи и может быть ограничен безопасными лимитами для больших дампов.</div>
+    <div class="leak-limitations">time_only и after_explicit_gc не читают поля объектов и не знают корень GC. Даже confirmed_hprof/path доказывает достижимость лишь в момент дампа; ожидаемость этой ссылки нужно проверить по жизненному циклу.</div>
   </section>
 </main>
 <script>{{reportJS}}</script>

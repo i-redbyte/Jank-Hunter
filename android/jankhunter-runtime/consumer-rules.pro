@@ -1,2 +1,3 @@
 -keep class io.jankhunter.runtime.JankHunter { *; }
--keep class io.jankhunter.runtime.AutoInitProvider { *; }
+-keep class io.jankhunter.runtime.JankHunterHooks { public static *; }
+-keep class io.jankhunter.runtime.JankHunterAutoInitProvider { *; }

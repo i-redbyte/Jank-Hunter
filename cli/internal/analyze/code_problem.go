@@ -51,15 +51,10 @@ type codeProblemAccumulator struct {
 
 func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
 	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
-	builder.addOwners(summary.Owners)
-	builder.addFlows(summary.Flows)
-	builder.addLogSpam(summary.LogSpam)
 	builder.addProblemWindows(summary.ProblemWindows)
-	builder.addRetained(summary.RetainedClasses, summary.LowMemoryCount)
 	builder.addMemoryLeaks(summary.MemoryLeaks)
-	builder.addRoutes(summary.Routes)
+	builder.addLogSpam(summary.LogSpam)
 	builder.addRuntimeCalls(summary.RuntimeCalls)
-	builder.addInfluence(summary.Influence)
 	return builder.finish()
 }
 
@@ -252,6 +247,10 @@ func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 
 func (b *codeProblemBuilder) addProblemWindows(windows []ProblemWindowStats) {
 	for _, window := range windows {
+		if window.Kind == "retained_object" || window.Kind == "log_spam" {
+			// Retained/log-spam events have their own canonical scoring paths.
+			continue
+		}
 		className, method := codeLocationFromOwner(window.Owner)
 		if className == "" {
 			continue
@@ -318,7 +317,7 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			continue
 		}
 		item := b.item(className, method, target)
-		item.runtimeEvidence = true
+		item.runtimeEvidence = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
 		item.addCategory(codeCategoryLifecycle)
 		if leak.EstimatedRetainedKB >= 4*1024 || leak.RetainedObjectCount >= 3 {
 			item.addCategory(codeCategoryOOM)
@@ -327,7 +326,14 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 		item.memoryKB += leak.EstimatedRetainedKB
 		item.maxMS = maxUint64(item.maxMS, leak.MaxAgeMS)
 		item.addContext(leak.Screen, leak.Flow, leak.Step, "")
-		detail := fmt.Sprintf("Удержан %s; держатель: %s; качество привязки: %s.", leak.ClassName, leak.Holder, leak.HolderQuality)
+		detail := fmt.Sprintf(
+			"Наблюдался достижимый %s; уровень: %s; держатель: %s; качество привязки: %s. %s.",
+			leak.ClassName,
+			leak.EvidenceKind,
+			leak.Holder,
+			leak.HolderQuality,
+			retainedEvidenceMeaning(leak.EvidenceKind),
+		)
 		if leak.ObjectKind != "" {
 			detail += " Тип: " + leak.ObjectKind + "."
 		}
@@ -344,8 +350,12 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			}
 			detail += "."
 		}
+		signalName := "Сигнал удержания памяти"
+		if leak.HeapEvidence {
+			signalName = "Подтвержденный путь удержания HPROF"
+		}
 		item.addSignal(CodeProblemSignal{
-			Name:     "Подозрение утечки памяти",
+			Name:     signalName,
 			Category: codeCategoryMemory,
 			Severity: leak.Severity,
 			Score:    leak.Score,
@@ -458,25 +468,31 @@ func (b *codeProblemBuilder) addInfluence(influence InfluenceSummary) {
 }
 
 func (b *codeProblemBuilder) finish() []CodeProblemStats {
-	out := make([]CodeProblemStats, 0, len(b.items))
+	items := make([]*codeProblemAccumulator, 0, len(b.items))
 	for _, item := range b.items {
-		row := item.toStats()
-		if row.Score <= 0 && len(row.Signals) == 0 {
+		if roundedCodeProblemScore(item.score) <= 0 && len(item.signals) == 0 {
 			continue
 		}
-		out = append(out, row)
+		items = append(items, item)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			if out[i].ClassName == out[j].ClassName {
-				return out[i].Method < out[j].Method
+	sort.Slice(items, func(i, j int) bool {
+		leftScore := roundedCodeProblemScore(items[i].score)
+		rightScore := roundedCodeProblemScore(items[j].score)
+		if leftScore == rightScore {
+			if items[i].className == items[j].className {
+				return items[i].method < items[j].method
 			}
-			return out[i].ClassName < out[j].ClassName
+			return items[i].className < items[j].className
 		}
-		return out[i].Score > out[j].Score
+		return leftScore > rightScore
 	})
-	if len(out) > 200 {
-		out = out[:200]
+	if len(items) > 200 {
+		items = items[:200]
+	}
+
+	out := make([]CodeProblemStats, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.toStats())
 	}
 	return out
 }
@@ -566,7 +582,7 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 		}
 		return signals[i].Score > signals[j].Score
 	})
-	score := math.Round(a.score*10) / 10
+	score := roundedCodeProblemScore(a.score)
 	categories := sortedSet(a.categories, 0)
 	problems := sortedSet(a.problemNames, 0)
 	return CodeProblemStats{
@@ -588,6 +604,10 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 		Recommendation:  codeProblemRecommendation(categories),
 		Evidence:        codeProblemEvidence(a),
 	}
+}
+
+func roundedCodeProblemScore(score float64) float64 {
+	return math.Round(score*10) / 10
 }
 
 func codeProblemDrillDown(a *codeProblemAccumulator, signals []CodeProblemSignal) []CodeProblemDrillDown {

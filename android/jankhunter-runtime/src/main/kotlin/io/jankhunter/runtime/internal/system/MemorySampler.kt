@@ -2,7 +2,6 @@ package io.jankhunter.runtime.internal.system
 
 import android.content.Context
 import android.os.Debug
-import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -12,47 +11,29 @@ internal class MemorySampler(
     private val foreground: () -> Boolean = { true },
 ) {
     private val running = AtomicBoolean(false)
-    private val gcStats = RuntimeGcStats(::readRuntimeStat) { SystemClock.elapsedRealtime() }
-    private var thread: Thread? = null
+    private val gcStats = RuntimeGcStats(::readRuntimeStat) { android.os.SystemClock.elapsedRealtime() }
+    private var maintenance: MaintenanceHandle? = null
 
-    fun start() {
+    fun start(scheduler: RuntimeMaintenanceScheduler) {
         if (!running.compareAndSet(false, true)) return
-        thread = Thread({ loop() }, "JankHunterMemorySampler").apply {
-            isDaemon = true
-            start()
-        }
+        maintenance = scheduler.schedule(delayMs = ::currentIntervalMs) { sampleOnce() }
     }
 
     fun stop() {
         running.set(false)
-        thread?.interrupt()
+        maintenance?.cancel()
+        maintenance = null
     }
 
-    private fun loop() {
+    private fun sampleOnce() {
+        if (!running.get()) return
         val info = Debug.MemoryInfo()
-        while (running.get()) {
-            Debug.getMemoryInfo(info)
-            val runtime = Runtime.getRuntime()
-            val javaHeapKb = (runtime.totalMemory() - runtime.freeMemory()) / 1024L
-            val nativeHeapKb = Debug.getNativeHeapAllocatedSize() / 1024L
-            JankHunter.recordMemory(info.totalPss.toLong(), javaHeapKb, nativeHeapKb)
-            recordHeapPressure(runtime, nativeHeapKb)
-            sleepUntilNextSample()
-        }
-    }
-
-    private fun sleepUntilNextSample() {
-        val startedAtMs = SystemClock.elapsedRealtime()
-        while (running.get()) {
-            val remainingMs = currentIntervalMs() - (SystemClock.elapsedRealtime() - startedAtMs)
-            if (remainingMs <= 0L) return
-            try {
-                Thread.sleep(minOf(remainingMs, STATE_POLL_MS))
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return
-            }
-        }
+        Debug.getMemoryInfo(info)
+        val runtime = Runtime.getRuntime()
+        val javaHeapKb = (runtime.totalMemory() - runtime.freeMemory()) / 1024L
+        val nativeHeapKb = Debug.getNativeHeapAllocatedSize() / 1024L
+        JankHunter.recordMemory(info.totalPss.toLong(), javaHeapKb, nativeHeapKb)
+        recordHeapPressure(runtime, nativeHeapKb)
     }
 
     private fun currentIntervalMs(): Long {
@@ -75,11 +56,11 @@ internal class MemorySampler(
         JankHunter.recordGauge("memory.native_heap.free_kb", Debug.getNativeHeapFreeSize() / 1024L)
         JankHunter.recordGauge("memory.native_heap.size_kb", Debug.getNativeHeapSize() / 1024L)
 
-            val delta = gcStats.sample()
-            recordPositiveCounter("gc.count.delta", delta.gcCountDelta)
-            recordPositiveCounter("gc.time_ms.delta", delta.gcTimeMsDelta)
-            recordPositiveCounter("gc.blocking_count.delta", delta.blockingGcCountDelta)
-            recordPositiveCounter("gc.blocking_time_ms.delta", delta.blockingGcTimeMsDelta)
+        val delta = gcStats.sample()
+        recordPositiveCounter("gc.count.delta", delta.gcCountDelta)
+        recordPositiveCounter("gc.time_ms.delta", delta.gcTimeMsDelta)
+        recordPositiveCounter("gc.blocking_count.delta", delta.blockingGcCountDelta)
+        recordPositiveCounter("gc.blocking_time_ms.delta", delta.blockingGcTimeMsDelta)
         recordPositiveCounter("gc.bytes_allocated.delta", delta.bytesAllocatedDelta)
         recordPositiveCounter("gc.bytes_freed.delta", delta.bytesFreedDelta)
         JankHunter.recordGauge("memory.allocation_rate_bytes_per_sec", delta.allocationRateBytesPerSec)
@@ -102,6 +83,5 @@ internal class MemorySampler(
     private companion object {
         private const val BACKGROUND_INTERVAL_MULTIPLIER = 12L
         private const val MIN_BACKGROUND_INTERVAL_MS = 2 * 60_000L
-        private const val STATE_POLL_MS = 5_000L
     }
 }

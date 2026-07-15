@@ -35,11 +35,13 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    systemProperty("jankhunter.benchmark", providers.systemProperty("jankhunter.benchmark").orElse("false").get())
+    val benchmarkEnabled = providers.systemProperty("jankhunter.benchmark").orElse("false").get()
+    systemProperty("jankhunter.benchmark", benchmarkEnabled)
     systemProperty(
         "jankhunter.benchmark.iterations",
         providers.systemProperty("jankhunter.benchmark.iterations").orElse("100000").get(),
     )
+    testLogging.showStandardStreams = benchmarkEnabled.toBoolean()
 }
 
 afterEvaluate {

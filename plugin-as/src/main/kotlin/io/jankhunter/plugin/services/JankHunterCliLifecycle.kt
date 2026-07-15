@@ -1,10 +1,6 @@
 package io.jankhunter.plugin.services
 
-import com.intellij.execution.ExecutionException
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessEvent
-import com.intellij.execution.process.ProcessListener
 import com.intellij.openapi.project.Project
 import io.jankhunter.plugin.execution.JankHunterArtifactDiscovery
 import java.io.File
@@ -20,19 +16,6 @@ data class JankHunterCliStatus(
 )
 
 object JankHunterCliLifecycle {
-    fun localCliFile(project: Project): File? {
-        val base = project.basePath ?: return null
-        return listOf(
-            File(base, ".jankhunter/bin/jankhunter"),
-            File(base, "cli/bin/jankhunter"),
-            File(base, "../cli/bin/jankhunter").canonicalFile,
-            File(base, "../../cli/bin/jankhunter").canonicalFile,
-            File(System.getProperty("user.home"), ".jankhunter/bin/jankhunter"),
-            File("/opt/homebrew/bin/jankhunter"),
-            File("/usr/local/bin/jankhunter"),
-        ).firstOrNull { it.parentFile?.isDirectory == true }
-    }
-
     fun status(project: Project, configuredPath: String): JankHunterCliStatus {
         val path = configuredPath.ifBlank { JankHunterArtifactDiscovery.detectCli(project) }
         val file = if (path.contains('/')) File(path) else null
@@ -44,36 +27,14 @@ object JankHunterCliLifecycle {
         return JankHunterCliStatus(path, exists, executable, versionOutput, version, stale)
     }
 
-    fun buildCli(project: Project, onText: (String) -> Unit, onDone: (Boolean) -> Unit) {
+    fun buildCommand(project: Project): GeneralCommandLine? {
         val cliDir = project.basePath?.let { File(it, "cli") }?.takeIf { File(it, "Makefile").isFile }
             ?: project.basePath?.let { File(it, "../cli").canonicalFile }?.takeIf { File(it, "Makefile").isFile }
-        if (cliDir == null) {
-            onText("Не нашел cli/Makefile рядом с проектом.\n")
-            onDone(false)
-            return
-        }
-        val commandLine = GeneralCommandLine("make")
+            ?: return null
+        return GeneralCommandLine("make")
             .withParameters("build")
             .withWorkDirectory(cliDir)
             .withCharset(StandardCharsets.UTF_8)
-        try {
-            val handler = OSProcessHandler(commandLine)
-            handler.addProcessListener(
-                object : ProcessListener {
-                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                        onText(event.text)
-                    }
-
-                    override fun processTerminated(event: ProcessEvent) {
-                        onDone(event.exitCode == 0)
-                    }
-                },
-            )
-            handler.startNotify()
-        } catch (error: ExecutionException) {
-            onText("Не удалось запустить make build: ${error.message}\n")
-            onDone(false)
-        }
     }
 
     private fun runVersion(project: Project, cliPath: String): String {
@@ -82,11 +43,7 @@ object JankHunterCliLifecycle {
                 .withParameters("version")
                 .withCharset(StandardCharsets.UTF_8)
             project.basePath?.let { commandLine.withWorkDirectory(File(it)) }
-            val process = commandLine.createProcess()
-            val out = process.inputStream.bufferedReader().readText()
-            val err = process.errorStream.bufferedReader().readText()
-            process.waitFor()
-            out + err
+            JankHunterProcessCapture.run(commandLine, VERSION_TIMEOUT_MILLIS).combinedOutput()
         }.getOrDefault("")
     }
 
@@ -107,4 +64,5 @@ object JankHunterCliLifecycle {
     }
 
     private const val PLUGIN_EXPECTED_CLI_VERSION = "1.0.1"
+    private const val VERSION_TIMEOUT_MILLIS = 5_000L
 }

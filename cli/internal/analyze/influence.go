@@ -133,68 +133,6 @@ type influenceAccumulator struct {
 }
 
 func (b *influenceBuilder) addRuntime(summary Summary) {
-	for _, owner := range summary.Owners {
-		className := classFromOwner(owner.Owner)
-		if className == "" {
-			continue
-		}
-		node := b.node(className)
-		node.runtime = true
-		switch owner.Kind {
-		case "main_thread_stall":
-			node.mainMS += owner.TotalMS
-			node.problems += uint64(owner.Count)
-			node.addReason("работа на главном потоке")
-			node.score += scoreDuration(owner.TotalMS, 1800) + scoreDuration(owner.MaxMS, 500)
-		case "http":
-			node.networkMS += owner.TotalMS
-			node.addReason("сетевые задержки")
-			node.score += scoreDuration(owner.TotalMS, 2500) + scoreDuration(owner.MaxMS, 900)
-		case "retained_object":
-			node.retained += uint64(owner.Count)
-			node.addReason("удержанные объекты")
-			node.score += scoreCount(uint64(owner.Count), 8) + scoreDuration(owner.MaxMS, 60_000)
-		default:
-			node.score += scoreCount(uint64(owner.Count), 120)
-		}
-	}
-	for _, flow := range summary.Flows {
-		className := classFromOwner(flow.Owner)
-		if className == "" {
-			continue
-		}
-		node := b.node(className)
-		node.runtime = true
-		node.problems += flow.ProblemCount
-		node.logSpam += flow.LogSpam
-		node.mainMS += flow.StallMaxMS
-		node.networkMS += flow.HTTPP95MS
-		node.memoryKB += flow.MemoryMaxKB
-		node.uiJank += flow.UIJank
-		node.addFlow(flow.Flow)
-		node.addScreen(flow.Screen)
-		node.addRoute(flow.RouteSample)
-		if flow.ProblemCount > 0 {
-			node.addReason("проблемные окна")
-		}
-		if flow.LogSpam > 0 {
-			node.addReason("спам логами")
-		}
-		if flow.HTTPP95MS > 0 {
-			node.addReason("95-й процентиль HTTP")
-		}
-		if flow.StallMaxMS > 0 {
-			node.addReason("паузы главного потока")
-		}
-		if flow.UIJank > 0 {
-			node.addReason("UI-подтормаживания")
-		}
-		node.score += scoreCount(flow.ProblemCount, 10)
-		node.score += scoreCount(flow.LogSpam, 180)
-		node.score += scoreDuration(flow.HTTPP95MS, 900)
-		node.score += scoreDuration(flow.StallMaxMS, 500)
-		node.score += scoreCount(flow.UIJank, 50)
-	}
 	for _, spam := range summary.LogSpam {
 		className := classFromOwner(spam.Owner)
 		if className == "" {
@@ -209,6 +147,9 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.score += scoreCount(spam.Count, 160)
 	}
 	for _, problem := range summary.ProblemWindows {
+		if problem.Kind == "retained_object" || problem.Kind == "log_spam" {
+			continue
+		}
 		className := classFromOwner(problem.Owner)
 		if className == "" {
 			continue
@@ -225,29 +166,6 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.score += scoreCount(problem.Count, 8)
 		node.score += scoreDuration(problem.MaxMS, 500)
 	}
-	for _, retained := range summary.RetainedClasses {
-		className := normalizeClassName(retained.Name)
-		if className == "" {
-			continue
-		}
-		node := b.node(className)
-		node.runtime = true
-		node.retained += retained.Value
-		node.addReason("удержанные объекты")
-		node.score += scoreCount(retained.Value, 8)
-	}
-	for _, route := range summary.Routes {
-		className := classFromOwner(route.OwnerSample)
-		if className == "" {
-			continue
-		}
-		node := b.node(className)
-		node.runtime = true
-		node.networkMS += route.P95MS
-		node.addRoute(route.Route)
-		node.addReason("сетевой маршрут")
-		node.score += scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3)
-	}
 	for _, leak := range summary.MemoryLeaks {
 		target := leak.ClassName
 		if isLikelyAppClass(leak.Holder) {
@@ -261,12 +179,12 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			continue
 		}
 		node := b.node(className)
-		node.runtime = true
+		node.runtime = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
 		node.retained += leak.Count
 		node.memoryKB += leak.EstimatedRetainedKB
 		node.addFlow(leak.Flow)
 		node.addScreen(leak.Screen)
-		node.addReason("доказательства утечки из дампа памяти")
+		node.addReason(leak.EvidenceLabel)
 		node.score += leak.Score * 0.45
 	}
 	for _, call := range summary.RuntimeCalls {

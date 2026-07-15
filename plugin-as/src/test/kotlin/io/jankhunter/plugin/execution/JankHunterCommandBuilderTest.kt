@@ -1,6 +1,7 @@
 package io.jankhunter.plugin.execution
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import io.jankhunter.plugin.settings.JankHunterRecentRun
 import java.io.File
 import java.nio.file.Files
 
@@ -14,10 +15,10 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
         assertTrue(command.args.contains("--all-sessions"))
     }
 
-    fun testInspectLatestLogScopeUsesNewestExpandedFile() {
+    fun testInspectLatestLogScopeUsesCanonicalNumericIndex() {
         withTempLogDir { dir ->
-            val old = log(dir, "session-app-1000-0.jhlog", modifiedAt = 1_000)
-            val latest = log(dir, "session-app-2000-0.jhlog", modifiedAt = 2_000)
+            val old = log(dir, "jh-session-log.2026-07-14.9.jhlog", modifiedAt = 3_000)
+            val latest = log(dir, "jh-session-log.2026-07-14.10.jhlog", modifiedAt = 1_000)
 
             val command = JankHunterCommandBuilder.build(
                 project,
@@ -33,30 +34,66 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
         }
     }
 
-    fun testLatestSessionGroupKeepsNewestParts() {
+    fun testInspectLatestLogScopeUsesNewestCanonicalDateBeforeIndex() {
         withTempLogDir { dir ->
-            val old = log(dir, "session-app-1000-0.jhlog", modifiedAt = 1_000)
-            val latestPart0 = log(dir, "session-app-2000-0.jhlog", modifiedAt = 2_000)
-            val latestPart1 = log(dir, "session-app-2000-1.jhlog", modifiedAt = 2_001)
+            val old = log(dir, "jh-session-log.2026-07-13.99.jhlog", modifiedAt = 3_000)
+            val latest = log(dir, "jh-session-log.2026-07-14.0.jhlog", modifiedAt = 1_000)
 
             val command = JankHunterCommandBuilder.build(
                 project,
                 request(
                     logs = "${dir.path}/*.jhlog",
-                    inspectLogScope = JankHunterLogScope.LATEST_SESSION_GROUP,
+                    inspectLogScope = JankHunterLogScope.LATEST_LOG,
                 ),
             )
 
             assertFalse(command.args.contains("--all-sessions"))
             assertFalse(command.args.contains(old.toPath().normalize().toString()))
-            assertTrue(command.args.contains(latestPart0.toPath().normalize().toString()))
-            assertTrue(command.args.contains(latestPart1.toPath().normalize().toString()))
+            assertTrue(command.args.contains(latest.toPath().normalize().toString()))
         }
+    }
+
+    fun testInspectLatestLogScopeRejectsNonCanonicalLeadingZeroIndex() {
+        withTempLogDir { dir ->
+            val canonical = log(dir, "jh-session-log.2026-07-14.0.jhlog", modifiedAt = 1_000)
+            val nonCanonical = log(dir, "jh-session-log.2026-07-15.01.jhlog", modifiedAt = 3_000)
+
+            val command = JankHunterCommandBuilder.build(
+                project,
+                request(
+                    logs = "${dir.path}/*.jhlog",
+                    inspectLogScope = JankHunterLogScope.LATEST_LOG,
+                ),
+            )
+
+            assertTrue(command.args.contains(canonical.toPath().normalize().toString()))
+            assertFalse(command.args.contains(nonCanonical.toPath().normalize().toString()))
+        }
+    }
+
+    fun testInspectForwardsDependencyInjectionCatalog() {
+        val command = JankHunterCommandBuilder.build(
+            project,
+            request(logs = "/tmp/run.jhlog", diCatalog = "/tmp/di-catalog.jsonl"),
+        )
+
+        val flagIndex = command.args.indexOf("--di-catalog")
+        assertTrue(flagIndex >= 0)
+        assertEquals("/tmp/di-catalog.jsonl", command.args[flagIndex + 1])
+    }
+
+    fun testRecentRunPreservesDependencyInjectionCatalog() {
+        val request = request(logs = "/tmp/run.jhlog", diCatalog = "/tmp/di-catalog.jsonl")
+
+        val restored = JankHunterRecentRun.fromRequest("now", "jankhunter inspect", request).toRequest()
+
+        assertEquals(request.diCatalog, restored.diCatalog)
     }
 
     private fun request(
         logs: String,
         inspectLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED,
+        diCatalog: String = "",
     ): JankHunterRunRequest =
         JankHunterRunRequest(
             mode = JankHunterMode.INSPECT,
@@ -70,6 +107,7 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
             mapping = "",
             classGraph = "",
             diagnostics = "",
+            diCatalog = diCatalog,
             heapDump = "",
             heapEvidence = "",
             baselineHeapDump = "",

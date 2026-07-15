@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
@@ -22,15 +22,15 @@ const run = (args) => {
   }
 };
 
-const buildReportSet = (name, logCount, presentation = false) => {
+const buildReportSet = (name, presentation = false) => {
   const setDir = resolve(outDir, name);
   mkdirSync(setDir, { recursive: true });
-  const logs = [];
-  for (let index = 0; index < logCount; index += 1) {
-    const logPath = resolve(setDir, `sample-${index + 1}.jhlog`);
-    run(["sample", "--out", logPath]);
-    logs.push(logPath);
-  }
+  const logPath = resolve(setDir, "sample.jhlog");
+  const candidatePath = resolve(setDir, "candidate.jhlog");
+  run(["sample", "--out", logPath]);
+  run(["sample", "--out", candidatePath]);
+  const logs = [logPath];
+  const candidateLogs = [candidatePath];
 
   const inspectPath = resolve(setDir, "inspect.html");
   const comparePath = resolve(setDir, "compare.html");
@@ -69,11 +69,13 @@ const buildReportSet = (name, logCount, presentation = false) => {
   if (presentation) {
     const ownerMapPath = resolve(setDir, "owner-map.json");
     writeFileSync(ownerMapPath, JSON.stringify({
-      format: 1,
+      format: 4,
+      kind: "metadata",
+      symbolNamespace: "00112233445566778899aabbccddeeff",
       owners: {
-        "FeedRepository.refresh": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
-        "CheckoutPresenter.render": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
-        "CheckoutPresenter.renderItems": "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
+        "stable:0x0000000000001001": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
+        "stable:0x0000000000001002": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
+        "stable:0x0000000000001003": "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
       },
     }, null, 2));
     ownerMapArgs.push("--owner-map", ownerMapPath);
@@ -82,7 +84,7 @@ const buildReportSet = (name, logCount, presentation = false) => {
   run([
     "compare",
     "--baseline", logs.join(","),
-    "--candidate", logs.join(","),
+    "--candidate", candidateLogs.join(","),
     ...ownerMapArgs,
     ...diagnosticsArgs,
     ...presentationFlag,
@@ -90,17 +92,17 @@ const buildReportSet = (name, logCount, presentation = false) => {
   ]);
 
   const reports = [
-    { set: name, type: "inspect", path: inspectPath },
-    { set: name, type: "inspect-math", path: inspectPath.replace(/\.html$/, "-math.html") },
-    { set: name, type: "inspect-leaks", path: inspectPath.replace(/\.html$/, "-leaks.html") },
-    { set: name, type: "inspect-influence", path: inspectPath.replace(/\.html$/, "-influence.html") },
-    { set: name, type: "inspect-diagnostics", path: inspectPath.replace(/\.html$/, "-diagnostics.html") },
-    { set: name, type: "compare", path: comparePath },
-    { set: name, type: "compare-math", path: comparePath.replace(/\.html$/, "-math.html") },
-    { set: name, type: "compare-leaks", path: comparePath.replace(/\.html$/, "-leaks.html") },
-    { set: name, type: "compare-influence", path: comparePath.replace(/\.html$/, "-influence.html") },
-    { set: name, type: "compare-diagnostics", path: comparePath.replace(/\.html$/, "-diagnostics.html") },
-  ].filter((report) => existsSync(report.path));
+    { set: name, type: "inspect", path: inspectPath, page: "overview" },
+    { set: name, type: "inspect-math", path: inspectPath, page: "math" },
+    { set: name, type: "inspect-leaks", path: inspectPath, page: "leaks" },
+    { set: name, type: "inspect-influence", path: inspectPath, page: "influence" },
+    { set: name, type: "inspect-diagnostics", path: inspectPath, page: "diagnostics" },
+    { set: name, type: "compare", path: comparePath, page: "overview" },
+    { set: name, type: "compare-math", path: comparePath, page: "math" },
+    { set: name, type: "compare-leaks", path: comparePath, page: "leaks" },
+    { set: name, type: "compare-influence", path: comparePath, page: "influence" },
+    { set: name, type: "compare-diagnostics", path: comparePath, page: "diagnostics" },
+  ];
 
   for (const required of ["inspect", "inspect-math", "inspect-leaks", "inspect-influence", "inspect-diagnostics", "compare", "compare-math", "compare-leaks", "compare-influence", "compare-diagnostics"]) {
     if (!reports.some((report) => report.type === required)) {
@@ -111,8 +113,8 @@ const buildReportSet = (name, logCount, presentation = false) => {
 };
 
 const reportPaths = [
-  ...buildReportSet("short", 1, false),
-  ...buildReportSet("long-presentation", 8, true),
+  ...buildReportSet("short"),
+  ...buildReportSet("long-presentation", true),
 ];
 
 const browser = await chromium.launch();
@@ -120,6 +122,13 @@ const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
 ];
+const visualStabilityCSS = `
+  *, *::before, *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+`;
 const failures = [];
 
 const collectLayoutIssues = async (page) => page.evaluate(() => {
@@ -163,7 +172,33 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
         });
     })
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
-  return { pageOverflow, bareTables, tallRows, clippedTooltips, scrollWrappers, clippedCells, nakedOverflowCells, escapedProblemCells };
+  const graphEdges = Array.from(document.querySelectorAll(".leak-graph-edge, .influence-edge"));
+  const missingArrowMarkers = graphEdges.filter((edge) => {
+    const marker = edge.getAttribute("marker-end") || "";
+    const match = marker.match(/^url\(#([^)]+)\)$/);
+    return !match || !document.getElementById(match[1]);
+  }).length;
+  const leakNodes = Array.from(document.querySelectorAll(".leak-graph-node"));
+  const leakLabelOverlaps = Array.from(document.querySelectorAll(".leak-graph-edge-label-bg"))
+    .filter((label) => {
+      const a = label.getBoundingClientRect();
+      return leakNodes.some((node) => {
+        const b = node.getBoundingClientRect();
+        return a.left < b.right - 2 && a.right > b.left + 2 && a.top < b.bottom - 2 && a.bottom > b.top + 2;
+      });
+    }).length;
+  return {
+    pageOverflow,
+    bareTables,
+    tallRows,
+    clippedTooltips,
+    scrollWrappers,
+    clippedCells,
+    nakedOverflowCells,
+    escapedProblemCells,
+    missingArrowMarkers,
+    leakLabelOverlaps,
+  };
 });
 
 const checkLongCellToggle = async (page) => page.evaluate(() => {
@@ -199,26 +234,36 @@ const checkZeroToggle = async (page) => page.evaluate(() => {
   return { available: true, zeroRows: rows.length, hiddenBefore, visibleAfter, hiddenAfter };
 });
 
-const checkTooltipPlacement = async (page) => {
-  const handles = await page.$$("[data-tip]");
+const checkTooltipPlacement = async (surface) => {
+  const handles = await surface.$$("[data-tip]");
   let checked = 0;
   for (const handle of handles) {
     const box = await handle.evaluate((node) => {
       const rect = node.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
       return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        visible: rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth,
+        x,
+        y,
+        visible: rect.width > 0 && rect.height > 0 && x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight,
       };
     });
     if (!box.visible) {
       continue;
     }
-    await page.mouse.move(box.x, box.y);
-    await page.waitForTimeout(120);
-    const issue = await page.evaluate(() => {
+    await handle.hover();
+    const appeared = await surface.waitForFunction(
+      () => document.querySelector(".jh-tooltip.is-visible") !== null,
+      null,
+      { timeout: 500 },
+    ).then(() => true, () => false);
+    if (!appeared) {
+      return "подсказка не появилась";
+    }
+    await surface.waitForTimeout(120);
+    const issue = await surface.evaluate(() => {
       const tip = document.querySelector(".jh-tooltip.is-visible");
-      if (!tip) return "подсказка не появилась";
+      if (!tip) return "подсказка исчезла до проверки";
       const rect = tip.getBoundingClientRect();
       const margin = 4;
       if (rect.left < margin || rect.right > window.innerWidth - margin) return "подсказка вышла за горизонтальные границы";
@@ -236,23 +281,79 @@ const checkTooltipPlacement = async (page) => {
   return checked > 0 ? "" : "";
 };
 
+const checkFragmentNavigation = async (page, frame) => {
+  const expectedFrameCount = page.frames().length;
+  const hrefs = await frame.$$eval('a[href^="#"]', (anchors) =>
+    Array.from(new Set(anchors.map((anchor) => anchor.getAttribute("href")).filter(Boolean))),
+  );
+  const issues = [];
+  for (const href of hrefs) {
+    let targetID = href.slice(1);
+    try { targetID = decodeURIComponent(targetID); } catch (_) {}
+    const targetExists = targetID === "" || await frame.evaluate((id) =>
+      document.getElementById(id) !== null || document.getElementsByName(id).length > 0,
+    targetID);
+    if (!targetExists) {
+      issues.push(`${href}: целевая секция отсутствует`);
+      continue;
+    }
+    await frame.evaluate((value) => {
+      const anchor = Array.from(document.querySelectorAll('a[href^="#"]'))
+        .find((candidate) => candidate.getAttribute("href") === value);
+      anchor?.click();
+    }, href);
+    await page.waitForTimeout(20);
+    const state = await frame.evaluate((id) => {
+      const target = id ? (document.getElementById(id) || document.getElementsByName(id)[0]) : document.documentElement;
+      const rect = target?.getBoundingClientRect();
+      return {
+        documentURL: window.location.href,
+        nestedShell: document.body.hasAttribute("data-jankhunter-single-html"),
+        targetVisible: Boolean(rect && rect.bottom > 0 && rect.top < window.innerHeight),
+      };
+    }, targetID);
+    if (state.nestedShell || !state.documentURL.startsWith("about:srcdoc")) {
+      issues.push(`${href}: ссылка загрузила контейнер отчета внутрь iframe (${state.documentURL})`);
+      break;
+    }
+    if (!state.targetVisible) {
+      issues.push(`${href}: целевая секция не появилась в viewport после клика`);
+    }
+    if (page.frames().length !== expectedFrameCount) {
+      issues.push(`${href}: число iframe изменилось с ${expectedFrameCount - 1} до ${page.frames().length - 1}`);
+      break;
+    }
+  }
+  return issues;
+};
+
 try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
     for (const report of reportPaths) {
       const reportName = `${report.set}-${report.type}`;
-      await page.goto(pathToFileURL(report.path).href, { waitUntil: "load" });
-      await page.evaluate(() => document.fonts?.ready);
+      const reportURL = pathToFileURL(report.path);
+      reportURL.hash = `page=${report.page}`;
+      await page.goto(reportURL.href, { waitUntil: "load" });
+      const frameElement = await page.waitForSelector(`iframe.report-frame.active[data-page="${report.page}"]`);
+      const reportFrame = await frameElement.contentFrame();
+      if (!reportFrame) {
+        throw new Error(`В snapshot-наборе ${reportName} не загрузилась встроенная страница ${report.page}`);
+      }
+      await reportFrame.waitForLoadState("load");
+      await page.addStyleTag({ content: visualStabilityCSS });
+      await reportFrame.addStyleTag({ content: visualStabilityCSS });
+      await reportFrame.evaluate(() => document.fonts?.ready);
       await page.waitForTimeout(120);
-      const issues = await collectLayoutIssues(page);
-      const longCellToggle = await checkLongCellToggle(page);
-      const zeroToggle = await checkZeroToggle(page);
-      const tooltipIssue = await checkTooltipPlacement(page);
+      const issues = await collectLayoutIssues(reportFrame);
+      const longCellToggle = await checkLongCellToggle(reportFrame);
+      const zeroToggle = await checkZeroToggle(reportFrame);
+      const tooltipIssue = await checkTooltipPlacement(reportFrame);
+      const fragmentIssues = viewport.name === "desktop" && report.set === "short"
+        ? await checkFragmentNavigation(page, reportFrame)
+        : [];
 
-      const displayName = report.path
-        .slice(outDir.length + 1)
-        .replace(/[^a-z0-9-]+/gi, "-")
-        .replace(/-html$/, "");
+      const displayName = reportName;
 
       if (issues.pageOverflow > 6) {
         failures.push(`${viewport.name}/${displayName}: страница шире viewport на ${issues.pageOverflow}px`);
@@ -278,6 +379,12 @@ try {
       if (issues.escapedProblemCells.length > 0) {
         failures.push(`${viewport.name}/${displayName}: содержимое problem/leak таблицы вышло за границы ячейки: ${JSON.stringify(issues.escapedProblemCells.slice(0, 3))}`);
       }
+      if (issues.missingArrowMarkers > 0) {
+        failures.push(`${viewport.name}/${displayName}: у ${issues.missingArrowMarkers} SVG-связей отсутствует рабочий marker-end`);
+      }
+      if (issues.leakLabelOverlaps > 0) {
+        failures.push(`${viewport.name}/${displayName}: ${issues.leakLabelOverlaps} подписей связей перекрывают карточки графа утечек`);
+      }
       if (longCellToggle.available && (!longCellToggle.expanded || !longCellToggle.collapsed)) {
         failures.push(`${viewport.name}/${displayName}: кнопка раскрытия длинной ячейки не переключает состояние`);
       }
@@ -289,11 +396,28 @@ try {
       if (tooltipIssue) {
         failures.push(`${viewport.name}/${displayName}: ${tooltipIssue}`);
       }
+      for (const issue of fragmentIssues) {
+        failures.push(`${viewport.name}/${displayName}: ${issue}`);
+      }
 
       await page.screenshot({
         path: resolve(outDir, `${reportName}-${viewport.name}.png`),
         fullPage: true,
       });
+
+      if (report.page === "overview") {
+        const mathLink = await reportFrame.$('a[href$="-math.html"]');
+        if (!mathLink) {
+          failures.push(`${viewport.name}/${displayName}: в обзоре нет ссылки на математический анализ`);
+        } else {
+          await mathLink.click();
+          const routed = await page.waitForSelector('iframe.report-frame.active[data-page="math"]', { timeout: 1000 })
+            .then(() => true, () => false);
+          if (!routed) {
+            failures.push(`${viewport.name}/${displayName}: внутренняя ссылка не переключила вкладку математического анализа`);
+          }
+        }
+      }
     }
     await page.close();
   }

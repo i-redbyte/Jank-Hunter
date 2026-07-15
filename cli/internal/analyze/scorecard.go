@@ -26,13 +26,16 @@ type ScorecardArtifacts struct {
 }
 
 type ScorecardDataQuality struct {
-	Confidence      string   `json:"confidence"`
-	BaselineLogs    int      `json:"baseline_logs"`
-	CandidateLogs   int      `json:"candidate_logs"`
-	BaselineEvents  int      `json:"baseline_events"`
-	CandidateEvents int      `json:"candidate_events"`
-	CohortWarnings  []string `json:"cohort_warnings,omitempty"`
-	Warnings        []string `json:"warnings,omitempty"`
+	Confidence                 string            `json:"confidence"`
+	BaselineLogs               int               `json:"baseline_logs"`
+	CandidateLogs              int               `json:"candidate_logs"`
+	BaselineEvents             int               `json:"baseline_events"`
+	CandidateEvents            int               `json:"candidate_events"`
+	BaselineCollectionQuality  CollectionQuality `json:"baseline_collection_quality"`
+	CandidateCollectionQuality CollectionQuality `json:"candidate_collection_quality"`
+	CohortWarnings             []string          `json:"cohort_warnings,omitempty"`
+	QualityWarnings            []string          `json:"quality_warnings,omitempty"`
+	Warnings                   []string          `json:"warnings,omitempty"`
 }
 
 type ScorecardRow struct {
@@ -84,13 +87,19 @@ func BuildValidationScorecard(
 			CandidateHeapSources: comparison.Candidate.HeapSources(),
 		},
 		DataQuality: ScorecardDataQuality{
-			Confidence:      comparison.Confidence(),
-			BaselineLogs:    comparison.Baseline.LogCount,
-			CandidateLogs:   comparison.Candidate.LogCount,
-			BaselineEvents:  comparison.Baseline.EventCount,
-			CandidateEvents: comparison.Candidate.EventCount,
-			CohortWarnings:  append([]string{}, comparison.Warnings...),
-			Warnings:        append(append([]string{}, comparison.Baseline.Warnings...), comparison.Candidate.Warnings...),
+			Confidence:                 comparison.Confidence(),
+			BaselineLogs:               comparison.Baseline.LogCount,
+			CandidateLogs:              comparison.Candidate.LogCount,
+			BaselineEvents:             comparison.Baseline.EventCount,
+			CandidateEvents:            comparison.Candidate.EventCount,
+			BaselineCollectionQuality:  comparison.Baseline.CollectionQuality,
+			CandidateCollectionQuality: comparison.Candidate.CollectionQuality,
+			CohortWarnings:             append([]string{}, comparison.CohortWarnings...),
+			QualityWarnings:            append([]string{}, comparison.QualityWarnings...),
+			Warnings: uniqueStrings(append(
+				append([]string{}, comparison.Baseline.Warnings...),
+				comparison.Candidate.Warnings...,
+			)),
 		},
 		LeakCompare: leakCompare.Stats,
 		Scores:      scores,
@@ -117,21 +126,27 @@ func (summary Summary) HeapSources() []string {
 
 func dataQualityScore(comparison Comparison) ScorecardRow {
 	score := scoreForConfidence(comparison.Confidence())
-	if len(comparison.Warnings) > 0 {
-		score -= math.Min(2, float64(len(comparison.Warnings))*0.5)
+	if len(comparison.CohortWarnings) > 0 {
+		score -= math.Min(2, float64(len(comparison.CohortWarnings))*0.5)
+	}
+	if len(comparison.QualityWarnings) > 0 {
+		score -= math.Min(2, float64(len(comparison.QualityWarnings))*0.5)
 	}
 	return ScorecardRow{
 		Weight:     20,
 		Score0To10: roundScore(score),
 		Status:     statusForScore(score),
 		Evidence: fmt.Sprintf(
-			"confidence=%s, baseline logs/events=%d/%d, candidate logs/events=%d/%d, cohort warnings=%d",
+			"confidence=%s, baseline logs/events=%d/%d, candidate logs/events=%d/%d, cohort warnings=%d, quality warnings=%d; %s; %s",
 			comparison.Confidence(),
 			comparison.Baseline.LogCount,
 			comparison.Baseline.EventCount,
 			comparison.Candidate.LogCount,
 			comparison.Candidate.EventCount,
-			len(comparison.Warnings),
+			len(comparison.CohortWarnings),
+			len(comparison.QualityWarnings),
+			collectionQualityEvidence("baseline", comparison.Baseline),
+			collectionQualityEvidence("candidate", comparison.Candidate),
 		),
 		NextActions: dataQualityActions(comparison),
 	}
@@ -251,7 +266,10 @@ func compareStabilityScore(report LeakCompareReport, confidence string) Scorecar
 
 func ciGateReadinessScore(comparison Comparison) ScorecardRow {
 	score := scoreForConfidence(comparison.Confidence())
-	if len(comparison.Warnings) > 0 {
+	if len(comparison.CohortWarnings) > 0 {
+		score -= 2
+	}
+	if len(comparison.QualityWarnings) > 0 {
 		score -= 2
 	}
 	if comparison.Baseline.LogCount >= 5 && comparison.Candidate.LogCount >= 5 {
@@ -263,11 +281,14 @@ func ciGateReadinessScore(comparison Comparison) ScorecardRow {
 		Score0To10: roundScore(score),
 		Status:     statusForScore(score),
 		Evidence: fmt.Sprintf(
-			"confidence=%s, baseline_logs=%d, candidate_logs=%d, warnings=%d",
+			"confidence=%s, baseline_logs=%d, candidate_logs=%d, cohort_warnings=%d, quality_warnings=%d; %s; %s",
 			comparison.Confidence(),
 			comparison.Baseline.LogCount,
 			comparison.Candidate.LogCount,
-			len(comparison.Warnings),
+			len(comparison.CohortWarnings),
+			len(comparison.QualityWarnings),
+			collectionQualityEvidence("baseline", comparison.Baseline),
+			collectionQualityEvidence("candidate", comparison.Candidate),
 		),
 		NextActions: ciGateActions(comparison),
 	}
@@ -327,7 +348,7 @@ func scorecardSummary(
 	if totalWeight > 0 {
 		score = weighted / float64(totalWeight)
 	}
-	if len(comparison.Warnings) > 0 {
+	if len(comparison.CohortWarnings) > 0 {
 		actions = append(actions, "Align cohorts before trusting regression gates: app version, SDK, device, process and network mix should match.")
 	}
 	if leakCompare.Candidate.Stats.RuntimeOnly > 0 && leakCompare.Candidate.Stats.HeapConfirmed == 0 {
@@ -342,12 +363,14 @@ func scorecardSummary(
 
 func dataQualityActions(comparison Comparison) []string {
 	var actions []string
-	if comparison.Confidence() != "high" {
+	if sampleConfidence(comparison.Baseline, comparison.Candidate) != "high" {
 		actions = append(actions, "Collect 5+ logs and 500+ events per baseline/candidate cohort for high confidence.")
 	}
-	if len(comparison.Warnings) > 0 {
+	if len(comparison.CohortWarnings) > 0 {
 		actions = append(actions, "Normalize cohorts before comparing regressions.")
 	}
+	actions = append(actions, collectionQualityActions("baseline", comparison.Baseline)...)
+	actions = append(actions, collectionQualityActions("candidate", comparison.Candidate)...)
 	return actions
 }
 
@@ -391,10 +414,17 @@ func compareStabilityActions(report LeakCompareReport) []string {
 }
 
 func ciGateActions(comparison Comparison) []string {
-	if comparison.Confidence() == "high" && len(comparison.Warnings) == 0 {
+	if comparison.Confidence() == "high" && len(comparison.CohortWarnings) == 0 && len(comparison.QualityWarnings) == 0 {
 		return []string{"Enable compare --thresholds in CI with fail_on_new/fail_on_worse leak rules."}
 	}
-	return []string{"Keep CI gate advisory until confidence is medium/high and cohort warnings are resolved."}
+	actions := []string{"Keep CI gate advisory until confidence is medium/high."}
+	if len(comparison.CohortWarnings) > 0 {
+		actions = append(actions, "Resolve cohort warnings before enabling a blocking CI gate.")
+	}
+	if len(comparison.QualityWarnings) > 0 {
+		actions = append(actions, "Resolve collection-quality loss and incomplete segment-chain reasons before enabling a blocking CI gate.")
+	}
+	return actions
 }
 
 func readabilityActions(report LeakReport, complete int) []string {
@@ -428,13 +458,43 @@ func statusForScore(score float64) string {
 
 func goNoGo(score float64, comparison Comparison) string {
 	switch {
-	case score >= 8 && comparison.Confidence() != "low" && len(comparison.Warnings) == 0:
+	case collectionConfidenceCap(comparison.Baseline) == "low" || collectionConfidenceCap(comparison.Candidate) == "low":
+		return "blocked"
+	case score >= 8 && comparison.Confidence() != "low" && len(comparison.CohortWarnings) == 0 && len(comparison.QualityWarnings) == 0:
 		return "go"
 	case score >= 6:
 		return "qa_only"
 	default:
 		return "blocked"
 	}
+}
+
+func collectionQualityEvidence(label string, summary Summary) string {
+	level := collectionConfidenceCap(summary)
+	if len(summary.CollectionQuality.Reasons) == 0 {
+		return fmt.Sprintf("%s collection quality=%s (no reported loss)", label, level)
+	}
+	return fmt.Sprintf(
+		"%s collection quality=%s (%s)",
+		label,
+		level,
+		strings.Join(summary.CollectionQuality.Reasons, "; "),
+	)
+}
+
+func collectionQualityActions(label string, summary Summary) []string {
+	quality := summary.CollectionQuality
+	if collectionConfidenceCap(summary) == "high" && len(quality.Reasons) == 0 {
+		return nil
+	}
+	if len(quality.Reasons) == 0 {
+		return []string{fmt.Sprintf("Resolve %s collection-quality degradation before trusting regression gates.", label)}
+	}
+	actions := make([]string, 0, len(quality.Reasons))
+	for _, reason := range quality.Reasons {
+		actions = append(actions, fmt.Sprintf("Resolve %s collection quality: %s.", label, reason))
+	}
+	return actions
 }
 
 func ratio(numerator, denominator int) float64 {

@@ -1,6 +1,5 @@
 package io.jankhunter.plugin.ui
 
-import com.intellij.execution.ExecutionException
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
@@ -33,13 +32,14 @@ import io.jankhunter.plugin.execution.JankHunterCommandBuilder
 import io.jankhunter.plugin.execution.JankHunterInputPaths
 import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterMode
-import io.jankhunter.plugin.execution.JankHunterPreset
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 import io.jankhunter.plugin.execution.JankHunterRunValidator
-import io.jankhunter.plugin.profiles.JankHunterProfileStore
+import io.jankhunter.plugin.execution.JankHunterSessionLogFiles
+import io.jankhunter.plugin.execution.JankHunterValidationResult
 import io.jankhunter.plugin.problems.ProblemsParser
 import io.jankhunter.plugin.problems.ProblemsTable
 import io.jankhunter.plugin.problems.ProblemsTableModel
+import io.jankhunter.plugin.problems.SourceLocation
 import io.jankhunter.plugin.problems.SourceNavigator
 import io.jankhunter.plugin.services.JankHunterAdbIntegration
 import io.jankhunter.plugin.services.JankHunterCliStatus
@@ -49,7 +49,7 @@ import io.jankhunter.plugin.services.JankHunterNotifications
 import io.jankhunter.plugin.services.JankHunterProjectService
 import io.jankhunter.plugin.services.JankHunterProjectIntrospection
 import io.jankhunter.plugin.settings.JankHunterSettings
-import io.jankhunter.plugin.settings.RecentRun
+import io.jankhunter.plugin.settings.JankHunterRecentRun
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.FlowLayout
@@ -63,18 +63,16 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.Future
 import javax.swing.DefaultComboBoxModel
-import javax.swing.ButtonGroup
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JRadioButton
 import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.ListSelectionModel
-import javax.swing.SwingUtilities
 import javax.swing.RowFilter
 import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.DefaultTableModel
@@ -82,21 +80,28 @@ import javax.swing.table.TableRowSorter
 import org.cef.browser.CefBrowser
 import org.cef.handler.CefLoadHandlerAdapter
 
+private data class PreparedRun(
+    val command: JankHunterCommand,
+    val request: JankHunterRunRequest,
+    val validation: JankHunterValidationResult,
+)
+
+private data class LogDirectoryScan(val logs: List<File>, val heapDump: File?)
+
+internal data class PreparedLogs(
+    val input: String,
+    val directory: File?,
+    val heapDump: File?,
+    val found: Boolean,
+)
+
 class JankHunterToolWindow(
     private val project: Project,
     private val enableBrowser: Boolean = true,
 ) : Disposable {
     val component: JComponent
 
-    private val presetCombo = JComboBox(JankHunterPreset.entries.toTypedArray())
-    private val applyPresetButton = JButton("Apply")
-    private val profileStore = JankHunterProfileStore(project)
-    private val profileCombo = JComboBox<String>()
-    private val loadProfileButton = JButton("Load")
-    private val saveProfileButton = JButton("Save")
-    private val saveDefaultsButton = JButton("Save Defaults")
     private val modeCombo = JComboBox(JankHunterMode.entries.toTypedArray())
-    private val modeButtons = JankHunterMode.entries.associateWith { mode -> JRadioButton(mode.label) }
     private val targetProjectLabel = JBLabel()
     private val cliPathField = browseField()
     private val cliStatusLabel = JBLabel()
@@ -119,6 +124,7 @@ class JankHunterToolWindow(
     private val mappingField = browseField()
     private val classGraphField = browseField()
     private val diagnosticsField = browseField()
+    private val diCatalogField = browseField()
     private val heapDumpField = browseField()
     private val heapEvidenceField = browseField()
     private val baselineHeapDumpField = browseField()
@@ -144,7 +150,6 @@ class JankHunterToolWindow(
     private val deviceCombo = JComboBox<JankHunterDevice>()
     private val scanDevicesButton = JButton("Devices")
     private val packageField = JBTextField()
-    private val remoteLogsField = JBTextField("/sdcard/Android/data/io.jankhunter.sample/files/jankhunter")
     private val pullLogsButton = JButton("Pull From App")
     private val openRemoteLogsButton = JButton("List App Logs")
     private val collectInspectButton = JButton("Pull + Generate")
@@ -176,14 +181,21 @@ class JankHunterToolWindow(
     private val rerunHistoryButton = JButton("Rerun")
     private val openHistoryOutputButton = JButton("Open Output")
     private val rowMap = linkedMapOf<String, JPanel>()
-    private val visibleHistory = mutableListOf<RecentRun>()
+    private val visibleHistory = mutableListOf<JankHunterRecentRun>()
 
     private val artifactSets = mutableListOf<JankHunterArtifactSet>()
+    private val backgroundTasks = mutableListOf<Future<*>>()
+    private val consoleLock = Any()
+    private val pendingConsole = StringBuilder()
     private var processHandler: OSProcessHandler? = null
+    private var adbPullTask: Future<*>? = null
     private var lastOutputPath: String? = null
     private var lastHtmlOutputPath: String? = null
-    private var lastRunRequest: JankHunterRunRequest? = null
     private var autoHeapDumpPath: String? = null
+    private var commandStarting = false
+    private var adbPulling = false
+    private var adbPullGeneration = 0L
+    private var consoleFlushScheduled = false
     @Volatile
     private var disposed = false
 
@@ -194,11 +206,6 @@ class JankHunterToolWindow(
             JankHunterProjectIntrospection.defaultLogsDirectory(project).path
         }
         packageField.text = settings.packageName
-        if (settings.remoteLogsPath.isNotBlank()) {
-            remoteLogsField.text = settings.remoteLogsPath
-        } else if (packageField.text.isNotBlank()) {
-            syncRemotePathFromPackage()
-        }
         targetProjectLabel.text = ":  /  ${project.basePath.orEmpty()}"
         presentationCheckBox.isSelected = settings.presentationMode
         openInIdeCheckBox.isSelected = settings.openReportInIde
@@ -206,13 +213,12 @@ class JankHunterToolWindow(
         inspectLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
         baselineLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
         candidateLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-        modeButtons[JankHunterMode.INSPECT]?.isSelected = true
+        modeCombo.selectedItem = JankHunterMode.INSPECT
 
         consoleArea.isEditable = false
         consoleArea.lineWrap = true
         consoleArea.wrapStyleWord = false
 
-        configureProfileCombo()
         configureProblemsTable()
         configureHistoryTable()
 
@@ -247,8 +253,16 @@ class JankHunterToolWindow(
     }
 
     override fun dispose() {
+        if (disposed) return
         disposed = true
         JankHunterProjectService.getInstance(project).unregister(this)
+        backgroundTasks.forEach { task -> task.cancel(true) }
+        backgroundTasks.clear()
+        adbPullTask = null
+        synchronized(consoleLock) {
+            pendingConsole.setLength(0)
+            consoleFlushScheduled = false
+        }
         processHandler?.destroyProcess()
         browserQuery?.dispose()
         browser?.dispose()
@@ -260,33 +274,20 @@ class JankHunterToolWindow(
         stopButton.addActionListener { stopCommand() }
         openInIdeButton.addActionListener { openLastOutputInsideIde() }
         openBrowserButton.addActionListener { openLastOutputInBrowser() }
-        clearButton.addActionListener { consoleArea.text = "" }
+        clearButton.addActionListener { replaceConsole("") }
         findLogsButton.addActionListener { fillRecentLogs() }
         openLogsButton.addActionListener { chooseLogsDirectory() }
-        applyPresetButton.addActionListener { applySelectedPreset() }
-        loadProfileButton.addActionListener { loadSelectedProfile() }
-        saveProfileButton.addActionListener { saveSelectedProfile() }
-        saveDefaultsButton.addActionListener { saveProjectDefaults() }
         checkCliButton.addActionListener { refreshCliStatusAsync(showDialog = true) }
         buildCliButton.addActionListener { buildCli() }
         scanArtifactsButton.addActionListener { refreshArtifactsAsync(autoApplyBlankFields = false, showMessage = true) }
         applyArtifactsButton.addActionListener { applySelectedArtifacts(force = true) }
         scanDevicesButton.addActionListener { refreshDevices() }
-        packageField.addActionListener { syncRemotePathFromPackage() }
         pullLogsButton.addActionListener { pullDeviceLogs(openInspect = false) }
         openRemoteLogsButton.addActionListener { openRemoteLogFolder() }
         collectInspectButton.addActionListener { pullDeviceLogs(openInspect = true) }
         modeCombo.addActionListener {
-            syncModeButtons()
             outputField.text = ""
             updateModeVisibility()
-        }
-        modeButtons.forEach { (mode, button) ->
-            button.addActionListener {
-                modeCombo.selectedItem = mode
-                outputField.text = ""
-                updateModeVisibility()
-            }
         }
         applyProblemsFilterButton.addActionListener { applyProblemsView() }
         resetProblemsFilterButton.addActionListener { resetProblemsFilters() }
@@ -294,7 +295,7 @@ class JankHunterToolWindow(
         openProblemSourceButton.addActionListener { openSelectedProblemSource() }
         openProblemReportButton.addActionListener { openProblemReport() }
         copyRecommendationButton.addActionListener { copySelectedRecommendation() }
-        reloadProblemsButton.addActionListener { lastOutputPath?.let(::loadProblemsTable) }
+        reloadProblemsButton.addActionListener { lastOutputPath?.let { loadProblemsTableAsync(it) } }
         loadHistoryButton.addActionListener { loadSelectedHistory() }
         rerunHistoryButton.addActionListener { rerunSelectedHistory() }
         openHistoryOutputButton.addActionListener { openSelectedHistoryOutput() }
@@ -316,14 +317,13 @@ class JankHunterToolWindow(
         )
     }
 
-    private fun configureProfileCombo() {
-        profileCombo.model = DefaultComboBoxModel(profileStore.load().profiles.keys.toTypedArray())
-        profileCombo.selectedItem = "debug"
-    }
-
     private fun configureBrowserBridge(cefBrowser: JBCefBrowser, query: JBCefJSQuery) {
         query.addHandler { className ->
-            SourceNavigator.open(project, mapOf("class" to className))
+            ApplicationManager.getApplication().invokeLater {
+                if (!disposed && !project.isDisposed) {
+                    navigateToSource(mapOf("class" to className), showFailure = false)
+                }
+            }
             JBCefJSQuery.Response(null)
         }
         cefBrowser.jbCefClient.addLoadHandler(
@@ -496,6 +496,7 @@ class JankHunterToolWindow(
         addRow(form, row++, "Mapping", mappingField, "mapping")
         addRow(form, row++, "Class graph", classGraphField, "classGraph")
         addRow(form, row++, "Diagnostics", diagnosticsField, "diagnostics")
+        addRow(form, row++, "DI catalog", diCatalogField, "diCatalog")
         addFormFiller(form, row)
         return form
     }
@@ -519,33 +520,9 @@ class JankHunterToolWindow(
         return form
     }
 
-    private fun buildPresetPanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(presetCombo, BorderLayout.CENTER)
-            add(applyPresetButton, BorderLayout.EAST)
-        }
-
-    private fun buildProfilePanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(profileCombo, BorderLayout.CENTER)
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(loadProfileButton)
-                    add(saveProfileButton)
-                    add(saveDefaultsButton)
-                },
-                BorderLayout.EAST,
-            )
-        }
-
     private fun buildModePanel(): JComponent =
-        JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            val group = ButtonGroup()
-            listOf(JankHunterMode.INSPECT, JankHunterMode.COMPARE, JankHunterMode.PROBLEMS).forEach { mode ->
-                val button = modeButtons.getValue(mode)
-                group.add(button)
-                add(button)
-            }
+        JPanel(BorderLayout()).apply {
+            add(modeCombo, BorderLayout.CENTER)
         }
 
     private fun buildCliPanel(): JComponent =
@@ -689,7 +666,7 @@ class JankHunterToolWindow(
         rowMap["options"]?.isVisible = mode != JankHunterMode.VERSION && mode != JankHunterMode.SAMPLE
         rowMap["artifacts"]?.isVisible = analysis
 
-        listOf("ownerMap", "mapping", "classGraph", "diagnostics", "route", "screen", "owner", "class")
+        listOf("ownerMap", "mapping", "classGraph", "diagnostics", "diCatalog", "route", "screen", "owner", "class")
             .forEach { rowMap[it]?.isVisible = analysis }
         listOf("heapDump", "heapEvidence")
             .forEach { rowMap[it]?.isVisible = inspectLike }
@@ -700,38 +677,61 @@ class JankHunterToolWindow(
         rowMap["format"]?.isVisible = mode == JankHunterMode.PROBLEMS
         jsonCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
         presentationCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
-        openInIdeCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
+        openInIdeCheckBox.isVisible = mode in setOf(
+            JankHunterMode.INSPECT,
+            JankHunterMode.COMPARE,
+            JankHunterMode.PROBLEMS,
+            JankHunterMode.SCORECARD,
+        )
         openExternalCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
+        generateReportButton.isVisible = mode == JankHunterMode.INSPECT
 
         component.revalidate()
         component.repaint()
     }
 
     private fun runRequest(rawRequest: JankHunterRunRequest) {
-        if (processHandler != null) {
-            return
-        }
+        if (processHandler != null || commandStarting || adbPullTask?.isDone == false) return
 
-        val command = try {
-            JankHunterCommandBuilder.build(project, rawRequest)
-        } catch (error: IllegalArgumentException) {
-            Messages.showErrorDialog(project, error.message ?: "Невалидная команда Jank Hunter.", "Jank Hunter")
-            return
-        }
-        val request = rawRequest.copy(
-            cliPath = command.executable,
-            output = command.outputPath.orEmpty(),
+        commandStarting = true
+        setRunning(true)
+        runInBackground(
+            task = {
+                val command = JankHunterCommandBuilder.build(project, rawRequest)
+                val request = rawRequest.copy(
+                    cliPath = command.executable,
+                    output = command.outputPath.orEmpty(),
+                )
+                PreparedRun(command, request, JankHunterRunValidator.validate(project, request, command))
+            },
+            onDone = { result ->
+                val prepared = result.getOrElse { error ->
+                    commandStarting = false
+                    setRunning(false)
+                    Messages.showErrorDialog(
+                        project,
+                        error.message ?: "Невалидная команда Jank Hunter.",
+                        "Jank Hunter",
+                    )
+                    return@runInBackground
+                }
+                if (!prepared.validation.ok) {
+                    commandStarting = false
+                    setRunning(false)
+                    Messages.showErrorDialog(
+                        project,
+                        prepared.validation.errors.joinToString("\n"),
+                        "Jank Hunter: проверка не пройдена",
+                    )
+                    return@runInBackground
+                }
+
+                outputField.text = prepared.command.outputPath.orEmpty()
+                rememberSettings()
+                addHistory(prepared.request, prepared.command)
+                startProcess(prepared.request, prepared.command, prepared.validation.warnings)
+            },
         )
-        val validation = JankHunterRunValidator.validate(project, request, command)
-        if (!validation.ok) {
-            Messages.showErrorDialog(project, validation.errors.joinToString("\n"), "Jank Hunter: проверка не пройдена")
-            return
-        }
-        outputField.text = command.outputPath.orEmpty()
-        rememberSettings()
-        addHistory(request, command)
-        lastRunRequest = request
-        startProcess(request, command, validation.warnings)
     }
 
     private fun collectRequest(): JankHunterRunRequest =
@@ -749,6 +749,7 @@ class JankHunterToolWindow(
             mapping = mappingField.text,
             classGraph = classGraphField.text,
             diagnostics = diagnosticsField.text,
+            diCatalog = diCatalogField.text,
             heapDump = heapDumpField.text,
             heapEvidence = heapEvidenceField.text,
             baselineHeapDump = baselineHeapDumpField.text,
@@ -779,6 +780,7 @@ class JankHunterToolWindow(
         mappingField.text = request.mapping
         classGraphField.text = request.classGraph
         diagnosticsField.text = request.diagnostics
+        diCatalogField.text = request.diCatalog
         heapDumpField.text = request.heapDump
         autoHeapDumpPath = null
         heapEvidenceField.text = request.heapEvidence
@@ -798,9 +800,7 @@ class JankHunterToolWindow(
     }
 
     private fun restoreStartupRequest() {
-        val request = profileStore.loadDefaults(cliPathField.text)
-            ?: lastRunForCurrentProject()?.toRequest()
-            ?: return
+        val request = lastRunForCurrentProject()?.toRequest() ?: return
         applyRequest(
             request.copy(
                 cliPath = request.cliPath.ifBlank { cliPathField.text },
@@ -811,7 +811,7 @@ class JankHunterToolWindow(
         updateOpenButtons()
     }
 
-    private fun lastRunForCurrentProject(): RecentRun? {
+    private fun lastRunForCurrentProject(): JankHunterRecentRun? {
         val projectPath = currentProjectPath()
         if (projectPath.isBlank()) return null
         val state = JankHunterSettings.getInstance().state
@@ -824,7 +824,6 @@ class JankHunterToolWindow(
         state.cliPath = cliPathField.text.trim()
         state.logsDirectory = logsDirectoryField.text.trim()
         state.packageName = packageField.text.trim()
-        state.remoteLogsPath = remoteLogsField.text.trim()
         state.openReportInIde = openInIdeCheckBox.isSelected
         state.openReportExternally = openExternalCheckBox.isSelected
         state.presentationMode = presentationCheckBox.isSelected
@@ -832,15 +831,12 @@ class JankHunterToolWindow(
 
     private fun startProcess(request: JankHunterRunRequest, command: JankHunterCommand, warnings: List<String>) {
         val workDirectory = project.basePath?.let(::File)
-        command.outputPath?.let { File(it).parentFile?.mkdirs() }
-        consoleArea.text = ""
+        replaceConsole("")
         appendConsole("$ ${command.displayText()}\n\n")
         warnings.forEach { warning -> appendConsole("warning: $warning\n") }
         if (warnings.isNotEmpty()) {
             appendConsole("\n")
         }
-        setRunning(true)
-
         val commandLine = GeneralCommandLine(command.executable)
             .withParameters(command.args)
             .withCharset(StandardCharsets.UTF_8)
@@ -848,54 +844,74 @@ class JankHunterToolWindow(
             commandLine.withWorkDirectory(workDirectory)
         }
 
-        val handler = try {
-            OSProcessHandler(commandLine)
-        } catch (error: ExecutionException) {
-            setRunning(false)
-            appendConsole("Не удалось запустить Jank Hunter: ${error.message}\n")
-            return
-        }
-
-        processHandler = handler
-        handler.addProcessListener(
-            object : ProcessListener {
-                override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                    appendConsole(event.text)
-                }
-
-                override fun processTerminated(event: ProcessEvent) {
-                    ApplicationManager.getApplication().invokeLater {
-                        processHandler = null
-                        setRunning(false)
-                        appendConsole("\nПроцесс завершился с кодом ${event.exitCode}\n")
-                        if (event.exitCode == 0) {
-                            onProcessSucceeded(request, command.outputPath)
-                        } else if (request.mode == JankHunterMode.SCORECARD) {
-                            JankHunterNotifications.scorecardFailed(
-                                project,
-                                "Scorecard завершился с кодом ${event.exitCode}.",
-                                openOutput = { command.outputPath?.let { openOutputInsideIde(File(it)) } },
-                                rerun = { runRequest(request) },
-                            )
-                        }
+        runInBackground(
+            task = {
+                command.outputPath?.let { outputPath ->
+                    val parent = File(outputPath).parentFile
+                    check(parent == null || parent.isDirectory || parent.mkdirs()) {
+                        "Не удалось создать папку результата: ${parent?.path.orEmpty()}"
                     }
                 }
+                OSProcessHandler(commandLine)
+            },
+            onAbandoned = { handler -> handler.destroyProcess() },
+            onDone = { result ->
+                val handler = result.getOrElse { error ->
+                    commandStarting = false
+                    setRunning(false)
+                    appendConsole("Не удалось запустить Jank Hunter: ${error.message}\n")
+                    return@runInBackground
+                }
+                if (disposed || project.isDisposed) {
+                    handler.destroyProcess()
+                    return@runInBackground
+                }
+
+                commandStarting = false
+                processHandler = handler
+                handler.addProcessListener(
+                    object : ProcessListener {
+                        override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                            appendConsole(event.text)
+                        }
+
+                        override fun processTerminated(event: ProcessEvent) {
+                            ApplicationManager.getApplication().invokeLater {
+                                if (disposed || project.isDisposed) return@invokeLater
+                                processHandler = null
+                                setRunning(false)
+                                appendConsole("\nПроцесс завершился с кодом ${event.exitCode}\n")
+                                if (event.exitCode == 0) {
+                                    onProcessSucceeded(request, command.outputPath)
+                                } else if (request.mode == JankHunterMode.SCORECARD) {
+                                    JankHunterNotifications.scorecardFailed(
+                                        project,
+                                        "Scorecard завершился с кодом ${event.exitCode}.",
+                                        openOutput = { command.outputPath?.let { openOutputInsideIde(File(it)) } },
+                                        rerun = { runRequest(request) },
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
+                handler.startNotify()
+                setRunning(true)
             },
         )
-        handler.startNotify()
     }
 
     private fun stopCommand() {
         processHandler?.destroyProcess()
+        adbPullTask?.cancel(true)
+        // Future.cancel() marks the Future done before adb/tar have necessarily released their
+        // streams and processes. Keep the device lane busy until the matching completion callback
+        // confirms that cleanup has actually finished.
+        updateBusyControls()
     }
 
     private fun setRunning(running: Boolean) {
-        runButton.isEnabled = !running
-        generateReportButton.isEnabled = !running
-        stopButton.isEnabled = running
-        modeCombo.isEnabled = !running
-        modeButtons.values.forEach { it.isEnabled = !running }
-        presetCombo.isEnabled = !running
+        updateBusyControls(forceCliBusy = running)
     }
 
     private fun onProcessSucceeded(request: JankHunterRunRequest, outputPath: String?) {
@@ -910,20 +926,28 @@ class JankHunterToolWindow(
             lastHtmlOutputPath = outputPath
         }
         updateOpenButtons()
-        val problems = loadProblemsTable(outputPath)
-
-        if (openInIdeCheckBox.isSelected) {
+        if (openInIdeCheckBox.isSelected && request.mode != JankHunterMode.SAMPLE) {
             openOutputInsideIde(File(outputPath))
         }
         if (openExternalCheckBox.isSelected && outputPath.endsWith(".html", ignoreCase = true)) {
             openOutputInBrowser(File(outputPath))
         }
+        if (request.mode == JankHunterMode.PROBLEMS) {
+            loadProblemsTableAsync(outputPath) { problems ->
+                notifyOutputReady(request, outputPath, problems?.rows?.size)
+            }
+        } else {
+            notifyOutputReady(request, outputPath, null)
+        }
+    }
+
+    private fun notifyOutputReady(request: JankHunterRunRequest, outputPath: String, problemCount: Int?) {
         JankHunterNotifications.reportReady(
             project,
             outputPath,
-            problems?.rows?.size,
+            problemCount,
             openReport = { openOutputInsideIde(File(outputPath)) },
-            openProblems = { tabs.selectedIndex = 2 },
+            openProblems = if (problemCount == null) null else ({ tabs.selectedIndex = 2 }),
             rerun = { runRequest(request) },
         )
     }
@@ -960,10 +984,14 @@ class JankHunterToolWindow(
             }
         }
 
-        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file)
-        if (virtualFile != null) {
-            FileEditorManager.getInstance(project).openFile(virtualFile, true)
-        }
+        runInBackground(
+            task = { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) },
+            onDone = { result ->
+                result.getOrNull()?.let { virtualFile ->
+                    FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                }
+            },
+        )
     }
 
     private fun ensureReportBrowser(): JBCefBrowser? {
@@ -997,10 +1025,9 @@ class JankHunterToolWindow(
     private fun refreshArtifactsAsync(autoApplyBlankFields: Boolean, showMessage: Boolean) {
         scanArtifactsButton.isEnabled = false
         artifactCombo.model = DefaultComboBoxModel(arrayOf("Сканирую проект..."))
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = runCatching { JankHunterArtifactDiscovery.findArtifactSets(project) }
-            ApplicationManager.getApplication().invokeLater {
-                if (disposed || project.isDisposed) return@invokeLater
+        runInBackground(
+            task = { JankHunterArtifactDiscovery.findArtifactSets(project) },
+            onDone = { result ->
                 scanArtifactsButton.isEnabled = true
                 val sets = result.getOrElse { error ->
                     if (showMessage) {
@@ -1013,8 +1040,8 @@ class JankHunterToolWindow(
                     emptyList()
                 }
                 applyArtifactSets(sets, autoApplyBlankFields, showMessage && result.isSuccess)
-            }
-        }
+            },
+        )
     }
 
     private fun applyArtifactSets(
@@ -1037,6 +1064,7 @@ class JankHunterToolWindow(
                             "mapping".takeIf { set.mapping.isNotBlank() },
                             "class-graph".takeIf { set.classGraph.isNotBlank() },
                             "diagnostics".takeIf { set.diagnostics.isNotBlank() },
+                            "di-catalog".takeIf { set.diCatalog.isNotBlank() },
                         ).joinToString(", "),
                     )
                 },
@@ -1053,7 +1081,7 @@ class JankHunterToolWindow(
         }
         if (showMessage) {
             val message = if (artifactSets.isEmpty()) {
-                "Не нашел owner-map/class-graph/diagnostics/mapping в проекте."
+                "Не нашел owner-map/class-graph/diagnostics/di-catalog/mapping в проекте."
             } else {
                 "Найдено наборов артефактов: ${artifactSets.size}."
             }
@@ -1067,6 +1095,7 @@ class JankHunterToolWindow(
         setIfAllowed(mappingField, set.mapping, force)
         setIfAllowed(classGraphField, set.classGraph, force)
         setIfAllowed(diagnosticsField, set.diagnostics, force)
+        setIfAllowed(diCatalogField, set.diCatalog, force)
     }
 
     private fun setIfAllowed(field: TextFieldWithBrowseButton, value: String, force: Boolean) {
@@ -1079,57 +1108,81 @@ class JankHunterToolWindow(
     private fun chooseLogsDirectory() {
         val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return
         logsDirectoryField.text = selected.path
-        fillLogsFromDirectory(showMessage = true)
+        fillLogsFromDirectoryAsync(showMessage = true)
     }
 
     private fun generateReportFromLogs() {
-        refreshLogsForGenerate()
-        if (logsField.text.isBlank()) {
-            chooseLogsDirectory()
-        }
-        if (logsField.text.isBlank()) {
-            Messages.showInfoMessage(project, "Укажите папку или файлы .jhlog перед генерацией отчета.", "Jank Hunter")
+        if (selectedMode() == JankHunterMode.COMPARE || selectedMode() == JankHunterMode.SCORECARD) {
+            runRequest(collectRequest())
             return
         }
-        if (selectedMode() != JankHunterMode.COMPARE && selectedMode() != JankHunterMode.SCORECARD) {
-            selectMode(JankHunterMode.INSPECT)
+
+        selectMode(JankHunterMode.INSPECT)
+        var directory = logsDirectory()
+        if (logsField.text.isBlank() && directory?.isDirectory != true) {
+            val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return
+            logsDirectoryField.text = selected.path
+            directory = File(selected.path)
         }
-        logsDirectory()?.takeIf { it.isDirectory }?.let(::syncHeapDumpFromLogsDirectory)
-        runRequest(collectRequest())
+
+        val rawInput = logsField.text
+        val scope = selectedInspectLogScope()
+        generateReportButton.isEnabled = false
+        runInBackground(
+            task = { prepareLogsForGenerate(rawInput, directory, scope) },
+            onDone = { result ->
+                generateReportButton.isEnabled = true
+                val prepared = result.getOrElse { error ->
+                    JankHunterNotifications.error(project, "Jank Hunter", error.message.orEmpty())
+                    return@runInBackground
+                }
+                if (!prepared.found) {
+                    Messages.showInfoMessage(
+                        project,
+                        "Укажите папку или существующие .jhlog файлы перед генерацией отчета.",
+                        "Jank Hunter",
+                    )
+                    return@runInBackground
+                }
+                logsField.text = prepared.input
+                prepared.directory?.let { dir ->
+                    logsDirectoryField.text = dir.path
+                    syncHeapDumpFromLogsDirectory(dir, prepared.heapDump)
+                }
+                runRequest(collectRequest())
+            },
+        )
     }
 
-    private fun refreshLogsForGenerate() {
-        if (logsField.text.isBlank()) {
-            val files = fillLogsFromDirectory(showMessage = false)
-            if (files.isEmpty()) return
-            return
-        }
-
-        if (hasExistingLogInput()) {
-            return
-        }
-
-        val files = fillLogsFromDirectory(showMessage = false)
-        if (files.isNotEmpty()) {
-            return
-        }
-
-        val nearby = findNearbyLogsForMissingInput(logsField.text)
-        if (nearby.isEmpty()) {
-            return
-        }
-
-        val scoped = applyLogScope(nearby, selectedInspectLogScope())
-        logsField.text = scoped.joinToString(", ") { it.path }
-        scoped.firstOrNull()?.parentFile?.let { dir ->
-            logsDirectoryField.text = dir.path
-            syncHeapDumpFromLogsDirectory(dir)
-        }
-    }
-
-    private fun hasExistingLogInput(): Boolean =
-        JankHunterInputPaths.expandExistingFiles(project, logsField.text)
+    internal fun prepareLogsForGenerate(rawInput: String, directory: File?, scope: JankHunterLogScope): PreparedLogs {
+        val hasExistingInput = JankHunterInputPaths.expandExistingFiles(project, rawInput)
             .any { path -> path.toString().endsWith(".jhlog", ignoreCase = true) }
+        if (hasExistingInput) {
+            val heapDump = directory?.takeIf(File::isDirectory)?.let(::scanLogsDirectory)?.heapDump
+            return PreparedLogs(rawInput, directory, heapDump, found = true)
+        }
+
+        val directoryScan = directory?.takeIf(File::isDirectory)?.let(::scanLogsDirectory)
+        if (directoryScan != null && directoryScan.logs.isNotEmpty()) {
+            return PreparedLogs(
+                input = applyLogScope(directoryScan.logs, scope).joinToString(", ") { it.path },
+                directory = directory,
+                heapDump = directoryScan.heapDump,
+                found = true,
+            )
+        }
+
+        val nearby = findNearbyLogsForMissingInput(rawInput)
+        val scoped = applyLogScope(nearby, scope)
+        val recoveredDirectory = scoped.firstOrNull()?.parentFile
+        val recoveredHeap = recoveredDirectory?.let(::scanLogsDirectory)?.heapDump
+        return PreparedLogs(
+            input = scoped.joinToString(", ") { it.path },
+            directory = recoveredDirectory,
+            heapDump = recoveredHeap,
+            found = scoped.isNotEmpty(),
+        )
+    }
 
     private fun findNearbyLogsForMissingInput(raw: String): List<File> {
         val roots = linkedSetOf<File>()
@@ -1169,43 +1222,58 @@ class JankHunterToolWindow(
         return path != home
     }
 
-    private fun fillLogsFromDirectory(showMessage: Boolean): List<File> {
+    private fun fillLogsFromDirectoryAsync(showMessage: Boolean) {
         val dir = logsDirectory()
         if (dir == null || !dir.isDirectory) {
             if (showMessage) {
                 Messages.showInfoMessage(project, "Выберите папку с .jhlog файлами.", "Jank Hunter")
             }
-            return emptyList()
+            return
         }
 
-        val logs = dir.walkTopDown()
-            .filter { file -> file.isFile && file.extension.equals("jhlog", ignoreCase = true) }
-            .sortedByDescending(File::lastModified)
-            .take(50)
-            .toList()
-        if (logs.isNotEmpty()) {
-            logsField.text = applyLogScope(logs, selectedInspectLogScope()).joinToString(", ") { it.path }
-        }
-
-        val heapDump = dir.walkTopDown()
-            .firstOrNull { file -> file.isFile && file.extension.equals("hprof", ignoreCase = true) }
-        syncHeapDumpFromLogsDirectory(dir, heapDump)
-
-        if (showMessage) {
-            val message = if (logs.isEmpty()) {
-                "В выбранной папке нет .jhlog файлов."
-            } else {
-                "Подставлено .jhlog файлов: ${applyLogScope(logs, selectedInspectLogScope()).size} из ${logs.size}."
-            }
-            Messages.showInfoMessage(project, message, "Jank Hunter")
-        }
-        return logs
+        openLogsButton.isEnabled = false
+        runInBackground(
+            task = { scanLogsDirectory(dir) },
+            onDone = { result ->
+                openLogsButton.isEnabled = true
+                val scan = result.getOrElse { error ->
+                    JankHunterNotifications.error(project, "Jank Hunter", error.message.orEmpty())
+                    return@runInBackground
+                }
+                if (scan.logs.isNotEmpty()) {
+                    logsField.text = applyLogScope(scan.logs, selectedInspectLogScope()).joinToString(", ") { it.path }
+                }
+                syncHeapDumpFromLogsDirectory(dir, scan.heapDump)
+                if (showMessage) {
+                    val message = if (scan.logs.isEmpty()) {
+                        "В выбранной папке нет .jhlog файлов."
+                    } else {
+                        "Подставлено .jhlog файлов: ${applyLogScope(scan.logs, selectedInspectLogScope()).size} из ${scan.logs.size}."
+                    }
+                    Messages.showInfoMessage(project, message, "Jank Hunter")
+                }
+            },
+        )
     }
 
-    private fun syncHeapDumpFromLogsDirectory(dir: File) {
-        val heapDump = dir.walkTopDown()
-            .firstOrNull { file -> file.isFile && file.extension.equals("hprof", ignoreCase = true) }
-        syncHeapDumpFromLogsDirectory(dir, heapDump)
+    private fun scanLogsDirectory(dir: File): LogDirectoryScan {
+        val logs = mutableListOf<File>()
+        var heapDump: File? = null
+        dir.walkTopDown()
+            .maxDepth(MAX_LOG_SCAN_DEPTH)
+            .onEnter { !Thread.currentThread().isInterrupted }
+            .filter(File::isFile)
+            .forEach { file ->
+                if (Thread.currentThread().isInterrupted) return@forEach
+                when {
+                    file.extension.equals("jhlog", ignoreCase = true) -> logs += file
+                    heapDump == null && file.extension.equals("hprof", ignoreCase = true) -> heapDump = file
+                }
+            }
+        return LogDirectoryScan(
+            logs = logs.sortedByDescending(File::lastModified).take(MAX_DISCOVERED_LOGS),
+            heapDump = heapDump,
+        )
     }
 
     private fun syncHeapDumpFromLogsDirectory(dir: File, heapDump: File?) {
@@ -1253,93 +1321,36 @@ class JankHunterToolWindow(
         logsDirectoryField.text.trim().takeIf(String::isNotEmpty)?.let(::File)
 
     private fun fillRecentLogs() {
-        val logs = JankHunterArtifactDiscovery.findRecentLogs(project)
-        if (logs.isEmpty()) {
-            Messages.showInfoMessage(project, "Не нашел .jhlog файлов внутри проекта.", "Jank Hunter")
-            return
-        }
-        if (selectedMode() == JankHunterMode.COMPARE || selectedMode() == JankHunterMode.SCORECARD) {
-            val files = logs.map(::File)
-            if (baselineField.text.isBlank()) {
-                baselineField.text = applyLogScope(files, selectedBaselineLogScope()).joinToString(", ") { it.path }
-            } else {
-                candidateField.text = applyLogScope(files, selectedCandidateLogScope()).joinToString(", ") { it.path }
-            }
-        } else {
-            val joined = applyLogScope(logs.map(::File), selectedInspectLogScope()).joinToString(", ") { it.path }
-            logsField.text = joined
-        }
-    }
-
-    private fun applySelectedPreset() {
-        when (presetCombo.selectedItem as? JankHunterPreset ?: JankHunterPreset.CUSTOM) {
-            JankHunterPreset.CUSTOM -> Unit
-            JankHunterPreset.FAST_INSPECT -> {
-                selectMode(JankHunterMode.INSPECT)
-                inspectLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-                jsonCheckBox.isSelected = false
-                presentationCheckBox.isSelected = false
-                openInIdeCheckBox.isSelected = true
-                openExternalCheckBox.isSelected = false
-                heapDumpField.text = ""
-                autoHeapDumpPath = null
-                heapEvidenceField.text = ""
-                outputField.text = ""
-            }
-            JankHunterPreset.INSPECT_WITH_HEAP -> {
-                selectMode(JankHunterMode.INSPECT)
-                inspectLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-                jsonCheckBox.isSelected = false
-                presentationCheckBox.isSelected = true
-                openInIdeCheckBox.isSelected = true
-                outputField.text = ""
-            }
-            JankHunterPreset.COMPARE_WITH_HEAP -> {
-                selectMode(JankHunterMode.COMPARE)
-                baselineLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-                candidateLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-                jsonCheckBox.isSelected = false
-                presentationCheckBox.isSelected = true
-                openInIdeCheckBox.isSelected = true
-                outputField.text = ""
-            }
-            JankHunterPreset.PROBLEMS_CSV -> {
-                selectMode(JankHunterMode.PROBLEMS)
-                datasetCombo.selectedItem = "code-problems"
-                formatCombo.selectedItem = "csv"
-                openInIdeCheckBox.isSelected = false
-                openExternalCheckBox.isSelected = false
-                outputField.text = ""
-            }
-            JankHunterPreset.CI_SCORECARD -> {
-                selectMode(JankHunterMode.SCORECARD)
-                openInIdeCheckBox.isSelected = false
-                openExternalCheckBox.isSelected = false
-                outputField.text = ""
-            }
-        }
-        updateModeVisibility()
-    }
-
-    private fun loadSelectedProfile() {
-        val name = profileCombo.selectedItem?.toString().orEmpty()
-        val profile = profileStore.load().profiles[name] ?: return
-        applyRequest(profile.toRequest(cliPathField.text))
-    }
-
-    private fun saveSelectedProfile() {
-        val name = profileCombo.selectedItem?.toString()?.takeIf(String::isNotBlank) ?: "debug"
-        rememberSettings()
-        profileStore.saveProfile(name, collectRequest())
-        configureProfileCombo()
-        profileCombo.selectedItem = name
-        Messages.showInfoMessage(project, "Профиль '$name' сохранен в .jankhunter/plugin.json.", "Jank Hunter")
-    }
-
-    private fun saveProjectDefaults() {
-        rememberSettings()
-        profileStore.saveDefaults(collectRequest())
-        Messages.showInfoMessage(project, "Defaults сохранены в .jankhunter/plugin.json.", "Jank Hunter")
+        findLogsButton.isEnabled = false
+        runInBackground(
+            task = { JankHunterArtifactDiscovery.findRecentLogs(project) },
+            onDone = { result ->
+                findLogsButton.isEnabled = true
+                val logs = result.getOrElse { error ->
+                    JankHunterNotifications.error(
+                        project,
+                        "Jank Hunter",
+                        "Не удалось найти .jhlog: ${error.message.orEmpty()}",
+                    )
+                    return@runInBackground
+                }
+                if (logs.isEmpty()) {
+                    Messages.showInfoMessage(project, "Не нашел .jhlog файлов внутри проекта.", "Jank Hunter")
+                    return@runInBackground
+                }
+                if (selectedMode() == JankHunterMode.COMPARE || selectedMode() == JankHunterMode.SCORECARD) {
+                    val files = logs.map(::File)
+                    if (baselineField.text.isBlank()) {
+                        baselineField.text = applyLogScope(files, selectedBaselineLogScope()).joinToString(", ") { it.path }
+                    } else {
+                        candidateField.text = applyLogScope(files, selectedCandidateLogScope()).joinToString(", ") { it.path }
+                    }
+                } else {
+                    logsField.text = applyLogScope(logs.map(::File), selectedInspectLogScope())
+                        .joinToString(", ") { it.path }
+                }
+            },
+        )
     }
 
     private fun initializeCliStatusPlaceholder() {
@@ -1348,10 +1359,10 @@ class JankHunterToolWindow(
     }
 
     private fun refreshTargetProjectAsync() {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val targetProject = JankHunterProjectIntrospection.detect(project)
-            ApplicationManager.getApplication().invokeLater {
-                if (disposed || project.isDisposed) return@invokeLater
+        runInBackground(
+            task = { JankHunterProjectIntrospection.detect(project) },
+            onDone = { result ->
+                val targetProject = result.getOrNull()
                 targetProjectLabel.text = buildString {
                     append(targetProject?.moduleName ?: ":")
                     targetProject?.packageName?.takeIf(String::isNotBlank)?.let { append("  /  $it") }
@@ -1360,20 +1371,18 @@ class JankHunterToolWindow(
                 }
                 if (packageField.text.isBlank()) {
                     packageField.text = targetProject?.packageName.orEmpty()
-                    syncRemotePathFromPackage()
                 }
-            }
-        }
+            },
+        )
     }
 
     private fun refreshCliStatusAsync(showDialog: Boolean) {
         val configuredPath = cliPathField.text
         cliStatusLabel.text = "Checking..."
         checkCliButton.isEnabled = false
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val result = runCatching { JankHunterCliLifecycle.status(project, configuredPath) }
-            ApplicationManager.getApplication().invokeLater {
-                if (disposed || project.isDisposed) return@invokeLater
+        runInBackground(
+            task = { JankHunterCliLifecycle.status(project, configuredPath) },
+            onDone = { result ->
                 checkCliButton.isEnabled = true
                 val status = result.getOrElse { error ->
                     cliStatusLabel.text = "Failed"
@@ -1385,11 +1394,11 @@ class JankHunterToolWindow(
                             "Не удалось проверить CLI: ${error.message.orEmpty()}",
                         )
                     }
-                    return@invokeLater
+                    return@runInBackground
                 }
                 applyCliStatus(status, showDialog)
-            }
-        }
+            },
+        )
     }
 
     private fun applyCliStatus(status: JankHunterCliStatus, showDialog: Boolean) {
@@ -1414,43 +1423,77 @@ class JankHunterToolWindow(
     }
 
     private fun buildCli() {
-        consoleArea.text = ""
+        if (processHandler != null || commandStarting || adbPullTask?.isDone == false) return
+        commandStarting = true
+        setRunning(true)
+        replaceConsole("")
         appendConsole("$ make build\n\n")
-        JankHunterCliLifecycle.buildCli(
-            project,
-            onText = ::appendConsole,
-            onDone = { ok ->
-                ApplicationManager.getApplication().invokeLater {
-                    if (ok) {
-                        cliPathField.text = JankHunterCommandBuilder.defaultCliPath(project)
-                        Messages.showInfoMessage(project, "CLI собран: ${cliPathField.text}", "Jank Hunter")
-                    } else {
-                        JankHunterNotifications.error(project, "Jank Hunter CLI", "Не удалось собрать CLI.")
-                    }
+        runInBackground(
+            task = {
+                val commandLine = JankHunterCliLifecycle.buildCommand(project)
+                    ?: error("Не нашел cli/Makefile рядом с проектом.")
+                OSProcessHandler(commandLine)
+            },
+            onAbandoned = { handler -> handler.destroyProcess() },
+            onDone = { result ->
+                val handler = result.getOrElse { error ->
+                    commandStarting = false
+                    setRunning(false)
+                    appendConsole("Не удалось запустить make build: ${error.message.orEmpty()}\n")
+                    return@runInBackground
                 }
+                commandStarting = false
+                processHandler = handler
+                handler.addProcessListener(
+                    object : ProcessListener {
+                        override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
+                            appendConsole(event.text)
+                        }
+
+                        override fun processTerminated(event: ProcessEvent) {
+                            ApplicationManager.getApplication().invokeLater {
+                                if (disposed || project.isDisposed) return@invokeLater
+                                processHandler = null
+                                setRunning(false)
+                                appendConsole("\nmake build завершился с кодом ${event.exitCode}\n")
+                                if (event.exitCode == 0) {
+                                    cliPathField.text = JankHunterCommandBuilder.defaultCliPath(project)
+                                    Messages.showInfoMessage(project, "CLI собран: ${cliPathField.text}", "Jank Hunter")
+                                } else {
+                                    JankHunterNotifications.error(project, "Jank Hunter CLI", "Не удалось собрать CLI.")
+                                }
+                            }
+                        }
+                    },
+                )
+                handler.startNotify()
+                setRunning(true)
             },
         )
     }
 
     private fun refreshDevices() {
-        val devices = JankHunterAdbIntegration.listDevices(project)
-        val model = DefaultComboBoxModel<JankHunterDevice>()
-        devices.forEach(model::addElement)
-        deviceCombo.model = model
-        if (devices.isEmpty()) {
-            Messages.showInfoMessage(project, "ADB devices не найдены.", "Jank Hunter")
-        }
-    }
-
-    private fun syncRemotePathFromPackage() {
-        val pkg = packageField.text.trim()
-        if (pkg.isNotBlank()) {
-            remoteLogsField.text = "/data/data/$pkg/files/jankhunter"
-        }
+        scanDevicesButton.isEnabled = false
+        runInBackground(
+            task = { JankHunterAdbIntegration.listDevices(project) },
+            onDone = { result ->
+                scanDevicesButton.isEnabled = true
+                val devices = result.getOrElse { error ->
+                    JankHunterNotifications.error(project, "Jank Hunter ADB", error.message.orEmpty())
+                    return@runInBackground
+                }
+                val model = DefaultComboBoxModel<JankHunterDevice>()
+                devices.forEach(model::addElement)
+                deviceCombo.model = model
+                if (devices.isEmpty()) {
+                    Messages.showInfoMessage(project, "ADB devices не найдены.", "Jank Hunter")
+                }
+            },
+        )
     }
 
     private fun pullDeviceLogs(openInspect: Boolean) {
-        syncRemotePathFromPackage()
+        if (processHandler != null || commandStarting || adbPulling) return
         val device = deviceCombo.selectedItem as? JankHunterDevice
         val packageName = packageField.text.trim()
         if (packageName.isBlank()) {
@@ -1458,10 +1501,12 @@ class JankHunterToolWindow(
             return
         }
         val localDir = ensureLogsDirectoryForPull() ?: return
-        consoleArea.text = ""
+        replaceConsole("")
         val serial = device?.serial?.takeIf(String::isNotBlank)?.let { "-s $it " }.orEmpty()
         appendConsole("$ adb ${serial}exec-out run-as $packageName sh -c 'cd files/jankhunter && tar -cf - .' -> ${localDir.path}\n\n")
-        JankHunterAdbIntegration.pullAppPrivateLogs(
+        setPullingLogs(true)
+        val pullGeneration = ++adbPullGeneration
+        val pullTask = JankHunterAdbIntegration.pullAppPrivateLogs(
             project,
             device?.serial.orEmpty(),
             packageName,
@@ -1469,37 +1514,75 @@ class JankHunterToolWindow(
             onText = ::appendConsole,
             onDone = { ok, files ->
                 ApplicationManager.getApplication().invokeLater {
+                    if (disposed || project.isDisposed) return@invokeLater
+                    if (pullGeneration != adbPullGeneration) return@invokeLater
+                    adbPullTask = null
+                    setPullingLogs(false)
                     appendConsole("\nADB run-as pull finished: $ok, logs=${files.size}\n")
-                    syncHeapDumpFromLogsDirectory(localDir)
                     if (ok && files.isNotEmpty()) {
                         logsField.text = applyLogScope(files, selectedInspectLogScope()).joinToString(", ") { it.path }
                     }
-                    if (ok && openInspect && files.isNotEmpty()) {
-                        selectMode(JankHunterMode.INSPECT)
-                        runRequest(collectRequest())
-                    }
+                    if (!ok && files.isEmpty()) return@invokeLater
+                    runInBackground(
+                        task = { scanLogsDirectory(localDir).heapDump },
+                        onDone = { scanResult ->
+                            syncHeapDumpFromLogsDirectory(localDir, scanResult.getOrNull())
+                            if (ok && openInspect && files.isNotEmpty()) {
+                                selectMode(JankHunterMode.INSPECT)
+                                runRequest(collectRequest())
+                            }
+                        },
+                    )
                 }
             },
         )
+        adbPullTask = pullTask
+        trackBackgroundTask(pullTask)
+        updateBusyControls()
+    }
+
+    private fun setPullingLogs(pulling: Boolean) {
+        adbPulling = pulling
+        updateBusyControls()
+    }
+
+    private fun updateBusyControls(forceCliBusy: Boolean = false) {
+        val cliBusy = forceCliBusy || processHandler != null || commandStarting
+        val idle = !cliBusy && !adbPulling
+        runButton.isEnabled = idle
+        generateReportButton.isEnabled = idle
+        modeCombo.isEnabled = idle
+        buildCliButton.isEnabled = idle
+        pullLogsButton.isEnabled = idle
+        collectInspectButton.isEnabled = idle
+        stopButton.isEnabled = processHandler != null || adbPulling
     }
 
     private fun openRemoteLogFolder() {
-        syncRemotePathFromPackage()
         val device = deviceCombo.selectedItem as? JankHunterDevice
         val packageName = packageField.text.trim()
         if (packageName.isBlank()) {
             Messages.showInfoMessage(project, "Не удалось определить package. Укажите applicationId вручную.", "Jank Hunter")
             return
         }
-        val listing = JankHunterAdbIntegration.listAppPrivateLogs(project, device?.serial.orEmpty(), packageName)
-        consoleArea.text = listing.ifBlank { "App private log folder is empty or unavailable. Is the debug app installed?\n" }
-        tabs.selectedIndex = 0
+        openRemoteLogsButton.isEnabled = false
+        runInBackground(
+            task = { JankHunterAdbIntegration.listAppPrivateLogs(project, device?.serial.orEmpty(), packageName) },
+            onDone = { result ->
+                openRemoteLogsButton.isEnabled = true
+                val listing = result.getOrElse { error -> "ADB error: ${error.message.orEmpty()}\n" }
+                replaceConsole(
+                    listing.ifBlank { "App private log folder is empty or unavailable. Is the debug app installed?\n" },
+                )
+                tabs.selectedIndex = 0
+            },
+        )
     }
 
     private fun addHistory(request: JankHunterRunRequest, command: JankHunterCommand) {
         val state = JankHunterSettings.getInstance().state
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-        val entry = RecentRun.fromRequest(timestamp, command.displayText(), request, currentProjectPath())
+        val entry = JankHunterRecentRun.fromRequest(timestamp, command.displayText(), request, currentProjectPath())
         state.lastRun = entry
         state.recentRuns.removeAll { it.commandLine == entry.commandLine && it.projectPath == entry.projectPath }
         state.recentRuns.add(0, entry)
@@ -1520,7 +1603,7 @@ class JankHunterToolWindow(
         }
     }
 
-    private fun selectedHistoryEntry(): RecentRun? {
+    private fun selectedHistoryEntry(): JankHunterRecentRun? {
         val viewRow = historyTable.selectedRow
         if (viewRow < 0) return null
         val modelRow = historyTable.convertRowIndexToModel(viewRow)
@@ -1547,35 +1630,56 @@ class JankHunterToolWindow(
         openOutputInsideIde(File(output))
     }
 
-    private fun loadProblemsTable(outputPath: String): ProblemsTable? {
+    private fun loadProblemsTableAsync(outputPath: String, onLoaded: (ProblemsTable?) -> Unit = {}) {
         val file = File(outputPath)
         if (!file.isFile || file.extension.lowercase() !in setOf("csv", "json")) {
-            return null
+            onLoaded(null)
+            return
         }
-        val table = runCatching { ProblemsParser.parse(file) }
-            .onFailure { error -> appendConsole("Не удалось разобрать problems-файл: ${error.message}\n") }
-            .getOrNull()
-            ?: return null
-        if (!table.isEmpty) {
-            rawProblemsTable = table
-            applyProblemsView()
-            tabs.selectedIndex = 2
-        }
-        return table
+        reloadProblemsButton.isEnabled = false
+        runInBackground(
+            task = { ProblemsParser.parse(file) },
+            onDone = { result ->
+                reloadProblemsButton.isEnabled = true
+                val table = result.getOrElse { error ->
+                    appendConsole("Не удалось разобрать problems-файл: ${error.message}\n")
+                    onLoaded(null)
+                    return@runInBackground
+                }
+                if (!table.isEmpty) {
+                    rawProblemsTable = table
+                    applyProblemsView()
+                    tabs.selectedIndex = 2
+                }
+                onLoaded(table)
+            },
+        )
     }
 
     private fun openSelectedProblemSource() {
         val viewRow = problemsTable.selectedRow
         if (viewRow < 0) return
         val row = problemsModel.rowAt(problemsTable.convertRowIndexToModel(viewRow))
-        if (!SourceNavigator.open(project, row)) {
-            Messages.showInfoMessage(project, "Не удалось найти исходник для выбранной строки.", "Jank Hunter")
-        }
+        navigateToSource(row, showFailure = true)
+    }
+
+    private fun navigateToSource(row: Map<String, String>, showFailure: Boolean) {
+        openProblemSourceButton.isEnabled = false
+        runInBackground(
+            task = { SourceNavigator.find(project, row) },
+            onDone = { result ->
+                openProblemSourceButton.isEnabled = true
+                val location: SourceLocation? = result.getOrNull()
+                if (location != null && SourceNavigator.open(project, location)) return@runInBackground
+                if (showFailure) {
+                    Messages.showInfoMessage(project, "Не удалось найти исходник для выбранной строки.", "Jank Hunter")
+                }
+            },
+        )
     }
 
     private fun openProblemReport() {
         val report = lastHtmlOutputPath?.let(::File)
-            ?: lastOutputPath?.let { latestHtmlNear(File(it)) }
         if (report?.isFile == true) {
             openOutputInsideIde(report)
         } else {
@@ -1655,12 +1759,6 @@ class JankHunterToolWindow(
         return keys.any { key -> row[key]?.contains(trimmed, ignoreCase = true) == true }
     }
 
-    private fun latestHtmlNear(file: File): File? {
-        val dir = file.parentFile ?: return null
-        return dir.listFiles { candidate -> candidate.isFile && candidate.extension.equals("html", ignoreCase = true) }
-            ?.maxByOrNull(File::lastModified)
-    }
-
     fun applyClassFilter(className: String) {
         selectMode(JankHunterMode.INSPECT)
         classField.text = className
@@ -1678,27 +1776,82 @@ class JankHunterToolWindow(
             else -> 0
         }
 
-    private fun appendConsole(text: String) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            consoleArea.append(text)
-            consoleArea.caretPosition = consoleArea.document.length
-        } else {
+    private fun <T> runInBackground(
+        task: () -> T,
+        onAbandoned: (T) -> Unit = {},
+        onDone: (Result<T>) -> Unit,
+    ) {
+        val future = ApplicationManager.getApplication().executeOnPooledThread {
+            val result = runCatching(task)
             ApplicationManager.getApplication().invokeLater {
-                consoleArea.append(text)
-                consoleArea.caretPosition = consoleArea.document.length
+                if (disposed || project.isDisposed) {
+                    result.getOrNull()?.let(onAbandoned)
+                    return@invokeLater
+                }
+                onDone(result)
             }
         }
+        trackBackgroundTask(future)
+    }
+
+    private fun trackBackgroundTask(task: Future<*>) {
+        backgroundTasks.removeAll { current -> current.isDone || current.isCancelled }
+        backgroundTasks += task
+    }
+
+    private fun appendConsole(text: String) {
+        if (text.isEmpty() || disposed) return
+        val scheduleFlush = synchronized(consoleLock) {
+            val overflow = pendingConsole.length + text.length - MAX_CONSOLE_CHARS
+            if (overflow > 0) {
+                if (overflow >= pendingConsole.length) {
+                    pendingConsole.setLength(0)
+                } else {
+                    pendingConsole.delete(0, overflow)
+                }
+            }
+            pendingConsole.append(text.takeLast(MAX_CONSOLE_CHARS))
+            if (consoleFlushScheduled) {
+                false
+            } else {
+                consoleFlushScheduled = true
+                true
+            }
+        }
+        if (scheduleFlush) {
+            ApplicationManager.getApplication().invokeLater { flushConsole() }
+        }
+    }
+
+    private fun replaceConsole(text: String) {
+        synchronized(consoleLock) {
+            pendingConsole.setLength(0)
+            consoleFlushScheduled = false
+        }
+        consoleArea.text = text.takeLast(MAX_CONSOLE_CHARS)
+        consoleArea.caretPosition = consoleArea.document.length
+    }
+
+    private fun flushConsole() {
+        if (disposed || project.isDisposed) return
+        val text = synchronized(consoleLock) {
+            val value = pendingConsole.toString()
+            pendingConsole.setLength(0)
+            consoleFlushScheduled = false
+            value
+        }
+        if (text.isEmpty()) return
+        consoleArea.append(text)
+        val excess = consoleArea.document.length - MAX_CONSOLE_CHARS
+        if (excess > 0) {
+            runCatching { consoleArea.document.remove(0, excess) }
+        }
+        consoleArea.caretPosition = consoleArea.document.length
     }
 
     private fun selectMode(mode: JankHunterMode) {
         modeCombo.selectedItem = mode
-        syncModeButtons()
         updateModeVisibility()
-    }
-
-    private fun syncModeButtons() {
-        val mode = selectedMode()
-        modeButtons[mode]?.isSelected = true
     }
 
     private fun selectedMode(): JankHunterMode = modeCombo.selectedItem as? JankHunterMode ?: JankHunterMode.INSPECT
@@ -1716,44 +1869,9 @@ class JankHunterToolWindow(
         if (logs.isEmpty()) return emptyList()
         return when (scope) {
             JankHunterLogScope.ALL_SELECTED -> logs
-            JankHunterLogScope.LATEST_LOG -> logs.maxByOrNull(File::lastModified)?.let(::listOf).orEmpty()
-            JankHunterLogScope.LATEST_SESSION_GROUP -> latestSessionGroup(logs)
+            JankHunterLogScope.LATEST_LOG -> JankHunterSessionLogFiles.latest(logs)?.let(::listOf).orEmpty()
         }
     }
-
-    private fun latestSessionGroup(logs: List<File>): List<File> {
-        val latestByGroup = linkedMapOf<String, Long>()
-        val sessionByFile = linkedMapOf<File, SessionLogPath>()
-        logs.forEach { file ->
-            val session = parseSessionLogPath(file) ?: return@forEach
-            sessionByFile[file] = session
-            latestByGroup[session.group] = maxOf(latestByGroup[session.group] ?: Long.MIN_VALUE, session.startMs)
-        }
-        if (sessionByFile.isEmpty()) return logs
-        return logs.filter { file ->
-            val session = sessionByFile[file]
-            session == null || latestByGroup[session.group] == session.startMs
-        }
-    }
-
-    private fun parseSessionLogPath(file: File): SessionLogPath? {
-        if (!file.name.endsWith(".jhlog") || !file.name.startsWith("session-")) return null
-        val name = file.name.removeSuffix(".jhlog")
-        val parts = name.split('-')
-        if (parts.size < 4) return null
-        val startMs = parts[parts.size - 2].toLongOrNull() ?: return null
-        parts.last().toLongOrNull() ?: return null
-        val process = parts.subList(1, parts.size - 2).joinToString("-").takeIf { it.isNotBlank() } ?: return null
-        return SessionLogPath(
-            group = File(file.parentFile ?: File("."), "session-$process").path,
-            startMs = startMs,
-        )
-    }
-
-    private data class SessionLogPath(
-        val group: String,
-        val startMs: Long,
-    )
 
     private fun browseDirectoryField(): TextFieldWithBrowseButton {
         val field = TextFieldWithBrowseButton()
@@ -1785,12 +1903,6 @@ class JankHunterToolWindow(
         FileChooserDescriptor(false, true, false, false, false, false)
 
     private fun configureTooltips() {
-        presetCombo.toolTipText = hint("Готовые наборы настроек для частых сценариев запуска.")
-        applyPresetButton.toolTipText = hint("Применить выбранный пресет к форме.")
-        profileCombo.toolTipText = hint("Именованные профили из .jankhunter/plugin.json.")
-        loadProfileButton.toolTipText = hint("Загрузить выбранный именованный профиль в форму.")
-        saveProfileButton.toolTipText = hint("Сохранить текущую форму как выбранный именованный профиль.")
-        saveDefaultsButton.toolTipText = hint("Сохранить текущую форму как defaults проекта в .jankhunter/plugin.json.")
         modeCombo.toolTipText = hint(selectedMode().hint)
         cliPathField.toolTipText = hint(
             "Путь к бинарнику jankhunter. Если оставить пустым, плагин попробует найти ../cli/bin/jankhunter или команду jankhunter в PATH.",
@@ -1800,27 +1912,32 @@ class JankHunterToolWindow(
         openLogsButton.toolTipText = hint("Выбрать папку с логами и подставить найденные .jhlog в текущий запуск.")
         generateReportButton.toolTipText = hint("Собрать inspect-отчет из выбранной папки или списка .jhlog файлов.")
         artifactCombo.toolTipText = hint("Найденные артефакты Android Gradle plugin, сгруппированные по variant.")
-        scanArtifactsButton.toolTipText = hint("Просканировать проект и обновить список owner-map/class-graph/diagnostics/mapping.")
+        scanArtifactsButton.toolTipText = hint(
+            "Просканировать проект и обновить список owner-map/class-graph/diagnostics/di-catalog/mapping.",
+        )
         applyArtifactsButton.toolTipText = hint("Заполнить поля артефактов выбранным набором.")
         logsField.toolTipText = hint(
             "Файлы .jhlog для отчета. Один файл, несколько выбранных файлов, glob-маски или пути через запятую.",
         )
         inspectLogScopeCombo.toolTipText = hint(
-            "Как собрать inspect: один самый новый лог, последняя session-группа или все перечисленные в Report input логи с --all-sessions.",
+            "Как собрать inspect: канонический session-лог с максимальными датой и числовым индексом или все перечисленные логи с --all-sessions.",
         )
         baselineField.toolTipText = hint("Базовый прогон для compare/scorecard. Поддерживаются несколько файлов и glob-маски.")
         baselineLogScopeCombo.toolTipText = hint(
-            "Какие baseline-логи отправить в compare/scorecard: один самый новый, последнюю session-группу или все выбранные.",
+            "Какие baseline-логи отправить в compare/scorecard: последний канонический session-лог или все выбранные.",
         )
         candidateField.toolTipText = hint("Кандидатный прогон для compare/scorecard. Обычно это логи после изменения.")
         candidateLogScopeCombo.toolTipText = hint(
-            "Какие candidate-логи отправить в compare/scorecard: один самый новый, последнюю session-группу или все выбранные.",
+            "Какие candidate-логи отправить в compare/scorecard: последний канонический session-лог или все выбранные.",
         )
         outputField.toolTipText = hint("Куда записать результат. Если пусто, плагин создаст файл в build/jankhunter внутри проекта.")
         ownerMapField.toolTipText = hint("owner-map.json от Android Gradle plugin: раскрывает owner hash в class.method.")
         mappingField.toolTipText = hint("R8/ProGuard mapping.txt: раскрывает обфусцированные имена классов и методов.")
         classGraphField.toolTipText = hint("class-graph.jsonl: статические связи, горячие пути и method-level hotspots.")
         diagnosticsField.toolTipText = hint("instrumentation-diagnostics.jsonl: отчет по ASM-инструментации.")
+        diCatalogField.toolTipText = hint(
+            "di-catalog.jsonl: opt-in build-time связи Dagger/Hilt/Koin; они отображаются отдельно и не влияют на score.",
+        )
         heapDumpField.toolTipText = hint("HPROF для inspect/problems: CLI построит цепочки удержания от GC root.")
         heapEvidenceField.toolTipText = hint("Готовый JSON heap evidence вместо HPROF.")
         baselineHeapDumpField.toolTipText = hint("HPROF для базового прогона в compare/scorecard.")
@@ -1835,10 +1952,10 @@ class JankHunterToolWindow(
         formatCombo.toolTipText = hint("Формат Problems: csv для таблицы или json для дальнейшей обработки.")
         jsonCheckBox.toolTipText = hint("Добавить --json: основной результат команды будет напечатан в JSON.")
         presentationCheckBox.toolTipText = hint("Добавить --presentation: более крупные акценты и печатный CSS в HTML.")
-        openInIdeCheckBox.toolTipText = hint("После успешного запуска открыть HTML-отчет во вкладке Report.")
+        openInIdeCheckBox.toolTipText = hint("После успешного запуска открыть созданный результат внутри IDE.")
         openExternalCheckBox.toolTipText = hint("После успешного запуска открыть HTML-отчет в браузере по умолчанию.")
         runButton.toolTipText = hint("Проверить поля и запустить Jank Hunter CLI.")
-        stopButton.toolTipText = hint("Остановить текущий процесс Jank Hunter.")
+        stopButton.toolTipText = hint("Остановить текущий процесс Jank Hunter или выгрузку через ADB.")
         openInIdeButton.toolTipText = hint("Открыть последний созданный файл результата внутри IDE.")
         openBrowserButton.toolTipText = hint("Открыть последний созданный HTML-отчет в браузере.")
         clearButton.toolTipText = hint("Очистить консольный вывод.")
@@ -1891,5 +2008,8 @@ class JankHunterToolWindow(
 
     companion object {
         private const val MAX_HISTORY = 25
+        private const val MAX_DISCOVERED_LOGS = 50
+        private const val MAX_LOG_SCAN_DEPTH = 8
+        private const val MAX_CONSOLE_CHARS = 1_000_000
     }
 }

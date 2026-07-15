@@ -2,325 +2,689 @@ package jhlog
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
+	"math"
 	"os"
+	"sort"
+	"unicode/utf8"
 )
 
+type WriterOptions struct {
+	Header         SegmentHeader
+	RawChunkTarget int
+	GZIP           bool
+}
+
+type recordEncodeState struct {
+	lastElapsedUS int64
+	lastContext   AttributionContext
+	hasContext    bool
+}
+
 type Writer struct {
-	w           io.Writer
-	closeBody   io.Closer
-	lastMS      uint64
-	lastContext contextTuple
-	hasContext  bool
+	w               io.Writer
+	header          SegmentHeader
+	chunkTarget     int
+	gzipChunks      bool
+	raw             bytes.Buffer
+	recordCount     uint32
+	sequence        uint32
+	state           recordEncodeState
+	closed          bool
+	poisoned        error
+	latestQuality   QualitySnapshot
+	totalEvents     uint64
+	totalDictionary uint64
+	lastElapsedUS   uint64
 }
 
 func NewWriter(w io.Writer) (*Writer, error) {
-	if _, err := w.Write(Magic); err != nil {
-		return nil, err
+	return NewWriterWithOptions(w, WriterOptions{
+		Header: DefaultSegmentHeader(),
+		GZIP:   true,
+	})
+}
+
+func NewWriterWithHeader(w io.Writer, header SegmentHeader) (*Writer, error) {
+	return NewWriterWithOptions(w, WriterOptions{Header: header, GZIP: true})
+}
+
+func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
+	if w == nil {
+		return nil, fmt.Errorf("jhlog writer is nil")
 	}
-	gzipWriter, err := gzip.NewWriterLevel(w, gzip.BestCompression)
+	headerBytes, header, err := encodeFileHeader(options.Header)
 	if err != nil {
 		return nil, err
 	}
-	return &Writer{w: gzipWriter, closeBody: gzipWriter}, nil
+	if header.SegmentStartElapsedUS > math.MaxInt64 {
+		return nil, fmt.Errorf("segment start elapsed time %d exceeds signed timestamp range", header.SegmentStartElapsedUS)
+	}
+	target := options.RawChunkTarget
+	if target == 0 {
+		target = defaultRawChunkTarget
+	}
+	if target < 1 || target > maxRawChunkSize {
+		return nil, fmt.Errorf("raw chunk target %d is outside 1..%d", target, maxRawChunkSize)
+	}
+	if err := writeAll(w, headerBytes); err != nil {
+		return nil, fmt.Errorf("write file header: %w", err)
+	}
+	return &Writer{
+		w:           w,
+		header:      header,
+		chunkTarget: target,
+		gzipChunks:  options.GZIP,
+		state: recordEncodeState{
+			lastElapsedUS: int64(header.SegmentStartElapsedUS),
+		},
+		latestQuality: QualitySnapshot{Counters: map[uint64]uint64{}},
+		lastElapsedUS: header.SegmentStartElapsedUS,
+	}, nil
 }
 
 func Create(path string) (io.Closer, *Writer, error) {
+	return CreateWithHeader(path, DefaultSegmentHeader())
+}
+
+func CreateWithHeader(path string, header SegmentHeader) (io.Closer, *Writer, error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	writer, err := NewWriter(file)
+	writer, err := NewWriterWithHeader(file, header)
 	if err != nil {
 		_ = file.Close()
 		return nil, nil, err
 	}
-	return logFile{file: file, writer: writer}, writer, nil
+	closer := &logFile{file: file, writer: writer}
+	return closer, writer, nil
 }
 
 type logFile struct {
 	file   *os.File
 	writer *Writer
+	closed bool
 }
 
-func (f logFile) Close() error {
-	bodyErr := f.writer.Close()
-	fileErr := f.file.Close()
-	if bodyErr != nil {
-		return bodyErr
+func (f *logFile) Close() error {
+	if f.closed {
+		return nil
 	}
-	return fileErr
+	f.closed = true
+	writerErr := f.writer.Close()
+	fileErr := f.file.Close()
+	return errors.Join(writerErr, fileErr)
+}
+
+func (w *Writer) Header() SegmentHeader {
+	header := w.header
+	header.SymbolNamespace = append([]byte(nil), header.SymbolNamespace...)
+	return header
+}
+
+func (w *Writer) SetQualitySnapshot(snapshot QualitySnapshot) {
+	w.latestQuality = cloneQualitySnapshot(snapshot)
+	if w.latestQuality.Counters == nil {
+		w.latestQuality.Counters = map[uint64]uint64{}
+	}
 }
 
 func (w *Writer) WriteEvent(event Event) error {
-	flags := w.compactEventFlags(event)
-	var payload bytes.Buffer
-	if err := encodePayload(&payload, event, flags); err != nil {
-		return err
+	if w.closed {
+		return fmt.Errorf("jhlog writer is closed")
+	}
+	if w.poisoned != nil {
+		return w.poisoned
+	}
+	if event.Type == EventQualitySnapshot {
+		if event.Quality == nil {
+			return fmt.Errorf("quality snapshot payload is nil")
+		}
+		w.SetQualitySnapshot(*event.Quality)
+		return nil
+	}
+	if event.Type == EventSegmentEnd {
+		return fmt.Errorf("segment end is reserved for Writer.Close")
 	}
 
-	delta := event.TimeMS
-	if event.TimeMS >= w.lastMS {
-		delta = event.TimeMS - w.lastMS
+	record, nextState, elapsedUS, err := encodeRecord(event, w.state)
+	if err != nil {
+		return err
 	}
-	w.lastMS = event.TimeMS
+	if len(record) > maxRawChunkSize {
+		w.incrementQuality(QualityOversizedRecordTotal, 1)
+		w.incrementQuality(EventQualityCounterID(event.Type, QualityLossOversized), 1)
+		return fmt.Errorf("event type %d record is too large: %d > %d", event.Type, len(record), maxRawChunkSize)
+	}
+	if w.raw.Len() > 0 && w.raw.Len()+len(record) > w.chunkTarget {
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		record, nextState, elapsedUS, err = encodeRecord(event, w.state)
+		if err != nil {
+			return err
+		}
+	}
+	if w.raw.Len()+len(record) > maxRawChunkSize {
+		if w.raw.Len() > 0 {
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			record, nextState, elapsedUS, err = encodeRecord(event, w.state)
+			if err != nil {
+				return err
+			}
+		}
+		if len(record) > maxRawChunkSize {
+			w.incrementQuality(QualityOversizedRecordTotal, 1)
+			w.incrementQuality(EventQualityCounterID(event.Type, QualityLossOversized), 1)
+			return fmt.Errorf("event type %d record is too large: %d > %d", event.Type, len(record), maxRawChunkSize)
+		}
+	}
+	if _, err := w.raw.Write(record); err != nil {
+		return err
+	}
+	w.recordCount++
+	w.state = nextState
+	w.lastElapsedUS = elapsedUS
+	if event.Type == EventDictionary {
+		w.totalDictionary++
+	} else {
+		w.totalEvents++
+		w.incrementQuality(QualityAcceptedEventTotal, 1)
+		w.incrementQuality(QualityWrittenEventTotal, 1)
+	}
+	return nil
+}
 
-	if err := writeCompactHeader(w.w, event.Type, delta, flags, needsPayloadLength(event.Type), uint64(payload.Len())); err != nil {
+func (w *Writer) Flush() error {
+	if w.closed {
+		return fmt.Errorf("jhlog writer is closed")
+	}
+	if w.poisoned != nil {
+		return w.poisoned
+	}
+	if w.raw.Len() == 0 {
+		return nil
+	}
+	raw := append([]byte(nil), w.raw.Bytes()...)
+	if err := w.commitChunk(raw, w.recordCount, false); err != nil {
 		return err
 	}
-	if _, err := w.w.Write(payload.Bytes()); err != nil {
-		return err
-	}
-	w.rememberContext(event)
+	w.raw.Reset()
+	w.recordCount = 0
+	w.resetChunkState()
 	return nil
 }
 
 func (w *Writer) Close() error {
-	if w.closeBody == nil {
-		return nil
-	}
-	err := w.closeBody.Close()
-	w.closeBody = nil
-	return err
+	return w.CloseWithReason(SegmentEndNormal)
 }
 
-func (w *Writer) compactEventFlags(event Event) uint64 {
-	flags := compactEventFlags(event)
-	if context, ok := eventContextTuple(event); ok && w.hasContext && w.lastContext == context {
-		flags &^= contextFlagMask
-		flags |= uint64(FlagSameContext)
+func (w *Writer) CloseWithReason(reason SegmentEndReason) error {
+	if w.closed {
+		return w.poisoned
 	}
-	return flags
+	if w.poisoned != nil {
+		w.closed = true
+		return w.poisoned
+	}
+	if err := w.Flush(); err != nil {
+		w.closed = true
+		return err
+	}
+
+	quality := cloneQualitySnapshot(w.latestQuality)
+	if quality.Sequence == 0 {
+		quality.Sequence = 1
+	}
+	if quality.CapturedElapsedUS == 0 {
+		quality.CapturedElapsedUS = w.lastElapsedUS
+	}
+	if quality.Counters == nil {
+		quality.Counters = map[uint64]uint64{}
+	}
+	quality.Counters[QualityAcceptedEventTotal] = maxUint64(quality.Counters[QualityAcceptedEventTotal], w.totalEvents)
+	quality.Counters[QualityWrittenEventTotal] = maxUint64(quality.Counters[QualityWrittenEventTotal], w.totalEvents)
+	// A terminal snapshot is observable only after its FINAL chunk commits, so
+	// it can truthfully include that chunk before the bytes are encoded.
+	committedBeforeFinal := maxUint64(quality.Counters[QualityCommittedChunkTotal], uint64(w.sequence))
+	if committedBeforeFinal == math.MaxUint64 {
+		w.closed = true
+		return fmt.Errorf("committed chunk quality counter overflow")
+	}
+	quality.Counters[QualityCommittedChunkTotal] = committedBeforeFinal + 1
+
+	end := SegmentEndEvent{
+		Reason:                 reason,
+		TotalEventRecords:      w.totalEvents,
+		TotalDictionaryRecords: w.totalDictionary,
+		LastQualitySequence:    quality.Sequence,
+	}
+	state := recordEncodeState{lastElapsedUS: int64(w.header.SegmentStartElapsedUS)}
+	qualityRecord, state, _, err := encodeRecord(Event{Type: EventQualitySnapshot, Quality: &quality}, state)
+	if err != nil {
+		w.closed = true
+		return err
+	}
+	endRecord, _, _, err := encodeRecord(Event{Type: EventSegmentEnd, SegmentEnd: &end}, state)
+	if err != nil {
+		w.closed = true
+		return err
+	}
+	finalRaw := make([]byte, 0, len(qualityRecord)+len(endRecord))
+	finalRaw = append(finalRaw, qualityRecord...)
+	finalRaw = append(finalRaw, endRecord...)
+	if len(finalRaw) > maxRawChunkSize {
+		w.closed = true
+		return fmt.Errorf("final control chunk is too large: %d", len(finalRaw))
+	}
+	if err := w.commitChunk(finalRaw, 2, true); err != nil {
+		w.closed = true
+		return err
+	}
+	w.latestQuality = quality
+	w.closed = true
+	return nil
 }
 
-func (w *Writer) rememberContext(event Event) {
-	context, ok := eventContextTuple(event)
-	if !ok {
-		return
+func (w *Writer) commitChunk(raw []byte, recordCount uint32, final bool) error {
+	if len(raw) > maxRawChunkSize {
+		return fmt.Errorf("raw chunk is too large: %d", len(raw))
 	}
-	w.lastContext = context
-	w.hasContext = true
+	stored := raw
+	flags := uint16(0)
+	if w.gzipChunks {
+		var err error
+		stored, err = compressChunk(raw)
+		if err != nil {
+			return fmt.Errorf("compress chunk %d: %w", w.sequence, err)
+		}
+		flags |= chunkFlagGZIP
+	}
+	if final {
+		flags |= chunkFlagFinal
+	}
+	if len(stored) > maxStoredChunkSize {
+		return fmt.Errorf("stored chunk is too large: %d", len(stored))
+	}
+	metadata := chunkMetadata{
+		Flags:       flags,
+		Sequence:    w.sequence,
+		StoredLen:   uint32(len(stored)),
+		RawLen:      uint32(len(raw)),
+		RecordCount: recordCount,
+		RawCRC:      crc32.ChecksumIEEE(raw),
+	}
+	header := marshalChunkHeader(metadata)
+	trailer := marshalCommitTrailer(metadata)
+	for _, part := range [][]byte{header[:], stored, trailer[:]} {
+		if err := writeAll(w.w, part); err != nil {
+			w.incrementQuality(QualityWriterIOErrorTotal, 1)
+			w.incrementQuality(QualityFailedChunkTotal, 1)
+			w.poisoned = fmt.Errorf("write chunk %d: %w", w.sequence, err)
+			return w.poisoned
+		}
+	}
+	w.sequence++
+	w.incrementQuality(QualityCommittedChunkTotal, 1)
+	return nil
 }
 
-func compactEventFlags(event Event) uint64 {
-	flags := event.Flags
-	if event.Type == EventContext && event.Context != nil {
+func (w *Writer) resetChunkState() {
+	w.state = recordEncodeState{lastElapsedUS: int64(w.header.SegmentStartElapsedUS)}
+}
+
+func (w *Writer) incrementQuality(id, delta uint64) {
+	if w.latestQuality.Counters == nil {
+		w.latestQuality.Counters = map[uint64]uint64{}
+	}
+	w.latestQuality.Counters[id] += delta
+}
+
+func cloneQualitySnapshot(snapshot QualitySnapshot) QualitySnapshot {
+	clone := snapshot
+	clone.Counters = make(map[uint64]uint64, len(snapshot.Counters))
+	for id, value := range snapshot.Counters {
+		clone.Counters[id] = value
+	}
+	return clone
+}
+
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func encodeRecord(event Event, state recordEncodeState) ([]byte, recordEncodeState, uint64, error) {
+	if event.Type == 0 {
+		return nil, state, 0, fmt.Errorf("event type is zero")
+	}
+	context := eventAttribution(event)
+	attributes := eventAttributes(event)
+	elapsedUS, hasTime, err := eventElapsedUS(event)
+	if err != nil {
+		return nil, state, 0, err
+	}
+	hasThread := event.Producer.HasThread || event.Producer.ThreadID != 0
+
+	envelope := EnvelopeFlag(0)
+	if hasTime {
+		envelope |= EnvelopeHasTime
+	}
+	if hasThread {
+		envelope |= EnvelopeHasThread
+	}
+	if context.Present {
+		envelope |= EnvelopeHasContext
+		if state.hasContext && equalAttribution(state.lastContext, context) {
+			envelope |= EnvelopeSameContext
+		}
+	}
+	if attributes != 0 {
+		envelope |= EnvelopeHasAttributes
+	}
+
+	nextState := state
+	var body bytes.Buffer
+	if err := writeUvarint(&body, uint64(event.Type)); err != nil {
+		return nil, state, 0, err
+	}
+	if err := writeUvarint(&body, uint64(envelope)); err != nil {
+		return nil, state, 0, err
+	}
+	if hasTime {
+		if elapsedUS > math.MaxInt64 {
+			return nil, state, 0, fmt.Errorf("producer elapsed time %d exceeds signed timestamp range", elapsedUS)
+		}
+		delta := int64(elapsedUS) - state.lastElapsedUS
+		if err := writeUvarint(&body, encodeSVarint(delta)); err != nil {
+			return nil, state, 0, err
+		}
+		nextState.lastElapsedUS = int64(elapsedUS)
+	} else {
+		elapsedUS = uint64(state.lastElapsedUS)
+	}
+	if hasThread {
+		if err := writeUvarint(&body, event.Producer.ThreadID); err != nil {
+			return nil, state, 0, err
+		}
+	}
+	if context.Present && envelope&EnvelopeSameContext == 0 {
+		if err := writeAttribution(&body, context); err != nil {
+			return nil, state, 0, err
+		}
+		nextState.lastContext = context
+		nextState.hasContext = true
+	}
+	if attributes != 0 {
+		if err := writeUvarint(&body, attributes); err != nil {
+			return nil, state, 0, err
+		}
+	}
+	if err := encodeEventPayload(&body, event); err != nil {
+		return nil, state, 0, err
+	}
+	var record bytes.Buffer
+	if err := writeUvarint(&record, uint64(body.Len())); err != nil {
+		return nil, state, 0, err
+	}
+	if _, err := record.Write(body.Bytes()); err != nil {
+		return nil, state, 0, err
+	}
+	return record.Bytes(), nextState, elapsedUS, nil
+}
+
+func eventElapsedUS(event Event) (uint64, bool, error) {
+	if event.Producer.HasTime || event.Producer.ElapsedUS != 0 {
+		return event.Producer.ElapsedUS, true, nil
+	}
+	if event.TimeUS != 0 {
+		return event.TimeUS, true, nil
+	}
+	if event.TimeMS != 0 {
+		if event.TimeMS > math.MaxUint64/1000 {
+			return 0, false, fmt.Errorf("event time milliseconds overflows microseconds: %d", event.TimeMS)
+		}
+		return event.TimeMS * 1000, true, nil
+	}
+	return 0, false, nil
+}
+
+func eventAttributes(event Event) uint64 {
+	attributes := event.Flags & semanticAttributeMask
+	if event.Context != nil {
 		if event.Context.LowMemory {
-			flags |= uint64(FlagContextLowMemory)
+			attributes |= uint64(FlagContextLowMemory)
 		}
 		if event.Context.NetworkMetered {
-			flags |= uint64(FlagNetworkMetered)
+			attributes |= uint64(FlagNetworkMetered)
 		}
 		if event.Context.NetworkValidated {
-			flags |= uint64(FlagNetworkValidated)
+			attributes |= uint64(FlagNetworkValidated)
 		}
 		if event.Context.NetworkVPN {
-			flags |= uint64(FlagNetworkVPN)
+			attributes |= uint64(FlagNetworkVPN)
 		}
 	}
-	if event.Type == EventSession && event.Session != nil && event.Session.DeviceRooted {
-		flags |= uint64(FlagDeviceRooted)
+	if event.Session != nil && event.Session.DeviceRooted {
+		attributes |= uint64(FlagDeviceRooted)
 	}
-	switch event.Type {
-	case EventFlow:
-		flags |= compactContextFlags(event.Flow)
-	case EventRetained:
-		flags |= compactContextFlags(event.Retained)
-	case EventLogSpam:
-		flags |= compactContextFlags(event.LogSpam)
-	case EventProblem:
-		flags |= compactContextFlags(event.Problem)
-	case EventRuntimeCall:
-		flags |= compactContextFlags(event.RuntimeCall)
+	return attributes
+}
+
+func eventAttribution(event Event) AttributionContext {
+	if event.Attribution.Present {
+		return event.Attribution
 	}
-	return flags
-}
-
-const contextFlagMask = uint64(FlagHasScreen | FlagHasOwner | FlagHasFlow | FlagHasStep)
-
-type contextTuple struct {
-	screenID uint64
-	ownerID  uint64
-	flowID   uint64
-	stepID   uint64
-}
-
-type contextIDs interface {
-	contextIDs() (screenID, ownerID, flowID, stepID uint64)
-}
-
-func eventContextTuple(event Event) (contextTuple, bool) {
-	switch event.Type {
-	case EventFlow:
-		return contextTupleFrom(event.Flow), event.Flow != nil
-	case EventRetained:
-		return contextTupleFrom(event.Retained), event.Retained != nil
-	case EventLogSpam:
-		return contextTupleFrom(event.LogSpam), event.LogSpam != nil
-	case EventProblem:
-		return contextTupleFrom(event.Problem), event.Problem != nil
-	case EventRuntimeCall:
-		return contextTupleFrom(event.RuntimeCall), event.RuntimeCall != nil
+	context := AttributionContext{Present: true}
+	switch {
+	case event.HTTP != nil:
+		context.Owner = firstSymbol(event.HTTP.OwnerRef, event.HTTP.OwnerID)
+	case event.UIWindow != nil:
+		context.Screen = firstSymbol(event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
+	case event.Stall != nil:
+		context.Owner = firstSymbol(event.Stall.OwnerRef, event.Stall.OwnerID)
+	case event.Retained != nil:
+		context = legacyContext(event.Retained.ScreenID, event.Retained.OwnerID, event.Retained.FlowID, event.Retained.StepID)
+	case event.Flow != nil:
+		context = legacyContext(event.Flow.ScreenID, event.Flow.OwnerID, event.Flow.FlowID, event.Flow.StepID)
+	case event.LogSpam != nil:
+		context = legacyContext(event.LogSpam.ScreenID, event.LogSpam.OwnerID, event.LogSpam.FlowID, event.LogSpam.StepID)
+	case event.Problem != nil:
+		context = legacyContext(event.Problem.ScreenID, event.Problem.OwnerID, event.Problem.FlowID, event.Problem.StepID)
+	case event.RuntimeCall != nil:
+		context = legacyContext(event.RuntimeCall.ScreenID, event.RuntimeCall.CallerID, event.RuntimeCall.FlowID, event.RuntimeCall.StepID)
+		context.Owner = firstSymbol(event.RuntimeCall.CallerRef, event.RuntimeCall.CallerID)
 	default:
-		return contextTuple{}, false
+		return AttributionContext{}
+	}
+	return context
+}
+
+func legacyContext(screenID, ownerID, flowID, stepID uint64) AttributionContext {
+	return AttributionContext{
+		Present: true,
+		Screen:  LocalSymbol(screenID),
+		Owner:   LocalSymbol(ownerID),
+		Flow:    LocalSymbol(flowID),
+		Step:    LocalSymbol(stepID),
 	}
 }
 
-func contextTupleFrom(context contextIDs) contextTuple {
-	if context == nil {
-		return contextTuple{}
+func firstSymbol(ref SymbolRef, legacyID uint64) SymbolRef {
+	if !ref.IsUnknown() {
+		return ref
 	}
-	screenID, ownerID, flowID, stepID := context.contextIDs()
-	return contextTuple{screenID: screenID, ownerID: ownerID, flowID: flowID, stepID: stepID}
+	return LocalSymbol(legacyID)
 }
 
-func compactContextFlags(context contextIDs) uint64 {
-	if context == nil {
-		return 0
-	}
-	screenID, ownerID, flowID, stepID := context.contextIDs()
-	var flags uint64
-	if screenID != 0 {
-		flags |= uint64(FlagHasScreen)
-	}
-	if ownerID != 0 {
-		flags |= uint64(FlagHasOwner)
-	}
-	if flowID != 0 {
-		flags |= uint64(FlagHasFlow)
-	}
-	if stepID != 0 {
-		flags |= uint64(FlagHasStep)
-	}
-	return flags
+func equalAttribution(a, b AttributionContext) bool {
+	return a.Screen == b.Screen && a.Owner == b.Owner && a.Flow == b.Flow && a.Step == b.Step
 }
 
-func encodePayload(w io.Writer, event Event, flags uint64) error {
+func writeAttribution(w io.Writer, context AttributionContext) error {
+	var mask uint64
+	refs := []struct {
+		bit uint64
+		ref SymbolRef
+	}{
+		{1 << 0, context.Screen},
+		{1 << 1, context.Owner},
+		{1 << 2, context.Flow},
+		{1 << 3, context.Step},
+	}
+	for _, item := range refs {
+		if !item.ref.IsUnknown() {
+			mask |= item.bit
+		}
+	}
+	if err := writeUvarint(w, mask); err != nil {
+		return err
+	}
+	for _, item := range refs {
+		if mask&item.bit == 0 {
+			continue
+		}
+		if err := writeSymbolRef(w, item.ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeSymbolRef(w io.Writer, ref SymbolRef) error {
+	if ref.Stable {
+		if err := writeUvarint(w, 1); err != nil {
+			return err
+		}
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], ref.StableID)
+		return writeAll(w, raw[:])
+	}
+	if ref.LocalID > math.MaxUint64>>1 {
+		return fmt.Errorf("local symbol id %d is too large", ref.LocalID)
+	}
+	return writeUvarint(w, ref.LocalID<<1)
+}
+
+func encodeEventPayload(w io.Writer, event Event) error {
+	writeValues := func(values ...uint64) error {
+		for _, value := range values {
+			if err := writeUvarint(w, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	writeRefs := func(refs ...SymbolRef) error {
+		for _, ref := range refs {
+			if err := writeSymbolRef(w, ref); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	switch event.Type {
 	case EventDictionary:
-		if event.Dictionary == nil {
+		p := event.Dictionary
+		if p == nil {
 			return fmt.Errorf("dictionary payload is nil")
 		}
-		if err := writeUvarint(w, uint64(event.Dictionary.Kind)); err != nil {
+		data := p.Data
+		if data == nil {
+			data = []byte(p.Value)
+		}
+		if p.Encoding == 0 && !utf8.Valid(data) {
+			return fmt.Errorf("dictionary value %d is not valid UTF-8", p.ID)
+		}
+		if err := writeValues(uint64(p.Kind), p.ID, p.Encoding, uint64(len(data))); err != nil {
 			return err
 		}
-		if err := writeUvarint(w, event.Dictionary.ID); err != nil {
-			return err
-		}
-		if err := writeDictionaryValue(w, event.Dictionary.Value); err != nil {
-			return err
-		}
+		return writeAll(w, data)
 	case EventSession:
 		p := event.Session
 		if p == nil {
 			return fmt.Errorf("session payload is nil")
 		}
-		for _, value := range []uint64{p.AppVersionID, p.BuildID, p.DeviceID, p.SDKInt} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
+		if err := writeRefs(
+			firstSymbol(p.AppVersionRef, p.AppVersionID),
+			firstSymbol(p.BuildRef, p.BuildID),
+			firstSymbol(p.DeviceRef, p.DeviceID),
+		); err != nil {
+			return err
 		}
-		extra := []uint64{
-			p.ProcessID,
-			p.AndroidReleaseID,
-			p.SecurityPatchID,
-			p.PrimaryABIID,
-			p.SupportedABIsID,
-			p.ManufacturerID,
-			p.BrandID,
-			p.HardwareID,
-			p.BoardID,
-			p.ProductID,
+		if err := writeValues(p.SDKInt); err != nil {
+			return err
 		}
-		if hasNonZero(extra) {
-			for _, value := range extra {
-				if err := writeUvarint(w, value); err != nil {
-					return err
-				}
-			}
-		}
+		return writeRefs(
+			firstSymbol(p.AndroidReleaseRef, p.AndroidReleaseID),
+			firstSymbol(p.SecurityPatchRef, p.SecurityPatchID),
+			firstSymbol(p.PrimaryABIRef, p.PrimaryABIID),
+			firstSymbol(p.SupportedABIsRef, p.SupportedABIsID),
+			firstSymbol(p.ManufacturerRef, p.ManufacturerID),
+			firstSymbol(p.BrandRef, p.BrandID),
+			firstSymbol(p.HardwareRef, p.HardwareID),
+			firstSymbol(p.BoardRef, p.BoardID),
+			firstSymbol(p.ProductRef, p.ProductID),
+		)
 	case EventContext:
 		p := event.Context
 		if p == nil {
-			return fmt.Errorf("context payload is nil")
+			return fmt.Errorf("device context payload is nil")
 		}
-		for _, value := range []uint64{
-			uint64(p.Network),
-			p.BatteryPct,
-			p.AvailMemoryKB,
-			p.BatteryState,
-			encodeSVarint(p.BatteryTempDeciC),
-			p.RxBytes,
-			p.TxBytes,
-			p.TotalMemoryKB,
-			p.FreeStorageKB,
-			p.TotalStorageKB,
-		} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(
+			uint64(p.Network), p.BatteryPct, p.AvailMemoryKB, p.BatteryState,
+			encodeSVarint(p.BatteryTempDeciC), p.RxBytes, p.TxBytes,
+			p.TotalMemoryKB, p.FreeStorageKB, p.TotalStorageKB,
+		)
 	case EventHTTP:
 		p := event.HTTP
 		if p == nil {
 			return fmt.Errorf("http payload is nil")
 		}
-		values := []uint64{
-			p.OwnerID, p.RouteID, p.DurationMS, p.DNSMS, p.ConnectMS,
-			p.TTFBMS, uint64(p.Status), p.RxBytes, p.TxBytes,
+		if err := writeSymbolRef(w, firstSymbol(p.RouteRef, p.RouteID)); err != nil {
+			return err
 		}
-		for _, value := range values {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.DurationMS, p.DNSMS, p.ConnectMS, p.TTFBMS, uint64(p.Status), p.RxBytes, p.TxBytes)
 	case EventUIWindow:
 		p := event.UIWindow
 		if p == nil {
 			return fmt.Errorf("ui window payload is nil")
 		}
-		values := []uint64{p.ScreenID, p.WindowMS, p.FrameCount, p.JankCount, p.P50MS, p.P95MS, p.P99MS}
-		for _, value := range values {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.WindowMS, p.FrameCount, p.JankCount, p.P50MS, p.P95MS, p.P99MS)
 	case EventStall:
 		p := event.Stall
 		if p == nil {
 			return fmt.Errorf("stall payload is nil")
 		}
-		for _, value := range []uint64{p.OwnerID, p.StackID, p.DurationMS} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
+		if err := writeSymbolRef(w, firstSymbol(p.StackRef, p.StackID)); err != nil {
+			return err
 		}
+		return writeValues(p.DurationMS)
 	case EventMemory:
 		p := event.Memory
 		if p == nil {
 			return fmt.Errorf("memory payload is nil")
 		}
-		for _, value := range []uint64{p.PSSKB, p.JavaHeapKB, p.NativeHeapKB} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.PSSKB, p.JavaHeapKB, p.NativeHeapKB)
 	case EventRetained:
 		p := event.Retained
 		if p == nil {
 			return fmt.Errorf("retained payload is nil")
 		}
-		if err := writeContextIDs(w, flags, p); err != nil {
+		if err := writeRefs(firstSymbol(p.ClassRef, p.ClassID), firstSymbol(p.HolderRef, p.HolderID)); err != nil {
 			return err
 		}
-		for _, value := range []uint64{p.ClassID, p.HolderID, p.AgeMS, p.Count} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.AgeMS, p.Count, uint64(p.Evidence.Effective()))
 	case EventCounter, EventGauge:
 		p := event.Metric
 		if p == nil {
@@ -338,415 +702,83 @@ func encodePayload(w io.Writer, event Event, flags uint64) error {
 		if max == 0 {
 			max = p.Value
 		}
-		values := trimMetricValues(
-			[]uint64{p.MetricID, p.Value, count, sum, max, uint64(p.Mode)},
-			event.Type,
-		)
-		for _, value := range values {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
+		if err := writeSymbolRef(w, firstSymbol(p.MetricRef, p.MetricID)); err != nil {
+			return err
 		}
+		return writeValues(p.Value, count, sum, max, uint64(p.Mode))
 	case EventFlow:
 		p := event.Flow
 		if p == nil {
 			return fmt.Errorf("flow payload is nil")
 		}
-		if err := writeContextIDs(w, flags, p); err != nil {
-			return err
-		}
+		return writeValues(p.Phase, p.InstanceID)
 	case EventLogSpam:
 		p := event.LogSpam
 		if p == nil {
 			return fmt.Errorf("log spam payload is nil")
 		}
-		if err := writeContextIDs(w, flags, p); err != nil {
+		if err := writeSymbolRef(w, firstSymbol(p.SourceRef, p.SourceID)); err != nil {
 			return err
 		}
-		for _, value := range []uint64{p.SourceID, p.Level, p.Count} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.Level, p.Count)
 	case EventProblem:
 		p := event.Problem
 		if p == nil {
 			return fmt.Errorf("problem payload is nil")
 		}
-		if err := writeContextIDs(w, flags, p); err != nil {
+		if err := writeSymbolRef(w, firstSymbol(p.KindRef, p.KindID)); err != nil {
 			return err
 		}
-		for _, value := range []uint64{p.KindID, p.WindowMS, p.Count, p.MaxMS} {
-			if err := writeUvarint(w, value); err != nil {
-				return err
-			}
-		}
+		return writeValues(p.WindowMS, p.Count, p.MaxMS)
 	case EventRuntimeCall:
 		p := event.RuntimeCall
 		if p == nil {
 			return fmt.Errorf("runtime call payload is nil")
 		}
-		if err := writeContextIDs(w, flags, p); err != nil {
+		if err := writeSymbolRef(w, firstSymbol(p.CalleeRef, p.CalleeID)); err != nil {
 			return err
 		}
-		for _, value := range []uint64{p.CalleeID, p.Count, p.TotalMS, p.MaxMS} {
-			if err := writeUvarint(w, value); err != nil {
+		return writeValues(p.Count, p.TotalMS, p.MaxMS)
+	case EventQualitySnapshot:
+		p := event.Quality
+		if p == nil {
+			return fmt.Errorf("quality snapshot payload is nil")
+		}
+		ids := make([]uint64, 0, len(p.Counters))
+		for id := range p.Counters {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		if err := writeValues(p.Sequence, p.CapturedElapsedUS, uint64(len(ids))); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := writeValues(id, p.Counters[id]); err != nil {
 				return err
 			}
 		}
+		return nil
+	case EventSegmentEnd:
+		p := event.SegmentEnd
+		if p == nil {
+			return fmt.Errorf("segment end payload is nil")
+		}
+		return writeValues(uint64(p.Reason), p.TotalEventRecords, p.TotalDictionaryRecords, p.LastQualitySequence)
 	default:
 		return fmt.Errorf("unsupported event type %d", event.Type)
 	}
-	return nil
-}
-
-func (p *FlowEvent) contextIDs() (uint64, uint64, uint64, uint64) {
-	if p == nil {
-		return 0, 0, 0, 0
-	}
-	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
-}
-
-func (p *RetainedEvent) contextIDs() (uint64, uint64, uint64, uint64) {
-	if p == nil {
-		return 0, 0, 0, 0
-	}
-	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
-}
-
-func (p *LogSpamEvent) contextIDs() (uint64, uint64, uint64, uint64) {
-	if p == nil {
-		return 0, 0, 0, 0
-	}
-	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
-}
-
-func (p *ProblemEvent) contextIDs() (uint64, uint64, uint64, uint64) {
-	if p == nil {
-		return 0, 0, 0, 0
-	}
-	return p.ScreenID, p.OwnerID, p.FlowID, p.StepID
-}
-
-func (p *RuntimeCallEvent) contextIDs() (uint64, uint64, uint64, uint64) {
-	if p == nil {
-		return 0, 0, 0, 0
-	}
-	return p.ScreenID, p.CallerID, p.FlowID, p.StepID
-}
-
-func writeContextIDs(w io.Writer, flags uint64, context contextIDs) error {
-	if flags&uint64(FlagSameContext) != 0 {
-		return nil
-	}
-	screenID, ownerID, flowID, stepID := context.contextIDs()
-	values := []struct {
-		flag  Flag
-		value uint64
-	}{
-		{FlagHasScreen, screenID},
-		{FlagHasOwner, ownerID},
-		{FlagHasFlow, flowID},
-		{FlagHasStep, stepID},
-	}
-	for _, item := range values {
-		if flags&uint64(item.flag) == 0 {
-			continue
-		}
-		if err := writeUvarint(w, item.value); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func trimMetricValues(values []uint64, eventType EventType) []uint64 {
-	defaults := []uint64{0, 0, 1, values[1], values[1], uint64(defaultMetricMode(eventType))}
-	last := len(values) - 1
-	for last >= 2 && values[last] == defaults[last] {
-		last--
-	}
-	return values[:last+1]
-}
-
-func defaultMetricMode(eventType EventType) MetricMode {
-	if eventType == EventGauge {
-		return MetricModeAverage
-	}
-	return MetricModeUnknown
-}
-
-func hasNonZero(values []uint64) bool {
-	for _, value := range values {
-		if value != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func writeDictionaryValue(w io.Writer, value string) error {
-	if value == "" {
-		if err := writeUvarint(w, 0); err != nil {
-			return err
-		}
-		if err := writeUvarint(w, dictValueCodecUTF8); err != nil {
-			return err
-		}
-		return writeRawString(w, value)
-	}
-	if payload, codec, ok := encodedDictionaryValue(value); ok {
-		utf8Size := uvarintSize(uint64(len(value))) + len(value)
-		encodedSize := 1 + uvarintSize(codec) + len(payload)
-		if encodedSize < utf8Size {
-			if err := writeUvarint(w, 0); err != nil {
-				return err
-			}
-			if err := writeUvarint(w, codec); err != nil {
-				return err
-			}
-			_, err := w.Write(payload)
-			return err
-		}
-	}
-	return writeRawString(w, value)
-}
-
-func writeRawString(w io.Writer, value string) error {
-	if err := writeUvarint(w, uint64(len(value))); err != nil {
-		return err
-	}
-	_, err := io.WriteString(w, value)
-	return err
-}
-
-func encodedDictionaryValue(value string) ([]byte, uint64, bool) {
-	if isISODate(value) {
-		return packBCDString(value[:4] + value[5:7] + value[8:10]), dictValueCodecBCDISODate, true
-	}
-	if isDecimalString(value) {
-		var payload bytes.Buffer
-		if err := writeUvarint(&payload, uint64(len(value))); err != nil {
-			return nil, 0, false
-		}
-		payload.Write(packBCDString(value))
-		return payload.Bytes(), dictValueCodecBCDDecimal, true
-	}
-	return nil, 0, false
-}
-
-func isDecimalString(value string) bool {
-	if value == "" {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func isISODate(value string) bool {
-	if len(value) != len("2000-01-01") || value[4] != '-' || value[7] != '-' {
-		return false
-	}
-	for _, index := range []int{0, 1, 2, 3, 5, 6, 8, 9} {
-		if value[index] < '0' || value[index] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func packBCDString(value string) []byte {
-	out := make([]byte, (len(value)+1)/2)
-	for i := range out {
-		hi := value[i*2] - '0'
-		lo := byte(0x0f)
-		if i*2+1 < len(value) {
-			lo = value[i*2+1] - '0'
-		}
-		out[i] = hi<<4 | lo
-	}
-	return out
-}
-
-func uvarintSize(value uint64) int {
-	var buf [binary.MaxVarintLen64]byte
-	return binary.PutUvarint(buf[:], value)
 }
 
 func writeUvarint(w io.Writer, value uint64) error {
-	var buf [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(buf[:], value)
-	_, err := w.Write(buf[:n])
-	return err
+	var raw [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(raw[:], value)
+	return writeAll(w, raw[:n])
 }
 
 func encodeSVarint(value int64) uint64 {
 	return uint64(value<<1) ^ uint64(value>>63)
 }
 
-func writeCompactHeader(w io.Writer, eventType EventType, deltaMS, flags uint64, payloadLength bool, payloadSize uint64) error {
-	deltaCode := compactDeltaCode(deltaMS)
-	header := byte(eventType & compactEventTypeMask)
-	if flags != 0 {
-		header |= compactHeaderHasFlags
-	}
-	if payloadLength {
-		header |= compactHeaderHasPayloadLen
-	}
-	header |= byte(deltaCode << compactHeaderDeltaShift)
-	if _, err := w.Write([]byte{header}); err != nil {
-		return err
-	}
-	if err := writeCompactDelta(w, deltaCode, deltaMS); err != nil {
-		return err
-	}
-	if flags != 0 {
-		if err := writeUvarint(w, flags); err != nil {
-			return err
-		}
-	}
-	if payloadLength {
-		if err := writeUvarint(w, payloadSize); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func compactDeltaCode(deltaMS uint64) byte {
-	switch {
-	case deltaMS == 0:
-		return compactDeltaZero
-	case deltaMS <= 0xff:
-		return compactDeltaUint8
-	case deltaMS <= 0xffff:
-		return compactDeltaUint16
-	default:
-		return compactDeltaUvarint
-	}
-}
-
-func writeCompactDelta(w io.Writer, code byte, deltaMS uint64) error {
-	switch code {
-	case compactDeltaZero:
-		return nil
-	case compactDeltaUint8:
-		_, err := w.Write([]byte{byte(deltaMS)})
-		return err
-	case compactDeltaUint16:
-		_, err := w.Write([]byte{byte(deltaMS), byte(deltaMS >> 8)})
-		return err
-	default:
-		return writeUvarint(w, deltaMS)
-	}
-}
-
-func needsPayloadLength(eventType EventType) bool {
-	switch eventType {
-	case EventDictionary, EventSession, EventContext, EventRetained, EventCounter, EventGauge, EventFlow, EventLogSpam, EventProblem, EventRuntimeCall:
-		return true
-	default:
-		return false
-	}
-}
-
-const (
-	compactEventTypeMask       EventType = 0x0f
-	compactHeaderHasFlags                = 1 << 4
-	compactHeaderHasPayloadLen           = 1 << 5
-	compactHeaderDeltaShift              = 6
-	compactDeltaZero           byte      = 0
-	compactDeltaUint8          byte      = 1
-	compactDeltaUint16         byte      = 2
-	compactDeltaUvarint        byte      = 3
-)
-
-func WriteSample(path string) error {
-	file, writer, err := Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	entries := []DictionaryEntry{
-		{Kind: DictAppVersion, ID: 1, Value: "0.1.0-debug"},
-		{Kind: DictBuild, ID: 2, Value: "100"},
-		{Kind: DictDevice, ID: 3, Value: "Pixel 8 / API 35"},
-		{Kind: DictProcess, ID: 4, Value: "main"},
-		{Kind: DictOwner, ID: 10, Value: "FeedRepository.refresh"},
-		{Kind: DictOwner, ID: 11, Value: "CheckoutPresenter.render"},
-		{Kind: DictOwner, ID: 12, Value: "CheckoutButton.onClick"},
-		{Kind: DictOwner, ID: 13, Value: "CheckoutRepository.load"},
-		{Kind: DictRoute, ID: 20, Value: "GET /feed"},
-		{Kind: DictRoute, ID: 21, Value: "POST /checkout"},
-		{Kind: DictScreen, ID: 30, Value: "FeedScreen"},
-		{Kind: DictScreen, ID: 31, Value: "CheckoutScreen"},
-		{Kind: DictClass, ID: 40, Value: "com.app.checkout.CheckoutActivity"},
-		{Kind: DictOwner, ID: 41, Value: "CheckoutPresenter.render"},
-		{Kind: DictClass, ID: 42, Value: "com.app.checkout.CheckoutBinding"},
-		{Kind: DictClass, ID: 43, Value: "com.app.payments.PaymentListener"},
-		{Kind: DictClass, ID: 44, Value: "com.app.checkout.CheckoutCacheEntry"},
-		{Kind: DictOwner, ID: 45, Value: "CheckoutBindingCache.activeBinding"},
-		{Kind: DictOwner, ID: 46, Value: "PaymentCallbackRegistry.listeners"},
-		{Kind: DictOwner, ID: 47, Value: "CheckoutCache.entries"},
-		{Kind: DictStack, ID: 50, Value: "CheckoutPresenter.renderItems"},
-		{Kind: DictMetric, ID: 60, Value: "logs.warn.count"},
-		{Kind: DictMetric, ID: 61, Value: "ui.fps_x100"},
-		{Kind: DictMetric, ID: 62, Value: "ui_jank"},
-		{Kind: DictMetric, ID: 63, Value: "main_thread_stall"},
-		{Kind: DictLogSource, ID: 64, Value: "android.util.Log.w"},
-		{Kind: DictFlow, ID: 65, Value: "checkout.open"},
-		{Kind: DictStep, ID: 66, Value: "render_list"},
-		{Kind: DictStep, ID: 67, Value: "network"},
-		{Kind: DictStep, ID: 68, Value: "listener_callback"},
-		{Kind: DictStep, ID: 69, Value: "cache_entries"},
-		{Kind: DictGeneric, ID: 70, Value: "15"},
-		{Kind: DictGeneric, ID: 71, Value: "2025-05-05"},
-		{Kind: DictGeneric, ID: 72, Value: "arm64-v8a"},
-		{Kind: DictGeneric, ID: 73, Value: "arm64-v8a,armeabi-v7a,armeabi"},
-		{Kind: DictGeneric, ID: 74, Value: "Google"},
-		{Kind: DictGeneric, ID: 75, Value: "google"},
-		{Kind: DictGeneric, ID: 76, Value: "shiba"},
-		{Kind: DictGeneric, ID: 77, Value: "shiba"},
-		{Kind: DictGeneric, ID: 78, Value: "shiba"},
-	}
-	for _, entry := range entries {
-		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
-			return err
-		}
-	}
-
-	events := []Event{
-		{Type: EventSession, TimeMS: 1, Flags: uint64(FlagAppForeground), Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, ProcessID: 4, AndroidReleaseID: 70, SecurityPatchID: 71, PrimaryABIID: 72, SupportedABIsID: 73, ManufacturerID: 74, BrandID: 75, HardwareID: 76, BoardID: 77, ProductID: 78}},
-		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground | FlagNetworkValidated), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2018304, TotalMemoryKB: 8032000, BatteryState: 2, BatteryTempDeciC: 320, NetworkMetered: false, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000, FreeStorageKB: 48_000_000, TotalStorageKB: 118_000_000, NetworkVPN: false}},
-		{Type: EventHTTP, TimeMS: 1200, Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 184, DNSMS: 7, ConnectMS: 0, TTFBMS: 91, Status: Status2xx, RxBytes: 42120, TxBytes: 740}},
-		{Type: EventHTTP, TimeMS: 2400, Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 10, RouteID: 20, DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38900, TxBytes: 730}},
-		{Type: EventUIWindow, TimeMS: 10000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 30, WindowMS: 10000, FrameCount: 580, JankCount: 28, P50MS: 12, P95MS: 33, P99MS: 72}},
-		{Type: EventGauge, TimeMS: 10100, Metric: &MetricEvent{MetricID: 61, Value: 5800}},
-		{Type: EventFlow, TimeMS: 12000, Flow: &FlowEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67}},
-		{Type: EventRuntimeCall, TimeMS: 12040, RuntimeCall: &RuntimeCallEvent{ScreenID: 31, CallerID: 12, FlowID: 65, StepID: 67, CalleeID: 13, Count: 8, TotalMS: 640, MaxMS: 240}},
-		{Type: EventLogSpam, TimeMS: 12100, LogSpam: &LogSpamEvent{ScreenID: 31, OwnerID: 12, FlowID: 65, StepID: 67, SourceID: 64, Level: 5, Count: 12}},
-		{Type: EventStall, TimeMS: 13200, Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{OwnerID: 11, StackID: 50, DurationMS: 1240}},
-		{Type: EventProblem, TimeMS: 13201, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 63, WindowMS: 1240, Count: 1, MaxMS: 1240}},
-		{Type: EventMemory, TimeMS: 15000, Flags: uint64(FlagAppForeground), Memory: &MemoryEvent{PSSKB: 188240, JavaHeapKB: 90412, NativeHeapKB: 38112}},
-		{Type: EventRetained, TimeMS: 21000, Retained: &RetainedEvent{ScreenID: 31, OwnerID: 41, FlowID: 65, StepID: 66, ClassID: 40, HolderID: 41, AgeMS: 15000, Count: 2}},
-		{Type: EventRetained, TimeMS: 21400, Retained: &RetainedEvent{ScreenID: 31, OwnerID: 45, FlowID: 65, StepID: 66, ClassID: 42, HolderID: 45, AgeMS: 45000, Count: 1}},
-		{Type: EventRetained, TimeMS: 21800, Retained: &RetainedEvent{ScreenID: 31, OwnerID: 46, FlowID: 65, StepID: 68, ClassID: 43, HolderID: 46, AgeMS: 30000, Count: 1}},
-		{Type: EventRetained, TimeMS: 21900, Retained: &RetainedEvent{ScreenID: 31, OwnerID: 47, FlowID: 65, StepID: 69, ClassID: 44, HolderID: 47, AgeMS: 20000, Count: 3}},
-		{Type: EventCounter, TimeMS: 22000, Metric: &MetricEvent{MetricID: 60, Value: 17}},
-		{Type: EventHTTP, TimeMS: 23000, Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{OwnerID: 11, RouteID: 21, DurationMS: 1320, DNSMS: 9, ConnectMS: 0, TTFBMS: 1140, Status: Status5xx, RxBytes: 1024, TxBytes: 1240}},
-		{Type: EventUIWindow, TimeMS: 30000, Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: &UIWindowEvent{ScreenID: 31, WindowMS: 10000, FrameCount: 542, JankCount: 62, P50MS: 14, P95MS: 48, P99MS: 108}},
-		{Type: EventProblem, TimeMS: 30001, Problem: &ProblemEvent{ScreenID: 31, OwnerID: 11, FlowID: 65, StepID: 66, KindID: 62, WindowMS: 10000, Count: 62, MaxMS: 48}},
-		{Type: EventGauge, TimeMS: 30100, Metric: &MetricEvent{MetricID: 61, Value: 5420}},
-	}
-	for _, event := range events {
-		if err := writer.WriteEvent(event); err != nil {
-			return err
-		}
-	}
-	return nil
+func decodeSVarint(value uint64) int64 {
+	return int64(value>>1) ^ -int64(value&1)
 }

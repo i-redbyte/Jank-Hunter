@@ -557,7 +557,7 @@ func warningFindings(prefix string, warnings []string, recommendation string) []
 func warningRecommendation(warning string, fallback string) string {
 	switch {
 	case strings.Contains(warning, "ASM-диагностика не передана"):
-		return "Передайте в CLI артефакт ASM-диагностики через --instrumentation-diagnostics <path>/instrumentation-diagnostics.jsonl. Если файла нет, пересоберите приложение после интеграции Jank Hunter, проверьте includeWholeApplication=true или includePackages, затем повторите inspect/compare."
+		return "Передайте в CLI артефакт ASM-диагностики через --instrumentation-diagnostics <path>/instrumentation-diagnostics.jsonl. Если файла нет, пересоберите приложение после интеграции Jank Hunter, проверьте namespace модуля и при необходимости includePackages, затем повторите inspect/compare."
 	case strings.Contains(warning, "ASM-диагностика пустая"):
 		return "Пересоберите Android-модуль с включенным instrumentation, проверьте include/exclude пакетов и убедитесь, что Gradle-задача действительно создала instrumentation-diagnostics.jsonl."
 	case strings.Contains(warning, "ASM прошел по классам, но не нашел hooks"):

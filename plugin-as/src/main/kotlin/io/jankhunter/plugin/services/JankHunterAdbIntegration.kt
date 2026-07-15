@@ -1,79 +1,63 @@
 package io.jankhunter.plugin.services
 
-import com.intellij.execution.ExecutionException
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessEvent
-import com.intellij.execution.process.ProcessListener
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import java.io.File
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import java.util.Properties
+import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 data class JankHunterDevice(val serial: String, val label: String) {
     override fun toString(): String = label
 }
 
+private data class JankHunterPullResult(val succeeded: Boolean, val files: List<File>)
+
 object JankHunterAdbIntegration {
-    fun findAdb(project: Project): String {
-        val candidates = buildList {
-            System.getenv("ANDROID_HOME")?.let { add(File(it, "platform-tools/adb").path) }
-            System.getenv("ANDROID_SDK_ROOT")?.let { add(File(it, "platform-tools/adb").path) }
-            project.basePath?.let { add(File(it, "android/local.properties").path) }
-            System.getenv("PATH")?.split(File.pathSeparator)?.forEach { add(File(it, "adb").path) }
-        }
-        val localProperties = candidates.firstOrNull { it.endsWith("local.properties") }?.let(::File)
-        if (localProperties?.isFile == true) {
-            val sdkDir = localProperties.readLines()
-                .firstOrNull { it.startsWith("sdk.dir=") }
-                ?.substringAfter('=')
-                ?.replace("\\:", ":")
-            if (!sdkDir.isNullOrBlank()) {
-                val adb = File(sdkDir, "platform-tools/adb")
-                if (adb.canExecute()) return adb.path
+    private fun findAdb(project: Project): String {
+        val sdkCandidates = buildList {
+            System.getenv("ANDROID_HOME")?.takeIf(String::isNotBlank)?.let(::add)
+            System.getenv("ANDROID_SDK_ROOT")?.takeIf(String::isNotBlank)?.let(::add)
+            project.basePath?.let { basePath ->
+                sequenceOf(File(basePath, "local.properties"), File(basePath, "android/local.properties"))
+                    .mapNotNull(::sdkDirectoryFrom)
+                    .forEach(::add)
             }
         }
-        return candidates.firstOrNull { File(it).canExecute() } ?: "adb"
+        sdkCandidates.forEach { sdkDirectory ->
+            val adb = File(sdkDirectory, "platform-tools/adb")
+            if (adb.isFile && adb.canExecute()) return adb.absolutePath
+        }
+
+        return System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.asSequence()
+            ?.map { directory -> File(directory, "adb") }
+            ?.firstOrNull { candidate -> candidate.isFile && candidate.canExecute() }
+            ?.absolutePath
+            ?: "adb"
     }
 
+    /** Must be called away from the Swing event-dispatch thread. */
     fun listDevices(project: Project): List<JankHunterDevice> {
-        val output = runBlocking(project, listOf("devices", "-l"))
-        return output.lines()
+        val result = runCommand(project, listOf("devices", "-l"), ADB_QUERY_TIMEOUT_MILLIS)
+        check(result.succeeded) { result.combinedOutput().trim().ifBlank { "adb devices failed" } }
+
+        return result.stdout.lineSequence()
             .drop(1)
             .mapNotNull { line ->
-                val trimmed = line.trim()
-                if (trimmed.isBlank() || !trimmed.contains("device")) return@mapNotNull null
-                val serial = trimmed.split(Regex("\\s+"), limit = 2).first()
-                JankHunterDevice(serial, trimmed)
+                val fields = line.trim().split(WHITESPACE, limit = 3)
+                if (fields.size < 2 || fields[1] != "device") return@mapNotNull null
+                JankHunterDevice(fields[0], line.trim())
             }
-    }
-
-    fun pullLogs(
-        project: Project,
-        deviceSerial: String,
-        remoteDirectory: String,
-        localDirectory: File,
-        onText: (String) -> Unit,
-        onDone: (Boolean, List<File>) -> Unit,
-    ) {
-        localDirectory.mkdirs()
-        val before = localDirectory.listFiles { file -> file.extension == "jhlog" }?.map { it.name to it.lastModified() }?.toMap().orEmpty()
-        val args = mutableListOf<String>()
-        if (deviceSerial.isNotBlank()) {
-            args += listOf("-s", deviceSerial)
-        }
-        args += listOf("pull", remoteDirectory, localDirectory.path)
-        start(project, args, onText) { ok ->
-            val files = localDirectory
-                .walkTopDown()
-                .filter { it.isFile && it.extension == "jhlog" }
-                .filter { before[it.name] != it.lastModified() || ok }
-                .sortedByDescending(File::lastModified)
-                .toList()
-            onDone(ok, files)
-        }
+            .toList()
     }
 
     fun pullAppPrivateLogs(
@@ -83,65 +67,95 @@ object JankHunterAdbIntegration {
         localDirectory: File,
         onText: (String) -> Unit,
         onDone: (Boolean, List<File>) -> Unit,
-    ) {
-        localDirectory.mkdirs()
-        val before = snapshotJhlogs(localDirectory)
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val ok = runCatching {
-                pullRunAsTar(project, deviceSerial, packageName, localDirectory, onText)
-            }.getOrElse { error ->
-                onText("ADB run-as pull error: ${error.message.orEmpty()}\n")
-                false
-            }
-            val files = localDirectory
-                .walkTopDown()
-                .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
-                .filter { ok || before[relativeFileKey(localDirectory, it)] != it.lastModified() }
-                .sortedByDescending(File::lastModified)
-                .toList()
-            if (ok && files.isEmpty()) {
-                onText("ADB run-as pull succeeded, but no .jhlog files were found in ${localDirectory.path}.\n")
-            }
-            onDone(ok && files.isNotEmpty(), files)
+    ): Future<*> {
+        val started = AtomicBoolean(false)
+        val completionDelivered = AtomicBoolean(false)
+        val complete: (Boolean, List<File>) -> Unit = { succeeded, files ->
+            if (completionDelivered.compareAndSet(false, true)) onDone(succeeded, files)
         }
+        val task = object : FutureTask<Unit>(
+            Runnable {
+                started.set(true)
+                try {
+                    val result = pullAppPrivateLogsBlocking(
+                        project,
+                        deviceSerial,
+                        packageName,
+                        localDirectory,
+                        onText,
+                    )
+                    complete(result.succeeded, result.files)
+                } finally {
+                    // Guarantees UI-state completion even if an unexpected plugin exception
+                    // escapes before the normal result is assembled.
+                    complete(false, emptyList())
+                }
+            },
+            Unit,
+        ) {
+            override fun done() {
+                // FutureTask.cancel() can win before the pooled worker starts. In that case the
+                // runnable (and its finally block) never executes, so complete the callback here.
+                if (isCancelled && !started.get()) complete(false, emptyList())
+            }
+        }
+        try {
+            ApplicationManager.getApplication().executeOnPooledThread(task)
+        } catch (error: Exception) {
+            onText("Cannot schedule ADB pull: ${error.message.orEmpty()}\n")
+            task.cancel(false)
+        }
+        return task
     }
 
+    private fun pullAppPrivateLogsBlocking(
+        project: Project,
+        deviceSerial: String,
+        packageName: String,
+        localDirectory: File,
+        onText: (String) -> Unit,
+    ): JankHunterPullResult {
+        if (project.isDisposed) return JankHunterPullResult(false, emptyList())
+        if (!localDirectory.exists() && !localDirectory.mkdirs()) {
+            onText("Cannot create local log directory: ${localDirectory.path}\n")
+            return JankHunterPullResult(false, emptyList())
+        }
+
+        val before = snapshotJhlogs(localDirectory)
+        var interrupted = false
+        val ok = try {
+            pullRunAsTar(project, deviceSerial, packageName, localDirectory, onText)
+        } catch (_: InterruptedException) {
+            interrupted = true
+            false
+        } catch (error: Exception) {
+            onText("ADB run-as pull error: ${error.message.orEmpty()}\n")
+            false
+        }
+        if (interrupted || Thread.currentThread().isInterrupted) {
+            onText("ADB run-as pull cancelled.\n")
+            Thread.currentThread().interrupt()
+            return JankHunterPullResult(false, emptyList())
+        }
+        val files = localDirectory
+            .walkTopDown()
+            .maxDepth(MAX_LOG_SEARCH_DEPTH)
+            .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
+            .filter { ok || before[relativeFileKey(localDirectory, it)] != it.lastModified() }
+            .sortedByDescending(File::lastModified)
+            .toList()
+        if (ok && files.isEmpty()) {
+            onText("ADB run-as pull succeeded, but no .jhlog files were found in ${localDirectory.path}.\n")
+        }
+        return JankHunterPullResult(ok && files.isNotEmpty(), files)
+    }
+
+    /** Must be called away from the Swing event-dispatch thread. */
     fun listAppPrivateLogs(project: Project, deviceSerial: String, packageName: String): String {
         val args = mutableListOf<String>()
         if (deviceSerial.isNotBlank()) args += listOf("-s", deviceSerial)
         args += listOf("shell", "run-as", packageName, "sh", "-c", "ls -la files/jankhunter 2>/dev/null")
-        return runBlocking(project, args)
-    }
-
-    fun listRemoteLogs(project: Project, deviceSerial: String, remoteDirectory: String): String {
-        val args = mutableListOf<String>()
-        if (deviceSerial.isNotBlank()) args += listOf("-s", deviceSerial)
-        args += listOf("shell", "ls", "-la", remoteDirectory)
-        return runBlocking(project, args)
-    }
-
-    private fun start(project: Project, args: List<String>, onText: (String) -> Unit, onDone: (Boolean) -> Unit) {
-        val commandLine = GeneralCommandLine(findAdb(project))
-            .withParameters(args)
-            .withCharset(StandardCharsets.UTF_8)
-        try {
-            val handler = OSProcessHandler(commandLine)
-            handler.addProcessListener(
-                object : ProcessListener {
-                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                        onText(event.text)
-                    }
-
-                    override fun processTerminated(event: ProcessEvent) {
-                        onDone(event.exitCode == 0)
-                    }
-                },
-            )
-            handler.startNotify()
-        } catch (error: ExecutionException) {
-            onText("ADB error: ${error.message}\n")
-            onDone(false)
-        }
+        return runCommand(project, args, ADB_QUERY_TIMEOUT_MILLIS).combinedOutput()
     }
 
     private fun pullRunAsTar(
@@ -169,37 +183,61 @@ object JankHunterAdbIntegration {
             .withCharset(StandardCharsets.UTF_8)
 
         val adbProcess = adbCommand.createProcess()
-        val tarProcess = tarCommand.createProcess()
-        val adbErr = StringBuilder()
-        val tarOut = StringBuilder()
-        val tarErr = StringBuilder()
-        val readers = listOf(
-            readTextAsync(adbProcess.errorStream, adbErr),
-            readTextAsync(tarProcess.inputStream, tarOut),
-            readTextAsync(tarProcess.errorStream, tarErr),
+        val tarProcess = try {
+            tarCommand.createProcess()
+        } catch (error: Exception) {
+            JankHunterProcessCapture.terminate(adbProcess)
+            throw error
+        }
+
+        val adbErr = LimitedText()
+        val tarOut = LimitedText()
+        val tarErr = LimitedText()
+        val copyError = AtomicReference<Throwable?>()
+        val workers = listOf(
+            readTextAsync("jankhunter-adb-stderr", adbProcess.errorStream, adbErr),
+            readTextAsync("jankhunter-tar-stdout", tarProcess.inputStream, tarOut),
+            readTextAsync("jankhunter-tar-stderr", tarProcess.errorStream, tarErr),
+            thread(name = "jankhunter-adb-tar-copy", start = true, isDaemon = true) {
+                runCatching {
+                    adbProcess.inputStream.use { input ->
+                        tarProcess.outputStream.use { output -> input.copyTo(output) }
+                    }
+                }.onFailure(copyError::set)
+            },
         )
 
-        val copyError = runCatching {
-            adbProcess.inputStream.use { input ->
-                tarProcess.outputStream.use { output ->
-                    input.copyTo(output)
-                }
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ADB_PULL_TIMEOUT_MILLIS)
+        var adbFinished = false
+        var tarFinished = false
+        try {
+            adbFinished = waitUntil(adbProcess, deadlineNanos)
+            if (adbFinished && copyError.get() == null) {
+                tarFinished = waitUntil(tarProcess, deadlineNanos)
             }
-        }.exceptionOrNull()
-        if (copyError != null) {
-            runCatching { adbProcess.destroy() }
+        } finally {
+            if (!adbFinished || !tarFinished || copyError.get() != null) {
+                JankHunterProcessCapture.terminate(adbProcess)
+                JankHunterProcessCapture.terminate(tarProcess)
+            }
+            joinWorkersPreservingInterrupt(workers)
         }
 
-        val adbExit = adbProcess.waitFor()
-        val tarExit = tarProcess.waitFor()
-        readers.forEach { it.join() }
+        appendIfNotBlank(onText, adbErr.value())
+        appendIfNotBlank(onText, tarOut.value())
+        appendIfNotBlank(onText, tarErr.value())
 
-        appendIfNotBlank(onText, adbErr)
-        appendIfNotBlank(onText, tarOut)
-        appendIfNotBlank(onText, tarErr)
-        if (copyError != null) {
-            onText("ADB tar stream copy failed: ${copyError.message.orEmpty()}\n")
+        val transferError = copyError.get()
+        if (transferError != null) {
+            onText("ADB tar stream copy failed: ${transferError.message.orEmpty()}\n")
         }
+        if (!adbFinished || !tarFinished) {
+            onText("ADB run-as pull timed out after ${ADB_PULL_TIMEOUT_MILLIS / 1_000} seconds.\n")
+            return false
+        }
+
+        val adbExit = adbProcess.exitValue()
+        val tarExit = tarProcess.exitValue()
         if (adbExit != 0) {
             onText(
                 "ADB run-as exited with code $adbExit. Проверьте package, debuggable-сборку и наличие files/jankhunter.\n",
@@ -208,44 +246,104 @@ object JankHunterAdbIntegration {
         if (tarExit != 0) {
             onText("Local tar exited with code $tarExit while unpacking run-as output.\n")
         }
-        return adbExit == 0 && tarExit == 0 && copyError == null
+        return adbExit == 0 && tarExit == 0 && transferError == null
     }
 
-    private fun runBlocking(project: Project, args: List<String>): String =
+    private fun runCommand(project: Project, args: List<String>, timeoutMillis: Long): JankHunterCapturedProcess =
         runCatching {
-            val process = GeneralCommandLine(findAdb(project))
-                .withParameters(args)
-                .withCharset(StandardCharsets.UTF_8)
-                .createProcess()
-            val out = process.inputStream.bufferedReader().readText()
-            val err = process.errorStream.bufferedReader().readText()
-            process.waitFor()
-            out + err
-        }.getOrDefault("")
+            JankHunterProcessCapture.run(
+                GeneralCommandLine(findAdb(project))
+                    .withParameters(args)
+                    .withCharset(StandardCharsets.UTF_8),
+                timeoutMillis,
+            )
+        }.getOrElse { error ->
+            JankHunterCapturedProcess("", "ADB error: ${error.message.orEmpty()}\n", null, timedOut = false)
+        }
 
-    private fun readTextAsync(stream: InputStream, target: StringBuilder): Thread =
-        thread(start = true, isDaemon = true) {
-            stream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                val buffer = CharArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val read = reader.read(buffer)
-                    if (read < 0) break
-                    target.append(buffer, 0, read)
+    private fun waitUntil(process: Process, deadlineNanos: Long): Boolean {
+        val remainingNanos = deadlineNanos - System.nanoTime()
+        if (remainingNanos <= 0) return false
+        return process.waitFor(maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos)), TimeUnit.MILLISECONDS)
+    }
+
+    private fun joinWorkersPreservingInterrupt(workers: List<Thread>) {
+        var interrupted = Thread.interrupted()
+        workers.forEach { worker ->
+            try {
+                worker.join(WORKER_JOIN_TIMEOUT_MILLIS)
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+    }
+
+    private fun readTextAsync(name: String, stream: InputStream, target: LimitedText): Thread =
+        thread(name = name, start = true, isDaemon = true) {
+            runCatching {
+                stream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+                    val buffer = CharArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = reader.read(buffer)
+                        if (read < 0) break
+                        target.append(buffer, read)
+                    }
                 }
             }
         }
 
-    private fun appendIfNotBlank(onText: (String) -> Unit, text: StringBuilder) {
-        val value = text.toString()
-        if (value.isNotBlank()) onText(value)
+    private fun appendIfNotBlank(onText: (String) -> Unit, text: String) {
+        if (text.isNotBlank()) onText(text)
+    }
+
+    private fun sdkDirectoryFrom(localProperties: File): String? {
+        if (!localProperties.isFile) return null
+        return runCatching {
+            Properties().apply { localProperties.inputStream().use { input -> load(input) } }
+                .getProperty("sdk.dir")
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+        }.getOrNull()
     }
 
     private fun snapshotJhlogs(directory: File): Map<String, Long> =
         directory
             .walkTopDown()
+            .maxDepth(MAX_LOG_SEARCH_DEPTH)
             .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
+            .take(MAX_TRACKED_LOGS)
             .associate { relativeFileKey(directory, it) to it.lastModified() }
 
     private fun relativeFileKey(root: File, file: File): String =
         runCatching { file.relativeTo(root).path }.getOrDefault(file.path)
+
+    private class LimitedText {
+        private val text = StringBuilder()
+        private var truncated = false
+
+        @Synchronized
+        fun append(buffer: CharArray, count: Int) {
+            val available = MAX_CAPTURE_CHARS - text.length
+            if (available > 0) text.append(buffer, 0, minOf(available, count))
+            if (count > available) truncated = true
+        }
+
+        @Synchronized
+        fun value(): String = buildString {
+            append(text)
+            if (truncated) {
+                if (isNotEmpty() && last() != '\n') append('\n')
+                append("[process output truncated]\n")
+            }
+        }
+    }
+
+    private val WHITESPACE = Regex("\\s+")
+    private const val ADB_QUERY_TIMEOUT_MILLIS = 10_000L
+    private const val ADB_PULL_TIMEOUT_MILLIS = 60_000L
+    private const val WORKER_JOIN_TIMEOUT_MILLIS = 1_000L
+    private const val MAX_CAPTURE_CHARS = 256 * 1024
+    private const val MAX_LOG_SEARCH_DEPTH = 8
+    private const val MAX_TRACKED_LOGS = 200
 }

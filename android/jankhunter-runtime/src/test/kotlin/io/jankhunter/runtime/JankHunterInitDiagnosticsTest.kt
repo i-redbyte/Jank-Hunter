@@ -33,7 +33,7 @@ class JankHunterInitDiagnosticsTest {
     }
 
     @Test
-    fun initRecordsStartupFailureWithoutThrowing() {
+    fun lazyWriterFailureCleansRuntimeAndKeepsInitForRetry() {
         val filesDir = File(tempDir(), "files").apply {
             writeText("not a directory")
         }
@@ -41,14 +41,20 @@ class JankHunterInitDiagnosticsTest {
 
         JankHunter.init(context, JankHunterConfig.builder().autoStartCollectors(false).build())
 
-        val diagnostics = JankHunter.initDiagnostics()
+        val diagnostics = awaitWriterFailure()
         assertEquals("failed", diagnostics.status)
-        assertEquals("IllegalStateException", diagnostics.failureClass)
-        assertTrue(diagnostics.failureMessage.orEmpty().contains("Cannot create Jank Hunter log directory"))
+        assertEquals(diagnostics.toString(), "IOException", diagnostics.failureClass)
+        assertTrue(diagnostics.failureMessage.orEmpty().contains("Cannot create Jank Hunter metadata directory"))
         assertEquals("com.example", diagnostics.processName)
         assertTrue(diagnostics.logDirectory.orEmpty().endsWith("files/jankhunter"))
         assertNotNull(JankHunter.lastInitFailure())
         assertFalse(JankHunter.isStarted())
+
+        assertTrue(filesDir.delete())
+        assertTrue(filesDir.mkdirs())
+        assertTrue(JankHunter.setRuntimeEnabled(true, "writer_recovery"))
+        assertTrue(JankHunter.isStarted())
+        assertEquals("started", JankHunter.initDiagnostics().status)
     }
 
     @Test
@@ -78,6 +84,16 @@ class JankHunterInitDiagnosticsTest {
     }
 
     private fun tempDir(): File = Files.createTempDirectory("jankhunter-init-diagnostics-test").toFile()
+
+    private fun awaitWriterFailure(): JankHunterInitDiagnostics {
+        val deadlineNanos = System.nanoTime() + 5_000_000_000L
+        while (System.nanoTime() < deadlineNanos) {
+            val diagnostics = JankHunter.initDiagnostics()
+            if (!JankHunter.isStarted() && diagnostics.failureClass != null) return diagnostics
+            Thread.sleep(10L)
+        }
+        return JankHunter.initDiagnostics()
+    }
 
     private class FailingLogDirectoryContext(
         private val filesDir: File,

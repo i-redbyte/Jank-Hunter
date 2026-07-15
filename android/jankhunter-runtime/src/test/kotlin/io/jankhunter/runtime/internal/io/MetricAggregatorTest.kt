@@ -3,6 +3,9 @@ package io.jankhunter.runtime.internal.io
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -103,6 +106,41 @@ class MetricAggregatorTest {
     }
 
     @Test
+    fun saturatesLongAggregatesInsteadOfWrappingNegative() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val sink = RecordingSink()
+
+        aggregator.counter("large.counter", Long.MAX_VALUE)
+        aggregator.counter("large.counter", 1L)
+        aggregator.gauge("large.gauge", Long.MAX_VALUE)
+        aggregator.gauge("large.gauge", 1L)
+        aggregator.flush(sink)
+
+        assertEquals(Long.MAX_VALUE, sink.counters["large.counter"])
+        assertEquals(Long.MAX_VALUE, sink.gauges["large.gauge"]?.sum)
+        assertTrue((sink.gauges["large.gauge"]?.value ?: -1L) >= 0L)
+    }
+
+    @Test
+    fun valuesRecordedDuringEmissionStayInTheNextBatch() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val firstSink = RecordingSink()
+        aggregator.counter("first", 1L)
+
+        aggregator.flush(object : MetricAggregator.Sink by firstSink {
+            override fun counter(name: String, value: Long) {
+                firstSink.counter(name, value)
+                aggregator.counter("second", 2L)
+            }
+        })
+
+        assertEquals(mapOf("first" to 1L), firstSink.counters)
+        val secondSink = RecordingSink()
+        aggregator.flush(secondSink)
+        assertEquals(mapOf("second" to 2L), secondSink.counters)
+    }
+
+    @Test
     fun enforcesMaxKeysUnderConcurrentUniqueMetrics() {
         val aggregator = MetricAggregator(maxKeys = 8)
         val ready = CountDownLatch(32)
@@ -129,6 +167,157 @@ class MetricAggregatorTest {
         val accepted = sink.counters.keys.count { it.startsWith("metric.") }
         assertTrue("accepted=$accepted counters=${sink.counters}", accepted <= 8)
         assertEquals(24L, sink.counters["jankhunter.metric_aggregation.dropped.count"])
+    }
+
+    @Test
+    fun concurrentUpdatesRemainLosslessWhileFlushSwapsBatches() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val workerCount = 8
+        val running = AtomicBoolean(true)
+        val workersStarted = CountDownLatch(workerCount)
+        val firstFlushEntered = CountDownLatch(1)
+        val releaseFirstFlush = CountDownLatch(1)
+        val updateDuringFirstFlush = CountDownLatch(1)
+        val blockFirstDelivery = AtomicBoolean(true)
+        val flushDeliveryBlocked = AtomicBoolean()
+        val produced = AtomicLong()
+        val flushCount = AtomicInteger()
+        val recorded = AtomicLong()
+        val sink = object : MetricAggregator.Sink {
+            override fun counter(name: String, value: Long) {
+                if (name != "shared.counter") return
+                if (blockFirstDelivery.compareAndSet(true, false)) {
+                    flushDeliveryBlocked.set(true)
+                    firstFlushEntered.countDown()
+                    assertTrue(releaseFirstFlush.await(5, TimeUnit.SECONDS))
+                    flushDeliveryBlocked.set(false)
+                }
+                recorded.addAndGet(value)
+            }
+
+            override fun gauge(
+                name: String,
+                value: Long,
+                count: Long,
+                sum: Long,
+                max: Long,
+                mode: MetricAggregationMode,
+            ) = Unit
+        }
+        val producers = Executors.newFixedThreadPool(workerCount)
+        val flusher = Executors.newSingleThreadExecutor()
+        try {
+            val workerFutures = List(workerCount) {
+                producers.submit {
+                    aggregator.counter("shared.counter", 1L)
+                    produced.incrementAndGet()
+                    workersStarted.countDown()
+                    while (running.get()) {
+                        aggregator.counter("shared.counter", 1L)
+                        produced.incrementAndGet()
+                        if (flushDeliveryBlocked.get()) {
+                            updateDuringFirstFlush.countDown()
+                        }
+                    }
+                }
+            }
+
+            assertTrue(workersStarted.await(5, TimeUnit.SECONDS))
+            val flusherFuture = flusher.submit {
+                repeat(500) {
+                    aggregator.flush(sink)
+                    flushCount.incrementAndGet()
+                }
+            }
+            assertTrue(firstFlushEntered.await(5, TimeUnit.SECONDS))
+            assertTrue(updateDuringFirstFlush.await(5, TimeUnit.SECONDS))
+            releaseFirstFlush.countDown()
+            flusherFuture.get(10, TimeUnit.SECONDS)
+            running.set(false)
+            workerFutures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            releaseFirstFlush.countDown()
+            running.set(false)
+            producers.shutdownNow()
+            flusher.shutdownNow()
+            assertTrue(producers.awaitTermination(10, TimeUnit.SECONDS))
+            assertTrue(flusher.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        aggregator.flush(sink)
+        assertTrue(flushCount.get() > 0)
+        assertEquals(produced.get(), recorded.get())
+    }
+
+    @Test
+    fun concurrentEvictionAccountsForEverySampleWithoutWaitingForWriters() {
+        val aggregator = MetricAggregator(maxKeys = 4)
+        val workerCount = 8
+        val updatesPerWorker = 2_000
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(workerCount)
+        try {
+            val futures = List(workerCount) { worker ->
+                executor.submit {
+                    assertTrue(start.await(2, TimeUnit.SECONDS))
+                    repeat(updatesPerWorker) { update ->
+                        aggregator.counter("metric.${(worker + update) and 15}", 1L)
+                    }
+                }
+            }
+            start.countDown()
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        val sink = RecordingSink()
+        aggregator.flush(sink)
+        val retained = sink.counters
+            .filterKeys { it.startsWith("metric.") }
+            .values
+            .sum()
+        val dropped = sink.counters[MetricAggregator.DROPPED_METRIC_NAME] ?: 0L
+
+        assertEquals(workerCount.toLong() * updatesPerWorker, retained + dropped)
+    }
+
+    @Test
+    fun concurrentGaugeKeepsLastValueAndModeFromTheSameSample() {
+        val aggregator = MetricAggregator(maxKeys = 8)
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(4)
+        try {
+            val futures = listOf(
+                101L to MetricAggregationMode.STATE,
+                202L to MetricAggregationMode.LAST,
+                101L to MetricAggregationMode.STATE,
+                202L to MetricAggregationMode.LAST,
+            ).map { (value, mode) ->
+                executor.submit {
+                    assertTrue(start.await(2, TimeUnit.SECONDS))
+                    repeat(5_000) {
+                        aggregator.gauge("mixed.gauge", value, mode)
+                    }
+                }
+            }
+            start.countDown()
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        val sink = RecordingSink()
+        aggregator.flush(sink)
+        val gauge = requireNotNull(sink.gauges["mixed.gauge"])
+        when (gauge.mode) {
+            MetricAggregationMode.STATE -> assertEquals(101L, gauge.value)
+            MetricAggregationMode.LAST -> assertEquals(202L, gauge.value)
+            else -> throw AssertionError("unexpected mode ${gauge.mode}")
+        }
+        assertEquals(20_000L, gauge.count)
     }
 
     private class RecordingSink : MetricAggregator.Sink {

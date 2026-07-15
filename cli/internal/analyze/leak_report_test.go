@@ -97,6 +97,72 @@ func TestBuildLeakReportUsesHeapModeWhenEvidenceExists(t *testing.T) {
 	}
 }
 
+func TestRuntimeLeakGraphUsesTypedContextRelations(t *testing.T) {
+	graph := runtimeLeakGraph(MemoryLeakSuspect{
+		ClassName: "com.app.LeakedView",
+		DominatorPath: []string{
+			"экран: FeedActivity",
+			"сценарий: feed.open",
+			"шаг: render",
+			"держатель: FeedPresenter",
+			"метод: bind",
+			"удержанный объект: com.app.LeakedView",
+		},
+	})
+
+	if graph.Title != "Контекст обнаружения удержанного объекта" {
+		t.Fatalf("runtime graph title = %q", graph.Title)
+	}
+	want := []string{
+		"сценарий на экране",
+		"шаг сценария",
+		"атрибутировано вероятному владельцу",
+		"место наблюдения",
+		"объект оставался жив после lifecycle",
+	}
+	if len(graph.Edges) != len(want) {
+		t.Fatalf("runtime graph edges = %+v", graph.Edges)
+	}
+	for index, label := range want {
+		if graph.Edges[index].Label != label {
+			t.Fatalf("edge %d label = %q, want %q", index, graph.Edges[index].Label, label)
+		}
+	}
+	if graph.Nodes[4].Kind != "method" {
+		t.Fatalf("method node kind = %q", graph.Nodes[4].Kind)
+	}
+}
+
+func TestRuntimeRetentionSummaryDoesNotCallContextAReferenceChain(t *testing.T) {
+	summary := retainedLeakChainSummary(
+		memoryLeakStats{screen: "FeedActivity", flow: "feed.open", step: "render", count: 2},
+		"com.app.FeedPresenter.bind",
+		"com.app.LeakedView",
+		"View",
+		"среднее: пользовательский держатель и контекст",
+		RetentionEvidenceAfterExplicitGC,
+	)
+	if strings.Contains(summary, "Доверие цепочки") {
+		t.Fatalf("runtime summary mislabels context as a reference chain: %q", summary)
+	}
+	if !strings.Contains(summary, "Доверие runtime-атрибуции") {
+		t.Fatalf("runtime summary has no attribution label: %q", summary)
+	}
+}
+
+func TestSaturatingSignedUint64DeltaKeepsExtremeValuesRepresentable(t *testing.T) {
+	maximum := ^uint64(0)
+	if got, want := saturatingSignedUint64Delta(0, maximum), int64(1<<63-1); got != want {
+		t.Fatalf("positive saturated delta = %d, want %d", got, want)
+	}
+	if got, want := saturatingSignedUint64Delta(maximum, 0), int64(-1<<63); got != want {
+		t.Fatalf("negative saturated delta = %d, want %d", got, want)
+	}
+	if got, want := saturatingSignedUint64Delta(9, 4), int64(-5); got != want {
+		t.Fatalf("ordinary delta = %d, want %d", got, want)
+	}
+}
+
 func assertLeakStatus(t *testing.T, statuses map[string]string, className, want string) {
 	t.Helper()
 	if got := statuses[className]; got != want {

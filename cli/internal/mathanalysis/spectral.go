@@ -84,7 +84,7 @@ func newRouteSeriesCollector(options analyze.Options, scale timelineScale) *rout
 
 type routeSeriesCollector struct {
 	filter   analyze.Filter
-	ownerMap map[string]string
+	ownerMap *analyze.OwnerMap
 	scale    timelineScale
 	routes   map[string][]float64
 }

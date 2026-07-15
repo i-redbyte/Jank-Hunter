@@ -4,7 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
@@ -36,12 +36,12 @@ func parseProblemsDataset(raw string) (problemsDataset, error) {
 }
 
 func writeProblemsDatasetJSON(
-	file *os.File,
+	writer io.Writer,
 	dataset problemsDataset,
 	summary analyze.Summary,
 	mathReport *mathanalysis.MathReport,
 ) error {
-	encoder := json.NewEncoder(file)
+	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	switch dataset {
 	case datasetCodeProblems:
@@ -58,20 +58,20 @@ func writeProblemsDatasetJSON(
 }
 
 func writeProblemsDatasetCSV(
-	file *os.File,
+	writer io.Writer,
 	dataset problemsDataset,
 	summary analyze.Summary,
 	mathReport *mathanalysis.MathReport,
 ) error {
 	switch dataset {
 	case datasetCodeProblems:
-		return writeCSVTable(file, codeProblemsTable(summary.CodeProblems))
+		return writeCSVTable(writer, codeProblemsTable(summary.CodeProblems))
 	case datasetLeaks:
-		return writeCSVTable(file, leakSuspectsTable(summary.MemoryLeaks))
+		return writeCSVTable(writer, leakSuspectsTable(summary.MemoryLeaks))
 	case datasetInfluence:
-		return writeCSVTable(file, influenceTable(summary.Influence))
+		return writeCSVTable(writer, influenceTable(summary.Influence))
 	case datasetMathFindings:
-		return writeCSVTable(file, mathFindingsTable(mathReport))
+		return writeCSVTable(writer, mathFindingsTable(mathReport))
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
 	}
@@ -82,8 +82,8 @@ type csvTable struct {
 	rows   [][]string
 }
 
-func writeCSVTable(file *os.File, table csvTable) error {
-	writer := csv.NewWriter(file)
+func writeCSVTable(output io.Writer, table csvTable) error {
+	writer := csv.NewWriter(output)
 	defer writer.Flush()
 	if err := writer.Write(table.header); err != nil {
 		return err

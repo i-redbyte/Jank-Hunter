@@ -1,27 +1,57 @@
 package io.jankhunter.gradle
 
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Locale
 
 internal object InstrumentationArtifactFiles {
     fun writeClassShard(directoryPath: String, className: String, text: String) {
-        if (directoryPath.isBlank() || text.isBlank()) return
+        if (directoryPath.isBlank()) return
         val directory = File(directoryPath)
         directory.mkdirs()
         val shard = File(directory, shardName(className))
+        if (text.isBlank()) {
+            shard.delete()
+            return
+        }
         val tmp = File(shard.parentFile, "${shard.name}.${System.nanoTime()}.tmp")
         tmp.writeText(text)
+        replaceAtomically(tmp, shard)
+    }
+
+    fun writeAtomically(file: File, text: String) {
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, "${file.name}.${System.nanoTime()}.tmp")
+        tmp.writeText(text)
+        replaceAtomically(tmp, file)
+    }
+
+    private fun replaceAtomically(tmp: File, target: File) {
         try {
             Files.move(
                 tmp.toPath(),
-                shard.toPath(),
+                target.toPath(),
                 StandardCopyOption.REPLACE_EXISTING,
                 StandardCopyOption.ATOMIC_MOVE,
             )
+        } catch (_: AtomicMoveNotSupportedException) {
+            replaceNonAtomically(tmp, target)
         } catch (_: UnsupportedOperationException) {
-            Files.move(tmp.toPath(), shard.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            replaceNonAtomically(tmp, target)
+        } catch (error: Exception) {
+            tmp.delete()
+            throw error
+        }
+    }
+
+    private fun replaceNonAtomically(tmp: File, target: File) {
+        try {
+            Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } catch (error: Exception) {
+            tmp.delete()
+            throw error
         }
     }
 

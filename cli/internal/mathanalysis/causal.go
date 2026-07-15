@@ -231,6 +231,7 @@ func (b *causalGraphBuilder) edgeList() []CausalEdge {
 
 func causalShortestPaths(nodes []CausalNode, edges []CausalEdge) []GraphPath {
 	nodeMap := causalNodeMap(nodes)
+	adjacency := causalAdjacency(edges)
 	var sources []string
 	var targets []string
 	for _, node := range nodes {
@@ -244,7 +245,7 @@ func causalShortestPaths(nodes []CausalNode, edges []CausalEdge) []GraphPath {
 	var paths []GraphPath
 	for _, source := range sources {
 		for _, target := range targets {
-			path, ok := shortestGraphPath(nodeMap, edges, source, target)
+			path, ok := shortestGraphPathWithAdjacency(nodeMap, adjacency, source, target)
 			if ok && len(path.Nodes) > 1 {
 				paths = append(paths, path)
 			}
@@ -263,13 +264,21 @@ func causalShortestPaths(nodes []CausalNode, edges []CausalEdge) []GraphPath {
 }
 
 func shortestGraphPath(nodes map[string]CausalNode, edges []CausalEdge, source, target string) (GraphPath, bool) {
+	return shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), source, target)
+}
+
+func shortestGraphPathWithAdjacency(
+	nodes map[string]CausalNode,
+	adjacency map[string][]CausalEdge,
+	source,
+	target string,
+) (GraphPath, bool) {
 	if _, ok := nodes[source]; !ok {
 		return GraphPath{}, false
 	}
 	if _, ok := nodes[target]; !ok {
 		return GraphPath{}, false
 	}
-	adjacency := causalAdjacency(edges)
 	dist := map[string]float64{}
 	prev := map[string]string{}
 	visited := map[string]bool{}
@@ -281,7 +290,7 @@ func shortestGraphPath(nodes map[string]CausalNode, edges []CausalEdge, source, 
 		current := ""
 		best := math.Inf(1)
 		for id, value := range dist {
-			if !visited[id] && value < best {
+			if !visited[id] && (value < best || (value == best && (current == "" || id < current))) {
 				current = id
 				best = value
 			}
@@ -293,7 +302,7 @@ func shortestGraphPath(nodes map[string]CausalNode, edges []CausalEdge, source, 
 		for _, edge := range adjacency[current] {
 			next := edge.To
 			candidate := dist[current] + edge.Weight
-			if candidate < dist[next] {
+			if candidate < dist[next] || (candidate == dist[next] && (prev[next] == "" || current < prev[next])) {
 				dist[next] = candidate
 				prev[next] = current
 			}
