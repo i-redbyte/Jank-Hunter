@@ -5,6 +5,7 @@ import org.gradle.testfixtures.ProjectBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterExtensionTest {
@@ -81,19 +82,24 @@ class JankHunterExtensionTest {
         assertEquals(false, instrumentation.coroutines.get())
         assertEquals(false, instrumentation.methodCounters.get())
         assertEquals(true, instrumentation.lifecycleLeaks.get())
+        assertEquals(false, instrumentation.includeWholeApplication.get())
         assertEquals(emptySet<String>(), instrumentation.includePackages.get())
     }
 
     @Test
-    fun instrumentationDslDoesNotExposeRemovedOrDisconnectedFlags() {
+    fun instrumentationDslExposesWholeApplicationWithoutUnsafeEmptyIncludesFlag() {
+        val instrumentation = extension().instrument
         val methodNames = JankHunterExtension.Instrumentation::class.java.methods
             .mapTo(mutableSetOf()) { it.name }
 
+        instrumentation.includeWholeApplication.set(true)
+
+        assertTrue(instrumentation.includeWholeApplication.get())
         assertFalse("getActivities" in methodNames)
         assertFalse("getFragments" in methodNames)
         assertFalse("getRxJava" in methodNames)
         assertFalse("getAllowEmptyIncludePackages" in methodNames)
-        assertFalse("getIncludeWholeApplication" in methodNames)
+        assertTrue("getIncludeWholeApplication" in methodNames)
     }
 
     @Test

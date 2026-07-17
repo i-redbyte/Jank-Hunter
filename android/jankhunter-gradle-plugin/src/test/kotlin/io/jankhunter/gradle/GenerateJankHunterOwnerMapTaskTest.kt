@@ -31,6 +31,7 @@ class GenerateJankHunterOwnerMapTaskTest {
         task.runtimeCallGraph.set(false)
         task.generatedOwners.set(true)
         task.symbolNamespace.set("0123456789abcdef0123456789abcdef")
+        task.includeWholeApplication.set(true)
         task.androidNamespace.set("com.app")
         task.includePackages.set(setOf("com.app"))
         task.excludePackages.set(setOf("com.app.generated"))
@@ -42,6 +43,7 @@ class GenerateJankHunterOwnerMapTaskTest {
         assertTrue(text.contains("\"kind\":\"metadata\""))
         assertTrue(text.contains("\"generatedOwners\":true"))
         assertTrue(text.contains("\"symbolNamespace\":\"0123456789abcdef0123456789abcdef\""))
+        assertTrue(text.contains("\"includeWholeApplication\":true"))
         assertTrue(text.contains("\"includePackages\":[\"com.app\"]"))
         assertFalse(text.contains("\"owners\":{}"))
     }
