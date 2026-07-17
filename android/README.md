@@ -271,6 +271,7 @@ jankHunter {
         classGraph = true
         runtimeCallGraph = false
         methodCounters = false
+        includeWholeApplication = false
         asmProgressLog = false
 
         includePackages("com.myapp.feature", "com.myapp.data")
@@ -305,6 +306,11 @@ jankHunter {
     }
 }
 ```
+
+Чтобы application-модуль инструментировал классы всех подключённых project-модулей и внешних
+зависимостей, включите `includeWholeApplication = true`. Системные пакеты, AndroidX, Kotlin,
+OkHttp и сам Jank Hunter при этом остаются исключёнными; дополнительные исключения задаются через
+`excludePackages`.
 
 Что внедряется:
 
@@ -423,12 +429,11 @@ jankHunter {
 
 `releaseSafety` не переписывает runtime-настройки молча: он только останавливает сборку, если для release-like варианта включена чувствительная возможность без явного подтверждения. Если включены дампы памяти, нужен ещё `allowHeapDumps = true`; если `runtime.mainProcessOnly = false`, нужен `allowSecondaryProcesses = true`.
 
-Высокочастотные ASM hooks (`methodCounters`, `runtimeCallGraph`, сеть, корутины) работают только в
-`InstrumentationScope.PROJECT`. Для детекта lifecycle-утечек application-модуль отдельно запускает
-лёгкий `InstrumentationScope.ALL`: в классах приложения и внутренних Gradle-модулей он обрабатывает
-только `onDestroy`, `onDestroyView` и `onCleared`. Поэтому feature/library-модули не выпадают из
-leak coverage, но не получают дорогие method/runtime hooks. Android namespace задаёт безопасную
-область пакетов; `includePackages` расширяет её, а `excludePackages` позволяет точечно исключать код.
+В application-модуле ASM visitors работают с `InstrumentationScope.ALL`, поэтому могут видеть код
+подключённых модулей и зависимостей; в library-модуле область остаётся `PROJECT`. Android namespace
+задаёт безопасную область пакетов по умолчанию, `includePackages` расширяет её, а
+`includeWholeApplication = true` снимает пакетное ограничение для прикладных классов. Системные и
+служебные пакеты по-прежнему исключаются, а `excludePackages` позволяет точечно исключить код.
 
 ## Утечки Памяти И HPROF
 

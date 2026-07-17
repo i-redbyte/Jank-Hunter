@@ -252,6 +252,7 @@ write_fixture() {
 
   mkdir -p "$fixture_dir/app/src/main/java/com/example/jhsmoke"
   mkdir -p "$fixture_dir/feature/src/main/java/com/example/jhsmoke/feature"
+  mkdir -p "$fixture_dir/network-feature/src/main/java/org/example/jhsmoke/network"
 
   cat > "$fixture_dir/settings.gradle.kts" <<EOF
 pluginManagement {
@@ -273,7 +274,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "JankHunterPluginSmoke"
-include(":app", ":feature")
+include(":app", ":feature", ":network-feature")
 EOF
 
   cat > "$fixture_dir/build.gradle.kts" <<EOF
@@ -302,15 +303,29 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
 }
 
 jankHunter {
     enabled = true
     enabledBuildTypes.add("debug")
+    enabledBuildTypes.add("release")
     autoInit = true
     dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.ENABLED
     sessionLogSizeLimitEnabled = true
     maxSessionLogSizeMiB = 8
+    releaseSafety {
+        allowInstrumentation = true
+        privacyReviewed = true
+        allowHeapDumps = true
+        performanceBudgetEvidence = "release-performance-budget.md"
+    }
     retainedHeapDump {
         enabled = true
         privacyApproved = true
@@ -326,14 +341,40 @@ jankHunter {
         logSpam = true
         classGraph = true
         runtimeCallGraph = true
+        includeWholeApplication = true
         asmProgressLog = false
     }
 }
 
 dependencies {
     implementation(project(":feature"))
+    implementation(project(":network-feature"))
     implementation("com.squareup.okhttp3:okhttp:3.12.13")
-    debugImplementation("$group:jankhunter-okhttp3:$version")
+    implementation("$group:jankhunter-okhttp3:$version")
+}
+EOF
+
+  cat > "$fixture_dir/app/release-performance-budget.md" <<'EOF'
+jankhunter_release_performance_budget_v1
+EOF
+
+  cat > "$fixture_dir/network-feature/build.gradle.kts" <<EOF
+plugins {
+    id("com.android.library")
+}
+
+android {
+    namespace = "org.example.jhsmoke.network"
+    compileSdk = $SMOKE_COMPILE_SDK
+    buildToolsVersion = "$build_tools_version"
+
+    defaultConfig {
+        minSdk = 23
+    }
+}
+
+dependencies {
+    implementation("com.squareup.okhttp3:okhttp:3.12.13")
 }
 EOF
 
@@ -440,6 +481,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         Helper.work();
         com.example.jhsmoke.feature.FeatureEntry.touch();
+        org.example.jhsmoke.network.ReleaseNetworkClient.create();
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
@@ -453,6 +495,25 @@ public class MainActivity extends Activity {
         OkHttpClient client = new OkHttpClient.Builder().build();
         Request request = new Request.Builder().url("ws://localhost/").build();
         client.newWebSocket(request, new WebSocketListener() { });
+    }
+}
+EOF
+
+  cat > "$fixture_dir/network-feature/src/main/AndroidManifest.xml" <<'EOF'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+EOF
+
+  cat > "$fixture_dir/network-feature/src/main/java/org/example/jhsmoke/network/ReleaseNetworkClient.java" <<'EOF'
+package org.example.jhsmoke.network;
+
+import okhttp3.OkHttpClient;
+
+public final class ReleaseNetworkClient {
+    private ReleaseNetworkClient() {
+    }
+
+    public static OkHttpClient create() {
+        return new OkHttpClient.Builder().build();
     }
 }
 EOF
@@ -589,6 +650,7 @@ main() {
   local consumer_args=(
     -p "$fixture_dir"
     :app:assembleDebug
+    :app:assembleRelease
     --no-daemon
     --console=plain
     --warning-mode all
@@ -649,6 +711,14 @@ main() {
   require_file_contains "$feature_diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Feature lifecycle diagnostics"
   require_file_contains "$feature_diagnostics" '"intent":"lifecycle.watch_retained"' "Feature lifecycle diagnostics"
   require_file_not_contains "$diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Application lifecycle diagnostics"
+
+  local release_owner_map="$fixture_dir/app/build/generated/jankhunter/release/owner-map.json"
+  require_file_contains "$release_owner_map" '"includeWholeApplication":true' "Release owner map metadata"
+  local release_diagnostics="$fixture_dir/app/build/generated/jankhunter/release/instrumentation-diagnostics.jsonl"
+  require_file_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
+  require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release dependency OkHttp hook diagnostics"
+  local release_mapping="$fixture_dir/app/build/outputs/mapping/release/mapping.txt"
+  require_file_contains "$release_mapping" 'okhttp3.EventListener$Factory eventListenerFactory -> eventListenerFactory' "Release R8 mapping"
 
   local di_catalog="$fixture_dir/app/build/generated/jankhunter/debug/di-catalog.jsonl"
   require_file_contains "$di_catalog" '"kind":"metadata"' "Dependency injection catalog metadata"

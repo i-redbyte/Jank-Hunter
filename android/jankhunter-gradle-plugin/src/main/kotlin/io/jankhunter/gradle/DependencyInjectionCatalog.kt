@@ -28,11 +28,18 @@ internal data class DependencyInjectionEdgeRecord(
 )
 
 internal object DependencyInjectionClassMatcher {
-    fun shouldScan(classData: ClassData, includePackages: Iterable<String>): Boolean {
+    fun shouldScan(
+        classData: ClassData,
+        includePackages: Iterable<String>,
+        includeWholeApplication: Boolean = false,
+    ): Boolean {
         if (InstrumentationPackages.isGeneratedAndroidClass(classData.className)) return false
         if (classData.className.normalizedClassName().startsWith("io.jankhunter.")) return false
         if (isGeneratedDiClass(classData)) return true
         val className = classData.className.normalizedClassName()
+        if (includeWholeApplication) {
+            return !InstrumentationPackages.isBuiltinExcluded(className)
+        }
         return includePackages
             .map { it.normalizedClassName() }
             .filter(String::isNotEmpty)

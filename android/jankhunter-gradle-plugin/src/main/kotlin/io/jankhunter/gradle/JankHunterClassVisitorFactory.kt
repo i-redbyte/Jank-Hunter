@@ -106,6 +106,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         return InstrumentationMatcher(
             params.includePackages.getOrElse(emptySet()),
             params.excludePackages.getOrElse(emptySet()),
+            params.includeWholeApplication.getOrElse(false),
         ).matches(classData.className)
     }
 
@@ -117,6 +118,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         return DependencyInjectionClassMatcher.shouldScan(
             classData,
             params.includePackages.getOrElse(emptySet()),
+            params.includeWholeApplication.getOrElse(false),
         )
     }
 }

@@ -22,6 +22,20 @@ class InstrumentationMatcherTest {
     }
 
     @Test
+    fun wholeApplicationMatchesDependencyPackagesButKeepsSafetyExcludes() {
+        val matcher = InstrumentationMatcher(
+            includePackages = listOf("com.example"),
+            excludePackages = listOf("org.example.generated"),
+            includeWholeApplication = true,
+        )
+
+        assertTrue(matcher.matches("org.example.network.ReleaseNetworkClient"))
+        assertFalse(matcher.matches("org.example.generated.NetworkFactory"))
+        assertFalse(matcher.matches("okhttp3.OkHttpClient"))
+        assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
+    }
+
+    @Test
     fun honorsIncludeAndExcludePackages() {
         val matcher = InstrumentationMatcher(
             includePackages = listOf("com.example"),

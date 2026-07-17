@@ -61,6 +61,9 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
     abstract val symbolNamespace: Property<String>
 
     @get:Input
+    abstract val includeWholeApplication: Property<Boolean>
+
+    @get:Input
     abstract val androidNamespace: Property<String>
 
     @get:Input
@@ -111,6 +114,7 @@ abstract class GenerateJankHunterOwnerMapTask : DefaultTask() {
             runtimeCallGraph = runtimeCallGraph.getOrElse(false),
             generatedOwners = generatedOwners.getOrElse(false),
             symbolNamespace = symbolNamespace.get(),
+            includeWholeApplication = includeWholeApplication.getOrElse(false),
             androidNamespace = androidNamespace.getOrElse(""),
             includePackages = includePackages.getOrElse(emptySet()),
             excludePackages = excludePackages.getOrElse(emptySet()),
@@ -172,6 +176,7 @@ internal object OwnerMapWriter {
         runtimeCallGraph: Boolean,
         generatedOwners: Boolean,
         symbolNamespace: String,
+        includeWholeApplication: Boolean,
         androidNamespace: String,
         includePackages: Set<String>,
         excludePackages: Set<String>,
@@ -192,6 +197,8 @@ internal object OwnerMapWriter {
             append(",\"symbolNamespace\":\"")
             append(escape(symbolNamespace))
             append('"')
+            append(",\"includeWholeApplication\":")
+            append(includeWholeApplication)
             append(",\"hooks\":{")
             appendHook("methodCounters", methodCounters, first = true)
             appendHook("okhttp", okhttp)

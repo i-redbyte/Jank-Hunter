@@ -39,6 +39,7 @@ abstract class JankHunterLifecycleClassVisitorFactory :
         val matched = InstrumentationMatcher(
             params.includePackages.getOrElse(emptySet()),
             params.excludePackages.getOrElse(emptySet()),
+            params.includeWholeApplication.getOrElse(false),
         ).matches(classData.className)
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordScanned(

@@ -131,8 +131,9 @@ dependencies {
 ```
 
 `jankhunter-android-sdk` — единственная пользовательская dependency; runtime, annotations и
-OkHttp/WebSocket support приходят транзитивно. ASM обрабатывает только классы текущего модуля
-внутри его Android `namespace`; ручные include-пакеты могут безопасно расширить эту границу внутри модуля:
+OkHttp/WebSocket support приходят транзитивно. По умолчанию ASM ограничен Android `namespace` и
+явными include-пакетами. В application-модуле `includeWholeApplication = true` разрешает обработку
+классов всех модулей и зависимостей итогового приложения:
 
 ```kotlin
 jankHunter {
@@ -144,6 +145,7 @@ jankHunter {
     dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
 
     instrument {
+        includeWholeApplication = false
         includePackages("com.myapp.feature", "com.myapp.data")
         excludePackages("com.myapp.generated", "com.myapp.di")
         handlers = true

@@ -17,7 +17,6 @@ class JankHunterPlugin : Plugin<Project> {
             configureAndroidProject(
                 project,
                 extension,
-                instrumentationScope = InstrumentationScope.PROJECT,
                 applicationProject = true,
             )
         }
@@ -26,7 +25,6 @@ class JankHunterPlugin : Plugin<Project> {
             configureAndroidProject(
                 project,
                 extension,
-                instrumentationScope = InstrumentationScope.PROJECT,
                 applicationProject = false,
             )
         }
@@ -35,7 +33,6 @@ class JankHunterPlugin : Plugin<Project> {
     private fun configureAndroidProject(
         project: Project,
         extension: JankHunterExtension,
-        instrumentationScope: InstrumentationScope,
         applicationProject: Boolean,
     ) {
         val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
@@ -67,7 +64,7 @@ class JankHunterPlugin : Plugin<Project> {
                 validateReleaseSafety(project, extension, variant.name)
             }
             val symbolNamespace = JankHunterSymbolNamespace.current()
-            val effectiveInstrumentationScope = instrumentationScope
+            val effectiveInstrumentationScope = instrumentationScope(applicationProject)
             val shouldGenerateRuntimeManifest = applicationProject
             if (shouldGenerateRuntimeManifest) {
                 val runtimeManifest = project.tasks.register(
@@ -114,6 +111,7 @@ class JankHunterPlugin : Plugin<Project> {
                 extension.dependencyInjectionAnalysis.getOrElse(JankHunterFeatureMode.DISABLED) ==
                     JankHunterFeatureMode.ENABLED
             val runtimeHooksEnabled = extension.instrument.hasRuntimeHooksEnabled()
+            val includeWholeApplication = extension.instrument.includeWholeApplication.getOrElse(false)
             val manualIncludes = extension.instrument.includePackages.getOrElse(emptySet())
             val effectiveExcludePackages = extension.instrument.excludePackages.map { packages ->
                 InstrumentationPackages.normalizedPackages(packages)
@@ -124,7 +122,7 @@ class JankHunterPlugin : Plugin<Project> {
                     manualIncludes,
                     namespace,
                 )
-                if (includes.isEmpty()) {
+                if (includes.isEmpty() && !includeWholeApplication) {
                     throw GradleException(
                         "Jank Hunter cannot determine a safe instrumentation boundary for variant " +
                             "'${variant.name}'. Set the Android namespace or add " +
@@ -151,6 +149,7 @@ class JankHunterPlugin : Plugin<Project> {
                 it.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
                 it.generatedOwners.set(runtimeHooksEnabled)
                 it.symbolNamespace.set(symbolNamespace)
+                it.includeWholeApplication.set(extension.instrument.includeWholeApplication)
                 it.androidNamespace.set(androidNamespace)
                 it.includePackages.set(effectiveIncludePackages)
                 it.excludePackages.set(effectiveExcludePackages)
@@ -260,12 +259,13 @@ class JankHunterPlugin : Plugin<Project> {
                 )
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel(variant.name))
+                params.includeWholeApplication.set(extension.instrument.includeWholeApplication)
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(effectiveExcludePackages)
             }
             variant.instrumentation.transformClassesWith(
                 JankHunterLifecycleClassVisitorFactory::class.java,
-                if (applicationProject) InstrumentationScope.ALL else InstrumentationScope.PROJECT,
+                effectiveInstrumentationScope,
             ) { params ->
                 params.enabled.set(extension.instrument.lifecycleLeaks)
                 params.instrumentationDiagnosticsDirectory.set(
@@ -275,6 +275,7 @@ class JankHunterPlugin : Plugin<Project> {
                 )
                 params.asmProgressLog.set(extension.instrument.asmProgressLog)
                 params.progressLabel.set(project.progressLabel("${variant.name}:lifecycle"))
+                params.includeWholeApplication.set(extension.instrument.includeWholeApplication)
                 params.includePackages.set(effectiveIncludePackages)
                 params.excludePackages.set(effectiveExcludePackages)
             }
@@ -288,7 +289,7 @@ class JankHunterPlugin : Plugin<Project> {
                         "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
                         "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
                         "dependencyInjectionAnalysis={} " +
-                        "asmProgressLog={} autoInit={} " +
+                        "includeWholeApplication={} asmProgressLog={} autoInit={} " +
                         "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                         "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generatedRuntimeManifest={} " +
                         "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} symbolMode={} " +
@@ -306,6 +307,7 @@ class JankHunterPlugin : Plugin<Project> {
                     extension.instrument.classGraph.get(),
                     extension.instrument.runtimeCallGraph.get(),
                     extension.dependencyInjectionAnalysis.get(),
+                    extension.instrument.includeWholeApplication.get(),
                     extension.instrument.asmProgressLog.get(),
                     extension.autoInit.get(),
                     extension.retainedHeapDump.enabled.get(),
@@ -322,6 +324,10 @@ class JankHunterPlugin : Plugin<Project> {
                 )
             }
         }
+    }
+
+    internal fun instrumentationScope(applicationProject: Boolean): InstrumentationScope {
+        return if (applicationProject) InstrumentationScope.ALL else InstrumentationScope.PROJECT
     }
 
     private fun JankHunterExtension.isVariantEnabled(variantName: String): Boolean {

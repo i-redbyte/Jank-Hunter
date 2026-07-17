@@ -67,6 +67,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val progressLabel: Property<String>
 
     @get:Input
+    val includeWholeApplication: Property<Boolean>
+
+    @get:Input
     val includePackages: SetProperty<String>
 
     @get:Input
