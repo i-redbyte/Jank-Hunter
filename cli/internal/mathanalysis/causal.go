@@ -49,10 +49,14 @@ func newCausalGraphBuilder() *causalGraphBuilder {
 }
 
 func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov MarkovModel) {
-	for index, bucket := range timeline {
-		state := markovHealthy
-		if index < len(markov.States) {
-			state = markov.States[index].State
+	stateByTime := make(map[uint64]string, len(markov.States))
+	for _, state := range markov.States {
+		stateByTime[state.TimeMS] = state.State
+	}
+	for _, bucket := range timeline {
+		state, ok := stateByTime[bucket.StartMS]
+		if !ok {
+			continue
 		}
 		stateID := causalNodeID("state", state)
 		b.addNode(stateID, MarkovStateLabel(state), "state")
@@ -433,10 +437,15 @@ func floydPathIDs(nodes []CausalNode, next [][]int, i, j int) []string {
 func causalOwnerScores(nodes []CausalNode, edges []CausalEdge, loops []NetworkLoopFinding) []OwnerBlameScore {
 	scores := map[string]float64{}
 	for _, edge := range edges {
-		if strings.HasPrefix(edge.From, "owner:") {
-			owner := strings.TrimPrefix(edge.From, "owner:")
-			scores[owner] += edge.Confidence
+		if edge.Kind != "owner-state" || !strings.HasPrefix(edge.From, "owner:") || !strings.HasPrefix(edge.To, "state:") {
+			continue
 		}
+		state := strings.TrimPrefix(edge.To, "state:")
+		if !markovIsBadState(state) {
+			continue
+		}
+		owner := strings.TrimPrefix(edge.From, "owner:")
+		scores[owner] += edge.Confidence
 	}
 	for _, loop := range loops {
 		if loop.Owner != "" {
@@ -471,9 +480,9 @@ func compareCausalGraphs(baseline, candidate CausalGraph) []CausalDelta {
 		if !ok {
 			if edge.Confidence >= 0.35 {
 				deltas = append(deltas, CausalDelta{
-					Kind:           "новое ребро",
+					Kind:           "новая связь",
 					Severity:       causalDeltaSeverity(edge.Confidence, 0),
-					Summary:        fmt.Sprintf("Новое ребро: %s -> %s, доверие %.2f, наблюдений %d.", edge.FromLabel, edge.ToLabel, edge.Confidence, edge.Count),
+					Summary:        fmt.Sprintf("Новая статистическая связь: %s ↔ %s, уверенность %.2f, совместных наблюдений %d. Она не доказывает направление причины.", edge.FromLabel, edge.ToLabel, edge.Confidence, edge.Count),
 					CandidateValue: edge.Confidence,
 					Delta:          edge.Confidence,
 				})
@@ -483,9 +492,9 @@ func compareCausalGraphs(baseline, candidate CausalGraph) []CausalDelta {
 		delta := edge.Confidence - base.Confidence
 		if delta >= 0.25 {
 			deltas = append(deltas, CausalDelta{
-				Kind:           "усилилось ребро",
+				Kind:           "усилилась связь",
 				Severity:       causalDeltaSeverity(delta, base.Confidence),
-				Summary:        fmt.Sprintf("Ребро усилилось: %s -> %s, доверие %.2f -> %.2f.", edge.FromLabel, edge.ToLabel, base.Confidence, edge.Confidence),
+				Summary:        fmt.Sprintf("Статистическая связь усилилась: %s ↔ %s, уверенность %.2f -> %.2f. Это приоритет проверки, а не доказанная причина.", edge.FromLabel, edge.ToLabel, base.Confidence, edge.Confidence),
 				BaselineValue:  base.Confidence,
 				CandidateValue: edge.Confidence,
 				Delta:          delta,
@@ -525,10 +534,17 @@ func causalChangedPathDelta(baseline, candidate []GraphPath) (CausalDelta, bool)
 	if candidatePath == baselinePath {
 		return CausalDelta{}, false
 	}
+	baselineConfidence := 0.0
+	if len(baseline) > 0 {
+		baselineConfidence = baseline[0].Confidence
+	}
+	if len(baseline) > 0 && candidate[0].Confidence-baselineConfidence < 0.15 {
+		return CausalDelta{}, false
+	}
 	return CausalDelta{
-		Kind:           "изменился путь",
+		Kind:           "усилилась цепочка связей",
 		Severity:       "medium",
-		Summary:        fmt.Sprintf("Главный кратчайший путь изменился: было `%s`, стало `%s`.", fallbackPathText(baselinePath), candidatePath),
+		Summary:        fmt.Sprintf("Самая сильная цепочка статистических связей изменилась: было `%s`, стало `%s`; уверенность %.2f -> %.2f. Направление причины этим не установлено.", fallbackPathText(baselinePath), candidatePath, baselineConfidence, candidate[0].Confidence),
 		BaselineValue:  baselineCost,
 		CandidateValue: candidate[0].Cost,
 		Delta:          candidate[0].Cost - baselineCost,
@@ -558,9 +574,6 @@ func causalOwnerScoreDeltas(baseline, candidate []OwnerBlameScore) []CausalDelta
 }
 
 func causalDeltaSeverity(delta, baseline float64) string {
-	if delta >= 0.6 || (baseline > 0 && delta/baseline >= 0.6) {
-		return "high"
-	}
 	return "medium"
 }
 
@@ -568,29 +581,24 @@ func causalGraphStatus(graph CausalGraph) string {
 	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
 		return "medium"
 	}
-	for _, score := range graph.OwnerScores {
-		if score.Score >= 6 {
-			return "high"
-		}
-	}
 	if len(graph.Paths) > 0 {
-		return "ok"
+		return "medium"
 	}
-	return "medium"
+	return "ok"
 }
 
 func causalGraphSummary(graph CausalGraph) string {
 	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
-		return "Недостаточно агрегированных узлов и ребер для графа причинности."
+		return "Недостаточно наблюдаемых связей для графа гипотез."
 	}
-	return fmt.Sprintf("Построено %d узлов, %d ребер, %d кратчайших объясняющих путей и %d оценок вклада источников.", len(graph.Nodes), len(graph.Edges), len(graph.Paths), len(graph.OwnerScores))
+	return fmt.Sprintf("Построено %d узлов, %d направлений для %d пар связей, %d цепочек от симптомов и %d оценок связи источников с плохими состояниями. Граф показывает совместные наблюдения, а не доказанные причины.", len(graph.Nodes), len(graph.Edges), len(graph.Edges)/2, len(graph.Paths), len(graph.OwnerScores))
 }
 
 func causalGraphFindings(graph CausalGraph) []Finding {
 	if len(graph.Nodes) == 0 || len(graph.Edges) == 0 {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Граф причинности пуст",
+			Title:          "Для графа гипотез недостаточно данных",
 			Detail:         causalGraphSummary(graph),
 			Recommendation: "Нужны временные интервалы с контекстом маршрута, источника, экрана или состояния.",
 		}}
@@ -598,10 +606,10 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 	if len(graph.Paths) > 0 {
 		best := graph.Paths[0]
 		return []Finding{{
-			Severity:       "ok",
-			Title:          "Найден объясняющий путь",
-			Detail:         fmt.Sprintf("%s; стоимость %.2f, доверие %.2f.", strings.Join(best.Nodes, " -> "), best.Cost, best.Confidence),
-			Recommendation: "Используйте путь как гипотезу: проверьте источник, маршрут и состояние рядом с соответствующим симптомом.",
+			Severity:       "medium",
+			Title:          "Есть цепочка связей для проверки",
+			Detail:         fmt.Sprintf("%s; условная стоимость %.2f, уверенность %.2f. Цепочка не устанавливает направление причины.", strings.Join(best.Nodes, " ↔ "), best.Cost, best.Confidence),
+			Recommendation: "Проверьте эту гипотезу по сырым событиям, трассировке и коду источника. Не считайте источник виновником только по графу.",
 		}}
 	}
 	return []Finding{{
@@ -629,9 +637,9 @@ func compareCausalGraphStatus(deltas []CausalDelta) string {
 
 func compareCausalGraphSummary(deltas []CausalDelta) string {
 	if len(deltas) == 0 {
-		return "Новых или заметно усилившихся причинных ребер не найдено."
+		return "Новых или заметно усилившихся статистических связей не найдено."
 	}
-	return fmt.Sprintf("Найдено %d изменений графа: новые/усиленные ребра, измененные пути или рост вклада источников.", len(deltas))
+	return fmt.Sprintf("Найдено %d изменений графа гипотез: новые или усиленные связи, более сильные цепочки либо рост связи источника с плохими состояниями.", len(deltas))
 }
 
 func compareCausalGraphFindings(deltas []CausalDelta) []Finding {
@@ -639,7 +647,7 @@ func compareCausalGraphFindings(deltas []CausalDelta) []Finding {
 		if delta.Severity == "high" || delta.Severity == "medium" {
 			return []Finding{{
 				Severity:       delta.Severity,
-				Title:          "Изменился граф причинности",
+				Title:          "Изменился граф связей и гипотез",
 				Detail:         delta.Summary,
 				Recommendation: "Сравните изменившееся ребро или путь с марковскими состояниями, сетевыми циклами и вкладом источников.",
 			}}
@@ -647,7 +655,7 @@ func compareCausalGraphFindings(deltas []CausalDelta) []Finding {
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Граф причинности стабилен",
+		Title:    "Граф связей заметно не изменился",
 		Detail:   compareCausalGraphSummary(deltas),
 	}}
 }
@@ -655,29 +663,29 @@ func compareCausalGraphFindings(deltas []CausalDelta) []Finding {
 func CausalKindLabel(kind string) string {
 	switch kind {
 	case "state-symptom":
-		return "состояние -> симптом"
+		return "состояние ↔ симптом"
 	case "screen-state":
-		return "экран -> состояние"
+		return "экран ↔ состояние"
 	case "owner-state":
-		return "источник -> состояние"
+		return "источник ↔ состояние"
 	case "screen-owner":
-		return "экран -> источник"
+		return "экран ↔ источник"
 	case "route-state":
-		return "маршрут -> состояние"
+		return "маршрут ↔ состояние"
 	case "owner-route":
-		return "источник -> маршрут"
+		return "источник ↔ маршрут"
 	case "route-phase":
-		return "маршрут -> фаза"
+		return "маршрут ↔ фаза"
 	case "phase-symptom":
-		return "фаза -> симптом"
+		return "фаза ↔ симптом"
 	case "route-symptom":
-		return "маршрут -> симптом"
+		return "маршрут ↔ симптом"
 	case "loop-owner":
-		return "цикл -> источник"
+		return "цикл ↔ источник"
 	case "loop-route":
-		return "цикл -> маршрут"
+		return "цикл ↔ маршрут"
 	case "loop-phase":
-		return "цикл -> фаза"
+		return "цикл ↔ фаза"
 	case "state":
 		return "состояние"
 	case "symptom":
@@ -702,7 +710,16 @@ func CausalKindLabel(kind string) string {
 func causalEdgeMap(edges []CausalEdge) map[string]CausalEdge {
 	out := make(map[string]CausalEdge, len(edges))
 	for _, edge := range edges {
-		out[edge.From+"\x00"+edge.To+"\x00"+edge.Kind] = edge
+		left := edge.From
+		right := edge.To
+		if left > right {
+			left, right = right, left
+		}
+		key := left + "\x00" + right + "\x00" + edge.Kind
+		if _, ok := out[key]; ok {
+			continue
+		}
+		out[key] = edge
 	}
 	return out
 }

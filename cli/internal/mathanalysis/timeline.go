@@ -57,30 +57,33 @@ type timelineStreamState struct {
 	currentNetwork string
 }
 
-func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
-	if timeMS, ok := timelineEventTimeMS(event, dict, filter, ownerMap); ok {
+func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, symbols *mathSymbolResolver) (uint64, bool) {
+	if timeMS, ok := timelineEventTimeMS(event, dict, filter, symbols); ok {
 		return timeMS, true
 	}
-	return networkLoopEventTimeMS(event, dict, filter, ownerMap)
+	return networkLoopEventTimeMS(event, dict, filter, symbols)
 }
 
-func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
+func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, symbols *mathSymbolResolver) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
-		route := jhlog.Resolve(dict, event.HTTP.RouteID)
-		owner := resolveTimelineOwner(ownerMap, dict, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 		if !timelineContainsFilter(route, filter.RouteContains) || !timelineContainsFilter(owner, filter.OwnerContains) {
 			return 0, false
 		}
 		return event.TimeMS, true
 	case event.UIWindow != nil:
-		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
 		if !timelineContainsFilter(screen, filter.ScreenContains) {
 			return 0, false
 		}
 		return event.TimeMS, true
 	case event.Stall != nil:
-		owner := resolveTimelineOwner(ownerMap, dict, event.Stall.OwnerID)
+		if isMathDiagnosticStall(event, dict, symbols) {
+			return 0, false
+		}
+		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
 		if !timelineContainsFilter(owner, filter.OwnerContains) {
 			return 0, false
 		}
@@ -173,11 +176,11 @@ func (s timelineScale) bucketMSOrDefault() uint64 {
 	return DefaultBucketMS
 }
 
-func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state *timelineStreamState) {
+func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state *timelineStreamState, symbols *mathSymbolResolver) {
 	switch {
 	case event.HTTP != nil:
-		route := jhlog.Resolve(dict, event.HTTP.RouteID)
-		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 		if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -206,7 +209,7 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			agg.ttfbCount = saturatingAddUint64(agg.ttfbCount, 1)
 		}
 	case event.UIWindow != nil:
-		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
 		if !timelineContainsFilter(screen, c.filter.ScreenContains) {
 			return
 		}
@@ -218,7 +221,10 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		agg.bucket.UIFrames = saturatingAddUint64(agg.bucket.UIFrames, event.UIWindow.FrameCount)
 		agg.bucket.UIJankyFrames = saturatingAddUint64(agg.bucket.UIJankyFrames, event.UIWindow.JankCount)
 	case event.Stall != nil:
-		owner := c.resolveOwner(dict, event.Stall.OwnerID)
+		if isMathDiagnosticStall(event, dict, symbols) {
+			return
+		}
+		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -239,6 +245,7 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		if !agg.hasMemoryPSS || event.Memory.PSSKB > agg.bucket.MemoryPSSKB {
 			agg.bucket.MemoryPSSKB = event.Memory.PSSKB
 			agg.hasMemoryPSS = true
+			agg.bucket.HasMemoryPSS = true
 		}
 	case event.Context != nil:
 		agg := c.bucket(event.TimeMS)
@@ -250,8 +257,10 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		if !agg.hasAvailableMemory || event.Context.AvailMemoryKB < agg.bucket.AvailableMemoryKB {
 			agg.bucket.AvailableMemoryKB = event.Context.AvailMemoryKB
 			agg.hasAvailableMemory = true
+			agg.bucket.HasAvailableMemory = true
 		}
 		if state.hasRxTx {
+			agg.bucket.HasTrafficSample = true
 			agg.bucket.TrafficRxBytes = saturatingAddUint64(
 				agg.bucket.TrafficRxBytes,
 				safeCounterDelta(state.lastRx, event.Context.RxBytes),
@@ -287,6 +296,7 @@ func (c *timelineCollector) bucket(timeMS uint64) *timelineBucketAgg {
 		}
 		c.buckets[index] = agg
 	}
+	agg.bucket.HasObservation = true
 	return agg
 }
 
@@ -313,6 +323,7 @@ func (c *timelineCollector) finish() []TimelineBucket {
 			}
 			if agg.ttfbCount > 0 {
 				bucket.TTFBMS = agg.ttfbTotalMS / agg.ttfbCount
+				bucket.HasTTFB = true
 			}
 			bucket.RouteSample = topSample(agg.routes)
 			bucket.OwnerSample = topSample(agg.owners)
@@ -344,39 +355,43 @@ func topSample(samples map[string]int) string {
 
 func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 	definitions := []struct {
-		name  string
-		unit  string
-		value func(TimelineBucket) float64
+		name    string
+		unit    string
+		value   func(TimelineBucket) float64
+		present func(TimelineBucket) bool
 	}{
 		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
 		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
-		{name: "HTTP p95", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPP95DurationMS) }},
-		{name: "HTTP среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPAvgDurationMS) }},
+		{name: "HTTP p95", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPP95DurationMS) }, present: func(b TimelineBucket) bool { return b.HTTPCount > 0 }},
+		{name: "HTTP среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.HTTPAvgDurationMS) }, present: func(b TimelineBucket) bool { return b.HTTPCount > 0 }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
-		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
+		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }, present: func(b TimelineBucket) bool { return b.DNSCount > 0 }},
 		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
-		{name: "Средний TTFB", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }},
-		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
-		{name: "UI кадры", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.UIFrames) }},
+		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }, present: func(b TimelineBucket) bool { return b.ConnectCount > 0 }},
+		{name: "Средний TTFB", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.TTFBMS) }, present: func(b TimelineBucket) bool { return b.HasTTFB }},
+		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }, present: func(b TimelineBucket) bool { return b.UIFrames > 0 }},
+		{name: "UI кадры", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.UIFrames) }, present: func(b TimelineBucket) bool { return b.UIFrames > 0 }},
 		{name: "Паузы главного потока", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.StallCount) }},
-		{name: "Макс. пауза", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }},
-		{name: "PSS", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }},
-		{name: "Свободная RAM", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }},
-		{name: "Дельта RX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficRxBytes) }},
-		{name: "Дельта TX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficTxBytes) }},
+		{name: "Макс. пауза", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.StallMaxMS) }, present: func(b TimelineBucket) bool { return b.StallCount > 0 }},
+		{name: "PSS", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.MemoryPSSKB) }, present: func(b TimelineBucket) bool { return b.HasMemoryPSS }},
+		{name: "Свободная RAM", unit: "КБ", value: func(b TimelineBucket) float64 { return float64(b.AvailableMemoryKB) }, present: func(b TimelineBucket) bool { return b.HasAvailableMemory }},
+		{name: "Дельта RX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficRxBytes) }, present: func(b TimelineBucket) bool { return b.HasTrafficSample }},
+		{name: "Дельта TX трафика", unit: "байт", value: func(b TimelineBucket) float64 { return float64(b.TrafficTxBytes) }, present: func(b TimelineBucket) bool { return b.HasTrafficSample }},
 	}
 
 	series := make([]Series, 0, len(definitions))
 	for _, definition := range definitions {
 		points := make([]float64, 0, len(timeline))
+		present := make([]bool, 0, len(timeline))
 		hasSignal := false
 		for _, bucket := range timeline {
 			value := definition.value(bucket)
-			if value != 0 {
+			hasValue := definition.present == nil || definition.present(bucket)
+			if hasValue && (value != 0 || definition.present != nil) {
 				hasSignal = true
 			}
 			points = append(points, value)
+			present = append(present, hasValue)
 		}
 		if hasSignal {
 			series = append(series, Series{
@@ -384,6 +399,7 @@ func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 				Unit:     definition.unit,
 				BucketMS: bucketMS,
 				Points:   points,
+				Present:  present,
 			})
 		}
 	}
@@ -391,55 +407,61 @@ func timelineSeries(timeline []TimelineBucket, bucketMS uint64) []Series {
 }
 
 func timelineStatus(timeline []TimelineBucket) string {
-	if len(timeline) < 3 {
+	if timelineObservedBucketCount(timeline) < 3 {
 		return "medium"
 	}
 	return "ok"
 }
 
 func timelineSummary(timeline []TimelineBucket, series []Series) string {
-	if len(timeline) < 3 {
+	observed := timelineObservedBucketCount(timeline)
+	if observed < 3 {
 		return "Недостаточно данных для надежного анализа: нужно хотя бы несколько временных интервалов одного сценария."
 	}
-	return fmt.Sprintf("Построено %d временных интервалов по %d мс и %d рядов сигналов.", len(timeline), timelineBucketMS(timeline, series), len(series))
+	return fmt.Sprintf("Построено %d временных интервалов по %d мс и %d рядов сигналов; хотя бы одно наблюдение есть в %d интервалах. Пропуски не считаются нормальной работой.", len(timeline), timelineBucketMS(timeline, series), len(series), observed)
 }
 
 func timelineFindings(timeline []TimelineBucket) []Finding {
-	if len(timeline) < 3 {
+	observed := timelineObservedBucketCount(timeline)
+	if observed < 3 {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("В таймлайне только %d временных интервалов. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline)),
+			Detail:         fmt.Sprintf("В таймлайне %d временных интервалов, но хотя бы одно наблюдение есть только в %d. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline), observed),
 			Recommendation: "Соберите более длинный прогон или несколько повторов сценария.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Таймлайн сигналов построен",
-		Detail:   fmt.Sprintf("Временные интервалы по %d мс готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и быстрого преобразования Фурье.", timelineBucketMS(timeline, nil)),
+		Detail:   fmt.Sprintf("Временные интервалы по %d мс готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и спектрального анализа.", timelineBucketMS(timeline, nil)),
 	}}
 }
 
 func compareTimelineStatus(baselineTimeline, candidateTimeline []TimelineBucket) string {
-	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
+	if timelineObservedBucketCount(baselineTimeline) < 3 || timelineObservedBucketCount(candidateTimeline) < 3 {
 		return "medium"
 	}
 	return "ok"
 }
 
 func compareTimelineSummary(baselineTimeline, candidateTimeline []TimelineBucket) string {
-	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
+	baselineObserved := timelineObservedBucketCount(baselineTimeline)
+	candidateObserved := timelineObservedBucketCount(candidateTimeline)
+	if baselineObserved < 3 || candidateObserved < 3 {
 		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных интервалов."
 	}
-	return fmt.Sprintf("База: %d временных интервалов по %d мс, кандидат: %d временных интервалов по %d мс.", len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
+	return fmt.Sprintf("База: измерено %d из %d интервалов по %d мс; кандидат: %d из %d интервалов по %d мс. Пропуски не считаются нулевой нагрузкой или нормальной работой.", baselineObserved, len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), candidateObserved, len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
 }
 
 func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucket) []Finding {
-	if len(baselineTimeline) < 3 || len(candidateTimeline) < 3 {
+	baselineObserved := timelineObservedBucketCount(baselineTimeline)
+	candidateObserved := timelineObservedBucketCount(candidateTimeline)
+	if baselineObserved < 3 || candidateObserved < 3 {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("База содержит %d временных интервалов, кандидат содержит %d временных интервалов. Этого мало для надежного сравнения формы таймлайна.", len(baselineTimeline), len(candidateTimeline)),
+			Detail:         fmt.Sprintf("База содержит %d измеренных интервалов из %d, кандидат — %d из %d. Этого мало для надежного сравнения формы таймлайна.", baselineObserved, len(baselineTimeline), candidateObserved, len(candidateTimeline)),
 			Recommendation: "Соберите более длинные прогоны базы и кандидата или несколько повторов каждого сценария.",
 		}}
 	}
@@ -448,6 +470,19 @@ func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucke
 		Title:    "Таймлайны базы и кандидата построены",
 		Detail:   "Равномерные временные интервалы готовы для сравнения точек изменения, периодичности, сетевых циклов и интегральных оценок.",
 	}}
+}
+
+func timelineObservedBucketCount(timeline []TimelineBucket) int {
+	if !timelineUsesObservationFlags(timeline) {
+		return len(timeline)
+	}
+	count := 0
+	for _, bucket := range timeline {
+		if bucket.HasObservation {
+			count++
+		}
+	}
+	return count
 }
 
 func timelineContainsFilter(value string, needle string) bool {
@@ -467,14 +502,6 @@ func timelineBucketMS(timeline []TimelineBucket, series []Series) uint64 {
 		}
 	}
 	return DefaultBucketMS
-}
-
-func (c *timelineCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return resolveTimelineOwner(c.ownerMap, dict, id)
-}
-
-func resolveTimelineOwner(ownerMap *analyze.OwnerMap, dict map[uint64]string, id uint64) string {
-	return analyze.ResolveOwnerAlias(ownerMap, jhlog.Resolve(dict, id))
 }
 
 func percentileSorted(values []uint64, p float64) uint64 {

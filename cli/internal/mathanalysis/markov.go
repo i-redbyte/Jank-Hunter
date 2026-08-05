@@ -32,24 +32,75 @@ func buildMarkovModel(timeline []TimelineBucket, loops []NetworkLoopFinding) Mar
 	transitions := buildMarkovTransitions(states)
 	badEpisodes := markovBadEpisodeCount(states)
 	confidence, confidenceReason := markovConfidence(states, transitions, badEpisodes)
+	recoveryProbability, hasRecoveryProbability := markovBadToHealthyProbability(transitions)
+	expectedRecoveryWindows, hasExpectedRecovery := markovExpectedRecoveryWindows(states)
+	expectedRecoveryMS, _ := markovExpectedRecoveryMS(states)
+	missingBucketCount := len(timeline) - len(states)
+	coverage := markovObservationCoverage(len(timeline), len(states))
+	if coverage < 0.8 && len(timeline) > 0 {
+		confidence = "low"
+		confidenceReason = fmt.Sprintf("измерено %d из %d временных интервалов: пропуски не считаются здоровыми и разрывают последовательность", len(states), len(timeline))
+	} else if missingBucketCount > 0 && confidence == "high" {
+		confidence = "medium"
+		confidenceReason += fmt.Sprintf("; измерено %d из %d интервалов, переходы через пропуски исключены", len(states), len(timeline))
+	}
 	model := MarkovModel{
 		States:                  states,
 		Transitions:             transitions,
 		SampleCount:             len(states),
+		TimelineBucketCount:     len(timeline),
+		MissingBucketCount:      missingBucketCount,
+		ObservationCoverage:     coverage,
 		TransitionEventCount:    markovTransitionEventCount(transitions),
 		BadEpisodeCount:         badEpisodes,
+		IndependentRunCount:     1,
+		SequenceComparable:      true,
 		Confidence:              confidence,
 		ConfidenceReason:        confidenceReason,
 		HealthyToBadCount:       markovHealthyToBadCount(transitions),
-		BadToHealthyProbability: markovBadToHealthyProbability(transitions),
-		ExpectedRecoveryWindows: markovExpectedRecoveryWindows(states),
-		ExpectedRecoveryMS:      markovExpectedRecoveryMS(states),
+		BadToHealthyProbability: recoveryProbability,
+		HasRecoveryProbability:  hasRecoveryProbability,
+		ExpectedRecoveryWindows: expectedRecoveryWindows,
+		ExpectedRecoveryMS:      expectedRecoveryMS,
+		HasExpectedRecovery:     hasExpectedRecovery,
 		TotalDurationMS:         markovTotalDurationMS(states),
 		BadStateDurationMS:      markovBadStateDurationMS(states),
 		BadStateExposure:        markovBadStateExposure(states),
 		StateExposures:          markovStateExposures(states),
 		StickyStates:            markovStickyStates(transitions),
 		ContextStickyStates:     markovContextStickyStates(states),
+	}
+	model.Forecast = buildMarkovForecast(model)
+	return model
+}
+
+func buildMarkovModelForRuns(timeline []TimelineBucket, loops []NetworkLoopFinding, runCount int) MarkovModel {
+	model := buildMarkovModel(timeline, loops)
+	model.IndependentRunCount = normalizedRunCount(runCount)
+	if model.IndependentRunCount == 1 {
+		return model
+	}
+	model.SequenceComparable = false
+	model.Transitions = nil
+	model.TransitionEventCount = 0
+	model.BadEpisodeCount = 0
+	model.HealthyToBadCount = 0
+	model.BadToHealthyProbability = 0
+	model.HasRecoveryProbability = false
+	model.ExpectedRecoveryWindows = 0
+	model.ExpectedRecoveryMS = 0
+	model.HasExpectedRecovery = false
+	model.StickyStates = nil
+	model.ContextStickyStates = nil
+	model.Confidence = "low"
+	model.ConfidenceReason = fmt.Sprintf("объединены независимые прогоны: %d; состояния описывают позицию внутри общего сценария, а не хронологию одного запуска", model.IndependentRunCount)
+	model.Forecast = MarkovForecast{
+		Direction:        markovForecastInsufficient,
+		Label:            "Прогноз для объединённых прогонов отключён",
+		Severity:         "medium",
+		Confidence:       "low",
+		ConfidenceReason: model.ConfidenceReason,
+		Summary:          "Состояния разных запусков совмещены по относительному времени. Из такой агрегированной последовательности нельзя честно предсказывать, что произойдёт дальше в одном запуске.",
 	}
 	return model
 }
@@ -58,7 +109,12 @@ func classifyMarkovStates(timeline []TimelineBucket, loops []NetworkLoopFinding)
 	pssFloor := minNonZeroPSS(timeline)
 	states := make([]MarkovBucketState, 0, len(timeline))
 	previousBad := false
+	usesObservationFlags := timelineUsesObservationFlags(timeline)
 	for _, bucket := range timeline {
+		if usesObservationFlags && !bucket.HasObservation {
+			previousBad = false
+			continue
+		}
 		state, reason, contributors := classifyMarkovBucket(bucket, loops, pssFloor)
 		if state == markovHealthy && previousBad {
 			state = markovRecovering
@@ -88,7 +144,7 @@ func classifyMarkovStates(timeline []TimelineBucket, loops []NetworkLoopFinding)
 func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pssFloor uint64) (string, string, []MarkovSymptomWeight) {
 	contributors := markovBucketContributors(bucket, loops, pssFloor)
 	if len(contributors) == 0 {
-		return markovHealthy, "нет выраженной деградации", nil
+		return markovHealthy, "в доступных сигналах нет выраженной деградации", nil
 	}
 	state := markovDominantState(contributors)
 	for _, contributor := range contributors {
@@ -97,6 +153,22 @@ func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pss
 		}
 	}
 	return state, MarkovStateLabel(state), contributors
+}
+
+func timelineUsesObservationFlags(timeline []TimelineBucket) bool {
+	for _, bucket := range timeline {
+		if bucket.HasObservation {
+			return true
+		}
+	}
+	return false
+}
+
+func markovObservationCoverage(total, observed int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(observed) / float64(total)
 }
 
 func markovNetworkLoopConfidence(bucket TimelineBucket, loops []NetworkLoopFinding) float64 {
@@ -286,6 +358,9 @@ func buildMarkovTransitions(states []MarkovBucketState) []MarkovTransition {
 	counts := map[string]map[string]int{}
 	totals := map[string]int{}
 	for i := 1; i < len(states); i++ {
+		if !markovStatesAdjacent(states[i-1], states[i]) {
+			continue
+		}
 		from := states[i-1].State
 		to := states[i].State
 		if counts[from] == nil {
@@ -327,7 +402,7 @@ func markovHealthyToBadCount(transitions []MarkovTransition) int {
 	return count
 }
 
-func markovBadToHealthyProbability(transitions []MarkovTransition) float64 {
+func markovBadToHealthyProbability(transitions []MarkovTransition) (float64, bool) {
 	var badOutgoing int
 	var recovered int
 	for _, transition := range transitions {
@@ -340,63 +415,70 @@ func markovBadToHealthyProbability(transitions []MarkovTransition) float64 {
 		}
 	}
 	if badOutgoing == 0 {
-		return 1
+		return 0, false
 	}
-	return float64(recovered) / float64(badOutgoing)
+	return float64(recovered) / float64(badOutgoing), true
 }
 
-func markovExpectedRecoveryWindows(states []MarkovBucketState) float64 {
+func markovExpectedRecoveryWindows(states []MarkovBucketState) (float64, bool) {
 	var total float64
 	var episodes int
-	for index := 0; index < len(states); {
+	for index := 0; index < len(states); index++ {
 		if !markovIsBadState(states[index].State) {
-			index++
 			continue
 		}
 		length := 0
-		for index < len(states) && markovIsBadState(states[index].State) {
+		for {
 			length++
+			if index+1 >= len(states) || !markovStatesAdjacent(states[index], states[index+1]) || !markovIsBadState(states[index+1].State) {
+				break
+			}
 			index++
 		}
-		if index < len(states) {
+		if index+1 < len(states) && markovStatesAdjacent(states[index], states[index+1]) {
 			total += float64(length)
 			episodes++
 		}
 	}
 	if episodes == 0 {
-		return 0
+		return 0, false
 	}
-	return total / float64(episodes)
+	return total / float64(episodes), true
 }
 
-func markovExpectedRecoveryMS(states []MarkovBucketState) float64 {
+func markovExpectedRecoveryMS(states []MarkovBucketState) (float64, bool) {
 	var total float64
 	var episodes int
-	for index := 0; index < len(states); {
+	for index := 0; index < len(states); index++ {
 		if !markovIsBadState(states[index].State) {
-			index++
 			continue
 		}
 		var duration uint64
-		for index < len(states) && markovIsBadState(states[index].State) {
+		for {
 			duration += markovStateDurationMS(states[index])
+			if index+1 >= len(states) || !markovStatesAdjacent(states[index], states[index+1]) || !markovIsBadState(states[index+1].State) {
+				break
+			}
 			index++
 		}
-		if index < len(states) {
+		if index+1 < len(states) && markovStatesAdjacent(states[index], states[index+1]) {
 			total += float64(duration)
 			episodes++
 		}
 	}
 	if episodes == 0 {
-		return 0
+		return 0, false
 	}
-	return total / float64(episodes)
+	return total / float64(episodes), true
 }
 
 func markovBadEpisodeCount(states []MarkovBucketState) int {
 	var episodes int
 	inBadEpisode := false
-	for _, state := range states {
+	for index, state := range states {
+		if index > 0 && !markovStatesAdjacent(states[index-1], state) {
+			inBadEpisode = false
+		}
 		if markovIsBadState(state.State) {
 			if !inBadEpisode {
 				episodes++
@@ -407,6 +489,10 @@ func markovBadEpisodeCount(states []MarkovBucketState) int {
 		inBadEpisode = false
 	}
 	return episodes
+}
+
+func markovStatesAdjacent(previous, current MarkovBucketState) bool {
+	return saturatingAddUint64(previous.TimeMS, markovStateDurationMS(previous)) == current.TimeMS
 }
 
 func markovTransitionEventCount(transitions []MarkovTransition) int {
@@ -519,6 +605,9 @@ func markovContextStickyStates(states []MarkovBucketState) []MarkovContextSticky
 	counts := map[string]*contextCounts{}
 	for index := 1; index < len(states); index++ {
 		previous := states[index-1]
+		if !markovStatesAdjacent(previous, states[index]) {
+			continue
+		}
 		if !markovIsBadState(previous.State) {
 			continue
 		}
@@ -583,13 +672,36 @@ func markovContextLabel(state MarkovBucketState) string {
 }
 
 func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
+	if normalizedRunCount(baseline.IndependentRunCount) > 1 || normalizedRunCount(candidate.IndependentRunCount) > 1 {
+		return []MarkovDelta{{
+			Metric:             "Сопоставимость последовательности состояний",
+			Unit:               "прогонов",
+			BaselineValue:      float64(normalizedRunCount(baseline.IndependentRunCount)),
+			CandidateValue:     float64(normalizedRunCount(candidate.IndependentRunCount)),
+			Delta:              float64(normalizedRunCount(candidate.IndependentRunCount) - normalizedRunCount(baseline.IndependentRunCount)),
+			BaselineAvailable:  true,
+			CandidateAvailable: true,
+			Severity:           "medium",
+			Summary:            "Марковские дельты не рассчитаны: хотя бы одна сторона объединяет независимые запуски, поэтому соседние агрегированные состояния не являются последовательностью одного прогона.",
+		}}
+	}
 	deltas := []MarkovDelta{
-		markovDeltaCount("Здоровые -> плохие состояния", "шт", float64(baseline.HealthyToBadCount), float64(candidate.HealthyToBadCount), true),
-		markovDeltaProbability("Вероятность восстановления", baseline.BadToHealthyProbability, candidate.BadToHealthyProbability, false),
-		markovDeltaCount("Ожидаемое восстановление", "интервалов", baseline.ExpectedRecoveryWindows, candidate.ExpectedRecoveryWindows, true),
-		markovDeltaDuration("Ожидаемое восстановление по времени", baseline.ExpectedRecoveryMS, candidate.ExpectedRecoveryMS, true),
+		markovDeltaCount("Здоровые → плохие состояния", "шт", float64(baseline.HealthyToBadCount), float64(candidate.HealthyToBadCount), true),
 		markovDeltaProbability("Доля плохих состояний", baseline.BadStateExposure, candidate.BadStateExposure, true),
 		markovDeltaTransitionMatrixDivergence(baseline, candidate),
+	}
+	if baseline.HasRecoveryProbability && candidate.HasRecoveryProbability {
+		deltas = append(deltas, markovDeltaProbability("Вероятность восстановления", baseline.BadToHealthyProbability, candidate.BadToHealthyProbability, false))
+	} else if baseline.HasRecoveryProbability != candidate.HasRecoveryProbability {
+		deltas = append(deltas, unavailableMarkovDelta("Вероятность восстановления", "%", baseline.BadToHealthyProbability*100, candidate.BadToHealthyProbability*100, baseline.HasRecoveryProbability, candidate.HasRecoveryProbability))
+	}
+	if baseline.HasExpectedRecovery && candidate.HasExpectedRecovery {
+		deltas = append(deltas,
+			markovDeltaCount("Ожидаемое восстановление", "интервалов", baseline.ExpectedRecoveryWindows, candidate.ExpectedRecoveryWindows, true),
+			markovDeltaDuration("Ожидаемое восстановление по времени", baseline.ExpectedRecoveryMS, candidate.ExpectedRecoveryMS, true),
+		)
+	} else if baseline.HasExpectedRecovery != candidate.HasExpectedRecovery {
+		deltas = append(deltas, unavailableMarkovDelta("Ожидаемое восстановление", "интервалов", baseline.ExpectedRecoveryWindows, candidate.ExpectedRecoveryWindows, baseline.HasExpectedRecovery, candidate.HasExpectedRecovery))
 	}
 	states := markovStickyStateUnion(baseline.StickyStates, candidate.StickyStates)
 	for _, state := range states {
@@ -600,17 +712,35 @@ func compareMarkovModels(baseline, candidate MarkovModel) []MarkovDelta {
 	return deltas
 }
 
+func unavailableMarkovDelta(metric, unit string, baseline, candidate float64, baselineAvailable, candidateAvailable bool) MarkovDelta {
+	return MarkovDelta{
+		Metric:             metric,
+		Unit:               unit,
+		BaselineValue:      baseline,
+		CandidateValue:     candidate,
+		Delta:              candidate - baseline,
+		Comparable:         false,
+		BaselineAvailable:  baselineAvailable,
+		CandidateAvailable: candidateAvailable,
+		Severity:           "medium",
+		Summary:            fmt.Sprintf("%s не сравнивается: завершённый плохой эпизод наблюдался только на одной стороне.", metric),
+	}
+}
+
 func markovDeltaCount(metric, unit string, baseline, candidate float64, higherIsWorse bool) MarkovDelta {
 	delta := candidate - baseline
 	severity := markovDeltaCountSeverity(delta, higherIsWorse)
 	return MarkovDelta{
-		Metric:         metric,
-		Unit:           unit,
-		BaselineValue:  baseline,
-		CandidateValue: candidate,
-		Delta:          delta,
-		Severity:       severity,
-		Summary:        markovDeltaSummary(metric, baseline, candidate, delta, unit, higherIsWorse),
+		Metric:             metric,
+		Unit:               unit,
+		BaselineValue:      baseline,
+		CandidateValue:     candidate,
+		Delta:              delta,
+		Comparable:         true,
+		BaselineAvailable:  true,
+		CandidateAvailable: true,
+		Severity:           severity,
+		Summary:            markovDeltaSummary(metric, baseline, candidate, delta, unit, higherIsWorse),
 	}
 }
 
@@ -620,13 +750,16 @@ func markovDeltaProbability(metric string, baseline, candidate float64, higherIs
 	delta := candPct - basePct
 	severity := markovDeltaProbabilitySeverity(delta, basePct, higherIsWorse)
 	return MarkovDelta{
-		Metric:         metric,
-		Unit:           "%",
-		BaselineValue:  basePct,
-		CandidateValue: candPct,
-		Delta:          delta,
-		Severity:       severity,
-		Summary:        markovDeltaSummary(metric, basePct, candPct, delta, "%", higherIsWorse),
+		Metric:             metric,
+		Unit:               "%",
+		BaselineValue:      basePct,
+		CandidateValue:     candPct,
+		Delta:              delta,
+		Comparable:         true,
+		BaselineAvailable:  true,
+		CandidateAvailable: true,
+		Severity:           severity,
+		Summary:            markovDeltaSummary(metric, basePct, candPct, delta, "%", higherIsWorse),
 	}
 }
 
@@ -634,13 +767,16 @@ func markovDeltaDuration(metric string, baseline, candidate float64, higherIsWor
 	delta := candidate - baseline
 	severity := markovDeltaDurationSeverity(delta, baseline, higherIsWorse)
 	return MarkovDelta{
-		Metric:         metric,
-		Unit:           "мс",
-		BaselineValue:  baseline,
-		CandidateValue: candidate,
-		Delta:          delta,
-		Severity:       severity,
-		Summary:        markovDeltaSummary(metric, baseline, candidate, delta, "мс", higherIsWorse),
+		Metric:             metric,
+		Unit:               "мс",
+		BaselineValue:      baseline,
+		CandidateValue:     candidate,
+		Delta:              delta,
+		Comparable:         true,
+		BaselineAvailable:  true,
+		CandidateAvailable: true,
+		Severity:           severity,
+		Summary:            markovDeltaSummary(metric, baseline, candidate, delta, "мс", higherIsWorse),
 	}
 }
 
@@ -652,13 +788,16 @@ func markovDeltaTransitionMatrixDivergence(baseline, candidate MarkovModel) Mark
 		summary += " Изменение не выглядит регрессией по экспозиции и восстановлению."
 	}
 	return MarkovDelta{
-		Metric:         "Расхождение матрицы переходов",
-		Unit:           "индекс",
-		BaselineValue:  0,
-		CandidateValue: divergence,
-		Delta:          divergence,
-		Severity:       severity,
-		Summary:        summary,
+		Metric:             "Расхождение матрицы переходов",
+		Unit:               "индекс",
+		BaselineValue:      0,
+		CandidateValue:     divergence,
+		Delta:              divergence,
+		Comparable:         true,
+		BaselineAvailable:  true,
+		CandidateAvailable: true,
+		Severity:           severity,
+		Summary:            summary,
 	}
 }
 
@@ -712,11 +851,13 @@ func markovDeltaDurationSeverity(delta, baseline float64, higherIsWorse bool) st
 }
 
 func markovDeltaSummary(metric string, baseline, candidate, delta float64, unit string, higherIsWorse bool) string {
-	trend := "улучшилась"
+	trend := "изменение считается улучшением"
 	if (higherIsWorse && delta > 0) || (!higherIsWorse && delta < 0) {
-		trend = "ухудшилась"
+		trend = "изменение считается ухудшением"
+	} else if delta == 0 {
+		trend = "без изменения"
 	}
-	return fmt.Sprintf("%s %s: %.1f -> %.1f %s, Δ %+.1f %s.", metric, trend, baseline, candidate, unit, delta, unit)
+	return fmt.Sprintf("%s: %s; %.1f → %.1f %s, Δ %+.1f %s.", metric, trend, baseline, candidate, unit, delta, unit)
 }
 
 func markovTransitionMatrixDivergence(baseline, candidate MarkovModel) float64 {
@@ -783,11 +924,11 @@ func markovCandidateLooksWorse(baseline, candidate MarkovModel) bool {
 	if candidate.HealthyToBadCount > baseline.HealthyToBadCount {
 		return true
 	}
-	if candidate.BadToHealthyProbability < baseline.BadToHealthyProbability-0.10 {
+	if baseline.HasRecoveryProbability && candidate.HasRecoveryProbability && candidate.BadToHealthyProbability < baseline.BadToHealthyProbability-0.10 {
 		return true
 	}
-	if baseline.ExpectedRecoveryMS == 0 {
-		return candidate.ExpectedRecoveryMS >= 1000
+	if !baseline.HasExpectedRecovery || !candidate.HasExpectedRecovery {
+		return false
 	}
 	return candidate.ExpectedRecoveryMS > baseline.ExpectedRecoveryMS*1.20
 }
@@ -852,11 +993,15 @@ func markovConfidenceLabel(value string) string {
 	}
 }
 
+func MarkovConfidenceLabel(value string) string {
+	return markovConfidenceLabel(value)
+}
+
 func markovStatus(model MarkovModel) string {
 	if len(model.States) < 2 {
 		return "medium"
 	}
-	if model.HealthyToBadCount > 0 && model.BadToHealthyProbability < 0.35 {
+	if model.HealthyToBadCount > 0 && model.HasRecoveryProbability && model.BadToHealthyProbability < 0.35 {
 		return "high"
 	}
 	for _, sticky := range model.StickyStates {
@@ -877,7 +1022,17 @@ func markovSummary(model MarkovModel) string {
 	if len(model.States) < 2 {
 		return "Недостаточно временных интервалов для матрицы переходов состояний."
 	}
-	return fmt.Sprintf("Состояний=%d, переходов=%d, уверенность=%s, плохая экспозиция %.1f%%, здоровые -> плохие=%d, восстановление %.1f%%, ожидание восстановления %.1f интервалов / %.0f мс.", len(model.States), len(model.Transitions), markovConfidenceLabel(model.Confidence), model.BadStateExposure*100, model.HealthyToBadCount, model.BadToHealthyProbability*100, model.ExpectedRecoveryWindows, model.ExpectedRecoveryMS)
+	if normalizedRunCount(model.IndependentRunCount) > 1 {
+		return fmt.Sprintf("Независимых прогонов: %d; относительных временных интервалов: %d. Состояния описывают общий профиль сценария; прогноз и выводы о хронологической траектории отключены.", normalizedRunCount(model.IndependentRunCount), len(model.States))
+	}
+	recovery := "завершённое восстановление не наблюдалось"
+	if model.HasRecoveryProbability {
+		recovery = fmt.Sprintf("восстановление %.1f%%", model.BadToHealthyProbability*100)
+	}
+	if model.HasExpectedRecovery {
+		recovery += fmt.Sprintf(" за %.1f интервала / %.0f мс", model.ExpectedRecoveryWindows, model.ExpectedRecoveryMS)
+	}
+	return fmt.Sprintf("Измерено %d из %d временных интервалов, переходов=%d, типов переходов=%d. Плохие состояния занимали %.1f%% измеренного времени; входов из нормального состояния — %d; %s. Уверенность %s.", len(model.States), model.TimelineBucketCount, model.TransitionEventCount, len(model.Transitions), model.BadStateExposure*100, model.HealthyToBadCount, recovery, markovConfidenceLabel(model.Confidence))
 }
 
 func markovFindings(model MarkovModel) []Finding {
@@ -889,15 +1044,31 @@ func markovFindings(model MarkovModel) []Finding {
 			Recommendation: "Нужны хотя бы два временных интервала сценария.",
 		}}
 	}
+	if normalizedRunCount(model.IndependentRunCount) > 1 {
+		return []Finding{{
+			Severity:       "medium",
+			Title:          "Марковская последовательность объединяет разные прогоны",
+			Detail:         markovSummary(model),
+			Recommendation: "Откройте отдельный прогон, если нужен прогноз или анализ переходов по времени. В объединённом отчёте используйте состояния только как профиль проблем по позиции сценария.",
+		}}
+	}
+	if model.BadStateExposure > 0 && !model.HasRecoveryProbability {
+		return []Finding{{
+			Severity:       "medium",
+			Title:          "Восстановление после плохого состояния не наблюдалось",
+			Detail:         markovSummary(model),
+			Recommendation: "Продлите этот одиночный прогон до спокойного состояния или завершения сценария. Ноль в метриках восстановления здесь не означает мгновенное восстановление.",
+		}}
+	}
 	if model.Confidence == "low" {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Низкая уверенность марковской модели",
 			Detail:         model.ConfidenceReason + ". " + markovSummary(model),
-			Recommendation: "Соберите более длинный прогон или несколько повторов того же сценария, чтобы стабилизировать вероятности переходов.",
+			Recommendation: "Соберите более длинный одиночный прогон. Повторы анализируйте отдельно или сопоставляйте попарно, чтобы не смешивать последовательности состояний.",
 		}}
 	}
-	if model.HealthyToBadCount > 0 && model.BadToHealthyProbability < 0.5 {
+	if model.HealthyToBadCount > 0 && model.HasRecoveryProbability && model.BadToHealthyProbability < 0.5 {
 		return []Finding{{
 			Severity:       markovStatus(model),
 			Title:          "Слабое восстановление после плохих состояний",
@@ -953,10 +1124,18 @@ func compareMarkovSummary(deltas []MarkovDelta) string {
 		return "Недостаточно марковских метрик для сравнения."
 	}
 	var worse int
+	var incomparable int
 	for _, delta := range deltas {
+		if !delta.Comparable {
+			incomparable++
+			continue
+		}
 		if delta.Severity == "high" || delta.Severity == "medium" {
 			worse++
 		}
+	}
+	if incomparable > 0 {
+		return fmt.Sprintf("Сопоставимо %d из %d марковских метрик; для %d метрик нет одинаковой наблюдаемой основы. Среди сопоставимых ухудшено %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
 	}
 	if worse == 0 {
 		return "Кандидат не ухудшил переходы между состояниями."
@@ -972,15 +1151,38 @@ func compareMarkovFindings(deltas []MarkovDelta) []Finding {
 			Detail:   compareMarkovSummary(deltas),
 		}}
 	}
+	var findings []Finding
 	for _, delta := range deltas {
-		if delta.Severity == "high" || delta.Severity == "medium" {
-			return []Finding{{
-				Severity:       delta.Severity,
-				Title:          "Изменились переходы состояний",
+		if !delta.Comparable {
+			findings = append(findings, Finding{
+				Severity:       "medium",
+				Title:          "Часть марковского сравнения недоступна",
 				Detail:         delta.Summary,
-				Recommendation: "Сравните последовательность состояний кандидата с таймлайном, сетевыми циклами и интегральной нагрузкой.",
-			}}
+				Recommendation: "Сравните по одному независимому прогону одинакового сценария, сопоставляйте повторы попарно и дождитесь завершённого плохого эпизода на обеих сторонах.",
+			})
+			break
 		}
+	}
+	var worst *MarkovDelta
+	for _, delta := range deltas {
+		if !delta.Comparable || (delta.Severity != "high" && delta.Severity != "medium") {
+			continue
+		}
+		if worst == nil || severityRank(delta.Severity) > severityRank(worst.Severity) {
+			item := delta
+			worst = &item
+		}
+	}
+	if worst != nil {
+		findings = append(findings, Finding{
+			Severity:       worst.Severity,
+			Title:          "Изменились переходы состояний",
+			Detail:         worst.Summary,
+			Recommendation: "Сравните последовательность состояний кандидата с таймлайном, сетевыми циклами и интегральной нагрузкой.",
+		})
+	}
+	if len(findings) > 0 {
+		return findings
 	}
 	return []Finding{{
 		Severity: "ok",

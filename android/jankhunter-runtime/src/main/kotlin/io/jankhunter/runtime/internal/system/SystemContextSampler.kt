@@ -14,7 +14,6 @@ import android.os.Process
 import android.os.StatFs
 import io.jankhunter.runtime.JankHunter
 import java.io.File
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 internal class SystemContextSampler(
@@ -30,33 +29,21 @@ internal class SystemContextSampler(
         readProcessStat = { readTextFile(PROC_SELF_STAT) },
         readSystemStat = { readFirstLine(PROC_STAT) },
     )
-    private val running = AtomicBoolean(false)
-    private var maintenance: MaintenanceHandle? = null
+    private val schedule = ForegroundSamplingSchedule(intervalMs, foreground, ::sampleOnce)
 
     fun start(scheduler: RuntimeMaintenanceScheduler) {
-        if (!running.compareAndSet(false, true)) return
-        maintenance = scheduler.schedule(delayMs = ::currentIntervalMs) { sampleOnce() }
+        schedule.start(scheduler)
     }
 
     fun stop() {
-        running.set(false)
-        maintenance?.cancel()
-        maintenance = null
+        schedule.stop()
     }
 
-    private fun currentIntervalMs(): Long {
-        val foregroundInterval = max(1_000L, intervalMs)
-        if (foreground()) return foregroundInterval
-        val backgroundInterval = if (foregroundInterval > Long.MAX_VALUE / BACKGROUND_INTERVAL_MULTIPLIER) {
-            Long.MAX_VALUE
-        } else {
-            foregroundInterval * BACKGROUND_INTERVAL_MULTIPLIER
-        }
-        return max(MIN_BACKGROUND_INTERVAL_MS, backgroundInterval)
+    fun onForegroundChanged() {
+        schedule.onForegroundChanged()
     }
 
     private fun sampleOnce() {
-        if (!running.get()) return
         val memory = readMemory()
         val battery = readBattery()
         val network = readNetwork()
@@ -255,7 +242,5 @@ internal class SystemContextSampler(
         const val NETWORK_VPN = 5
         private const val PROC_SELF_STAT = "/proc/self/stat"
         private const val PROC_STAT = "/proc/stat"
-        private const val BACKGROUND_INTERVAL_MULTIPLIER = 12L
-        private const val MIN_BACKGROUND_INTERVAL_MS = 2 * 60_000L
     }
 }

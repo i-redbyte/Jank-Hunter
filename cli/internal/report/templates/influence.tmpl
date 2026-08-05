@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: граф влияния кода</title>
-  <style>{{baseCSS}}{{mathCSS}}</style>
+  <style>{{reportCSS .ReportStyle true}}</style>
 </head>
-<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -20,8 +20,8 @@
         <strong class="env-device">{{if .Influence.HasClassGraph}}сигналы выполнения + статический граф{{else}}только сигналы выполнения{{end}}</strong>
         <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{.Influence.RuntimeEdges}} связей выполнения</div></div>
-          <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{.Influence.StaticEdges}} связей</div></div>
+          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{ruCount .Influence.RuntimeEdges "runtime-связь" "runtime-связи" "runtime-связей"}}</div></div>
+          <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{ruCount .Influence.StaticEdges "статическая связь" "статические связи" "статических связей"}}</div></div>
         </div>
       </div>
       {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
@@ -42,22 +42,72 @@
     <div class="panel-head">
       <div>
         <h2>Карта влияния</h2>
-        <div class="panel-kicker">Размер узла отражает оценку. Сплошные связи подтверждены сигналами выполнения, пунктирные/тусклые узлы пока видны только по статическому графу.</div>
+        <div class="panel-kicker">Записанная связь подтверждает вызов во время прогона. Статическая связь показывает только возможность вызова по байткоду. Оценка риска задаёт порядок расследования и не заменяет Perfetto, анализ HPROF или сетевую диагностику.</div>
       </div>
-      <span class="pill">код → симптомы</span>
+      <span class="pill">гипотезы, не причинность</span>
     </div>
-    {{influenceGraphSVG .Influence}}
+    <div class="influence-workbench" data-influence-workbench>
+      <div class="influence-view-toolbar" role="toolbar" aria-label="Выбор данных графа">
+        <span class="influence-toolbar-label">Набор данных</span>
+        <button type="button" class="is-active" data-influence-view="problems">Проблемы</button>
+        <button type="button" data-influence-view="runtime">Только выполнение</button>
+        <button type="button" data-influence-view="packages">Пакеты</button>
+        <button type="button" data-influence-view="neighborhood">Окрестность</button>
+        <button type="button" data-influence-view="context">Экран / сценарий</button>
+      </div>
+      <div class="influence-filter-grid">
+        <label class="influence-field influence-field-search"><span>Класс или пакет</span><input type="search" data-influence-search list="influence-search-options" autocomplete="off" placeholder="com.example.CheckoutRepository" aria-label="Поиск класса или пакета"></label>
+        <datalist id="influence-search-options"></datalist>
+        <label class="influence-field" data-influence-package-field hidden><span>Глубина пакета</span><select data-influence-package-depth aria-label="Глубина группировки пакета"><option value="2">2 сегмента</option><option value="3" selected>3 сегмента</option><option value="4">4 сегмента</option><option value="5">5 сегментов</option></select></label>
+        <label class="influence-field" data-influence-direction-field hidden><span>Направление</span><select data-influence-direction aria-label="Направление окрестности"><option value="both">Входящие и исходящие</option><option value="incoming">Входящие</option><option value="outgoing">Исходящие</option></select></label>
+        <label class="influence-field" data-influence-depth-field hidden><span>Глубина</span><select data-influence-depth aria-label="Глубина окрестности"><option value="1">1 связь</option><option value="2">2 связи</option><option value="3">3 связи</option></select></label>
+        <label class="influence-field" data-influence-context-field hidden><span>Экран / сценарий / маршрут</span><select data-influence-context aria-label="Контекст графа"></select></label>
+        <label class="influence-toggle" data-influence-runtime-field hidden><input type="checkbox" data-influence-runtime-only><span>Только записанные связи</span></label>
+        <button type="button" class="influence-reset-filters" data-influence-reset-filters>Сбросить фильтры</button>
+      </div>
+      <div class="influence-view-status" role="status" aria-live="polite">
+        <div><strong data-influence-view-title>Проблемы</strong><span data-influence-view-explanation></span></div>
+        <div class="influence-counts"><span data-influence-shown></span><span data-influence-omitted></span></div>
+      </div>
+      <div class="influence-workspace-note" data-influence-workspace-note></div>
+      <div class="influence-canvas-layout">
+        <div class="influence-graph-card">
+          <div class="influence-tools" role="toolbar" aria-label="Подсветка внутри выбранного графа">
+            <span class="influence-toolbar-label">Подсветка</span>
+            <button type="button" data-influence-highlight="node">Вершина</button>
+            <button type="button" class="is-active" data-influence-highlight="paths">Пути</button>
+            <button type="button" data-influence-highlight="tree">Остов</button>
+            <button type="button" data-influence-highlight="reset">Сброс</button>
+            <span class="influence-zoom-tools">
+              <button type="button" data-influence-zoom="out" aria-label="Уменьшить масштаб">−</button>
+              <button type="button" data-influence-zoom="reset" aria-label="Сбросить масштаб">100%</button>
+              <button type="button" data-influence-zoom="in" aria-label="Увеличить масштаб">+</button>
+              <button type="button" data-influence-center>Показать выбранный узел</button>
+            </span>
+          </div>
+          <div class="influence-selection" data-influence-selection>Выберите узел мышью или клавиатурой. Режим подсветки не меняет данные и оценку.</div>
+          <div class="influence-viewport" data-influence-viewport tabindex="0" aria-label="Интерактивная область графа: колесо меняет масштаб, перетаскивание перемещает граф">
+            <svg class="influence-graph" data-influence-graph role="img" aria-label="Граф влияния кода"><g data-influence-stage></g></svg>
+            <div class="influence-empty" data-influence-empty hidden>По текущим фильтрам узлы не найдены.</div>
+          </div>
+        </div>
+        <aside class="influence-detail" data-influence-detail aria-live="polite">
+          <div class="influence-detail-empty">Выберите класс или пакет, чтобы увидеть фактические сигналы, связи и контекст.</div>
+        </aside>
+      </div>
+      <div class="influence-legend" data-influence-legend aria-label="Легенда графа"></div>
+    </div>
   </section>
 
   <section id="nodes" class="panel">
     <div class="panel-head">
-      <div><h2>Проблемные классы</h2><div class="panel-kicker">Классы отсортированы по суммарному влиянию на сеть, UI, главный поток, память, лог-спам и сценарии.</div></div>
+      <div><h2>Классы для проверки</h2><div class="panel-kicker">Классы отсортированы по относительному приоритету внутри прогона. Оценка объединяет наблюдаемые симптомы и соседство в графе, но не является измерением времени самого класса.</div></div>
     </div>
     <details class="fold influence-table-fold">
-      <summary><span>Показать проблемные классы</span><span class="method-kind">{{len .Influence.TopNodes}} классов</span></summary>
+      <summary><span>Показать классы для проверки</span><span class="method-kind">{{ruCount (len .Influence.TopNodes) "класс" "класса" "классов"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table influence-node-table">
-          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Статус</th><th>Метрики</th><th>Причины</th><th>Сценарии / экраны</th></tr>
+          <tr><th>{{tip "Класс" "Класс из runtime-атрибуции или статического ASM-графа. Наличие строки не означает, что в классе есть ошибка."}}</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>{{tip "Основа" "Runtime означает, что класс или соседний вызов встречался в этом прогоне. Статическая связь означает только возможность вызова по байткоду."}}</th><th>{{tip "Наблюдаемые сигналы" "Сводка событий, связанных с классом через owner, runtime-call или контекст. Значения не являются профилем собственного CPU-времени класса."}}</th><th>{{tip "Основания ранжирования" "Какие сигналы увеличили приоритет строки. Это список гипотез для проверки, а не готовая первопричина."}}</th><th>{{tip "Сценарии / экраны" "Контекст, в котором класс был атрибутирован. Пустое значение означает, что контекст не был записан."}}</th></tr>
           {{range .Influence.TopNodes}}
           <tr>
             <td><code>{{.ClassName}}</code></td>
@@ -85,16 +135,16 @@
 
   <section id="edges" class="panel">
     <div class="panel-head">
-      <div><h2>Связи влияния</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и усиливаются, если один из классов проявился в симптомах выполнения.</div></div>
+      <div><h2>Связи между классами</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и runtime-вызовов. Вес нужен только для сортировки; он не измеряет силу причинного влияния.</div></div>
     </div>
     <details class="fold influence-table-fold">
-      <summary><span>Показать связи влияния</span><span class="method-kind">{{len .Influence.TopEdges}} связей</span></summary>
+      <summary><span>Показать связи</span><span class="method-kind">{{ruCount (len .Influence.TopEdges) "связь" "связи" "связей"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table influence-edge-table">
-          <tr><th>Откуда</th><th>Куда</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
+          <tr><th>{{tip "Откуда" "Класс-источник связи по статическому графу или записанному вызову."}}</th><th>{{tip "Куда" "Класс-назначение связи. Направление описывает вызов, но не направление причины симптома."}}</th><th>{{tip "Записанные вызовы" "Число вызовов, реально записанных в анализируемом прогоне."}}</th><th>{{tip "Статические связи" "Число совпавших статических записей графа. Это не число выполнений."}}</th><th>{{tip "Вес ранжирования" "Условный вес для сортировки связей внутри отчёта. Это не миллисекунды, вероятность или коэффициент причинности."}}</th><th>{{tip "Основание" "Выполнение означает записанный вызов; статика означает только возможность связи; смешанное основание хранит оба счётчика отдельно."}}</th><th>{{tip "Пояснение" "Какие фактические источники подтверждают связь. Наблюдение одного из концов не превращает статическую связь в выполненный вызов."}}</th></tr>
           {{range .Influence.TopEdges}}
-          <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.Count}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{if .RuntimeConfirmed}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
-          {{else}}<tr><td colspan="6" class="muted">Нет статических связей. Передайте `--class-graph`, чтобы увидеть ребра между классами.</td></tr>{{end}}
+          <tr><td><code>{{.From}}</code></td><td><code>{{.To}}</code></td><td>{{.RuntimeCount}}</td><td>{{.StaticCount}}</td><td>{{printf "%.1f" .Influence}}</td><td>{{influenceEvidenceLabel .Evidence}}</td><td>{{.Reason}}</td></tr>
+          {{else}}<tr><td colspan="7" class="muted">Связей для показа нет. Передайте <code>--class-graph</code>, чтобы добавить статические ребра между классами.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -102,16 +152,16 @@
 
   <section id="paths" class="panel">
     <div class="panel-head">
-      <div><h2>Горячие пути</h2><div class="panel-kicker">Цепочки обхода в ширину из статического графа, усиленные симптомами выполнения и весом вызовов.</div></div>
+      <div><h2>Пути для расследования</h2><div class="panel-kicker">Цепочки обхода статического графа, ранжированные рядом с runtime-сигналами. Это возможные маршруты поиска кода, а не записанный стек и не доказанная цепочка причины.</div></div>
     </div>
     <details class="fold influence-table-fold" open>
-      <summary><span>Показать горячие пути</span><span class="method-kind">{{len .Influence.HotPaths}} путей</span></summary>
+      <summary><span>Показать пути для расследования</span><span class="method-kind">{{ruCount (len .Influence.HotPaths) "путь" "пути" "путей"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Путь</th><th>Вес</th><th>Выполнение</th><th>Пояснение</th></tr>
+          <tr><th>{{tip "Путь" "Последовательность классов из статического графа. Она может не выполняться целиком в записанном сценарии."}}</th><th>{{tip "Вес" "Условный приоритет пути по весам узлов и связей; сравним только внутри этого отчёта."}}</th><th>{{tip "Цель наблюдалась" "Да — путь заканчивается в узле с данными выполнения. Промежуточные связи могут оставаться статическими."}}</th><th>Пояснение</th></tr>
           {{range .Influence.HotPaths}}
           <tr><td><code>{{join .Nodes " → "}}</code></td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTarget}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Нет горячих путей. Нужен `--class-graph` и симптомы выполнения.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Пути для расследования не построены. Нужен <code>--class-graph</code> и хотя бы один связанный runtime-сигнал.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -119,13 +169,13 @@
 
   <section id="methods" class="panel">
     <div class="panel-head">
-      <div><h2>Горячие методы</h2><div class="panel-kicker">Индекс на уровне методов показывает вызывающие и вызываемые методы рядом с симптомами выполнения и сильными статическими связями.</div></div>
+      <div><h2>Методы для проверки</h2><div class="panel-kicker">Индекс показывает вызывающие и вызываемые методы рядом с данными выполнения и статическими связями. Он не заменяет CPU-профилировщик и не сообщает собственное время метода.</div></div>
     </div>
     <details class="fold influence-table-fold" open>
-      <summary><span>Показать горячие методы</span><span class="method-kind">{{len .Influence.MethodHotspots}} методов</span></summary>
+      <summary><span>Показать методы для проверки</span><span class="method-kind">{{ruCount (len .Influence.MethodHotspots) "метод" "метода" "методов"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Класс</th><th>Метод</th><th>Роль</th><th>Вызовы</th><th>Вес</th><th>Выполнение</th></tr>
+          <tr><th>Класс</th><th>Метод</th><th>{{tip "Роль" "Вызывающий метод обращается к соседнему, вызываемый получает этот вызов. Роль описывает направление связи, а не виновника проблемы."}}</th><th>{{tip "Вызовы" "Число записанных вызовов, если доступен граф вызовов выполнения."}}</th><th>{{tip "Вес" "Условный приоритет метода внутри этого графа; не является длительностью."}}</th><th>{{tip "Наблюдалось" "Да — метод или его класс сопоставлен с данными выполнения этого прогона."}}</th></tr>
           {{range .Influence.MethodHotspots}}
           <tr><td><code>{{.ClassName}}</code></td><td><code>{{.Method}}</code></td><td>{{influenceRoleLabel .Role}}</td><td>{{.Count}}</td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Нет данных на уровне методов. Передайте граф классов с вызывающими и вызываемыми методами.</td></tr>{{end}}
@@ -136,13 +186,13 @@
 
   <section id="cycles" class="panel">
     <div class="panel-head">
-      <div><h2>Циклы зависимостей</h2><div class="panel-kicker">SCC-компоненты показывают замкнутые зоны, где изменения и нагрузка могут быстро распространяться по соседним классам.</div></div>
+      <div><h2>Циклы связей</h2><div class="panel-kicker">Компоненты сильной связности показывают группы классов, достижимых друг из друга в статическом графе. Цикл может усложнять архитектуру, но не доказывает выполнение цикла, нагрузку или ошибку.</div></div>
     </div>
     <details class="fold influence-table-fold">
-      <summary><span>Показать циклы</span><span class="method-kind">{{len .Influence.Cycles}} циклов</span></summary>
+      <summary><span>Показать циклы</span><span class="method-kind">{{ruCount (len .Influence.Cycles) "цикл" "цикла" "циклов"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table">
-          <tr><th>Компонента</th><th>Вес</th><th>Затронуто выполнение</th></tr>
+          <tr><th>{{tip "Компонента" "Компонента сильной связности: группа классов, между которыми в графе существуют пути в обе стороны."}}</th><th>{{tip "Вес" "Суммарный условный вес связей компоненты для сортировки. Это не число выполнений цикла."}}</th><th>{{tip "Наблюдение выполнения" "Да — хотя бы один класс компоненты встречался в данных выполнения. Полный цикл мог не выполняться."}}</th></tr>
           {{range .Influence.Cycles}}
           <tr><td><code>{{join .Nodes " ↔ "}}</code></td><td>{{.Weight}}</td><td>{{if .RuntimeTouched}}да{{else}}нет{{end}}</td></tr>
           {{else}}<tr><td colspan="3" class="muted">Сильносвязных циклов не найдено или статический граф не передан.</td></tr>{{end}}
@@ -165,182 +215,835 @@
 </main>
 <script>{{reportJS}}
 (() => {
-  const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
+  const data = {{influenceGraphData .Influence}};
+  const root = document.querySelector('[data-influence-workbench]');
+  if (!root || !Array.isArray(data.Views)) return;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const escapeHTML = (value) => String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[char]));
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const viewButtons = Array.from(root.querySelectorAll('[data-influence-view]'));
+  const highlightButtons = Array.from(root.querySelectorAll('[data-influence-highlight]'));
+  const search = root.querySelector('[data-influence-search]');
+  const searchOptions = root.querySelector('#influence-search-options');
+  const packageField = root.querySelector('[data-influence-package-field]');
+  const packageDepth = root.querySelector('[data-influence-package-depth]');
+  const directionField = root.querySelector('[data-influence-direction-field]');
+  const direction = root.querySelector('[data-influence-direction]');
+  const depthField = root.querySelector('[data-influence-depth-field]');
+  const depth = root.querySelector('[data-influence-depth]');
+  const contextField = root.querySelector('[data-influence-context-field]');
+  const context = root.querySelector('[data-influence-context]');
+  const runtimeField = root.querySelector('[data-influence-runtime-field]');
+  const runtimeOnly = root.querySelector('[data-influence-runtime-only]');
+  const resetFilters = root.querySelector('[data-influence-reset-filters]');
+  const title = root.querySelector('[data-influence-view-title]');
+  const explanation = root.querySelector('[data-influence-view-explanation]');
+  const shown = root.querySelector('[data-influence-shown]');
+  const omitted = root.querySelector('[data-influence-omitted]');
+  const workspaceNote = root.querySelector('[data-influence-workspace-note]');
+  const selection = root.querySelector('[data-influence-selection]');
+  const viewport = root.querySelector('[data-influence-viewport]');
+  const graph = root.querySelector('[data-influence-graph]');
+  const stage = root.querySelector('[data-influence-stage]');
+  const empty = root.querySelector('[data-influence-empty]');
+  const detail = root.querySelector('[data-influence-detail]');
+  const legend = root.querySelector('[data-influence-legend]');
+  const centerButton = root.querySelector('[data-influence-center]');
+  const workspace = data.Workspace || {};
+  const workspaceNodes = asArray(workspace.Nodes);
+  const workspaceEdges = asArray(workspace.Edges);
+  const workspaceNodeByID = new Map(workspaceNodes.map((node) => [node.ID || node.ClassName, node]));
+  const indexedViewNodes = new Map(asArray(data.ViewNodes).map((node) => [node._Key, node]));
+  const indexedViewEdges = new Map(asArray(data.ViewEdges).map((edge) => [edge._Key, edge]));
+  const views = data.Views.map((view) => Object.assign({}, view, {
+    Nodes: asArray(view.NodeIDs).map((key) => indexedViewNodes.get(key)).filter(Boolean).map((node) => {
+      const detailed = workspaceNodeByID.get(node.ID || node.ClassName);
+      if (!detailed || node.Aggregate) return node;
+      return Object.assign({}, node, detailed, {
+        Kind: node.Kind || detailed.Kind,
+        Connector: Boolean(node.Connector || detailed.Connector),
+      });
+    }),
+    Edges: asArray(view.EdgeIDs).map((key) => indexedViewEdges.get(key)).filter(Boolean),
+  }));
+  const viewByID = new Map(views.map((view) => [view.ID, view]));
+  const firstByMode = new Map();
+  views.forEach((view) => {
+    if (!firstByMode.has(view.Mode)) firstByMode.set(view.Mode, view);
+  });
+  let currentMode = 'problems';
+  let currentView = viewByID.get('problems') || views[0] || null;
+  let selectedNode = '';
+  let pinnedNode = '';
+  let highlightMode = 'paths';
+  let renderedNodes = [];
+  let renderedEdges = [];
+  let positions = new Map();
+  let graphWidth = 1280;
+  let graphHeight = 720;
+  let transform = { scale: 1, x: 0, y: 0 };
+  let dragging = null;
 
-  document.querySelectorAll('.influence-graph-card').forEach((card) => {
-    const selection = card.querySelector('[data-influence-selection]');
-    const graph = card.querySelector('.influence-graph');
-    const nodes = Array.from(card.querySelectorAll('.influence-node[data-node]'));
-    const edges = Array.from(card.querySelectorAll('.influence-edge[data-from][data-to]'));
-    if (!graph || nodes.length === 0) return;
+  const createSVG = (name, attributes = {}) => {
+    const node = document.createElementNS(svgNS, name);
+    Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+    return node;
+  };
 
-    const modeButtons = Array.from(card.querySelectorAll('[data-influence-mode]'));
-    const resetButton = card.querySelector('[data-influence-reset]');
+  const setText = (node, value) => {
+    if (node) node.textContent = value == null ? '' : String(value);
+  };
+
+  const nodeName = (node) => node.ClassName || node.ID || '';
+
+  const displayLabel = (node) => {
+    if (node.Label) return node.Label;
+    if (node.Aggregate && node.Package) return node.Package;
+    const parts = nodeName(node).split('.');
+    return parts.slice(Math.max(0, parts.length - 2)).join('.');
+  };
+
+  const statusLabel = (node) => {
+    if (node.Aggregate) return 'package · max score';
+    if (node.Connector) return 'connector · не участник контекста';
+    if (node.HeapEvidence) return 'runtime · HPROF evidence';
+    if (node.RuntimeEvidence) return 'runtime evidence';
+    return 'static-only';
+  };
+
+  const edgeLabel = (edge) => {
+    if (edge.Evidence === 'mixed') return 'runtime + static';
+    if (edge.Evidence === 'runtime') return 'runtime';
+    return 'static-only';
+  };
+
+  const syncTransform = () => {
+    if (!stage) return;
+    stage.setAttribute('transform', 'translate(' + transform.x.toFixed(2) + ' ' + transform.y.toFixed(2) + ') scale(' + transform.scale.toFixed(3) + ')');
+  };
+
+  const resetTransform = () => {
+    transform = { scale: 1, x: 0, y: 0 };
+    syncTransform();
+  };
+
+  const workspaceMessage = () => {
+    const nodeText = 'workspace классов: ' + number(workspace.ShownNodes) + ' из ' + number(workspace.TotalNodes);
+    const edgeText = 'связей: ' + number(workspace.ShownEdges) + ' из ' + number(workspace.TotalEdges);
+    const reasons = asArray(workspace.OmissionReasons);
+    setText(workspaceNote, nodeText + ' · ' + edgeText + (reasons.length ? ' · ' + reasons.join('; ') : ' · данные помещаются полностью'));
+  };
+
+  const populateSearch = () => {
+    if (!searchOptions) return;
+    const fragment = document.createDocumentFragment();
+    workspaceNodes.slice(0, 2000).forEach((node) => {
+      const option = document.createElement('option');
+      option.value = node.ID || node.ClassName || '';
+      option.label = node.Package ? node.Package + ' → ' + displayLabel(node) : displayLabel(node);
+      fragment.appendChild(option);
+    });
+    searchOptions.replaceChildren(fragment);
+  };
+
+  const populateContexts = () => {
+    if (!context) return;
+    const labels = { screen: 'Экран', flow: 'Flow', route: 'Route' };
+    const fragment = document.createDocumentFragment();
+    asArray(workspace.Contexts).forEach((item) => {
+      const option = document.createElement('option');
+      option.value = item.ID;
+      option.textContent = (labels[item.Kind] || item.Kind) + ': ' + item.Value + ' · runtime ' + number(item.RuntimeNodes) + ' · problem ' + number(item.ProblemNodes);
+      fragment.appendChild(option);
+    });
+    context.replaceChildren(fragment);
+  };
+
+  const nodeMapFor = (nodes) => new Map(asArray(nodes).map((node) => [node.ID || node.ClassName, node]));
+
+  const layout = (view) => {
+    const nodes = asArray(view.Nodes);
+    const edges = asArray(view.Edges);
+    const incoming = new Map(nodes.map((node) => [node.ID, 0]));
+    const outgoing = new Map(nodes.map((node) => [node.ID, 0]));
+    edges.forEach((edge) => {
+      outgoing.set(edge.From, (outgoing.get(edge.From) || 0) + 1);
+      incoming.set(edge.To, (incoming.get(edge.To) || 0) + 1);
+    });
+    const columns = [[], [], []];
+    nodes.forEach((node, index) => {
+      const input = incoming.get(node.ID) || 0;
+      const output = outgoing.get(node.ID) || 0;
+      let column = index % 3;
+      if (node.Connector) column = 1;
+      else if (output > 0 && input === 0) column = 0;
+      else if (input > 0 && output === 0) column = 2;
+      else if (input + output > 0) column = 1;
+      columns[column].push(node);
+    });
+    const nodeW = 270;
+    const nodeH = 86;
+    const columnGap = 55;
+    const rowGap = 26;
+    const marginX = 36;
+    const marginY = 58;
+    graphWidth = marginX * 2 + nodeW * 3 + columnGap * 2;
+    const maxRows = Math.max(1, ...columns.map((items) => items.length));
+    graphHeight = Math.max(640, marginY * 2 + maxRows * (nodeH + rowGap));
+    const next = new Map();
+    columns.forEach((items, column) => {
+      items.forEach((node, row) => {
+        next.set(node.ID, {
+          x: marginX + column * (nodeW + columnGap),
+          y: marginY + row * (nodeH + rowGap),
+          w: nodeW,
+          h: nodeH,
+        });
+      });
+    });
+    return next;
+  };
+
+  const edgePath = (from, to) => {
+    const x1 = from.x + from.w;
+    const y1 = from.y + from.h / 2;
+    const x2 = to.x;
+    const y2 = to.y + to.h / 2;
+    if (x2 > x1) {
+      const curve = Math.max(55, Math.abs(x2 - x1) * 0.42);
+      return 'M' + x1 + ' ' + y1 + ' C' + (x1 + curve) + ' ' + y1 + ' ' + (x2 - curve) + ' ' + y2 + ' ' + x2 + ' ' + y2;
+    }
+    const rail = Math.min(graphWidth - 18, Math.max(from.x, to.x) + from.w + 42);
+    return 'M' + x1 + ' ' + y1 + ' C' + rail + ' ' + y1 + ' ' + rail + ' ' + y2 + ' ' + (to.x + to.w) + ' ' + y2;
+  };
+
+  const buildDefinitions = () => {
+    const defs = createSVG('defs');
+    ['runtime', 'static', 'mixed'].forEach((kind) => {
+      const marker = createSVG('marker', {
+        id: 'influence-arrow-' + kind,
+        markerWidth: 10,
+        markerHeight: 10,
+        refX: 9,
+        refY: 5,
+        orient: 'auto',
+        markerUnits: 'userSpaceOnUse',
+      });
+      const path = createSVG('path', { d: 'M0,0 L10,5 L0,10 Z', class: 'influence-arrow influence-arrow-' + kind });
+      marker.appendChild(path);
+      defs.appendChild(marker);
+    });
+    return defs;
+  };
+
+  const renderMarker = (group, node) => {
+    if (node.Aggregate) {
+      group.appendChild(createSVG('rect', { class: 'node-marker node-marker-aggregate', x: 14, y: 20, width: 32, height: 32, rx: 3 }));
+      return;
+    }
+    if (node.Connector) {
+      group.appendChild(createSVG('polygon', { class: 'node-marker node-marker-connector', points: '30,14 47,36 30,58 13,36' }));
+      return;
+    }
+    group.appendChild(createSVG('circle', { class: 'node-marker', cx: 30, cy: 36, r: clamp(15 + number(node.Score) * 0.45, 15, 24) }));
+  };
+
+  const addText = (group, className, x, y, value) => {
+    const textNode = createSVG('text', { class: className, x, y });
+    textNode.textContent = value;
+    group.appendChild(textNode);
+    return textNode;
+  };
+
+  const fitSVGText = (textNode, maxWidth) => {
+    const value = textNode.textContent || '';
+    if (!value || textNode.getComputedTextLength() <= maxWidth) return;
+    let low = 1;
+    let high = value.length;
+    let fitted = '…';
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = value.slice(0, middle).trimEnd() + '…';
+      textNode.textContent = candidate;
+      if (textNode.getComputedTextLength() <= maxWidth) {
+        fitted = candidate;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    textNode.textContent = fitted;
+  };
+
+  const bindNode = (group, node) => {
+    const name = node.ID;
+    group.addEventListener('pointerenter', () => {
+      if (!pinnedNode) selectNode(name, false);
+    });
+    group.addEventListener('focus', () => selectNode(name, false));
+    group.addEventListener('click', (event) => {
+      event.stopPropagation();
+      pinnedNode = name;
+      selectNode(name, true);
+    });
+    group.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        pinnedNode = name;
+        selectNode(name, true);
+      }
+    });
+  };
+
+  const renderGraph = () => {
+    if (!currentView || !stage || !graph) return;
+    renderedNodes = asArray(currentView.Nodes);
+    renderedEdges = asArray(currentView.Edges);
+    positions = layout(currentView);
+    graph.setAttribute('viewBox', '0 0 ' + graphWidth + ' ' + graphHeight);
+    stage.replaceChildren();
+    const definitions = buildDefinitions();
+    stage.appendChild(definitions);
+    renderedEdges.forEach((edge, index) => {
+      const from = positions.get(edge.From);
+      const to = positions.get(edge.To);
+      if (!from || !to) return;
+      const kind = edge.Evidence === 'runtime' || edge.Evidence === 'mixed' ? edge.Evidence : 'static';
+      const path = createSVG('path', {
+        class: 'influence-edge evidence-' + kind + (edge.Aggregate ? ' aggregate' : ''),
+        d: edgePath(from, to),
+        'data-from': edge.From,
+        'data-to': edge.To,
+        'data-edge-index': index,
+        'stroke-width': clamp(1.5 + Math.log1p(number(edge.Influence)) * 0.72, 1.5, 6).toFixed(2),
+        'marker-end': 'url(#influence-arrow-' + kind + ')',
+      });
+      const tip = createSVG('title');
+      tip.textContent = edge.From + ' → ' + edge.To + ' · ' + edgeLabel(edge) + ' · runtime ' + number(edge.RuntimeCount) + ' · static ' + number(edge.StaticCount);
+      path.appendChild(tip);
+      stage.appendChild(path);
+    });
+    renderedNodes.forEach((node) => {
+      const position = positions.get(node.ID);
+      if (!position) return;
+      const classes = ['influence-node', node.Severity || 'ok'];
+      if (!node.RuntimeEvidence) classes.push('static-only');
+      if (node.Connector) classes.push('connector');
+      if (node.Aggregate) classes.push('aggregate');
+      if (node.HeapEvidence) classes.push('hprof');
+      const group = createSVG('g', {
+        class: classes.join(' '),
+        transform: 'translate(' + position.x + ' ' + position.y + ')',
+        tabindex: 0,
+        role: 'button',
+        'aria-label': nodeName(node) + ', score ' + number(node.Score).toFixed(1) + ', ' + statusLabel(node),
+        'data-node': node.ID,
+      });
+      const tip = createSVG('title');
+      tip.textContent = nodeName(node) + ' · score ' + number(node.Score).toFixed(1) + ' · ' + statusLabel(node);
+      group.appendChild(tip);
+      group.appendChild(createSVG('rect', { class: 'node-card', width: position.w, height: position.h, rx: 6 }));
+      renderMarker(group, node);
+      addText(group, 'node-score-text', 30, 39, node.Aggregate ? String(number(node.ChildCount)) : number(node.Score).toFixed(1));
+      const labelText = addText(group, 'node-label', 61, 25, displayLabel(node));
+      const kindText = addText(group, 'node-kind', 61, 47, statusLabel(node));
+      const reason = node.Aggregate ? 'классы ' + number(node.ChildCount) + ' · problem ' + number(node.ProblemClassCount) : asArray(node.Reasons).join(', ');
+      const reasonText = addText(group, 'node-reason', 61, 68, reason || 'нет проблемных сигналов');
+      bindNode(group, node);
+      stage.appendChild(group);
+      const textWidth = position.w - 75;
+      fitSVGText(labelText, textWidth);
+      fitSVGText(kindText, textWidth);
+      fitSVGText(reasonText, textWidth);
+    });
+    if (empty) empty.hidden = renderedNodes.length > 0;
+    resetTransform();
+    if (selectedNode && renderedNodes.some((node) => node.ID === selectedNode)) {
+      selectNode(selectedNode, true);
+    } else {
+      selectedNode = '';
+      pinnedNode = '';
+      clearHighlight();
+      renderDetail(null);
+    }
+  };
+
+  const adjacency = () => {
     const outgoing = new Map();
     const incoming = new Map();
-    edges.forEach((edge, index) => {
-      const from = edge.dataset.from || '';
-      const to = edge.dataset.to || '';
-      if (!from || !to) return;
-      if (!outgoing.has(from)) outgoing.set(from, []);
-      if (!incoming.has(to)) incoming.set(to, []);
-      outgoing.get(from).push({ index, to });
-      incoming.get(to).push({ index, from });
+    renderedEdges.forEach((edge, index) => {
+      if (!outgoing.has(edge.From)) outgoing.set(edge.From, []);
+      if (!incoming.has(edge.To)) incoming.set(edge.To, []);
+      outgoing.get(edge.From).push({ index, to: edge.To });
+      incoming.get(edge.To).push({ index, from: edge.From });
     });
+    return { outgoing, incoming };
+  };
 
-    let pinnedNode = '';
-    let currentNode = '';
-    let mode = 'paths';
-
-    const walkPathsFrom = (start) => {
-      const reached = new Set([start]);
-      const activeEdges = new Set();
-      const stack = [start];
-      while (stack.length > 0) {
-        const current = stack.pop();
-        (outgoing.get(current) || []).forEach(({ index, to }) => {
-          activeEdges.add(index);
-          if (!reached.has(to)) {
-            reached.add(to);
-            stack.push(to);
-          }
-        });
-      }
+  const analyzeSelection = (start) => {
+    const maps = adjacency();
+    const reached = new Set([start]);
+    const activeEdges = new Set();
+    if (highlightMode === 'node') {
+      (maps.outgoing.get(start) || []).forEach(({ index, to }) => { activeEdges.add(index); reached.add(to); });
+      (maps.incoming.get(start) || []).forEach(({ index, from }) => { activeEdges.add(index); reached.add(from); });
       return { reached, activeEdges };
-    };
-
-    const walkTreeFrom = (start) => {
-      const reached = new Set([start]);
-      const activeEdges = new Set();
-      const queue = [start];
-      while (queue.length > 0) {
-        const current = queue.shift();
-        (outgoing.get(current) || []).forEach(({ index, to }) => {
-          if (reached.has(to)) return;
-          reached.add(to);
-          activeEdges.add(index);
-          queue.push(to);
-        });
-      }
-      return { reached, activeEdges };
-    };
-
-    const incidentFrom = (start) => {
-      const reached = new Set([start]);
-      const activeEdges = new Set();
-      (outgoing.get(start) || []).forEach(({ index, to }) => {
-        activeEdges.add(index);
-        reached.add(to);
-      });
-      (incoming.get(start) || []).forEach(({ index, from }) => {
-        activeEdges.add(index);
-        reached.add(from);
-      });
-      return { reached, activeEdges };
-    };
-
-    const analysisFor = (start) => {
-      if (mode === 'tree') return walkTreeFrom(start);
-      if (mode === 'node') return incidentFrom(start);
-      return walkPathsFrom(start);
-    };
-
-    const modeText = () => {
-      if (mode === 'tree') return 'остов влияния';
-      if (mode === 'node') return 'ближайшие связи вершины';
-      return 'исходящие пути';
-    };
-
-    const syncModeButtons = () => {
-      modeButtons.forEach((button) => {
-        button.classList.toggle('is-active', button.dataset.influenceMode === mode);
-      });
-    };
-
-    const reset = () => {
-      pinnedNode = '';
-      currentNode = '';
-      nodes.forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-neighbor', 'is-dimmed'));
-      edges.forEach((edge) => edge.classList.remove('is-path', 'is-tree', 'is-dimmed'));
-      if (selection) {
-        selection.textContent = 'Выберите режим и наведите мышью на вершину: можно выделить вершину, исходящие пути или остов влияния.';
-      }
-    };
-
-    const selectNode = (name) => {
-      currentNode = name;
-      const { reached, activeEdges } = analysisFor(name);
-      nodes.forEach((node) => {
-        const nodeName = node.dataset.node || '';
-        const selected = nodeName === name;
-        const related = reached.has(nodeName);
-        node.classList.toggle('is-selected', selected);
-        node.classList.toggle('is-related', related && !selected);
-        node.classList.toggle('is-neighbor', mode === 'node' && related && !selected);
-        node.classList.toggle('is-dimmed', !related);
-      });
-      edges.forEach((edge, index) => {
-        const active = activeEdges.has(index);
-        edge.classList.toggle('is-path', active);
-        edge.classList.toggle('is-tree', active && mode === 'tree');
-        edge.classList.toggle('is-dimmed', !active);
-      });
-      if (selection) {
-        selection.innerHTML = '<strong>' + escapeHTML(name) + '</strong>: выделены ' + modeText() + ', ' +
-          reached.size + ' узлов и ' + activeEdges.size + ' связей.';
-      }
-    };
-
-    modeButtons.forEach((button) => {
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        mode = button.dataset.influenceMode || 'paths';
-        syncModeButtons();
-        if (currentNode) selectNode(currentNode);
-      });
-    });
-    if (resetButton) {
-      resetButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        reset();
-      });
     }
-    syncModeButtons();
-
-    nodes.forEach((node) => {
-      const name = node.dataset.node || '';
-      node.addEventListener('pointerenter', () => {
-        if (!pinnedNode) selectNode(name);
-      });
-      node.addEventListener('focus', () => selectNode(name));
-      node.addEventListener('click', (event) => {
-        event.stopPropagation();
-        pinnedNode = name;
-        selectNode(name);
-      });
-      node.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          pinnedNode = name;
-          selectNode(name);
+    const queue = [start];
+    while (queue.length) {
+      const current = highlightMode === 'tree' ? queue.shift() : queue.pop();
+      (maps.outgoing.get(current) || []).forEach(({ index, to }) => {
+        if (highlightMode === 'tree' && reached.has(to)) return;
+        activeEdges.add(index);
+        if (!reached.has(to)) {
+          reached.add(to);
+          queue.push(to);
         }
       });
-    });
+    }
+    return { reached, activeEdges };
+  };
 
-    card.addEventListener('pointerleave', () => {
-      if (!pinnedNode) reset();
+  const clearHighlight = () => {
+    root.querySelectorAll('.influence-node').forEach((node) => node.classList.remove('is-selected', 'is-related', 'is-neighbor', 'is-dimmed'));
+    root.querySelectorAll('.influence-edge').forEach((edge) => edge.classList.remove('is-path', 'is-tree', 'is-dimmed'));
+    setText(selection, 'Выберите узел мышью или клавиатурой. Режим подсветки не меняет данные и score.');
+  };
+
+  const currentNodeByID = (id) => renderedNodes.find((node) => node.ID === id) || null;
+
+  const renderMetric = (label, value) => '<div><span>' + escapeHTML(label) + '</span><strong>' + escapeHTML(value) + '</strong></div>';
+
+  const factualExplanation = (node, paths) => {
+    if (node.Aggregate) return 'Score группы равен максимальному score дочернего класса, а не сумме. Счетчики классов и связей рассчитаны отдельно.';
+    if (!node.RuntimeEvidence) return 'Класс известен только из статического графа. Его выполнение в этом прогоне не подтверждено; score используется только для приоритизации проверки.';
+    const signals = [];
+    if (number(node.Problems)) signals.push(number(node.Problems) + ' проблемных сигналов');
+    if (number(node.RuntimeWallMS)) signals.push(number(node.RuntimeWallMS) + ' мс runtime-времени');
+    if (number(node.MainThreadMS)) signals.push(number(node.MainThreadMS) + ' мс на главном потоке');
+    if (number(node.NetworkMS)) signals.push(number(node.NetworkMS) + ' мс сетевой нагрузки');
+    if (number(node.Retained)) signals.push(number(node.Retained) + ' сигналов удержания');
+    if (number(node.LogSpam)) signals.push(number(node.LogSpam) + ' вызовов шумных логов');
+    let result = 'Класс записан во время этого прогона' + (signals.length ? ' и получил score ' + number(node.Score).toFixed(1) + ' из-за фактических данных: ' + signals.join(', ') : '') + '. Score используется для приоритизации и сам по себе не доказывает причинную связь.';
+    const confirmed = asArray(paths).find((item) => item.RuntimeTarget && asArray(item.Nodes).length > 1);
+    if (confirmed) result += ' Подтвержденный runtime-путь: ' + asArray(confirmed.Nodes).join(' → ') + '.';
+    return result;
+  };
+
+  const renderDetail = (node) => {
+    if (!detail) return;
+    if (!node) {
+      detail.innerHTML = '<div class="influence-detail-empty">Выберите класс или пакет, чтобы увидеть фактические сигналы, связи и контекст.</div>';
+      return;
+    }
+    const nodeID = node.ID;
+    const currentIncoming = renderedEdges.filter((edge) => edge.To === nodeID);
+    const currentOutgoing = renderedEdges.filter((edge) => edge.From === nodeID);
+    const className = nodeName(node);
+    const methods = asArray(data.MethodHotspots).filter((item) => item.ClassName === className).slice(0, 6);
+    const paths = asArray(data.HotPaths).filter((item) => asArray(item.Nodes).includes(className)).slice(0, 4);
+    const contexts = []
+      .concat(asArray(node.Screens).map((value) => 'экран: ' + value))
+      .concat(asArray(node.Flows).map((value) => 'flow: ' + value))
+      .concat(asArray(node.Routes).map((value) => 'route: ' + value));
+    const breadcrumbs = asArray(node.Breadcrumbs).length ? asArray(node.Breadcrumbs) : className.split('.');
+    const metrics = [
+      ['Score', number(node.Score).toFixed(1) + ' · эвристика'],
+      ['Severity', node.Severity || 'нет данных'],
+      ['Runtime wall', number(node.RuntimeWallMS) + ' мс'],
+      ['Главный поток', number(node.MainThreadMS) + ' мс'],
+      ['Сеть', number(node.NetworkMS) + ' мс'],
+      ['Memory pressure', number(node.MemoryPressure) + ' КБ'],
+      ['Удержания', number(node.Retained) + (node.HeapEvidence ? ' · HPROF' : '')],
+      ['Log spam', number(node.LogSpam)],
+      ['Входящие / исходящие', currentIncoming.length + ' / ' + currentOutgoing.length],
+    ];
+    let packageBlock = '';
+    if (node.Aggregate) {
+      packageBlock = '<div class="influence-detail-section"><strong>Состав группы</strong><p>Классов: ' + number(node.ChildCount) + ' · runtime: ' + number(node.RuntimeClassCount) + ' · static-only: ' + number(node.StaticOnlyClassCount) + ' · problem: ' + number(node.ProblemClassCount) + '</p><div class="influence-detail-list">' + asArray(node.Children).map((item) => '<code>' + escapeHTML(item) + '</code>').join('') + '</div><button type="button" data-influence-expand-package>Раскрыть до классов</button></div>';
+    }
+    const methodBlock = methods.length ? '<div class="influence-detail-section"><strong>Горячие методы</strong><div class="influence-detail-list">' + methods.map((item) => '<code>' + escapeHTML(item.Method) + ' · ' + escapeHTML(item.Role) + ' · вес ' + number(item.Weight).toFixed(1) + '</code>').join('') + '</div></div>' : '';
+    const pathBlock = paths.length ? '<div class="influence-detail-section"><strong>Пути для проверки</strong><div class="influence-detail-list">' + paths.map((item) => '<code>' + escapeHTML(asArray(item.Nodes).join(' → ')) + '</code>').join('') + '</div></div>' : '';
+    detail.innerHTML = '<div class="influence-detail-head"><div><span>' + escapeHTML(statusLabel(node)) + '</span><h3>' + escapeHTML(className) + '</h3></div>' + (node.HeapEvidence ? '<span class="influence-hprof-badge">HPROF</span>' : '') + '</div>' +
+      '<div class="influence-breadcrumbs">' + breadcrumbs.map((item) => '<span>' + escapeHTML(item) + '</span>').join('<b>→</b>') + '</div>' +
+      '<p class="influence-explanation data-ticket" data-ticket-label="Контекст расчёта">' + escapeHTML(node.Explanation || factualExplanation(node, paths)) + '</p>' +
+      '<div class="influence-detail-metrics">' + metrics.map((item) => renderMetric(item[0], item[1])).join('') + '</div>' +
+      '<div class="influence-detail-section"><strong>Основания</strong><p>' + escapeHTML(asArray(node.Reasons).join(', ') || 'нет проблемных сигналов') + '</p></div>' +
+      '<div class="influence-detail-section"><strong>Screen / Flow / Route</strong><p>' + escapeHTML(contexts.join(' · ') || 'контекст не записан') + '</p></div>' +
+      packageBlock + methodBlock + pathBlock;
+    const expand = detail.querySelector('[data-influence-expand-package]');
+    if (expand) expand.addEventListener('click', () => expandPackage(node));
+  };
+
+  const selectNode = (name, pin) => {
+    const node = currentNodeByID(name);
+    if (!node) return;
+    selectedNode = name;
+    if (pin) pinnedNode = name;
+    const analysis = analyzeSelection(name);
+    root.querySelectorAll('.influence-node[data-node]').forEach((element) => {
+      const id = element.dataset.node || '';
+      const isSelected = id === name;
+      const related = analysis.reached.has(id);
+      element.classList.toggle('is-selected', isSelected);
+      element.classList.toggle('is-related', related && !isSelected);
+      element.classList.toggle('is-neighbor', highlightMode === 'node' && related && !isSelected);
+      element.classList.toggle('is-dimmed', !related);
     });
-    graph.addEventListener('click', () => reset());
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && pinnedNode) reset();
+    root.querySelectorAll('.influence-edge[data-edge-index]').forEach((element) => {
+      const index = Number(element.dataset.edgeIndex);
+      const active = analysis.activeEdges.has(index);
+      element.classList.toggle('is-path', active);
+      element.classList.toggle('is-tree', active && highlightMode === 'tree');
+      element.classList.toggle('is-dimmed', !active);
     });
+    setText(selection, nodeName(node) + ': ' + analysis.reached.size + ' узлов и ' + analysis.activeEdges.size + ' связей в подсветке «' + highlightMode + '».');
+    renderDetail(node);
+    writeHash();
+  };
+
+  const updateStatus = () => {
+    if (!currentView) return;
+    setText(title, currentView.Title || currentView.Mode);
+    setText(explanation, currentView.Explanation || '');
+    setText(shown, 'Показано ' + number(currentView.ShownNodes) + ' из ' + number(currentView.TotalNodes) + ' узлов · ' + number(currentView.ShownEdges) + ' из ' + number(currentView.TotalEdges) + ' связей');
+    const reasons = asArray(currentView.OmissionReasons);
+    const omittedText = 'Исключено: ' + number(currentView.OmittedNodes) + ' узлов · ' + number(currentView.OmittedEdges) + ' связей';
+    setText(omitted, omittedText + (reasons.length ? ' · ' + reasons.join('; ') : ' · обрезки нет'));
+  };
+
+  const renderLegend = () => {
+    if (!legend || !currentView) return;
+    const fragment = document.createDocumentFragment();
+    asArray(currentView.Legend).forEach((item) => {
+      const entry = document.createElement('div');
+      entry.className = 'influence-legend-item kind-' + item.Kind;
+      entry.tabIndex = 0;
+      entry.setAttribute('data-tip', item.Help || '');
+      const mark = document.createElement('span');
+      const textNode = document.createElement('span');
+      textNode.textContent = item.Label;
+      entry.append(mark, textNode);
+      fragment.appendChild(entry);
+    });
+    legend.replaceChildren(fragment);
+  };
+
+  const syncControls = () => {
+    viewButtons.forEach((button) => {
+      const active = button.dataset.influenceView === currentMode || (currentMode === 'package-detail' && button.dataset.influenceView === 'packages');
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if (packageField) packageField.hidden = currentMode !== 'packages' && currentMode !== 'package-detail';
+    if (directionField) directionField.hidden = currentMode !== 'neighborhood';
+    if (depthField) depthField.hidden = currentMode !== 'neighborhood';
+    if (runtimeField) runtimeField.hidden = currentMode !== 'neighborhood';
+    if (contextField) contextField.hidden = currentMode !== 'context';
+    highlightButtons.forEach((button) => {
+      const active = button.dataset.influenceHighlight === highlightMode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  };
+
+  const setView = (view, mode, preserveSelection = false) => {
+    if (!view) return;
+    currentView = view;
+    currentMode = mode || view.Mode || 'problems';
+    if (!preserveSelection) {
+      selectedNode = '';
+      pinnedNode = '';
+    }
+    syncControls();
+    updateStatus();
+    renderLegend();
+    renderGraph();
+    writeHash();
+  };
+
+  const matchingWorkspaceNode = (query) => {
+    const normalized = String(query || '').trim().toLowerCase();
+    if (!normalized) return null;
+    return workspaceNodes.find((node) => String(node.ID || node.ClassName).toLowerCase() === normalized) ||
+      workspaceNodes.find((node) => String(node.ID || node.ClassName).toLowerCase().includes(normalized) || String(node.Package || '').toLowerCase().includes(normalized)) || null;
+  };
+
+  const dynamicView = (id, mode, titleText, explanationText, nodes, edges, filters, maxNodes = 64, maxEdges = 120) => {
+    const totalNodes = nodes.length;
+    const totalEdges = edges.length;
+    const shownNodes = nodes.slice(0, maxNodes);
+    const selected = new Set(shownNodes.map((node) => node.ID));
+    const shownEdges = edges.filter((edge) => selected.has(edge.From) && selected.has(edge.To)).slice(0, maxEdges);
+    const reasons = [];
+    if (shownNodes.length < totalNodes) reasons.push('лимит представления: ' + maxNodes + ' узлов');
+    if (shownEdges.length < totalEdges) reasons.push('часть связей исключена лимитом или вместе с узлами');
+    if (number(workspace.OmittedNodes) || number(workspace.OmittedEdges)) reasons.push('представление построено по bounded workspace');
+    return {
+      ID: id,
+      Mode: mode,
+      Title: titleText,
+      Explanation: explanationText,
+      Filters: filters,
+      Nodes: shownNodes,
+      Edges: shownEdges,
+      TotalNodes: totalNodes,
+      TotalEdges: totalEdges,
+      ShownNodes: shownNodes.length,
+      ShownEdges: shownEdges.length,
+      OmittedNodes: totalNodes - shownNodes.length,
+      OmittedEdges: totalEdges - shownEdges.length,
+      OmissionReasons: reasons,
+      Limits: { MaxNodes: maxNodes, MaxEdges: maxEdges },
+      Legend: asArray((viewByID.get('problems') || {}).Legend),
+    };
+  };
+
+  const buildNeighborhood = (nodeID) => {
+    const nodeByID = nodeMapFor(workspaceNodes);
+    if (!nodeByID.has(nodeID)) {
+      return dynamicView('neighborhood', 'neighborhood', 'Окрестность', 'Выбранный класс отсутствует в bounded workspace.', [], [], {}, 64, 120);
+    }
+    const maxDepth = clamp(parseInt(depth && depth.value || '1', 10), 1, 3);
+    const selectedDirection = direction && direction.value || 'both';
+    const onlyRuntime = Boolean(runtimeOnly && runtimeOnly.checked);
+    const outgoing = new Map();
+    const incoming = new Map();
+    workspaceEdges.forEach((edge) => {
+      if (onlyRuntime && number(edge.RuntimeCount) === 0) return;
+      if (!outgoing.has(edge.From)) outgoing.set(edge.From, []);
+      if (!incoming.has(edge.To)) incoming.set(edge.To, []);
+      outgoing.get(edge.From).push(edge);
+      incoming.get(edge.To).push(edge);
+    });
+    const reached = new Map([[nodeID, 0]]);
+    const queue = [nodeID];
+    while (queue.length) {
+      const current = queue.shift();
+      const currentDepth = reached.get(current) || 0;
+      if (currentDepth >= maxDepth) continue;
+      const adjacent = [];
+      if (selectedDirection === 'both' || selectedDirection === 'outgoing') adjacent.push(...(outgoing.get(current) || []));
+      if (selectedDirection === 'both' || selectedDirection === 'incoming') adjacent.push(...(incoming.get(current) || []));
+      adjacent.forEach((edge) => {
+        const next = edge.From === current ? edge.To : edge.From;
+        if (reached.has(next) && reached.get(next) <= currentDepth + 1) return;
+        reached.set(next, currentDepth + 1);
+        queue.push(next);
+      });
+    }
+    const nodes = workspaceNodes.filter((node) => reached.has(node.ID));
+    const reachedIDs = new Set(nodes.map((node) => node.ID));
+    const edges = workspaceEdges.filter((edge) => (!onlyRuntime || number(edge.RuntimeCount) > 0) && reachedIDs.has(edge.From) && reachedIDs.has(edge.To));
+    return dynamicView('neighborhood', 'neighborhood', 'Окрестность', 'Cycle-safe обход bounded workspace; direction и depth не меняют исходный score.', nodes, edges, {
+      SelectedNode: nodeID,
+      Direction: selectedDirection,
+      Depth: maxDepth,
+      RuntimeOnly: onlyRuntime,
+    });
+  };
+
+  const expandPackage = (packageNode) => {
+    const packageName = packageNode.Package || packageNode.ClassName;
+    const nodes = workspaceNodes.filter((node) => node.Package === packageName || String(node.Package || '').startsWith(packageName + '.'));
+    const ids = new Set(nodes.map((node) => node.ID));
+    const edges = workspaceEdges.filter((edge) => ids.has(edge.From) && ids.has(edge.To));
+    const expanded = dynamicView('package-detail:' + packageName, 'package-detail', 'Классы пакета ' + packageName, 'Группа раскрыта до class-level данных bounded workspace. Score каждого класса остался исходным.', nodes, edges, { Query: packageName });
+    setView(expanded, 'package-detail');
+  };
+
+  const activateMode = (mode) => {
+    if (mode === 'packages') {
+      const value = packageDepth && packageDepth.value || '3';
+      setView(viewByID.get('packages:' + value) || firstByMode.get('packages'), 'packages');
+      return;
+    }
+    if (mode === 'context') {
+      const id = context && context.value;
+      setView(viewByID.get(id) || firstByMode.get('context') || dynamicView('context', 'context', 'Экран / Flow', 'В отчете нет runtime-контекста.', [], [], {}), 'context');
+      return;
+    }
+    if (mode === 'neighborhood') {
+      const node = matchingWorkspaceNode(search && search.value) || workspaceNodes[0];
+      const nodeID = node && node.ID || '';
+      if (search && nodeID) search.value = nodeID;
+      setView(buildNeighborhood(nodeID), 'neighborhood');
+      return;
+    }
+    setView(firstByMode.get(mode), mode);
+  };
+
+  const performSearch = () => {
+    const node = matchingWorkspaceNode(search && search.value);
+    if (!node) {
+      const emptySearch = dynamicView('search-empty', currentMode, 'Нет результатов', 'Класс или пакет не найден в bounded workspace. Полные totals и причины ограничения показаны выше.', [], [], { Query: search && search.value || '' });
+      setView(emptySearch, currentMode);
+      return;
+    }
+    if (search) search.value = node.ID;
+    if (currentMode === 'neighborhood') {
+      setView(buildNeighborhood(node.ID), 'neighborhood');
+      selectedNode = node.ID;
+      selectNode(node.ID, true);
+      return;
+    }
+    const visible = renderedNodes.find((item) => item.ID === node.ID);
+    if (visible) {
+      selectNode(visible.ID, true);
+      centerSelected();
+      return;
+    }
+    setView(buildNeighborhood(node.ID), 'neighborhood');
+    selectedNode = node.ID;
+    selectNode(node.ID, true);
+  };
+
+  const centerSelected = () => {
+    const position = positions.get(selectedNode);
+    if (!position) {
+      setText(selection, 'Сначала выберите видимый узел.');
+      return;
+    }
+    transform.x = graphWidth / 2 - (position.x + position.w / 2) * transform.scale;
+    transform.y = graphHeight / 2 - (position.y + position.h / 2) * transform.scale;
+    syncTransform();
+  };
+
+  const writeHash = () => {
+    const params = new URLSearchParams();
+    params.set('view', currentMode);
+    if (selectedNode) params.set('node', selectedNode);
+    if (highlightMode !== 'paths') params.set('highlight', highlightMode);
+    if (currentMode === 'packages' && packageDepth) params.set('packageDepth', packageDepth.value);
+    if (currentMode === 'neighborhood') {
+      params.set('direction', direction && direction.value || 'both');
+      params.set('depth', depth && depth.value || '1');
+      if (runtimeOnly && runtimeOnly.checked) params.set('runtime', '1');
+    }
+    if (currentMode === 'context' && context && context.value) params.set('context', context.value);
+    if (window.parent !== window) {
+      const outer = new URLSearchParams(window.parent.location.hash.replace(/^#/, ''));
+      outer.set('page', 'influence');
+      outer.set('influence', params.toString());
+      window.parent.history.replaceState(null, '', '#' + outer.toString());
+      return;
+    }
+    history.replaceState(null, '', '#' + params.toString());
+  };
+
+  const restoreHash = () => {
+    let rawHash = location.hash.replace(/^#/, '');
+    if (window.parent !== window) {
+      const outer = new URLSearchParams(window.parent.location.hash.replace(/^#/, ''));
+      rawHash = outer.get('influence') || rawHash;
+    }
+    const params = new URLSearchParams(rawHash);
+    const mode = params.get('view') || 'problems';
+    if (packageDepth && params.get('packageDepth')) packageDepth.value = params.get('packageDepth');
+    if (direction && params.get('direction')) direction.value = params.get('direction');
+    if (depth && params.get('depth')) depth.value = params.get('depth');
+    if (runtimeOnly) runtimeOnly.checked = params.get('runtime') === '1';
+    if (context && params.get('context')) context.value = params.get('context');
+    highlightMode = params.get('highlight') || 'paths';
+    const nodeID = params.get('node') || '';
+    if (search && nodeID) search.value = nodeID;
+    activateMode(mode);
+    if (nodeID && renderedNodes.some((node) => node.ID === nodeID)) selectNode(nodeID, true);
+  };
+
+  viewButtons.forEach((button) => button.addEventListener('click', () => activateMode(button.dataset.influenceView || 'problems')));
+  highlightButtons.forEach((button) => button.addEventListener('click', () => {
+    const next = button.dataset.influenceHighlight || 'paths';
+    if (next === 'reset') {
+      pinnedNode = '';
+      clearHighlight();
+      renderDetail(selectedNode ? currentNodeByID(selectedNode) : null);
+      return;
+    }
+    highlightMode = next;
+    syncControls();
+    if (selectedNode) selectNode(selectedNode, true);
+    else writeHash();
+  }));
+  if (search) {
+    search.addEventListener('change', performSearch);
+    search.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        performSearch();
+      }
+    });
+  }
+  if (packageDepth) packageDepth.addEventListener('change', () => activateMode('packages'));
+  if (direction) direction.addEventListener('change', () => activateMode('neighborhood'));
+  if (depth) depth.addEventListener('change', () => activateMode('neighborhood'));
+  if (runtimeOnly) runtimeOnly.addEventListener('change', () => activateMode('neighborhood'));
+  if (context) context.addEventListener('change', () => activateMode('context'));
+  if (resetFilters) resetFilters.addEventListener('click', () => {
+    if (search) search.value = '';
+    if (packageDepth) packageDepth.value = '3';
+    if (direction) direction.value = 'both';
+    if (depth) depth.value = '1';
+    if (runtimeOnly) runtimeOnly.checked = false;
+    highlightMode = 'paths';
+    activateMode('problems');
   });
+  root.querySelectorAll('[data-influence-zoom]').forEach((button) => button.addEventListener('click', () => {
+    const action = button.dataset.influenceZoom;
+    if (action === 'reset') resetTransform();
+    else {
+      transform.scale = clamp(transform.scale * (action === 'in' ? 1.2 : 1 / 1.2), 0.45, 2.4);
+      syncTransform();
+    }
+  }));
+  if (centerButton) centerButton.addEventListener('click', centerSelected);
+  if (viewport) {
+    viewport.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      transform.scale = clamp(transform.scale * (event.deltaY < 0 ? 1.08 : 1 / 1.08), 0.45, 2.4);
+      syncTransform();
+    }, { passive: false });
+    viewport.addEventListener('pointerdown', (event) => {
+      if (event.target.closest && event.target.closest('.influence-node')) return;
+      dragging = { x: event.clientX, y: event.clientY, tx: transform.x, ty: transform.y };
+      viewport.setPointerCapture(event.pointerId);
+      viewport.classList.add('is-panning');
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      if (!dragging) return;
+      const ratio = graphWidth / Math.max(1, viewport.clientWidth);
+      transform.x = dragging.tx + (event.clientX - dragging.x) * ratio;
+      transform.y = dragging.ty + (event.clientY - dragging.y) * ratio;
+      syncTransform();
+    });
+    const endPan = () => {
+      dragging = null;
+      viewport.classList.remove('is-panning');
+    };
+    viewport.addEventListener('pointerup', endPan);
+    viewport.addEventListener('pointercancel', endPan);
+    viewport.addEventListener('click', (event) => {
+      if (event.target === graph || event.target === stage) {
+        pinnedNode = '';
+        clearHighlight();
+      }
+    });
+  }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      pinnedNode = '';
+      clearHighlight();
+    }
+  });
+  workspaceMessage();
+  populateSearch();
+  populateContexts();
+  restoreHash();
 })();
 </script>
 </body>

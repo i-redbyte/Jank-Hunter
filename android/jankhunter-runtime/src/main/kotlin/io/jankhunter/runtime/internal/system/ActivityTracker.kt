@@ -141,9 +141,8 @@ internal class ActivityTracker(
         val canonicalFrameMonitor = frameMonitor ?: return
         if (!jankStatsEnabled || jankStatsHandles.containsKey(activity)) return
         makeRoomFor(activity)
-        val screenName = screenName(activity)
         val handle = JankHunterJankStats.install(activity.window) { frame ->
-            canonicalFrameMonitor.onJankStatsFrame(screenName, frame.durationNanos, frame.isJank)
+            canonicalFrameMonitor.onJankStatsFrame(JankHunter.currentScreen(), frame.durationNanos, frame.isJank)
         } ?: return
         handle.setTrackingEnabled(false)
         jankStatsHandles[activity] = handle

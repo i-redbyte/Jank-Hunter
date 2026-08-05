@@ -400,10 +400,14 @@ type InfluenceSummary struct {
 	RuntimeEdges     int
 	StaticNodes      int
 	StaticEdges      int
+	TotalNodes       int
+	TotalEdges       int
 	ShownNodes       int
 	ShownEdges       int
 	TopNodes         []InfluenceNode
 	TopEdges         []InfluenceEdge
+	Views            []InfluenceGraphView
+	Workspace        InfluenceGraphWorkspace
 	HotPaths         []InfluencePath
 	MethodHotspots   []InfluenceMethod
 	Cycles           []InfluenceCycle
@@ -426,6 +430,7 @@ type InfluenceNode struct {
 	MemoryPressure  uint64
 	UIJank          uint64
 	Retained        uint64
+	HeapEvidence    bool
 	Flows           []string
 	Screens         []string
 	Routes          []string
@@ -436,9 +441,98 @@ type InfluenceEdge struct {
 	From             string
 	To               string
 	Count            uint64
+	RuntimeCount     uint64
+	StaticCount      uint64
 	Influence        float64
 	RuntimeConfirmed bool
+	Evidence         string
 	Reason           string
+}
+
+type InfluenceGraphView struct {
+	ID              string
+	Mode            string
+	Title           string
+	Explanation     string
+	Filters         InfluenceGraphFilters
+	Nodes           []InfluenceGraphNode
+	Edges           []InfluenceGraphEdge
+	TotalNodes      int
+	TotalEdges      int
+	ShownNodes      int
+	ShownEdges      int
+	OmittedNodes    int
+	OmittedEdges    int
+	OmissionReasons []string
+	Limits          InfluenceGraphLimits
+	Legend          []InfluenceGraphLegend
+}
+
+type InfluenceGraphFilters struct {
+	Query        string
+	PackageDepth int
+	SelectedNode string
+	Direction    string
+	Depth        int
+	RuntimeOnly  bool
+	ContextKind  string
+	ContextValue string
+}
+
+type InfluenceGraphLimits struct {
+	MaxNodes int
+	MaxEdges int
+}
+
+type InfluenceGraphLegend struct {
+	Kind  string
+	Label string
+	Help  string
+}
+
+type InfluenceGraphNode struct {
+	InfluenceNode
+	ID                   string
+	Kind                 string
+	Package              string
+	Breadcrumbs          []string
+	Aggregate            bool
+	Connector            bool
+	ChildCount           int
+	RuntimeClassCount    int
+	StaticOnlyClassCount int
+	ProblemClassCount    int
+	Children             []string
+	Explanation          string
+}
+
+type InfluenceGraphEdge struct {
+	InfluenceEdge
+	ID        string
+	Aggregate bool
+}
+
+type InfluenceGraphWorkspace struct {
+	Nodes           []InfluenceGraphNode
+	Edges           []InfluenceGraphEdge
+	TotalNodes      int
+	TotalEdges      int
+	ShownNodes      int
+	ShownEdges      int
+	OmittedNodes    int
+	OmittedEdges    int
+	Contexts        []InfluenceGraphContext
+	TotalContexts   int
+	ShownContexts   int
+	OmissionReasons []string
+}
+
+type InfluenceGraphContext struct {
+	ID           string
+	Kind         string
+	Value        string
+	RuntimeNodes int
+	ProblemNodes int
 }
 
 type InfluencePath struct {
@@ -477,6 +571,8 @@ type Delta struct {
 	Severity       string
 	Confidence     string
 	Interval       string
+	Comparable     bool
+	ComparisonNote string
 	Unit           string
 	BaselineValue  float64
 	CandidateValue float64
@@ -488,12 +584,13 @@ type Delta struct {
 }
 
 type Comparison struct {
-	Baseline        Summary
-	Candidate       Summary
-	Deltas          []Delta
-	Warnings        []string
-	CohortWarnings  []string
-	QualityWarnings []string
+	Baseline         Summary
+	Candidate        Summary
+	Deltas           []Delta
+	Warnings         []string
+	CohortWarnings   []string
+	QualityWarnings  []string
+	ExposureWarnings []string
 }
 
 type ThresholdConfig struct {

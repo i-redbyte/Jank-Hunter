@@ -23,6 +23,8 @@ internal class RuntimeState {
     val initFailures = AtomicLong()
     val appForeground = AtomicBoolean(false)
     val runtimeEnabled = AtomicBoolean(true)
+    val heapDumpInProgress = AtomicBoolean(false)
+    val heapDumpAttributionUntilMs = AtomicLong()
 
     @Volatile
     var lifecycle = RuntimeLifecycle.STOPPED

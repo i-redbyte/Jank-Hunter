@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -38,14 +39,15 @@ const (
 	maxHprofClasses            = 100_000
 	maxHprofClassFields        = 1_500_000
 	maxHprofRoots              = 500_000
-	maxHprofObjects            = 250_000
+	maxHprofObjects            = 1_000_000
 	maxHprofEdges              = 1_500_000
+	maxHprofDeferredBytes      = 64 << 20
 	maxHprofTargets            = 2_000
 	maxHprofPathElements       = 48
 	maxRetainedTreeSample      = 8
 	maxHprofExactTargets       = 512
 	maxHprofEvidenceTargets    = 4_096
-	maxHprofRetainedVisits     = 5_000_000
+	maxHprofRetainedVisits     = 10_000_000
 	maxHprofAlternativePaths   = 3
 	maxHprofAlternativeStates  = 6_000
 )
@@ -225,12 +227,15 @@ type hprofParser struct {
 	strings             map[uint64]string
 	classNames          map[uint64]string
 	classes             map[uint64]*hprofClass
+	classesByName       map[string][]*hprofClass
 	nodes               map[uint64]*heapNode
 	roots               []heapRoot
 	targets             map[string]struct{}
 	edgeCount           int
 	stringBytes         uint64
 	classFieldCount     int
+	deferredBytes       uint64
+	deferredInstances   []deferredHprofInstance
 	limits              hprofLimits
 	degradationWarnings []string
 	degradationKeys     map[string]struct{}
@@ -266,6 +271,13 @@ type hprofClass struct {
 	superID      uint64
 	instanceSize uint64
 	fields       []hprofField
+}
+
+type deferredHprofInstance struct {
+	objectID  uint64
+	classID   uint64
+	className string
+	payload   []byte
 }
 
 type hprofField struct {
@@ -315,6 +327,7 @@ func newHprofParser(path string, targets map[string]struct{}) *hprofParser {
 		strings:         map[uint64]string{},
 		classNames:      map[uint64]string{},
 		classes:         map[uint64]*hprofClass{},
+		classesByName:   map[string][]*hprofClass{},
 		nodes:           map[uint64]*heapNode{},
 		targets:         targets,
 		limits:          defaultHprofLimits(),
@@ -367,7 +380,7 @@ func (p *hprofParser) parse() error {
 			return fmt.Errorf("consume HPROF record 0x%02x in %s: %w", tag, p.path, err)
 		}
 	}
-	return nil
+	return p.resolveDeferredInstances()
 }
 
 func (p *hprofParser) readHeader(reader *bufio.Reader) error {
@@ -762,6 +775,7 @@ func (p *hprofParser) parseClassDump(reader *hprofReader) error {
 	}
 	if storeClass {
 		p.classes[classID] = class
+		p.classesByName[class.name] = append(p.classesByName[class.name], class)
 	}
 	return nil
 }
@@ -787,6 +801,88 @@ func (p *hprofParser) parseInstanceDump(reader *hprofReader) error {
 	}
 	className := p.className(classID)
 	node := p.ensureNode(objectID, className, p.instanceShallowSize(classID, dataLength))
+	if p.resolveClass(classID) == nil && dataLength > 0 {
+		return p.deferInstance(reader, objectID, classID, className, dataLength)
+	}
+	return p.parseInstancePayload(reader, node, objectID, classID, className, dataLength)
+}
+
+func (p *hprofParser) deferInstance(
+	reader *hprofReader,
+	objectID uint64,
+	classID uint64,
+	className string,
+	dataLength uint32,
+) error {
+	nextBytes, err := checkedAddUint64(p.deferredBytes, uint64(dataLength), "HPROF deferred instance storage")
+	if err != nil || nextBytes > maxHprofDeferredBytes {
+		p.degrade("deferred-instances", fmt.Sprintf(
+			"Достигнут лимит отложенных полей HPROF (%d байт): часть ссылок экземпляров не добавлена в runtime-граф.",
+			maxHprofDeferredBytes,
+		))
+		return reader.skip(uint64(dataLength))
+	}
+	payloadSize, err := checkedInt(uint64(dataLength), "HPROF deferred instance payload")
+	if err != nil {
+		return err
+	}
+	payload := make([]byte, payloadSize)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return err
+	}
+	p.deferredBytes = nextBytes
+	p.deferredInstances = append(p.deferredInstances, deferredHprofInstance{
+		objectID:  objectID,
+		classID:   classID,
+		className: className,
+		payload:   payload,
+	})
+	return nil
+}
+
+func (p *hprofParser) resolveDeferredInstances() error {
+	unresolved := 0
+	for _, instance := range p.deferredInstances {
+		if p.resolveClass(instance.classID) == nil {
+			unresolved++
+			continue
+		}
+		node := p.ensureNode(
+			instance.objectID,
+			instance.className,
+			p.instanceShallowSize(instance.classID, uint32(len(instance.payload))),
+		)
+		reader := &hprofReader{r: bytes.NewReader(instance.payload), limit: uint64(len(instance.payload))}
+		if err := p.parseInstancePayload(
+			reader,
+			node,
+			instance.objectID,
+			instance.classID,
+			instance.className,
+			uint32(len(instance.payload)),
+		); err != nil {
+			return fmt.Errorf("parse deferred HPROF instance 0x%x: %w", instance.objectID, err)
+		}
+	}
+	if unresolved > 0 {
+		p.degrade("unresolved-instance-classes", fmt.Sprintf(
+			"Для %d экземпляров HPROF не найдено однозначное описание класса: их ссылки не добавлены в runtime-граф.",
+			unresolved,
+		))
+	}
+	p.deferredInstances = nil
+	p.deferredBytes = 0
+	return nil
+}
+
+func (p *hprofParser) parseInstancePayload(
+	reader *hprofReader,
+	node *heapNode,
+	objectID uint64,
+	classID uint64,
+	className string,
+	dataLength uint32,
+) error {
 	fields := p.instanceFields(classID)
 	consumed := uint64(0)
 	for _, field := range fields {
@@ -988,7 +1084,7 @@ func (p *hprofParser) arrayClassName(classID uint64) string {
 }
 
 func (p *hprofParser) instanceShallowSize(classID uint64, dataLength uint32) uint64 {
-	if class := p.classes[classID]; class != nil && class.instanceSize > 0 {
+	if class := p.resolveClass(classID); class != nil && class.instanceSize > 0 {
 		return class.instanceSize
 	}
 	if dataLength > 0 {
@@ -1005,7 +1101,7 @@ func (p *hprofParser) instanceFields(classID uint64) []hprofField {
 			break
 		}
 		seen[classID] = struct{}{}
-		class := p.classes[classID]
+		class := p.resolveClass(classID)
 		if class == nil {
 			break
 		}
@@ -1013,6 +1109,17 @@ func (p *hprofParser) instanceFields(classID uint64) []hprofField {
 		classID = class.superID
 	}
 	return out
+}
+
+func (p *hprofParser) resolveClass(classID uint64) *hprofClass {
+	if class := p.classes[classID]; class != nil {
+		return class
+	}
+	candidates := p.classesByName[p.classNames[classID]]
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	return nil
 }
 
 func (p *hprofParser) valueSize(typ byte) (uint64, error) {
@@ -1074,9 +1181,32 @@ func (p *hprofParser) applyParseQuality(evidence *HeapEvidence) {
 		return
 	}
 	evidence.Warnings = append(append([]string(nil), p.degradationWarnings...), evidence.Warnings...)
+	if !p.hasGraphDegradation() {
+		return
+	}
 	for i := range evidence.Leaks {
 		evidence.Leaks[i].Confidence = lowerHprofConfidence(evidence.Leaks[i].Confidence)
 	}
+}
+
+func (p *hprofParser) hasGraphDegradation() bool {
+	for _, key := range []string{
+		"strings",
+		"string-record-bytes",
+		"string-bytes",
+		"roots",
+		"class-fields",
+		"deferred-instances",
+		"unresolved-instance-classes",
+		"nodes",
+		"classes",
+		"edges",
+	} {
+		if p.hasDegradation(key) {
+			return true
+		}
+	}
+	return false
 }
 
 func lowerHprofConfidence(confidence string) string {
@@ -1116,7 +1246,13 @@ func (p *hprofParser) evidence() *HeapEvidence {
 	evidenceTargets := 0
 	skippedEvidenceTargets := 0
 	limitedRetainedTargets := 0
-	for className, ids := range targetsByClass {
+	classNames := make([]string, 0, len(targetsByClass))
+	for className := range targetsByClass {
+		classNames = append(classNames, className)
+	}
+	sort.Strings(classNames)
+	for _, className := range classNames {
+		ids := targetsByClass[className]
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		if len(ids) > maxHprofTargets {
 			ids = ids[:maxHprofTargets]
@@ -1246,6 +1382,9 @@ func (p *hprofParser) targetNodes(parent map[uint64]heapParent) map[string][]uin
 	out := map[string][]uint64{}
 	for id, node := range p.nodes {
 		if node == nil {
+			continue
+		}
+		if _, isClassObject := p.classes[id]; isClassObject {
 			continue
 		}
 		if _, ok := p.targets[node.className]; !ok {

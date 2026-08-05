@@ -32,6 +32,9 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 	}
 	var failures []string
 	for _, delta := range comparison.Deltas {
+		if !delta.Comparable {
+			continue
+		}
 		threshold := config.Metrics[delta.Name]
 		maxSeverity := firstNonEmpty(threshold.MaxSeverity, config.MaxSeverity)
 		if maxSeverity != "" && severityRank(delta.Severity) > severityRank(maxSeverity) {

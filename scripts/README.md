@@ -244,6 +244,7 @@ ANDROID_SERIAL=emulator-5554 ./scripts/android-e2e.sh
 | `--out-dir PATH` | `OUT_DIR` | `reports/android-e2e` |
 | `--serial SERIAL` | `ANDROID_SERIAL` | единственное онлайн-устройство |
 | `--instrumentation-diagnostics PATH` | — | не передаётся |
+| `--contract PATH` | `ANDROID_E2E_CONTRACT` | `scripts/contracts/android-sample-e2e.json` |
 | — | `ADB` | `adb` из `PATH` |
 | — | `PYTHON` | `python3` из `PATH` |
 | — | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | Android SDK; затем `android/local.properties` и standard path |
@@ -255,11 +256,14 @@ ANDROID_SERIAL=emulator-5554 ./scripts/android-e2e.sh
 
 1. Gradle собирает debug APK sample app и instrumentation APK с найденной версией Build Tools.
 2. До установки `aapt` подтверждает package ID, а `adb shell pm list packages` проверяет, что sample app и test package ещё не установлены. Скрипт не перезаписывает и не удаляет существующее приложение с данными.
-3. Скрипт устанавливает оба APK, напрямую запускает ровно `SampleEndToEndLogTest` и требует итог `OK (1 test)`.
-4. Пока package ещё установлен, `adb exec-out run-as io.jankhunter.sample` копирует `files/jankhunter-e2e` с устройства; затем оба тестовых package строго удаляются. Ошибка uninstall делает прогон неуспешным, а EXIT trap повторяет cleanup и печатает диагностику.
-5. CLI получает все найденные `.jhlog`, автоматически подключает полный debug bundle Gradle-плагина, если он создан, и строит JSON и HTML. Явный `--instrumentation-diagnostics` имеет приоритет для diagnostics-файла.
-6. Fail-closed quality gate проверяет ненулевые события/словарь, sealed chain, отсутствие потерь и overflow/truncation, обязательные sample counters/gauge/screen/owner и запрещённые warnings.
-7. Ошибка instrumentation/cleanup, пустые логи, отсутствующие выходные файлы или неполные данные считаются ошибкой.
+3. Скрипт устанавливает оба APK и запускает ровно `SampleEndToEndLogTest`. Instrumentation проходит реальную цепочку `Main → Baseline → UI/CPU → Network → Memory → Result`, дожидается стабильного HPROF, закрывает runtime и требует итог `OK (1 test)`.
+4. Пока package ещё установлен, `adb exec-out run-as io.jankhunter.sample` копирует `files/jankhunter-e2e` с устройства вместе с `.jhlog` и `.hprof`; затем оба тестовых package строго удаляются. Ошибка uninstall делает прогон неуспешным, а EXIT trap повторяет cleanup и печатает диагностику.
+5. CLI получает все найденные `.jhlog`, автоматически подключает HPROF и полный debug bundle Gradle-плагина, если он создан, и строит JSON и HTML. Явный `--instrumentation-diagnostics` имеет приоритет для diagnostics-файла.
+6. Fail-closed quality gate проверяет sealed chain, отсутствие потерь и overflow/truncation, обязательные маркеры полного сценария и запрещённые warnings.
+7. `validate-android-e2e.py` применяет версионируемый JSON-контракт к итоговому отчету. Контракт проверяет точные счетчики, допустимые диапазоны нестабильных измерений, HTTP/WebSocket, stalls, UI, CPU, память, GC, retention, HPROF-пути, логи, runtime graph, экраны и системные snapshot-метрики.
+8. Ошибка instrumentation/cleanup, пустые артефакты, нарушение качества или любое несовпадение с контрактом считается ошибкой.
+
+Контракт состоит из независимых assertions с уникальными `id`. Селектор задается через `path`, при необходимости дополняется `where` и `field`; `cardinality` проверяет число совпадений, `expect` — тип, точное значение, диапазон, длину или состав. `relations` связывает значения разных полей отчета, например `EventCount`, `DataRecordCount`, `accepted_events` и `written_events`. Это позволяет расширять покрытие без изменения instrumentation и shell-runner.
 
 Результат:
 
@@ -268,6 +272,7 @@ reports/android-e2e/
 ├── .jankhunter-android-e2e-owned
 ├── instrumentation.txt
 ├── logs/*.jhlog
+├── logs/*.hprof
 ├── inspect.json
 └── report.html
 ```

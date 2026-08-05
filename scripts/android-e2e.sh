@@ -10,6 +10,8 @@ DEVICE_SERIAL="${ANDROID_SERIAL:-}"
 PYTHON="${PYTHON:-python3}"
 ANDROID_BUILD_TOOLS_VERSION="${ANDROID_BUILD_TOOLS_VERSION:-}"
 INSTRUMENTATION_DIAGNOSTICS=""
+METRIC_CONTRACT="${ANDROID_E2E_CONTRACT:-$ROOT_DIR/scripts/contracts/android-sample-e2e.json}"
+CONTRACT_VALIDATOR="$ROOT_DIR/scripts/validate-android-e2e.py"
 APP_APK=""
 TEST_APK=""
 AAPT=""
@@ -28,10 +30,11 @@ Options:
   --serial SERIAL   Android device/emulator serial. Required when several devices are online.
   --instrumentation-diagnostics PATH
                     Optional Gradle-plugin instrumentation diagnostics JSONL passed to inspect.
+  --contract PATH   Metric contract JSON. Default: scripts/contracts/android-sample-e2e.json.
   -h, --help        Show this help.
 
 Environment:
-  OUT_DIR, ADB, ANDROID_SERIAL, PYTHON
+  OUT_DIR, ADB, ANDROID_SERIAL, PYTHON, ANDROID_E2E_CONTRACT
   ANDROID_HOME / ANDROID_SDK_ROOT  Android SDK location.
   ANDROID_BUILD_TOOLS_VERSION     Installed numeric version; defaults to the highest installed.
 EOF
@@ -129,6 +132,11 @@ while [[ $# -gt 0 ]]; do
       INSTRUMENTATION_DIAGNOSTICS="$2"
       shift 2
       ;;
+    --contract)
+      require_value "$1" "${2:-}"
+      METRIC_CONTRACT="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -147,6 +155,11 @@ if [[ -n "$INSTRUMENTATION_DIAGNOSTICS" ]]; then
     fail "instrumentation diagnostics file is missing or empty: $INSTRUMENTATION_DIAGNOSTICS"
   INSTRUMENTATION_DIAGNOSTICS="$(cd "$(dirname "$INSTRUMENTATION_DIAGNOSTICS")" && pwd -P)/$(basename "$INSTRUMENTATION_DIAGNOSTICS")"
 fi
+[[ -f "$METRIC_CONTRACT" && -s "$METRIC_CONTRACT" ]] ||
+  fail "metric contract file is missing or empty: $METRIC_CONTRACT"
+METRIC_CONTRACT="$(cd "$(dirname "$METRIC_CONTRACT")" && pwd -P)/$(basename "$METRIC_CONTRACT")"
+[[ -f "$CONTRACT_VALIDATOR" && -s "$CONTRACT_VALIDATOR" ]] ||
+  fail "metric contract validator is missing or empty: $CONTRACT_VALIDATOR"
 
 select_device() {
   local devices=()
@@ -293,8 +306,7 @@ run_instrumentation_test() {
 
 validate_inspect_json() {
   local inspect_json="$1"
-  local diagnostics_supplied=0
-  [[ -n "$INSTRUMENTATION_DIAGNOSTICS" ]] && diagnostics_supplied=1
+  local diagnostics_supplied=1
   "$PYTHON" - "$inspect_json" "$diagnostics_supplied" <<'PY'
 import json
 import sys
@@ -377,13 +389,14 @@ def named_values(*names):
 
 
 counters = named_values("Counters", "counters")
-for name in ("sample.e2e.retained.watch.count", "sample.e2e.background.count"):
+for name in ("sample.auto.run.completed.count", "jankhunter.heap_dump.created.count"):
     if counters.get(name, 0) <= 0:
         failures.append(f"expected positive counter is missing: {name}")
 
 gauges = named_values("Gauges", "gauges")
-if gauges.get("sample.e2e.background.duration_ms", 0) <= 0:
-    failures.append("expected positive gauge is missing: sample.e2e.background.duration_ms")
+for name in ("sample.auto.actual_stage_count", "jankhunter.heap_dump.retained_age_ms"):
+    if gauges.get(name, 0) <= 0:
+        failures.append(f"expected positive gauge is missing: {name}")
 
 
 def string_fields(collection_names, field_names):
@@ -401,12 +414,12 @@ def string_fields(collection_names, field_names):
 screens = string_fields(("Screens", "screens"), ("Screen", "screen"))
 screens.update(string_fields(("Flows", "flows"), ("Screen", "screen")))
 screens.update(string_fields(("ProblemWindows", "problem_windows"), ("Screen", "screen")))
-if "SampleEndToEnd" not in screens:
-    failures.append("expected screen context is missing: SampleEndToEnd")
+if "sample.compose.result" not in screens:
+    failures.append("expected screen context is missing: sample.compose.result")
 
 owners = string_fields(("Owners", "owners"), ("Owner", "owner"))
-if "sample.e2e.synthetic_stall" not in owners:
-    failures.append("expected owner is missing: sample.e2e.synthetic_stall")
+if "io.jankhunter.sample.graph.CheckoutRenderer" not in owners:
+    failures.append("expected owner is missing: io.jankhunter.sample.graph.CheckoutRenderer")
 
 warnings = value(summary, "Warnings", "warnings")
 if warnings is None:
@@ -450,6 +463,16 @@ if failures:
         print(f"[jankhunter-android-e2e] error: {failure}", file=sys.stderr)
     raise SystemExit(1)
 PY
+}
+
+validate_metric_contract() {
+  local arguments=(
+    "$CONTRACT_VALIDATOR"
+    --report "$OUT_DIR/inspect.json"
+    --contract "$METRIC_CONTRACT"
+    --diagnostics-supplied
+  )
+  "$PYTHON" "${arguments[@]}"
 }
 
 require_command "$ADB"
@@ -512,18 +535,25 @@ shopt -u nullglob
 [[ "${#logs[@]}" -gt 0 ]] || fail "device test completed but no .jhlog files were copied"
 
 log "building HTML report and JSON summary"
+generated_artifacts="$ROOT_DIR/android/sample-app/build/generated/jankhunter/debug"
+owner_map="$generated_artifacts/owner-map.json"
+class_graph="$generated_artifacts/class-graph.jsonl"
+instrumentation_artifact="$generated_artifacts/instrumentation-diagnostics.jsonl"
+[[ -s "$owner_map" ]] || fail "Gradle plugin owner map is missing or empty: $owner_map"
+[[ -s "$class_graph" ]] || fail "Gradle plugin class graph is missing or empty: $class_graph"
+[[ -s "$instrumentation_artifact" ]] ||
+  fail "Gradle plugin diagnostics are missing or empty: $instrumentation_artifact"
+grep -q '"classGraph":true' "$owner_map" || fail "owner map does not enable classGraph"
+grep -q '"runtimeCallGraph":true' "$owner_map" || fail "owner map does not enable runtimeCallGraph"
+grep -q 'io.jankhunter.sample.graph' "$class_graph" ||
+  fail "class graph does not contain the configured sample graph package"
 (
   cd "$ROOT_DIR/cli"
   inspect_command=(
     go run ./cmd/jankhunter inspect "${logs[@]}" --json
     --out "$OUT_DIR/report.html"
   )
-  generated_artifacts="$ROOT_DIR/android/sample-app/build/generated/jankhunter/debug"
-  if [[ -s "$generated_artifacts/owner-map.json" &&
-    -s "$generated_artifacts/class-graph.jsonl" &&
-    -s "$generated_artifacts/instrumentation-diagnostics.jsonl" ]]; then
-    inspect_command+=(--artifacts-dir "$generated_artifacts")
-  fi
+  inspect_command+=(--artifacts-dir "$generated_artifacts")
   if [[ -n "$INSTRUMENTATION_DIAGNOSTICS" ]]; then
     inspect_command+=(--instrumentation-diagnostics "$INSTRUMENTATION_DIAGNOSTICS")
   fi
@@ -533,8 +563,10 @@ log "building HTML report and JSON summary"
 [[ -s "$OUT_DIR/report.html" ]] || fail "HTML report was not generated"
 [[ -s "$OUT_DIR/inspect.json" ]] || fail "JSON summary was not generated"
 validate_inspect_json "$OUT_DIR/inspect.json"
+validate_metric_contract
 
 log "logs: $LOG_DIR"
 log "instrumentation: $OUT_DIR/instrumentation.txt"
 log "report: $OUT_DIR/report.html"
 log "json: $OUT_DIR/inspect.json"
+log "contract: $METRIC_CONTRACT"

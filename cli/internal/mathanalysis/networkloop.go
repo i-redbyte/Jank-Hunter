@@ -56,17 +56,17 @@ func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *netw
 	}
 }
 
-func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, ownerMap *analyze.OwnerMap) (uint64, bool) {
+func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, symbols *mathSymbolResolver) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
-		route := jhlog.Resolve(dict, event.HTTP.RouteID)
-		owner := resolveTimelineOwner(ownerMap, dict, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 		if !networkLoopPassesFilter(filter, route, owner) {
 			return 0, false
 		}
 		return event.TimeMS, true
 	case event.Metric != nil && (event.Type == jhlog.EventCounter || event.Type == jhlog.EventGauge):
-		name := jhlog.Resolve(dict, event.Metric.MetricID)
+		name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
 		if name == "" {
 			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
 		}
@@ -87,18 +87,18 @@ func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter an
 	}
 }
 
-func (c *networkLoopCollector) add(event jhlog.Event, dict map[uint64]string) {
+func (c *networkLoopCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
 	switch {
 	case event.HTTP != nil:
-		c.addHTTP(event, dict)
+		c.addHTTP(event, dict, symbols)
 	case event.Metric != nil && (event.Type == jhlog.EventCounter || event.Type == jhlog.EventGauge):
-		c.addMetric(event, dict)
+		c.addMetric(event, dict, symbols)
 	}
 }
 
-func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string) {
-	route := jhlog.Resolve(dict, event.HTTP.RouteID)
-	owner := c.resolveOwner(dict, event.HTTP.OwnerID)
+func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
+	route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+	owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 	if !c.passesFilter(route, owner) {
 		return
 	}
@@ -139,8 +139,8 @@ func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string
 	}
 }
 
-func (c *networkLoopCollector) addMetric(event jhlog.Event, dict map[uint64]string) {
-	name := jhlog.Resolve(dict, event.Metric.MetricID)
+func (c *networkLoopCollector) addMetric(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
+	name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
 	if name == "" {
 		name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
 	}
@@ -243,10 +243,6 @@ func networkLoopPassesFilter(filter analyze.Filter, route, owner string) bool {
 		return false
 	}
 	return true
-}
-
-func (c *networkLoopCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func analyzeNetworkLoopSignal(signal *networkLoopSignal, bucketMS uint64) (NetworkLoopFinding, bool) {
@@ -560,7 +556,7 @@ func appearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:         loop.BurnScore,
 		ConfidenceDelta:   loop.Confidence,
 		Severity:          networkLoopFindingSeverity(loop),
-		Summary:           fmt.Sprintf("У кандидата появился сетевой цикл: период %.1fs, доверие %.2f, выгорание %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
+		Summary:           fmt.Sprintf("У кандидата появился кандидат сетевого цикла: период %.1fs, доверие %.2f, условная нагрузка %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
 	}
 }
 
@@ -574,7 +570,7 @@ func disappearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:        -loop.BurnScore,
 		ConfidenceDelta:  -loop.Confidence,
 		Severity:         "ok",
-		Summary:          fmt.Sprintf("У кандидата исчез сетевой цикл из базы: период %.1fs, доверие %.2f, выгорание %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
+		Summary:          fmt.Sprintf("У кандидата исчез кандидат сетевого цикла из базы: период %.1fs, доверие %.2f, условная нагрузка %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
 	}
 }
 
@@ -611,7 +607,7 @@ func changedNetworkLoopDelta(baseline, candidate NetworkLoopFinding) (NetworkLoo
 		BurnDelta:         burnDelta,
 		ConfidenceDelta:   confidenceDelta,
 		Severity:          severity,
-		Summary:           fmt.Sprintf("Сетевой цикл %s: период %.1fs -> %.1fs, выгорание %.1f -> %.1f, доверие %.2f -> %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
+		Summary:           fmt.Sprintf("Кандидат сетевого цикла %s: период %.1fs -> %.1fs, условная нагрузка %.1f -> %.1f, доверие %.2f -> %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
 	}, true
 }
 
@@ -633,7 +629,7 @@ func networkLoopSummary(loops []NetworkLoopFinding) string {
 	if len(loops) == 0 {
 		return "Сетевых циклов по DNS, соединениям, переподключениям, WebSocket и всплескам маршрутов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d кандидатов сетевых циклов: скользящие MAD-всплески подтверждены автокорреляцией, преобразованием Фурье и повторяющимся паттерном.", len(loops))
+	return fmt.Sprintf("Найдено %d кандидатов сетевых циклов. Каждый прошел порог по повторяемости и комбинированной уверенности; отдельные методы могут давать разную силу подтверждения.", len(loops))
 }
 
 func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
@@ -647,8 +643,8 @@ func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
 	worst := loops[0]
 	return []Finding{{
 		Severity:       networkLoopFindingSeverity(worst),
-		Title:          "Найден сетевой цикл",
-		Detail:         fmt.Sprintf("Период %.1fs, доверие %.2f, выгорание %.1f. Паттерн: %s.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
+		Title:          "Найден кандидат сетевого цикла",
+		Detail:         fmt.Sprintf("Предполагаемый период %.1fs, доверие %.2f, условная нагрузка %.1f. Повторяющийся паттерн: %s. Это гипотеза, а не доказанная причина.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
 		Recommendation: worst.ProbableCause,
 		Evidence:       networkLoopEvidence(worst),
 	}}
@@ -674,7 +670,7 @@ func compareNetworkLoopSummary(deltas []NetworkLoopDelta) string {
 	if len(deltas) == 0 {
 		return "Новых, исчезнувших или заметно усилившихся сетевых циклов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d изменений сетевых циклов: появление/исчезновение, смена периода, оценка выгорания и доверие.", len(deltas))
+	return fmt.Sprintf("Найдено %d изменений кандидатов сетевых циклов: появление или исчезновение, смена периода, условной нагрузки либо поддержки данными.", len(deltas))
 }
 
 func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
@@ -682,7 +678,7 @@ func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
 		if delta.Severity == "high" || delta.Severity == "medium" {
 			return []Finding{{
 				Severity:       delta.Severity,
-				Title:          "Изменился сетевой цикл",
+				Title:          "Изменился кандидат сетевого цикла",
 				Detail:         delta.Summary,
 				Recommendation: "Проверьте маршрут, источник, DNS, соединения, повторы и WebSocket-события с тем же периодом; для Android смотрите OkHttp EventListener и владельца корутины или обновления.",
 			}}
@@ -868,21 +864,21 @@ func networkLoopProbableCause(kind, route, owner string) string {
 	target := networkLoopTarget(route, owner)
 	switch kind {
 	case "dns":
-		return "Вероятная причина: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL/кеш, OkHttp DNS и сетевой слой."
+		return "Гипотеза для проверки: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL/кеш, OkHttp DNS и сетевой слой."
 	case "connect":
-		return "Вероятная причина: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети."
+		return "Гипотеза для проверки: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети."
 	case "retry":
-		return "Вероятная причина: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления."
+		return "Гипотеза для проверки: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления."
 	case "websocket":
-		return "Вероятная причина: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения."
+		return "Гипотеза для проверки: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения."
 	case "failure":
-		return "Вероятная причина: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и политику повторов."
+		return "Гипотеза для проверки: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и политику повторов."
 	case "owner":
-		return "Вероятная причина: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин/задач и подавление частых повторов."
+		return "Гипотеза для проверки: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин/задач и подавление частых повторов."
 	case "route":
-		return "Вероятная причина: периодический polling или шквал запросов" + target + ". Проверьте таймеры, refresh и cache policy."
+		return "Гипотеза для проверки: периодический polling или шквал запросов" + target + ". Проверьте таймеры, refresh и cache policy."
 	default:
-		return "Вероятная причина: повторяющийся сетевой паттерн" + target + "."
+		return "Гипотеза для проверки: повторяющийся сетевой паттерн" + target + "."
 	}
 }
 

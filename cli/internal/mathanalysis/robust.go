@@ -34,11 +34,11 @@ type robustCollector struct {
 	samples  robustSampleMap
 }
 
-func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
+func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
 	switch {
 	case event.HTTP != nil:
-		route := jhlog.Resolve(dict, event.HTTP.RouteID)
-		owner := c.resolveOwner(dict, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 		if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -52,7 +52,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 			c.addValue("Маршрут", route, "Задержка соединения", "мс", float64(event.HTTP.ConnectMS))
 		}
 	case event.UIWindow != nil:
-		screen := jhlog.Resolve(dict, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
 		if !timelineContainsFilter(screen, c.filter.ScreenContains) {
 			return
 		}
@@ -63,31 +63,32 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string) {
 			c.addValue("Экран", screen, "Доля подтормаживаний UI", "%", jankRate(event.UIWindow.JankCount, event.UIWindow.FrameCount))
 		}
 	case event.Stall != nil:
-		owner := c.resolveOwner(dict, event.Stall.OwnerID)
+		if isMathDiagnosticStall(event, dict, symbols) {
+			return
+		}
+		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
 		c.addValue("Источник", owner, "Пауза главного потока", "мс", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
-		className := jhlog.Resolve(dict, event.Retained.ClassID)
+		className := symbols.resolve(dict, event.Retained.ClassRef, event.Retained.ClassID)
 		if !timelineContainsFilter(className, c.filter.ClassContains) {
 			return
 		}
 		c.addValue("Источник", className, "Возраст удержанного объекта", "мс", float64(event.Retained.AgeMS))
 	case event.Memory != nil:
-		c.addValue("Память", "процесс", "PSS", "КБ", float64(event.Memory.PSSKB))
-		c.addValue("Память", "процесс", "Куча Java", "КБ", float64(event.Memory.JavaHeapKB))
-		c.addValue("Память", "процесс", "Нативная куча", "КБ", float64(event.Memory.NativeHeapKB))
-	case event.Context != nil:
-		c.addValue("Контекст", "устройство", "Доступная память", "КБ", float64(event.Context.AvailMemoryKB))
-		if event.Context.BatteryPct > 0 {
-			c.addValue("Контекст", "устройство", "Батарея", "%", float64(event.Context.BatteryPct))
+		if event.Memory.PSSKB > 0 {
+			c.addValue("Память", "процесс", "PSS", "КБ", float64(event.Memory.PSSKB))
 		}
-		if event.Context.BatteryTempDeciC != 0 {
-			c.addValue("Контекст", "устройство", "Температура батареи", "0.1 C", float64(event.Context.BatteryTempDeciC))
+		if event.Memory.JavaHeapKB > 0 {
+			c.addValue("Память", "процесс", "Куча Java", "КБ", float64(event.Memory.JavaHeapKB))
+		}
+		if event.Memory.NativeHeapKB > 0 {
+			c.addValue("Память", "процесс", "Нативная куча", "КБ", float64(event.Memory.NativeHeapKB))
 		}
 	case event.Metric != nil && event.Type == jhlog.EventGauge:
-		name := jhlog.Resolve(dict, event.Metric.MetricID)
+		name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
 		if name == "" {
 			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
 		}
@@ -99,14 +100,7 @@ func (c *robustCollector) addMetricValue(name string, metric *jhlog.MetricEvent)
 	if metric == nil {
 		return
 	}
-	weight := metric.Count
-	if weight == 0 {
-		weight = 1
-	}
-	if metric.Mode == jhlog.MetricModeLast || metric.Mode == jhlog.MetricModeState {
-		weight = 1
-	}
-	c.addWeightedValue("Gauge-метрика", name, "Значение", "знач.", float64(metric.Value), weight)
+	c.addValue("Gauge-метрика", name, "Значение", "знач.", float64(metric.Value))
 }
 
 func (c *robustCollector) addValue(dimension, name, metric, unit string, value float64) {
@@ -127,10 +121,6 @@ func (c *robustCollector) addWeightedValue(dimension, name, metric, unit string,
 		c.samples[key] = set
 	}
 	set.addWeighted(value, weight)
-}
-
-func (c *robustCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
 }
 
 func (s *robustSampleSet) addWeighted(value float64, weight uint64) {
@@ -253,30 +243,42 @@ func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) Robus
 	candidateP95 := percentileFloatSorted(sortedFloatCopy(candidateValues), 0.95)
 	delta := candidateP95 - baseP95
 	deltaPct := 0.0
-	if baseP95 > 0 {
+	comparable := baseCount > 0 && candidateCount > 0
+	deltaPctAvailable := comparable && baseP95 != 0
+	if deltaPctAvailable {
 		deltaPct = delta * 100 / baseP95
 	}
-	cliff := cliffDelta(candidateValues, baseValues)
-	effect := effectSizeLabel(cliff)
+	cliff := 0.0
+	effect := "не применимо"
+	if comparable {
+		cliff = cliffDelta(candidateValues, baseValues)
+		effect = effectSizeLabel(cliff)
+	}
 	confidence := compareConfidence(baseCount, candidateCount, deltaPct, cliff)
-	severity := robustDeltaSeverity(deltaPct, cliff, baseCount, candidateCount)
+	severity := robustDeltaSeverity(key, deltaPct, deltaPctAvailable, cliff, baseCount, candidateCount)
+	recommendation := robustDeltaRecommendation(severity)
+	if !comparable {
+		recommendation = "Проверьте, что база и кандидат проходили одинаковый сценарий и собирали одинаковые типы событий. Распределение есть только с одной стороны, поэтому вывод о регрессии невозможен."
+	}
 	return RobustDelta{
-		Dimension:      key.Dimension,
-		Name:           key.Name,
-		Metric:         key.Metric,
-		Unit:           key.Unit,
-		BaselineCount:  baseCount,
-		CandidateCount: candidateCount,
-		BaselineP95:    baseP95,
-		CandidateP95:   candidateP95,
-		P95Delta:       delta,
-		P95DeltaPct:    deltaPct,
-		CliffDelta:     cliff,
-		EffectSize:     effect,
-		Confidence:     confidence,
-		Severity:       severity,
-		Summary:        robustDeltaSummary(key, baseCount, candidateCount, baseP95, candidateP95, deltaPct, cliff),
-		Recommendation: robustDeltaRecommendation(severity),
+		Dimension:         key.Dimension,
+		Name:              key.Name,
+		Metric:            key.Metric,
+		Unit:              key.Unit,
+		BaselineCount:     baseCount,
+		CandidateCount:    candidateCount,
+		BaselineP95:       baseP95,
+		CandidateP95:      candidateP95,
+		P95Delta:          delta,
+		P95DeltaPct:       deltaPct,
+		DeltaPctAvailable: deltaPctAvailable,
+		CliffDelta:        cliff,
+		Comparable:        comparable,
+		EffectSize:        effect,
+		Confidence:        confidence,
+		Severity:          severity,
+		Summary:           robustDeltaSummary(key, baseCount, candidateCount, baseP95, candidateP95, deltaPct, cliff),
+		Recommendation:    recommendation,
 	}
 }
 
@@ -360,7 +362,13 @@ func compareRobustSummary(deltas []RobustDelta) string {
 	if len(deltas) == 0 {
 		return "Недостаточно пересекающихся распределений для робастного сравнения."
 	}
-	return fmt.Sprintf("Сравнено %d распределений: дельта p95, дельта Клиффа и метка доверия.", len(deltas))
+	comparable := 0
+	for _, delta := range deltas {
+		if delta.Comparable {
+			comparable++
+		}
+	}
+	return fmt.Sprintf("Сопоставимо %d из %d распределений. Для остальных сигнал есть только в одном прогоне, поэтому дельта Клиффа и относительное изменение не рассчитываются.", comparable, len(deltas))
 }
 
 func compareRobustFindings(deltas []RobustDelta) []Finding {
@@ -374,15 +382,20 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 	}
 	for _, delta := range deltas {
 		if delta.Severity == "high" || delta.Severity == "medium" {
+			title := "Найдена робастная регрессия"
+			evidence := []string{fmt.Sprintf("%s · %s · %s", delta.Dimension, delta.Name, delta.Metric)}
+			if delta.Comparable {
+				evidence = append(evidence, fmt.Sprintf("дельта Клиффа %.3f, эффект: %s, доверие: %s", delta.CliffDelta, delta.EffectSize, delta.Confidence))
+			} else {
+				title = "Распределение есть только в одном прогоне"
+				evidence = append(evidence, fmt.Sprintf("наблюдений: база=%d, кандидат=%d; размер эффекта и относительное изменение не рассчитываются", delta.BaselineCount, delta.CandidateCount))
+			}
 			return []Finding{{
 				Severity:       delta.Severity,
-				Title:          "Найдена робастная регрессия",
+				Title:          title,
 				Detail:         delta.Summary,
 				Recommendation: delta.Recommendation,
-				Evidence: []string{
-					fmt.Sprintf("%s · %s · %s", delta.Dimension, delta.Name, delta.Metric),
-					fmt.Sprintf("дельта Клиффа %.3f, эффект: %s, доверие: %s", delta.CliffDelta, delta.EffectSize, delta.Confidence),
-				},
+				Evidence:       evidence,
 			}}
 		}
 	}
@@ -420,6 +433,9 @@ func sampleQuality(total, sampled int, approximated bool) (string, string, strin
 }
 
 func compareConfidence(baseCount, candidateCount int, deltaPct, cliff float64) string {
+	if baseCount == 0 || candidateCount == 0 {
+		return "не применимо: сигнал есть только в одном прогоне"
+	}
 	minCount := baseCount
 	if candidateCount < minCount {
 		minCount = candidateCount
@@ -440,9 +456,21 @@ func compareConfidence(baseCount, candidateCount int, deltaPct, cliff float64) s
 	}
 }
 
-func robustDeltaSeverity(deltaPct, cliff float64, baseCount, candidateCount int) string {
-	if baseCount == 0 || candidateCount == 0 {
+func robustDeltaSeverity(key robustKey, deltaPct float64, deltaPctAvailable bool, cliff float64, baseCount, candidateCount int) string {
+	if key.Dimension == "Gauge-метрика" {
+		return "ok"
+	}
+	if baseCount == 0 && candidateCount > 0 {
 		return "medium"
+	}
+	if candidateCount == 0 {
+		return "ok"
+	}
+	if !deltaPctAvailable {
+		if cliff >= 0.474 {
+			return "medium"
+		}
+		return "ok"
 	}
 	confidenceTier := robustConfidenceTier(baseCount, candidateCount, deltaPct, cliff)
 	if confidenceTier >= 2 && deltaPct >= 50 && cliff >= 0.33 {
@@ -480,6 +508,12 @@ func robustDeltaSummary(key robustKey, baseCount, candidateCount int, baseP95, c
 	}
 	if candidateCount == 0 {
 		return fmt.Sprintf("Сигнал %s/%s исчез у кандидата: p95 базы %.1f %s, сэмплов=%d.", key.Name, key.Metric, baseP95, key.Unit, baseCount)
+	}
+	if baseP95 == 0 {
+		return fmt.Sprintf("%s/%s: p95 изменился с нуля до %.1f %s. Процент не рассчитывается, потому что делить на нулевую базу нельзя.", key.Name, key.Metric, candidateP95, key.Unit)
+	}
+	if key.Dimension == "Gauge-метрика" {
+		return fmt.Sprintf("%s/%s: p95 изменился с %.1f до %.1f %s (%+.1f%%), дельта Клиффа %.3f. Направление пользовательской gauge-метрики неизвестно, поэтому это изменение не помечается как регрессия автоматически.", key.Name, key.Metric, baseP95, candidateP95, key.Unit, deltaPct, cliff)
 	}
 	return fmt.Sprintf("%s/%s: p95 изменился с %.1f до %.1f %s (%+.1f%%), дельта Клиффа %.3f.", key.Name, key.Metric, baseP95, candidateP95, key.Unit, deltaPct, cliff)
 }

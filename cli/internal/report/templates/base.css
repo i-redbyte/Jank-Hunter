@@ -1240,19 +1240,42 @@ main {
 .gauge {
   --value: 0;
   --color: var(--cyan);
+  --cap: round;
+  position: relative;
   width: 156px;
   aspect-ratio: 1;
-  border-radius: 50%;
   display: grid;
   place-items: center;
-  background:
-    radial-gradient(circle at center, rgba(8,12,24,0.96) 0 58%, transparent 59%),
-    conic-gradient(var(--color) calc(var(--value) * 1%), rgba(255,255,255,0.08) 0);
-  border: 1px solid var(--line);
-  animation: glow 4.8s ease-in-out infinite;
+}
+.gauge-ring {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  shape-rendering: geometricPrecision;
+}
+.gauge-track,
+.gauge-value {
+  fill: none;
+  stroke-width: 12;
+  transform: rotate(-90deg);
+  transform-origin: 60px 60px;
+}
+.gauge-track {
+  stroke: rgba(255,255,255,0.09);
+}
+.gauge-value {
+  stroke: var(--color);
+  stroke-dasharray: var(--value) 100;
+  stroke-linecap: var(--cap);
 }
 .gauge-core {
-  width: 112px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 108px;
   aspect-ratio: 1;
   border-radius: 50%;
   display: grid;
@@ -1260,6 +1283,7 @@ main {
   text-align: center;
   background: rgba(7,10,18,0.88);
   border: 1px solid var(--line);
+  transform: translate(-50%, -50%);
 }
 .gauge-core strong { display: block; font-size: 23px; line-height: 1; }
 .gauge-core span {
@@ -1879,7 +1903,11 @@ details.log-card summary::-webkit-details-marker { display: none; }
 .influence-edge-table th:nth-child(3),
 .influence-edge-table td:nth-child(3),
 .influence-edge-table th:nth-child(4),
-.influence-edge-table td:nth-child(4),
+.influence-edge-table td:nth-child(4) {
+  min-width: 110px;
+  max-width: 130px;
+  white-space: nowrap;
+}
 .influence-edge-table th:nth-child(5),
 .influence-edge-table td:nth-child(5) {
   min-width: 120px;
@@ -1888,6 +1916,12 @@ details.log-card summary::-webkit-details-marker { display: none; }
 }
 .influence-edge-table th:nth-child(6),
 .influence-edge-table td:nth-child(6) {
+  min-width: 160px;
+  max-width: 190px;
+  white-space: nowrap;
+}
+.influence-edge-table th:nth-child(7),
+.influence-edge-table td:nth-child(7) {
   min-width: 320px;
   max-width: 460px;
 }
@@ -1952,6 +1986,8 @@ details.log-card summary::-webkit-details-marker { display: none; }
   color: #f3e8ff;
   max-width: 980px;
 }
+.di-disclaimer .di-badge { flex: 0 0 auto; }
+.di-disclaimer strong { min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
 .di-disclaimer.compact { margin: 0 0 16px; max-width: none; }
 .di-class-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .di-class-name code { max-width: 100%; }

@@ -8,22 +8,23 @@ import (
 )
 
 type MathReport struct {
-	Title          string
-	SourcePaths    []string
-	Summary        analyze.Summary
-	Sections       []MathSection
-	Findings       []Finding
-	Timeline       []TimelineBucket
-	Series         []Series
-	RobustStats    []RobustStat
-	ChangePoints   []ChangePoint
-	Periodic       []PeriodicSignal
-	Spectral       []SpectralPeak
-	NetworkLoops   []NetworkLoopFinding
-	IntegralScores []IntegralScore
-	Markov         MarkovModel
-	CausalGraph    CausalGraph
-	GraphPaths     []GraphPath
+	Title               string
+	SourcePaths         []string
+	IndependentRunCount int
+	Summary             analyze.Summary
+	Sections            []MathSection
+	Findings            []Finding
+	Timeline            []TimelineBucket
+	Series              []Series
+	RobustStats         []RobustStat
+	ChangePoints        []ChangePoint
+	Periodic            []PeriodicSignal
+	Spectral            []SpectralPeak
+	NetworkLoops        []NetworkLoopFinding
+	IntegralScores      []IntegralScore
+	Markov              MarkovModel
+	CausalGraph         CausalGraph
+	GraphPaths          []GraphPath
 }
 
 type CompareMathReport struct {
@@ -60,29 +61,34 @@ type Finding struct {
 }
 
 type TimelineBucket struct {
-	StartMS           uint64
-	EndMS             uint64
-	HTTPCount         int
-	HTTPFailed        int
-	HTTPAvgDurationMS uint64
-	HTTPP95DurationMS uint64
-	DNSCount          int
-	DNSDurationMS     uint64
-	ConnectCount      int
-	ConnectDurationMS uint64
-	TTFBMS            uint64
-	UIFrames          uint64
-	UIJankyFrames     uint64
-	StallCount        int
-	StallMaxMS        uint64
-	MemoryPSSKB       uint64
-	AvailableMemoryKB uint64
-	TrafficRxBytes    uint64
-	TrafficTxBytes    uint64
-	RouteSample       string
-	OwnerSample       string
-	ScreenSample      string
-	NetworkSample     string
+	StartMS            uint64
+	EndMS              uint64
+	HasObservation     bool
+	HTTPCount          int
+	HTTPFailed         int
+	HTTPAvgDurationMS  uint64
+	HTTPP95DurationMS  uint64
+	DNSCount           int
+	DNSDurationMS      uint64
+	ConnectCount       int
+	ConnectDurationMS  uint64
+	TTFBMS             uint64
+	HasTTFB            bool
+	UIFrames           uint64
+	UIJankyFrames      uint64
+	StallCount         int
+	StallMaxMS         uint64
+	MemoryPSSKB        uint64
+	HasMemoryPSS       bool
+	AvailableMemoryKB  uint64
+	HasAvailableMemory bool
+	TrafficRxBytes     uint64
+	TrafficTxBytes     uint64
+	HasTrafficSample   bool
+	RouteSample        string
+	OwnerSample        string
+	ScreenSample       string
+	NetworkSample      string
 }
 
 type Series struct {
@@ -90,6 +96,7 @@ type Series struct {
 	Unit     string
 	BucketMS uint64
 	Points   []float64
+	Present  []bool
 }
 
 type RobustStat struct {
@@ -115,42 +122,46 @@ type RobustStat struct {
 }
 
 type RobustDelta struct {
-	Dimension      string
-	Name           string
-	Metric         string
-	Unit           string
-	BaselineCount  int
-	CandidateCount int
-	BaselineP95    float64
-	CandidateP95   float64
-	P95Delta       float64
-	P95DeltaPct    float64
-	CliffDelta     float64
-	EffectSize     string
-	Confidence     string
-	Severity       string
-	Summary        string
-	Recommendation string
+	Dimension         string
+	Name              string
+	Metric            string
+	Unit              string
+	BaselineCount     int
+	CandidateCount    int
+	BaselineP95       float64
+	CandidateP95      float64
+	P95Delta          float64
+	P95DeltaPct       float64
+	DeltaPctAvailable bool
+	CliffDelta        float64
+	Comparable        bool
+	EffectSize        string
+	Confidence        string
+	Severity          string
+	Summary           string
+	Recommendation    string
 }
 
 type ChangePoint struct {
-	Signal         string
-	Unit           string
-	TimeMS         uint64
-	BeforeMedian   float64
-	AfterMedian    float64
-	BeforeMAD      float64
-	AfterMAD       float64
-	Delta          float64
-	DeltaPct       float64
-	Score          float64
-	Direction      string
-	Severity       string
-	NearbyRoute    string
-	NearbyOwner    string
-	NearbyScreen   string
-	NearbyNetwork  string
-	Recommendation string
+	Signal            string
+	Unit              string
+	TimeMS            uint64
+	BeforeMedian      float64
+	AfterMedian       float64
+	BeforeMAD         float64
+	AfterMAD          float64
+	Delta             float64
+	DeltaPct          float64
+	DeltaPctAvailable bool
+	Position          float64
+	Score             float64
+	Direction         string
+	Severity          string
+	NearbyRoute       string
+	NearbyOwner       string
+	NearbyScreen      string
+	NearbyNetwork     string
+	Recommendation    string
 }
 
 type ChangePointDelta struct {
@@ -170,6 +181,10 @@ type PeriodicSignal struct {
 	Unit                  string
 	BucketMS              uint64
 	SampleCount           int
+	TotalBucketCount      int
+	ObservedBucketCount   int
+	AnalyzedSampleCount   int
+	AnalysisBucketMS      uint64
 	Status                string
 	Summary               string
 	FirstSignificantLagMS uint64
@@ -229,41 +244,72 @@ type IntegralScore struct {
 	Explanation string
 	Unit        string
 	Value       float64
+	DurationMS  uint64
+	RunCount    int
 	Severity    string
 	Summary     string
 }
 
 type IntegralDelta struct {
-	ID             string
-	Title          string
-	Formula        string
-	Unit           string
-	BaselineValue  float64
-	CandidateValue float64
-	Delta          float64
-	DeltaPct       float64
-	Severity       string
-	Summary        string
+	ID                  string
+	Title               string
+	Formula             string
+	Unit                string
+	BaselineValue       float64
+	CandidateValue      float64
+	Delta               float64
+	DeltaPct            float64
+	DeltaPctAvailable   bool
+	Comparable          bool
+	BaselineDurationMS  uint64
+	CandidateDurationMS uint64
+	BaselineRunCount    int
+	CandidateRunCount   int
+	Severity            string
+	Summary             string
 }
 
 type MarkovModel struct {
 	States                  []MarkovBucketState
 	Transitions             []MarkovTransition
 	SampleCount             int
+	TimelineBucketCount     int
+	MissingBucketCount      int
+	ObservationCoverage     float64
 	TransitionEventCount    int
 	BadEpisodeCount         int
+	IndependentRunCount     int
+	SequenceComparable      bool
 	Confidence              string
 	ConfidenceReason        string
 	HealthyToBadCount       int
 	BadToHealthyProbability float64
+	HasRecoveryProbability  bool
 	ExpectedRecoveryWindows float64
 	ExpectedRecoveryMS      float64
+	HasExpectedRecovery     bool
 	TotalDurationMS         uint64
 	BadStateDurationMS      uint64
 	BadStateExposure        float64
 	StateExposures          []MarkovStateExposure
 	StickyStates            []MarkovStickyState
 	ContextStickyStates     []MarkovContextStickyState
+	Forecast                MarkovForecast
+}
+
+type MarkovForecast struct {
+	Direction               string
+	Label                   string
+	Severity                string
+	Confidence              string
+	ConfidenceReason        string
+	Summary                 string
+	SegmentWindows          int
+	HorizonWindows          int
+	HorizonMS               uint64
+	EarlyBadExposure        float64
+	RecentBadExposure       float64
+	ProjectedBadProbability float64
 }
 
 type MarkovBucketState struct {
@@ -312,13 +358,16 @@ type MarkovContextStickyState struct {
 }
 
 type MarkovDelta struct {
-	Metric         string
-	Unit           string
-	BaselineValue  float64
-	CandidateValue float64
-	Delta          float64
-	Severity       string
-	Summary        string
+	Metric             string
+	Unit               string
+	BaselineValue      float64
+	CandidateValue     float64
+	Delta              float64
+	Comparable         bool
+	BaselineAvailable  bool
+	CandidateAvailable bool
+	Severity           string
+	Summary            string
 }
 
 type CausalGraph struct {
@@ -378,10 +427,10 @@ func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary 
 	robustStats := summarizeRobustSamples(inputs.RobustSamples)
 	changePoints := detectChangePoints(inputs.Timeline)
 	periodic, spectral := buildPeriodicAnalysisWithRouteDefinitions(inputs.Timeline, inputs.Scale, inputs.RouteDefinitions)
-	integralScores := computeIntegralScores(inputs.Timeline, inputs.NetworkLoops)
-	markov := buildMarkovModel(inputs.Timeline, inputs.NetworkLoops)
+	integralScores := computeIntegralScoresForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.IndependentRuns)
+	markov := buildMarkovModelForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.IndependentRuns)
 	causalGraph := buildCausalGraph(inputs.Timeline, inputs.NetworkLoops, markov)
-	return buildInspectReport(summary, paths, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
+	return buildInspectReport(summary, paths, inputs.IndependentRuns, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
 }
 
 func AnalyzeCompareWithSummaries(
@@ -418,17 +467,17 @@ func AnalyzeCompareWithSummaries(
 	baselinePeriodic, baselineSpectral := buildPeriodicAnalysisWithRouteDefinitions(baselineInputs.Timeline, baselineInputs.Scale, baselineInputs.RouteDefinitions)
 	candidatePeriodic, candidateSpectral := buildPeriodicAnalysisWithRouteDefinitions(candidateInputs.Timeline, candidateInputs.Scale, candidateInputs.RouteDefinitions)
 	networkLoopDeltas := compareNetworkLoops(baselineInputs.NetworkLoops, candidateInputs.NetworkLoops)
-	baselineIntegralScores := computeIntegralScores(baselineInputs.Timeline, baselineInputs.NetworkLoops)
-	candidateIntegralScores := computeIntegralScores(candidateInputs.Timeline, candidateInputs.NetworkLoops)
+	baselineIntegralScores := computeIntegralScoresForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.IndependentRuns)
+	candidateIntegralScores := computeIntegralScoresForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.IndependentRuns)
 	integralDeltas := compareIntegralScores(baselineIntegralScores, candidateIntegralScores)
-	baselineMarkov := buildMarkovModel(baselineInputs.Timeline, baselineInputs.NetworkLoops)
-	candidateMarkov := buildMarkovModel(candidateInputs.Timeline, candidateInputs.NetworkLoops)
+	baselineMarkov := buildMarkovModelForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.IndependentRuns)
+	candidateMarkov := buildMarkovModelForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.IndependentRuns)
 	markovDeltas := compareMarkovModels(baselineMarkov, candidateMarkov)
 	baselineCausalGraph := buildCausalGraph(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineMarkov)
 	candidateCausalGraph := buildCausalGraph(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateMarkov)
 	causalDeltas := compareCausalGraphs(baselineCausalGraph, candidateCausalGraph)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineInputs.Timeline, baselineInputs.Series, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineInputs.NetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateInputs.Timeline, candidateInputs.Series, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateInputs.NetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineInputs.IndependentRuns, baselineInputs.Timeline, baselineInputs.Series, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineInputs.NetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateInputs.IndependentRuns, candidateInputs.Timeline, candidateInputs.Series, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateInputs.NetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -450,25 +499,26 @@ func AnalyzeCompareWithSummaries(
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) MathReport {
-	findings := dataQualityFindings(summary)
+func buildInspectReport(summary analyze.Summary, paths []string, independentRunCount int, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) MathReport {
+	findings := dataQualityFindingsForRuns(summary, independentRunCount)
 	return MathReport{
-		Title:          titleFromPaths(paths),
-		SourcePaths:    append([]string(nil), paths...),
-		Summary:        summary,
-		Findings:       findings,
-		Timeline:       timeline,
-		Series:         series,
-		RobustStats:    robustStats,
-		ChangePoints:   changePoints,
-		Periodic:       periodic,
-		Spectral:       spectral,
-		NetworkLoops:   networkLoops,
-		IntegralScores: integralScores,
-		Markov:         markov,
-		CausalGraph:    causalGraph,
-		GraphPaths:     causalGraph.Paths,
-		Sections:       inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops, integralScores, markov, causalGraph),
+		Title:               titleFromPaths(paths),
+		SourcePaths:         append([]string(nil), paths...),
+		IndependentRunCount: normalizedRunCount(independentRunCount),
+		Summary:             summary,
+		Findings:            findings,
+		Timeline:            timeline,
+		Series:              series,
+		RobustStats:         robustStats,
+		ChangePoints:        changePoints,
+		Periodic:            periodic,
+		Spectral:            spectral,
+		NetworkLoops:        networkLoops,
+		IntegralScores:      integralScores,
+		Markov:              markov,
+		CausalGraph:         causalGraph,
+		GraphPaths:          causalGraph.Paths,
+		Sections:            inspectSections(summary, findings, timeline, series, robustStats, changePoints, periodic, networkLoops, integralScores, markov, causalGraph),
 	}
 }
 
@@ -480,13 +530,25 @@ func titleFromPaths(paths []string) string {
 }
 
 func dataQualityFindings(summary analyze.Summary) []Finding {
+	return dataQualityFindingsForRuns(summary, 1)
+}
+
+func dataQualityFindingsForRuns(summary analyze.Summary, independentRunCount int) []Finding {
 	findings := warningFindings("", summary.Warnings, "Проверьте целостность входных .jhlog и фильтры команды перед тем, как доверять математическим выводам.")
+	if normalizedRunCount(independentRunCount) > 1 {
+		findings = append(findings, Finding{
+			Severity:       "medium",
+			Title:          "Объединены независимые прогоны",
+			Detail:         fmt.Sprintf("Количество независимых прогонов: %d. Они совмещены по относительному времени от начала каждого прогона, поэтому таймлайн описывает общий профиль сценария, а не одну непрерывную историю. Робастные распределения используют все реальные наблюдения. Марковский прогноз отключен, потому что переходы между агрегированными интервалами нельзя честно считать будущей траекторией одного запуска.", normalizedRunCount(independentRunCount)),
+			Recommendation: "Для анализа последовательности состояний и прогноза откройте каждый прогон отдельно. Для сравнения агрегатов используйте одинаковое число повторов одного и того же сценария.",
+		})
+	}
 	switch {
 	case summary.EventCount == 0:
 		findings = append(findings, Finding{
 			Severity:       "high",
 			Title:          "Нет событий для математического анализа",
-			Detail:         "Лог не содержит событий, поэтому отчет показывает только структуру будущих разделов.",
+			Detail:         "Лог не содержит событий, поэтому численные результаты недоступны. Пустые таблицы и предупреждения не означают нулевую нагрузку приложения.",
 			Recommendation: "Проверьте, что события выполнения писались в .jhlog во время сценария, и повторите команду inspect с непустым логом.",
 		})
 	case summary.HTTPCount < 5 && summary.UIFrames < 300 && summary.ContextCount < 3:
@@ -499,8 +561,8 @@ func dataQualityFindings(summary analyze.Summary) []Finding {
 	default:
 		findings = append(findings, Finding{
 			Severity: "ok",
-			Title:    "Данных достаточно для каркаса математического отчета",
-			Detail:   fmt.Sprintf("Собрано %d событий из %d логов. Подробные вычисления будут заполнять эти разделы по следующим этапам.", summary.EventCount, summary.LogCount),
+			Title:    "Данных достаточно для первичного математического анализа",
+			Detail:   fmt.Sprintf("Собрано %d событий из %d логов. Выводы относятся только к записанному сценарию и не переносятся автоматически на все поведение приложения.", summary.EventCount, summary.LogCount),
 		})
 	}
 	return findings
@@ -521,8 +583,8 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	if len(findings) == 0 {
 		findings = append(findings, Finding{
 			Severity: "ok",
-			Title:    "Сравнение готово для математического слоя",
-			Detail:   "База и кандидат агрегированы; последующие этапы добавят робастные интервалы, циклы, состояния и граф причинности.",
+			Title:    "База и кандидат пригодны для первичного сравнения",
+			Detail:   "Расчеты выполнены по переданным прогонам. Отсутствие предупреждений о составе данных не доказывает, что сценарии полностью одинаковы.",
 		})
 	}
 	return findings
@@ -627,7 +689,7 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 		},
 		{
 			ID:       "graph",
-			Title:    "Граф причинности",
+			Title:    "Граф связей и гипотез",
 			Status:   causalGraphStatus(causalGraph),
 			Summary:  causalGraphSummary(causalGraph),
 			Findings: causalGraphFindings(causalGraph),
@@ -695,7 +757,7 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 		},
 		{
 			ID:       "graph",
-			Title:    "Граф причинности",
+			Title:    "Граф связей и гипотез",
 			Status:   compareCausalGraphStatus(causalDeltas),
 			Summary:  compareCausalGraphSummary(causalDeltas),
 			Findings: compareCausalGraphFindings(causalDeltas),

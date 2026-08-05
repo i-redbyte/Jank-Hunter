@@ -11,15 +11,20 @@ import (
 )
 
 const (
-	minPeriodicPoints = 12
-	maxSpectralPoints = 2048
-	maxAutocorrLag    = 60
+	minPeriodicPoints             = 12
+	maxSpectralPoints             = 2048
+	maxAutocorrLag                = 60
+	minSpectralPeakRatio          = 3.0
+	minSpectralPeakConfidence     = 0.35
+	minDisplayedAutocorrelation   = 0.30
+	minSignificantAutocorrelation = 0.60
 )
 
 type periodicDefinition struct {
-	name   string
-	unit   string
-	points []float64
+	name    string
+	unit    string
+	points  []float64
+	present []bool
 }
 
 func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale timelineScale, routeDefinitions []periodicDefinition) ([]PeriodicSignal, []SpectralPeak) {
@@ -29,10 +34,14 @@ func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale 
 	signals := make([]PeriodicSignal, 0, len(definitions))
 	var peaks []SpectralPeak
 	for _, definition := range definitions {
-		if !hasNonZeroFloat(definition.points) {
+		points, observed := longestPeriodicRun(definition.points, definition.present)
+		if !hasNonZeroFloat(points) {
 			continue
 		}
-		signal := analyzePeriodicSignal(definition.name, definition.unit, scale.bucketMSOrDefault(), definition.points)
+		signal := analyzePeriodicSignal(definition.name, definition.unit, scale.bucketMSOrDefault(), points)
+		signal.TotalBucketCount = len(definition.points)
+		signal.ObservedBucketCount = observed
+		signal.Summary = periodicSignalSummary(signal)
 		signals = append(signals, signal)
 		peaks = append(peaks, signal.Peaks...)
 	}
@@ -50,25 +59,28 @@ func buildPeriodicAnalysisWithRouteDefinitions(timeline []TimelineBucket, scale 
 
 func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition {
 	defs := []struct {
-		name  string
-		unit  string
-		value func(TimelineBucket) float64
+		name    string
+		unit    string
+		value   func(TimelineBucket) float64
+		present func(TimelineBucket) bool
 	}{
-		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }},
+		{name: "Доля подтормаживаний UI", unit: "%", value: func(b TimelineBucket) float64 { return jankRate(b.UIJankyFrames, b.UIFrames) }, present: func(b TimelineBucket) bool { return b.UIFrames > 0 }},
 		{name: "HTTP запросы", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPCount) }},
 		{name: "HTTP ошибки", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.HTTPFailed) }},
 		{name: "DNS количество", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.DNSCount) }},
-		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }},
+		{name: "DNS среднее", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.DNSDurationMS) }, present: func(b TimelineBucket) bool { return b.DNSCount > 0 }},
 		{name: "Количество соединений", unit: "шт", value: func(b TimelineBucket) float64 { return float64(b.ConnectCount) }},
-		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }},
+		{name: "Среднее время соединения", unit: "мс", value: func(b TimelineBucket) float64 { return float64(b.ConnectDurationMS) }, present: func(b TimelineBucket) bool { return b.ConnectCount > 0 }},
 	}
 	out := make([]periodicDefinition, 0, len(defs))
 	for _, def := range defs {
 		points := make([]float64, 0, len(timeline))
+		present := make([]bool, 0, len(timeline))
 		for _, bucket := range timeline {
 			points = append(points, def.value(bucket))
+			present = append(present, def.present == nil || def.present(bucket))
 		}
-		out = append(out, periodicDefinition{name: def.name, unit: def.unit, points: points})
+		out = append(out, periodicDefinition{name: def.name, unit: def.unit, points: points, present: present})
 	}
 	return out
 }
@@ -89,12 +101,12 @@ type routeSeriesCollector struct {
 	routes   map[string][]float64
 }
 
-func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string) {
+func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
 	if event.HTTP == nil || !c.scale.hasData || c.scale.bucketCount == 0 {
 		return
 	}
-	route := jhlog.Resolve(dict, event.HTTP.RouteID)
-	owner := c.resolveOwner(dict, event.HTTP.OwnerID)
+	route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
+	owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
 	if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 		return
 	}
@@ -144,29 +156,29 @@ func (c *routeSeriesCollector) definitions(limit int) []periodicDefinition {
 	return out
 }
 
-func (c *routeSeriesCollector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return analyze.ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id))
-}
-
 func analyzePeriodicSignal(name string, unit string, bucketMS uint64, points []float64) PeriodicSignal {
 	signal := PeriodicSignal{
-		Signal:      name,
-		Unit:        unit,
-		BucketMS:    bucketMS,
-		SampleCount: len(points),
+		Signal:              name,
+		Unit:                unit,
+		BucketMS:            bucketMS,
+		SampleCount:         len(points),
+		TotalBucketCount:    len(points),
+		ObservedBucketCount: len(points),
 	}
 	if len(points) < minPeriodicPoints {
 		signal.Status = "medium"
 		signal.Summary = fmt.Sprintf("Недостаточно данных: нужно хотя бы %d временных интервалов, сейчас %d.", minPeriodicPoints, len(points))
 		return signal
 	}
-	analysisPoints := downsampleFloat(points, maxSpectralPoints)
+	analysisPoints, analysisBucketMS := downsamplePeriodicPoints(points, bucketMS, maxSpectralPoints)
 	signal.Approximated = len(analysisPoints) < len(points)
-	lags := autocorrelationLags(analysisPoints, bucketMS)
+	signal.AnalyzedSampleCount = len(analysisPoints)
+	signal.AnalysisBucketMS = analysisBucketMS
+	lags := autocorrelationLags(analysisPoints, analysisBucketMS)
 	signal.TopLags = topAutocorrelationLags(lags, 3)
 	signal.FirstSignificantLagMS = firstSignificantLag(lags)
 	signal.DecayHalfLifeMS = decayHalfLife(lags)
-	signal.Peaks, signal.SpectralEntropy = spectralPeaks(name, bucketMS, analysisPoints, 3)
+	signal.Peaks, signal.SpectralEntropy = spectralPeaks(name, analysisBucketMS, analysisPoints, 3)
 	signal.Status = periodicSignalStatus(signal)
 	signal.Summary = periodicSignalSummary(signal)
 	return signal
@@ -184,7 +196,7 @@ func autocorrelationLags(points []float64, bucketMS uint64) []AutocorrelationLag
 	if denominator == 0 {
 		return nil
 	}
-	limit := len(centered) / 2
+	limit := len(centered) / 3
 	if limit > maxAutocorrLag {
 		limit = maxAutocorrLag
 	}
@@ -205,7 +217,7 @@ func autocorrelationLags(points []float64, bucketMS uint64) []AutocorrelationLag
 func topAutocorrelationLags(lags []AutocorrelationLag, limit int) []AutocorrelationLag {
 	positive := make([]AutocorrelationLag, 0, len(lags))
 	for _, lag := range lags {
-		if lag.Correlation > 0 {
+		if lag.Correlation >= minDisplayedAutocorrelation {
 			positive = append(positive, lag)
 		}
 	}
@@ -223,7 +235,7 @@ func topAutocorrelationLags(lags []AutocorrelationLag, limit int) []Autocorrelat
 
 func firstSignificantLag(lags []AutocorrelationLag) uint64 {
 	for _, lag := range lags {
-		if lag.Correlation >= 0.55 {
+		if lag.Correlation >= minSignificantAutocorrelation {
 			return lag.LagMS
 		}
 	}
@@ -231,6 +243,9 @@ func firstSignificantLag(lags []AutocorrelationLag) uint64 {
 }
 
 func decayHalfLife(lags []AutocorrelationLag) uint64 {
+	if len(lags) == 0 || lags[0].Correlation <= 0.5 {
+		return 0
+	}
 	for _, lag := range lags {
 		if lag.Correlation <= 0.5 {
 			return lag.LagMS
@@ -259,10 +274,20 @@ func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit i
 		if power <= 0 {
 			continue
 		}
+		if index > 0 && power < powers[index-1] {
+			continue
+		}
+		if index+1 < len(powers) && power < powers[index+1] {
+			continue
+		}
 		k := index + 1
 		frequency := float64(k) / (float64(len(points)) * bucketSeconds)
 		periodMS := uint64(math.Round((1 / frequency) * 1000))
 		ratio := power / background
+		confidence := spectralConfidence(ratio, entropy)
+		if ratio < minSpectralPeakRatio || confidence < minSpectralPeakConfidence {
+			continue
+		}
 		peaks = append(peaks, SpectralPeak{
 			Signal:           signalName,
 			PeriodMS:         periodMS,
@@ -270,7 +295,7 @@ func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit i
 			Power:            power,
 			PeakToBackground: ratio,
 			SpectralEntropy:  entropy,
-			Confidence:       spectralConfidence(ratio, entropy),
+			Confidence:       confidence,
 		})
 	}
 	sort.Slice(peaks, func(i, j int) bool {
@@ -351,18 +376,22 @@ func spectralConfidence(ratio float64, entropy float64) float64 {
 }
 
 func periodicSignalStatus(signal PeriodicSignal) string {
-	if len(signal.Peaks) == 0 && signal.FirstSignificantLagMS == 0 {
+	if signal.SampleCount < minPeriodicPoints {
 		return "medium"
 	}
-	if topPeakConfidence(signal) >= 0.6 || signal.FirstSignificantLagMS > 0 {
-		return "ok"
+	if periodicHasCrediblePattern(signal) {
+		return "medium"
 	}
-	return "medium"
+	return "ok"
 }
 
 func periodicSignalSummary(signal PeriodicSignal) string {
-	if signal.Status == "medium" && len(signal.Peaks) == 0 {
-		return "Недостаточно выраженных периодических пиков: сигнал похож на шум или слишком короткий."
+	coverage := periodicCoverageSummary(signal)
+	if signal.SampleCount < minPeriodicPoints {
+		return fmt.Sprintf("Недостаточно данных: нужен непрерывный участок не менее %d измеренных интервалов, сейчас %d.%s", minPeriodicPoints, signal.SampleCount, coverage)
+	}
+	if !periodicHasCrediblePattern(signal) {
+		return "Повторяемый цикл не подтвержден: значимого лага и спектрального пика с достаточным отношением к фону нет." + coverage
 	}
 	parts := []string{}
 	if signal.FirstSignificantLagMS > 0 {
@@ -372,49 +401,66 @@ func periodicSignalSummary(signal PeriodicSignal) string {
 		parts = append(parts, fmt.Sprintf("главный спектральный период %.1fs", seconds(signal.Peaks[0].PeriodMS)))
 	}
 	if signal.Approximated {
-		parts = append(parts, "преобразование Фурье посчитано по ограниченной равномерной выборке")
+		parts = append(parts, fmt.Sprintf("ряд сокращен до %d точек с шагом около %.1fs без изменения масштаба времени", signal.AnalyzedSampleCount, seconds(signal.AnalysisBucketMS)))
 	}
-	return strings.Join(parts, "; ")
+	return strings.Join(parts, "; ") + coverage
+}
+
+func periodicCoverageSummary(signal PeriodicSignal) string {
+	if signal.TotalBucketCount <= 0 || signal.ObservedBucketCount >= signal.TotalBucketCount {
+		return ""
+	}
+	return fmt.Sprintf(" Из %d интервалов измерение есть в %d; анализ использует самый длинный непрерывный участок из %d интервалов, чтобы не подменять пропуски нулями.", signal.TotalBucketCount, signal.ObservedBucketCount, signal.SampleCount)
 }
 
 func periodicStatus(signals []PeriodicSignal) string {
-	if len(signals) == 0 {
+	if !periodicAnalysisAvailable(signals) {
 		return "medium"
 	}
 	for _, signal := range signals {
-		if topPeakConfidence(signal) >= 0.6 || signal.FirstSignificantLagMS > 0 {
-			return "ok"
+		if periodicHasCrediblePattern(signal) {
+			return "medium"
 		}
 	}
-	return "medium"
+	return "ok"
 }
 
 func periodicSummary(signals []PeriodicSignal) string {
 	if len(signals) == 0 {
 		return "Недостаточно данных для автокорреляции и преобразования Фурье."
 	}
-	peaks := 0
+	patterns := 0
+	analyzed := 0
 	for _, signal := range signals {
-		peaks += len(signal.Peaks)
+		if signal.SampleCount >= minPeriodicPoints {
+			analyzed++
+		}
+		if periodicHasCrediblePattern(signal) {
+			patterns++
+		}
 	}
-	return fmt.Sprintf("Проанализировано %d сигналов: лаги автокорреляции, преобразование Фурье с окном Ханна, спектральная энтропия и %d спектральных пиков.", len(signals), peaks)
+	return fmt.Sprintf("Получено %d сигналов; непрерывного участка хватает для анализа у %d, повторяемый паттерн с достаточной поддержкой найден у %d. Слабые спектральные пики, похожие на шум, скрыты.", len(signals), analyzed, patterns)
 }
 
 func periodicFindings(signals []PeriodicSignal) []Finding {
-	if len(signals) == 0 {
+	if !periodicAnalysisAvailable(signals) {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для периодического анализа",
-			Detail:         "Нужна запись хотя бы из нескольких десятков временных интервалов; короткий smoke-прогон почти не дает устойчивого спектра.",
+			Detail:         periodicSummary(signals),
 			Recommendation: "Соберите более длинный ручной или длительный прогон для поиска периодических подтормаживаний UI или сетевых циклов.",
 		}}
 	}
 	best := signals[0]
-	if len(best.Peaks) > 0 && topPeakConfidence(best) >= 0.4 {
+	if periodicHasCrediblePattern(best) {
+		period := best.FirstSignificantLagMS
+		if len(best.Peaks) > 0 {
+			period = best.Peaks[0].PeriodMS
+		}
 		return []Finding{{
-			Severity:       "ok",
-			Title:          "Найден периодический кандидат",
-			Detail:         fmt.Sprintf("%s: главный период %.1fs, пик/фон %.2f, энтропия %.2f.", best.Signal, seconds(best.Peaks[0].PeriodMS), best.Peaks[0].PeakToBackground, best.SpectralEntropy),
+			Severity:       "medium",
+			Title:          "Найден повторяемый паттерн для проверки",
+			Detail:         fmt.Sprintf("%s: предполагаемый период %.1fs. Это статистическая повторяемость, а не доказанная проблема приложения.", best.Signal, seconds(period)),
 			Recommendation: "Сопоставьте период с таймлайном, запросами конкретного маршрута, GC, диспетчером, исполнителем задач, gauge-метриками и сетевыми повторами.",
 		}}
 	}
@@ -426,21 +472,24 @@ func periodicFindings(signals []PeriodicSignal) []Finding {
 }
 
 func comparePeriodicStatus(baseline, candidate []PeriodicSignal) string {
-	if len(baseline) == 0 || len(candidate) == 0 {
+	if !periodicAnalysisAvailable(baseline) || !periodicAnalysisAvailable(candidate) {
+		return "medium"
+	}
+	if periodicPatternCount(candidate) > periodicPatternCount(baseline) {
 		return "medium"
 	}
 	return "ok"
 }
 
 func comparePeriodicSummary(baseline, candidate []PeriodicSignal) string {
-	if len(baseline) == 0 || len(candidate) == 0 {
+	if !periodicAnalysisAvailable(baseline) || !periodicAnalysisAvailable(candidate) {
 		return "Недостаточно периодических сигналов для честного сравнения."
 	}
-	return fmt.Sprintf("База: %d сигналов, кандидат: %d сигналов. Сетевые периоды дополнительно сопоставляются в разделе сетевых циклов.", len(baseline), len(candidate))
+	return fmt.Sprintf("База: %d подтвержденных паттернов из %d сигналов; кандидат: %d из %d. Наличие периода само по себе не доказывает деградацию.", periodicPatternCount(baseline), len(baseline), periodicPatternCount(candidate), len(candidate))
 }
 
 func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
-	if len(baseline) == 0 || len(candidate) == 0 {
+	if !periodicAnalysisAvailable(baseline) || !periodicAnalysisAvailable(candidate) {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно периодических сигналов для сравнения",
@@ -448,11 +497,82 @@ func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
 			Recommendation: "Соберите более длинные прогоны базы и кандидата.",
 		}}
 	}
+	if periodicPatternCount(candidate) > periodicPatternCount(baseline) {
+		return []Finding{{
+			Severity:       "medium",
+			Title:          "У кандидата больше повторяемых паттернов",
+			Detail:         comparePeriodicSummary(baseline, candidate),
+			Recommendation: "Проверьте, совпадает ли новый период с таймером, polling, retry, GC или пользовательским действием. Если совпадения нет, не считайте период регрессией.",
+		}}
+	}
 	return []Finding{{
 		Severity: "ok",
 		Title:    "Периодический анализ построен для базы и кандидата",
 		Detail:   comparePeriodicSummary(baseline, candidate),
 	}}
+}
+
+func downsamplePeriodicPoints(points []float64, bucketMS uint64, limit int) ([]float64, uint64) {
+	downsampled := downsampleFloat(points, limit)
+	if len(downsampled) >= len(points) || len(downsampled) < 2 || len(points) < 2 {
+		return downsampled, bucketMS
+	}
+	spanMS := float64(len(points)-1) * float64(bucketMS)
+	effectiveBucketMS := uint64(math.Round(spanMS / float64(len(downsampled)-1)))
+	if effectiveBucketMS == 0 {
+		effectiveBucketMS = bucketMS
+	}
+	return downsampled, effectiveBucketMS
+}
+
+func longestPeriodicRun(points []float64, present []bool) ([]float64, int) {
+	if len(present) != len(points) {
+		return append([]float64(nil), points...), len(points)
+	}
+	bestStart := 0
+	bestLength := 0
+	currentStart := 0
+	currentLength := 0
+	observed := 0
+	for index, available := range present {
+		if available {
+			observed++
+			if currentLength == 0 {
+				currentStart = index
+			}
+			currentLength++
+			if currentLength > bestLength {
+				bestStart = currentStart
+				bestLength = currentLength
+			}
+			continue
+		}
+		currentLength = 0
+	}
+	return append([]float64(nil), points[bestStart:bestStart+bestLength]...), observed
+}
+
+func periodicHasCrediblePattern(signal PeriodicSignal) bool {
+	return signal.FirstSignificantLagMS > 0 || topPeakConfidence(signal) >= minSpectralPeakConfidence
+}
+
+func periodicAnalysisAvailable(signals []PeriodicSignal) bool {
+	for _, signal := range signals {
+		if signal.SampleCount >= minPeriodicPoints {
+			return true
+		}
+	}
+	return false
+}
+
+func periodicPatternCount(signals []PeriodicSignal) int {
+	count := 0
+	for _, signal := range signals {
+		if periodicHasCrediblePattern(signal) {
+			count++
+		}
+	}
+	return count
 }
 
 func downsampleFloat(points []float64, limit int) []float64 {

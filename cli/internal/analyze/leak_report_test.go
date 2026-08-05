@@ -163,6 +163,13 @@ func TestSaturatingSignedUint64DeltaKeepsExtremeValuesRepresentable(t *testing.T
 	}
 }
 
+func TestLeakCompareVerdictTranslatesConfidence(t *testing.T) {
+	verdict := leakCompareVerdict(LeakCompareStats{ChangeLabel: "без изменений", BaselineTotal: 1, CandidateTotal: 1}, "low")
+	if !strings.Contains(verdict, "Доверие сравнения: низкое") || strings.Contains(verdict, "Доверие сравнения: low") {
+		t.Fatalf("leak compare verdict = %q", verdict)
+	}
+}
+
 func assertLeakStatus(t *testing.T, statuses map[string]string, className, want string) {
 	t.Helper()
 	if got := statuses[className]; got != want {

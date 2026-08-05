@@ -35,6 +35,10 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	html := string(data)
 	for _, marker := range []string{
 		`data-jankhunter-single-html`,
+		`data-report-style="modern"`,
+		`class="report-logo"`,
+		`РАЗДЕЛЫ ОТЧЁТА`,
+		`grid-template-columns: 232px minmax(0, 1fr)`,
 		`id="jankhunter-report-pages"`,
 		`"id":"overview"`,
 		`"id":"math"`,
@@ -69,6 +73,36 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	}
 	if !strings.Contains(pages[0].HTML, bundledPageBridge) || !strings.Contains(pages[1].HTML, bundledPageBridge) {
 		t.Fatal("navigation bridge is not injected into every embedded page")
+	}
+}
+
+func TestWriteBundleWithOptionsPreservesLegacyShell(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.html")
+	err := WriteBundleWithOptions(path, []BundlePage{{
+		ID:    "overview",
+		Title: "Обзор",
+		Href:  "report.html",
+		HTML:  []byte("<!doctype html><html><body>legacy</body></html>"),
+	}}, ReportOptions{Style: ReportStyleLegacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, marker := range []string{
+		`data-report-style="legacy"`,
+		`<div class="report-brand">Jank <span>Hunter</span></div>`,
+		`grid-template-rows: auto minmax(0, 1fr)`,
+	} {
+		if !strings.Contains(html, marker) {
+			t.Fatalf("legacy bundle does not contain %q", marker)
+		}
+	}
+	if strings.Contains(html, `class="report-logo"`) {
+		t.Fatal("legacy bundle contains modern logo")
 	}
 }
 

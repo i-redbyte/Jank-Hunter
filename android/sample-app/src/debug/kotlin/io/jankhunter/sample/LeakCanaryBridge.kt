@@ -5,12 +5,19 @@ import leakcanary.AppWatcher
 import leakcanary.LeakCanary
 
 internal object LeakCanaryBridge {
-    private var configured = false
+    fun configureAutomatic() {
+        LeakCanary.config = LeakCanary.config.copy(
+            dumpHeap = false,
+            showNotifications = false,
+        )
+    }
 
     fun configure() {
-        if (configured) return
-        LeakCanary.config = LeakCanary.config.copy(retainedVisibleThreshold = 1)
-        configured = true
+        LeakCanary.config = LeakCanary.config.copy(
+            dumpHeap = true,
+            retainedVisibleThreshold = 1,
+            showNotifications = true,
+        )
     }
 
     fun watch(watchedObject: Any, description: String) {

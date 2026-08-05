@@ -11,7 +11,10 @@ internal object InstrumentationPackages {
         "okhttp3.",
         "okio.",
         "org.jetbrains.",
-        "io.jankhunter.",
+        "io.jankhunter.annotations.",
+        "io.jankhunter.gradle.",
+        "io.jankhunter.okhttp3.",
+        "io.jankhunter.runtime.",
     )
 
     fun effectiveIncludes(

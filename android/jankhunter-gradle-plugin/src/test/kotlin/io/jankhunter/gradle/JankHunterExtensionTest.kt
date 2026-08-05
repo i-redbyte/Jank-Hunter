@@ -54,6 +54,7 @@ class JankHunterExtensionTest {
         instrumentation.asmProgressLog.set(true)
         instrumentation.classGraph.set(true)
         instrumentation.runtimeCallGraph.set(true)
+        instrumentation.includeAndroidNamespace.set(false)
 
         assertEquals(
             linkedSetOf("com.myapp", "com.myapp.feature", "com.myapp.data"),
@@ -66,6 +67,7 @@ class JankHunterExtensionTest {
         assertEquals(true, instrumentation.asmProgressLog.get())
         assertEquals(true, instrumentation.classGraph.get())
         assertEquals(true, instrumentation.runtimeCallGraph.get())
+        assertEquals(false, instrumentation.includeAndroidNamespace.get())
     }
 
     @Test
@@ -75,6 +77,7 @@ class JankHunterExtensionTest {
         assertEquals(false, instrumentation.asmProgressLog.get())
         assertEquals(true, instrumentation.classGraph.get())
         assertEquals(false, instrumentation.runtimeCallGraph.get())
+        assertEquals(true, instrumentation.includeAndroidNamespace.get())
         assertEquals(false, instrumentation.okhttp.get())
         assertEquals(false, instrumentation.webSockets.get())
         assertEquals(true, instrumentation.handlers.get())

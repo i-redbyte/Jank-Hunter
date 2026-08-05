@@ -40,3 +40,23 @@ func BenchmarkWriteInspectRepresentative(b *testing.B) {
 	}
 	b.ReportMetric(float64(stat.Size()), "html-bytes/op")
 }
+
+func BenchmarkWriteInfluenceLargeGraph(b *testing.B) {
+	influence := buildLargeReportInfluence(20_000)
+	directory := b.TempDir()
+	reportPath := filepath.Join(directory, "large-influence.html")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := report.WriteInfluenceWithOptions(reportPath, influence, "Большой граф влияния", report.ReportOptions{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	stat, err := os.Stat(reportPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(stat.Size()), "html-bytes/op")
+}

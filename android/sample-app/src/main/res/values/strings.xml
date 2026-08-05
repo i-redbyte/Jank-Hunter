@@ -97,4 +97,56 @@
     <string name="status_baseline_recorded">Baseline записан: чистый объект, кастомные метрики, без удержания sample-списка.</string>
     <string name="status_candidate_recorded">Candidate записан: UI, память и leak-регрессии готовы к compare.</string>
     <string name="status_candidate_leak_burst_watched">Candidate leak burst поставлен под наблюдение.</string>
+
+    <string name="auto_progress_format">Этап %1$d из %2$d · %3$s</string>
+    <string name="auto_stage_launch">подготовка</string>
+    <string name="auto_launch_title">Автоматическая проверка Jank Hunter</string>
+    <string name="auto_launch_description">Приложение само пройдет единую цепочку экранов и создаст контролируемые чистые и проблемные потоки.</string>
+    <string name="auto_launch_fact_real">Все проблемы создаются реальной работой процесса, main looper, loopback-сети и retention watcher.</string>
+    <string name="auto_launch_fact_system">Батарея, thermal, storage и состояние сети только наблюдаются и не подменяются.</string>
+    <string name="auto_launch_fact_report">Финальный отчет можно сверить с известным сценарием и точными expected-счетчиками.</string>
+
+    <string name="auto_stage_baseline">baseline</string>
+    <string name="auto_baseline_title">Чистый baseline</string>
+    <string name="auto_baseline_description">Экран дает стабильное окно кадров и записывает небольшую ожидаемую нагрузку без удержания объекта.</string>
+    <string name="auto_baseline_fact_frames">UI остается отзывчивым, чтобы отчет получил контрольное окно FPS и jank.</string>
+    <string name="auto_baseline_fact_object">ReleasedCheckoutProbe наблюдается, но нигде не сохраняется.</string>
+    <string name="auto_baseline_fact_executor">Короткая executor-задача формирует чистую точку сравнения очереди и service time.</string>
+
+    <string name="auto_stage_ui_cpu">UI и CPU</string>
+    <string name="auto_ui_cpu_title">Фризы, CPU и очередь задач</string>
+    <string name="auto_ui_cpu_description">Два уровня блокировки main looper отделены от длительной CPU-задачи и очереди executor.</string>
+    <string name="auto_ui_cpu_fact_stall">Main looper блокируется на 180 и 520 мс в разных flows.</string>
+    <string name="auto_ui_cpu_fact_cpu">Фоновый поток непрерывно считает 1200 мс, создавая измеримую CPU-нагрузку.</string>
+    <string name="auto_ui_cpu_fact_queue">Три задачи ждут однопоточный executor после CPU-работы.</string>
+
+    <string name="auto_stage_network">сеть</string>
+    <string name="auto_network_title">Детерминированная loopback-сеть</string>
+    <string name="auto_network_description">Локальный сервер дает воспроизводимые ответы без зависимости от интернета.</string>
+    <string name="auto_network_fact_http">HTTP: быстрый 200, медленный 200 и 503.</string>
+    <string name="auto_network_fact_failure">Отдельный запрос получает реальный connection refused на закрытом порту.</string>
+    <string name="auto_network_fact_websocket">WebSocket действительно открывается, принимает сообщение и отключается.</string>
+
+    <string name="auto_stage_memory">память и логи</string>
+    <string name="auto_memory_title">Память, retention и log spam</string>
+    <string name="auto_memory_description">Освобождаемые allocation отделены от удержанного heap pressure, clean watch — от реальных retained chains.</string>
+    <string name="auto_memory_fact_allocations">Временные массивы создают allocation/GC, четыре массива по 2 МиБ остаются удержанными.</string>
+    <string name="auto_memory_fact_retention">Один объект освобождается, Activity reference и три cache entry удерживаются приложением.</string>
+    <string name="auto_memory_fact_logs">Тихий flow пишет 3 разных сообщения, шумный — 60 сообщений одного источника.</string>
+
+    <string name="auto_stage_result">готово</string>
+    <string name="auto_result_title">Автоматический сценарий завершен</string>
+    <string name="auto_result_description">Jank Hunter выполнил flush. Лог содержит контрольные expected-счетчики и фактические измерения каждого этапа.</string>
+    <string name="auto_result_fact_truth">Системные данные отражают состояние эмулятора, а не заранее заданные значения.</string>
+    <string name="auto_result_fact_heap">При подтвержденном retention в директории Jank Hunter создается один HPROF.</string>
+    <string name="auto_result_fact_cli">Выгрузите артефакты и сравните JSON/HTML с этой цепочкой.</string>
+    <string name="auto_restart">Повторить автоматический прогон</string>
+    <string name="action_open_manual_mode">Открыть ручную лабораторию</string>
+    <string name="manual_mode_label">Jank Hunter · ручной режим</string>
+    <string name="manual_mode_title">Ручная лаборатория</string>
+    <string name="manual_mode_description">Все прежние отдельные действия доступны здесь и не смешиваются с автоматической цепочкой.</string>
+    <string name="action_share_diagnostics">Поделиться логами Jank Hunter</string>
+    <string name="share_preparing">Jank Hunter создает ZIP-архив…</string>
+    <string name="share_no_artifacts">Логи Jank Hunter пока не созданы.</string>
+    <string name="share_chooser_title">Отправить диагностику Jank Hunter</string>
 </resources>

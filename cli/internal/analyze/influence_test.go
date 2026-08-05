@@ -148,6 +148,42 @@ func TestBuildInfluenceSeparatesRuntimeWallTimeAndRetainedMemory(t *testing.T) {
 	}
 }
 
+func TestInfluenceSeverityUsesPublishedBandsAndCapsStaticNodes(t *testing.T) {
+	if influenceSeverity(4.9) != "ok" || influenceSeverity(5) != "medium" || influenceSeverity(15) != "high" {
+		t.Fatalf("influence score bands do not match the report guide")
+	}
+	node := (&influenceAccumulator{className: "com.app.StaticOnly", score: 30, static: true, flows: map[string]struct{}{}, screens: map[string]struct{}{}, routes: map[string]struct{}{}, reasons: map[string]struct{}{}}).toNode()
+	if node.Severity != "medium" || node.RuntimeEvidence {
+		t.Fatalf("static-only node was presented as runtime critical: %+v", node)
+	}
+}
+
+func TestClassFromOwnerResolvesDestroyedLifecycleClass(t *testing.T) {
+	tests := []struct {
+		owner string
+		want  string
+	}{
+		{
+			owner: "lifecycle.destroyed.com.app.feature.FeedActivity",
+			want:  "com.app.feature.FeedActivity",
+		},
+		{
+			owner: "owner.lifecycle.destroyed.com.app.feature.FeedActivity",
+			want:  "com.app.feature.FeedActivity",
+		},
+		{
+			owner: "lifecycle.destroyed.unknown",
+			want:  "",
+		},
+	}
+
+	for _, test := range tests {
+		if got := classFromOwner(test.owner); got != test.want {
+			t.Fatalf("classFromOwner(%q) = %q, want %q", test.owner, got, test.want)
+		}
+	}
+}
+
 func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
 	cases := map[string]string{
 		"http_slow_or_failed":      "медленный или ошибочный HTTP",

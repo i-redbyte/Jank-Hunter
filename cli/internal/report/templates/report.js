@@ -1,5 +1,14 @@
 
 (() => {
+  const modernReport = document.body.dataset.reportStyle !== 'legacy';
+  if (modernReport) {
+    const explorer = document.getElementById('explorer');
+    const registry = document.getElementById('registry');
+    if (explorer && registry && explorer.parentNode === registry.parentNode) {
+      explorer.parentNode.insertBefore(registry, explorer);
+    }
+  }
+
   const markScrollableTables = () => {
     document.querySelectorAll('.table-scroll').forEach((wrapper) => {
       wrapper.classList.toggle('is-scrollable', wrapper.scrollWidth > wrapper.clientWidth + 4);
@@ -102,12 +111,12 @@
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'cell-toggle';
-      toggle.textContent = 'показать полностью';
+      toggle.textContent = modernReport ? 'развернуть' : 'показать полностью';
       toggle.setAttribute('aria-expanded', 'false');
       toggle.addEventListener('click', () => {
         const expanded = !clip.classList.contains('is-expanded');
         clip.classList.toggle('is-expanded', expanded);
-        toggle.textContent = expanded ? 'свернуть' : 'показать полностью';
+        toggle.textContent = expanded ? 'свернуть' : (modernReport ? 'развернуть' : 'показать полностью');
         toggle.setAttribute('aria-expanded', String(expanded));
         scheduleTableMeasure();
       });

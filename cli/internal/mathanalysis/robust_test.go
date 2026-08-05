@@ -130,8 +130,42 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 	if gauge == nil {
 		t.Fatalf("gauge robust stat not found: %#v", report.RobustStats)
 	}
-	if gauge.Count != 5 || gauge.Median != 30 || gauge.P95 != 30 {
+	if gauge.Count != 3 || gauge.Median != 20 || gauge.P95 != 30 {
 		t.Fatalf("unexpected gauge stat: %+v", *gauge)
+	}
+}
+
+func TestCompareRobustSamplesDoesNotGuessGaugeDirection(t *testing.T) {
+	key := robustKey{Dimension: "Gauge-метрика", Name: "cache.hit.ratio", Metric: "Значение", Unit: "знач."}
+	baselineValues := make([]float64, 80)
+	candidateValues := make([]float64, 80)
+	for index := range baselineValues {
+		baselineValues[index] = 10
+		candidateValues[index] = 90
+	}
+
+	deltas := compareRobustSamples(
+		robustSampleMap{key: robustSet(baselineValues...)},
+		robustSampleMap{key: robustSet(candidateValues...)},
+	)
+
+	if len(deltas) != 1 || deltas[0].Severity != "ok" {
+		t.Fatalf("custom gauge direction must stay neutral: %+v", deltas)
+	}
+	if !deltas[0].Comparable || !deltas[0].DeltaPctAvailable {
+		t.Fatalf("gauge distributions should remain numerically comparable: %+v", deltas[0])
+	}
+}
+
+func TestCompareRobustSamplesMarksMissingDistributionAsNotComparable(t *testing.T) {
+	key := robustKey{Dimension: "Маршрут", Name: "GET /items", Metric: "HTTP задержка", Unit: "мс"}
+	deltas := compareRobustSamples(nil, robustSampleMap{key: robustSet(100, 120, 140)})
+
+	if len(deltas) != 1 || deltas[0].Comparable || deltas[0].DeltaPctAvailable {
+		t.Fatalf("one-sided distribution must not expose comparison statistics: %+v", deltas)
+	}
+	if deltas[0].EffectSize != "не применимо" {
+		t.Fatalf("EffectSize = %q, want not applicable", deltas[0].EffectSize)
 	}
 }
 

@@ -62,6 +62,36 @@ func TestCompareChangePointsReportsAppearedAndDisappeared(t *testing.T) {
 	}
 }
 
+func TestDetectChangePointsDoesNotInventPercentFromZeroBaseline(t *testing.T) {
+	timeline := make([]TimelineBucket, 6)
+	for index := range timeline {
+		timeline[index] = httpBucket(uint64(index)*DefaultBucketMS, 100)
+		if index >= 3 {
+			timeline[index].HTTPFailed = 3
+		}
+	}
+
+	points := detectChangePoints(timeline)
+	for _, point := range points {
+		if point.Signal == "HTTP ошибки" {
+			if point.DeltaPctAvailable {
+				t.Fatalf("percentage must be unavailable for zero baseline: %+v", point)
+			}
+			return
+		}
+	}
+	t.Fatalf("HTTP error change point not found: %+v", points)
+}
+
+func TestCompareChangePointsMatchesSameRelativeScenarioPosition(t *testing.T) {
+	baseline := []ChangePoint{{Signal: "HTTP p95", TimeMS: 3_000, Position: 0.30, Score: 5}}
+	candidate := []ChangePoint{{Signal: "HTTP p95", TimeMS: 8_000, Position: 0.34, Score: 5}}
+
+	if deltas := compareChangePoints(baseline, candidate); len(deltas) != 0 {
+		t.Fatalf("same scenario position must not appear as new point: %+v", deltas)
+	}
+}
+
 func httpBucket(startMS uint64, p95 uint64) TimelineBucket {
 	return TimelineBucket{
 		StartMS:           startMS,

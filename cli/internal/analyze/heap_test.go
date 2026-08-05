@@ -392,6 +392,86 @@ func TestHprofInvalidArrayLengthFailsWithoutAllocation(t *testing.T) {
 	}
 }
 
+func TestHprofResolvesUniqueClassDescriptionForAliasID(t *testing.T) {
+	builder := newMiniHprof()
+	holderName := builder.string("com.app.Holder")
+	containerName := builder.string("com.app.Container")
+	targetName := builder.string("com.app.Target")
+	containerField := builder.string("container")
+	targetField := builder.string("target")
+
+	const (
+		holderClassID         = uint32(0x100)
+		containerClassID      = uint32(0x200)
+		containerAliasClassID = uint32(0x201)
+		targetClassID         = uint32(0x300)
+		containerID           = uint32(0x1001)
+		targetID              = uint32(0x1002)
+	)
+	builder.loadClass(holderClassID, holderName)
+	builder.loadClass(containerClassID, containerName)
+	builder.loadClass(containerAliasClassID, containerName)
+	builder.loadClass(targetClassID, targetName)
+
+	var heap bytes.Buffer
+	heap.WriteByte(0x05)
+	writeU4(&heap, holderClassID)
+	builder.classDump(&heap, holderClassID, 16, []miniStaticField{{nameID: containerField, valueID: containerID}}, nil)
+	builder.instanceDump(&heap, containerID, containerAliasClassID, []uint32{targetID})
+	builder.instanceDump(&heap, targetID, targetClassID, nil)
+	builder.classDump(&heap, containerClassID, 16, nil, []miniField{{nameID: targetField, typ: hprofTypeObject}})
+	builder.classDump(&heap, targetClassID, 16, nil, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := newHprofParser(writeMiniHprof(t, builder.bytes()), map[string]struct{}{"com.app.Target": {}})
+	if err := parser.parse(); err != nil {
+		t.Fatalf("parse() error = %v", err)
+	}
+	evidence := parser.evidence()
+	if len(evidence.Leaks) != 1 || evidence.Leaks[0].ClassName != "com.app.Target" {
+		t.Fatalf("alias class fields did not preserve target path: %+v", evidence)
+	}
+	if len(evidence.Leaks[0].ReferencePath) < 3 {
+		t.Fatalf("alias class path is incomplete: %+v", evidence.Leaks[0].ReferencePath)
+	}
+}
+
+func TestHprofRetainedSizeApproximationDoesNotClaimIncompleteGraph(t *testing.T) {
+	parser := newHprofParser("sample.hprof", map[string]struct{}{})
+	parser.degrade("retained-traversal", "retained size is approximate")
+	evidence := &HeapEvidence{Leaks: []HeapLeakEvidence{{Confidence: "среднее+: путь найден"}}}
+
+	parser.applyParseQuality(evidence)
+
+	if evidence.Leaks[0].Confidence != "среднее+: путь найден" {
+		t.Fatalf("retained-size approximation changed graph confidence: %q", evidence.Leaks[0].Confidence)
+	}
+	if !warningContains(evidence.Warnings, "retained size is approximate") {
+		t.Fatalf("retained-size warning missing: %+v", evidence.Warnings)
+	}
+}
+
+func TestHprofClassMirrorIsNotReportedAsRetainedInstance(t *testing.T) {
+	builder := newMiniHprof()
+	targetName := builder.string("com.app.Target")
+	const targetClassID = uint32(0x200)
+	builder.loadClass(targetClassID, targetName)
+
+	var heap bytes.Buffer
+	heap.WriteByte(0x05)
+	writeU4(&heap, targetClassID)
+	builder.classDump(&heap, targetClassID, 16, nil, nil)
+	builder.record(hprofTagHeapDump, heap.Bytes())
+
+	parser := newHprofParser(writeMiniHprof(t, builder.bytes()), map[string]struct{}{"com.app.Target": {}})
+	if err := parser.parse(); err != nil {
+		t.Fatalf("parse() error = %v", err)
+	}
+	if evidence := parser.evidence(); len(evidence.Leaks) != 0 {
+		t.Fatalf("class mirror was reported as an instance: %+v", evidence.Leaks)
+	}
+}
+
 func syntheticLeakHprof() []byte {
 	builder := newMiniHprof()
 	holderName := builder.string("com.app.LeakHolder")

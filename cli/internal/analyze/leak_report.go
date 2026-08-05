@@ -690,12 +690,31 @@ func leakReportVerdict(stats LeakReportStats) string {
 	case stats.TotalSuspects == 0:
 		return "Сигналов неожиданной достижимости объектов нет."
 	case stats.High > 0:
-		return fmt.Sprintf("Найдено %d сигналов удержания, из них %d высокого риска. Сначала проверьте строки с подтвержденным HPROF-путем; runtime-сигналы без пути не являются доказательством утечки.", stats.TotalSuspects, stats.High)
+		return fmt.Sprintf("Найдено %s; с высоким риском — %d. Сначала проверьте строки с подтвержденным HPROF-путем; runtime-сигналы без пути не являются доказательством утечки.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"), stats.High)
 	case stats.Medium > 0:
-		return fmt.Sprintf("Найдено %d сигналов удержания. Проверьте повторяемость и уровень evidence; для точной цепочки нужен HPROF-путь от корня GC.", stats.TotalSuspects)
+		return fmt.Sprintf("Найдено %s. Проверьте повторяемость и уровень evidence; для точной цепочки нужен HPROF-путь от корня GC.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	default:
-		return fmt.Sprintf("Найдено %d слабых сигналов удержания. Это стоит мониторить, но без роста возраста/количества риск низкий.", stats.TotalSuspects)
+		return fmt.Sprintf("Найдено %s с низким приоритетом. Это стоит мониторить, но без роста возраста или количества риск низкий.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	}
+}
+
+func russianCount(value int, singular, paucal, plural string) string {
+	absolute := value
+	if absolute < 0 {
+		absolute = -absolute
+	}
+	lastTwo := absolute % 100
+	last := absolute % 10
+	form := plural
+	if lastTwo < 11 || lastTwo > 14 {
+		switch {
+		case last == 1:
+			form = singular
+		case last >= 2 && last <= 4:
+			form = paucal
+		}
+	}
+	return fmt.Sprintf("%d %s", value, form)
 }
 
 func leakWarnings(warnings []string) []string {
@@ -724,9 +743,9 @@ func leakCompareChangeLabel(stats LeakCompareStats) string {
 	case stats.BaselineTotal == 0 && stats.CandidateTotal == 0:
 		return "сигналов удержания нет ни в базе, ни в кандидате"
 	case stats.CandidateTotal > stats.BaselineTotal:
-		return "в новой версии больше сигналов удержания"
+		return "в данных кандидата больше сигналов удержания"
 	case stats.CandidateTotal < stats.BaselineTotal:
-		return "в новой версии меньше сигналов удержания"
+		return "в данных кандидата меньше сигналов удержания"
 	default:
 		return "количество сигналов удержания не изменилось"
 	}
@@ -750,27 +769,43 @@ func leakCompareOverallStatus(stats LeakCompareStats) string {
 func leakCompareVerdict(stats LeakCompareStats, confidence string) string {
 	base := fmt.Sprintf("%s: база %d, кандидат %d.", stats.ChangeLabel, stats.BaselineTotal, stats.CandidateTotal)
 	if stats.New > 0 || stats.Worse > 0 {
-		base += fmt.Sprintf(" Регрессии: новых %d, усилившихся %d.", stats.New, stats.Worse)
+		base += fmt.Sprintf(" Сигналы возможного ухудшения: только в кандидате %d, усилившихся %d.", stats.New, stats.Worse)
 	}
 	if stats.Resolved > 0 || stats.Better > 0 {
-		base += fmt.Sprintf(" Улучшения: исчезло %d, стало легче %d.", stats.Resolved, stats.Better)
+		base += fmt.Sprintf(" Признаки ослабления: не найдены в кандидате %d, стали слабее %d.", stats.Resolved, stats.Better)
 	}
 	if confidence != "" {
-		base += " Доверие сравнения: " + confidence + "."
+		base += " Доверие сравнения: " + comparisonConfidenceLabel(confidence) + "."
+	}
+	if confidence == "low" {
+		base += " Вывод предварительный: повторите одинаковый сценарий в сопоставимых условиях."
 	}
 	return base
+}
+
+func comparisonConfidenceLabel(value string) string {
+	switch value {
+	case "high":
+		return "высокое"
+	case "medium":
+		return "среднее"
+	case "low":
+		return "низкое"
+	default:
+		return "неизвестно"
+	}
 }
 
 func leakDeltaStatusLabel(status string) string {
 	switch status {
 	case LeakDeltaNew:
-		return "новый сигнал"
+		return "только в кандидате"
 	case LeakDeltaWorse:
-		return "стало хуже"
+		return "сигнал усилился"
 	case LeakDeltaBetter:
-		return "стало легче"
+		return "сигнал ослаб"
 	case LeakDeltaResolved:
-		return "исчезла"
+		return "не найден в кандидате"
 	default:
 		return "без сильного изменения"
 	}
