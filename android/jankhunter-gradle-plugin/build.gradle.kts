@@ -1,26 +1,18 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.util.Properties
 
 plugins {
     `java-gradle-plugin`
-    id("org.jetbrains.kotlin.jvm")
-    id("maven-publish")
+    id("io.jankhunter.kotlin-gradle-plugin")
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+val sharedProperties = Properties().apply {
+    file("../gradle.properties").inputStream().use(::load)
 }
 
-tasks.withType<JavaCompile>().configureEach {
-    options.release.set(17)
-}
-
-tasks.withType<KotlinCompile>().configureEach {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
-    }
-}
+group = providers.gradleProperty("jankHunterGroup")
+    .getOrElse(sharedProperties.getProperty("jankHunterGroup"))
+version = providers.gradleProperty("jankHunterVersion")
+    .getOrElse(sharedProperties.getProperty("jankHunterVersion"))
 
 gradlePlugin {
     plugins {
@@ -31,43 +23,12 @@ gradlePlugin {
     }
 }
 
-val jankHunterPluginMetadataGroup = project.group.toString()
-val jankHunterPluginMetadataVersion = project.version.toString()
-
-val generateJankHunterPluginMetadata by tasks.registering {
-    val outputFile = layout.buildDirectory.file(
-        "generated/resources/jankhunterPluginMetadata/io/jankhunter/gradle/jankhunter-plugin.properties",
-    )
-    inputs.property("jankHunterGroup", jankHunterPluginMetadataGroup)
-    inputs.property("jankHunterVersion", jankHunterPluginMetadataVersion)
-    outputs.file(outputFile)
-
-    doLast {
-        val file = outputFile.get().asFile
-        file.parentFile.mkdirs()
-        file.writeText(
-            """
-            jankHunterGroup=$jankHunterPluginMetadataGroup
-            jankHunterVersion=$jankHunterPluginMetadataVersion
-            """.trimIndent() + "\n",
-        )
-    }
-}
-
-sourceSets {
-    main {
-        resources.srcDir(layout.buildDirectory.dir("generated/resources/jankhunterPluginMetadata"))
-    }
-}
-
-tasks.named("processResources") {
-    dependsOn(generateJankHunterPluginMetadata)
-}
-
 dependencies {
-    compileOnly("com.android.tools.build:gradle:9.0.1")
-    implementation("org.ow2.asm:asm-commons:9.7.1")
-    testImplementation("com.android.tools.build:gradle:9.0.1")
-    testImplementation("org.ow2.asm:asm-util:9.7.1")
-    testImplementation("junit:junit:4.13.2")
+    compileOnly(libs.android.gradle.plugin)
+    implementation(libs.asm.commons)
+    testImplementation(libs.android.gradle.plugin)
+    testImplementation(libs.asm.util)
+    testImplementation(libs.junit)
 }
+
+apply(from = file("../gradle/plugin-metadata.gradle.kts"))

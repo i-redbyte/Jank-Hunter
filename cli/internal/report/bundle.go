@@ -62,12 +62,20 @@ const bundledPageBridge = `<script>
 </script>`
 
 func WriteBundle(path string, pages []BundlePage) error {
+	return WriteBundleWithOptions(path, pages, ReportOptions{})
+}
+
+func WriteBundleWithOptions(path string, pages []BundlePage, options ReportOptions) error {
 	encoded, err := encodeBundlePages(pages)
 	if err != nil {
 		return err
 	}
+	prefix := modernSingleHTMLBundlePrefix
+	if options.Style.normalized() == ReportStyleLegacy {
+		prefix = legacySingleHTMLBundlePrefix
+	}
 	return atomicfile.Write(path, 0o644, func(file *os.File) error {
-		if _, err := io.WriteString(file, singleHTMLBundlePrefix); err != nil {
+		if _, err := io.WriteString(file, prefix); err != nil {
 			return fmt.Errorf("write report bundle shell: %w", err)
 		}
 		if _, err := file.Write(encoded); err != nil {
@@ -124,7 +132,57 @@ func injectBundleBridge(document string) string {
 	return document + bundledPageBridge
 }
 
-const singleHTMLBundlePrefix = `<!doctype html>
+const modernSingleHTMLBundlePrefix = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Jank Hunter · отчет</title>
+  <style>
+    :root { color-scheme: dark; --shell-bg: #06140b; --shell-panel: #0a1c11; --shell-line: rgba(151, 184, 155, .22); --shell-text: #edf4e9; --shell-muted: #91a698; --shell-accent: #a7c990; --shell-rail: #99af9c; --shell-rail-text: #102017; --shell-active: #21452e; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--shell-bg); color: var(--shell-text); font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button, input, select, textarea { font: inherit; }
+    .report-shell { width: 100%; height: 100%; display: grid; grid-template-columns: 232px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+    .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: 28px 20px 22px; color: var(--shell-rail-text); background: var(--shell-rail); border-right: 1px solid rgba(16, 32, 23, .22); z-index: 2; }
+    .report-brand { flex: 0 0 auto; padding: 0 6px 20px; border-bottom: 1px solid rgba(16, 32, 23, .24); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+    .report-logo { display: block; width: 100%; max-width: 184px; height: auto; max-height: 114px; object-fit: contain; object-position: left center; }
+    .report-brand::after { content: "JHLOG v9"; display: block; margin-top: 8px; color: rgba(16, 32, 23, .64); font-size: 11px; letter-spacing: .08em; }
+    .report-tabs { display: grid; gap: 6px; min-width: 0; margin-top: 24px; }
+    .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 7px 6px; color: rgba(16, 32, 23, .64); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 11px; letter-spacing: .08em; }
+    .report-tab { width: 100%; min-width: 0; appearance: none; border: 0; border-radius: 4px; padding: 11px 10px; background: transparent; color: rgba(16, 32, 23, .72); font-weight: 400; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background .16s ease, color .16s ease; }
+    .report-tab:hover, .report-tab:focus-visible { color: var(--shell-rail-text); background: rgba(237, 244, 233, .24); outline: none; }
+    .report-tab[aria-selected="true"] { color: var(--shell-text); background: var(--shell-active); }
+    .report-frames { position: relative; min-width: 0; min-height: 0; background: var(--shell-bg); }
+    .report-frame { display: none; width: 100%; height: 100%; border: 0; background: var(--shell-bg); }
+    .report-frame.active { display: block; }
+    .report-error { display: grid; place-items: center; height: 100%; padding: 24px; color: var(--shell-muted); text-align: center; }
+    @media (max-width: 820px) {
+      .report-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+      .report-toolbar { padding: 16px 18px 14px; border-right: 0; border-bottom: 1px solid rgba(16, 32, 23, .22); }
+      .report-brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 14px; }
+      .report-logo { width: 132px; max-height: 80px; }
+      .report-brand::after { display: block; margin: 0; }
+      .report-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+      .report-tabs::before { grid-column: 1 / -1; }
+      .report-tab { padding: 9px 10px; }
+    }
+    @media (max-width: 380px) {
+      .report-tabs { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body data-jankhunter-single-html data-report-style="modern">
+  <main class="report-shell">
+    <header class="report-toolbar">
+      <div class="report-brand"><img class="report-logo" src="` + reportLogoDataURI + `" alt="Jank Hunter"></div>
+      <nav class="report-tabs" role="tablist" aria-label="Разделы отчета"></nav>
+    </header>
+    <section class="report-frames" aria-live="polite"></section>
+  </main>
+  <script id="jankhunter-report-pages" type="application/json">`
+
+const legacySingleHTMLBundlePrefix = `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
@@ -153,7 +211,7 @@ const singleHTMLBundlePrefix = `<!doctype html>
     }
   </style>
 </head>
-<body data-jankhunter-single-html>
+<body data-jankhunter-single-html data-report-style="legacy">
   <main class="report-shell">
     <header class="report-toolbar">
       <div class="report-brand">Jank <span>Hunter</span></div>

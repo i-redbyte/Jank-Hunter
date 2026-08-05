@@ -19,6 +19,18 @@ class InstrumentationMatcherTest {
         assertFalse(matcher.matches("kotlin.collections.CollectionsKt"))
         assertFalse(matcher.matches("androidx.fragment.app.Fragment"))
         assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
+        assertFalse(matcher.matches("io.jankhunter.okhttp3.JankHunterEventListener"))
+    }
+
+    @Test
+    fun allowsExplicitlyIncludedJankHunterSamplePackage() {
+        val matcher = InstrumentationMatcher(
+            includePackages = listOf("io.jankhunter.sample.graph"),
+            excludePackages = emptyList(),
+        )
+
+        assertTrue(matcher.matches("io.jankhunter.sample.graph.CheckoutRepository"))
+        assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
     }
 
     @Test

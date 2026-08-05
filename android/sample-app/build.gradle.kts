@@ -1,34 +1,72 @@
 plugins {
-    id("com.android.application")
+    id("io.jankhunter.android-application")
+    id("io.jankhunter.android")
 }
-
-val jankHunterVersion = providers.gradleProperty("jankHunterVersion").get()
 
 android {
     namespace = "io.jankhunter.sample"
-    compileSdk = 35
-    providers.gradleProperty("jankHunterBuildToolsVersion").orNull?.let {
-        buildToolsVersion = it
-    }
 
     defaultConfig {
         applicationId = "io.jankhunter.sample"
-        minSdk = 23
-        targetSdk = 35
         versionCode = 1
-        versionName = jankHunterVersion.removeSuffix("-SNAPSHOT")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+}
+
+jankHunter {
+    enabled.set(true)
+    enabledBuildTypes.set(setOf("debug"))
+    autoInit.set(true)
+    verboseLogs.set(true)
+
+    runtime {
+        mainThreadStallThresholdMs.set(150)
+        ownerBlockThresholdMs.set(100)
+        httpSlowThresholdMs.set(500)
+        jankFrameThresholdMs.set(32)
+        uiWindowP95ThresholdMs.set(32)
+        mainLooperDispatchMonitor.set(true)
+        jankStats.set(true)
+        mainProcessOnly.set(true)
+    }
+
+    instrument {
+        classGraph.set(true)
+        runtimeCallGraph.set(true)
+        methodCounters.set(false)
+        okhttp.set(true)
+        webSockets.set(true)
+        handlers.set(true)
+        executors.set(true)
+        coroutines.set(true)
+        flowInteractions.set(true)
+        lifecycleLeaks.set(true)
+        logSpam.set(true)
+        includeAndroidNamespace.set(false)
+        includePackages("io.jankhunter.sample.graph")
+    }
+
+    retainedHeapDump {
+        enabled.set(true)
+        privacyApproved.set(true)
+        minIntervalMs.set(1_000)
+        maxCount.set(1)
+        minRetainedAgeMs.set(1_000)
     }
 }
 
 dependencies {
     implementation(project(":jankhunter-runtime"))
     implementation(project(":jankhunter-okhttp3"))
-    implementation("com.squareup.okhttp3:okhttp:3.12.13")
+    implementation(libs.okhttp)
+    implementation(libs.androidx.core)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.bundles.androidx.lifecycle)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.bundles.androidx.compose)
 
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+    debugImplementation(libs.leakcanary)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 
-    androidTestImplementation("androidx.test:core:1.6.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(libs.bundles.androidx.test)
+    testImplementation(libs.junit)
 }

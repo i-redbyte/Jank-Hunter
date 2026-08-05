@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
 KEEP_SMOKE_DIR="${KEEP_SMOKE_DIR:-0}"
-SMOKE_COMPILE_SDK="${SMOKE_COMPILE_SDK:-35}"
+SMOKE_COMPILE_SDK="${SMOKE_COMPILE_SDK:-}"
 SMOKE_JAVA_HOME="${SMOKE_JAVA_HOME:-}"
 SMOKE_AGP_VERSION="${SMOKE_AGP_VERSION:-}"
 ANDROID_BUILD_TOOLS_VERSION="${ANDROID_BUILD_TOOLS_VERSION:-}"
@@ -26,8 +26,8 @@ Options:
 
 Environment:
   SMOKE_JAVA_HOME              JDK home (Java 17 or newer).
-  SMOKE_AGP_VERSION            AGP version for the consumer; defaults to android/build.gradle.kts.
-  SMOKE_COMPILE_SDK            Compile/target SDK. Default: 35.
+  SMOKE_AGP_VERSION            AGP version for the consumer; defaults to the version catalog.
+  SMOKE_COMPILE_SDK            Compile/target SDK; defaults to the version catalog.
   ANDROID_BUILD_TOOLS_VERSION  Installed Build Tools version; defaults to the highest installed.
   SMOKE_CONFIGURATION_CACHE    Set to 0 to disable the create/reuse configuration-cache check.
   SMOKE_WORK_DIR               Parent for a unique cold run directory preserved for inspection.
@@ -156,9 +156,21 @@ resolve_agp_version() {
     return 0
   fi
   local version
-  version="$(sed -nE 's/^[[:space:]]*id\("com[.]android[.]library"\)[[:space:]]+version[[:space:]]+"([^"]+)".*$/\1/p' \
-    "$ANDROID_DIR/build.gradle.kts" | head -n 1)"
-  [[ -n "$version" ]] || fail "could not resolve AGP version from $ANDROID_DIR/build.gradle.kts"
+  version="$(sed -nE 's/^[[:space:]]*agp[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
+    "$ANDROID_DIR/gradle/libs.versions.toml" | head -n 1)"
+  [[ -n "$version" ]] || fail "could not resolve AGP version from $ANDROID_DIR/gradle/libs.versions.toml"
+  printf '%s\n' "$version"
+}
+
+resolve_compile_sdk() {
+  if [[ -n "$SMOKE_COMPILE_SDK" ]]; then
+    printf '%s\n' "$SMOKE_COMPILE_SDK"
+    return 0
+  fi
+  local version
+  version="$(sed -nE 's/^[[:space:]]*android-compile-sdk[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
+    "$ANDROID_DIR/gradle/libs.versions.toml" | head -n 1)"
+  [[ -n "$version" ]] || fail "could not resolve compile SDK from $ANDROID_DIR/gradle/libs.versions.toml"
   printf '%s\n' "$version"
 }
 
@@ -567,6 +579,7 @@ main() {
 
   require_boolean_environment KEEP_SMOKE_DIR "$KEEP_SMOKE_DIR"
   require_boolean_environment SMOKE_CONFIGURATION_CACHE "$SMOKE_CONFIGURATION_CACHE"
+  SMOKE_COMPILE_SDK="$(resolve_compile_sdk)"
   [[ "$SMOKE_COMPILE_SDK" =~ ^[1-9][0-9]*$ ]] ||
     fail "SMOKE_COMPILE_SDK must be a positive integer, found: $SMOKE_COMPILE_SDK"
   require_single_line "SMOKE_WORK_DIR" "${SMOKE_WORK_DIR:-}"
@@ -628,6 +641,10 @@ main() {
   JAVA_HOME="$java17_home" ANDROID_HOME="$sdk_dir" ANDROID_SDK_ROOT="$sdk_dir" \
     "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR" publishToMavenLocal \
     -PjankHunterBuildToolsVersion="$build_tools_version" \
+    -Dmaven.repo.local="$maven_repo" \
+    --no-daemon --console=plain --warning-mode all
+  JAVA_HOME="$java17_home" ANDROID_HOME="$sdk_dir" ANDROID_SDK_ROOT="$sdk_dir" \
+    "$ANDROID_DIR/gradlew" -p "$ANDROID_DIR/jankhunter-gradle-plugin" publishToMavenLocal \
     -Dmaven.repo.local="$maven_repo" \
     --no-daemon --console=plain --warning-mode all
 

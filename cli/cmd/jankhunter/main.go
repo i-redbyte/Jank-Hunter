@@ -18,7 +18,7 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-var version = "1.0.2"
+var version = "1.0.3"
 
 func main() {
 	configureCLIGarbageCollector()
@@ -51,8 +51,8 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--report-style modern|legacy] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--report-style modern|legacy] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
   jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
@@ -91,6 +91,14 @@ func runInspect(args []string) error {
 		return err
 	}
 	animatedBackground, remaining, err := takeBoolFlag(remaining, "animated-background")
+	if err != nil {
+		return err
+	}
+	reportStyleValue, remaining, err := takeStringFlag(remaining, "report-style", string(report.ReportStyleModern))
+	if err != nil {
+		return err
+	}
+	reportStyle, err := report.ParseReportStyle(reportStyleValue)
 	if err != nil {
 		return err
 	}
@@ -138,6 +146,7 @@ func runInspect(args []string) error {
 		reportOptions := report.ReportOptions{
 			PresentationMode:   presentation,
 			AnimatedBackground: animatedBackground,
+			Style:              reportStyle,
 		}
 		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
 			return err
@@ -248,6 +257,14 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	reportStyleValue, remaining, err := takeStringFlag(remaining, "report-style", string(report.ReportStyleModern))
+	if err != nil {
+		return err
+	}
+	reportStyle, err := report.ParseReportStyle(reportStyleValue)
+	if err != nil {
+		return err
+	}
 	thresholdsPath, remaining, err := takeStringFlag(remaining, "thresholds", "")
 	if err != nil {
 		return err
@@ -306,16 +323,21 @@ func runCompare(args []string) error {
 			fmt.Printf("warning: candidate: %s\n", warning)
 		}
 		for _, delta := range comparison.Deltas {
+			state := delta.Severity
+			if !delta.Comparable {
+				state = "не сравнивается"
+			}
+			basis := strings.TrimSpace(strings.Join([]string{delta.ComparisonNote, delta.Interval}, " "))
 			fmt.Printf(
 				"%-24s %12s -> %-12s %8s %s доверие=%s выборка=%d %s\n",
 				compareCLILabel(delta.Name),
 				delta.Baseline,
 				delta.Candidate,
 				delta.Change,
-				delta.Severity,
+				state,
 				delta.Confidence,
 				delta.SampleSize,
-				delta.Interval,
+				basis,
 			)
 		}
 	}
@@ -323,6 +345,7 @@ func runCompare(args []string) error {
 		reportOptions := report.ReportOptions{
 			PresentationMode:   presentation,
 			AnimatedBackground: animatedBackground,
+			Style:              reportStyle,
 		}
 		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions, baseline)
 		if err != nil {
@@ -425,7 +448,7 @@ func runScorecard(args []string) error {
 }
 
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
-	return writeSingleHTMLReport(out, func(renderPath string) error {
+	return writeSingleHTMLReport(out, reportOptions, func(renderPath string) error {
 		return writeInspectReportSetUsing(renderPath, summary, paths, options, reportOptions, inspectReportSetWriters{
 			primary: report.WriteInspectWithOptions,
 			math:    report.WriteMathInspectWithOptions,
@@ -525,7 +548,7 @@ func writeCompareReportSet(
 	options analyze.Options,
 	reportOptions report.ReportOptions,
 ) error {
-	return writeSingleHTMLReport(out, func(renderPath string) error {
+	return writeSingleHTMLReport(out, reportOptions, func(renderPath string) error {
 		return writeCompareReportSetFiles(
 			renderPath,
 			comparison,
@@ -622,7 +645,7 @@ func writeCompareReportSetFiles(
 	return report.WriteCompareReportWithOptions(reportPaths.Main, comparison, baselineReports, candidateReports, reportOptions)
 }
 
-func writeSingleHTMLReport(out string, writePages func(string) error) error {
+func writeSingleHTMLReport(out string, reportOptions report.ReportOptions, writePages func(string) error) error {
 	temporaryDirectory, err := os.MkdirTemp("", "jankhunter-report-")
 	if err != nil {
 		return fmt.Errorf("create temporary report directory: %w", err)
@@ -637,7 +660,7 @@ func writeSingleHTMLReport(out string, writePages func(string) error) error {
 	if err != nil {
 		return err
 	}
-	if err := report.WriteBundle(out, pages); err != nil {
+	if err := report.WriteBundleWithOptions(out, pages, reportOptions); err != nil {
 		return fmt.Errorf("write single HTML report: %w", err)
 	}
 	return nil
@@ -687,8 +710,8 @@ func compareCLILabel(name string) string {
 	switch name {
 	case "HTTP p95":
 		return "HTTP p95"
-	case "HTTP failures":
-		return "HTTP ошибки"
+	case "HTTP failure rate":
+		return "Доля HTTP-ошибок"
 	case "UI jank rate":
 		return "Доля UI-подтормаживаний"
 	case "UI avg FPS":
@@ -699,10 +722,10 @@ func compareCLILabel(name string) string {
 		return "Макс. PSS"
 	case "Min available memory":
 		return "Мин. свободная память"
-	case "UID RX max":
-		return "Макс. RX UID"
-	case "UID TX max":
-		return "Макс. TX UID"
+	case "UID RX delta":
+		return "RX UID за прогон"
+	case "UID TX delta":
+		return "TX UID за прогон"
 	case "Retained objects":
 		return "Удержанные объекты"
 	case "Log spam":

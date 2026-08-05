@@ -124,6 +124,7 @@ type influenceAccumulator struct {
 	memoryKB  uint64
 	uiJank    uint64
 	retained  uint64
+	heap      bool
 	flows     map[string]struct{}
 	screens   map[string]struct{}
 	routes    map[string]struct{}
@@ -182,6 +183,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.runtime = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
 		node.retained += leak.Count
 		node.memoryKB += leak.EstimatedRetainedKB
+		node.heap = node.heap || leak.HeapEvidence
 		node.addFlow(leak.Flow)
 		node.addScreen(leak.Screen)
 		node.addReason(leak.EvidenceLabel)
@@ -201,8 +203,8 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		caller.addScreen(call.Screen)
 		callee.addFlow(call.Flow)
 		callee.addScreen(call.Screen)
-		caller.addReason("вызовы выполнения")
-		callee.addReason("вызовы выполнения")
+		caller.addReason("runtime-вызов")
+		callee.addReason("runtime-вызов")
 		caller.score += scoreCount(call.Count, 220) * 0.45
 		callee.score += scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2200) + scoreDuration(call.MaxMS, 500)
 		caller.runtimeMS += call.TotalMS / 4
@@ -214,6 +216,29 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			totalMS: call.TotalMS,
 			maxMS:   call.MaxMS,
 		})
+	}
+	for _, flow := range summary.Flows {
+		className := classFromOwner(flow.Owner)
+		if className == "" {
+			continue
+		}
+		node := b.node(className)
+		node.runtime = true
+		node.addFlow(flow.Flow)
+		node.addScreen(flow.Screen)
+		node.addRoute(flow.RouteSample)
+		node.networkMS = maxUint64Value(node.networkMS, flow.HTTPP95MS)
+		node.uiJank += flow.UIJank
+	}
+	for _, route := range summary.Routes {
+		className := classFromOwner(route.OwnerSample)
+		if className == "" {
+			continue
+		}
+		node := b.node(className)
+		node.runtime = true
+		node.addRoute(route.Route)
+		node.networkMS = maxUint64Value(node.networkMS, route.P95MS)
 	}
 }
 
@@ -263,53 +288,29 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 
 	allNodes := make([]InfluenceNode, 0, len(b.nodes))
 	for _, node := range b.nodes {
-		if node.runtime || node.score > 0 {
+		if node.runtime || node.static || node.score > 0 {
 			allNodes = append(allNodes, node.toNode())
 		}
 	}
 	sort.Slice(allNodes, func(i, j int) bool {
-		if allNodes[i].Score == allNodes[j].Score {
-			return allNodes[i].ClassName < allNodes[j].ClassName
-		}
-		return allNodes[i].Score > allNodes[j].Score
+		return influenceNodeLess(allNodes[i], allNodes[j])
 	})
-	if len(allNodes) > 60 {
-		allNodes = allNodes[:60]
-	}
-
-	selected := map[string]struct{}{}
-	for i, node := range allNodes {
-		selected[node.ClassName] = struct{}{}
-		if i >= 24 {
+	edges := b.allInfluenceEdges()
+	views, workspace := buildInfluenceViews(allNodes, edges)
+	var defaultView InfluenceGraphView
+	for _, view := range views {
+		if view.ID == "problems" {
+			defaultView = view
 			break
 		}
 	}
-	edges := b.influenceEdges(selected)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Influence == edges[j].Influence {
-			return edges[i].Count > edges[j].Count
-		}
-		return edges[i].Influence > edges[j].Influence
-	})
-	if len(edges) > 120 {
-		edges = edges[:120]
+	topNodes := make([]InfluenceNode, 0, len(defaultView.Nodes))
+	for _, node := range defaultView.Nodes {
+		topNodes = append(topNodes, node.InfluenceNode)
 	}
-	for _, edge := range edges {
-		for _, endpoint := range []string{edge.From, edge.To} {
-			if _, ok := selected[endpoint]; ok {
-				continue
-			}
-			if len(allNodes) >= 80 {
-				break
-			}
-			if node := b.nodes[endpoint]; node != nil {
-				allNodes = append(allNodes, node.toNode())
-				selected[endpoint] = struct{}{}
-			}
-		}
-	}
-	if len(allNodes) > 80 {
-		allNodes = allNodes[:80]
+	topEdges := make([]InfluenceEdge, 0, len(defaultView.Edges))
+	for _, edge := range defaultView.Edges {
+		topEdges = append(topEdges, edge.InfluenceEdge)
 	}
 	runtimeTargets := b.runtimeTargets()
 	hotPaths := b.hotPaths(runtimeTargets)
@@ -324,14 +325,18 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		RuntimeEdges:     len(b.runtimeEdges),
 		StaticNodes:      staticNodes,
 		StaticEdges:      len(b.edges),
-		ShownNodes:       len(allNodes),
-		ShownEdges:       len(edges),
-		TopNodes:         allNodes,
-		TopEdges:         edges,
+		TotalNodes:       len(allNodes),
+		TotalEdges:       len(edges),
+		ShownNodes:       defaultView.ShownNodes,
+		ShownEdges:       defaultView.ShownEdges,
+		TopNodes:         topNodes,
+		TopEdges:         topEdges,
+		Views:            views,
+		Workspace:        workspace,
 		HotPaths:         hotPaths,
 		MethodHotspots:   methodHotspots,
 		Cycles:           cycles,
-		StandaloneReason: "Подробный граф вынесен отдельно, чтобы большой проект не превращал основной математический отчет в тяжелую страницу.",
+		StandaloneReason: "Полный индекс анализируется отдельно, а HTML получает ограниченные представления с явными totals и причинами исключения.",
 	}
 	out.Heuristic = influenceHeuristic(out)
 	return out
@@ -397,67 +402,57 @@ func (b *influenceBuilder) cycles(runtimeTargets map[string]struct{}) []Influenc
 }
 
 func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []InfluenceEdge {
+	out := make([]InfluenceEdge, 0)
+	for _, edge := range b.allInfluenceEdges() {
+		_, fromSelected := selected[edge.From]
+		_, toSelected := selected[edge.To]
+		if fromSelected || toSelected {
+			out = append(out, edge)
+		}
+	}
+	return out
+}
+
+func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
 	dedup := map[string]*InfluenceEdge{}
-	for _, edge := range b.relevantStaticEdges(selected) {
+	for _, edge := range b.edges {
 		fromNode := b.nodes[edge.From]
 		toNode := b.nodes[edge.To]
 		if fromNode == nil || toNode == nil {
 			continue
 		}
-		_, fromSelected := selected[edge.From]
-		_, toSelected := selected[edge.To]
-		if !fromSelected && !toSelected && !toNode.runtime {
-			continue
-		}
 		key := edge.From + "\x00" + edge.To
 		row := dedup[key]
 		if row == nil {
-			row = &InfluenceEdge{
-				From:             edge.From,
-				To:               edge.To,
-				RuntimeConfirmed: fromNode.runtime || toNode.runtime,
-			}
+			row = &InfluenceEdge{From: edge.From, To: edge.To}
 			dedup[key] = row
 		}
 		row.Count += edge.Count
-		row.Influence += float64(edge.Count) * math.Max(toNode.score, fromNode.score*0.35)
-		if toNode.runtime {
-			row.Reason = "вызывает узел с проблемами выполнения"
-		} else if fromNode.runtime {
-			row.Reason = "сосед проблемного узла выполнения"
-		} else {
-			row.Reason = "статическая связь"
-		}
+		row.StaticCount += edge.Count
+		priority := math.Max(toNode.score, fromNode.score*0.35)
+		row.Influence += math.Log1p(float64(edge.Count)) * (1 + priority)
 	}
 	for _, edge := range b.runtimeEdges {
-		fromNode := b.nodes[edge.from]
-		toNode := b.nodes[edge.to]
-		if fromNode == nil || toNode == nil {
-			continue
-		}
-		_, fromSelected := selected[edge.from]
-		_, toSelected := selected[edge.to]
-		if !fromSelected && !toSelected {
+		if b.nodes[edge.from] == nil || b.nodes[edge.to] == nil {
 			continue
 		}
 		key := edge.from + "\x00" + edge.to
 		row := dedup[key]
 		if row == nil {
-			row = &InfluenceEdge{
-				From: edge.from,
-				To:   edge.to,
-			}
+			row = &InfluenceEdge{From: edge.from, To: edge.to}
 			dedup[key] = row
 		}
 		row.Count += edge.count
+		row.RuntimeCount += edge.count
 		row.Influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
-		row.RuntimeConfirmed = true
-		row.Reason = "вызов выполнения в этом прогоне"
 	}
 	out := make([]InfluenceEdge, 0, len(dedup))
 	for _, edge := range dedup {
-		out = append(out, *edge)
+		normalized := normalizeInfluenceEvidence(*edge)
+		normalized.Influence = roundedInfluence(normalized.Influence)
+		out = append(out, normalized)
 	}
+	sortInfluenceEdges(out)
 	return out
 }
 
@@ -497,11 +492,15 @@ func (n *influenceAccumulator) toNode() InfluenceNode {
 		status = "static_only"
 	}
 	score := math.Round(n.score*10) / 10
+	severity := influenceSeverity(score)
+	if !n.runtime && severity == "high" {
+		severity = "medium"
+	}
 	return InfluenceNode{
 		ClassName:       n.className,
 		Label:           shortClassName(n.className),
 		Score:           score,
-		Severity:        influenceSeverity(score),
+		Severity:        severity,
 		Status:          status,
 		RuntimeEvidence: n.runtime,
 		Problems:        n.problems,
@@ -512,11 +511,19 @@ func (n *influenceAccumulator) toNode() InfluenceNode {
 		MemoryPressure:  n.memoryKB,
 		UIJank:          n.uiJank,
 		Retained:        n.retained,
+		HeapEvidence:    n.heap,
 		Flows:           sortedSet(n.flows, 4),
 		Screens:         sortedSet(n.screens, 4),
 		Routes:          sortedSet(n.routes, 4),
 		Reasons:         sortedSet(n.reasons, 5),
 	}
+}
+
+func maxUint64Value(left uint64, right uint64) uint64 {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func (n *influenceAccumulator) addFlow(value string) {
@@ -600,6 +607,13 @@ func classFromOwner(owner string) string {
 		return ""
 	}
 	owner = strings.TrimPrefix(owner, "owner.")
+	if strings.HasPrefix(owner, "lifecycle.destroyed.") {
+		className := normalizeClassName(strings.TrimPrefix(owner, "lifecycle.destroyed."))
+		if isLikelyAppClass(className) {
+			return className
+		}
+		return ""
+	}
 	if hashIndex := strings.LastIndex(owner, "#"); hashIndex > 0 {
 		owner = owner[:hashIndex]
 		if dot := strings.LastIndex(owner, "."); dot > 0 {
@@ -672,9 +686,9 @@ func sortedSet(values map[string]struct{}, limit int) []string {
 
 func influenceSeverity(score float64) string {
 	switch {
-	case score >= 12:
+	case score >= 15:
 		return "high"
-	case score >= 6:
+	case score >= 5:
 		return "medium"
 	default:
 		return "ok"
@@ -740,27 +754,31 @@ func influenceHeuristic(summary InfluenceSummary) []InfluenceFinding {
 	out := []InfluenceFinding{}
 	if len(summary.TopNodes) > 0 {
 		top := summary.TopNodes[0]
+		detail := fmt.Sprintf("%s: оценка приоритета %.1f, основания: %s.", top.ClassName, top.Score, strings.Join(top.Reasons, ", "))
+		if top.Status != "runtime" {
+			detail += " Для узла нет подтверждения выполнения в этом прогоне; статическая связь не доказывает влияние на производительность."
+		}
 		out = append(out, InfluenceFinding{
 			Severity: top.Severity,
-			Title:    "Главный узел влияния",
-			Detail:   fmt.Sprintf("%s: оценка %.1f, причины: %s.", top.ClassName, top.Score, strings.Join(top.Reasons, ", ")),
+			Title:    "Первый узел для проверки",
+			Detail:   detail,
 		})
 	}
 	for _, edge := range summary.TopEdges {
 		if edge.RuntimeConfirmed {
 			out = append(out, InfluenceFinding{
-				Severity: "medium",
-				Title:    "Связь с доказательством выполнения",
-				Detail:   fmt.Sprintf("%s → %s, вес %.1f, вызовов %d.", edge.From, edge.To, edge.Influence, edge.Count),
+				Severity: "ok",
+				Title:    "Связь наблюдалась во время выполнения",
+				Detail:   fmt.Sprintf("%s → %s: зафиксировано вызовов %d, вес ранжирования %.1f. Наличие вызова не доказывает, что он вызвал соседний симптом.", edge.From, edge.To, edge.Count, edge.Influence),
 			})
 			break
 		}
 	}
 	if !summary.HasClassGraph {
 		out = append(out, InfluenceFinding{
-			Severity: "medium",
-			Title:    "Нет статического графа",
-			Detail:   "CLI построил влияние только по событиям выполнения. Передайте --class-graph, чтобы увидеть связи между классами.",
+			Severity: "ok",
+			Title:    "Статический граф не передан",
+			Detail:   "Показаны только наблюдения выполнения. Параметр --class-graph добавит структуру связей между классами, но сам по себе не подтвердит их выполнение.",
 		})
 	}
 	return out

@@ -1,4 +1,6 @@
 pluginManagement {
+    includeBuild("build-logic")
+    includeBuild("jankhunter-gradle-plugin")
     repositories {
         google()
         mavenCentral()
@@ -26,5 +28,4 @@ include(":jankhunter-runtime")
 include(":jankhunter-annotations")
 include(":jankhunter-okhttp3")
 include(":jankhunter-android-sdk")
-include(":jankhunter-gradle-plugin")
 include(":sample-app")

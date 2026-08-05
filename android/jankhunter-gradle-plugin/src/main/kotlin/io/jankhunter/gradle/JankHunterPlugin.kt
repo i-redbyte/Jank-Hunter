@@ -120,7 +120,7 @@ class JankHunterPlugin : Plugin<Project> {
             val effectiveIncludePackages = androidNamespace.map { namespace ->
                 val includes = InstrumentationPackages.effectiveIncludes(
                     manualIncludes,
-                    namespace,
+                    namespace.takeIf { extension.instrument.includeAndroidNamespace.getOrElse(true) },
                 )
                 if (includes.isEmpty() && !includeWholeApplication) {
                     throw GradleException(

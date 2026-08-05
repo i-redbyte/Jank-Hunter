@@ -495,7 +495,7 @@ object JankHunter {
             }
         } finally {
             val duration = nowMs() - start
-            if (duration >= ownerBlockThresholdMs()) {
+            if (shouldRecordOwnerStall(duration)) {
                 recordStall(ownerName, "explicit_owner_block", duration)
             }
         }
@@ -510,7 +510,7 @@ object JankHunter {
             }
         } finally {
             val duration = nowMs() - start
-            if (duration >= ownerBlockThresholdMs()) {
+            if (shouldRecordOwnerStall(duration)) {
                 recordStall(ownerName, "explicit_owner_block", duration)
             }
         }
@@ -893,6 +893,8 @@ object JankHunter {
 
     internal fun setAppForeground(foreground: Boolean) {
         runtimeState.appForeground.set(foreground)
+        runtimeState.memorySampler?.onForegroundChanged()
+        runtimeState.systemContextSampler?.onForegroundChanged()
     }
 
     internal fun isAppForegroundForSampling(): Boolean = isAppForeground()
@@ -1007,6 +1009,14 @@ object JankHunter {
     internal fun captureMainThreadStallContext(owner: String?): JankHunterContextSnapshot {
         val mainContext = runtimeState.mainThreadContext
             ?: captureContext(ownerOverride = owner)
+        if (runtimeState.heapDumpInProgress.get() || nowMs() <= runtimeState.heapDumpAttributionUntilMs.get()) {
+            return JankHunterContextSnapshot(
+                mainContext.screen,
+                "jankhunter.heap_dump",
+                "jankhunter.diagnostics",
+                "heap_dump",
+            )
+        }
         return JankHunterContextSnapshot(
             mainContext.screen,
             firstContextValue(mainContext.owner, owner),
@@ -1525,7 +1535,17 @@ object JankHunter {
 
     private fun maybeDumpRetainedHeap(className: String?, holder: String?, ageMs: Long, count: Long) {
         val asyncWriter = writer ?: return
-        when (val result = retainedHeapDumper?.maybeDump(className, holder, ageMs, count)) {
+        val heapDumper = retainedHeapDumper ?: return
+        runtimeState.heapDumpInProgress.set(true)
+        val result = try {
+            heapDumper.maybeDump(className, holder, ageMs, count)
+        } finally {
+            val thresholdMs = config?.mainThreadStallThresholdMs() ?: HEAP_DUMP_ATTRIBUTION_MIN_MS
+            val graceMs = maxOf(HEAP_DUMP_ATTRIBUTION_MIN_MS, thresholdMs * 2L)
+            runtimeState.heapDumpAttributionUntilMs.set(nowMs() + graceMs)
+            runtimeState.heapDumpInProgress.set(false)
+        }
+        when (result) {
             is RetainedHeapDumper.Result.Dumped -> {
                 asyncWriter.counter("jankhunter.heap_dump.created.count", 1)
                 asyncWriter.gauge("jankhunter.heap_dump.retained_age_ms", result.ageMs)
@@ -1538,7 +1558,6 @@ object JankHunter {
             is RetainedHeapDumper.Result.Failed -> {
                 asyncWriter.counter("jankhunter.heap_dump.failed.${metricOwner(result.reason)}.count", 1)
             }
-            null -> Unit
         }
     }
 
@@ -1562,6 +1581,16 @@ object JankHunter {
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun shouldRecordOwnerStall(durationMs: Long): Boolean {
+        val mainLooper = Looper.getMainLooper() ?: return false
+        return isMainThreadOwnerBlock(
+            durationMs = durationMs,
+            thresholdMs = ownerBlockThresholdMs(),
+            isMainThread = Looper.myLooper() === mainLooper,
+            monitorActive = runtimeState.watchdog != null,
+        )
+    }
 
     private fun isAppForeground(): Boolean {
         if (runtimeState.appForeground.get()) return true
@@ -1623,6 +1652,7 @@ object JankHunter {
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
     private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
     private const val BLOCKING_FLUSH_TIMEOUT_MS = 1_000L
+    private const val HEAP_DUMP_ATTRIBUTION_MIN_MS = 500L
     private const val CRASH_FLUSH_TIMEOUT_MS = 100L
     private const val NANOS_PER_MS = 1_000_000L
     private val OWNER_WHITESPACE = Regex("\\s+")

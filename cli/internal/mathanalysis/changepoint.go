@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	changeWindowBuckets  = 3
-	changePointTolerance = DefaultBucketMS * 2
+	changeWindowBuckets          = 3
+	changePointTolerance         = DefaultBucketMS * 2
+	changePointPositionTolerance = 0.08
 )
 
 type changeSignal struct {
@@ -109,23 +110,25 @@ func detectSignalChangePoints(timeline []TimelineBucket, signal changeSignal) []
 		}
 		point := points[split]
 		change := ChangePoint{
-			Signal:         signal.name,
-			Unit:           signal.unit,
-			TimeMS:         point.bucket.StartMS,
-			BeforeMedian:   beforeMedian,
-			AfterMedian:    afterMedian,
-			BeforeMAD:      beforeMAD,
-			AfterMAD:       afterMAD,
-			Delta:          delta,
-			DeltaPct:       percentDelta(beforeMedian, afterMedian),
-			Score:          score,
-			Direction:      changeDirection(delta),
-			Severity:       changePointSeverity(signal, delta, score),
-			NearbyRoute:    point.bucket.RouteSample,
-			NearbyOwner:    point.bucket.OwnerSample,
-			NearbyScreen:   point.bucket.ScreenSample,
-			NearbyNetwork:  point.bucket.NetworkSample,
-			Recommendation: changePointRecommendation(signal, delta),
+			Signal:            signal.name,
+			Unit:              signal.unit,
+			TimeMS:            point.bucket.StartMS,
+			BeforeMedian:      beforeMedian,
+			AfterMedian:       afterMedian,
+			BeforeMAD:         beforeMAD,
+			AfterMAD:          afterMAD,
+			Delta:             delta,
+			DeltaPct:          percentDelta(beforeMedian, afterMedian),
+			DeltaPctAvailable: beforeMedian != 0,
+			Position:          changePointPosition(timeline, point.bucket.StartMS),
+			Score:             score,
+			Direction:         changeDirection(delta),
+			Severity:          changePointSeverity(signal, delta, score),
+			NearbyRoute:       point.bucket.RouteSample,
+			NearbyOwner:       point.bucket.OwnerSample,
+			NearbyScreen:      point.bucket.ScreenSample,
+			NearbyNetwork:     point.bucket.NetworkSample,
+			Recommendation:    changePointRecommendation(signal, delta),
 		}
 		candidates = append(candidates, changePointCandidate{point: change, index: point.index})
 	}
@@ -192,7 +195,7 @@ func compareChangePoints(baseline, candidate []ChangePoint) []ChangePointDelta {
 	matchedBaseline := make([]bool, len(baseline))
 	var deltas []ChangePointDelta
 	for _, candidatePoint := range candidate {
-		index := nearestChangePoint(baseline, candidatePoint)
+		index := nearestUnmatchedChangePoint(baseline, candidatePoint, matchedBaseline)
 		if index < 0 {
 			deltas = append(deltas, appearedChangeDelta(candidatePoint))
 			continue
@@ -220,20 +223,36 @@ func compareChangePoints(baseline, candidate []ChangePoint) []ChangePointDelta {
 	return deltas
 }
 
-func nearestChangePoint(points []ChangePoint, target ChangePoint) int {
+func nearestUnmatchedChangePoint(points []ChangePoint, target ChangePoint, matched []bool) int {
 	best := -1
 	bestDistance := ^uint64(0)
 	for index, point := range points {
+		if index < len(matched) && matched[index] {
+			continue
+		}
 		if point.Signal != target.Signal {
 			continue
 		}
 		distance := timeDistance(point.TimeMS, target.TimeMS)
-		if distance <= changePointTolerance && distance < bestDistance {
+		positionClose := point.Position > 0 && target.Position > 0 && math.Abs(point.Position-target.Position) <= changePointPositionTolerance
+		if (distance <= changePointTolerance || positionClose) && distance < bestDistance {
 			best = index
 			bestDistance = distance
 		}
 	}
 	return best
+}
+
+func changePointPosition(timeline []TimelineBucket, timeMS uint64) float64 {
+	if len(timeline) == 0 {
+		return 0
+	}
+	startMS := timeline[0].StartMS
+	endMS := timeline[len(timeline)-1].EndMS
+	if endMS <= startMS || timeMS <= startMS {
+		return 0
+	}
+	return float64(timeMS-startMS) / float64(endMS-startMS)
 }
 
 func appearedChangeDelta(point ChangePoint) ChangePointDelta {

@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: математическое сравнение</title>
-  <style>{{baseCSS}}{{mathCSS}}</style>
+  <style>{{reportCSS .ReportStyle true}}</style>
 </head>
-<body class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -17,7 +17,7 @@
     <div class="hero-side">
       <div class="env-card">
         <div class="env-title">Сравнение</div>
-        <strong class="env-device">{{.Math.Baseline.Summary.LogCount}} → {{.Math.Candidate.Summary.LogCount}} логов</strong>
+        <strong class="env-device">{{ruCount .Math.Baseline.Summary.LogCount "лог" "лога" "логов"}} → {{ruCount .Math.Candidate.Summary.LogCount "лог" "лога" "логов"}}</strong>
         <div class="env-subtitle">события данных: база {{.Math.Baseline.Summary.EventCount}} · кандидат {{.Math.Candidate.Summary.EventCount}}</div>
         <div class="env-grid">
           <div class="env-item"><div class="env-label">HTTP базы</div><div class="env-value">{{.Math.Baseline.Summary.HTTPCount}}</div><div class="env-detail">p95 {{.Math.Baseline.Summary.HTTPP95MS}} мс</div></div>
@@ -35,29 +35,29 @@
   <a href="#method-reference">Справка по методам</a>
 </nav>
 <main>
-  <section class="panel">
+  <section id="math-overview" class="panel">
     <div class="panel-head">
       <div>
         <h2>Обзор сравнения</h2>
-        <div class="panel-kicker">Каркас математического отчета сравнения подключен к сводкам базы и кандидата.</div>
+        <div class="panel-kicker">Сравнение рассчитано по переданным прогонам базы и кандидата. Несопоставимые или недостаточные данные отмечаются явно.</div>
       </div>
       <span class="pill">математическое сравнение</span>
     </div>
     <div class="grid">
-      <div class="metric"><div class="label">События данных базы</div><div class="value">{{.Math.Baseline.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Baseline.Summary.TotalRecordCount}}</div></div>
-      <div class="metric"><div class="label">События данных кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Candidate.Summary.TotalRecordCount}}</div></div>
+      <div class="metric"><div class="label">События данных базы</div><div class="value">{{.Math.Baseline.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Baseline.Summary.TotalRecordCount}}{{if gt .Math.Baseline.IndependentRunCount 1}} · прогонов {{.Math.Baseline.IndependentRunCount}}{{end}}</div></div>
+      <div class="metric"><div class="label">События данных кандидата</div><div class="value">{{.Math.Candidate.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Candidate.Summary.TotalRecordCount}}{{if gt .Math.Candidate.IndependentRunCount 1}} · прогонов {{.Math.Candidate.IndependentRunCount}}{{end}}</div></div>
       <div class="metric"><div class="label">Подтормаживания базы</div><div class="value">{{printf "%.2f" .Math.Baseline.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Baseline.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">Подтормаживания кандидата</div><div class="value">{{printf "%.2f" .Math.Candidate.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Candidate.Summary.UIFrames}} кадров</div></div>
-      <div class="metric"><div class="label">{{tip "Проблемные окна" "Агрегированные окна причин: медленный HTTP, пауза главного потока, UI-подтормаживания, удержания или спам логами."}}</div><div class="value">{{summaryProblems .Math.Baseline.Summary}} → {{summaryProblems .Math.Candidate.Summary}}</div><div class="hint">спам {{summaryLogSpam .Math.Baseline.Summary}} → {{summaryLogSpam .Math.Candidate.Summary}}</div></div>
+      <div class="metric"><div class="label">{{tip "Проблемные окна" "Частота агрегированных окон причин за минуту. Значение нормировано по длительности, чтобы длинный прогон не выглядел хуже только из-за времени наблюдения."}}</div><div class="value">{{printf "%.2f" (perMinute (summaryProblemWindows .Math.Baseline.Summary) .Math.Baseline.Summary.DurationMS)}} → {{printf "%.2f" (perMinute (summaryProblemWindows .Math.Candidate.Summary) .Math.Candidate.Summary.DurationMS)}} <small>шт/мин</small></div><div class="hint">спам {{printf "%.2f" (perMinute (summaryLogSpam .Math.Baseline.Summary) .Math.Baseline.Summary.DurationMS)}} → {{printf "%.2f" (perMinute (summaryLogSpam .Math.Candidate.Summary) .Math.Candidate.Summary.DurationMS)}} выз./мин</div></div>
     </div>
     <div class="report-guide">
-      <div class="guide-card"><strong>Как читать сравнение</strong>Положительная дельта у задержек, памяти, подтормаживаний, ошибок и спама обычно означает ухудшение кандидата. Смотрите серьезность вместе с доверием и размером выборки.</div>
-      <div class="guide-card"><strong>Где искать причину</strong>После общей регрессии откройте “Сценарии и причины”, затем “Граф влияния кандидата”: там видно, какие источники и маршруты связаны с ухудшением.</div>
-      <div class="guide-card"><strong>Что считать выводом</strong>Один большой пик без повторяемости — повод проверить вручную. Повторяемый сдвиг, сетевой цикл или высокий интеграл — уже сильный сигнал для задачи на исправление.</div>
+      <div class="guide-card"><strong>Как читать сравнение</strong>Сначала проверьте одинаковость сценариев, устройств, сети и длительности. Затем смотрите абсолютную дельту, размер выборки и уверенность вместе.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После подтвержденного ухудшения найдите его время и сценарий. Граф связей дает список гипотез, но не доказывает виновника.</div>
+      <div class="guide-card"><strong>Что считать выводом</strong>Один пик или новая связь — повод проверить. Для задачи на исправление нужен повторяемый эффект и подтверждение измерениями либо трассировкой.</div>
     </div>
     {{scoreGuide "compare"}}
     <details id="code-problems" class="fold code-registry-fold" open>
-      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{len .Math.Candidate.Summary.CodeProblems}} строк</span></summary>
+      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{ruCount (len .Math.Candidate.Summary.CodeProblems) "строка" "строки" "строк"}}</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
         {{rowLimitNote "Реестр проблем на математической странице" (len .Math.Candidate.Summary.CodeProblems) 16}}
@@ -75,7 +75,7 @@
               <option value="">Все уровни риска</option>
               <option value="high">Критично</option>
               <option value="medium">Предупреждение</option>
-              <option value="ok">Норма</option>
+              <option value="ok">Низкий риск</option>
             </select>
             <select data-code-registry-category aria-label="Фильтр по категории">
               <option value="">Все категории</option>
@@ -103,7 +103,7 @@
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
                 <td>
                   <details class="code-problem-details">
-                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} сценариев{{end}}</small></summary>
+                    <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{ruCount (len .Candidate.Signals) "сигнал" "сигнала" "сигналов"}}{{if .Candidate.DrillDown}} · {{ruCount (len .Candidate.DrillDown) "сценарий" "сценария" "сценариев"}}{{end}}</small></summary>
                     <div class="code-problem-detail-body">
                       <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
                       <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
@@ -134,7 +134,7 @@
               <option value="">Все уровни риска</option>
               <option value="high">Критично</option>
               <option value="medium">Предупреждение</option>
-              <option value="ok">Норма</option>
+              <option value="ok">Низкий риск</option>
             </select>
             <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
               <option value="">Все типы</option>
@@ -191,7 +191,7 @@
     </table>
     {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
     {{end}}
-    <h3>Сравнение сценариев и причин</h3>
+    <h3>Сравнение сценариев и источников</h3>
     {{$flowRows := flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
     {{rowLimitNote "Сравнение сценариев на математической странице" (len $flowRows) 64}}
     <table class="timeline-table">
@@ -213,7 +213,7 @@
       <div class="finding {{severityClass .Severity}}"><strong>{{.Title}}</strong><div class="muted">{{.Detail}}</div>{{if .Recommendation}}<div class="muted">{{.Recommendation}}</div>{{end}}</div>
       {{else}}<div class="muted">Нет значимых предупреждений по качеству сравнения.</div>{{end}}
     </div>
-    <h3>Сводка разделов</h3>
+    <h3 id="section-overview" class="section-overview-heading">Сводка разделов</h3>
     <div class="section-overview-grid">
       {{range .Math.Sections}}
       <a class="section-overview-card {{severityClass .Status}}" href="#{{.ID}}">
@@ -226,13 +226,53 @@
 
   {{$math := .Math}}
   {{range .Math.Sections}}
-  <section id="{{.ID}}" class="panel">
+  <section id="{{.ID}}" class="panel{{if eq .ID "markov"}} markov-panel{{end}}">
     <div class="panel-head">
       <div><h2>{{.Title}}</h2><div class="panel-kicker">{{.Summary}}</div></div>
       <span class="section-status {{severityClass .Status}}">{{statusLabel .Status}}</span>
     </div>
+    {{if eq .ID "markov"}}
+    <div class="markov-forecast-grid">
+      {{with $math.Baseline.Markov.Forecast}}
+      <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
+        <div class="markov-forecast-copy">
+          <div class="markov-forecast-heading"><span>База · прогноз траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+          <strong class="markov-forecast-title">{{.Label}}</strong>
+          <p>{{.Summary}}</p>
+          <div class="markov-forecast-confidence">Уверенность: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}}</div>
+        </div>
+        {{if .HorizonWindows}}
+        <div class="markov-forecast-metrics">
+          <div><span>Начало</span><strong>{{printf "%.1f" (percent01 .EarlyBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
+          <div><span>Последняя часть</span><strong>{{printf "%.1f" (percent01 .RecentBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
+          <div><span>Прогноз</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>плохого состояния</small></div>
+          <div><span>Горизонт</span><strong>{{.HorizonWindows}}</strong><small>интервалов · {{humanDuration .HorizonMS}}</small></div>
+        </div>
+        {{end}}
+      </article>
+      {{end}}
+      {{with $math.Candidate.Markov.Forecast}}
+      <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
+        <div class="markov-forecast-copy">
+          <div class="markov-forecast-heading"><span>Кандидат · прогноз траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+          <strong class="markov-forecast-title">{{.Label}}</strong>
+          <p>{{.Summary}}</p>
+          <div class="markov-forecast-confidence">Уверенность: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}}</div>
+        </div>
+        {{if .HorizonWindows}}
+        <div class="markov-forecast-metrics">
+          <div><span>Начало</span><strong>{{printf "%.1f" (percent01 .EarlyBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
+          <div><span>Последняя часть</span><strong>{{printf "%.1f" (percent01 .RecentBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
+          <div><span>Прогноз</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>плохого состояния</small></div>
+          <div><span>Горизонт</span><strong>{{.HorizonWindows}}</strong><small>интервалов · {{humanDuration .HorizonMS}}</small></div>
+        </div>
+        {{end}}
+      </article>
+      {{end}}
+    </div>
+    {{end}}
     <details class="fold">
-      <summary>Детали раздела</summary>
+      <summary>{{if eq .ID "markov"}}Методика и наблюдения{{else}}Детали раздела{{end}}</summary>
       <div class="fold-body">
         <div class="finding-list">
           {{range significantMathFindings .Findings}}
@@ -265,22 +305,23 @@
         <div class="category-block">
           <h4>{{.Title}}</h4>
           <table class="timeline-table">
-            <tr><th>Статус</th><th>Имя</th><th>Метрика</th><th>N база</th><th>N кандидат</th><th>p95 база</th><th>p95 кандидат</th><th>Δ p95</th><th>Δ%</th><th>Дельта Клиффа</th><th>Эффект</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
+            <tr><th>{{tip "Статус" "Автоматическая оценка направления изменения. Для неизвестного направления gauge статус остаётся нейтральным."}}</th><th>{{tip "Имя" "Маршрут, экран, источник или gauge-метрика, для которых сопоставляются две выборки."}}</th><th>{{tip "Метрика" "Измеряемая величина и её единица."}}</th><th>{{tip "N база" "Количество наблюдений в базе. Ноль означает, что сигнал в базе отсутствует и прямое сравнение распределений невозможно."}}</th><th>{{tip "N кандидат" "Количество наблюдений у кандидата. Сильно разные N могут означать, что сценарии выполнены не одинаково."}}</th><th>{{tip "p95 база" "Уровень, который не превышают 95% наблюдений базы."}}</th><th>{{tip "p95 кандидат" "Уровень, который не превышают 95% наблюдений кандидата."}}</th><th>{{tip "Δ p95" "Абсолютная разница p95: кандидат минус база, в исходных единицах метрики."}}</th><th>{{tip "Δ%" "Относительное изменение к базе. Если база равна нулю или сигнал есть только в одном прогоне, процент не рассчитывается."}}</th><th>{{tip "Дельта Клиффа" "Показывает, как часто значение кандидата больше значения базы: от −1 до 1. Рассчитывается только когда обе выборки существуют. Это размер эффекта, а не вероятность ошибки."}}</th><th>{{tip "Эффект" "Словесная категория абсолютной дельты Клиффа: пренебрежимый, малый, средний или большой размер различия."}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>{{tip "Вывод" "Человекочитаемое резюме сравнения с явной причиной, если автоматический вердикт отключён."}}</th></tr>
             {{range .Items}}
             <tr>
               <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
               <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
-              <td>{{printf "%.1f" .BaselineP95}} {{.Unit}}</td><td>{{printf "%.1f" .CandidateP95}} {{.Unit}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{printf "%+.1f" .P95DeltaPct}}%</td>
-              <td>{{printf "%.3f" .CliffDelta}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
+              <td>{{if gt .BaselineCount 0}}{{printf "%.1f" .BaselineP95}} {{.Unit}}{{else}}<span class="muted">нет выборки</span>{{end}}</td><td>{{if gt .CandidateCount 0}}{{printf "%.1f" .CandidateP95}} {{.Unit}}{{else}}<span class="muted">нет выборки</span>{{end}}</td><td>{{printf "%+.1f" .P95Delta}} {{.Unit}}</td><td>{{if .DeltaPctAvailable}}{{printf "%+.1f" .P95DeltaPct}}%{{else}}<span class="muted">не применимо</span>{{end}}</td>
+              <td>{{if .Comparable}}{{printf "%.3f" .CliffDelta}}{{else}}<span class="muted">не применимо</span>{{end}}</td><td>{{.EffectSize}}</td><td>{{.Confidence}}</td><td>{{.Summary}}</td>
             </tr>
             {{end}}
           </table>
         </div>
         {{else}}<div class="muted">Недостаточно пересекающихся распределений для робастного сравнения.</div>{{end}}
-        <p class="muted">Положительная дельта Клиффа означает, что значения кандидата чаще больше базы. Для задержек, подтормаживаний UI, памяти и очередей это обычно ухудшение.</p>
+        <p class="muted">Положительная дельта Клиффа означает только то, что значения кандидата чаще больше базы. Для известных задержек, пауз и PSS это ухудшение; для пользовательской gauge-метрики направление неизвестно и автоматический вердикт не ставится.</p>
         {{end}}
         {{if eq .ID "change-points"}}
         <h3>Изменения точек изменения</h3>
+        <p class="help-text">Точки сопоставляются по сигналу и близкому месту сценария: по времени либо по относительной позиции в прогоне. Это уменьшает ложные «новые точки», когда одинаковый шаг выполнялся с разной скоростью.</p>
         <table class="timeline-table">
           <tr><th>Статус</th><th>Сигнал</th><th>Время базы</th><th>Время кандидата</th><th>{{tip "Оценка базы" (scoreHelp "change")}}</th><th>{{tip "Оценка кандидата" (scoreHelp "change")}}</th><th>Вывод</th></tr>
           {{range $math.ChangeDeltas}}
@@ -297,23 +338,23 @@
         {{if eq .ID "periodic"}}
         <h3>База</h3>
         <table class="timeline-table">
-          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          <tr><th>Сигнал</th><th>{{tip "N" "Самый длинный непрерывный участок с измерениями; ниже показано покрытие всего ряда. Пропуски не заменяются нулями."}}</th><th>{{tip "Первый лаг" "Первый сдвиг с автокорреляцией от 0.60. Отсутствие значения означает, что повторяемость не подтверждена этим тестом."}}</th><th>{{tip "Энтропия" "Ближе к 0 — узкий ритм, ближе к 1 — шум. Энтропия не измеряет серьезность проблемы."}}</th><th>{{tip "Пики" "Только локальные спектральные пики, минимум втрое выше фона и с достаточной уверенностью."}}</th><th>Вывод</th></tr>
           {{range $math.Baseline.Periodic}}
-          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}<div class="muted">измерено {{.ObservedBucketCount}} из {{.TotalBucketCount}}</div>{{if .Approximated}}<div class="muted">спектр: {{.AnalyzedSampleCount}}, шаг {{printf "%.1fs" (seconds .AnalysisBucketMS)}}</div>{{end}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}<span class="muted">не подтвержден</span>{{end}}</td><td>{{if ge .SampleCount 12}}{{printf "%.2f" .SpectralEntropy}}{{else}}<span class="muted">не рассчитана</span>{{end}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · уверенность {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет подтвержденных</span>{{end}}</td><td>{{.Summary}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Недостаточно данных базы.</td></tr>{{end}}
         </table>
         <h3>Кандидат</h3>
         <table class="timeline-table">
-          <tr><th>Сигнал</th><th>N</th><th>Первый лаг</th><th>Энтропия</th><th>Пики</th><th>Вывод</th></tr>
+          <tr><th>Сигнал</th><th>{{tip "N" "Самый длинный непрерывный участок с измерениями; ниже показано покрытие всего ряда."}}</th><th>{{tip "Первый лаг" "Первый сдвиг с автокорреляцией от 0.60."}}</th><th>{{tip "Энтропия" "Ближе к 0 — узкий ритм, ближе к 1 — шум. Это не оценка серьезности."}}</th><th>{{tip "Пики" "Слабые пики, похожие на фон, скрываются."}}</th><th>Вывод</th></tr>
           {{range $math.Candidate.Periodic}}
-          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}-{{end}}</td><td>{{printf "%.2f" .SpectralEntropy}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · доверие {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Summary}}</td></tr>
+          <tr><td>{{.Signal}}</td><td>{{.SampleCount}}<div class="muted">измерено {{.ObservedBucketCount}} из {{.TotalBucketCount}}</div>{{if .Approximated}}<div class="muted">спектр: {{.AnalyzedSampleCount}}, шаг {{printf "%.1fs" (seconds .AnalysisBucketMS)}}</div>{{end}}</td><td>{{if .FirstSignificantLagMS}}{{printf "%.1fs" (seconds .FirstSignificantLagMS)}}{{else}}<span class="muted">не подтвержден</span>{{end}}</td><td>{{if ge .SampleCount 12}}{{printf "%.2f" .SpectralEntropy}}{{else}}<span class="muted">не рассчитана</span>{{end}}</td><td>{{range .Peaks}}<div>{{printf "%.1fs" (seconds .PeriodMS)}} · уверенность {{printf "%.2f" .Confidence}}</div>{{else}}<span class="muted">нет подтвержденных</span>{{end}}</td><td>{{.Summary}}</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Недостаточно данных кандидата.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "network-loops"}}
-        <h3>Дельты сетевых циклов</h3>
+        <h3>Изменения кандидатов сетевых циклов</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Маршрут</th><th>Источник</th><th>Период базы</th><th>Период кандидата</th><th>{{tip "Выгорание базы" (scoreHelp "network_burn")}}</th><th>{{tip "Выгорание кандидата" (scoreHelp "network_burn")}}</th><th>Δ выгорания</th><th>{{tip "Δ доверия" (scoreHelp "confidence")}}</th><th>Вывод</th></tr>
+          <tr><th>{{tip "Статус" "Новый, исчезнувший, усилившийся или ослабевший кандидат сетевого цикла."}}</th><th>{{tip "Маршрут" "Размеченный сетевой маршрут кандидата цикла. Пустое значение означает, что маршрут не удалось атрибутировать."}}</th><th>{{tip "Источник" "Размеченный источник сетевой работы. Это контекст для проверки, а не автоматически виновный код."}}</th><th>{{tip "Период базы" "Оценённое типичное расстояние между всплесками в базе."}}</th><th>{{tip "Период кандидата" "Оценённое типичное расстояние между всплесками у кандидата."}}</th><th>{{tip "Нагрузка базы" (scoreHelp "network_burn")}}</th><th>{{tip "Нагрузка кандидата" (scoreHelp "network_burn")}}</th><th>{{tip "Δ нагрузки" "Условная нагрузка кандидата минус база. Единица не является временем, байтами или энергией."}}</th><th>{{tip "Δ уверенности" "Насколько изменилась поддержка повторяемого паттерна несколькими признаками. Это не изменение вероятности бага."}}</th><th>{{tip "Вывод" "Кратко описывает тип изменения и напоминает об ограничениях детектора."}}</th></tr>
           {{range $math.NetworkLoopDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{.Status}}</span></td>
@@ -327,39 +368,40 @@
             <td>{{printf "%+.2f" .ConfidenceDelta}}</td>
             <td>{{.Summary}}</td>
           </tr>
-          {{else}}<tr><td colspan="10" class="muted">Заметных изменений сетевых циклов не найдено.</td></tr>{{end}}
+          {{else}}<tr><td colspan="10" class="muted">Заметных изменений кандидатов сетевых циклов не найдено.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "integral"}}
         <h3>Дельты интегральных оценок</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Δ%</th><th>Критерии</th><th>Формула</th><th>Вывод</th></tr>
+          <tr><th>{{tip "Статус" "Регрессия рассчитывается только для сопоставимой длительности и одинакового числа независимых прогонов."}}</th><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>{{tip "База" "Накопленное значение, длительность и число независимых прогонов базы."}}</th><th>{{tip "Кандидат" "Накопленное значение, длительность и число независимых прогонов кандидата."}}</th><th>{{tip "Δ" "Абсолютная разница: кандидат минус база, в единице конкретной оценки."}}</th><th>{{tip "Δ%" "Процент относительно базы. Если база равна нулю, число прогонов различается или длительность отличается больше чем на 20%, процент не имеет честного смысла и не показывается."}}</th><th>{{tip "Критерии" "Стартовые инженерные диапазоны статуса, а не универсальный SLA продукта."}}</th><th>{{tip "Формула" "Правило расчёта. У каждой строки своя единица; Σ означает суммирование по временным интервалам."}}</th><th>{{tip "Вывод" "Поясняет изменение или точную причину, почему автоматический вердикт отключён."}}</th></tr>
           {{range $math.IntegralDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
             <td>{{.Title}}</td>
-            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
-            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
+            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}<div class="muted">{{printf "%.1fs" (seconds .BaselineDurationMS)}} · прогонов {{if gt .BaselineRunCount 0}}{{.BaselineRunCount}}{{else}}1{{end}}</div></td>
+            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}<div class="muted">{{printf "%.1fs" (seconds .CandidateDurationMS)}} · прогонов {{if gt .CandidateRunCount 0}}{{.CandidateRunCount}}{{else}}1{{end}}</div></td>
             <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
-            <td>{{printf "%+.1f" .DeltaPct}}%</td>
+            <td>{{if .DeltaPctAvailable}}{{printf "%+.1f" .DeltaPct}}%{{else}}<span class="muted">не применимо</span>{{end}}</td>
             <td>{{integralCriteria .ID}}</td>
             <td><code>{{.Formula}}</code></td>
             <td>{{.Summary}}</td>
           </tr>
           {{else}}<tr><td colspan="9" class="muted">Интегральные дельты недоступны.</td></tr>{{end}}
         </table>
+        <p class="help-text">Интегральные оценки зависят от длительности. Если база и кандидат выполняли разные сценарии или работали разное время, дельта описывает эти прогоны, но не доказывает регрессию кода.</p>
         {{end}}
         {{if eq .ID "markov"}}
         <h3>Дельты марковских метрик</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Метрика</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          <tr><th>{{tip "Статус" "Предупреждение означает ухудшение сопоставимой метрики или невозможность честно сравнить последовательности."}}</th><th>{{tip "Метрика" "Конкретная характеристика марковской модели: экспозиция плохих состояний, восстановление, переходы или расхождение матриц."}}</th><th>{{tip "База" "Наблюдаемое значение марковской метрики в базовом прогоне."}}</th><th>{{tip "Кандидат" "Наблюдаемое значение той же метрики у кандидата."}}</th><th>{{tip "Δ" "Кандидат минус база. В колонке «Вывод» явно указано, какое направление для этой метрики хуже."}}</th><th>{{tip "Вывод" "Объясняет направление изменения или сообщает, почему марковские дельты не рассчитаны."}}</th></tr>
           {{range significantMarkovDeltas $math.MarkovDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
             <td>{{.Metric}}</td>
-            <td>{{printf "%.1f" .BaselineValue}} {{.Unit}}</td>
-            <td>{{printf "%.1f" .CandidateValue}} {{.Unit}}</td>
-            <td>{{printf "%+.1f" .Delta}} {{.Unit}}</td>
+            <td>{{if .BaselineAvailable}}{{printf "%.1f" .BaselineValue}} {{.Unit}}{{else}}<span class="muted">нет данных</span>{{end}}</td>
+            <td>{{if .CandidateAvailable}}{{printf "%.1f" .CandidateValue}} {{.Unit}}{{else}}<span class="muted">нет данных</span>{{end}}</td>
+            <td>{{if .Comparable}}{{printf "%+.1f" .Delta}} {{.Unit}}{{else}}<span class="muted">не применимо</span>{{end}}</td>
             <td>{{.Summary}}</td>
           </tr>
           {{else}}<tr><td colspan="6" class="muted">Нет значимых марковских дельт.</td></tr>{{end}}
@@ -367,34 +409,34 @@
         </table>
         <h3>Экспозиция плохих состояний кандидата</h3>
         <table class="timeline-table">
-          <tr><th>Состояние</th><th>Доля времени</th><th>Длительность</th><th>Окна</th></tr>
+          <tr><th>Состояние</th><th>{{tip "Доля времени" "Доля длительности кандидата, классифицированная как это плохое состояние."}}</th><th>Длительность</th><th>Интервалы</th></tr>
           {{range $math.Candidate.Markov.StateExposures}}
           <tr><td>{{markovState .State}}</td><td>{{printf "%.1f" (percent01 .Exposure)}}%</td><td>{{humanDuration .DurationMS}}</td><td>{{.Windows}}</td></tr>
           {{else}}<tr><td colspan="4" class="muted">У кандидата нет плохих состояний.</td></tr>{{end}}
         </table>
         <h3>Контекстная липкость кандидата</h3>
         <table class="timeline-table">
-          <tr><th>Состояние</th><th>Контекст</th><th>Количество</th><th>Вероятность</th></tr>
-          {{range $math.Candidate.Markov.ContextStickyStates}}
+          <tr><th>Состояние</th><th>Контекст</th><th>{{tip "Количество" "Число самопереходов плохого состояния рядом с этим контекстом."}}</th><th>{{tip "Вероятность" "Наблюдаемая доля самопереходов. На малой выборке нестабильна и не является общей вероятностью бага."}}</th></tr>
+          {{if $math.Candidate.Markov.SequenceComparable}}{{range $math.Candidate.Markov.ContextStickyStates}}
           <tr><td>{{markovState .State}}</td><td>{{.Context}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">У кандидата нет липких контекстов.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">У кандидата нет липких контекстов.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="muted">Не рассчитывается для объединённых независимых прогонов кандидата.</td></tr>{{end}}
         </table>
         <h3>Переходы кандидата</h3>
         <table class="timeline-table">
-          <tr><th>Из</th><th>В</th><th>Количество</th><th>Вероятность</th></tr>
-          {{range significantMarkovTransitions $math.Candidate.Markov.Transitions}}
+          <tr><th>Из</th><th>В</th><th>{{tip "Количество" "Число наблюдавшихся переходов между соседними интервалами кандидата."}}</th><th>{{tip "Вероятность" "Доля этого перехода среди всех переходов из исходного состояния кандидата."}}</th></tr>
+          {{if $math.Candidate.Markov.SequenceComparable}}{{range significantMarkovTransitions $math.Candidate.Markov.Transitions}}
           <tr><td>{{markovState .From}}</td><td>{{markovState .To}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
           {{else}}<tr><td colspan="4" class="muted">Нет значимых переходов кандидата между состояниями деградации.</td></tr>{{end}}
-          {{if hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов кандидата: {{hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}.</td></tr>{{end}}
+          {{if hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}<tr><td colspan="4" class="muted">Скрыто спокойных переходов кандидата: {{hiddenMarkovTransitions $math.Candidate.Markov.Transitions}}.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="muted">Хронологические переходы не рассчитываются для объединённых независимых прогонов кандидата.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "graph"}}
-        <h3>Визуальный граф кандидата</h3>
-        <p class="help-text">Показаны самые сильные связи кандидата. Полная детализация ребер остается в таблицах ниже.</p>
+        <h3>Визуальный граф связей кандидата</h3>
+        <p class="help-text">Линии показывают совместные наблюдения без направления причины. Обратные дубликаты скрыты.</p>
         {{causalGraphSVG $math.Candidate.CausalGraph}}
-        <h3>Дельты графа причинности</h3>
+        <h3>Изменения графа связей и гипотез</h3>
         <table class="timeline-table">
-          <tr><th>Статус</th><th>Тип</th><th>База</th><th>Кандидат</th><th>Δ</th><th>Вывод</th></tr>
+          <tr><th>Статус</th><th>Тип изменения</th><th>{{tip "База" "Значение зависит от типа строки: уверенность связи, условная стоимость цепочки или оценка связи источника. Это не единая физическая метрика."}}</th><th>{{tip "Кандидат" "Сопоставимое условное значение кандидата для этого типа строки."}}</th><th>Δ</th><th>Вывод и ограничение</th></tr>
           {{range $math.CausalDeltas}}
           <tr>
             <td><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></td>
@@ -406,11 +448,11 @@
           </tr>
           {{else}}<tr><td colspan="6" class="muted">Заметных изменений графа не найдено.</td></tr>{{end}}
         </table>
-        <h3>Кратчайшие пути кандидата</h3>
+        <h3>Цепочки от симптомов у кандидата</h3>
         <table class="timeline-table">
-          <tr><th>От</th><th>К</th><th>Путь</th><th>{{tip "Стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th></tr>
+          <tr><th>Симптом</th><th>Контекст</th><th>Цепочка связей</th><th>{{tip "Условная стоимость" (scoreHelp "path_cost")}}</th><th>{{tip "Уверенность" "Сила цепочки совместных наблюдений. Не является вероятностью причины."}}</th></tr>
           {{range $math.Candidate.CausalGraph.Paths}}
-          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{pathText .}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
+          <tr><td>{{.From}}</td><td>{{.To}}</td><td>{{join .Nodes " ↔ "}}</td><td>{{printf "%.2f" .Cost}}</td><td>{{printf "%.2f" .Confidence}}</td></tr>
           {{else}}<tr><td colspan="5" class="muted">Кратчайшие пути кандидата не найдены.</td></tr>{{end}}
         </table>
         {{end}}

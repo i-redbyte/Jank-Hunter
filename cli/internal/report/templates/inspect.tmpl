@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: отчет</title>
-  <style>{{baseCSS}}</style>
+  <style>{{reportCSS .ReportStyle false}}</style>
 </head>
-<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
@@ -32,7 +32,7 @@
         <div class="chip">Логи <strong>{{.Summary.LogCount}}</strong></div>
         <div class="chip">События данных <strong>{{.Summary.EventCount}}</strong></div>
         <div class="chip">Словарь / control <strong>{{.Summary.DictionaryRecords}} / {{.Summary.ControlRecords}}</strong></div>
-        {{if .Summary.CollectionQuality.Level}}<div class="chip">Доверие к сбору <strong>{{.Summary.CollectionQuality.Level}}</strong></div>{{end}}
+        {{if .Summary.CollectionQuality.Level}}<div class="chip">Доверие к сбору <strong>{{confidenceLabel .Summary.CollectionQuality.Level}}</strong></div>{{end}}
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
       {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
@@ -63,12 +63,12 @@
       <span class="pill">автономный отчет</span>
     </div>
     <div class="grid">
-      <div class="metric"><div class="label">{{tip "HTTP p95" "95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее."}}</div><div class="value">{{if gt .Summary.HTTPCount 0}}{{.Summary.HTTPP95MS}} мс{{else}}нет данных{{end}}</div><div class="hint">{{.Summary.HTTPCount}} запросов, ошибок {{.Summary.HTTPFailed}}</div></div>
+      <div class="metric"><div class="label">{{tip "HTTP p95" "95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее."}}</div><div class="value">{{if gt .Summary.HTTPCount 0}}{{.Summary.HTTPP95MS}} мс{{else}}нет данных{{end}}</div><div class="hint">{{ruCount .Summary.HTTPCount "запрос" "запроса" "запросов"}}, {{ruCount .Summary.HTTPFailed "ошибка" "ошибки" "ошибок"}}</div></div>
       <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{if gt .Summary.UIFrames 0}}{{printf "%.2f" .Summary.UIJankPct}}%{{else}}нет данных{{end}}</div><div class="hint">{{.Summary.UIJank}} / {{.Summary.UIFrames}} кадров</div></div>
       <div class="metric"><div class="label">{{tip "Средний FPS" "Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах."}}</div><div class="value">{{if gt .Summary.UIFrames 0}}{{printf "%.1f" .Summary.UIAvgFPS}}{{else}}нет данных{{end}}</div><div class="hint">{{if gt .Summary.UIFrames 0}}минимум {{printf "%.1f" .Summary.UIMinFPS}}{{else}}нет UI-окон{{end}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{if gt .Summary.StallCount 0}}{{.Summary.StallMaxMS}} мс{{else}}нет данных{{end}}</div><div class="hint">событий пауз {{.Summary.StallCount}}</div></div>
       <div class="metric"><div class="label">{{tip "Макс. PSS" "PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM."}}</div><div class="value">{{if gt .Summary.MemoryCount 0}}{{.Summary.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</div><div class="hint">удержано {{.Summary.Retained}}</div></div>
-      <div class="metric"><div class="label">{{tip "RX UID за прогон" "Принятый сетевой трафик UID приложения между первым и последним снимком контекста. Помогает увидеть тяжелую сетевую активность внутри прогона."}}</div><div class="value">{{if gt .Summary.ContextCount 0}}{{.Summary.TrafficRxMax}}{{else}}нет данных{{end}}</div><div class="hint">{{if gt .Summary.ContextCount 0}}TX за прогон {{.Summary.TrafficTxMax}}{{else}}нет контекста{{end}}</div></div>
+      <div class="metric"><div class="label">{{tip "RX UID за прогон" "Разница счетчика принятого трафика UID приложения между первым и последним снимком каждого лога. Ноль означает, что между снимками рост счетчика не зафиксирован; это не оценка размера HTTP-ответов."}}</div><div class="value">{{if gt .Summary.ContextCount 0}}{{.Summary.TrafficRxMax}} байт{{else}}нет данных{{end}}</div><div class="hint">{{if gt .Summary.ContextCount 0}}TX за прогон {{.Summary.TrafficTxMax}} байт{{else}}нет снимков контекста{{end}}</div></div>
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать отчет</strong>Сначала смотрите общий статус и красные/желтые находки, затем открывайте разделы сценариев, источников и граф влияния. Так проще перейти от симптома к коду.</div>
@@ -77,13 +77,13 @@
     </div>
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Summary.UIFrames 0}}{{ringStyle .Summary.UIJankPct}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Summary.UIFrames 0}}{{printf "%.1f" .Summary.UIJankPct}}%{{else}}нет данных{{end}}</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Summary.HTTPCount 0}}{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--bad)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Summary.HTTPCount 0}}{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%{{else}}нет данных{{end}}</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Summary.UIFrames 0}}{{ringStyle (fpsScore .Summary.UIAvgFPS)}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Summary.UIFrames 0}}{{printf "%.1f" .Summary.UIAvgFPS}}{{else}}нет данных{{end}}</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
     </div>
     {{if .Summary.Influence.Available}}
     <h3>Граф влияния кода</h3>
-    <p class="help-text">Короткий срез “злых” узлов: классы получают вес по паузам главного потока, сети, памяти, лог-спаму, проблемным окнам и сценариям. Подробная карта связей вынесена в отдельный отчет.</p>
+    <p class="help-text">Короткий список приоритетных узлов: классы получают вес по паузам главного потока, сети, памяти, спаму логами, проблемным окнам и сценариям. Оценка ранжирует места для проверки, но не доказывает, что класс стал причиной симптома. Подробная карта связей вынесена в отдельный отчет.</p>
     <div class="grid influence-grid">
       {{range topInfluenceNodes .Summary.Influence 6}}
       <div class="metric influence-tile" data-tip="{{.ClassName}} · {{join .Reasons ", "}}">
@@ -102,7 +102,7 @@
 
   <section id="code-problems" class="panel code-registry-panel">
     <details class="fold code-registry-fold" open>
-      <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{len .Summary.CodeProblems}} строк · сортировка и фильтры</span></summary>
+      <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{ruCount (len .Summary.CodeProblems) "строка" "строки" "строк"}} · сортировка и фильтры</span></summary>
       <div class="fold-body">
     <p class="help-text">Ранжированный список классов и методов, где сошлись риск АНР, сеть, память, UI, спам логами, удержания и граф влияния. Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода: чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
     {{rowLimitNote "Реестр проблем кода" (len .Summary.CodeProblems) 64}}
@@ -111,7 +111,7 @@
     <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
     {{end}}
     {{with codeProblemSeverities .Summary.CodeProblems}}
-    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{codeSeverityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
     {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -141,12 +141,12 @@
         <tbody>
           {{range limitRows .Summary.CodeProblems 64}}
           <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}">
-            <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть выполнение</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
+            <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{codeSeverityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть runtime-сигналы</div>{{else}}<div class="muted">только статическая связь</div>{{end}}</td>
             <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{len .Signals}} сигналов{{if .DrillDown}} · {{len .DrillDown}} сценариев{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{ruCount (len .Signals) "сигнал" "сигнала" "сигналов"}}{{if .DrillDown}} · {{ruCount (len .DrillDown) "сценарий" "сценария" "сценариев"}}{{end}}</small></summary>
                 <div class="code-problem-detail-body">
                   <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
                   <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
@@ -181,9 +181,9 @@
         </div>
         <h3>Таблица маршрутов</h3>
         <table>
-          <tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p50</th><th>p95</th><th>Макс.</th><th>Средний TTFB</th><th>RX</th><th>TX</th><th>Источник</th></tr>
+          <tr><th>{{tip "Маршрут" "Нормализованное имя HTTP-маршрута. Параметры и чувствительные значения не должны использоваться как имя маршрута."}}</th><th>{{tip "Запросы" "Число HTTP-событий маршрута в доступных логах."}}</th><th>{{tip "Ошибки" "Транспортные ошибки и ответы 5xx. Клиентские 4xx не считаются ошибкой автоматически."}}</th><th>{{tip "p50" "Медиана длительности: половина запросов была не медленнее этого значения."}}</th><th>{{tip "p95" "95-й процентиль длительности. При малой выборке это одна из худших задержек, поэтому смотрите также число запросов."}}</th><th>{{tip "Максимум" "Самая длинная записанная длительность запроса. Один пик не показывает типичное поведение."}}</th><th>{{tip "Средний TTFB" "Среднее время до первого байта. Ноль может означать, что разбиение фаз не было записано."}}</th><th>{{tip "RX" "Сумма известных принятых байтов HTTP-событий. Ноль может означать пустой ответ или отсутствие размера в instrumentation."}}</th><th>{{tip "TX" "Сумма известных отправленных байтов HTTP-событий. Ноль может означать пустое тело или отсутствие размера в instrumentation."}}</th><th>{{tip "Источник" "Пример owner, связанного с маршрутом. Это контекст вызова, а не доказанная причина задержки."}}</th></tr>
           {{range limitRows .Summary.Routes 64}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td><span class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</span></td><td>{{.MaxMS}} мс</td><td>{{.AvgTTFBMS}} мс</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{contextHint .OwnerSample "owner"}}</code></td></tr>
+          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td><span class="metric-with-badge">{{.P95MS}} мс{{if .P95Approximate}}<span class="approx-badge" title="p95 рассчитан по reservoir-сэмплу: {{.Sampled}} из {{.Count}} запросов">≈</span>{{end}}</span></td><td>{{.MaxMS}} мс</td><td>{{if gt .AvgTTFBMS 0}}{{.AvgTTFBMS}} мс{{else}}нет данных{{end}}</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{contextHint .OwnerSample "owner"}}</code></td></tr>
           {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
       </div>
@@ -205,7 +205,7 @@
         </div>
         <h3>Таблица экранов</h3>
         <table>
-          <tr><th>Экран</th><th>Окна</th><th>Кадры</th><th>Медленные кадры</th><th>Доля подтормаживаний</th><th>Средний FPS</th><th>Мин. FPS</th><th>p95 кадра</th><th>Макс. p99</th></tr>
+          <tr><th>{{tip "Экран" "Имя screen из runtime-контекста или ASM-аннотации."}}</th><th>{{tip "Окна" "Число агрегированных UI-окон наблюдения для экрана."}}</th><th>{{tip "Кадры" "Общее число кадров в записанных UI-окнах."}}</th><th>{{tip "Медленные кадры" "Кадры, превысившие целевое время текущей частоты экрана."}}</th><th>{{tip "Доля подтормаживаний" "Процент медленных кадров. На коротком окне значение нестабильно, поэтому учитывайте общее число кадров."}}</th><th>{{tip "Средний FPS" "Средняя частота кадров по длительности окон. Сравнивайте на устройствах с одинаковой частотой дисплея."}}</th><th>{{tip "Мин. FPS" "Самая низкая частота кадров среди UI-окон, а не мгновенное значение каждого кадра."}}</th><th>{{tip "p95 кадра" "95-й процентиль длительности кадров для экрана."}}</th><th>{{tip "Макс. p99" "Самый высокий p99 среди окон экрана; чувствителен к коротким и редким окнам."}}</th></tr>
           {{range limitRows .Summary.Screens 64}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
@@ -227,7 +227,7 @@
       <div class="fold-body">
         {{rowLimitNote "Сценарии" (len .Summary.Flows) 256}}
         <table>
-          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th><th>Маршрут</th><th>HTTP</th><th>Ошибки</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Макс. пауза</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
+          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>{{tip "Источник" "Owner, активный при записи события. Он помогает найти код, но не доказывает первопричину."}}</th><th>Маршрут</th><th>{{tip "HTTP" "Число HTTP-событий именно в этом контексте."}}</th><th>Ошибки</th><th>{{tip "HTTP p95" "Показывается только при наличии HTTP-событий в строке."}}</th><th>{{tip "UI-подтормаживания" "Медленные и все кадры в контексте. Показывается только при наличии UI-кадров."}}</th><th>Паузы</th><th>{{tip "Макс. пауза" "Самая длинная зафиксированная пауза главного потока в контексте."}}</th><th>Спам логами</th><th>{{tip "Проблемные окна" "Число агрегированных окон симптомов. Окно группирует близкие события, но не доказывает общую причину."}}</th><th>{{tip "Макс. PSS" "Максимальный PSS в контексте, если memory-событие было атрибутировано."}}</th></tr>
           {{range limitRows .Summary.Flows 256}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td>
@@ -237,13 +237,13 @@
             <td><code>{{contextHint .RouteSample "route"}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
-            <td><span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 сценария рассчитан по reservoir-сэмплу">≈</span>{{end}}</span></td>
-            <td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td>
+            <td>{{if gt .HTTPCount 0}}<span class="metric-with-badge">{{.HTTPP95MS}} мс{{if .HTTPP95Approximate}}<span class="approx-badge" title="HTTP p95 сценария рассчитан по reservoir-сэмплу">≈</span>{{end}}</span>{{else}}нет HTTP-замера{{end}}</td>
+            <td>{{if gt .UIFrames 0}}{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%{{else}}нет UI-замера{{end}}</td>
             <td>{{.StallCount}}</td>
-            <td>{{.StallMaxMS}} мс</td>
+            <td>{{if gt .StallCount 0}}{{.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</td>
             <td>{{.LogSpam}}</td>
             <td>{{.ProblemCount}}</td>
-            <td>{{.MemoryMaxKB}} КБ</td>
+            <td>{{if gt .MemoryMaxKB 0}}{{.MemoryMaxKB}} КБ{{else}}нет замера{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="14" class="muted">Нет событий контекста сценария. Включите API сценариев или ASM-опцию flowInteractions, чтобы увидеть цепочки причин.</td></tr>{{end}}
         </table>
@@ -260,7 +260,7 @@
             </table>
           </div>
           <div>
-            <h3>{{tip "Проблемные окна" "Агрегированные окна, где уже заметна причина: медленный HTTP, пауза главного потока, UI-подтормаживания, удержанные объекты или спам логами."}}</h3>
+            <h3>{{tip "Проблемные окна" "Агрегированные окна, где Jank Hunter увидел один или несколько симптомов: медленный HTTP, паузу главного потока, UI-подтормаживания, удержание или спам логами. Название причины — классификация сигнала, а не доказанная первопричина."}}</h3>
             {{rowLimitNote "Проблемные окна" (len .Summary.ProblemWindows) 256}}
             <table>
               <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th></tr>
@@ -270,13 +270,13 @@
             </table>
           </div>
         </div>
-        <h3>Вызовы выполнения</h3>
+        <h3>{{tip "Вызовы выполнения" "Рёбра runtime-call graph, записанные instrumentation. Итого и максимум относятся к наблюдаемой длительности обёрнутого вызова и не равны чистому CPU-времени метода."}}</h3>
         {{rowLimitNote "Ребра runtime-графа" (len .Summary.RuntimeCalls) 256}}
         <table>
           <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range limitRows .Summary.RuntimeCalls 256}}
           <tr><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
-          {{else}}<tr><td colspan="8" class="muted">Нет графа вызовов выполнения. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+          {{else}}<tr><td colspan="8" class="muted">Нет графа runtime-вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -284,14 +284,14 @@
 
   <section id="owners" class="panel">
     <div class="panel-head">
-      <div><h2>Горячие точки влияния</h2><div class="panel-kicker">Источники, классы и подсказки стека с наибольшим измеренным вкладом.</div></div>
+      <div><h2>Атрибутированные источники</h2><div class="panel-kicker">Источники, классы и подсказки стека, к которым привязаны самые длинные или частые наблюдаемые события. Атрибуция помогает найти код, но не доказывает причинность.</div></div>
     </div>
     <details class="fold">
       <summary>Детали источников</summary>
       <div class="fold-body">
         {{rowLimitNote "Источники и классы" (len .Summary.Owners) 256}}
         <table>
-          <tr><th>Источник / класс</th><th>Тип</th><th>Количество</th><th>Итого</th><th>Макс.</th><th>Подсказка стека</th></tr>
+          <tr><th>{{tip "Источник / класс" "Owner из аннотации, ASM-символа, withOwner или ownerHint."}}</th><th>{{tip "Тип" "Семейство события, привязанного к owner: пауза, HTTP, логирование и т. п."}}</th><th>{{tip "Количество" "Число событий этого типа у источника."}}</th><th>{{tip "Итого" "Сумма длительностей событий. Для пересекающихся работ это не wall-clock время сценария и не CPU time класса."}}</th><th>{{tip "Максимум" "Самая длинная длительность одного события."}}</th><th>{{tip "Подсказка стека" "Первый доступный пользовательский кадр стека. Это подсказка места вызова, а не полный stack trace."}}</th></tr>
           {{range limitRows .Summary.Owners 256}}
           <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .StackHint "stack"}}</code></td></tr>
           {{else}}<tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
@@ -319,7 +319,7 @@
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
           <option value="medium">Предупреждение</option>
-          <option value="ok">Норма</option>
+          <option value="ok">Низкий риск</option>
         </select>
         <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
           <option value="">Все типы</option>
@@ -331,17 +331,17 @@
       <table class="code-problem-table leak-table">
         <thead>
           <tr>
-            <th><button type="button" data-code-sort="severity">Риск</button></th>
-            <th><button type="button" data-code-sort="class">Удержанный объект</button></th>
-            <th><button type="button" data-code-sort="category">Тип</button></th>
-            <th>Вероятный держатель</th>
-            <th>Контекст</th>
-            <th><button type="button" data-code-sort="score">Оценка</button></th>
+            <th>{{tip "Риск" "Приоритет проверки по score и evidence; не вероятность утечки."}}</th>
+            <th>{{tip "Удержанный объект" "Класс объекта, который оставался достижимым дольше задержки наблюдения."}}</th>
+            <th>{{tip "Тип" "Предполагаемая категория объекта для подсказок жизненного цикла."}}</th>
+            <th>{{tip "Вероятный держатель" "Owner из runtime-контекста или держатель из HPROF. Без HPROF это гипотеза, а не доказанная ссылка."}}</th>
+            <th>{{tip "Контекст" "Экран, сценарий и шаг, активные при записи сигнала."}}</th>
+            <th>{{tip "Оценка" "Относительный приоритет внутри отчёта. Учитывает evidence, возраст, повторяемость и контекст; не доказывает утечку."}}</th>
             <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th>
             <th>{{tip "Путь / контекст удержания" "С HPROF здесь показан путь ссылок от корня GC. Без HPROF — только контекст обнаружения: экран, сценарий, шаг, вероятный владелец и место наблюдения."}}</th>
-            <th>Влияние</th>
+            <th>{{tip "Возможное влияние" "Почему удержание может быть важно для памяти или жизненного цикла. Это гипотеза для проверки."}}</th>
             <th>Что проверить</th>
-            <th>Доказательства</th>
+            <th>{{tip "Доказательства" "Уровень evidence и ограничения качества. HPROF-путь сильнее runtime-наблюдения, но требует проверки ожидаемого жизненного цикла."}}</th>
           </tr>
         </thead>
         <tbody>
@@ -353,7 +353,7 @@
             <td><code>{{contextHint .Holder "holder"}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
             <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{contextHint .Screen "screen"}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{contextHint .Flow "flow"}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{contextHint .Step "step"}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
-            <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
+            <td><div>{{if gt .EstimatedRetainedKB 0}}{{dataSize .EstimatedRetainedKB}}{{else}}нет оценки{{end}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
             <td>{{.Impact}}</td>
             <td>{{.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
@@ -434,9 +434,9 @@
       <summary>Детали контекста</summary>
       <div class="fold-body">
         <div class="triad">
-          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{reportHint .Name "неизвестно" "app"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{reportHint .Name "неизвестно" "sdk"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
-          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{reportHint .Name "неизвестно" "device"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td class="muted">неизвестно</td><td>0</td></tr>{{end}}</table></div>
+          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{reportHint .Name "неизвестно" "app"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных версии приложения.</td></tr>{{end}}</table></div>
+          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{reportHint .Name "неизвестно" "sdk"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных SDK.</td></tr>{{end}}</table></div>
+          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{reportHint .Name "неизвестно" "device"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных устройства.</td></tr>{{end}}</table></div>
         </div>
         <h3>Разбивка по процессам</h3>
         <table><tr><th>Процесс</th><th>Сессии</th></tr>{{range .Summary.Processes}}<tr><td><code>{{reportHint .Name "неизвестно" "process"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</table>

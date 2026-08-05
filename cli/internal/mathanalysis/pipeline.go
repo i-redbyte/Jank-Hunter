@@ -12,6 +12,7 @@ type mathInputAnalysis struct {
 	Timeline         []TimelineBucket
 	Series           []Series
 	Scale            timelineScale
+	IndependentRuns  int
 	RobustSamples    robustSampleMap
 	RouteDefinitions []periodicDefinition
 	NetworkLoops     []NetworkLoopFinding
@@ -30,6 +31,7 @@ func analyzeMathInputs(paths []string, options analyze.Options) (mathInputAnalys
 		Timeline:         timeline,
 		Series:           series,
 		Scale:            scale,
+		IndependentRuns:  len(normalizer.baseByKey),
 		RobustSamples:    robustSamples,
 		RouteDefinitions: routeDefinitions,
 		NetworkLoops:     networkLoops,
@@ -59,8 +61,10 @@ func detectScaleAndCollectRobust(paths []string, options analyze.Options) (timel
 	hasData := false
 	for _, path := range paths {
 		runKey := normalizer.key(path)
+		symbols := newMathSymbolResolver(options)
 		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
-			if timeMS, ok := mathScaleEventTimeMS(event, dict, filter, options.OwnerMap); ok {
+			symbols.observe(event)
+			if timeMS, ok := mathScaleEventTimeMS(event, dict, filter, symbols); ok {
 				runRange := ranges[runKey]
 				if !runRange.hasData || timeMS < runRange.minMS {
 					runRange.minMS = timeMS
@@ -72,7 +76,7 @@ func detectScaleAndCollectRobust(paths []string, options analyze.Options) (timel
 				ranges[runKey] = runRange
 				hasData = true
 			}
-			robust.add(event, dict)
+			robust.add(event, dict, symbols)
 			return nil
 		}); err != nil {
 			return timelineScale{}, runTimelineNormalizer{}, nil, err
@@ -103,12 +107,14 @@ func collectBucketedMathInputs(paths []string, options analyze.Options, scale ti
 	networkCollector := newNetworkLoopCollector(options, scale)
 	for _, path := range paths {
 		timelineState := &timelineStreamState{}
+		symbols := newMathSymbolResolver(options)
 		if err := jhlog.StreamFile(path, func(event jhlog.Event, dict map[uint64]string) error {
+			symbols.observe(event)
 			normalizedEvent := event
 			normalizedEvent.TimeMS = normalizer.normalize(path, event.TimeMS)
-			timelineCollector.add(normalizedEvent, dict, timelineState)
-			routeCollector.add(normalizedEvent, dict)
-			networkCollector.add(normalizedEvent, dict)
+			timelineCollector.add(normalizedEvent, dict, timelineState, symbols)
+			routeCollector.add(normalizedEvent, dict, symbols)
+			networkCollector.add(normalizedEvent, dict, symbols)
 			return nil
 		}); err != nil {
 			return nil, nil, nil, nil, err

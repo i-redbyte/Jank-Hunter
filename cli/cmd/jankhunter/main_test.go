@@ -153,7 +153,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}
 	assertFileContains(t, inspectPath, `data-jankhunter-single-html`)
 	assertBundlePageContains(t, inspectPath, "overview", "λ Анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Удержания и возможные утечки памяти")
-	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Что измеряет")
+	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Что измеряет")
 	assertBundlePageContains(t, inspectPath, "leaks", "Удержания и возможные утечки памяти", "Проводник утечек", "Сигналы достижимости", "легкий режим", "Контекст обнаружения удержанного объекта")
 	assertNoCompanionReports(t, inspectPath)
 
@@ -199,8 +199,8 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 		t.Fatalf("runCompare() error = %v", err)
 	}
 	assertBundlePageContains(t, comparePath, "overview", "λ Анализ", `href="compare-math.html"`, "Утечки памяти", `href="compare-leaks.html"`, "Сравнение сигналов удержания памяти")
-	assertBundlePageContains(t, comparePath, "math", "Математический анализ сравнения", "Качество сравнения", "Сравнение сигналов удержания памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф причинности", "Сводка разделов", "Справка по методам", "Поля в compare")
-	assertBundlePageContains(t, comparePath, "leaks", "Сравнение сигналов удержания памяти", "Проводник дельт утечек", "количество сигналов удержания не изменилось")
+	assertBundlePageContains(t, comparePath, "math", "Математический анализ сравнения", "Качество сравнения", "Сравнение сигналов удержания памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Поля в compare")
+	assertBundlePageContains(t, comparePath, "leaks", "Сравнение сигналов удержания памяти", "Проводник изменений удержания", "количество сигналов удержания не изменилось")
 	assertNoCompanionReports(t, comparePath)
 
 	customComparePath := filepath.Join(dir, "another.custom.name.html")
@@ -277,7 +277,7 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	printVersion(&buffer)
 
 	text := buffer.String()
-	if !strings.Contains(text, "Jank Hunter CLI 1.0.2") {
+	if !strings.Contains(text, "Jank Hunter CLI 1.0.3") {
 		t.Fatalf("version output missing CLI version: %q", text)
 	}
 	if !strings.Contains(text, ".jhlog format") {
@@ -490,7 +490,7 @@ func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	if err := registry.run([]string{"version"}); err != nil {
 		t.Fatalf("registry version error = %v", err)
 	}
-	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.2") {
+	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.3") {
 		t.Fatalf("version command output = %q", buffer.String())
 	}
 	if err := registry.run([]string{"missing"}); err == nil {
@@ -650,6 +650,55 @@ func TestAnimatedBackgroundFlagDefaultsOff(t *testing.T) {
 	assertBundlePageContains(t, comparePath, "overview", `class="animated-background"`)
 	assertBundlePageContains(t, comparePath, "leaks", `class="leak-page animated-background"`)
 	assertNoCompanionReports(t, comparePath)
+}
+
+func TestReportStyleDefaultsToModernAndPreservesLegacy(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+	dir := t.TempDir()
+	samplePath := filepath.Join(dir, "sample.jhlog")
+	if err := runSample([]string{"--out", samplePath}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+
+	modernPath := filepath.Join(dir, "modern.html")
+	if err := runInspect([]string{samplePath, "--out", modernPath}); err != nil {
+		t.Fatalf("runInspect(modern) error = %v", err)
+	}
+	assertFileContains(
+		t,
+		modernPath,
+		`data-report-style="modern"`,
+		`class="report-logo"`,
+		"РАЗДЕЛЫ ОТЧЁТА",
+	)
+	for _, pageID := range []string{"overview", "math", "leaks", "influence"} {
+		assertBundlePageContains(
+			t,
+			modernPath,
+			pageID,
+			`data-report-style="modern"`,
+			"--bg: #06140b",
+			"padding: 8px !important",
+		)
+	}
+
+	legacyPath := filepath.Join(dir, "legacy.html")
+	if err := runInspect([]string{samplePath, "--report-style", "legacy", "--out", legacyPath}); err != nil {
+		t.Fatalf("runInspect(legacy) error = %v", err)
+	}
+	assertFileContains(
+		t,
+		legacyPath,
+		`data-report-style="legacy"`,
+		`<div class="report-brand">Jank <span>Hunter</span></div>`,
+	)
+	assertFileNotContains(t, legacyPath, `class="report-logo"`)
+	assertBundlePageContains(t, legacyPath, "overview", `data-report-style="legacy"`, "--cyan: #6ff7ff")
+	assertBundlePageNotContains(t, legacyPath, "overview", "--bg: #06140b")
+
+	if err := runInspect([]string{samplePath, "--report-style", "unknown", "--out", filepath.Join(dir, "invalid.html")}); err == nil {
+		t.Fatal("runInspect(unknown report style) succeeded")
+	}
 }
 
 func TestExportStreamsSampleJSONL(t *testing.T) {

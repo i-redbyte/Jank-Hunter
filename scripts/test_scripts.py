@@ -16,6 +16,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("integrate-android-project.sh").resolve()
 ANDROID_E2E_SCRIPT = Path(__file__).with_name("android-e2e.sh").resolve()
+ANDROID_E2E_VALIDATOR = Path(__file__).with_name("validate-android-e2e.py").resolve()
 GRADLE_SMOKE_SCRIPT = Path(__file__).with_name("gradle-plugin-smoke.sh").resolve()
 GROUP = "io.jankhunter"
 VERSION = "1.0.0"
@@ -1016,6 +1017,193 @@ android {{
         self.assertIn(f'implementation("{GROUP}:jankhunter-android-sdk:{VERSION}")', result)
 
 
+class AndroidE2EContractValidatorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def run_validator(
+        self,
+        report: dict,
+        contract: dict,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[str]:
+        report_path = self.root / "report.json"
+        contract_path = self.root / "contract.json"
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ANDROID_E2E_VALIDATOR),
+                "--report",
+                str(report_path),
+                "--contract",
+                str(contract_path),
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_validates_scalars_rows_cardinality_relations_and_warnings(self) -> None:
+        report = {
+            "EventCount": 12,
+            "DataRecordCount": 12,
+            "Counters": [
+                {"Name": "expected", "Value": 3},
+                {"Name": "other", "Value": 1},
+            ],
+            "Paths": ["root", "target"],
+            "Warnings": ["ASM-диагностика не передана"],
+        }
+        contract = {
+            "schema": 1,
+            "assertions": [
+                {
+                    "id": "events",
+                    "path": "EventCount",
+                    "expect": {"type": "integer", "minimum": 10, "maximum": 20},
+                },
+                {
+                    "id": "counter",
+                    "path": "Counters",
+                    "where": {"Name": "expected"},
+                    "field": "Value",
+                    "cardinality": {"equals": 1},
+                    "expect": {"equals": 3},
+                },
+                {
+                    "id": "absent",
+                    "path": "Counters",
+                    "where": {"Name": "forbidden"},
+                    "cardinality": {"equals": 0},
+                },
+                {
+                    "id": "path",
+                    "path": "Paths",
+                    "expect": {"minimum_length": 2, "contains": "target"},
+                },
+            ],
+            "relations": [
+                {
+                    "id": "records",
+                    "left": "EventCount",
+                    "operator": "equals",
+                    "right": "DataRecordCount",
+                }
+            ],
+            "warnings": {
+                "allowed_without_diagnostics": ["ASM-диагностика не передана"],
+                "forbidden_fragments": ["asm-диагност", "runtime graph"],
+            },
+        }
+
+        completed = self.run_validator(report, contract)
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertIn("PASS: 5 metric checks", completed.stdout)
+
+    def test_reports_all_contract_mismatches_with_assertion_ids(self) -> None:
+        completed = self.run_validator(
+            {
+                "EventCount": 2,
+                "Counters": [{"Name": "expected", "Value": 1}],
+                "Warnings": [],
+            },
+            {
+                "schema": 1,
+                "assertions": [
+                    {
+                        "id": "events-minimum",
+                        "path": "EventCount",
+                        "expect": {"minimum": 10},
+                    },
+                    {
+                        "id": "counter-value",
+                        "path": "Counters",
+                        "where": {"Name": "expected"},
+                        "field": "Value",
+                        "cardinality": {"equals": 1},
+                        "expect": {"equals": 3},
+                    },
+                    {
+                        "id": "missing-row",
+                        "path": "Counters",
+                        "where": {"Name": "missing"},
+                        "cardinality": {"equals": 1},
+                    },
+                ],
+            },
+        )
+
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("events-minimum", completed.stderr)
+        self.assertIn("counter-value", completed.stderr)
+        self.assertIn("missing-row", completed.stderr)
+
+    def test_rejects_duplicate_ids_and_unknown_rule_keys(self) -> None:
+        duplicate = self.run_validator(
+            {"Value": 1},
+            {
+                "schema": 1,
+                "assertions": [
+                    {"id": "same", "path": "Value", "expect": {"equals": 1}},
+                    {"id": "same", "path": "Value", "expect": {"equals": 1}},
+                ],
+            },
+        )
+        self.assertNotEqual(0, duplicate.returncode)
+        self.assertIn("ids must be unique", duplicate.stderr)
+
+        unknown = self.run_validator(
+            {"Value": 1},
+            {
+                "schema": 1,
+                "assertions": [
+                    {"id": "value", "path": "Value", "expect": {"approximate": 1}}
+                ],
+            },
+        )
+        self.assertNotEqual(0, unknown.returncode)
+        self.assertIn("unsupported expectation keys", unknown.stderr)
+
+    def test_missing_asm_warning_is_rejected_when_diagnostics_are_supplied(self) -> None:
+        contract = {
+            "schema": 1,
+            "assertions": [
+                {"id": "events", "path": "EventCount", "expect": {"minimum": 1}}
+            ],
+            "warnings": {
+                "allowed_without_diagnostics": ["ASM-диагностика не передана"],
+                "forbidden_fragments": ["asm-диагност", "runtime graph"],
+            },
+        }
+        report = {
+            "EventCount": 1,
+            "Warnings": ["ASM-диагностика не передана"],
+        }
+
+        allowed = self.run_validator(report, contract)
+        rejected = self.run_validator(report, contract, "--diagnostics-supplied")
+
+        self.assertEqual(0, allowed.returncode, allowed.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("forbidden collection-quality warning", rejected.stderr)
+
+        combined = dict(report)
+        combined["Warnings"] = [
+            "ASM-диагностика не передана; runtime graph потерял ребра"
+        ]
+        combined_result = self.run_validator(combined, contract)
+        self.assertNotEqual(0, combined_result.returncode)
+        self.assertIn("forbidden collection-quality warning", combined_result.stderr)
+
+
 class AndroidE2EScriptTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1118,14 +1306,15 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
                 "written_events": 12,
             },
             "Counters": [
-                {"Name": "sample.e2e.retained.watch.count", "Value": 1},
-                {"Name": "sample.e2e.background.count", "Value": 1},
+                {"Name": "sample.auto.run.completed.count", "Value": 1},
+                {"Name": "jankhunter.heap_dump.created.count", "Value": 1},
             ],
             "Gauges": [
-                {"Name": "sample.e2e.background.duration_ms", "Value": 80}
+                {"Name": "sample.auto.actual_stage_count", "Value": 5},
+                {"Name": "jankhunter.heap_dump.retained_age_ms", "Value": 13000},
             ],
-            "Screens": [{"Screen": "SampleEndToEnd"}],
-            "Owners": [{"Owner": "sample.e2e.synthetic_stall"}],
+            "Screens": [{"Screen": "sample.compose.result"}],
+            "Owners": [{"Owner": "io.jankhunter.sample.graph.CheckoutRenderer"}],
             "Warnings": list(warnings),
         }
 
@@ -1139,6 +1328,24 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         cli.mkdir()
         copied_script = scripts / "android-e2e.sh"
         shutil.copy2(ANDROID_E2E_SCRIPT, copied_script)
+        shutil.copy2(ANDROID_E2E_VALIDATOR, scripts / "validate-android-e2e.py")
+        contracts = scripts / "contracts"
+        contracts.mkdir()
+        (contracts / "android-sample-e2e.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "assertions": [
+                        {
+                            "id": "events",
+                            "path": "EventCount",
+                            "expect": {"minimum": 1},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         gradle_args = self.root / "gradle-args.txt"
         self.write_executable(
@@ -1151,6 +1358,27 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         test_apk.parent.mkdir(parents=True)
         app_apk.write_bytes(b"app-apk")
         test_apk.write_bytes(b"test-apk")
+        generated_artifacts = android / "sample-app/build/generated/jankhunter/debug"
+        generated_artifacts.mkdir(parents=True)
+        (generated_artifacts / "owner-map.json").write_text(
+            json.dumps(
+                {
+                    "classGraph": True,
+                    "runtimeCallGraph": True,
+                    "includePackages": ["io.jankhunter.sample.graph"],
+                },
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        (generated_artifacts / "class-graph.jsonl").write_text(
+            json.dumps({"class": "io.jankhunter.sample.graph.CheckoutRenderer"}) + "\n",
+            encoding="utf-8",
+        )
+        (generated_artifacts / "instrumentation-diagnostics.jsonl").write_text(
+            json.dumps({"format": 1}) + "\n",
+            encoding="utf-8",
+        )
         device_logs = self.root / "device-logs"
         device_logs.mkdir()
         (device_logs / "jh-session-log.2026-07-14.0.jhlog").write_bytes(b"fixture")
@@ -1233,15 +1461,12 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
         )
         return copied_script, go_args, environment
 
-    def test_runtime_quality_gate_allows_only_missing_optional_asm_warning(self) -> None:
+    def test_runtime_quality_gate_rejects_missing_asm_warning_with_generated_diagnostics(
+        self,
+    ) -> None:
         script, _, environment = self.create_full_fixture()
         output = self.root / "e2e-output"
-        environment["FAKE_INSPECT_JSON"] = json.dumps(
-            self.complete_summary(
-                "Качество сбора: ASM-диагностика не передана; нельзя подтвердить hooks."
-            ),
-            ensure_ascii=False,
-        )
+        environment["FAKE_INSPECT_JSON"] = json.dumps(self.complete_summary())
 
         passed = subprocess.run(
             [str(script), "--out-dir", str(output)],
@@ -1258,7 +1483,7 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
 
         environment["FAKE_INSPECT_JSON"] = json.dumps(
             self.complete_summary(
-                "Качество сбора: runtime-граф вызовов отбросил ребра: 1."
+                "Качество сбора: ASM-диагностика не передана; нельзя подтвердить hooks."
             ),
             ensure_ascii=False,
         )
@@ -1278,12 +1503,12 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
         summary["Screens"] = []
         summary["Owners"] = []
         summary["Warnings"] = [
-            "SampleEndToEnd",
-            "sample.e2e.synthetic_stall",
+            "sample.compose.result",
+            "io.jankhunter.sample.graph.CheckoutRenderer",
         ]
         summary["Unrelated"] = {
-            "Screen": "SampleEndToEnd",
-            "Owner": "sample.e2e.synthetic_stall",
+            "Screen": "sample.compose.result",
+            "Owner": "io.jankhunter.sample.graph.CheckoutRenderer",
         }
         environment["FAKE_INSPECT_JSON"] = json.dumps(summary, ensure_ascii=False)
 
@@ -1303,7 +1528,9 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
         script, _, environment = self.create_full_fixture()
         summary = self.complete_summary()
         summary["Screens"] = []
-        summary["Flows"] = [{"Screen": "SampleEndToEnd"}]
+        summary["Flows"] = [
+            {"Screen": "sample.compose.result"}
+        ]
         environment["FAKE_INSPECT_JSON"] = json.dumps(summary, ensure_ascii=False)
 
         completed = subprocess.run(

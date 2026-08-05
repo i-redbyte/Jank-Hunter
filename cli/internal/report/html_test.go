@@ -11,6 +11,68 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
 
+func TestSparklineDoesNotConnectMissingMeasurements(t *testing.T) {
+	html := string(sparklineSVG(mathanalysis.Series{
+		Name:    "PSS",
+		Points:  []float64{100, 110, 0, 120, 130},
+		Present: []bool{true, true, false, true, true},
+	}))
+
+	if got := strings.Count(html, `<polyline class="spark-line"`); got != 2 {
+		t.Fatalf("sparkline segments = %d, want 2: %s", got, html)
+	}
+}
+
+func TestUniqueCausalEdgesRemovesReverseDirection(t *testing.T) {
+	edges := []mathanalysis.CausalEdge{
+		{From: "owner:A", To: "state:Janky", Kind: "owner-state"},
+		{From: "state:Janky", To: "owner:A", Kind: "owner-state"},
+	}
+
+	if unique := uniqueCausalEdges(edges); len(unique) != 1 {
+		t.Fatalf("unique edges = %+v, want one undirected relation", unique)
+	}
+}
+
+func TestCompareRowsDoNotCallOneSidedDimensionsRegressions(t *testing.T) {
+	baseline := analyze.Summary{DurationMS: 60_000}
+	candidate := analyze.Summary{
+		DurationMS: 60_000,
+		Routes:     []analyze.RouteStats{{Route: "GET /new", Count: 4, P95MS: 900}},
+		Screens:    []analyze.ScreenStats{{Screen: "NewScreen", Frames: 240, JankRatePct: 12}},
+		Owners:     []analyze.OwnerStats{{Owner: "NewOwner", Count: 4, MaxMS: 900}},
+		Flows:      []analyze.FlowStats{{Flow: "new-flow", HTTPCount: 4, HTTPP95MS: 900}},
+	}
+
+	if row := routeCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
+		t.Fatalf("candidate-only route became a regression: %+v", row)
+	}
+	if row := screenCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
+		t.Fatalf("candidate-only screen became a regression: %+v", row)
+	}
+	if row := ownerCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
+		t.Fatalf("candidate-only owner became a regression: %+v", row)
+	}
+	if row := flowCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
+		t.Fatalf("candidate-only flow became a regression: %+v", row)
+	}
+}
+
+func TestInspectAnalysisCapsSmallSamplesAndAvoidsHealthyClaim(t *testing.T) {
+	analysis := inspectAnalysis(analyze.Summary{
+		LogCount:   1,
+		EventCount: 10,
+		HTTPCount:  1,
+		HTTPP95MS:  2_000,
+	}, "ru")
+	if analysis.Severity != "medium" {
+		t.Fatalf("small sample severity = %q", analysis.Severity)
+	}
+	if analysis.Status == "Все хорошо" || strings.Contains(analysis.Summary, "прогон здоров") {
+		t.Fatalf("analysis made a categorical health claim: %+v", analysis)
+	}
+}
+
 func TestWriteReports(t *testing.T) {
 	summary := analyze.Summary{
 		Title:       "sample.jhlog",
@@ -97,9 +159,10 @@ func TestWriteReports(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Сценарии и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Удержания и возможные утечки памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "λ Анализ", `href="inspect-math.html"`, "approx-badge", "p95 рассчитан по reservoir-сэмплу: 20000 из 21000 запросов", "HTTP p95 сценария рассчитан по reservoir-сэмплу")
+	assertModernReportStyle(t, inspectPath)
+	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Сценарии и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Удержания и возможные утечки памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "λ Анализ", `href="inspect-math.html"`, "approx-badge", "p95 рассчитан по reservoir-сэмплу: 20000 из 21000 запросов", "HTTP p95 сценария рассчитан по reservoir-сэмплу")
 	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "ensureSelectOption", "setSelectFromChip", "viewportBox", "node.closest('.metric')")
-	assertHTMLNotContains(t, inspectPath, "Drill-down")
+	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspectWithOptions(mathInspectPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{
@@ -108,7 +171,8 @@ func TestWriteReports(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция сценариев и причин", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Выгорание", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф причинности", "Уверенность", "Экспозиция плохих состояний", "Контекстная липкость", "Вклады симптомов", `href="inspect.html"`, "← Обзор")
+	assertModernReportStyle(t, mathInspectPath)
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция сценариев и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Экспозиция плохих состояний", "Контекстная липкость", "Вклады симптомов", "Прогноз траектории", "Методика и наблюдения", "Пропуск означает отсутствие memory-сэмпла", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Уверенность: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, "← Обзор")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -121,24 +185,28 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение сценариев и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertModernReportStyle(t, comparePath)
+	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение сценариев и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
 
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение сценариев и причин", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Экспозиция плохих состояний кандидата", "Граф причинности", `href="compare.html"`, "← Обзор")
+	assertModernReportStyle(t, mathComparePath)
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение сценариев и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Экспозиция плохих состояний кандидата", "Граф связей и гипотез", "База · прогноз траектории", "Кандидат · прогноз траектории", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluenceWithOptions(influencePath, sampleInfluence(), "Граф влияния кода", ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Проблемные классы", "Связи влияния", "Горячие пути", "Горячие методы", "Показать проблемные классы", "Показать связи влияния", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", `id="influence-arrow-confirmed-report"`, `markerUnits="userSpaceOnUse"`, "<path class=\"influence-edge", `marker-end="url(#influence-arrow-confirmed-report)"`, "data-influence-mode=\"tree\"", "data-influence-selection", "data-node=", "walkPathsFrom", `href="inspect.html"`, "← Обзор")
+	assertModernReportStyle(t, influencePath)
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Классы для проверки", "Связи между классами", "Пути для расследования", "Методы для проверки", "Показать классы для проверки", "Показать связи", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", "data-influence-view=\"packages\"", "data-influence-highlight=\"tree\"", "data-influence-selection", "data-influence-viewport", "buildNeighborhood", "expandPackage", "RuntimeCount", "StaticCount", `href="inspect.html"`, "← Обзор")
 
 	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
 	if err := WriteInstrumentationDiagnosticsWithOptions(diagnosticsPath, sampleInstrumentationDiagnostics(), ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
+	assertModernReportStyle(t, diagnosticsPath)
 	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
 
 	dependencyInjectionPath := filepath.Join(dir, "inspect-di.html")
@@ -149,6 +217,7 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteDependencyInjectionWithOptions() error = %v", err)
 	}
+	assertModernReportStyle(t, dependencyInjectionPath)
 	assertHTMLContains(
 		t,
 		dependencyInjectionPath,
@@ -261,6 +330,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	if err := WriteLeakInspectWithOptions(inspectPath, analyze.BuildLeakReport(summary), ReportOptions{Links: ReportLinks{Main: "report.html"}}); err != nil {
 		t.Fatalf("WriteLeakInspectWithOptions() error = %v", err)
 	}
+	assertModernReportStyle(t, inspectPath)
 	assertHTMLContains(
 		t,
 		inspectPath,
@@ -285,6 +355,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	if err := WriteLeakCompareWithOptions(comparePath, analyze.BuildLeakCompareReport(analyze.Compare(analyze.Summary{}, summary)), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteLeakCompareWithOptions() error = %v", err)
 	}
+	assertModernReportStyle(t, comparePath)
 	assertHTMLContains(
 		t,
 		comparePath,
@@ -645,7 +716,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{Links: ReportLinks{Math: "inspect-ru-math.html"}}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "Сетевые маршруты", "Сценарии и причины", "Эвристический итог", "λ Анализ")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Сетевые маршруты", "Сценарии и причины", "Эвристический итог", "λ Анализ")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReportWithOptions(
@@ -946,18 +1017,42 @@ func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
 		Findings: []mathanalysis.Finding{{
 			Severity: "ok",
 			Title:    "Данных достаточно",
-			Detail:   "Каркас математического отчета готов.",
+			Detail:   "Математический отчет рассчитан по доступным событиям.",
 		}},
 		Sections: []mathanalysis.MathSection{
 			{ID: "quality", Title: "Качество данных", Status: "ok", Summary: "Сводка качества данных."},
 			{ID: "timeline", Title: "Таймлайн сигналов", Status: "ok", Summary: "Сводка таймлайна."},
+			{ID: "robust", Title: "Робастная статистика", Status: "ok", Summary: "Сводка распределений."},
+			{ID: "change-points", Title: "Точки изменения", Status: "ok", Summary: "Сводка сдвигов."},
+			{ID: "periodic", Title: "Периодические сигналы", Status: "ok", Summary: "Подтвержденных повторяемых паттернов нет."},
 			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас детектора сетевых циклов."},
-			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Каркас интегральных оценок."},
+			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Накопленные оценки рассчитаны по доступным интервалам."},
 			{ID: "markov", Title: "Марковская модель состояний", Status: "medium", Summary: "Сводка марковских переходов."},
+			{ID: "graph", Title: "Граф связей и гипотез", Status: "ok", Summary: "Сводка статистических связей."},
 		},
 		Timeline: []mathanalysis.TimelineBucket{
 			{StartMS: 0, EndMS: 1000},
 			{StartMS: 1000, EndMS: 2000, HTTPCount: 2, HTTPP95DurationMS: 612, UIFrames: 90, UIJankyFrames: 7},
+		},
+		RobustStats: []mathanalysis.RobustStat{{
+			Dimension:             "Маршрут",
+			Name:                  "GET /feed",
+			Metric:                "HTTP задержка",
+			Unit:                  "мс",
+			Count:                 10,
+			Median:                180,
+			P90:                   420,
+			P95:                   520,
+			P99:                   610,
+			MAD:                   45,
+			TrimmedMean:           230,
+			Min:                   90,
+			Max:                   640,
+			SampleQuality:         "достаточная",
+			SampleQualitySeverity: "ok",
+		}},
+		Periodic: []mathanalysis.PeriodicSignal{
+			{Signal: "HTTP запросы", Unit: "шт", BucketMS: 1_000, SampleCount: 12, TotalBucketCount: 16, ObservedBucketCount: 14, AnalyzedSampleCount: 12, AnalysisBucketMS: 1_000, Status: "ok", Summary: "Повторяемый цикл не подтвержден."},
 		},
 		IntegralScores: []mathanalysis.IntegralScore{
 			{
@@ -973,14 +1068,19 @@ func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
 		},
 		Markov: mathanalysis.MarkovModel{
 			SampleCount:             3,
+			TimelineBucketCount:     3,
+			ObservationCoverage:     1,
 			TransitionEventCount:    2,
 			BadEpisodeCount:         1,
+			SequenceComparable:      true,
 			Confidence:              "medium",
 			ConfidenceReason:        "окон=3, плохих эпизодов=1: восстановление и липкость лучше подтвердить повтором",
 			HealthyToBadCount:       1,
 			BadToHealthyProbability: 1,
+			HasRecoveryProbability:  true,
 			ExpectedRecoveryWindows: 1,
 			ExpectedRecoveryMS:      1000,
+			HasExpectedRecovery:     true,
 			TotalDurationMS:         3000,
 			BadStateDurationMS:      1000,
 			BadStateExposure:        1.0 / 3.0,
@@ -1013,6 +1113,14 @@ func sampleMathReport(summary analyze.Summary) mathanalysis.MathReport {
 			ContextStickyStates: []mathanalysis.MarkovContextStickyState{
 				{State: "NetworkSlow", Context: "источник FeedRepository.refresh · маршрут GET /feed", Count: 1, Probability: 0.5},
 			},
+			Forecast: mathanalysis.MarkovForecast{
+				Direction:        "insufficient",
+				Label:            "Недостаточно данных",
+				Severity:         "medium",
+				Confidence:       "low",
+				ConfidenceReason: "для прогноза нужно не менее 12 временных интервалов, сейчас 3",
+				Summary:          "Текущая модель описывает только уже наблюдаемые состояния и не строит предположение о дальнейшей траектории.",
+			},
 		},
 	}
 }
@@ -1027,37 +1135,49 @@ func sampleCompareMathReport(comparison analyze.Comparison, summary analyze.Summ
 		Findings: []mathanalysis.Finding{{
 			Severity: "ok",
 			Title:    "Сравнение готово",
-			Detail:   "Каркас математического сравнения готов.",
+			Detail:   "Математическое сравнение рассчитано по доступным событиям.",
 		}},
 		Sections: []mathanalysis.MathSection{
 			{ID: "quality", Title: "Качество сравнения", Status: "ok", Summary: "Сводка качества сравнения."},
+			{ID: "robust", Title: "Робастная статистика", Status: "medium", Summary: "Один сигнал есть только у кандидата."},
+			{ID: "periodic", Title: "Периодические сигналы", Status: "ok", Summary: "Подтвержденных повторяемых паттернов нет."},
 			{ID: "network-loops", Title: "Сетевые циклы", Status: "pending", Summary: "Каркас compare-детектора сетевых циклов."},
-			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Каркас интегральных дельт."},
+			{ID: "integral", Title: "Интегральная нагрузка", Status: "medium", Summary: "Накопленные дельты рассчитаны по доступным интервалам."},
 			{ID: "markov", Title: "Марковская модель состояний", Status: "medium", Summary: "Каркас марковских дельт."},
+		},
+		RobustDeltas: []mathanalysis.RobustDelta{
+			{Dimension: "Маршрут", Name: "GET /new", Metric: "HTTP задержка", Unit: "мс", CandidateCount: 12, CandidateP95: 420, P95Delta: 420, EffectSize: "не применимо", Confidence: "не применимо: сигнал есть только в одном прогоне", Severity: "medium", Summary: "Сигнал есть только у кандидата."},
 		},
 		IntegralDeltas: []mathanalysis.IntegralDelta{
 			{
-				ID:             "latency_pain_area",
-				Title:          "Площадь сетевой задержки",
-				Formula:        "Σ max(0, HTTP p95 - 300ms) * Δt",
-				Unit:           "мс*с",
-				BaselineValue:  100,
-				CandidateValue: 620,
-				Delta:          520,
-				DeltaPct:       520,
-				Severity:       "medium",
-				Summary:        "Площадь сетевой задержки выросла.",
+				ID:                  "latency_pain_area",
+				Title:               "Площадь сетевой задержки",
+				Formula:             "Σ max(0, HTTP p95 - 300ms) * Δt",
+				Unit:                "мс*с",
+				BaselineValue:       100,
+				CandidateValue:      620,
+				Delta:               520,
+				DeltaPct:            520,
+				DeltaPctAvailable:   true,
+				Comparable:          true,
+				BaselineDurationMS:  10_000,
+				CandidateDurationMS: 10_000,
+				Severity:            "medium",
+				Summary:             "Площадь сетевой задержки выросла.",
 			},
 		},
 		MarkovDeltas: []mathanalysis.MarkovDelta{
 			{
-				Metric:         "Расхождение матрицы переходов",
-				Unit:           "индекс",
-				BaselineValue:  0,
-				CandidateValue: 0.42,
-				Delta:          0.42,
-				Severity:       "medium",
-				Summary:        "Матрица переходов изменилась на 0.420 по расхождению Йенсена-Шеннона.",
+				Metric:             "Расхождение матрицы переходов",
+				Unit:               "индекс",
+				BaselineValue:      0,
+				CandidateValue:     0.42,
+				Delta:              0.42,
+				Comparable:         true,
+				BaselineAvailable:  true,
+				CandidateAvailable: true,
+				Severity:           "medium",
+				Summary:            "Матрица переходов изменилась на 0.420 по расхождению Йенсена-Шеннона.",
 			},
 		},
 	}
@@ -1099,6 +1219,36 @@ func TestRowLimitNoteIsExplicitAndEscapesLabel(t *testing.T) {
 	}
 	if note := rowLimitNote("small", 4, 4); note != "" {
 		t.Fatalf("rowLimitNote() for an unbounded set = %q, want empty", note)
+	}
+}
+
+func TestRussianCountUsesCorrectForms(t *testing.T) {
+	tests := map[int]string{
+		0:   "0 сигналов",
+		1:   "1 сигнал",
+		2:   "2 сигнала",
+		4:   "4 сигнала",
+		5:   "5 сигналов",
+		11:  "11 сигналов",
+		14:  "14 сигналов",
+		21:  "21 сигнал",
+		23:  "23 сигнала",
+		100: "100 сигналов",
+		101: "101 сигнал",
+	}
+	for value, want := range tests {
+		if got := russianCount(value, "сигнал", "сигнала", "сигналов"); got != want {
+			t.Errorf("russianCount(%d) = %q, want %q", value, got, want)
+		}
+	}
+}
+
+func TestPerMinuteNormalizesByRunDuration(t *testing.T) {
+	if got := perMinute(60, 120_000); got != 30 {
+		t.Fatalf("perMinute(60, 120000) = %.2f, want 30", got)
+	}
+	if got := perMinute(60, 0); got != 0 {
+		t.Fatalf("perMinute(60, 0) = %.2f, want 0", got)
 	}
 }
 

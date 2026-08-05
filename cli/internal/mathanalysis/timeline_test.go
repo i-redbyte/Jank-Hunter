@@ -2,6 +2,7 @@ package mathanalysis
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
@@ -71,6 +72,12 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	if got, want := bucket2.AvailableMemoryKB, uint64(1000); got != want {
 		t.Fatalf("bucket2 AvailableMemoryKB = %d, want %d", got, want)
 	}
+	if !bucket2.HasMemoryPSS || !bucket2.HasAvailableMemory || bucket2.HasTrafficSample {
+		t.Fatalf("bucket2 measurement flags are wrong: %+v", bucket2)
+	}
+	if bucket2.StallCount != 0 {
+		t.Fatalf("Jank Hunter heap-dump stall must not enter application timeline: %+v", bucket2)
+	}
 
 	bucket3 := report.Timeline[3]
 	if got, want := bucket3.TrafficRxBytes, uint64(600); got != want {
@@ -78,6 +85,9 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	}
 	if got, want := bucket3.TrafficTxBytes, uint64(60); got != want {
 		t.Fatalf("bucket3 TrafficTxBytes = %d, want %d", got, want)
+	}
+	if !bucket3.HasTrafficSample || bucket3.HasMemoryPSS {
+		t.Fatalf("bucket3 measurement flags are wrong: %+v", bucket3)
 	}
 	if got, want := bucket3.NetworkSample, "wifi"; got != want {
 		t.Fatalf("bucket3 NetworkSample = %q, want %q", got, want)
@@ -91,6 +101,32 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	}
 	if !hasSeries(report.Series, "Дельта RX трафика") {
 		t.Fatalf("report.Series does not include Дельта RX трафика: %#v", report.Series)
+	}
+	if countSeries(report.Series, "Доля подтормаживаний UI") != 1 {
+		t.Fatalf("UI jank series must be unique: %#v", report.Series)
+	}
+	pss := findSeries(report.Series, "PSS")
+	if pss == nil || len(pss.Present) != 4 || pss.Present[0] || pss.Present[1] || !pss.Present[2] || pss.Present[3] {
+		t.Fatalf("PSS gaps are not preserved: %+v", pss)
+	}
+}
+
+func TestAnalyzeInspectResolvesEmbeddedStableSymbols(t *testing.T) {
+	path := writeStableSymbolTimelineFixture(t)
+
+	report, err := analyzeInspectForTest(t, []string{path}, analyze.Options{})
+	if err != nil {
+		t.Fatalf("analyzeInspectForTest() error = %v", err)
+	}
+	if len(report.Timeline) == 0 {
+		t.Fatal("stable-symbol timeline is empty")
+	}
+	bucket := report.Timeline[0]
+	if bucket.RouteSample != "GET /stable" || bucket.OwnerSample != "StableRepository.load" || bucket.ScreenSample != "StableScreen" {
+		t.Fatalf("stable symbols were not resolved: %+v", bucket)
+	}
+	if stat := findRobustStat(report.RobustStats, "Маршрут", "GET /stable", "HTTP задержка"); stat == nil {
+		t.Fatalf("stable route is missing from robust statistics: %+v", report.RobustStats)
 	}
 }
 
@@ -131,6 +167,9 @@ func TestAnalyzeInspectNormalizesAbsoluteTimelineOffset(t *testing.T) {
 	if got, want := report.Timeline[3].HTTPCount, 1; got != want {
 		t.Fatalf("bucket3 HTTPCount = %d, want %d", got, want)
 	}
+	if !report.Timeline[0].HasObservation || report.Timeline[1].HasObservation || report.Timeline[2].HasObservation || !report.Timeline[3].HasObservation {
+		t.Fatalf("observation gaps are not preserved: %+v", report.Timeline)
+	}
 	for _, series := range report.Series {
 		if len(series.Points) != 4 {
 			t.Fatalf("series %q points = %d, want 4", series.Name, len(series.Points))
@@ -154,6 +193,15 @@ func TestAnalyzeInspectOverlaysIndependentRunsByRelativeTime(t *testing.T) {
 	}
 	if got, want := report.Timeline[3].HTTPCount, 2; got != want {
 		t.Fatalf("bucket3 HTTPCount = %d, want overlaid runs=%d", got, want)
+	}
+	if got, want := report.IndependentRunCount, 2; got != want {
+		t.Fatalf("IndependentRunCount = %d, want %d", got, want)
+	}
+	if report.Markov.Forecast.Direction != markovForecastInsufficient || !strings.Contains(report.Markov.Forecast.Label, "отключён") {
+		t.Fatalf("multi-run Markov forecast must be disabled: %+v", report.Markov.Forecast)
+	}
+	if !findingDetailsContain(report.Findings, "совмещены по относительному времени") {
+		t.Fatalf("multi-run limitation is missing: %+v", report.Findings)
 	}
 }
 
@@ -209,6 +257,9 @@ func writeTimelineFixture(t *testing.T) string {
 		{Kind: jhlog.DictBuild, ID: 5, Value: "100"},
 		{Kind: jhlog.DictDevice, ID: 6, Value: "Pixel"},
 		{Kind: jhlog.DictProcess, ID: 7, Value: "main"},
+		{Kind: jhlog.DictOwner, ID: 8, Value: "jankhunter.heap_dump"},
+		{Kind: jhlog.DictFlow, ID: 9, Value: "jankhunter.diagnostics"},
+		{Kind: jhlog.DictStep, ID: 10, Value: "heap_dump"},
 	}
 	for _, entry := range entries {
 		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
@@ -224,12 +275,44 @@ func writeTimelineFixture(t *testing.T) string {
 		{Type: jhlog.EventUIWindow, TimeMS: 1600, UIWindow: &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 1000, FrameCount: 60, JankCount: 6, P95MS: 22}},
 		{Type: jhlog.EventMemory, TimeMS: 2400, Memory: &jhlog.MemoryEvent{PSSKB: 123000, JavaHeapKB: 32000, NativeHeapKB: 18000}},
 		{Type: jhlog.EventContext, TimeMS: 2500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 90, AvailMemoryKB: 1000, RxBytes: 1000, TxBytes: 200}},
+		{Type: jhlog.EventStall, TimeMS: 2700, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(8), Flow: jhlog.LocalSymbol(9), Step: jhlog.LocalSymbol(10)}, Stall: &jhlog.StallEvent{OwnerID: 8, DurationMS: 2_500}},
 		{Type: jhlog.EventUIWindow, TimeMS: 3200, UIWindow: &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 500, FrameCount: 30, JankCount: 3, P95MS: 28}},
 		{Type: jhlog.EventContext, TimeMS: 3500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 89, AvailMemoryKB: 900, RxBytes: 1600, TxBytes: 260}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
 			t.Fatalf("WriteEvent(%v) error = %v", event.Type, err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	return path
+}
+
+func writeStableSymbolTimelineFixture(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "stable-timeline.jhlog")
+	file, writer, err := jhlog.Create(path)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, entry := range []jhlog.DictionaryEntry{
+		{Kind: jhlog.DictStableSymbol, ID: 0x1001, Value: "GET /stable"},
+		{Kind: jhlog.DictStableSymbol, ID: 0x1002, Value: "StableRepository.load"},
+		{Kind: jhlog.DictStableSymbol, ID: 0x1003, Value: "StableScreen"},
+	} {
+		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatalf("WriteEvent(dictionary) error = %v", err)
+		}
+	}
+	for _, event := range []jhlog.Event{
+		{Type: jhlog.EventHTTP, TimeMS: 100, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.StableSymbol(0x1001), OwnerRef: jhlog.StableSymbol(0x1002), DurationMS: 120, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventUIWindow, TimeMS: 200, UIWindow: &jhlog.UIWindowEvent{ScreenRef: jhlog.StableSymbol(0x1003), WindowMS: 1_000, FrameCount: 60, JankCount: 2, P95MS: 20}},
+	} {
+		if err := writer.WriteEvent(event); err != nil {
+			t.Fatalf("WriteEvent(event) error = %v", err)
 		}
 	}
 	if err := file.Close(); err != nil {
@@ -289,4 +372,23 @@ func hasSeries(series []Series, name string) bool {
 		}
 	}
 	return false
+}
+
+func countSeries(series []Series, name string) int {
+	count := 0
+	for _, item := range series {
+		if item.Name == name {
+			count++
+		}
+	}
+	return count
+}
+
+func findSeries(series []Series, name string) *Series {
+	for index := range series {
+		if series[index].Name == name {
+			return &series[index]
+		}
+	}
+	return nil
 }

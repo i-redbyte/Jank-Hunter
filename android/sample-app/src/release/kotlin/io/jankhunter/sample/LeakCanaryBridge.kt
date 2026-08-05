@@ -3,6 +3,8 @@ package io.jankhunter.sample
 import android.content.Context
 
 internal object LeakCanaryBridge {
+    fun configureAutomatic() = Unit
+
     fun configure() = Unit
 
     @Suppress("UNUSED_PARAMETER")

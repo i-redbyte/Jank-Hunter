@@ -5,6 +5,9 @@ import _ "embed"
 //go:embed templates/base.css
 var baseCSS string
 
+//go:embed templates/modern.css
+var modernCSS string
+
 //go:embed templates/report.js
 var reportJS string
 

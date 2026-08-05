@@ -3,30 +3,28 @@ package io.jankhunter.runtime.internal.system
 import android.content.Context
 import android.os.Debug
 import io.jankhunter.runtime.JankHunter
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal class MemorySampler(
     @Suppress("UNUSED_PARAMETER") context: Context,
     private val intervalMs: Long,
     private val foreground: () -> Boolean = { true },
 ) {
-    private val running = AtomicBoolean(false)
     private val gcStats = RuntimeGcStats(::readRuntimeStat) { android.os.SystemClock.elapsedRealtime() }
-    private var maintenance: MaintenanceHandle? = null
+    private val schedule = ForegroundSamplingSchedule(intervalMs, foreground, ::sampleOnce)
 
     fun start(scheduler: RuntimeMaintenanceScheduler) {
-        if (!running.compareAndSet(false, true)) return
-        maintenance = scheduler.schedule(delayMs = ::currentIntervalMs) { sampleOnce() }
+        schedule.start(scheduler)
     }
 
     fun stop() {
-        running.set(false)
-        maintenance?.cancel()
-        maintenance = null
+        schedule.stop()
+    }
+
+    fun onForegroundChanged() {
+        schedule.onForegroundChanged()
     }
 
     private fun sampleOnce() {
-        if (!running.get()) return
         val info = Debug.MemoryInfo()
         Debug.getMemoryInfo(info)
         val runtime = Runtime.getRuntime()
@@ -34,17 +32,6 @@ internal class MemorySampler(
         val nativeHeapKb = Debug.getNativeHeapAllocatedSize() / 1024L
         JankHunter.recordMemory(info.totalPss.toLong(), javaHeapKb, nativeHeapKb)
         recordHeapPressure(runtime, nativeHeapKb)
-    }
-
-    private fun currentIntervalMs(): Long {
-        val foregroundInterval = intervalMs.coerceAtLeast(1_000L)
-        if (foreground()) return foregroundInterval
-        val backgroundInterval = if (foregroundInterval > Long.MAX_VALUE / BACKGROUND_INTERVAL_MULTIPLIER) {
-            Long.MAX_VALUE
-        } else {
-            foregroundInterval * BACKGROUND_INTERVAL_MULTIPLIER
-        }
-        return maxOf(MIN_BACKGROUND_INTERVAL_MS, backgroundInterval)
     }
 
     private fun recordHeapPressure(runtime: Runtime, nativeHeapKb: Long) {
@@ -80,8 +67,4 @@ internal class MemorySampler(
         }
     }
 
-    private companion object {
-        private const val BACKGROUND_INTERVAL_MULTIPLIER = 12L
-        private const val MIN_BACKGROUND_INTERVAL_MS = 2 * 60_000L
-    }
 }

@@ -18,10 +18,11 @@ import (
 const maxAggregateSamplesPerSignal = 20_000
 
 const (
-	legacyHTTPSlowThresholdMS = 1_000
-	legacyUIP95ThresholdMS    = 32
-	canonicalLogSpamWindowMS  = 5_000
-	canonicalLogSpamCount     = 50
+	legacyHTTPSlowThresholdMS        = 1_000
+	legacyUIP95ThresholdMS           = 32
+	canonicalLogSpamWindowMS         = 5_000
+	canonicalLogSpamCount            = 50
+	heapDumpStallAttributionWindowMS = 2_000
 )
 
 type qualityCounterWarning struct {
@@ -342,6 +343,7 @@ type collector struct {
 	qualitySnapshots    map[string]segmentQualityState
 	streamResults       []jhlog.StreamResult
 	chainIssues         []string
+	lastHeapDumpMS      uint64
 
 	httpDurations  uint64SampleSet
 	routeDurations map[string]*uint64SampleSet
@@ -1154,13 +1156,20 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 				"ui_jank",
 				event.UIWindow.WindowMS,
 				maxUint64(event.UIWindow.JankCount, 1),
-				event.UIWindow.P95MS,
+				maxUint64(event.UIWindow.P95MS, event.UIWindow.P99MS),
 			)
 		}
 	case event.Stall != nil:
 		owner := c.resolveOwnerRef(dict, firstEventSymbol(event.Stall.OwnerRef, event.Stall.OwnerID))
 		stack := resolveEventSymbol(dict, event.Stall.StackRef, event.Stall.StackID)
-		context := c.eventContext("", owner, "", "")
+		flowOverride := ""
+		stepOverride := ""
+		if c.isHeapDumpStall(event.TimeMS, owner) {
+			owner = "jankhunter.heap_dump"
+			flowOverride = "jankhunter.diagnostics"
+			stepOverride = "heap_dump"
+		}
+		context := c.eventContext("", owner, flowOverride, stepOverride)
 		if !c.matchesFilters("", context, nil, owner) {
 			return
 		}
@@ -1170,7 +1179,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.summary.StallMaxMS = event.Stall.DurationMS
 		}
 		addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
-		flowKey := c.flowKey("", owner)
+		flowKey := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step)
 		flow := c.ensureFlow(flowKey)
 		flow.StallCount++
 		if event.Stall.DurationMS > flow.StallMaxMS {
@@ -1353,6 +1362,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Type == jhlog.EventCounter && event.Metric.MetricRef.Stable {
 			name = c.resolveOwnerRef(dict, event.Metric.MetricRef)
 		}
+		if event.Type == jhlog.EventCounter && name == "jankhunter.heap_dump.created.count" && event.Metric.Value > 0 {
+			c.lastHeapDumpMS = event.TimeMS
+		}
 		if event.Type == jhlog.EventGauge {
 			mode := event.Metric.Mode
 			if mode == jhlog.MetricModeUnknown {
@@ -1363,6 +1375,13 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.counterValues[name] += event.Metric.Value
 		}
 	}
+}
+
+func (c *collector) isHeapDumpStall(eventTimeMS uint64, owner string) bool {
+	if c.lastHeapDumpMS == 0 || eventTimeMS < c.lastHeapDumpMS || !isLikelySystemClass(owner) {
+		return false
+	}
+	return eventTimeMS-c.lastHeapDumpMS <= heapDumpStallAttributionWindowMS
 }
 
 func (c *collector) markCohort() {
@@ -2360,19 +2379,23 @@ func (c *collector) runEnvironment(summary Summary) RunEnvironment {
 func Compare(baseline, candidate Summary) Comparison {
 	comparison := Comparison{Baseline: baseline, Candidate: candidate}
 	confidence := confidence(baseline, candidate)
+	baselineLogSpam := totalLogSpam(baseline)
+	candidateLogSpam := totalLogSpam(candidate)
+	baselineProblemWindows := totalProblemWindows(baseline)
+	candidateProblemWindows := totalProblemWindows(candidate)
 	comparison.Deltas = append(comparison.Deltas,
-		delta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "мс", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
-		delta("HTTP failures", uint64(baseline.HTTPFailed), uint64(candidate.HTTPFailed), "шт", true, minUint64(uint64(baseline.HTTPCount), uint64(candidate.HTTPCount))),
-		deltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, minUint64(baseline.UIFrames, candidate.UIFrames)),
-		deltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, minUint64(baseline.UIFrames, candidate.UIFrames)),
+		observedDelta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "мс", true, uint64(baseline.HTTPCount), uint64(candidate.HTTPCount), "HTTP-запросы не зафиксированы"),
+		observedDeltaFloat("HTTP failure rate", percentCount(baseline.HTTPFailed, baseline.HTTPCount), percentCount(candidate.HTTPFailed, candidate.HTTPCount), "п.п.", true, uint64(baseline.HTTPCount), uint64(candidate.HTTPCount), "HTTP-запросы не зафиксированы"),
+		observedDeltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, baseline.UIFrames, candidate.UIFrames, "UI-кадры не зафиксированы"),
+		observedDeltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, baseline.UIFrames, candidate.UIFrames, "UI-кадры не зафиксированы"),
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
-		delta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "КБ", true, minUint64(uint64(baseline.MemoryCount), uint64(candidate.MemoryCount))),
-		delta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "КБ", false, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID RX delta", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
-		delta("UID TX delta", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
+		observedDelta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "КБ", true, uint64(baseline.MemoryCount), uint64(candidate.MemoryCount), "PSS не измерялся"),
+		observedDelta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "КБ", false, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки контекста памяти отсутствуют"),
+		observedDelta("UID RX delta", baseline.TrafficRxMax, candidate.TrafficRxMax, "байт", true, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки сетевого контекста отсутствуют"),
+		observedDelta("UID TX delta", baseline.TrafficTxMax, candidate.TrafficTxMax, "байт", true, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки сетевого контекста отсутствуют"),
 		delta("Retained objects", baseline.Retained, candidate.Retained, "шт", true, minUint64(baseline.Retained, candidate.Retained)),
-		delta("Log spam", totalLogSpam(baseline), totalLogSpam(candidate), "шт", true, minUint64(uint64(len(baseline.LogSpam)), uint64(len(candidate.LogSpam)))),
-		delta("Problem windows", totalProblemWindows(baseline), totalProblemWindows(candidate), "шт", true, minUint64(uint64(len(baseline.ProblemWindows)), uint64(len(candidate.ProblemWindows)))),
+		durationRateDelta("Log spam", baselineLogSpam, candidateLogSpam, baseline.DurationMS, candidate.DurationMS, minUint64(baselineLogSpam, candidateLogSpam)),
+		durationRateDelta("Problem windows", baselineProblemWindows, candidateProblemWindows, baseline.DurationMS, candidate.DurationMS, minUint64(baselineProblemWindows, candidateProblemWindows)),
 		mixDelta("Process mix", baseline.Processes, candidate.Processes, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("App version mix", baseline.AppVersions, candidate.AppVersions, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("SDK mix", baseline.SDKs, candidate.SDKs, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
@@ -2390,26 +2413,153 @@ func Compare(baseline, candidate Summary) Comparison {
 	}
 	comparison.CohortWarnings = cohortWarnings(baseline, candidate)
 	comparison.QualityWarnings = comparisonQualityWarnings(baseline, candidate)
-	comparison.Warnings = append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...)
+	comparison.ExposureWarnings = durationComparisonWarnings(baseline, candidate)
+	comparison.Warnings = append(append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...), comparison.ExposureWarnings...)
 	return comparison
 }
 
 func mixDelta(name string, baseline, candidate []NamedValue, sampleSize uint64) Delta {
-	before := namedSummary(baseline)
-	after := namedSummary(candidate)
-	severity := "ok"
-	change := "без изменений"
-	if before != after {
-		severity = "medium"
-		change = "изменилось"
-	}
-	return Delta{
+	baselineTotal := namedValueTotal(baseline)
+	candidateTotal := namedValueTotal(candidate)
+	before := namedShareSummary(baseline)
+	after := namedShareSummary(candidate)
+	result := Delta{
 		Name:       name,
 		Baseline:   before,
 		Candidate:  after,
-		Change:     change,
-		Severity:   severity,
+		Change:     "без существенных изменений",
+		Severity:   "ok",
+		Comparable: true,
 		SampleSize: sampleSize,
+		Interval:   sampleNote(sampleSize),
+	}
+	if baselineTotal == 0 || candidateTotal == 0 {
+		if baselineTotal == 0 {
+			result.Baseline = "нет данных"
+		}
+		if candidateTotal == 0 {
+			result.Candidate = "нет данных"
+		}
+		return markDeltaUnavailable(result, baselineTotal, candidateTotal, "категориальный состав отсутствует хотя бы в одном прогоне")
+	}
+	distance := namedDistributionDistance(baseline, candidate)
+	result.ComparisonNote = fmt.Sprintf("сравниваются доли категорий, а не абсолютное число служебных событий; суммарное различие долей %.1f п.п.", distance*100)
+	severity := "ok"
+	if distance > 0.05 {
+		severity = "medium"
+		result.Change = "доли изменились"
+	}
+	result.Severity = severity
+	return result
+}
+
+func observedDelta(name string, before, after uint64, unit string, higherIsWorse bool, baselineSamples, candidateSamples uint64, absence string) Delta {
+	result := delta(name, before, after, unit, higherIsWorse, minUint64(baselineSamples, candidateSamples))
+	if baselineSamples > 0 && candidateSamples > 0 {
+		return result
+	}
+	if baselineSamples == 0 {
+		result.Baseline = "нет данных"
+	}
+	if candidateSamples == 0 {
+		result.Candidate = "нет данных"
+	}
+	return markDeltaUnavailable(result, baselineSamples, candidateSamples, absence+" хотя бы в одном прогоне")
+}
+
+func observedDeltaFloat(name string, before, after float64, unit string, higherIsWorse bool, baselineSamples, candidateSamples uint64, absence string) Delta {
+	result := deltaFloat(name, before, after, unit, higherIsWorse, minUint64(baselineSamples, candidateSamples))
+	if baselineSamples > 0 && candidateSamples > 0 {
+		return result
+	}
+	if baselineSamples == 0 {
+		result.Baseline = "нет данных"
+	}
+	if candidateSamples == 0 {
+		result.Candidate = "нет данных"
+	}
+	return markDeltaUnavailable(result, baselineSamples, candidateSamples, absence+" хотя бы в одном прогоне")
+}
+
+func markDeltaUnavailable(result Delta, baselineSamples, candidateSamples uint64, reason string) Delta {
+	result.Change = "не сравнивается"
+	result.Severity = "ok"
+	result.Interval = fmt.Sprintf("база=%d, кандидат=%d", baselineSamples, candidateSamples)
+	result.Comparable = false
+	result.ComparisonNote = reason
+	result.ChangeAbs = 0
+	result.ChangePct = 0
+	result.RegressionAbs = 0
+	result.RegressionPct = 0
+	result.SampleSize = minUint64(baselineSamples, candidateSamples)
+	return result
+}
+
+func durationRateDelta(name string, before, after, baselineDurationMS, candidateDurationMS, sampleSize uint64) Delta {
+	if baselineDurationMS == 0 || candidateDurationMS == 0 {
+		baseline := "нет данных"
+		candidate := "нет данных"
+		if baselineDurationMS > 0 {
+			baseline = fmt.Sprintf("%.2f шт/мин", float64(before)*60_000/float64(baselineDurationMS))
+		}
+		if candidateDurationMS > 0 {
+			candidate = fmt.Sprintf("%.2f шт/мин", float64(after)*60_000/float64(candidateDurationMS))
+		}
+		return markDeltaUnavailable(Delta{Name: name, Baseline: baseline, Candidate: candidate, Unit: "шт/мин"}, baselineDurationMS, candidateDurationMS, "длительность хотя бы одного прогона неизвестна")
+	}
+	baselineRate := float64(before) * 60_000 / float64(baselineDurationMS)
+	candidateRate := float64(after) * 60_000 / float64(candidateDurationMS)
+	result := relativeDeltaFloat(name, baselineRate, candidateRate, "шт/мин", true, sampleSize)
+	result.ComparisonNote = fmt.Sprintf("нормировано по длительности: %d и %d событий", before, after)
+	return result
+}
+
+func relativeDeltaFloat(name string, before, after float64, unit string, higherIsWorse bool, sampleSize uint64) Delta {
+	diff := after - before
+	changePct := 0.0
+	severity := "ok"
+	regressionAbs := 0.0
+	regressionPct := 0.0
+	change := "0.0%"
+	if before == 0 && after > 0 {
+		change = "+new"
+		if higherIsWorse {
+			severity = "medium"
+			regressionAbs = after
+			regressionPct = 100
+		}
+	} else if before != 0 {
+		changePct = diff * 100 / before
+		change = fmt.Sprintf("%+.1f%%", changePct)
+		if higherIsWorse && changePct > 0 {
+			regressionAbs = diff
+			regressionPct = changePct
+		} else if !higherIsWorse && changePct < 0 {
+			regressionAbs = math.Abs(diff)
+			regressionPct = math.Abs(changePct)
+		}
+		if regressionPct >= 25 {
+			severity = "high"
+		} else if regressionPct >= 10 {
+			severity = "medium"
+		}
+	}
+	return Delta{
+		Name:           name,
+		Baseline:       fmt.Sprintf("%.2f %s", before, unit),
+		Candidate:      fmt.Sprintf("%.2f %s", after, unit),
+		Change:         change,
+		Severity:       severity,
+		Interval:       sampleNote(sampleSize),
+		Comparable:     true,
+		Unit:           unit,
+		BaselineValue:  before,
+		CandidateValue: after,
+		ChangeAbs:      diff,
+		ChangePct:      changePct,
+		RegressionAbs:  regressionAbs,
+		RegressionPct:  regressionPct,
+		SampleSize:     sampleSize,
 	}
 }
 
@@ -2419,6 +2569,13 @@ func totalLogSpam(summary Summary) uint64 {
 		total += item.Count
 	}
 	return total
+}
+
+func percentCount(part, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(part) * 100 / float64(total)
 }
 
 func totalProblemWindows(summary Summary) uint64 {
@@ -2444,13 +2601,42 @@ func cohortWarnings(baseline, candidate Summary) []string {
 	}
 	var warnings []string
 	for _, check := range checks {
-		before := namedSummary(check.baseline)
-		after := namedSummary(check.candidate)
-		if before != after {
+		if namedValueTotal(check.baseline) == 0 || namedValueTotal(check.candidate) == 0 {
+			continue
+		}
+		before := namedShareSummary(check.baseline)
+		after := namedShareSummary(check.candidate)
+		if namedDistributionDistance(check.baseline, check.candidate) > 0.05 {
 			warnings = append(warnings, fmt.Sprintf("Состав %s отличается: база [%s], кандидат [%s].", check.name, before, after))
 		}
 	}
 	return warnings
+}
+
+func durationComparisonWarnings(baseline, candidate Summary) []string {
+	if baseline.DurationMS == 0 || candidate.DurationMS == 0 {
+		return []string{"Длительность хотя бы одного прогона неизвестна: частотные метрики не сравниваются."}
+	}
+	shorter := baseline.DurationMS
+	longer := candidate.DurationMS
+	if shorter > longer {
+		shorter, longer = longer, shorter
+	}
+	if float64(longer-shorter)/float64(shorter) <= 0.2 {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"Длительность прогонов отличается больше чем на 20%%: база %s, кандидат %s. Максимумы и редкие события могли получить разную экспозицию.",
+		humanDurationMS(baseline.DurationMS),
+		humanDurationMS(candidate.DurationMS),
+	)}
+}
+
+func humanDurationMS(value uint64) string {
+	if value < 1000 {
+		return fmt.Sprintf("%d мс", value)
+	}
+	return fmt.Sprintf("%.1f с", float64(value)/1000)
 }
 
 func confidence(baseline, candidate Summary) string {
@@ -2669,6 +2855,53 @@ func namedSummary(values []NamedValue) string {
 	return strings.Join(parts, ",")
 }
 
+func namedValueTotal(values []NamedValue) uint64 {
+	var total uint64
+	for _, value := range values {
+		total += value.Value
+	}
+	return total
+}
+
+func namedShareSummary(values []NamedValue) string {
+	total := namedValueTotal(values)
+	if total == 0 {
+		return "нет данных"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprintf("%s:%.1f%% (n=%d)", humanSummaryName(value.Name), float64(value.Value)*100/float64(total), value.Value))
+	}
+	if len(parts) == 0 {
+		return "нет данных"
+	}
+	return strings.Join(parts, ",")
+}
+
+func namedDistributionDistance(baseline, candidate []NamedValue) float64 {
+	baselineTotal := namedValueTotal(baseline)
+	candidateTotal := namedValueTotal(candidate)
+	if baselineTotal == 0 || candidateTotal == 0 {
+		return 0
+	}
+	shares := map[string][2]float64{}
+	for _, value := range baseline {
+		pair := shares[value.Name]
+		pair[0] += float64(value.Value) / float64(baselineTotal)
+		shares[value.Name] = pair
+	}
+	for _, value := range candidate {
+		pair := shares[value.Name]
+		pair[1] += float64(value.Value) / float64(candidateTotal)
+		shares[value.Name] = pair
+	}
+	distance := 0.0
+	for _, pair := range shares {
+		distance += math.Abs(pair[0] - pair[1])
+	}
+	return distance / 2
+}
+
 func humanSummaryName(value string) string {
 	value = datavalue.HumanUnknown(value, "неизвестно")
 	fields := strings.Fields(value)
@@ -2746,6 +2979,7 @@ func delta(name string, before, after uint64, unit string, higherIsWorse bool, s
 		Change:         change,
 		Severity:       severity,
 		Interval:       sampleNote(sampleSize),
+		Comparable:     true,
 		Unit:           unit,
 		BaselineValue:  float64(before),
 		CandidateValue: float64(after),
@@ -2776,7 +3010,11 @@ func deltaFloat(name string, before, after float64, unit string, higherIsWorse b
 	if higherIsWorse {
 		if diff > 0 {
 			regressionAbs = diff
-			regressionPct = math.Abs(changePct)
+			if before == 0 {
+				regressionPct = 100
+			} else {
+				regressionPct = math.Abs(changePct)
+			}
 		}
 		if diff >= 3.0 {
 			severity = "high"
@@ -2786,7 +3024,11 @@ func deltaFloat(name string, before, after float64, unit string, higherIsWorse b
 	} else {
 		if diff < 0 {
 			regressionAbs = math.Abs(diff)
-			regressionPct = math.Abs(changePct)
+			if before == 0 {
+				regressionPct = 100
+			} else {
+				regressionPct = math.Abs(changePct)
+			}
 		}
 		if diff <= -5.0 {
 			severity = "high"
@@ -2801,6 +3043,7 @@ func deltaFloat(name string, before, after float64, unit string, higherIsWorse b
 		Change:         fmt.Sprintf("%+.2f %s", diff, unit),
 		Severity:       severity,
 		Interval:       sampleNote(sampleSize),
+		Comparable:     true,
 		Unit:           unit,
 		BaselineValue:  before,
 		CandidateValue: after,

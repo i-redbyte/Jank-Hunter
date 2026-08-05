@@ -1061,7 +1061,10 @@ func isLikelySystemClass(value string) bool {
 		"dalvik.",
 		"libcore.",
 		"sun.",
-		"io.jankhunter.",
+		"io.jankhunter.annotations.",
+		"io.jankhunter.gradle.",
+		"io.jankhunter.okhttp3.",
+		"io.jankhunter.runtime.",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(lower, prefix) {

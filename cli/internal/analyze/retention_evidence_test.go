@@ -36,6 +36,100 @@ func TestClassifiedBaseEventsRespectRuntimeProblemDecision(t *testing.T) {
 	}
 }
 
+func TestUIProblemWindowUsesObservedP99AsMaximum(t *testing.T) {
+	dict := map[uint64]string{1: "CheckoutActivity"}
+	summary := inspectLogsForTest("ui p99", []jhlog.Log{{
+		Dict: dict,
+		Events: []jhlog.Event{{
+			Type:  jhlog.EventUIWindow,
+			Flags: uint64(jhlog.FlagUIClassified | jhlog.FlagUIProblem),
+			UIWindow: &jhlog.UIWindowEvent{
+				ScreenID:   1,
+				WindowMS:   1_000,
+				FrameCount: 60,
+				JankCount:  2,
+				P95MS:      16,
+				P99MS:      48,
+			},
+		}},
+	}})
+
+	if len(summary.ProblemWindows) != 1 || summary.ProblemWindows[0].MaxMS != 48 {
+		t.Fatalf("UI problem maximum = %+v, want observed p99=48", summary.ProblemWindows)
+	}
+}
+
+func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
+	dict := map[uint64]string{
+		1: "jankhunter.heap_dump.created.count",
+		2: "android.view.DisplayEventReceiver",
+		3: "android.view.DisplayEventReceiver.nativeGetLatestVsyncEventData",
+	}
+	summary := inspectLogsForTest("heap dump stall", []jhlog.Log{{
+		Dict: dict,
+		Events: []jhlog.Event{
+			{
+				Type:   jhlog.EventCounter,
+				TimeMS: 1_000,
+				Metric: &jhlog.MetricEvent{MetricID: 1, Value: 1},
+			},
+			{
+				Type:   jhlog.EventStall,
+				TimeMS: 1_200,
+				Stall:  &jhlog.StallEvent{OwnerID: 2, StackID: 3, DurationMS: 700},
+			},
+		},
+	}})
+
+	if len(summary.ProblemWindows) != 1 {
+		t.Fatalf("heap dump stall windows = %+v", summary.ProblemWindows)
+	}
+	window := summary.ProblemWindows[0]
+	if window.Owner != "jankhunter.heap_dump" || window.Flow != "jankhunter.diagnostics" || window.Step != "heap_dump" {
+		t.Fatalf("heap dump stall attribution = %+v", window)
+	}
+}
+
+func TestJankHunterSampleClassIsApplicationOwned(t *testing.T) {
+	suspect := memoryLeakSuspectFromStats(
+		memoryLeakStats{
+			className:            "io.jankhunter.sample.RetainedCheckoutCache",
+			holder:               "sample.auto.retention.checkout_cache",
+			count:                1,
+			maxAgeMs:             8_000,
+			afterExplicitGCCount: 1,
+		},
+		0,
+		0,
+		nil,
+		retentionDataQuality{},
+	)
+
+	if !suspect.UserOwned || suspect.SystemRetained || suspect.ObjectKind != "пользовательский объект" {
+		t.Fatalf("sample retention ownership is incorrect: %+v", suspect)
+	}
+}
+
+func TestJankHunterRuntimeClassIsSystemOwned(t *testing.T) {
+	suspect := memoryLeakSuspectFromStats(
+		memoryLeakStats{
+			className:            "io.jankhunter.runtime.internal.SampleState",
+			holder:               "io.jankhunter.runtime.JankHunter",
+			count:                1,
+			maxAgeMs:             8_000,
+			afterExplicitGCCount: 1,
+		},
+		0,
+		0,
+		nil,
+		retentionDataQuality{},
+	)
+
+	if suspect.UserOwned || !suspect.SystemRetained {
+		t.Fatalf("runtime retention ownership is incorrect: %+v", suspect)
+	}
+}
+
 func TestLegacyDerivedProblemDoesNotDoubleCanonicalBaseWindow(t *testing.T) {
 	dict := map[uint64]string{
 		1: "com.app.MainThreadOwner.run",

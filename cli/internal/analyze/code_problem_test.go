@@ -150,6 +150,21 @@ func TestCodeProblemFinishMatchesMaterializeAllSelection(t *testing.T) {
 	}
 }
 
+func TestCodeProblemSeverityMatchesDisplayedScoreBands(t *testing.T) {
+	if got := codeProblemSeverity(4.9, nil); got != "ok" {
+		t.Fatalf("score 4.9 severity = %q", got)
+	}
+	if got := codeProblemSeverity(5, nil); got != "medium" {
+		t.Fatalf("score 5 severity = %q", got)
+	}
+	if got := codeProblemSeverity(15, []CodeProblemSignal{{Category: codeCategoryNetwork}}); got != "high" {
+		t.Fatalf("score 15 severity = %q", got)
+	}
+	if got := codeProblemSeverity(20, []CodeProblemSignal{{Category: codeCategoryInfluence}}); got != "medium" {
+		t.Fatalf("static influence-only score severity = %q", got)
+	}
+}
+
 func codeProblemSelectionFixture() codeProblemBuilder {
 	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
 	for index := range 260 {

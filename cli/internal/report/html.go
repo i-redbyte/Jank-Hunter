@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"math"
@@ -34,6 +35,7 @@ type ReportOptions struct {
 	PresentationMode   bool
 	AnimatedBackground bool
 	GeneratedAt        string
+	Style              ReportStyle
 	Links              ReportLinks
 }
 
@@ -86,6 +88,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"DependencyInjectionReportHref": options.Links.DependencyInjection,
 		"PresentationMode":              options.PresentationMode,
 		"AnimatedBackground":            options.AnimatedBackground,
+		"ReportStyle":                   options.Style.normalized(),
 	})
 }
 
@@ -106,6 +109,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"DependencyInjectionReportHref": options.Links.DependencyInjection,
 		"PresentationMode":              options.PresentationMode,
 		"AnimatedBackground":            options.AnimatedBackground,
+		"ReportStyle":                   options.Style.normalized(),
 	})
 }
 
@@ -118,6 +122,7 @@ func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
+		"ReportStyle":         options.Style.normalized(),
 	})
 }
 
@@ -130,6 +135,7 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
+		"ReportStyle":         options.Style.normalized(),
 	})
 }
 
@@ -140,6 +146,7 @@ func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, opt
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
 	})
 }
 
@@ -150,10 +157,12 @@ func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareRepo
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
 	})
 }
 
 func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
+	influence = analyze.EnsureInfluenceViews(influence)
 	return execute(path, cachedInfluenceTemplate, map[string]any{
 		"GeneratedAt":        options.generatedAt(),
 		"Title":              title,
@@ -161,6 +170,7 @@ func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, 
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
 	})
 }
 
@@ -175,6 +185,7 @@ func WriteInstrumentationDiagnosticsWithOptions(
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
 	})
 }
 
@@ -189,6 +200,7 @@ func WriteDependencyInjectionWithOptions(
 		"MainReportHref":      options.Links.Main,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
+		"ReportStyle":         options.Style.normalized(),
 	})
 }
 
@@ -311,11 +323,8 @@ func execute(path string, cached *cachedReportTemplate, data any) error {
 
 func reportTemplateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"baseCSS": func() template.CSS {
-			return template.CSS(baseCSS)
-		},
-		"mathCSS": func() template.CSS {
-			return template.CSS(mathCSS)
+		"reportCSS": func(style ReportStyle, includeMath bool) template.CSS {
+			return template.CSS(reportStylesheet(style, includeMath))
 		},
 		"reportJS": func() template.JS {
 			return template.JS(reportJS)
@@ -354,7 +363,12 @@ func reportTemplateFuncs() template.FuncMap {
 			return template.CSS(fmt.Sprintf("width:%.2f%%", width))
 		},
 		"ringStyle": func(value float64) template.CSS {
-			return template.CSS(fmt.Sprintf("--value:%.2f", clampPct(value)))
+			value = clampPct(value)
+			capStyle := "round"
+			if value < 1 {
+				capStyle = "butt"
+			}
+			return template.CSS(fmt.Sprintf("--value:%.2f;--cap:%s", value, capStyle))
 		},
 		"rate": func(part int, total int) float64 {
 			if total <= 0 {
@@ -403,6 +417,7 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"humanDuration":              humanDuration,
 		"dataSize":                   humanDataSizeKB,
+		"ruCount":                    russianCount,
 		"tip":                        tooltipHTML,
 		"metricHelp":                 metricHelp,
 		"memoryHelp":                 memoryMetricHelp,
@@ -435,19 +450,23 @@ func reportTemplateFuncs() template.FuncMap {
 		"deltaInterval":              compareDeltaInterval,
 		"problemDeltas":              problemDeltas,
 		"severityLabel":              severityLabel,
+		"codeSeverityLabel":          codeSeverityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
-		"influenceRoleLabel": influenceRoleLabel,
-		"routeCompareRows":   routeCompareRows,
-		"screenCompareRows":  screenCompareRows,
-		"ownerCompareRows":   ownerCompareRows,
-		"flowCompareRows":    flowCompareRows,
-		"summaryLogSpam":     summaryLogSpamTotal,
-		"summaryProblems":    summaryProblemTotal,
-		"signedMS":           signedMS,
-		"signedDuration":     signedDuration,
-		"signedFloat":        signedFloat,
+		"influenceRoleLabel":     influenceRoleLabel,
+		"influenceGraphData":     influenceGraphData,
+		"influenceEvidenceLabel": influenceEvidenceLabel,
+		"routeCompareRows":       routeCompareRows,
+		"screenCompareRows":      screenCompareRows,
+		"ownerCompareRows":       ownerCompareRows,
+		"flowCompareRows":        flowCompareRows,
+		"summaryLogSpam":         summaryLogSpamTotal,
+		"summaryProblemWindows":  summaryProblemWindowTotal,
+		"perMinute":              perMinute,
+		"signedMS":               signedMS,
+		"signedDuration":         signedDuration,
+		"signedFloat":            signedFloat,
 		"networkBucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroNetworkBucket(bucket) {
 				return "bucket-zero"
@@ -468,8 +487,9 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"robustGroups":                 robustStatGroups,
 		"robustDeltaGroups":            robustDeltaGroups,
+		"causalEdges":                  uniqueCausalEdges,
+		"causalPaths":                  uniqueCausalPaths,
 		"causalGraphSVG":               causalGraphSVG,
-		"influenceGraphSVG":            influenceGraphSVG,
 		"influenceStatus":              influenceStatusLabel,
 		"influenceSeverity":            influenceSeverityLabel,
 		"topInfluenceNodes":            topInfluenceNodes,
@@ -507,6 +527,9 @@ func reportTemplateFuncs() template.FuncMap {
 		"markovState": func(state string) string {
 			return mathanalysis.MarkovStateLabel(state)
 		},
+		"markovConfidence": func(confidence string) string {
+			return mathanalysis.MarkovConfidenceLabel(confidence)
+		},
 		"causalKind": func(kind string) string {
 			return mathanalysis.CausalKindLabel(kind)
 		},
@@ -525,6 +548,252 @@ func reportTemplateFuncs() template.FuncMap {
 		"cohortHint":  cohortValueHint,
 		"flowKeyHint": flowKeyLabelHint,
 		"bodyClass":   bodyClass,
+	}
+}
+
+type influenceHTMLData struct {
+	Views          []influenceHTMLView
+	ViewNodes      []influenceHTMLNode
+	ViewEdges      []influenceHTMLEdge
+	Workspace      influenceHTMLWorkspace
+	HotPaths       []analyze.InfluencePath
+	MethodHotspots []analyze.InfluenceMethod
+}
+
+type influenceHTMLView struct {
+	ID              string
+	Mode            string
+	Title           string
+	Explanation     string
+	Filters         analyze.InfluenceGraphFilters
+	NodeIDs         []string
+	EdgeIDs         []string
+	TotalNodes      int
+	TotalEdges      int
+	ShownNodes      int
+	ShownEdges      int
+	OmittedNodes    int
+	OmittedEdges    int
+	OmissionReasons []string
+	Limits          analyze.InfluenceGraphLimits
+	Legend          []analyze.InfluenceGraphLegend
+}
+
+type influenceHTMLWorkspace struct {
+	Nodes           []influenceHTMLNode
+	Edges           []influenceHTMLEdge
+	TotalNodes      int
+	TotalEdges      int
+	ShownNodes      int
+	ShownEdges      int
+	OmittedNodes    int
+	OmittedEdges    int
+	Contexts        []analyze.InfluenceGraphContext
+	TotalContexts   int
+	ShownContexts   int
+	OmissionReasons []string
+}
+
+type influenceHTMLNode struct {
+	ViewKey              string   `json:"_Key,omitempty"`
+	ClassName            string   `json:",omitempty"`
+	Label                string   `json:",omitempty"`
+	Score                float64  `json:",omitempty"`
+	Severity             string   `json:",omitempty"`
+	Status               string   `json:",omitempty"`
+	RuntimeEvidence      bool     `json:",omitempty"`
+	Problems             uint64   `json:",omitempty"`
+	LogSpam              uint64   `json:",omitempty"`
+	MainThreadMS         uint64   `json:",omitempty"`
+	RuntimeWallMS        uint64   `json:",omitempty"`
+	NetworkMS            uint64   `json:",omitempty"`
+	MemoryPressure       uint64   `json:",omitempty"`
+	UIJank               uint64   `json:",omitempty"`
+	Retained             uint64   `json:",omitempty"`
+	HeapEvidence         bool     `json:",omitempty"`
+	Flows                []string `json:",omitempty"`
+	Screens              []string `json:",omitempty"`
+	Routes               []string `json:",omitempty"`
+	Reasons              []string `json:",omitempty"`
+	ID                   string   `json:",omitempty"`
+	Kind                 string   `json:",omitempty"`
+	Package              string   `json:",omitempty"`
+	Breadcrumbs          []string `json:",omitempty"`
+	Aggregate            bool     `json:",omitempty"`
+	Connector            bool     `json:",omitempty"`
+	ChildCount           int      `json:",omitempty"`
+	RuntimeClassCount    int      `json:",omitempty"`
+	StaticOnlyClassCount int      `json:",omitempty"`
+	ProblemClassCount    int      `json:",omitempty"`
+	Children             []string `json:",omitempty"`
+	Explanation          string   `json:",omitempty"`
+}
+
+type influenceHTMLEdge struct {
+	ViewKey      string `json:"_Key,omitempty"`
+	From         string `json:",omitempty"`
+	To           string `json:",omitempty"`
+	RuntimeCount uint64 `json:",omitempty"`
+	StaticCount  uint64 `json:",omitempty"`
+	Influence    float64 `json:",omitempty"`
+	Evidence     string `json:",omitempty"`
+	Aggregate    bool   `json:",omitempty"`
+}
+
+func influenceGraphData(influence analyze.InfluenceSummary) template.JS {
+	payload, err := json.Marshal(buildInfluenceHTMLData(influence))
+	if err != nil {
+		return template.JS(`{}`)
+	}
+	return template.JS(payload)
+}
+
+func buildInfluenceHTMLData(influence analyze.InfluenceSummary) influenceHTMLData {
+	views := make([]influenceHTMLView, 0, len(influence.Views))
+	viewNodes := make([]influenceHTMLNode, 0)
+	viewEdges := make([]influenceHTMLEdge, 0)
+	seenNodes := map[string]string{}
+	seenEdges := map[string]string{}
+	for _, view := range influence.Views {
+		nodeIDs := make([]string, 0, len(view.Nodes))
+		for _, node := range view.Nodes {
+			key := node.ID
+			if node.Connector {
+				key = "connector:" + key
+			}
+			if existing, exists := seenNodes[key]; exists {
+				nodeIDs = append(nodeIDs, existing)
+				continue
+			}
+			payloadKey := fmt.Sprintf("n%d", len(viewNodes))
+			seenNodes[key] = payloadKey
+			nodeIDs = append(nodeIDs, payloadKey)
+			compact := compactInfluenceHTMLNode(node, node.Aggregate)
+			compact.ViewKey = payloadKey
+			viewNodes = append(viewNodes, compact)
+		}
+		edgeIDs := make([]string, 0, len(view.Edges))
+		for _, edge := range view.Edges {
+			key := fmt.Sprintf("%s:%t:%d:%d", edge.ID, edge.Aggregate, edge.RuntimeCount, edge.StaticCount)
+			if existing, exists := seenEdges[key]; exists {
+				edgeIDs = append(edgeIDs, existing)
+				continue
+			}
+			payloadKey := fmt.Sprintf("e%d", len(viewEdges))
+			seenEdges[key] = payloadKey
+			edgeIDs = append(edgeIDs, payloadKey)
+			compact := compactInfluenceHTMLEdge(edge)
+			compact.ViewKey = payloadKey
+			viewEdges = append(viewEdges, compact)
+		}
+		views = append(views, influenceHTMLView{
+			ID:              view.ID,
+			Mode:            view.Mode,
+			Title:           view.Title,
+			Explanation:     view.Explanation,
+			Filters:         view.Filters,
+			NodeIDs:         nodeIDs,
+			EdgeIDs:         edgeIDs,
+			TotalNodes:      view.TotalNodes,
+			TotalEdges:      view.TotalEdges,
+			ShownNodes:      view.ShownNodes,
+			ShownEdges:      view.ShownEdges,
+			OmittedNodes:    view.OmittedNodes,
+			OmittedEdges:    view.OmittedEdges,
+			OmissionReasons: view.OmissionReasons,
+			Limits:          view.Limits,
+			Legend:          view.Legend,
+		})
+	}
+	workspaceNodes := make([]influenceHTMLNode, 0, len(influence.Workspace.Nodes))
+	for _, node := range influence.Workspace.Nodes {
+		workspaceNodes = append(workspaceNodes, compactInfluenceHTMLNode(node, true))
+	}
+	workspace := influence.Workspace
+	return influenceHTMLData{
+		Views:     views,
+		ViewNodes: viewNodes,
+		ViewEdges: viewEdges,
+		Workspace: influenceHTMLWorkspace{
+			Nodes:           workspaceNodes,
+			Edges:           influenceHTMLEdges(workspace.Edges),
+			TotalNodes:      workspace.TotalNodes,
+			TotalEdges:      workspace.TotalEdges,
+			ShownNodes:      workspace.ShownNodes,
+			ShownEdges:      workspace.ShownEdges,
+			OmittedNodes:    workspace.OmittedNodes,
+			OmittedEdges:    workspace.OmittedEdges,
+			Contexts:        workspace.Contexts,
+			TotalContexts:   workspace.TotalContexts,
+			ShownContexts:   workspace.ShownContexts,
+			OmissionReasons: workspace.OmissionReasons,
+		},
+		HotPaths:       influence.HotPaths,
+		MethodHotspots: influence.MethodHotspots,
+	}
+}
+
+func compactInfluenceHTMLNode(node analyze.InfluenceGraphNode, detailed bool) influenceHTMLNode {
+	result := influenceHTMLNode{
+		Score:           node.Score,
+		Severity:        node.Severity,
+		RuntimeEvidence: node.RuntimeEvidence,
+		HeapEvidence:    node.HeapEvidence,
+		ID:              node.ID,
+		Aggregate:       node.Aggregate,
+		Connector:       node.Connector,
+	}
+	if len(node.Reasons) > 0 {
+		limit := len(node.Reasons)
+		if !detailed && limit > 2 {
+			limit = 2
+		}
+		result.Reasons = node.Reasons[:limit]
+	}
+	if node.Aggregate || detailed {
+		result.Package = node.Package
+	}
+	if node.Connector {
+		result.Kind = node.Kind
+	}
+	if !detailed {
+		return result
+	}
+	result.Problems = node.Problems
+	result.LogSpam = node.LogSpam
+	result.MainThreadMS = node.MainThreadMS
+	result.RuntimeWallMS = node.RuntimeWallMS
+	result.NetworkMS = node.NetworkMS
+	result.MemoryPressure = node.MemoryPressure
+	result.UIJank = node.UIJank
+	result.Retained = node.Retained
+	result.Flows = node.Flows
+	result.Screens = node.Screens
+	result.Routes = node.Routes
+	result.ChildCount = node.ChildCount
+	result.RuntimeClassCount = node.RuntimeClassCount
+	result.StaticOnlyClassCount = node.StaticOnlyClassCount
+	result.ProblemClassCount = node.ProblemClassCount
+	return result
+}
+
+func influenceHTMLEdges(edges []analyze.InfluenceGraphEdge) []influenceHTMLEdge {
+	result := make([]influenceHTMLEdge, 0, len(edges))
+	for _, edge := range edges {
+		result = append(result, compactInfluenceHTMLEdge(edge))
+	}
+	return result
+}
+
+func compactInfluenceHTMLEdge(edge analyze.InfluenceGraphEdge) influenceHTMLEdge {
+	return influenceHTMLEdge{
+		From:         edge.From,
+		To:           edge.To,
+		RuntimeCount: edge.RuntimeCount,
+		StaticCount:  edge.StaticCount,
+		Influence:    edge.Influence,
+		Evidence:     edge.Evidence,
+		Aggregate:    edge.Aggregate,
 	}
 }
 
@@ -829,13 +1098,15 @@ func memoryMetricHelp(name string) string {
 func integralHelp(id string) string {
 	switch id {
 	case "network_failure_burn":
-		return "Сетевое выгорание — накопленная стоимость повторяющихся сетевых проблем: HTTP-ошибок, всплесков DNS и соединения, а также найденных сетевых циклов. Чем выше значение, тем дольше и дороже сеть мешала сценарию."
+		return "Условная накопленная нагрузка сетевых повторов объединяет HTTP-ошибки, всплески DNS/соединений и кандидаты циклов. Это не время, трафик или расход батареи; число нужно использовать только для ранжирования одинаковых сценариев."
 	case "memory_pressure_area":
 		return "Площадь давления памяти объединяет рост PSS относительно базового уровня и длительность низкого запаса свободной RAM. Это не расшифровка PSS, а интегральная оценка риска GC, вытеснения кэшей и убийства процесса."
 	case "recovery_debt":
 		return "Долг восстановления растет, когда плохие временные окна идут подряд. Он показывает, как долго пользователь остается в деградировавшем состоянии."
 	case "latency_pain_area":
 		return "Накопленная сетевая задержка выше целевого порога. Учитывает не только пик, но и длительность медленного периода."
+	case "main_thread_stall_burden":
+		return "Сумма превышений максимальной паузы главного потока над 100 мс в каждом интервале. Это нижняя оценка нагрузки пауз, а не их полная длительность, потому что таймлайн хранит один максимум на интервал."
 	case "jank_pressure_area":
 		return "Накопленная доля подтормаживающих UI-кадров во времени. Длинная умеренная просадка может быть важнее короткого пика."
 	default:
@@ -846,15 +1117,17 @@ func integralHelp(id string) string {
 func integralCriteria(id string) string {
 	switch id {
 	case "jank_pressure_area":
-		return "Норма до 60 %*с, предупреждение от 60, критично от 180. Больше означает, что медленные кадры длились дольше или занимали большую долю времени."
+		return "Стартовый ориентир: до 60 %*с — спокойно, 60–180 — проверить, от 180 — высокий приоритет. Порог не является универсальным SLA и зависит от длительности сценария."
 	case "latency_pain_area":
-		return "Норма до 500 мс*с, предупреждение от 500, критично от 2000. Считается только хвост HTTP p95 выше инженерного порога 300 мс."
+		return "Стартовый ориентир: до 500 мс*с — спокойно, 500–2000 — проверить, от 2000 — высокий приоритет. Считается только часть HTTP p95 выше 300 мс."
+	case "main_thread_stall_burden":
+		return "Стартовый ориентир: до 500 мс — спокойно, 500–2000 — проверить, от 2000 — высокий приоритет. Суммируется только превышение максимальной паузы над 100 мс в каждом интервале."
 	case "network_failure_burn":
-		return "Норма до 5 усл.ед., предупреждение от 5, критично от 20. Больше означает повторяемые сетевые ошибки, всплески DNS и соединения или цикл запросов."
+		return "Стартовый ориентир: до 5 усл. ед. — спокойно, 5–20 — проверить, от 20 — высокий приоритет. Значение условное и сравнимо только для одинаковых сценариев."
 	case "memory_pressure_area":
-		return "Норма до 128 МБ*с, предупреждение от 128, критично от 1024. Больше означает длительный рост PSS или долгий период низкой свободной RAM."
+		return "Стартовый ориентир: до 128 МБ*с — спокойно, 128–1024 — проверить, от 1024 — высокий приоритет. Базовый PSS — p10 замеров текущего прогона."
 	case "recovery_debt":
-		return "Норма до 8 с^2, предупреждение от 8, критично от 30. Больше означает, что плохие окна шли сериями и пользователь дольше оставался в деградации."
+		return "Стартовый ориентир: до 8 с² — спокойно, 8–30 — проверить, от 30 — высокий приоритет. Значение растет быстрее, когда плохие интервалы идут подряд."
 	default:
 		return "Чем выше значение, тем выше накопленная нагрузка. Порог для этой оценки не задан."
 	}
@@ -865,15 +1138,15 @@ func scoreHelp(kind string) string {
 	case "change":
 		return "Оценка точки изменения показывает, насколько сильный сдвиг сигнала виден на фоне локального шума. Примерно до 3 — слабый сигнал, 3–6 — заметный, выше 6 — сильный. Для задержек, памяти и подтормаживаний больше обычно хуже."
 	case "influence":
-		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей сценария. 0–5 низкий риск, 5–15 средний, выше 15 высокий."
+		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей сценария. Меньше 5 — низкий риск, от 5 до 15 — средний, от 15 — высокий. Статическая связь без runtime-сигнала не доказывает влияние на производительность."
 	case "network_burn":
-		return "Выгорание — условная накопленная стоимость сетевого цикла: учитывает периодичность, повторяемость, ошибки, DNS, соединение и длительность окна. До 5 обычно терпимо, 5–20 требует проверки, выше 20 критично для сценария."
+		return "Условная нагрузка кандидата сетевого цикла растет от числа и размера повторяющихся всплесков и уверенности детектора. Это не миллисекунды, байты или расход батареи. До 5 — слабый сигнал, 5–20 — проверить, выше 20 — высокий приоритет."
 	case "confidence":
 		return "Доверие лежит в диапазоне 0..1. Чем ближе к 1, тем лучше сигнал подтвержден повторяемостью, количеством наблюдений или совпадением нескольких методов."
 	case "path_cost":
-		return "Стоимость пути в графе причинности: меньше значит более прямое и сильное объяснение. 1.00 — очень прямая связь, значения выше 2 обычно слабее и требуют подтверждения."
+		return "Условная стоимость цепочки статистических связей: меньше означает более короткую цепочку с более уверенными связями. Она не является вероятностью и не доказывает направление причины."
 	case "integral":
-		return "Интегральная оценка — площадь симптома по времени: значение сигнала умножается на длительность окна и суммируется. Она помогает отличить короткий пик от долгой деградации."
+		return "Накопленная оценка суммирует площадь симптома по времени или превышение инженерного порога. Точная формула и единица указаны в строке; разные оценки нельзя складывать между собой."
 	default:
 		return "Оценка — относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и связанный контекст."
 	}
@@ -886,9 +1159,9 @@ func scoreGuideHTML(kind string) template.HTML {
 	case "leak":
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сигналов удержания</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: высокий приоритет</span><p>time_only получает меньший вес, after_explicit_gc — средний, confirmed_hprof/path — полный. Оценка задает порядок расследования и сама по себе не доказывает утечку.</p></div></div>`)
 	case "math":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: заметный сигнал</span><span class="score-band sev-high">6+: сильный сигнал</span><p>Для задержек, памяти, подтормаживаний и сетевых циклов больше обычно хуже. Доверие 0..1 показывает, насколько вывод подтвержден данными.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: проверить</span><span class="score-band sev-high">6+: высокий приоритет</span><p>Шкалы ранжируют наблюдения внутри сопоставимых сценариев и не являются универсальным SLA. Уверенность показывает поддержку данными, а не вероятность ошибки в коде.</p></div></div>`)
 	case "compare":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сравнения</strong><span class="score-band sev-ok">зеленый: без регрессии</span><span class="score-band sev-medium">желтый: нужна проверка</span><span class="score-band sev-high">красный: критично</span><p>Положительная дельта задержек, ошибок, памяти, подтормаживаний и спама обычно означает ухудшение кандидата. Смотрите дельту вместе с доверием и размером выборки.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сравнения</strong><span class="score-band sev-ok">зеленый: ухудшение не подтверждено</span><span class="score-band sev-medium">желтый: нужна проверка</span><span class="score-band sev-high">красный: сильное ухудшение</span><p>Вердикт учитывает направление метрики, размер эффекта и выборку. Для пользовательской gauge-метрики направление неизвестно, поэтому изменение не считается регрессией автоматически.</p></div></div>`)
 	default:
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Как читать оценку</strong><p>Оценка - это относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и контекст.</p></div></div>`)
 	}
@@ -1168,6 +1441,37 @@ func rowLimitNote(label string, total, limit int) template.HTML {
 	))
 }
 
+func russianCount(value any, singular, paucal, plural string) string {
+	number := reflect.ValueOf(value)
+	absolute := uint64(0)
+	rendered := fmt.Sprint(value)
+	switch number.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		signed := number.Int()
+		if signed < 0 {
+			absolute = uint64(-(signed + 1)) + 1
+		} else {
+			absolute = uint64(signed)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		absolute = number.Uint()
+	default:
+		return rendered + " " + plural
+	}
+	lastTwo := absolute % 100
+	last := absolute % 10
+	form := plural
+	if lastTwo < 11 || lastTwo > 14 {
+		switch {
+		case last == 1:
+			form = singular
+		case last >= 2 && last <= 4:
+			form = paucal
+		}
+	}
+	return rendered + " " + form
+}
+
 func codeProblemDrillPath(drill analyze.CodeProblemDrillDown) string {
 	location := drill.ClassName
 	if drill.Method != "" {
@@ -1220,59 +1524,40 @@ func codeProblemMetric(signal analyze.CodeProblemSignal) string {
 }
 
 type memoryLeakCompareRow struct {
-	Candidate     analyze.MemoryLeakSuspect
-	BaselineScore float64
-	BaselineCount uint64
-	BaselineAgeMS uint64
-	DeltaScore    float64
-	DeltaCount    int64
-	DeltaAgeMS    int64
-	Status        string
-	Severity      string
+	Candidate       analyze.MemoryLeakSuspect
+	HasBaseline     bool
+	BaselineScore   float64
+	BaselineCount   uint64
+	BaselineAgeMS   uint64
+	DeltaScore      float64
+	DeltaCount      int64
+	DeltaAgeMS      int64
+	Status          string
+	Severity        string
+	Explanation     string
+	MatchConfidence string
 }
 
 func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow {
-	baselineByKey := map[string]analyze.MemoryLeakSuspect{}
-	for _, row := range comparison.Baseline.MemoryLeaks {
-		baselineByKey[memoryLeakCompareKey(row)] = row
-	}
-	out := make([]memoryLeakCompareRow, 0, len(comparison.Candidate.MemoryLeaks))
-	for _, row := range comparison.Candidate.MemoryLeaks {
-		before, found := baselineByKey[memoryLeakCompareKey(row)]
-		delta := row.Score
-		if found {
-			delta = row.Score - before.Score
-		}
-		status := "без сильного изменения"
-		severity := row.Severity
-		switch {
-		case !found:
-			status = "новое удержание кандидата"
-			if severity == "ok" {
-				severity = "medium"
-			}
-		case delta >= 8 || row.Count >= saturatingAddUint64(before.Count, 5) || row.MaxAgeMS >= saturatingAddUint64(before.MaxAgeMS, 30_000):
-			status = "утечка усилилась"
-			severity = "high"
-		case delta >= 3 || row.Count > before.Count || row.MaxAgeMS > before.MaxAgeMS:
-			status = "подозрение выросло"
-			if severity == "ok" {
-				severity = "medium"
-			}
-		case delta <= -3 || row.Count < before.Count || row.MaxAgeMS < before.MaxAgeMS:
-			status = "стало легче"
-			severity = "ok"
+	report := analyze.BuildLeakCompareReport(comparison)
+	out := make([]memoryLeakCompareRow, 0, len(report.Deltas))
+	for _, delta := range report.Deltas {
+		if !delta.HasCandidate {
+			continue
 		}
 		out = append(out, memoryLeakCompareRow{
-			Candidate:     row,
-			BaselineScore: before.Score,
-			BaselineCount: before.Count,
-			BaselineAgeMS: before.MaxAgeMS,
-			DeltaScore:    math.Round(delta*10) / 10,
-			DeltaCount:    saturatingSignedDelta(row.Count, before.Count),
-			DeltaAgeMS:    saturatingSignedDelta(row.MaxAgeMS, before.MaxAgeMS),
-			Status:        status,
-			Severity:      severity,
+			Candidate:       delta.Candidate,
+			HasBaseline:     delta.HasBaseline,
+			BaselineScore:   delta.ScoreBefore,
+			BaselineCount:   delta.CountBefore,
+			BaselineAgeMS:   delta.AgeBeforeMS,
+			DeltaScore:      delta.DeltaScore,
+			DeltaCount:      delta.DeltaCount,
+			DeltaAgeMS:      delta.DeltaAgeMS,
+			Status:          delta.StatusLabel,
+			Severity:        delta.Severity,
+			Explanation:     delta.Explanation,
+			MatchConfidence: delta.MatchConfidence,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -1290,18 +1575,10 @@ func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow
 	return out
 }
 
-func memoryLeakCompareKey(row analyze.MemoryLeakSuspect) string {
-	return strings.Join([]string{
-		strings.ToLower(row.ClassName),
-		strings.ToLower(row.Holder),
-		strings.ToLower(row.Screen),
-		strings.ToLower(row.Flow),
-		strings.ToLower(row.Step),
-	}, "\x00")
-}
-
 type codeProblemCompareRow struct {
 	Candidate     analyze.CodeProblemStats
+	HasBaseline   bool
+	Comparable    bool
 	BaselineScore float64
 	DeltaScore    float64
 	Status        string
@@ -1324,18 +1601,18 @@ func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareR
 	out := make([]codeProblemCompareRow, 0, len(candidate))
 	for _, row := range candidate {
 		before, found := baselineByLocation[codeProblemLocation(row)]
-		delta := row.Score
-		if found {
+		comparable := found && durationComparableForReport(comparison.Baseline.DurationMS, comparison.Candidate.DurationMS)
+		delta := 0.0
+		if comparable {
 			delta = row.Score - before.Score
 		}
 		status := "без сильного изменения"
 		severity := row.Severity
 		switch {
 		case !found:
-			status = "новая проблема кандидата"
-			if severity == "ok" {
-				severity = "medium"
-			}
+			status = "новая точка для проверки"
+		case !comparable:
+			status = "оценка не сравнивается: длительность прогонов различается"
 		case delta >= 8:
 			status = "сильное усиление"
 			severity = "high"
@@ -1345,11 +1622,13 @@ func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareR
 				severity = "medium"
 			}
 		case delta <= -3:
-			status = "стало легче"
+			status = "оценка снизилась"
 			severity = "ok"
 		}
 		out = append(out, codeProblemCompareRow{
 			Candidate:     row,
+			HasBaseline:   found,
+			Comparable:    comparable,
 			BaselineScore: before.Score,
 			DeltaScore:    math.Round(delta*10) / 10,
 			Status:        status,
@@ -1427,7 +1706,7 @@ func compareDeltaGroups(deltas []analyze.Delta) []compareDeltaGroup {
 func problemDeltas(deltas []analyze.Delta) []analyze.Delta {
 	var out []analyze.Delta
 	for _, delta := range deltas {
-		if delta.Severity != "" && delta.Severity != "ok" {
+		if delta.Comparable && delta.Severity != "" && delta.Severity != "ok" {
 			out = append(out, delta)
 		}
 	}
@@ -1436,7 +1715,7 @@ func problemDeltas(deltas []analyze.Delta) []analyze.Delta {
 
 func compareDeltaCategory(name string) string {
 	switch name {
-	case "HTTP p95", "HTTP failures", "UID RX max", "UID TX max", "Network mix":
+	case "HTTP p95", "HTTP failure rate", "UID RX delta", "UID TX delta", "Network mix":
 		return "network"
 	case "UI jank rate", "UI avg FPS", "Main-thread stall max", "Log spam", "Problem windows":
 		return "ui"
@@ -1453,8 +1732,8 @@ func compareDeltaLabel(name string) string {
 	switch name {
 	case "HTTP p95":
 		return "HTTP p95-задержка"
-	case "HTTP failures":
-		return "HTTP-ошибки"
+	case "HTTP failure rate":
+		return "Доля HTTP-ошибок"
 	case "UI jank rate":
 		return "Доля подтормаживаний UI"
 	case "UI avg FPS":
@@ -1465,10 +1744,10 @@ func compareDeltaLabel(name string) string {
 		return "Макс. PSS"
 	case "Min available memory":
 		return "Мин. свободная память"
-	case "UID RX max":
-		return "Макс. входящий трафик приложения"
-	case "UID TX max":
-		return "Макс. исходящий трафик приложения"
+	case "UID RX delta":
+		return "Входящий трафик приложения за прогон"
+	case "UID TX delta":
+		return "Исходящий трафик приложения за прогон"
 	case "Retained objects":
 		return "Удержанные объекты"
 	case "Log spam":
@@ -1496,8 +1775,8 @@ func compareDeltaHelp(name string) string {
 	switch name {
 	case "HTTP p95":
 		return "95-й процентиль длительности HTTP-запросов. Рост обычно означает, что хвост сетевых задержек стал хуже."
-	case "HTTP failures":
-		return "Количество HTTP-вызовов с ошибкой или статусом 5xx. Рост почти всегда ухудшает пользовательский сценарий."
+	case "HTTP failure rate":
+		return "Доля HTTP-вызовов с транспортной ошибкой или статусом 5xx. Сравнивается процент, а не сырое количество, поэтому разное число запросов не создает ложную регрессию. На малой выборке результат нужно подтвердить повтором."
 	case "UI jank rate":
 		return "Доля медленных UI-кадров. Рост в процентных пунктах показывает, что интерфейс стал чаще дергаться."
 	case "UI avg FPS":
@@ -1508,14 +1787,14 @@ func compareDeltaHelp(name string) string {
 		return "Максимальный PSS процесса. Рост показывает больший вклад приложения в потребление RAM."
 	case "Min available memory":
 		return "Минимум свободной RAM. Здесь ухудшением считается падение, потому что запас памяти стал меньше."
-	case "UID RX max", "UID TX max":
-		return "Максимальный трафик UID приложения. Рост сам по себе не всегда плох, но важен рядом с сетевой задержкой и ошибками."
+	case "UID RX delta", "UID TX delta":
+		return "Рост счетчика трафика UID между первым и последним снимком каждого лога. Большее значение не считается доказательством проблемы без одинакового сценария и ожидаемого объема данных."
 	case "Retained objects":
 		return "Количество удержанных объектов. Рост может указывать на утечки или слишком долгие ссылки."
 	case "Log spam":
-		return "Суммарное количество вызовов android.util.Log.* и Timber.*. Рост может давить на главный поток, I/O и засорять диагностику."
+		return "Частота вызовов android.util.Log.* и Timber.* в минуту. Нормализация по времени не дает более длинному прогону автоматически выглядеть хуже."
 	case "Problem windows":
-		return "Агрегированные окна, где Jank Hunter уже увидел причину: медленный HTTP, паузу главного потока, UI-подтормаживания, удержания или спам логами."
+		return "Частота агрегированных проблемных окон в минуту. Окно объединяет близкие симптомы, но не доказывает их общую первопричину."
 	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
 		return "Проверка честности сравнения: база и кандидат должны быть собраны в сопоставимых условиях."
 	default:
@@ -1571,6 +1850,13 @@ func severityLabel(value string) string {
 	}
 }
 
+func codeSeverityLabel(value string) string {
+	if value == "ok" {
+		return "низкий риск"
+	}
+	return severityLabel(value)
+}
+
 func confidenceLabel(value string) string {
 	switch value {
 	case "high":
@@ -1596,6 +1882,10 @@ type routeCompareRow struct {
 	BaselineOwner     string
 	CandidateOwner    string
 	Severity          string
+	Comparable        bool
+	ComparisonNote    string
+	BaselinePresent   bool
+	CandidatePresent  bool
 }
 
 func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
@@ -1612,9 +1902,19 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 	}
 	rows := make([]routeCompareRow, 0, len(names))
 	for name := range names {
-		b := base[name]
-		c := cand[name]
+		b, hasBaseline := base[name]
+		c, hasCandidate := cand[name]
 		delta := saturatingSignedDelta(c.P95MS, b.P95MS)
+		comparable := hasBaseline && hasCandidate && b.Count > 0 && c.Count > 0
+		severity := "ok"
+		note := comparePresenceNote(hasBaseline, hasCandidate, "маршрут")
+		if comparable {
+			severity = latencyDeltaSeverity(b.P95MS, c.P95MS)
+			if minInt(b.Count, c.Count) < 3 {
+				severity = capSeverity(severity, "medium")
+				note = "меньше трех запросов хотя бы в одном прогоне"
+			}
+		}
 		rows = append(rows, routeCompareRow{
 			Route:             name,
 			BaselineCount:     b.Count,
@@ -1626,7 +1926,11 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 			DeltaP95MS:        delta,
 			BaselineOwner:     b.OwnerSample,
 			CandidateOwner:    c.OwnerSample,
-			Severity:          latencyDeltaSeverity(b.P95MS, c.P95MS),
+			Severity:          severity,
+			Comparable:        comparable,
+			ComparisonNote:    note,
+			BaselinePresent:   hasBaseline,
+			CandidatePresent:  hasCandidate,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -1654,6 +1958,10 @@ type screenCompareRow struct {
 	BaselineP95MS    uint64
 	CandidateP95MS   uint64
 	Severity         string
+	Comparable       bool
+	ComparisonNote   string
+	BaselinePresent  bool
+	CandidatePresent bool
 }
 
 func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
@@ -1670,10 +1978,20 @@ func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
 	}
 	rows := make([]screenCompareRow, 0, len(names))
 	for name := range names {
-		b := base[name]
-		c := cand[name]
+		b, hasBaseline := base[name]
+		c, hasCandidate := cand[name]
 		deltaJank := c.JankRatePct - b.JankRatePct
 		deltaFPS := c.AvgFPS - b.AvgFPS
+		comparable := hasBaseline && hasCandidate && b.Frames > 0 && c.Frames > 0
+		severity := "ok"
+		note := comparePresenceNote(hasBaseline, hasCandidate, "экран")
+		if comparable {
+			severity = screenDeltaSeverity(deltaJank, deltaFPS)
+			if minReportUint64(b.Frames, c.Frames) < 120 {
+				severity = capSeverity(severity, "medium")
+				note = "меньше 120 кадров хотя бы в одном прогоне"
+			}
+		}
 		rows = append(rows, screenCompareRow{
 			Screen:           name,
 			BaselineFrames:   b.Frames,
@@ -1686,7 +2004,11 @@ func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
 			DeltaFPS:         deltaFPS,
 			BaselineP95MS:    b.P95MS,
 			CandidateP95MS:   c.P95MS,
-			Severity:         screenDeltaSeverity(deltaJank, deltaFPS),
+			Severity:         severity,
+			Comparable:       comparable,
+			ComparisonNote:   note,
+			BaselinePresent:  hasBaseline,
+			CandidatePresent: hasCandidate,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -1712,6 +2034,10 @@ type ownerCompareRow struct {
 	BaselineTotalMS  uint64
 	CandidateTotalMS uint64
 	Severity         string
+	Comparable       bool
+	ComparisonNote   string
+	BaselinePresent  bool
+	CandidatePresent bool
 }
 
 func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
@@ -1728,10 +2054,20 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 	}
 	rows := make([]ownerCompareRow, 0, len(names))
 	for name := range names {
-		b := base[name]
-		c := cand[name]
+		b, hasBaseline := base[name]
+		c, hasCandidate := cand[name]
 		kind := firstNonEmpty(c.Kind, b.Kind)
 		delta := saturatingSignedDelta(c.MaxMS, b.MaxMS)
+		comparable := hasBaseline && hasCandidate && b.Count > 0 && c.Count > 0
+		severity := "ok"
+		note := comparePresenceNote(hasBaseline, hasCandidate, "источник")
+		if comparable {
+			severity = latencyDeltaSeverity(b.MaxMS, c.MaxMS)
+			if minInt(b.Count, c.Count) < 3 {
+				severity = capSeverity(severity, "medium")
+				note = "меньше трех событий хотя бы в одном прогоне"
+			}
+		}
 		rows = append(rows, ownerCompareRow{
 			Owner:            name,
 			Kind:             kind,
@@ -1742,7 +2078,11 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 			DeltaMaxMS:       delta,
 			BaselineTotalMS:  b.TotalMS,
 			CandidateTotalMS: c.TotalMS,
-			Severity:         latencyDeltaSeverity(b.MaxMS, c.MaxMS),
+			Severity:         severity,
+			Comparable:       comparable,
+			ComparisonNote:   note,
+			BaselinePresent:  hasBaseline,
+			CandidatePresent: hasCandidate,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -1758,26 +2098,37 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 }
 
 type flowCompareRow struct {
-	Screen              string
-	Flow                string
-	Step                string
-	Owner               string
-	BaselineProblems    uint64
-	CandidateProblems   uint64
-	DeltaProblems       int64
-	BaselineLogSpam     uint64
-	CandidateLogSpam    uint64
-	DeltaLogSpam        int64
-	BaselineHTTPP95MS   uint64
-	CandidateHTTPP95MS  uint64
-	DeltaHTTPP95MS      int64
-	BaselineStallMaxMS  uint64
-	CandidateStallMaxMS uint64
-	DeltaStallMaxMS     int64
-	BaselineJankPct     float64
-	CandidateJankPct    float64
-	DeltaJankPct        float64
-	Severity            string
+	Screen                string
+	Flow                  string
+	Step                  string
+	Owner                 string
+	BaselineProblems      uint64
+	CandidateProblems     uint64
+	DeltaProblems         int64
+	BaselineLogSpam       uint64
+	CandidateLogSpam      uint64
+	DeltaLogSpam          int64
+	BaselineHTTPP95MS     uint64
+	CandidateHTTPP95MS    uint64
+	DeltaHTTPP95MS        int64
+	BaselineStallMaxMS    uint64
+	CandidateStallMaxMS   uint64
+	DeltaStallMaxMS       int64
+	BaselineJankPct       float64
+	CandidateJankPct      float64
+	DeltaJankPct          float64
+	Severity              string
+	Comparable            bool
+	ComparisonNote        string
+	BaselinePresent       bool
+	CandidatePresent      bool
+	BaselineHTTPPresent   bool
+	CandidateHTTPPresent  bool
+	BaselineUIPresent     bool
+	CandidateUIPresent    bool
+	BaselineStallPresent  bool
+	CandidateStallPresent bool
+	CountsComparable      bool
 }
 
 func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
@@ -1796,34 +2147,73 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 	}
 	rows := make([]flowCompareRow, 0, len(keys))
 	for key := range keys {
-		b := base[key]
-		c := cand[key]
-		problemDelta := saturatingSignedDelta(c.ProblemCount, b.ProblemCount)
-		logDelta := saturatingSignedDelta(c.LogSpam, b.LogSpam)
-		httpDelta := saturatingSignedDelta(c.HTTPP95MS, b.HTTPP95MS)
-		stallDelta := saturatingSignedDelta(c.StallMaxMS, b.StallMaxMS)
-		jankDelta := c.UIJankPct - b.UIJankPct
+		b, hasBaseline := base[key]
+		c, hasCandidate := cand[key]
+		countsComparable := hasBaseline && hasCandidate && durationComparableForReport(baseline.DurationMS, candidate.DurationMS)
+		httpComparable := hasBaseline && hasCandidate && b.HTTPCount > 0 && c.HTTPCount > 0
+		stallComparable := hasBaseline && hasCandidate && b.StallCount > 0 && c.StallCount > 0
+		uiComparable := hasBaseline && hasCandidate && b.UIFrames > 0 && c.UIFrames > 0
+		problemDelta := int64(0)
+		logDelta := int64(0)
+		httpDelta := int64(0)
+		stallDelta := int64(0)
+		jankDelta := float64(0)
+		if countsComparable {
+			problemDelta = saturatingSignedDelta(c.ProblemCount, b.ProblemCount)
+			logDelta = saturatingSignedDelta(c.LogSpam, b.LogSpam)
+		}
+		if httpComparable {
+			httpDelta = saturatingSignedDelta(c.HTTPP95MS, b.HTTPP95MS)
+		}
+		if stallComparable {
+			stallDelta = saturatingSignedDelta(c.StallMaxMS, b.StallMaxMS)
+		}
+		if uiComparable {
+			jankDelta = c.UIJankPct - b.UIJankPct
+		}
+		comparable := countsComparable || httpComparable || stallComparable || uiComparable
+		severity := "ok"
+		if comparable {
+			severity = flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta)
+		}
+		note := comparePresenceNote(hasBaseline, hasCandidate, "сценарий")
+		if hasBaseline && hasCandidate && !comparable {
+			note = "нет метрик с сопоставимым покрытием"
+		} else if hasBaseline && hasCandidate && !countsComparable {
+			note = "количества не сравниваются из-за разной длительности; статус рассчитан по доступным latency/UI метрикам"
+		}
 		rows = append(rows, flowCompareRow{
-			Screen:              firstNonEmpty(c.Screen, b.Screen),
-			Flow:                firstNonEmpty(c.Flow, b.Flow),
-			Step:                firstNonEmpty(c.Step, b.Step),
-			Owner:               firstNonEmpty(c.Owner, b.Owner),
-			BaselineProblems:    b.ProblemCount,
-			CandidateProblems:   c.ProblemCount,
-			DeltaProblems:       problemDelta,
-			BaselineLogSpam:     b.LogSpam,
-			CandidateLogSpam:    c.LogSpam,
-			DeltaLogSpam:        logDelta,
-			BaselineHTTPP95MS:   b.HTTPP95MS,
-			CandidateHTTPP95MS:  c.HTTPP95MS,
-			DeltaHTTPP95MS:      httpDelta,
-			BaselineStallMaxMS:  b.StallMaxMS,
-			CandidateStallMaxMS: c.StallMaxMS,
-			DeltaStallMaxMS:     stallDelta,
-			BaselineJankPct:     b.UIJankPct,
-			CandidateJankPct:    c.UIJankPct,
-			DeltaJankPct:        jankDelta,
-			Severity:            flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta),
+			Screen:                firstNonEmpty(c.Screen, b.Screen),
+			Flow:                  firstNonEmpty(c.Flow, b.Flow),
+			Step:                  firstNonEmpty(c.Step, b.Step),
+			Owner:                 firstNonEmpty(c.Owner, b.Owner),
+			BaselineProblems:      b.ProblemCount,
+			CandidateProblems:     c.ProblemCount,
+			DeltaProblems:         problemDelta,
+			BaselineLogSpam:       b.LogSpam,
+			CandidateLogSpam:      c.LogSpam,
+			DeltaLogSpam:          logDelta,
+			BaselineHTTPP95MS:     b.HTTPP95MS,
+			CandidateHTTPP95MS:    c.HTTPP95MS,
+			DeltaHTTPP95MS:        httpDelta,
+			BaselineStallMaxMS:    b.StallMaxMS,
+			CandidateStallMaxMS:   c.StallMaxMS,
+			DeltaStallMaxMS:       stallDelta,
+			BaselineJankPct:       b.UIJankPct,
+			CandidateJankPct:      c.UIJankPct,
+			DeltaJankPct:          jankDelta,
+			Severity:              severity,
+			Comparable:            comparable,
+			ComparisonNote:        note,
+			BaselinePresent:       hasBaseline,
+			CandidatePresent:      hasCandidate,
+			BaselineHTTPPresent:   b.HTTPCount > 0,
+			CandidateHTTPPresent:  c.HTTPCount > 0,
+			BaselineUIPresent:     b.UIFrames > 0,
+			CandidateUIPresent:    c.UIFrames > 0,
+			BaselineStallPresent:  b.StallCount > 0,
+			CandidateStallPresent: c.StallCount > 0,
+			CountsComparable:      countsComparable,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -1838,6 +2228,50 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 		return flowKeyLabel(rows[i].Screen, rows[i].Flow, rows[i].Step, rows[i].Owner) < flowKeyLabel(rows[j].Screen, rows[j].Flow, rows[j].Step, rows[j].Owner)
 	})
 	return rows
+}
+
+func comparePresenceNote(hasBaseline, hasCandidate bool, entity string) string {
+	switch {
+	case hasBaseline && hasCandidate:
+		return ""
+	case hasCandidate:
+		return "новый " + entity + " кандидата; дельта не вычисляется"
+	default:
+		return entity + " есть только в базе; дельта не вычисляется"
+	}
+}
+
+func capSeverity(value, maximum string) string {
+	if reportSeverityRank(value) > reportSeverityRank(maximum) {
+		return maximum
+	}
+	return value
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func minReportUint64(left, right uint64) uint64 {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func durationComparableForReport(baselineMS, candidateMS uint64) bool {
+	if baselineMS == 0 || candidateMS == 0 {
+		return false
+	}
+	shorter := baselineMS
+	longer := candidateMS
+	if shorter > longer {
+		shorter, longer = longer, shorter
+	}
+	return float64(longer-shorter)/float64(shorter) <= 0.2
 }
 
 func flowDeltaSortScore(row flowCompareRow) uint64 {
@@ -2039,12 +2473,19 @@ func summaryLogSpamTotal(summary analyze.Summary) uint64 {
 	return total
 }
 
-func summaryProblemTotal(summary analyze.Summary) uint64 {
+func summaryProblemWindowTotal(summary analyze.Summary) uint64 {
 	var total uint64
 	for _, item := range summary.ProblemWindows {
-		total = saturatingAddUint64(total, item.Count)
+		total = saturatingAddUint64(total, uint64(item.Windows))
 	}
 	return total
+}
+
+func perMinute(value, durationMS uint64) float64 {
+	if durationMS == 0 {
+		return 0
+	}
+	return float64(value) * 60_000 / float64(durationMS)
 }
 
 func latencyDeltaSeverity(baseline, candidate uint64) string {
@@ -2188,11 +2629,11 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 	if len(report.NetworkLoops) > 0 {
 		loop := report.NetworkLoops[0]
 		target := firstNonEmpty(loop.Route, loop.Owner, "сетевой сценарий")
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Сетевой цикл", Detail: fmt.Sprintf("Проверьте %s: период %.1f сек, доверие %.2f, оценка выгорания %.1f.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Кандидат сетевого цикла", Detail: fmt.Sprintf("Проверьте %s: предполагаемый период %.1f сек, уверенность %.2f, условная нагрузка %.1f. Это гипотеза, а не доказанная причина.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
 	}
 	if len(report.CausalGraph.OwnerScores) > 0 {
 		owner := report.CausalGraph.OwnerScores[0]
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Главный источник", Detail: fmt.Sprintf("Наибольший вклад у %s: оценка %.2f. Используйте это как приоритет для просмотра карты источников и трассировок.", owner.Owner, owner.Score)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Источник, чаще связанный с проблемами", Detail: fmt.Sprintf("%s получил оценку связи %.2f только по плохим состояниям и сетевым циклам. Проверьте трассировку и код: граф сам по себе не доказывает вину источника.", owner.Owner, owner.Score)})
 	}
 	if flow, ok := topProblemFlow(report.Summary); ok {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: flowCardSeverity(flow), Title: "Сценарий с причинами", Detail: fmt.Sprintf("%s: проблем %d, спам логами %d, HTTP p95 %d мс, макс. пауза %d мс.", flowKeyLabel(flow.Screen, flow.Flow, flow.Step, flow.Owner), flow.ProblemCount, flow.LogSpam, flow.HTTPP95MS, flow.StallMaxMS)})
@@ -2201,7 +2642,7 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: score.Severity, Title: score.Title, Detail: fmt.Sprintf("%.1f %s. %s", score.Value, score.Unit, score.Explanation)})
 	}
 	if len(summary.Cards) == 0 {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Используйте отчет как базу: сравните следующий прогон, а при появлении предупреждений начните с сети, UI, памяти и графа причинности."})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Используйте отчет как контрольную точку. При предупреждении начните с измеренного сигнала, затем проверьте таймлайн, сырые события и граф связей."})
 	}
 	return summary
 }
@@ -2224,7 +2665,11 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 	if len(report.RobustDeltas) > 0 {
 		for _, delta := range report.RobustDeltas {
 			if delta.Severity == "high" || delta.Severity == "medium" {
-				summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Распределение изменилось", Detail: fmt.Sprintf("%s / %s: p95 изменился на %+.1f %s (%+.1f%%), доверие %s.", delta.Dimension, delta.Metric, delta.P95Delta, delta.Unit, delta.P95DeltaPct, delta.Confidence)})
+				detail := delta.Summary
+				if delta.Comparable && delta.DeltaPctAvailable {
+					detail = fmt.Sprintf("%s / %s: p95 изменился на %+.1f %s (%+.1f%%), доверие %s.", delta.Dimension, delta.Metric, delta.P95Delta, delta.Unit, delta.P95DeltaPct, delta.Confidence)
+				}
+				summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Распределение изменилось", Detail: detail})
 				break
 			}
 		}
@@ -2232,17 +2677,17 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 	if len(report.NetworkLoopDeltas) > 0 {
 		delta := report.NetworkLoopDeltas[0]
 		target := firstNonEmpty(delta.Route, delta.Owner, "сетевой цикл")
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Изменение сетевого цикла", Detail: fmt.Sprintf("%s: изменение выгорания %+.1f, изменение доверия %+.2f.", target, delta.BurnDelta, delta.ConfidenceDelta)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Изменение кандидата сетевого цикла", Detail: fmt.Sprintf("%s: изменение условной нагрузки %+.1f, изменение уверенности %+.2f.", target, delta.BurnDelta, delta.ConfidenceDelta)})
 	}
 	if len(report.CausalDeltas) > 0 {
 		delta := report.CausalDeltas[0]
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Граф причинности изменился", Detail: delta.Summary})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Граф связей изменился", Detail: delta.Summary})
 	}
 	if row, ok := topFlowDelta(report.Comparison.Baseline, report.Comparison.Candidate); ok && row.Severity != "ok" {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Сценарий ухудшился", Detail: fmt.Sprintf("%s: Δ проблем %d, Δ спама %d, Δ HTTP p95 %d мс, Δ UI %+.2f п.п.", flowKeyLabel(row.Screen, row.Flow, row.Step, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
 	}
 	if len(summary.Cards) == 0 {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующей регрессии начните с разделов робастных дельт, сетевых циклов и графа причинности."})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующем ухудшении начните с распределений, таймлайна и сырых событий, а граф связей используйте только как список гипотез."})
 	}
 	return summary
 }
@@ -2593,11 +3038,23 @@ func sparklineSVG(series mathanalysis.Series) template.HTML {
 	if len(series.Points) == 0 {
 		return template.HTML(`<svg class="sparkline" viewBox="0 0 360 86" role="img" aria-label="нет данных"></svg>`)
 	}
-	maxValue := seriesMax(series)
-	minValue := series.Points[0]
-	for _, point := range series.Points {
+	validPoints := make([]float64, 0, len(series.Points))
+	for index, point := range series.Points {
+		if seriesPointPresent(series, index) {
+			validPoints = append(validPoints, point)
+		}
+	}
+	if len(validPoints) == 0 {
+		return template.HTML(`<svg class="sparkline" viewBox="0 0 360 86" role="img" aria-label="нет замеров"></svg>`)
+	}
+	maxValue := validPoints[0]
+	minValue := validPoints[0]
+	for _, point := range validPoints[1:] {
 		if point < minValue {
 			minValue = point
+		}
+		if point > maxValue {
+			maxValue = point
 		}
 	}
 	if maxValue == minValue {
@@ -2622,8 +3079,19 @@ func sparklineSVG(series mathanalysis.Series) template.HTML {
 	}
 
 	var bars strings.Builder
+	var lines []string
 	var line strings.Builder
+	flushLine := func() {
+		if line.Len() > 0 {
+			lines = append(lines, line.String())
+			line.Reset()
+		}
+	}
 	for i, point := range series.Points {
+		if !seriesPointPresent(series, i) {
+			flushLine()
+			continue
+		}
 		x := pad
 		if len(series.Points) > 1 {
 			x += float64(i) * step
@@ -2636,20 +3104,25 @@ func sparklineSVG(series mathanalysis.Series) template.HTML {
 		if point > 0 {
 			fmt.Fprintf(&bars, `<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="1.4"></rect>`, x-barWidth/2, height-pad-barHeight, barWidth, barHeight)
 		}
-		if i > 0 {
+		if line.Len() > 0 {
 			line.WriteByte(' ')
 		}
 		fmt.Fprintf(&line, "%.2f,%.2f", x, y)
 	}
+	flushLine()
 
 	var out strings.Builder
 	fmt.Fprintf(&out, `<svg class="sparkline" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(series.Name))
 	out.WriteString(`<line class="spark-axis" x1="5" y1="81" x2="355" y2="81"></line>`)
 	out.WriteString(`<g class="spark-bars">`)
 	out.WriteString(bars.String())
-	out.WriteString(`</g><polyline class="spark-line" points="`)
-	out.WriteString(line.String())
-	out.WriteString(`"></polyline></svg>`)
+	out.WriteString(`</g><g class="spark-lines">`)
+	for _, points := range lines {
+		out.WriteString(`<polyline class="spark-line" points="`)
+		out.WriteString(points)
+		out.WriteString(`"></polyline>`)
+	}
+	out.WriteString(`</g></svg>`)
 	return template.HTML(out.String())
 }
 
@@ -2663,7 +3136,7 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 		width    = 960.0
 		height   = 460.0
 	)
-	edges := append([]mathanalysis.CausalEdge(nil), graph.Edges...)
+	edges := uniqueCausalEdges(graph.Edges)
 	if len(edges) > maxEdges {
 		edges = edges[:maxEdges]
 	}
@@ -2694,8 +3167,7 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 	position := layoutCausalNodes(nodes, width, height)
 	var out strings.Builder
 	out.WriteString(`<div class="causal-graph-card">`)
-	out.WriteString(`<svg class="causal-graph" viewBox="0 0 960 460" role="img" aria-label="Обзор графа причинности">`)
-	out.WriteString(`<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="rgba(111,247,255,0.58)"></path></marker></defs>`)
+	out.WriteString(`<svg class="causal-graph" viewBox="0 0 960 460" role="img" aria-label="Обзор статистических связей">`)
 	for _, edge := range edges {
 		from, okFrom := position[edge.From]
 		to, okTo := position[edge.To]
@@ -2703,7 +3175,7 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 			continue
 		}
 		opacity := 0.28 + clampPct(edge.Confidence*100)/140
-		fmt.Fprintf(&out, `<line class="causal-edge" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f" marker-end="url(#arrow)"><title>%s → %s · %s · доверие %.2f</title></line>`,
+		fmt.Fprintf(&out, `<line class="causal-edge" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f"><title>%s ↔ %s · %s · уверенность %.2f</title></line>`,
 			from.x+112, from.y+24, to.x, to.y+24, opacity,
 			template.HTMLEscapeString(edge.FromLabel),
 			template.HTMLEscapeString(edge.ToLabel),
@@ -2724,296 +3196,71 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 		)
 	}
 	out.WriteString(`</svg>`)
-	if len(graph.Edges) > len(edges) || len(graph.Nodes) > len(nodes) {
-		fmt.Fprintf(&out, `<div class="help-text">Показаны самые сильные связи: %d из %d ребер и %d из %d узлов. Полная детализация находится в таблицах ниже.</div>`, len(edges), len(graph.Edges), len(nodes), len(graph.Nodes))
+	allEdges := uniqueCausalEdges(graph.Edges)
+	if len(allEdges) > len(edges) || len(graph.Nodes) > len(nodes) {
+		fmt.Fprintf(&out, `<div class="help-text">Показаны самые сильные статистические связи: %d из %d и %d из %d узлов. Обратные дубликаты скрыты.</div>`, len(edges), len(allEdges), len(nodes), len(graph.Nodes))
 	}
 	out.WriteString(`</div>`)
 	return template.HTML(out.String())
 }
 
-func influenceGraphSVG(influence analyze.InfluenceSummary) template.HTML {
-	if !influence.Available || len(influence.TopNodes) == 0 {
-		return template.HTML(`<div class="muted">Недостаточно данных для графа влияния кода.</div>`)
-	}
-	const (
-		maxNodes = 30
-		maxEdges = 72
-		width    = 1040.0
-		nodeW    = 214.0
-		nodeH    = 74.0
-		topY     = 72.0
-		gapY     = 22.0
-	)
-	nodeByName := map[string]analyze.InfluenceNode{}
-	for _, node := range influence.TopNodes {
-		if node.ClassName != "" {
-			nodeByName[node.ClassName] = node
+func uniqueCausalEdges(edges []mathanalysis.CausalEdge) []mathanalysis.CausalEdge {
+	seen := make(map[string]struct{}, len(edges))
+	unique := make([]mathanalysis.CausalEdge, 0, len(edges)/2+1)
+	for _, edge := range edges {
+		left := edge.From
+		right := edge.To
+		if left > right {
+			left, right = right, left
 		}
-	}
-
-	visible := map[string]struct{}{}
-	var order []string
-	addVisible := func(name string) bool {
-		if name == "" {
-			return true
-		}
-		if _, ok := visible[name]; ok {
-			return true
-		}
-		if len(order) >= maxNodes {
-			return false
-		}
-		visible[name] = struct{}{}
-		order = append(order, name)
-		return true
-	}
-
-	var edges []analyze.InfluenceEdge
-	for _, edge := range influence.TopEdges {
-		if len(edges) >= maxEdges {
-			break
-		}
-		if edge.From == "" || edge.To == "" || edge.From == edge.To {
+		key := left + "\x00" + right + "\x00" + edge.Kind
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		_, fromVisible := visible[edge.From]
-		_, toVisible := visible[edge.To]
-		needed := 0
-		if !fromVisible {
-			needed++
-		}
-		if !toVisible {
-			needed++
-		}
-		if len(order)+needed > maxNodes {
-			if !fromVisible || !toVisible {
-				continue
-			}
-		}
-		addVisible(edge.From)
-		addVisible(edge.To)
-		edges = append(edges, edge)
+		seen[key] = struct{}{}
+		unique = append(unique, edge)
 	}
-	for _, node := range influence.TopNodes {
-		if len(order) >= maxNodes {
-			break
-		}
-		addVisible(node.ClassName)
-	}
-	if len(order) == 0 {
-		return template.HTML(`<div class="muted">Недостаточно узлов для визуального графа влияния.</div>`)
-	}
+	return unique
+}
 
-	inDegree := map[string]int{}
-	outDegree := map[string]int{}
-	for _, edge := range edges {
-		outDegree[edge.From]++
-		inDegree[edge.To]++
-	}
-
-	type visibleNode struct {
-		node   analyze.InfluenceNode
-		column int
-		degree int
-	}
-	nodes := make([]visibleNode, 0, len(order))
-	for index, name := range order {
-		node, ok := nodeByName[name]
-		if !ok {
-			node = analyze.InfluenceNode{
-				ClassName: name,
-				Label:     influenceGraphLabel(name),
-				Severity:  "ok",
-				Status:    "static_only",
-				Reasons:   []string{"есть связь в графе"},
-			}
+func uniqueCausalPaths(paths []mathanalysis.GraphPath) []mathanalysis.GraphPath {
+	seen := make(map[string]struct{}, len(paths))
+	unique := make([]mathanalysis.GraphPath, 0, len(paths))
+	for _, path := range paths {
+		left := path.From
+		right := path.To
+		if left > right {
+			left, right = right, left
 		}
-		if node.Label == "" {
-			node.Label = influenceGraphLabel(name)
-		}
-		if node.Severity == "" {
-			node.Severity = "ok"
-		}
-		column := 1
-		switch {
-		case len(edges) == 0:
-			column = index % 3
-		case outDegree[name] > 0 && inDegree[name] == 0:
-			column = 0
-		case outDegree[name] > 0 && inDegree[name] > 0:
-			column = 1
-		default:
-			column = 2
-		}
-		nodes = append(nodes, visibleNode{
-			node:   node,
-			column: column,
-			degree: inDegree[name] + outDegree[name],
-		})
-	}
-	sort.SliceStable(nodes, func(i, j int) bool {
-		if nodes[i].column != nodes[j].column {
-			return nodes[i].column < nodes[j].column
-		}
-		if nodes[i].node.RuntimeEvidence != nodes[j].node.RuntimeEvidence {
-			return nodes[i].node.RuntimeEvidence
-		}
-		if nodes[i].node.Score != nodes[j].node.Score {
-			return nodes[i].node.Score > nodes[j].node.Score
-		}
-		if nodes[i].degree != nodes[j].degree {
-			return nodes[i].degree > nodes[j].degree
-		}
-		return nodes[i].node.ClassName < nodes[j].node.ClassName
-	})
-
-	columnX := []float64{52, 413, 774}
-	columnCounts := [3]int{}
-	for _, node := range nodes {
-		if node.column >= 0 && node.column < len(columnCounts) {
-			columnCounts[node.column]++
-		}
-	}
-	maxRows := 1
-	for _, count := range columnCounts {
-		if count > maxRows {
-			maxRows = count
-		}
-	}
-	height := math.Max(520, topY+float64(maxRows)*(nodeH+gapY)+34)
-	columnRow := [3]int{}
-	positions := map[string]graphPoint{}
-	nodeColumns := map[string]int{}
-	for _, item := range nodes {
-		row := columnRow[item.column]
-		columnRow[item.column]++
-		positions[item.node.ClassName] = graphPoint{
-			x: columnX[item.column],
-			y: topY + float64(row)*(nodeH+gapY),
-		}
-		nodeColumns[item.node.ClassName] = item.column
-	}
-
-	var out strings.Builder
-	out.WriteString(`<div class="influence-graph-card">`)
-	out.WriteString(`<div class="influence-tools" role="toolbar" aria-label="Режим выделения графа"><button type="button" data-influence-mode="node">Вершина</button><button type="button" class="is-active" data-influence-mode="paths">Пути</button><button type="button" data-influence-mode="tree">Остов</button><button type="button" data-influence-reset>Сброс</button></div>`)
-	out.WriteString(`<div class="influence-selection" data-influence-selection>Наведите мышью на вершину или сфокусируйте ее клавиатурой, чтобы подсветить все исходящие пути от нее.</div>`)
-	fmt.Fprintf(&out, `<svg class="influence-graph" viewBox="0 0 %.0f %.0f" role="img" aria-label="Граф влияния кода">`, width, height)
-	const influenceArrowID = "influence-arrow-report"
-	const influenceConfirmedArrowID = "influence-arrow-confirmed-report"
-	fmt.Fprintf(&out, `<defs><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.78"></path></marker><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#62ffa8" opacity="0.88"></path></marker></defs>`, influenceArrowID, influenceConfirmedArrowID)
-	out.WriteString(`<text class="influence-layer-label" x="52" y="34">Источники вызовов</text>`)
-	out.WriteString(`<text class="influence-layer-label" x="413" y="34">Связующие классы</text>`)
-	out.WriteString(`<text class="influence-layer-label" x="774" y="34">Проблемные узлы</text>`)
-	for _, edge := range edges {
-		from, okFrom := positions[edge.From]
-		to, okTo := positions[edge.To]
-		if !okFrom || !okTo {
+		key := left + "\x00" + right
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		opacity := 0.22 + math.Min(edge.Influence/80, 0.62)
-		strokeWidth := 1.4 + math.Min(edge.Influence/45, 4.6)
-		className := "influence-edge"
-		if edge.RuntimeConfirmed {
-			className += " confirmed"
-		}
-		path := influenceEdgePath(from, to, nodeColumns[edge.From], nodeColumns[edge.To], nodeW, nodeH, width)
-		markerID := influenceArrowID
-		if edge.RuntimeConfirmed {
-			markerID = influenceConfirmedArrowID
-		}
-		fmt.Fprintf(&out, `<path class="%s" data-from="%s" data-to="%s" d="%s" opacity="%.2f" stroke-width="%.2f" marker-end="url(#%s)"><title>%s → %s · вес %.1f · вызовов %d · %s</title></path>`,
-			className,
-			template.HTMLEscapeString(edge.From),
-			template.HTMLEscapeString(edge.To),
-			path,
-			opacity,
-			strokeWidth,
-			markerID,
-			template.HTMLEscapeString(edge.From),
-			template.HTMLEscapeString(edge.To),
-			edge.Influence,
-			edge.Count,
-			template.HTMLEscapeString(edge.Reason),
-		)
+		seen[key] = struct{}{}
+		unique = append(unique, path)
 	}
-	for _, item := range nodes {
-		node := item.node
-		pos := positions[node.ClassName]
-		scoreRadius := 15 + math.Min(node.Score*0.55, 9)
-		className := "influence-node " + node.Severity
-		if !node.RuntimeEvidence {
-			className += " static-only"
-		}
-		reasons := strings.Join(node.Reasons, ", ")
-		if reasons == "" {
-			reasons = influenceStatusLabel(node.Status)
-		}
-		fmt.Fprintf(&out, `<g class="%s" data-node="%s" tabindex="0" role="button" aria-label="%s, оценка %.1f" transform="translate(%.1f %.1f)"><title>%s · оценка %.1f · %s</title><rect class="node-card" width="%.0f" height="%.0f"></rect><circle cx="28" cy="28" r="%.1f"></circle><text class="node-score-text" x="28" y="31">%s</text><text class="node-label" x="55" y="23">%s</text><text class="node-kind" x="55" y="42">%s</text><text class="node-reason" x="55" y="59">%s</text></g>`,
-			className,
-			template.HTMLEscapeString(node.ClassName),
-			template.HTMLEscapeString(node.ClassName),
-			node.Score,
-			pos.x,
-			pos.y,
-			template.HTMLEscapeString(node.ClassName),
-			node.Score,
-			template.HTMLEscapeString(reasons),
-			nodeW,
-			nodeH,
-			scoreRadius,
-			template.HTMLEscapeString(influenceGraphScoreLabel(node.Score)),
-			template.HTMLEscapeString(truncateRunes(node.Label, 24)),
-			template.HTMLEscapeString(influenceGraphNodeKind(node)),
-			template.HTMLEscapeString(truncateRunes(reasons, 34)),
-		)
-	}
-	out.WriteString(`</svg>`)
-	if len(edges) == 0 {
-		out.WriteString(`<div class="help-text">В этом прогоне видны проблемные узлы, но между выбранными классами нет подтвержденных связей. Передайте статический ` + "`--class-graph`" + ` или включите сбор графа вызовов выполнения (` + "`runtimeCallGraph`" + `), чтобы получить ребра.</div>`)
-	}
-	if influence.ShownNodes > len(nodes) || influence.ShownEdges > len(edges) {
-		fmt.Fprintf(&out, `<div class="help-text">Показаны ключевые узлы и связи: %d из %d узлов, %d из %d ребер. Полная детализация находится в таблицах ниже.</div>`, len(nodes), influence.ShownNodes, len(edges), influence.ShownEdges)
-	}
-	out.WriteString(`</div>`)
-	return template.HTML(out.String())
-}
-
-func influenceGraphLabel(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "unknown"
-	}
-	parts := strings.Split(name, ".")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "." + parts[len(parts)-1]
-	}
-	return name
-}
-
-func influenceGraphScoreLabel(score float64) string {
-	if score <= 0 {
-		return "0"
-	}
-	if score >= 100 {
-		return fmt.Sprintf("%.0f", score)
-	}
-	return fmt.Sprintf("%.1f", score)
-}
-
-func influenceGraphNodeKind(node analyze.InfluenceNode) string {
-	if node.RuntimeEvidence {
-		return influenceSeverityLabel(node.Severity) + " · выполнение"
-	}
-	return "статическая связь"
+	return unique
 }
 
 func influenceStatusLabel(value string) string {
 	switch value {
 	case "runtime":
-		return "есть доказательства выполнения"
+		return "есть данные выполнения"
 	case "static_only":
-		return "статическая связь без проявления"
+		return "только статические данные"
+	default:
+		return "нет данных"
+	}
+}
+
+func influenceEvidenceLabel(value string) string {
+	switch value {
+	case "runtime":
+		return "выполнение"
+	case "mixed":
+		return "выполнение + статика"
+	case "static":
+		return "только статика"
 	default:
 		return "нет данных"
 	}
@@ -3046,42 +3293,6 @@ func topInfluenceNodes(influence analyze.InfluenceSummary, limit int) []analyze.
 		return influence.TopNodes
 	}
 	return influence.TopNodes[:limit]
-}
-
-func influenceEdgePath(from, to graphPoint, fromColumn, toColumn int, nodeW, nodeH, width float64) string {
-	const edgeGap = 14.0
-	y1 := from.y + nodeH/2
-	y2 := to.y + nodeH/2
-	if fromColumn == toColumn {
-		useLeftRail := from.x < width/2
-		railX := math.Max(18, from.x-48)
-		x1 := from.x - edgeGap
-		x2 := to.x - edgeGap
-		if !useLeftRail {
-			railX = math.Min(width-18, from.x+nodeW+48)
-			x1 = from.x + nodeW + edgeGap
-			x2 = to.x + nodeW + edgeGap
-		}
-		midY := (y1 + y2) / 2
-		return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f S%.1f %.1f %.1f %.1f",
-			x1, y1,
-			railX, y1,
-			railX, midY,
-			railX, midY,
-			railX, y2,
-			x2, y2,
-		)
-	}
-	if to.x > from.x {
-		x1 := from.x + nodeW + edgeGap
-		x2 := to.x - edgeGap
-		curve := math.Max(70, math.Abs(x2-x1)*0.42)
-		return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1+curve, y1, x2-curve, y2, x2, y2)
-	}
-	x1 := from.x - edgeGap
-	x2 := to.x + nodeW + edgeGap
-	curve := math.Max(70, math.Abs(x2-x1)*0.42)
-	return fmt.Sprintf("M%.1f %.1f C%.1f %.1f %.1f %.1f %.1f %.1f", x1, y1, x1-curve, y1, x2+curve, y2, x2, y2)
 }
 
 type graphPoint struct {
@@ -3142,19 +3353,30 @@ func truncateRunes(value string, limit int) string {
 
 func seriesMax(series mathanalysis.Series) float64 {
 	var maxValue float64
-	for _, point := range series.Points {
-		if point > maxValue {
+	found := false
+	for index, point := range series.Points {
+		if !seriesPointPresent(series, index) {
+			continue
+		}
+		if !found || point > maxValue {
 			maxValue = point
+			found = true
 		}
 	}
 	return maxValue
 }
 
 func seriesLast(series mathanalysis.Series) float64 {
-	if len(series.Points) == 0 {
-		return 0
+	for index := len(series.Points) - 1; index >= 0; index-- {
+		if seriesPointPresent(series, index) {
+			return series.Points[index]
+		}
 	}
-	return series.Points[len(series.Points)-1]
+	return 0
+}
+
+func seriesPointPresent(series mathanalysis.Series, index int) bool {
+	return index >= 0 && index < len(series.Points) && (len(series.Present) != len(series.Points) || series.Present[index])
 }
 
 func reportLanguage() string {

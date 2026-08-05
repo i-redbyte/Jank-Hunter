@@ -95,6 +95,29 @@ func TestBuildCausalGraphConnectsSymptomToOwner(t *testing.T) {
 	t.Fatalf("causal graph did not connect network symptom to owner: %+v", graph.Paths)
 }
 
+func TestCausalOwnerScoresIgnoreHealthyActivity(t *testing.T) {
+	edges := []CausalEdge{
+		{From: "owner:Feed", To: "state:Healthy", Kind: "owner-state", Confidence: 1},
+		{From: "owner:Feed", To: "state:Janky", Kind: "owner-state", Confidence: 0.4},
+	}
+
+	scores := causalOwnerScores(nil, edges, nil)
+	if len(scores) != 1 {
+		t.Fatalf("owner scores = %+v, want one problem-associated owner", scores)
+	}
+	assertFloat(t, scores[0].Score, 0.4)
+}
+
+func TestCompareCausalGraphsHidesReverseDuplicate(t *testing.T) {
+	forward := CausalEdge{From: "owner:Feed", To: "state:Janky", FromLabel: "Feed", ToLabel: "Jank", Kind: "owner-state", Confidence: 0.8, Count: 4}
+	reverse := CausalEdge{From: forward.To, To: forward.From, FromLabel: forward.ToLabel, ToLabel: forward.FromLabel, Kind: forward.Kind, Confidence: forward.Confidence, Count: forward.Count}
+
+	deltas := compareCausalGraphs(CausalGraph{}, CausalGraph{Edges: []CausalEdge{forward, reverse}})
+	if len(deltas) != 1 {
+		t.Fatalf("reverse edge must not create a duplicate delta: %+v", deltas)
+	}
+}
+
 func equalStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

@@ -84,6 +84,14 @@ make build
 `--instrumentation-diagnostics` добавляет вкладку «ASM диагностика», а `--di-catalog` —
 вкладку «DI-каталог». Внешние ресурсы и соседние HTML-файлы отчёту не нужны.
 
+Новый зелёный интерфейс используется для всех HTML-отчётов по умолчанию. Предыдущий
+вариант сохранён и доступен через `--report-style legacy`:
+
+```bash
+jankhunter inspect logs/*.jhlog --report-style legacy --out report.html
+jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --report-style legacy --out compare.html
+```
+
 Для доклада или обсуждения с командой можно включить более крупные акценты:
 
 ```bash

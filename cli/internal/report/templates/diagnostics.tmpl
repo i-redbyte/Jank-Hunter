@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: ASM диагностика</title>
-  <style>{{baseCSS}}</style>
+  <style>{{reportCSS .ReportStyle false}}</style>
 </head>
-<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -17,7 +17,7 @@
     <div class="hero-side">
       <div class="env-card">
         <div class="env-title">Покрытие инструментирования</div>
-        <strong class="env-device">{{.Diagnostics.ClassCount}} классов</strong>
+        <strong class="env-device">{{ruCount .Diagnostics.ClassCount "класс" "класса" "классов"}}</strong>
         <div class="env-subtitle">Методы {{.Diagnostics.MethodCount}} · перехватчиков {{.Diagnostics.HookCount}} · аннотаций {{.Diagnostics.AnnotatedMethodCount}}</div>
         <div class="env-grid">
           <div class="env-item"><div class="env-label">Игнорировано</div><div class="env-value">{{.Diagnostics.IgnoredMethodCount}}</div><div class="env-detail">методов с @JankHunterIgnore или игнором на уровне класса</div></div>
@@ -41,20 +41,20 @@
     <div class="panel-head">
       <div>
         <h2>Сводка ASM</h2>
-        <div class="panel-kicker">Диагностика сборки показывает, какие перехватчики реально совпали с байткодом и какие области аннотаций попали в атрибуцию выполнения.</div>
+        <div class="panel-kicker">Диагностика сборки показывает, какие правила инструментирования совпали с байткодом и какие аннотации могут добавить контекст в runtime-события. Эти данные оценивают покрытие телеметрии, а не производительность приложения.</div>
       </div>
       <span class="pill">instrumentation-diagnostics.jsonl</span>
     </div>
     <div class="grid">
-      <div class="metric"><div class="label">Классы</div><div class="value">{{.Diagnostics.ClassCount}}</div><div class="hint">попали в сопоставитель инструментирования</div></div>
-      <div class="metric"><div class="label">Методы</div><div class="value">{{.Diagnostics.MethodCount}}</div><div class="hint">безопасные, пропущенные и игнорированные вместе</div></div>
-      <div class="metric"><div class="label">Перехватчики</div><div class="value">{{.Diagnostics.HookCount}}</div><div class="hint">сумма срабатываний перехватчиков байткода</div></div>
-      <div class="metric"><div class="label">Аннотации</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankHunterFlow / @JankHunterScreen / @JankHunterTrace / @JankHunterOwner</div></div>
+      <div class="metric"><div class="label">{{tip "Классы" "Число классов, просмотренных ASM-сопоставителем в выбранном варианте сборки. Это не число классов, выполненных на устройстве."}}</div><div class="value">{{.Diagnostics.ClassCount}}</div><div class="hint">попали в сопоставитель инструментирования</div></div>
+      <div class="metric"><div class="label">{{tip "Методы" "Общее число просмотренных методов: подходящие, пропущенные и явно игнорированные. Значение характеризует область build-time анализа."}}</div><div class="value">{{.Diagnostics.MethodCount}}</div><div class="hint">подходящие, пропущенные и игнорированные вместе</div></div>
+      <div class="metric"><div class="label">{{tip "Перехватчики" "Сумма мест в байткоде, где Jank Hunter добавил поддерживаемый hook. Это не число runtime-вызовов."}}</div><div class="value">{{.Diagnostics.HookCount}}</div><div class="hint">мест инструментирования в байткоде</div></div>
+      <div class="metric"><div class="label">{{tip "Аннотации" "Число методов с распознанным контекстом Jank Hunter. Контекст появится в основном отчёте только если метод выполнится и событие будет записано."}}</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankHunterFlow / @JankHunterScreen / @JankHunterTrace / @JankHunterOwner</div></div>
     </div>
     <div class="report-guide">
-      <div class="guide-card"><strong>Зачем смотреть</strong>Если ожидаемый перехватчик не попал в таблицу, сигнатура библиотеки изменилась или вызов ушел через другую перегрузку.</div>
+      <div class="guide-card"><strong>Зачем смотреть</strong>Если ожидаемый перехватчик не попал в таблицу, сначала проверьте DSL-флаг и область include/exclude. Затем возможны новая сигнатура библиотеки или другая перегрузка.</div>
       <div class="guide-card"><strong>Как чинить</strong>Ищите идентификаторы сигнатуры и моста. Для новых вариантов OkHttp/корутин добавляйте версионированную запись моста и тест распознавателя.</div>
-      <div class="guide-card"><strong>Что считать нормой</strong>Пропуск конструкторов, нативных и абстрактных методов не ошибка. Нулевые перехватчики при включенной функции требуют проверки include/exclude packages и сигнатур.</div>
+      <div class="guide-card"><strong>Что считать нормой</strong>Пропуск конструкторов, native и abstract методов не ошибка. Ноль hooks допустим для выключенной функции или пустой области пакетов; при ожидаемом покрытии проверьте настройки и сигнатуры.</div>
     </div>
   </section>
 
@@ -64,10 +64,10 @@
     </div>
     <div class="table-scroll">
       <table>
-        <tr><th>Назначение</th><th>Сигнатура</th><th>Мост</th><th>Метод</th><th>Строка</th><th>Срабатывания</th></tr>
+        <tr><th>{{tip "Назначение" "Какой тип сигнала добавляет hook: HTTP, coroutine, owner, flow и т. п."}}</th><th>{{tip "Сигнатура" "Стабильный идентификатор распознанного варианта метода. Нужен для поддержки разных версий библиотек."}}</th><th>{{tip "Мост" "Версионированное правило адаптации конкретной сигнатуры библиотеки. «Без моста» означает прямое встроенное правило."}}</th><th>{{tip "Метод" "Метод и место вызова, где добавлен hook, если диагностика сохранила имя."}}</th><th>{{tip "Строка" "Номер строки из debug metadata байткода. «Нет» допустимо для сборки без line information."}}</th><th>{{tip "Места" "Сколько мест в байткоде получили это правило. Это build-time количество, не runtime-частота."}}</th></tr>
         {{range .Diagnostics.Hooks}}
         <tr><td><code>{{.Intent}}</code></td><td><code>{{.Signature}}</code></td><td>{{if .Bridge}}<code>{{.Bridge}}</code>{{else}}<span class="muted">без моста</span>{{end}}</td><td>{{if .Method}}<code>{{.Method}}</code>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{if .Line}}{{.Line}}{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Count}}</td></tr>
-        {{else}}<tr><td colspan="6" class="muted">Нет сработавших перехватчиков. Проверьте флаги DSL, includePackages/excludePackages и сигнатуры целевых библиотек.</td></tr>{{end}}
+        {{else}}<tr><td colspan="6" class="muted">Hooks не добавлены. Это нормально, если функции выключены или выбранные пакеты не содержат целевых вызовов; иначе проверьте DSL, includePackages/excludePackages и поддерживаемые сигнатуры.</td></tr>{{end}}
       </table>
     </div>
   </section>
@@ -78,7 +78,7 @@
     </div>
     <div class="table-scroll">
       <table>
-        <tr><th>Тип</th><th>Модуль</th><th>Семейство</th><th>Причина</th><th>Метод</th><th>Строка</th><th>Срабатывания</th></tr>
+        <tr><th>{{tip "Решение" "Что сделал matcher: отключил правило, не поддержал сигнатуру или пропустил место по безопасному ограничению."}}</th><th>{{tip "Модуль" "Функциональный модуль instrumentation, к которому относится решение."}}</th><th>{{tip "Семейство" "Группа похожих API или сигнатур, например OkHttp или coroutine."}}</th><th>{{tip "Причина" "Машинный код причины. unsupported_signature означает пробел покрытия телеметрии, а не проблему производительности приложения."}}</th><th>Метод</th><th>Строка</th><th>{{tip "Места" "Число build-time мест с одинаковым решением."}}</th></tr>
         {{range .Diagnostics.Decisions}}
         <tr><td>{{.Kind}}</td><td><code>{{.Module}}</code></td><td>{{.Family}}</td><td><code>{{.Reason}}</code></td><td>{{if .Method}}<code>{{.Method}}</code>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{if .Line}}{{.Line}}{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="7" class="muted">Нет отключенных, неподдержанных или пропущенных решений. Все релевантные места вызова либо сработали, либо не попадали в известные семейства.</td></tr>{{end}}
@@ -88,11 +88,11 @@
 
   <section id="annotations" class="panel">
     <div class="panel-head">
-      <div><h2>Области аннотаций</h2><div class="panel-kicker">Эти значения будут попадать в контекст выполнения и дальше в основной отчет.</div></div>
+      <div><h2>Области аннотаций</h2><div class="panel-kicker">Эти значения смогут попасть в контекст события, если соответствующий метод реально выполнится и запись не будет потеряна.</div></div>
     </div>
     <div class="table-scroll">
       <table>
-        <tr><th>Источник</th><th>Экран</th><th>Сценарий</th><th>Трасса</th><th>Методы</th></tr>
+        <tr><th>{{tip "Источник" "Owner помогает связать событие с классом или компонентом, который инициировал работу."}}</th><th>{{tip "Экран" "Screen — имя пользовательского экрана для группировки UI и связанных событий."}}</th><th>{{tip "Сценарий" "Flow — пользовательский или тестовый сценарий, например открытие ленты."}}</th><th>{{tip "Трасса" "Trace — дополнительная метка участка кода внутри сценария; это не системный Perfetto trace."}}</th><th>{{tip "Методы" "Число методов с одинаковым набором аннотаций."}}</th></tr>
         {{range .Diagnostics.Annotations}}
         <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{contextHint .Screen "screen"}}</td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Trace "trace"}}</code></td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="5" class="muted">Области аннотаций не найдены.</td></tr>{{end}}
@@ -109,7 +109,7 @@
       <div class="fold-body">
         <div class="table-scroll">
           <table>
-            <tr><th>Класс</th><th>Методы</th><th>Перехватчики</th><th>Аннотации</th><th>Игнорировано</th><th>Пропущено</th><th>Главные перехватчики</th></tr>
+            <tr><th>Класс</th><th>{{tip "Методы" "Сколько методов класса просмотрено build-time анализом."}}</th><th>{{tip "Hooks" "Сколько мест инструментирования добавлено в классе."}}</th><th>{{tip "Аннотации" "Сколько методов класса получили распознанный Jank Hunter context."}}</th><th>{{tip "Игнорировано" "Методы, исключенные через @JankHunterIgnore или игнор на уровне класса."}}</th><th>{{tip "Пропущено" "Методы, которые нельзя или не нужно безопасно менять: причина указана в строке."}}</th><th>{{tip "Главные hooks" "Наиболее частые правила инструментирования в классе. Количество относится к байткоду сборки."}}</th></tr>
             {{range .Diagnostics.TopClasses}}
             <tr>
               <td><code>{{.ClassName}}</code></td>
@@ -129,7 +129,7 @@
 
   <section id="warnings" class="panel">
     <div class="panel-head">
-      <div><h2>Предупреждения</h2><div class="panel-kicker">Ошибки формата и неполные записи диагностики.</div></div>
+      <div><h2>Предупреждения</h2><div class="panel-kicker">Ошибки формата и неполные записи диагностики. Они снижают доверие к покрытию instrumentation, но не меняют оценку состояния приложения.</div></div>
     </div>
     {{range .Diagnostics.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="muted">Предупреждений нет.</p>{{end}}
   </section>

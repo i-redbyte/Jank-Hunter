@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: DI-каталог</title>
-  <style>{{baseCSS}}</style>
+  <style>{{reportCSS .ReportStyle false}}</style>
 </head>
-<body class="{{bodyClass "di-page" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "di-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero di-hero">
   <div class="hero-grid">
     <div>
@@ -19,7 +19,7 @@
     <div class="hero-side">
       <div class="env-card di-summary-card">
         <div class="env-title">Покрытие DI</div>
-        <strong class="env-device">{{.DependencyInjection.ClassCount}} классов</strong>
+        <strong class="env-device">{{ruCount .DependencyInjection.ClassCount "класс" "класса" "классов"}}</strong>
         <div class="env-subtitle">{{.DependencyInjection.EdgeCount}} направленных связей consumer → dependency</div>
         <div class="env-grid">
           <div class="env-item"><div class="env-label">Показано классов</div><div class="env-value">{{.DependencyInjection.ShownClassCount}}</div><div class="env-detail">{{if .DependencyInjection.ClassesTruncated}}список ограничен{{else}}полный список{{end}}</div></div>
@@ -38,18 +38,18 @@
 <main>
   <section id="overview" class="panel di-panel">
     <div class="panel-head">
-      <div><h2>Build-time карта зависимостей</h2><div class="panel-kicker">Каталог построен из аннотаций и безопасно распознаваемых generated-сигнатур, без запуска приложения и без runtime tracing.</div></div>
+      <div><h2>Build-time карта зависимостей</h2><div class="panel-kicker">Каталог построен из аннотаций и однозначно распознанных generated-сигнатур, без запуска приложения и без runtime tracing. Он описывает wiring сборки, а не фактическое создание объектов.</div></div>
       <span class="di-badge">DI · BUILD TIME</span>
     </div>
     <div class="grid">
       {{range .DependencyInjection.Frameworks}}
-      <div class="metric di-framework-card"><div class="label">{{.Name}}</div><div class="value">{{.Classes}}</div><div class="hint">классов · {{.Edges}} связей</div></div>
-      {{else}}<div class="muted">DI framework records не найдены.</div>{{end}}
+      <div class="metric di-framework-card"><div class="label">{{.Name}}</div><div class="value">{{.Classes}}</div><div class="hint">{{ruCount .Classes "класс" "класса" "классов"}} · {{ruCount .Edges "связь" "связи" "связей"}}</div></div>
+      {{else}}<div class="muted">Записи DI-framework не найдены. Это может означать отсутствие поддерживаемого DI, пустую область сканирования или неподдерживаемый способ объявления.</div>{{end}}
     </div>
     <div class="report-guide di-guide">
-      <div class="guide-card"><strong>Направление</strong>Каждая запись читается как consumer → dependency: левому классу для создания или injection нужен правый.</div>
+      <div class="guide-card"><strong>Направление</strong>Каждая запись читается как consumer → dependency: левому классу по metadata сборки нужна правая зависимость. Это не означает, что оба объекта были созданы в прогоне.</div>
       <div class="guide-card"><strong>Наблюдение</strong>Фиолетовая пометка «встречается отдельно» означает только совпадение имени с runtime или memory-отчётом.</div>
-      <div class="guide-card"><strong>Изоляция</strong>DI catalog не передаётся в расчёты проблем, утечек, влияния, confidence или регрессионных gate.</div>
+      <div class="guide-card"><strong>Изоляция</strong>DI-каталог не передаётся в расчёты проблем, утечек, влияния, confidence или регрессионных gate. Предупреждения этой страницы не меняют статус приложения.</div>
     </div>
   </section>
 
@@ -59,7 +59,7 @@
     </div>
     <div class="table-scroll">
       <table class="di-class-table">
-        <tr><th>Класс</th><th>Framework</th><th>Роли</th><th>Scope / component</th><th>Отдельное наблюдение</th></tr>
+        <tr><th>{{tip "Класс" "Класс, найденный в DI metadata или generated-коде выбранного варианта сборки."}}</th><th>{{tip "Framework" "DI-система, для которой распознана запись: например Dagger, Hilt или Koin."}}</th><th>{{tip "Роли" "Как класс участвует в wiring: consumer, dependency, module, component и т. п. Роль не описывает время жизни объекта."}}</th><th>{{tip "Scope / component" "Build-time scope и component из аннотаций. Scope задаёт правила DI-контейнера, но сам по себе не доказывает удержание объекта в памяти."}}</th><th>{{tip "Отдельное наблюдение" "Совпадение имени класса с runtime- или memory-данными. Это независимые факты: каталог не связывает DI-ребро с симптомом автоматически."}}</th></tr>
         {{range .DependencyInjection.Classes}}
         <tr class="di-class-row">
           <td><div class="di-class-name"><span class="di-badge">DI</span>{{if .Generated}}<span class="di-badge di-generated">GENERATED</span>{{end}}<code>{{.Name}}</code></div></td>
@@ -75,13 +75,13 @@
 
   <section id="edges" class="panel di-panel">
     <div class="panel-head">
-      <div><h2>DI-связи</h2><div class="panel-kicker">Фиолетовая стрелка означает только build-time wiring. Resolution показывает источник уверенности: declaration или подтверждённый generated binding.</div></div>
+      <div><h2>DI-связи</h2><div class="panel-kicker">Фиолетовая стрелка означает только build-time wiring. Resolution показывает, откуда получена запись: из declaration или однозначно распознанного generated binding.</div></div>
       <span class="di-badge">CONSUMER → DEPENDENCY</span>
     </div>
     <div class="di-disclaimer compact"><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
     <div class="table-scroll">
       <table class="di-edge-table">
-        <tr><th>Consumer</th><th></th><th>Dependency</th><th>Тип / framework</th><th>Место</th><th>Resolution</th></tr>
+        <tr><th>{{tip "Consumer" "Класс, которому DI-контейнер предоставляет зависимость по metadata сборки."}}</th><th></th><th>{{tip "Dependency" "Предоставляемый тип. Ребро не является runtime-ссылкой из heap dump."}}</th><th>{{tip "Тип / framework" "Способ injection и DI-framework. Qualifier уточняет, какой binding выбран среди типов с одинаковым контрактом."}}</th><th>{{tip "Место" "Метод, поле, constructor или generated-site, из которого восстановлена связь."}}</th><th>{{tip "Resolution" "Источник подтверждения build-time связи. Это уверенность распознавания wiring, а не вероятность runtime-создания объекта."}}</th></tr>
         {{range .DependencyInjection.Edges}}
         <tr class="di-edge-row">
           <td><code>{{.Consumer}}</code>{{if .ConsumerObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
@@ -91,17 +91,17 @@
           <td><code>{{.Site}}</code></td>
           <td><span class="di-resolution">{{.Resolution}}</span></td>
         </tr>
-        {{else}}<tr><td colspan="6" class="muted">Надёжно подтверждённые DI-связи не найдены; классы и роли всё равно сохранены в каталоге.</td></tr>{{end}}
+        {{else}}<tr><td colspan="6" class="muted">Однозначно распознанные DI-связи не найдены; обнаруженные классы и роли всё равно сохранены в каталоге. Отсутствие строк не доказывает отсутствие DI wiring.</td></tr>{{end}}
       </table>
     </div>
   </section>
 
   <section id="coverage" class="panel di-panel">
-    <div class="panel-head"><div><h2>Покрытие и ограничения</h2><div class="panel-kicker">Jank Hunter намеренно предпочитает пропустить неоднозначную связь, а не выдать ложное доказательство.</div></div></div>
+    <div class="panel-head"><div><h2>Покрытие и ограничения</h2><div class="panel-kicker">Jank Hunter пропускает неоднозначную связь, если её нельзя надёжно восстановить из build-time данных. Поэтому каталог может быть неполным, но не должен выдавать догадку за подтверждённое ребро.</div></div></div>
     <div class="report-guide di-guide">
       <div class="guide-card"><strong>Dagger / Hilt</strong>Поддержаны @Inject, @Provides, @Binds, entry points, InstallIn, Factory.newInstance и MembersInjector.</div>
       <div class="guide-card"><strong>Koin</strong>Поддержаны annotations и KSP-generated роли. Произвольный Kotlin runtime DSL без статического контракта не интерпретируется.</div>
-      <div class="guide-card"><strong>Runtime impact</strong>Generated DI-классы проходят только read-only ASM scan: hooks и Jank Hunter marker в них не добавляются.</div>
+      <div class="guide-card"><strong>Runtime impact</strong>Generated DI-классы проходят только read-only ASM scan: hooks и Jank Hunter marker в них не добавляются. Каталог не создаёт runtime overhead.</div>
     </div>
     {{range .DependencyInjection.Warnings}}<p class="warning di-warning">{{.}}</p>{{end}}
   </section>

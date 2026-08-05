@@ -65,6 +65,50 @@ const buildReportSet = (name, presentation = false) => {
     }),
   ].join("\n") + "\n");
   const diagnosticsArgs = ["--instrumentation-diagnostics", diagnosticsPath];
+  const classGraphPath = resolve(setDir, "class-graph.jsonl");
+  const classGraphRecords = [
+    { format: 1, class: "CheckoutPresenter", edges: [{ caller: "submit()V", calleeClass: "com.app.checkout.MiddleConnector", calleeMethod: "dispatch()V", count: 4 }] },
+    { format: 1, class: "com.app.checkout.MiddleConnector", edges: [{ caller: "dispatch()V", calleeClass: "com.app.checkout.CheckoutRepository", calleeMethod: "load()V", count: 4 }] },
+    { format: 1, class: "com.app.checkout.CheckoutButton", edges: [{ caller: "click()V", calleeClass: "com.app.checkout.CheckoutRepository", calleeMethod: "load()V", count: 8 }] },
+    { format: 1, class: "com.app.checkout.CheckoutRepository", edges: [{ caller: "load()V", calleeClass: "com.app.network.CheckoutApi", calleeMethod: "request()V", count: 5 }] },
+    { format: 1, class: "com.app.analytics.StaticTracker", edges: [{ caller: "track()V", calleeClass: "com.app.analytics.StaticSink", calleeMethod: "send()V", count: 3 }] },
+  ];
+  for (let index = 0; index < 96; index += 1) {
+    const suffix = String(index).padStart(3, "0");
+    const next = String(index + 1).padStart(3, "0");
+    classGraphRecords.push({
+      format: 1,
+      class: `com.production.feature${suffix}.subsystem.ClassWithVeryLongProductionName${suffix}`,
+      edges: index < 95 ? [{
+        caller: `executeFeature${suffix}()V`,
+        calleeClass: `com.production.feature${next}.subsystem.ClassWithVeryLongProductionName${next}`,
+        calleeMethod: `executeFeature${next}()V`,
+        count: 96 - index,
+      }] : [],
+    });
+  }
+  writeFileSync(classGraphPath, classGraphRecords.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const classGraphArgs = ["--class-graph", classGraphPath];
+  const heapEvidencePath = resolve(setDir, "heap-evidence.json");
+  writeFileSync(heapEvidencePath, JSON.stringify({
+    sources: ["visual-fixture"],
+    leaks: [{
+      class_name: "com.app.checkout.CheckoutActivity",
+      holder: "com.app.checkout.CheckoutPresenter",
+      holder_field: "screen",
+      gc_root: "android.app.ActivityThread",
+      retained_size_kb: 4096,
+      retained_object_count: 2,
+      reference_path: [
+        { class_name: "android.app.ActivityThread", field_name: "mActivities", kind: "gc_root" },
+        { class_name: "com.app.checkout.CheckoutPresenter", field_name: "screen", kind: "instance_field" },
+        { class_name: "com.app.checkout.CheckoutActivity", kind: "target" },
+      ],
+      confidence: "high",
+    }],
+  }, null, 2));
+  const heapInspectArgs = ["--heap-evidence", heapEvidencePath];
+  const heapCompareArgs = ["--baseline-heap-evidence", heapEvidencePath, "--candidate-heap-evidence", heapEvidencePath];
   const ownerMapArgs = [];
   if (presentation) {
     const ownerMapPath = resolve(setDir, "owner-map.json");
@@ -80,13 +124,15 @@ const buildReportSet = (name, presentation = false) => {
     }, null, 2));
     ownerMapArgs.push("--owner-map", ownerMapPath);
   }
-  run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...presentationFlag, "--out", inspectPath]);
+  run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
   run([
     "compare",
     "--baseline", logs.join(","),
     "--candidate", candidateLogs.join(","),
     ...ownerMapArgs,
     ...diagnosticsArgs,
+    ...classGraphArgs,
+    ...heapCompareArgs,
     ...presentationFlag,
     "--out", comparePath,
   ]);
@@ -103,6 +149,34 @@ const buildReportSet = (name, presentation = false) => {
     { set: name, type: "compare-influence", path: comparePath, page: "influence" },
     { set: name, type: "compare-diagnostics", path: comparePath, page: "diagnostics" },
   ];
+  if (name === "short") {
+    reports.push(
+      { set: name, type: "inspect-influence-packages", path: inspectPath, page: "influence", influenceScenario: "packages" },
+      { set: name, type: "inspect-influence-neighborhood", path: inspectPath, page: "influence", influenceScenario: "neighborhood" },
+      { set: name, type: "inspect-influence-detail", path: inspectPath, page: "influence", influenceScenario: "detail" },
+      { set: name, type: "inspect-influence-context", path: inspectPath, page: "influence", influenceScenario: "context" },
+      { set: name, type: "inspect-influence-empty", path: inspectPath, page: "influence", influenceScenario: "empty" },
+      { set: name, type: "inspect-influence-zoom", path: inspectPath, page: "influence", influenceScenario: "zoom" },
+    );
+  }
+  if (presentation) {
+    reports.push({ set: name, type: "inspect-section-overview", path: inspectPath, page: "math", section: "section-overview" });
+    reports.push({ set: name, type: "inspect-method-reference", path: inspectPath, page: "math", section: "method-reference" });
+    reports.push(
+      { set: name, type: "readme-inspect-hero", path: inspectPath, page: "overview", readme: true },
+      { set: name, type: "readme-inspect-signals", path: inspectPath, page: "overview", section: "overview", readme: true },
+      { set: name, type: "readme-inspect-flows", path: inspectPath, page: "overview", section: "flows", readme: true },
+      { set: name, type: "readme-leaks-explorer", path: inspectPath, page: "leaks", section: "summary", readme: true },
+      { set: name, type: "readme-math-summary", path: inspectPath, page: "math", section: "math-overview", readme: true },
+      { set: name, type: "readme-math-network-loops", path: inspectPath, page: "math", section: "network-loops", openDetails: true, readme: true },
+      { set: name, type: "readme-math-integral", path: inspectPath, page: "math", section: "integral", openDetails: true, readme: true },
+      { set: name, type: "readme-math-markov", path: inspectPath, page: "math", section: "markov", openDetails: true, readme: true },
+      { set: name, type: "readme-math-relations-graph", path: inspectPath, page: "math", section: "graph", openDetails: true, readme: true },
+      { set: name, type: "readme-influence-graph", path: inspectPath, page: "influence", section: "graph", influenceScenario: "context", readme: true },
+      { set: name, type: "readme-diagnostics-overview", path: inspectPath, page: "diagnostics", section: "overview", readme: true },
+      { set: name, type: "readme-compare-overview", path: comparePath, page: "overview", section: "compare", readme: true },
+    );
+  }
 
   for (const required of ["inspect", "inspect-math", "inspect-leaks", "inspect-influence", "inspect-diagnostics", "compare", "compare-math", "compare-leaks", "compare-influence", "compare-diagnostics"]) {
     if (!reports.some((report) => report.type === required)) {
@@ -121,6 +195,7 @@ const browser = await chromium.launch();
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
+  { name: "readme", width: 1280, height: 720, readmeOnly: true },
 ];
 const visualStabilityCSS = `
   *, *::before, *::after {
@@ -142,7 +217,16 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
       height: row.getBoundingClientRect().height,
       text: row.textContent.trim().replace(/\s+/g, " ").slice(0, 160),
     }))
-    .filter((row) => row.height > 340 && row.text.length > 0);
+    .filter((row) => row.height > 180 && row.text.length > 0);
+  const looseTableCells = Array.from(document.querySelectorAll("th, td"))
+    .filter((cell) => {
+      const style = getComputedStyle(cell);
+      return parseFloat(style.paddingTop) > 8.1 ||
+        parseFloat(style.paddingRight) > 8.1 ||
+        parseFloat(style.paddingBottom) > 8.1 ||
+        parseFloat(style.paddingLeft) > 8.1;
+    })
+    .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 120));
   const clippedTooltips = Array.from(document.querySelectorAll("[data-tip]"))
     .filter((node) => {
       const rect = node.getBoundingClientRect();
@@ -187,10 +271,108 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
         return a.left < b.right - 2 && a.right > b.left + 2 && a.top < b.bottom - 2 && a.bottom > b.top + 2;
       });
     }).length;
+  const influenceTextOverflow = Array.from(document.querySelectorAll(".influence-node"))
+    .flatMap((node) => {
+      const card = node.querySelector(":scope > .node-card");
+      if (!card) return [];
+      const cardRect = card.getBoundingClientRect();
+      return Array.from(node.querySelectorAll(":scope > text"))
+        .filter((text) => {
+          const rect = text.getBoundingClientRect();
+          return rect.width > 0 && (
+            rect.left < cardRect.left - 1 ||
+            rect.right > cardRect.right + 1 ||
+            rect.top < cardRect.top - 1 ||
+            rect.bottom > cardRect.bottom + 1
+          );
+        })
+        .map((text) => text.textContent.trim().slice(0, 120));
+    });
+  const textOverflow = Array.from(document.querySelectorAll("p, small, .section-status, .method-kind, .explain"))
+    .filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && node.scrollWidth > node.clientWidth + 3;
+    })
+    .map((node) => node.textContent.trim().replace(/\s+/g, " ").slice(0, 120));
+  const methodReferenceTypography = Array.from(document.querySelectorAll(".method-reference-card > summary"))
+    .map((summary) => {
+      const title = summary.querySelector(":scope > span:first-child");
+      const kind = summary.querySelector(":scope > .method-kind");
+      if (!title || !kind) return null;
+      const titleStyle = getComputedStyle(title);
+      const kindStyle = getComputedStyle(kind);
+      const titleLineHeight = parseFloat(titleStyle.lineHeight);
+      const kindLineHeight = parseFloat(kindStyle.lineHeight);
+      return {
+        title: title.textContent.trim(),
+        titleFont: parseFloat(titleStyle.fontSize),
+        titleLines: titleLineHeight > 0 ? title.getBoundingClientRect().height / titleLineHeight : 0,
+        kindFont: parseFloat(kindStyle.fontSize),
+        kindLines: kindLineHeight > 0 ? kind.getBoundingClientRect().height / kindLineHeight : 0,
+      };
+    })
+    .filter((item) => item && (item.titleFont > 18 || item.kindFont > 12 || item.titleLines > 2.6 || item.kindLines > 2.6));
+  const sectionOverviewLayout = Array.from(document.querySelectorAll(".section-overview-card"))
+    .map((card) => {
+      const title = card.querySelector(".section-overview-title > span:first-child");
+      const status = card.querySelector(".section-overview-title > .section-status");
+      const summary = card.querySelector(".section-overview-summary");
+      if (!title || !status || !summary) return null;
+      const cardRect = card.getBoundingClientRect();
+      const titleRect = title.getBoundingClientRect();
+      const statusRect = status.getBoundingClientRect();
+      const summaryRect = summary.getBoundingClientRect();
+      return {
+        title: title.textContent.trim(),
+        width: cardRect.width,
+        titleStatusGap: statusRect.top - titleRect.bottom,
+        statusSummaryGap: summaryRect.top - statusRect.bottom,
+        alignContent: getComputedStyle(card).alignContent,
+      };
+    })
+    .filter((item) => item && (
+      (window.innerWidth >= 900 && item.width < 320) ||
+      item.titleStatusGap > 18 ||
+      item.statusSummaryGap > 20 ||
+      item.alignContent !== "start"
+    ));
+  const gaugeIssues = Array.from(document.querySelectorAll(".gauge-card"))
+    .map((card, index) => {
+      const gauge = card.querySelector(".gauge");
+      const ring = card.querySelector("svg.gauge-ring");
+      const circles = Array.from(card.querySelectorAll("svg.gauge-ring circle"));
+      if (!gauge || !ring || circles.length !== 2) {
+        return { index, reason: "неполная SVG-структура" };
+      }
+      const cardRect = card.getBoundingClientRect();
+      const gaugeRect = gauge.getBoundingClientRect();
+      const ringRect = ring.getBoundingClientRect();
+      const isContained = [gaugeRect, ringRect].every((rect) =>
+        rect.left >= cardRect.left - 1 && rect.right <= cardRect.right + 1 &&
+        rect.top >= cardRect.top - 1 && rect.bottom <= cardRect.bottom + 1,
+      );
+      if (!isContained || card.scrollWidth > card.clientWidth + 1 || gauge.scrollWidth > gauge.clientWidth + 1) {
+        return { index, reason: "выход за границы карточки" };
+      }
+      const invalidCircle = circles.some((circle) =>
+        circle.getAttribute("cx") !== "60" || circle.getAttribute("cy") !== "60" ||
+        circle.getAttribute("r") !== "48" || circle.getAttribute("pathLength") !== "100",
+      );
+      if (invalidCircle || ring.getAttribute("viewBox") !== "0 0 120 120") {
+        return { index, reason: "ненормализованная геометрия" };
+      }
+      const valueStyle = getComputedStyle(circles[1]);
+      if (valueStyle.strokeDasharray === "none" || parseFloat(valueStyle.strokeWidth) <= 0) {
+        return { index, reason: "не задана дуга значения" };
+      }
+      return null;
+    })
+    .filter(Boolean);
   return {
     pageOverflow,
     bareTables,
     tallRows,
+    looseTableCells,
     clippedTooltips,
     scrollWrappers,
     clippedCells,
@@ -198,6 +380,11 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     escapedProblemCells,
     missingArrowMarkers,
     leakLabelOverlaps,
+    influenceTextOverflow,
+    textOverflow,
+    methodReferenceTypography,
+    sectionOverviewLayout,
+    gaugeIssues,
   };
 });
 
@@ -233,6 +420,115 @@ const checkZeroToggle = async (page) => page.evaluate(() => {
   const hiddenAfter = rows.length - visibleCount();
   return { available: true, zeroRows: rows.length, hiddenBefore, visibleAfter, hiddenAfter };
 });
+
+const exerciseInfluenceScenario = async (frame, scenario) => frame.evaluate(async (selectedScenario) => {
+  const root = document.querySelector("[data-influence-workbench]");
+  if (!root) return { issues: ["influence workbench отсутствует"] };
+  const issues = [];
+  const tick = () => new Promise((resolveTick) => setTimeout(resolveTick, 0));
+  const stateHash = () => window.location.hash + " " + window.parent.location.hash;
+  const clickView = async (mode) => {
+    const button = root.querySelector(`[data-influence-view="${mode}"]`);
+    if (!button) {
+      issues.push(`кнопка режима ${mode} отсутствует`);
+      return;
+    }
+    button.click();
+    await tick();
+  };
+  const uniqueIDs = new Set();
+  for (const element of document.querySelectorAll("[id]")) {
+    if (uniqueIDs.has(element.id)) issues.push(`duplicate DOM id ${element.id}`);
+    uniqueIDs.add(element.id);
+  }
+  if (root.querySelectorAll("[data-influence-view]").length !== 5) issues.push("должно быть пять режимов данных");
+  if (root.querySelectorAll(".influence-legend-item").length !== 6) issues.push("легенда неполная");
+  if (!root.querySelector("[data-influence-shown]")?.textContent.includes("Показано")) issues.push("нет shown N of M");
+
+  if (selectedScenario === "packages") {
+    await clickView("packages");
+    const depth = root.querySelector("[data-influence-package-depth]");
+    depth.value = "5";
+    depth.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    if (root.querySelectorAll(".influence-node.aggregate").length < 80) issues.push("large package view содержит меньше 80 групп");
+    const packageNode = root.querySelector(".influence-node.aggregate");
+    packageNode?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    if (!root.querySelector("[data-influence-expand-package]")) issues.push("package detail не раскрывается до классов");
+    if (!stateHash().includes("view%3Dpackages") && !stateHash().includes("view=packages")) issues.push("package mode не сохранен в hash");
+  }
+
+  if (selectedScenario === "neighborhood") {
+    await clickView("neighborhood");
+    const search = root.querySelector("[data-influence-search]");
+    search.value = "com.app.checkout.CheckoutRepository";
+    search.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    const direction = root.querySelector("[data-influence-direction]");
+    direction.value = "both";
+    direction.dispatchEvent(new Event("change", { bubbles: true }));
+    const depth = root.querySelector("[data-influence-depth]");
+    depth.value = "3";
+    depth.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    if (!root.querySelector("[data-influence-view-title]")?.textContent.includes("Окрестность")) issues.push("neighborhood view не активирован");
+    if (!stateHash().includes("depth%3D3") && !stateHash().includes("depth=3")) issues.push("depth не сохранен в hash");
+  }
+
+  if (selectedScenario === "detail") {
+    const hprofNode = root.querySelector(".influence-node.hprof") || root.querySelector(".influence-node");
+    hprofNode?.focus();
+    hprofNode?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    if (!root.querySelector(".influence-detail h3")) issues.push("detail panel не открылся с клавиатуры");
+    if (root.querySelector(".influence-node.hprof") && !root.querySelector(".influence-hprof-badge")) issues.push("HPROF evidence не показан в detail panel");
+    if (!root.querySelector(".influence-detail-metrics")) issues.push("detail panel не содержит метрики");
+  }
+
+  if (selectedScenario === "context") {
+    await clickView("context");
+    if (root.querySelectorAll(".influence-node.connector").length === 0) issues.push("context view не показывает connector node");
+    if (root.querySelectorAll(".influence-edge.evidence-static").length === 0) issues.push("context connector не сохранил static evidence");
+  }
+
+  if (selectedScenario === "empty") {
+    const search = root.querySelector("[data-influence-search]");
+    search.value = "__missing.production.Class__";
+    search.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+    if (root.querySelectorAll(".influence-node").length !== 0) issues.push("empty search оставил узлы");
+    if (root.querySelector("[data-influence-empty]")?.hidden) issues.push("empty state скрыт");
+  }
+
+  if (selectedScenario === "zoom") {
+    const zoomIn = root.querySelector('[data-influence-zoom="in"]');
+    const zoomOut = root.querySelector('[data-influence-zoom="out"]');
+    for (let index = 0; index < 20; index += 1) zoomIn?.click();
+    const transformAtMax = root.querySelector("[data-influence-stage]")?.getAttribute("transform") || "";
+    for (let index = 0; index < 40; index += 1) zoomOut?.click();
+    const transformAtMin = root.querySelector("[data-influence-stage]")?.getAttribute("transform") || "";
+    const maxScale = Number((transformAtMax.match(/scale\(([^)]+)\)/) || [])[1]);
+    const minScale = Number((transformAtMin.match(/scale\(([^)]+)\)/) || [])[1]);
+    if (maxScale > 2.401 || minScale < 0.449) issues.push(`zoom вышел за границы ${minScale}..${maxScale}`);
+    const viewport = root.querySelector("[data-influence-viewport]");
+    if (getComputedStyle(viewport).overflow !== "hidden") issues.push("pan/zoom выходит за пределы graph viewport");
+    root.querySelector("[data-influence-reset-filters]")?.click();
+    await tick();
+    if (!root.querySelector('[data-influence-view="problems"]')?.classList.contains("is-active")) issues.push("reset не вернул Problems view");
+  }
+
+  const mixedEdges = root.querySelectorAll(".influence-edge.evidence-mixed").length;
+  const staticEdges = root.querySelectorAll(".influence-edge.evidence-static").length;
+  const runtimeEdges = root.querySelectorAll(".influence-edge.evidence-runtime").length;
+  return {
+    issues,
+    mixedEdges,
+    staticEdges,
+    runtimeEdges,
+    pageOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+  };
+}, scenario);
 
 const checkTooltipPlacement = async (surface) => {
   const handles = await surface.$$("[data-tip]");
@@ -330,7 +626,14 @@ const checkFragmentNavigation = async (page, frame) => {
 try {
   for (const viewport of viewports) {
     const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") pageErrors.push(message.text());
+    });
     for (const report of reportPaths) {
+      if (viewport.readmeOnly ? !report.readme : report.readme) continue;
+      const errorStart = pageErrors.length;
       const reportName = `${report.set}-${report.type}`;
       const reportURL = pathToFileURL(report.path);
       reportURL.hash = `page=${report.page}`;
@@ -345,11 +648,23 @@ try {
       await reportFrame.addStyleTag({ content: visualStabilityCSS });
       await reportFrame.evaluate(() => document.fonts?.ready);
       await page.waitForTimeout(120);
+      const influenceResult = report.page === "influence"
+        ? await exerciseInfluenceScenario(reportFrame, report.influenceScenario || "default")
+        : null;
+      if (report.section) {
+        await reportFrame.evaluate(({ id, openDetails }) => {
+          const target = document.getElementById(id);
+          if (openDetails) target?.querySelector(":scope > details.fold")?.setAttribute("open", "");
+          target?.scrollIntoView({ block: "start" });
+        }, { id: report.section, openDetails: Boolean(report.openDetails) });
+        await page.waitForTimeout(80);
+      }
       const issues = await collectLayoutIssues(reportFrame);
       const longCellToggle = await checkLongCellToggle(reportFrame);
       const zeroToggle = await checkZeroToggle(reportFrame);
-      const tooltipIssue = await checkTooltipPlacement(reportFrame);
+      const tooltipIssue = report.section ? "" : await checkTooltipPlacement(reportFrame);
       const fragmentIssues = viewport.name === "desktop" && report.set === "short"
+        && !report.influenceScenario
         ? await checkFragmentNavigation(page, reportFrame)
         : [];
 
@@ -363,6 +678,9 @@ try {
       }
       if (issues.tallRows.length > 0) {
         failures.push(`${viewport.name}/${displayName}: слишком высокие строки таблиц: ${JSON.stringify(issues.tallRows.slice(0, 3))}`);
+      }
+      if (issues.looseTableCells.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: отступы таблиц превышают 8px: ${JSON.stringify(issues.looseTableCells.slice(0, 3))}`);
       }
       if (issues.clippedTooltips > 0) {
         failures.push(`${viewport.name}/${displayName}: скрытые элементы с подсказками: ${issues.clippedTooltips}`);
@@ -385,6 +703,21 @@ try {
       if (issues.leakLabelOverlaps > 0) {
         failures.push(`${viewport.name}/${displayName}: ${issues.leakLabelOverlaps} подписей связей перекрывают карточки графа утечек`);
       }
+      if (issues.influenceTextOverflow.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: текст вышел за карточки графа влияния: ${JSON.stringify(issues.influenceTextOverflow.slice(0, 3))}`);
+      }
+      if (issues.textOverflow.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: текстовые блоки вышли за границы: ${JSON.stringify(issues.textOverflow.slice(0, 3))}`);
+      }
+      if (issues.methodReferenceTypography.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: типографика справки по методам слишком крупная: ${JSON.stringify(issues.methodReferenceTypography.slice(0, 3))}`);
+      }
+      if (issues.sectionOverviewLayout.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: карточки сводки разделов растянуты: ${JSON.stringify(issues.sectionOverviewLayout.slice(0, 3))}`);
+      }
+      if (issues.gaugeIssues.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: дефекты индикаторов здоровья: ${JSON.stringify(issues.gaugeIssues)}`);
+      }
       if (longCellToggle.available && (!longCellToggle.expanded || !longCellToggle.collapsed)) {
         failures.push(`${viewport.name}/${displayName}: кнопка раскрытия длинной ячейки не переключает состояние`);
       }
@@ -399,13 +732,28 @@ try {
       for (const issue of fragmentIssues) {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
+      if (influenceResult) {
+        for (const issue of influenceResult.issues) {
+          failures.push(`${viewport.name}/${displayName}: ${issue}`);
+        }
+        if (!report.influenceScenario && (influenceResult.mixedEdges === 0 || influenceResult.staticEdges === 0)) {
+          failures.push(`${viewport.name}/${displayName}: default view не различает mixed/static evidence`);
+        }
+        if (influenceResult.pageOverflow > 6) {
+          failures.push(`${viewport.name}/${displayName}: influence scenario шире viewport на ${influenceResult.pageOverflow}px`);
+        }
+      }
+      const newErrors = pageErrors.slice(errorStart);
+      if (newErrors.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: JS errors: ${JSON.stringify(newErrors.slice(0, 3))}`);
+      }
 
       await page.screenshot({
         path: resolve(outDir, `${reportName}-${viewport.name}.png`),
-        fullPage: true,
+        fullPage: !report.section,
       });
 
-      if (report.page === "overview") {
+      if (report.page === "overview" && !report.readme) {
         const mathLink = await reportFrame.$('a[href$="-math.html"]');
         if (!mathLink) {
           failures.push(`${viewport.name}/${displayName}: в обзоре нет ссылки на математический анализ`);

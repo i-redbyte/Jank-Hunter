@@ -55,6 +55,57 @@ func TestBuildMarkovModelMarksNetworkLoopWindow(t *testing.T) {
 	}
 }
 
+func TestBuildMarkovModelDisablesForecastForIndependentRuns(t *testing.T) {
+	model := buildMarkovModelForRuns(markovForecastTimeline(30, func(int) bool { return false }), nil, 3)
+
+	if model.IndependentRunCount != 3 || model.SequenceComparable || len(model.Transitions) != 0 || model.Forecast.Direction != markovForecastInsufficient || model.Forecast.HorizonWindows != 0 {
+		t.Fatalf("multi-run forecast must be disabled: %+v", model)
+	}
+	if model.Confidence != "low" || !strings.Contains(model.ConfidenceReason, "прогоны: 3") {
+		t.Fatalf("multi-run confidence reason is missing: %+v", model)
+	}
+}
+
+func TestBuildMarkovModelDoesNotTreatMissingBucketAsHealthyRecovery(t *testing.T) {
+	model := buildMarkovModel([]TimelineBucket{
+		{StartMS: 0, EndMS: 1_000, HasObservation: true, UIFrames: 100, UIJankyFrames: 20},
+		{StartMS: 1_000, EndMS: 2_000},
+		{StartMS: 2_000, EndMS: 3_000, HasObservation: true, UIFrames: 100},
+	}, nil)
+
+	if len(model.States) != 2 || model.States[1].State != markovHealthy {
+		t.Fatalf("missing bucket must be omitted and break recovery: %+v", model.States)
+	}
+	if model.TransitionEventCount != 0 || model.HasRecoveryProbability || model.HasExpectedRecovery {
+		t.Fatalf("gap must not create a recovery transition: %+v", model)
+	}
+	if model.MissingBucketCount != 1 || model.Forecast.Direction != markovForecastInsufficient {
+		t.Fatalf("coverage limitation is not explicit: %+v", model)
+	}
+}
+
+func TestCompareMarkovModelsRejectsAggregatedSequences(t *testing.T) {
+	baseline := buildMarkovModelForRuns(markovForecastTimeline(30, func(int) bool { return false }), nil, 2)
+	candidate := buildMarkovModel(markovForecastTimeline(30, func(int) bool { return false }), nil)
+
+	deltas := compareMarkovModels(baseline, candidate)
+	if len(deltas) != 1 || deltas[0].Comparable || !strings.Contains(deltas[0].Summary, "не рассчитаны") {
+		t.Fatalf("aggregated Markov sequences must be incomparable: %+v", deltas)
+	}
+}
+
+func TestCompareMarkovFindingsKeepsUnavailableMetricAndRegression(t *testing.T) {
+	deltas := []MarkovDelta{
+		{Metric: "Нет данных", Comparable: false, Severity: "medium", Summary: "метрика недоступна"},
+		{Metric: "Регрессия", Comparable: true, Severity: "high", Summary: "плохая экспозиция выросла"},
+	}
+
+	findings := compareMarkovFindings(deltas)
+	if len(findings) != 2 || findings[0].Severity != "medium" || findings[1].Severity != "high" {
+		t.Fatalf("unavailable metric and regression must both remain visible: %+v", findings)
+	}
+}
+
 func TestCompareMarkovModelsReportsRegression(t *testing.T) {
 	baseline := buildMarkovModel([]TimelineBucket{
 		{StartMS: 0, EndMS: 1000},
@@ -69,7 +120,7 @@ func TestCompareMarkovModelsReportsRegression(t *testing.T) {
 
 	deltas := compareMarkovModels(baseline, candidate)
 	for _, delta := range deltas {
-		if delta.Metric == "Здоровые -> плохие состояния" && delta.Severity == "medium" {
+		if delta.Metric == "Здоровые → плохие состояния" && delta.Severity == "medium" {
 			return
 		}
 	}
@@ -133,6 +184,117 @@ func TestCompareMarkovModelsReportsMatrixDivergence(t *testing.T) {
 		}
 	}
 	t.Fatalf("matrix divergence delta was not reported")
+}
+
+func TestBuildMarkovModelForecastsStableHealthyRun(t *testing.T) {
+	model := buildMarkovModel(markovForecastTimeline(30, func(int) bool { return false }), nil)
+
+	if model.Forecast.Direction != markovForecastStable {
+		t.Fatalf("Direction = %q, want stable", model.Forecast.Direction)
+	}
+	if !strings.Contains(model.Forecast.Label, "состояние в норме") {
+		t.Fatalf("Label = %q, want normal state", model.Forecast.Label)
+	}
+	if model.Forecast.Confidence != "high" {
+		t.Fatalf("Confidence = %q, want high", model.Forecast.Confidence)
+	}
+	if model.Forecast.SegmentWindows != 10 {
+		t.Fatalf("SegmentWindows = %d, want 10", model.Forecast.SegmentWindows)
+	}
+	assertFloat(t, model.Forecast.ProjectedBadProbability, 0)
+}
+
+func TestBuildMarkovModelForecastsDegradation(t *testing.T) {
+	model := buildMarkovModel(markovForecastTimeline(30, func(index int) bool { return index >= 10 }), nil)
+
+	if model.Forecast.Direction != markovForecastDegrading {
+		t.Fatalf("Direction = %q, want degrading: %+v", model.Forecast.Direction, model.Forecast)
+	}
+	if model.Forecast.Severity != "high" {
+		t.Fatalf("Severity = %q, want high", model.Forecast.Severity)
+	}
+	if model.Forecast.RecentBadExposure <= model.Forecast.EarlyBadExposure {
+		t.Fatalf("recent exposure must exceed early exposure: %+v", model.Forecast)
+	}
+}
+
+func TestBuildMarkovModelForecastsImprovement(t *testing.T) {
+	model := buildMarkovModel(markovForecastTimeline(30, func(index int) bool { return index < 10 }), nil)
+
+	if model.Forecast.Direction != markovForecastImproving {
+		t.Fatalf("Direction = %q, want improving: %+v", model.Forecast.Direction, model.Forecast)
+	}
+	if model.Forecast.RecentBadExposure >= model.Forecast.EarlyBadExposure {
+		t.Fatalf("recent exposure must be below early exposure: %+v", model.Forecast)
+	}
+}
+
+func TestBuildMarkovModelForecastReportsInsufficientHistory(t *testing.T) {
+	model := buildMarkovModel(markovForecastTimeline(11, func(int) bool { return false }), nil)
+
+	if model.Forecast.Direction != markovForecastInsufficient {
+		t.Fatalf("Direction = %q, want insufficient", model.Forecast.Direction)
+	}
+	if model.Forecast.HorizonWindows != 0 {
+		t.Fatalf("HorizonWindows = %d, want 0", model.Forecast.HorizonWindows)
+	}
+}
+
+func TestMarkovForecastDirectionReportsConflictingSignals(t *testing.T) {
+	if direction := markovForecastDirection(0.20, -0.20); direction != markovForecastUncertain {
+		t.Fatalf("Direction = %q, want uncertain", direction)
+	}
+}
+
+func TestBuildMarkovModelForecastKeepsStableProblemsVisible(t *testing.T) {
+	model := buildMarkovModel(markovForecastTimeline(36, func(index int) bool { return index%4 == 1 }), nil)
+
+	if model.Forecast.Direction != markovForecastStable {
+		t.Fatalf("Direction = %q, want stable: %+v", model.Forecast.Direction, model.Forecast)
+	}
+	if !strings.Contains(model.Forecast.Label, "не подтверждены") {
+		t.Fatalf("Label = %q, want no confirmed trajectory", model.Forecast.Label)
+	}
+}
+
+func TestBuildMarkovModelForecastWeightsExposureByDuration(t *testing.T) {
+	var startMS uint64
+	timeline := make([]TimelineBucket, 0, 12)
+	for index := range 12 {
+		durationMS := uint64(1000)
+		if index == 0 {
+			durationMS = 4000
+		}
+		bucket := TimelineBucket{StartMS: startMS, EndMS: startMS + durationMS}
+		if index == 0 {
+			bucket.UIFrames = 100
+			bucket.UIJankyFrames = 20
+		}
+		timeline = append(timeline, bucket)
+		startMS += durationMS
+	}
+
+	model := buildMarkovModel(timeline, nil)
+	assertFloat(t, model.Forecast.EarlyBadExposure, 4.0/7.0)
+	if model.Forecast.Direction != markovForecastImproving {
+		t.Fatalf("Direction = %q, want improving: %+v", model.Forecast.Direction, model.Forecast)
+	}
+}
+
+func markovForecastTimeline(count int, bad func(int) bool) []TimelineBucket {
+	timeline := make([]TimelineBucket, 0, count)
+	for index := range count {
+		bucket := TimelineBucket{
+			StartMS: uint64(index * 1000),
+			EndMS:   uint64((index + 1) * 1000),
+		}
+		if bad(index) {
+			bucket.UIFrames = 100
+			bucket.UIJankyFrames = 20
+		}
+		timeline = append(timeline, bucket)
+	}
+	return timeline
 }
 
 func transitionCount(transitions []MarkovTransition, from, to string) int {

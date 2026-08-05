@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: сравнение</title>
-  <style>{{baseCSS}}</style>
+  <style>{{reportCSS .ReportStyle false}}</style>
 </head>
-<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="report-hero-grid">
     <div class="report-hero-title">
@@ -23,8 +23,8 @@
         <div class="env-grid">
           <div class="env-item"><div class="env-label">База</div><div class="env-value">{{reportHint .Comparison.Baseline.Environment.Title "неизвестно" "device"}}</div><div class="env-detail">{{reportHint .Comparison.Baseline.Environment.Subtitle "контекст недоступен" "session"}}</div></div>
           <div class="env-item"><div class="env-label">Кандидат</div><div class="env-value">{{reportHint .Comparison.Candidate.Environment.Title "неизвестно" "device"}}</div><div class="env-detail">{{reportHint .Comparison.Candidate.Environment.Subtitle "контекст недоступен" "session"}}</div></div>
-          <div class="env-item"><div class="env-label">HTTP p95</div><div class="env-value">{{.Comparison.Baseline.HTTPP95MS}} → {{.Comparison.Candidate.HTTPP95MS}} мс</div><div class="env-detail">ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
-          <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{printf "%.2f" .Comparison.Baseline.UIJankPct}}% → {{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</div><div class="env-detail">FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div></div>
+          <div class="env-item"><div class="env-label">HTTP p95</div><div class="env-value">{{if gt .Comparison.Baseline.HTTPCount 0}}{{.Comparison.Baseline.HTTPP95MS}} мс{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.HTTPCount 0}}{{.Comparison.Candidate.HTTPP95MS}} мс{{else}}нет данных{{end}}</div><div class="env-detail">запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
+          <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</div><div class="env-detail">FPS {{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}нет данных{{end}}</div></div>
         </div>
       </div>
       </div>
@@ -60,31 +60,33 @@
       <span class="pill">автономный HTML</span>
     </div>
     {{range .Comparison.CohortWarnings}}<p class="warning">{{.}}</p>{{end}}
+    {{range .Comparison.QualityWarnings}}<p class="warning">{{.}}</p>{{end}}
+    {{range .Comparison.ExposureWarnings}}<p class="warning">{{.}}</p>{{end}}
     <div class="compare-pair-grid">
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "HTTP p95" "95-й процентиль HTTP-задержки. Рост показывает ухудшение хвоста сетевых запросов."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.HTTPP95MS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.HTTPP95MS}} мс</strong></div></div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.HTTPCount 0}}{{.Comparison.Baseline.HTTPP95MS}} мс{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.HTTPCount 0}}{{.Comparison.Candidate.HTTPP95MS}} мс{{else}}нет данных{{end}}</strong></div></div>
         <div class="compare-delta">Запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div>
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше значение у кандидата, тем заметнее просадка интерфейса."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%</strong></div></div>
-        <div class="compare-delta">Средний FPS {{printf "%.1f" .Comparison.Baseline.UIAvgFPS}} → {{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</strong></div></div>
+        <div class="compare-delta">Средний FPS {{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}нет данных{{end}}</div>
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.MemoryMaxKB}} КБ</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.MemoryMaxKB}} КБ</strong></div></div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.MemoryCount 0}}{{.Comparison.Baseline.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.MemoryCount 0}}{{.Comparison.Candidate.MemoryMaxKB}} КБ{{else}}нет данных{{end}}</strong></div></div>
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная пауза главного потока. При 2 мс watchdog задержек такие пики особенно важно смотреть рядом с владельцами работ."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.StallMaxMS}} мс</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.StallMaxMS}} мс</strong></div></div>
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная зафиксированная пауза главного потока. Один пик полезно проверять рядом с экраном, сценарием и источником работы; отсутствие события означает, что Jank Hunter не зафиксировал паузу, а не гарантирует ее полное отсутствие."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.StallCount 0}}{{.Comparison.Baseline.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.StallCount 0}}{{.Comparison.Candidate.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</strong></div></div>
         <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Сценарии и причины" "Сумма агрегированных проблемных окон и спама логами по кортежам контекста сценария. Рост показывает, что кандидат чаще попадает в объяснимые проблемные участки сценария."}}</div>
-        <div class="compare-values"><div class="compare-value"><span>Проблемы</span><strong>{{summaryProblems .Comparison.Baseline}} → {{summaryProblems .Comparison.Candidate}}</strong></div><div class="compare-value"><span>Спам логами</span><strong>{{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}}</strong></div></div>
-        <div class="compare-delta">Сценарии {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
+        <div class="compare-pair-title">{{tip "Сценарии и причины" "Частота проблемных окон и вызовов логов за минуту. Нормализация по длительности не позволяет длинному прогону выглядеть хуже только из-за большего времени наблюдения."}}</div>
+        <div class="compare-values"><div class="compare-value"><span>Проблемные окна, шт/мин</span><strong>{{printf "%.2f" (perMinute (summaryProblemWindows .Comparison.Baseline) .Comparison.Baseline.DurationMS)}} → {{printf "%.2f" (perMinute (summaryProblemWindows .Comparison.Candidate) .Comparison.Candidate.DurationMS)}}</strong></div><div class="compare-value"><span>Спам логами, выз./мин</span><strong>{{printf "%.2f" (perMinute (summaryLogSpam .Comparison.Baseline) .Comparison.Baseline.DurationMS)}} → {{printf "%.2f" (perMinute (summaryLogSpam .Comparison.Candidate) .Comparison.Candidate.DurationMS)}}</strong></div></div>
+        <div class="compare-delta">Исходные значения: окна {{summaryProblemWindows .Comparison.Baseline}} → {{summaryProblemWindows .Comparison.Candidate}} · вызовы логов {{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}} · строки сценариев {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
       </div>
     </div>
     <div class="report-guide">
@@ -95,14 +97,15 @@
     {{scoreGuide "compare"}}
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle .Comparison.Candidate.UIJankPct}}; --color: var(--warn)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}; --color: var(--bad)"><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">Ошибки кандидата</div></div>
-      <div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">FPS кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.UIFrames 0}}{{ringStyle .Comparison.Candidate.UIJankPct}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.HTTPCount 0}}{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--bad)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.HTTPCount 0}}{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%{{else}}нет данных{{end}}</strong><span>HTTP</span></div></div></div><div class="gauge-label">Ошибки кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.UIFrames 0}}{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}нет данных{{end}}</strong><span>FPS</span></div></div></div><div class="gauge-label">FPS кандидата</div></div>
     </div>
     {{if .Comparison.Candidate.Influence.Available}}
-    <h3>Граф влияния кандидата</h3>
+    <h3>Узлы графа для проверки в кандидате</h3>
+    <p class="help-text">Оценка ранжирует классы по связанным runtime-сигналам и статическим соседям. Она не доказывает причинность и не измеряет собственное CPU-время класса.</p>
     <table>
-      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Причины</th></tr>
+      <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Приоритет</th><th>{{tip "Основания" "Сигналы и связи, увеличившие приоритет. Это гипотезы для проверки, а не установленные причины."}}</th></tr>
       {{range topInfluenceNodes .Comparison.Candidate.Influence 6}}
       <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{join .Reasons ", "}}</td></tr>
       {{end}}
@@ -113,7 +116,7 @@
 
   <section id="code-problems" class="panel code-registry-panel">
     <details class="fold code-registry-fold" open>
-      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{len .Comparison.Candidate.CodeProblems}} строк · кандидат против базы</span></summary>
+      <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{ruCount (len .Comparison.Candidate.CodeProblems) "строка" "строки" "строк"}} · кандидат против базы</span></summary>
       <div class="fold-body">
     <p class="help-text">Сравнение проблемных классов и методов кандидата с базой: новые точки, усиление оценки и текущие доказательства. Дельта оценки показывает, насколько сильнее или слабее стало проблемное место у кандидата. Положительная дельта — повод проверить строку раньше.</p>
     {{rowLimitNote "Реестр проблем кандидата" (len .Comparison.Candidate.CodeProblems) 64}}
@@ -122,7 +125,7 @@
     <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
     {{end}}
     {{with codeProblemSeverities .Comparison.Candidate.CodeProblems}}
-    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{codeSeverityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
     {{end}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -131,7 +134,7 @@
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
           <option value="medium">Предупреждение</option>
-          <option value="ok">Норма</option>
+          <option value="ok">Низкий риск</option>
         </select>
         <select data-code-registry-category aria-label="Фильтр по категории">
           <option value="">Все категории</option>
@@ -153,13 +156,13 @@
         <tbody>
           {{range limitRows (codeProblemCompareRows .Comparison) 64}}
           <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}">
-            <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
+            <td><span class="problem-score {{severityClass .Severity}}">{{codeSeverityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
             <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
-            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
+            <td><div>база {{if .HasBaseline}}{{printf "%.1f" .BaselineScore}}{{else}}нет сопоставимой точки{{end}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div>{{if .Comparable}}<div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div>{{else}}<div class="muted">дельта не вычисляется</div>{{end}}</td>
             <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
             <td>
               <details class="code-problem-details">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{len .Candidate.Signals}} сигналов{{if .Candidate.DrillDown}} · {{len .Candidate.DrillDown}} сценариев{{end}}</small></summary>
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{ruCount (len .Candidate.Signals) "сигнал" "сигнала" "сигналов"}}{{if .Candidate.DrillDown}} · {{ruCount (len .Candidate.DrillDown) "сценарий" "сценария" "сценариев"}}{{end}}</small></summary>
                 <div class="code-problem-detail-body">
                   <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
                   <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
@@ -197,7 +200,7 @@
           <option value="">Все уровни риска</option>
           <option value="high">Критично</option>
           <option value="medium">Предупреждение</option>
-          <option value="ok">Норма</option>
+          <option value="ok">Низкий риск</option>
         </select>
         <select data-code-registry-category aria-label="Фильтр утечек по типу объекта">
           <option value="">Все типы</option>
@@ -229,8 +232,8 @@
             <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
             <td><div class="leak-object-kind">{{leakObjectKindLabel .Candidate.ObjectKind}}</div>{{if .Candidate.SystemRetained}}<div class="muted">системный объект</div>{{else if .Candidate.UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
             <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
-            <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
-            <td><div>кол-во {{.BaselineCount}} → {{.Candidate.Count}} ({{printf "%+d" .DeltaCount}})</div><div>возраст {{humanDuration .BaselineAgeMS}} → {{humanDuration .Candidate.MaxAgeMS}} ({{signedDuration .DeltaAgeMS}})</div></td>
+            <td><div>база {{if .HasBaseline}}{{printf "%.1f" .BaselineScore}}{{else}}нет сопоставимого сигнала{{end}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div>{{if .HasBaseline}}<div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div>{{end}}</td>
+            <td><div>кол-во {{if .HasBaseline}}{{.BaselineCount}}{{else}}нет данных{{end}} → {{.Candidate.Count}}{{if .HasBaseline}} ({{printf "%+d" .DeltaCount}}){{end}}</div><div>возраст {{if .HasBaseline}}{{humanDuration .BaselineAgeMS}}{{else}}нет данных{{end}} → {{humanDuration .Candidate.MaxAgeMS}}{{if .HasBaseline}} ({{signedDuration .DeltaAgeMS}}){{end}}</div><div class="muted">уверенность сопоставления: {{.MatchConfidence}}</div></td>
             <td><div class="problem-context">{{with reportValue .Candidate.Screen ""}}<div>экран <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Flow ""}}<div>сценарий <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Step ""}}<div>шаг <code>{{.}}</code></div>{{end}}</div></td>
             <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
@@ -252,18 +255,18 @@
       <h3>{{.Title}}</h3>
       <p class="help-text">{{.Detail}}</p>
       <table class="compare-table">
-        <tr><th>Метрика</th><th>База</th><th>Кандидат</th><th>Изменение</th><th>Регрессия</th><th>Серьезность</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>Выборка</th><th>Основа оценки</th></tr>
+        <tr><th>{{tip "Метрика" "Название сравниваемого сигнала. Подведите курсор к конкретному названию строки, чтобы увидеть формулу и направление ухудшения."}}</th><th>База</th><th>Кандидат</th><th>{{tip "Изменение" "Разница кандидата относительно базы. Для процентов может использоваться относительное изменение или процентные пункты, что указано в единице."}}</th><th>{{tip "Полоса регрессии" "Визуальная длина положительной регрессии, ограниченная 100%. Улучшение и несопоставимые данные не заполняют полосу."}}</th><th>{{tip "Статус" "Учитывает направление, размер эффекта, выборку и общее доверие. «Не сравнивается» означает отсутствие обязательных измерений."}}</th><th>{{tip "Доверие" (scoreHelp "confidence")}}</th><th>{{tip "Выборка" "Минимальное число релевантных наблюдений в базе и кандидате. Для mix-метрик это число логов или событий."}}</th><th>{{tip "Основа оценки" "Размер выборки, нормализация и причина отказа от сравнения, если данных недостаточно."}}</th></tr>
         {{range .Items}}
         <tr>
           <td class="metric-name">{{tip (deltaLabel .Name) (deltaHelp .Name)}}</td>
           <td>{{deltaValue .Baseline}}</td>
           <td>{{deltaValue .Candidate}}</td>
           <td>{{deltaChange .Change}}</td>
-          <td><div class="delta-track"><i class="{{severityClass .Severity}}" style="{{deltaWidth .RegressionPct}}"></i></div></td>
-          <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+          <td>{{if .Comparable}}<div class="delta-track"><i class="{{severityClass .Severity}}" style="{{deltaWidth .RegressionPct}}"></i></div>{{else}}<span class="muted">нет сопоставимых данных</span>{{end}}</td>
+          <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{else}}не сравнивается{{end}}</td>
           <td>{{confidenceLabel .Confidence}}</td>
           <td>{{.SampleSize}}</td>
-          <td>{{deltaInterval .Interval}}</td>
+          <td>{{if .ComparisonNote}}{{.ComparisonNote}} · {{end}}{{deltaInterval .Interval}}</td>
         </tr>
         {{end}}
       </table>
@@ -289,15 +292,15 @@
         <h3>Маршруты</h3>
         {{rowLimitNote "Сравнение маршрутов" (len $routeRows) 64}}
         <table>
-          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>p95 базы</th><th>p95 кандидата</th><th>Дельта p95</th><th>Серьезность</th><th>Источник</th></tr>
+          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>{{tip "p95 базы" "95-й процентиль длительности запросов базы. На выборке меньше трёх запросов статус не поднимается выше предупреждения."}}</th><th>{{tip "p95 кандидата" "95-й процентиль длительности запросов кандидата."}}</th><th>{{tip "Дельта p95" "Вычисляется только если маршрут есть и содержит запросы в обоих наборах."}}</th><th>{{tip "Статус" "Новая или исчезнувшая строка не называется регрессией: для неё показывается причина отказа от сравнения."}}</th><th>Источник</th></tr>
           {{range limitRows $routeRows 64}}
           <tr>
             <td><code>{{.Route}}</code></td>
-            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
-            <td>{{.BaselineFailures}}</td><td>{{.CandidateFailures}}</td>
-            <td>{{.BaselineP95MS}} мс</td><td>{{.CandidateP95MS}} мс</td>
-            <td>{{signedMS .DeltaP95MS}}</td>
-            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineCount}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateCount}}{{else}}нет данных{{end}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineFailures}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateFailures}}{{else}}нет данных{{end}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineP95MS}} мс{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateP95MS}} мс{{else}}нет данных{{end}}</td>
+            <td>{{if .Comparable}}{{signedMS .DeltaP95MS}}{{else}}не вычисляется{{end}}</td>
+            <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{else}}{{.ComparisonNote}}{{end}}</td>
             <td><code>{{fallback .CandidateOwner .BaselineOwner}}</code></td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий для сравнения.</td></tr>{{end}}
@@ -306,16 +309,16 @@
         <h3>Экраны</h3>
         {{rowLimitNote "Сравнение экранов" (len $screenRows) 64}}
         <table>
-          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>Дельта</th><th>FPS базы</th><th>FPS кандидата</th><th>Дельта FPS</th><th>Серьезность</th></tr>
+          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>{{tip "Дельта jank" "Разница доли медленных кадров в процентных пунктах. Вычисляется только для экрана с кадрами в обоих наборах."}}</th><th>FPS базы</th><th>FPS кандидата</th><th>{{tip "Дельта FPS" "Разница среднего FPS; отрицательное значение означает падение."}}</th><th>{{tip "Статус" "На выборке меньше 120 кадров сильный сигнал понижается до предупреждения."}}</th></tr>
           {{range limitRows $screenRows 64}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td>
-            <td>{{.BaselineFrames}}</td><td>{{.CandidateFrames}}</td>
-            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
-            <td>{{signedFloat .DeltaJankPct "п.п."}}</td>
-            <td>{{printf "%.1f" .BaselineAvgFPS}}</td><td>{{printf "%.1f" .CandidateAvgFPS}}</td>
-            <td>{{signedFloat .DeltaFPS "FPS"}}</td>
-            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineFrames}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateFrames}}{{else}}нет данных{{end}}</td>
+            <td>{{if .BaselinePresent}}{{printf "%.2f" .BaselineJankPct}}%{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{printf "%.2f" .CandidateJankPct}}%{{else}}нет данных{{end}}</td>
+            <td>{{if .Comparable}}{{signedFloat .DeltaJankPct "п.п."}}{{else}}не вычисляется{{end}}</td>
+            <td>{{if .BaselinePresent}}{{printf "%.1f" .BaselineAvgFPS}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{printf "%.1f" .CandidateAvgFPS}}{{else}}нет данных{{end}}</td>
+            <td>{{if .Comparable}}{{signedFloat .DeltaFPS "FPS"}}{{else}}не вычисляется{{end}}</td>
+            <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{else}}{{.ComparisonNote}}{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Нет UI-окон для сравнения.</td></tr>{{end}}
         </table>
@@ -323,15 +326,15 @@
         <h3>Источники</h3>
         {{rowLimitNote "Сравнение источников" (len $ownerRows) 128}}
         <table>
-          <tr><th>Источник / класс</th><th>Тип</th><th>Количество базы</th><th>Количество кандидата</th><th>Макс. базы</th><th>Макс. кандидата</th><th>Дельта макс.</th><th>Итого базы</th><th>Итого кандидата</th><th>Серьезность</th></tr>
+          <tr><th>Источник / класс</th><th>Тип</th><th>Количество базы</th><th>Количество кандидата</th><th>Макс. базы</th><th>Макс. кандидата</th><th>{{tip "Дельта максимума" "Разница самых длинных событий источника. Вычисляется только если источник наблюдался в обоих наборах."}}</th><th>{{tip "Итого базы" "Сумма длительностей атрибутированных событий; не CPU time класса."}}</th><th>{{tip "Итого кандидата" "Сумма длительностей атрибутированных событий; пересекающиеся работы могут суммироваться."}}</th><th>Статус</th></tr>
           {{range limitRows $ownerRows 128}}
           <tr>
             <td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td>
-            <td>{{.BaselineCount}}</td><td>{{.CandidateCount}}</td>
-            <td>{{.BaselineMaxMS}} мс</td><td>{{.CandidateMaxMS}} мс</td>
-            <td>{{signedMS .DeltaMaxMS}}</td>
-            <td>{{.BaselineTotalMS}} мс</td><td>{{.CandidateTotalMS}} мс</td>
-            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineCount}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateCount}}{{else}}нет данных{{end}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineMaxMS}} мс{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateMaxMS}} мс{{else}}нет данных{{end}}</td>
+            <td>{{if .Comparable}}{{signedMS .DeltaMaxMS}}{{else}}не вычисляется{{end}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineTotalMS}} мс{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateTotalMS}} мс{{else}}нет данных{{end}}</td>
+            <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{else}}{{.ComparisonNote}}{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="10" class="muted">Атрибуция источников пока недоступна.</td></tr>{{end}}
         </table>
@@ -349,16 +352,16 @@
         {{$flowRows := flowCompareRows .Comparison.Baseline .Comparison.Candidate}}
         {{rowLimitNote "Сравнение сценариев" (len $flowRows) 256}}
         <table>
-          <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
+          <tr><th>{{tip "Контекст" "Комбинация screen, flow, step и owner. Строки сопоставляются только при полном совпадении этой комбинации."}}</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>{{tip "Δ проблем" "Сырое количество сравнивается только при длительности прогонов с разницей не больше 20%."}}</th><th>Спам базы</th><th>Спам кандидата</th><th>{{tip "Δ спама" "Сырое количество сравнивается только для сопоставимой длительности. В общей матрице используется частота в минуту."}}</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>{{tip "Статус" "Рассчитывается только по метрикам, которые присутствуют в обоих наборах. Отсутствующий замер не подменяется нулём."}}</th></tr>
           {{range limitRows $flowRows 256}}
           <tr>
             <td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td>
-            <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
-            <td>{{.BaselineLogSpam}}</td><td>{{.CandidateLogSpam}}</td><td>{{.DeltaLogSpam}}</td>
-            <td>{{.BaselineHTTPP95MS}} мс</td><td>{{.CandidateHTTPP95MS}} мс</td>
-            <td>{{.BaselineStallMaxMS}} мс</td><td>{{.CandidateStallMaxMS}} мс</td>
-            <td>{{printf "%.2f" .BaselineJankPct}}%</td><td>{{printf "%.2f" .CandidateJankPct}}%</td>
-            <td class="{{severityClass .Severity}}">{{severityLabel .Severity}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineProblems}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateProblems}}{{else}}нет данных{{end}}</td><td>{{if .CountsComparable}}{{.DeltaProblems}}{{else}}—{{end}}</td>
+            <td>{{if .BaselinePresent}}{{.BaselineLogSpam}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateLogSpam}}{{else}}нет данных{{end}}</td><td>{{if .CountsComparable}}{{.DeltaLogSpam}}{{else}}—{{end}}</td>
+            <td>{{if .BaselineHTTPPresent}}{{.BaselineHTTPP95MS}} мс{{else}}нет HTTP-замера{{end}}</td><td>{{if .CandidateHTTPPresent}}{{.CandidateHTTPP95MS}} мс{{else}}нет HTTP-замера{{end}}</td>
+            <td>{{if .BaselineStallPresent}}{{.BaselineStallMaxMS}} мс{{else}}пауза не зафиксирована{{end}}</td><td>{{if .CandidateStallPresent}}{{.CandidateStallMaxMS}} мс{{else}}пауза не зафиксирована{{end}}</td>
+            <td>{{if .BaselineUIPresent}}{{printf "%.2f" .BaselineJankPct}}%{{else}}нет UI-замера{{end}}</td><td>{{if .CandidateUIPresent}}{{printf "%.2f" .CandidateJankPct}}%{{else}}нет UI-замера{{end}}</td>
+            <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{if .ComparisonNote}}<div class="muted">{{.ComparisonNote}}</div>{{end}}{{else}}{{.ComparisonNote}}{{end}}</td>
           </tr>
           {{else}}<tr><td colspan="14" class="muted">Нет событий контекста сценария для сравнения.</td></tr>{{end}}
         </table>
@@ -379,7 +382,7 @@
     {{range limitRows .Logs 12}}
     <details class="log-card" id="{{.Anchor}}">
       <summary>
-        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{.Summary.EventCount}} событий данных · {{.Summary.DictionaryRecords}} словарных · {{.Summary.ControlRecords}} control · {{humanDuration .Summary.DurationMS}} · {{.Summary.LogCount}} логов</div></div>
+        <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{ruCount .Summary.EventCount "событие данных" "события данных" "событий данных"}} · {{ruCount .Summary.DictionaryRecords "словарная запись" "словарные записи" "словарных записей"}} · {{.Summary.ControlRecords}} control · {{humanDuration .Summary.DurationMS}} · {{ruCount .Summary.LogCount "лог" "лога" "логов"}}</div></div>
         <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span><span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span></div>
       </summary>
       <div class="log-body">
@@ -387,7 +390,7 @@
           <div><h3>Маршруты</h3>{{rowLimitNote "Маршруты этого лога" (len .Summary.Routes) 64}}<table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range limitRows .Summary.Routes 64}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
           <div><h3>Экраны</h3>{{rowLimitNote "Экраны этого лога" (len .Summary.Screens) 64}}<table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>p95</th></tr>{{range limitRows .Summary.Screens 64}}<tr><td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{printf "%.1f" .AvgFPS}}</td><td>{{.P95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3>{{rowLimitNote "Источники этого лога" (len .Summary.Owners) 128}}<table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range limitRows .Summary.Owners 128}}<tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
-          <div><h3>Память и метрики</h3>{{rowLimitNote "Gauge-метрики этого лога" (len .Summary.Gauges) 128}}<table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{.Summary.MemoryMaxKB}}</td><td>удержано={{.Summary.Retained}}</td></tr>{{range limitRows .Summary.Gauges 128}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
+          <div><h3>Память и метрики</h3>{{rowLimitNote "Gauge-метрики этого лога" (len .Summary.Gauges) 128}}<table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{if gt .Summary.MemoryCount 0}}{{.Summary.MemoryMaxKB}}{{else}}нет замера{{end}}</td><td>события удержания={{.Summary.Retained}}</td></tr>{{range limitRows .Summary.Gauges 128}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
           <div><h3>Сценарии и причины</h3>{{rowLimitNote "Сценарии этого лога" (len .Summary.Flows) 128}}<table><tr><th>Экран / сценарий / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range limitRows .Summary.Flows 128}}<tr><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет сценариев.</td></tr>{{end}}</table></div>
           <div><h3>Проблемные окна</h3>{{rowLimitNote "Проблемные окна этого лога" (len .Summary.ProblemWindows) 128}}<table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range limitRows .Summary.ProblemWindows 128}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>

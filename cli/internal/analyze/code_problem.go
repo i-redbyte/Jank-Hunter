@@ -397,8 +397,8 @@ func (b *codeProblemBuilder) addRoutes(routes []RouteStats) {
 
 func (b *codeProblemBuilder) addRuntimeCalls(calls []RuntimeCallStats) {
 	for _, call := range calls {
-		b.addRuntimeCallEndpoint(call.Caller, call, 0.45, "Инициатор вызова выполнения")
-		b.addRuntimeCallEndpoint(call.Callee, call, 1.0, "Вызванная работа")
+		b.addRuntimeCallEndpoint(call.Caller, call, 0.45, "Инициатор вызова")
+		b.addRuntimeCallEndpoint(call.Callee, call, 1.0, "Выполняемый метод")
 	}
 }
 
@@ -711,12 +711,12 @@ func codeProblemSeverity(score float64, signals []CodeProblemSignal) string {
 		}
 	}
 	switch {
-	case score >= 18:
+	case score >= 15:
 		if !hasNonInfluenceSignal {
 			return "medium"
 		}
 		return "high"
-	case score >= 7:
+	case score >= 5:
 		if severity == "ok" {
 			return "medium"
 		}

@@ -1549,11 +1549,70 @@ func TestCompareWarnsOnCohortMismatch(t *testing.T) {
 	}
 }
 
+func TestCompareIgnoresCategoricalCountGrowthWhenSharesStayStable(t *testing.T) {
+	baseline := Summary{
+		LogCount:     1,
+		EventCount:   1_030,
+		ContextCount: 81,
+		Network:      []NamedValue{{Name: "wifi", Value: 81}},
+		Cohorts: []NamedValue{
+			{Name: "wifi", Value: 1_025},
+			{Name: "unknown", Value: 5},
+		},
+	}
+	candidate := Summary{
+		LogCount:     1,
+		EventCount:   784,
+		ContextCount: 42,
+		Network:      []NamedValue{{Name: "wifi", Value: 42}},
+		Cohorts: []NamedValue{
+			{Name: "wifi", Value: 780},
+			{Name: "unknown", Value: 4},
+		},
+	}
+
+	comparison := Compare(baseline, candidate)
+	if len(comparison.CohortWarnings) != 0 {
+		t.Fatalf("scaled categorical counts produced warnings: %+v", comparison.CohortWarnings)
+	}
+	deltas := deltasByName(comparison.Deltas)
+	for _, name := range []string{"Network mix", "Cohort mix"} {
+		delta, ok := deltas[name]
+		if !ok {
+			t.Fatalf("missing %s delta: %+v", name, comparison.Deltas)
+		}
+		if delta.Severity != "ok" || delta.Change != "без существенных изменений" {
+			t.Fatalf("%s = %+v, want stable shares", name, delta)
+		}
+		if !strings.Contains(delta.ComparisonNote, "сравниваются доли категорий") {
+			t.Fatalf("%s has no normalization explanation: %+v", name, delta)
+		}
+	}
+}
+
+func TestCompareDoesNotTreatMissingCategoricalTelemetryAsAChange(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 1, ContextCount: 4, Network: []NamedValue{{Name: "wifi", Value: 4}}},
+		Summary{LogCount: 1},
+	)
+	delta, ok := deltasByName(comparison.Deltas)["Network mix"]
+	if !ok {
+		t.Fatalf("missing Network mix delta: %+v", comparison.Deltas)
+	}
+	if delta.Comparable || delta.Severity != "ok" || delta.Candidate != "нет данных" {
+		t.Fatalf("missing network telemetry = %+v, want incomparable data", delta)
+	}
+	if len(comparison.CohortWarnings) != 0 {
+		t.Fatalf("missing categorical telemetry produced cohort warnings: %+v", comparison.CohortWarnings)
+	}
+}
+
 func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
 	comparison := Compare(
 		Summary{
 			LogCount:     5,
 			EventCount:   500,
+			DurationMS:   60_000,
 			MemoryCount:  3,
 			ContextCount: 50,
 			MemoryMaxKB:  100,
@@ -1564,6 +1623,7 @@ func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
 		Summary{
 			LogCount:     5,
 			EventCount:   500,
+			DurationMS:   60_000,
 			MemoryCount:  4,
 			ContextCount: 60,
 			MemoryMaxKB:  140,
@@ -1577,8 +1637,63 @@ func TestCompareUsesRealSampleSizesAndDoesNotInventIntervals(t *testing.T) {
 	if got := deltas["Max PSS"]; got.SampleSize != 3 || got.Interval != "выборка=3" {
 		t.Fatalf("Max PSS delta = %+v", got)
 	}
-	if got := deltas["Problem windows"]; got.Baseline != "2 шт" || got.Candidate != "3 шт" {
+	if got := deltas["Problem windows"]; got.Baseline != "2.00 шт/мин" || got.Candidate != "3.00 шт/мин" {
 		t.Fatalf("Problem windows delta = %+v", got)
+	}
+}
+
+func TestCompareDoesNotReplaceMissingMeasurementsWithZero(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 60_000},
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 60_000, HTTPCount: 20, HTTPP95MS: 900},
+	)
+
+	delta := deltasByName(comparison.Deltas)["HTTP p95"]
+	if delta.Comparable || delta.Baseline != "нет данных" || delta.Candidate != "900 мс" || delta.Severity != "ok" {
+		t.Fatalf("missing HTTP measurement became a regression: %+v", delta)
+	}
+	gate := EvaluateGate(comparison, ThresholdConfig{MaxSeverity: "ok"})
+	if gate.Failed {
+		t.Fatalf("gate failed on an incomparable metric: %+v", gate.Failures)
+	}
+}
+
+func TestCompareUsesHTTPFailureRateInsteadOfRawCount(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 60_000, HTTPCount: 100, HTTPFailed: 10, HTTPP95MS: 300},
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 60_000, HTTPCount: 200, HTTPFailed: 20, HTTPP95MS: 300},
+	)
+
+	delta := deltasByName(comparison.Deltas)["HTTP failure rate"]
+	if !delta.Comparable || delta.Severity != "ok" || delta.Baseline != "10.00 п.п." || delta.Candidate != "10.00 п.п." {
+		t.Fatalf("equal failure rates were reported as different: %+v", delta)
+	}
+	if _, exists := deltasByName(comparison.Deltas)["HTTP failures"]; exists {
+		t.Fatal("raw HTTP failure count is still exposed as a regression metric")
+	}
+}
+
+func TestCompareNormalizesCountSignalsByDuration(t *testing.T) {
+	comparison := Compare(
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 60_000, LogSpam: []LogSpamStats{{Count: 10}}, ProblemWindows: []ProblemWindowStats{{Windows: 4}}},
+		Summary{LogCount: 5, EventCount: 500, DurationMS: 120_000, LogSpam: []LogSpamStats{{Count: 20}}, ProblemWindows: []ProblemWindowStats{{Windows: 8}}},
+	)
+
+	deltas := deltasByName(comparison.Deltas)
+	for _, name := range []string{"Log spam", "Problem windows"} {
+		if delta := deltas[name]; delta.Severity != "ok" || delta.Change != "+0.0%" {
+			t.Fatalf("%s was not normalized by duration: %+v", name, delta)
+		}
+	}
+	if len(comparison.ExposureWarnings) != 1 || len(comparison.CohortWarnings) != 0 {
+		t.Fatalf("duration warning classes = exposure:%v cohort:%v", comparison.ExposureWarnings, comparison.CohortWarnings)
+	}
+}
+
+func TestDeltaFloatShowsRegressionWhenBaselineIsZero(t *testing.T) {
+	delta := deltaFloat("rate", 0, 4, "п.п.", true, 100)
+	if delta.RegressionPct != 100 || delta.Severity != "high" {
+		t.Fatalf("new float regression is not visible: %+v", delta)
 	}
 }
 
