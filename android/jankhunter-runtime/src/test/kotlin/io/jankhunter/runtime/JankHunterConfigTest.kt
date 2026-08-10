@@ -12,6 +12,8 @@ class JankHunterConfigTest {
         val config = JankHunterConfig.builder()
             .enabled(false)
             .runtimeEnabled(false)
+            .runtimeCallGraphEnabled(false)
+            .runtimeCallGraphMode(JankHunterRuntimeGraphMode.LEGACY)
             .autoStartCollectors(false)
             .mainThreadStallThresholdMs(123)
             .ownerBlockThresholdMs(234)
@@ -57,6 +59,8 @@ class JankHunterConfigTest {
 
         assertFalse(config.enabled())
         assertFalse(config.runtimeEnabled())
+        assertFalse(config.runtimeCallGraphEnabled())
+        assertEquals(JankHunterRuntimeGraphMode.LEGACY, config.runtimeCallGraphMode())
         assertFalse(config.autoStartCollectors())
         assertEquals(123, config.mainThreadStallThresholdMs())
         assertEquals(234, config.ownerBlockThresholdMs())
@@ -107,6 +111,8 @@ class JankHunterConfigTest {
 
         assertTrue(config.enabled())
         assertTrue(config.runtimeEnabled())
+        assertTrue(config.runtimeCallGraphEnabled())
+        assertEquals(JankHunterRuntimeGraphMode.BUFFERED, config.runtimeCallGraphMode())
         assertTrue(config.autoStartCollectors())
         assertTrue(config.systemSamplerEnabled())
         assertEquals(700L, config.mainThreadStallThresholdMs())

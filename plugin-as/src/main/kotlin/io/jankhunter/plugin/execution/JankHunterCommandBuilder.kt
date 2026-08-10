@@ -36,6 +36,8 @@ data class JankHunterRunRequest(
     val format: String,
     val json: Boolean,
     val presentation: Boolean,
+    val reportStyle: String = "modern",
+    val animatedBackground: Boolean = false,
 )
 
 data class JankHunterCommand(
@@ -77,12 +79,14 @@ object JankHunterCommandBuilder {
             }
         }
 
+        fun addPathFlag(name: String, value: String) = addFlag(name, JankHunterUserPaths.expandHome(value))
+
         fun addAnalysisFlags() {
-            addFlag("owner-map", request.ownerMap)
-            addFlag("mapping", request.mapping)
-            addFlag("class-graph", request.classGraph)
-            addFlag("instrumentation-diagnostics", request.diagnostics)
-            addFlag("di-catalog", request.diCatalog)
+            addPathFlag("owner-map", request.ownerMap)
+            addPathFlag("mapping", request.mapping)
+            addPathFlag("class-graph", request.classGraph)
+            addPathFlag("instrumentation-diagnostics", request.diagnostics)
+            addPathFlag("di-catalog", request.diCatalog)
             addFlag("route", request.route)
             addFlag("screen", request.screen)
             addFlag("owner", request.owner)
@@ -90,15 +94,23 @@ object JankHunterCommandBuilder {
         }
 
         fun addInspectHeapFlags() {
-            addFlag("heap-dump", request.heapDump)
-            addFlag("heap-evidence", request.heapEvidence)
+            addPathFlag("heap-dump", request.heapDump)
+            addPathFlag("heap-evidence", request.heapEvidence)
         }
 
         fun addCompareHeapFlags() {
-            addFlag("baseline-heap-dump", request.baselineHeapDump)
-            addFlag("baseline-heap-evidence", request.baselineHeapEvidence)
-            addFlag("candidate-heap-dump", request.candidateHeapDump)
-            addFlag("candidate-heap-evidence", request.candidateHeapEvidence)
+            addPathFlag("baseline-heap-dump", request.baselineHeapDump)
+            addPathFlag("baseline-heap-evidence", request.baselineHeapEvidence)
+            addPathFlag("candidate-heap-dump", request.candidateHeapDump)
+            addPathFlag("candidate-heap-evidence", request.candidateHeapEvidence)
+        }
+
+        fun addReportAppearanceFlags() {
+            request.reportStyle.trim()
+                .takeIf { it.isNotEmpty() && !it.equals("modern", ignoreCase = true) }
+                ?.let { addFlag("report-style", it) }
+            if (request.presentation) args += "--presentation"
+            if (request.animatedBackground) args += "--animated-background"
         }
 
         fun ensureOutput(extension: String): String {
@@ -116,7 +128,7 @@ object JankHunterCommandBuilder {
                 addInspectHeapFlags()
                 if (request.inspectLogScope == JankHunterLogScope.ALL_SELECTED) args += "--all-sessions"
                 if (request.json) args += "--json"
-                if (request.presentation) args += "--presentation"
+                addReportAppearanceFlags()
                 addFlag("out", ensureOutput("html"))
                 args += logs
             }
@@ -131,7 +143,7 @@ object JankHunterCommandBuilder {
                 addFlag("candidate", candidate.joinToString(","))
                 addCompareHeapFlags()
                 if (request.json) args += "--json"
-                if (request.presentation) args += "--presentation"
+                addReportAppearanceFlags()
                 addFlag("out", ensureOutput("html"))
             }
 
@@ -174,7 +186,7 @@ object JankHunterCommandBuilder {
     private fun normalizeExecutablePath(project: Project, raw: String): String {
         val hasSeparator = raw.contains('/') || raw.contains(File.separatorChar)
         if (!hasSeparator) return raw
-        val path = Path.of(raw)
+        val path = Path.of(JankHunterUserPaths.expandHome(raw))
         return if (path.isAbsolute) {
             path.normalize().toString()
         } else {
@@ -183,7 +195,7 @@ object JankHunterCommandBuilder {
     }
 
     private fun normalizeOutputPath(project: Project, raw: String): String {
-        val path = Path.of(raw)
+        val path = Path.of(JankHunterUserPaths.expandHome(raw))
         return if (path.isAbsolute) {
             path.normalize().toString()
         } else {
@@ -199,8 +211,7 @@ object JankHunterCommandBuilder {
     ): String {
         val settings = JankHunterSettings.getInstance().state
         val baseDir = settings.outputDirectory.trim().ifEmpty {
-            val basePath = project.basePath ?: System.getProperty("user.home")
-            File(basePath, "build/jankhunter").path
+            JankHunterSettings.defaultOutputDirectory()
         }
         val effectiveExtension = if (mode == JankHunterMode.PROBLEMS) {
             if (format.equals("json", ignoreCase = true)) "json" else extension
@@ -211,7 +222,7 @@ object JankHunterCommandBuilder {
         return File(baseDir, "${mode.command}-$timestamp.$effectiveExtension").path
     }
 
-    private fun pathList(raw: String): List<String> = JankHunterInputPaths.pathList(raw)
+    private fun pathList(raw: String): List<String> = JankHunterInputPaths.pathList(raw).map(JankHunterUserPaths::expandHome)
 
     private fun scopedPathList(project: Project, raw: String, scope: JankHunterLogScope): List<String> {
         val parts = pathList(raw)

@@ -84,6 +84,7 @@ class JankHunterExtensionTest {
         assertEquals(true, instrumentation.executors.get())
         assertEquals(false, instrumentation.coroutines.get())
         assertEquals(false, instrumentation.methodCounters.get())
+        assertEquals(JankHunterMethodFilterMode.DIAGNOSTICS, instrumentation.methodFilterMode.get())
         assertEquals(true, instrumentation.lifecycleLeaks.get())
         assertEquals(false, instrumentation.includeWholeApplication.get())
         assertEquals(emptySet<String>(), instrumentation.includePackages.get())

@@ -19,7 +19,6 @@ repositories {
 }
 
 dependencies {
-    implementation("com.google.code.gson:gson:2.11.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.opentest4j:opentest4j:1.3.0")
 
@@ -33,11 +32,7 @@ dependencies {
         } else {
             intellijIdea(providers.gradleProperty("platformVersion").get())
         }
-        // The selected local IDE already ships the matching test framework. Keeping it bundled
-        // avoids a redundant remote artifact lookup and guarantees ABI parity with that IDE.
         testFramework(TestFrameworkType.Bundled)
-        // Pin the verifier so Gradle can resolve the executable deterministically from Maven
-        // Central without querying JetBrains' latest-version endpoint during every build.
         pluginVerifier("1.408")
     }
 }
@@ -64,8 +59,6 @@ tasks.test {
 
 intellijPlatform {
     buildSearchableOptions = false
-    // The plugin builds its Swing UI in Kotlin and has no IntelliJ GUI Designer .form files.
-    // Bytecode instrumentation would only add a remote java-compiler dependency and build work.
     instrumentCode = false
 
     pluginConfiguration {
@@ -75,15 +68,14 @@ intellijPlatform {
 
         description = """
             <p><b>Jank Hunter for Android</b> brings Android jank investigation into Android Studio and IntelliJ IDEA.</p>
-            <p>Run the local Jank Hunter CLI, validate <code>.jhlog</code> inputs, discover Android Gradle Plugin artifacts,
-            collect logs from connected devices, inspect or compare captures, open HTML reports, and review detected
-            problems with source navigation directly in the IDE.</p>
+            <p>Run the local Jank Hunter CLI, validate <code>.jhlog</code> inputs, inspect or compare captures,
+            add optional HPROF evidence and Android Gradle Plugin artifacts, and open generated HTML reports.</p>
         """.trimIndent()
 
         changeNotes = """
             <ul>
-              <li>Initial tool window for inspect, compare, problems, scorecard, sample, and version commands.</li>
-              <li>Settings page for CLI path and default report behavior.</li>
+              <li>Simple inspect and compare workflows in a modeless window.</li>
+              <li>Optional advanced artifacts, filters, report appearance, scorecard, and CLI diagnostics.</li>
             </ul>
         """.trimIndent()
 
@@ -97,8 +89,6 @@ intellijPlatform {
     }
 
     pluginVerification {
-        // Jank Hunter has no Marketplace plugin dependencies. Offline verification keeps the
-        // result deterministic and prevents a local/CI network outage from masking ABI checks.
         freeArgs.add("-offline")
         ides {
             val localIde = providers.gradleProperty("localIdePath").orNull

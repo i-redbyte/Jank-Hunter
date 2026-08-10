@@ -52,6 +52,8 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
         val classGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val runtimeCallGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val methodCounters: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val methodFilterMode: Property<JankHunterMethodFilterMode> =
+            objects.property(JankHunterMethodFilterMode::class.java).convention(JankHunterMethodFilterMode.DIAGNOSTICS)
         val includeAndroidNamespace: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val includeWholeApplication: Property<Boolean> =
             objects.property(Boolean::class.java).convention(false)

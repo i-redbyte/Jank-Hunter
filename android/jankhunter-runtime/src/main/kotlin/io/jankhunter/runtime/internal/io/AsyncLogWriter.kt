@@ -5,6 +5,8 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue
+import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import java.io.File
 import java.io.IOException
@@ -18,13 +20,16 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.LockSupport
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Non-blocking producer facade for the binary session writer.
  *
- * The file, worker and event-lane arrays stay unallocated until the first event wins admission.
- * High-value evidence has an independent bounded reserve, while a global sequence merge preserves
- * producer admission order across both lanes. Quality and flush controls never consume bulk slots.
+ * The file and worker stay lazy. Preallocated bounded MPSC event lanes avoid queue-node allocation
+ * and blocking queue locks. High-value evidence has an independent reserve, while a short
+ * fail-open admission critical section assigns one global sequence across both lanes. Quality and
+ * flush controls never consume bulk slots.
  */
 internal class AsyncLogWriter private constructor(
     private val directory: File,
@@ -38,7 +43,7 @@ internal class AsyncLogWriter private constructor(
 ) {
     private val controlQueue = ArrayBlockingQueue<FlushControl>(CONTROL_QUEUE_CAPACITY)
     private val queuedEvents = Semaphore(0)
-    private val admissionLock = Any()
+    private val admissionLock = ReentrantLock()
     private val controlSubmitters = AtomicInteger()
     private val terminalReason = AtomicInteger(TERMINAL_REASON_NONE)
     private val terminalCallbackDelivered = AtomicBoolean(false)
@@ -50,8 +55,10 @@ internal class AsyncLogWriter private constructor(
     private val producerContext = ThreadLocal<LogEventContext>()
     private val binaryStorage: JankHunterBinaryStorage? = config.binaryStorage()
 
-    @Volatile
-    private var eventLanes: EventLanes? = null
+    private val eventLanes = EventLanes(
+        bulkCapacity = config.maxQueueSize(),
+        criticalCapacity = criticalQueueCapacity(config.maxQueueSize()),
+    )
 
     @Volatile
     private var accepting = true
@@ -282,9 +289,9 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
-    fun stableCounters(batch: StableCounterBatch) {
-        if (batch.size <= 0) return
-        enqueue(JhlogV9.TYPE_COUNTER, EventLane.BULK, batch.size.toLong()) {
+    fun stableCounters(batch: StableCounterBatch): Boolean {
+        if (batch.size <= 0) return true
+        return enqueue(JhlogV9.TYPE_COUNTER, EventLane.BULK, batch.logicalEventCount()) {
             PendingLogEvent.StableCounters(captureProducer(), batch)
         }
     }
@@ -321,8 +328,8 @@ internal class AsyncLogWriter private constructor(
         source: String?,
         level: Int,
         count: Long,
-    ) {
-        enqueue(JhlogV9.TYPE_LOG_SPAM, EventLane.BULK) {
+    ): Boolean {
+        return enqueue(JhlogV9.TYPE_LOG_SPAM, EventLane.BULK, count) {
             PendingLogEvent.LogSpam(captureProducer(), screen, owner, flow, step, source, level, count)
         }
     }
@@ -354,9 +361,9 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
-    fun runtimeCalls(batch: RuntimeCallBatch) {
-        if (batch.size <= 0) return
-        enqueue(JhlogV9.TYPE_RUNTIME_CALL, EventLane.BULK, batch.size.toLong()) {
+    fun runtimeCalls(batch: RuntimeCallBatch): Boolean {
+        if (batch.size <= 0) return true
+        return enqueue(JhlogV9.TYPE_RUNTIME_CALL, EventLane.BULK, batch.logicalEventCount()) {
             PendingLogEvent.RuntimeCalls(captureProducer(), batch)
         }
     }
@@ -424,11 +431,11 @@ internal class AsyncLogWriter private constructor(
     }
 
     fun close(timeoutMs: Long = closeTimeoutMs()): Boolean {
-        val activeWorker = synchronized(admissionLock) {
+        admissionLock.withLock {
             accepting = false
             running.set(false)
-            worker
         }
+        val activeWorker = worker
         if (activeWorker == null) return true
         // Wake an idle poll without interrupting an in-flight file lock, custom storage call or
         // chunk commit. Interrupting those operations can turn an orderly shutdown into data loss.
@@ -457,57 +464,63 @@ internal class AsyncLogWriter private constructor(
         logicalEventCount: Long = 1L,
         createEvent: () -> PendingLogEvent,
     ): Boolean {
-        return synchronized(admissionLock) {
+        if (!admissionLock.tryLock()) {
+            quality.add(QualityCounterId.WRITER_ADMISSION_CONTENTION_TOTAL)
+            quality.addRejected(recordType, QualityCounterId.REASON_ADMISSION_CONTENTION, logicalEventCount)
+            return false
+        }
+        return try {
             if (!accepting) {
                 quality.addRejected(
                     recordType,
                     QualityCounterId.REASON_NOT_ACCEPTING,
                     logicalEventCount,
                 )
-                return@synchronized false
+                return false
             }
-
-            val lanes = eventLanes ?: config.maxQueueSize().let { bulkCapacity ->
-                EventLanes(
-                    bulkCapacity = bulkCapacity,
-                    criticalCapacity = criticalQueueCapacity(bulkCapacity),
-                )
-            }.also { eventLanes = it }
-            val queue = lanes.queue(lane)
-            if (queue.remainingCapacity() == 0) {
+            if (!eventLanes.hasCapacity(lane)) {
                 quality.addRejected(recordType, QualityCounterId.REASON_QUEUE_FULL, logicalEventCount)
-                return@synchronized false
+                return false
             }
-
             val event = createEvent()
             val sequence = acceptedSequence + 1L
             event.sequence = sequence
-            if (!queue.offer(event)) {
-                quality.addRejected(
-                    recordType,
-                    QualityCounterId.REASON_QUEUE_FULL,
-                    logicalEventCount,
-                )
-                return@synchronized false
+            when (eventLanes.tryOffer(lane, event)) {
+                OfferResult.OFFERED -> Unit
+                OfferResult.FULL -> {
+                    quality.addRejected(recordType, QualityCounterId.REASON_QUEUE_FULL, logicalEventCount)
+                    return false
+                }
+                OfferResult.CONTENDED -> {
+                    quality.add(QualityCounterId.WRITER_ADMISSION_CONTENTION_TOTAL)
+                    quality.addRejected(
+                        recordType,
+                        QualityCounterId.REASON_ADMISSION_CONTENTION,
+                        logicalEventCount,
+                    )
+                    return false
+                }
             }
             acceptedSequence = sequence
             quality.addAccepted(event.logicalEventCount)
-            if (!startWorkerLocked()) return@synchronized false
+            if (!startWorker()) return false
             queuedEvents.release()
             true
+        } finally {
+            admissionLock.unlock()
         }
     }
 
     private fun beginControlSubmission(): Long {
-        return synchronized(admissionLock) {
-            if (!accepting) return@synchronized CONTROL_NOT_ACCEPTING
-            if (worker == null) return@synchronized CONTROL_NO_WORK
+        return admissionLock.withLock {
+            if (!accepting) return@withLock CONTROL_NOT_ACCEPTING
+            if (worker == null) return@withLock CONTROL_NO_WORK
             controlSubmitters.incrementAndGet()
             acceptedSequence
         }
     }
 
-    private fun startWorkerLocked(): Boolean {
+    private fun startWorker(): Boolean {
         if (worker != null) return true
         return try {
             val startedWorker = Thread(::runWorkerFailOpen, "JankHunterWriter").apply {
@@ -639,7 +652,7 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
-    private fun hasPendingEvents(): Boolean = eventLanes?.hasEvents() == true
+    private fun hasPendingEvents(): Boolean = eventLanes.hasEvents()
 
     private fun pollNextEvent(): PendingLogEvent? {
         val available = try {
@@ -648,7 +661,7 @@ internal class AsyncLogWriter private constructor(
             false
         }
         if (!available) return null
-        return eventLanes?.pollNext()
+        return eventLanes.pollNext()
     }
 
     private fun writeEvent(event: PendingLogEvent) {
@@ -749,7 +762,7 @@ internal class AsyncLogWriter private constructor(
     ) {
         terminalReason.compareAndSet(TERMINAL_REASON_NONE, reason)
         if (terminalFailure == null && failure != null) terminalFailure = failure
-        synchronized(admissionLock) {
+        admissionLock.withLock {
             accepting = false
             running.set(false)
             rejectAllQueuedLocked(reason)
@@ -804,9 +817,8 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun rejectAllQueuedLocked(reason: Int) {
-        val lanes = eventLanes ?: return
         while (true) {
-            val event = lanes.pollNext() ?: break
+            val event = eventLanes.pollNext() ?: break
             quality.addRejected(event.recordType, reason, event.remainingEventCount)
         }
         queuedEvents.drainPermits()
@@ -863,14 +875,16 @@ internal class AsyncLogWriter private constructor(
         bulkCapacity: Int,
         criticalCapacity: Int,
     ) {
-        private val critical = ArrayBlockingQueue<PendingLogEvent>(criticalCapacity)
-        private val bulk = ArrayBlockingQueue<PendingLogEvent>(bulkCapacity)
+        private val critical = BoundedMpscQueue<PendingLogEvent>(criticalCapacity)
+        private val bulk = BoundedMpscQueue<PendingLogEvent>(bulkCapacity)
 
-        fun queue(lane: EventLane): ArrayBlockingQueue<PendingLogEvent> {
-            return if (lane == EventLane.CRITICAL) critical else bulk
+        fun tryOffer(lane: EventLane, event: PendingLogEvent): OfferResult {
+            return queue(lane).tryOffer(event)
         }
 
-        fun hasEvents(): Boolean = critical.isNotEmpty() || bulk.isNotEmpty()
+        fun hasEvents(): Boolean = !critical.isEmpty() || !bulk.isEmpty()
+
+        fun hasCapacity(lane: EventLane): Boolean = queue(lane).hasCapacity()
 
         fun pollNext(): PendingLogEvent? {
             val criticalHead = critical.peek()
@@ -881,6 +895,10 @@ internal class AsyncLogWriter private constructor(
                 criticalHead.sequence < bulkHead.sequence -> critical.poll()
                 else -> bulk.poll()
             }
+        }
+
+        private fun queue(lane: EventLane): BoundedMpscQueue<PendingLogEvent> {
+            return if (lane == EventLane.CRITICAL) critical else bulk
         }
     }
 

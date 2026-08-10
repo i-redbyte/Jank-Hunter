@@ -9,6 +9,8 @@ import java.io.File
 class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
     private val runtimeEnabled = builder.runtimeEnabled
+    private val runtimeCallGraphEnabled = builder.runtimeCallGraphEnabled
+    private val runtimeCallGraphMode = builder.runtimeCallGraphMode
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
     private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
@@ -59,6 +61,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun enabled(): Boolean = enabled
 
     fun runtimeEnabled(): Boolean = runtimeEnabled
+
+    fun runtimeCallGraphEnabled(): Boolean = runtimeCallGraphEnabled
+
+    fun runtimeCallGraphMode(): JankHunterRuntimeGraphMode = runtimeCallGraphMode
 
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
@@ -162,6 +168,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         return Builder()
             .enabled(enabled)
             .runtimeEnabled(runtimeEnabled)
+            .runtimeCallGraphEnabled(runtimeCallGraphEnabled)
+            .runtimeCallGraphMode(runtimeCallGraphMode)
             .autoStartCollectors(autoStartCollectors)
             .mainThreadStallThresholdMs(mainThreadStallThresholdMs)
             .ownerBlockThresholdMs(ownerBlockThresholdMs)
@@ -219,6 +227,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     class Builder {
         internal var enabled = true
         internal var runtimeEnabled = true
+        internal var runtimeCallGraphEnabled = true
+        internal var runtimeCallGraphMode = JankHunterRuntimeGraphMode.BUFFERED
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
         internal var ownerBlockThresholdMs = 250L
@@ -269,6 +279,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun enabled(value: Boolean) = apply { enabled = value }
 
         fun runtimeEnabled(value: Boolean) = apply { runtimeEnabled = value }
+
+        fun runtimeCallGraphEnabled(value: Boolean) = apply { runtimeCallGraphEnabled = value }
+
+        fun runtimeCallGraphMode(value: JankHunterRuntimeGraphMode) = apply { runtimeCallGraphMode = value }
 
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 
@@ -374,6 +388,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     companion object {
         const val META_ENABLED = "io.jankhunter.enabled"
         const val META_RUNTIME_ENABLED = "io.jankhunter.runtime_enabled"
+        const val META_RUNTIME_CALL_GRAPH_ENABLED = "io.jankhunter.runtime_call_graph_enabled"
         const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
         const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
         const val META_OWNER_BLOCK_THRESHOLD_MS = "io.jankhunter.owner_block_threshold_ms"
@@ -427,6 +442,7 @@ class JankHunterConfig private constructor(builder: Builder) {
             return builder()
                 .enabled(metadataBoolean(metadata, META_ENABLED, defaultEnabled))
                 .runtimeEnabled(metadataBoolean(metadata, META_RUNTIME_ENABLED, true))
+                .runtimeCallGraphEnabled(metadataBoolean(metadata, META_RUNTIME_CALL_GRAPH_ENABLED, true))
                 .autoStartCollectors(metadataBoolean(metadata, META_AUTO_START_COLLECTORS, true))
                 .mainThreadStallThresholdMs(metadataLong(metadata, META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
                 .ownerBlockThresholdMs(metadataLong(metadata, META_OWNER_BLOCK_THRESHOLD_MS, 250L))

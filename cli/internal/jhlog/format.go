@@ -522,48 +522,70 @@ type SegmentEndEvent struct {
 }
 
 const (
-	QualityAcceptedEventTotal            uint64 = 1
-	QualityWrittenEventTotal             uint64 = 2
-	QualityQueueFullTotal                uint64 = 3
-	QualityNotAcceptingTotal             uint64 = 4
-	QualityControlLaneFullTotal          uint64 = 5
-	QualityControlTimeoutTotal           uint64 = 6
-	QualityControlInterruptedTotal       uint64 = 7
-	QualityWriterIOErrorTotal            uint64 = 8
-	QualityEventLostAfterIOTotal         uint64 = 9
-	QualityEventLostAfterIORetryTotal           = QualityEventLostAfterIOTotal // Compatibility alias.
-	QualityDictionaryOverflowTotal       uint64 = 10
-	QualityDictionaryValueTruncated      uint64 = 11
-	QualityDictionaryValueTruncatedTotal        = QualityDictionaryValueTruncated
-	QualityOversizedRecordTotal          uint64 = 12
-	QualityCommittedChunkTotal           uint64 = 13
-	QualityFailedChunkTotal              uint64 = 14
-	QualityRecoveryTotal                 uint64 = 15
-	QualityCloseTimeoutTotal             uint64 = 16
-	QualityEventLostAfterSizeLimitTotal  uint64 = 17
+	QualityAcceptedEventTotal             uint64 = 1
+	QualityWrittenEventTotal              uint64 = 2
+	QualityQueueFullTotal                 uint64 = 3
+	QualityNotAcceptingTotal              uint64 = 4
+	QualityControlLaneFullTotal           uint64 = 5
+	QualityControlTimeoutTotal            uint64 = 6
+	QualityControlInterruptedTotal        uint64 = 7
+	QualityWriterIOErrorTotal             uint64 = 8
+	QualityEventLostAfterIOTotal          uint64 = 9
+	QualityEventLostAfterIORetryTotal            = QualityEventLostAfterIOTotal // Compatibility alias.
+	QualityDictionaryOverflowTotal        uint64 = 10
+	QualityDictionaryValueTruncated       uint64 = 11
+	QualityDictionaryValueTruncatedTotal         = QualityDictionaryValueTruncated
+	QualityOversizedRecordTotal           uint64 = 12
+	QualityCommittedChunkTotal            uint64 = 13
+	QualityFailedChunkTotal               uint64 = 14
+	QualityRecoveryTotal                  uint64 = 15
+	QualityCloseTimeoutTotal              uint64 = 16
+	QualityEventLostAfterSizeLimitTotal   uint64 = 17
+	QualityWriterAdmissionContentionTotal uint64 = 18
 
-	QualityMetricCardinalityLoss    uint64 = 0x2000
-	QualityInvalidMetric            uint64 = 0x2001
-	QualityRuntimeGraphCapacityLoss uint64 = 0x2002
-	QualityRuntimeStackMismatch     uint64 = 0x2003
-	QualityLogSpamCardinalityLoss   uint64 = 0x2004
-	QualityHandlerEntryLimit        uint64 = 0x2005
-	QualityHandlerWrapperLimit      uint64 = 0x2006
-	QualityLifecycleRegistryLimit   uint64 = 0x2007
-	QualityObjectWatcherLimit       uint64 = 0x2008
-	QualityJankStatsHandleLimit     uint64 = 0x2009
-	QualityMetricFlushTimeout       uint64 = 0x200a
+	QualityMetricCardinalityLoss                uint64 = 0x2000
+	QualityInvalidMetric                        uint64 = 0x2001
+	QualityRuntimeGraphCapacityLoss             uint64 = 0x2002
+	QualityRuntimeStackMismatch                 uint64 = 0x2003
+	QualityLogSpamCardinalityLoss               uint64 = 0x2004
+	QualityHandlerEntryLimit                    uint64 = 0x2005
+	QualityHandlerWrapperLimit                  uint64 = 0x2006
+	QualityLifecycleRegistryLimit               uint64 = 0x2007
+	QualityObjectWatcherLimit                   uint64 = 0x2008
+	QualityJankStatsHandleLimit                 uint64 = 0x2009
+	QualityMetricFlushTimeout                   uint64 = 0x200a
+	QualityRuntimeGraphContentionLoss           uint64 = 0x200b
+	QualityRuntimeGraphBufferCapacityLoss       uint64 = 0x200c
+	QualityRuntimeGraphRegistryCapacityLoss     uint64 = 0x200d
+	QualityRuntimeGraphStaleEpochLoss           uint64 = 0x200e
+	QualityRuntimeGraphShutdownLoss             uint64 = 0x200f
+	QualityRuntimeGraphWriterRejectionLoss      uint64 = 0x2010
+	QualityRuntimeStackCapacityLoss             uint64 = 0x2011
+	QualityMethodCounterContentionLoss          uint64 = 0x2012
+	QualityHandlerContentionBypass              uint64 = 0x2013
+	QualityRuntimeGraphKillSwitch               uint64 = 0x2014
+	QualityRuntimeGraphShadowCapacityLoss       uint64 = 0x2015
+	QualityRuntimeGraphShadowProductionFallback uint64 = 0x2016
+	QualityRuntimeEventBufferCapacityLoss       uint64 = 0x2017
+	QualityRuntimeEventRegistryCapacityLoss     uint64 = 0x2018
+	QualityMethodCounterCardinalityLoss         uint64 = 0x2019
+	QualityRuntimeEventWriterRejectionLoss      uint64 = 0x201a
+	QualityRuntimeGraphInputTotal               uint64 = 0x201b
+	QualityRuntimeGraphEmittedTotal             uint64 = 0x201c
+	QualityRuntimeGraphCircuitBreakerTrip       uint64 = 0x201d
+	QualityRuntimeGraphCircuitBreakerDrop       uint64 = 0x201e
 )
 
 type QualityLossReason uint64
 
 const (
-	QualityLossQueueFull    QualityLossReason = 1
-	QualityLossNotAccepting QualityLossReason = 2
-	QualityLossIOLost       QualityLossReason = 3
-	QualityLossIORetry                        = QualityLossIOLost // Compatibility alias.
-	QualityLossOversized    QualityLossReason = 4
-	QualityLossSizeLimit    QualityLossReason = 5
+	QualityLossQueueFull           QualityLossReason = 1
+	QualityLossNotAccepting        QualityLossReason = 2
+	QualityLossIOLost              QualityLossReason = 3
+	QualityLossIORetry                               = QualityLossIOLost // Compatibility alias.
+	QualityLossOversized           QualityLossReason = 4
+	QualityLossSizeLimit           QualityLossReason = 5
+	QualityLossAdmissionContention QualityLossReason = 6
 )
 
 func EventQualityCounterID(eventType EventType, reason QualityLossReason) uint64 {
@@ -606,6 +628,8 @@ func QualityCounterName(id uint64) string {
 		return "close_timeout_total"
 	case QualityEventLostAfterSizeLimitTotal:
 		return "event_lost_after_size_limit_total"
+	case QualityWriterAdmissionContentionTotal:
+		return "writer_admission_contention_total"
 	case QualityMetricCardinalityLoss:
 		return "metric_cardinality_loss_total"
 	case QualityInvalidMetric:
@@ -628,6 +652,46 @@ func QualityCounterName(id uint64) string {
 		return "jankstats_handle_limit_total"
 	case QualityMetricFlushTimeout:
 		return "metric_flush_timeout_total"
+	case QualityRuntimeGraphContentionLoss:
+		return "runtime_graph_contention_loss_total"
+	case QualityRuntimeGraphBufferCapacityLoss:
+		return "runtime_graph_buffer_capacity_loss_total"
+	case QualityRuntimeGraphRegistryCapacityLoss:
+		return "runtime_graph_registry_capacity_loss_total"
+	case QualityRuntimeGraphStaleEpochLoss:
+		return "runtime_graph_stale_epoch_loss_total"
+	case QualityRuntimeGraphShutdownLoss:
+		return "runtime_graph_shutdown_loss_total"
+	case QualityRuntimeGraphWriterRejectionLoss:
+		return "runtime_graph_writer_rejection_loss_total"
+	case QualityRuntimeStackCapacityLoss:
+		return "runtime_stack_capacity_loss_total"
+	case QualityMethodCounterContentionLoss:
+		return "method_counter_contention_loss_total"
+	case QualityHandlerContentionBypass:
+		return "handler_contention_bypass_total"
+	case QualityRuntimeGraphKillSwitch:
+		return "runtime_graph_kill_switch_total"
+	case QualityRuntimeGraphShadowCapacityLoss:
+		return "runtime_graph_shadow_capacity_loss_total"
+	case QualityRuntimeGraphShadowProductionFallback:
+		return "runtime_graph_shadow_production_fallback_total"
+	case QualityRuntimeEventBufferCapacityLoss:
+		return "runtime_event_buffer_capacity_loss_total"
+	case QualityRuntimeEventRegistryCapacityLoss:
+		return "runtime_event_registry_capacity_loss_total"
+	case QualityMethodCounterCardinalityLoss:
+		return "method_counter_cardinality_loss_total"
+	case QualityRuntimeEventWriterRejectionLoss:
+		return "runtime_event_writer_rejection_loss_total"
+	case QualityRuntimeGraphInputTotal:
+		return "runtime_graph_input_total"
+	case QualityRuntimeGraphEmittedTotal:
+		return "runtime_graph_emitted_total"
+	case QualityRuntimeGraphCircuitBreakerTrip:
+		return "runtime_graph_circuit_breaker_trip_total"
+	case QualityRuntimeGraphCircuitBreakerDrop:
+		return "runtime_graph_circuit_breaker_drop_total"
 	}
 	if id >= 0x1000 && id < 0x2000 {
 		return fmt.Sprintf("event_%d_reason_%d_total", (id-0x1000)/16, (id-0x1000)%16)

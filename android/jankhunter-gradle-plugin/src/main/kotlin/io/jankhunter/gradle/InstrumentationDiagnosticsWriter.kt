@@ -30,6 +30,9 @@ internal data class InstrumentationDiagnosticsRecord(
     val skippedMethods: Map<String, Int>,
     val ignoredMethods: Int,
     val annotatedMethods: Int,
+    val methodFilterIncluded: Int,
+    val methodFilterExcluded: Int,
+    val methodFilterReasons: Map<String, Int>,
     val hooks: Map<HookDiagnosticKey, Int>,
     val decisions: Map<DecisionDiagnosticKey, Int>,
     val annotations: Map<AnnotationDiagnosticKey, Int>,
@@ -40,6 +43,9 @@ internal class InstrumentationDiagnosticsClassBuilder(
 ) {
     private var methods = 0
     private var ignoredMethods = 0
+    private var methodFilterIncluded = 0
+    private var methodFilterExcluded = 0
+    private val methodFilterReasons = linkedMapOf<String, Int>()
     private val skippedMethods = linkedMapOf<String, Int>()
     private val hooks = linkedMapOf<HookDiagnosticKey, Int>()
     private val decisions = linkedMapOf<DecisionDiagnosticKey, Int>()
@@ -69,6 +75,20 @@ internal class InstrumentationDiagnosticsClassBuilder(
             line = line,
         )
         hooks[key] = (hooks[key] ?: 0) + 1
+    }
+
+    fun recordMethodFilter(decision: MethodFilterDecision, excluded: Boolean) {
+        if (excluded) methodFilterExcluded++ else methodFilterIncluded++
+        if (decision.categories.isEmpty()) {
+            recordMethodFilterReason("regular", excluded)
+        } else {
+            decision.categories.forEach { recordMethodFilterReason(it, excluded) }
+        }
+    }
+
+    private fun recordMethodFilterReason(reason: String, excluded: Boolean) {
+        val key = if (excluded) "excluded:$reason" else "included:$reason"
+        methodFilterReasons[key] = (methodFilterReasons[key] ?: 0) + 1
     }
 
     fun recordLifecycleHook(methodName: String, descriptor: String, superName: String?) {
@@ -121,6 +141,9 @@ internal class InstrumentationDiagnosticsClassBuilder(
             skippedMethods = skippedMethods.toMap(),
             ignoredMethods = ignoredMethods,
             annotatedMethods = annotations.values.sum(),
+            methodFilterIncluded = methodFilterIncluded,
+            methodFilterExcluded = methodFilterExcluded,
+            methodFilterReasons = methodFilterReasons.toMap(),
             hooks = hooks.toMap(),
             decisions = decisions.toMap(),
             annotations = annotations.toMap(),
@@ -146,7 +169,13 @@ internal object InstrumentationDiagnosticsWriter {
             append(record.ignoredMethods)
             append(",\"annotatedMethods\":")
             append(record.annotatedMethods)
-            append(",\"skippedMethods\":[")
+            append(",\"methodFilterIncluded\":")
+            append(record.methodFilterIncluded)
+            append(",\"methodFilterExcluded\":")
+            append(record.methodFilterExcluded)
+            append(",\"methodFilterReasons\":[")
+            appendSkipped(record.methodFilterReasons)
+            append("],\"skippedMethods\":[")
             appendSkipped(record.skippedMethods)
             append("],\"hooks\":[")
             appendHooks(record.hooks)

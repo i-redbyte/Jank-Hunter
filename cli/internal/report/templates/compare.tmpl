@@ -468,6 +468,7 @@
       <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">служебные сведения базы и кандидата</span></summary>
       <div class="fold-body technical-quality-body">
         <p class="help-text">Сведения о полноте телеметрии вынесены в конец и не являются выводом о регрессии сами по себе.</p>
+        <p class="quality-notice">Полнота runtime-графа: база {{printf "%.2f" (percent01 .Comparison.Baseline.CollectionQuality.RuntimeGraphCompletenessRatio)}}%, кандидат {{printf "%.2f" (percent01 .Comparison.Candidate.CollectionQuality.RuntimeGraphCompletenessRatio)}}%.</p>
         {{range .Comparison.Baseline.CollectionQuality.Notices}}<p class="quality-notice">База: {{.}}.</p>{{end}}
         {{range .Comparison.Candidate.CollectionQuality.Notices}}<p class="quality-notice">Кандидат: {{.}}.</p>{{end}}
         {{range .Comparison.QualityWarnings}}<p class="warning">{{.}}</p>{{end}}

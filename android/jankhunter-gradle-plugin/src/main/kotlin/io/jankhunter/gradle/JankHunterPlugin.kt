@@ -238,6 +238,7 @@ class JankHunterPlugin : Plugin<Project> {
                 )
                 params.dependencyInjectionAnalysis.set(dependencyInjectionAnalysisEnabled)
                 params.methodCounters.set(extension.instrument.methodCounters)
+                params.methodFilterMode.set(extension.instrument.methodFilterMode)
                 params.okhttp.set(extension.instrument.okhttp)
                 params.webSockets.set(extension.instrument.webSockets)
                 params.okHttpHelperAvailable.set(okHttpHelperAvailable)

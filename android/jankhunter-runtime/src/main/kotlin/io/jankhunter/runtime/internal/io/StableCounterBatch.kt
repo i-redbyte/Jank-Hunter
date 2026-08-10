@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
-/** Bounded primitive hand-off for counters whose metric name is a stable symbol reference. */
+import io.jankhunter.runtime.internal.saturatingAdd
+
 internal class StableCounterBatch(capacity: Int) {
     private val ids = LongArray(capacity)
     private val names = arrayOfNulls<String>(capacity)
@@ -24,4 +25,12 @@ internal class StableCounterBatch(capacity: Int) {
     fun name(index: Int): String? = names[index]
 
     fun value(index: Int): Long = values[index]
+
+    fun logicalEventCount(): Long {
+        var result = 0L
+        for (index in 0 until size) {
+            result = saturatingAdd(result, values[index])
+        }
+        return result
+    }
 }

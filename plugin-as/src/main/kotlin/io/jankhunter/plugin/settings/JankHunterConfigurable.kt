@@ -16,7 +16,6 @@ class JankHunterConfigurable : SearchableConfigurable {
     private var panel: JPanel? = null
     private var cliPathField: TextFieldWithBrowseButton? = null
     private var outputDirectoryField: TextFieldWithBrowseButton? = null
-    private var openInIdeCheckBox: JBCheckBox? = null
     private var openExternalCheckBox: JBCheckBox? = null
     private var presentationCheckBox: JBCheckBox? = null
 
@@ -27,7 +26,6 @@ class JankHunterConfigurable : SearchableConfigurable {
     override fun createComponent(): JComponent {
         val cliField = TextFieldWithBrowseButton()
         val outField = TextFieldWithBrowseButton()
-        val openInIde = JBCheckBox("Open generated HTML reports inside the IDE")
         val openExternal = JBCheckBox("Open generated HTML reports in the system browser")
         val presentation = JBCheckBox("Use presentation mode by default")
 
@@ -35,9 +33,8 @@ class JankHunterConfigurable : SearchableConfigurable {
             "Путь к бинарнику jankhunter. Можно указать ../cli/bin/jankhunter или системную команду, доступную в PATH.",
         )
         outField.toolTipText = hint(
-            "Папка для автогенерируемых отчетов. Если пусто, используется build/jankhunter внутри открытого проекта.",
+            "Папка для автогенерируемых отчетов. Если пусто, используется ~/JankHunter/reports.",
         )
-        openInIde.toolTipText = hint("Автоматически открывать HTML-отчет во встроенной вкладке Report после успешного запуска.")
         openExternal.toolTipText = hint("Автоматически открывать HTML-отчет в браузере по умолчанию.")
         presentation.toolTipText = hint("По умолчанию добавлять --presentation для inspect и compare.")
 
@@ -53,13 +50,11 @@ class JankHunterConfigurable : SearchableConfigurable {
         val createdPanel = JPanel(GridBagLayout())
         addRow(createdPanel, 0, "CLI", cliField)
         addRow(createdPanel, 1, "Output directory", outField)
-        addWideRow(createdPanel, 2, openInIde)
-        addWideRow(createdPanel, 3, openExternal)
-        addWideRow(createdPanel, 4, presentation)
+        addWideRow(createdPanel, 2, openExternal)
+        addWideRow(createdPanel, 3, presentation)
 
         cliPathField = cliField
         outputDirectoryField = outField
-        openInIdeCheckBox = openInIde
         openExternalCheckBox = openExternal
         presentationCheckBox = presentation
         panel = createdPanel
@@ -72,7 +67,6 @@ class JankHunterConfigurable : SearchableConfigurable {
         val state = JankHunterSettings.getInstance().state
         return cliPathField?.text.orEmpty() != state.cliPath ||
             outputDirectoryField?.text.orEmpty() != state.outputDirectory ||
-            openInIdeCheckBox?.isSelected != state.openReportInIde ||
             openExternalCheckBox?.isSelected != state.openReportExternally ||
             presentationCheckBox?.isSelected != state.presentationMode
     }
@@ -81,7 +75,6 @@ class JankHunterConfigurable : SearchableConfigurable {
         val state = JankHunterSettings.getInstance().state
         state.cliPath = cliPathField?.text.orEmpty().trim()
         state.outputDirectory = outputDirectoryField?.text.orEmpty().trim()
-        state.openReportInIde = openInIdeCheckBox?.isSelected == true
         state.openReportExternally = openExternalCheckBox?.isSelected == true
         state.presentationMode = presentationCheckBox?.isSelected == true
     }
@@ -89,8 +82,7 @@ class JankHunterConfigurable : SearchableConfigurable {
     override fun reset() {
         val state = JankHunterSettings.getInstance().state
         cliPathField?.text = state.cliPath
-        outputDirectoryField?.text = state.outputDirectory
-        openInIdeCheckBox?.isSelected = state.openReportInIde
+        outputDirectoryField?.text = state.outputDirectory.ifBlank { JankHunterSettings.defaultOutputDirectory() }
         openExternalCheckBox?.isSelected = state.openReportExternally
         presentationCheckBox?.isSelected = state.presentationMode
     }
@@ -99,7 +91,6 @@ class JankHunterConfigurable : SearchableConfigurable {
         panel = null
         cliPathField = null
         outputDirectoryField = null
-        openInIdeCheckBox = null
         openExternalCheckBox = null
         presentationCheckBox = null
     }

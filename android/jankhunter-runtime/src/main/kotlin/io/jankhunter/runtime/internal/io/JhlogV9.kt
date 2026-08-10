@@ -97,6 +97,7 @@ internal object QualityCounterId {
     const val FAILED_CHUNK_TOTAL = 14
     const val CLOSE_TIMEOUT_TOTAL = 16
     const val EVENT_LOST_AFTER_SIZE_LIMIT_TOTAL = 17
+    const val WRITER_ADMISSION_CONTENTION_TOTAL = 18
 
     const val METRIC_CARDINALITY_LOSS = 0x2000
     const val INVALID_METRIC = 0x2001
@@ -109,12 +110,33 @@ internal object QualityCounterId {
     const val OBJECT_WATCHER_LIMIT = 0x2008
     const val JANKSTATS_HANDLE_LIMIT = 0x2009
     const val METRIC_FLUSH_TIMEOUT = 0x200a
+    const val RUNTIME_GRAPH_CONTENTION_LOSS = 0x200b
+    const val RUNTIME_GRAPH_BUFFER_CAPACITY_LOSS = 0x200c
+    const val RUNTIME_GRAPH_REGISTRY_CAPACITY_LOSS = 0x200d
+    const val RUNTIME_GRAPH_STALE_EPOCH_LOSS = 0x200e
+    const val RUNTIME_GRAPH_SHUTDOWN_LOSS = 0x200f
+    const val RUNTIME_GRAPH_WRITER_REJECTION_LOSS = 0x2010
+    const val RUNTIME_STACK_CAPACITY_LOSS = 0x2011
+    const val METHOD_COUNTER_CONTENTION_LOSS = 0x2012
+    const val HANDLER_CONTENTION_BYPASS = 0x2013
+    const val RUNTIME_GRAPH_KILL_SWITCH = 0x2014
+    const val RUNTIME_GRAPH_SHADOW_CAPACITY_LOSS = 0x2015
+    const val RUNTIME_GRAPH_SHADOW_PRODUCTION_FALLBACK = 0x2016
+    const val RUNTIME_EVENT_BUFFER_CAPACITY_LOSS = 0x2017
+    const val RUNTIME_EVENT_REGISTRY_CAPACITY_LOSS = 0x2018
+    const val METHOD_COUNTER_CARDINALITY_LOSS = 0x2019
+    const val RUNTIME_EVENT_WRITER_REJECTION_LOSS = 0x201a
+    const val RUNTIME_GRAPH_INPUT_TOTAL = 0x201b
+    const val RUNTIME_GRAPH_EMITTED_TOTAL = 0x201c
+    const val RUNTIME_GRAPH_CIRCUIT_BREAKER_TRIP = 0x201d
+    const val RUNTIME_GRAPH_CIRCUIT_BREAKER_DROP = 0x201e
 
     const val REASON_QUEUE_FULL = 1
     const val REASON_NOT_ACCEPTING = 2
     const val REASON_IO_LOST = 3
     const val REASON_OVERSIZED = 4
     const val REASON_SIZE_LIMIT = 5
+    const val REASON_ADMISSION_CONTENTION = 6
 
     fun eventReason(recordType: Int, reason: Int): Int {
         return 0x1000 + recordType.coerceAtLeast(0) * 16 + reason

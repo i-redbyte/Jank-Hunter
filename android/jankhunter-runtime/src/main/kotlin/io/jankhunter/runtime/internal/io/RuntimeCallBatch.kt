@@ -1,5 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.internal.saturatingAdd
+
 /**
  * A bounded, structure-of-arrays hand-off from the runtime graph to the writer thread.
  *
@@ -78,4 +80,12 @@ internal class RuntimeCallBatch(capacity: Int) {
     fun totalMs(index: Int): Long = totalsMs[index]
 
     fun maxMs(index: Int): Long = maximaMs[index]
+
+    fun logicalEventCount(): Long {
+        var result = 0L
+        for (index in 0 until size) {
+            result = saturatingAdd(result, counts[index])
+        }
+        return result
+    }
 }

@@ -1,0 +1,35 @@
+package io.jankhunter.plugin.settings
+
+class JankHunterRecentRun {
+    var projectPath: String = ""
+    var timestamp: String = ""
+    var commandLine: String = ""
+    var mode: String = "INSPECT"
+    var cliPath: String = ""
+    var logs: String = ""
+    var inspectLogScope: String = "ALL_SELECTED"
+    var baseline: String = ""
+    var baselineLogScope: String = "ALL_SELECTED"
+    var candidate: String = ""
+    var candidateLogScope: String = "ALL_SELECTED"
+    var output: String = ""
+    var ownerMap: String = ""
+    var mapping: String = ""
+    var classGraph: String = ""
+    var diagnostics: String = ""
+    var diCatalog: String = ""
+    var heapDump: String = ""
+    var heapEvidence: String = ""
+    var baselineHeapDump: String = ""
+    var baselineHeapEvidence: String = ""
+    var candidateHeapDump: String = ""
+    var candidateHeapEvidence: String = ""
+    var route: String = ""
+    var screen: String = ""
+    var owner: String = ""
+    var className: String = ""
+    var dataset: String = ""
+    var format: String = ""
+    var json: Boolean = false
+    var presentation: Boolean = false
+}
