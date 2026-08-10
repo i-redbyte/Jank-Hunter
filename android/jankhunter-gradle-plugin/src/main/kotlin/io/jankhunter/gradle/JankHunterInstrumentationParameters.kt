@@ -16,6 +16,9 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val methodCounters: Property<Boolean>
 
     @get:Input
+    val methodFilterMode: Property<JankHunterMethodFilterMode>
+
+    @get:Input
     val okhttp: Property<Boolean>
 
     @get:Input

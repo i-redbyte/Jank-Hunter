@@ -1,12 +1,15 @@
 package io.jankhunter.gradle
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.MethodVisitor
 import java.nio.file.Files
 
 class InstrumentationDiagnosticsTest {
@@ -44,6 +47,9 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"class\":\"example.Diagnostics\""))
         assertTrue(text.contains("\"methods\":1"))
         assertTrue(text.contains("\"annotatedMethods\":1"))
+        assertTrue(text.contains("\"methodFilterIncluded\":1"))
+        assertTrue(text.contains("\"methodFilterExcluded\":0"))
+        assertTrue(text.contains("\"reason\":\"included:regular\""))
         assertTrue(text.contains("\"intent\":\"logspam.android.util.Log.d\""))
         assertTrue(text.contains("\"signature\":\"logspam.android.util.Log.d\""))
         assertTrue(text.contains("\"method\":\"load()V\""))
@@ -54,6 +60,94 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"screen\":\"FeedScreen\""))
         assertTrue(text.contains("\"flow\":\"feed.open\""))
         assertTrue(text.contains("\"trace\":\"refresh\""))
+    }
+
+    @Test
+    fun enabledFilterRemovesOnlyBoundaryHooksAndKeepsCallSiteHooks() {
+        val diagnostics = Files.createTempDirectory("jankhunter-filter-diagnostics").toFile()
+        val reader = ClassReader(syntheticLogFixture())
+        val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        reader.accept(
+            JankHunterClassVisitor(
+                writer,
+                "example/Filtered",
+                HookConfig(
+                    methodCounters = true,
+                    methodFilterMode = JankHunterMethodFilterMode.ENABLED,
+                    okhttp = false,
+                    webSockets = false,
+                    handlers = false,
+                    executors = false,
+                    coroutines = false,
+                    flowInteractions = false,
+                    logSpam = true,
+                    classGraph = false,
+                    runtimeCallGraph = true,
+                    classGraphDirectory = "",
+                    instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
+                    ownerMapEntriesDirectory = "",
+                ),
+            ),
+            0,
+        )
+
+        val calls = jankHunterHookCalls(writer.toByteArray())
+        assertFalse("recordMethodCall" in calls)
+        assertFalse("enterMethod" in calls)
+        assertFalse("exitMethod" in calls)
+        assertTrue("recordLogSpam" in calls)
+        val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
+        assertTrue(text.contains("\"methodFilterExcluded\":1"))
+        assertTrue(text.contains("\"reason\":\"excluded:acc_synthetic\""))
+    }
+
+    private fun syntheticLogFixture(): ByteArray {
+        val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Filtered", null, "java/lang/Object", null)
+        writer.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC, "access\$200", "()V", null, null).run {
+            visitCode()
+            visitLdcInsn("tag")
+            visitLdcInsn("message")
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "android/util/Log",
+                "d",
+                "(Ljava/lang/String;Ljava/lang/String;)I",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun jankHunterHookCalls(bytecode: ByteArray): Set<String> {
+        val result = linkedSetOf<String>()
+        ClassReader(bytecode).accept(object : ClassVisitor(Opcodes.ASM9) {
+            override fun visitMethod(
+                access: Int,
+                name: String?,
+                descriptor: String?,
+                signature: String?,
+                exceptions: Array<out String>?,
+            ): MethodVisitor {
+                return object : MethodVisitor(Opcodes.ASM9) {
+                    override fun visitMethodInsn(
+                        opcode: Int,
+                        owner: String,
+                        name: String,
+                        descriptor: String,
+                        isInterface: Boolean,
+                    ) {
+                        if (owner == "io/jankhunter/runtime/JankHunterHooks") result += name
+                    }
+                }
+            }
+        }, 0)
+        return result
     }
 
     private fun fixture(): ByteArray {

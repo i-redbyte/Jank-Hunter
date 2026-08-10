@@ -1,5 +1,7 @@
 package io.jankhunter.runtime
 
+import java.util.concurrent.atomic.AtomicReference
+
 internal class ContextTracker(
     initialScreen: String = "unknown",
 ) {
@@ -7,20 +9,24 @@ internal class ContextTracker(
     private val owner = ThreadLocal<String>()
     private val flow = ThreadLocal<String>()
     private val flowStep = ThreadLocal<String>()
-    private val lock = Any()
+    private val lastRecordedContext = AtomicReference<JankHunterContext?>()
 
     @Volatile
     private var screen = initialScreen
-
-    private var lastRecordedContext: JankHunterContext? = null
 
     fun currentOwner(): String = owner.get() ?: "unknown"
 
     fun currentScreen(): String = screenOverride.get() ?: screen
 
+    fun currentScreenOrNull(): String? = normalizedContextValue(screenOverride.get() ?: screen)
+
     fun currentFlow(): String = flow.get() ?: "unknown"
 
+    fun currentFlowOrNull(): String? = flow.get()
+
     fun currentFlowStep(): String = flowStep.get() ?: "unknown"
+
+    fun currentFlowStepOrNull(): String? = flowStep.get()
 
     fun ownerOrNull(): String? = owner.get()
 
@@ -119,17 +125,11 @@ internal class ContextTracker(
     }
 
     fun shouldRecord(tuple: JankHunterContext): Boolean {
-        synchronized(lock) {
-            if (tuple == lastRecordedContext) return false
-            lastRecordedContext = tuple
-            return true
-        }
+        return lastRecordedContext.getAndSet(tuple) != tuple
     }
 
     fun resetRecordedContext() {
-        synchronized(lock) {
-            lastRecordedContext = null
-        }
+        lastRecordedContext.set(null)
     }
 
     private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {

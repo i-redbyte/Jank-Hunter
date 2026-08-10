@@ -284,21 +284,24 @@ type CollectionSegment struct {
 }
 
 type CollectionQuality struct {
-	Level                  string   `json:"level"`
-	Complete               bool     `json:"complete"`
-	ChainValid             bool     `json:"chain_valid"`
-	SealedSegments         int      `json:"sealed_segments"`
-	UnsealedSegments       int      `json:"unsealed_segments"`
-	SegmentsWithQuality    int      `json:"segments_with_quality"`
-	SegmentsWithoutQuality int      `json:"segments_without_quality"`
-	AcceptedEvents         uint64   `json:"accepted_events"`
-	WrittenEvents          uint64   `json:"written_events"`
-	KnownLostEvents        uint64   `json:"known_lost_events"`
-	DictionaryOverflow     uint64   `json:"dictionary_overflow"`
-	DictionaryTruncated    uint64   `json:"dictionary_truncated"`
-	ChainIssues            []string `json:"chain_issues,omitempty"`
-	Notices                []string `json:"notices,omitempty"`
-	Reasons                []string `json:"reasons,omitempty"`
+	Level                         string   `json:"level"`
+	Complete                      bool     `json:"complete"`
+	ChainValid                    bool     `json:"chain_valid"`
+	SealedSegments                int      `json:"sealed_segments"`
+	UnsealedSegments              int      `json:"unsealed_segments"`
+	SegmentsWithQuality           int      `json:"segments_with_quality"`
+	SegmentsWithoutQuality        int      `json:"segments_without_quality"`
+	AcceptedEvents                uint64   `json:"accepted_events"`
+	WrittenEvents                 uint64   `json:"written_events"`
+	KnownLostEvents               uint64   `json:"known_lost_events"`
+	RuntimeGraphInputEvents       uint64   `json:"runtime_graph_input_events"`
+	RuntimeGraphEmittedEvents     uint64   `json:"runtime_graph_emitted_events"`
+	RuntimeGraphCompletenessRatio float64  `json:"runtime_graph_completeness_ratio"`
+	DictionaryOverflow            uint64   `json:"dictionary_overflow"`
+	DictionaryTruncated           uint64   `json:"dictionary_truncated"`
+	ChainIssues                   []string `json:"chain_issues,omitempty"`
+	Notices                       []string `json:"notices,omitempty"`
+	Reasons                       []string `json:"reasons,omitempty"`
 }
 
 type Summary struct {

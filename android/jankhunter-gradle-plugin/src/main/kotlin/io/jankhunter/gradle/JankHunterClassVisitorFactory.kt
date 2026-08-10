@@ -22,6 +22,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         val hookConfig = HookConfig(
             embeddedSymbols = params.embeddedSymbols.getOrElse(true),
             methodCounters = params.methodCounters.getOrElse(false),
+            methodFilterMode = params.methodFilterMode.getOrElse(JankHunterMethodFilterMode.DIAGNOSTICS),
             okhttp = params.okhttp.getOrElse(false),
             webSockets = params.webSockets.getOrElse(false),
             okHttpHelperAvailable = params.okHttpHelperAvailable.getOrElse(false),
@@ -176,6 +177,7 @@ private class ClassHierarchyResolver(
 internal data class HookConfig(
     val embeddedSymbols: Boolean = true,
     val methodCounters: Boolean,
+    val methodFilterMode: JankHunterMethodFilterMode = JankHunterMethodFilterMode.DIAGNOSTICS,
     val okhttp: Boolean,
     val webSockets: Boolean,
     val okHttpHelperAvailable: Boolean = true,
@@ -223,6 +225,7 @@ internal class JankHunterClassVisitor(
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
     private val classHierarchy = classHierarchy.mapTo(linkedSetOf()) { it.replace('.', '/') }
+    private val generatedHelperClass = MethodFilterClassifier.isGeneratedHelperClass(className)
     private var superName: String? = null
     private var alreadyInstrumented = false
     private var classHookApplied = false
@@ -281,6 +284,7 @@ internal class JankHunterClassVisitor(
             name,
             descriptor,
             className,
+            generatedHelperClass,
             config,
             classAnnotations.snapshot(),
             name == "<init>",
@@ -338,6 +342,7 @@ private class JankHunterMethodVisitor(
     private val methodName: String,
     private val methodDescriptor: String,
     private val className: String,
+    private val generatedHelperClass: Boolean,
     private val config: HookConfig,
     private val classAnnotations: JankAnnotationMetadata,
     private val constructor: Boolean,
@@ -396,6 +401,13 @@ private class JankHunterMethodVisitor(
     private var currentLine: Int? = null
     private var hookApplied = false
     private var constructorBodyEntered = false
+    private val methodFilterDecision = MethodFilterClassifier.classify(
+        config.methodFilterMode,
+        generatedHelperClass,
+        accessFlags,
+        methodName,
+        methodDescriptor,
+    )
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
         val delegate = super.visitAnnotation(descriptor, visible)
@@ -423,7 +435,7 @@ private class JankHunterMethodVisitor(
             emitEnterAnnotatedContext()
             hookApplied = true
         }
-        if (config.methodCounters) {
+        if (config.methodCounters && methodBoundaryHooksEnabled()) {
             visitLdcInsn(methodId)
             if (config.embeddedSymbols) visitLdcInsn(generatedOwnerLabel)
             visitMethodInsn(
@@ -435,7 +447,7 @@ private class JankHunterMethodVisitor(
             )
             hookApplied = true
         }
-        if (config.runtimeCallGraph) {
+        if (config.runtimeCallGraph && methodBoundaryHooksEnabled()) {
             visitLdcInsn(methodId)
             if (config.embeddedSymbols) visitLdcInsn(generatedOwnerLabel)
             visitMethodInsn(
@@ -633,6 +645,13 @@ private class JankHunterMethodVisitor(
             ignored = ignored,
             annotation = if (!ignored) annotationDiagnosticKey() else null,
         )
+        if (config.methodFilterMode != JankHunterMethodFilterMode.DISABLED) {
+            diagnostics.recordMethodFilter(
+                methodFilterDecision,
+                excluded = config.methodFilterMode == JankHunterMethodFilterMode.ENABLED &&
+                    methodFilterDecision.exclusionReason != null,
+            )
+        }
         super.visitEnd()
     }
 
@@ -690,6 +709,11 @@ private class JankHunterMethodVisitor(
 
     private fun shouldInstrumentMethod(): Boolean {
         return !instrumentationIgnored() && (!constructor || constructorBodyEntered)
+    }
+
+    private fun methodBoundaryHooksEnabled(): Boolean {
+        return config.methodFilterMode != JankHunterMethodFilterMode.ENABLED ||
+            methodFilterDecision.exclusionReason == null
     }
 
     private fun shouldWatchLifecycleOnEnter(): Boolean {

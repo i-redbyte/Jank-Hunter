@@ -11,7 +11,7 @@ import org.junit.Test
 class HandlerWrapperRegistryTest {
     @Test
     fun wrappersAreResolvedByHandlerAndRunnableIdentity() {
-        val dropped = mutableListOf<String>()
+        val dropped = mutableListOf<HandlerWrapperLoss>()
         val registry = HandlerWrapperRegistry(dropped::add)
         val handlerA = Handler()
         val handlerB = Handler()
@@ -86,7 +86,7 @@ class HandlerWrapperRegistryTest {
 
     @Test
     fun entryAndWrapperLimitsArePreserved() {
-        val dropped = mutableListOf<String>()
+        val dropped = mutableListOf<HandlerWrapperLoss>()
         val registry = HandlerWrapperRegistry(dropped::add)
         val handler = Handler()
         val original = Runnable {}
@@ -98,8 +98,8 @@ class HandlerWrapperRegistryTest {
 
         assertEquals(
             listOf(
-                "jankhunter.handler_wrapper.dropped_wrappers.count",
-                "jankhunter.handler_wrapper.dropped_entries.count",
+                HandlerWrapperLoss.WRAPPER_LIMIT,
+                HandlerWrapperLoss.ENTRY_LIMIT,
             ),
             dropped,
         )

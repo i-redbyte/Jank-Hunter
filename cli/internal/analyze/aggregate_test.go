@@ -610,9 +610,10 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 	t.Run("lossy", func(t *testing.T) {
 		collector := newCollector("lossy", 1, Options{})
 		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
-			jhlog.QualityAcceptedEventTotal: 1_000,
-			jhlog.QualityWrittenEventTotal:  900,
-			jhlog.QualityQueueFullTotal:     10,
+			jhlog.QualityAcceptedEventTotal:             1_000,
+			jhlog.QualityWrittenEventTotal:              900,
+			jhlog.QualityQueueFullTotal:                 10,
+			jhlog.QualityWriterAdmissionContentionTotal: 7,
 		}}
 		collector.addStreamResult(jhlog.StreamResult{
 			Source:        "lossy.jhlog",
@@ -627,8 +628,29 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		}
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
-		if got.Level != "low" || got.KnownLostEvents != 110 || !warningsContain(got.Reasons, "потерю как минимум 110 событий") {
+		if got.Level != "low" || got.KnownLostEvents != 117 ||
+			!warningsContain(got.Reasons, "потерю как минимум 117 событий") ||
+			warningsContain(got.Reasons, "служебный канал") {
 			t.Fatalf("lossy quality = %+v", got)
+		}
+	})
+
+	t.Run("runtime graph completeness", func(t *testing.T) {
+		collector := newCollector("runtime graph", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+			jhlog.QualityRuntimeGraphInputTotal:   1_000,
+			jhlog.QualityRuntimeGraphEmittedTotal: 980,
+		}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source: "graph.jhlog", Version: jhlog.FormatVersion,
+			Header: collectionTestHeader(13, 0), Status: jhlog.SegmentStatusClosedClean,
+			Sealed: true, LatestQuality: &quality,
+		})
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" ||
+			!warningsContain(got.Reasons, "полнота runtime-графа 98.00%") {
+			t.Fatalf("runtime graph completeness = %+v", got)
 		}
 	})
 }

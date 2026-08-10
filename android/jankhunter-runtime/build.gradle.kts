@@ -15,6 +15,7 @@ android {
 }
 
 dependencies {
+    androidTestImplementation(libs.bundles.androidx.test)
     testImplementation(libs.junit)
 }
 

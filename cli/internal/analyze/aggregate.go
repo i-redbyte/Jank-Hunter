@@ -2000,9 +2000,31 @@ func (c *collector) finalizeCollectionQuality() {
 	counters := c.latestQualityTotals()
 	quality.AcceptedEvents = counters[jhlog.QualityAcceptedEventTotal]
 	quality.WrittenEvents = counters[jhlog.QualityWrittenEventTotal]
+	quality.RuntimeGraphInputEvents = counters[jhlog.QualityRuntimeGraphInputTotal]
+	quality.RuntimeGraphEmittedEvents = counters[jhlog.QualityRuntimeGraphEmittedTotal]
+	quality.RuntimeGraphCompletenessRatio = 1
+	if quality.RuntimeGraphInputEvents > 0 {
+		quality.RuntimeGraphCompletenessRatio = math.Min(
+			1,
+			float64(quality.RuntimeGraphEmittedEvents)/float64(quality.RuntimeGraphInputEvents),
+		)
+		if quality.RuntimeGraphCompletenessRatio < 1 {
+			level := "medium"
+			if quality.RuntimeGraphCompletenessRatio < 0.99 {
+				level = "low"
+			}
+			addReason(level, fmt.Sprintf(
+				"полнота runtime-графа %.2f%% (%d из %d событий)",
+				quality.RuntimeGraphCompletenessRatio*100,
+				quality.RuntimeGraphEmittedEvents,
+				quality.RuntimeGraphInputEvents,
+			))
+		}
+	}
 	preAdmissionLoss := saturatingUint64Sum(
 		counters[jhlog.QualityQueueFullTotal],
 		counters[jhlog.QualityNotAcceptingTotal],
+		counters[jhlog.QualityWriterAdmissionContentionTotal],
 	)
 	postAdmissionCounters := saturatingUint64Sum(
 		counters[jhlog.QualityEventLostAfterIOTotal],
@@ -2056,7 +2078,25 @@ func (c *collector) finalizeCollectionQuality() {
 	boundedEvidenceLoss := saturatingUint64Sum(
 		counters[jhlog.QualityMetricCardinalityLoss],
 		counters[jhlog.QualityRuntimeGraphCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphContentionLoss],
+		counters[jhlog.QualityRuntimeGraphBufferCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphRegistryCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphStaleEpochLoss],
+		counters[jhlog.QualityRuntimeGraphShutdownLoss],
+		counters[jhlog.QualityRuntimeGraphWriterRejectionLoss],
 		counters[jhlog.QualityRuntimeStackMismatch],
+		counters[jhlog.QualityRuntimeStackCapacityLoss],
+		counters[jhlog.QualityMethodCounterContentionLoss],
+		counters[jhlog.QualityHandlerContentionBypass],
+		counters[jhlog.QualityRuntimeGraphKillSwitch],
+		counters[jhlog.QualityRuntimeGraphShadowCapacityLoss],
+		counters[jhlog.QualityRuntimeGraphShadowProductionFallback],
+		counters[jhlog.QualityRuntimeEventBufferCapacityLoss],
+		counters[jhlog.QualityRuntimeEventRegistryCapacityLoss],
+		counters[jhlog.QualityMethodCounterCardinalityLoss],
+		counters[jhlog.QualityRuntimeEventWriterRejectionLoss],
+		counters[jhlog.QualityRuntimeGraphCircuitBreakerTrip],
+		counters[jhlog.QualityRuntimeGraphCircuitBreakerDrop],
 		counters[jhlog.QualityLogSpamCardinalityLoss],
 		counters[jhlog.QualityHandlerEntryLimit],
 		counters[jhlog.QualityHandlerWrapperLimit],
@@ -2110,6 +2150,7 @@ func (c *collector) retentionDataQuality() retentionDataQuality {
 		jhlog.QualityLossIOLost,
 		jhlog.QualityLossOversized,
 		jhlog.QualityLossSizeLimit,
+		jhlog.QualityLossAdmissionContention,
 	} {
 		result.runtimeLoss += quality[jhlog.EventQualityCounterID(jhlog.EventRetained, reason)]
 	}
@@ -2184,10 +2225,29 @@ func qualityCounterWarnings(counters map[uint64]uint64) []string {
 		{jhlog.QualityFailedChunkTotal, "чанки не удалось зафиксировать"},
 		{jhlog.QualityRecoveryTotal, "writer выполнял восстановление после ошибки"},
 		{jhlog.QualityCloseTimeoutTotal, "закрытие writer завершилось по таймауту"},
+		{jhlog.QualityWriterAdmissionContentionTotal, "writer admission был обойдён из-за конкуренции producers"},
 		{jhlog.QualityMetricCardinalityLoss, "метрики потеряны из-за лимита кардинальности"},
 		{jhlog.QualityInvalidMetric, "некорректные метрики отклонены"},
 		{jhlog.QualityRuntimeGraphCapacityLoss, "runtime-граф достиг лимита рёбер"},
+		{jhlog.QualityRuntimeGraphContentionLoss, "runtime-граф пропустил рёбра из-за конкуренции потоков"},
+		{jhlog.QualityRuntimeGraphBufferCapacityLoss, "producer buffer runtime-графа был заполнен"},
+		{jhlog.QualityRuntimeGraphRegistryCapacityLoss, "реестр producer buffers runtime-графа был заполнен"},
+		{jhlog.QualityRuntimeGraphStaleEpochLoss, "runtime-граф отклонил событие старой epoch"},
+		{jhlog.QualityRuntimeGraphShutdownLoss, "runtime-граф не успел завершить drain при shutdown"},
+		{jhlog.QualityRuntimeGraphWriterRejectionLoss, "writer отклонил batch runtime-графа"},
 		{jhlog.QualityRuntimeStackMismatch, "runtime-стек вызовов рассинхронизировался"},
+		{jhlog.QualityRuntimeStackCapacityLoss, "runtime-стек вызовов достиг ограничения глубины"},
+		{jhlog.QualityMethodCounterContentionLoss, "runtime method counters пропустили события из-за конкуренции"},
+		{jhlog.QualityHandlerContentionBypass, "Handler instrumentation была обойдена из-за конкуренции registry"},
+		{jhlog.QualityRuntimeGraphKillSwitch, "runtime-граф отключён отдельным kill switch"},
+		{jhlog.QualityRuntimeGraphShadowCapacityLoss, "shadow comparison достиг лимита кардинальности"},
+		{jhlog.QualityRuntimeGraphShadowProductionFallback, "SHADOW запрещён в production и заменён на BUFFERED"},
+		{jhlog.QualityRuntimeEventBufferCapacityLoss, "producer buffer method/log events был заполнен"},
+		{jhlog.QualityRuntimeEventRegistryCapacityLoss, "реестр producer buffers method/log events был заполнен"},
+		{jhlog.QualityMethodCounterCardinalityLoss, "method counters достигли лимита кардинальности"},
+		{jhlog.QualityRuntimeEventWriterRejectionLoss, "writer отклонил batch method/log events"},
+		{jhlog.QualityRuntimeGraphCircuitBreakerTrip, "circuit breaker runtime-графа разомкнул сбор"},
+		{jhlog.QualityRuntimeGraphCircuitBreakerDrop, "circuit breaker runtime-графа отбросил события"},
 		{jhlog.QualityLogSpamCardinalityLoss, "агрегатор логов достиг лимита кардинальности"},
 		{jhlog.QualityHandlerEntryLimit, "реестр Handler достиг лимита записей"},
 		{jhlog.QualityHandlerWrapperLimit, "реестр Handler достиг лимита wrapper-объектов"},

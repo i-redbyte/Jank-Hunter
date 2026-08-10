@@ -36,6 +36,9 @@ internal class RuntimeState {
     var config: JankHunterConfig? = null
 
     @Volatile
+    var runtimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED
+
+    @Volatile
     var initContext: Context? = null
 
     @Volatile

@@ -1,7 +1,6 @@
 package io.jankhunter.plugin.execution
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import io.jankhunter.plugin.settings.JankHunterRecentRun
 import java.io.File
 import java.nio.file.Files
 
@@ -82,12 +81,36 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
         assertEquals("/tmp/di-catalog.jsonl", command.args[flagIndex + 1])
     }
 
-    fun testRecentRunPreservesDependencyInjectionCatalog() {
-        val request = request(logs = "/tmp/run.jhlog", diCatalog = "/tmp/di-catalog.jsonl")
+    fun testProblemsExportRemainsAvailableOutsideTheMainUi() {
+        val command = JankHunterCommandBuilder.build(
+            project,
+            request(logs = "/tmp/run.jhlog").copy(
+                mode = JankHunterMode.PROBLEMS,
+                output = "/tmp/problems.csv",
+                dataset = "code-problems",
+                format = "csv",
+            ),
+        )
 
-        val restored = JankHunterRecentRun.fromRequest("now", "jankhunter inspect", request).toRequest()
+        assertEquals("problems", command.args.first())
+        assertTrue(command.args.containsAll(listOf("--dataset", "code-problems")))
+        assertTrue(command.args.containsAll(listOf("--format", "csv")))
+        assertEquals("/tmp/problems.csv", command.outputPath)
+    }
 
-        assertEquals(request.diCatalog, restored.diCatalog)
+    fun testInspectForwardsAdvancedAppearanceOptions() {
+        val command = JankHunterCommandBuilder.build(
+            project,
+            request(logs = "/tmp/run.jhlog").copy(
+                reportStyle = "legacy",
+                presentation = true,
+                animatedBackground = true,
+            ),
+        )
+
+        assertTrue(command.args.containsAll(listOf("--report-style", "legacy")))
+        assertTrue(command.args.contains("--presentation"))
+        assertTrue(command.args.contains("--animated-background"))
     }
 
     private fun request(
@@ -122,6 +145,8 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
             format = "",
             json = false,
             presentation = false,
+            reportStyle = "modern",
+            animatedBackground = false,
         )
 
     private fun withTempLogDir(block: (File) -> Unit) {

@@ -15,7 +15,7 @@ object JankHunterInputPaths {
             .filter { it.isNotEmpty() }
 
     fun resolvePath(project: Project, raw: String): Path {
-        val path = Path.of(raw.trim())
+        val path = Path.of(JankHunterUserPaths.expandHome(raw))
         return if (path.isAbsolute) {
             path.normalize()
         } else {

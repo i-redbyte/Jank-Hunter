@@ -1,552 +1,494 @@
 package io.jankhunter.runtime
 
+import android.os.Process
+import io.jankhunter.runtime.internal.saturatingAdd
+import io.jankhunter.runtime.internal.concurrent.SpscSlotSequencer
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import io.jankhunter.runtime.internal.io.RuntimeCallBatch
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReferenceArray
+import java.util.concurrent.locks.LockSupport
 
 /**
- * Allocation-free per-thread call stack plus a bounded, primitive edge table.
+ * Runtime call graph with a wait-free application-thread publication path.
  *
- * Method IDs are opaque unsigned 64-bit values carried in a Kotlin [Long]. Every bit pattern,
- * including zero and negative values, is valid. The token returned by [enter] is therefore a
- * separate non-zero epoch and never encodes a method ID or a timestamp.
+ * Each producer owns its stack and SPSC ring. Only [JankHunterGraph] touches aggregation or the
+ * asynchronous writer. Context is captured at callee entry and is part of the edge identity.
  */
 internal class RuntimeCallGraph(
-    private val nowMs: () -> Long,
-    private val captureContext: () -> JankHunterContext,
+    private val nowMs: RuntimeLongSource,
+    private val captureScreen: () -> String?,
+    private val captureFlow: () -> String?,
+    private val captureStep: () -> String?,
     private val maxKeys: () -> Int,
+    private val consumerDelayNanos: Long = 0L,
+    private val batchObserver: ((RuntimeCallBatch) -> Unit)? = null,
 ) {
-    private val stack = ThreadLocal<RuntimeCallStack>()
-    private val shards = Array(SHARD_COUNT) { EdgeShard() }
-    private val entryCount = AtomicInteger()
-    private val epoch = AtomicLong(INITIAL_EPOCH)
-    private val capacityLoss = AtomicLong()
+    private val threadState = ThreadLocal<ProducerState>()
+    private val buffers = AtomicReferenceArray<RuntimeGraphEdgeBuffer>(MAX_PRODUCERS)
+    private val epoch = AtomicLong(1L)
+    private val running = AtomicBoolean(false)
+    private val producerWakePending = AtomicBoolean()
+    private val accepted = AtomicLong()
+    private val attempted = AtomicLong()
+    private val emitted = AtomicLong()
+    private val aggregatedEdgeKeys = AtomicLong()
+    private val acceptedEventLoss = AtomicLong()
+    private val bufferCapacityLoss = AtomicLong()
+    private val producerRegistryLoss = AtomicLong()
+    private val edgeCapacityLoss = AtomicLong()
+    private val staleEpochLoss = AtomicLong()
+    private val shutdownLoss = AtomicLong()
+    private val writerRejectionLoss = AtomicLong()
     private val stackMismatch = AtomicLong()
-    private val lastFlushAtMs = AtomicLong()
-    private val flushLock = Any()
-    private var nextFlushShard = 0
+    private val stackCapacityLoss = AtomicLong()
+    private val flushRequest = AtomicLong()
+    private val flushCompleted = AtomicLong()
+    private val shadowCapacityLoss = AtomicLong()
+    private val circuitBreakerOpen = AtomicBoolean(false)
+    private val circuitBreakerLossBudget = AtomicLong()
+    private val circuitBreakerTrips = AtomicLong()
+    private val circuitBreakerDrops = AtomicLong()
+    private val reportedAttempted = AtomicLong()
+    private val reportedEmitted = AtomicLong()
+    private val preAdmissionLossTotal = AtomicLong()
+    private val circuitBreakerDropTotal = AtomicLong()
 
-    fun resetFlushState() {
-        advanceEpoch()
-        lastFlushAtMs.set(nowMs())
-        capacityLoss.set(0L)
-        stackMismatch.set(0L)
+    @Volatile
+    private var activeMode = JankHunterRuntimeGraphMode.BUFFERED
+
+    @Volatile
+    private var lastShadowComparison = RuntimeGraphShadowComparisonResult.EMPTY
+
+    @Volatile
+    private var consumer: Thread? = null
+
+    @Volatile
+    private var activeWriter: AsyncLogWriter? = null
+
+    fun resetFlushState(
+        writer: AsyncLogWriter,
+        mode: JankHunterRuntimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED,
+    ) {
+        check(consumer?.isAlive != true) { "Runtime graph consumer is already running" }
+        advanceRuntimeEpoch(epoch)
+        clearRegistry()
+        clearQuality()
+        producerWakePending.set(false)
+        activeMode = mode
+        lastShadowComparison = RuntimeGraphShadowComparisonResult.EMPTY
+        activeWriter = writer
+        running.set(true)
+        val graphThread = Thread(::runConsumerFailOpen, CONSUMER_NAME).apply { isDaemon = true }
+        consumer = graphThread
+        graphThread.start()
     }
 
     fun clear() {
-        advanceEpoch()
-        shards.forEach { shard ->
-            synchronized(shard.lock) {
-                shard.clear()
-            }
-        }
-        entryCount.set(0)
-        stack.remove()
-        lastFlushAtMs.set(0L)
-        capacityLoss.set(0L)
-        stackMismatch.set(0L)
+        running.set(false)
+        consumer?.let(LockSupport::unpark)
+        clearRegistry()
+        threadState.remove()
+        activeWriter = null
+        consumer = null
+        flushRequest.set(0L)
+        flushCompleted.set(0L)
+        producerWakePending.set(false)
+        clearQuality()
     }
 
     fun enter(methodId: Long, enabled: Boolean): Long = enter(methodId, null, enabled)
 
     fun enter(methodId: Long, methodName: String?, enabled: Boolean): Long {
-        if (!enabled) return DISABLED_TOKEN
+        if (!enabled || !running.get()) return DISABLED_TOKEN
         val currentEpoch = epoch.get()
-        val now = nowMs()
-        val currentStack = stack.get() ?: RuntimeCallStack(currentEpoch).also(stack::set)
-        if (currentStack.epoch != currentEpoch) {
-            currentStack.reset(currentEpoch)
+        var state = threadState.get()
+        if (state == null || state.epoch != currentEpoch) {
+            state = createProducerState(currentEpoch)
+            threadState.set(state)
         }
-        currentStack.push(methodId, methodName, now)
+        if (!state.stack.push(
+                methodId = methodId,
+                methodName = methodName,
+                startedAtMs = nowMs.getAsLong(),
+                screen = captureScreen(),
+                flow = captureFlow(),
+                step = captureStep(),
+            )
+        ) {
+            stackCapacityLoss.incrementAndGet()
+            return DISABLED_TOKEN
+        }
         return currentEpoch
     }
 
-    /** Pops the stack even when [writer] is absent so a transient writer failure cannot poison it. */
-    fun exit(token: Long, methodId: Long, writer: AsyncLogWriter?) {
+    fun exit(token: Long, methodId: Long) {
         if (token == DISABLED_TOKEN) return
         val currentEpoch = epoch.get()
-        val currentStack = stack.get()
-        if (currentStack == null) {
+        val state = threadState.get()
+        if (state == null) {
             if (token == currentEpoch) stackMismatch.incrementAndGet()
             return
         }
-        if (currentStack.epoch != currentEpoch) {
-            currentStack.reset(currentEpoch)
-        }
-        if (token != currentEpoch) return
-
-        if (!currentStack.pop(methodId)) {
-            stackMismatch.incrementAndGet()
-            if (currentStack.depth == 0) stack.remove()
+        if (state.epoch != currentEpoch) {
+            state.stack.reset()
             return
         }
-        if (currentStack.depth == 0) stack.remove()
-
-        // The stack mutation above is deliberately independent of writer availability.
-        if (!currentStack.hasPoppedParent || writer == null) return
-        val now = nowMs()
-        val durationMs = (now - currentStack.poppedStartedAtMs).coerceAtLeast(0L)
-        recordEdge(
-            currentStack.poppedParentId,
-            currentStack.poppedParentName,
-            methodId,
-            currentStack.poppedName,
-            durationMs,
-            currentEpoch,
-        )
-        maybeFlush(now, writer)
-    }
-
-    /** Emits at most one bounded batch. Repeated/manual flushes can drain subsequent batches. */
-    fun flush(force: Boolean, writer: AsyncLogWriter?) {
-        val asyncWriter = writer ?: return
-        flushAt(nowMs(), force, asyncWriter)
-    }
-
-    /** Drains through bounded queue items; the default 4096-key table needs at most 32 items. */
-    fun flushForShutdown(writer: AsyncLogWriter?) {
-        advanceEpoch()
-        val asyncWriter = writer ?: return
-        synchronized(flushLock) {
-            while (true) {
-                val batch = takeBatch() ?: break
-                asyncWriter.runtimeCalls(batch)
-            }
-            flushQuality(asyncWriter)
-            lastFlushAtMs.set(nowMs())
+        if (token != currentEpoch) return
+        if (!state.stack.pop(methodId)) {
+            stackMismatch.incrementAndGet()
+            return
         }
-    }
-
-    internal fun entryCountForTest(): Int = entryCount.get()
-
-    internal fun currentThreadDepthForTest(): Int = stack.get()?.depth ?: 0
-
-    private fun recordEdge(
-        callerId: Long,
-        callerName: String?,
-        calleeId: Long,
-        calleeName: String?,
-        durationMs: Long,
-        expectedEpoch: Long,
-    ) {
-        val hash = edgeHash(callerId, calleeId)
-        val shard = shards[hash and (SHARD_COUNT - 1)]
-        synchronized(shard.lock) {
-            if (epoch.get() != expectedEpoch) return
-            val existing = shard.find(callerId, calleeId, hash)
-            if (existing >= 0) {
-                shard.update(existing, durationMs)
-                return
-            }
-
-            val limit = maxKeys().coerceAtLeast(0)
-            if (!reserveEntry(limit)) {
-                capacityLoss.incrementAndGet()
-                return
-            }
-            try {
-                val context = captureContext()
-                shard.insert(
-                    callerId = callerId,
-                    callerName = callerName,
-                    calleeId = calleeId,
-                    calleeName = calleeName,
-                    hash = hash,
-                    screen = context.screen,
-                    flow = context.flow,
-                    step = context.step,
-                    durationMs = durationMs,
-                )
-            } catch (throwable: Throwable) {
-                entryCount.decrementAndGet()
-                capacityLoss.incrementAndGet()
-                throw throwable
-            }
+        if (!state.stack.hasPoppedParent || !running.get()) return
+        attempted.incrementAndGet()
+        if (circuitBreakerOpen.get()) {
+            circuitBreakerDrops.incrementAndGet()
+            circuitBreakerDropTotal.incrementAndGet()
+            return
         }
-    }
-
-    private fun reserveEntry(limit: Int): Boolean {
-        if (limit <= 0) return false
-        while (true) {
-            val current = entryCount.get()
-            if (current >= limit) return false
-            if (entryCount.compareAndSet(current, current + 1)) return true
+        val buffer = state.buffer
+        if (buffer == null) {
+            producerRegistryLoss.incrementAndGet()
+            preAdmissionLossTotal.incrementAndGet()
+            recordCircuitBreakerLoss()
+            return
         }
-    }
-
-    private fun maybeFlush(now: Long, writer: AsyncLogWriter) {
-        val last = lastFlushAtMs.get()
-        if (now - last < RUNTIME_CALL_FLUSH_MS) return
-        if (!lastFlushAtMs.compareAndSet(last, now)) return
-        flushAt(now, force = true, writer)
-    }
-
-    private fun flushAt(now: Long, force: Boolean, writer: AsyncLogWriter) {
-        if (!force) {
-            val last = lastFlushAtMs.get()
-            if (now - last < RUNTIME_CALL_FLUSH_MS) return
-            if (!lastFlushAtMs.compareAndSet(last, now)) return
-        }
-        synchronized(flushLock) {
-            val batch = takeBatch()
-            if (batch != null) {
-                writer.runtimeCalls(batch)
-            }
-            flushQuality(writer)
-            val nextDelay = if (entryCount.get() > 0) RUNTIME_CALL_DRAIN_INTERVAL_MS else RUNTIME_CALL_FLUSH_MS
-            lastFlushAtMs.set(now - (RUNTIME_CALL_FLUSH_MS - nextDelay))
-        }
-    }
-
-    private fun takeBatch(): RuntimeCallBatch? {
-        if (entryCount.get() <= 0) return null
-        val batch = RuntimeCallBatch(MAX_FLUSH_RECORDS)
-        var visited = 0
-        while (visited < SHARD_COUNT && batch.size < MAX_FLUSH_RECORDS) {
-            val shardIndex = nextFlushShard
-            nextFlushShard = (nextFlushShard + 1) and (SHARD_COUNT - 1)
-            val shard = shards[shardIndex]
-            val removed = synchronized(shard.lock) {
-                shard.drainInto(batch, MAX_FLUSH_RECORDS)
-            }
-            if (removed > 0) entryCount.addAndGet(-removed)
-            visited++
-        }
-        return batch.takeIf { it.size > 0 }
-    }
-
-    private fun flushQuality(writer: AsyncLogWriter) {
-        val capacityLossCount = capacityLoss.getAndSet(0L)
-        if (capacityLossCount > 0L) {
-            writer.recordQuality(QualityCounterId.RUNTIME_GRAPH_CAPACITY_LOSS, capacityLossCount)
-        }
-        val mismatchCount = stackMismatch.getAndSet(0L)
-        if (mismatchCount > 0L) {
-            writer.recordQuality(QualityCounterId.RUNTIME_STACK_MISMATCH, mismatchCount)
-        }
-    }
-
-    private fun advanceEpoch() {
-        while (true) {
-            val current = epoch.get()
-            val next = if (current == Long.MAX_VALUE) INITIAL_EPOCH else current + 1L
-            if (epoch.compareAndSet(current, next)) return
-        }
-    }
-
-    private class RuntimeCallStack(initialEpoch: Long) {
-        var epoch: Long = initialEpoch
-            private set
-        private var values = LongArray(INITIAL_STACK_DEPTH * FRAME_WIDTH)
-        private var names = arrayOfNulls<String>(INITIAL_STACK_DEPTH)
-
-        var depth: Int = 0
-            private set
-        var poppedStartedAtMs: Long = 0L
-            private set
-        var poppedParentId: Long = 0L
-            private set
-        var poppedName: String? = null
-            private set
-        var poppedParentName: String? = null
-            private set
-        var hasPoppedParent: Boolean = false
-            private set
-
-        fun reset(newEpoch: Long) {
-            names.fill(null, 0, depth)
-            epoch = newEpoch
-            depth = 0
-            poppedStartedAtMs = 0L
-            poppedParentId = 0L
-            poppedName = null
-            poppedParentName = null
-            hasPoppedParent = false
-        }
-
-        fun push(methodId: Long, methodName: String?, startedAtMs: Long) {
-            ensureCapacity(depth + 1)
-            val offset = depth * FRAME_WIDTH
-            values[offset] = methodId
-            values[offset + 1] = startedAtMs
-            names[depth] = methodName
-            depth++
-        }
-
-        fun pop(methodId: Long): Boolean {
-            hasPoppedParent = false
-            poppedName = null
-            poppedParentName = null
-            if (depth <= 0) return false
-            val topOffset = (depth - 1) * FRAME_WIDTH
-            if (values[topOffset] == methodId) {
-                poppedStartedAtMs = values[topOffset + 1]
-                poppedName = names[depth - 1]
-                names[depth - 1] = null
-                depth--
-                if (depth > 0) {
-                    poppedParentId = values[(depth - 1) * FRAME_WIDTH]
-                    poppedParentName = names[depth - 1]
-                    hasPoppedParent = true
-                }
-                return true
-            }
-
-            // Truncate through the matching frame. A non-LIFO exit never emits a guessed edge.
-            for (index in depth - 2 downTo 0) {
-                if (values[index * FRAME_WIDTH] == methodId) {
-                    names.fill(null, index, depth)
-                    depth = index
-                    return false
-                }
-            }
-            names.fill(null, 0, depth)
-            depth = 0
-            return false
-        }
-
-        private fun ensureCapacity(requiredDepth: Int) {
-            val required = requiredDepth * FRAME_WIDTH
-            if (required <= values.size) return
-            var newSize = values.size
-            while (newSize < required) newSize = newSize shl 1
-            values = values.copyOf(newSize)
-            names = names.copyOf(newSize / FRAME_WIDTH)
-        }
-    }
-
-    private class EdgeShard {
-        val lock = Any()
-        private var states = ByteArray(INITIAL_EDGE_CAPACITY)
-        private var hashes = IntArray(INITIAL_EDGE_CAPACITY)
-        private var callers = LongArray(INITIAL_EDGE_CAPACITY)
-        private var callerNames = arrayOfNulls<String>(INITIAL_EDGE_CAPACITY)
-        private var callees = LongArray(INITIAL_EDGE_CAPACITY)
-        private var calleeNames = arrayOfNulls<String>(INITIAL_EDGE_CAPACITY)
-        private var counts = LongArray(INITIAL_EDGE_CAPACITY)
-        private var totalsMs = LongArray(INITIAL_EDGE_CAPACITY)
-        private var maximaMs = LongArray(INITIAL_EDGE_CAPACITY)
-        private var screens = arrayOfNulls<String>(INITIAL_EDGE_CAPACITY)
-        private var flows = arrayOfNulls<String>(INITIAL_EDGE_CAPACITY)
-        private var steps = arrayOfNulls<String>(INITIAL_EDGE_CAPACITY)
-        private var size = 0
-        private var used = 0
-        private var drainCursor = 0
-
-        fun find(callerId: Long, calleeId: Long, hash: Int): Int {
-            var index = hash and (states.size - 1)
-            repeat(states.size) {
-                when (states[index]) {
-                    EMPTY -> return -1
-                    OCCUPIED -> if (
-                        hashes[index] == hash && callers[index] == callerId && callees[index] == calleeId
-                    ) {
-                        return index
-                    }
-                }
-                index = (index + 1) and (states.size - 1)
-            }
-            return -1
-        }
-
-        fun update(index: Int, durationMs: Long) {
-            counts[index] = saturatingAdd(counts[index], 1L)
-            totalsMs[index] = saturatingAdd(totalsMs[index], durationMs)
-            if (durationMs > maximaMs[index]) maximaMs[index] = durationMs
-        }
-
-        fun insert(
-            callerId: Long,
-            callerName: String?,
-            calleeId: Long,
-            calleeName: String?,
-            hash: Int,
-            screen: String?,
-            flow: String?,
-            step: String?,
-            durationMs: Long,
+        val durationMs = (nowMs.getAsLong() - state.stack.poppedStartedAtMs).coerceAtLeast(0L)
+        if (!buffer.publish(
+                eventEpoch = currentEpoch,
+                callerId = state.stack.poppedParentId,
+                callerName = state.stack.poppedParentName,
+                calleeId = methodId,
+                calleeName = state.stack.poppedName,
+                screen = state.stack.poppedScreen,
+                flow = state.stack.poppedFlow,
+                step = state.stack.poppedStep,
+                durationMs = durationMs,
+            )
         ) {
-            ensureInsertCapacity()
-            var index = hash and (states.size - 1)
-            var deleted = -1
-            while (true) {
-                when (states[index]) {
-                    EMPTY -> {
-                        if (deleted >= 0) index = deleted else used++
-                        break
+            bufferCapacityLoss.incrementAndGet()
+            preAdmissionLossTotal.incrementAndGet()
+            recordCircuitBreakerLoss()
+            return
+        }
+        accepted.incrementAndGet()
+        wakeConsumer()
+    }
+
+    fun flushBlocking(timeoutMs: Long): Boolean {
+        if (!running.get()) return true
+        val request = flushRequest.incrementAndGet()
+        consumer?.let(LockSupport::unpark)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
+        while (flushCompleted.get() < request) {
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0L) return false
+            LockSupport.parkNanos(minOf(remaining, FLUSH_WAIT_POLL_NS))
+            if (Thread.interrupted()) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return true
+    }
+
+    fun flushForShutdown() {
+        val graphThread = consumer ?: return
+        running.set(false)
+        LockSupport.unpark(graphThread)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_TIMEOUT_MS)
+        var interrupted = false
+        while (graphThread.isAlive) {
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0L) break
+            try {
+                graphThread.join(
+                    TimeUnit.NANOSECONDS.toMillis(remaining).coerceIn(1L, SHUTDOWN_JOIN_POLL_MS),
+                )
+            } catch (_: InterruptedException) {
+                interrupted = true
+                break
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        if (graphThread.isAlive) {
+            val lost = bufferedEventCount()
+            shutdownLoss.addAndGet(lost)
+            acceptedEventLoss.addAndGet(lost)
+        }
+        flushQuality(activeWriter)
+    }
+
+    internal fun acceptedForTest(): Long = accepted.get()
+
+    internal fun attemptedForTest(): Long = attempted.get()
+
+    internal fun emittedForTest(): Long = emitted.get()
+
+    internal fun aggregatedEdgeKeysForTest(): Long = aggregatedEdgeKeys.get()
+
+    internal fun acceptedEventLossForTest(): Long = acceptedEventLoss.get()
+
+    internal fun currentThreadDepthForTest(): Int = threadState.get()?.stack?.depth ?: 0
+
+    internal fun consumerForTest(): Thread? = consumer
+
+    internal fun shadowComparisonForTest(): RuntimeGraphShadowComparisonResult = lastShadowComparison
+
+    internal fun circuitBreakerOpenForTest(): Boolean = circuitBreakerOpen.get()
+
+    internal fun circuitBreakerDropsForTest(): Long = circuitBreakerDrops.get()
+
+    internal fun fullyAccountedEventsForTest(): Long = emitted.get() + acceptedEventLoss.get() +
+        preAdmissionLossTotal.get() + circuitBreakerDropTotal.get()
+
+    internal fun registeredProducerCountForTest(): Int {
+        var result = 0
+        for (index in 0 until buffers.length()) if (buffers.get(index) != null) result++
+        return result
+    }
+
+    private fun createProducerState(currentEpoch: Long): ProducerState {
+        val buffer = registerFirstAvailable(buffers) { RuntimeGraphEdgeBuffer(Thread.currentThread()) }
+        return ProducerState(currentEpoch, RuntimeCallStack(), buffer)
+    }
+
+    private fun runConsumerFailOpen() {
+        val mode = activeMode
+        val table = RuntimeGraphEdgeTable(contextAware = mode != JankHunterRuntimeGraphMode.LEGACY)
+        val shadow = if (mode == JankHunterRuntimeGraphMode.SHADOW) RuntimeGraphShadowComparison() else null
+        try {
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            } catch (_: Throwable) {
+            }
+            var lastFlushAtMs = nowMs.getAsLong()
+            while (running.get() || hasBufferedEvents()) {
+                producerWakePending.set(false)
+                val drained = drainBuffers(table, shadow)
+                if (drained > 0 && consumerDelayNanos > 0L) LockSupport.parkNanos(consumerDelayNanos)
+                val request = flushRequest.get()
+                val now = nowMs.getAsLong()
+                val due = now - lastFlushAtMs >= FLUSH_INTERVAL_MS
+                var completedRequest = NO_FLUSH_REQUEST
+                if (request > flushCompleted.get() || due || !running.get()) {
+                    if (request > flushCompleted.get() || !running.get()) {
+                        drainAllBuffers(table, shadow)
                     }
-                    DELETED -> if (deleted < 0) deleted = index
+                    flushShadowComparison(shadow)
+                    emitAll(table)
+                    flushQuality(activeWriter)
+                    completedRequest = request
+                    lastFlushAtMs = now
                 }
-                index = (index + 1) and (states.size - 1)
+                reclaimDeadBuffers()
+                if (completedRequest != NO_FLUSH_REQUEST) flushCompleted.set(completedRequest)
+                if (drained == 0 && running.get()) LockSupport.parkNanos(CONSUMER_PARK_NS)
             }
-            states[index] = OCCUPIED
-            hashes[index] = hash
-            callers[index] = callerId
-            callerNames[index] = callerName
-            callees[index] = calleeId
-            calleeNames[index] = calleeName
-            counts[index] = 1L
-            totalsMs[index] = durationMs
-            maximaMs[index] = durationMs
-            screens[index] = screen
-            flows[index] = flow
-            steps[index] = step
-            size++
+            flushShadowComparison(shadow)
+            emitAll(table)
+            flushQuality(activeWriter)
+            reclaimDeadBuffers()
+            flushCompleted.set(flushRequest.get())
+        } catch (_: Throwable) {
+            val lost = saturatingAdd(bufferedEventCount(), table.logicalEventCount())
+            shutdownLoss.addAndGet(lost)
+            acceptedEventLoss.addAndGet(lost)
+            flushQuality(activeWriter)
+        } finally {
+            consumer = null
         }
+    }
 
-        fun drainInto(batch: RuntimeCallBatch, limit: Int): Int {
-            if (size <= 0 || batch.size >= limit) return 0
-            var removed = 0
-            var visited = 0
-            var index = drainCursor and (states.size - 1)
-            while (visited < states.size && batch.size < limit) {
-                if (states[index] == OCCUPIED) {
-                    batch.add(
-                        screens[index],
-                        callers[index],
-                        callerNames[index],
-                        flows[index],
-                        steps[index],
-                        callees[index],
-                        calleeNames[index],
-                        counts[index],
-                        totalsMs[index],
-                        maximaMs[index],
-                    )
-                    delete(index)
-                    removed++
+    private fun drainBuffers(table: RuntimeGraphEdgeTable, shadow: RuntimeGraphShadowComparison?): Int {
+        var total = 0
+        for (index in 0 until buffers.length()) {
+            val buffer = buffers.get(index) ?: continue
+            var drainedFromBuffer = 0
+            while (drainedFromBuffer < MAX_DRAIN_PER_BUFFER) {
+                val position = buffer.sequencer.tryClaimConsumer()
+                if (position == SpscSlotSequencer.NO_POSITION) break
+                val slot = buffer.sequencer.slotIndex(position)
+                if (buffer.epochs[slot] != epoch.get()) {
+                    staleEpochLoss.incrementAndGet()
+                    acceptedEventLoss.incrementAndGet()
+                } else {
+                    val limit = maxKeys().coerceAtLeast(0)
+                    if (!table.add(buffer, slot, limit)) {
+                        edgeCapacityLoss.incrementAndGet()
+                        acceptedEventLoss.incrementAndGet()
+                        recordCircuitBreakerLoss()
+                    } else if (shadow != null && !shadow.record(buffer, slot, limit)) {
+                        shadowCapacityLoss.incrementAndGet()
+                    }
                 }
-                index = (index + 1) and (states.size - 1)
-                visited++
+                buffer.clearReferences(slot)
+                buffer.sequencer.release(position)
+                total++
+                drainedFromBuffer++
             }
-            drainCursor = index
-            if (size == 0) resetEmptyTable()
-            return removed
         }
+        return total
+    }
 
-        fun clear() {
-            states.fill(EMPTY)
-            hashes.fill(0)
-            callers.fill(0L)
-            callerNames.fill(null)
-            callees.fill(0L)
-            calleeNames.fill(null)
-            counts.fill(0L)
-            totalsMs.fill(0L)
-            maximaMs.fill(0L)
-            screens.fill(null)
-            flows.fill(null)
-            steps.fill(null)
-            size = 0
-            used = 0
-            drainCursor = 0
-        }
+    private fun wakeConsumer() {
+        if (producerWakePending.compareAndSet(false, true)) consumer?.let(LockSupport::unpark)
+    }
 
-        private fun delete(index: Int) {
-            states[index] = DELETED
-            counts[index] = 0L
-            totalsMs[index] = 0L
-            maximaMs[index] = 0L
-            callerNames[index] = null
-            calleeNames[index] = null
-            screens[index] = null
-            flows[index] = null
-            steps[index] = null
-            size--
-        }
+    private fun drainAllBuffers(table: RuntimeGraphEdgeTable, shadow: RuntimeGraphShadowComparison?) {
+        while (drainBuffers(table, shadow) > 0) Unit
+    }
 
-        private fun resetEmptyTable() {
-            states.fill(EMPTY)
-            used = 0
-            drainCursor = 0
-        }
-
-        private fun ensureInsertCapacity() {
-            if ((used + 1) * LOAD_FACTOR_DENOMINATOR < states.size * LOAD_FACTOR_NUMERATOR) return
-            val compact = size * 2 < used
-            rehash(if (compact) states.size else states.size shl 1)
-        }
-
-        private fun rehash(capacity: Int) {
-            val oldStates = states
-            val oldHashes = hashes
-            val oldCallers = callers
-            val oldCallerNames = callerNames
-            val oldCallees = callees
-            val oldCalleeNames = calleeNames
-            val oldCounts = counts
-            val oldTotals = totalsMs
-            val oldMaxima = maximaMs
-            val oldScreens = screens
-            val oldFlows = flows
-            val oldSteps = steps
-
-            states = ByteArray(capacity)
-            hashes = IntArray(capacity)
-            callers = LongArray(capacity)
-            callerNames = arrayOfNulls(capacity)
-            callees = LongArray(capacity)
-            calleeNames = arrayOfNulls(capacity)
-            counts = LongArray(capacity)
-            totalsMs = LongArray(capacity)
-            maximaMs = LongArray(capacity)
-            screens = arrayOfNulls(capacity)
-            flows = arrayOfNulls(capacity)
-            steps = arrayOfNulls(capacity)
-            used = 0
-            size = 0
-            drainCursor = 0
-
-            for (oldIndex in oldStates.indices) {
-                if (oldStates[oldIndex] != OCCUPIED) continue
-                var index = oldHashes[oldIndex] and (capacity - 1)
-                while (states[index] == OCCUPIED) index = (index + 1) and (capacity - 1)
-                states[index] = OCCUPIED
-                hashes[index] = oldHashes[oldIndex]
-                callers[index] = oldCallers[oldIndex]
-                callerNames[index] = oldCallerNames[oldIndex]
-                callees[index] = oldCallees[oldIndex]
-                calleeNames[index] = oldCalleeNames[oldIndex]
-                counts[index] = oldCounts[oldIndex]
-                totalsMs[index] = oldTotals[oldIndex]
-                maximaMs[index] = oldMaxima[oldIndex]
-                screens[index] = oldScreens[oldIndex]
-                flows[index] = oldFlows[oldIndex]
-                steps[index] = oldSteps[oldIndex]
-                used++
-                size++
+    private fun emitAll(table: RuntimeGraphEdgeTable) {
+        val writer = activeWriter
+        while (table.size > 0) {
+            val batch = RuntimeCallBatch(MAX_FLUSH_RECORDS)
+            table.drainInto(batch)
+            val logicalEvents = batch.logicalEventCount()
+            aggregatedEdgeKeys.addAndGet(batch.size.toLong())
+            batchObserver?.invoke(batch)
+            val admitted = if (writer == null) {
+                false
+            } else {
+                try {
+                    writer.runtimeCalls(batch)
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+            if (!admitted) {
+                writerRejectionLoss.addAndGet(logicalEvents)
+                acceptedEventLoss.addAndGet(logicalEvents)
+                recordCircuitBreakerLoss(logicalEvents)
+            } else {
+                emitted.addAndGet(logicalEvents)
             }
         }
     }
+
+    private fun flushShadowComparison(shadow: RuntimeGraphShadowComparison?) {
+        val comparison = shadow?.compareAndClear() ?: return
+        lastShadowComparison = comparison
+        val writer = activeWriter ?: return
+        writer.counter("jankhunter.runtime_graph.shadow.missing_edges.count", comparison.missingEdges)
+        writer.counter("jankhunter.runtime_graph.shadow.extra_edges.count", comparison.extraEdges)
+        writer.counter("jankhunter.runtime_graph.shadow.count_differences.count", comparison.countDifferences)
+        writer.counter("jankhunter.runtime_graph.shadow.duration_differences.count", comparison.durationDifferences)
+        writer.counter("jankhunter.runtime_graph.shadow.context_splits.count", comparison.contextSplits)
+    }
+
+    private fun flushQuality(writer: AsyncLogWriter?) {
+        val target = writer ?: return
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_BUFFER_CAPACITY_LOSS, bufferCapacityLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_REGISTRY_CAPACITY_LOSS, producerRegistryLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_CAPACITY_LOSS, edgeCapacityLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_STALE_EPOCH_LOSS, staleEpochLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_SHUTDOWN_LOSS, shutdownLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_WRITER_REJECTION_LOSS, writerRejectionLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_STACK_MISMATCH, stackMismatch)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_STACK_CAPACITY_LOSS, stackCapacityLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_SHADOW_CAPACITY_LOSS, shadowCapacityLoss)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_CIRCUIT_BREAKER_TRIP, circuitBreakerTrips)
+        recordAndResetQuality(target, QualityCounterId.RUNTIME_GRAPH_CIRCUIT_BREAKER_DROP, circuitBreakerDrops)
+        recordDelta(target, QualityCounterId.RUNTIME_GRAPH_INPUT_TOTAL, attempted, reportedAttempted)
+        recordDelta(target, QualityCounterId.RUNTIME_GRAPH_EMITTED_TOTAL, emitted, reportedEmitted)
+    }
+
+    private fun recordDelta(writer: AsyncLogWriter, counterId: Int, total: AtomicLong, reported: AtomicLong) {
+        val current = total.get()
+        val previous = reported.getAndSet(current)
+        if (current > previous) writer.recordQuality(counterId, current - previous)
+    }
+
+    private fun recordCircuitBreakerLoss(delta: Long = 1L) {
+        if (circuitBreakerOpen.get() || delta <= 0L) return
+        var loss: Long
+        while (true) {
+            val current = circuitBreakerLossBudget.get()
+            loss = saturatingAdd(current, delta)
+            if (circuitBreakerLossBudget.compareAndSet(current, loss)) break
+        }
+        if (loss >= CIRCUIT_BREAKER_LOSS_THRESHOLD && circuitBreakerOpen.compareAndSet(false, true)) {
+            circuitBreakerTrips.incrementAndGet()
+        }
+    }
+
+    private fun hasBufferedEvents(): Boolean {
+        for (index in 0 until buffers.length()) {
+            if (buffers.get(index)?.sequencer?.isEmpty() == false) return true
+        }
+        return false
+    }
+
+    private fun bufferedEventCount(): Long {
+        var count = 0L
+        for (index in 0 until buffers.length()) {
+            count = saturatingAdd(count, buffers.get(index)?.sequencer?.pendingCount() ?: continue)
+        }
+        return count
+    }
+
+    private fun reclaimDeadBuffers() {
+        for (index in 0 until buffers.length()) {
+            val buffer = buffers.get(index) ?: continue
+            if (buffer.owner.get() == null && buffer.sequencer.isEmpty()) {
+                buffers.compareAndSet(index, buffer, null)
+            }
+        }
+    }
+
+    private fun clearRegistry() {
+        for (index in 0 until buffers.length()) {
+            buffers.getAndSet(index, null)?.clear()
+        }
+    }
+
+    private fun clearQuality() {
+        accepted.set(0L)
+        attempted.set(0L)
+        emitted.set(0L)
+        aggregatedEdgeKeys.set(0L)
+        acceptedEventLoss.set(0L)
+        bufferCapacityLoss.set(0L)
+        producerRegistryLoss.set(0L)
+        edgeCapacityLoss.set(0L)
+        staleEpochLoss.set(0L)
+        shutdownLoss.set(0L)
+        writerRejectionLoss.set(0L)
+        stackMismatch.set(0L)
+        stackCapacityLoss.set(0L)
+        shadowCapacityLoss.set(0L)
+        circuitBreakerOpen.set(false)
+        circuitBreakerLossBudget.set(0L)
+        circuitBreakerTrips.set(0L)
+        circuitBreakerDrops.set(0L)
+        reportedAttempted.set(0L)
+        reportedEmitted.set(0L)
+        preAdmissionLossTotal.set(0L)
+        circuitBreakerDropTotal.set(0L)
+    }
+
+    private class ProducerState(
+        val epoch: Long,
+        val stack: RuntimeCallStack,
+        val buffer: RuntimeGraphEdgeBuffer?,
+    )
 
     private companion object {
+        const val CONSUMER_NAME = "JankHunterGraph"
         const val DISABLED_TOKEN = 0L
-        const val INITIAL_EPOCH = 1L
-        const val FRAME_WIDTH = 2
-        const val INITIAL_STACK_DEPTH = 16
-        const val SHARD_COUNT = 16
-        const val INITIAL_EDGE_CAPACITY = 16
-        const val MAX_FLUSH_RECORDS = 128
-        const val RUNTIME_CALL_FLUSH_MS = 5_000L
-        const val RUNTIME_CALL_DRAIN_INTERVAL_MS = 250L
-        const val LOAD_FACTOR_NUMERATOR = 3
-        const val LOAD_FACTOR_DENOMINATOR = 4
-        const val EMPTY: Byte = 0
-        const val OCCUPIED: Byte = 1
-        const val DELETED: Byte = 2
-
-        fun edgeHash(callerId: Long, calleeId: Long): Int {
-            var mixed = callerId xor java.lang.Long.rotateLeft(calleeId, 29)
-            mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
-            mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
-            return (mixed xor (mixed ushr 32)).toInt()
-        }
-
-        fun saturatingAdd(left: Long, right: Long): Long {
-            if (right <= 0L) return left
-            return if (left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
-        }
+        const val NO_FLUSH_REQUEST = -1L
+        const val MAX_PRODUCERS = 128
+        const val CIRCUIT_BREAKER_LOSS_THRESHOLD = 256L
+        const val MAX_DRAIN_PER_BUFFER = RUNTIME_GRAPH_BUFFER_CAPACITY
+        const val MAX_FLUSH_RECORDS = RUNTIME_GRAPH_MAX_FLUSH_RECORDS
+        const val FLUSH_INTERVAL_MS = 5_000L
+        const val CONSUMER_PARK_NS = 50_000_000L
+        const val FLUSH_WAIT_POLL_NS = 1_000_000L
+        const val SHUTDOWN_TIMEOUT_MS = 2_000L
+        const val SHUTDOWN_JOIN_POLL_MS = 50L
     }
 }

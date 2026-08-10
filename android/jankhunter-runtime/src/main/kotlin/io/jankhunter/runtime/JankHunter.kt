@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -55,30 +56,24 @@ object JankHunter {
         { timeoutMs, task -> runtimeState.maintenanceScheduler?.executeAndWait(timeoutMs, task) == true },
     )
     private val sampling = RuntimeSamplingService(::nowMs)
-    private val logSpam = RuntimeLogSpamService(
-        ::nowMs,
-        { config },
-        { writer },
-        { isRuntimeActiveForHooks() },
-        { ownerName -> captureContext(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull())) },
-        { writer?.recordQuality(QualityCounterId.LOG_SPAM_CARDINALITY_LOSS) },
+    private val runtimeHookEvents = RuntimeHookEventTransport(
+        maxCounterKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
+        maxLogSpamKeys = { config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS },
     )
     private val runtimeCallGraph = RuntimeCallGraph(
         nowMs = ::nowMs,
-        captureContext = { captureContext(ownerOverride = null) },
+        captureScreen = contextTracker::currentScreenOrNull,
+        captureFlow = contextTracker::currentFlowOrNull,
+        captureStep = contextTracker::currentFlowStepOrNull,
         maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
     )
-    private val methodCounters = RuntimeMethodCounters(
-        nowMs = ::nowMs,
-        maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
-    )
-    private val handlerWrappers = HandlerWrapperRegistry { metricName ->
-        val qualityId = when (metricName) {
-            "jankhunter.handler_wrapper.dropped_entries.count" -> QualityCounterId.HANDLER_ENTRY_LIMIT
-            "jankhunter.handler_wrapper.dropped_wrappers.count" -> QualityCounterId.HANDLER_WRAPPER_LIMIT
-            else -> null
+    private val handlerWrappers = HandlerWrapperRegistry { loss ->
+        val qualityId = when (loss) {
+            HandlerWrapperLoss.ENTRY_LIMIT -> QualityCounterId.HANDLER_ENTRY_LIMIT
+            HandlerWrapperLoss.WRAPPER_LIMIT -> QualityCounterId.HANDLER_WRAPPER_LIMIT
+            HandlerWrapperLoss.CONTENTION -> QualityCounterId.HANDLER_CONTENTION_BYPASS
         }
-        if (qualityId != null) writer?.recordQuality(qualityId)
+        writer?.recordQuality(qualityId)
     }
 
     private var writer: AsyncLogWriter?
@@ -272,8 +267,6 @@ object JankHunter {
 
         config = providedConfig
         metrics.configure(providedConfig.maxMetricAggregationKeys())
-        runtimeCallGraph.resetFlushState()
-        methodCounters.resetFlushState()
         sampling.configure(providedConfig)
 
         val directory = runtimeLogDirectory(appContext, providedConfig)
@@ -296,6 +289,21 @@ object JankHunter {
             },
         )
         writer = asyncWriter
+        if (providedConfig.runtimeCallGraphEnabled()) {
+            val requestedMode = providedConfig.runtimeCallGraphMode()
+            val effectiveMode = if (
+                requestedMode == JankHunterRuntimeGraphMode.SHADOW &&
+                appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0
+            ) {
+                asyncWriter.recordQuality(QualityCounterId.RUNTIME_GRAPH_SHADOW_PRODUCTION_FALLBACK)
+                JankHunterRuntimeGraphMode.BUFFERED
+            } else {
+                requestedMode
+            }
+            runtimeState.runtimeGraphMode = effectiveMode
+        } else {
+            asyncWriter.recordQuality(QualityCounterId.RUNTIME_GRAPH_KILL_SWITCH)
+        }
 
         val identity = appIdentity(appContext)
         val device = DeviceSnapshots.current()
@@ -320,6 +328,10 @@ object JankHunter {
             throw asyncWriter.terminalFailureCause()
                 ?: IllegalStateException("Jank Hunter writer failed to start")
         }
+        if (providedConfig.runtimeCallGraphEnabled()) {
+            runtimeCallGraph.resetFlushState(asyncWriter, runtimeState.runtimeGraphMode)
+        }
+        runtimeHookEvents.start(asyncWriter)
         installCrashFlushHandler()
         recordRuntimeStartMetadata(asyncWriter, attempt)
 
@@ -367,12 +379,9 @@ object JankHunter {
         val stopResources = coordinator.beginStop()
         if (stopResources) {
             val shutdownDeadlineNs = System.nanoTime() + BLOCKING_FLUSH_TIMEOUT_MS * NANOS_PER_MS
-            swallow {
-                flushLogSpam(force = true)
-                flushMetricsBlocking(remainingShutdownTimeoutMs(shutdownDeadlineNs))
-                methodCounters.flushForShutdown(writer)
-                runtimeCallGraph.flushForShutdown(writer)
-            }
+            swallow { flushMetricsBlocking(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
+            swallow { runtimeHookEvents.stopAndFlush(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
+            swallow { runtimeCallGraph.flushForShutdown() }
             swallow { collectors.stop() }
             swallow { writer?.close(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
         }
@@ -386,9 +395,9 @@ object JankHunter {
         swallow { contextTracker.resetRecordedContext() }
         swallow { metrics.reset() }
         swallow { sampling.reset() }
-        swallow { logSpam.reset() }
-        swallow { methodCounters.clear() }
+        swallow { runtimeHookEvents.clear() }
         swallow { runtimeCallGraph.clear() }
+        runtimeState.runtimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED
         coordinator.markStopped()
         if (clearInit) {
             config = null
@@ -474,6 +483,12 @@ object JankHunter {
     ) {
         asyncWriter.counter("jankhunter.runtime.session.start.count", 1)
         asyncWriter.gauge("jankhunter.runtime.init_attempt", attempt)
+        val graphMode = if (config?.runtimeCallGraphEnabled() == true) {
+            runtimeState.runtimeGraphMode.name.lowercase()
+        } else {
+            "disabled"
+        }
+        asyncWriter.counter("jankhunter.runtime_graph.mode.$graphMode.count", 1)
     }
 
     private fun runtimeLogDirectory(appContext: Context, providedConfig: JankHunterConfig): File {
@@ -845,10 +860,9 @@ object JankHunter {
 
     @JvmStatic
     fun flush() {
-        flushLogSpam(force = true)
         flushMetricsBlocking()
-        methodCounters.flush(force = true, writer)
-        runtimeCallGraph.flush(force = true, writer)
+        runtimeHookEvents.flushBlocking(flushTimeoutMs())
+        runtimeCallGraph.flushBlocking(flushTimeoutMs())
         writer?.flushBlocking(flushTimeoutMs())
     }
 
@@ -867,16 +881,17 @@ object JankHunter {
     @JvmStatic
     fun enterMethod(methodId: Long, methodName: String?): Long {
         return RuntimeHookGuard.value(0L) {
-            runtimeCallGraph.enter(methodId, methodName, isRuntimeActiveForHooks())
+            runtimeCallGraph.enter(
+                methodId,
+                methodName,
+                isRuntimeActiveForHooks() && config?.runtimeCallGraphEnabled() == true,
+            )
         }
     }
 
     @JvmStatic
     fun exitMethod(token: Long, methodId: Long) {
-        RuntimeHookGuard.run {
-            val activeWriter = if (isRuntimeActiveForHooks()) writer else null
-            runtimeCallGraph.exit(token, methodId, activeWriter)
-        }
+        RuntimeHookGuard.run { runtimeCallGraph.exit(token, methodId) }
     }
 
     @JvmStatic
@@ -887,7 +902,7 @@ object JankHunter {
     @JvmStatic
     fun recordMethodCall(methodId: Long, methodName: String?) {
         RuntimeHookGuard.run {
-            methodCounters.record(methodId, methodName, isRuntimeActiveForHooks(), writer)
+            if (isRuntimeActiveForHooks()) runtimeHookEvents.recordMethod(methodId, methodName)
         }
     }
 
@@ -1326,7 +1341,17 @@ object JankHunter {
 
     @JvmStatic
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
-        RuntimeHookGuard.run { logSpam.record(ownerName, source, level) }
+        RuntimeHookGuard.run {
+            if (!isRuntimeActiveForHooks()) return@run
+            runtimeHookEvents.recordLogSpam(
+                screen = contextTracker.currentScreenOrNull(),
+                owner = ownerName?.takeIf { it.isNotBlank() } ?: contextTracker.ownerOrNull(),
+                flow = contextTracker.currentFlowOrNull(),
+                step = contextTracker.currentFlowStepOrNull(),
+                source = source,
+                level = level,
+            )
+        }
     }
 
     internal fun captureContext(
@@ -1576,10 +1601,6 @@ object JankHunter {
         asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
     }
 
-    private fun flushLogSpam(force: Boolean) {
-        logSpam.flush(force)
-    }
-
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
 
     private fun shouldRecordOwnerStall(durationMs: Long): Boolean {
@@ -1649,6 +1670,7 @@ object JankHunter {
     private const val DEFAULT_HTTP_SLOW_THRESHOLD_MS = 1_000L
     private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
     private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
+    private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
     private const val DEFAULT_MAX_HANDLER_TRACKING_ENTRIES = 4096
     private const val DEFAULT_MAX_HANDLER_WRAPPERS_PER_RUNNABLE = 32
     private const val BLOCKING_FLUSH_TIMEOUT_MS = 1_000L

@@ -234,6 +234,49 @@ func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
 	}
 }
 
+func TestRuntimeGraphContentionQualityCounterKeepsWireName(t *testing.T) {
+	if QualityRuntimeGraphContentionLoss != 0x200b {
+		t.Fatalf("runtime graph contention quality wire value changed: %d", QualityRuntimeGraphContentionLoss)
+	}
+	if got := QualityCounterName(QualityRuntimeGraphContentionLoss); got != "runtime_graph_contention_loss_total" {
+		t.Fatalf("QualityCounterName() = %q", got)
+	}
+}
+
+func TestBufferedRuntimeGraphQualityCountersKeepWireNames(t *testing.T) {
+	cases := map[uint64]string{
+		QualityRuntimeGraphBufferCapacityLoss:   "runtime_graph_buffer_capacity_loss_total",
+		QualityRuntimeGraphRegistryCapacityLoss: "runtime_graph_registry_capacity_loss_total",
+		QualityRuntimeGraphStaleEpochLoss:       "runtime_graph_stale_epoch_loss_total",
+		QualityRuntimeGraphShutdownLoss:         "runtime_graph_shutdown_loss_total",
+		QualityRuntimeGraphWriterRejectionLoss:  "runtime_graph_writer_rejection_loss_total",
+		QualityRuntimeStackCapacityLoss:         "runtime_stack_capacity_loss_total",
+	}
+	for id, want := range cases {
+		if got := QualityCounterName(id); got != want {
+			t.Fatalf("QualityCounterName(%d) = %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestRuntimeEventTransportQualityCountersKeepWireNames(t *testing.T) {
+	cases := map[uint64]string{
+		QualityRuntimeEventBufferCapacityLoss:   "runtime_event_buffer_capacity_loss_total",
+		QualityRuntimeEventRegistryCapacityLoss: "runtime_event_registry_capacity_loss_total",
+		QualityMethodCounterCardinalityLoss:     "method_counter_cardinality_loss_total",
+		QualityRuntimeEventWriterRejectionLoss:  "runtime_event_writer_rejection_loss_total",
+		QualityRuntimeGraphInputTotal:           "runtime_graph_input_total",
+		QualityRuntimeGraphEmittedTotal:         "runtime_graph_emitted_total",
+		QualityRuntimeGraphCircuitBreakerTrip:   "runtime_graph_circuit_breaker_trip_total",
+		QualityRuntimeGraphCircuitBreakerDrop:   "runtime_graph_circuit_breaker_drop_total",
+	}
+	for id, want := range cases {
+		if got := QualityCounterName(id); got != want {
+			t.Fatalf("QualityCounterName(%d) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 func TestProfileFilesReportsV9ControlAndEventSizes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {

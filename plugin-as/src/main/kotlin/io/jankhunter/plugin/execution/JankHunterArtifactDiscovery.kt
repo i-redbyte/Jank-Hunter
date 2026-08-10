@@ -122,18 +122,6 @@ object JankHunterArtifactDiscovery {
             )
     }
 
-    fun findRecentLogs(project: Project, limit: Int = 20): List<String> {
-        val root = project.basePath?.let { File(it) }?.takeIf { it.isDirectory } ?: return emptyList()
-        return root.walkTopDown()
-            .maxDepth(MAX_LOG_SEARCH_DEPTH)
-            .onEnter { file -> file.name !in skippedDirectories }
-            .filter { it.isFile && it.extension.equals("jhlog", ignoreCase = true) }
-            .sortedByDescending { it.lastModified() }
-            .take(limit)
-            .map { it.path }
-            .toList()
-    }
-
     private fun score(set: JankHunterArtifactSet): Int {
         var score = 0
         if (set.ownerMap.isNotBlank()) score += 4
@@ -198,5 +186,4 @@ object JankHunterArtifactDiscovery {
 
     private const val MAX_MODULE_SEARCH_DEPTH = 8
     private const val MAX_ARTIFACT_SEARCH_DEPTH = 6
-    private const val MAX_LOG_SEARCH_DEPTH = 10
 }

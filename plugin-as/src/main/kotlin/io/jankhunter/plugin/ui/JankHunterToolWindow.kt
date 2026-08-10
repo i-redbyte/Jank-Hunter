@@ -4,96 +4,43 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
-import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.util.Key
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.components.JBTextField
-import com.intellij.ui.JBColor
-import com.intellij.ui.jcef.JBCefApp
-import com.intellij.ui.jcef.JBCefBrowser
-import com.intellij.ui.jcef.JBCefBrowserBase
-import com.intellij.ui.jcef.JBCefJSQuery
-import com.intellij.ui.table.JBTable
-import io.jankhunter.plugin.execution.JankHunterArtifactDiscovery
-import io.jankhunter.plugin.execution.JankHunterArtifactSet
 import io.jankhunter.plugin.execution.JankHunterCommand
 import io.jankhunter.plugin.execution.JankHunterCommandBuilder
-import io.jankhunter.plugin.execution.JankHunterInputPaths
+import io.jankhunter.plugin.execution.JankHunterDiscoveredLog
+import io.jankhunter.plugin.execution.JankHunterLogDiscovery
 import io.jankhunter.plugin.execution.JankHunterLogScope
 import io.jankhunter.plugin.execution.JankHunterMode
 import io.jankhunter.plugin.execution.JankHunterRunRequest
 import io.jankhunter.plugin.execution.JankHunterRunValidator
-import io.jankhunter.plugin.execution.JankHunterSessionLogFiles
-import io.jankhunter.plugin.execution.JankHunterValidationResult
-import io.jankhunter.plugin.problems.ProblemsParser
-import io.jankhunter.plugin.problems.ProblemsTable
-import io.jankhunter.plugin.problems.ProblemsTableModel
-import io.jankhunter.plugin.problems.SourceLocation
-import io.jankhunter.plugin.problems.SourceNavigator
-import io.jankhunter.plugin.services.JankHunterAdbIntegration
-import io.jankhunter.plugin.services.JankHunterCliStatus
-import io.jankhunter.plugin.services.JankHunterCliLifecycle
-import io.jankhunter.plugin.services.JankHunterDevice
+import io.jankhunter.plugin.execution.JankHunterUserPaths
 import io.jankhunter.plugin.services.JankHunterNotifications
-import io.jankhunter.plugin.services.JankHunterProjectService
 import io.jankhunter.plugin.services.JankHunterProjectIntrospection
+import io.jankhunter.plugin.services.JankHunterProjectService
 import io.jankhunter.plugin.settings.JankHunterSettings
-import io.jankhunter.plugin.settings.JankHunterRecentRun
 import java.awt.BorderLayout
-import java.awt.Color
+import java.awt.CardLayout
 import java.awt.FlowLayout
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import java.awt.Insets
-import java.awt.datatransfer.StringSelection
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Future
-import javax.swing.DefaultComboBoxModel
+import javax.swing.BorderFactory
 import javax.swing.JButton
-import javax.swing.JCheckBox
-import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JSplitPane
-import javax.swing.JTabbedPane
-import javax.swing.ListSelectionModel
-import javax.swing.RowFilter
-import javax.swing.table.DefaultTableCellRenderer
-import javax.swing.table.DefaultTableModel
-import javax.swing.table.TableRowSorter
-import org.cef.browser.CefBrowser
-import org.cef.handler.CefLoadHandlerAdapter
-
-private data class PreparedRun(
-    val command: JankHunterCommand,
-    val request: JankHunterRunRequest,
-    val validation: JankHunterValidationResult,
-)
-
-private data class LogDirectoryScan(val logs: List<File>, val heapDump: File?)
-
-internal data class PreparedLogs(
-    val input: String,
-    val directory: File?,
-    val heapDump: File?,
-    val found: Boolean,
-)
 
 class JankHunterToolWindow(
     private val project: Project,
@@ -101,1915 +48,512 @@ class JankHunterToolWindow(
 ) : Disposable {
     val component: JComponent
 
-    private val modeCombo = JComboBox(JankHunterMode.entries.toTypedArray())
-    private val targetProjectLabel = JBLabel()
-    private val cliPathField = browseField()
-    private val cliStatusLabel = JBLabel()
-    private val checkCliButton = JButton("Check CLI")
-    private val buildCliButton = JButton("Build CLI")
-    private val logsDirectoryField = browseDirectoryField()
-    private val openLogsButton = JButton("Open Logs")
-    private val generateReportButton = JButton("Generate")
-    private val artifactCombo = JComboBox<String>()
-    private val applyArtifactsButton = JButton("Apply")
-    private val scanArtifactsButton = JButton("Scan")
-    private val logsField = browseField(appendSelection = true)
-    private val inspectLogScopeCombo = JComboBox(JankHunterLogScope.entries.toTypedArray())
-    private val baselineField = browseField(appendSelection = true)
-    private val baselineLogScopeCombo = JComboBox(JankHunterLogScope.entries.toTypedArray())
-    private val candidateField = browseField(appendSelection = true)
-    private val candidateLogScopeCombo = JComboBox(JankHunterLogScope.entries.toTypedArray())
-    private val outputField = JBTextField()
-    private val ownerMapField = browseField()
-    private val mappingField = browseField()
-    private val classGraphField = browseField()
-    private val diagnosticsField = browseField()
-    private val diCatalogField = browseField()
-    private val heapDumpField = browseField()
-    private val heapEvidenceField = browseField()
-    private val baselineHeapDumpField = browseField()
-    private val baselineHeapEvidenceField = browseField()
-    private val candidateHeapDumpField = browseField()
-    private val candidateHeapEvidenceField = browseField()
-    private val routeField = JBTextField()
-    private val screenField = JBTextField()
-    private val ownerField = JBTextField()
-    private val classField = JBTextField()
-    private val datasetCombo = JComboBox(arrayOf("code-problems", "leaks", "influence", "math-findings"))
-    private val formatCombo = JComboBox(arrayOf("csv", "json"))
-    private val jsonCheckBox = JCheckBox("JSON")
-    private val presentationCheckBox = JCheckBox("Presentation")
-    private val openInIdeCheckBox = JCheckBox("Open in IDE")
-    private val openExternalCheckBox = JCheckBox("Browser")
-    private val runButton = JButton("Run")
-    private val stopButton = JButton("Stop")
-    private val openInIdeButton = JButton("Open In IDE")
-    private val openBrowserButton = JButton("Open Browser")
-    private val clearButton = JButton("Clear")
-    private val findLogsButton = JButton("Find Logs")
-    private val deviceCombo = JComboBox<JankHunterDevice>()
-    private val scanDevicesButton = JButton("Devices")
-    private val packageField = JBTextField()
-    private val pullLogsButton = JButton("Pull From App")
-    private val openRemoteLogsButton = JButton("List App Logs")
-    private val collectInspectButton = JButton("Pull + Generate")
-    private val consoleArea = JBTextArea()
-    private val tabs = JTabbedPane()
-    private val reportPlaceholder = JBLabel("HTML-отчет появится здесь после успешного запуска.")
-    private var browser: JBCefBrowser? = null
-    private var browserQuery: JBCefJSQuery? = null
-    private val problemsModel = ProblemsTableModel()
-    private val problemsTable = JBTable(problemsModel)
-    private val problemsSorter = TableRowSorter(problemsModel)
-    private var rawProblemsTable: ProblemsTable = ProblemsTable(emptyList(), emptyList())
-    private val severityFilter = JComboBox(arrayOf("all", "critical", "high", "medium", "low", "info"))
-    private val categoryFilter = JBTextField()
-    private val screenFilter = JBTextField()
-    private val ownerFilter = JBTextField()
-    private val groupProblemsCombo = JComboBox(arrayOf("none", "class", "owner"))
-    private val applyProblemsFilterButton = JButton("Filter")
-    private val resetProblemsFilterButton = JButton("Reset")
-    private val openProblemSourceButton = JButton("Open Source")
-    private val openProblemReportButton = JButton("Open Report")
-    private val copyRecommendationButton = JButton("Copy Recommendation")
-    private val reloadProblemsButton = JButton("Reload")
-    private val historyModel = object : DefaultTableModel(arrayOf("Time", "Mode", "Output", "Command"), 0) {
-        override fun isCellEditable(row: Int, column: Int): Boolean = false
-    }
-    private val historyTable = JBTable(historyModel)
-    private val loadHistoryButton = JButton("Load")
-    private val rerunHistoryButton = JButton("Rerun")
-    private val openHistoryOutputButton = JButton("Open Output")
-    private val rowMap = linkedMapOf<String, JPanel>()
-    private val visibleHistory = mutableListOf<JankHunterRecentRun>()
+    private val settings = JankHunterSettings.getInstance().state
+    private val rootLayout = CardLayout()
+    private val root = JPanel(rootLayout)
+    private val taskLayout = CardLayout()
+    private val taskContent = JPanel(taskLayout)
+    private val outputDirectoryField = directoryField()
+    private val openBrowserCheckBox = JBCheckBox("Открыть отчёт в браузере после генерации")
+    private val statusLabel = JBLabel("Выберите логи для анализа")
+    private val reportButton = JButton("Отчёт")
+    private val compareButton = JButton("Сравнить отчёты")
+    private val advancedButton = JButton("Расширенный режим")
+    private val runButton = JButton("Сгенерировать отчёт")
+    private val stopButton = JButton("Отменить")
+    private val processedFingerprints: Set<String>
+        get() = settings.processedLogFingerprints.toSet()
 
-    private val artifactSets = mutableListOf<JankHunterArtifactSet>()
+    private val reportSelection = selectionPanel(
+        "Логи и данные об утечках",
+        settings.logsDirectory.ifBlank { JankHunterProjectIntrospection.defaultLogsDirectory(project).path },
+    ) { path ->
+        settings.logsDirectory = path
+    }
+    private val baselineSelection = selectionPanel("Было · baseline", settings.baselineLogsDirectory) { path ->
+        settings.baselineLogsDirectory = path
+    }
+    private val candidateSelection = selectionPanel("Стало · candidate", settings.candidateLogsDirectory) { path ->
+        settings.candidateLogsDirectory = path
+    }
+    private val advancedPanel = JankHunterAdvancedPanel(
+        project = project,
+        onBack = ::showSimpleMode,
+        onRun = ::runCurrentReport,
+        onScorecard = ::runScorecard,
+        onSelectReport = { selectTask(UserTask.REPORT) },
+        onSelectCompare = { selectTask(UserTask.COMPARE) },
+        onChooseReportDirectory = reportSelection::chooseDirectory,
+        onChooseBaselineDirectory = baselineSelection::chooseDirectory,
+        onChooseCandidateDirectory = candidateSelection::chooseDirectory,
+    )
     private val backgroundTasks = mutableListOf<Future<*>>()
-    private val consoleLock = Any()
-    private val pendingConsole = StringBuilder()
+    private var currentTask = UserTask.REPORT
     private var processHandler: OSProcessHandler? = null
-    private var adbPullTask: Future<*>? = null
-    private var lastOutputPath: String? = null
-    private var lastHtmlOutputPath: String? = null
-    private var autoHeapDumpPath: String? = null
     private var commandStarting = false
-    private var adbPulling = false
-    private var adbPullGeneration = 0L
-    private var consoleFlushScheduled = false
-    @Volatile
+    private var advancedModeVisible = false
     private var disposed = false
 
     init {
-        val settings = JankHunterSettings.getInstance().state
-        cliPathField.text = settings.cliPath.ifBlank { JankHunterCommandBuilder.defaultCliPath(project) }
-        logsDirectoryField.text = settings.logsDirectory.ifBlank {
-            JankHunterProjectIntrospection.defaultLogsDirectory(project).path
-        }
-        packageField.text = settings.packageName
-        targetProjectLabel.text = ":  /  ${project.basePath.orEmpty()}"
-        presentationCheckBox.isSelected = settings.presentationMode
-        openInIdeCheckBox.isSelected = settings.openReportInIde
-        openExternalCheckBox.isSelected = settings.openReportExternally
-        inspectLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-        baselineLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-        candidateLogScopeCombo.selectedItem = JankHunterLogScope.ALL_SELECTED
-        modeCombo.selectedItem = JankHunterMode.INSPECT
+        outputDirectoryField.text = settings.outputDirectory.ifBlank { JankHunterSettings.defaultOutputDirectory() }
+        openBrowserCheckBox.isSelected = settings.openReportExternally
 
-        consoleArea.isEditable = false
-        consoleArea.lineWrap = true
-        consoleArea.wrapStyleWord = false
-
-        configureProblemsTable()
-        configureHistoryTable()
-
-        tabs.addTab("Console", JBScrollPane(consoleArea))
-        tabs.addTab("Report", reportPlaceholder)
-        tabs.addTab("Problems", buildProblemsPanel())
-        tabs.addTab("History", buildHistoryPanel())
-
-        configureTooltips()
-        configureActions()
-
+        reportButton.addActionListener { selectTask(UserTask.REPORT) }
+        compareButton.addActionListener { selectTask(UserTask.COMPARE) }
+        advancedButton.addActionListener { showAdvancedMode() }
+        runButton.addActionListener { runCurrentReport() }
+        stopButton.addActionListener { stopProcess() }
         stopButton.isEnabled = false
-        openInIdeButton.isEnabled = false
-        openBrowserButton.isEnabled = false
 
-        val root = JPanel(BorderLayout())
-        root.add(buildHeaderPanel(), BorderLayout.NORTH)
-        val splitPane = JSplitPane(JSplitPane.VERTICAL_SPLIT, buildForm(), tabs).apply {
-            resizeWeight = 0.34
-            isContinuousLayout = true
-        }
-        root.add(splitPane, BorderLayout.CENTER)
+        taskContent.add(reportSelection.component, UserTask.REPORT.card)
+        taskContent.add(
+            JSplitPane(JSplitPane.VERTICAL_SPLIT, baselineSelection.component, candidateSelection.component).apply {
+                resizeWeight = 0.5
+                isContinuousLayout = true
+                border = null
+            },
+            UserTask.COMPARE.card,
+        )
 
+        root.add(buildSimplePanel(), SIMPLE_CARD)
+        root.add(advancedPanel.component, ADVANCED_CARD)
         component = root
-        restoreStartupRequest()
+
+        selectTask(UserTask.REPORT)
         JankHunterProjectService.getInstance(project).register(this)
-        initializeArtifactPlaceholder()
-        initializeCliStatusPlaceholder()
-        refreshTargetProjectAsync()
-        refreshHistoryTable()
-        updateModeVisibility()
+        scanConfiguredSelections()
+    }
+
+    fun applyClassFilter(className: String) {
+        advancedPanel.setClassFilter(className)
+        showAdvancedMode()
     }
 
     override fun dispose() {
         if (disposed) return
         disposed = true
         JankHunterProjectService.getInstance(project).unregister(this)
-        backgroundTasks.forEach { task -> task.cancel(true) }
+        backgroundTasks.forEach { it.cancel(true) }
         backgroundTasks.clear()
-        adbPullTask = null
-        synchronized(consoleLock) {
-            pendingConsole.setLength(0)
-            consoleFlushScheduled = false
-        }
         processHandler?.destroyProcess()
-        browserQuery?.dispose()
-        browser?.dispose()
+        reportSelection.dispose()
+        baselineSelection.dispose()
+        candidateSelection.dispose()
+        advancedPanel.dispose()
     }
 
-    private fun configureActions() {
-        runButton.addActionListener { runRequest(collectRequest()) }
-        generateReportButton.addActionListener { generateReportFromLogs() }
-        stopButton.addActionListener { stopCommand() }
-        openInIdeButton.addActionListener { openLastOutputInsideIde() }
-        openBrowserButton.addActionListener { openLastOutputInBrowser() }
-        clearButton.addActionListener { replaceConsole("") }
-        findLogsButton.addActionListener { fillRecentLogs() }
-        openLogsButton.addActionListener { chooseLogsDirectory() }
-        checkCliButton.addActionListener { refreshCliStatusAsync(showDialog = true) }
-        buildCliButton.addActionListener { buildCli() }
-        scanArtifactsButton.addActionListener { refreshArtifactsAsync(autoApplyBlankFields = false, showMessage = true) }
-        applyArtifactsButton.addActionListener { applySelectedArtifacts(force = true) }
-        scanDevicesButton.addActionListener { refreshDevices() }
-        pullLogsButton.addActionListener { pullDeviceLogs(openInspect = false) }
-        openRemoteLogsButton.addActionListener { openRemoteLogFolder() }
-        collectInspectButton.addActionListener { pullDeviceLogs(openInspect = true) }
-        modeCombo.addActionListener {
-            outputField.text = ""
-            updateModeVisibility()
-        }
-        applyProblemsFilterButton.addActionListener { applyProblemsView() }
-        resetProblemsFilterButton.addActionListener { resetProblemsFilters() }
-        groupProblemsCombo.addActionListener { applyProblemsView() }
-        openProblemSourceButton.addActionListener { openSelectedProblemSource() }
-        openProblemReportButton.addActionListener { openProblemReport() }
-        copyRecommendationButton.addActionListener { copySelectedRecommendation() }
-        reloadProblemsButton.addActionListener { lastOutputPath?.let { loadProblemsTableAsync(it) } }
-        loadHistoryButton.addActionListener { loadSelectedHistory() }
-        rerunHistoryButton.addActionListener { rerunSelectedHistory() }
-        openHistoryOutputButton.addActionListener { openSelectedHistoryOutput() }
-    }
-
-    private fun configureProblemsTable() {
-        problemsTable.autoCreateRowSorter = true
-        problemsTable.rowSorter = problemsSorter
-        problemsTable.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        problemsTable.setDefaultRenderer(Any::class.java, SeverityBadgeRenderer())
-        problemsTable.addMouseListener(
-            object : MouseAdapter() {
-                override fun mouseClicked(event: MouseEvent) {
-                    if (event.clickCount == 2) {
-                        openSelectedProblemSource()
-                    }
-                }
+    private fun buildSimplePanel(): JComponent = JPanel(BorderLayout(0, 10)).apply {
+        border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+        add(
+            JPanel(BorderLayout()).apply {
+                add(JBLabel("Jank Hunter"), BorderLayout.WEST)
+                add(
+                    JPanel(FlowLayout(FlowLayout.CENTER, 6, 0)).apply {
+                        add(reportButton)
+                        add(compareButton)
+                    },
+                    BorderLayout.CENTER,
+                )
+                add(advancedButton, BorderLayout.EAST)
             },
+            BorderLayout.NORTH,
+        )
+        add(taskContent, BorderLayout.CENTER)
+        add(
+            JPanel(BorderLayout(0, 8)).apply {
+                add(
+                    JPanel(BorderLayout(8, 0)).apply {
+                        border = BorderFactory.createTitledBorder("Папка для отчётов")
+                        add(outputDirectoryField, BorderLayout.CENTER)
+                    },
+                    BorderLayout.NORTH,
+                )
+                add(
+                    JPanel(BorderLayout()).apply {
+                        add(openBrowserCheckBox, BorderLayout.WEST)
+                        add(
+                            JPanel(FlowLayout(FlowLayout.RIGHT, 7, 0)).apply {
+                                add(stopButton)
+                                add(runButton)
+                            },
+                            BorderLayout.EAST,
+                        )
+                    },
+                    BorderLayout.CENTER,
+                )
+                add(statusLabel, BorderLayout.SOUTH)
+            },
+            BorderLayout.SOUTH,
         )
     }
 
-    private fun configureBrowserBridge(cefBrowser: JBCefBrowser, query: JBCefJSQuery) {
-        query.addHandler { className ->
-            ApplicationManager.getApplication().invokeLater {
-                if (!disposed && !project.isDisposed) {
-                    navigateToSource(mapOf("class" to className), showFailure = false)
-                }
+    private fun selectionPanel(
+        title: String,
+        initialDirectory: String,
+        onDirectoryChanged: (String) -> Unit,
+    ): JankHunterLogSelectionPanel = JankHunterLogSelectionPanel(
+        project = project,
+        title = title,
+        initialDirectory = initialDirectory,
+        processedFingerprints = { processedFingerprints },
+        onDirectoryChanged = onDirectoryChanged,
+        onSelectionChanged = ::updateAdvancedContext,
+    )
+
+    private fun scanConfiguredSelections() {
+        listOf(reportSelection, baselineSelection, candidateSelection)
+            .filter { it.directory() != null }
+            .forEach(JankHunterLogSelectionPanel::scan)
+    }
+
+    private fun directoryField(): TextFieldWithBrowseButton = TextFieldWithBrowseButton().apply {
+        addActionListener {
+            val descriptor = FileChooserDescriptor(false, true, false, false, false, false)
+            FileChooser.chooseFile(descriptor, project, null)?.let { selected -> text = selected.path }
+        }
+    }
+
+    private fun selectTask(task: UserTask) {
+        currentTask = task
+        taskLayout.show(taskContent, task.card)
+        reportButton.isEnabled = task != UserTask.REPORT
+        compareButton.isEnabled = task != UserTask.COMPARE
+        runButton.text = if (task == UserTask.REPORT) "Сгенерировать отчёт" else "Сравнить отчёты"
+        statusLabel.text = if (task == UserTask.REPORT) {
+            "Выберите один или несколько логов"
+        } else {
+            "Выберите две непересекающиеся группы логов"
+        }
+        updateAdvancedContext()
+    }
+
+    private fun showSimpleMode() {
+        advancedModeVisible = false
+        rootLayout.show(root, SIMPLE_CARD)
+    }
+
+    private fun showAdvancedMode() {
+        advancedModeVisible = true
+        updateAdvancedContext()
+        advancedPanel.ensureArtifactsLoaded()
+        rootLayout.show(root, ADVANCED_CARD)
+    }
+
+    private fun updateAdvancedContext() {
+        val text = when (currentTask) {
+            UserTask.REPORT -> {
+                val logs = reportSelection.selectedLogs().size
+                val heap = reportSelection.heapInput().takeIf(String::isNotBlank)?.let { " + HPROF/evidence" }.orEmpty()
+                "Отчёт: $logs логов$heap"
             }
-            JBCefJSQuery.Response(null)
+
+            UserTask.COMPARE -> {
+                val baseline = baselineSelection.selectedLogs().size
+                val candidate = candidateSelection.selectedLogs().size
+                "Сравнение: $baseline baseline → $candidate candidate"
+            }
         }
-        cefBrowser.jbCefClient.addLoadHandler(
-            object : CefLoadHandlerAdapter() {
-                override fun onLoadEnd(browser: CefBrowser, frame: org.cef.browser.CefFrame, httpStatusCode: Int) {
-                    if (!frame.isMain) return
-                    val js = """
-                        (function() {
-                          const send = function(value) { ${query.inject("value")} };
-                          const re = /\b([a-zA-Z_][\w]*\.)+[A-Z][A-Za-z0-9_]*(?:\$[A-Za-z0-9_]+)?\b/;
-                          document.addEventListener('click', function(event) {
-                            let node = event.target;
-                            while (node && node !== document.body) {
-                              const text = (node.innerText || node.textContent || '').trim();
-                              const match = text.match(re);
-                              if (match) {
-                                event.preventDefault();
-                                send(match[0]);
-                                return;
-                              }
-                              node = node.parentElement;
-                            }
-                          }, true);
-                        })();
-                    """.trimIndent()
-                    cefBrowser.runJavaScript(js)
-                }
-            },
-            cefBrowser.cefBrowser,
-        )
+        advancedPanel.setContext(text, currentTask == UserTask.COMPARE)
     }
 
-    private fun configureHistoryTable() {
-        historyTable.autoCreateRowSorter = true
-        historyTable.selectionModel.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        historyTable.addMouseListener(
-            object : MouseAdapter() {
-                override fun mouseClicked(event: MouseEvent) {
-                    if (event.clickCount == 2) {
-                        rerunSelectedHistory()
-                    }
-                }
-            },
-        )
+    private fun runCurrentReport() {
+        runMode(if (currentTask == UserTask.REPORT) JankHunterMode.INSPECT else JankHunterMode.COMPARE)
     }
 
-    private fun buildToolbar(): JComponent =
-        JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-            isOpaque = false
-            add(generateReportButton)
-            add(runButton)
-            add(stopButton)
-            add(openInIdeButton)
-            add(openBrowserButton)
-            add(clearButton)
-        }
-
-    private fun buildHeaderPanel(): JComponent =
-        JPanel(BorderLayout()).apply {
-            background = JBColor(Color(0x111827), Color(0x0B0F14))
-            border = javax.swing.BorderFactory.createEmptyBorder(8, 10, 6, 10)
-            add(
-                JPanel(BorderLayout()).apply {
-                    isOpaque = false
-                    add(
-                        JBLabel("JANK HUNTER // APP LOG OPS").apply {
-                            foreground = JBColor(Color(0x0F766E), Color(0x6EE7B7))
-                            font = font.deriveFont(java.awt.Font.BOLD, 14f)
-                        },
-                        BorderLayout.WEST,
-                    )
-                    add(
-                        JBLabel("pull -> inspect -> report").apply {
-                            foreground = JBColor(Color(0x334155), Color(0x94A3B8))
-                            font = font.deriveFont(11f)
-                        },
-                        BorderLayout.EAST,
-                    )
-                },
-                BorderLayout.NORTH,
-            )
-            add(buildToolbar(), BorderLayout.SOUTH)
-        }
-
-    private fun buildProblemsPanel(): JComponent =
-        JPanel(BorderLayout()).apply {
-            add(
-                buildProblemsToolbar(),
-                BorderLayout.NORTH,
-            )
-            add(JBScrollPane(problemsTable), BorderLayout.CENTER)
-        }
-
-    private fun buildProblemsToolbar(): JComponent =
-        JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-            add(JBLabel("Severity"))
-            add(severityFilter)
-            add(JBLabel("Category"))
-            add(categoryFilter)
-            add(JBLabel("Screen"))
-            add(screenFilter)
-            add(JBLabel("Owner"))
-            add(ownerFilter)
-            add(JBLabel("Group"))
-            add(groupProblemsCombo)
-            add(applyProblemsFilterButton)
-            add(resetProblemsFilterButton)
-            add(openProblemSourceButton)
-            add(openProblemReportButton)
-            add(copyRecommendationButton)
-            add(reloadProblemsButton)
-        }
-
-    private fun buildHistoryPanel(): JComponent =
-        JPanel(BorderLayout()).apply {
-            add(
-                JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
-                    add(loadHistoryButton)
-                    add(rerunHistoryButton)
-                    add(openHistoryOutputButton)
-                },
-                BorderLayout.NORTH,
-            )
-            add(JBScrollPane(historyTable), BorderLayout.CENTER)
-        }
-
-    private fun buildForm(): JComponent {
-        rowMap.clear()
-        return JTabbedPane().apply {
-            addTab("Run", buildRunPanel())
-            addTab("Logs", buildLogsPanel())
-            addTab("Artifacts", buildArtifactInputsPanel())
-            addTab("Filters", buildAdvancedInputsPanel())
-        }
+    private fun exportProblems() {
+        runMode(JankHunterMode.PROBLEMS)
     }
 
-    private fun buildRunPanel(): JComponent {
-        val form = JPanel(GridBagLayout())
-        var row = 0
-        addRow(form, row++, "Target", targetProjectLabel, "target")
-        addRow(form, row++, "Package", packageField, "package")
-        addWideRow(form, row++, buildModePanel(), "mode")
-        addRow(form, row++, "CLI", buildCliPanel(), "cli")
-        addRow(form, row++, "Logs folder", buildLocalLogsPanel(), "logsDirectory")
-        addRow(form, row++, "Report input", logsField, "logs")
-        addRow(form, row++, "Report logs", inspectLogScopeCombo, "inspectLogScope")
-        addRow(form, row++, "Output", outputField, "output")
-        addWideRow(form, row++, buildOptionsPanel(), "options")
-        addFormFiller(form, row)
-        return form
+    private fun runScorecard() {
+        if (currentTask != UserTask.COMPARE) {
+            Messages.showInfoMessage(project, "Scorecard доступен для сравнения baseline и candidate.", "Jank Hunter")
+            return
+        }
+        runMode(JankHunterMode.SCORECARD)
     }
 
-    private fun buildLogsPanel(): JComponent {
-        val form = JPanel(GridBagLayout())
-        var row = 0
-        addRow(form, row++, "Baseline", baselineField, "baseline")
-        addRow(form, row++, "Baseline scope", baselineLogScopeCombo, "baselineLogScope")
-        addRow(form, row++, "Candidate", candidateField, "candidate")
-        addRow(form, row++, "Candidate scope", candidateLogScopeCombo, "candidateLogScope")
-        addWideRow(form, row++, buildAdbPanel(), "adb")
-        addFormFiller(form, row)
-        return form
-    }
-
-    private fun buildArtifactInputsPanel(): JComponent {
-        val form = JPanel(GridBagLayout())
-        var row = 0
-        addRow(form, row++, "Artifacts", buildArtifactsPanel(), "artifacts")
-        addRow(form, row++, "Owner map", ownerMapField, "ownerMap")
-        addRow(form, row++, "Mapping", mappingField, "mapping")
-        addRow(form, row++, "Class graph", classGraphField, "classGraph")
-        addRow(form, row++, "Diagnostics", diagnosticsField, "diagnostics")
-        addRow(form, row++, "DI catalog", diCatalogField, "diCatalog")
-        addFormFiller(form, row)
-        return form
-    }
-
-    private fun buildAdvancedInputsPanel(): JComponent {
-        val form = JPanel(GridBagLayout())
-        var row = 0
-        addRow(form, row++, "Heap dump", heapDumpField, "heapDump")
-        addRow(form, row++, "Heap evidence", heapEvidenceField, "heapEvidence")
-        addRow(form, row++, "Baseline heap dump", baselineHeapDumpField, "baselineHeapDump")
-        addRow(form, row++, "Baseline heap evidence", baselineHeapEvidenceField, "baselineHeapEvidence")
-        addRow(form, row++, "Candidate heap dump", candidateHeapDumpField, "candidateHeapDump")
-        addRow(form, row++, "Candidate heap evidence", candidateHeapEvidenceField, "candidateHeapEvidence")
-        addRow(form, row++, "Route", routeField, "route")
-        addRow(form, row++, "Screen", screenField, "screen")
-        addRow(form, row++, "Owner", ownerField, "owner")
-        addRow(form, row++, "Class", classField, "class")
-        addRow(form, row++, "Dataset", datasetCombo, "dataset")
-        addRow(form, row++, "Format", formatCombo, "format")
-        addFormFiller(form, row)
-        return form
-    }
-
-    private fun buildModePanel(): JComponent =
-        JPanel(BorderLayout()).apply {
-            add(modeCombo, BorderLayout.CENTER)
+    private fun runMode(mode: JankHunterMode) {
+        if (processHandler != null || commandStarting) return
+        val advanced = if (advancedModeVisible) advancedPanel.options() else JankHunterAdvancedOptions.SIMPLE
+        persistUiSettings(advancedModeVisible, advanced)
+        val request = runCatching { buildRequest(mode, advanced) }.getOrElse { error ->
+            showError(error.message ?: "Не удалось прочитать параметры запуска.")
+            return
         }
-
-    private fun buildCliPanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(cliPathField, BorderLayout.CENTER)
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(cliStatusLabel)
-                    add(checkCliButton)
-                    add(buildCliButton)
-                },
-                BorderLayout.EAST,
-            )
-        }
-
-    private fun buildLocalLogsPanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(logsDirectoryField, BorderLayout.CENTER)
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(openLogsButton)
-                    add(pullLogsButton)
-                    add(collectInspectButton)
-                    add(findLogsButton)
-                },
-                BorderLayout.EAST,
-            )
-        }
-
-    private fun buildAdbPanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(
-                JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-                    add(deviceCombo)
-                    add(scanDevicesButton)
-                },
-                BorderLayout.CENTER,
-            )
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(openRemoteLogsButton)
-                },
-                BorderLayout.EAST,
-            )
-        }
-
-    private fun buildArtifactsPanel(): JComponent =
-        JPanel(BorderLayout(8, 0)).apply {
-            add(artifactCombo, BorderLayout.CENTER)
-            add(
-                JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    add(scanArtifactsButton)
-                    add(applyArtifactsButton)
-                },
-                BorderLayout.EAST,
-            )
-        }
-
-    private fun buildOptionsPanel(): JComponent =
-        JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            add(jsonCheckBox)
-            add(presentationCheckBox)
-            add(openInIdeCheckBox)
-            add(openExternalCheckBox)
-        }
-
-    private fun addRow(
-        form: JPanel,
-        row: Int,
-        label: String,
-        input: JComponent,
-        key: String? = null,
-    ) {
-        val rowPanel = JPanel(BorderLayout(8, 0)).apply {
-            add(JBLabel(label), BorderLayout.WEST)
-            add(input, BorderLayout.CENTER)
-        }
-        form.add(
-            rowPanel,
-            GridBagConstraints().apply {
-                gridx = 0
-                gridy = row
-                gridwidth = 2
-                weightx = 1.0
-                fill = GridBagConstraints.HORIZONTAL
-                insets = Insets(3, 6, 3, 6)
-            },
-        )
-        if (key != null) {
-            rowMap[key] = rowPanel
-        }
-    }
-
-    private fun addWideRow(form: JPanel, row: Int, input: JComponent, key: String) {
-        form.add(
-            input,
-            GridBagConstraints().apply {
-                gridx = 0
-                gridy = row
-                gridwidth = 2
-                weightx = 1.0
-                fill = GridBagConstraints.HORIZONTAL
-                insets = Insets(3, 6, 3, 6)
-            },
-        )
-        rowMap[key] = input as JPanel
-    }
-
-    private fun addFormFiller(form: JPanel, row: Int) {
-        form.add(
-            JPanel(),
-            GridBagConstraints().apply {
-                gridx = 0
-                gridy = row
-                gridwidth = 2
-                weighty = 1.0
-                fill = GridBagConstraints.BOTH
-            },
-        )
-    }
-
-    private fun updateModeVisibility() {
-        val mode = selectedMode()
-        modeCombo.toolTipText = hint(mode.hint)
-        val analysis = mode in setOf(
-            JankHunterMode.INSPECT,
-            JankHunterMode.COMPARE,
-            JankHunterMode.PROBLEMS,
-            JankHunterMode.SCORECARD,
-        )
-        val inspectLike = mode == JankHunterMode.INSPECT || mode == JankHunterMode.PROBLEMS
-        val compareLike = mode == JankHunterMode.COMPARE || mode == JankHunterMode.SCORECARD
-
-        rowMap["logs"]?.isVisible = inspectLike
-        rowMap["inspectLogScope"]?.isVisible = mode == JankHunterMode.INSPECT
-        rowMap["baseline"]?.isVisible = compareLike
-        rowMap["baselineLogScope"]?.isVisible = compareLike
-        rowMap["candidate"]?.isVisible = compareLike
-        rowMap["candidateLogScope"]?.isVisible = compareLike
-        rowMap["output"]?.isVisible = mode != JankHunterMode.VERSION
-        rowMap["options"]?.isVisible = mode != JankHunterMode.VERSION && mode != JankHunterMode.SAMPLE
-        rowMap["artifacts"]?.isVisible = analysis
-
-        listOf("ownerMap", "mapping", "classGraph", "diagnostics", "diCatalog", "route", "screen", "owner", "class")
-            .forEach { rowMap[it]?.isVisible = analysis }
-        listOf("heapDump", "heapEvidence")
-            .forEach { rowMap[it]?.isVisible = inspectLike }
-        listOf("baselineHeapDump", "baselineHeapEvidence", "candidateHeapDump", "candidateHeapEvidence")
-            .forEach { rowMap[it]?.isVisible = compareLike }
-
-        rowMap["dataset"]?.isVisible = mode == JankHunterMode.PROBLEMS
-        rowMap["format"]?.isVisible = mode == JankHunterMode.PROBLEMS
-        jsonCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
-        presentationCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
-        openInIdeCheckBox.isVisible = mode in setOf(
-            JankHunterMode.INSPECT,
-            JankHunterMode.COMPARE,
-            JankHunterMode.PROBLEMS,
-            JankHunterMode.SCORECARD,
-        )
-        openExternalCheckBox.isVisible = mode == JankHunterMode.INSPECT || mode == JankHunterMode.COMPARE
-        generateReportButton.isVisible = mode == JankHunterMode.INSPECT
-
-        component.revalidate()
-        component.repaint()
-    }
-
-    private fun runRequest(rawRequest: JankHunterRunRequest) {
-        if (processHandler != null || commandStarting || adbPullTask?.isDone == false) return
-
         commandStarting = true
-        setRunning(true)
+        setBusy(true)
+        statusLabel.text = "Проверка входных данных…"
+        advancedPanel.replaceConsole("")
+
         runInBackground(
             task = {
-                val command = JankHunterCommandBuilder.build(project, rawRequest)
-                val request = rawRequest.copy(
-                    cliPath = command.executable,
-                    output = command.outputPath.orEmpty(),
-                )
-                PreparedRun(command, request, JankHunterRunValidator.validate(project, request, command))
+                val command = JankHunterCommandBuilder.build(project, request)
+                val normalized = request.copy(cliPath = command.executable, output = command.outputPath.orEmpty())
+                val validation = JankHunterRunValidator.validate(project, normalized, command)
+                PreparedRun(normalized, command, validation.errors, validation.warnings)
             },
             onDone = { result ->
                 val prepared = result.getOrElse { error ->
                     commandStarting = false
-                    setRunning(false)
-                    Messages.showErrorDialog(
-                        project,
-                        error.message ?: "Невалидная команда Jank Hunter.",
-                        "Jank Hunter",
-                    )
+                    setBusy(false)
+                    showError(error.message ?: "Не удалось подготовить запуск.")
                     return@runInBackground
                 }
-                if (!prepared.validation.ok) {
+                if (prepared.errors.isNotEmpty()) {
                     commandStarting = false
-                    setRunning(false)
-                    Messages.showErrorDialog(
-                        project,
-                        prepared.validation.errors.joinToString("\n"),
-                        "Jank Hunter: проверка не пройдена",
-                    )
+                    setBusy(false)
+                    showError(prepared.errors.joinToString("\n"))
                     return@runInBackground
                 }
-
-                outputField.text = prepared.command.outputPath.orEmpty()
-                rememberSettings()
-                addHistory(prepared.request, prepared.command)
-                startProcess(prepared.request, prepared.command, prepared.validation.warnings)
+                startProcess(prepared)
             },
         )
     }
 
-    private fun collectRequest(): JankHunterRunRequest =
-        JankHunterRunRequest(
-            mode = selectedMode(),
-            cliPath = cliPathField.text,
-            logs = logsField.text,
-            inspectLogScope = selectedInspectLogScope(),
-            baseline = baselineField.text,
-            baselineLogScope = selectedBaselineLogScope(),
-            candidate = candidateField.text,
-            candidateLogScope = selectedCandidateLogScope(),
-            output = outputField.text,
-            ownerMap = ownerMapField.text,
-            mapping = mappingField.text,
-            classGraph = classGraphField.text,
-            diagnostics = diagnosticsField.text,
-            diCatalog = diCatalogField.text,
-            heapDump = heapDumpField.text,
-            heapEvidence = heapEvidenceField.text,
-            baselineHeapDump = baselineHeapDumpField.text,
-            baselineHeapEvidence = baselineHeapEvidenceField.text,
-            candidateHeapDump = candidateHeapDumpField.text,
-            candidateHeapEvidence = candidateHeapEvidenceField.text,
-            route = routeField.text,
-            screen = screenField.text,
-            owner = ownerField.text,
-            className = classField.text,
-            dataset = datasetCombo.selectedItem?.toString().orEmpty(),
-            format = formatCombo.selectedItem?.toString().orEmpty(),
-            json = jsonCheckBox.isSelected,
-            presentation = presentationCheckBox.isSelected,
+    private fun buildRequest(mode: JankHunterMode, advanced: JankHunterAdvancedOptions): JankHunterRunRequest {
+        val reportLogs = reportSelection.selectedLogs()
+        val baselineLogs = baselineSelection.selectedLogs()
+        val candidateLogs = candidateSelection.selectedLogs()
+        val problemsLogs = if (currentTask == UserTask.REPORT) reportLogs else candidateLogs
+        val output = outputFile(mode, when (mode) {
+            JankHunterMode.COMPARE, JankHunterMode.SCORECARD -> candidateSelection.directory()
+            JankHunterMode.PROBLEMS -> if (currentTask == UserTask.REPORT) reportSelection.directory() else candidateSelection.directory()
+            else -> reportSelection.directory()
+        })
+
+        val inspectHeap = classifyHeap(if (mode == JankHunterMode.PROBLEMS && currentTask == UserTask.COMPARE) {
+            candidateSelection.heapInput()
+        } else {
+            reportSelection.heapInput()
+        })
+        val baselineHeap = classifyHeap(baselineSelection.heapInput())
+        val candidateHeap = classifyHeap(candidateSelection.heapInput())
+
+        return JankHunterRunRequest(
+            mode = mode,
+            cliPath = advancedPanel.cliPath().ifBlank { settings.cliPath },
+            logs = paths(if (mode == JankHunterMode.PROBLEMS) problemsLogs else reportLogs),
+            inspectLogScope = JankHunterLogScope.ALL_SELECTED,
+            baseline = paths(baselineLogs),
+            baselineLogScope = JankHunterLogScope.ALL_SELECTED,
+            candidate = paths(candidateLogs),
+            candidateLogScope = JankHunterLogScope.ALL_SELECTED,
+            output = output.path,
+            ownerMap = advanced.ownerMap,
+            mapping = advanced.mapping,
+            classGraph = advanced.classGraph,
+            diagnostics = advanced.diagnostics,
+            diCatalog = advanced.diCatalog,
+            heapDump = inspectHeap.hprof,
+            heapEvidence = inspectHeap.evidence,
+            baselineHeapDump = baselineHeap.hprof,
+            baselineHeapEvidence = baselineHeap.evidence,
+            candidateHeapDump = candidateHeap.hprof,
+            candidateHeapEvidence = candidateHeap.evidence,
+            route = advanced.route,
+            screen = advanced.screen,
+            owner = advanced.owner,
+            className = advanced.className,
+            dataset = "code-problems",
+            format = "csv",
+            json = false,
+            presentation = advanced.presentation,
+            reportStyle = advanced.reportStyle,
+            animatedBackground = false,
         )
-
-    private fun applyRequest(request: JankHunterRunRequest) {
-        selectMode(request.mode)
-        cliPathField.text = request.cliPath
-        logsField.text = request.logs
-        inspectLogScopeCombo.selectedItem = request.inspectLogScope
-        baselineField.text = request.baseline
-        baselineLogScopeCombo.selectedItem = request.baselineLogScope
-        candidateField.text = request.candidate
-        candidateLogScopeCombo.selectedItem = request.candidateLogScope
-        outputField.text = request.output
-        ownerMapField.text = request.ownerMap
-        mappingField.text = request.mapping
-        classGraphField.text = request.classGraph
-        diagnosticsField.text = request.diagnostics
-        diCatalogField.text = request.diCatalog
-        heapDumpField.text = request.heapDump
-        autoHeapDumpPath = null
-        heapEvidenceField.text = request.heapEvidence
-        baselineHeapDumpField.text = request.baselineHeapDump
-        baselineHeapEvidenceField.text = request.baselineHeapEvidence
-        candidateHeapDumpField.text = request.candidateHeapDump
-        candidateHeapEvidenceField.text = request.candidateHeapEvidence
-        routeField.text = request.route
-        screenField.text = request.screen
-        ownerField.text = request.owner
-        classField.text = request.className
-        datasetCombo.selectedItem = request.dataset.ifBlank { "code-problems" }
-        formatCombo.selectedItem = request.format.ifBlank { "csv" }
-        jsonCheckBox.isSelected = request.json
-        presentationCheckBox.isSelected = request.presentation
-        updateModeVisibility()
     }
 
-    private fun restoreStartupRequest() {
-        val request = lastRunForCurrentProject()?.toRequest() ?: return
-        applyRequest(
-            request.copy(
-                cliPath = request.cliPath.ifBlank { cliPathField.text },
-            ),
-        )
-        lastOutputPath = request.output.takeIf(String::isNotBlank)
-        lastHtmlOutputPath = request.output.takeIf { it.endsWith(".html", ignoreCase = true) }
-        updateOpenButtons()
-    }
-
-    private fun lastRunForCurrentProject(): JankHunterRecentRun? {
-        val projectPath = currentProjectPath()
-        if (projectPath.isBlank()) return null
-        val state = JankHunterSettings.getInstance().state
-        return state.lastRun?.takeIf { it.projectPath == projectPath }
-            ?: state.recentRuns.firstOrNull { it.projectPath == projectPath }
-    }
-
-    private fun rememberSettings() {
-        val state = JankHunterSettings.getInstance().state
-        state.cliPath = cliPathField.text.trim()
-        state.logsDirectory = logsDirectoryField.text.trim()
-        state.packageName = packageField.text.trim()
-        state.openReportInIde = openInIdeCheckBox.isSelected
-        state.openReportExternally = openExternalCheckBox.isSelected
-        state.presentationMode = presentationCheckBox.isSelected
-    }
-
-    private fun startProcess(request: JankHunterRunRequest, command: JankHunterCommand, warnings: List<String>) {
-        val workDirectory = project.basePath?.let(::File)
-        replaceConsole("")
-        appendConsole("$ ${command.displayText()}\n\n")
-        warnings.forEach { warning -> appendConsole("warning: $warning\n") }
-        if (warnings.isNotEmpty()) {
-            appendConsole("\n")
+    private fun outputFile(mode: JankHunterMode, sourceDirectory: File?): File {
+        val rootDirectory = JankHunterUserPaths.expandHome(outputDirectoryField.text)
+            .takeIf(String::isNotEmpty)
+            ?.let(::File)
+            ?: File(JankHunterSettings.defaultOutputDirectory())
+        val source = JankHunterLogDiscovery.sourceName(sourceDirectory)
+        val extension = when (mode) {
+            JankHunterMode.PROBLEMS -> "csv"
+            JankHunterMode.SCORECARD -> "json"
+            else -> "html"
         }
+        val prefix = when (mode) {
+            JankHunterMode.INSPECT -> "report"
+            else -> mode.command
+        }
+        return File(File(rootDirectory, source), "$prefix-${OUTPUT_TIME_FORMAT.format(LocalDateTime.now())}.$extension")
+    }
+
+    private fun classifyHeap(path: String): HeapInput {
+        if (path.isBlank()) return HeapInput()
+        return if (File(path).extension.equals("json", ignoreCase = true)) {
+            HeapInput(evidence = path)
+        } else {
+            HeapInput(hprof = path)
+        }
+    }
+
+    private fun paths(logs: List<JankHunterDiscoveredLog>): String = logs.joinToString(", ") { it.file.path }
+
+    private fun startProcess(prepared: PreparedRun) {
+        val command = prepared.command
+        val outputParent = command.outputPath?.let(::File)?.parentFile
+        if (outputParent != null && !outputParent.isDirectory && !outputParent.mkdirs()) {
+            commandStarting = false
+            setBusy(false)
+            showError("Не удалось создать папку отчёта: ${outputParent.path}")
+            return
+        }
+
+        advancedPanel.setCommandPreview(command.displayText())
+        advancedPanel.appendConsole("$ ${command.displayText()}\n\n")
+        prepared.warnings.forEach { warning -> advancedPanel.appendConsole("warning: $warning\n") }
+
         val commandLine = GeneralCommandLine(command.executable)
             .withParameters(command.args)
             .withCharset(StandardCharsets.UTF_8)
-        if (workDirectory != null) {
-            commandLine.withWorkDirectory(workDirectory)
-        }
+        project.basePath?.let { commandLine.withWorkDirectory(it) }
 
-        runInBackground(
-            task = {
-                command.outputPath?.let { outputPath ->
-                    val parent = File(outputPath).parentFile
-                    check(parent == null || parent.isDirectory || parent.mkdirs()) {
-                        "Не удалось создать папку результата: ${parent?.path.orEmpty()}"
-                    }
-                }
-                OSProcessHandler(commandLine)
-            },
-            onAbandoned = { handler -> handler.destroyProcess() },
-            onDone = { result ->
-                val handler = result.getOrElse { error ->
-                    commandStarting = false
-                    setRunning(false)
-                    appendConsole("Не удалось запустить Jank Hunter: ${error.message}\n")
-                    return@runInBackground
-                }
-                if (disposed || project.isDisposed) {
-                    handler.destroyProcess()
-                    return@runInBackground
-                }
-
-                commandStarting = false
-                processHandler = handler
-                handler.addProcessListener(
-                    object : ProcessListener {
-                        override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                            appendConsole(event.text)
-                        }
-
-                        override fun processTerminated(event: ProcessEvent) {
-                            ApplicationManager.getApplication().invokeLater {
-                                if (disposed || project.isDisposed) return@invokeLater
-                                processHandler = null
-                                setRunning(false)
-                                appendConsole("\nПроцесс завершился с кодом ${event.exitCode}\n")
-                                if (event.exitCode == 0) {
-                                    onProcessSucceeded(request, command.outputPath)
-                                } else if (request.mode == JankHunterMode.SCORECARD) {
-                                    JankHunterNotifications.scorecardFailed(
-                                        project,
-                                        "Scorecard завершился с кодом ${event.exitCode}.",
-                                        openOutput = { command.outputPath?.let { openOutputInsideIde(File(it)) } },
-                                        rerun = { runRequest(request) },
-                                    )
-                                }
-                            }
-                        }
-                    },
-                )
-                handler.startNotify()
-                setRunning(true)
-            },
-        )
-    }
-
-    private fun stopCommand() {
-        processHandler?.destroyProcess()
-        adbPullTask?.cancel(true)
-        // Future.cancel() marks the Future done before adb/tar have necessarily released their
-        // streams and processes. Keep the device lane busy until the matching completion callback
-        // confirms that cleanup has actually finished.
-        updateBusyControls()
-    }
-
-    private fun setRunning(running: Boolean) {
-        updateBusyControls(forceCliBusy = running)
-    }
-
-    private fun onProcessSucceeded(request: JankHunterRunRequest, outputPath: String?) {
-        if (outputPath == null) {
-            lastOutputPath = null
-            updateOpenButtons()
+        val handler = runCatching { OSProcessHandler(commandLine) }.getOrElse { error ->
+            commandStarting = false
+            setBusy(false)
+            showError(error.message ?: "Не удалось запустить Jank Hunter CLI.")
             return
         }
-
-        lastOutputPath = outputPath
-        if (outputPath.endsWith(".html", ignoreCase = true)) {
-            lastHtmlOutputPath = outputPath
-        }
-        updateOpenButtons()
-        if (openInIdeCheckBox.isSelected && request.mode != JankHunterMode.SAMPLE) {
-            openOutputInsideIde(File(outputPath))
-        }
-        if (openExternalCheckBox.isSelected && outputPath.endsWith(".html", ignoreCase = true)) {
-            openOutputInBrowser(File(outputPath))
-        }
-        if (request.mode == JankHunterMode.PROBLEMS) {
-            loadProblemsTableAsync(outputPath) { problems ->
-                notifyOutputReady(request, outputPath, problems?.rows?.size)
-            }
-        } else {
-            notifyOutputReady(request, outputPath, null)
-        }
-    }
-
-    private fun notifyOutputReady(request: JankHunterRunRequest, outputPath: String, problemCount: Int?) {
-        JankHunterNotifications.reportReady(
-            project,
-            outputPath,
-            problemCount,
-            openReport = { openOutputInsideIde(File(outputPath)) },
-            openProblems = if (problemCount == null) null else ({ tabs.selectedIndex = 2 }),
-            rerun = { runRequest(request) },
-        )
-    }
-
-    private fun updateOpenButtons() {
-        val file = lastOutputPath?.let(::File)
-        val exists = file?.isFile == true
-        openInIdeButton.isEnabled = exists
-        openBrowserButton.isEnabled = exists && file.extension.equals("html", ignoreCase = true)
-    }
-
-    private fun openLastOutputInsideIde() {
-        val file = lastOutputPath?.let(::File) ?: return
-        openOutputInsideIde(file)
-    }
-
-    private fun openLastOutputInBrowser() {
-        val file = lastOutputPath?.let(::File) ?: return
-        openOutputInBrowser(file)
-    }
-
-    private fun openOutputInsideIde(file: File) {
-        if (!file.isFile) {
-            appendConsole("Файл результата пока недоступен: ${file.path}\n")
-            return
-        }
-
-        if (file.extension.equals("html", ignoreCase = true)) {
-            val reportBrowser = ensureReportBrowser()
-            if (reportBrowser != null) {
-                reportBrowser.loadURL(file.toURI().toString())
-                tabs.selectedIndex = 1
-                return
-            }
-        }
-
-        runInBackground(
-            task = { LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) },
-            onDone = { result ->
-                result.getOrNull()?.let { virtualFile ->
-                    FileEditorManager.getInstance(project).openFile(virtualFile, true)
-                }
-            },
-        )
-    }
-
-    private fun ensureReportBrowser(): JBCefBrowser? {
-        browser?.let { return it }
-        if (!enableBrowser || !JBCefApp.isSupported()) return null
-        val created = JBCefBrowser()
-        val query = createBrowserQuery(created)
-        browser = created
-        browserQuery = query
-        configureBrowserBridge(created, query)
-        val reportIndex = tabs.indexOfTab("Report")
-        if (reportIndex >= 0) {
-            tabs.setComponentAt(reportIndex, created.component)
-            tabs.selectedIndex = 1
-        }
-        return created
-    }
-
-    private fun openOutputInBrowser(file: File) {
-        if (file.isFile) {
-            BrowserUtil.browse(file.toURI())
-        }
-    }
-
-    private fun initializeArtifactPlaceholder() {
-        artifactSets.clear()
-        artifactCombo.model = DefaultComboBoxModel(arrayOf("Нажмите Scan для поиска артефактов"))
-        artifactCombo.selectedIndex = 0
-    }
-
-    private fun refreshArtifactsAsync(autoApplyBlankFields: Boolean, showMessage: Boolean) {
-        scanArtifactsButton.isEnabled = false
-        artifactCombo.model = DefaultComboBoxModel(arrayOf("Сканирую проект..."))
-        runInBackground(
-            task = { JankHunterArtifactDiscovery.findArtifactSets(project) },
-            onDone = { result ->
-                scanArtifactsButton.isEnabled = true
-                val sets = result.getOrElse { error ->
-                    if (showMessage) {
-                        JankHunterNotifications.error(
-                            project,
-                            "Jank Hunter",
-                            "Не удалось просканировать артефакты: ${error.message.orEmpty()}",
-                        )
+        commandStarting = false
+        processHandler = handler
+        handler.addProcessListener(
+            object : ProcessListener {
+                override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
+                    ApplicationManager.getApplication().invokeLater {
+                        if (!disposed) advancedPanel.appendConsole(event.text)
                     }
-                    emptyList()
                 }
-                applyArtifactSets(sets, autoApplyBlankFields, showMessage && result.isSuccess)
+
+                override fun processTerminated(event: ProcessEvent) {
+                    ApplicationManager.getApplication().invokeLater {
+                        if (disposed || project.isDisposed) return@invokeLater
+                        processHandler = null
+                        setBusy(false)
+                        advancedPanel.appendConsole("\nПроцесс завершился с кодом ${event.exitCode}\n")
+                        if (event.exitCode == 0) {
+                            onSucceeded(prepared.request, command.outputPath)
+                        } else {
+                            statusLabel.text = "Ошибка генерации · код ${event.exitCode}"
+                            showAdvancedMode()
+                            JankHunterNotifications.error(
+                                project,
+                                "Jank Hunter",
+                                "Команда завершилась с кодом ${event.exitCode}. Подробности показаны в диагностике.",
+                            )
+                        }
+                    }
+                }
             },
         )
+        statusLabel.text = "Генерация отчёта…"
+        handler.startNotify()
     }
 
-    private fun applyArtifactSets(
-        sets: List<JankHunterArtifactSet>,
-        autoApplyBlankFields: Boolean,
-        showMessage: Boolean,
-    ) {
-        artifactSets.clear()
-        artifactSets += sets
-
-        val model = DefaultComboBoxModel<String>()
-        artifactSets.forEach { set ->
-            model.addElement(
-                buildString {
-                    append(set.displayName())
-                    append("  ")
-                    append(
-                        listOfNotNull(
-                            "owner-map".takeIf { set.ownerMap.isNotBlank() },
-                            "mapping".takeIf { set.mapping.isNotBlank() },
-                            "class-graph".takeIf { set.classGraph.isNotBlank() },
-                            "diagnostics".takeIf { set.diagnostics.isNotBlank() },
-                            "di-catalog".takeIf { set.diCatalog.isNotBlank() },
-                        ).joinToString(", "),
-                    )
-                },
+    private fun onSucceeded(request: JankHunterRunRequest, outputPath: String?) {
+        markCurrentLogsProcessed(request.mode)
+        val output = outputPath?.let(::File)
+        statusLabel.text = if (output?.isFile == true) "Готово: ${output.path}" else "Готово"
+        if (output?.isFile == true && output.extension.equals("html", ignoreCase = true) && openBrowserCheckBox.isSelected) {
+            if (enableBrowser) BrowserUtil.browse(output.toURI())
+        }
+        if (output?.isFile == true) {
+            JankHunterNotifications.reportReady(
+                project,
+                output.path,
+                problemCount = null,
+                openReport = { BrowserUtil.browse(output.toURI()) },
+                openProblems = null,
+                rerun = { runMode(request.mode) },
             )
         }
-        if (model.size == 0) {
-            model.addElement("Артефакты не найдены")
+        when (currentTask) {
+            UserTask.REPORT -> reportSelection.scan()
+            UserTask.COMPARE -> {
+                baselineSelection.scan()
+                candidateSelection.scan()
+            }
         }
-        artifactCombo.model = model
-        artifactCombo.selectedIndex = 0
+    }
 
-        if (artifactSets.isNotEmpty() && autoApplyBlankFields) {
-            applySelectedArtifacts(force = false)
-        }
-        if (showMessage) {
-            val message = if (artifactSets.isEmpty()) {
-                "Не нашел owner-map/class-graph/diagnostics/di-catalog/mapping в проекте."
+    private fun markCurrentLogsProcessed(mode: JankHunterMode) {
+        val logs = when (mode) {
+            JankHunterMode.INSPECT -> reportSelection.selectedLogs()
+            JankHunterMode.PROBLEMS -> if (currentTask == UserTask.REPORT) {
+                reportSelection.selectedLogs()
             } else {
-                "Найдено наборов артефактов: ${artifactSets.size}."
+                candidateSelection.selectedLogs()
             }
-            Messages.showInfoMessage(project, message, "Jank Hunter")
+            JankHunterMode.COMPARE, JankHunterMode.SCORECARD ->
+                baselineSelection.selectedLogs() + candidateSelection.selectedLogs()
+            else -> emptyList()
+        }
+        val fingerprints = LinkedHashSet(settings.processedLogFingerprints)
+        logs.mapTo(fingerprints, JankHunterDiscoveredLog::fingerprint)
+        settings.processedLogFingerprints = fingerprints.toList()
+            .takeLast(MAX_PROCESSED_FINGERPRINTS)
+            .toMutableList()
+    }
+
+    private fun persistUiSettings(includeAdvanced: Boolean, advanced: JankHunterAdvancedOptions) {
+        settings.outputDirectory = outputDirectoryField.text.trim().ifBlank { JankHunterSettings.defaultOutputDirectory() }
+        settings.openReportExternally = openBrowserCheckBox.isSelected
+        settings.cliPath = advancedPanel.cliPath()
+        if (includeAdvanced) {
+            settings.presentationMode = advanced.presentation
+            settings.reportStyle = advanced.reportStyle
         }
     }
 
-    private fun applySelectedArtifacts(force: Boolean) {
-        val set = artifactSets.getOrNull(artifactCombo.selectedIndex) ?: return
-        setIfAllowed(ownerMapField, set.ownerMap, force)
-        setIfAllowed(mappingField, set.mapping, force)
-        setIfAllowed(classGraphField, set.classGraph, force)
-        setIfAllowed(diagnosticsField, set.diagnostics, force)
-        setIfAllowed(diCatalogField, set.diCatalog, force)
+    private fun stopProcess() {
+        processHandler?.destroyProcess()
+        statusLabel.text = "Остановка…"
     }
 
-    private fun setIfAllowed(field: TextFieldWithBrowseButton, value: String, force: Boolean) {
-        if (value.isBlank()) return
-        if (force || field.text.isBlank()) {
-            field.text = value
-        }
+    private fun setBusy(busy: Boolean) {
+        runButton.isEnabled = !busy
+        stopButton.isEnabled = busy
+        reportButton.isEnabled = !busy && currentTask != UserTask.REPORT
+        compareButton.isEnabled = !busy && currentTask != UserTask.COMPARE
+        advancedButton.isEnabled = !busy
     }
 
-    private fun chooseLogsDirectory() {
-        val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return
-        logsDirectoryField.text = selected.path
-        fillLogsFromDirectoryAsync(showMessage = true)
+    private fun showError(message: String) {
+        statusLabel.text = "Проверьте входные данные"
+        Messages.showErrorDialog(project, message, "Jank Hunter")
     }
 
-    private fun generateReportFromLogs() {
-        if (selectedMode() == JankHunterMode.COMPARE || selectedMode() == JankHunterMode.SCORECARD) {
-            runRequest(collectRequest())
-            return
-        }
-
-        selectMode(JankHunterMode.INSPECT)
-        var directory = logsDirectory()
-        if (logsField.text.isBlank() && directory?.isDirectory != true) {
-            val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return
-            logsDirectoryField.text = selected.path
-            directory = File(selected.path)
-        }
-
-        val rawInput = logsField.text
-        val scope = selectedInspectLogScope()
-        generateReportButton.isEnabled = false
-        runInBackground(
-            task = { prepareLogsForGenerate(rawInput, directory, scope) },
-            onDone = { result ->
-                generateReportButton.isEnabled = true
-                val prepared = result.getOrElse { error ->
-                    JankHunterNotifications.error(project, "Jank Hunter", error.message.orEmpty())
-                    return@runInBackground
-                }
-                if (!prepared.found) {
-                    Messages.showInfoMessage(
-                        project,
-                        "Укажите папку или существующие .jhlog файлы перед генерацией отчета.",
-                        "Jank Hunter",
-                    )
-                    return@runInBackground
-                }
-                logsField.text = prepared.input
-                prepared.directory?.let { dir ->
-                    logsDirectoryField.text = dir.path
-                    syncHeapDumpFromLogsDirectory(dir, prepared.heapDump)
-                }
-                runRequest(collectRequest())
-            },
-        )
-    }
-
-    internal fun prepareLogsForGenerate(rawInput: String, directory: File?, scope: JankHunterLogScope): PreparedLogs {
-        val hasExistingInput = JankHunterInputPaths.expandExistingFiles(project, rawInput)
-            .any { path -> path.toString().endsWith(".jhlog", ignoreCase = true) }
-        if (hasExistingInput) {
-            val heapDump = directory?.takeIf(File::isDirectory)?.let(::scanLogsDirectory)?.heapDump
-            return PreparedLogs(rawInput, directory, heapDump, found = true)
-        }
-
-        val directoryScan = directory?.takeIf(File::isDirectory)?.let(::scanLogsDirectory)
-        if (directoryScan != null && directoryScan.logs.isNotEmpty()) {
-            return PreparedLogs(
-                input = applyLogScope(directoryScan.logs, scope).joinToString(", ") { it.path },
-                directory = directory,
-                heapDump = directoryScan.heapDump,
-                found = true,
-            )
-        }
-
-        val nearby = findNearbyLogsForMissingInput(rawInput)
-        val scoped = applyLogScope(nearby, scope)
-        val recoveredDirectory = scoped.firstOrNull()?.parentFile
-        val recoveredHeap = recoveredDirectory?.let(::scanLogsDirectory)?.heapDump
-        return PreparedLogs(
-            input = scoped.joinToString(", ") { it.path },
-            directory = recoveredDirectory,
-            heapDump = recoveredHeap,
-            found = scoped.isNotEmpty(),
-        )
-    }
-
-    private fun findNearbyLogsForMissingInput(raw: String): List<File> {
-        val roots = linkedSetOf<File>()
-        JankHunterInputPaths.pathList(raw).forEach { part ->
-            val resolved = runCatching { JankHunterInputPaths.resolvePath(project, part).toFile() }.getOrNull()
-                ?: return@forEach
-            nearestExistingLogSearchRoot(resolved.parentFile ?: resolved)?.let(roots::add)
-        }
-        return roots
-            .asSequence()
-            .flatMap { root ->
-                root.walkTopDown()
-                    .maxDepth(6)
-                    .filter { file -> file.isFile && file.extension.equals("jhlog", ignoreCase = true) }
-            }
-            .distinctBy { file -> runCatching { file.canonicalPath }.getOrDefault(file.path) }
-            .sortedByDescending(File::lastModified)
-            .take(50)
-            .toList()
-    }
-
-    private fun nearestExistingLogSearchRoot(start: File?): File? {
-        var current = start
-        while (current != null) {
-            if (current.isDirectory) {
-                return current.takeIf(::isSafeLogRecoveryRoot)
-            }
-            current = current.parentFile
-        }
-        return null
-    }
-
-    private fun isSafeLogRecoveryRoot(dir: File): Boolean {
-        val path = dir.toPath().normalize().toString()
-        if (path == File.separator) return false
-        val home = File(System.getProperty("user.home")).toPath().normalize().toString()
-        return path != home
-    }
-
-    private fun fillLogsFromDirectoryAsync(showMessage: Boolean) {
-        val dir = logsDirectory()
-        if (dir == null || !dir.isDirectory) {
-            if (showMessage) {
-                Messages.showInfoMessage(project, "Выберите папку с .jhlog файлами.", "Jank Hunter")
-            }
-            return
-        }
-
-        openLogsButton.isEnabled = false
-        runInBackground(
-            task = { scanLogsDirectory(dir) },
-            onDone = { result ->
-                openLogsButton.isEnabled = true
-                val scan = result.getOrElse { error ->
-                    JankHunterNotifications.error(project, "Jank Hunter", error.message.orEmpty())
-                    return@runInBackground
-                }
-                if (scan.logs.isNotEmpty()) {
-                    logsField.text = applyLogScope(scan.logs, selectedInspectLogScope()).joinToString(", ") { it.path }
-                }
-                syncHeapDumpFromLogsDirectory(dir, scan.heapDump)
-                if (showMessage) {
-                    val message = if (scan.logs.isEmpty()) {
-                        "В выбранной папке нет .jhlog файлов."
-                    } else {
-                        "Подставлено .jhlog файлов: ${applyLogScope(scan.logs, selectedInspectLogScope()).size} из ${scan.logs.size}."
-                    }
-                    Messages.showInfoMessage(project, message, "Jank Hunter")
-                }
-            },
-        )
-    }
-
-    private fun scanLogsDirectory(dir: File): LogDirectoryScan {
-        val logs = mutableListOf<File>()
-        var heapDump: File? = null
-        dir.walkTopDown()
-            .maxDepth(MAX_LOG_SCAN_DEPTH)
-            .onEnter { !Thread.currentThread().isInterrupted }
-            .filter(File::isFile)
-            .forEach { file ->
-                if (Thread.currentThread().isInterrupted) return@forEach
-                when {
-                    file.extension.equals("jhlog", ignoreCase = true) -> logs += file
-                    heapDump == null && file.extension.equals("hprof", ignoreCase = true) -> heapDump = file
-                }
-            }
-        return LogDirectoryScan(
-            logs = logs.sortedByDescending(File::lastModified).take(MAX_DISCOVERED_LOGS),
-            heapDump = heapDump,
-        )
-    }
-
-    private fun syncHeapDumpFromLogsDirectory(dir: File, heapDump: File?) {
-        val current = heapDumpField.text.trim()
-        if (heapDump != null) {
-            if (current.isBlank() || current == autoHeapDumpPath || !File(current).isFile) {
-                heapDumpField.text = heapDump.path
-                autoHeapDumpPath = heapDump.path
-            }
-            return
-        }
-
-        if (shouldClearMissingHeapDump(current, dir)) {
-            heapDumpField.text = ""
-            autoHeapDumpPath = null
-        }
-    }
-
-    private fun shouldClearMissingHeapDump(path: String, logsDir: File): Boolean {
-        if (path.isBlank()) return false
-        val file = File(path)
-        if (file.isFile) return false
-        if (path == autoHeapDumpPath) return true
-        if (!file.extension.equals("hprof", ignoreCase = true)) return false
-        if (file.name.startsWith("retained-", ignoreCase = true)) return true
-        return runCatching {
-            file.toPath().normalize().startsWith(logsDir.toPath().normalize())
-        }.getOrDefault(false)
-    }
-
-    private fun ensureLogsDirectoryForPull(): File? {
-        val existing = logsDirectory()
-        if (existing != null) {
-            existing.mkdirs()
-            return existing
-        }
-        val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return null
-        logsDirectoryField.text = selected.path
-        val dir = File(selected.path)
-        dir.mkdirs()
-        return dir
-    }
-
-    private fun logsDirectory(): File? =
-        logsDirectoryField.text.trim().takeIf(String::isNotEmpty)?.let(::File)
-
-    private fun fillRecentLogs() {
-        findLogsButton.isEnabled = false
-        runInBackground(
-            task = { JankHunterArtifactDiscovery.findRecentLogs(project) },
-            onDone = { result ->
-                findLogsButton.isEnabled = true
-                val logs = result.getOrElse { error ->
-                    JankHunterNotifications.error(
-                        project,
-                        "Jank Hunter",
-                        "Не удалось найти .jhlog: ${error.message.orEmpty()}",
-                    )
-                    return@runInBackground
-                }
-                if (logs.isEmpty()) {
-                    Messages.showInfoMessage(project, "Не нашел .jhlog файлов внутри проекта.", "Jank Hunter")
-                    return@runInBackground
-                }
-                if (selectedMode() == JankHunterMode.COMPARE || selectedMode() == JankHunterMode.SCORECARD) {
-                    val files = logs.map(::File)
-                    if (baselineField.text.isBlank()) {
-                        baselineField.text = applyLogScope(files, selectedBaselineLogScope()).joinToString(", ") { it.path }
-                    } else {
-                        candidateField.text = applyLogScope(files, selectedCandidateLogScope()).joinToString(", ") { it.path }
-                    }
-                } else {
-                    logsField.text = applyLogScope(logs.map(::File), selectedInspectLogScope())
-                        .joinToString(", ") { it.path }
-                }
-            },
-        )
-    }
-
-    private fun initializeCliStatusPlaceholder() {
-        cliStatusLabel.text = "Not checked"
-        cliStatusLabel.foreground = JBColor(Color(0x8A6D00), Color(0xD0A000))
-    }
-
-    private fun refreshTargetProjectAsync() {
-        runInBackground(
-            task = { JankHunterProjectIntrospection.detect(project) },
-            onDone = { result ->
-                val targetProject = result.getOrNull()
-                targetProjectLabel.text = buildString {
-                    append(targetProject?.moduleName ?: ":")
-                    targetProject?.packageName?.takeIf(String::isNotBlank)?.let { append("  /  $it") }
-                    append("  /  ")
-                    append(project.basePath.orEmpty())
-                }
-                if (packageField.text.isBlank()) {
-                    packageField.text = targetProject?.packageName.orEmpty()
-                }
-            },
-        )
-    }
-
-    private fun refreshCliStatusAsync(showDialog: Boolean) {
-        val configuredPath = cliPathField.text
-        cliStatusLabel.text = "Checking..."
-        checkCliButton.isEnabled = false
-        runInBackground(
-            task = { JankHunterCliLifecycle.status(project, configuredPath) },
-            onDone = { result ->
-                checkCliButton.isEnabled = true
-                val status = result.getOrElse { error ->
-                    cliStatusLabel.text = "Failed"
-                    cliStatusLabel.foreground = JBColor(Color(0x8A6D00), Color(0xD0A000))
-                    if (showDialog) {
-                        JankHunterNotifications.error(
-                            project,
-                            "Jank Hunter CLI",
-                            "Не удалось проверить CLI: ${error.message.orEmpty()}",
-                        )
-                    }
-                    return@runInBackground
-                }
-                applyCliStatus(status, showDialog)
-            },
-        )
-    }
-
-    private fun applyCliStatus(status: JankHunterCliStatus, showDialog: Boolean) {
-        cliPathField.text = status.cliPath
-        cliStatusLabel.text = when {
-            status.exists && status.executable -> "OK"
-            status.exists -> "Not executable"
-            else -> "Not found"
-        }
-        cliStatusLabel.foreground = when {
-            status.exists && status.executable -> JBColor(Color(0x237804), Color(0x73D13D))
-            else -> JBColor(Color(0x8A6D00), Color(0xD0A000))
-        }
-        if (!showDialog) return
-        val message = buildString {
-            append("CLI: ${status.cliPath}\n")
-            append("exists=${status.exists} executable=${status.executable}\n")
-            if (status.versionOutput.isNotBlank()) append(status.versionOutput.trim())
-            if (status.stale) append("\nВерсия CLI старее ожидаемой для плагина.")
-        }
-        Messages.showInfoMessage(project, message, "Jank Hunter CLI")
-    }
-
-    private fun buildCli() {
-        if (processHandler != null || commandStarting || adbPullTask?.isDone == false) return
-        commandStarting = true
-        setRunning(true)
-        replaceConsole("")
-        appendConsole("$ make build\n\n")
-        runInBackground(
-            task = {
-                val commandLine = JankHunterCliLifecycle.buildCommand(project)
-                    ?: error("Не нашел cli/Makefile рядом с проектом.")
-                OSProcessHandler(commandLine)
-            },
-            onAbandoned = { handler -> handler.destroyProcess() },
-            onDone = { result ->
-                val handler = result.getOrElse { error ->
-                    commandStarting = false
-                    setRunning(false)
-                    appendConsole("Не удалось запустить make build: ${error.message.orEmpty()}\n")
-                    return@runInBackground
-                }
-                commandStarting = false
-                processHandler = handler
-                handler.addProcessListener(
-                    object : ProcessListener {
-                        override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) {
-                            appendConsole(event.text)
-                        }
-
-                        override fun processTerminated(event: ProcessEvent) {
-                            ApplicationManager.getApplication().invokeLater {
-                                if (disposed || project.isDisposed) return@invokeLater
-                                processHandler = null
-                                setRunning(false)
-                                appendConsole("\nmake build завершился с кодом ${event.exitCode}\n")
-                                if (event.exitCode == 0) {
-                                    cliPathField.text = JankHunterCommandBuilder.defaultCliPath(project)
-                                    Messages.showInfoMessage(project, "CLI собран: ${cliPathField.text}", "Jank Hunter")
-                                } else {
-                                    JankHunterNotifications.error(project, "Jank Hunter CLI", "Не удалось собрать CLI.")
-                                }
-                            }
-                        }
-                    },
-                )
-                handler.startNotify()
-                setRunning(true)
-            },
-        )
-    }
-
-    private fun refreshDevices() {
-        scanDevicesButton.isEnabled = false
-        runInBackground(
-            task = { JankHunterAdbIntegration.listDevices(project) },
-            onDone = { result ->
-                scanDevicesButton.isEnabled = true
-                val devices = result.getOrElse { error ->
-                    JankHunterNotifications.error(project, "Jank Hunter ADB", error.message.orEmpty())
-                    return@runInBackground
-                }
-                val model = DefaultComboBoxModel<JankHunterDevice>()
-                devices.forEach(model::addElement)
-                deviceCombo.model = model
-                if (devices.isEmpty()) {
-                    Messages.showInfoMessage(project, "ADB devices не найдены.", "Jank Hunter")
-                }
-            },
-        )
-    }
-
-    private fun pullDeviceLogs(openInspect: Boolean) {
-        if (processHandler != null || commandStarting || adbPulling) return
-        val device = deviceCombo.selectedItem as? JankHunterDevice
-        val packageName = packageField.text.trim()
-        if (packageName.isBlank()) {
-            Messages.showInfoMessage(project, "Не удалось определить package. Укажите applicationId вручную.", "Jank Hunter")
-            return
-        }
-        val localDir = ensureLogsDirectoryForPull() ?: return
-        replaceConsole("")
-        val serial = device?.serial?.takeIf(String::isNotBlank)?.let { "-s $it " }.orEmpty()
-        appendConsole("$ adb ${serial}exec-out run-as $packageName sh -c 'cd files/jankhunter && tar -cf - .' -> ${localDir.path}\n\n")
-        setPullingLogs(true)
-        val pullGeneration = ++adbPullGeneration
-        val pullTask = JankHunterAdbIntegration.pullAppPrivateLogs(
-            project,
-            device?.serial.orEmpty(),
-            packageName,
-            localDir,
-            onText = ::appendConsole,
-            onDone = { ok, files ->
-                ApplicationManager.getApplication().invokeLater {
-                    if (disposed || project.isDisposed) return@invokeLater
-                    if (pullGeneration != adbPullGeneration) return@invokeLater
-                    adbPullTask = null
-                    setPullingLogs(false)
-                    appendConsole("\nADB run-as pull finished: $ok, logs=${files.size}\n")
-                    if (ok && files.isNotEmpty()) {
-                        logsField.text = applyLogScope(files, selectedInspectLogScope()).joinToString(", ") { it.path }
-                    }
-                    if (!ok && files.isEmpty()) return@invokeLater
-                    runInBackground(
-                        task = { scanLogsDirectory(localDir).heapDump },
-                        onDone = { scanResult ->
-                            syncHeapDumpFromLogsDirectory(localDir, scanResult.getOrNull())
-                            if (ok && openInspect && files.isNotEmpty()) {
-                                selectMode(JankHunterMode.INSPECT)
-                                runRequest(collectRequest())
-                            }
-                        },
-                    )
-                }
-            },
-        )
-        adbPullTask = pullTask
-        trackBackgroundTask(pullTask)
-        updateBusyControls()
-    }
-
-    private fun setPullingLogs(pulling: Boolean) {
-        adbPulling = pulling
-        updateBusyControls()
-    }
-
-    private fun updateBusyControls(forceCliBusy: Boolean = false) {
-        val cliBusy = forceCliBusy || processHandler != null || commandStarting
-        val idle = !cliBusy && !adbPulling
-        runButton.isEnabled = idle
-        generateReportButton.isEnabled = idle
-        modeCombo.isEnabled = idle
-        buildCliButton.isEnabled = idle
-        pullLogsButton.isEnabled = idle
-        collectInspectButton.isEnabled = idle
-        stopButton.isEnabled = processHandler != null || adbPulling
-    }
-
-    private fun openRemoteLogFolder() {
-        val device = deviceCombo.selectedItem as? JankHunterDevice
-        val packageName = packageField.text.trim()
-        if (packageName.isBlank()) {
-            Messages.showInfoMessage(project, "Не удалось определить package. Укажите applicationId вручную.", "Jank Hunter")
-            return
-        }
-        openRemoteLogsButton.isEnabled = false
-        runInBackground(
-            task = { JankHunterAdbIntegration.listAppPrivateLogs(project, device?.serial.orEmpty(), packageName) },
-            onDone = { result ->
-                openRemoteLogsButton.isEnabled = true
-                val listing = result.getOrElse { error -> "ADB error: ${error.message.orEmpty()}\n" }
-                replaceConsole(
-                    listing.ifBlank { "App private log folder is empty or unavailable. Is the debug app installed?\n" },
-                )
-                tabs.selectedIndex = 0
-            },
-        )
-    }
-
-    private fun addHistory(request: JankHunterRunRequest, command: JankHunterCommand) {
-        val state = JankHunterSettings.getInstance().state
-        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-        val entry = JankHunterRecentRun.fromRequest(timestamp, command.displayText(), request, currentProjectPath())
-        state.lastRun = entry
-        state.recentRuns.removeAll { it.commandLine == entry.commandLine && it.projectPath == entry.projectPath }
-        state.recentRuns.add(0, entry)
-        while (state.recentRuns.size > MAX_HISTORY) {
-            state.recentRuns.removeAt(state.recentRuns.lastIndex)
-        }
-        refreshHistoryTable()
-    }
-
-    private fun refreshHistoryTable() {
-        historyModel.rowCount = 0
-        visibleHistory.clear()
-        val projectPath = currentProjectPath()
-        visibleHistory += JankHunterSettings.getInstance().state.recentRuns
-            .filter { run -> projectPath.isBlank() || run.projectPath == projectPath }
-        visibleHistory.forEach { run ->
-            historyModel.addRow(arrayOf(run.timestamp, run.mode, run.output, run.commandLine))
-        }
-    }
-
-    private fun selectedHistoryEntry(): JankHunterRecentRun? {
-        val viewRow = historyTable.selectedRow
-        if (viewRow < 0) return null
-        val modelRow = historyTable.convertRowIndexToModel(viewRow)
-        return visibleHistory.getOrNull(modelRow)
-    }
-
-    private fun currentProjectPath(): String = project.basePath.orEmpty()
-
-    private fun loadSelectedHistory() {
-        val entry = selectedHistoryEntry() ?: return
-        applyRequest(entry.toRequest())
-        lastOutputPath = entry.output.takeIf(String::isNotBlank)
-        updateOpenButtons()
-    }
-
-    private fun rerunSelectedHistory() {
-        val entry = selectedHistoryEntry() ?: return
-        applyRequest(entry.toRequest())
-        runRequest(entry.toRequest())
-    }
-
-    private fun openSelectedHistoryOutput() {
-        val output = selectedHistoryEntry()?.output?.takeIf(String::isNotBlank) ?: return
-        openOutputInsideIde(File(output))
-    }
-
-    private fun loadProblemsTableAsync(outputPath: String, onLoaded: (ProblemsTable?) -> Unit = {}) {
-        val file = File(outputPath)
-        if (!file.isFile || file.extension.lowercase() !in setOf("csv", "json")) {
-            onLoaded(null)
-            return
-        }
-        reloadProblemsButton.isEnabled = false
-        runInBackground(
-            task = { ProblemsParser.parse(file) },
-            onDone = { result ->
-                reloadProblemsButton.isEnabled = true
-                val table = result.getOrElse { error ->
-                    appendConsole("Не удалось разобрать problems-файл: ${error.message}\n")
-                    onLoaded(null)
-                    return@runInBackground
-                }
-                if (!table.isEmpty) {
-                    rawProblemsTable = table
-                    applyProblemsView()
-                    tabs.selectedIndex = 2
-                }
-                onLoaded(table)
-            },
-        )
-    }
-
-    private fun openSelectedProblemSource() {
-        val viewRow = problemsTable.selectedRow
-        if (viewRow < 0) return
-        val row = problemsModel.rowAt(problemsTable.convertRowIndexToModel(viewRow))
-        navigateToSource(row, showFailure = true)
-    }
-
-    private fun navigateToSource(row: Map<String, String>, showFailure: Boolean) {
-        openProblemSourceButton.isEnabled = false
-        runInBackground(
-            task = { SourceNavigator.find(project, row) },
-            onDone = { result ->
-                openProblemSourceButton.isEnabled = true
-                val location: SourceLocation? = result.getOrNull()
-                if (location != null && SourceNavigator.open(project, location)) return@runInBackground
-                if (showFailure) {
-                    Messages.showInfoMessage(project, "Не удалось найти исходник для выбранной строки.", "Jank Hunter")
-                }
-            },
-        )
-    }
-
-    private fun openProblemReport() {
-        val report = lastHtmlOutputPath?.let(::File)
-        if (report?.isFile == true) {
-            openOutputInsideIde(report)
-        } else {
-            Messages.showInfoMessage(project, "HTML-отчет для выбранной строки пока неизвестен.", "Jank Hunter")
-        }
-    }
-
-    private fun copySelectedRecommendation() {
-        val viewRow = problemsTable.selectedRow
-        if (viewRow < 0) return
-        val row = problemsModel.rowAt(problemsTable.convertRowIndexToModel(viewRow))
-        val text = row["recommendation"]
-            ?: row["Recommendation"]
-            ?: row["fix_examples"]
-            ?: row["verification_steps"]
-            ?: row["evidence"]
-            ?: ""
-        if (text.isBlank()) return
-        CopyPasteManager.getInstance().setContents(StringSelection(text))
-    }
-
-    private fun applyProblemsView() {
-        val grouped = groupedProblems(rawProblemsTable, groupProblemsCombo.selectedItem?.toString().orEmpty())
-        problemsModel.setTable(grouped)
-        problemsSorter.model = problemsModel
-        problemsSorter.rowFilter = object : RowFilter<ProblemsTableModel, Int>() {
-            override fun include(entry: Entry<out ProblemsTableModel, out Int>): Boolean {
-                val row = problemsModel.rowAt(entry.identifier)
-                return matchesProblemsFilters(row)
-            }
-        }
-    }
-
-    private fun resetProblemsFilters() {
-        severityFilter.selectedItem = "all"
-        categoryFilter.text = ""
-        screenFilter.text = ""
-        ownerFilter.text = ""
-        groupProblemsCombo.selectedItem = "none"
-        applyProblemsView()
-    }
-
-    private fun groupedProblems(table: ProblemsTable, group: String): ProblemsTable {
-        if (table.isEmpty || group == "none") return table
-        val keyName = if (group == "owner") "owner" else "class"
-        val groups = table.rows.groupBy { row ->
-            row[keyName]
-                ?: row[keyName.replaceFirstChar { it.titlecase() }]
-                ?: row["from"]
-                ?: row["holder"]
-                ?: ""
-        }
-        val rows = groups.map { (key, rows) ->
-            mapOf(
-                keyName to key.ifBlank { "(empty)" },
-                "count" to rows.size.toString(),
-                "max_severity" to rows.maxByOrNull { severityRank(it["severity"].orEmpty()) }?.get("severity").orEmpty(),
-                "score" to rows.mapNotNull { it["score"]?.toDoubleOrNull() }.maxOrNull()?.toString().orEmpty(),
-                "recommendation" to rows.firstNotNullOfOrNull { it["recommendation"]?.takeIf(String::isNotBlank) }.orEmpty(),
-            )
-        }
-        return ProblemsTable(listOf(keyName, "count", "max_severity", "score", "recommendation"), rows)
-    }
-
-    private fun matchesProblemsFilters(row: Map<String, String>): Boolean {
-        val severity = severityFilter.selectedItem?.toString().orEmpty()
-        if (severity != "all" && !row.values.any { it.equals(severity, ignoreCase = true) }) return false
-        if (!containsAny(row, categoryFilter.text, "categories", "problems", "record_type")) return false
-        if (!containsAny(row, screenFilter.text, "screen", "screens")) return false
-        if (!containsAny(row, ownerFilter.text, "owner", "holder", "class", "from")) return false
-        return true
-    }
-
-    private fun containsAny(row: Map<String, String>, needle: String, vararg keys: String): Boolean {
-        val trimmed = needle.trim()
-        if (trimmed.isBlank()) return true
-        return keys.any { key -> row[key]?.contains(trimmed, ignoreCase = true) == true }
-    }
-
-    fun applyClassFilter(className: String) {
-        selectMode(JankHunterMode.INSPECT)
-        classField.text = className
-        updateModeVisibility()
-        tabs.selectedIndex = 0
-    }
-
-    private fun severityRank(value: String): Int =
-        when (value.lowercase()) {
-            "critical" -> 5
-            "high" -> 4
-            "medium" -> 3
-            "low" -> 2
-            "info" -> 1
-            else -> 0
-        }
-
-    private fun <T> runInBackground(
-        task: () -> T,
-        onAbandoned: (T) -> Unit = {},
-        onDone: (Result<T>) -> Unit,
-    ) {
+    private fun <T> runInBackground(task: () -> T, onDone: (Result<T>) -> Unit) {
         val future = ApplicationManager.getApplication().executeOnPooledThread {
             val result = runCatching(task)
             ApplicationManager.getApplication().invokeLater {
-                if (disposed || project.isDisposed) {
-                    result.getOrNull()?.let(onAbandoned)
-                    return@invokeLater
-                }
-                onDone(result)
+                if (!disposed && !project.isDisposed) onDone(result)
             }
         }
-        trackBackgroundTask(future)
+        backgroundTasks.removeAll { it.isDone || it.isCancelled }
+        backgroundTasks += future
     }
 
-    private fun trackBackgroundTask(task: Future<*>) {
-        backgroundTasks.removeAll { current -> current.isDone || current.isCancelled }
-        backgroundTasks += task
-    }
+    private data class PreparedRun(
+        val request: JankHunterRunRequest,
+        val command: JankHunterCommand,
+        val errors: List<String>,
+        val warnings: List<String>,
+    )
 
-    private fun appendConsole(text: String) {
-        if (text.isEmpty() || disposed) return
-        val scheduleFlush = synchronized(consoleLock) {
-            val overflow = pendingConsole.length + text.length - MAX_CONSOLE_CHARS
-            if (overflow > 0) {
-                if (overflow >= pendingConsole.length) {
-                    pendingConsole.setLength(0)
-                } else {
-                    pendingConsole.delete(0, overflow)
-                }
-            }
-            pendingConsole.append(text.takeLast(MAX_CONSOLE_CHARS))
-            if (consoleFlushScheduled) {
-                false
-            } else {
-                consoleFlushScheduled = true
-                true
-            }
-        }
-        if (scheduleFlush) {
-            ApplicationManager.getApplication().invokeLater { flushConsole() }
-        }
-    }
+    private data class HeapInput(val hprof: String = "", val evidence: String = "")
 
-    private fun replaceConsole(text: String) {
-        synchronized(consoleLock) {
-            pendingConsole.setLength(0)
-            consoleFlushScheduled = false
-        }
-        consoleArea.text = text.takeLast(MAX_CONSOLE_CHARS)
-        consoleArea.caretPosition = consoleArea.document.length
-    }
-
-    private fun flushConsole() {
-        if (disposed || project.isDisposed) return
-        val text = synchronized(consoleLock) {
-            val value = pendingConsole.toString()
-            pendingConsole.setLength(0)
-            consoleFlushScheduled = false
-            value
-        }
-        if (text.isEmpty()) return
-        consoleArea.append(text)
-        val excess = consoleArea.document.length - MAX_CONSOLE_CHARS
-        if (excess > 0) {
-            runCatching { consoleArea.document.remove(0, excess) }
-        }
-        consoleArea.caretPosition = consoleArea.document.length
-    }
-
-    private fun selectMode(mode: JankHunterMode) {
-        modeCombo.selectedItem = mode
-        updateModeVisibility()
-    }
-
-    private fun selectedMode(): JankHunterMode = modeCombo.selectedItem as? JankHunterMode ?: JankHunterMode.INSPECT
-
-    private fun selectedInspectLogScope(): JankHunterLogScope =
-        inspectLogScopeCombo.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
-
-    private fun selectedBaselineLogScope(): JankHunterLogScope =
-        baselineLogScopeCombo.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
-
-    private fun selectedCandidateLogScope(): JankHunterLogScope =
-        candidateLogScopeCombo.selectedItem as? JankHunterLogScope ?: JankHunterLogScope.ALL_SELECTED
-
-    private fun applyLogScope(logs: List<File>, scope: JankHunterLogScope): List<File> {
-        if (logs.isEmpty()) return emptyList()
-        return when (scope) {
-            JankHunterLogScope.ALL_SELECTED -> logs
-            JankHunterLogScope.LATEST_LOG -> JankHunterSessionLogFiles.latest(logs)?.let(::listOf).orEmpty()
-        }
-    }
-
-    private fun browseDirectoryField(): TextFieldWithBrowseButton {
-        val field = TextFieldWithBrowseButton()
-        field.addActionListener {
-            val selected = FileChooser.chooseFile(directoryDescriptor(), project, null) ?: return@addActionListener
-            field.text = selected.path
-        }
-        return field
-    }
-
-    private fun browseField(appendSelection: Boolean = false): TextFieldWithBrowseButton {
-        val field = TextFieldWithBrowseButton()
-        field.addActionListener {
-            val descriptor = FileChooserDescriptor(true, true, false, false, false, appendSelection)
-            if (appendSelection) {
-                val selected = FileChooser.chooseFiles(descriptor, project, null)
-                if (selected.isEmpty()) return@addActionListener
-                val value = selected.joinToString(", ") { it.path }
-                field.text = if (field.text.isBlank()) value else field.text.trimEnd() + ", " + value
-            } else {
-                val selected = FileChooser.chooseFile(descriptor, project, null) ?: return@addActionListener
-                field.text = selected.path
-            }
-        }
-        return field
-    }
-
-    private fun directoryDescriptor(): FileChooserDescriptor =
-        FileChooserDescriptor(false, true, false, false, false, false)
-
-    private fun configureTooltips() {
-        modeCombo.toolTipText = hint(selectedMode().hint)
-        cliPathField.toolTipText = hint(
-            "Путь к бинарнику jankhunter. Если оставить пустым, плагин попробует найти ../cli/bin/jankhunter или команду jankhunter в PATH.",
-        )
-        cliStatusLabel.toolTipText = hint("Статус CLI. Проверка запускается вручную кнопкой Check CLI.")
-        logsDirectoryField.toolTipText = hint("Локальная папка, где лежат или куда будут выгружены .jhlog файлы.")
-        openLogsButton.toolTipText = hint("Выбрать папку с логами и подставить найденные .jhlog в текущий запуск.")
-        generateReportButton.toolTipText = hint("Собрать inspect-отчет из выбранной папки или списка .jhlog файлов.")
-        artifactCombo.toolTipText = hint("Найденные артефакты Android Gradle plugin, сгруппированные по variant.")
-        scanArtifactsButton.toolTipText = hint(
-            "Просканировать проект и обновить список owner-map/class-graph/diagnostics/di-catalog/mapping.",
-        )
-        applyArtifactsButton.toolTipText = hint("Заполнить поля артефактов выбранным набором.")
-        logsField.toolTipText = hint(
-            "Файлы .jhlog для отчета. Один файл, несколько выбранных файлов, glob-маски или пути через запятую.",
-        )
-        inspectLogScopeCombo.toolTipText = hint(
-            "Как собрать inspect: канонический session-лог с максимальными датой и числовым индексом или все перечисленные логи с --all-sessions.",
-        )
-        baselineField.toolTipText = hint("Базовый прогон для compare/scorecard. Поддерживаются несколько файлов и glob-маски.")
-        baselineLogScopeCombo.toolTipText = hint(
-            "Какие baseline-логи отправить в compare/scorecard: последний канонический session-лог или все выбранные.",
-        )
-        candidateField.toolTipText = hint("Кандидатный прогон для compare/scorecard. Обычно это логи после изменения.")
-        candidateLogScopeCombo.toolTipText = hint(
-            "Какие candidate-логи отправить в compare/scorecard: последний канонический session-лог или все выбранные.",
-        )
-        outputField.toolTipText = hint("Куда записать результат. Если пусто, плагин создаст файл в build/jankhunter внутри проекта.")
-        ownerMapField.toolTipText = hint("owner-map.json от Android Gradle plugin: раскрывает owner hash в class.method.")
-        mappingField.toolTipText = hint("R8/ProGuard mapping.txt: раскрывает обфусцированные имена классов и методов.")
-        classGraphField.toolTipText = hint("class-graph.jsonl: статические связи, горячие пути и method-level hotspots.")
-        diagnosticsField.toolTipText = hint("instrumentation-diagnostics.jsonl: отчет по ASM-инструментации.")
-        diCatalogField.toolTipText = hint(
-            "di-catalog.jsonl: opt-in build-time связи Dagger/Hilt/Koin; они отображаются отдельно и не влияют на score.",
-        )
-        heapDumpField.toolTipText = hint("HPROF для inspect/problems: CLI построит цепочки удержания от GC root.")
-        heapEvidenceField.toolTipText = hint("Готовый JSON heap evidence вместо HPROF.")
-        baselineHeapDumpField.toolTipText = hint("HPROF для базового прогона в compare/scorecard.")
-        baselineHeapEvidenceField.toolTipText = hint("JSON heap evidence для базового прогона.")
-        candidateHeapDumpField.toolTipText = hint("HPROF для кандидатного прогона в compare/scorecard.")
-        candidateHeapEvidenceField.toolTipText = hint("JSON heap evidence для кандидатного прогона.")
-        routeField.toolTipText = hint("Фильтр по части route, например /feed или /checkout.")
-        screenField.toolTipText = hint("Фильтр по части имени экрана, например Feed или Checkout.")
-        ownerField.toolTipText = hint("Фильтр по owner/source work, например FeedRepository.")
-        classField.toolTipText = hint("Фильтр по части имени класса.")
-        datasetCombo.toolTipText = hint("Датасет Problems: проблемы кода, утечки, граф влияния или математические findings.")
-        formatCombo.toolTipText = hint("Формат Problems: csv для таблицы или json для дальнейшей обработки.")
-        jsonCheckBox.toolTipText = hint("Добавить --json: основной результат команды будет напечатан в JSON.")
-        presentationCheckBox.toolTipText = hint("Добавить --presentation: более крупные акценты и печатный CSS в HTML.")
-        openInIdeCheckBox.toolTipText = hint("После успешного запуска открыть созданный результат внутри IDE.")
-        openExternalCheckBox.toolTipText = hint("После успешного запуска открыть HTML-отчет в браузере по умолчанию.")
-        runButton.toolTipText = hint("Проверить поля и запустить Jank Hunter CLI.")
-        stopButton.toolTipText = hint("Остановить текущий процесс Jank Hunter или выгрузку через ADB.")
-        openInIdeButton.toolTipText = hint("Открыть последний созданный файл результата внутри IDE.")
-        openBrowserButton.toolTipText = hint("Открыть последний созданный HTML-отчет в браузере.")
-        clearButton.toolTipText = hint("Очистить консольный вывод.")
-        findLogsButton.toolTipText = hint("Найти свежие .jhlog файлы в проекте и подставить их в текущий режим.")
-        openProblemSourceButton.toolTipText = hint("Открыть исходник для выбранной строки problems-таблицы.")
-        reloadProblemsButton.toolTipText = hint("Перечитать последний CSV/JSON результат в таблицу.")
-        loadHistoryButton.toolTipText = hint("Загрузить выбранный запуск обратно в форму.")
-        rerunHistoryButton.toolTipText = hint("Повторить выбранный запуск из истории.")
-        openHistoryOutputButton.toolTipText = hint("Открыть файл результата выбранного запуска.")
-        consoleArea.toolTipText = hint("Здесь отображаются команда, stdout, stderr и код завершения процесса.")
-    }
-
-    private fun hint(text: String): String = "<html>${text.replace("\n", "<br>")}</html>"
-
-    private fun createBrowserQuery(browser: JBCefBrowser): JBCefJSQuery = JBCefJSQuery.create(browser as JBCefBrowserBase)
-
-    private class SeverityBadgeRenderer : DefaultTableCellRenderer() {
-        override fun getTableCellRendererComponent(
-            table: javax.swing.JTable,
-            value: Any?,
-            isSelected: Boolean,
-            hasFocus: Boolean,
-            row: Int,
-            column: Int,
-        ): java.awt.Component {
-            val component = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
-            val modelColumn = table.convertColumnIndexToModel(column)
-            val name = table.model.getColumnName(modelColumn)
-            val textValue = value?.toString().orEmpty()
-            if (!isSelected) {
-                val color = when {
-                    name.equals("severity", ignoreCase = true) || name.equals("max_severity", ignoreCase = true) -> {
-                        when (textValue.lowercase()) {
-                            "critical" -> JBColor(Color(0x8B0000), Color(0xFF6B6B))
-                            "high" -> JBColor(Color(0xB54708), Color(0xF79009))
-                            "medium" -> JBColor(Color(0x8A6D00), Color(0xD0A000))
-                            "low" -> JBColor(Color(0x155EEF), Color(0x84ADFF))
-                            else -> null
-                        }
-                    }
-                    else -> null
-                }
-                foreground = color ?: table.foreground
-                background = table.background
-            }
-            toolTipText = textValue
-            return component
-        }
+    private enum class UserTask(val card: String) {
+        REPORT("report"),
+        COMPARE("compare"),
     }
 
     companion object {
-        private const val MAX_HISTORY = 25
-        private const val MAX_DISCOVERED_LOGS = 50
-        private const val MAX_LOG_SCAN_DEPTH = 8
-        private const val MAX_CONSOLE_CHARS = 1_000_000
+        private const val SIMPLE_CARD = "simple"
+        private const val ADVANCED_CARD = "advanced"
+        private const val MAX_PROCESSED_FINGERPRINTS = 1_000
+        private val OUTPUT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss")
     }
 }

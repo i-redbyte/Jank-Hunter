@@ -474,6 +474,7 @@
       <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">служебные сведения</span></summary>
       <div class="fold-body technical-quality-body">
         <p class="help-text">Этот раздел вынесен в конец отчета: он описывает полноту телеметрии и не заменяет выводы о производительности приложения.</p>
+        <p class="quality-notice">Полнота runtime-графа: {{printf "%.2f" (percent01 .Summary.CollectionQuality.RuntimeGraphCompletenessRatio)}}% · записано {{.Summary.CollectionQuality.RuntimeGraphEmittedEvents}} из {{.Summary.CollectionQuality.RuntimeGraphInputEvents}} событий.</p>
         {{range .Summary.CollectionQuality.Notices}}<p class="quality-notice">{{.}}.</p>{{end}}
         {{range .Summary.Warnings}}<p class="warning">{{.}}</p>{{else}}{{if not .Summary.CollectionQuality.Notices}}<p class="quality-notice">Служебных замечаний к сбору нет.</p>{{end}}{{end}}
       </div>
