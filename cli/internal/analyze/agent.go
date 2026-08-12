@@ -51,15 +51,14 @@ type agentStackState struct {
 }
 
 type agentStackSample struct {
-	timeNS, fingerprint, thread, contextToken, sequence uint64
-	source                                              string
-	context                                             agentContext
+	timeNS, fingerprint, thread, sequence uint64
+	source                                string
 }
 
 type agentSymptom struct {
 	startNS, endNS         uint64
 	durationMS, jankFrames uint64
-	kind, source, stack    string
+	kind, source           string
 	context                agentContext
 }
 
@@ -88,7 +87,6 @@ type agentAggregator struct {
 	sequences                                          map[agentProducerKey]*agentSequenceState
 	clockOffsets                                       map[string]int64
 	sources                                            map[string]struct{}
-	dataGaps                                           []string
 	sourceCapacityLost                                 bool
 	truncatedStacks                                    uint64
 }
@@ -242,7 +240,7 @@ func (a *agentAggregator) addStackSample(event jhlog.Event, payload *jhlog.Agent
 		}
 	}
 	sample := agentStackSample{timeNS: saturatingMultiply(event.TimeUS, 1_000), fingerprint: payload.Payload0, thread: payload.ThreadToken,
-		contextToken: payload.ContextToken, sequence: payload.ProducerSequence, source: firstNonEmpty(event.Source, "unknown"), context: context}
+		sequence: payload.ProducerSequence, source: firstNonEmpty(event.Source, "unknown")}
 	a.stackSamples = insertRecentStack(a.stackSamples, sample)
 	if payload.Payload3 != 0 {
 		a.quality.IncompleteWindows++
@@ -269,7 +267,7 @@ func (a *agentAggregator) addStackDefinition(payload *jhlog.AgentEvent) {
 	state.methodIDs[frameIndex] = payload.Payload1
 }
 
-func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow FlowStats, stack string) {
+func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow FlowStats) {
 	endNS := saturatingMultiply(event.TimeMS, 1_000_000)
 	durationNS := saturatingMultiply(event.Stall.DurationMS, 1_000_000)
 	startNS := uint64(0)
@@ -277,7 +275,7 @@ func (a *agentAggregator) addStallSymptom(event jhlog.Event, flow FlowStats, sta
 		startNS = endNS - durationNS
 	}
 	a.addSymptom(agentSymptom{startNS: startNS, endNS: endNS, durationMS: event.Stall.DurationMS,
-		kind: "main_thread_stall", source: firstNonEmpty(event.Source, "unknown"), stack: stack,
+		kind: "main_thread_stall", source: firstNonEmpty(event.Source, "unknown"),
 		context: agentContext{screen: flow.Screen, flow: flow.Flow, owner: flow.Owner, step: flow.Step}})
 }
 
@@ -496,7 +494,7 @@ func (a *agentAggregator) stackSnapshot() AgentStackSummary {
 }
 
 func (a *agentAggregator) buildDataGaps(result AgentSummary) []string {
-	gaps := append([]string(nil), a.dataGaps...)
+	var gaps []string
 	if result.Quality.SequenceGaps > 0 {
 		gaps = append(gaps, fmt.Sprintf("В native producer sequence отсутствует %d событий.", result.Quality.SequenceGaps))
 	}

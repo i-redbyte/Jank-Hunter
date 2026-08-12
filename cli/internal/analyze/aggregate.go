@@ -1188,7 +1188,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			stepOverride = "heap_dump"
 		}
 		context := c.eventContext("", owner, flowOverride, stepOverride)
-		c.agent.addStallSymptom(event, context, stack)
+		c.agent.addStallSymptom(event, context)
 		if !c.matchesFilters("", context, nil, owner) {
 			return
 		}
