@@ -86,8 +86,8 @@ func newAgentFinding(index int, symptom agentSymptom) AgentFinding {
 			"GC мог быть следствием allocation pressure, а не первичной причиной задержки.",
 		},
 		Actions: []string{
-			"Повторить сценарий с Perfetto/CPU profiler и тем же screen/flow/owner.",
-			"Сравнить с прогоном без подозреваемой работы и проверить устойчивость временной цепочки.",
+			"Повторить тот же сценарий с теми же экраном, сценарием и источником работы.",
+			"Сравнить с прогоном без подозреваемой работы и проверить, повторяется ли временная связь.",
 		},
 		TimelineReference: fmt.Sprintf("%s@%d..%d ns", symptom.source, symptom.startNS, symptom.endNS),
 	}

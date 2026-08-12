@@ -51,7 +51,6 @@ encoded as zero.
 | `SystemHealthManager` / `UidHealthStats` | UID CPU, wakelocks, jobs, sensors, Wi-Fi/Bluetooth and other exposed health timers/counters | API/OEM field support, permissions, counter units, reset/wrap behavior and aggregation interval |
 | `BatteryManager` | device current/charge/energy properties | counter availability, sign convention, resolution, update cadence, charging behavior and whether the value is cumulative or instantaneous |
 | App SDK / ASM context | screen, flow, step, owner, scheduled work and public call-site markers | semantic quality depends on app instrumentation; high-cardinality labels require bounds/privacy rules |
-| Perfetto / Macrobenchmark / Power Profiler | controlled timing, scheduler, CPU and device-specific power evidence | normally offline/QA-only; trace setup and device support differ and production overhead is unacceptable |
 | External hardware monitor | calibrated device power reference | lab-only, device wiring and automation complexity; strongest energy evidence when properly calibrated |
 
 Possible public call-site hooks are a fallback when aggregate evidence cannot distinguish logically
@@ -197,7 +196,7 @@ physical-device evidence:
 - What CPU/wakeup/I/O/memory/log/energy overhead is acceptable for a long session?
 - Is a separate `BatteryAnalysisMode` necessary, or can a generic evidence-session policy express
   short validation and long sampling without battery-specific core code?
-- How do results compare with Perfetto/Power Profiler and, where available, a hardware power monitor?
+- How do results compare with a hardware power monitor where one is available?
 
 Minimum research exit criteria:
 
