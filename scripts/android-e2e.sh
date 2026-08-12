@@ -421,6 +421,34 @@ owners = string_fields(("Owners", "owners"), ("Owner", "owner"))
 if "io.jankhunter.sample.graph.CheckoutRenderer" not in owners:
     failures.append("expected owner is missing: io.jankhunter.sample.graph.CheckoutRenderer")
 
+agent = value(summary, "Agent", "agent")
+if not isinstance(agent, dict):
+    failures.append("ART TI agent summary is missing")
+else:
+    if value(agent, "Available", "available") is not True:
+        failures.append("ART TI agent is not available")
+    if value(agent, "EffectivePreset", "effective_preset") != "CAUSAL":
+        failures.append("ART TI effective preset is not CAUSAL")
+    capabilities = value(agent, "Capabilities", "capabilities")
+    if value(capabilities, "Active", "active") != 63:
+        failures.append("ART TI active capability matrix is incomplete")
+    gc = value(agent, "GC", "gc")
+    contention = value(agent, "Contention", "contention")
+    stacks = value(agent, "Stacks", "stacks")
+    positive_integer("ART TI GC count", value(gc, "Count", "count"))
+    positive_integer("ART TI contention count", value(contention, "Count", "count"))
+    positive_integer("ART TI stack sample count", value(stacks, "Samples", "samples"))
+    findings = value(agent, "Findings", "findings")
+    expected_finding = any(
+        isinstance(finding, dict)
+        and value(finding, "EvidenceLevel", "evidence_level") == "STRONG_ASSOCIATION"
+        and value(finding, "Flow", "flow") == "sample.auto.jvmti.monitor_contention"
+        and value(finding, "Owner", "owner") == "io.jankhunter.sample.graph.JvmtiEvidenceScenario"
+        for finding in findings or []
+    )
+    if not expected_finding:
+        failures.append("ART TI causal finding for the sample JVMTI scenario is missing")
+
 warnings = value(summary, "Warnings", "warnings")
 if warnings is None:
     warnings = []
@@ -473,6 +501,14 @@ validate_metric_contract() {
     --diagnostics-supplied
   )
   "$PYTHON" "${arguments[@]}"
+}
+
+validate_html_report() {
+  local report="$1"
+  grep -Fq 'ART TI: native runtime evidence' "$report" ||
+    fail "HTML report does not contain the ART TI section"
+  grep -Fq 'JvmtiEvidenceScenario' "$report" ||
+    fail "HTML report does not contain the sample JVMTI causal evidence"
 }
 
 require_command "$ADB"
@@ -564,6 +600,7 @@ grep -q 'io.jankhunter.sample.graph' "$class_graph" ||
 [[ -s "$OUT_DIR/inspect.json" ]] || fail "JSON summary was not generated"
 validate_inspect_json "$OUT_DIR/inspect.json"
 validate_metric_contract
+validate_html_report "$OUT_DIR/report.html"
 
 log "logs: $LOG_DIR"
 log "instrumentation: $OUT_DIR/instrumentation.txt"

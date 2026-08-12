@@ -54,11 +54,23 @@ class SampleEndToEndLogTest {
         }
         val logFile = waitForLog(logDir)
         assertTrue("expected non-empty .jhlog at ${logFile.absolutePath}", logFile.length() > 0)
-        val agentTypes = CommittedAgentEventScanner.scan(logFile).mapTo(linkedSetOf()) { it.type }
+        val events = CommittedAgentEventScanner.scan(logFile)
+        val agentTypes = events.mapTo(linkedSetOf()) { it.type }
         assertTrue("expected ART TI status in committed .jhlog", AGENT_STATUS in agentTypes)
         assertTrue("expected ART TI capabilities in committed .jhlog", AGENT_CAPABILITY in agentTypes)
         assertTrue("expected ART TI quality in committed .jhlog", AGENT_QUALITY in agentTypes)
         assertTrue("expected ART TI clock calibration in committed .jhlog", AGENT_CLOCK_SYNC in agentTypes)
+        assertTrue("expected a real JVMTI GC interval", events.any { it.type == AGENT_GC_INTERVAL })
+        assertTrue(
+            "expected the sample's long JVMTI monitor contention",
+            events.any { it.type == AGENT_CONTENTION_INTERVAL && it.payload1 >= MIN_CONTENTION_DURATION_NS },
+        )
+        assertTrue(
+            "expected a context-attributed JVMTI stack sample",
+            events.any { it.type == AGENT_STACK_SAMPLE && it.contextToken != 0L },
+        )
+        assertTrue("expected JVMTI stack definitions", AGENT_STACK_DEFINITION in agentTypes)
+        assertTrue("expected resolved JVMTI method definitions", AGENT_METHOD_DEFINITION in agentTypes)
     }
 
     private fun waitForResultRoute(instrumentation: android.app.Instrumentation) {
@@ -125,6 +137,12 @@ class SampleEndToEndLogTest {
         const val AGENT_STATUS = 1
         const val AGENT_CAPABILITY = 2
         const val AGENT_QUALITY = 3
+        const val AGENT_GC_INTERVAL = 6
+        const val AGENT_CONTENTION_INTERVAL = 7
+        const val AGENT_STACK_SAMPLE = 8
+        const val AGENT_STACK_DEFINITION = 9
         const val AGENT_CLOCK_SYNC = 10
+        const val AGENT_METHOD_DEFINITION = 12
+        const val MIN_CONTENTION_DURATION_NS = 300_000_000L
     }
 }

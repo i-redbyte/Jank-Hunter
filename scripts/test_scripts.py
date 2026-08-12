@@ -1315,6 +1315,21 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
             ],
             "Screens": [{"Screen": "sample.compose.result"}],
             "Owners": [{"Owner": "io.jankhunter.sample.graph.CheckoutRenderer"}],
+            "Agent": {
+                "Available": True,
+                "EffectivePreset": "CAUSAL",
+                "Capabilities": {"Active": 63},
+                "GC": {"Count": 1},
+                "Contention": {"Count": 1},
+                "Stacks": {"Samples": 1},
+                "Findings": [
+                    {
+                        "EvidenceLevel": "STRONG_ASSOCIATION",
+                        "Flow": "sample.auto.jvmti.monitor_contention",
+                        "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario",
+                    }
+                ],
+            },
             "Warnings": list(warnings),
         }
 
@@ -1439,7 +1454,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '<html>report</html>\\n' > "$out"
+printf '<html>ART TI: native runtime evidence JvmtiEvidenceScenario</html>\\n' > "$out"
 printf '%s\\n' "$FAKE_INSPECT_JSON"
 """,
         )
