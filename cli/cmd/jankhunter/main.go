@@ -18,7 +18,7 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-var version = "1.0.3"
+var version = "1.0.4"
 
 func main() {
 	configureCLIGarbageCollector()

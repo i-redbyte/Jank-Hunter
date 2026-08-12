@@ -314,7 +314,7 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	printVersion(&buffer)
 
 	text := buffer.String()
-	if !strings.Contains(text, "Jank Hunter CLI 1.0.3") {
+	if !strings.Contains(text, "Jank Hunter CLI 1.0.4") {
 		t.Fatalf("version output missing CLI version: %q", text)
 	}
 	if !strings.Contains(text, ".jhlog format") {
@@ -527,7 +527,7 @@ func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	if err := registry.run([]string{"version"}); err != nil {
 		t.Fatalf("registry version error = %v", err)
 	}
-	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.3") {
+	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.4") {
 		t.Fatalf("version command output = %q", buffer.String())
 	}
 	if err := registry.run([]string{"missing"}); err == nil {
