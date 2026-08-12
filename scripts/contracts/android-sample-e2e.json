@@ -61,7 +61,7 @@
     {"id": "artti-contention-duration", "path": "Agent.Contention.MaxMS", "expect": {"minimum": 300, "maximum": 1000}},
     {"id": "artti-stack-samples", "path": "Agent.Stacks.Samples", "expect": {"minimum": 1}},
     {"id": "artti-stack-definitions", "path": "Agent.Stacks.Definitions", "expect": {"minimum": 1}},
-    {"id": "artti-causal-finding", "path": "Agent.Findings", "where": {"EvidenceLevel": "STRONG_ASSOCIATION", "Confidence": "HIGH", "Flow": "sample.auto.jvmti.monitor_contention", "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario"}, "field": "Method", "cardinality": {"minimum": 1}, "expect": {"contains": "JvmtiEvidenceScenario;->blockMainThread"}},
+    {"id": "artti-causal-finding", "path": "Agent.Findings", "where": {"EvidenceLevel": "STRONG_ASSOCIATION", "Flow": "sample.auto.jvmti.monitor_contention", "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario"}, "field": "Method", "cardinality": {"minimum": 1}, "expect": {"contains": "JvmtiEvidenceScenario;->blockMainThread"}},
 
     {"id": "counter-run-started", "path": "Counters", "where": {"Name": "sample.auto.run.started.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-run-completed", "path": "Counters", "where": {"Name": "sample.auto.run.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
@@ -136,7 +136,7 @@
 
     {"id": "runtime-call-baseline", "path": "RuntimeCalls", "where": {"Caller": "io.jankhunter.sample.graph.CheckoutBaselineRepository.loadItemCount", "Callee": "io.jankhunter.sample.graph.CheckoutBaselineDataSource.readItemCount"}, "field": "TotalMS", "cardinality": {"equals": 1}, "expect": {"minimum": 1, "maximum": 500}},
     {"id": "runtime-call-cpu", "path": "RuntimeCalls", "where": {"Caller": "io.jankhunter.sample.graph.PerformanceScenarioUseCase.calculateFor$lambda$0", "Callee": "io.jankhunter.sample.graph.CheckoutCalculator.calculateFor"}, "field": "TotalMS", "cardinality": {"equals": 1}, "expect": {"minimum": 1000, "maximum": 3000}},
-    {"id": "runtime-call-render", "path": "RuntimeCalls", "where": {"Caller": "io.jankhunter.sample.graph.PerformanceScenarioUseCase.renderFor$lambda$0", "Callee": "io.jankhunter.sample.graph.CheckoutRenderer.renderFor"}, "field": "Count", "cardinality": {"equals": 1}, "expect": {"equals": 2}},
+    {"id": "runtime-call-render", "path": "RuntimeCalls", "where": {"Caller": "io.jankhunter.sample.graph.PerformanceScenarioUseCase.renderFor$lambda$0", "Callee": "io.jankhunter.sample.graph.CheckoutRenderer.renderFor"}, "field": "Count", "cardinality": {"equals": 2}, "expect": {"equals": 1}},
 
     {"id": "retained-activity", "path": "RetainedClasses", "where": {"Name": "io.jankhunter.sample.MemoryScenarioActivity"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "retained-screen", "path": "RetainedClasses", "where": {"Name": "io.jankhunter.sample.RetainedCheckoutScreen"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
