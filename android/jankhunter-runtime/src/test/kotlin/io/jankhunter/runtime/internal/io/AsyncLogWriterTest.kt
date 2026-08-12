@@ -31,6 +31,67 @@ import org.junit.Test
 
 class AsyncLogWriterTest {
     @Test
+    fun concurrentRuntimeAndAgentProducersDoNotLoseEventsAtAdmission() {
+        val directory = Files.createTempDirectory("jankhunter-concurrent-admission").toFile()
+        try {
+            val producerCount = 4
+            val eventsPerProducer = 500
+            val writer = AsyncLogWriter.open(
+                directory,
+                JankHunterConfig.builder()
+                    .maxQueueSize(4_096)
+                    .maxDictionaryEntries(4_096)
+                    .flushIntervalMs(60_000L)
+                    .build(),
+                "main",
+            )
+            val start = CountDownLatch(1)
+            val producers = List(producerCount) { producer ->
+                Thread {
+                    start.await()
+                    repeat(eventsPerProducer) { index ->
+                        if (producer % 2 == 0) {
+                            val batch = JankHunterAgentEventBatch(1)
+                            check(
+                                batch.tryAppend(
+                                    JankHunterAgentEventType.AGENT_STATUS,
+                                    1,
+                                    0,
+                                    index.toLong() + 1L,
+                                    System.nanoTime(),
+                                    producer.toLong(),
+                                    0L,
+                                    0L,
+                                    1L,
+                                    0L,
+                                    0L,
+                                    0L,
+                                ),
+                            )
+                            writer.agentEvents(batch)
+                        } else {
+                            writer.counter("concurrent.$producer.$index", 1L)
+                        }
+                    }
+                }.apply { start() }
+            }
+
+            start.countDown()
+            producers.forEach { it.join(5_000L) }
+            assertTrue(producers.none(Thread::isAlive))
+            assertTrue(writer.close(timeoutMs = 5_000L))
+
+            val quality = qualityCounters(logFiles(directory).single())
+            val expected = (producerCount * eventsPerProducer).toLong()
+            assertEquals(expected, quality[QualityCounterId.ACCEPTED_EVENT_TOTAL] ?: 0L)
+            assertEquals(expected, quality[QualityCounterId.WRITTEN_EVENT_TOTAL] ?: 0L)
+            assertEquals(0L, quality[QualityCounterId.WRITER_ADMISSION_CONTENTION_TOTAL] ?: 0L)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun canonicalAgentBatchContextAndMethodUseOneForwardSkippableRecordType() {
         val directory = Files.createTempDirectory("jankhunter-agent-events").toFile()
         try {

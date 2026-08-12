@@ -15,12 +15,8 @@ internal sealed class PendingLogEvent(
     val recordType: Int,
     private val producerContext: LogEventContext?,
 ) {
-    private val producerElapsedUs = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0L) / 1_000L
+    internal val producerElapsedUs = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0L) / 1_000L
     private val producerThreadId = Process.myTid().toLong().coerceAtLeast(0L)
-
-    /** Global admission order used to merge the independently bounded writer lanes. */
-    var sequence: Long = 0L
-        internal set
 
     open val logicalEventCount: Long = 1L
 

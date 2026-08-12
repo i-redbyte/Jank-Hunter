@@ -28,9 +28,9 @@ import kotlin.concurrent.withLock
  * Non-blocking producer facade for the binary session writer.
  *
  * The file and worker stay lazy. Preallocated bounded MPSC event lanes avoid queue-node allocation
- * and blocking queue locks. High-value evidence has an independent reserve, while a short
- * fail-open admission critical section assigns one global sequence across both lanes. Quality and
- * flush controls never consume bulk slots.
+ * and blocking queue locks. High-value evidence has an independent reserve, and lane frontiers
+ * provide exact flush barriers without serializing runtime and agent producers. Quality and flush
+ * controls never consume bulk slots.
  */
 internal class AsyncLogWriter private constructor(
     private val directory: File,
@@ -45,6 +45,7 @@ internal class AsyncLogWriter private constructor(
     private val controlQueue = ArrayBlockingQueue<FlushControl>(CONTROL_QUEUE_CAPACITY)
     private val queuedEvents = Semaphore(0)
     private val admissionLock = ReentrantLock()
+    private val eventSubmitters = AtomicInteger()
     private val controlSubmitters = AtomicInteger()
     private val terminalReason = AtomicInteger(TERMINAL_REASON_NONE)
     private val terminalCallbackDelivered = AtomicBoolean(false)
@@ -61,11 +62,8 @@ internal class AsyncLogWriter private constructor(
         criticalCapacity = criticalQueueCapacity(config.maxQueueSize()),
     )
 
-    @Volatile
-    private var accepting = true
+    private val accepting = AtomicBoolean(true)
 
-    private var acceptedSequence = 0L
-    private var completedSequence = 0L
     private var allocation: SessionLogAllocator.Allocation? = null
     private var writer: BinaryLogWriter? = null
     private var lastFlushAtMs = SystemClock.elapsedRealtime()
@@ -410,13 +408,13 @@ internal class AsyncLogWriter private constructor(
         quality.add(counterId, delta)
     }
 
-    internal fun isAcceptingEvents(): Boolean = accepting
+    internal fun isAcceptingEvents(): Boolean = accepting.get()
 
     internal fun terminalFailureCause(): Throwable? = terminalFailure
 
     fun flush() {
         val target = beginControlSubmission()
-        if (target < 0L) return
+        if (target == null) return
         try {
             if (!controlQueue.offer(FlushControl(target))) {
                 quality.add(QualityCounterId.CONTROL_LANE_FULL_TOTAL)
@@ -428,8 +426,7 @@ internal class AsyncLogWriter private constructor(
 
     fun flushBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
         val target = beginControlSubmission()
-        if (target == CONTROL_NO_WORK) return true
-        if (target == CONTROL_NOT_ACCEPTING) return false
+        if (target == null) return accepting.get()
         val timeoutNs = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
         val startedAtNs = System.nanoTime()
         val request = FlushControl(target, CountDownLatch(1))
@@ -469,9 +466,10 @@ internal class AsyncLogWriter private constructor(
 
     fun close(timeoutMs: Long = closeTimeoutMs()): Boolean {
         admissionLock.withLock {
-            accepting = false
-            running.set(false)
+            accepting.set(false)
         }
+        awaitEventSubmitters()
+        running.set(false)
         val activeWorker = worker
         if (activeWorker == null) return true
         // Wake an idle poll without interrupting an in-flight file lock, custom storage call or
@@ -501,13 +499,12 @@ internal class AsyncLogWriter private constructor(
         logicalEventCount: Long = 1L,
         createEvent: () -> PendingLogEvent,
     ): Boolean {
-        if (!admissionLock.tryLock()) {
-            quality.add(QualityCounterId.WRITER_ADMISSION_CONTENTION_TOTAL)
-            quality.addRejected(recordType, QualityCounterId.REASON_ADMISSION_CONTENTION, logicalEventCount)
+        if (!beginEventSubmission()) {
+            quality.addRejected(recordType, QualityCounterId.REASON_NOT_ACCEPTING, logicalEventCount)
             return false
         }
         return try {
-            if (!accepting) {
+            if (!accepting.get()) {
                 quality.addRejected(
                     recordType,
                     QualityCounterId.REASON_NOT_ACCEPTING,
@@ -520,8 +517,10 @@ internal class AsyncLogWriter private constructor(
                 return false
             }
             val event = createEvent()
-            val sequence = acceptedSequence + 1L
-            event.sequence = sequence
+            if (!accepting.get()) {
+                quality.addRejected(recordType, QualityCounterId.REASON_NOT_ACCEPTING, logicalEventCount)
+                return false
+            }
             when (eventLanes.tryOffer(lane, event)) {
                 OfferResult.OFFERED -> Unit
                 OfferResult.FULL -> {
@@ -538,40 +537,51 @@ internal class AsyncLogWriter private constructor(
                     return false
                 }
             }
-            acceptedSequence = sequence
             quality.addAccepted(event.logicalEventCount)
-            if (!startWorker()) return false
             queuedEvents.release()
             true
         } finally {
-            admissionLock.unlock()
+            eventSubmitters.decrementAndGet()
         }
     }
 
-    private fun beginControlSubmission(): Long {
+    private fun beginEventSubmission(): Boolean {
+        if (!accepting.get()) return false
+        eventSubmitters.incrementAndGet()
+        if (accepting.get()) return true
+        eventSubmitters.decrementAndGet()
+        return false
+    }
+
+    private fun beginControlSubmission(): EventFrontier? {
         return admissionLock.withLock {
-            if (!accepting) return@withLock CONTROL_NOT_ACCEPTING
-            if (worker == null) return@withLock CONTROL_NO_WORK
+            if (!accepting.get()) return@withLock null
+            awaitEventSubmitters()
+            if (!eventLanes.hasEvents()) return@withLock null
             controlSubmitters.incrementAndGet()
-            acceptedSequence
+            eventLanes.frontier()
         }
     }
 
     private fun startWorker(): Boolean {
         if (worker != null) return true
-        return try {
-            val startedWorker = Thread(::runWorkerFailOpen, "JankHunterWriter").apply {
-                isDaemon = true
+        return admissionLock.withLock {
+            if (worker != null) return@withLock true
+            if (!accepting.get()) return@withLock false
+            try {
+                val startedWorker = Thread(::runWorkerFailOpen, "JankHunterWriter").apply {
+                    isDaemon = true
+                }
+                worker = startedWorker
+                startedWorker.start()
+                true
+            } catch (error: Throwable) {
+                worker = null
+                if (!error.isFatal()) quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
+                terminateWithoutWorker(error)
+                if (error.isFatal()) throw error
+                false
             }
-            worker = startedWorker
-            startedWorker.start()
-            true
-        } catch (error: Throwable) {
-            worker = null
-            if (!error.isFatal()) quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
-            terminateWithoutWorker(error)
-            if (error.isFatal()) throw error
-            false
         }
     }
 
@@ -618,6 +628,7 @@ internal class AsyncLogWriter private constructor(
 
     private fun loop() {
         try {
+            if (!awaitFirstEvent()) return
             if (!openSessionWriter()) return
             var initialCleanupPending = true
             while (
@@ -636,11 +647,7 @@ internal class AsyncLogWriter private constructor(
                 }
                 val event = pollNextEvent()
                 if (event != null) {
-                    try {
-                        writeEvent(event)
-                    } finally {
-                        completedSequence = event.sequence
-                    }
+                    writeEvent(event)
                 }
                 processReadyControls()
                 flushIfNeeded(force = false)
@@ -667,6 +674,21 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
+    private fun awaitFirstEvent(): Boolean {
+        while (running.get() && !hasPendingEvents()) {
+            val available = try {
+                queuedEvents.tryAcquire(WORKER_POLL_MS, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                false
+            }
+            if (available && hasPendingEvents()) {
+                queuedEvents.release()
+                return true
+            }
+        }
+        return hasPendingEvents()
+    }
+
     private fun openSessionWriter(): Boolean {
         return try {
             val opened = openSession(
@@ -690,6 +712,12 @@ internal class AsyncLogWriter private constructor(
     }
 
     private fun hasPendingEvents(): Boolean = eventLanes.hasEvents()
+
+    private fun awaitEventSubmitters() {
+        while (eventSubmitters.get() > 0) {
+            LockSupport.parkNanos(EVENT_SUBMITTER_DRAIN_PARK_NS)
+        }
+    }
 
     private fun pollNextEvent(): PendingLogEvent? {
         val available = try {
@@ -726,7 +754,7 @@ internal class AsyncLogWriter private constructor(
     private fun processReadyControls() {
         while (true) {
             val request = controlQueue.peek() ?: return
-            if (completedSequence < request.targetSequence) return
+            if (!eventLanes.hasConsumed(request.target)) return
             if (controlQueue.poll() !== request) continue
             request.complete(flushIfNeeded(force = true))
         }
@@ -800,10 +828,11 @@ internal class AsyncLogWriter private constructor(
         terminalReason.compareAndSet(TERMINAL_REASON_NONE, reason)
         if (terminalFailure == null && failure != null) terminalFailure = failure
         admissionLock.withLock {
-            accepting = false
+            accepting.set(false)
             running.set(false)
-            rejectAllQueuedLocked(reason)
         }
+        awaitEventSubmitters()
+        rejectAllQueuedLocked(reason)
         currentEvent?.let { event ->
             quality.addRejected(event.recordType, reason, event.remainingEventCount)
         }
@@ -813,7 +842,7 @@ internal class AsyncLogWriter private constructor(
     private fun terminateWithoutWorker(error: Throwable) {
         terminalReason.compareAndSet(TERMINAL_REASON_NONE, QualityCounterId.REASON_IO_LOST)
         if (terminalFailure == null) terminalFailure = error
-        accepting = false
+        accepting.set(false)
         running.set(false)
         try {
             rejectAllQueuedLocked(QualityCounterId.REASON_IO_LOST)
@@ -833,7 +862,7 @@ internal class AsyncLogWriter private constructor(
         } catch (_: Throwable) {
             terminalReason.compareAndSet(TERMINAL_REASON_NONE, QualityCounterId.REASON_IO_LOST)
             if (terminalFailure == null) terminalFailure = error
-            accepting = false
+            accepting.set(false)
             running.set(false)
         }
         try {
@@ -919,17 +948,29 @@ internal class AsyncLogWriter private constructor(
             return queue(lane).tryOffer(event)
         }
 
-        fun hasEvents(): Boolean = !critical.isEmpty() || !bulk.isEmpty()
+        fun hasEvents(): Boolean = critical.hasPending() || bulk.hasPending()
 
         fun hasCapacity(lane: EventLane): Boolean = queue(lane).hasCapacity()
+
+        fun frontier(): EventFrontier = EventFrontier(
+            critical = critical.producerFrontier(),
+            bulk = bulk.producerFrontier(),
+        )
+
+        fun hasConsumed(frontier: EventFrontier): Boolean {
+            return critical.hasConsumed(frontier.critical) && bulk.hasConsumed(frontier.bulk)
+        }
 
         fun pollNext(): PendingLogEvent? {
             val criticalHead = critical.peek()
             val bulkHead = bulk.peek()
+            if ((critical.hasPending() && criticalHead == null) || (bulk.hasPending() && bulkHead == null)) {
+                return null
+            }
             return when {
                 criticalHead == null -> bulk.poll()
                 bulkHead == null -> critical.poll()
-                criticalHead.sequence < bulkHead.sequence -> critical.poll()
+                criticalHead.producerElapsedUs < bulkHead.producerElapsedUs -> critical.poll()
                 else -> bulk.poll()
             }
         }
@@ -939,8 +980,10 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
+    private data class EventFrontier(val critical: Long, val bulk: Long)
+
     private class FlushControl(
-        val targetSequence: Long,
+        val target: EventFrontier,
         private val completion: CountDownLatch? = null,
     ) {
         @Volatile
@@ -964,13 +1007,12 @@ internal class AsyncLogWriter private constructor(
 
     companion object {
         private const val TERMINAL_REASON_NONE = 0
-        private const val CONTROL_NOT_ACCEPTING = -2L
-        private const val CONTROL_NO_WORK = -1L
         private const val CLOSE_JOIN_POLL_MS = 250L
         private const val DEFAULT_BLOCKING_TIMEOUT_MS = 1_000L
         private const val WORKER_POLL_MS = 50L
         private const val CONTROL_QUEUE_CAPACITY = 16
         private const val CONTROL_DRAIN_PARK_NS = 100_000L
+        private const val EVENT_SUBMITTER_DRAIN_PARK_NS = 10_000L
         private const val CRITICAL_QUEUE_CAPACITY_DIVISOR = 8
         private const val MIN_CRITICAL_QUEUE_CAPACITY = 16
         private const val MAX_CRITICAL_QUEUE_CAPACITY = 256
@@ -1042,7 +1084,7 @@ internal class AsyncLogWriter private constructor(
                 collectorStartElapsedUs = nowElapsedUs(),
                 quality = LogQualityCounters(),
                 onTerminalStop = onTerminalStop,
-            )
+            ).also { writer -> writer.startWorker() }
         }
 
         private fun openSession(

@@ -57,11 +57,17 @@ internal class BoundedMpscQueue<T : Any>(
         return element
     }
 
-    fun isEmpty(): Boolean = peek() == null
+    fun isEmpty(): Boolean = producerPosition.get() == consumerPosition.get()
+
+    fun hasPending(): Boolean = producerPosition.get() > consumerPosition.get()
 
     fun hasCapacity(): Boolean {
         return producerPosition.get() - consumerPosition.get() < capacity.toLong()
     }
+
+    fun producerFrontier(): Long = producerPosition.get()
+
+    fun hasConsumed(frontier: Long): Boolean = consumerPosition.get() >= frontier
 
     private fun index(position: Long): Int {
         return if (mask == NO_MASK) Math.floorMod(position, capacity) else position.toInt() and mask
@@ -70,7 +76,7 @@ internal class BoundedMpscQueue<T : Any>(
     companion object {
         private const val NO_MASK = -1
         private const val MIN_CAPACITY = 1
-        private const val MAX_CAS_ATTEMPTS = 8
+        private const val MAX_CAS_ATTEMPTS = 64
     }
 
     enum class OfferResult {
