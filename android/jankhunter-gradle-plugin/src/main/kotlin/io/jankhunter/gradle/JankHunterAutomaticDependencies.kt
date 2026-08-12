@@ -8,6 +8,7 @@ import org.gradle.api.artifacts.ProjectDependency
 internal object JankHunterAutomaticDependencies {
     private const val ANNOTATIONS_ARTIFACT = "jankhunter-annotations"
     private const val RUNTIME_ARTIFACT = "jankhunter-runtime"
+    private const val ART_TI_ARTIFACT = "jankhunter-artti"
 
     fun addAnnotations(project: Project) {
         project.addJankHunterDependencyIfMissing(
@@ -21,6 +22,13 @@ internal object JankHunterAutomaticDependencies {
         project.addJankHunterDependencyIfMissing(
             configurationName = implementationConfigurationName(variantName),
             artifactId = RUNTIME_ARTIFACT,
+        )
+    }
+
+    fun addArtTi(project: Project, variantName: String) {
+        project.addJankHunterDependencyIfMissing(
+            configurationName = implementationConfigurationName(variantName),
+            artifactId = ART_TI_ARTIFACT,
         )
     }
 

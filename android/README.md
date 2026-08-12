@@ -8,6 +8,7 @@ Android-часть Jank Hunter отвечает за сбор сигналов �
 
 - `jankhunter-annotations`: лёгкие аннотации для атрибуции и управления ASM-внедрением.
 - `jankhunter-runtime`: Android-библиотека сбора сигналов и записи `.jhlog`.
+- `jankhunter-artti`: опциональный ART TI agent на базе JVMTI с native collectors и Kotlin bridge.
 - `jankhunter-okhttp3`: слушатель OkHttp и помощники для WebSocket.
 - `jankhunter-android-sdk`: единая публичная зависимость, которая транзитивно подключает runtime, annotations и OkHttp/WebSocket support.
 - `jankhunter-gradle-plugin`: Gradle-плагин, который добавляет настройки манифеста, создаёт карту владельцев, граф классов, диагностику ASM и внедряет перехватчики в байткод.
@@ -103,6 +104,31 @@ JankHunter.init(context, config)
 приоритет для активного окна, а Choreographer включается только как fallback. Глобальный
 `MainLooper.setMessageLogging(Printer)` по умолчанию выключен; включайте
 `mainLooperDispatchMonitor` явно только для короткой углублённой диагностики.
+
+## Опциональный ART TI agent
+
+По умолчанию `artTi.mode=OFF`: плагин не добавляет `jankhunter-artti` и не увеличивает APK.
+Для debug/QA-варианта включите рекомендуемый bounded preset:
+
+```kotlin
+jankHunter {
+    artTi {
+        mode.set(ArtTiMode.CAUSAL)
+        stackSampling.maxDepth.set(96) // необязательный override preset
+    }
+}
+```
+
+Доступны `OFF`, `LIGHT`, `CAUSAL`, `DEEP` и полностью явный `CUSTOM`. Артефакт добавляется только
+в варианты из `artTi.enabledBuildTypes` (по умолчанию `debug`). Плагин генерирует effective native
+config и trigger policy; application-код не загружает `.so` и не вызывает attachment вручную.
+Runtime дополнительно проверяет API 28+, фактический `ApplicationInfo.FLAG_DEBUGGABLE`, process
+policy и ABI. Недоступная capability переводит агент в degraded mode, не отключая остальные
+collectors Jank Hunter.
+
+Для release-like варианта нужны существующие release-safety подтверждения и отдельное
+`releaseSafety.allowArtTiAgent=true`. Даже после этого non-debuggable APK не выполняет attach:
+`android:debuggable` является build/install-time свойством и не может быть изменено SDK.
 
 ## Переключатель Сбора
 

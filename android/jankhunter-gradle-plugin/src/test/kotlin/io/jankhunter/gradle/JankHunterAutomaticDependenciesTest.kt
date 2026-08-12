@@ -50,6 +50,19 @@ class JankHunterAutomaticDependenciesTest {
     }
 
     @Test
+    fun addsArtTiOnlyToTheRequestedVariantWithoutDuplicates() {
+        val project = ProjectBuilder.builder().build()
+        val debugImplementation = project.configurations.create("debugImplementation")
+        val releaseImplementation = project.configurations.create("releaseImplementation")
+
+        JankHunterAutomaticDependencies.addArtTi(project, "debug")
+        JankHunterAutomaticDependencies.addArtTi(project, "debug")
+
+        assertEquals(1, debugImplementation.dependencies.count { it.name == "jankhunter-artti" })
+        assertTrue(releaseImplementation.dependencies.isEmpty())
+    }
+
+    @Test
     fun doesNotAddDuplicateRuntimeWhenPublicSdkIsDeclared() {
         val project = ProjectBuilder.builder().build()
         val implementation = project.configurations.create("implementation")

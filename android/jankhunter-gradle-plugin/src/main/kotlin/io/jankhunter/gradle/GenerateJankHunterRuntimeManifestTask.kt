@@ -59,12 +59,24 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     @get:Input
     abstract val symbolNamespace: Property<String>
 
+    @get:Input
+    abstract val artTiEntrypoint: Property<String>
+
+    @get:Input
+    abstract val artTiNativeOptions: Property<String>
+
+    @get:Input
+    abstract val artTiTriggerPolicy: Property<String>
+
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
     init {
         autoInit.convention(true)
         mainLooperDispatchMonitorEnabled.convention(false)
+        artTiEntrypoint.convention("")
+        artTiNativeOptions.convention("")
+        artTiTriggerPolicy.convention("")
     }
 
     @TaskAction
@@ -78,6 +90,21 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                         android:authorities="${'$'}{applicationId}.jankhunter-init"
                         android:exported="false"
                         android:initOrder="100" />
+            """.trimIndent()
+        } else {
+            ""
+        }
+        val artTiMetadata = if (artTiEntrypoint.get().isNotEmpty()) {
+            """
+                    <meta-data
+                        android:name="io.jankhunter.runtime.optional_integrations"
+                        android:value="${artTiEntrypoint.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.artti.native_options"
+                        android:value="${artTiNativeOptions.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.artti.trigger_policy"
+                        android:value="${artTiTriggerPolicy.get()}" />
             """.trimIndent()
         } else {
             ""
@@ -137,6 +164,7 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.symbol_namespace"
                         android:value="${symbolNamespace.get()}" />
+            $artTiMetadata
             $autoInitProvider
                 </application>
             </manifest>

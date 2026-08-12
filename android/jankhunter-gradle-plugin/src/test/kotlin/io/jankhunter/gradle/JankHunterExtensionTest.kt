@@ -126,6 +126,23 @@ class JankHunterExtensionTest {
     }
 
     @Test
+    fun artTiDslDefaultsOffAndUsesLazyOverrides() {
+        val extension = extension()
+
+        assertEquals(ArtTiMode.OFF, extension.artTi.mode.get())
+        assertEquals(setOf("debug"), extension.artTi.enabledBuildTypes.get())
+        assertNull(extension.artTi.stackSampling.maxDepth.orNull)
+
+        extension.artTi {
+            it.mode.set(ArtTiMode.CAUSAL)
+            it.stackSampling { stack -> stack.maxDepth.set(96) }
+        }
+
+        assertEquals(ArtTiMode.CAUSAL, extension.artTi.mode.get())
+        assertEquals(96, extension.artTi.stackSampling.maxDepth.get())
+    }
+
+    @Test
     fun sessionLogSizeLimitUsesExplicitMiBDsl() {
         val extension = extension()
 
@@ -204,6 +221,7 @@ class JankHunterExtensionTest {
         assertEquals(false, releaseSafety.privacyReviewed.get())
         assertEquals(false, releaseSafety.allowHeapDumps.get())
         assertEquals(false, releaseSafety.allowSecondaryProcesses.get())
+        assertEquals(false, releaseSafety.allowArtTiAgent.get())
         assertNull(releaseSafety.performanceBudgetEvidence.orNull)
     }
 

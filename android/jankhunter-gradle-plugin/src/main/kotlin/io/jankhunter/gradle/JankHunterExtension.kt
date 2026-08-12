@@ -22,6 +22,7 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
     val runtime: Runtime = objects.newInstance(Runtime::class.java)
     val instrument: Instrumentation = objects.newInstance(Instrumentation::class.java)
     val retainedHeapDump: RetainedHeapDump = objects.newInstance(RetainedHeapDump::class.java)
+    val artTi: ArtTi = objects.newInstance(ArtTi::class.java)
     val releaseSafety: ReleaseSafety = objects.newInstance(ReleaseSafety::class.java)
 
     fun runtime(action: Action<Runtime>) {
@@ -34,6 +35,10 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
 
     fun retainedHeapDump(action: Action<RetainedHeapDump>) {
         action.execute(retainedHeapDump)
+    }
+
+    fun artTi(action: Action<ArtTi>) {
+        action.execute(artTi)
     }
 
     fun releaseSafety(action: Action<ReleaseSafety>) {
@@ -90,6 +95,60 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
         val minRetainedAgeMs: Property<Long> = objects.property(Long::class.java).convention(30_000L)
     }
 
+    open class ArtTi @Inject constructor(objects: ObjectFactory) {
+        val mode: Property<ArtTiMode> = objects.property(ArtTiMode::class.java).convention(ArtTiMode.OFF)
+        val enabledBuildTypes: SetProperty<String> =
+            objects.setProperty(String::class.java).convention(setOf("debug"))
+        val garbageCollection: GarbageCollection = objects.newInstance(GarbageCollection::class.java)
+        val threads: Threads = objects.newInstance(Threads::class.java)
+        val monitorContention: MonitorContention = objects.newInstance(MonitorContention::class.java)
+        val stackSampling: StackSampling = objects.newInstance(StackSampling::class.java)
+        val transport: Transport = objects.newInstance(Transport::class.java)
+
+        fun garbageCollection(action: Action<GarbageCollection>) = action.execute(garbageCollection)
+
+        fun threads(action: Action<Threads>) = action.execute(threads)
+
+        fun monitorContention(action: Action<MonitorContention>) = action.execute(monitorContention)
+
+        fun stackSampling(action: Action<StackSampling>) = action.execute(stackSampling)
+
+        fun transport(action: Action<Transport>) = action.execute(transport)
+
+        open class GarbageCollection @Inject constructor(objects: ObjectFactory) {
+            val enabled: Property<Boolean> = objects.property(Boolean::class.java)
+        }
+
+        open class Threads @Inject constructor(objects: ObjectFactory) {
+            val lifecycle: Property<Boolean> = objects.property(Boolean::class.java)
+            val maxTrackedThreads: Property<Int> = objects.property(Int::class.java)
+        }
+
+        open class MonitorContention @Inject constructor(objects: ObjectFactory) {
+            val enabled: Property<Boolean> = objects.property(Boolean::class.java)
+            val minDurationMs: Property<Long> = objects.property(Long::class.java)
+            val maxOpenIntervals: Property<Int> = objects.property(Int::class.java)
+        }
+
+        open class StackSampling @Inject constructor(objects: ObjectFactory) {
+            val enabled: Property<Boolean> = objects.property(Boolean::class.java)
+            val maxDepth: Property<Int> = objects.property(Int::class.java)
+            val onMainThreadStall: Property<Boolean> = objects.property(Boolean::class.java)
+            val onLongContention: Property<Boolean> = objects.property(Boolean::class.java)
+            val minTriggerIntervalMs: Property<Long> = objects.property(Long::class.java)
+            val maxSamplesPerMinute: Property<Int> = objects.property(Int::class.java)
+            val maxStackDefinitions: Property<Int> = objects.property(Int::class.java)
+            val maxMethodDefinitions: Property<Int> = objects.property(Int::class.java)
+        }
+
+        open class Transport @Inject constructor(objects: ObjectFactory) {
+            val capacity: Property<Int> = objects.property(Int::class.java)
+            val drainBatchSize: Property<Int> = objects.property(Int::class.java)
+            val overflowPolicy: Property<ArtTiOverflowPolicy> =
+                objects.property(ArtTiOverflowPolicy::class.java)
+        }
+    }
+
     open class Runtime @Inject constructor(objects: ObjectFactory) {
         val mainThreadStallThresholdMs: Property<Long> = objects.property(Long::class.java).convention(700L)
         val ownerBlockThresholdMs: Property<Long> = objects.property(Long::class.java).convention(250L)
@@ -106,6 +165,7 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
         val privacyReviewed: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val allowHeapDumps: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val allowSecondaryProcesses: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val allowArtTiAgent: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val performanceBudgetEvidence: Property<String> = objects.property(String::class.java)
     }
 }

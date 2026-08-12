@@ -16,6 +16,9 @@ jankHunter {
     enabled.set(true)
     enabledBuildTypes.set(setOf("debug"))
     autoInit.set(true)
+    artTi {
+        mode.set(io.jankhunter.gradle.ArtTiMode.CAUSAL)
+    }
     verboseLogs.set(true)
 
     runtime {

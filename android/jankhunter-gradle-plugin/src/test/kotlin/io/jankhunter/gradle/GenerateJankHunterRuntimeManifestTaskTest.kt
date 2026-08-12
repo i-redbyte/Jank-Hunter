@@ -109,4 +109,48 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("0123456789abcdef0123456789abcdef"))
         assertFalse(manifest.contains("tools:replace"))
     }
+
+    @Test
+    fun writesCompactArtTiMetadataOnlyWhenPackaged() {
+        val project = ProjectBuilder.builder().build()
+        val task = configuredTask(project, "generateArtTiManifest")
+        task.artTiEntrypoint.set("io.jankhunter.artti.internal.ArtTiIntegration")
+        task.artTiNativeOptions.set("v=1;profile=2;transport=4096;cap=0x3f")
+        task.artTiTriggerPolicy.set("v=1;main=1;long=1;minms=250;maxpm=120;drainms=50")
+
+        task.writeManifest()
+
+        val manifest = task.outputFile.get().asFile.readText()
+        assertTrue(manifest.contains("io.jankhunter.runtime.optional_integrations"))
+        assertTrue(manifest.contains("io.jankhunter.artti.internal.ArtTiIntegration"))
+        assertTrue(manifest.contains("io.jankhunter.artti.native_options"))
+        assertTrue(manifest.contains("profile=2;transport=4096"))
+        assertTrue(manifest.contains("io.jankhunter.artti.trigger_policy"))
+    }
+
+    private fun configuredTask(
+        project: org.gradle.api.Project,
+        name: String,
+    ): GenerateJankHunterRuntimeManifestTask {
+        return project.tasks.register(name, GenerateJankHunterRuntimeManifestTask::class.java).get().apply {
+            outputFile.set(project.layout.buildDirectory.file("$name/AndroidManifest.xml"))
+            autoInit.set(true)
+            mainThreadStallThresholdMs.set(700L)
+            ownerBlockThresholdMs.set(250L)
+            httpSlowThresholdMs.set(1_000L)
+            mainLooperDispatchMonitorEnabled.set(false)
+            retainedHeapDumpEnabled.set(false)
+            retainedHeapDumpPrivacyApproved.set(false)
+            retainedHeapDumpMinIntervalMs.set(600_000L)
+            retainedHeapDumpMaxCount.set(1)
+            retainedHeapDumpMinRetainedAgeMs.set(30_000L)
+            jankStatsEnabled.set(true)
+            jankFrameThresholdMs.set(32L)
+            uiWindowP95ThresholdMs.set(32L)
+            mainProcessOnly.set(true)
+            sessionLogSizeLimitEnabled.set(true)
+            maxSessionLogSizeMiB.set(16)
+            symbolNamespace.set("0123456789abcdef0123456789abcdef")
+        }
+    }
 }

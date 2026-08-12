@@ -55,13 +55,22 @@ class JankHunterPlugin : Plugin<Project> {
                 JankHunterAutomaticDependencies.addRuntime(project, variant.name)
                 configureBuildBanner(project, variant.name)
             }
+            val effectiveArtTi = EffectiveArtTiConfigResolver.resolve(extension.artTi)
+            val artTiEnabledForVariant = applicationProject && effectiveArtTi.enabled &&
+                VariantBuildTypeMatcher.isEnabled(
+                    variantName = variant.name,
+                    enabledBuildTypes = extension.artTi.enabledBuildTypes.getOrElse(emptySet()),
+                )
+            if (artTiEnabledForVariant) {
+                JankHunterAutomaticDependencies.addArtTi(project, variant.name)
+            }
             val maxSessionLogSizeMiB = validatedPositiveMiB(
                 "jankHunter.maxSessionLogSizeMiB",
                 extension.maxSessionLogSizeMiB.get(),
             )
             val releaseVariant = VariantBuildTypeMatcher.isReleaseLike(variant.name)
             if (releaseVariant) {
-                validateReleaseSafety(project, extension, variant.name)
+                validateReleaseSafety(project, extension, variant.name, artTiEnabledForVariant)
             }
             val symbolNamespace = JankHunterSymbolNamespace.current()
             val effectiveInstrumentationScope = instrumentationScope(applicationProject)
@@ -88,6 +97,15 @@ class JankHunterPlugin : Plugin<Project> {
                     it.sessionLogSizeLimitEnabled.set(extension.sessionLogSizeLimitEnabled)
                     it.maxSessionLogSizeMiB.set(maxSessionLogSizeMiB)
                     it.symbolNamespace.set(symbolNamespace)
+                    it.artTiEntrypoint.set(
+                        if (artTiEnabledForVariant) ART_TI_INTEGRATION_CLASS else "",
+                    )
+                    it.artTiNativeOptions.set(
+                        if (artTiEnabledForVariant) effectiveArtTi.nativeAgentOptions() else "",
+                    )
+                    it.artTiTriggerPolicy.set(
+                        if (artTiEnabledForVariant) effectiveArtTi.triggerPolicy() else "",
+                    )
                     it.outputFile.set(
                         project.layout.buildDirectory.file(
                             "generated/jankhunterRuntimeManifest/${variant.name}/AndroidManifest.xml",
@@ -294,7 +312,7 @@ class JankHunterPlugin : Plugin<Project> {
                         "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                         "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generatedRuntimeManifest={} " +
                         "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} symbolMode={} " +
-                        "ownerMapTask={} mergeArtifactsTask={}",
+                        "artTiMode={} artTiPackaged={} ownerMapTask={} mergeArtifactsTask={}",
                     variant.name,
                     extension.instrument.methodCounters.get(),
                     extension.instrument.okhttp.get(),
@@ -320,6 +338,8 @@ class JankHunterPlugin : Plugin<Project> {
                     extension.sessionLogSizeLimitEnabled.get(),
                     maxSessionLogSizeMiB,
                     extension.symbolMode.get(),
+                    effectiveArtTi.mode,
+                    artTiEnabledForVariant,
                     ownerMap.name,
                     mergeArtifacts.name,
                 )
@@ -389,7 +409,12 @@ class JankHunterPlugin : Plugin<Project> {
         throw GradleException("$name must be greater than zero, but was $value.")
     }
 
-    private fun validateReleaseSafety(project: Project, extension: JankHunterExtension, variantName: String) {
+    private fun validateReleaseSafety(
+        project: Project,
+        extension: JankHunterExtension,
+        variantName: String,
+        artTiEnabled: Boolean,
+    ) {
         val safety = extension.releaseSafety
         if (!safety.allowInstrumentation.getOrElse(false)) {
             throw GradleException(
@@ -425,7 +450,13 @@ class JankHunterPlugin : Plugin<Project> {
         ) {
             throw GradleException(
                 "runtime.mainProcessOnly=false for release-like variant '$variantName' requires " +
-                    "jankHunter.releaseSafety.allowSecondaryProcesses=true.",
+                "jankHunter.releaseSafety.allowSecondaryProcesses=true.",
+            )
+        }
+        if (artTiEnabled && !safety.allowArtTiAgent.getOrElse(false)) {
+            throw GradleException(
+                "ART TI is enabled for release-like variant '$variantName'. Set " +
+                    "jankHunter.releaseSafety.allowArtTiAgent=true after verifying the final APK is debuggable.",
             )
         }
     }
@@ -453,6 +484,7 @@ class JankHunterPlugin : Plugin<Project> {
     private companion object {
         private const val BUILD_BANNER_SERVICE_NAME = "io.jankhunter.build-banner"
         private const val PERFORMANCE_BUDGET_MARKER = "jankhunter_release_performance_budget_v1"
+        private const val ART_TI_INTEGRATION_CLASS = "io.jankhunter.artti.internal.ArtTiIntegration"
     }
 }
 
