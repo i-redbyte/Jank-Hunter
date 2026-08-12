@@ -4,6 +4,8 @@ import android.os.SystemClock
 import io.jankhunter.okhttp3.JankHunterEventListenerFactory
 import io.jankhunter.sample.R
 import io.jankhunter.sample.SampleApplication
+import io.jankhunter.sample.graph.JvmtiEvidenceResult
+import io.jankhunter.sample.graph.JvmtiEvidenceScenario
 import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,6 +21,7 @@ internal class ManualPerformanceScenarios(
         Thread(runnable, "JankHunterManualWorker")
     }
     private val interactions = AtomicInteger()
+    private val jvmtiEvidence = JvmtiEvidenceScenario()
     private val networkClient by lazy {
         OkHttpClient.Builder()
             .eventListenerFactory(JankHunterEventListenerFactory())
@@ -26,6 +29,7 @@ internal class ManualPerformanceScenarios(
     }
     val handlers: Map<ManualAction, ManualActionHandler> = mapOf(
         ManualAction.UI_STALL to { recordUiStall() },
+        ManualAction.JVMTI_EVIDENCE to { recordJvmtiEvidence() },
         ManualAction.BACKGROUND_WORK to { recordBackgroundWork() },
         ManualAction.HTTP_SUCCESS to { runHttpSuccess() },
         ManualAction.HTTP_503 to { runHttp503() },
@@ -44,6 +48,23 @@ internal class ManualPerformanceScenarios(
         }
         JankHunter.recordCounter("sample.ui_stall.clicks", 1)
         status(text(R.string.status_ui_stall_recorded, count))
+    }
+
+    fun recordJvmtiEvidence() {
+        JankHunter.withFlow("sample.manual.jvmti.monitor_contention") {
+            JankHunter.markFlowStep("wait_420_ms_with_gc")
+            var result: JvmtiEvidenceResult? = null
+            JankHunter.withOwner(JvmtiEvidenceScenario::class.java.name) {
+                result = jvmtiEvidence.blockMainThread(JVMTI_CONTENTION_MS)
+            }
+            checkNotNull(result).also { evidence ->
+                JankHunter.recordCounter("sample.manual.jvmti.contention.completed.count", 1)
+                JankHunter.recordGauge("sample.manual.jvmti.contention.wait_ms", evidence.mainThreadWaitMs)
+                JankHunter.recordGauge("sample.manual.jvmti.allocation_bytes", evidence.allocatedBytes)
+                status(text(R.string.status_jvmti_evidence_recorded, evidence.mainThreadWaitMs))
+            }
+        }
+        JankHunter.flush()
     }
 
     fun recordBackgroundWork() {
@@ -146,5 +167,9 @@ internal class ManualPerformanceScenarios(
 
     private fun status(value: String) {
         stateSink.emit(ManualStateUpdate.Status(value))
+    }
+
+    private companion object {
+        const val JVMTI_CONTENTION_MS = 420L
     }
 }

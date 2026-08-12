@@ -15,6 +15,7 @@ internal enum class ManualAction(val requiresActivityReference: Boolean = false)
     DISABLE_RUNTIME,
     RECORD_FLAG_PROBE,
     UI_STALL,
+    JVMTI_EVIDENCE,
     BACKGROUND_WORK,
     HTTP_SUCCESS,
     HTTP_503,

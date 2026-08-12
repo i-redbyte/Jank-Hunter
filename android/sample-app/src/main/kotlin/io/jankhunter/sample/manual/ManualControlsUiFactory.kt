@@ -33,6 +33,7 @@ internal object ManualControlsUiFactory {
             subtitle = R.string.section_performance_lab_subtitle,
             actions = listOf(
                 ActionSpec(R.string.action_ui_stall, ManualAction.UI_STALL, SampleActionTone.WARNING),
+                ActionSpec(R.string.action_jvmti_evidence, ManualAction.JVMTI_EVIDENCE, SampleActionTone.EMPHASIS),
                 ActionSpec(R.string.action_background_work, ManualAction.BACKGROUND_WORK),
                 ActionSpec(R.string.action_http_success, ManualAction.HTTP_SUCCESS, SampleActionTone.SUCCESS),
                 ActionSpec(R.string.action_http_503, ManualAction.HTTP_503, SampleActionTone.DANGER),

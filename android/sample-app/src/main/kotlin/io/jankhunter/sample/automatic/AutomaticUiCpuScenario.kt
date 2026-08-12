@@ -27,7 +27,9 @@ internal class AutomaticUiCpuScenario(
         runMainThreadStall("sample.auto.ui.moderate_stall", "block_180_ms", MODERATE_STALL_MS)
         delay(SEVERE_STALL_AT_MS - MODERATE_STALL_AT_MS - MODERATE_STALL_MS)
         runMainThreadStall("sample.auto.ui.severe_stall", "block_520_ms", SEVERE_STALL_MS)
-        delay(STAGE_DURATION_MS - SEVERE_STALL_AT_MS - SEVERE_STALL_MS - FLUSH_ADVANCE_MS)
+        delay(JVMTI_CONTENTION_AT_MS - SEVERE_STALL_AT_MS - SEVERE_STALL_MS)
+        runJvmtiEvidence()
+        delay(STAGE_DURATION_MS - JVMTI_CONTENTION_AT_MS - JVMTI_CONTENTION_MS - FLUSH_ADVANCE_MS)
         completeAutomaticStage(ScenarioStep.UI_CPU)
         delay(FLUSH_ADVANCE_MS)
     }
@@ -63,15 +65,27 @@ internal class AutomaticUiCpuScenario(
         }
     }
 
+    private fun runJvmtiEvidence() {
+        JankHunter.withFlow("sample.auto.jvmti.monitor_contention") {
+            JankHunter.markFlowStep("wait_420_ms_with_gc")
+            val result = graphScenario.collectJvmtiEvidence(JVMTI_CONTENTION_MS)
+            JankHunter.recordCounter("sample.auto.jvmti.contention.completed.count", 1)
+            JankHunter.recordGauge("sample.auto.jvmti.contention.wait_ms", result.mainThreadWaitMs)
+            JankHunter.recordGauge("sample.auto.jvmti.allocation_bytes", result.allocatedBytes)
+        }
+    }
+
     private companion object {
         const val MODERATE_STALL_AT_MS = 450L
         const val SEVERE_STALL_AT_MS = 1_350L
+        const val JVMTI_CONTENTION_AT_MS = 2_350L
         const val MODERATE_STALL_MS = 180L
         const val SEVERE_STALL_MS = 520L
+        const val JVMTI_CONTENTION_MS = 420L
         const val CPU_WORK_MS = 1_200L
         const val QUEUE_TASK_COUNT = 3
         const val QUEUE_TASK_MS = 90L
-        const val STAGE_DURATION_MS = 3_600L
+        const val STAGE_DURATION_MS = 4_200L
         const val FLUSH_ADVANCE_MS = 250L
     }
 }

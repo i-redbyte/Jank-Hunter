@@ -43,6 +43,7 @@ internal enum class ScenarioStep(
             R.string.auto_ui_cpu_fact_stall,
             R.string.auto_ui_cpu_fact_cpu,
             R.string.auto_ui_cpu_fact_queue,
+            R.string.auto_ui_cpu_fact_jvmti,
         ),
         screenName = "sample.compose.ui_cpu",
     ),

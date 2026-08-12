@@ -31,8 +31,9 @@
     <string name="runtime_status_line">Runtime-флаг %1$s: %2$s</string>
 
     <string name="section_performance_lab">Лаборатория производительности</string>
-    <string name="section_performance_lab_subtitle">Сигналы, которые видны в inspect, math, influence и code-problem отчетах.</string>
+    <string name="section_performance_lab_subtitle">Сигналы, которые видны в inspect, math, influence, code-problem и ART TI/JVMTI-разделах отчета.</string>
     <string name="action_ui_stall">UI-фриз</string>
+    <string name="action_jvmti_evidence">ART TI: monitor + GC</string>
     <string name="action_background_work">Фоновая работа</string>
     <string name="action_http_success">HTTP успех</string>
     <string name="action_http_503">HTTP 503</string>
@@ -40,6 +41,7 @@
     <string name="action_log_spam">Шумные логи</string>
     <string name="action_custom_metrics">Кастомные метрики</string>
     <string name="status_ui_stall_recorded">UI-фриз записан (#%1$d).</string>
+    <string name="status_jvmti_evidence_recorded">ART TI-сценарий записан: main thread ждал monitor %1$d мс, внутри интервала создано давление памяти и запрошен GC.</string>
     <string name="status_background_work_recorded">Фоновая работа записана.</string>
     <string name="status_memory_pressure_recorded">Давление памяти записано: %1$d КБ удерживается в sample-списке.</string>
     <string name="status_log_spam_recorded">Всплеск шумных логов записан.</string>
@@ -115,10 +117,11 @@
 
     <string name="auto_stage_ui_cpu">UI и CPU</string>
     <string name="auto_ui_cpu_title">Фризы, CPU и очередь задач</string>
-    <string name="auto_ui_cpu_description">Два уровня блокировки main looper отделены от длительной CPU-задачи и очереди executor.</string>
+    <string name="auto_ui_cpu_description">Два уровня блокировки main looper дополнены реальным monitor contention с GC pressure для ART TI/JVMTI-отчета.</string>
     <string name="auto_ui_cpu_fact_stall">Main looper блокируется на 180 и 520 мс в разных flows.</string>
     <string name="auto_ui_cpu_fact_cpu">Фоновый поток непрерывно считает 1200 мс, создавая измеримую CPU-нагрузку.</string>
     <string name="auto_ui_cpu_fact_queue">Три задачи ждут однопоточный executor после CPU-работы.</string>
+    <string name="auto_ui_cpu_fact_jvmti">Main thread 420 мс ждёт monitor: JVMTI фиксирует contention, triggered stack и GC внутри того же временного окна.</string>
 
     <string name="auto_stage_network">сеть</string>
     <string name="auto_network_title">Детерминированная loopback-сеть</string>

@@ -6,6 +6,7 @@ import io.jankhunter.runtime.JankHunter
 internal class PerformanceScenarioUseCase(
     private val calculator: CheckoutCalculator,
     private val renderer: CheckoutRenderer,
+    private val jvmtiEvidence: JvmtiEvidenceScenario,
 ) {
     fun calculateFor(durationMs: Long): Long {
         var checksum = 0L
@@ -19,6 +20,14 @@ internal class PerformanceScenarioUseCase(
         JankHunter.withOwner(CheckoutRenderer::class.java.name) {
             renderer.renderFor(durationMs)
         }
+    }
+
+    fun collectJvmtiEvidence(holdDurationMs: Long): JvmtiEvidenceResult {
+        var result: JvmtiEvidenceResult? = null
+        JankHunter.withOwner(JvmtiEvidenceScenario::class.java.name) {
+            result = jvmtiEvidence.blockMainThread(holdDurationMs)
+        }
+        return checkNotNull(result)
     }
 }
 

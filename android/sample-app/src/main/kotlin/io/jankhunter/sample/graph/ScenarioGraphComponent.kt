@@ -10,6 +10,7 @@ internal class ScenarioGraphComponent(application: SampleApplication) {
     val performance = PerformanceScenarioUseCase(
         CheckoutCalculator(),
         CheckoutRenderer(),
+        JvmtiEvidenceScenario(),
     )
     val network = NetworkScenarioUseCase(
         CheckoutNetworkRepository(CheckoutApi()),
