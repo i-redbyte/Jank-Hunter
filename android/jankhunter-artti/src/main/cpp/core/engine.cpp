@@ -54,6 +54,7 @@ Status NativeEngine::Publish(NativeEvent event) noexcept {
 Status NativeEngine::PublishQualitySnapshot(const bool final_after_stop) noexcept {
   NativeEvent event{};
   event.type = EventType::kQualitySnapshot;
+  event.monotonic_ns = clock_.NowNs();
   event.payload.status.value0 = quality_.high_watermark();
   event.payload.status.value1 = quality_.Get(QualityCounter::kQueueFull);
   event.payload.status.value2 = quality_.Get(QualityCounter::kQueueContended);
@@ -67,7 +68,6 @@ Status NativeEngine::PublishQualitySnapshot(const bool final_after_stop) noexcep
   }
   event.payload.status.value3 = other_loss;
   if (final_after_stop && state() == EngineState::kStopped) {
-    event.monotonic_ns = clock_.NowNs();
     event.producer_sequence = next_sequence_.fetch_add(1U, std::memory_order_relaxed);
     const auto status = transport_.TryPush(event);
     if (status.ok()) {

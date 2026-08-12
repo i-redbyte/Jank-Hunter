@@ -306,6 +306,7 @@ void EngineQualitySnapshotIsBoundedAndCumulative() {
   JH_CHECK(output[0].payload.status.value1 == 3U);
   JH_CHECK(output[0].payload.status.value2 == 2U);
   JH_CHECK(output[0].payload.status.value3 == 4U);
+  JH_CHECK(output[0].monotonic_ns != 0U);
   JH_CHECK(engine.BeginStop().ok());
   engine.MarkStopped();
   JH_CHECK(engine.PublishQualitySnapshot(true).ok());
