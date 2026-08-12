@@ -1,0 +1,69 @@
+package io.jankhunter.artti.internal
+
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+internal data class ArtTiNativeConfig(
+    val profile: Int = PROFILE_CAUSAL,
+    val transportCapacity: Int = 4096,
+    val maxTrackedThreads: Int = 512,
+    val maxOpenContentions: Int = 1024,
+    val maxStackDepth: Int = 64,
+    val drainBatchSize: Int = 256,
+    val minContentionDurationNs: Long = 8_000_000L,
+    val configHash: Long = 0L,
+    val requestedCapabilities: Long = 0L,
+) {
+    fun validate(): ArtTiNativeStatus {
+        if (profile !in PROFILE_OFF..PROFILE_CUSTOM) return ArtTiNativeStatus.INVALID_ARGUMENT
+        if (!transportCapacity.isPowerOfTwo() || transportCapacity !in 2..MAX_TRANSPORT_CAPACITY) {
+            return ArtTiNativeStatus.INVALID_ARGUMENT
+        }
+        if (maxTrackedThreads !in 1..MAX_TRACKED_THREADS ||
+            maxOpenContentions !in 1..MAX_OPEN_CONTENTIONS ||
+            maxStackDepth !in 1..MAX_STACK_DEPTH ||
+            drainBatchSize !in 1..transportCapacity ||
+            minContentionDurationNs < 0L
+        ) {
+            return ArtTiNativeStatus.INVALID_ARGUMENT
+        }
+        return ArtTiNativeStatus.OK
+    }
+
+    fun encodeDirect(): ByteBuffer {
+        check(validate() == ArtTiNativeStatus.OK) { "Invalid ART TI native config" }
+        return ByteBuffer.allocateDirect(ArtTiNativeProtocol.CONFIG_WIRE_SIZE)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .apply {
+                putInt(ArtTiNativeProtocol.CONFIG_WIRE_SIZE)
+                putInt(CONFIG_SCHEMA_VERSION)
+                putInt(profile)
+                putInt(transportCapacity)
+                putInt(maxTrackedThreads)
+                putInt(maxOpenContentions)
+                putInt(maxStackDepth)
+                putInt(drainBatchSize)
+                putLong(minContentionDurationNs)
+                putLong(configHash)
+                putLong(requestedCapabilities)
+                putLong(0L)
+                putLong(0L)
+                flip()
+            }
+    }
+
+    private fun Int.isPowerOfTwo(): Boolean = this > 0 && this and (this - 1) == 0
+
+    companion object {
+        const val PROFILE_OFF = 0
+        const val PROFILE_LIGHT = 1
+        const val PROFILE_CAUSAL = 2
+        const val PROFILE_DEEP = 3
+        const val PROFILE_CUSTOM = 4
+        private const val CONFIG_SCHEMA_VERSION = 1
+        private const val MAX_TRANSPORT_CAPACITY = 65_536
+        private const val MAX_TRACKED_THREADS = 16_384
+        private const val MAX_OPEN_CONTENTIONS = 65_536
+        private const val MAX_STACK_DEPTH = 256
+    }
+}

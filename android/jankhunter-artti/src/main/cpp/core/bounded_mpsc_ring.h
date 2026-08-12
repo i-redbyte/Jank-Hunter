@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <new>
 
 #include "core/status.h"
 
@@ -18,7 +19,7 @@ class BoundedMpscRing final {
   explicit BoundedMpscRing(std::uint32_t capacity) noexcept
       : capacity_(IsPowerOfTwo(capacity) ? capacity : 0U),
         mask_(capacity_ == 0U ? 0U : capacity_ - 1U),
-        slots_(capacity_ == 0U ? nullptr : std::make_unique<Slot[]>(capacity_)) {
+        slots_(capacity_ == 0U ? nullptr : std::unique_ptr<Slot[]>(new (std::nothrow) Slot[capacity_])) {
     for (std::uint64_t index = 0U; index < capacity_; ++index) {
       slots_[index].sequence.store(index, std::memory_order_relaxed);
     }

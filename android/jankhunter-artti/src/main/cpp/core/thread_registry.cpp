@@ -1,11 +1,13 @@
 #include "core/thread_registry.h"
 
 #include <algorithm>
+#include <new>
 
 namespace jankhunter::artti {
 
 ThreadRegistry::ThreadRegistry(const std::uint32_t capacity) noexcept
-    : capacity_(capacity), entries_(capacity == 0U ? nullptr : std::make_unique<Entry[]>(capacity)) {}
+    : capacity_(capacity),
+      entries_(capacity == 0U ? nullptr : std::unique_ptr<Entry[]>(new (std::nothrow) Entry[capacity])) {}
 
 Status ThreadRegistry::Register(
     const ThreadMetadata& metadata,

@@ -36,3 +36,13 @@ ctest --test-dir /private/tmp/jh-artti-tsan --output-on-failure
 
 Benchmarks print JSON lines with latency percentiles, throughput and drops. They are regression
 evidence, not device release gates.
+
+## Native batch protocol V1
+
+- fixed little-endian config and handshake structs with `structSize` and schema/ABI versions;
+- a 32-byte batch header followed by 88-byte minimum length-delimited records;
+- unknown records are skipped by declared length;
+- Kotlin drains into a reusable direct `ByteBuffer`;
+- the decoder uses a single mutable record view for visitor delivery rather than a JVM object per
+  native event;
+- status codes cross JNI; native exceptions and STL ownership do not.

@@ -30,3 +30,5 @@ dependencies {
     implementation(project(":jankhunter-runtime"))
     testImplementation(libs.junit)
 }
+
+apply(from = rootProject.file("gradle/runtime-benchmarks.gradle.kts"))

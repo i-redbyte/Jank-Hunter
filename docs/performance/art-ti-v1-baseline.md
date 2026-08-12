@@ -104,3 +104,14 @@ Validation completed for this native core:
 - concurrent publish/stop stress;
 - ASan + UBSan host test pass;
 - TSan host test pass.
+
+## Stage 2 protocol evidence
+
+| Operation | p50 | p95 | p99 | Notes |
+| --- | ---: | ---: | ---: | --- |
+| native encode, 256-record batch | 500 ns/batch | 542 ns/batch | 666 ns/batch | 20,000 host iterations, no allocation in encoder |
+| Kotlin decode, 256-record batch | 1,088.3 ns/batch | not sampled | not sampled | median of 7 x 10,000 host JVM iterations; 4.3 ns/record |
+
+The Kotlin decoder reuses one mutable record flyweight for the visitor and does not allocate one
+event object per record. The benchmark measures decode/visitor dispatch only; it does not include
+future canonical persistence objects or Android JNI transition cost.

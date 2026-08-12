@@ -15,6 +15,8 @@
 #include "core/engine.h"
 #include "core/interval_tracker.h"
 #include "core/thread_registry.h"
+#include "protocol/batch_encoder.h"
+#include "protocol/wire_format.h"
 
 namespace {
 
@@ -124,6 +126,24 @@ void BatchDrain() {
   Print("consumer_batch_256", distribution);
 }
 
+void BatchEncode() {
+  std::array<NativeEvent, 256U> batch{};
+  for (std::uint32_t index = 0U; index < batch.size(); ++index) {
+    batch[index].producer_sequence = index + 1U;
+    batch[index].monotonic_ns = index + 100U;
+  }
+  std::array<std::byte,
+      jankhunter::artti::protocol::kBatchHeaderSize +
+          batch.size() * jankhunter::artti::protocol::kRecordSize>
+      output{};
+  const auto distribution = Measure(
+      [&batch, &output](std::uint32_t) {
+        static_cast<void>(jankhunter::artti::protocol::EncodeBatch(batch, output));
+      },
+      20'000U);
+  Print("native_batch_encode_256", distribution);
+}
+
 void IntervalPairing() {
   MonitorIntervalTracker tracker(1024U);
   QualityCounters quality;
@@ -215,6 +235,7 @@ int main() {
   MultiProducerContention();
   OverflowPath();
   BatchDrain();
+  BatchEncode();
   IntervalPairing();
   ThreadLookup();
   StartStopCycles();

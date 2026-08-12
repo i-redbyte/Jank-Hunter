@@ -1,5 +1,6 @@
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -11,6 +12,8 @@
 #include "core/interval_tracker.h"
 #include "core/quality.h"
 #include "core/thread_registry.h"
+#include "protocol/batch_encoder.h"
+#include "protocol/wire_format.h"
 
 namespace {
 
@@ -29,6 +32,8 @@ using jankhunter::artti::StatusCode;
 using jankhunter::artti::ThreadMetadata;
 using jankhunter::artti::ThreadRegistry;
 using jankhunter::artti::ThreadToken;
+using jankhunter::artti::protocol::EncodeBatch;
+using jankhunter::artti::protocol::RequiredBatchBytes;
 
 std::atomic<std::uint64_t> test_clock_ns{1U};
 
@@ -245,6 +250,43 @@ void EngineStartStopRace() {
   JH_CHECK(engine.state() == EngineState::kStopped);
 }
 
+std::uint32_t ReadU32(const std::vector<std::byte>& input, const std::size_t offset) {
+  std::uint32_t result = 0U;
+  for (std::size_t index = 0U; index < sizeof(result); ++index) {
+    result |= static_cast<std::uint32_t>(input[offset + index]) << (index * 8U);
+  }
+  return result;
+}
+
+void BatchEncodingBoundsAndEnvelope() {
+  std::array<NativeEvent, 2U> events{};
+  events[0].type = EventType::kGcInterval;
+  events[0].producer_sequence = 7U;
+  events[0].monotonic_ns = 100U;
+  events[0].payload.interval.start_ns = 90U;
+  events[0].payload.interval.duration_ns = 10U;
+  events[1].type = EventType::kClockSync;
+  events[1].producer_sequence = 9U;
+  events[1].monotonic_ns = 110U;
+  const auto required = RequiredBatchBytes(events.size());
+  JH_CHECK(required == jankhunter::artti::protocol::kBatchHeaderSize +
+      events.size() * jankhunter::artti::protocol::kRecordSize);
+  std::vector<std::byte> output(required);
+  const auto encoded = EncodeBatch(events, output);
+  JH_CHECK(encoded.status.ok());
+  JH_CHECK(encoded.bytes_written == required);
+  JH_CHECK(encoded.records_written == events.size());
+  JH_CHECK(encoded.first_sequence == 7U);
+  JH_CHECK(encoded.last_sequence == 9U);
+  JH_CHECK(ReadU32(output, 0U) == jankhunter::artti::protocol::kBatchMagic);
+  JH_CHECK(ReadU32(output, 8U) == required);
+  JH_CHECK(ReadU32(output, 12U) == events.size());
+  std::vector<std::byte> short_output(required - 1U);
+  const auto rejected = EncodeBatch(events, short_output);
+  JH_CHECK(rejected.status.code == StatusCode::kBufferTooSmall);
+  JH_CHECK(rejected.bytes_written == required);
+}
+
 }  // namespace
 
 int main() {
@@ -257,6 +299,7 @@ int main() {
   ThreadRegistryLifecycle();
   EngineLifecycleAndIntervals();
   EngineStartStopRace();
+  BatchEncodingBoundsAndEnvelope();
   std::cout << "jh_artti_core_tests: PASS\n";
   return 0;
 }

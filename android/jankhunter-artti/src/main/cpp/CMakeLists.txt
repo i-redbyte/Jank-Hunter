@@ -13,6 +13,7 @@ add_library(jh_artti_core STATIC
     core/engine.cpp
     core/interval_tracker.cpp
     core/thread_registry.cpp
+    protocol/batch_encoder.cpp
 )
 target_include_directories(jh_artti_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(jh_artti_core PUBLIC cxx_std_20)
@@ -44,7 +45,11 @@ if(JH_ENABLE_TSAN AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 
 if(ANDROID)
-    add_library(jankhunter_artti SHARED bootstrap.cpp)
+    add_library(jankhunter_artti SHARED
+        bootstrap.cpp
+        bridge/bridge_runtime.cpp
+        bridge/jni_bridge.cpp
+    )
     target_link_libraries(jankhunter_artti PRIVATE jh_artti_core)
     target_compile_features(jankhunter_artti PRIVATE cxx_std_20)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
