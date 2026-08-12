@@ -12,7 +12,7 @@
     <div class="report-hero-title">
       <div class="eyebrow">Jank Hunter · обзор</div>
       <h1>Отчет по сигналам выполнения</h1>
-      <div class="subhead">runtime-graph-buffered-v9 · создан 2026-08-08T00:00:00Z · автономный HTML</div>
+      <div class="subhead">art-ti-evidence-v9 · создан 2026-08-08T00:00:00Z · автономный HTML</div>
     </div>
     <div class="report-hero-lower">
       <div class="report-hero-context">
@@ -46,10 +46,10 @@
       <div class="report-hero-control">
       <div class="hero-meta">
         <div class="chip">Логи <strong>1</strong></div>
-        <div class="chip">События данных <strong>3</strong></div>
-        <div class="chip">Словарь / control <strong>11 / 2</strong></div>
+        <div class="chip">События данных <strong>15</strong></div>
+        <div class="chip">Словарь / control <strong>12 / 2</strong></div>
         <div class="chip">Доверие к сбору <strong>высокое</strong></div>
-        <div class="chip">Длительность <strong>19 мс</strong></div>
+        <div class="chip">Длительность <strong>1.2 сек</strong></div>
       </div>
 
       </div>
@@ -81,9 +81,9 @@
     </div>
     <div class="grid">
       <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="95-й процентиль длительности HTTP-запросов: 95% запросов были не медленнее этого значения, а худшие 5% — медленнее.">HTTP p95</span></div><div class="value">нет данных</div><div class="hint">0 запросов, 0 ошибок</div></div>
-      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса.">Подтормаживания UI</span></div><div class="value">нет данных</div><div class="hint">0 / 0 кадров</div></div>
-      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах.">Средний FPS</span></div><div class="value">нет данных</div><div class="hint">нет UI-окон</div></div>
-      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку.">Макс. пауза</span></div><div class="value">нет данных</div><div class="hint">событий пауз 0</div></div>
+      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса.">Подтормаживания UI</span></div><div class="value">58.33%</div><div class="hint">7 / 12 кадров</div></div>
+      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Frames per second: среднее число UI-кадров в секунду. Для плавного интерфейса обычно стремятся к 60 FPS или выше на 60 Hz экранах.">Средний FPS</span></div><div class="value">60.0</div><div class="hint">минимум 60.0</div></div>
+      <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку.">Макс. пауза</span></div><div class="value">200 мс</div><div class="hint">событий пауз 1</div></div>
       <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="PSS — пропорциональный размер памяти процесса. Учитывает долю разделяемых страниц и показывает реальный вклад приложения в RAM.">Макс. PSS</span></div><div class="value">нет данных</div><div class="hint">удержано 0</div></div>
       <div class="metric"><div class="label"><span class="explain" tabindex="0" data-tip="Разница счетчика принятого трафика UID приложения между первым и последним снимком каждого лога. Ноль означает, что между снимками рост счетчика не зафиксирован; это не оценка размера HTTP-ответов.">RX UID за прогон</span></div><div class="value">нет данных</div><div class="hint">нет снимков контекста</div></div>
     </div>
@@ -94,29 +94,29 @@
     </div>
     <h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="--value:0.00;--cap:butt; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>нет данных</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
+      <div class="gauge-card"><div class="gauge" style="--value:58.33;--cap:round; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>58.3%</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>
       <div class="gauge-card"><div class="gauge" style="--value:0.00;--cap:butt; --color: var(--bad)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>нет данных</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>
-      <div class="gauge-card"><div class="gauge" style="--value:0.00;--cap:butt; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>нет данных</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
+      <div class="gauge-card"><div class="gauge" style="--value:100.00;--cap:round; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>60.0</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>
     </div>
 
     <h3>Граф влияния кода</h3>
     <p class="help-text">Короткий список приоритетных узлов: классы получают вес по паузам главного потока, сети, памяти, спаму логами, проблемным окнам и сценариям. Оценка ранжирует места для проверки, но не доказывает, что класс стал причиной симптома. Подробная карта связей вынесена в отдельный отчет.</p>
     <div class="grid influence-grid">
 
+      <div class="metric influence-tile" data-tip="Caller · UI-подтормаживания, runtime-вызов, паузы главного потока">
+        <div class="label">средний риск</div>
+        <div class="value">7.7</div>
+        <div class="influence-tile-body" tabindex="0">
+          <div class="hint"><code>Caller</code></div>
+          <div class="hint influence-tile-reasons">UI-подтормаживания, runtime-вызов, паузы главного потока</div>
+        </div>
+      </div>
+
       <div class="metric influence-tile" data-tip="Callee · runtime-вызов">
         <div class="label">средний риск</div>
         <div class="value">6.6</div>
         <div class="influence-tile-body" tabindex="0">
           <div class="hint"><code>Callee</code></div>
-          <div class="hint influence-tile-reasons">runtime-вызов</div>
-        </div>
-      </div>
-
-      <div class="metric influence-tile" data-tip="Caller · runtime-вызов">
-        <div class="label">низкий риск</div>
-        <div class="value">1.4</div>
-        <div class="influence-tile-body" tabindex="0">
-          <div class="hint"><code>Caller</code></div>
           <div class="hint influence-tile-reasons">runtime-вызов</div>
         </div>
       </div>
@@ -129,10 +129,36 @@
   <section id="art-ti" class="panel">
     <div class="panel-head">
       <div><h2>ART TI: native runtime evidence</h2><div class="panel-kicker">Bounded JVMTI-сигналы о GC, monitor contention, потоках и triggered stacks. Они усиливают расследование, но временное совпадение не считается доказанной причиной.</div></div>
-      <span class="pill">данных агента нет</span>
+      <span class="pill">доступен</span>
     </div>
 
-      <p class="quality-notice">Данных агента нет. Остальные разделы построены только по обычным Jank Hunter events.</p>
+      <div class="grid">
+        <div class="metric"><div class="label">Состояние</div><div class="value">доступен</div><div class="hint">reason=attached · status=256/2</div></div>
+        <div class="metric"><div class="label">Effective config</div><div class="value">CAUSAL</div><div class="hint">hash=0x000000000000cafe</div></div>
+        <div class="metric"><div class="label">Native memory</div><div class="value">131072 байт</div><div class="hint">agent events=10</div></div>
+        <div class="metric"><div class="label">Capabilities</div><div class="value"><code>0x3f</code></div><div class="hint">requested 0x3f · missing 0x0</div></div>
+        <div class="metric"><div class="label">GC</div><div class="value">100.000 мс</div><div class="hint">count=1 · max=100.000 мс</div></div>
+        <div class="metric"><div class="label">Contention</div><div class="value">0.000 мс</div><div class="hint">count=0 · max=0.000 мс</div></div>
+        <div class="metric"><div class="label">Native queue</div><div class="value">high-water 8</div><div class="hint">full=0 · contention=0 · other loss=0</div></div>
+        <div class="metric"><div class="label">Data continuity</div><div class="value">gaps=0</div><div class="hint">clock sync=1 · compatible=true</div></div>
+      </div>
+      <h3>Capability matrix</h3>
+      <table><tr><th>Requested</th><th>Potential</th><th>Granted</th><th>Active</th><th>Missing</th></tr><tr><td><code>0x3f</code><div class="muted">GC events, thread lifecycle, monitor contention, stack trace, thread metadata, Linux TID</div></td><td><code>0x3f</code></td><td><code>0x3f</code></td><td><code>0x3f</code><div class="muted">GC events, thread lifecycle, monitor contention, stack trace, thread metadata, Linux TID</div></td><td><code>0x0</code></td></tr></table>
+      <div class="split">
+        <div><h3>Top GC intervals</h3><table><tr><th>Duration</th><th>Start / sequence</th></tr><tr><td>100.000 мс</td><td><code>1050000000 / 4</code></td></tr></table></div>
+        <div><h3>Contention suspects</h3><table><tr><th>Duration</th><th>Thread / sequence</th></tr><tr><td colspan="2" class="muted">Contention intervals не зафиксированы.</td></tr></table></div>
+      </div>
+      <h3>Thread / stack hotspots</h3>
+      <p class="help-text">Потоки: starts=0, ends=0, unique=1, max concurrent=0. Stack samples=1, missing definitions=0.</p>
+      <table><tr><th>Fingerprint</th><th>Samples</th><th>Thread / context</th><th>Methods</th></tr><tr><td><code>0x0000000000000b17</code></td><td>1</td><td><code>11</code><div class="muted">Feed / open / render / Caller.run</div></td><td><div><code>Landroid/graphics/BitmapFactory;-&gt;decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;</code></div></td></tr></table>
+      <h3>Causal evidence cards</h3>
+
+      <article class="guide-card"><strong>STRONG_ASSOCIATION · HIGH (85/100)</strong><p>UI window: 7 jank frames в Feed / open / render / Caller.run</p><p><b>Подозреваемая причина:</b> Декодирование/подготовка изображения на наблюдаемом потоке с allocation pressure и GC</p><p class="muted">screen=Feed · flow=open · owner=Caller.run · thread=11 · method=<code>Landroid/graphics/BitmapFactory;-&gt;decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;</code></p><ol><li><code>DIRECT</code> UI window: 7 jank frames в Feed / open / render / Caller.run — window 1000000000..1200000000 ns</li><li><code>DIRECT</code> Triggered stack sample зафиксирован рядом с симптомом; hotspot Landroid/graphics/BitmapFactory;-&gt;decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap; — fingerprint=0x0000000000000b17</li><li><code>DIRECT</code> GC interval пересёк окно симптома — GC 100.000 ms; overlap 100.000 ms</li></ol><p><b>Точные измерения:</b> GC total в прогоне 100.000 ms, max 100.000 ms</p><p><b>Positive evidence:</b> Измерено 100.000 ms перекрытия GC со stall/jank window. Stack sample и симптом принадлежат одному source и bounded temporal window.</p><p><b>Missing/counter evidence:</b> Temporal overlap и sampled stack не доказывают, что наблюдаемый метод вызвал GC/contention или был единственной причиной симптома.</p><p><b>Альтернативы:</b> Другая работа main thread, I/O, scheduler delay или GPU/render bottleneck могла совпасть с окном. GC мог быть следствием allocation pressure, а не первичной причиной задержки.</p><p><b>Следующий шаг:</b> Перенести decode/resize с main thread, использовать подготовленные thumbnails и повторить сценарий. Повторить сценарий с Perfetto/CPU profiler и тем же screen/flow/owner. Сравнить с прогоном без подозреваемой работы и проверить устойчивость временной цепочки.</p><p class="muted">timeline: <code>testdata/art-ti-evidence-v9.jhlog@1000000000..1200000000 ns</code></p></article>
+
+      <article class="guide-card"><strong>STRONG_ASSOCIATION · HIGH (85/100)</strong><p>Main-thread stall 200 ms в Feed / open / render / Caller.run</p><p><b>Подозреваемая причина:</b> Декодирование/подготовка изображения на наблюдаемом потоке с allocation pressure и GC</p><p class="muted">screen=Feed · flow=open · owner=Caller.run · thread=11 · method=<code>Landroid/graphics/BitmapFactory;-&gt;decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;</code></p><ol><li><code>DIRECT</code> Main-thread stall 200 ms в Feed / open / render / Caller.run — window 1000000000..1200000000 ns</li><li><code>DIRECT</code> Triggered stack sample зафиксирован рядом с симптомом; hotspot Landroid/graphics/BitmapFactory;-&gt;decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap; — fingerprint=0x0000000000000b17</li><li><code>DIRECT</code> GC interval пересёк окно симптома — GC 100.000 ms; overlap 100.000 ms</li></ol><p><b>Точные измерения:</b> GC total в прогоне 100.000 ms, max 100.000 ms</p><p><b>Positive evidence:</b> Измерено 100.000 ms перекрытия GC со stall/jank window. Stack sample и симптом принадлежат одному source и bounded temporal window.</p><p><b>Missing/counter evidence:</b> Temporal overlap и sampled stack не доказывают, что наблюдаемый метод вызвал GC/contention или был единственной причиной симптома.</p><p><b>Альтернативы:</b> Другая работа main thread, I/O, scheduler delay или GPU/render bottleneck могла совпасть с окном. GC мог быть следствием allocation pressure, а не первичной причиной задержки.</p><p><b>Следующий шаг:</b> Перенести decode/resize с main thread, использовать подготовленные thumbnails и повторить сценарий. Повторить сценарий с Perfetto/CPU profiler и тем же screen/flow/owner. Сравнить с прогоном без подозреваемой работы и проверить устойчивость временной цепочки.</p><p class="muted">timeline: <code>testdata/art-ti-evidence-v9.jhlog@1000000000..1200000000 ns</code></p></article>
+
+
+      <details class="fold"><summary>Ограничения интерпретации</summary><div class="fold-body"><p class="quality-notice">Совпадение GC/contention со stall измеряет временное перекрытие, но само по себе не доказывает причинность.</p><p class="quality-notice">Triggered stack — ограниченная выборка конкретного момента; отсутствие метода в sample не доказывает, что он не выполнялся.</p><p class="quality-notice">Идентификаторы thread/method/stack действуют только внутри process instance и не сравниваются как стабильные символы между запусками.</p></div></details>
 
   </section>
 
@@ -144,10 +170,10 @@
 
     <div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Каждое семейство событий оценивается один раз через канонический сигнал: проблемное окно, удержание, лог или runtime-вызов. Производные owner/flow/граф представляют контекст и повторно score не увеличивают.</p></div></div>
 
-    <div class="registry-insights"><span class="registry-insights-label">Категории</span><button type="button" class="registry-chip sev-medium" data-registry-category="Выполнение">Выполнение <strong>2</strong></button></div>
+    <div class="registry-insights"><span class="registry-insights-label">Категории</span><button type="button" class="registry-chip sev-medium" data-registry-category="Выполнение">Выполнение <strong>2</strong></button><button type="button" class="registry-chip sev-medium" data-registry-category="UI">UI <strong>1</strong></button><button type="button" class="registry-chip sev-medium" data-registry-category="Главный поток">Главный поток <strong>1</strong></button><button type="button" class="registry-chip sev-medium" data-registry-category="Риск ANR">Риск ANR <strong>1</strong></button></div>
 
 
-    <div class="registry-insights"><span class="registry-insights-label">Риск</span><button type="button" class="registry-chip sev-medium" data-registry-severity="medium">предупреждение <strong>1</strong></button><button type="button" class="registry-chip sev-ok" data-registry-severity="ok">низкий риск <strong>1</strong></button></div>
+    <div class="registry-insights"><span class="registry-insights-label">Риск</span><button type="button" class="registry-chip sev-medium" data-registry-severity="medium">предупреждение <strong>2</strong></button></div>
 
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -176,6 +202,25 @@
         </thead>
         <tbody>
 
+          <tr data-code-problem-row data-score="8.8" data-severity="medium" data-class="Caller.run" data-categories="UI|Выполнение|Главный поток|Риск ANR">
+            <td><span class="problem-score sev-medium">8.8</span><div class="muted">предупреждение</div><div class="muted">есть runtime-сигналы</div></td>
+            <td><div class="problem-location"><code>Caller</code><div class="method"><code>run</code></div></div></td>
+            <td><div class="problem-tags"><span class="problem-chip">UI</span><span class="problem-chip">Выполнение</span><span class="problem-chip">Главный поток</span><span class="problem-chip">Риск ANR</span></div><div class="muted">Инициатор вызова, Пауза главного потока, Подтормаживания UI</div></td>
+            <td>
+              <details class="code-problem-details">
+                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: проблем=8, вызовов=2, макс=200 мс.</em></span><small>3 сигнала · 4 сценария</small></summary>
+                <div class="code-problem-detail-body">
+                  <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>Сводка сигналов: проблем=8, вызовов=2, макс=200 мс.</p></div>
+                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context"><div>экран <code>Checkout</code></div><div>экран <code>Feed</code></div><div>сценарий <code>open</code></div><div>шаг <code>network</code></div><div>шаг <code>render</code></div></div></div>
+                  <div class="code-problem-detail-block"><strong>Влияние</strong><p>ухудшает плавность интерфейса и отклик на действия; утяжеляет цепочку выполнения в измеренном сценарии; блокирует главный поток, повышая риск АНР и пропуска кадров; создает риск ANR из-за долгой работы или цепочки на главном потоке.</p></div>
+                  <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле; проверьте цепочку вызовов и стоимость вызываемого метода; перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей; разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока.</p></div>
+                  <div class="code-problem-detail-block span-all"><strong>Детализация</strong><p class="report-limit-note"><strong>Сценарии этой строки:</strong> показано 3 из 4 наиболее значимых строк; еще 1 учтены в сводных метриках и оценках. Полный машинный набор доступен в JSON-выводе команды с <code>--json</code>.</p><div class="problem-drilldown"><div class="problem-drill"><strong>Caller.run -&gt; экран Checkout -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: проблем=8, вызовов=2, макс=200 мс.</span><span>Рекомендация: проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле; проверьте цепочку вызовов и стоимость вызываемого метода; перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей; разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока.</span></div><div class="problem-drill"><strong>Caller.run -&gt; экран Checkout -&gt; сценарий open -&gt; шаг render</strong><span>Доказательство: Сводка сигналов: проблем=8, вызовов=2, макс=200 мс.</span><span>Рекомендация: проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле; проверьте цепочку вызовов и стоимость вызываемого метода; перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей; разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока.</span></div><div class="problem-drill"><strong>Caller.run -&gt; экран Feed -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: проблем=8, вызовов=2, макс=200 мс.</span><span>Рекомендация: проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле; проверьте цепочку вызовов и стоимость вызываемого метода; перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей; разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока.</span></div></div></div>
+                  <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals"><div class="problem-signal sev-ok"><strong>Пауза главного потока</strong><small>Главный поток · кол-во 1 · итого 200 мс · макс. 200 мс<br>Окон: 1, событий: 1, максимальное значение: 200 мс.</small></div><div class="problem-signal sev-ok"><strong>Подтормаживания UI</strong><small>UI · кол-во 7 · итого 200 мс<br>Окон: 1, событий: 7, максимальное значение: 0 мс.</small></div><div class="problem-signal sev-ok"><strong>Инициатор вызова</strong><small>Выполнение · кол-во 2 · итого 30 мс · макс. 20 мс<br>Связка Caller.run → Callee.load, вызовов 1.</small></div></div></div>
+                </div>
+              </details>
+            </td>
+          </tr>
+
           <tr data-code-problem-row data-score="5.6" data-severity="medium" data-class="Callee.load" data-categories="Выполнение">
             <td><span class="problem-score sev-medium">5.6</span><div class="muted">предупреждение</div><div class="muted">есть runtime-сигналы</div></td>
             <td><div class="problem-location"><code>Callee</code><div class="method"><code>load</code></div></div></td>
@@ -190,25 +235,6 @@
                   <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>проверьте цепочку вызовов и стоимость вызываемого метода.</p></div>
                   <div class="code-problem-detail-block span-all"><strong>Детализация</strong><p class="report-limit-note"><strong>Сценарии этой строки:</strong> показано 3 из 4 наиболее значимых строк; еще 1 учтены в сводных метриках и оценках. Полный машинный набор доступен в JSON-выводе команды с <code>--json</code>.</p><div class="problem-drilldown"><div class="problem-drill"><strong>Callee.load -&gt; экран Checkout -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div><div class="problem-drill"><strong>Callee.load -&gt; экран Checkout -&gt; сценарий open -&gt; шаг render</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div><div class="problem-drill"><strong>Callee.load -&gt; экран Feed -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div></div></div>
                   <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals"><div class="problem-signal sev-ok"><strong>Выполняемый метод</strong><small>Выполнение · кол-во 2 · итого 30 мс · макс. 20 мс<br>Связка Caller.run → Callee.load, вызовов 1.</small></div></div></div>
-                </div>
-              </details>
-            </td>
-          </tr>
-
-          <tr data-code-problem-row data-score="2.5" data-severity="ok" data-class="Caller.run" data-categories="Выполнение">
-            <td><span class="problem-score sev-ok">2.5</span><div class="muted">низкий риск</div><div class="muted">есть runtime-сигналы</div></td>
-            <td><div class="problem-location"><code>Caller</code><div class="method"><code>run</code></div></div></td>
-            <td><div class="problem-tags"><span class="problem-chip">Выполнение</span></div><div class="muted">Инициатор вызова</div></td>
-            <td>
-              <details class="code-problem-details">
-                <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>Сводка сигналов: вызовов=2, макс=20 мс.</em></span><small>1 сигнал · 4 сценария</small></summary>
-                <div class="code-problem-detail-body">
-                  <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>Сводка сигналов: вызовов=2, макс=20 мс.</p></div>
-                  <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context"><div>экран <code>Checkout</code></div><div>экран <code>Feed</code></div><div>сценарий <code>open</code></div><div>шаг <code>network</code></div><div>шаг <code>render</code></div></div></div>
-                  <div class="code-problem-detail-block"><strong>Влияние</strong><p>утяжеляет цепочку выполнения в измеренном сценарии.</p></div>
-                  <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>проверьте цепочку вызовов и стоимость вызываемого метода.</p></div>
-                  <div class="code-problem-detail-block span-all"><strong>Детализация</strong><p class="report-limit-note"><strong>Сценарии этой строки:</strong> показано 3 из 4 наиболее значимых строк; еще 1 учтены в сводных метриках и оценках. Полный машинный набор доступен в JSON-выводе команды с <code>--json</code>.</p><div class="problem-drilldown"><div class="problem-drill"><strong>Caller.run -&gt; экран Checkout -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div><div class="problem-drill"><strong>Caller.run -&gt; экран Checkout -&gt; сценарий open -&gt; шаг render</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div><div class="problem-drill"><strong>Caller.run -&gt; экран Feed -&gt; сценарий open -&gt; шаг network</strong><span>Доказательство: Сводка сигналов: вызовов=2, макс=20 мс.</span><span>Рекомендация: проверьте цепочку вызовов и стоимость вызываемого метода.</span></div></div></div>
-                  <div class="code-problem-detail-block span-all"><strong>Сигналы</strong><div class="problem-signals"><div class="problem-signal sev-ok"><strong>Инициатор вызова</strong><small>Выполнение · кол-во 2 · итого 30 мс · макс. 20 мс<br>Связка Caller.run → Callee.load, вызовов 1.</small></div></div></div>
                 </div>
               </details>
             </td>
@@ -250,12 +276,20 @@
       <div class="fold-body">
 
         <div class="chart-list">
-          <div class="muted">Нет событий UI-окон.</div>
+
+          <div class="chart-row"><code>Feed</code><div class="chart-track warn"><i style="width:58.33%"></i></div><strong>58.33%</strong></div>
+
         </div>
         <h3>Таблица экранов</h3>
         <table>
           <tr><th><span class="explain" tabindex="0" data-tip="Имя screen из runtime-контекста или ASM-аннотации.">Экран</span></th><th><span class="explain" tabindex="0" data-tip="Число агрегированных UI-окон наблюдения для экрана.">Окна</span></th><th><span class="explain" tabindex="0" data-tip="Общее число кадров в записанных UI-окнах.">Кадры</span></th><th><span class="explain" tabindex="0" data-tip="Кадры, превысившие целевое время текущей частоты экрана.">Медленные кадры</span></th><th><span class="explain" tabindex="0" data-tip="Процент медленных кадров. На коротком окне значение нестабильно, поэтому учитывайте общее число кадров.">Доля подтормаживаний</span></th><th><span class="explain" tabindex="0" data-tip="Средняя частота кадров по длительности окон. Сравнивайте на устройствах с одинаковой частотой дисплея.">Средний FPS</span></th><th><span class="explain" tabindex="0" data-tip="Самая низкая частота кадров среди UI-окон, а не мгновенное значение каждого кадра.">Мин. FPS</span></th><th><span class="explain" tabindex="0" data-tip="95-й процентиль длительности кадров для экрана.">p95 кадра</span></th><th><span class="explain" tabindex="0" data-tip="Самый высокий p99 среди окон экрана; чувствителен к коротким и редким окнам.">Макс. p99</span></th></tr>
-          <tr><td colspan="9" class="muted">Нет событий UI-окон.</td></tr>
+
+          <tr>
+            <td><code>Feed</code></td><td>1</td><td>12</td><td>7</td>
+            <td><div>58.33%</div><div class="bar"><i style="width:58.33%"></i></div></td>
+            <td>60.0</td><td>60.0</td><td>0 мс</td><td>0 мс</td>
+          </tr>
+
         </table>
       </div>
     </details>
@@ -271,7 +305,24 @@
 
         <table>
           <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th><span class="explain" tabindex="0" data-tip="Owner, активный при записи события. Он помогает найти код, но не доказывает первопричину.">Источник</span></th><th>Маршрут</th><th><span class="explain" tabindex="0" data-tip="Число HTTP-событий именно в этом контексте.">HTTP</span></th><th>Ошибки</th><th><span class="explain" tabindex="0" data-tip="Показывается только при наличии HTTP-событий в строке.">HTTP p95</span></th><th><span class="explain" tabindex="0" data-tip="Медленные и все кадры в контексте. Показывается только при наличии UI-кадров.">UI-подтормаживания</span></th><th>Паузы</th><th><span class="explain" tabindex="0" data-tip="Самая длинная зафиксированная пауза главного потока в контексте.">Макс. пауза</span></th><th>Спам логами</th><th><span class="explain" tabindex="0" data-tip="Число агрегированных окон симптомов. Окно группирует близкие события, но не доказывает общую причину.">Проблемные окна</span></th><th><span class="explain" tabindex="0" data-tip="Максимальный PSS в контексте, если memory-событие было атрибутировано.">Макс. PSS</span></th></tr>
-          <tr><td colspan="14" class="muted">Нет событий контекста сценария. Включите API сценариев или ASM-опцию flowInteractions, чтобы увидеть цепочки причин.</td></tr>
+
+          <tr>
+            <td><code>Feed</code></td>
+            <td><code>open</code></td>
+            <td><code>render</code></td>
+            <td><code>Caller.run</code></td>
+            <td><code><span class="explain" tabindex="0" data-tip="Маршрут берется из OkHttp/HTTP instrumentation. Если он отсутствует при сетевых симптомах, проверьте instrument.okhttp, includePackages, scope ALL и поддержку версии OkHttp bridge.">нет данных</span></code></td>
+            <td>0</td>
+            <td>0</td>
+            <td>нет HTTP-замера</td>
+            <td>7 / 12 · 58.33%</td>
+            <td>1</td>
+            <td>200 мс</td>
+            <td>0</td>
+            <td>8</td>
+            <td>нет замера</td>
+          </tr>
+
         </table>
 
         <div class="split">
@@ -288,7 +339,11 @@
 
             <table>
               <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th></tr>
-              <tr><td colspan="9" class="muted">Нет агрегированных проблемных окон.</td></tr>
+
+              <tr><td>пауза главного потока</td><td>1</td><td>1</td><td>200 мс</td><td>200 мс</td><td><code>Feed</code></td><td><code>open</code></td><td><code>render</code></td><td><code>Caller.run</code></td></tr>
+
+              <tr><td>подтормаживания UI</td><td>1</td><td>7</td><td>200 мс</td><td>0 мс</td><td><code>Feed</code></td><td><code>open</code></td><td><code>render</code></td><td><code>Caller.run</code></td></tr>
+
             </table>
           </div>
         </div>
@@ -316,7 +371,9 @@
 
         <table>
           <tr><th><span class="explain" tabindex="0" data-tip="Owner из аннотации, ASM-символа, withOwner или ownerHint.">Источник / класс</span></th><th><span class="explain" tabindex="0" data-tip="Семейство события, привязанного к owner: пауза, HTTP, логирование и т. п.">Тип</span></th><th><span class="explain" tabindex="0" data-tip="Число событий этого типа у источника.">Количество</span></th><th><span class="explain" tabindex="0" data-tip="Сумма длительностей событий. Для пересекающихся работ это не wall-clock время сценария и не CPU time класса.">Итого</span></th><th><span class="explain" tabindex="0" data-tip="Самая длинная длительность одного события.">Максимум</span></th><th><span class="explain" tabindex="0" data-tip="Первый доступный пользовательский кадр стека. Это подсказка места вызова, а не полный stack trace.">Подсказка стека</span></th></tr>
-          <tr><td colspan="6" class="muted">Атрибуция источников пока недоступна.</td></tr>
+
+          <tr><td><code>Caller.run</code></td><td>пауза главного потока</td><td>1</td><td>200 мс</td><td>200 мс</td><td><code><span class="explain" tabindex="0" data-tip="Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра или событие записано старой версией runtime.">нет данных</span></code></td></tr>
+
         </table>
       </div>
     </details>
@@ -451,7 +508,7 @@
         <h3>Сэмплы сети</h3>
         <table><tr><th>Сеть</th><th>Сэмплы</th></tr><tr><td colspan="2" class="muted">Нет событий контекста.</td></tr></table>
         <h3>Объединенные когорты</h3>
-        <table><tr><th>Когорта</th><th>События</th></tr><tr><td><code><span class="explain" tabindex="0" data-tip="Когорта собирается из device/app/build/process/network metadata. Неизвестная часть означает, что соответствующее session/context-событие не попало в лог.">app=1.0 build=1 sdk=api-35 device=fixture process=main network=неизвестно root=no</span></code></td><td>2</td></tr></table>
+        <table><tr><th>Когорта</th><th>События</th></tr><tr><td><code><span class="explain" tabindex="0" data-tip="Когорта собирается из device/app/build/process/network metadata. Неизвестная часть означает, что соответствующее session/context-событие не попало в лог.">app=1.0 build=1 sdk=api-35 device=fixture process=main network=неизвестно root=no</span></code></td><td>4</td></tr></table>
       </div>
     </details>
   </section>
@@ -470,10 +527,12 @@
 
       <div class="finding sev-medium"><strong>Малая выборка</strong><div class="muted">Прогон небольшой, поэтому вердикт полезен как быстрый дымовой тест, но не как финальное заключение о производительности для релиза.</div></div>
 
+      <div class="finding sev-medium"><strong>Высокая доля подтормаживаний UI</strong><div class="muted">Медленные UI-кадры составляют 58.33% из 12 наблюдаемых кадров. Для короткого UI-окна вывод считается предварительным.</div></div>
+
     </div>
     <h3>Рекомендации</h3>
     <ul class="recommendations">
-      <li>Соберите несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.</li>
+      <li>Соберите несколько прогонов на сценарий, прежде чем доверять небольшим изменениям.</li><li>Смотрите разделы UI и источников вместе: паузы главного потока часто объясняют худшие подтормаживания экранов.</li>
     </ul>
   </section>
 

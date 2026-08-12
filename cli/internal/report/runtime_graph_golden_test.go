@@ -15,6 +15,7 @@ func TestRuntimeGraphV9JSONAndHTMLGoldens(t *testing.T) {
 		"runtime-graph-legacy-v9",
 		"runtime-graph-buffered-v9",
 		"runtime-graph-incomplete-v9",
+		"art-ti-evidence-v9",
 	}
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {

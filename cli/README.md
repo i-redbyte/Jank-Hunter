@@ -136,6 +136,8 @@ jankhunter inspect logs/*.jhlog --out report.html
 Что видно в отчёте:
 
 - верхний срез: сеть, плавность, частота кадров, память, паузы главного потока и трафик;
+- раздел ART TI: attach/status и effective preset, capability matrix, bounded native memory/queue health,
+  GC и contention intervals, thread/stack hotspots, data gaps и доказательные causal cards;
 - сведения об устройстве: Android, API, патч безопасности, ABI, сеть, VPN, батарея, память, хранилище и root-доступ;
 - маршруты HTTP и WebSocket-сигналы;
 - экраны и окна кадров;
@@ -163,6 +165,14 @@ JSON вместо HTML:
 ```bash
 jankhunter inspect logs/*.jhlog --json > inspect.json
 ```
+
+JSON остаётся аддитивно совместимым: новая верхнеуровневая секция `Agent` содержит
+`Availability`, `Capabilities`, `Quality`, `GC`, `Contention`, `Threads`, `Stacks`, `Findings`,
+`DataGaps` и `Limitations`. Старый лог получает `Agent.EventCount=0` и
+`Agent.Availability="данных агента нет"`; остальные прежние поля summary вычисляются тем же кодом.
+Finding явно разделяет `EvidenceLevel`, измерения, positive/missing evidence, quality penalties,
+альтернативы, действия и `TimelineReference`. `DIRECT` означает измеренный interval/stack/overlap,
+а не автоматически доказанную первопричину.
 
 По умолчанию, если в список попали несколько файлов вида `jh-session-log.YYYY-MM-DD.<index>.jhlog`, `inspect` определяет сессию и процесс по v9 identity внутри файла и берёт последнюю сессию для каждого процесса. Одна сессия хранится в одном файле: terminal-запись `SIZE_LIMIT` завершает сбор этой сессии и не создаёт следующий сегмент. Чтобы разобрать все выбранные сессии вместе:
 
@@ -351,6 +361,10 @@ jankhunter compare \
   --candidate "new/*.jhlog" \
   --json > compare.json
 ```
+
+В compare JSON поле `Agent` сначала сообщает config/capability/data-quality mismatch, затем новые
+или исчезнувшие method suspects и causal paths. Дельты ART TI считаются несопоставимыми, если в
+одной стороне нет agent observations; fingerprint/thread token между процессами не сравниваются.
 
 Дампы памяти можно передать отдельно:
 

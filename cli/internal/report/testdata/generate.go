@@ -18,6 +18,7 @@ type fixtureSpec struct {
 	name       string
 	contextual bool
 	incomplete bool
+	agent      bool
 }
 
 func main() {
@@ -25,6 +26,7 @@ func main() {
 		{name: "runtime-graph-legacy-v9"},
 		{name: "runtime-graph-buffered-v9", contextual: true},
 		{name: "runtime-graph-incomplete-v9", contextual: true, incomplete: true},
+		{name: "art-ti-evidence-v9", contextual: true, agent: true},
 	}
 	for _, spec := range specs {
 		if err := generate(spec); err != nil {
@@ -35,7 +37,7 @@ func main() {
 
 func generate(spec fixtureSpec) error {
 	base := filepath.Join("testdata", spec.name)
-	if err := writeLog(base+".jhlog", spec.contextual, spec.incomplete); err != nil {
+	if err := writeLog(base+".jhlog", spec.contextual, spec.incomplete, spec.agent); err != nil {
 		return err
 	}
 	summary, err := analyze.InspectFilesWithOptions(spec.name, []string{base + ".jhlog"}, analyze.Options{})
@@ -69,7 +71,7 @@ func normalizeHTML(payload []byte) []byte {
 	return bytes.Join(lines, []byte{'\n'})
 }
 
-func writeLog(path string, contextual, incomplete bool) (result error) {
+func writeLog(path string, contextual, incomplete, agent bool) (result error) {
 	header := jhlog.DefaultSegmentHeader()
 	header.RunID[0], header.ProcessInstanceID[0], header.SessionID[0] = 1, 2, 3
 	header.OSPID = 42
@@ -122,6 +124,32 @@ func writeLog(path string, contextual, incomplete bool) (result error) {
 		Type: jhlog.EventRuntimeCall, TimeMS: 20, RuntimeCall: runtimeCall(10, 31, 2, 30, 20),
 	}); err != nil {
 		return err
+	}
+	if agent {
+		method := jhlog.DictionaryEntry{Kind: jhlog.DictMethod, ID: 40, Value: "Landroid/graphics/BitmapFactory;->decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;"}
+		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &method}); err != nil {
+			return err
+		}
+		context := jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(10), Owner: jhlog.LocalSymbol(20), Flow: jhlog.LocalSymbol(30), Step: jhlog.LocalSymbol(32)}
+		agentEvents := []jhlog.Event{
+			{Type: jhlog.EventAgent, TimeUS: 900_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentStatus, SchemaVersion: 1, ProducerSequence: 1, Payload0: 2, Payload2: 0xCAFE, Payload3: 131_072}},
+			{Type: jhlog.EventAgent, TimeUS: 910_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentCapability, SchemaVersion: 1, ProducerSequence: 2, Payload0: 0x3f, Payload1: 0x3f, Payload2: 0x3f, Payload3: 0x3f}},
+			{Type: jhlog.EventAgent, TimeUS: 920_000, Attribution: context, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentCorrelationLink, SchemaVersion: 1, ContextToken: 77, EventFlags: jhlog.AgentFlagContextDefinition, Payload0: 77}},
+			{Type: jhlog.EventAgent, TimeUS: 930_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentMethodDefinition, SchemaVersion: 1, Payload0: 44, MethodRef: jhlog.LocalSymbol(40)}},
+			{Type: jhlog.EventAgent, TimeUS: 940_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentStackDefinition, SchemaVersion: 1, ProducerSequence: 3, ContextToken: 77, Payload0: 0xB17, Payload1: 44, Payload3: 1 << 32}},
+			{Type: jhlog.EventAgent, TimeUS: 950_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentStatus, SchemaVersion: 1, Payload0: 0x100, Payload1: 2, Payload2: 0xCAFE}},
+			{Type: jhlog.EventAgent, TimeUS: 1_000_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentClockSync, SchemaVersion: 1, Payload0: 1_000_000_000, Payload1: 10_000}},
+			{Type: jhlog.EventAgent, TimeUS: 1_150_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentGCInterval, SchemaVersion: 1, ProducerSequence: 4, Payload0: 1_050_000_000, Payload1: 100_000_000}},
+			{Type: jhlog.EventStall, TimeMS: 1_200, Attribution: context, Stall: &jhlog.StallEvent{DurationMS: 200}},
+			{Type: jhlog.EventUIWindow, TimeMS: 1_200, Attribution: context, UIWindow: &jhlog.UIWindowEvent{WindowMS: 200, FrameCount: 12, JankCount: 7}},
+			{Type: jhlog.EventAgent, TimeUS: 1_200_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentThreadStackSample, SchemaVersion: 1, ProducerSequence: 5, ThreadToken: 11, ContextToken: 77, Payload0: 0xB17, Payload2: uint64(1) | uint64(1)<<32}},
+			{Type: jhlog.EventAgent, TimeUS: 1_210_000, Agent: &jhlog.AgentEvent{SemanticType: jhlog.AgentQualitySnapshot, SchemaVersion: 1, ProducerSequence: 6, Payload0: 8}},
+		}
+		for _, event := range agentEvents {
+			if err := writer.WriteEvent(event); err != nil {
+				return err
+			}
+		}
 	}
 	quality := map[uint64]uint64{}
 	if contextual {

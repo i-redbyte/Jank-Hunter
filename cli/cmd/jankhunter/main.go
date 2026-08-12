@@ -1597,6 +1597,33 @@ func printSummary(summary analyze.Summary) {
 		fmt.Printf("jankstats: %s\n", namedValues(summary.JankStats))
 	}
 	fmt.Printf("stalls: count=%d max=%dms\n", summary.StallCount, summary.StallMaxMS)
+	if summary.Agent.EventCount == 0 {
+		fmt.Println("art_ti: данных агента нет")
+	} else {
+		fmt.Printf(
+			"art_ti: availability=%s reason=%s preset=%s config=%s capabilities=0x%x/0x%x native_memory=%dB events=%d\n",
+			summary.Agent.Availability,
+			summary.Agent.Reason,
+			summary.Agent.EffectivePreset,
+			summary.Agent.ConfigHash,
+			summary.Agent.Capabilities.Active,
+			summary.Agent.Capabilities.Requested,
+			summary.Agent.NativeMemoryBytes,
+			summary.Agent.EventCount,
+		)
+		fmt.Printf(
+			"art_ti_intervals: gc=%d/%.3fms/max=%.3fms contention=%d/%.3fms/max=%.3fms sequence_gaps=%d native_loss=%d findings=%d\n",
+			summary.Agent.GC.Count,
+			summary.Agent.GC.TotalMS,
+			summary.Agent.GC.MaxMS,
+			summary.Agent.Contention.Count,
+			summary.Agent.Contention.TotalMS,
+			summary.Agent.Contention.MaxMS,
+			summary.Agent.Quality.SequenceGaps,
+			summary.Agent.Quality.QueueFullTotal+summary.Agent.Quality.AdmissionContentionTotal+summary.Agent.Quality.OtherNativeLossTotal,
+			len(summary.Agent.Findings),
+		)
+	}
 	if len(summary.Processes) > 0 {
 		fmt.Printf("processes: %s\n", namedValues(summary.Processes))
 	}

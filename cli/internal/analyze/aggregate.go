@@ -43,11 +43,22 @@ var runtimeQualityCounterWarnings = []qualityCounterWarning{
 }
 
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
-	collector := newCollector(title, len(paths), options)
+	streams := make([]jhlog.CanonicalEventStream, 0, len(paths))
 	for _, path := range paths {
+		streams = append(streams, jhlog.FileEventStream{Path: path})
+	}
+	return InspectEventStreamsWithOptions(title, streams, options)
+}
+
+// InspectEventStreamsWithOptions consumes storage-neutral canonical streams.
+// It is intentionally public inside the CLI module so current v9, test/fake,
+// and future ring adapters exercise exactly the same streaming analyzer.
+func InspectEventStreamsWithOptions(title string, streams []jhlog.CanonicalEventStream, options Options) (Summary, error) {
+	collector := newCollector(title, len(streams), options)
+	for _, stream := range streams {
 		collector.startLog()
 		lastDictSize := 0
-		result, err := jhlog.StreamFileWithResult(path, func(event jhlog.Event, dict map[uint64]string) error {
+		result, err := stream.Stream(func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
 				collector.summary.Dictionary += len(dict) - lastDictSize
 				lastDictSize = len(dict)
@@ -396,6 +407,7 @@ type collector struct {
 	currentAttrFlow   string
 	currentAttrStep   string
 	stableSymbols     stableSymbolResolver
+	agent             *agentAggregator
 }
 
 type stableSymbolResolver struct {
@@ -469,6 +481,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 			external:        options.ExternalSymbols,
 			requireExplicit: options.RequireExplicitExternalSymbols,
 		},
+		agent: newAgentAggregator(),
 	}
 }
 
@@ -1015,6 +1028,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		return
 	}
 	c.applyAttribution(dict, event.Attribution)
+	context := c.eventContext("", "", "", "")
+	if event.Agent != nil {
+		c.agent.add(dict, event, context)
+	}
 	c.summary.EventCount++
 	if !c.seenEvent {
 		c.seenEvent = true
@@ -1114,6 +1131,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	case event.UIWindow != nil:
 		screen := resolveEventSymbol(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
 		context := c.eventContext(screen, "", "", "")
+		c.agent.addUISymptom(event, context)
 		if !c.matchesFilters("", context, nil) {
 			return
 		}
@@ -1170,6 +1188,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			stepOverride = "heap_dump"
 		}
 		context := c.eventContext("", owner, flowOverride, stepOverride)
+		c.agent.addStallSymptom(event, context, stack)
 		if !c.matchesFilters("", context, nil, owner) {
 			return
 		}
@@ -1723,6 +1742,7 @@ func counterDelta(first, last uint64) uint64 {
 func (c *collector) finish() Summary {
 	c.finalizeCollectionQuality()
 	summary := c.summary
+	summary.Agent = c.agent.snapshot()
 	if c.logsWithEvents > 0 {
 		summary.DurationMS = c.totalLogDurationMS
 	} else if c.seenEvent && c.lastTime >= c.firstTime {
@@ -2462,6 +2482,10 @@ func Compare(baseline, candidate Summary) Comparison {
 		mixDelta("Device mix", baseline.Devices, candidate.Devices, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("Network mix", baseline.Network, candidate.Network, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		mixDelta("Cohort mix", baseline.Cohorts, candidate.Cohorts, minUint64(uint64(baseline.EventCount), uint64(candidate.EventCount))),
+		observedDeltaFloat("ART TI GC time", baseline.Agent.GC.TotalMS, candidate.Agent.GC.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "ART TI GC capability/data отсутствуют"),
+		observedDelta("ART TI GC count", baseline.Agent.GC.Count, candidate.Agent.GC.Count, "шт", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "ART TI GC capability/data отсутствуют"),
+		observedDeltaFloat("ART TI contention time", baseline.Agent.Contention.TotalMS, candidate.Agent.Contention.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "ART TI contention capability/data отсутствуют"),
+		observedDelta("ART TI contention count", baseline.Agent.Contention.Count, candidate.Agent.Contention.Count, "шт", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "ART TI contention capability/data отсутствуют"),
 	)
 	for i := range comparison.Deltas {
 		comparison.Deltas[i].Confidence = confidence
@@ -2474,8 +2498,89 @@ func Compare(baseline, candidate Summary) Comparison {
 	comparison.CohortWarnings = cohortWarnings(baseline, candidate)
 	comparison.QualityWarnings = comparisonQualityWarnings(baseline, candidate)
 	comparison.ExposureWarnings = durationComparisonWarnings(baseline, candidate)
+	comparison.Agent = compareAgent(baseline.Agent, candidate.Agent)
+	comparison.QualityWarnings = append(comparison.QualityWarnings, comparison.Agent.Warnings...)
 	comparison.Warnings = append(append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...), comparison.ExposureWarnings...)
 	return comparison
+}
+
+func agentSignalSamples(summary AgentSummary, capability uint64) uint64 {
+	if summary.EventCount == 0 || summary.Capabilities.Active&capability == 0 {
+		return 0
+	}
+	return summary.EventCount
+}
+
+func compareAgent(baseline, candidate AgentSummary) AgentComparison {
+	result := AgentComparison{}
+	if baseline.EventCount == 0 || candidate.EventCount == 0 {
+		result.Warnings = append(result.Warnings, "ART TI данные отсутствуют хотя бы в одном прогоне; agent regression metrics не полностью сопоставимы.")
+		return result
+	}
+	result.ConfigMismatch = baseline.ConfigHash != candidate.ConfigHash || baseline.EffectivePreset != candidate.EffectivePreset
+	result.CapabilityMismatch = baseline.Capabilities.Active != candidate.Capabilities.Active
+	if result.ConfigMismatch {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI config mismatch: %s/%s → %s/%s.", baseline.EffectivePreset, baseline.ConfigHash, candidate.EffectivePreset, candidate.ConfigHash))
+	}
+	if result.CapabilityMismatch {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI active capabilities mismatch: 0x%x → 0x%x.", baseline.Capabilities.Active, candidate.Capabilities.Active))
+	}
+	if len(baseline.DataGaps) > 0 || len(candidate.DataGaps) > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI data-quality mismatch: gaps base=%d, candidate=%d; findings require manual confirmation.", len(baseline.DataGaps), len(candidate.DataGaps)))
+	}
+	baseStacks := agentMethodSuspects(baseline.Stacks)
+	candidateStacks := agentMethodSuspects(candidate.Stacks)
+	result.NewStackSuspects, result.ResolvedSuspects = setDifference(candidateStacks, baseStacks), setDifference(baseStacks, candidateStacks)
+	basePaths := agentFindingKeys(baseline.Findings)
+	candidatePaths := agentFindingKeys(candidate.Findings)
+	for _, key := range setDifference(candidatePaths, basePaths) {
+		result.CausalChanges = append(result.CausalChanges, "added: "+key)
+	}
+	for _, key := range setDifference(basePaths, candidatePaths) {
+		result.CausalChanges = append(result.CausalChanges, "resolved: "+key)
+	}
+	return result
+}
+
+func agentMethodSuspects(summary AgentStackSummary) []string {
+	set := map[string]struct{}{}
+	for _, hotspot := range summary.Hotspots {
+		for _, method := range hotspot.Methods {
+			set[method] = struct{}{}
+		}
+	}
+	return sortedStringSet(set)
+}
+
+func agentFindingKeys(findings []AgentFinding) []string {
+	set := map[string]struct{}{}
+	for _, finding := range findings {
+		set[strings.Join([]string{finding.SuspectedCause, finding.Screen, finding.Flow, finding.Owner}, " | ")] = struct{}{}
+	}
+	return sortedStringSet(set)
+}
+
+func setDifference(left, right []string) []string {
+	seen := map[string]struct{}{}
+	for _, value := range right {
+		seen[value] = struct{}{}
+	}
+	result := make([]string, 0)
+	for _, value := range left {
+		if _, ok := seen[value]; !ok {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func sortedStringSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func mixDelta(name string, baseline, candidate []NamedValue, sampleSize uint64) Delta {

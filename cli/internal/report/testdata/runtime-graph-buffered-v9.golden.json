@@ -158,6 +158,74 @@
     "dictionary_overflow": 0,
     "dictionary_truncated": 0
   },
+  "Agent": {
+    "Available": false,
+    "Availability": "данных агента нет",
+    "Reason": "",
+    "StatusCode": 0,
+    "StatusDetail": 0,
+    "EffectivePreset": "unknown",
+    "ConfigHash": "",
+    "NativeMemoryBytes": 0,
+    "EventCount": 0,
+    "Capabilities": {
+      "Requested": 0,
+      "Potential": 0,
+      "Granted": 0,
+      "Active": 0,
+      "Missing": 0,
+      "RequestedList": [],
+      "ActiveList": []
+    },
+    "Quality": {
+      "QueueHighWatermark": 0,
+      "QueueFullTotal": 0,
+      "AdmissionContentionTotal": 0,
+      "OtherNativeLossTotal": 0,
+      "SequenceGaps": 0,
+      "IncompleteWindows": 0,
+      "ClockSyncCount": 0,
+      "MaxClockUncertaintyNS": 0,
+      "CompatibleClockCalibration": false
+    },
+    "GC": {
+      "Count": 0,
+      "TotalNS": 0,
+      "TotalMS": 0,
+      "MaxNS": 0,
+      "MaxMS": 0,
+      "Top": null
+    },
+    "Contention": {
+      "Count": 0,
+      "TotalNS": 0,
+      "TotalMS": 0,
+      "MaxNS": 0,
+      "MaxMS": 0,
+      "Top": null
+    },
+    "Threads": {
+      "Starts": 0,
+      "Ends": 0,
+      "EstimatedActive": 0,
+      "MaxConcurrent": 0,
+      "UniqueObserved": 0
+    },
+    "Stacks": {
+      "Samples": 0,
+      "Definitions": 0,
+      "TruncatedSamples": 0,
+      "MissingDefinitions": 0,
+      "Hotspots": null
+    },
+    "Findings": [],
+    "DataGaps": null,
+    "Limitations": [
+      "Совпадение GC/contention со stall измеряет временное перекрытие, но само по себе не доказывает причинность.",
+      "Triggered stack — ограниченная выборка конкретного момента; отсутствие метода в sample не доказывает, что он не выполнялся.",
+      "Идентификаторы thread/method/stack действуют только внутри process instance и не сравниваются как стабильные символы между запусками."
+    ]
+  },
   "Routes": null,
   "Screens": null,
   "Owners": null,

@@ -90,3 +90,30 @@ The adapter merged with that work must:
 
 The in-memory sink used by runtime tests consumes the same packed batch contract and copies before
 reuse; it is the executable adapter seam until the shared ring storage lands.
+
+## Canonical CLI adapter and evidence contract
+
+The Go reader exposes `CanonicalEventStream`. The v9 file adapter, the in-memory equivalence fake
+and a future ring decoder all emit the same `jhlog.Event` plus `StreamResult`; inspect never branches
+on the physical storage format. A current-v9 fixture and the ring-shaped in-memory adapter must
+produce byte-equivalent agent JSON when no overwrite is injected. Removing a producer sequence and
+marking the stream open produces a visible incomplete/data-gap result and lowers finding confidence.
+
+The agent analyzer has `empty/add/merge/snapshot` behavior. Add is streaming-first and retains only:
+
+- top 16 GC/contention intervals;
+- 256 strongest symptom and recent stack timeline entries with a 250 ms reorder/join window;
+- 128 stack fingerprints, 4,096 method definitions, 2,048 thread/context identities;
+- 128 source/producer indexes with at most 256 disjoint sequence ranges each.
+
+Temporal joins never cross a source. Ties use duration then producer sequence, while sequence ranges
+merge independently of chunk order. Reaching a cardinality/range limit is reported as a data-quality
+penalty instead of silently allocating more memory. The compact evidence chain is the directed graph
+needed for the actual query (context → sampled method/interval → symptom); V1 does not materialize an
+universal runtime graph.
+
+Inspect JSON adds the `Agent` object without removing or renaming prior summary fields. Old logs use
+`Agent.EventCount=0` and `Agent.Availability="данных агента нет"`. Compare refuses to treat agent
+deltas as comparable when one side has no observations, warns before regression claims when config,
+capabilities, clocks, windows or quality differ, and compares resolved method symbols rather than
+process-local thread/stack IDs.
