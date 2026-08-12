@@ -93,7 +93,6 @@ internal data class ArtTiMethodDefinition(
 internal data class ArtTiNativeHandshake(
     val abiVersion: Int,
     val protocolVersion: Int,
-    val nativeEventSize: Int,
     val featureBits: Long,
     val batchHeaderSize: Int,
     val recordSize: Int,
@@ -120,10 +119,12 @@ internal data class ArtTiNativeHandshake(
             require(structSize in ArtTiNativeProtocol.HANDSHAKE_WIRE_SIZE..input.remaining() + Int.SIZE_BYTES) {
                 "Invalid ART TI handshake struct size: $structSize"
             }
+            val abiVersion = input.int
+            val protocolVersion = input.int
+            input.int // native event size is diagnostic-only and not part of compatibility checks
             ArtTiNativeHandshake(
-                abiVersion = input.int,
-                protocolVersion = input.int,
-                nativeEventSize = input.int,
+                abiVersion = abiVersion,
+                protocolVersion = protocolVersion,
                 featureBits = input.long,
                 batchHeaderSize = input.int,
                 recordSize = input.int,
