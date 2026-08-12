@@ -3,6 +3,13 @@ plugins {
     id("io.jankhunter.android")
 }
 
+val sampleJankHunterEnabled = providers.gradleProperty("jankhunter.sample.enabled")
+    .map { it.toBooleanStrict() }
+    .orElse(true)
+val sampleArtTiMode = providers.gradleProperty("jankhunter.sample.artTiMode")
+    .map { io.jankhunter.gradle.ArtTiMode.valueOf(it.uppercase()) }
+    .orElse(io.jankhunter.gradle.ArtTiMode.CAUSAL)
+
 android {
     namespace = "io.jankhunter.sample"
 
@@ -10,14 +17,27 @@ android {
         applicationId = "io.jankhunter.sample"
         versionCode = 1
     }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
 }
 
 jankHunter {
-    enabled.set(true)
+    // Reproducible performance lanes:
+    //   -Pjankhunter.sample.enabled=false (SDK baseline)
+    //   -Pjankhunter.sample.artTiMode=OFF (SDK with agent disabled)
+    //   default / CAUSAL (recommended agent profile)
+    enabled.set(sampleJankHunterEnabled)
     enabledBuildTypes.set(setOf("debug"))
     autoInit.set(true)
     artTi {
-        mode.set(io.jankhunter.gradle.ArtTiMode.CAUSAL)
+        mode.set(sampleArtTiMode)
     }
     verboseLogs.set(true)
 

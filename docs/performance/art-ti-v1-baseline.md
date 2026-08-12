@@ -148,3 +148,138 @@ Verification performed:
 These are build/host results, not device callback-latency claims. Actual ART capability behavior,
 startup/frame impact, RSS/PSS and CAUSAL/overload callback percentiles remain `not measured` until
 the instrumented device stage.
+
+## Stage 7 reproducible hardening evidence
+
+`jankhunter_release_performance_budget_v1`
+
+Measured on 2026-08-12. Host: macOS/arm64, Apple M5 Max, AppleClang 21, OpenJDK 21.0.10,
+Gradle 9.4.1, AGP 9.0.1, NDK 30. Device smoke: Pixel 10 Pro AVD (`sdk_gphone16k_arm64`), arm64
+16 KiB page image, API 37 / Android release 17. Emulator results detect gross regressions; they
+are not substitutes for a physical-device release matrix.
+
+### Host callback/core and protocol
+
+Release native core, 200,000 timed operations unless the benchmark defines a count:
+
+| Benchmark | p50 ns | p95 ns | p99 ns | operations/s | drops |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| publish + drain | 42 | 42 | 42 | 17,197,644 | 0 |
+| 8-producer contention | n/a | n/a | n/a | 6,222,193 | 194,976 |
+| full queue/drop | 0* | 42 | 42 | 41,244,554 | 210,000* |
+| consumer drain, 256 records | 4,875 | 4,917 | 5,167 | 203,800 batches/s | 0 |
+| native encode, 256 records | 500 | 542 | 625 | 1,905,813 batches/s | 0 |
+| interval/thread/stack lookup | 0* | 42 | 42 | 34–42 million/s | 0 |
+| start/stop cycle | 167 | 209 | 209 | 5,219,207 | 0 |
+
+`*` Host clock resolution and overflow warm-up limitations remain as described above. The callback
+publish p99 is far below the 10 µs architectural target on this host, but only Android tracing on a
+representative physical device can close the device gate.
+
+Kotlin decoder (256 records): 1,031.6 ns/batch and 4.0 ns/record in a previous same-host run. The
+bounded Go agent aggregator processes 10,000 events in 431,700–433,836 ns/op with 3,648 B/op and
+18 allocs/op. The full pre-existing report pipeline remains much heavier: 51,142 events in
+205.3–205.5 ms, about 462.8 MB/op and 3.33 million allocs/op; this is not attributed to ART TI.
+
+Commands:
+
+```bash
+cmake -S android/jankhunter-artti/src/main/cpp -B /private/tmp/jh-artti-host \
+  -DJH_BUILD_HOST_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build /private/tmp/jh-artti-host --parallel
+/private/tmp/jh-artti-host/jh_artti_core_bench
+
+cd android
+./gradlew :jankhunter-artti:testDebugUnitTest \
+  -Djankhunter.benchmark=true \
+  --tests io.jankhunter.artti.internal.ArtTiNativeProtocolBenchmarkTest
+
+cd ../cli
+go test ./internal/analyze -run '^$' \
+  -bench BenchmarkAgentAggregatorBoundedStreaming -benchmem -count 3
+```
+
+### Device workload, frame, CPU and memory smoke
+
+Each lane uses the same 8-worker workload (20,000 operations/worker), 8 warmups and 40 measured
+iterations, then samples 63 frame intervals under eight workload repetitions. Memory samples force
+a GC and settle before `Debug.MemoryInfo`; negative PSS delta is valid noise/reclamation, not
+negative agent memory.
+
+| Metric | no SDK artifact | SDK + ART TI OFF | CAUSAL |
+| --- | ---: | ---: | ---: |
+| workload p50 | 702,750 ns | 699,083 ns | 721,375 ns |
+| workload p95 | 899,833 ns | 1,035,542 ns | 892,208 ns |
+| process CPU delta | 25 ms | 26 ms | 28 ms |
+| PSS before / after | 87,831 / 87,010 KiB | 90,746 / 87,577 KiB | 93,043 / 90,018 KiB |
+| native heap before / after | 6,108,752 / 6,109,376 B | 6,253,760 / 6,256,848 B | 6,917,504 / 6,920,608 B |
+| frame p50 / p95 / max | 16.67 / 16.67 / 16.67 ms | 16.67 / 16.67 / 16.67 ms | 16.67 / 16.67 / 16.67 ms |
+| frames over 24 ms | 0 / 63 | 0 / 63 | 0 / 63 |
+
+CAUSAL workload p50 is +3.2% versus OFF and +2.7% versus no-artifact in this run. CPU delta is
+only a 25–28 ms coarse sample. A single AVD p95, PSS snapshot or cold start is not a release gate.
+One symmetric `am start -W -S` smoke measured 456 ms no-artifact, 484 ms OFF and 506 ms CAUSAL;
+multiple physical-device cold/warm cohorts are still required.
+
+Run all three lanes:
+
+```bash
+cd android
+./gradlew :sample-app:connectedDebugAndroidTest \
+  -Pjankhunter.sample.enabled=false \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.jankhunter.sample.ArtTiPerformanceSmokeTest
+./gradlew :sample-app:connectedDebugAndroidTest \
+  -Pjankhunter.sample.artTiMode=OFF \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.jankhunter.sample.ArtTiPerformanceSmokeTest
+./gradlew :sample-app:connectedDebugAndroidTest \
+  -Pjankhunter.sample.artTiMode=CAUSAL \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.jankhunter.sample.ArtTiPerformanceSmokeTest
+```
+
+### Overload, lifecycle and real callbacks
+
+`ArtTiHardeningTest` passed on the same AVD. It observed capability-negotiated GC, thread
+start/end, monitor contention and triggered stack definition/sample events through actual
+Android → native callback → Kotlin batch → committed v9 storage. It then attempted 100,000
+synthetic events, observed bounded rejection plus queue loss/high-water evidence, verified main
+thread responsiveness, and required a clean stopped status. The synthetic producer exists only as
+an internal bridge test hook and does not replace the preceding real callback assertions.
+
+Foreground/background transition, secondary-process attachment and stop/restart across the full
+API 28–current/OEM matrix are not measured on this single AVD. Non-debuggable behavior is covered
+by eligibility/release packaging tests rather than attaching to a release process.
+
+### Binary/APK footprint and publishing
+
+| Artifact | arm64-v8a | x86_64 | total |
+| --- | ---: | ---: | ---: |
+| stripped release `.so`, uncompressed | 92,944 B | 87,048 B | 179,992 B |
+| release AAR entry, deflated | 42,117 B | 39,923 B | 82,040 B |
+| complete release AAR | — | — | 149,114 B |
+
+Debug sample APKs were 16,264,108 B for both no-artifact and OFF, and 18,294,461 B for CAUSAL
+(+2,030,353 B compressed). This delta is dominated by deliberately retained/unstrippable debug
+native symbols; use the stripped release AAR row for production footprint planning. The minified
+release sample is 1.5 MB and contains no ART TI library under the default debug-only variant rule.
+
+`scripts/gradle-plugin-smoke.sh` publishes into an isolated Maven repository, builds a Java 17 /
+minSdk 23 external Android consumer, runs R8, reuses the configuration cache, verifies both ART TI
+ABIs in debug and verifies no ART TI library in release. The release dynamic-symbol audit exposes
+only `Agent_OnAttach`, `Agent_OnLoad`, `Agent_OnUnload` and required JNI bridge entries; no STL API
+crosses the boundary.
+
+### Sanitizers, fuzzing and remaining gates
+
+- Native normal, ASan+UBSan and TSan host suites pass without suppressions.
+- Go canonical agent decoder fuzzing ran 5 seconds / 3,296,468 executions without a failure.
+- The native libFuzzer target is present, but Xcode AppleClang 21 cannot link its runtime; CMake
+  fails clearly rather than silently skipping. Run it in Linux/LLVM CI with a libFuzzer runtime.
+- Android HWASan/ASan was not available in this device infrastructure.
+- Device energy is not measured. Battery attribution and battery-specific collectors are outside V1.
+- Physical arm64 startup/frame/CPU/PSS and API 28/current multi-OEM coverage remain release-candidate
+  gates; unmeasured cells are not treated as zero.
+- Exporting the device-created `.jhlog` to the host was intentionally not authorized because it can
+  contain app screen/flow/runtime payload. The device test structurally verified the committed log
+  in-app. Separately, the full v9 agent golden passed `jankhunter inspect` to JSON and standalone
+  HTML (`Agent`, `Findings`, availability/quality/capabilities). This is honest coverage of both
+  boundaries, not a claim that a sensitive device payload was pulled.

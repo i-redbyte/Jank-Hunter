@@ -338,6 +338,9 @@ jankHunter {
         allowHeapDumps = true
         performanceBudgetEvidence = "release-performance-budget.md"
     }
+    artTi {
+        mode = io.jankhunter.gradle.ArtTiMode.CAUSAL
+    }
     retainedHeapDump {
         enabled = true
         privacyApproved = true
@@ -654,10 +657,12 @@ main() {
   local runtime_module="$maven_repo/$group_path/jankhunter-runtime/$version/jankhunter-runtime-$version.module"
   local annotations_module="$maven_repo/$group_path/jankhunter-annotations/$version/jankhunter-annotations-$version.module"
   local okhttp_module="$maven_repo/$group_path/jankhunter-okhttp3/$version/jankhunter-okhttp3-$version.module"
+  local artti_module="$maven_repo/$group_path/jankhunter-artti/$version/jankhunter-artti-$version.module"
   [[ -f "$plugin_module" ]] || fail "Published plugin metadata was not found: $plugin_module"
   [[ -f "$runtime_module" ]] || fail "Published runtime metadata was not found: $runtime_module"
   [[ -f "$annotations_module" ]] || fail "Published annotations metadata was not found: $annotations_module"
   [[ -f "$okhttp_module" ]] || fail "Published OkHttp helper metadata was not found: $okhttp_module"
+  [[ -f "$artti_module" ]] || fail "Published ART TI metadata was not found: $artti_module"
   grep -q '"org.gradle.jvm.version": 17' "$plugin_module" ||
     fail "Published Gradle plugin metadata is not Java 17-compatible: $plugin_module"
 
@@ -736,6 +741,18 @@ main() {
   require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release dependency OkHttp hook diagnostics"
   local release_mapping="$fixture_dir/app/build/outputs/mapping/release/mapping.txt"
   require_file_contains "$release_mapping" 'okhttp3.EventListener$Factory eventListenerFactory -> eventListenerFactory' "Release R8 mapping"
+
+  local debug_apk="$fixture_dir/app/build/outputs/apk/debug/app-debug.apk"
+  local release_apk="$fixture_dir/app/build/outputs/apk/release/app-release-unsigned.apk"
+  [[ -s "$debug_apk" ]] || fail "External debug APK was not generated: $debug_apk"
+  [[ -s "$release_apk" ]] || fail "External release APK was not generated: $release_apk"
+  zipinfo -1 "$debug_apk" | grep -Fx 'lib/arm64-v8a/libjankhunter_artti.so' >/dev/null ||
+    fail "Published ART TI arm64 library was not packaged in the external debug APK"
+  zipinfo -1 "$debug_apk" | grep -Fx 'lib/x86_64/libjankhunter_artti.so' >/dev/null ||
+    fail "Published ART TI x86_64 library was not packaged in the external debug APK"
+  if zipinfo -1 "$release_apk" | grep -F 'libjankhunter_artti.so' >/dev/null; then
+    fail "ART TI library unexpectedly leaked into the external release APK"
+  fi
 
   local di_catalog="$fixture_dir/app/build/generated/jankhunter/debug/di-catalog.jsonl"
   require_file_contains "$di_catalog" '"kind":"metadata"' "Dependency injection catalog metadata"

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Debug
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import io.jankhunter.runtime.JankHunter
@@ -113,6 +114,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
 
     @SuppressLint("NewApi")
     private fun runControl(context: Context) {
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
         var nativeStarted = false
         var phase = ControlPhase.PRECONDITIONS
         try {

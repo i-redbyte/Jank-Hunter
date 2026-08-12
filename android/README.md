@@ -113,7 +113,7 @@ JankHunter.init(context, config)
 ```kotlin
 jankHunter {
     artTi {
-        mode.set(ArtTiMode.CAUSAL)
+        mode.set(io.jankhunter.gradle.ArtTiMode.CAUSAL)
         stackSampling.maxDepth.set(96) // необязательный override preset
     }
 }
@@ -129,6 +129,111 @@ collectors Jank Hunter.
 Для release-like варианта нужны существующие release-safety подтверждения и отдельное
 `releaseSafety.allowArtTiAgent=true`. Даже после этого non-debuggable APK не выполняет attach:
 `android:debuggable` является build/install-time свойством и не может быть изменено SDK.
+
+### Что именно даёт агент
+
+`LIGHT` добавляет negotiated GC и thread-lifecycle evidence. `CAUSAL` дополнительно включает
+monitor-contention intervals и ограниченные stack captures при main-thread stall/долгом contention.
+`DEEP` использует те же V1 collectors с более крупными, но всё ещё фиксированными лимитами. События
+содержат opaque thread/method/stack tokens; имена методов разрешаются асинхронно вне JVMTI callback.
+
+В callback нет Java-вызова, I/O, symbolization, heap allocation или ожидания mutex. При заполнении
+очереди событие отбрасывается, а cumulative loss и high-watermark попадают в quality evidence.
+Control/drain работает с background priority. Поэтому наличие агента не должно становиться причиной
+остановки host app, но `DEEP` всё равно предназначен для короткой целевой диагностики.
+
+Сигналы интерпретируются как доказательства разной силы:
+
+- GC/contention interval — прямое измерение самого интервала;
+- stack в окне stall — прямой stack sample и временная корреляция, но не доказанная первопричина;
+- совпадение image decode stack, GC и stall усиливает гипотезу;
+- drops, незавершённые окна, неизвестные методы и отсутствующие capabilities снижают confidence;
+- HTML/JSON всегда показывают missing evidence и альтернативные объяснения.
+
+### Полностью явный CUSTOM
+
+`CUSTOM` требует перечислить все поля, чтобы обновление плагина не меняло профиль молча:
+
+```kotlin
+jankHunter {
+    artTi {
+        mode.set(io.jankhunter.gradle.ArtTiMode.CUSTOM)
+        enabledBuildTypes.set(setOf("debug", "benchmark"))
+        garbageCollection.enabled.set(true)
+        threads {
+            lifecycle.set(true)
+            maxTrackedThreads.set(512)
+        }
+        monitorContention {
+            enabled.set(true)
+            minDurationMs.set(8)
+            maxOpenIntervals.set(1024)
+        }
+        stackSampling {
+            enabled.set(true)
+            maxDepth.set(64)
+            onMainThreadStall.set(true)
+            onLongContention.set(true)
+            minTriggerIntervalMs.set(250)
+            maxSamplesPerMinute.set(120)
+            maxStackDefinitions.set(1024)
+            maxMethodDefinitions.set(4096)
+        }
+        transport {
+            capacity.set(4096) // степень двойки
+            drainBatchSize.set(256)
+            overflowPolicy.set(io.jankhunter.gradle.ArtTiOverflowPolicy.DROP_AND_COUNT)
+        }
+    }
+}
+```
+
+Некорректный или небезопасно неполный `CUSTOM` останавливает сборку. Частично недоступная на
+устройстве JVMTI capability не останавливает приложение: агент публикует requested/potential/
+granted/active matrix и продолжает доступные collectors в degraded mode.
+
+### Ограничения и диагностика
+
+- SDK имеет `minSdk 23`, но публичный `Debug.attachJvmtiAgent` доступен только с API 28.
+- V1 публикует `arm64-v8a` и emulator-friendly `x86_64`; другая ABI получает
+  `library_or_abi_missing` и продолжает работу без агента.
+- Attachment выполняется только для фактически debuggable application process. Release-like DSL
+  permission не делает APK debuggable.
+- По умолчанию используется main-process policy runtime. Secondary process требует отдельного
+  осознанного включения общей release/process safety policy.
+- ART/JVMTI реализован устройствами не одинаково; источником истины служит capability matrix в
+  логе, а не версия Android сама по себе.
+
+Причины `api_unsupported`, `app_not_debuggable`, `library_or_abi_missing`, `attach_failed`,
+`native_handshake_failed`, `capability_degraded` и `shutdown_timeout` пишутся как bounded status/
+counter evidence и один раз выводятся в Logcat с тегом `JankHunter`. Проверяйте их так:
+
+```bash
+adb logcat -s JankHunter
+jankhunter inspect session.jhlog --json > inspect.json
+```
+
+Если `Agent.EventCount=0`, сначала проверьте effective variant banner/config, `artTiPackaged=true`,
+API, `FLAG_DEBUGGABLE` и ABI. Если events есть, но confidence низкий, смотрите `Agent.Quality`,
+`DataGaps`, capability matrix и `Limitations`; увеличение queue/stack budgets — последний шаг после
+устранения избыточных triggers.
+
+### Privacy, размер и миграция
+
+Агент не отправляет данные в сеть и не записывает raw object values. Method symbols и app context
+могут раскрывать структуру приложения и пользовательские названия flow/screen, поэтому `.jhlog`
+остаётся диагностическим артефактом с тем же режимом доступа и retention, что и остальные логи.
+Stack sampling ограничен trigger budget и выключен в `LIGHT`.
+
+`OFF` не добавляет AAR и `.so`. В release AAR две stripped библиотеки занимают примерно 93 KiB
+(`arm64-v8a`) и 87 KiB (`x86_64`) до сжатия; debug APK заметно больше из-за native symbols.
+Текущие измерения и команды находятся в `docs/performance/art-ti-v1-baseline.md`.
+
+Миграция не меняет физический формат: ART TI — аддитивный length-delimited record type 17 в
+`.jhlog v9`. Новый CLI читает старые логи как `Agent.EventCount=0`; старый v9 reader пропускает
+неизвестный тип. Для отключения достаточно вернуть `mode=OFF` — application-код и storage
+мигрировать не нужно. При сравнении старого и нового лога CLI честно помечает agent deltas как
+несопоставимые, а не превращает отсутствие событий в нули.
 
 ## Переключатель Сбора
 
