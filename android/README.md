@@ -144,11 +144,11 @@ Control/drain работает с background priority. Поэтому налич
 
 Сигналы интерпретируются как доказательства разной силы:
 
-- GC/contention interval — прямое измерение самого интервала;
-- stack в окне stall — прямой stack sample и временная корреляция, но не доказанная первопричина;
-- совпадение image decode stack, GC и stall усиливает гипотезу;
-- drops, незавершённые окна, неизвестные методы и отсутствующие capabilities снижают confidence;
-- HTML/JSON всегда показывают missing evidence и альтернативные объяснения.
+- пауза сборки мусора или ожидание блокировки — прямое измерение самого интервала;
+- снимок стека в окне паузы главного потока — прямое наблюдение и временная связь, но не доказанная первопричина;
+- совпадение декодирования изображения, сборки мусора и паузы главного потока усиливает гипотезу;
+- потери, незавершённые окна, неизвестные методы и недоступные возможности снижают доверие;
+- отдельная HTML-страница «Анализ JVM TI» показывает, что подтверждено, что не доказано и что делать дальше.
 
 ### Полностью явный CUSTOM
 
@@ -201,7 +201,7 @@ granted/active matrix и продолжает доступные collectors в d
   permission не делает APK debuggable.
 - По умолчанию используется main-process policy runtime. Secondary process требует отдельного
   осознанного включения общей release/process safety policy.
-- ART/JVMTI реализован устройствами не одинаково; источником истины служит capability matrix в
+- ART/JVMTI реализован устройствами не одинаково; источником истины служит набор возможностей в
   логе, а не версия Android сама по себе.
 
 Причины `api_unsupported`, `app_not_debuggable`, `library_or_abi_missing`, `attach_failed`,
@@ -214,9 +214,9 @@ jankhunter inspect session.jhlog --json > inspect.json
 ```
 
 Если `Agent.EventCount=0`, сначала проверьте effective variant banner/config, `artTiPackaged=true`,
-API, `FLAG_DEBUGGABLE` и ABI. Если events есть, но confidence низкий, смотрите `Agent.Quality`,
-`DataGaps`, capability matrix и `Limitations`; увеличение queue/stack budgets — последний шаг после
-устранения избыточных triggers.
+API, `FLAG_DEBUGGABLE` и ABI. Если события есть, но доверие низкое, смотрите `Agent.Quality`,
+`DataGaps`, набор возможностей и `Limitations`; увеличение лимитов очереди и стеков — последний шаг
+после устранения избыточных срабатываний.
 
 ### Privacy, размер и миграция
 
