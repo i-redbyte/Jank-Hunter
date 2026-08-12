@@ -27,6 +27,8 @@ struct NativeConfigSnapshot final {
   std::uint32_t max_stack_depth{64U};
   std::uint32_t max_stack_definitions{1024U};
   std::uint32_t max_method_definitions{4096U};
+  std::uint32_t min_stack_trigger_interval_ms{250U};
+  std::uint32_t max_stack_samples_per_minute{120U};
   std::uint32_t drain_batch_size{256U};
   std::uint64_t min_contention_duration_ns{8'000'000U};
   std::uint64_t config_hash{0U};
@@ -49,7 +51,8 @@ struct NativeConfigSnapshot final {
         max_stack_depth == 0U || max_stack_depth > 256U || drain_batch_size == 0U ||
         drain_batch_size > transport_capacity || max_stack_definitions == 0U ||
         max_stack_definitions > 65'536U || max_method_definitions == 0U ||
-        max_method_definitions > 262'144U) {
+        max_method_definitions > 262'144U || min_stack_trigger_interval_ms > 60'000U ||
+        max_stack_samples_per_minute == 0U || max_stack_samples_per_minute > 10'000U) {
       return Status::Error(StatusCode::kInvalidArgument);
     }
     if ((requested_capabilities.contains(Capability::kStackTrace) ||

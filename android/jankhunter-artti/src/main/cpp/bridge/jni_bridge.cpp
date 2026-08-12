@@ -106,6 +106,35 @@ Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeCaptureStack(
 }
 
 extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeCaptureStackForToken(
+    JNIEnv* env,
+    jobject,
+    jlong thread_token,
+    jint trigger,
+    jlong context_token,
+    jlong related_sequence) noexcept {
+  if (thread_token <= 0 || trigger <= 0) {
+    return -static_cast<jint>(StatusCode::kInvalidArgument);
+  }
+  return jankhunter::artti::art::ArtJvmtiAdapter::Instance().CaptureStackForToken(
+      env,
+      static_cast<std::uint64_t>(thread_token),
+      static_cast<std::uint32_t>(trigger),
+      static_cast<std::uint64_t>(context_token),
+      static_cast<std::uint64_t>(related_sequence));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeLinkThreadContext(
+    JNIEnv*, jobject, jobject thread, jlong context_token) noexcept {
+  if (thread == nullptr || context_token == 0) {
+    return -static_cast<jint>(StatusCode::kInvalidArgument);
+  }
+  return jankhunter::artti::art::ArtJvmtiAdapter::Instance().LinkThreadContext(
+      static_cast<jthread>(thread), static_cast<std::uint64_t>(context_token));
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeResolveMethod(
     JNIEnv* env, jobject, jlong method_id, jobject output_buffer) noexcept {
   if (method_id <= 0 || env == nullptr || output_buffer == nullptr) {

@@ -23,7 +23,8 @@ struct ArtTiNativeConfigV1 final {
   std::uint64_t requested_capabilities{0U};
   std::uint32_t max_stack_definitions{1024U};
   std::uint32_t max_method_definitions{4096U};
-  std::uint64_t reserved1{0U};
+  std::uint32_t min_stack_trigger_interval_ms{250U};
+  std::uint32_t max_stack_samples_per_minute{120U};
 };
 
 struct ArtTiHandshakeV1 final {

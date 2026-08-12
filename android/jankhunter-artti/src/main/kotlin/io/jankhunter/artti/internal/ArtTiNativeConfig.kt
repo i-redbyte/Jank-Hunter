@@ -11,6 +11,8 @@ internal data class ArtTiNativeConfig(
     val maxStackDepth: Int = 64,
     val maxStackDefinitions: Int = 1024,
     val maxMethodDefinitions: Int = 4096,
+    val minStackTriggerIntervalMs: Int = 250,
+    val maxStackSamplesPerMinute: Int = 120,
     val drainBatchSize: Int = 256,
     val minContentionDurationNs: Long = 8_000_000L,
     val configHash: Long = 0L,
@@ -29,6 +31,8 @@ internal data class ArtTiNativeConfig(
             maxStackDepth !in 1..MAX_STACK_DEPTH ||
             maxStackDefinitions !in 1..MAX_STACK_DEFINITIONS ||
             maxMethodDefinitions !in 1..MAX_METHOD_DEFINITIONS ||
+            minStackTriggerIntervalMs !in 0..MAX_TRIGGER_INTERVAL_MS ||
+            maxStackSamplesPerMinute !in 1..MAX_STACK_SAMPLES_PER_MINUTE ||
             drainBatchSize !in 1..transportCapacity ||
             minContentionDurationNs < 0L
         ) {
@@ -60,7 +64,8 @@ internal data class ArtTiNativeConfig(
                 putLong(requestedCapabilities)
                 putInt(maxStackDefinitions)
                 putInt(maxMethodDefinitions)
-                putLong(0L)
+                putInt(minStackTriggerIntervalMs)
+                putInt(maxStackSamplesPerMinute)
                 flip()
             }
     }
@@ -88,5 +93,7 @@ internal data class ArtTiNativeConfig(
         private const val MAX_STACK_DEPTH = 256
         private const val MAX_STACK_DEFINITIONS = 65_536
         private const val MAX_METHOD_DEFINITIONS = 262_144
+        private const val MAX_TRIGGER_INTERVAL_MS = 60_000
+        private const val MAX_STACK_SAMPLES_PER_MINUTE = 10_000
     }
 }

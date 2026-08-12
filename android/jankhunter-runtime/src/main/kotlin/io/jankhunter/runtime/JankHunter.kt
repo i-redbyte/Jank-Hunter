@@ -44,6 +44,9 @@ object JankHunter {
     private val initAttempts get() = runtimeState.initAttempts
     private val contextTracker = ContextTracker()
     private val coordinator = RuntimeCoordinator(runtimeState, ::nowMs)
+    private val optionalIntegrations = OptionalIntegrationRegistry(
+        diagnostic = { reason -> recordCounter("jankhunter.integration.$reason.count", 1) },
+    )
     private val collectors = RuntimeCollectorService(runtimeState)
     private val metrics = RuntimeMetricsService(
         DEFAULT_MAX_METRIC_AGGREGATION_KEYS,
@@ -334,6 +337,7 @@ object JankHunter {
         runtimeHookEvents.start(asyncWriter)
         installCrashFlushHandler()
         recordRuntimeStartMetadata(asyncWriter, attempt)
+        optionalIntegrations.startAll(appContext)
 
         collectors.start(appContext, providedConfig, directory)
         if (!runtimeState.runtimeEnabled.get()) {
@@ -383,6 +387,7 @@ object JankHunter {
             swallow { runtimeHookEvents.stopAndFlush(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
             swallow { runtimeCallGraph.flushForShutdown() }
             swallow { collectors.stop() }
+            swallow { optionalIntegrations.stopAll(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
             swallow { writer?.close(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
         }
         swallow { restoreCrashFlushHandler() }
@@ -1057,6 +1062,11 @@ object JankHunter {
         )
     }
 
+    internal fun notifyMainThreadStall(contextSnapshot: JankHunterContextSnapshot) {
+        val mainThread = Looper.getMainLooper()?.thread ?: return
+        optionalIntegrations.onMainThreadStall(mainThread, contextSnapshot)
+    }
+
     @JvmStatic
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
         if (!shouldRecordMemorySample(pssKb, javaHeapKb, nativeHeapKb)) {
@@ -1597,6 +1607,15 @@ object JankHunter {
             runtimeState.mainThreadContext = tuple
         }
         asyncWriter.updateProducerContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
+        if (optionalIntegrations.hasActive()) {
+            optionalIntegrations.onContextChanged(
+                Thread.currentThread(),
+                tuple.screen,
+                tuple.owner,
+                tuple.flow,
+                tuple.step,
+            )
+        }
         if (!contextTracker.shouldRecord(tuple)) return
         asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
     }

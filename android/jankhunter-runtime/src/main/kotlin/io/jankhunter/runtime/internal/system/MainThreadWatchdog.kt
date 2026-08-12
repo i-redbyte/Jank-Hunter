@@ -98,8 +98,10 @@ internal class MainThreadWatchdog(
         val frame = stack.firstOrNull(::isApplicationFrame) ?: stack.firstOrNull()
         val owner = frame?.className
         val stackHint = frame?.let(::stackHint) ?: "unknown"
+        val context = JankHunter.captureMainThreadStallContext(owner)
+        JankHunter.notifyMainThreadStall(context)
         return StallCapture(
-            context = JankHunter.captureMainThreadStallContext(owner),
+            context = context,
             stackHint = stackHint,
         )
     }

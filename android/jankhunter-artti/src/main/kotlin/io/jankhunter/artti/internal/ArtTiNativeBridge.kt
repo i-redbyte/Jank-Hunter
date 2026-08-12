@@ -37,6 +37,16 @@ internal object ArtTiNativeBridge {
         relatedSequence: Long,
     ): Int
 
+    external fun nativeCaptureStackForToken(
+        threadToken: Long,
+        trigger: Int,
+        contextToken: Long,
+        relatedSequence: Long,
+    ): Int
+
+    /** Links an existing ASM/runtime context to the current Java/native thread identity. */
+    external fun nativeLinkThreadContext(thread: Thread, contextToken: Long): Int
+
     /** Resolves one process-local method ID into a bounded versioned direct buffer. */
     external fun nativeResolveMethod(methodId: Long, outputBuffer: ByteBuffer): Int
 

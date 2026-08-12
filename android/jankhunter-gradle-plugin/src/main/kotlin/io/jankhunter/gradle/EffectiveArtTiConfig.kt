@@ -47,6 +47,8 @@ internal data class EffectiveArtTiConfig(
             "depth=$maxStackDepth",
             "stackdefs=$maxStackDefinitions",
             "methoddefs=$maxMethodDefinitions",
+            "triggerms=$minTriggerIntervalMs",
+            "samplespm=$maxSamplesPerMinute",
             "batch=$drainBatchSize",
             "mincontentionns=${minContentionDurationMs * NANOS_PER_MS}",
             "hash=0x${java.lang.Long.toUnsignedString(configHash, 16)}",

@@ -34,6 +34,14 @@ class ArtJvmtiAdapter final {
       std::uint32_t trigger,
       std::uint64_t context_token,
       std::uint64_t related_sequence) noexcept;
+  [[nodiscard]] std::int32_t CaptureStackForToken(
+      JNIEnv* jni,
+      std::uint64_t thread_token,
+      std::uint32_t trigger,
+      std::uint64_t context_token,
+      std::uint64_t related_sequence) noexcept;
+  [[nodiscard]] std::int32_t LinkThreadContext(
+      jthread thread, std::uint64_t context_token) noexcept;
   [[nodiscard]] std::int32_t ResolveMethod(
       JNIEnv* jni, std::uint64_t method_id, std::span<std::byte> output) noexcept;
 
@@ -69,6 +77,11 @@ class ArtJvmtiAdapter final {
   [[nodiscard]] ThreadMetadata ReadThreadMetadata(JNIEnv* jni, jthread thread, bool* valid) noexcept;
   [[nodiscard]] ThreadToken TokenFor(jthread thread) noexcept;
   [[nodiscard]] ThreadToken EnsureCallbackThreadToken(NativeEngine* engine, jthread thread) noexcept;
+  [[nodiscard]] std::int32_t CaptureStackLocked(
+      jthread thread,
+      std::uint32_t trigger,
+      std::uint64_t context_token,
+      std::uint64_t related_sequence) noexcept;
   void PublishStatus(std::uint64_t status, std::uint64_t detail) noexcept;
   void PublishCapabilities() noexcept;
   void RemoveActiveCapability(Capability capability) noexcept;

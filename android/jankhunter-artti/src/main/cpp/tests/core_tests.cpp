@@ -327,12 +327,14 @@ void AgentOptionsAreBounded() {
   jankhunter::artti::bridge::ArtTiNativeConfigV1 config{};
   JH_CHECK(ParseAgentOptions(
       "v=1;profile=3;transport=1024;threads=128;contentions=256;depth=96;stackdefs=512;"
-      "methoddefs=2048;batch=64;mincontentionns=9000000;hash=0x2a;cap=0xf",
+      "methoddefs=2048;triggerms=50;samplespm=600;batch=64;mincontentionns=9000000;hash=0x2a;cap=0xf",
       &config).ok());
   JH_CHECK(config.profile == 3U);
   JH_CHECK(config.transport_capacity == 1024U);
   JH_CHECK(config.max_tracked_threads == 128U);
   JH_CHECK(config.max_stack_depth == 96U);
+  JH_CHECK(config.min_stack_trigger_interval_ms == 50U);
+  JH_CHECK(config.max_stack_samples_per_minute == 600U);
   JH_CHECK(config.config_hash == 42U);
   JH_CHECK(config.requested_capabilities == 15U);
   JH_CHECK(ParseAgentOptions("v=2", &config).code == StatusCode::kInvalidArgument);

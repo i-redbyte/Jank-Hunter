@@ -84,6 +84,8 @@ class ArtTiNativeProtocolDecoderTest {
         encoded.position(56)
         assertEquals(1024, encoded.int)
         assertEquals(4096, encoded.int)
+        assertEquals(250, encoded.int)
+        assertEquals(120, encoded.int)
 
         val handshakeBuffer = ByteBuffer.allocate(ArtTiNativeProtocol.HANDSHAKE_WIRE_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)

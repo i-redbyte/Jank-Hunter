@@ -24,25 +24,6 @@ constexpr std::uint64_t kStatusAttachFailed = 4U;
 constexpr std::uint64_t kStatusStopped = 5U;
 constexpr std::uint64_t kMinuteNs = 60'000'000'000ULL;
 
-struct StackBudget final {
-  std::uint32_t max_per_minute;
-  std::uint64_t min_interval_ns;
-};
-
-StackBudget BudgetForProfile(const AgentProfile profile) noexcept {
-  switch (profile) {
-    case AgentProfile::kOff:
-    case AgentProfile::kLight:
-      return {0U, kMinuteNs};
-    case AgentProfile::kDeep:
-      return {600U, 50'000'000U};
-    case AgentProfile::kCausal:
-    case AgentProfile::kCustom:
-      return {120U, 250'000'000U};
-  }
-  return {0U, kMinuteNs};
-}
-
 std::uint64_t CurrentTid() noexcept {
   const auto tid = syscall(SYS_gettid);
   return tid <= 0 ? 0U : static_cast<std::uint64_t>(tid);
@@ -475,12 +456,76 @@ std::int32_t ArtJvmtiAdapter::CaptureStack(
     const std::uint64_t context_token,
     const std::uint64_t related_sequence) noexcept {
   std::lock_guard lock(control_mutex_);
+  return CaptureStackLocked(thread, trigger, context_token, related_sequence);
+}
+
+std::int32_t ArtJvmtiAdapter::CaptureStackForToken(
+    JNIEnv* const jni,
+    const std::uint64_t thread_token,
+    const std::uint32_t trigger,
+    const std::uint64_t context_token,
+    const std::uint64_t related_sequence) noexcept {
+  std::lock_guard lock(control_mutex_);
+  if (!attached_ || jvmti_ == nullptr || jni == nullptr || thread_token == 0U) {
+    return -static_cast<std::int32_t>(StatusCode::kInvalidState);
+  }
+  jint count = 0;
+  jthread* threads = nullptr;
+  const auto error = jvmti_->GetAllThreads(&count, &threads);
+  if (error != JVMTI_ERROR_NONE || count < 0 || (count > 0 && threads == nullptr)) {
+    RecordJvmtiError(error);
+    if (threads != nullptr) static_cast<void>(jvmti_->Deallocate(
+        reinterpret_cast<unsigned char*>(threads)));
+    return -static_cast<std::int32_t>(StatusCode::kUnsupported);
+  }
+  std::int32_t result = -static_cast<std::int32_t>(StatusCode::kNotFound);
+  const auto limit = std::min<std::uint32_t>(
+      static_cast<std::uint32_t>(count), config_.max_tracked_threads);
+  for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(count); ++index) {
+    jthread thread = threads[index];
+    if (index < limit && result < 0 && TokenFor(thread).value() == thread_token) {
+      result = CaptureStackLocked(thread, trigger, context_token, related_sequence);
+    }
+    jni->DeleteLocalRef(thread);
+  }
+  if (threads != nullptr) static_cast<void>(jvmti_->Deallocate(
+      reinterpret_cast<unsigned char*>(threads)));
+  return result;
+}
+
+std::int32_t ArtJvmtiAdapter::LinkThreadContext(
+    jthread thread, const std::uint64_t context_token) noexcept {
+  if (thread == nullptr || context_token == 0U) {
+    return -static_cast<std::int32_t>(StatusCode::kInvalidArgument);
+  }
+  CallbackScope operation(this);
+  NativeEngine* const engine = operation.engine();
+  if (engine == nullptr) return -static_cast<std::int32_t>(StatusCode::kClosed);
+  const auto token = EnsureCallbackThreadToken(engine, thread);
+  if (!token.valid()) return -static_cast<std::int32_t>(StatusCode::kNotFound);
+  NativeEvent event{};
+  event.type = EventType::kCorrelationLink;
+  event.thread_token = token.value();
+  event.context_token = context_token;
+  event.payload.status.value0 = context_token;
+  return engine->Publish(event).ok()
+      ? static_cast<std::int32_t>(StatusCode::kOk)
+      : -static_cast<std::int32_t>(StatusCode::kQueueFull);
+}
+
+std::int32_t ArtJvmtiAdapter::CaptureStackLocked(
+    jthread thread,
+    const std::uint32_t trigger,
+    const std::uint64_t context_token,
+    const std::uint64_t related_sequence) noexcept {
   NativeEngine* const engine = bridge::BridgeRuntime::Instance().callback_engine();
   if (!attached_ || jvmti_ == nullptr || engine == nullptr || thread == nullptr ||
       !active_capabilities().contains(Capability::kStackTrace) || trigger == 0U || trigger > 3U) {
     return -static_cast<std::int32_t>(StatusCode::kInvalidState);
   }
-  const auto budget = BudgetForProfile(config_.profile);
+  const auto max_per_minute = config_.max_stack_samples_per_minute;
+  const auto min_interval_ns =
+      static_cast<std::uint64_t>(config_.min_stack_trigger_interval_ms) * 1'000'000U;
   const auto now_ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count());
   if (stack_budget_window_start_ns_ == 0U ||
@@ -489,8 +534,8 @@ std::int32_t ArtJvmtiAdapter::CaptureStack(
     stack_captures_in_window_ = 0U;
   }
   const bool too_soon = last_stack_capture_ns_ != 0U &&
-      now_ns - last_stack_capture_ns_ < budget.min_interval_ns;
-  if (budget.max_per_minute == 0U || stack_captures_in_window_ >= budget.max_per_minute || too_soon) {
+      now_ns - last_stack_capture_ns_ < min_interval_ns;
+  if (stack_captures_in_window_ >= max_per_minute || too_soon) {
     engine->quality().Add(QualityCounter::kStackCaptureBudgetLoss);
     return -static_cast<std::int32_t>(StatusCode::kContended);
   }

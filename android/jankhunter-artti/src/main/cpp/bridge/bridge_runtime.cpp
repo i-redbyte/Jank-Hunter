@@ -112,6 +112,8 @@ NativeConfigSnapshot BridgeRuntime::ConfigFromWire(const ArtTiNativeConfigV1& wi
   config.max_stack_depth = wire.max_stack_depth;
   config.max_stack_definitions = wire.max_stack_definitions;
   config.max_method_definitions = wire.max_method_definitions;
+  config.min_stack_trigger_interval_ms = wire.min_stack_trigger_interval_ms;
+  config.max_stack_samples_per_minute = wire.max_stack_samples_per_minute;
   config.drain_batch_size = wire.drain_batch_size;
   config.min_contention_duration_ns = wire.min_contention_duration_ns;
   config.config_hash = wire.config_hash;

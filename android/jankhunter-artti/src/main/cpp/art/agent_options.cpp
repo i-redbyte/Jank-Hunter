@@ -57,6 +57,10 @@ bool Assign(
     config->max_stack_definitions = static_cast<std::uint32_t>(value);
   } else if (key == "methoddefs" && value <= UINT32_MAX) {
     config->max_method_definitions = static_cast<std::uint32_t>(value);
+  } else if (key == "triggerms" && value <= UINT32_MAX) {
+    config->min_stack_trigger_interval_ms = static_cast<std::uint32_t>(value);
+  } else if (key == "samplespm" && value <= UINT32_MAX) {
+    config->max_stack_samples_per_minute = static_cast<std::uint32_t>(value);
   } else if (key == "batch" && value <= UINT32_MAX) {
     config->drain_batch_size = static_cast<std::uint32_t>(value);
   } else if (key == "mincontentionns") {
