@@ -648,10 +648,14 @@ std::int32_t ArtJvmtiAdapter::ResolveMethod(
     if (engine != nullptr) engine->quality().Add(QualityCounter::kMethodResolutionFailure);
     return -static_cast<std::int32_t>(StatusCode::kCapacityExhausted);
   }
-  if (method_ids_.Insert(method_id) == BoundedIdInsertResult::kFull) {
+  const auto method_insert = method_ids_.Insert(method_id);
+  if (method_insert == BoundedIdInsertResult::kFull) {
     NativeEngine* const engine = bridge::BridgeRuntime::Instance().callback_engine();
     if (engine != nullptr) engine->quality().Add(QualityCounter::kMethodResolutionFailure);
     return -static_cast<std::int32_t>(StatusCode::kCapacityExhausted);
+  }
+  if (method_insert == BoundedIdInsertResult::kExisting) {
+    return 0;
   }
   const auto total_size = static_cast<std::size_t>(protocol::kMethodHeaderSize) +
       class_length + name_length + signature_length;

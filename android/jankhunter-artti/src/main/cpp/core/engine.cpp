@@ -1,5 +1,7 @@
 #include "core/engine.h"
 
+#include <limits>
+
 namespace jankhunter::artti {
 
 NativeEngine::NativeEngine(const NativeConfigSnapshot& config, const ClockSource clock) noexcept
@@ -50,6 +52,34 @@ void NativeEngine::FailOpen() noexcept {
 
 Status NativeEngine::Publish(NativeEvent event) noexcept {
   if (event.monotonic_ns == 0U) event.monotonic_ns = clock_.NowNs();
+  return PublishPrepared(&event);
+}
+
+Status NativeEngine::PublishQualitySnapshot(const bool final_after_stop) noexcept {
+  NativeEvent event{};
+  event.type = EventType::kQualitySnapshot;
+  event.payload.status.value0 = quality_.high_watermark();
+  event.payload.status.value1 = quality_.Get(QualityCounter::kQueueFull);
+  event.payload.status.value2 = quality_.Get(QualityCounter::kQueueContended);
+  std::uint64_t other_loss = 0U;
+  for (auto index = static_cast<std::size_t>(QualityCounter::kRejectedAfterClose);
+       index < static_cast<std::size_t>(QualityCounter::kCount);
+       ++index) {
+    const auto value = quality_.Get(static_cast<QualityCounter>(index));
+    const auto room = std::numeric_limits<std::uint64_t>::max() - other_loss;
+    other_loss = value > room ? std::numeric_limits<std::uint64_t>::max() : other_loss + value;
+  }
+  event.payload.status.value3 = other_loss;
+  if (final_after_stop && state() == EngineState::kStopped) {
+    event.monotonic_ns = clock_.NowNs();
+    event.producer_sequence = next_sequence_.fetch_add(1U, std::memory_order_relaxed);
+    const auto status = transport_.TryPush(event);
+    if (status.ok()) {
+      quality_.Add(QualityCounter::kPublished);
+      quality_.ObserveHighWatermark(transport_.ApproximateSize());
+    }
+    return status;
+  }
   return PublishPrepared(&event);
 }
 

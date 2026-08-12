@@ -173,6 +173,59 @@ func TestRetainedEvidenceRoundTrips(t *testing.T) {
 	}
 }
 
+func TestAgentSemanticEventAndMethodDefinitionRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.jhlog")
+	writeClosedEvents(t, path, []Event{
+		{Type: EventDictionary, Dictionary: &DictionaryEntry{Kind: DictMethod, ID: 7, Value: "Lapp/Images;->decode()V"}},
+		{Type: EventAgent, TimeUS: 123_456, Agent: &AgentEvent{
+			SemanticType: AgentMethodDefinition, SchemaVersion: 1, Payload0: 0x44,
+			MethodRef: LocalSymbol(7),
+		}},
+		{Type: EventAgent, TimeUS: 124_000, Agent: &AgentEvent{
+			SemanticType: AgentGCInterval, SchemaVersion: 1, ProducerSequence: 9,
+			ThreadToken: 3, ContextToken: 4, Payload0: 100, Payload1: 24,
+		}},
+	})
+
+	var events []Event
+	result, err := StreamFileWithResult(path, func(event Event, _ map[uint64]string) error {
+		if event.Agent != nil {
+			events = append(events, event)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != SegmentStatusClosedClean || result.Events != 2 || len(events) != 2 {
+		t.Fatalf("agent stream result=%+v events=%d", result, len(events))
+	}
+	if events[0].Agent.MethodRef.LocalID != 7 || events[0].Agent.Payload0 != 0x44 {
+		t.Fatalf("method definition = %+v", events[0].Agent)
+	}
+	if events[1].Agent.SemanticType != AgentGCInterval || events[1].Agent.ProducerSequence != 9 ||
+		events[1].Agent.Payload1 != 24 {
+		t.Fatalf("GC event = %+v", events[1].Agent)
+	}
+}
+
+func TestFutureAgentSemanticSchemaIsForwardSkipped(t *testing.T) {
+	var payload bytes.Buffer
+	for _, value := range []uint64{uint64(AgentGCInterval), 2, 99, 1, 2, 3} {
+		if err := writeUvarint(&payload, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := Event{Type: EventAgent}
+	known, err := decodeEventPayload(bytes.NewReader(payload.Bytes()), &event, DefaultSegmentHeader())
+	if err != nil || known || event.Agent != nil {
+		t.Fatalf("future schema known=%t agent=%+v err=%v", known, event.Agent, err)
+	}
+	if len(event.Warnings) != 1 || !strings.Contains(event.Warnings[0], "schema 2") {
+		t.Fatalf("future schema warnings=%v", event.Warnings)
+	}
+}
+
 func TestLegacyRetainedPayloadDefaultsToTimeOnly(t *testing.T) {
 	var payload bytes.Buffer
 	for _, value := range []uint64{2, 0, 30_000, 1} { // local class id=1, no holder, age, count

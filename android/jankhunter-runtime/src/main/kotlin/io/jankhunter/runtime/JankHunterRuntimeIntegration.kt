@@ -11,7 +11,7 @@ import android.content.Context
 interface JankHunterRuntimeIntegration {
     val id: String
 
-    fun start(context: Context)
+    fun start(context: Context, eventSink: JankHunterAgentEventSink)
 
     fun stop(timeoutMs: Long)
 

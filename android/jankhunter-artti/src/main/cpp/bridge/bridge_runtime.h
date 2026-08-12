@@ -39,6 +39,7 @@ class BridgeRuntime final {
   std::unique_ptr<NativeEngine> engine_;
   std::unique_ptr<NativeEvent[]> scratch_;
   std::uint32_t scratch_capacity_{0U};
+  std::uint32_t quality_drain_tick_{0U};
   std::atomic<NativeEngine*> callback_engine_{nullptr};
 };
 

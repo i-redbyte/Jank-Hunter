@@ -11,6 +11,7 @@ import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
+import io.jankhunter.runtime.internal.io.CurrentAgentEventSink
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
@@ -44,7 +45,9 @@ object JankHunter {
     private val initAttempts get() = runtimeState.initAttempts
     private val contextTracker = ContextTracker()
     private val coordinator = RuntimeCoordinator(runtimeState, ::nowMs)
+    private val agentEventSink = CurrentAgentEventSink { writer }
     private val optionalIntegrations = OptionalIntegrationRegistry(
+        eventSink = agentEventSink,
         diagnostic = { reason -> recordCounter("jankhunter.integration.$reason.count", 1) },
     )
     private val collectors = RuntimeCollectorService(runtimeState)

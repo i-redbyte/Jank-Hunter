@@ -4,6 +4,8 @@ import io.jankhunter.runtime.JankHunterBinaryArtifact
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterAgentEventBatch
+import io.jankhunter.runtime.JankHunterAgentEventType
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -28,6 +30,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AsyncLogWriterTest {
+    @Test
+    fun canonicalAgentBatchContextAndMethodUseOneForwardSkippableRecordType() {
+        val directory = Files.createTempDirectory("jankhunter-agent-events").toFile()
+        try {
+            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val batch = JankHunterAgentEventBatch(2)
+            assertTrue(batch.tryAppend(JankHunterAgentEventType.GC_INTERVAL, 1, 0, 1, 10, 0, 0, 7, 8, 9, 0, 0))
+            assertTrue(batch.tryAppend(JankHunterAgentEventType.AGENT_QUALITY_SNAPSHOT, 1, 0, 2, 11, 0, 0, 0, 1, 2, 3, 4))
+            assertTrue(writer.agentEvents(batch))
+            assertTrue(writer.agentContext(7L, "Feed", "Images", "scroll", "decode"))
+            assertTrue(writer.agentMethodDefinition(44L, "Lapp/Images;->decode()V"))
+            assertTrue(writer.close())
+
+            val file = logFiles(directory).single()
+            assertEquals(4, recordPayloads(file, JhlogV9.TYPE_AGENT_EVENT).size)
+            val quality = qualityCounters(file)
+            assertEquals(4L, quality[QualityCounterId.ACCEPTED_EVENT_TOTAL] ?: 0L)
+            assertEquals(4L, quality[QualityCounterId.WRITTEN_EVENT_TOTAL] ?: 0L)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun fileHeaderCarriesConfiguredStableSymbolNamespace() {
         val directory = Files.createTempDirectory("jankhunter-symbol-namespace").toFile()

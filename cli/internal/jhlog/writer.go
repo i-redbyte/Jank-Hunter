@@ -739,6 +739,25 @@ func encodeEventPayload(w io.Writer, event Event) error {
 			return err
 		}
 		return writeValues(p.Count, p.TotalMS, p.MaxMS)
+	case EventAgent:
+		p := event.Agent
+		if p == nil {
+			return fmt.Errorf("agent payload is nil")
+		}
+		if p.SchemaVersion != 1 {
+			return fmt.Errorf("unsupported agent event schema %d", p.SchemaVersion)
+		}
+		if err := writeValues(
+			uint64(p.SemanticType), p.SchemaVersion, p.ProducerSequence, p.ProducerID,
+			p.ThreadToken, p.ContextToken, p.EventFlags, p.Payload0, p.Payload1,
+			p.Payload2, p.Payload3,
+		); err != nil {
+			return err
+		}
+		if p.SemanticType == AgentMethodDefinition && !p.MethodRef.IsUnknown() {
+			return writeSymbolRef(w, p.MethodRef)
+		}
+		return nil
 	case EventQualitySnapshot:
 		p := event.Quality
 		if p == nil {

@@ -286,6 +286,32 @@ void EngineStartStopRace() {
   JH_CHECK(engine.state() == EngineState::kStopped);
 }
 
+void EngineQualitySnapshotIsBoundedAndCumulative() {
+  NativeConfigSnapshot config{};
+  config.transport_capacity = 8U;
+  config.max_tracked_threads = 2U;
+  config.max_open_contentions = 2U;
+  config.drain_batch_size = 2U;
+  NativeEngine engine(config, ClockSource{nullptr, TestNow});
+  JH_CHECK(engine.Start().ok());
+  engine.quality().ObserveHighWatermark(7U);
+  engine.quality().Add(QualityCounter::kQueueFull, 3U);
+  engine.quality().Add(QualityCounter::kQueueContended, 2U);
+  engine.quality().Add(QualityCounter::kGcOrphanFinish, 4U);
+  JH_CHECK(engine.PublishQualitySnapshot().ok());
+  std::array<NativeEvent, 1U> output{};
+  JH_CHECK(engine.Drain(output).count == 1U);
+  JH_CHECK(output[0].type == EventType::kQualitySnapshot);
+  JH_CHECK(output[0].payload.status.value0 == 7U);
+  JH_CHECK(output[0].payload.status.value1 == 3U);
+  JH_CHECK(output[0].payload.status.value2 == 2U);
+  JH_CHECK(output[0].payload.status.value3 == 4U);
+  JH_CHECK(engine.BeginStop().ok());
+  engine.MarkStopped();
+  JH_CHECK(engine.PublishQualitySnapshot(true).ok());
+  JH_CHECK(engine.Drain(output).count == 1U);
+}
+
 std::uint32_t ReadU32(const std::vector<std::byte>& input, const std::size_t offset) {
   std::uint32_t result = 0U;
   for (std::size_t index = 0U; index < sizeof(result); ++index) {
@@ -397,6 +423,7 @@ int main() {
   ThreadRegistryLifecycle();
   EngineLifecycleAndIntervals();
   EngineStartStopRace();
+  EngineQualitySnapshotIsBoundedAndCumulative();
   BatchEncodingBoundsAndEnvelope();
   AgentOptionsAreBounded();
   CapabilityNegotiationIsPartialAndExplicit();

@@ -5,6 +5,7 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterAgentEventBatch
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
 import io.jankhunter.runtime.internal.system.RetentionEvidence
@@ -365,6 +366,42 @@ internal class AsyncLogWriter private constructor(
         if (batch.size <= 0) return true
         return enqueue(JhlogV9.TYPE_RUNTIME_CALL, EventLane.BULK, batch.logicalEventCount()) {
             PendingLogEvent.RuntimeCalls(captureProducer(), batch)
+        }
+    }
+
+    fun agentEvents(batch: JankHunterAgentEventBatch): Boolean {
+        if (batch.size <= 0) return true
+        return enqueue(JhlogV9.TYPE_AGENT_EVENT, EventLane.BULK, batch.size.toLong()) {
+            PendingLogEvent.AgentEvents(batch)
+        }
+    }
+
+    fun agentContext(
+        contextToken: Long,
+        screen: String?,
+        owner: String?,
+        flow: String?,
+        step: String?,
+    ): Boolean {
+        if (contextToken == 0L) {
+            recordQuality(QualityCounterId.AGENT_EVENT_INVALID_BATCH_LOSS)
+            return false
+        }
+        return enqueue(JhlogV9.TYPE_AGENT_EVENT, EventLane.CRITICAL) {
+            PendingLogEvent.AgentContext(
+                LogEventContext.of(screen, owner, flow, step).takeUnless { it == LogEventContext.EMPTY },
+                contextToken,
+            )
+        }
+    }
+
+    fun agentMethodDefinition(methodId: Long, symbol: String): Boolean {
+        if (methodId == 0L || symbol.isBlank()) {
+            recordQuality(QualityCounterId.AGENT_EVENT_INVALID_BATCH_LOSS)
+            return false
+        }
+        return enqueue(JhlogV9.TYPE_AGENT_EVENT, EventLane.CRITICAL) {
+            PendingLogEvent.AgentMethodDefinition(methodId, symbol)
         }
     }
 

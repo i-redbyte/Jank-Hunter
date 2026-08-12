@@ -796,6 +796,37 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
 			CalleeRef: calleeRef, CalleeID: calleeRef.LegacyID(), Count: values[0], TotalMS: values[1], MaxMS: values[2],
 		}
+	case EventAgent:
+		prefix, err := readValues("agent semantic type", "agent schema version")
+		if err != nil {
+			return true, err
+		}
+		if prefix[1] != 1 {
+			event.Warnings = append(event.Warnings, fmt.Sprintf("unsupported agent event schema %d", prefix[1]))
+			return false, nil
+		}
+		values, err := readValues(
+			"agent producer sequence", "agent producer id", "agent thread token",
+			"agent context token", "agent flags", "agent payload 0", "agent payload 1",
+			"agent payload 2", "agent payload 3",
+		)
+		if err != nil {
+			return true, err
+		}
+		agent := &AgentEvent{
+			SemanticType: AgentSemanticType(prefix[0]), SchemaVersion: prefix[1],
+			ProducerSequence: values[0], ProducerID: values[1], ThreadToken: values[2],
+			ContextToken: values[3], EventFlags: values[4], Payload0: values[5],
+			Payload1: values[6], Payload2: values[7], Payload3: values[8],
+		}
+		if agent.SemanticType == AgentMethodDefinition && reader.Len() > 0 {
+			ref, err := readRef("agent method")
+			if err != nil {
+				return true, err
+			}
+			agent.MethodRef = ref
+		}
+		event.Agent = agent
 	case EventQualitySnapshot:
 		values, err := readValues("quality sequence", "quality captured time", "quality entry count")
 		if err != nil {

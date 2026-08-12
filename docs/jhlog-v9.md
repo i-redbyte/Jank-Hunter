@@ -133,9 +133,14 @@ a stale but contract-compatible map simply leaves newly observed stable IDs unre
 14 RUNTIME_CALL
 15 QUALITY_SNAPSHOT
 16 SEGMENT_END
+17 AGENT_EVENT
 ```
 
 Types are varints, not a four-bit enum. New types can be added without changing the envelope.
+`AGENT_EVENT` is an additive data record; older v9 readers parse its common envelope and safely
+skip the length-delimited payload. Its semantic payload is documented in
+[`art-ti-canonical-events.md`](art-ti-canonical-events.md). It does not change the v9 required
+feature mask, magic, chunk commit contract, or behavior of sessions without ART TI data.
 
 ## Quality snapshots
 

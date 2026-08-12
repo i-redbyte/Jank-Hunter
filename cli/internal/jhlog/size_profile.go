@@ -174,6 +174,8 @@ func EventTypeName(eventType EventType) string {
 		return "problem"
 	case EventRuntimeCall:
 		return "runtime_call"
+	case EventAgent:
+		return "agent"
 	case EventQualitySnapshot:
 		return "quality_snapshot"
 	case EventSegmentEnd:

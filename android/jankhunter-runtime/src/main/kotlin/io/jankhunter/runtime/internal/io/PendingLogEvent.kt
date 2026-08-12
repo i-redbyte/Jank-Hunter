@@ -2,6 +2,7 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.Process
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterAgentEventBatch
 
 /**
  * Immutable data accepted by the asynchronous writer.
@@ -307,5 +308,60 @@ internal sealed class PendingLogEvent(
                 written++
             }
         }
+    }
+
+    class AgentEvents(
+        batch: JankHunterAgentEventBatch,
+    ) : PendingLogEvent(JhlogV9.TYPE_AGENT_EVENT, null) {
+        private val words = batch.copyPackedWords()
+        private var written = 0
+
+        override val logicalEventCount: Long
+            get() = words.size.toLong() / JankHunterAgentEventBatch.WORDS_PER_EVENT
+
+        override val remainingEventCount: Long
+            get() = (logicalEventCount - written).coerceAtLeast(0L)
+
+        override fun writePayload(writer: BinaryLogWriter) {
+            val size = words.size / JankHunterAgentEventBatch.WORDS_PER_EVENT
+            while (written < size) {
+                val offset = written * JankHunterAgentEventBatch.WORDS_PER_EVENT
+                val header = words[offset + JankHunterAgentEventBatch.TYPE_SCHEMA_FLAGS]
+                writer.withProducer(
+                    elapsedUs = words[offset + JankHunterAgentEventBatch.MONOTONIC_NS].coerceAtLeast(0L) / 1_000L,
+                    threadId = 0L,
+                    context = null,
+                ) {
+                    agentEvent(
+                        type = (header and 0xFFFFL).toInt(),
+                        schemaVersion = ((header ushr 16) and 0xFFFFL).toInt(),
+                        flags = (header ushr 32).toInt(),
+                        producerSequence = words[offset + JankHunterAgentEventBatch.PRODUCER_SEQUENCE],
+                        producerId = words[offset + JankHunterAgentEventBatch.PRODUCER_ID],
+                        threadToken = words[offset + JankHunterAgentEventBatch.THREAD_TOKEN],
+                        contextToken = words[offset + JankHunterAgentEventBatch.CONTEXT_TOKEN],
+                        payload0 = words[offset + JankHunterAgentEventBatch.PAYLOAD_0],
+                        payload1 = words[offset + JankHunterAgentEventBatch.PAYLOAD_1],
+                        payload2 = words[offset + JankHunterAgentEventBatch.PAYLOAD_2],
+                        payload3 = words[offset + JankHunterAgentEventBatch.PAYLOAD_3],
+                    )
+                }
+                written++
+            }
+        }
+    }
+
+    class AgentContext(
+        producerContext: LogEventContext?,
+        private val contextToken: Long,
+    ) : PendingLogEvent(JhlogV9.TYPE_AGENT_EVENT, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) = writer.agentContext(contextToken)
+    }
+
+    class AgentMethodDefinition(
+        private val methodId: Long,
+        private val symbol: String,
+    ) : PendingLogEvent(JhlogV9.TYPE_AGENT_EVENT, null) {
+        override fun writePayload(writer: BinaryLogWriter) = writer.agentMethodDefinition(methodId, symbol)
     }
 }

@@ -2,6 +2,8 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.Process
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterAgentEventFlag
+import io.jankhunter.runtime.JankHunterAgentEventType
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -107,7 +109,7 @@ internal class BinaryLogWriter private constructor(
     )
     private val stableSymbolDefinitions = HashMap<Long, String>()
     private val rawChunk = ByteArrayOutputStream(JhlogV9.TARGET_RAW_CHUNK_BYTES)
-    private val chunkTypeCounts = IntArray(JhlogV9.TYPE_SEGMENT_END + 1)
+    private val chunkTypeCounts = IntArray(JhlogV9.TYPE_AGENT_EVENT + 1)
     private var chunkRecordCount = 0
     private var chunkSequence = 0L
     private var lastTimedRecordUs = fileHeader.segmentStartElapsedUs
@@ -507,6 +509,71 @@ internal class BinaryLogWriter private constructor(
             .uvarint(nonNegative(maxMs))
         val context = contextIds(screen, null, flow, step).withStableOwner(callerId)
         record(JhlogV9.TYPE_RUNTIME_CALL, 0L, payload, context)
+    }
+
+    @Synchronized
+    @Suppress("LongParameterList")
+    fun agentEvent(
+        type: Int,
+        schemaVersion: Int,
+        flags: Int,
+        producerSequence: Long,
+        producerId: Long,
+        threadToken: Long,
+        contextToken: Long,
+        payload0: Long,
+        payload1: Long,
+        payload2: Long,
+        payload3: Long,
+    ) {
+        val payload = Payload()
+            .uvarint(type.toLong())
+            .uvarint(schemaVersion.toLong())
+            .uvarint(producerSequence)
+            .uvarint(producerId)
+            .uvarint(threadToken)
+            .uvarint(contextToken)
+            .uvarint(flags.toLong() and UINT32_MASK)
+            .uvarint(payload0)
+            .uvarint(payload1)
+            .uvarint(payload2)
+            .uvarint(payload3)
+        record(JhlogV9.TYPE_AGENT_EVENT, 0L, payload, currentProducerContext())
+    }
+
+    @Synchronized
+    fun agentContext(contextToken: Long) {
+        agentEvent(
+            type = JankHunterAgentEventType.CORRELATION_LINK,
+            schemaVersion = AGENT_EVENT_SCHEMA_V1,
+            flags = JankHunterAgentEventFlag.CONTEXT_DEFINITION,
+            producerSequence = 0L,
+            producerId = 0L,
+            threadToken = 0L,
+            contextToken = contextToken,
+            payload0 = contextToken,
+            payload1 = 0L,
+            payload2 = 0L,
+            payload3 = 0L,
+        )
+    }
+
+    @Synchronized
+    fun agentMethodDefinition(methodId: Long, symbol: String) {
+        val payload = Payload()
+            .uvarint(JankHunterAgentEventType.METHOD_DEFINITION.toLong())
+            .uvarint(AGENT_EVENT_SCHEMA_V1.toLong())
+            .uvarint(0L)
+            .uvarint(0L)
+            .uvarint(0L)
+            .uvarint(0L)
+            .uvarint(0L)
+            .uvarint(methodId)
+            .uvarint(0L)
+            .uvarint(0L)
+            .uvarint(0L)
+            .symbolRef(idFor(DICT_METHOD, symbol))
+        record(JhlogV9.TYPE_AGENT_EVENT, 0L, payload, null)
     }
 
     private fun metric(
@@ -1123,8 +1190,19 @@ internal class BinaryLogWriter private constructor(
         private const val DICT_STEP = 12
         private const val DICT_LOG_SOURCE = 13
         private const val DICT_STABLE_SYMBOL = 14
+        private const val DICT_METHOD = 15
 
-        private val EVENT_RECORD_TYPES = JhlogV9.TYPE_SESSION..JhlogV9.TYPE_RUNTIME_CALL
+        private val EVENT_RECORD_TYPES = IntArray(
+            JhlogV9.TYPE_RUNTIME_CALL - JhlogV9.TYPE_SESSION + 2,
+        ) { index ->
+            if (index <= JhlogV9.TYPE_RUNTIME_CALL - JhlogV9.TYPE_SESSION) {
+                JhlogV9.TYPE_SESSION + index
+            } else {
+                JhlogV9.TYPE_AGENT_EVENT
+            }
+        }
+        private const val AGENT_EVENT_SCHEMA_V1 = 1
+        private const val UINT32_MASK = 0xFFFF_FFFFL
 
         private fun defaultFileHeader(): BinaryLogFileHeader {
             val elapsedUs = nowElapsedUs()

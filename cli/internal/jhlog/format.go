@@ -107,6 +107,7 @@ const (
 	EventRuntimeCall     EventType = 14
 	EventQualitySnapshot EventType = 15
 	EventSegmentEnd      EventType = 16
+	EventAgent           EventType = 17
 
 	EventDictionaryDefinition = EventDictionary
 	EventSessionMetadata      = EventSession
@@ -118,7 +119,7 @@ const (
 // observation. Dictionary and control records are transport metadata and must
 // not inflate event sample sizes or observed durations.
 func (eventType EventType) IsSemanticData() bool {
-	return eventType >= EventSession && eventType <= EventRuntimeCall
+	return (eventType >= EventSession && eventType <= EventRuntimeCall) || eventType == EventAgent
 }
 
 type EnvelopeFlag uint64
@@ -228,6 +229,8 @@ const (
 	// DictStableSymbol uses the dictionary record envelope with an ASM-assigned stable ID.
 	// It lives in a separate namespace and must never be inserted into the local-ID dictionary.
 	DictStableSymbol
+	// DictMethod stores bounded ART TI method display names keyed by a v9-local symbol ID.
+	DictMethod
 )
 
 type NetworkKind uint64
@@ -323,8 +326,45 @@ type Event struct {
 	LogSpam     *LogSpamEvent     `json:"log_spam,omitempty"`
 	Problem     *ProblemEvent     `json:"problem,omitempty"`
 	RuntimeCall *RuntimeCallEvent `json:"runtime_call,omitempty"`
+	Agent       *AgentEvent       `json:"agent,omitempty"`
 	Quality     *QualitySnapshot  `json:"quality,omitempty"`
 	SegmentEnd  *SegmentEndEvent  `json:"segment_end,omitempty"`
+}
+
+type AgentSemanticType uint64
+
+const (
+	AgentStatus AgentSemanticType = 1 + iota
+	AgentCapability
+	AgentQualitySnapshot
+	AgentThreadStart
+	AgentThreadEnd
+	AgentGCInterval
+	AgentMonitorContentionInterval
+	AgentThreadStackSample
+	AgentStackDefinition
+	AgentClockSync
+	AgentCorrelationLink
+	AgentMethodDefinition
+)
+
+const AgentFlagContextDefinition uint64 = 1
+
+// AgentEvent is the canonical, storage-independent fixed part of an ART TI event.
+// Meaning of Payload0..3 is versioned by SemanticType and SchemaVersion.
+type AgentEvent struct {
+	SemanticType     AgentSemanticType `json:"semantic_type"`
+	SchemaVersion    uint64            `json:"schema_version"`
+	ProducerSequence uint64            `json:"producer_sequence,omitempty"`
+	ProducerID       uint64            `json:"producer_id,omitempty"`
+	ThreadToken      uint64            `json:"thread_token,omitempty"`
+	ContextToken     uint64            `json:"context_token,omitempty"`
+	EventFlags       uint64            `json:"event_flags,omitempty"`
+	Payload0         uint64            `json:"payload0,omitempty"`
+	Payload1         uint64            `json:"payload1,omitempty"`
+	Payload2         uint64            `json:"payload2,omitempty"`
+	Payload3         uint64            `json:"payload3,omitempty"`
+	MethodRef        SymbolRef         `json:"method_ref,omitempty"`
 }
 
 type SessionEvent struct {
@@ -574,6 +614,8 @@ const (
 	QualityRuntimeGraphEmittedTotal             uint64 = 0x201c
 	QualityRuntimeGraphCircuitBreakerTrip       uint64 = 0x201d
 	QualityRuntimeGraphCircuitBreakerDrop       uint64 = 0x201e
+	QualityAgentEventWriterRejectionLoss        uint64 = 0x201f
+	QualityAgentEventInvalidBatchLoss           uint64 = 0x2020
 )
 
 type QualityLossReason uint64
@@ -692,6 +734,10 @@ func QualityCounterName(id uint64) string {
 		return "runtime_graph_circuit_breaker_trip_total"
 	case QualityRuntimeGraphCircuitBreakerDrop:
 		return "runtime_graph_circuit_breaker_drop_total"
+	case QualityAgentEventWriterRejectionLoss:
+		return "agent_event_writer_rejection_loss_total"
+	case QualityAgentEventInvalidBatchLoss:
+		return "agent_event_invalid_batch_loss_total"
 	}
 	if id >= 0x1000 && id < 0x2000 {
 		return fmt.Sprintf("event_%d_reason_%d_total", (id-0x1000)/16, (id-0x1000)%16)

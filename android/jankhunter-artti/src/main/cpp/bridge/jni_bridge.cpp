@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -78,6 +79,13 @@ Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeStop(JNIEnv*, jobject)
   const auto adapter_status = jankhunter::artti::art::ArtJvmtiAdapter::Instance().Stop(500U);
   if (!adapter_status.ok()) return Code(adapter_status);
   return Code(BridgeRuntime::Instance().Stop());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeMonotonicTimeNs(
+    JNIEnv*, jobject) noexcept {
+  return static_cast<jlong>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 extern "C" JNIEXPORT jint JNICALL

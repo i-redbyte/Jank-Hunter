@@ -59,6 +59,7 @@ internal object JhlogV9 {
     const val TYPE_RUNTIME_CALL = 14
     const val TYPE_QUALITY_SNAPSHOT = 15
     const val TYPE_SEGMENT_END = 16
+    const val TYPE_AGENT_EVENT = 17
 
     const val FLOW_PHASE_SNAPSHOT = 0L
     const val SEGMENT_END_NORMAL = 0L
@@ -130,6 +131,8 @@ internal object QualityCounterId {
     const val RUNTIME_GRAPH_EMITTED_TOTAL = 0x201c
     const val RUNTIME_GRAPH_CIRCUIT_BREAKER_TRIP = 0x201d
     const val RUNTIME_GRAPH_CIRCUIT_BREAKER_DROP = 0x201e
+    const val AGENT_EVENT_WRITER_REJECTION_LOSS = 0x201f
+    const val AGENT_EVENT_INVALID_BATCH_LOSS = 0x2020
 
     const val REASON_QUEUE_FULL = 1
     const val REASON_NOT_ACCEPTING = 2

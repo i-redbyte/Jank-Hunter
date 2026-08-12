@@ -8,6 +8,9 @@ import android.os.Debug
 import android.os.SystemClock
 import android.util.Log
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.JankHunterAgentEventBatch
+import io.jankhunter.runtime.JankHunterAgentEventSink
+import io.jankhunter.runtime.JankHunterAgentEventType
 import io.jankhunter.runtime.JankHunterContextSnapshot
 import io.jankhunter.runtime.JankHunterRuntimeIntegration
 import java.util.concurrent.atomic.AtomicInteger
@@ -20,6 +23,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     private val lifecycle = AtomicReference(Lifecycle.UNINITIALIZED)
     private val loggedReasons = AtomicInteger()
     private val lastContextToken = ThreadLocal<Long>()
+    private val statusBatch = JankHunterAgentEventBatch(1)
 
     @Volatile
     private var worker: Thread? = null
@@ -30,12 +34,16 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
     @Volatile
     private var triggerBudget: ArtTiTriggerBudget? = null
 
-    override fun start(context: Context) {
+    @Volatile
+    private var eventSink: JankHunterAgentEventSink? = null
+
+    override fun start(context: Context, eventSink: JankHunterAgentEventSink) {
         while (true) {
             val observed = lifecycle.get()
             if (observed != Lifecycle.UNINITIALIZED && observed != Lifecycle.STOPPED) return
             if (lifecycle.compareAndSet(observed, Lifecycle.ATTACHING)) break
         }
+        this.eventSink = eventSink
         report(Reason.ATTACH_REQUESTED)
         val appContext = context.applicationContext ?: context
         worker = Thread({ runControl(appContext) }, CONTROL_THREAD_NAME).apply {
@@ -79,6 +87,9 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         val token = contextToken(screen, owner, flow, step)
         if (lastContextToken.get() == token) return
         lastContextToken.set(token)
+        if (eventSink?.tryPublishContext(token, screen, owner, flow, step) != true) {
+            JankHunter.recordCounter("jankhunter.artti.context_sink_drop.count", 1L)
+        }
         val result = ArtTiNativeBridge.nativeLinkThreadContext(thread, token)
         if (result < 0) report(Reason.CORRELATION_DROP)
     }
@@ -150,9 +161,10 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
             // the application class loader as intended by the public API.
             Debug.attachJvmtiAgent(NATIVE_LIBRARY_FILE, runtimeConfig.agentOptions, context.classLoader)
             phase = ControlPhase.POST_ATTACH_HANDSHAKE
-            verifyHandshake(runtimeConfig)
+            val handshake = verifyHandshake(runtimeConfig)
             phase = ControlPhase.ACTIVATE
             if (!lifecycle.compareAndSet(Lifecycle.ATTACHING, Lifecycle.ACTIVE)) return
+            publishRuntimeDescriptor(runtimeConfig, handshake)
             report(Reason.ATTACH_SUCCEEDED)
             phase = ControlPhase.METADATA_REFRESH
             val refreshed = ArtTiNativeBridge.nativeRefreshThreadMetadata()
@@ -166,6 +178,10 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
             }
         } finally {
             if (nativeStarted) {
+                config?.let { runtimeConfig ->
+                    runCatching { drainRemaining(runtimeConfig, resolveMethods = true) }
+                        .onFailure { report(Reason.FINAL_DRAIN_FAILED) }
+                }
                 val stopStatus = runCatching {
                     ArtTiNativeStatus.fromWire(ArtTiNativeBridge.nativeStop())
                 }.getOrElse {
@@ -179,28 +195,38 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 if (stopStatus != ArtTiNativeStatus.OK) {
                     report(Reason.NATIVE_SHUTDOWN_INCOMPLETE, warning = true)
                 }
+                config?.let { runtimeConfig ->
+                    runCatching { drainRemaining(runtimeConfig, resolveMethods = false) }
+                        .onFailure { report(Reason.FINAL_DRAIN_FAILED) }
+                }
             }
             worker = null
             if (lifecycle.get() == Lifecycle.STOPPING) lifecycle.set(Lifecycle.STOPPED)
         }
     }
 
-    private fun verifyHandshake(runtimeConfig: ArtTiRuntimeConfig) {
+    private fun verifyHandshake(runtimeConfig: ArtTiRuntimeConfig): ArtTiNativeHandshake {
         val buffer = ArtTiNativeProtocol.allocateHandshakeBuffer()
         val status = ArtTiNativeStatus.fromWire(ArtTiNativeBridge.nativeHandshake(buffer))
         require(status == ArtTiNativeStatus.OK) { "native_handshake_failed" }
         val handshake = ArtTiNativeHandshake.decode(buffer).getOrThrow()
         require(handshake.isCompatible()) { "native_handshake_incompatible" }
         require(handshake.configHash == runtimeConfig.native.configHash) { "native_config_hash_mismatch" }
+        return handshake
     }
 
     private fun drainLoop(runtimeConfig: ArtTiRuntimeConfig) {
         val output = ArtTiNativeProtocol.allocateDrainBuffer(runtimeConfig.native.drainBatchSize)
         val decoder = ArtTiNativeProtocolDecoder()
         val contexts = ArtTiThreadContextTable(runtimeConfig.native.maxTrackedThreads)
-        val visitor = ArtTiNativeRecordVisitor { record -> onNativeRecord(record, runtimeConfig, contexts) }
+        val semanticBatch = JankHunterAgentEventBatch(runtimeConfig.native.drainBatchSize)
+        val methodBuffer = ArtTiMethodDefinition.allocateBuffer()
+        val visitor = ArtTiNativeRecordVisitor { record ->
+            onNativeRecord(record, runtimeConfig, contexts, semanticBatch, methodBuffer)
+        }
         var consecutiveErrors = 0
         while (isActive()) {
+            semanticBatch.clear()
             val bytesWritten = ArtTiNativeBridge.nativeDrain(output, runtimeConfig.native.drainBatchSize)
             if (bytesWritten < 0) {
                 consecutiveErrors++
@@ -210,6 +236,9 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                 val result = decoder.decode(output, bytesWritten, visitor)
                 if (result.status == ArtTiNativeStatus.OK) {
                     consecutiveErrors = 0
+                    if (semanticBatch.size > 0 && eventSink?.tryPublish(semanticBatch) != true) {
+                        report(Reason.EVENT_SINK_DROP)
+                    }
                 } else {
                     consecutiveErrors++
                     report(Reason.DECODE_FAILED)
@@ -221,10 +250,43 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         }
     }
 
+    private fun drainRemaining(runtimeConfig: ArtTiRuntimeConfig, resolveMethods: Boolean) {
+        val output = ArtTiNativeProtocol.allocateDrainBuffer(runtimeConfig.native.drainBatchSize)
+        val decoder = ArtTiNativeProtocolDecoder()
+        val semanticBatch = JankHunterAgentEventBatch(runtimeConfig.native.drainBatchSize)
+        val methodBuffer = ArtTiMethodDefinition.allocateBuffer()
+        val visitor = ArtTiNativeRecordVisitor { record ->
+            if (resolveMethods && record.type == EVENT_STACK_DEFINITION) {
+                resolveMethodDefinition(record.payload1, methodBuffer)
+            }
+            if (!appendCanonical(record, semanticBatch)) report(Reason.CANONICAL_BATCH_DROP)
+        }
+        repeat(MAX_FINAL_DRAIN_BATCHES) {
+            semanticBatch.clear()
+            val bytesWritten = ArtTiNativeBridge.nativeDrain(output, runtimeConfig.native.drainBatchSize)
+            if (bytesWritten < 0) {
+                report(Reason.FINAL_DRAIN_FAILED)
+                return
+            }
+            val result = decoder.decode(output, bytesWritten, visitor)
+            if (result.status != ArtTiNativeStatus.OK) {
+                report(Reason.FINAL_DRAIN_FAILED)
+                return
+            }
+            if (semanticBatch.size > 0 && eventSink?.tryPublish(semanticBatch) != true) {
+                report(Reason.EVENT_SINK_DROP)
+            }
+            if (result.recordsSeen == 0) return
+        }
+        report(Reason.FINAL_DRAIN_TRUNCATED)
+    }
+
     private fun onNativeRecord(
         record: ArtTiNativeRecordView,
         runtimeConfig: ArtTiRuntimeConfig,
         contexts: ArtTiThreadContextTable,
+        semanticBatch: JankHunterAgentEventBatch,
+        methodBuffer: java.nio.ByteBuffer,
     ) {
         when (record.type) {
             EVENT_AGENT_STATUS -> JankHunter.recordGauge("jankhunter.artti.agent_status", record.payload0)
@@ -238,10 +300,99 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
                     report(Reason.CAPABILITY_DEGRADED)
                 }
             }
+            EVENT_QUALITY -> {
+                JankHunter.recordGauge("jankhunter.artti.queue.high_watermark", record.payload0)
+                JankHunter.recordGauge("jankhunter.artti.queue.full_total", record.payload1)
+                JankHunter.recordGauge("jankhunter.artti.queue.contention_total", record.payload2)
+                JankHunter.recordGauge("jankhunter.artti.native_other_loss_total", record.payload3)
+            }
             EVENT_THREAD_END -> contexts.remove(record.threadToken)
             EVENT_MONITOR_CONTENTION -> maybeCaptureLongContention(record, runtimeConfig, contexts)
+            EVENT_STACK_DEFINITION -> resolveMethodDefinition(record.payload1, methodBuffer)
             EVENT_CORRELATION_LINK -> if (!contexts.put(record.threadToken, record.contextToken)) {
                 report(Reason.CONTEXT_TABLE_DROP)
+            }
+        }
+        if (!appendCanonical(record, semanticBatch)) {
+            report(Reason.CANONICAL_BATCH_DROP)
+        }
+    }
+
+    private fun appendCanonical(
+        record: ArtTiNativeRecordView,
+        semanticBatch: JankHunterAgentEventBatch,
+    ): Boolean = semanticBatch.tryAppend(
+        type = record.type,
+        schemaVersion = record.schemaVersion,
+        flags = record.flags,
+        producerSequence = record.producerSequence,
+        monotonicNs = record.monotonicNs,
+        producerId = record.producerId,
+        threadToken = record.threadToken,
+        contextToken = record.contextToken,
+        payload0 = record.payload0,
+        payload1 = record.payload1,
+        payload2 = record.payload2,
+        payload3 = record.payload3,
+    )
+
+    private fun resolveMethodDefinition(methodId: Long, output: java.nio.ByteBuffer) {
+        if (methodId == 0L) return
+        val bytesWritten = ArtTiNativeBridge.nativeResolveMethod(methodId, output)
+        if (bytesWritten == 0) return
+        if (bytesWritten < 0) {
+            report(Reason.METHOD_RESOLUTION_DROP)
+            return
+        }
+        val definition = ArtTiMethodDefinition.decode(output, bytesWritten).getOrElse {
+            report(Reason.METHOD_RESOLUTION_DROP)
+            return
+        }
+        val symbol = buildString {
+            append(definition.classSignature)
+            append("->")
+            append(definition.methodName)
+            append(definition.methodSignature)
+        }.take(MAX_METHOD_SYMBOL_LENGTH)
+        if (eventSink?.tryPublishMethodDefinition(definition.methodId, symbol) != true) {
+            report(Reason.EVENT_SINK_DROP)
+        }
+    }
+
+    private fun publishRuntimeDescriptor(
+        runtimeConfig: ArtTiRuntimeConfig,
+        handshake: ArtTiNativeHandshake,
+    ) {
+        publishCanonicalStatus(
+            status = SDK_STATUS_CONFIG_APPLIED,
+            flags = runtimeConfig.native.transportCapacity,
+            profile = runtimeConfig.native.profile.toLong(),
+            configHash = runtimeConfig.native.configHash,
+            nativeMemoryBytes = handshake.nativeMemoryBytes,
+        )
+        val beforeNs = SystemClock.elapsedRealtimeNanos()
+        val nativeNs = ArtTiNativeBridge.nativeMonotonicTimeNs()
+        val afterNs = SystemClock.elapsedRealtimeNanos()
+        val midpointNs = beforeNs + (afterNs - beforeNs) / 2L
+        val uncertaintyNs = (afterNs - beforeNs).coerceAtLeast(0L) / 2L
+        synchronized(statusBatch) {
+            statusBatch.clear()
+            statusBatch.tryAppend(
+                type = JankHunterAgentEventType.CLOCK_SYNC,
+                schemaVersion = 1,
+                flags = 0,
+                producerSequence = 0L,
+                monotonicNs = nativeNs.coerceAtLeast(0L),
+                producerId = 0L,
+                threadToken = 0L,
+                contextToken = 0L,
+                payload0 = midpointNs.coerceAtLeast(0L),
+                payload1 = uncertaintyNs,
+                payload2 = 0L,
+                payload3 = 0L,
+            )
+            if (eventSink?.tryPublish(statusBatch) != true) {
+                JankHunter.recordCounter("jankhunter.artti.event_sink_drop.count", 1L)
             }
         }
     }
@@ -272,6 +423,7 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
 
     private fun report(reason: Reason, warning: Boolean = false, safeDetail: String? = null) {
         JankHunter.recordCounter("jankhunter.artti.${reason.metric}.count", 1L)
+        if (reason.loggable) publishCanonicalStatus(SDK_STATUS_REASON_BASE + reason.ordinal)
         if (!reason.loggable) return
         val mask = 1 shl reason.ordinal
         while (true) {
@@ -288,6 +440,36 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
             }
         }
         if (warning) Log.w(TAG, message) else Log.i(TAG, message)
+    }
+
+    private fun publishCanonicalStatus(
+        status: Int,
+        flags: Int = 0,
+        profile: Long = config?.native?.profile?.toLong() ?: 0L,
+        configHash: Long = config?.native?.configHash ?: 0L,
+        nativeMemoryBytes: Long = 0L,
+    ) {
+        val sink = eventSink ?: return
+        synchronized(statusBatch) {
+            statusBatch.clear()
+            statusBatch.tryAppend(
+                type = JankHunterAgentEventType.AGENT_STATUS,
+                schemaVersion = 1,
+                flags = flags,
+                producerSequence = 0L,
+                monotonicNs = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0L),
+                producerId = 0L,
+                threadToken = 0L,
+                contextToken = 0L,
+                payload0 = status.toLong(),
+                payload1 = profile,
+                payload2 = configHash,
+                payload3 = nativeMemoryBytes,
+            )
+            if (!sink.tryPublish(statusBatch)) {
+                JankHunter.recordCounter("jankhunter.artti.event_sink_drop.count", 1L)
+            }
+        }
     }
 
     private fun Throwable.safeClassName(): String = javaClass.simpleName
@@ -352,6 +534,11 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         CONTEXT_TABLE_DROP("context_table_drop"),
         STACK_BUDGET_DROP("stack_budget_drop"),
         STACK_CAPTURE_FAILED("stack_capture_failed"),
+        CANONICAL_BATCH_DROP("canonical_batch_drop"),
+        EVENT_SINK_DROP("event_sink_drop"),
+        METHOD_RESOLUTION_DROP("method_resolution_drop"),
+        FINAL_DRAIN_FAILED("final_drain_failed"),
+        FINAL_DRAIN_TRUNCATED("final_drain_truncated"),
         SHUTDOWN_TIMEOUT("shutdown_timeout", true),
         NATIVE_SHUTDOWN_INCOMPLETE("native_shutdown_incomplete", true),
         STOPPED("stopped"),
@@ -370,12 +557,18 @@ class ArtTiIntegration : JankHunterRuntimeIntegration {
         const val STACK_TRIGGER_LONG_CONTENTION = 2
         const val EVENT_AGENT_STATUS = 1
         const val EVENT_CAPABILITY = 2
+        const val EVENT_QUALITY = 3
         const val EVENT_THREAD_END = 5
         const val EVENT_MONITOR_CONTENTION = 7
+        const val EVENT_STACK_DEFINITION = 9
         const val EVENT_CORRELATION_LINK = 11
         const val FNV_OFFSET_BASIS = -3750763034362895579L
         const val FNV_PRIME = 1099511628211L
         const val NULL_MARKER = 0xffL
         const val FIELD_SEPARATOR = 0xfeL
+        const val MAX_METHOD_SYMBOL_LENGTH = 2_048
+        const val MAX_FINAL_DRAIN_BATCHES = 64
+        const val SDK_STATUS_CONFIG_APPLIED = 0x100
+        const val SDK_STATUS_REASON_BASE = 0x1_000
     }
 }

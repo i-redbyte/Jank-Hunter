@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 
 internal class OptionalIntegrationRegistry(
     private val discover: (Context) -> List<JankHunterRuntimeIntegration> = ::discoverFromManifest,
+    private val eventSink: JankHunterAgentEventSink,
     private val diagnostic: (String) -> Unit,
 ) {
     @Volatile
@@ -27,7 +28,7 @@ internal class OptionalIntegrationRegistry(
                 return@forEach
             }
             try {
-                integration.start(context)
+                integration.start(context, eventSink)
                 started += integration
                 diagnostic("$id.start_requested")
             } catch (_: Throwable) {

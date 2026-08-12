@@ -24,6 +24,7 @@ class OptionalIntegrationRegistryTest {
         val diagnostics = mutableListOf<String>()
         val registry = OptionalIntegrationRegistry(
             discover = { listOf(first, failing) },
+            eventSink = FakeSink,
             diagnostic = diagnostics::add,
         )
         val context: Context = ContextWrapper(null)
@@ -52,7 +53,7 @@ class OptionalIntegrationRegistryTest {
         var contexts = 0
         var stalls = 0
 
-        override fun start(context: Context) {
+        override fun start(context: Context, eventSink: JankHunterAgentEventSink) {
             starts++
         }
 
@@ -74,5 +75,19 @@ class OptionalIntegrationRegistryTest {
         override fun onMainThreadStall(thread: Thread, context: JankHunterContextSnapshot) {
             stalls++
         }
+    }
+
+    private object FakeSink : JankHunterAgentEventSink {
+        override fun tryPublish(batch: JankHunterAgentEventBatch): Boolean = true
+
+        override fun tryPublishContext(
+            contextToken: Long,
+            screen: String?,
+            owner: String?,
+            flow: String?,
+            step: String?,
+        ): Boolean = true
+
+        override fun tryPublishMethodDefinition(methodId: Long, symbol: String): Boolean = true
     }
 }

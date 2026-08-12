@@ -174,9 +174,12 @@ The canonical model contains `AgentStatus`, `AgentCapability`, `AgentQualitySnap
 process/session/producer identity and producer sequence. String-heavy values are definitions;
 runtime events reference bounded numeric IDs.
 
-`AgentEventSink.tryPublish(batch)` is non-blocking and storage-neutral. The current adapter maps
-canonical events to additive v9 record types. A future ring adapter must preserve canonical
-semantics, not native wire bytes.
+`JankHunterAgentEventSink.tryPublish(batch)` is non-blocking and storage-neutral. The current
+adapter maps canonical events to additive, forward-skippable v9 `AGENT_EVENT` records (type 17)
+using one packed-array ownership copy per accepted drain batch and no object per semantic event.
+Context and method definitions use low-rate methods on the same sink. A future ring adapter must
+preserve canonical semantics, not native wire bytes. The exact schema and executable seam are
+documented in [`../art-ti-canonical-events.md`](../art-ti-canonical-events.md).
 
 Ring-buffer integration checklist:
 

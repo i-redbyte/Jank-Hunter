@@ -45,6 +45,7 @@ class NativeEngine final {
   void FailOpen() noexcept;
 
   [[nodiscard]] Status Publish(NativeEvent event) noexcept;
+  [[nodiscard]] Status PublishQualitySnapshot(bool final_after_stop = false) noexcept;
   [[nodiscard]] DrainResult Drain(std::span<NativeEvent> output) noexcept;
 
   [[nodiscard]] Status OnGcStart() noexcept;

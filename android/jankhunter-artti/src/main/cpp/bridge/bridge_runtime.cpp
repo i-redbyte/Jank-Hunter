@@ -5,6 +5,11 @@
 #include <new>
 
 namespace jankhunter::artti::bridge {
+namespace {
+
+constexpr std::uint32_t kQualitySnapshotDrainPeriod = 20U;
+
+}  // namespace
 
 BridgeRuntime& BridgeRuntime::Instance() noexcept {
   static BridgeRuntime runtime;
@@ -32,6 +37,7 @@ Status BridgeRuntime::Initialize(const ArtTiNativeConfigV1& wire_config) noexcep
   const auto status = engine->Start();
   if (!status.ok()) return status;
   scratch_capacity_ = config.drain_batch_size;
+  quality_drain_tick_ = 0U;
   scratch_ = std::move(scratch);
   engine_ = std::move(engine);
   callback_engine_.store(engine_.get(), std::memory_order_release);
@@ -69,6 +75,9 @@ protocol::BatchEncodeResult BridgeRuntime::Drain(
     result.bytes_written = static_cast<std::uint32_t>(protocol::kBatchHeaderSize + protocol::kRecordSize);
     return result;
   }
+  if (record_capacity > 0U && quality_drain_tick_++ % kQualitySnapshotDrainPeriod == 0U) {
+    static_cast<void>(engine_->PublishQualitySnapshot());
+  }
   const auto drained = engine_->Drain(std::span<NativeEvent>(scratch_.get(), record_capacity));
   return protocol::EncodeBatch(
       std::span<const NativeEvent>(scratch_.get(), drained.count), output);
@@ -80,6 +89,8 @@ Status BridgeRuntime::Stop() noexcept {
   callback_engine_.store(nullptr, std::memory_order_release);
   const auto status = engine_->BeginStop();
   engine_->MarkStopped();
+  static_cast<void>(engine_->PublishQualitySnapshot(true));
+  quality_drain_tick_ = 0U;
   return status;
 }
 

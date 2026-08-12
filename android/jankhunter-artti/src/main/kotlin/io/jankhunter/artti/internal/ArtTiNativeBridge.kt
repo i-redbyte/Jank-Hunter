@@ -26,6 +26,9 @@ internal object ArtTiNativeBridge {
 
     external fun nativeStop(): Int
 
+    /** Monotonic native clock sample for explicit Kotlin/native calibration. */
+    external fun nativeMonotonicTimeNs(): Long
+
     /** Control-path refresh; never called from an ART callback. */
     external fun nativeRefreshThreadMetadata(): Int
 
