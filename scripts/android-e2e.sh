@@ -423,21 +423,21 @@ if "io.jankhunter.sample.graph.CheckoutRenderer" not in owners:
 
 agent = value(summary, "Agent", "agent")
 if not isinstance(agent, dict):
-    failures.append("ART TI agent summary is missing")
+    failures.append("JVM TI agent summary is missing")
 else:
     if value(agent, "Available", "available") is not True:
-        failures.append("ART TI agent is not available")
+        failures.append("JVM TI agent is not available")
     if value(agent, "EffectivePreset", "effective_preset") != "CAUSAL":
-        failures.append("ART TI effective preset is not CAUSAL")
+        failures.append("JVM TI effective preset is not CAUSAL")
     capabilities = value(agent, "Capabilities", "capabilities")
     if value(capabilities, "Active", "active") != 63:
-        failures.append("ART TI active capability matrix is incomplete")
+        failures.append("JVM TI active capability set is incomplete")
     gc = value(agent, "GC", "gc")
     contention = value(agent, "Contention", "contention")
     stacks = value(agent, "Stacks", "stacks")
-    positive_integer("ART TI GC count", value(gc, "Count", "count"))
-    positive_integer("ART TI contention count", value(contention, "Count", "count"))
-    positive_integer("ART TI stack sample count", value(stacks, "Samples", "samples"))
+    positive_integer("JVM TI GC count", value(gc, "Count", "count"))
+    positive_integer("JVM TI contention count", value(contention, "Count", "count"))
+    positive_integer("JVM TI stack sample count", value(stacks, "Samples", "samples"))
     findings = value(agent, "Findings", "findings")
     expected_finding = any(
         isinstance(finding, dict)
@@ -447,7 +447,7 @@ else:
         for finding in findings or []
     )
     if not expected_finding:
-        failures.append("ART TI causal finding for the sample JVMTI scenario is missing")
+        failures.append("JVM TI causal finding for the sample scenario is missing")
 
 warnings = value(summary, "Warnings", "warnings")
 if warnings is None:
@@ -505,8 +505,8 @@ validate_metric_contract() {
 
 validate_html_report() {
   local report="$1"
-  grep -Fq 'ART TI: native runtime evidence' "$report" ||
-    fail "HTML report does not contain the ART TI section"
+  grep -Fq 'Анализ работы среды Android' "$report" ||
+    fail "HTML report does not contain the JVM TI analysis page"
   grep -Fq 'JvmtiEvidenceScenario' "$report" ||
     fail "HTML report does not contain the sample JVMTI causal evidence"
 }

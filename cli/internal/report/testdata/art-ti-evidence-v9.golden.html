@@ -58,7 +58,7 @@
 </header>
 <nav class="nav">
   <a href="#overview">Обзор</a>
-  <a href="#art-ti">ART TI</a>
+
   <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
   <a href="#flows">Сценарии</a>
@@ -126,41 +126,7 @@
 
   </section>
 
-  <section id="art-ti" class="panel">
-    <div class="panel-head">
-      <div><h2>ART TI: native runtime evidence</h2><div class="panel-kicker">Bounded JVMTI-сигналы о GC, monitor contention, потоках и triggered stacks. Они усиливают расследование, но временное совпадение не считается доказанной причиной.</div></div>
-      <span class="pill">доступен</span>
-    </div>
 
-      <div class="grid">
-        <div class="metric"><div class="label">Состояние</div><div class="value">доступен</div><div class="hint">reason=attached · status=256/2</div></div>
-        <div class="metric"><div class="label">Effective config</div><div class="value">CAUSAL</div><div class="hint">hash=0x000000000000cafe</div></div>
-        <div class="metric"><div class="label">Native memory</div><div class="value">131072 байт</div><div class="hint">agent events=10</div></div>
-        <div class="metric"><div class="label">Capabilities</div><div class="value"><code>0x3f</code></div><div class="hint">requested 0x3f · missing 0x0</div></div>
-        <div class="metric"><div class="label">GC</div><div class="value">100.000 мс</div><div class="hint">count=1 · max=100.000 мс</div></div>
-        <div class="metric"><div class="label">Contention</div><div class="value">0.000 мс</div><div class="hint">count=0 · max=0.000 мс</div></div>
-        <div class="metric"><div class="label">Native queue</div><div class="value">high-water 8</div><div class="hint">full=0 · contention=0 · other loss=0</div></div>
-        <div class="metric"><div class="label">Data continuity</div><div class="value">gaps=0</div><div class="hint">clock sync=1 · compatible=true</div></div>
-      </div>
-      <h3>Capability matrix</h3>
-      <table><tr><th>Requested</th><th>Potential</th><th>Granted</th><th>Active</th><th>Missing</th></tr><tr><td><code>0x3f</code><div class="muted">сборка мусора, жизненный цикл потоков, ожидание блокировок, снимки стека, сведения о потоках, системные идентификаторы потоков</div></td><td><code>0x3f</code></td><td><code>0x3f</code></td><td><code>0x3f</code><div class="muted">сборка мусора, жизненный цикл потоков, ожидание блокировок, снимки стека, сведения о потоках, системные идентификаторы потоков</div></td><td><code>0x0</code></td></tr></table>
-      <div class="split">
-        <div><h3>Top GC intervals</h3><table><tr><th>Duration</th><th>Start / sequence</th></tr><tr><td>100.000 мс</td><td><code>1050000000 / 4</code></td></tr></table></div>
-        <div><h3>Contention suspects</h3><table><tr><th>Duration</th><th>Thread / sequence</th></tr><tr><td colspan="2" class="muted">Contention intervals не зафиксированы.</td></tr></table></div>
-      </div>
-      <h3>Thread / stack hotspots</h3>
-      <p class="help-text">Потоки: starts=0, ends=0, unique=1, max concurrent=0. Stack samples=1, missing definitions=0.</p>
-      <table><tr><th>Fingerprint</th><th>Samples</th><th>Thread / context</th><th>Methods</th></tr><tr><td><code>0x0000000000000b17</code></td><td>1</td><td><code>11</code><div class="muted">Feed / open / render / Caller.run</div></td><td><div><code>android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap</code></div></td></tr></table>
-      <h3>Causal evidence cards</h3>
-
-      <article class="guide-card"><strong>STRONG_ASSOCIATION · HIGH (85/100)</strong><p>Проблемное окно интерфейса: медленных кадров 7 в Feed / open / render / Caller.run</p><p><b>Подозреваемая причина:</b> Декодирование или подготовка изображения на наблюдаемом потоке вместе с интенсивным выделением памяти и сборкой мусора</p><p class="muted">screen=Feed · flow=open · owner=Caller.run · thread=11 · method=<code>android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap</code></p><ol><li><code>DIRECT</code> Проблемное окно интерфейса: медленных кадров 7 в Feed / open / render / Caller.run — временное окно 1000000000..1200000000 нс</li><li><code>DIRECT</code> Снимок стека зафиксирован рядом с задержкой; наблюдаемый метод android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap — отпечаток стека 0x0000000000000b17</li><li><code>DIRECT</code> Сборка мусора пересекла окно задержки — пауза 100.000 мс; пересечение 100.000 мс</li></ol><p><b>Точные измерения:</b> суммарная пауза сборки мусора 100.000 мс, максимальная 100.000 мс</p><p><b>Positive evidence:</b> Измерено 100.000 мс пересечения сборки мусора с проблемным окном. Снимок стека и задержка относятся к одному источнику данных и ограниченному временному окну.</p><p><b>Missing/counter evidence:</b> Временное совпадение и снимок стека не доказывают, что наблюдаемый метод вызвал сборку мусора или ожидание блокировки и был единственной причиной задержки.</p><p><b>Альтернативы:</b> Другая работа главного потока, ввод-вывод, задержка планировщика или отрисовка могли совпасть с тем же окном. Сборка мусора могла быть следствием большого числа выделений памяти, а не первичной причиной задержки.</p><p><b>Следующий шаг:</b> Перенести декодирование и изменение размера изображения с главного потока, использовать заранее подготовленные миниатюры и повторить сценарий. Повторить тот же сценарий с теми же экраном, сценарием и источником работы. Сравнить с прогоном без подозреваемой работы и проверить, повторяется ли временная связь.</p><p class="muted">timeline: <code>testdata/art-ti-evidence-v9.jhlog@1000000000..1200000000 ns</code></p></article>
-
-      <article class="guide-card"><strong>STRONG_ASSOCIATION · HIGH (85/100)</strong><p>Пауза главного потока 200 мс в Feed / open / render / Caller.run</p><p><b>Подозреваемая причина:</b> Декодирование или подготовка изображения на наблюдаемом потоке вместе с интенсивным выделением памяти и сборкой мусора</p><p class="muted">screen=Feed · flow=open · owner=Caller.run · thread=11 · method=<code>android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap</code></p><ol><li><code>DIRECT</code> Пауза главного потока 200 мс в Feed / open / render / Caller.run — временное окно 1000000000..1200000000 нс</li><li><code>DIRECT</code> Снимок стека зафиксирован рядом с задержкой; наблюдаемый метод android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap — отпечаток стека 0x0000000000000b17</li><li><code>DIRECT</code> Сборка мусора пересекла окно задержки — пауза 100.000 мс; пересечение 100.000 мс</li></ol><p><b>Точные измерения:</b> суммарная пауза сборки мусора 100.000 мс, максимальная 100.000 мс</p><p><b>Positive evidence:</b> Измерено 100.000 мс пересечения сборки мусора с проблемным окном. Снимок стека и задержка относятся к одному источнику данных и ограниченному временному окну.</p><p><b>Missing/counter evidence:</b> Временное совпадение и снимок стека не доказывают, что наблюдаемый метод вызвал сборку мусора или ожидание блокировки и был единственной причиной задержки.</p><p><b>Альтернативы:</b> Другая работа главного потока, ввод-вывод, задержка планировщика или отрисовка могли совпасть с тем же окном. Сборка мусора могла быть следствием большого числа выделений памяти, а не первичной причиной задержки.</p><p><b>Следующий шаг:</b> Перенести декодирование и изменение размера изображения с главного потока, использовать заранее подготовленные миниатюры и повторить сценарий. Повторить тот же сценарий с теми же экраном, сценарием и источником работы. Сравнить с прогоном без подозреваемой работы и проверить, повторяется ли временная связь.</p><p class="muted">timeline: <code>testdata/art-ti-evidence-v9.jhlog@1000000000..1200000000 ns</code></p></article>
-
-
-      <details class="fold"><summary>Ограничения интерпретации</summary><div class="fold-body"><p class="quality-notice">Совпадение сборки мусора или ожидания блокировки с задержкой измеряет временное перекрытие, но само по себе не доказывает причинность.</p><p class="quality-notice">Снимок стека показывает только один момент; отсутствие метода в снимке не доказывает, что он не выполнялся.</p><p class="quality-notice">Идентификаторы потоков, методов и стеков действуют только внутри одного запуска процесса и не подходят для прямого сравнения между запусками.</p></div></details>
-
-  </section>
 
   <section id="code-problems" class="panel code-registry-panel">
     <details class="fold code-registry-fold" open>

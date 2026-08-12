@@ -151,12 +151,12 @@ func TestAgentCompareSurfacesCompatibilityBeforeDeltas(t *testing.T) {
 	}
 	foundGC := false
 	for _, delta := range comparison.Deltas {
-		if delta.Name == "ART TI GC time" {
+		if delta.Name == "JVM TI: время сборки мусора" {
 			foundGC = true
 		}
 	}
 	if !foundGC {
-		t.Fatal("ART TI GC delta missing")
+		t.Fatal("JVM TI GC delta missing")
 	}
 }
 

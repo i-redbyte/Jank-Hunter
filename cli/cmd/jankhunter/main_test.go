@@ -212,6 +212,43 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	assertNoCompanionReports(t, customComparePath)
 }
 
+func TestInspectAddsReadableJVMTIPageOnlyWhenAgentDataExists(t *testing.T) {
+	t.Setenv("JH_LANG", "ru")
+	directory := t.TempDir()
+	agentLog := filepath.Join("..", "..", "internal", "report", "testdata", "art-ti-evidence-v9.jhlog")
+	agentReport := filepath.Join(directory, "agent.html")
+	if err := runInspect([]string{agentLog, "--out", agentReport}); err != nil {
+		t.Fatalf("runInspect(agent) error = %v", err)
+	}
+	assertBundlePageContains(t, agentReport, "overview", "Анализ JVM TI", `href="agent-jvmti.html"`, "Дополнительные данные JVM TI")
+	assertBundlePageNotContains(t, agentReport, "overview", "Top GC intervals", "Thread / stack hotspots", "Causal evidence cards", "Capability matrix", "native runtime evidence")
+	assertBundlePageContains(
+		t,
+		agentReport,
+		"jvmti",
+		"Анализ работы среды Android",
+		"Что могло повлиять на задержку",
+		"Методы, наблюдавшиеся рядом с задержками",
+		"Практическая ценность",
+		"android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap",
+	)
+	assertBundlePageNotContains(t, agentReport, "jvmti", "Top GC intervals", "Causal evidence cards", "Landroid/graphics/BitmapFactory;->")
+	assertNoCompanionReports(t, agentReport)
+
+	plainLog := filepath.Join(directory, "plain.jhlog")
+	if err := runSample([]string{"--out", plainLog}); err != nil {
+		t.Fatalf("runSample() error = %v", err)
+	}
+	plainReport := filepath.Join(directory, "plain.html")
+	if err := runInspect([]string{plainLog, "--out", plainReport}); err != nil {
+		t.Fatalf("runInspect(plain) error = %v", err)
+	}
+	if _, exists := readBundlePages(t, plainReport)["jvmti"]; exists {
+		t.Fatal("plain report unexpectedly contains JVM TI page")
+	}
+	assertBundlePageNotContains(t, plainReport, "overview", "Анализ JVM TI", "Дополнительные данные JVM TI")
+}
+
 func TestFailedOptionalCompanionWritesPrimaryOnceWithoutBrokenLink(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "sample.jhlog")
@@ -1059,7 +1096,7 @@ func assertBundlePageNotContains(t *testing.T, path, pageID string, needles ...s
 func assertNoCompanionReports(t *testing.T, mainPath string) {
 	t.Helper()
 	paths := report.PathsFor(mainPath)
-	for _, path := range []string{paths.Math, paths.Leaks, paths.Influence, paths.Diagnostics, paths.DependencyInjection} {
+	for _, path := range []string{paths.Agent, paths.Math, paths.Leaks, paths.Influence, paths.Diagnostics, paths.DependencyInjection} {
 		if _, err := os.Stat(path); err == nil {
 			t.Fatalf("standalone report unexpectedly created companion %s", path)
 		} else if !os.IsNotExist(err) {

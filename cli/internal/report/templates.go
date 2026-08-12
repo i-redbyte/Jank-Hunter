@@ -41,9 +41,17 @@ var inspectTemplate string
 //go:embed templates/compare.tmpl
 var compareTemplate string
 
+//go:embed templates/jvmti-inspect.tmpl
+var agentInspectTemplate string
+
+//go:embed templates/jvmti-compare.tmpl
+var agentCompareTemplate string
+
 var (
 	cachedInspectTemplate             = newCachedReportTemplate("inspect", inspectTemplate)
 	cachedCompareTemplate             = newCachedReportTemplate("compare", compareTemplate)
+	cachedAgentInspectTemplate        = newCachedReportTemplate("jvmti-inspect", agentInspectTemplate)
+	cachedAgentCompareTemplate        = newCachedReportTemplate("jvmti-compare", agentCompareTemplate)
 	cachedMathInspectTemplate         = newCachedReportTemplate("math-inspect", mathInspectTemplate)
 	cachedMathCompareTemplate         = newCachedReportTemplate("math-compare", mathCompareTemplate)
 	cachedLeaksInspectTemplate        = newCachedReportTemplate("leaks-inspect", leaksInspectTemplate)

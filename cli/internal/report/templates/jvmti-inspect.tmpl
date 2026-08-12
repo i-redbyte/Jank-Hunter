@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: анализ JVM TI</title>
+  <style>{{reportCSS .ReportStyle false}}</style>
+</head>
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<header class="hero">
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
+      <div class="eyebrow">Jank Hunter · JVM TI</div>
+      <h1>Анализ работы среды Android</h1>
+      <div class="subhead">{{.Summary.Title}} · создан {{.GeneratedAt}} · отдельный раздел отчёта</div>
+      <div class="hero-actions">{{if .MainReportHref}}<a class="math-link" href="{{.MainReportHref}}">← Обзор</a>{{end}}<a class="math-link" href="#findings">Перейти к выводам</a></div>
+    </div>
+    <div class="report-hero-lower">
+      <div class="report-hero-context">
+        <div class="env-card">
+          <div class="env-title">Главная ценность</div>
+          <strong class="env-device">Связать задержку с работой среды выполнения и наблюдаемым кодом</strong>
+          <div class="env-subtitle">Агент сопоставляет паузы сборки мусора, ожидания блокировок и снимки стеков с проблемными окнами Jank Hunter. Совпадение повышает приоритет проверки, но не считается доказанной причиной без повторного прогона.</div>
+        </div>
+      </div>
+      <div class="report-hero-control">
+        <div class="hero-meta">
+          <div class="chip">Состояние <strong>{{.Summary.Agent.Availability}}</strong></div>
+          <div class="chip">Режим <strong>{{agentPresetLabel .Summary.Agent.EffectivePreset}}</strong></div>
+          <div class="chip">Причинные выводы <strong>{{len .Summary.Agent.Findings}}</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+<nav class="nav">
+  <a href="#summary">Сводка</a>
+  <a href="#findings">Причинные выводы</a>
+  <a href="#stacks">Наблюдаемый код</a>
+  <a href="#quality">Качество данных</a>
+  <a href="#technical">Технические сведения</a>
+</nav>
+<main>
+  <section id="summary" class="panel">
+    <div class="panel-head">
+      <div><h2>Что произошло во время прогона</h2><div class="panel-kicker">Здесь показаны только показатели, которым можно дать практическую интерпретацию. Отдельные временные метки пауз не выводятся без связи с пользовательской задержкой.</div></div>
+      <span class="pill">{{agentReasonLabel .Summary.Agent.Reason}}</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">Режим сбора</div><div class="value">{{agentPresetLabel .Summary.Agent.EffectivePreset}}</div><div class="hint">какие виды событий собирал агент</div></div>
+      <div class="metric"><div class="label">События агента</div><div class="value">{{.Summary.Agent.EventCount}}</div><div class="hint">служебные и диагностические события</div></div>
+      <div class="metric"><div class="label">Сборка мусора</div><div class="value">{{printf "%.3f" .Summary.Agent.GC.TotalMS}} мс</div><div class="hint">{{ruCount .Summary.Agent.GC.Count "пауза" "паузы" "пауз"}} · самая длинная {{printf "%.3f" .Summary.Agent.GC.MaxMS}} мс</div></div>
+      <div class="metric"><div class="label">Ожидание блокировок</div><div class="value">{{printf "%.3f" .Summary.Agent.Contention.TotalMS}} мс</div><div class="hint">{{ruCount .Summary.Agent.Contention.Count "случай" "случая" "случаев"}} · самое длинное {{printf "%.3f" .Summary.Agent.Contention.MaxMS}} мс</div></div>
+      <div class="metric"><div class="label">Снимки стека</div><div class="value">{{.Summary.Agent.Stacks.Samples}}</div><div class="hint">описано кадров стека {{.Summary.Agent.Stacks.Definitions}}</div></div>
+      <div class="metric"><div class="label">Потери данных</div><div class="value">{{.Summary.Agent.Quality.SequenceGaps}}</div><div class="hint">других потерь {{.Summary.Agent.Quality.OtherNativeLossTotal}}</div></div>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Сборка мусора</strong>{{agentGCConclusion .Summary.Agent.GC}}</div>
+      <div class="guide-card"><strong>Блокировки</strong>{{agentContentionConclusion .Summary.Agent.Contention}}</div>
+      <div class="guide-card"><strong>Как принимать решение</strong>Исправляйте не самый большой внутренний показатель, а вывод, где задержка, поток и метод совпали во времени. Затем повторите тот же сценарий и проверьте, исчезла ли связь.</div>
+    </div>
+  </section>
+
+  <section id="findings" class="panel">
+    <div class="panel-head">
+      <div><h2>Что могло повлиять на задержку</h2><div class="panel-kicker">Карточки упорядочивают расследование: симптом → наблюдаемая работа → подтверждающие измерения → следующий шаг.</div></div>
+      <span class="pill">{{ruCount (len .Summary.Agent.Findings) "вывод" "вывода" "выводов"}}</span>
+    </div>
+    {{range .Summary.Agent.Findings}}
+    <article class="guide-card">
+      <strong>{{agentEvidenceLevelLabel .EvidenceLevel}} · доверие {{agentConfidenceLabel .Confidence}} ({{.ConfidenceScore}} из 100)</strong>
+      <h3>{{.Symptom}}</h3>
+      <p><b>Что могло повлиять:</b> {{.SuspectedCause}}</p>
+      {{if .Method}}<p><b>Наблюдаемый метод:</b> <code>{{.Method}}</code></p>{{end}}
+      <p class="muted">{{if .Screen}}экран: {{.Screen}} · {{end}}{{if .Flow}}сценарий: {{.Flow}} · {{end}}{{if .Owner}}источник: {{.Owner}} · {{end}}{{if .ThreadToken}}поток: {{.ThreadToken}}{{end}}</p>
+      <h4>Почему появился этот вывод</h4>
+      <ol>{{range .EvidenceChain}}<li>{{.Statement}} — {{.Measurement}}</li>{{end}}</ol>
+      {{if .ExactMeasurements}}<p><b>Измерено:</b> {{join .ExactMeasurements " "}}</p>{{end}}
+      {{if .PositiveEvidence}}<p><b>Что подтверждено:</b> {{join .PositiveEvidence " "}}</p>{{end}}
+      {{if .MissingOrCounterEvidence}}<p><b>Что пока не доказано:</b> {{join .MissingOrCounterEvidence " "}}</p>{{end}}
+      {{if .AlternativeExplanations}}<p><b>Другие возможные объяснения:</b> {{join .AlternativeExplanations " "}}</p>{{end}}
+      {{if .Actions}}<p><b>Что делать:</b> {{join .Actions " "}}</p>{{end}}
+      {{range .DataQualityPenalties}}<p class="warning"><b>Ограничение качества:</b> {{.}}</p>{{end}}
+      <details class="fold"><summary>Техническая ссылка на временное окно</summary><div class="fold-body"><code>{{.TimelineReference}}</code></div></details>
+    </article>
+    {{else}}
+    <p class="quality-notice">Агент собрал данные, но не нашёл временной связи с паузой главного потока или проблемным окном интерфейса. Отдельные короткие паузы среды выполнения без такой связи не требуют действий.</p>
+    {{end}}
+  </section>
+
+  <section id="stacks" class="panel">
+    <div class="panel-head">
+      <div><h2>Методы, наблюдавшиеся рядом с задержками</h2><div class="panel-kicker">Снимок стека отвечает на вопрос «какой код находился в потоке в момент диагностического снимка». Повторяющийся метод помогает выбрать класс для проверки, но число снимков не равно времени работы метода и не доказывает, что именно он вызвал задержку.</div></div>
+      <span class="pill">{{ruCount (len .Summary.Agent.Stacks.Hotspots) "группа" "группы" "групп"}}</span>
+    </div>
+    <div class="report-guide">
+      <div class="guide-card"><strong>Практическая ценность</strong>Вместо поиска по всему приложению вы получаете короткий список методов, которые реально были в наблюдаемом потоке рядом с проблемой.</div>
+      <div class="guide-card"><strong>Как использовать</strong>Начните с метода, который повторяется в том же экране или сценарии. Проверьте блокировки, ввод-вывод, декодирование и крупные выделения памяти внутри него.</div>
+      <div class="guide-card"><strong>Чего вывод не обещает</strong>Один снимок не измеряет загрузку процессора и не устанавливает причинность. После изменения кода нужен повтор того же сценария.</div>
+    </div>
+    <table>
+      <tr><th>Контекст</th><th>Снимки</th><th>Наблюдаемый поток</th><th>Методы в стеке</th></tr>
+      {{range .Summary.Agent.Stacks.Hotspots}}
+      <tr><td>{{if .Context}}{{.Context}}{{else}}контекст не определён{{end}}</td><td>{{.Samples}}</td><td>{{if .ThreadToken}}{{.ThreadToken}}{{else}}не определён{{end}}</td><td>{{range .Methods}}<div><code>{{.}}</code></div>{{else}}<span class="muted">описание методов не получено</span>{{end}}</td></tr>
+      {{else}}<tr><td colspan="4" class="muted">Снимки стеков рядом с задержками не зафиксированы.</td></tr>{{end}}
+    </table>
+  </section>
+
+  <section id="quality" class="panel">
+    <div class="panel-head"><div><h2>Можно ли доверять выводам</h2><div class="panel-kicker">Потери событий и несогласованные часы снижают силу временного сопоставления.</div></div><span class="pill">часы согласованы: {{agentBooleanLabel .Summary.Agent.Quality.CompatibleClockCalibration}}</span></div>
+    {{range .Summary.Agent.DataGaps}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Известных потерь в данных агента нет.</p>{{end}}
+    <details class="fold" open><summary>Ограничения интерпретации</summary><div class="fold-body">{{range .Summary.Agent.Limitations}}<p class="quality-notice">{{.}}</p>{{end}}</div></details>
+  </section>
+
+  <details id="technical" class="fold">
+    <summary><span>Технические сведения для диагностики агента</span><span class="fold-summary-meta">не нужны для обычного анализа приложения</span></summary>
+    <div class="fold-body">
+      <div class="grid">
+        <div class="metric"><div class="label">Память агента</div><div class="value">{{dataSizeBytes .Summary.Agent.NativeMemoryBytes}}</div><div class="hint">ограниченный внутренний буфер</div></div>
+        <div class="metric"><div class="label">Максимум очереди</div><div class="value">{{.Summary.Agent.Quality.QueueHighWatermark}}</div><div class="hint">переполнений {{.Summary.Agent.Quality.QueueFullTotal}}</div></div>
+        <div class="metric"><div class="label">Сверки часов</div><div class="value">{{.Summary.Agent.Quality.ClockSyncCount}}</div><div class="hint">максимальная неопределённость {{.Summary.Agent.Quality.MaxClockUncertaintyNS}} нс</div></div>
+        <div class="metric"><div class="label">Состояние подключения</div><div class="value">{{.Summary.Agent.StatusCode}} / {{.Summary.Agent.StatusDetail}}</div><div class="hint">{{agentReasonLabel .Summary.Agent.Reason}}</div></div>
+      </div>
+      <h3>Возможности агента</h3>
+      <table><tr><th>Запрошено</th><th>Доступно на устройстве</th><th>Разрешено</th><th>Используется</th><th>Недоступно</th></tr><tr><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Requested}}</code><div class="muted">{{join .Summary.Agent.Capabilities.RequestedList ", "}}</div></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Potential}}</code></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Granted}}</code></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Active}}</code><div class="muted">{{join .Summary.Agent.Capabilities.ActiveList ", "}}</div></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Missing}}</code></td></tr></table>
+      <p class="muted">Режим в файле: <code>{{.Summary.Agent.EffectivePreset}}</code> · отпечаток настроек: <code>{{.Summary.Agent.ConfigHash}}</code></p>
+    </div>
+  </details>
+</main>
+<footer>Jank Hunter · анализ JVM TI · создан {{.GeneratedAt}}</footer>
+<script>{{reportJS}}</script>
+</body>
+</html>

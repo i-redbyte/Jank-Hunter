@@ -1454,7 +1454,7 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf '<html>ART TI: native runtime evidence JvmtiEvidenceScenario</html>\\n' > "$out"
+printf '<html>Анализ работы среды Android JvmtiEvidenceScenario</html>\\n' > "$out"
 printf '%s\\n' "$FAKE_INSPECT_JSON"
 """,
         )

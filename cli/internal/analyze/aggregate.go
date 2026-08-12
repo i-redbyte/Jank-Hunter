@@ -2482,10 +2482,10 @@ func Compare(baseline, candidate Summary) Comparison {
 		mixDelta("Device mix", baseline.Devices, candidate.Devices, minUint64(uint64(baseline.LogCount), uint64(candidate.LogCount))),
 		mixDelta("Network mix", baseline.Network, candidate.Network, minUint64(uint64(baseline.ContextCount), uint64(candidate.ContextCount))),
 		mixDelta("Cohort mix", baseline.Cohorts, candidate.Cohorts, minUint64(uint64(baseline.EventCount), uint64(candidate.EventCount))),
-		observedDeltaFloat("ART TI GC time", baseline.Agent.GC.TotalMS, candidate.Agent.GC.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "ART TI GC capability/data отсутствуют"),
-		observedDelta("ART TI GC count", baseline.Agent.GC.Count, candidate.Agent.GC.Count, "шт", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "ART TI GC capability/data отсутствуют"),
-		observedDeltaFloat("ART TI contention time", baseline.Agent.Contention.TotalMS, candidate.Agent.Contention.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "ART TI contention capability/data отсутствуют"),
-		observedDelta("ART TI contention count", baseline.Agent.Contention.Count, candidate.Agent.Contention.Count, "шт", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "ART TI contention capability/data отсутствуют"),
+		observedDeltaFloat("JVM TI: время сборки мусора", baseline.Agent.GC.TotalMS, candidate.Agent.GC.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "нет данных о сборке мусора от JVM TI"),
+		observedDelta("JVM TI: число сборок мусора", baseline.Agent.GC.Count, candidate.Agent.GC.Count, "шт", true, agentSignalSamples(baseline.Agent, 1), agentSignalSamples(candidate.Agent, 1), "нет данных о сборке мусора от JVM TI"),
+		observedDeltaFloat("JVM TI: время ожидания блокировок", baseline.Agent.Contention.TotalMS, candidate.Agent.Contention.TotalMS, "мс", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "нет данных об ожидании блокировок от JVM TI"),
+		observedDelta("JVM TI: число ожиданий блокировок", baseline.Agent.Contention.Count, candidate.Agent.Contention.Count, "шт", true, agentSignalSamples(baseline.Agent, 4), agentSignalSamples(candidate.Agent, 4), "нет данных об ожидании блокировок от JVM TI"),
 	)
 	for i := range comparison.Deltas {
 		comparison.Deltas[i].Confidence = confidence
@@ -2514,19 +2514,19 @@ func agentSignalSamples(summary AgentSummary, capability uint64) uint64 {
 func compareAgent(baseline, candidate AgentSummary) AgentComparison {
 	result := AgentComparison{}
 	if baseline.EventCount == 0 || candidate.EventCount == 0 {
-		result.Warnings = append(result.Warnings, "ART TI данные отсутствуют хотя бы в одном прогоне; agent regression metrics не полностью сопоставимы.")
+		result.Warnings = append(result.Warnings, "Данные JVM TI отсутствуют хотя бы в одном прогоне; показатели среды выполнения нельзя полностью сопоставить.")
 		return result
 	}
 	result.ConfigMismatch = baseline.ConfigHash != candidate.ConfigHash || baseline.EffectivePreset != candidate.EffectivePreset
 	result.CapabilityMismatch = baseline.Capabilities.Active != candidate.Capabilities.Active
 	if result.ConfigMismatch {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI config mismatch: %s/%s → %s/%s.", baseline.EffectivePreset, baseline.ConfigHash, candidate.EffectivePreset, candidate.ConfigHash))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Настройки JVM TI различаются: %s/%s → %s/%s.", baseline.EffectivePreset, baseline.ConfigHash, candidate.EffectivePreset, candidate.ConfigHash))
 	}
 	if result.CapabilityMismatch {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI active capabilities mismatch: 0x%x → 0x%x.", baseline.Capabilities.Active, candidate.Capabilities.Active))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Активные возможности JVM TI различаются: 0x%x → 0x%x.", baseline.Capabilities.Active, candidate.Capabilities.Active))
 	}
 	if len(baseline.DataGaps) > 0 || len(candidate.DataGaps) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("ART TI data-quality mismatch: gaps base=%d, candidate=%d; findings require manual confirmation.", len(baseline.DataGaps), len(candidate.DataGaps)))
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Качество данных JVM TI различается: ограничений в базе %d, у кандидата %d; выводы требуют ручной проверки.", len(baseline.DataGaps), len(candidate.DataGaps)))
 	}
 	baseStacks := agentMethodSuspects(baseline.Stacks)
 	candidateStacks := agentMethodSuspects(candidate.Stacks)
@@ -2534,10 +2534,10 @@ func compareAgent(baseline, candidate AgentSummary) AgentComparison {
 	basePaths := agentFindingKeys(baseline.Findings)
 	candidatePaths := agentFindingKeys(candidate.Findings)
 	for _, key := range setDifference(candidatePaths, basePaths) {
-		result.CausalChanges = append(result.CausalChanges, "added: "+key)
+		result.CausalChanges = append(result.CausalChanges, "появилась связь: "+key)
 	}
 	for _, key := range setDifference(basePaths, candidatePaths) {
-		result.CausalChanges = append(result.CausalChanges, "resolved: "+key)
+		result.CausalChanges = append(result.CausalChanges, "исчезла связь: "+key)
 	}
 	return result
 }

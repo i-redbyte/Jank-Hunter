@@ -484,6 +484,13 @@ func writeInspectReportSetUsing(
 	companionOptions.Links = reportPaths.MainLink()
 	links := report.ReportLinks{}
 	var generationWarnings []string
+	if summary.Agent.EventCount > 0 {
+		if err := report.WriteAgentInspectWithOptions(reportPaths.Agent, summary, companionOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("анализ JVM TI не записан", err))
+		} else {
+			links.Agent = filepath.Base(reportPaths.Agent)
+		}
+	}
 
 	if err := report.WriteLeakInspectWithOptions(reportPaths.Leaks, analyze.BuildLeakReport(summary), companionOptions); err != nil {
 		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек inspect не записан", err))
@@ -584,6 +591,13 @@ func writeCompareReportSetFiles(
 	companionOptions.Links = reportPaths.MainLink()
 	links := report.ReportLinks{}
 	var generationWarnings []string
+	if comparison.Baseline.Agent.EventCount > 0 || comparison.Candidate.Agent.EventCount > 0 {
+		if err := report.WriteAgentCompareWithOptions(reportPaths.Agent, comparison, companionOptions); err != nil {
+			generationWarnings = append(generationWarnings, warnReportGeneration("сравнение JVM TI не записано", err))
+		} else {
+			links.Agent = filepath.Base(reportPaths.Agent)
+		}
+	}
 
 	if err := report.WriteLeakCompareWithOptions(reportPaths.Leaks, analyze.BuildLeakCompareReport(comparison), companionOptions); err != nil {
 		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек compare не записан", err))
@@ -675,6 +689,7 @@ func readReportBundlePages(mainPath string) ([]report.BundlePage, error) {
 		required bool
 	}{
 		{id: "overview", title: "Обзор", path: paths.Main, required: true},
+		{id: "jvmti", title: "Анализ JVM TI", path: paths.Agent},
 		{id: "math", title: "Математический анализ", path: paths.Math},
 		{id: "leaks", title: "Утечки памяти", path: paths.Leaks},
 		{id: "influence", title: "Граф влияния", path: paths.Influence},

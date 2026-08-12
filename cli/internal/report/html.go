@@ -44,6 +44,7 @@ type ReportOptions struct {
 // failed optional companion without rendering the primary report twice.
 type ReportLinks struct {
 	Main                string
+	Agent               string
 	Math                string
 	Leaks               string
 	Influence           string
@@ -53,6 +54,7 @@ type ReportLinks struct {
 
 type ReportPaths struct {
 	Main                string
+	Agent               string
 	Math                string
 	Leaks               string
 	Influence           string
@@ -63,6 +65,7 @@ type ReportPaths struct {
 func PathsFor(primary string) ReportPaths {
 	return ReportPaths{
 		Main:                primary,
+		Agent:               companionReportPath(primary, "jvmti"),
 		Math:                companionReportPath(primary, "math"),
 		Leaks:               companionReportPath(primary, "leaks"),
 		Influence:           companionReportPath(primary, "influence"),
@@ -81,6 +84,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"GeneratedAt":                   options.generatedAt(),
 		"Summary":                       summary,
 		"Analysis":                      inspectAnalysis(summary, lang),
+		"AgentReportHref":               options.Links.Agent,
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
 		"InfluenceReportHref":           options.Links.Influence,
@@ -102,6 +106,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 			{Title: "Логи кандидата", Empty: "Детали логов кандидата не встроены.", Logs: candidateLogs},
 		},
 		"Analysis":                      compareAnalysis(comparison, lang),
+		"AgentReportHref":               options.Links.Agent,
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
 		"InfluenceReportHref":           options.Links.Influence,
@@ -110,6 +115,28 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"PresentationMode":              options.PresentationMode,
 		"AnimatedBackground":            options.AnimatedBackground,
 		"ReportStyle":                   options.Style.normalized(),
+	})
+}
+
+func WriteAgentInspectWithOptions(path string, summary analyze.Summary, options ReportOptions) error {
+	return execute(path, cachedAgentInspectTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
+		"Summary":            summary,
+		"MainReportHref":     options.Links.Main,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
+	})
+}
+
+func WriteAgentCompareWithOptions(path string, comparison analyze.Comparison, options ReportOptions) error {
+	return execute(path, cachedAgentCompareTemplate, map[string]any{
+		"GeneratedAt":        options.generatedAt(),
+		"Comparison":         comparison,
+		"MainReportHref":     options.Links.Main,
+		"PresentationMode":   options.PresentationMode,
+		"AnimatedBackground": options.AnimatedBackground,
+		"ReportStyle":        options.Style.normalized(),
 	})
 }
 
@@ -262,7 +289,7 @@ func canonicalCompanionReportPath(path, suffix string) string {
 	}
 	for {
 		trimmed := false
-		for _, known := range []string{"math", "leaks", "influence", "diagnostics", "di"} {
+		for _, known := range []string{"jvmti", "math", "leaks", "influence", "diagnostics", "di"} {
 			knownSuffix := "-" + known
 			if strings.HasSuffix(base, knownSuffix) {
 				base = strings.TrimSuffix(base, knownSuffix)
@@ -417,6 +444,7 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"humanDuration":              humanDuration,
 		"dataSize":                   humanDataSizeKB,
+		"dataSizeBytes":              humanDataSizeBytes,
 		"ruCount":                    russianCount,
 		"tip":                        tooltipHTML,
 		"metricHelp":                 metricHelp,
@@ -454,19 +482,26 @@ func reportTemplateFuncs() template.FuncMap {
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
-		"influenceRoleLabel":     influenceRoleLabel,
-		"influenceGraphData":     influenceGraphData,
-		"influenceEvidenceLabel": influenceEvidenceLabel,
-		"routeCompareRows":       routeCompareRows,
-		"screenCompareRows":      screenCompareRows,
-		"ownerCompareRows":       ownerCompareRows,
-		"flowCompareRows":        flowCompareRows,
-		"summaryLogSpam":         summaryLogSpamTotal,
-		"summaryProblemWindows":  summaryProblemWindowTotal,
-		"perMinute":              perMinute,
-		"signedMS":               signedMS,
-		"signedDuration":         signedDuration,
-		"signedFloat":            signedFloat,
+		"agentPresetLabel":          agentPresetLabel,
+		"agentReasonLabel":          agentReasonLabel,
+		"agentEvidenceLevelLabel":   agentEvidenceLevelLabel,
+		"agentConfidenceLabel":      agentConfidenceLabel,
+		"agentBooleanLabel":         agentBooleanLabel,
+		"agentGCConclusion":         agentGCConclusion,
+		"agentContentionConclusion": agentContentionConclusion,
+		"influenceRoleLabel":        influenceRoleLabel,
+		"influenceGraphData":        influenceGraphData,
+		"influenceEvidenceLabel":    influenceEvidenceLabel,
+		"routeCompareRows":          routeCompareRows,
+		"screenCompareRows":         screenCompareRows,
+		"ownerCompareRows":          ownerCompareRows,
+		"flowCompareRows":           flowCompareRows,
+		"summaryLogSpam":            summaryLogSpamTotal,
+		"summaryProblemWindows":     summaryProblemWindowTotal,
+		"perMinute":                 perMinute,
+		"signedMS":                  signedMS,
+		"signedDuration":            signedDuration,
+		"signedFloat":               signedFloat,
 		"networkBucketClass": func(bucket mathanalysis.TimelineBucket) string {
 			if zeroNetworkBucket(bucket) {
 				return "bucket-zero"
@@ -630,14 +665,14 @@ type influenceHTMLNode struct {
 }
 
 type influenceHTMLEdge struct {
-	ViewKey      string `json:"_Key,omitempty"`
-	From         string `json:",omitempty"`
-	To           string `json:",omitempty"`
-	RuntimeCount uint64 `json:",omitempty"`
-	StaticCount  uint64 `json:",omitempty"`
+	ViewKey      string  `json:"_Key,omitempty"`
+	From         string  `json:",omitempty"`
+	To           string  `json:",omitempty"`
+	RuntimeCount uint64  `json:",omitempty"`
+	StaticCount  uint64  `json:",omitempty"`
 	Influence    float64 `json:",omitempty"`
-	Evidence     string `json:",omitempty"`
-	Aggregate    bool   `json:",omitempty"`
+	Evidence     string  `json:",omitempty"`
+	Aggregate    bool    `json:",omitempty"`
 }
 
 func influenceGraphData(influence analyze.InfluenceSummary) template.JS {
@@ -866,6 +901,107 @@ func humanDataSizeKB(kb uint64) string {
 		return fmt.Sprintf("%.1f МБ", float64(kb)/1024)
 	default:
 		return fmt.Sprintf("%d КБ", kb)
+	}
+}
+
+func humanDataSizeBytes(bytes uint64) string {
+	switch {
+	case bytes >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f ГБ", float64(bytes)/1024/1024/1024)
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1f МБ", float64(bytes)/1024/1024)
+	case bytes >= 1024:
+		return fmt.Sprintf("%.1f КБ", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%d байт", bytes)
+	}
+}
+
+func agentPresetLabel(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "OFF":
+		return "выключен"
+	case "LIGHT":
+		return "базовый сбор"
+	case "CAUSAL":
+		return "поиск причин"
+	case "DEEP":
+		return "углублённый сбор"
+	case "CUSTOM":
+		return "пользовательский набор"
+	default:
+		return "неизвестный режим"
+	}
+}
+
+func agentReasonLabel(value string) string {
+	switch strings.TrimSpace(value) {
+	case "attached":
+		return "агент подключён"
+	case "capability_degraded":
+		return "часть возможностей недоступна"
+	case "attach_failed":
+		return "не удалось подключить агент"
+	case "api_unsupported":
+		return "версия Android не поддерживается"
+	case "app_not_debuggable":
+		return "приложение не разрешает отладочное подключение"
+	case "stopped":
+		return "агент остановлен"
+	case "":
+		return "причина не указана"
+	default:
+		return "служебная причина: " + value
+	}
+}
+
+func agentEvidenceLevelLabel(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "DIRECT":
+		return "прямое измерение"
+	case "STRONG_ASSOCIATION":
+		return "сильная временная связь"
+	case "TEMPORAL_CORRELATION":
+		return "временное совпадение"
+	default:
+		return "предварительное наблюдение"
+	}
+}
+
+func agentConfidenceLabel(value string) string {
+	return confidenceLabel(strings.ToLower(strings.TrimSpace(value)))
+}
+
+func agentBooleanLabel(value bool) string {
+	if value {
+		return "да"
+	}
+	return "нет"
+}
+
+func agentGCConclusion(summary analyze.AgentIntervalSummary) string {
+	switch {
+	case summary.Count == 0:
+		return "Агент не зафиксировал пауз сборки мусора."
+	case summary.MaxMS >= 16.7:
+		return fmt.Sprintf("Самая длинная пауза %.3f мс могла сорвать кадр на экране 60 Гц. Проверяйте её только вместе с совпавшим проблемным окном.", summary.MaxMS)
+	case summary.MaxMS >= 8.3:
+		return fmt.Sprintf("Самая длинная пауза %.3f мс заметна для экранов с высокой частотой обновления, но сама по себе не объясняет задержку.", summary.MaxMS)
+	default:
+		return fmt.Sprintf("Максимальная пауза %.3f мс мала и без временного совпадения с задержкой не является практической проблемой.", summary.MaxMS)
+	}
+}
+
+func agentContentionConclusion(summary analyze.AgentIntervalSummary) string {
+	switch {
+	case summary.Count == 0:
+		return "Длительное ожидание блокировок не зафиксировано."
+	case summary.MaxMS >= 100:
+		return fmt.Sprintf("Ожидание %.3f мс достаточно велико, чтобы быть заметной причиной задержки. Найдите совпавший поток и метод ниже.", summary.MaxMS)
+	case summary.MaxMS >= 16.7:
+		return fmt.Sprintf("Ожидание %.3f мс могло сорвать кадр, если происходило на главном потоке.", summary.MaxMS)
+	default:
+		return fmt.Sprintf("Максимальное ожидание %.3f мс невелико; приоритет появляется только при повторении в проблемном сценарии.", summary.MaxMS)
 	}
 }
 

@@ -35,14 +35,14 @@
         {{if .Summary.CollectionQuality.Level}}<div class="chip">Доверие к сбору <strong>{{confidenceLabel .Summary.CollectionQuality.Level}}</strong></div>{{end}}
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
-      {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
+      {{if or .AgentReportHref .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .AgentReportHref}}<a class="math-link" href="{{.AgentReportHref}}">Анализ JVM TI</a>{{end}}{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
       </div>
     </div>
   </div>
 </header>
 <nav class="nav">
   <a href="#overview">Обзор</a>
-  <a href="#art-ti">ART TI</a>
+  {{if .AgentReportHref}}<a href="#jvmti-evidence">JVM TI</a>{{end}}
   <a href="#network">Сеть</a>
   <a href="#ui">UI</a>
   <a href="#flows">Сценарии</a>
@@ -101,41 +101,11 @@
     {{end}}
   </section>
 
-  <section id="art-ti" class="panel">
-    <div class="panel-head">
-      <div><h2>ART TI: native runtime evidence</h2><div class="panel-kicker">Bounded JVMTI-сигналы о GC, monitor contention, потоках и triggered stacks. Они усиливают расследование, но временное совпадение не считается доказанной причиной.</div></div>
-      <span class="pill">{{.Summary.Agent.Availability}}</span>
-    </div>
-    {{if eq .Summary.Agent.EventCount 0}}
-      <p class="quality-notice">Данных агента нет. Остальные разделы построены только по обычным Jank Hunter events.</p>
-    {{else}}
-      <div class="grid">
-        <div class="metric"><div class="label">Состояние</div><div class="value">{{.Summary.Agent.Availability}}</div><div class="hint">reason={{.Summary.Agent.Reason}} · status={{.Summary.Agent.StatusCode}}/{{.Summary.Agent.StatusDetail}}</div></div>
-        <div class="metric"><div class="label">Effective config</div><div class="value">{{.Summary.Agent.EffectivePreset}}</div><div class="hint">hash={{.Summary.Agent.ConfigHash}}</div></div>
-        <div class="metric"><div class="label">Native memory</div><div class="value">{{.Summary.Agent.NativeMemoryBytes}} байт</div><div class="hint">agent events={{.Summary.Agent.EventCount}}</div></div>
-        <div class="metric"><div class="label">Capabilities</div><div class="value"><code>0x{{printf "%x" .Summary.Agent.Capabilities.Active}}</code></div><div class="hint">requested 0x{{printf "%x" .Summary.Agent.Capabilities.Requested}} · missing 0x{{printf "%x" .Summary.Agent.Capabilities.Missing}}</div></div>
-        <div class="metric"><div class="label">GC</div><div class="value">{{printf "%.3f" .Summary.Agent.GC.TotalMS}} мс</div><div class="hint">count={{.Summary.Agent.GC.Count}} · max={{printf "%.3f" .Summary.Agent.GC.MaxMS}} мс</div></div>
-        <div class="metric"><div class="label">Contention</div><div class="value">{{printf "%.3f" .Summary.Agent.Contention.TotalMS}} мс</div><div class="hint">count={{.Summary.Agent.Contention.Count}} · max={{printf "%.3f" .Summary.Agent.Contention.MaxMS}} мс</div></div>
-        <div class="metric"><div class="label">Native queue</div><div class="value">high-water {{.Summary.Agent.Quality.QueueHighWatermark}}</div><div class="hint">full={{.Summary.Agent.Quality.QueueFullTotal}} · contention={{.Summary.Agent.Quality.AdmissionContentionTotal}} · other loss={{.Summary.Agent.Quality.OtherNativeLossTotal}}</div></div>
-        <div class="metric"><div class="label">Data continuity</div><div class="value">gaps={{.Summary.Agent.Quality.SequenceGaps}}</div><div class="hint">clock sync={{.Summary.Agent.Quality.ClockSyncCount}} · compatible={{.Summary.Agent.Quality.CompatibleClockCalibration}}</div></div>
-      </div>
-      <h3>Capability matrix</h3>
-      <table><tr><th>Requested</th><th>Potential</th><th>Granted</th><th>Active</th><th>Missing</th></tr><tr><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Requested}}</code><div class="muted">{{join .Summary.Agent.Capabilities.RequestedList ", "}}</div></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Potential}}</code></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Granted}}</code></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Active}}</code><div class="muted">{{join .Summary.Agent.Capabilities.ActiveList ", "}}</div></td><td><code>0x{{printf "%x" .Summary.Agent.Capabilities.Missing}}</code></td></tr></table>
-      <div class="split">
-        <div><h3>Top GC intervals</h3><table><tr><th>Duration</th><th>Start / sequence</th></tr>{{range .Summary.Agent.GC.Top}}<tr><td>{{printf "%.3f" .DurationMS}} мс</td><td><code>{{.StartNS}} / {{.Sequence}}</code></td></tr>{{else}}<tr><td colspan="2" class="muted">GC intervals не зафиксированы.</td></tr>{{end}}</table></div>
-        <div><h3>Contention suspects</h3><table><tr><th>Duration</th><th>Thread / sequence</th></tr>{{range .Summary.Agent.Contention.Top}}<tr><td>{{printf "%.3f" .DurationMS}} мс</td><td><code>{{.ThreadToken}} / {{.Sequence}}</code></td></tr>{{else}}<tr><td colspan="2" class="muted">Contention intervals не зафиксированы.</td></tr>{{end}}</table></div>
-      </div>
-      <h3>Thread / stack hotspots</h3>
-      <p class="help-text">Потоки: starts={{.Summary.Agent.Threads.Starts}}, ends={{.Summary.Agent.Threads.Ends}}, unique={{.Summary.Agent.Threads.UniqueObserved}}, max concurrent={{.Summary.Agent.Threads.MaxConcurrent}}. Stack samples={{.Summary.Agent.Stacks.Samples}}, missing definitions={{.Summary.Agent.Stacks.MissingDefinitions}}.</p>
-      <table><tr><th>Fingerprint</th><th>Samples</th><th>Thread / context</th><th>Methods</th></tr>{{range .Summary.Agent.Stacks.Hotspots}}<tr><td><code>{{.Fingerprint}}</code></td><td>{{.Samples}}</td><td><code>{{.ThreadToken}}</code><div class="muted">{{.Context}}</div></td><td>{{range .Methods}}<div><code>{{.}}</code></div>{{else}}<span class="muted">definition отсутствует</span>{{end}}</td></tr>{{else}}<tr><td colspan="4" class="muted">Triggered stacks не зафиксированы.</td></tr>{{end}}</table>
-      <h3>Causal evidence cards</h3>
-      {{range .Summary.Agent.Findings}}
-      <article class="guide-card"><strong>{{.EvidenceLevel}} · {{.Confidence}} ({{.ConfidenceScore}}/100)</strong><p>{{.Symptom}}</p><p><b>Подозреваемая причина:</b> {{.SuspectedCause}}</p><p class="muted">screen={{.Screen}} · flow={{.Flow}} · owner={{.Owner}} · thread={{.ThreadToken}} · method=<code>{{.Method}}</code></p><ol>{{range .EvidenceChain}}<li><code>{{.Level}}</code> {{.Statement}} — {{.Measurement}}</li>{{end}}</ol><p><b>Точные измерения:</b> {{join .ExactMeasurements " "}}</p><p><b>Positive evidence:</b> {{join .PositiveEvidence " "}}</p><p><b>Missing/counter evidence:</b> {{join .MissingOrCounterEvidence " "}}</p>{{if .DataQualityPenalties}}<p class="warning"><b>Quality penalties:</b> {{join .DataQualityPenalties " "}}</p>{{end}}<p><b>Альтернативы:</b> {{join .AlternativeExplanations " "}}</p><p><b>Следующий шаг:</b> {{join .Actions " "}}</p><p class="muted">timeline: <code>{{.TimelineReference}}</code></p></article>
-      {{else}}<p class="quality-notice">Agent evidence есть, но bounded analyzer не нашёл связанного stall/UI окна. Это не подтверждает отсутствие проблемы.</p>{{end}}
-      {{range .Summary.Agent.DataGaps}}<p class="warning">{{.}}</p>{{end}}
-      <details class="fold"><summary>Ограничения интерпретации</summary><div class="fold-body">{{range .Summary.Agent.Limitations}}<p class="quality-notice">{{.}}</p>{{end}}</div></details>
-    {{end}}
-  </section>
+  {{if .AgentReportHref}}<section id="jvmti-evidence" class="panel">
+    <div class="panel-head"><div><h2>Дополнительные данные JVM TI</h2><div class="panel-kicker">В основном отчёте остаются только связи, которые помогают перейти от пользовательской задержки к коду. Полный разбор вынесен на отдельную страницу.</div></div><span class="pill">{{ruCount (len .Summary.Agent.Findings) "вывод" "вывода" "выводов"}}</span></div>
+    {{range limitRows .Summary.Agent.Findings 3}}<article class="guide-card"><strong>{{agentEvidenceLevelLabel .EvidenceLevel}} · доверие {{agentConfidenceLabel .Confidence}}</strong><p>{{.Symptom}}</p><p><b>Что могло повлиять:</b> {{.SuspectedCause}}</p>{{if .Method}}<p><b>Наблюдаемый метод:</b> <code>{{.Method}}</code></p>{{end}}</article>{{else}}<p class="quality-notice">Связь данных агента с пользовательской задержкой не найдена. Отдельные короткие внутренние паузы без такой связи не требуют действий.</p>{{end}}
+    <p class="help-text"><a href="{{.AgentReportHref}}">Открыть полный анализ JVM TI: объяснения, наблюдаемые методы и следующие шаги</a></p>
+  </section>{{end}}
 
   <section id="code-problems" class="panel code-registry-panel">
     <details class="fold code-registry-fold" open>

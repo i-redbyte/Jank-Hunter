@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jank Hunter: сравнение JVM TI</title>
+  <style>{{reportCSS .ReportStyle false}}</style>
+</head>
+<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<header class="hero">
+  <div class="report-hero-grid">
+    <div class="report-hero-title">
+      <div class="eyebrow">Jank Hunter · JVM TI</div>
+      <h1>Сравнение работы среды Android</h1>
+      <div class="subhead">создан {{.GeneratedAt}} · база против кандидата</div>
+      <div class="hero-actions">{{if .MainReportHref}}<a class="math-link" href="{{.MainReportHref}}">← Обзор</a>{{end}}<a class="math-link" href="#changes">Перейти к изменениям</a></div>
+    </div>
+  </div>
+</header>
+<nav class="nav"><a href="#summary">Сводка</a><a href="#changes">Что изменилось</a><a href="#quality">Сопоставимость</a></nav>
+<main>
+  <section id="summary" class="panel">
+    <div class="panel-head"><div><h2>Изменения показателей среды выполнения</h2><div class="panel-kicker">Сравнение полезно только при одинаковом режиме сбора и одинаковом наборе возможностей агента.</div></div><span class="pill">база → кандидат</span></div>
+    <div class="compare-pair-grid">
+      <div class="compare-pair"><div class="compare-pair-title">Режим сбора</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{agentPresetLabel .Comparison.Baseline.Agent.EffectivePreset}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{agentPresetLabel .Comparison.Candidate.Agent.EffectivePreset}}</strong></div></div><div class="compare-delta">настройки различаются: {{agentBooleanLabel .Comparison.Agent.ConfigMismatch}}</div></div>
+      <div class="compare-pair"><div class="compare-pair-title">Паузы сборки мусора</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.3f" .Comparison.Baseline.Agent.GC.TotalMS}} мс · {{.Comparison.Baseline.Agent.GC.Count}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.3f" .Comparison.Candidate.Agent.GC.TotalMS}} мс · {{.Comparison.Candidate.Agent.GC.Count}}</strong></div></div><div class="compare-delta">самая длинная {{printf "%.3f" .Comparison.Baseline.Agent.GC.MaxMS}} → {{printf "%.3f" .Comparison.Candidate.Agent.GC.MaxMS}} мс</div></div>
+      <div class="compare-pair"><div class="compare-pair-title">Ожидание блокировок</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.3f" .Comparison.Baseline.Agent.Contention.TotalMS}} мс · {{.Comparison.Baseline.Agent.Contention.Count}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.3f" .Comparison.Candidate.Agent.Contention.TotalMS}} мс · {{.Comparison.Candidate.Agent.Contention.Count}}</strong></div></div><div class="compare-delta">самое длинное {{printf "%.3f" .Comparison.Baseline.Agent.Contention.MaxMS}} → {{printf "%.3f" .Comparison.Candidate.Agent.Contention.MaxMS}} мс</div></div>
+      <div class="compare-pair"><div class="compare-pair-title">Потери событий</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.Agent.Quality.SequenceGaps}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.Agent.Quality.SequenceGaps}}</strong></div></div><div class="compare-delta">часы согласованы: {{agentBooleanLabel .Comparison.Baseline.Agent.Quality.CompatibleClockCalibration}} → {{agentBooleanLabel .Comparison.Candidate.Agent.Quality.CompatibleClockCalibration}}</div></div>
+    </div>
+  </section>
+  <section id="changes" class="panel">
+    <div class="panel-head"><div><h2>Код и причинные связи, которые изменились</h2><div class="panel-kicker">Новый наблюдаемый метод — это приоритет для проверки, а не доказанная регрессия. Ищите повторяемость в одинаковом сценарии.</div></div></div>
+    <div class="split">
+      <div><h3>Методы в снимках стеков</h3><table><tr><th>Изменение</th><th>Метод</th></tr>{{range .Comparison.Agent.NewStackSuspects}}<tr><td>появился у кандидата</td><td><code>{{.}}</code></td></tr>{{end}}{{range .Comparison.Agent.ResolvedSuspects}}<tr><td>исчез у кандидата</td><td><code>{{.}}</code></td></tr>{{end}}{{if and (not .Comparison.Agent.NewStackSuspects) (not .Comparison.Agent.ResolvedSuspects)}}<tr><td colspan="2" class="muted">Состав наблюдаемых методов не изменился или данных недостаточно.</td></tr>{{end}}</table></div>
+      <div><h3>Изменения причинных выводов</h3>{{range .Comparison.Agent.CausalChanges}}<p>{{.}}</p>{{else}}<p class="muted">Новых или исчезнувших причинных связей не найдено.</p>{{end}}</div>
+    </div>
+  </section>
+  <section id="quality" class="panel">
+    <div class="panel-head"><div><h2>Ограничения сравнения</h2><div class="panel-kicker">Если настройки, возможности или качество данных различаются, числовую разницу нельзя считать чистой регрессией приложения.</div></div></div>
+    {{range .Comparison.Agent.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Режимы и возможности агента сопоставимы.</p>{{end}}
+  </section>
+</main>
+<footer>Jank Hunter · сравнение JVM TI · создан {{.GeneratedAt}}</footer>
+<script>{{reportJS}}</script>
+</body>
+</html>

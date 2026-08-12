@@ -679,13 +679,38 @@ func TestWriteReportsOnlyLinkGeneratedCompanions(t *testing.T) {
 	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{}); err != nil {
 		t.Fatalf("WriteInspectWithOptions() error = %v", err)
 	}
-	assertHTMLNotContains(t, inspectPath, "λ Анализ", `href="inspect-math.html"`)
+	assertHTMLNotContains(t, inspectPath, "λ Анализ", `href="inspect-math.html"`, "Анализ JVM TI", `href="inspect-jvmti.html"`)
 
 	comparePath := filepath.Join(dir, "compare.html")
 	if err := WriteCompareReportWithOptions(comparePath, analyze.Compare(summary, summary), nil, nil, ReportOptions{}); err != nil {
 		t.Fatalf("WriteCompareReportWithOptions() error = %v", err)
 	}
-	assertHTMLNotContains(t, comparePath, "λ Анализ", `href="compare-math.html"`)
+	assertHTMLNotContains(t, comparePath, "λ Анализ", `href="compare-math.html"`, "Сравнение JVM TI", `href="compare-jvmti.html"`)
+}
+
+func TestWriteAgentReportsUseRussianDecisionOrientedLanguage(t *testing.T) {
+	summary, err := analyze.InspectFilesWithOptions(
+		"JVM TI fixture",
+		[]string{filepath.Join("testdata", "art-ti-evidence-v9.jhlog")},
+		analyze.Options{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	inspectPath := filepath.Join(directory, "inspect-jvmti.html")
+	if err := WriteAgentInspectWithOptions(inspectPath, summary, ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
+		t.Fatalf("WriteAgentInspectWithOptions() error = %v", err)
+	}
+	assertHTMLContains(t, inspectPath, "Анализ работы среды Android", "Главная ценность", "Что могло повлиять на задержку", "Что делать", "Практическая ценность", "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap", `href="inspect.html"`)
+	assertHTMLNotContains(t, inspectPath, "Top GC intervals", "Thread / stack hotspots", "Causal evidence cards", "Positive evidence", "Missing/counter evidence", "Landroid/graphics/BitmapFactory;->")
+
+	comparisonPath := filepath.Join(directory, "compare-jvmti.html")
+	if err := WriteAgentCompareWithOptions(comparisonPath, analyze.Compare(summary, summary), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
+		t.Fatalf("WriteAgentCompareWithOptions() error = %v", err)
+	}
+	assertHTMLContains(t, comparisonPath, "Сравнение работы среды Android", "Изменения показателей среды выполнения", "Код и причинные связи, которые изменились", `href="compare.html"`)
+	assertHTMLNotContains(t, comparisonPath, "Config / capabilities", "Stack suspects", "Causal paths", "resolved")
 }
 
 func TestWriteReportsRussian(t *testing.T) {
@@ -818,6 +843,7 @@ func TestDependencyInjectionReportPath(t *testing.T) {
 func TestPathsForKeepsPrimarySuffixOpaque(t *testing.T) {
 	paths := PathsFor("/tmp/report-math.html")
 	if paths.Main != "/tmp/report-math.html" ||
+		paths.Agent != "/tmp/report-math-jvmti.html" ||
 		paths.Math != "/tmp/report-math-math.html" ||
 		paths.Leaks != "/tmp/report-math-leaks.html" ||
 		paths.Influence != "/tmp/report-math-influence.html" {

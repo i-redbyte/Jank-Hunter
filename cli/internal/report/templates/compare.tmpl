@@ -34,14 +34,14 @@
         <div class="chip">Логи кандидата <strong>{{.Comparison.Candidate.LogCount}}</strong></div>
         <div class="chip">Дельты <strong>{{len .Comparison.Deltas}}</strong></div>
       </div>
-      {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
+      {{if or .AgentReportHref .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .AgentReportHref}}<a class="math-link" href="{{.AgentReportHref}}">Сравнение JVM TI</a>{{end}}{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
       </div>
     </div>
   </div>
 </header>
 <nav class="nav">
   <a href="#compare">Сравнение</a>
-  <a href="#art-ti">ART TI</a>
+  {{if .AgentReportHref}}<a href="#jvmti-evidence">JVM TI</a>{{end}}
   <a href="#code-problems">Реестр кода</a>
   <a href="#memory-leaks">Утечки</a>
   <a href="#regressions">Регрессии</a>
@@ -115,20 +115,11 @@
     {{end}}
   </section>
 
-  <section id="art-ti" class="panel">
-    <div class="panel-head"><div><h2>ART TI: сопоставимость и изменения</h2><div class="panel-kicker">До оценки regression проверяются preset/config, capability matrix, exposure и data quality.</div></div><span class="pill">native evidence</span></div>
-    {{range .Comparison.Agent.Warnings}}<p class="warning">{{.}}</p>{{end}}
-    <div class="compare-pair-grid">
-      <div class="compare-pair"><div class="compare-pair-title">Config / capabilities</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{.Comparison.Baseline.Agent.EffectivePreset}}</strong><small><code>{{.Comparison.Baseline.Agent.ConfigHash}} · 0x{{printf "%x" .Comparison.Baseline.Agent.Capabilities.Active}}</code></small></div><div class="compare-value"><span>Кандидат</span><strong>{{.Comparison.Candidate.Agent.EffectivePreset}}</strong><small><code>{{.Comparison.Candidate.Agent.ConfigHash}} · 0x{{printf "%x" .Comparison.Candidate.Agent.Capabilities.Active}}</code></small></div></div><div class="compare-delta">config mismatch={{.Comparison.Agent.ConfigMismatch}} · capability mismatch={{.Comparison.Agent.CapabilityMismatch}}</div></div>
-      <div class="compare-pair"><div class="compare-pair-title">GC time / count</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.3f" .Comparison.Baseline.Agent.GC.TotalMS}} мс / {{.Comparison.Baseline.Agent.GC.Count}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.3f" .Comparison.Candidate.Agent.GC.TotalMS}} мс / {{.Comparison.Candidate.Agent.GC.Count}}</strong></div></div><div class="compare-delta">max {{printf "%.3f" .Comparison.Baseline.Agent.GC.MaxMS}} → {{printf "%.3f" .Comparison.Candidate.Agent.GC.MaxMS}} мс</div></div>
-      <div class="compare-pair"><div class="compare-pair-title">Contention time / count</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>{{printf "%.3f" .Comparison.Baseline.Agent.Contention.TotalMS}} мс / {{.Comparison.Baseline.Agent.Contention.Count}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{printf "%.3f" .Comparison.Candidate.Agent.Contention.TotalMS}} мс / {{.Comparison.Candidate.Agent.Contention.Count}}</strong></div></div><div class="compare-delta">max {{printf "%.3f" .Comparison.Baseline.Agent.Contention.MaxMS}} → {{printf "%.3f" .Comparison.Candidate.Agent.Contention.MaxMS}} мс</div></div>
-      <div class="compare-pair"><div class="compare-pair-title">Data quality</div><div class="compare-values"><div class="compare-value"><span>База</span><strong>gaps {{.Comparison.Baseline.Agent.Quality.SequenceGaps}}</strong><small>loss {{.Comparison.Baseline.Agent.Quality.OtherNativeLossTotal}}</small></div><div class="compare-value"><span>Кандидат</span><strong>gaps {{.Comparison.Candidate.Agent.Quality.SequenceGaps}}</strong><small>loss {{.Comparison.Candidate.Agent.Quality.OtherNativeLossTotal}}</small></div></div><div class="compare-delta">clock compatible {{.Comparison.Baseline.Agent.Quality.CompatibleClockCalibration}} → {{.Comparison.Candidate.Agent.Quality.CompatibleClockCalibration}}</div></div>
-    </div>
-    <div class="split">
-      <div><h3>Stack suspects</h3><table><tr><th>Изменение</th><th>Method</th></tr>{{range .Comparison.Agent.NewStackSuspects}}<tr><td>новый/усилившийся</td><td><code>{{.}}</code></td></tr>{{end}}{{range .Comparison.Agent.ResolvedSuspects}}<tr><td>resolved</td><td><code>{{.}}</code></td></tr>{{end}}{{if and (not .Comparison.Agent.NewStackSuspects) (not .Comparison.Agent.ResolvedSuspects)}}<tr><td colspan="2" class="muted">Стабильные method symbols для сравнения отсутствуют или не изменились.</td></tr>{{end}}</table></div>
-      <div><h3>Causal paths</h3>{{range .Comparison.Agent.CausalChanges}}<p><code>{{.}}</code></p>{{else}}<p class="muted">Добавленных/resolved evidence paths нет.</p>{{end}}</div>
-    </div>
-  </section>
+  {{if .AgentReportHref}}<section id="jvmti-evidence" class="panel">
+    <div class="panel-head"><div><h2>Изменения по данным JVM TI</h2><div class="panel-kicker">Подробное сравнение работы среды Android вынесено отдельно, чтобы служебные показатели не мешали разбору пользовательских регрессий.</div></div><span class="pill">дополнительные данные</span></div>
+    {{range .Comparison.Agent.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Режимы сбора и возможности агента сопоставимы.</p>{{end}}
+    <p class="help-text"><a href="{{.AgentReportHref}}">Открыть сравнение JVM TI: сборка мусора, блокировки, методы и причинные связи</a></p>
+  </section>{{end}}
 
   <section id="code-problems" class="panel code-registry-panel">
     <details class="fold code-registry-fold" open>

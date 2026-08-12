@@ -61,7 +61,7 @@
     {"id": "artti-contention-duration", "path": "Agent.Contention.MaxMS", "expect": {"minimum": 300, "maximum": 1000}},
     {"id": "artti-stack-samples", "path": "Agent.Stacks.Samples", "expect": {"minimum": 1}},
     {"id": "artti-stack-definitions", "path": "Agent.Stacks.Definitions", "expect": {"minimum": 1}},
-    {"id": "artti-causal-finding", "path": "Agent.Findings", "where": {"EvidenceLevel": "STRONG_ASSOCIATION", "Flow": "sample.auto.jvmti.monitor_contention", "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario"}, "field": "Method", "cardinality": {"minimum": 1}, "expect": {"contains": "JvmtiEvidenceScenario;->blockMainThread"}},
+    {"id": "artti-causal-finding", "path": "Agent.Findings", "where": {"EvidenceLevel": "STRONG_ASSOCIATION", "Flow": "sample.auto.jvmti.monitor_contention", "Owner": "io.jankhunter.sample.graph.JvmtiEvidenceScenario"}, "field": "Method", "cardinality": {"minimum": 1}, "expect": {"contains": "JvmtiEvidenceScenario.blockMainThread"}},
 
     {"id": "counter-run-started", "path": "Counters", "where": {"Name": "sample.auto.run.started.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
     {"id": "counter-run-completed", "path": "Counters", "where": {"Name": "sample.auto.run.completed.count"}, "field": "Value", "cardinality": {"equals": 1}, "expect": {"equals": 1}},
