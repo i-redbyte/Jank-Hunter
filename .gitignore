@@ -21,6 +21,7 @@ cli/coverage.out
 # Android / Gradle
 android/.kotlin/
 android/.gradle/
+android/**/.gradle/
 android/build/
 android/**/build/
 android/**/.cxx/
