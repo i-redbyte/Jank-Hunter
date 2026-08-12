@@ -69,6 +69,9 @@ if(ANDROID)
     add_library(jankhunter_artti SHARED
         bootstrap.cpp
         art/art_jvmti_adapter.cpp
+        art/art_jvmti_methods.cpp
+        art/art_jvmti_stacks.cpp
+        art/art_jvmti_threads.cpp
         bridge/bridge_runtime.cpp
         bridge/jni_bridge.cpp
     )

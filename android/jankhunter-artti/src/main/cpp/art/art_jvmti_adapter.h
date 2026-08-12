@@ -82,6 +82,12 @@ class ArtJvmtiAdapter final {
       std::uint32_t trigger,
       std::uint64_t context_token,
       std::uint64_t related_sequence) noexcept;
+  void PublishStackDefinition(
+      NativeEngine* engine,
+      std::span<const jvmtiFrameInfo> frames,
+      jint frame_count,
+      std::uint64_t fingerprint,
+      std::uint64_t context_token) noexcept;
   void PublishStatus(std::uint64_t status, std::uint64_t detail) noexcept;
   void PublishCapabilities() noexcept;
   void RemoveActiveCapability(Capability capability) noexcept;
