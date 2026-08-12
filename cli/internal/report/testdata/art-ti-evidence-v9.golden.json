@@ -175,20 +175,20 @@
       "Active": 63,
       "Missing": 0,
       "RequestedList": [
-        "GC events",
-        "thread lifecycle",
-        "monitor contention",
-        "stack trace",
-        "thread metadata",
-        "Linux TID"
+        "сборка мусора",
+        "жизненный цикл потоков",
+        "ожидание блокировок",
+        "снимки стека",
+        "сведения о потоках",
+        "системные идентификаторы потоков"
       ],
       "ActiveList": [
-        "GC events",
-        "thread lifecycle",
-        "monitor contention",
-        "stack trace",
-        "thread metadata",
-        "Linux TID"
+        "сборка мусора",
+        "жизненный цикл потоков",
+        "ожидание блокировок",
+        "снимки стека",
+        "сведения о потоках",
+        "системные идентификаторы потоков"
       ]
     },
     "Quality": {
@@ -249,7 +249,7 @@
           "ThreadToken": 11,
           "Context": "Feed / open / render / Caller.run",
           "Methods": [
-            "Landroid/graphics/BitmapFactory;-\u003edecodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;"
+            "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap"
           ]
         }
       ]
@@ -258,56 +258,56 @@
       {
         "ID": "artti-1",
         "EvidenceLevel": "STRONG_ASSOCIATION",
-        "Symptom": "UI window: 7 jank frames в Feed / open / render / Caller.run",
-        "SuspectedCause": "Декодирование/подготовка изображения на наблюдаемом потоке с allocation pressure и GC",
+        "Symptom": "Проблемное окно интерфейса: медленных кадров 7 в Feed / open / render / Caller.run",
+        "SuspectedCause": "Декодирование или подготовка изображения на наблюдаемом потоке вместе с интенсивным выделением памяти и сборкой мусора",
         "EvidenceChain": [
           {
             "Level": "DIRECT",
-            "Statement": "UI window: 7 jank frames в Feed / open / render / Caller.run",
-            "Measurement": "window 1000000000..1200000000 ns",
+            "Statement": "Проблемное окно интерфейса: медленных кадров 7 в Feed / open / render / Caller.run",
+            "Measurement": "временное окно 1000000000..1200000000 нс",
             "EventIDs": null
           },
           {
             "Level": "DIRECT",
-            "Statement": "Triggered stack sample зафиксирован рядом с симптомом; hotspot Landroid/graphics/BitmapFactory;-\u003edecodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;",
-            "Measurement": "fingerprint=0x0000000000000b17",
+            "Statement": "Снимок стека зафиксирован рядом с задержкой; наблюдаемый метод android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap",
+            "Measurement": "отпечаток стека 0x0000000000000b17",
             "EventIDs": [
               5
             ]
           },
           {
             "Level": "DIRECT",
-            "Statement": "GC interval пересёк окно симптома",
-            "Measurement": "GC 100.000 ms; overlap 100.000 ms",
+            "Statement": "Сборка мусора пересекла окно задержки",
+            "Measurement": "пауза 100.000 мс; пересечение 100.000 мс",
             "EventIDs": [
               4
             ]
           }
         ],
         "ExactMeasurements": [
-          "GC total в прогоне 100.000 ms, max 100.000 ms"
+          "суммарная пауза сборки мусора 100.000 мс, максимальная 100.000 мс"
         ],
         "Screen": "Feed",
         "Flow": "open",
         "Owner": "Caller.run",
         "ThreadToken": 11,
-        "Method": "Landroid/graphics/BitmapFactory;-\u003edecodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;",
+        "Method": "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap",
         "ConfidenceScore": 85,
         "Confidence": "HIGH",
         "PositiveEvidence": [
-          "Измерено 100.000 ms перекрытия GC со stall/jank window.",
-          "Stack sample и симптом принадлежат одному source и bounded temporal window."
+          "Измерено 100.000 мс пересечения сборки мусора с проблемным окном.",
+          "Снимок стека и задержка относятся к одному источнику данных и ограниченному временному окну."
         ],
         "MissingOrCounterEvidence": [
-          "Temporal overlap и sampled stack не доказывают, что наблюдаемый метод вызвал GC/contention или был единственной причиной симптома."
+          "Временное совпадение и снимок стека не доказывают, что наблюдаемый метод вызвал сборку мусора или ожидание блокировки и был единственной причиной задержки."
         ],
         "DataQualityPenalties": null,
         "AlternativeExplanations": [
-          "Другая работа main thread, I/O, scheduler delay или GPU/render bottleneck могла совпасть с окном.",
-          "GC мог быть следствием allocation pressure, а не первичной причиной задержки."
+          "Другая работа главного потока, ввод-вывод, задержка планировщика или отрисовка могли совпасть с тем же окном.",
+          "Сборка мусора могла быть следствием большого числа выделений памяти, а не первичной причиной задержки."
         ],
         "Actions": [
-          "Перенести decode/resize с main thread, использовать подготовленные thumbnails и повторить сценарий.",
+          "Перенести декодирование и изменение размера изображения с главного потока, использовать заранее подготовленные миниатюры и повторить сценарий.",
           "Повторить тот же сценарий с теми же экраном, сценарием и источником работы.",
           "Сравнить с прогоном без подозреваемой работы и проверить, повторяется ли временная связь."
         ],
@@ -316,56 +316,56 @@
       {
         "ID": "artti-2",
         "EvidenceLevel": "STRONG_ASSOCIATION",
-        "Symptom": "Main-thread stall 200 ms в Feed / open / render / Caller.run",
-        "SuspectedCause": "Декодирование/подготовка изображения на наблюдаемом потоке с allocation pressure и GC",
+        "Symptom": "Пауза главного потока 200 мс в Feed / open / render / Caller.run",
+        "SuspectedCause": "Декодирование или подготовка изображения на наблюдаемом потоке вместе с интенсивным выделением памяти и сборкой мусора",
         "EvidenceChain": [
           {
             "Level": "DIRECT",
-            "Statement": "Main-thread stall 200 ms в Feed / open / render / Caller.run",
-            "Measurement": "window 1000000000..1200000000 ns",
+            "Statement": "Пауза главного потока 200 мс в Feed / open / render / Caller.run",
+            "Measurement": "временное окно 1000000000..1200000000 нс",
             "EventIDs": null
           },
           {
             "Level": "DIRECT",
-            "Statement": "Triggered stack sample зафиксирован рядом с симптомом; hotspot Landroid/graphics/BitmapFactory;-\u003edecodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;",
-            "Measurement": "fingerprint=0x0000000000000b17",
+            "Statement": "Снимок стека зафиксирован рядом с задержкой; наблюдаемый метод android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap",
+            "Measurement": "отпечаток стека 0x0000000000000b17",
             "EventIDs": [
               5
             ]
           },
           {
             "Level": "DIRECT",
-            "Statement": "GC interval пересёк окно симптома",
-            "Measurement": "GC 100.000 ms; overlap 100.000 ms",
+            "Statement": "Сборка мусора пересекла окно задержки",
+            "Measurement": "пауза 100.000 мс; пересечение 100.000 мс",
             "EventIDs": [
               4
             ]
           }
         ],
         "ExactMeasurements": [
-          "GC total в прогоне 100.000 ms, max 100.000 ms"
+          "суммарная пауза сборки мусора 100.000 мс, максимальная 100.000 мс"
         ],
         "Screen": "Feed",
         "Flow": "open",
         "Owner": "Caller.run",
         "ThreadToken": 11,
-        "Method": "Landroid/graphics/BitmapFactory;-\u003edecodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;",
+        "Method": "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap",
         "ConfidenceScore": 85,
         "Confidence": "HIGH",
         "PositiveEvidence": [
-          "Измерено 100.000 ms перекрытия GC со stall/jank window.",
-          "Stack sample и симптом принадлежат одному source и bounded temporal window."
+          "Измерено 100.000 мс пересечения сборки мусора с проблемным окном.",
+          "Снимок стека и задержка относятся к одному источнику данных и ограниченному временному окну."
         ],
         "MissingOrCounterEvidence": [
-          "Temporal overlap и sampled stack не доказывают, что наблюдаемый метод вызвал GC/contention или был единственной причиной симптома."
+          "Временное совпадение и снимок стека не доказывают, что наблюдаемый метод вызвал сборку мусора или ожидание блокировки и был единственной причиной задержки."
         ],
         "DataQualityPenalties": null,
         "AlternativeExplanations": [
-          "Другая работа main thread, I/O, scheduler delay или GPU/render bottleneck могла совпасть с окном.",
-          "GC мог быть следствием allocation pressure, а не первичной причиной задержки."
+          "Другая работа главного потока, ввод-вывод, задержка планировщика или отрисовка могли совпасть с тем же окном.",
+          "Сборка мусора могла быть следствием большого числа выделений памяти, а не первичной причиной задержки."
         ],
         "Actions": [
-          "Перенести decode/resize с main thread, использовать подготовленные thumbnails и повторить сценарий.",
+          "Перенести декодирование и изменение размера изображения с главного потока, использовать заранее подготовленные миниатюры и повторить сценарий.",
           "Повторить тот же сценарий с теми же экраном, сценарием и источником работы.",
           "Сравнить с прогоном без подозреваемой работы и проверить, повторяется ли временная связь."
         ],
@@ -374,9 +374,9 @@
     ],
     "DataGaps": null,
     "Limitations": [
-      "Совпадение GC/contention со stall измеряет временное перекрытие, но само по себе не доказывает причинность.",
-      "Triggered stack — ограниченная выборка конкретного момента; отсутствие метода в sample не доказывает, что он не выполнялся.",
-      "Идентификаторы thread/method/stack действуют только внутри process instance и не сравниваются как стабильные символы между запусками."
+      "Совпадение сборки мусора или ожидания блокировки с задержкой измеряет временное перекрытие, но само по себе не доказывает причинность.",
+      "Снимок стека показывает только один момент; отсутствие метода в снимке не доказывает, что он не выполнялся.",
+      "Идентификаторы потоков, методов и стеков действуют только внутри одного запуска процесса и не подходят для прямого сравнения между запусками."
     ]
   },
   "Routes": null,

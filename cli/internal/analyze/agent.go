@@ -173,7 +173,7 @@ func (a *agentAggregator) add(dict map[uint64]string, event jhlog.Event, flow Fl
 	case jhlog.AgentMethodDefinition:
 		name := jhlog.ResolveSymbol(dict, payload.MethodRef)
 		if name != "unknown" && len(a.methods) < maxAgentMethods {
-			a.methods[payload.Payload0] = name
+			a.methods[payload.Payload0] = formatJVMMethodSymbol(name)
 		}
 	}
 }
@@ -448,9 +448,9 @@ func (a *agentAggregator) snapshot() AgentSummary {
 	result.DataGaps = a.buildDataGaps(result)
 	result.Findings = a.buildFindings(result)
 	result.Limitations = []string{
-		"Совпадение GC/contention со stall измеряет временное перекрытие, но само по себе не доказывает причинность.",
-		"Triggered stack — ограниченная выборка конкретного момента; отсутствие метода в sample не доказывает, что он не выполнялся.",
-		"Идентификаторы thread/method/stack действуют только внутри process instance и не сравниваются как стабильные символы между запусками.",
+		"Совпадение сборки мусора или ожидания блокировки с задержкой измеряет временное перекрытие, но само по себе не доказывает причинность.",
+		"Снимок стека показывает только один момент; отсутствие метода в снимке не доказывает, что он не выполнялся.",
+		"Идентификаторы потоков, методов и стеков действуют только внутри одного запуска процесса и не подходят для прямого сравнения между запусками.",
 	}
 	return result
 }
@@ -496,28 +496,28 @@ func (a *agentAggregator) stackSnapshot() AgentStackSummary {
 func (a *agentAggregator) buildDataGaps(result AgentSummary) []string {
 	var gaps []string
 	if result.Quality.SequenceGaps > 0 {
-		gaps = append(gaps, fmt.Sprintf("В native producer sequence отсутствует %d событий.", result.Quality.SequenceGaps))
+		gaps = append(gaps, fmt.Sprintf("В последовательности событий агента отсутствует %d событий.", result.Quality.SequenceGaps))
 	}
 	if result.Quality.QueueFullTotal > 0 {
-		gaps = append(gaps, fmt.Sprintf("Native queue была заполнена %d раз.", result.Quality.QueueFullTotal))
+		gaps = append(gaps, fmt.Sprintf("Очередь агента была заполнена %d раз.", result.Quality.QueueFullTotal))
 	}
 	if result.Quality.AdmissionContentionTotal > 0 {
-		gaps = append(gaps, fmt.Sprintf("Native admission отклонён из-за contention %d раз.", result.Quality.AdmissionContentionTotal))
+		gaps = append(gaps, fmt.Sprintf("Запись события была отклонена из-за конкуренции %d раз.", result.Quality.AdmissionContentionTotal))
 	}
 	if result.Quality.OtherNativeLossTotal > 0 {
-		gaps = append(gaps, fmt.Sprintf("Другие native losses: %d.", result.Quality.OtherNativeLossTotal))
+		gaps = append(gaps, fmt.Sprintf("Других потерь внутри агента: %d.", result.Quality.OtherNativeLossTotal))
 	}
 	if result.Stacks.MissingDefinitions > 0 {
-		gaps = append(gaps, fmt.Sprintf("Для %d stack observations отсутствует полное определение.", result.Stacks.MissingDefinitions))
+		gaps = append(gaps, fmt.Sprintf("Для %d снимков стека отсутствует полное описание.", result.Stacks.MissingDefinitions))
 	}
 	if len(a.capabilityVariants) > 1 {
-		gaps = append(gaps, "В объединённых streams различается capability matrix; причинные метрики не полностью сопоставимы.")
+		gaps = append(gaps, "В объединённых потоках данных различается набор возможностей агента; причинные показатели не полностью сопоставимы.")
 	}
 	if a.sourceCapacityLost {
-		gaps = append(gaps, "Bounded agent source/sequence index достиг лимита; часть coverage metadata агрегирована неточно.")
+		gaps = append(gaps, "Индекс источников и последовательностей агента достиг лимита; часть сведений о полноте собрана приближённо.")
 	}
 	if !result.Quality.CompatibleClockCalibration && result.EventCount > 0 {
-		gaps = append(gaps, "Нет совместимой clock calibration для всех streams; cross-stream temporal joins запрещены.")
+		gaps = append(gaps, "Не удалось согласовать часы всех потоков данных; временное сопоставление между ними отключено.")
 	}
 	return gaps
 }
@@ -588,7 +588,7 @@ func capabilityNames(bits uint64) []string {
 	names := []struct {
 		bit  uint64
 		name string
-	}{{1, "GC events"}, {2, "thread lifecycle"}, {4, "monitor contention"}, {8, "stack trace"}, {16, "thread metadata"}, {32, "Linux TID"}}
+	}{{1, "сборка мусора"}, {2, "жизненный цикл потоков"}, {4, "ожидание блокировок"}, {8, "снимки стека"}, {16, "сведения о потоках"}, {32, "системные идентификаторы потоков"}}
 	out := []string{}
 	for _, item := range names {
 		if bits&item.bit != 0 {

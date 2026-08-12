@@ -79,11 +79,11 @@ func newAgentFinding(index int, symptom agentSymptom) AgentFinding {
 		Owner:           symptom.context.owner,
 		ConfidenceScore: baseAgentConfidence,
 		MissingOrCounterEvidence: []string{
-			"Temporal overlap и sampled stack не доказывают, что наблюдаемый метод вызвал GC/contention или был единственной причиной симптома.",
+			"Временное совпадение и снимок стека не доказывают, что наблюдаемый метод вызвал сборку мусора или ожидание блокировки и был единственной причиной задержки.",
 		},
 		AlternativeExplanations: []string{
-			"Другая работа main thread, I/O, scheduler delay или GPU/render bottleneck могла совпасть с окном.",
-			"GC мог быть следствием allocation pressure, а не первичной причиной задержки.",
+			"Другая работа главного потока, ввод-вывод, задержка планировщика или отрисовка могли совпасть с тем же окном.",
+			"Сборка мусора могла быть следствием большого числа выделений памяти, а не первичной причиной задержки.",
 		},
 		Actions: []string{
 			"Повторить тот же сценарий с теми же экраном, сценарием и источником работы.",
@@ -102,17 +102,17 @@ func addGCEvidence(
 	overlap := intervalOverlapNS(symptom, interval)
 	finding.EvidenceChain = append(finding.EvidenceChain, AgentEvidenceStep{
 		Level:       "DIRECT",
-		Statement:   "GC interval пересёк окно симптома",
-		Measurement: fmt.Sprintf("GC %.3f ms; overlap %.3f ms", interval.DurationMS, float64(overlap)/1e6),
+		Statement:   "Сборка мусора пересекла окно задержки",
+		Measurement: fmt.Sprintf("пауза %.3f мс; пересечение %.3f мс", interval.DurationMS, float64(overlap)/1e6),
 		EventIDs:    []uint64{interval.Sequence},
 	})
 	finding.ExactMeasurements = append(
 		finding.ExactMeasurements,
-		fmt.Sprintf("GC total в прогоне %.3f ms, max %.3f ms", summary.GC.TotalMS, summary.GC.MaxMS),
+		fmt.Sprintf("суммарная пауза сборки мусора %.3f мс, максимальная %.3f мс", summary.GC.TotalMS, summary.GC.MaxMS),
 	)
 	finding.PositiveEvidence = append(
 		finding.PositiveEvidence,
-		fmt.Sprintf("Измерено %.3f ms перекрытия GC со stall/jank window.", float64(overlap)/1e6),
+		fmt.Sprintf("Измерено %.3f мс пересечения сборки мусора с проблемным окном.", float64(overlap)/1e6),
 	)
 	finding.ConfidenceScore += evidenceConfidenceIncrement
 }
@@ -126,13 +126,13 @@ func addContentionEvidence(
 	finding.ThreadToken = interval.ThreadToken
 	finding.EvidenceChain = append(finding.EvidenceChain, AgentEvidenceStep{
 		Level:       "DIRECT",
-		Statement:   "Monitor contention пересёк окно симптома",
-		Measurement: fmt.Sprintf("contention %.3f ms; overlap %.3f ms", interval.DurationMS, float64(overlap)/1e6),
+		Statement:   "Ожидание блокировки пересекло окно задержки",
+		Measurement: fmt.Sprintf("ожидание %.3f мс; пересечение %.3f мс", interval.DurationMS, float64(overlap)/1e6),
 		EventIDs:    []uint64{interval.Sequence},
 	})
 	finding.PositiveEvidence = append(
 		finding.PositiveEvidence,
-		"Зафиксирован законченный contention interval в том же temporal window.",
+		"Зафиксирован завершённый интервал ожидания блокировки в том же временном окне.",
 	)
 	finding.ConfidenceScore += evidenceConfidenceIncrement
 }
@@ -147,34 +147,34 @@ func (a *agentAggregator) addStackEvidence(
 	finding.ThreadToken = firstNonZero(finding.ThreadToken, sample.thread)
 	finding.Method = method
 
-	statement := "Triggered stack sample зафиксирован рядом с симптомом"
+	statement := "Снимок стека зафиксирован рядом с задержкой"
 	if method != "" {
-		statement += "; hotspot " + method
+		statement += "; наблюдаемый метод " + method
 	}
 	stackEvidence := []AgentEvidenceStep{
 		{
 			Level:       "DIRECT",
 			Statement:   symptomDescription(symptom),
-			Measurement: fmt.Sprintf("window %d..%d ns", symptom.startNS, symptom.endNS),
+			Measurement: fmt.Sprintf("временное окно %d..%d нс", symptom.startNS, symptom.endNS),
 		},
 		{
 			Level:       "DIRECT",
 			Statement:   statement,
-			Measurement: fmt.Sprintf("fingerprint=0x%016x", sample.fingerprint),
+			Measurement: fmt.Sprintf("отпечаток стека 0x%016x", sample.fingerprint),
 			EventIDs:    []uint64{sample.sequence},
 		},
 	}
 	finding.EvidenceChain = append(stackEvidence, finding.EvidenceChain...)
 	finding.PositiveEvidence = append(
 		finding.PositiveEvidence,
-		"Stack sample и симптом принадлежат одному source и bounded temporal window.",
+		"Снимок стека и задержка относятся к одному источнику данных и ограниченному временному окну.",
 	)
 	finding.ConfidenceScore += evidenceConfidenceIncrement
 
 	if containsImageDecode(methods) {
-		finding.SuspectedCause = "Декодирование/подготовка изображения на наблюдаемом потоке с allocation pressure и GC"
+		finding.SuspectedCause = "Декодирование или подготовка изображения на наблюдаемом потоке вместе с интенсивным выделением памяти и сборкой мусора"
 		finding.Actions = append(
-			[]string{"Перенести decode/resize с main thread, использовать подготовленные thumbnails и повторить сценарий."},
+			[]string{"Перенести декодирование и изменение размера изображения с главного потока, использовать заранее подготовленные миниатюры и повторить сценарий."},
 			finding.Actions...,
 		)
 	}
@@ -184,11 +184,11 @@ func finalizeFinding(finding *AgentFinding, match agentEvidenceMatch, summary Ag
 	if finding.SuspectedCause == "" {
 		switch {
 		case match.hasContention:
-			finding.SuspectedCause = "Блокировка/ожидание monitor в потоке, пересекшее окно задержки"
+			finding.SuspectedCause = "Ожидание блокировки в потоке, пересёкшее окно задержки"
 		case match.hasGC:
-			finding.SuspectedCause = "GC pause/allocation pressure, совпавшие с окном задержки"
+			finding.SuspectedCause = "Пауза сборки мусора и интенсивное выделение памяти, совпавшие с окном задержки"
 		default:
-			finding.SuspectedCause = "Работа из triggered stack sample рядом с задержкой"
+			finding.SuspectedCause = "Работа из снимка стека рядом с задержкой"
 		}
 	}
 
@@ -200,13 +200,13 @@ func finalizeFinding(finding *AgentFinding, match agentEvidenceMatch, summary Ag
 	if !match.hasStack {
 		finding.MissingOrCounterEvidence = append(
 			finding.MissingOrCounterEvidence,
-			"Нет triggered stack sample в bounded окне.",
+			"В ограниченном временном окне нет снимка стека.",
 		)
 	}
 	if !match.hasGC {
 		finding.MissingOrCounterEvidence = append(
 			finding.MissingOrCounterEvidence,
-			"GC overlap не зафиксирован.",
+			"Пересечение со сборкой мусора не зафиксировано.",
 		)
 	}
 
@@ -228,19 +228,19 @@ func fallbackContentionFinding(summary AgentSummary) AgentFinding {
 	return AgentFinding{
 		ID:              "artti-contention-1",
 		EvidenceLevel:   "DIRECT",
-		Symptom:         "Длительный monitor contention",
-		SuspectedCause:  "Конкуренция за monitor",
+		Symptom:         "Длительное ожидание блокировки",
+		SuspectedCause:  "Конкуренция за блокировку",
 		ThreadToken:     top.ThreadToken,
 		ConfidenceScore: score,
 		Confidence:      confidenceLabel(score),
 		ExactMeasurements: []string{
-			fmt.Sprintf("max %.3f ms; total %.3f ms", summary.Contention.MaxMS, summary.Contention.TotalMS),
+			fmt.Sprintf("максимум %.3f мс; суммарно %.3f мс", summary.Contention.MaxMS, summary.Contention.TotalMS),
 		},
-		PositiveEvidence:         []string{"Зафиксирован законченный JVMTI contention interval."},
-		MissingOrCounterEvidence: []string{"Нет связанного main-thread stall/UI window."},
-		AlternativeExplanations:  []string{"Contention мог происходить в background thread без влияния на UI."},
-		Actions:                  []string{"Проверить владельца monitor и убрать длительную работу из synchronized section."},
-		TimelineReference:        fmt.Sprintf("%s sequence=%d", top.Source, top.Sequence),
+		PositiveEvidence:         []string{"Агент зафиксировал завершённый интервал ожидания блокировки."},
+		MissingOrCounterEvidence: []string{"Нет связанной паузы главного потока или проблемного окна интерфейса."},
+		AlternativeExplanations:  []string{"Ожидание могло происходить в фоновом потоке и не влиять на интерфейс."},
+		Actions:                  []string{"Найти владельца блокировки и убрать длительную работу из синхронизированного участка."},
+		TimelineReference:        fmt.Sprintf("%s, событие %d", top.Source, top.Sequence),
 	}
 }
 
@@ -319,9 +319,9 @@ func symptomWeight(value agentSymptom) uint64 {
 
 func symptomDescription(value agentSymptom) string {
 	if value.kind == "main_thread_stall" {
-		return fmt.Sprintf("Main-thread stall %d ms в %s", value.durationMS, value.context.label())
+		return fmt.Sprintf("Пауза главного потока %d мс в %s", value.durationMS, value.context.label())
 	}
-	return fmt.Sprintf("UI window: %d jank frames в %s", value.jankFrames, value.context.label())
+	return fmt.Sprintf("Проблемное окно интерфейса: медленных кадров %d в %s", value.jankFrames, value.context.label())
 }
 
 func qualityPenalty(summary AgentSummary) int {

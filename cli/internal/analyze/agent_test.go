@@ -52,8 +52,11 @@ func TestAgentImageDecodeGCStallEvidence(t *testing.T) {
 		!strings.Contains(finding.SuspectedCause, "изображения") || !strings.Contains(finding.Method, "BitmapFactory") {
 		t.Fatalf("finding = %+v", finding)
 	}
-	if len(finding.EvidenceChain) < 3 || !strings.Contains(strings.Join(finding.PositiveEvidence, " "), "GC") {
+	if len(finding.EvidenceChain) < 3 || !strings.Contains(strings.Join(finding.PositiveEvidence, " "), "сборки мусора") {
 		t.Fatalf("evidence chain = %+v", finding.EvidenceChain)
+	}
+	if finding.Method != "android.graphics.BitmapFactory.decodeStream(java.io.InputStream): android.graphics.Bitmap" {
+		t.Fatalf("readable method = %q", finding.Method)
 	}
 }
 
@@ -138,12 +141,12 @@ func TestAgentCompareSurfacesCompatibilityBeforeDeltas(t *testing.T) {
 		Capabilities: AgentCapabilitySummary{Active: 0x3}, GC: AgentIntervalSummary{Count: 2, TotalMS: 20}}}
 	candidate := Summary{Agent: AgentSummary{EventCount: 20, EffectivePreset: "CAUSAL", ConfigHash: "0x2",
 		Capabilities: AgentCapabilitySummary{Active: 0xf}, GC: AgentIntervalSummary{Count: 4, TotalMS: 80},
-		DataGaps: []string{"sequence gap"}, Stacks: AgentStackSummary{Hotspots: []AgentStackHotspot{{Methods: []string{"Lapp/Foo;->work()V"}}}}}}
+		DataGaps: []string{"пропуск последовательности"}, Stacks: AgentStackSummary{Hotspots: []AgentStackHotspot{{Methods: []string{"app.Foo.work(): void"}}}}}}
 	comparison := Compare(baseline, candidate)
 	if !comparison.Agent.ConfigMismatch || !comparison.Agent.CapabilityMismatch || len(comparison.Agent.Warnings) < 3 {
 		t.Fatalf("agent comparison = %+v", comparison.Agent)
 	}
-	if len(comparison.Agent.NewStackSuspects) != 1 || comparison.Agent.NewStackSuspects[0] != "Lapp/Foo;->work()V" {
+	if len(comparison.Agent.NewStackSuspects) != 1 || comparison.Agent.NewStackSuspects[0] != "app.Foo.work(): void" {
 		t.Fatalf("stack suspects = %v", comparison.Agent.NewStackSuspects)
 	}
 	foundGC := false
