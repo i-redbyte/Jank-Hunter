@@ -1,7 +1,7 @@
-# Jank Hunter ART TI native core
+# Нативное ядро Jank Hunter ART TI
 
-`jankhunter-artti` is the optional ART TI agent AAR. The C++20 core is independent of JNI/JVMTI
-types and can be built and tested on the host:
+`jankhunter-artti` — опциональный AAR с агентом ART TI. Ядро на C++20 не зависит от типов
+JNI/JVMTI, поэтому его можно собрать и протестировать на хосте:
 
 ```bash
 cmake -S android/jankhunter-artti/src/main/cpp \
@@ -12,7 +12,7 @@ ctest --test-dir /private/tmp/jh-artti-host --output-on-failure
 /private/tmp/jh-artti-host/jh_artti_core_bench
 ```
 
-Sanitizer build:
+Сборка с санитайзерами:
 
 ```bash
 cmake -S android/jankhunter-artti/src/main/cpp \
@@ -23,7 +23,7 @@ cmake --build /private/tmp/jh-artti-asan --parallel
 ctest --test-dir /private/tmp/jh-artti-asan --output-on-failure
 ```
 
-Thread-sanitizer build, where the host compiler/runtime supports it:
+Сборка с ThreadSanitizer, если он поддерживается компилятором и средой выполнения на хосте:
 
 ```bash
 cmake -S android/jankhunter-artti/src/main/cpp \
@@ -34,7 +34,8 @@ cmake --build /private/tmp/jh-artti-tsan --parallel
 ctest --test-dir /private/tmp/jh-artti-tsan --output-on-failure
 ```
 
-Native decoder fuzzing, with a Clang toolchain that has a linkable libFuzzer runtime:
+Фаззинг нативного декодера с помощью Clang, в котором доступна для линковки среда выполнения
+libFuzzer:
 
 ```bash
 cmake -S android/jankhunter-artti/src/main/cpp \
@@ -45,17 +46,19 @@ cmake --build /private/tmp/jh-artti-fuzz --target jh_artti_batch_decoder_fuzz --
 /private/tmp/jh-artti-fuzz/jh_artti_batch_decoder_fuzz -max_total_time=30
 ```
 
-Configuration fails with an explicit message when the selected Clang installation cannot link
-libFuzzer. The current Xcode AppleClang toolchain has that limitation; Go's equivalent canonical
-payload fuzz target remains runnable with
+Если выбранная установка Clang не может слинковать libFuzzer, конфигурация завершится ошибкой с
+понятным сообщением. Такое ограничение есть у текущего набора инструментов Xcode AppleClang.
+Эквивалентную цель фаззинга канонической полезной нагрузки на Go по-прежнему можно запустить
+командой
 `go test ./internal/jhlog -run '^$' -fuzz FuzzAgentPayloadNeverPanics -fuzztime 30s`.
 
-Benchmarks print JSON lines with latency percentiles, throughput and drops. They are regression
-evidence, not device release gates.
+Бенчмарки выводят строки JSON с перцентилями задержки, пропускной способностью и количеством
+потерь. Они предназначены для выявления регрессий, а не для принятия решения о выпуске на
+устройствах.
 
-## Device and publishing smoke
+## Smoke-проверки на устройстве и при публикации
 
-With an attached debuggable emulator/device:
+При подключённом эмуляторе или устройстве, доступном для отладки:
 
 ```bash
 cd android
@@ -65,21 +68,26 @@ cd android
   -Pandroid.testInstrumentationRunnerArguments.class=io.jankhunter.sample.ArtTiPerformanceSmokeTest
 ```
 
-The hardening scenario drives real GC, thread churn, monitor contention and triggered stacks,
-injects a bounded overload, shuts the SDK down, then structurally verifies committed v9 agent
-events and final loss/status evidence. The performance test writes only aggregate timing, CPU,
-PSS/native-heap and frame-interval values; it does not export application payload.
+Сценарий проверки устойчивости запускает настоящую сборку мусора, интенсивное создание и
+завершение потоков, конкуренцию за мониторы и принудительное получение стеков. Затем он создаёт
+ограниченную перегрузку, останавливает SDK и проверяет структуру записанных событий агента v9,
+включая итоговые сведения о потерях и состоянии. Тест производительности записывает только
+агрегированные значения времени, загрузки CPU, PSS/нативной кучи и интервалов между кадрами; он
+не экспортирует полезную нагрузку приложения.
 
-`scripts/gradle-plugin-smoke.sh` publishes all artifacts into an isolated Maven Local repository,
-builds an external minified consumer twice with configuration-cache reuse, and verifies that the
-published ART TI AAR contributes arm64/x86_64 libraries only to the configured debug variant.
+Скрипт `scripts/gradle-plugin-smoke.sh` публикует все артефакты в изолированный локальный
+Maven-репозиторий, дважды собирает внешнее минифицированное приложение-потребитель с повторным
+использованием кэша конфигурации и проверяет, что опубликованный AAR ART TI добавляет библиотеки
+arm64/x86_64 только в настроенный debug-вариант.
 
-## Native batch protocol V1
+## Нативный пакетный протокол V1
 
-- fixed little-endian config and handshake structs with `structSize` and schema/ABI versions;
-- a 32-byte batch header followed by 88-byte minimum length-delimited records;
-- unknown records are skipped by declared length;
-- Kotlin drains into a reusable direct `ByteBuffer`;
-- the decoder uses a single mutable record view for visitor delivery rather than a JVM object per
-  native event;
-- status codes cross JNI; native exceptions and STL ownership do not.
+- конфигурация фиксированного размера и структуры рукопожатия в формате little-endian с полями
+  `structSize`, а также версиями схемы и ABI;
+- 32-байтный заголовок пакета, после которого следуют записи длиной не менее 88 байт с явно
+  указанным размером;
+- неизвестные записи пропускаются согласно заявленной длине;
+- Kotlin считывает данные в повторно используемый прямой `ByteBuffer`;
+- декодер передаёт посетителю одно изменяемое представление записи, не создавая отдельный объект
+  JVM для каждого нативного события;
+- через JNI передаются коды состояния, но не нативные исключения и не владение объектами STL.
