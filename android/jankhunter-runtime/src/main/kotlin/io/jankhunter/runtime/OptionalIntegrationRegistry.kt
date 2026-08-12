@@ -80,8 +80,6 @@ internal class OptionalIntegrationRegistry(
         }
     }
 
-    internal fun activeCount(): Int = active.size
-
     internal fun hasActive(): Boolean = active.isNotEmpty()
 
     companion object {

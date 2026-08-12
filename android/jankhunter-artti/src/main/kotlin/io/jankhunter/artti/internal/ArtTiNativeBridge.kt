@@ -15,8 +15,6 @@ internal object ArtTiNativeBridge {
         }
     }
 
-    fun isLoaded(): Boolean = loaded
-
     external fun nativeHandshake(responseBuffer: ByteBuffer): Int
 
     external fun nativeInitialize(configBuffer: ByteBuffer): Int

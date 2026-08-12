@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 import android.content.Context
 import android.content.ContextWrapper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,7 +41,7 @@ class OptionalIntegrationRegistryTest {
         assertEquals(1, first.contexts)
         assertEquals(1, first.stalls)
         assertEquals(1, first.stops)
-        assertEquals(0, registry.activeCount())
+        assertFalse(registry.hasActive())
         assertTrue(diagnostics.any { it == "failing.context_failed" })
     }
 

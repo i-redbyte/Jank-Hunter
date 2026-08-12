@@ -37,7 +37,6 @@ internal class ArtTiNativeRecordView {
 
 internal data class ArtTiNativeDecodeResult(
     val status: ArtTiNativeStatus,
-    val bytesConsumed: Int = 0,
     val recordsSeen: Int = 0,
     val recordsDelivered: Int = 0,
     val unknownRecords: Int = 0,
@@ -137,7 +136,6 @@ internal class ArtTiNativeProtocolDecoder {
         }
         return ArtTiNativeDecodeResult(
             status = ArtTiNativeStatus.OK,
-            bytesConsumed = batchSize,
             recordsSeen = recordCount,
             recordsDelivered = delivered,
             unknownRecords = unknown,

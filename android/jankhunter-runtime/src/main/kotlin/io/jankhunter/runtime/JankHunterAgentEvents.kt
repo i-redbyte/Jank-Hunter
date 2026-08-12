@@ -15,8 +15,6 @@ object JankHunterAgentEventType {
     const val CORRELATION_LINK = 11
     const val METHOD_DEFINITION = 12
 
-    internal const val MIN = AGENT_STATUS
-    internal const val MAX = METHOD_DEFINITION
 }
 
 object JankHunterAgentEventFlag {
