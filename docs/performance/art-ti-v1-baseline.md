@@ -77,3 +77,30 @@ than replaced with estimates:
 | device energy smoke | not measured | not measured | not measured | not measured |
 
 Battery attribution is not part of V1. Device energy is only an overall overhead smoke metric.
+
+## Stage 1 native-core host evidence
+
+Release host build, 200,000 timed operations unless noted:
+
+| Benchmark | p50 ns | p95 ns | p99 ns | operations/s | drops |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| single producer publish + drain | 41 | 42 | 42 | 20,197,940 | 0 |
+| multi-producer contention (8 x 100,000) | n/a | n/a | n/a | 6,673,440 | 186,458 |
+| full-queue drop | 0* | 42 | 42 | 40,302,267 | 210,000* |
+| consumer batch drain, 256 events | 4,875 | 5,209 | 6,542 | 199,918 batches/s | 0 |
+| interval pair | 0* | 42 | 42 | 33,642,661 | 0 |
+| thread lookup | 0* | 42 | 42 | 40,182,832 | 0 |
+| start/stop cycle, 10,000 | 209 | 250 | 250 | 4,129,315 | 0 |
+
+`*` The macOS host clock cannot resolve every sub-clock-tick operation, and the overflow warm-up is
+included in the cumulative drop count. Device release gates must use Android tracing/benchmark
+clocks and report their own distributions.
+
+Validation completed for this native core:
+
+- release host build with `-Wall -Wextra -Wconversion -Werror`, no exceptions/RTTI;
+- multi-producer stress with uniqueness and `drained + dropped == attempted` invariant;
+- queue wrap/full, saturating counters, interval orphan/capacity and thread lifecycle tests;
+- concurrent publish/stop stress;
+- ASan + UBSan host test pass;
+- TSan host test pass.

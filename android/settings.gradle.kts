@@ -25,6 +25,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "JankHunterAndroid"
 include(":jankhunter-runtime")
+include(":jankhunter-artti")
 include(":jankhunter-annotations")
 include(":jankhunter-okhttp3")
 include(":jankhunter-android-sdk")
