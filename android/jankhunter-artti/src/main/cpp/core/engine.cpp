@@ -46,10 +46,6 @@ void NativeEngine::MarkStopped() noexcept {
   state_.store(EngineState::kStopped, std::memory_order_release);
 }
 
-void NativeEngine::FailOpen() noexcept {
-  state_.store(EngineState::kFailedOpen, std::memory_order_release);
-}
-
 Status NativeEngine::Publish(NativeEvent event) noexcept {
   if (event.monotonic_ns == 0U) event.monotonic_ns = clock_.NowNs();
   return PublishPrepared(&event);

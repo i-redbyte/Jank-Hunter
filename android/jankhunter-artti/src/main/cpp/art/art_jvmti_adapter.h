@@ -45,9 +45,6 @@ class ArtJvmtiAdapter final {
   [[nodiscard]] std::int32_t ResolveMethod(
       JNIEnv* jni, std::uint64_t method_id, std::span<std::byte> output) noexcept;
 
-  [[nodiscard]] CapabilitySet requested_capabilities() const noexcept { return requested_; }
-  [[nodiscard]] CapabilitySet potential_capabilities() const noexcept { return potential_; }
-  [[nodiscard]] CapabilitySet granted_capabilities() const noexcept { return granted_; }
   [[nodiscard]] CapabilitySet active_capabilities() const noexcept {
     return CapabilitySet(active_bits_.load(std::memory_order_acquire));
   }

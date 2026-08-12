@@ -24,7 +24,6 @@ class CapabilitySet final {
   }
 
   constexpr void add(Capability value) noexcept { bits_ |= static_cast<std::uint64_t>(value); }
-  constexpr void remove(Capability value) noexcept { bits_ &= ~static_cast<std::uint64_t>(value); }
 
   [[nodiscard]] constexpr std::uint64_t bits() const noexcept { return bits_; }
   [[nodiscard]] constexpr CapabilitySet intersect(CapabilitySet other) const noexcept {

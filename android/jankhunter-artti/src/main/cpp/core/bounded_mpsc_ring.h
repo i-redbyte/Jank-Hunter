@@ -31,7 +31,6 @@ class BoundedMpscRing final {
   BoundedMpscRing& operator=(BoundedMpscRing&&) = delete;
 
   [[nodiscard]] bool valid() const noexcept { return slots_ != nullptr && capacity_ >= 2U; }
-  [[nodiscard]] std::uint32_t capacity() const noexcept { return capacity_; }
 
   [[nodiscard]] Status TryPush(const T& value) noexcept {
     if (!valid()) return Status::Error(StatusCode::kInvalidState);

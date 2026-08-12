@@ -18,9 +18,6 @@ class GcIntervalTracker final {
   [[nodiscard]] Status Start(std::uint64_t timestamp_ns, QualityCounters* quality) noexcept;
   [[nodiscard]] Status Finish(
       std::uint64_t timestamp_ns, NativeEvent* event, QualityCounters* quality) noexcept;
-  [[nodiscard]] bool open() const noexcept {
-    return start_ns_.load(std::memory_order_acquire) != 0U;
-  }
   void Reset() noexcept { start_ns_.store(0U, std::memory_order_release); }
 
  private:

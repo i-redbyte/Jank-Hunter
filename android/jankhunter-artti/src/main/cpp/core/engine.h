@@ -42,7 +42,6 @@ class NativeEngine final {
   [[nodiscard]] Status Start() noexcept;
   [[nodiscard]] Status BeginStop() noexcept;
   void MarkStopped() noexcept;
-  void FailOpen() noexcept;
 
   [[nodiscard]] Status Publish(NativeEvent event) noexcept;
   [[nodiscard]] Status PublishQualitySnapshot(bool final_after_stop = false) noexcept;
@@ -59,10 +58,8 @@ class NativeEngine final {
   [[nodiscard]] Status OnMonitorEntered(ThreadToken token) noexcept;
 
   [[nodiscard]] EngineState state() const noexcept { return state_.load(std::memory_order_acquire); }
-  [[nodiscard]] const QualityCounters& quality() const noexcept { return quality_; }
   [[nodiscard]] QualityCounters& quality() noexcept { return quality_; }
   [[nodiscard]] const NativeConfigSnapshot& config() const noexcept { return config_; }
-  [[nodiscard]] ThreadRegistry& threads() noexcept { return threads_; }
   [[nodiscard]] std::size_t MemoryBytes() const noexcept;
 
  private:

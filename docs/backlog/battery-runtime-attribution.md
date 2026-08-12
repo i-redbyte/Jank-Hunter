@@ -165,7 +165,7 @@ energy result by more than the agreed noise fraction, it cannot support the attr
 
 | Required seam | Existing V1 evidence | Readiness / future work |
 | --- | --- | --- |
-| Extensible source/collector registry | bounded `OptionalIntegrationRegistry`; native `CollectorKind` and `CollectorDescriptor` | usable seam; a future battery module must register descriptors and lifecycle, not add ad-hoc globals |
+| Extensible source/collector registry | bounded `OptionalIntegrationRegistry`; native `NativeEngine` and `CapabilitySet` boundaries | usable seam; a future battery module must add an explicit collector lifecycle, not ad-hoc globals |
 | Generic evidence primitives | packed semantic event batch with type/schema/flags/time/thread/context/four payload words; existing counter/gauge/interval/stack semantics | ready for additive typed schemas; do not overload fields without a documented schema |
 | Stable thread token and Linux TID | bounded native `ThreadRegistry`, lifetime events, optional `linux_tid` | ready; future sampler must handle unsupported TID and reuse races |
 | Clock synchronization | monotonic timestamps plus canonical `CLOCK_SYNC` with uncertainty | ready for new sources after source-specific calibration |
