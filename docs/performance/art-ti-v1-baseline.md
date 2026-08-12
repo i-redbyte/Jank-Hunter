@@ -115,3 +115,36 @@ Validation completed for this native core:
 The Kotlin decoder reuses one mutable record flyweight for the visitor and does not allocate one
 event object per record. The benchmark measures decode/visitor dispatch only; it does not include
 future canonical persistence objects or Android JNI transition cost.
+
+## Stage 3 ART TI adapter evidence
+
+The Android agent now builds against the official AOSP Android 9 JVMTI declaration, negotiates
+GC/monitor capabilities, registers only the requested callback pairs, snapshots thread metadata on
+the control path, pairs GC/contention intervals in the generic core, and exposes budgeted triggered
+stack capture plus bounded asynchronous method resolution.
+
+Host evidence after the adapter integration:
+
+| Benchmark | p50 ns | p95 ns | p99 ns | operations/s |
+| --- | ---: | ---: | ---: | ---: |
+| stack fingerprint existing-ID lookup | 0* | 42 | 42 | 42,249,061 |
+| single producer publish + drain | 41 | 42 | 42 | 17,217,260 |
+| native encode, 256 records | 500 | 542 | 667 | 1,874,041 batches/s |
+| start/stop cycle | 167 | 209 | 209 | 5,136,766 |
+
+`*` Same host-clock resolution limitation as the Stage 1 table. The fingerprint table is
+fixed-capacity, allocation-free after initialization and performs at most 32 probes.
+
+Verification performed:
+
+- Android debug AAR compiled with NDK 30 for `arm64-v8a` and `x86_64` under
+  `-Wall -Wextra -Wconversion -Werror`;
+- Kotlin protocol/method-definition unit tests passed;
+- release host core tests passed normally, under ASan/UBSan, and under TSan;
+- stripped native sizes: 240 KiB arm64-v8a and 220 KiB x86_64; debug AAR: 260 KiB;
+- dynamic exports are limited to `Agent_OnAttach`, `Agent_OnLoad`, `Agent_OnUnload`, and the eight
+  required JNI bridge functions (in addition to undefined libc imports).
+
+These are build/host results, not device callback-latency claims. Actual ART capability behavior,
+startup/frame impact, RSS/PSS and CAUSAL/overload callback percentiles remain `not measured` until
+the instrumented device stage.

@@ -21,7 +21,8 @@ struct ArtTiNativeConfigV1 final {
   std::uint64_t min_contention_duration_ns{8'000'000U};
   std::uint64_t config_hash{0U};
   std::uint64_t requested_capabilities{0U};
-  std::uint64_t reserved0{0U};
+  std::uint32_t max_stack_definitions{1024U};
+  std::uint32_t max_method_definitions{4096U};
   std::uint64_t reserved1{0U};
 };
 

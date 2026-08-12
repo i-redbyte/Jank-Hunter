@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/bounded_mpsc_ring.h"
+#include "core/bounded_id_table.h"
 #include "core/engine.h"
 #include "core/interval_tracker.h"
 #include "core/thread_registry.h"
@@ -22,6 +23,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using jankhunter::artti::BoundedMpscRing;
+using jankhunter::artti::BoundedIdTable;
 using jankhunter::artti::ClockSource;
 using jankhunter::artti::MonitorIntervalTracker;
 using jankhunter::artti::NativeConfigSnapshot;
@@ -173,6 +175,17 @@ void ThreadLookup() {
   Print("thread_lookup", distribution);
 }
 
+void StackFingerprintDeduplication() {
+  BoundedIdTable table;
+  if (!table.Initialize(4096U)) std::abort();
+  for (std::uint64_t id = 1U; id <= 2048U; ++id) static_cast<void>(table.Insert(id));
+  const auto distribution = Measure([&table](const std::uint32_t index) {
+    const auto fingerprint = static_cast<std::uint64_t>(index % 2048U) + 1U;
+    static_cast<void>(table.Insert(fingerprint));
+  });
+  Print("stack_fingerprint_dedup", distribution);
+}
+
 void MultiProducerContention() {
   constexpr std::uint32_t kThreads = 8U;
   constexpr std::uint32_t kOperationsPerThread = 100'000U;
@@ -238,6 +251,7 @@ int main() {
   BatchEncode();
   IntervalPairing();
   ThreadLookup();
+  StackFingerprintDeduplication();
   StartStopCycles();
   return 0;
 }

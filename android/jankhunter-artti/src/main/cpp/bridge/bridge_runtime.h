@@ -25,6 +25,8 @@ class BridgeRuntime final {
   [[nodiscard]] Status Stop() noexcept;
   [[nodiscard]] std::int32_t PublishSynthetic(
       std::uint16_t event_type, std::uint32_t count) noexcept;
+  [[nodiscard]] static NativeConfigSnapshot ConfigFromWire(
+      const ArtTiNativeConfigV1& wire) noexcept;
 
   [[nodiscard]] NativeEngine* callback_engine() const noexcept {
     return callback_engine_.load(std::memory_order_acquire);
@@ -32,7 +34,6 @@ class BridgeRuntime final {
 
  private:
   BridgeRuntime() = default;
-  [[nodiscard]] static NativeConfigSnapshot ToConfig(const ArtTiNativeConfigV1& wire) noexcept;
 
   mutable std::mutex control_mutex_;
   std::unique_ptr<NativeEngine> engine_;

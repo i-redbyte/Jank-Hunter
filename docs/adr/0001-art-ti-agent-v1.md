@@ -107,8 +107,16 @@ maximum frame buffer. Callback events contain only runtime method IDs. Method/cl
 resolved asynchronously into bounded definitions and are not read from arguments, locals, object
 fields or return values.
 
+The native boundary also enforces a defensive preset budget even if a Kotlin caller is faulty:
+`CAUSAL`/`CUSTOM` allow at most 120 captures per minute with a 250 ms minimum interval, `DEEP`
+allows 600 with a 50 ms minimum interval, and `OFF`/`LIGHT` reject captures. The effective SDK
+configuration may impose a stricter budget before crossing JNI.
+
 V1 uses a measured 64-bit stack fingerprint and a bounded open-addressed definition table. A full
 table emits the sample with an unresolved fingerprint and a quality loss counter; it never grows.
+The same fixed-capacity table bounds process-local method IDs. Lookup is a maximum of 32 probes;
+pathological collisions are counted as capacity loss instead of making control-path latency
+unbounded.
 
 ## Native protocol boundary
 

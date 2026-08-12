@@ -92,6 +92,24 @@ Status NativeEngine::OnThreadEnd(const ThreadToken token) noexcept {
   return status.ok() ? PublishPrepared(&event) : status;
 }
 
+Status NativeEngine::UpdateThreadMetadata(
+    const ThreadToken token, const ThreadMetadata& metadata) noexcept {
+  if (state() != EngineState::kActive) return Status::Error(StatusCode::kClosed);
+  const auto status = threads_.Update(token, metadata);
+  if (!status.ok()) return status;
+  NativeEvent event{};
+  event.type = EventType::kThreadStart;
+  event.flags = 1U;  // Metadata update for an existing process-local token.
+  event.monotonic_ns = clock_.NowNs();
+  event.thread_token = token.value();
+  event.payload.thread.linux_tid = metadata.linux_tid;
+  event.payload.thread.name_id = metadata.name_id;
+  event.payload.thread.state = metadata.state;
+  event.payload.thread.category = metadata.category;
+  event.payload.thread.daemon = metadata.daemon ? 1U : 0U;
+  return PublishPrepared(&event);
+}
+
 Status NativeEngine::OnMonitorEnter(const ThreadToken token) noexcept {
   if (state() != EngineState::kActive) return Status::Error(StatusCode::kClosed);
   return monitor_intervals_.Start(token, clock_.NowNs(), &quality_);

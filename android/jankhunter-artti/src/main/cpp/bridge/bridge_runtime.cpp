@@ -15,7 +15,7 @@ Status BridgeRuntime::Initialize(const ArtTiNativeConfigV1& wire_config) noexcep
   if (wire_config.struct_size < sizeof(ArtTiNativeConfigV1) || wire_config.schema_version != 1U) {
     return Status::Error(StatusCode::kInvalidArgument);
   }
-  const auto config = ToConfig(wire_config);
+  const auto config = ConfigFromWire(wire_config);
   if (!config.Validate().ok()) return Status::Error(StatusCode::kInvalidArgument);
 
   std::lock_guard lock(control_mutex_);
@@ -103,13 +103,15 @@ std::int32_t BridgeRuntime::PublishSynthetic(
   return static_cast<std::int32_t>(accepted);
 }
 
-NativeConfigSnapshot BridgeRuntime::ToConfig(const ArtTiNativeConfigV1& wire) noexcept {
+NativeConfigSnapshot BridgeRuntime::ConfigFromWire(const ArtTiNativeConfigV1& wire) noexcept {
   NativeConfigSnapshot config{};
   config.profile = static_cast<AgentProfile>(wire.profile);
   config.transport_capacity = wire.transport_capacity;
   config.max_tracked_threads = wire.max_tracked_threads;
   config.max_open_contentions = wire.max_open_contentions;
   config.max_stack_depth = wire.max_stack_depth;
+  config.max_stack_definitions = wire.max_stack_definitions;
+  config.max_method_definitions = wire.max_method_definitions;
   config.drain_batch_size = wire.drain_batch_size;
   config.min_contention_duration_ns = wire.min_contention_duration_ns;
   config.config_hash = wire.config_hash;

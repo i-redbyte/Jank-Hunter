@@ -52,6 +52,8 @@ class NativeEngine final {
   [[nodiscard]] Status OnThreadStart(
       const ThreadMetadata& metadata, ThreadToken* token) noexcept;
   [[nodiscard]] Status OnThreadEnd(ThreadToken token) noexcept;
+  [[nodiscard]] Status UpdateThreadMetadata(
+      ThreadToken token, const ThreadMetadata& metadata) noexcept;
   [[nodiscard]] Status OnMonitorEnter(ThreadToken token) noexcept;
   [[nodiscard]] Status OnMonitorEntered(ThreadToken token) noexcept;
 

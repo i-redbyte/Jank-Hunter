@@ -81,6 +81,9 @@ class ArtTiNativeProtocolDecoderTest {
         assertEquals(ArtTiNativeProtocol.CONFIG_WIRE_SIZE, encoded.remaining())
         assertEquals(ArtTiNativeProtocol.CONFIG_WIRE_SIZE, encoded.int)
         assertEquals(1, encoded.int)
+        encoded.position(56)
+        assertEquals(1024, encoded.int)
+        assertEquals(4096, encoded.int)
 
         val handshakeBuffer = ByteBuffer.allocate(ArtTiNativeProtocol.HANDSHAKE_WIRE_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)
@@ -103,6 +106,40 @@ class ArtTiNativeProtocolDecoderTest {
         assertTrue(handshake.isCompatible())
         assertEquals(42L, handshake.configHash)
         assertFalse(handshake.copy(protocolVersion = 2).isCompatible())
+    }
+
+    @Test
+    fun decodesBoundedMethodDefinitionAndRejectsCorruption() {
+        val classSignature = "Lio/jankhunter/sample/ImageCardBinder;".toByteArray()
+        val methodName = "bind".toByteArray()
+        val methodSignature = "(Landroid/view/View;)V".toByteArray()
+        val totalSize = ArtTiNativeProtocol.METHOD_HEADER_SIZE +
+            classSignature.size + methodName.size + methodSignature.size
+        val input = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putInt(ArtTiNativeProtocol.METHOD_MAGIC)
+            putShort(ArtTiNativeProtocol.METHOD_PROTOCOL_VERSION.toShort())
+            putShort(ArtTiNativeProtocol.METHOD_HEADER_SIZE.toShort())
+            putInt(totalSize)
+            putInt(0)
+            putLong(42L)
+            putShort(classSignature.size.toShort())
+            putShort(methodName.size.toShort())
+            putShort(methodSignature.size.toShort())
+            putShort(0)
+            put(classSignature)
+            put(methodName)
+            put(methodSignature)
+            flip()
+        }
+
+        val definition = ArtTiMethodDefinition.decode(input, totalSize).getOrThrow()
+        assertEquals(42L, definition.methodId)
+        assertEquals("Lio/jankhunter/sample/ImageCardBinder;", definition.classSignature)
+        assertEquals("bind", definition.methodName)
+        assertEquals("(Landroid/view/View;)V", definition.methodSignature)
+
+        input.putInt(8, totalSize + 1)
+        assertTrue(ArtTiMethodDefinition.decode(input, totalSize).isFailure)
     }
 
     private fun batch(records: List<Record>): ByteBuffer {

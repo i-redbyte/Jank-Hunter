@@ -13,6 +13,10 @@ internal object ArtTiNativeProtocol {
     const val HANDSHAKE_WIRE_SIZE = 64
     const val MAX_BATCH_BYTES = 256 * 1024
     const val MAX_RECORDS_PER_BATCH = (MAX_BATCH_BYTES - BATCH_HEADER_SIZE) / RECORD_SIZE
+    const val METHOD_MAGIC = 0x444D484A
+    const val METHOD_PROTOCOL_VERSION = 1
+    const val METHOD_HEADER_SIZE = 32
+    const val MAX_METHOD_DEFINITION_BYTES = 4 * 1024
 
     const val FEATURE_LENGTH_DELIMITED_RECORDS = 1L shl 0
     const val FEATURE_DIRECT_BUFFER_DRAIN = 1L shl 1
@@ -28,6 +32,61 @@ internal object ArtTiNativeProtocol {
         require(batchSize in 1..MAX_RECORDS_PER_BATCH)
         return ByteBuffer.allocateDirect(BATCH_HEADER_SIZE + batchSize * RECORD_SIZE)
             .order(ByteOrder.LITTLE_ENDIAN)
+    }
+}
+
+internal data class ArtTiMethodDefinition(
+    val methodId: Long,
+    val classSignature: String,
+    val methodName: String,
+    val methodSignature: String,
+) {
+    companion object {
+        fun allocateBuffer(): ByteBuffer = ByteBuffer
+            .allocateDirect(ArtTiNativeProtocol.MAX_METHOD_DEFINITION_BYTES)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        fun decode(source: ByteBuffer, bytesWritten: Int): Result<ArtTiMethodDefinition> = runCatching {
+            require(bytesWritten in ArtTiNativeProtocol.METHOD_HEADER_SIZE..ArtTiNativeProtocol.MAX_METHOD_DEFINITION_BYTES) {
+                "Invalid ART TI method definition size: $bytesWritten"
+            }
+            require(bytesWritten <= source.capacity()) { "ART TI method definition exceeds its buffer" }
+            val input = source.duplicate().order(ByteOrder.LITTLE_ENDIAN).apply {
+                position(0)
+                limit(bytesWritten)
+            }
+            require(input.int == ArtTiNativeProtocol.METHOD_MAGIC) { "Invalid ART TI method definition magic" }
+            val protocolVersion = input.short.toInt() and 0xFFFF
+            require(protocolVersion == ArtTiNativeProtocol.METHOD_PROTOCOL_VERSION) {
+                "Unsupported ART TI method definition protocol: $protocolVersion"
+            }
+            val headerSize = input.short.toInt() and 0xFFFF
+            val totalSize = input.int
+            input.int // flags
+            val methodId = input.long
+            val classLength = input.short.toInt() and 0xFFFF
+            val nameLength = input.short.toInt() and 0xFFFF
+            val signatureLength = input.short.toInt() and 0xFFFF
+            input.short // reserved
+            val payloadSize = classLength.toLong() + nameLength.toLong() + signatureLength.toLong()
+            require(headerSize in ArtTiNativeProtocol.METHOD_HEADER_SIZE..totalSize) {
+                "Invalid ART TI method header size: $headerSize"
+            }
+            require(totalSize == bytesWritten && payloadSize == totalSize.toLong() - headerSize) {
+                "Invalid ART TI method definition bounds"
+            }
+            require(methodId != 0L) { "ART TI method definition has a zero method ID" }
+            input.position(headerSize)
+            val classBytes = ByteArray(classLength).also(input::get)
+            val nameBytes = ByteArray(nameLength).also(input::get)
+            val signatureBytes = ByteArray(signatureLength).also(input::get)
+            ArtTiMethodDefinition(
+                methodId = methodId,
+                classSignature = classBytes.toString(Charsets.UTF_8),
+                methodName = nameBytes.toString(Charsets.UTF_8),
+                methodSignature = signatureBytes.toString(Charsets.UTF_8),
+            )
+        }
     }
 }
 

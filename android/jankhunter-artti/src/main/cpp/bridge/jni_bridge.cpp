@@ -7,6 +7,7 @@
 
 #include "bridge/artti_abi.h"
 #include "bridge/bridge_runtime.h"
+#include "art/art_jvmti_adapter.h"
 #include "core/status.h"
 
 namespace {
@@ -74,7 +75,49 @@ Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeDrain(
 
 extern "C" JNIEXPORT jint JNICALL
 Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeStop(JNIEnv*, jobject) noexcept {
+  const auto adapter_status = jankhunter::artti::art::ArtJvmtiAdapter::Instance().Stop(500U);
+  if (!adapter_status.ok()) return Code(adapter_status);
   return Code(BridgeRuntime::Instance().Stop());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeRefreshThreadMetadata(
+    JNIEnv* env, jobject) noexcept {
+  return jankhunter::artti::art::ArtJvmtiAdapter::Instance().RefreshThreadMetadata(env);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeCaptureStack(
+    JNIEnv* env,
+    jobject,
+    jobject thread,
+    jint trigger,
+    jlong context_token,
+    jlong related_sequence) noexcept {
+  if (trigger <= 0) {
+    return -static_cast<jint>(StatusCode::kInvalidArgument);
+  }
+  return jankhunter::artti::art::ArtJvmtiAdapter::Instance().CaptureStack(
+      env,
+      static_cast<jthread>(thread),
+      static_cast<std::uint32_t>(trigger),
+      static_cast<std::uint64_t>(context_token),
+      static_cast<std::uint64_t>(related_sequence));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_io_jankhunter_artti_internal_ArtTiNativeBridge_nativeResolveMethod(
+    JNIEnv* env, jobject, jlong method_id, jobject output_buffer) noexcept {
+  if (method_id <= 0 || env == nullptr || output_buffer == nullptr) {
+    return -static_cast<jint>(StatusCode::kInvalidArgument);
+  }
+  void* const address = env->GetDirectBufferAddress(output_buffer);
+  const jlong capacity = env->GetDirectBufferCapacity(output_buffer);
+  if (address == nullptr || capacity < 0) return -static_cast<jint>(StatusCode::kInvalidArgument);
+  return jankhunter::artti::art::ArtJvmtiAdapter::Instance().ResolveMethod(
+      env,
+      static_cast<std::uint64_t>(method_id),
+      std::span<std::byte>(static_cast<std::byte*>(address), static_cast<std::size_t>(capacity)));
 }
 
 extern "C" JNIEXPORT jint JNICALL

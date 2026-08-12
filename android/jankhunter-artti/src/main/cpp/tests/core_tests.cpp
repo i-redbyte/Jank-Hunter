@@ -8,6 +8,9 @@
 #include <vector>
 
 #include "core/bounded_mpsc_ring.h"
+#include "core/bounded_id_table.h"
+#include "art/agent_options.h"
+#include "art/capability_negotiator.h"
 #include "core/engine.h"
 #include "core/interval_tracker.h"
 #include "core/quality.h"
@@ -18,6 +21,8 @@
 namespace {
 
 using jankhunter::artti::BoundedMpscRing;
+using jankhunter::artti::BoundedIdInsertResult;
+using jankhunter::artti::BoundedIdTable;
 using jankhunter::artti::ClockSource;
 using jankhunter::artti::EngineState;
 using jankhunter::artti::EventType;
@@ -32,6 +37,11 @@ using jankhunter::artti::StatusCode;
 using jankhunter::artti::ThreadMetadata;
 using jankhunter::artti::ThreadRegistry;
 using jankhunter::artti::ThreadToken;
+using jankhunter::artti::Capability;
+using jankhunter::artti::CapabilitySet;
+using jankhunter::artti::art::CapabilityControl;
+using jankhunter::artti::art::NegotiateCapabilities;
+using jankhunter::artti::art::ParseAgentOptions;
 using jankhunter::artti::protocol::EncodeBatch;
 using jankhunter::artti::protocol::RequiredBatchBytes;
 
@@ -59,6 +69,16 @@ void ConfigValidation() {
   config.transport_capacity = 4096U;
   config.max_stack_depth = 0U;
   JH_CHECK(config.Validate().code == StatusCode::kInvalidArgument);
+  config.max_stack_depth = 64U;
+  config.requested_capabilities.add(Capability::kStackTrace);
+  JH_CHECK(config.Validate().code == StatusCode::kInvalidArgument);
+  config.requested_capabilities.add(Capability::kThreadEvents);
+  JH_CHECK(config.Validate().ok());
+  config.requested_capabilities = CapabilitySet(1ULL << 63U);
+  JH_CHECK(config.Validate().code == StatusCode::kInvalidArgument);
+  config.requested_capabilities = CapabilitySet{};
+  config.profile = static_cast<jankhunter::artti::AgentProfile>(99U);
+  JH_CHECK(config.Validate().code == StatusCode::kInvalidArgument);
 }
 
 void QueueWrapAndOverflow() {
@@ -80,6 +100,22 @@ void QueueWrapAndOverflow() {
   }
   std::uint64_t value = 0U;
   JH_CHECK(queue.TryPop(&value).code == StatusCode::kNotFound);
+}
+
+void BoundedIdDeduplicationAndCollisionPolicy() {
+  BoundedIdTable table;
+  JH_CHECK(!table.Initialize(0U));
+  JH_CHECK(table.Initialize(4U));
+  JH_CHECK(table.MemoryBytes() == 4U * sizeof(std::uint64_t));
+  JH_CHECK(table.Insert(1U) == BoundedIdInsertResult::kInserted);
+  JH_CHECK(table.Insert(1U) == BoundedIdInsertResult::kExisting);
+  JH_CHECK(table.Insert(5U) == BoundedIdInsertResult::kInserted);
+  JH_CHECK(table.Insert(9U) == BoundedIdInsertResult::kInserted);
+  JH_CHECK(table.Insert(13U) == BoundedIdInsertResult::kInserted);
+  JH_CHECK(table.Insert(17U) == BoundedIdInsertResult::kFull);
+  JH_CHECK(table.Insert(0U) == BoundedIdInsertResult::kFull);
+  table.Reset();
+  JH_CHECK(table.MemoryBytes() == 0U);
 }
 
 void QueueMultiProducerStress() {
@@ -287,10 +323,70 @@ void BatchEncodingBoundsAndEnvelope() {
   JH_CHECK(rejected.bytes_written == required);
 }
 
+void AgentOptionsAreBounded() {
+  jankhunter::artti::bridge::ArtTiNativeConfigV1 config{};
+  JH_CHECK(ParseAgentOptions(
+      "v=1;profile=3;transport=1024;threads=128;contentions=256;depth=96;stackdefs=512;"
+      "methoddefs=2048;batch=64;mincontentionns=9000000;hash=0x2a;cap=0xf",
+      &config).ok());
+  JH_CHECK(config.profile == 3U);
+  JH_CHECK(config.transport_capacity == 1024U);
+  JH_CHECK(config.max_tracked_threads == 128U);
+  JH_CHECK(config.max_stack_depth == 96U);
+  JH_CHECK(config.config_hash == 42U);
+  JH_CHECK(config.requested_capabilities == 15U);
+  JH_CHECK(ParseAgentOptions("v=2", &config).code == StatusCode::kInvalidArgument);
+  JH_CHECK(ParseAgentOptions("transport=18446744073709551616", &config).code ==
+      StatusCode::kInvalidArgument);
+  JH_CHECK(ParseAgentOptions("unknown=1", &config).code == StatusCode::kInvalidArgument);
+}
+
+class FakeCapabilityControl final : public CapabilityControl {
+ public:
+  CapabilitySet potential{};
+  CapabilitySet granted{};
+  jankhunter::artti::Status add_status{};
+
+  jankhunter::artti::Status GetPotential(CapabilitySet* output) noexcept override {
+    *output = potential;
+    return jankhunter::artti::Status::Ok();
+  }
+
+  jankhunter::artti::Status Add(CapabilitySet requested) noexcept override {
+    granted = requested.intersect(potential);
+    return add_status;
+  }
+
+  jankhunter::artti::Status GetGranted(CapabilitySet* output) noexcept override {
+    *output = granted;
+    return jankhunter::artti::Status::Ok();
+  }
+};
+
+void CapabilityNegotiationIsPartialAndExplicit() {
+  CapabilitySet requested;
+  requested.add(Capability::kGcEvents);
+  requested.add(Capability::kMonitorEvents);
+  FakeCapabilityControl control;
+  control.potential.add(Capability::kGcEvents);
+  const auto partial = NegotiateCapabilities(&control, requested);
+  JH_CHECK(partial.degraded);
+  JH_CHECK(partial.granted.contains(Capability::kGcEvents));
+  JH_CHECK(!partial.granted.contains(Capability::kMonitorEvents));
+
+  control.potential = requested;
+  control.add_status = jankhunter::artti::Status::Ok();
+  const auto complete = NegotiateCapabilities(&control, requested);
+  JH_CHECK(complete.status.ok());
+  JH_CHECK(!complete.degraded);
+  JH_CHECK(complete.granted.bits() == requested.bits());
+}
+
 }  // namespace
 
 int main() {
   ConfigValidation();
+  BoundedIdDeduplicationAndCollisionPolicy();
   QueueWrapAndOverflow();
   QueueMultiProducerStress();
   SaturatingQualityCounters();
@@ -300,6 +396,8 @@ int main() {
   EngineLifecycleAndIntervals();
   EngineStartStopRace();
   BatchEncodingBoundsAndEnvelope();
+  AgentOptionsAreBounded();
+  CapabilityNegotiationIsPartialAndExplicit();
   std::cout << "jh_artti_core_tests: PASS\n";
   return 0;
 }

@@ -26,6 +26,20 @@ internal object ArtTiNativeBridge {
 
     external fun nativeStop(): Int
 
+    /** Control-path refresh; never called from an ART callback. */
+    external fun nativeRefreshThreadMetadata(): Int
+
+    /** Control-path triggered capture for one selected Java thread. */
+    external fun nativeCaptureStack(
+        thread: Thread,
+        trigger: Int,
+        contextToken: Long,
+        relatedSequence: Long,
+    ): Int
+
+    /** Resolves one process-local method ID into a bounded versioned direct buffer. */
+    external fun nativeResolveMethod(methodId: Long, outputBuffer: ByteBuffer): Int
+
     /** Internal controlled-scenario producer; never called from an ART callback. */
     external fun nativePublishSynthetic(eventType: Int, count: Int): Int
 

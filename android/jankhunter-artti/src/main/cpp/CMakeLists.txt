@@ -10,6 +10,8 @@ if(JH_ENABLE_SANITIZERS AND JH_ENABLE_TSAN)
 endif()
 
 add_library(jh_artti_core STATIC
+    art/agent_options.cpp
+    art/capability_negotiator.cpp
     core/engine.cpp
     core/interval_tracker.cpp
     core/thread_registry.cpp
@@ -47,10 +49,14 @@ endif()
 if(ANDROID)
     add_library(jankhunter_artti SHARED
         bootstrap.cpp
+        art/art_jvmti_adapter.cpp
         bridge/bridge_runtime.cpp
         bridge/jni_bridge.cpp
     )
     target_link_libraries(jankhunter_artti PRIVATE jh_artti_core)
+    target_include_directories(jankhunter_artti PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/jvmti
+    )
     target_compile_features(jankhunter_artti PRIVATE cxx_std_20)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(jankhunter_artti PRIVATE
