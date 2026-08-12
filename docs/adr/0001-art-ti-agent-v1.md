@@ -257,4 +257,5 @@ device cells remain `not measured`; they are never represented as zero.
 - Hidden APIs or `BinderInternal.addGcWatcher`: rejected as unsupported and unsafe.
 - A new ring-buffer file format: rejected because no current repository contract exists to extend.
 - Battery collection in V1: rejected as out of scope; the architecture exposes future collector and
-  evidence seams with zero battery-specific work today.
+  evidence seams with zero battery-specific work today. Research boundaries, extension-point audit
+  and acceptance criteria live in [`battery-runtime-attribution.md`](../backlog/battery-runtime-attribution.md).
