@@ -3,6 +3,10 @@ package jhlog
 import "fmt"
 
 const FormatVersion = 9
+const LegacyFormatVersion8 = 8
+const CurrentFormatMarker = 0x80
+const CurrentFormatMajor = 1
+const CurrentFormatMinor = 0
 
 const magicSize = 8
 
@@ -69,6 +73,8 @@ const (
 type StreamResult struct {
 	Source            string               `json:"source"`
 	Version           uint8                `json:"version"`
+	FormatMajor       uint8                `json:"format_major,omitempty"`
+	FormatMinor       uint8                `json:"format_minor,omitempty"`
 	Header            SegmentHeader        `json:"header"`
 	Status            SegmentStatus        `json:"status"`
 	Sealed            bool                 `json:"sealed"`
@@ -86,6 +92,50 @@ type StreamResult struct {
 	StoredChunkBytes  uint64               `json:"stored_chunk_bytes,omitempty"`
 	RecordBytesByType map[EventType]uint64 `json:"record_bytes_by_type,omitempty"`
 	RecordsByType     map[EventType]uint64 `json:"records_by_type,omitempty"`
+	LogGrowth         *LogGrowthProjection `json:"log_growth,omitempty"`
+}
+
+func (result StreamResult) HasSegmentIdentity() bool {
+	return result.Version == FormatVersion ||
+		(result.Version == CurrentFormatMajor && result.FormatMajor == CurrentFormatMajor)
+}
+
+type LogGrowthProjection struct {
+	Generation   uint64             `json:"generation"`
+	CapturedAtMS uint64             `json:"captured_at_ms"`
+	Sessions     []LogGrowthSession `json:"sessions,omitempty"`
+	Days         []LogGrowthDay     `json:"days,omitempty"`
+	Live         *LogGrowthSession  `json:"live,omitempty"`
+}
+
+type LogGrowthSession struct {
+	SessionID            string `json:"session_id"`
+	DayKey               uint32 `json:"day_key"`
+	StartedAtMS          uint64 `json:"started_at_ms"`
+	EndedAtMS            uint64 `json:"ended_at_ms"`
+	ConfiguredLimitBytes uint64 `json:"configured_limit_bytes"`
+	MaximumRetainedBytes uint64 `json:"maximum_retained_bytes"`
+	GeneratedBytes       uint64 `json:"generated_bytes"`
+	OverflowCount        uint64 `json:"overflow_count"`
+	EvictedChunkCount    uint64 `json:"evicted_chunk_count"`
+	EvictedBytes         uint64 `json:"evicted_bytes"`
+	FirstOverflowAtMS    uint64 `json:"first_overflow_at_ms"`
+	LastOverflowAtMS     uint64 `json:"last_overflow_at_ms"`
+	Completed            bool   `json:"completed"`
+	Recovered            bool   `json:"recovered_after_interruption"`
+}
+
+type LogGrowthDay struct {
+	DayKey                uint32 `json:"day_key"`
+	SessionCount          uint64 `json:"session_count"`
+	TotalDurationMS       uint64 `json:"total_duration_ms"`
+	GeneratedBytes        uint64 `json:"generated_bytes"`
+	MaximumRetainedBytes  uint64 `json:"maximum_retained_bytes"`
+	MaximumFillPermille   uint64 `json:"maximum_fill_permille"`
+	SessionsReachingLimit uint64 `json:"sessions_reaching_limit"`
+	OverflowCount         uint64 `json:"overflow_count"`
+	EvictedChunkCount     uint64 `json:"evicted_chunk_count"`
+	EvictedBytes          uint64 `json:"evicted_bytes"`
 }
 
 type EventType uint64

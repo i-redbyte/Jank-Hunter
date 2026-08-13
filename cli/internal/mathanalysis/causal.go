@@ -619,22 +619,6 @@ func causalGraphFindings(graph CausalGraph) []Finding {
 	}}
 }
 
-func compareCausalGraphStatus(deltas []CausalDelta) string {
-	if len(deltas) == 0 {
-		return "ok"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
-}
-
 func compareCausalGraphSummary(deltas []CausalDelta) string {
 	if len(deltas) == 0 {
 		return "Новых или заметно усилившихся статистических связей не найдено."

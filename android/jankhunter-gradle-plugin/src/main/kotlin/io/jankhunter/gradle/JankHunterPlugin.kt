@@ -87,6 +87,7 @@ class JankHunterPlugin : Plugin<Project> {
                     it.mainProcessOnly.set(extension.runtime.mainProcessOnly)
                     it.sessionLogSizeLimitEnabled.set(extension.sessionLogSizeLimitEnabled)
                     it.maxSessionLogSizeMiB.set(maxSessionLogSizeMiB)
+                    it.logGrowthAnalyticsEnabled.set(extension.logGrowthAnalyticsEnabled)
                     it.symbolNamespace.set(symbolNamespace)
                     it.outputFile.set(
                         project.layout.buildDirectory.file(
@@ -293,7 +294,8 @@ class JankHunterPlugin : Plugin<Project> {
                         "includeWholeApplication={} asmProgressLog={} autoInit={} " +
                         "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                         "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generatedRuntimeManifest={} " +
-                        "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} symbolMode={} " +
+                        "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} logGrowthAnalyticsEnabled={} " +
+                        "symbolMode={} " +
                         "ownerMapTask={} mergeArtifactsTask={}",
                     variant.name,
                     extension.instrument.methodCounters.get(),
@@ -319,6 +321,7 @@ class JankHunterPlugin : Plugin<Project> {
                     shouldGenerateRuntimeManifest,
                     extension.sessionLogSizeLimitEnabled.get(),
                     maxSessionLogSizeMiB,
+                    extension.logGrowthAnalyticsEnabled.get(),
                     extension.symbolMode.get(),
                     ownerMap.name,
                     mergeArtifacts.name,

@@ -15,6 +15,7 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
     val sessionLogSizeLimitEnabled: Property<Boolean> =
         objects.property(Boolean::class.java).convention(true)
     val maxSessionLogSizeMiB: Property<Int> = objects.property(Int::class.java).convention(16)
+    val logGrowthAnalyticsEnabled: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
     val verboseLogs: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
     val symbolMode: Property<JankHunterSymbolMode> =
         objects.property(JankHunterSymbolMode::class.java).convention(JankHunterSymbolMode.EMBEDDED)

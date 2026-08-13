@@ -59,16 +59,8 @@
     </div>
     <div class="table-scroll">
       <table class="di-class-table">
-        <tr><th>{{tip "Класс" "Класс, найденный в DI metadata или generated-коде выбранного варианта сборки."}}</th><th>{{tip "Framework" "DI-система, для которой распознана запись: например Dagger, Hilt или Koin."}}</th><th>{{tip "Роли" "Как класс участвует в wiring: consumer, dependency, module, component и т. п. Роль не описывает время жизни объекта."}}</th><th>{{tip "Scope / component" "Build-time scope и component из аннотаций. Scope задаёт правила DI-контейнера, но сам по себе не доказывает удержание объекта в памяти."}}</th><th>{{tip "Отдельное наблюдение" "Совпадение имени класса с runtime- или memory-данными. Это независимые факты: каталог не связывает DI-ребро с симптомом автоматически."}}</th></tr>
-        {{range .DependencyInjection.Classes}}
-        <tr class="di-class-row">
-          <td><div class="di-class-name"><span class="di-badge">DI</span>{{if .Generated}}<span class="di-badge di-generated">GENERATED</span>{{end}}<code>{{.Name}}</code></div></td>
-          <td><span class="di-framework">{{.Framework}}</span></td>
-          <td>{{range .Roles}}<span class="di-role">{{.}}</span>{{else}}<span class="muted">не определена</span>{{end}}</td>
-          <td>{{range .Scopes}}<div><code>{{.}}</code></div>{{end}}{{range .Components}}<div><code>{{.}}</code></div>{{end}}{{if and (not .Scopes) (not .Components)}}<span class="muted">нет metadata</span>{{end}}</td>
-          <td>{{range .Observed}}<div class="di-observed">{{.}}</div>{{else}}<span class="muted">не сопоставлен с сигналами прогона</span>{{end}}</td>
-        </tr>
-        {{else}}<tr><td colspan="5" class="muted">DI-классы не найдены.</td></tr>{{end}}
+        <thead><tr><th>{{tip "Класс" "Класс, найденный в DI metadata или generated-коде выбранного варианта сборки."}}</th><th>{{tip "Framework" "DI-система, для которой распознана запись: например Dagger, Hilt или Koin."}}</th><th>{{tip "Роли" "Как класс участвует в wiring: consumer, dependency, module, component и т. п. Роль не описывает время жизни объекта."}}</th><th>{{tip "Scope / component" "Build-time scope и component из аннотаций. Scope задаёт правила DI-контейнера, но сам по себе не доказывает удержание объекта в памяти."}}</th><th>{{tip "Отдельное наблюдение" "Совпадение имени класса с runtime- или memory-данными. Это независимые факты: каталог не связывает DI-ребро с симптомом автоматически."}}</th></tr></thead>
+        <tbody>{{if .DependencyInjection.Classes}}{{deferredRows "di-class-row" .DependencyInjection.Classes 50 50 5 "DI-классы"}}{{else}}<tr><td colspan="5" class="muted">DI-классы не найдены.</td></tr>{{end}}</tbody>
       </table>
     </div>
   </section>
@@ -81,17 +73,8 @@
     <div class="di-disclaimer compact"><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
     <div class="table-scroll">
       <table class="di-edge-table">
-        <tr><th>{{tip "Consumer" "Класс, которому DI-контейнер предоставляет зависимость по metadata сборки."}}</th><th></th><th>{{tip "Dependency" "Предоставляемый тип. Ребро не является runtime-ссылкой из heap dump."}}</th><th>{{tip "Тип / framework" "Способ injection и DI-framework. Qualifier уточняет, какой binding выбран среди типов с одинаковым контрактом."}}</th><th>{{tip "Место" "Метод, поле, constructor или generated-site, из которого восстановлена связь."}}</th><th>{{tip "Resolution" "Источник подтверждения build-time связи. Это уверенность распознавания wiring, а не вероятность runtime-создания объекта."}}</th></tr>
-        {{range .DependencyInjection.Edges}}
-        <tr class="di-edge-row">
-          <td><code>{{.Consumer}}</code>{{if .ConsumerObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
-          <td class="di-arrow" aria-label="зависит от">→</td>
-          <td><code>{{.Dependency}}</code>{{if .DependencyObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
-          <td><span class="di-role">{{.InjectionKind}}</span><div class="muted">{{.Framework}}</div>{{range .Qualifiers}}<div><code>{{.}}</code></div>{{end}}</td>
-          <td><code>{{.Site}}</code></td>
-          <td><span class="di-resolution">{{.Resolution}}</span></td>
-        </tr>
-        {{else}}<tr><td colspan="6" class="muted">Однозначно распознанные DI-связи не найдены; обнаруженные классы и роли всё равно сохранены в каталоге. Отсутствие строк не доказывает отсутствие DI wiring.</td></tr>{{end}}
+        <thead><tr><th>{{tip "Consumer" "Класс, которому DI-контейнер предоставляет зависимость по metadata сборки."}}</th><th></th><th>{{tip "Dependency" "Предоставляемый тип. Ребро не является runtime-ссылкой из heap dump."}}</th><th>{{tip "Тип / framework" "Способ injection и DI-framework. Qualifier уточняет, какой binding выбран среди типов с одинаковым контрактом."}}</th><th>{{tip "Место" "Метод, поле, constructor или generated-site, из которого восстановлена связь."}}</th><th>{{tip "Resolution" "Источник подтверждения build-time связи. Это уверенность распознавания wiring, а не вероятность runtime-создания объекта."}}</th></tr></thead>
+        <tbody>{{if .DependencyInjection.Edges}}{{deferredRows "di-edge-row" .DependencyInjection.Edges 50 50 6 "DI-связи"}}{{else}}<tr><td colspan="6" class="muted">Однозначно распознанные DI-связи не найдены; обнаруженные классы и роли всё равно сохранены в каталоге. Отсутствие строк не доказывает отсутствие DI wiring.</td></tr>{{end}}</tbody>
       </table>
     </div>
   </section>
@@ -109,3 +92,20 @@
 <script>{{reportJS}}</script>
 </body>
 </html>
+
+{{- define "di-class-row"}}{{$row := .Value}}<tr class="di-class-row">
+  <td><div class="di-class-name"><span class="di-badge">DI</span>{{if $row.Generated}}<span class="di-badge di-generated">GENERATED</span>{{end}}<code>{{$row.Name}}</code></div></td>
+  <td><span class="di-framework">{{$row.Framework}}</span></td>
+  <td>{{range $row.Roles}}<span class="di-role">{{.}}</span>{{else}}<span class="muted">не определена</span>{{end}}</td>
+  <td>{{range $row.Scopes}}<div><code>{{.}}</code></div>{{end}}{{range $row.Components}}<div><code>{{.}}</code></div>{{end}}{{if and (not $row.Scopes) (not $row.Components)}}<span class="muted">нет metadata</span>{{end}}</td>
+  <td>{{range $row.Observed}}<div class="di-observed">{{.}}</div>{{else}}<span class="muted">не сопоставлен с сигналами прогона</span>{{end}}</td>
+</tr>{{end -}}
+
+{{- define "di-edge-row"}}{{$row := .Value}}<tr class="di-edge-row">
+  <td><code>{{$row.Consumer}}</code>{{if $row.ConsumerObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
+  <td class="di-arrow" aria-label="зависит от">→</td>
+  <td><code>{{$row.Dependency}}</code>{{if $row.DependencyObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
+  <td><span class="di-role">{{$row.InjectionKind}}</span><div class="muted">{{$row.Framework}}</div>{{range $row.Qualifiers}}<div><code>{{.}}</code></div>{{end}}</td>
+  <td><code>{{$row.Site}}</code></td>
+  <td><span class="di-resolution">{{$row.Resolution}}</span></td>
+</tr>{{end -}}

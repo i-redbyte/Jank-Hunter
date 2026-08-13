@@ -491,10 +491,7 @@ private object OkHttpInstrumentationModule : InstrumentationModule {
     override fun relevant(call: MethodCall): Boolean = relevantOkHttp(call, intents)
 
     override fun match(call: MethodCall, config: HookConfig): HookDecision {
-        if (!relevant(call)) return HookDecision.NotMatched
-        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
-        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision()
-            ?: HookDecision.Unsupported(id, family, "unsupported_signature")
+        return matchOkHttpModule(this, call, config, intents)
     }
 }
 
@@ -510,11 +507,20 @@ private object WebSocketInstrumentationModule : InstrumentationModule {
     override fun relevant(call: MethodCall): Boolean = relevantOkHttp(call, intents)
 
     override fun match(call: MethodCall, config: HookConfig): HookDecision {
-        if (!relevant(call)) return HookDecision.NotMatched
-        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
-        return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision()
-            ?: HookDecision.Unsupported(id, family, "unsupported_signature")
+        return matchOkHttpModule(this, call, config, intents)
     }
+}
+
+private fun matchOkHttpModule(
+    module: InstrumentationModule,
+    call: MethodCall,
+    config: HookConfig,
+    intents: Set<String>,
+): HookDecision {
+    if (!module.relevant(call)) return HookDecision.NotMatched
+    if (!module.enabled(config)) return HookDecision.Disabled(module.id, module.family, "disabled_by_gate")
+    return VersionedBridgeCatalog.matchOkHttp(call, intents)?.toDecision()
+        ?: HookDecision.Unsupported(module.id, module.family, "unsupported_signature")
 }
 
 private fun relevantOkHttp(call: MethodCall, intents: Set<String>): Boolean {

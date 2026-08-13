@@ -211,7 +211,7 @@ class InstrumentationSmokeTest {
             null,
             null,
         ).apply {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("constructor")
+            visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue("constructor")
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
             visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
@@ -240,7 +240,7 @@ class InstrumentationSmokeTest {
             visitEnd()
         }
         writer.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "exercise", MIXED_DESCRIPTOR, null, null).apply {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("asmSmoke")
+            visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue("asmSmoke")
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
             visitVarInsn(Opcodes.ALOAD, 1)
@@ -434,11 +434,6 @@ class InstrumentationSmokeTest {
             0,
         )
         return calls
-    }
-
-    private fun AnnotationVisitor.stringValue(value: String) {
-        visit("value", value)
-        visitEnd()
     }
 
     private data class Call(val owner: String, val name: String)

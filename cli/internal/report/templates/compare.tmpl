@@ -410,11 +410,11 @@
         <div class="split">
           <div>
             <h3>База</h3>
-            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Baseline.Cohorts}}<tr><td><code>{{cohortHint .Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+            <table><thead><tr><th>Когорта</th><th>События</th></tr></thead><tbody>{{if .Comparison.Baseline.Cohorts}}{{deferredRows "compare-cohort-row" .Comparison.Baseline.Cohorts 50 50 2 "когорты базы"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</tbody></table>
           </div>
           <div>
             <h3>Кандидат</h3>
-            <table><tr><th>Когорта</th><th>События</th></tr>{{range .Comparison.Candidate.Cohorts}}<tr><td><code>{{cohortHint .Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+            <table><thead><tr><th>Когорта</th><th>События</th></tr></thead><tbody>{{if .Comparison.Candidate.Cohorts}}{{deferredRows "compare-cohort-row" .Comparison.Candidate.Cohorts 50 50 2 "когорты кандидата"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</tbody></table>
           </div>
         </div>
         <h3>Контекст устройств</h3>
@@ -481,3 +481,5 @@
 <script>{{reportJS}}</script>
 </body>
 </html>
+
+{{- define "compare-cohort-row"}}{{$row := .Value}}<tr><td><code>{{cohortHint $row.Name}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}

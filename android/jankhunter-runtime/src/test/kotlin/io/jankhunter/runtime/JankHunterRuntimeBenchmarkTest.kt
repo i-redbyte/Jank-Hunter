@@ -5,6 +5,7 @@ import io.jankhunter.runtime.internal.io.MetricAggregator
 import io.jankhunter.runtime.internal.io.MetricAggregationMode
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executor
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -112,6 +113,28 @@ class JankHunterRuntimeBenchmarkTest {
             benchmarkLongSink = coroutineState[0]
         }
         printBenchmark("coroutine propagation wrapper", count, elapsedNs)
+    }
+
+    @Test
+    fun executorTaskTrackingHotPath() {
+        assumeBenchmarksEnabled()
+        val count = iterations()
+        val executionState = longArrayOf(1L)
+        val executor = JankHunterExecutor(
+            delegate = Executor { command -> command.run() },
+            name = "benchmark executor",
+            ownerName = "BenchmarkOwner",
+        )
+        val command = Runnable {
+            executionState[0] = nextBenchmarkState(executionState[0])
+        }
+        val elapsedNs = medianElapsedNs {
+            repeat(count) {
+                executor.execute(command)
+            }
+            benchmarkLongSink = executionState[0]
+        }
+        printBenchmark("executor task tracking", count, elapsedNs)
     }
 
     @Test

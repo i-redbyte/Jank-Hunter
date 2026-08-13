@@ -3,7 +3,6 @@ package io.jankhunter.runtime
 import android.os.SystemClock
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.Callable
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Delayed
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
@@ -16,9 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 internal class JankHunterExecutor internal constructor(
     private val delegate: Executor,
-    private val name: String?,
-    private val ownerName: String?,
-    private val clock: () -> Long = SystemClock::elapsedRealtime,
+    name: String?,
+    ownerName: String?,
+    clock: () -> Long = SystemClock::elapsedRealtime,
 ) : Executor {
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
@@ -29,9 +28,9 @@ internal class JankHunterExecutor internal constructor(
 
 internal class JankHunterExecutorService internal constructor(
     private val delegate: ExecutorService,
-    private val name: String?,
-    private val ownerName: String?,
-    private val clock: () -> Long = SystemClock::elapsedRealtime,
+    name: String?,
+    ownerName: String?,
+    clock: () -> Long = SystemClock::elapsedRealtime,
 ) : AbstractExecutorService() {
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
@@ -57,9 +56,9 @@ internal class JankHunterExecutorService internal constructor(
 
 internal class JankHunterScheduledExecutorService internal constructor(
     private val delegate: ScheduledExecutorService,
-    private val name: String?,
-    private val ownerName: String?,
-    private val clock: () -> Long = SystemClock::elapsedRealtime,
+    name: String?,
+    ownerName: String?,
+    clock: () -> Long = SystemClock::elapsedRealtime,
 ) : AbstractExecutorService(), ScheduledExecutorService {
     private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
 
@@ -68,7 +67,7 @@ internal class JankHunterScheduledExecutorService internal constructor(
     }
 
     override fun schedule(command: Runnable, delay: Long, unit: TimeUnit): ScheduledFuture<*> {
-        return tracker.scheduleRunnable(command) { scheduledCommand ->
+        return tracker.scheduleTrackedRunnable(command) { scheduledCommand ->
             delegate.schedule(scheduledCommand, delay, unit)
         }
     }
@@ -85,7 +84,7 @@ internal class JankHunterScheduledExecutorService internal constructor(
         period: Long,
         unit: TimeUnit,
     ): ScheduledFuture<*> {
-        return tracker.schedulePeriodic(command) { scheduledCommand ->
+        return tracker.scheduleTrackedRunnable(command) { scheduledCommand ->
             delegate.scheduleAtFixedRate(scheduledCommand, initialDelay, period, unit)
         }
     }
@@ -96,7 +95,7 @@ internal class JankHunterScheduledExecutorService internal constructor(
         delay: Long,
         unit: TimeUnit,
     ): ScheduledFuture<*> {
-        return tracker.schedulePeriodic(command) { scheduledCommand ->
+        return tracker.scheduleTrackedRunnable(command) { scheduledCommand ->
             delegate.scheduleWithFixedDelay(scheduledCommand, initialDelay, delay, unit)
         }
     }
@@ -123,34 +122,30 @@ private class ExecutorTaskTracker(
     private val clock: () -> Long,
 ) {
     private val queued = AtomicInteger()
-    private val trackedRunnables = ConcurrentHashMap<Runnable, PendingRunnable>()
+    private val metricName = metricExecutorName(name)
 
-    private fun enqueue(): QueuedTaskState {
-        val state = QueuedTaskState(clock())
+    private fun <T : QueuedTask> enqueue(task: T): T {
         queued.incrementAndGet()
         recordSnapshot()
-        return state
+        return task
     }
 
     fun execute(command: Runnable) {
-        val state = enqueue()
-        val wrapped = oneShotRunnable(command, state)
+        val wrapped = enqueue(TrackedRunnable(command))
         try {
             delegate.execute(wrapped)
         } catch (throwable: Throwable) {
-            trackedRunnables.remove(wrapped)
-            state.cancelIfQueued()
+            wrapped.cancelIfQueued()
             throw throwable
         }
     }
 
-    fun scheduleRunnable(
+    fun scheduleTrackedRunnable(
         command: Runnable,
         schedule: (Runnable) -> ScheduledFuture<*>,
     ): ScheduledFuture<*> {
-        val state = enqueue()
-        val wrapped = oneShotRunnable(command, state)
-        return trackScheduled(state, onCancel = { trackedRunnables.remove(wrapped) }) {
+        val wrapped = enqueue(TrackedRunnable(command))
+        return trackScheduled(wrapped) {
             schedule(wrapped)
         }
     }
@@ -159,108 +154,74 @@ private class ExecutorTaskTracker(
         callable: Callable<T>,
         schedule: (Callable<T>) -> ScheduledFuture<T>,
     ): ScheduledFuture<T> {
-        val state = enqueue()
-        return trackScheduled(state, onCancel = {}) {
-            schedule(oneShotCallable(callable, state))
-        }
-    }
-
-    fun schedulePeriodic(
-        command: Runnable,
-        schedule: (Runnable) -> ScheduledFuture<*>,
-    ): ScheduledFuture<*> {
-        val state = enqueue()
-        val wrapped = periodicRunnable(command, state)
-        return trackScheduled(state, onCancel = { trackedRunnables.remove(wrapped) }) {
+        val wrapped = enqueue(TrackedCallable(callable))
+        return trackScheduled(wrapped) {
             schedule(wrapped)
         }
     }
 
-    private fun oneShotRunnable(command: Runnable, state: QueuedTaskState): Runnable {
-        return trackRunnable(command, state, removeAfterRun = true)
-    }
-
-    private fun <T> oneShotCallable(callable: Callable<T>, state: QueuedTaskState): Callable<T> {
-        return Callable {
-            markStarted(state)
-            JankHunter.callExecutorTask(name, ownerName, callable, clock)
+    private inner class TrackedRunnable(
+        val original: Runnable,
+    ) : QueuedTask(), Runnable {
+        override fun run() {
+            markStarted(this)
+            JankHunter.runExecutorTask(metricName, ownerName, original, clock)
         }
+
+        fun belongsTo(tracker: ExecutorTaskTracker): Boolean = this@ExecutorTaskTracker === tracker
     }
 
-    private fun periodicRunnable(command: Runnable, state: QueuedTaskState): Runnable {
-        return trackRunnable(command, state, removeAfterRun = false, removeOnFailure = true)
-    }
-
-    private fun trackRunnable(
-        command: Runnable,
-        state: QueuedTaskState,
-        removeAfterRun: Boolean,
-        removeOnFailure: Boolean = false,
-    ): Runnable {
-        val wrapped = object : Runnable {
-            override fun run() {
-                markStarted(state)
-                var failed = false
-                try {
-                    JankHunter.runExecutorTask(name, ownerName, command, clock)
-                } catch (throwable: Throwable) {
-                    failed = true
-                    throw throwable
-                } finally {
-                    if (removeAfterRun || (failed && removeOnFailure)) {
-                        trackedRunnables.remove(this)
-                    }
-                }
-            }
+    private inner class TrackedCallable<T>(
+        private val original: Callable<T>,
+    ) : QueuedTask(), Callable<T> {
+        override fun call(): T {
+            markStarted(this)
+            return JankHunter.callExecutorTask(metricName, ownerName, original, clock)
         }
-        trackedRunnables[wrapped] = PendingRunnable(command, state)
-        return wrapped
     }
 
     fun unwrapShutdownNow(tasks: MutableList<Runnable>): MutableList<Runnable> {
-        return tasks.mapTo(mutableListOf()) { task ->
-            val pending = trackedRunnables.remove(task)
-            if (pending != null) {
-                pending.state.cancelIfQueued()
-                pending.original
+        val unwrapped = ArrayList<Runnable>(tasks.size)
+        tasks.forEach { task ->
+            if (task is TrackedRunnable && task.belongsTo(this)) {
+                task.cancelIfQueued()
+                unwrapped.add(task.original)
             } else {
-                task
+                unwrapped.add(task)
             }
         }
+        return unwrapped
     }
 
-    private fun markStarted(state: QueuedTaskState) {
+    private fun markStarted(state: QueuedTask) {
         val waitMs = if (state.markDequeued()) {
             queued.decrementAndGet()
             clock() - state.enqueuedAtMs
         } else {
             0L
         }
-        JankHunter.recordExecutorWait(name, ownerName, waitMs)
+        JankHunter.recordExecutorWait(metricName, ownerName, waitMs)
         recordSnapshot()
     }
 
     private fun recordSnapshot() {
-        JankHunter.recordExecutorSnapshot(name, delegate, queued.get())
+        JankHunter.recordExecutorSnapshot(metricName, delegate, queued.get())
     }
 
     private fun <T> trackScheduled(
-        state: QueuedTaskState,
-        onCancel: () -> Unit,
+        state: QueuedTask,
         schedule: () -> ScheduledFuture<T>,
     ): ScheduledFuture<T> {
         return try {
-            TrackedScheduledFuture(schedule(), state, onCancel)
+            TrackedScheduledFuture(schedule(), state)
         } catch (throwable: Throwable) {
-            onCancel()
             state.cancelIfQueued()
             throw throwable
         }
     }
 
-    inner class QueuedTaskState(
-        val enqueuedAtMs: Long,
-    ) {
+    abstract inner class QueuedTask {
+        val enqueuedAtMs: Long = clock()
         private val queuedState = AtomicBoolean(true)
 
         fun markDequeued(): Boolean = queuedState.compareAndSet(true, false)
@@ -272,22 +233,15 @@ private class ExecutorTaskTracker(
             }
         }
     }
-
-    private data class PendingRunnable(
-        val original: Runnable,
-        val state: QueuedTaskState,
-    )
 }
 
 private class TrackedScheduledFuture<V>(
     private val delegate: ScheduledFuture<V>,
-    private val state: ExecutorTaskTracker.QueuedTaskState,
-    private val onCancel: () -> Unit,
+    private val state: ExecutorTaskTracker.QueuedTask,
 ) : ScheduledFuture<V> {
     override fun cancel(mayInterruptIfRunning: Boolean): Boolean {
         val cancelled = delegate.cancel(mayInterruptIfRunning)
         if (cancelled) {
-            onCancel()
             state.cancelIfQueued()
         }
         return cancelled

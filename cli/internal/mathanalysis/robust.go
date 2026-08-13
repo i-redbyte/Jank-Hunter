@@ -185,9 +185,9 @@ func summarizeRobustSet(key robustKey, set *robustSampleSet) RobustStat {
 		Unit:                  key.Unit,
 		Count:                 set.seen,
 		Median:                median,
-		P90:                   percentileFloatSorted(values, 0.90),
-		P95:                   percentileFloatSorted(values, 0.95),
-		P99:                   percentileFloatSorted(values, 0.99),
+		P90:                   percentileSorted(values, 0.90),
+		P95:                   percentileSorted(values, 0.95),
+		P99:                   percentileSorted(values, 0.99),
 		MAD:                   medianAbsoluteDeviation(values, median),
 		TrimmedMean:           trimmedMeanSorted(values, 0.10),
 		Min:                   values[0],
@@ -239,8 +239,8 @@ func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) Robus
 	candidateValues := valuesOrEmpty(candidate)
 	baseCount := sampleCount(baseline)
 	candidateCount := sampleCount(candidate)
-	baseP95 := percentileFloatSorted(sortedFloatCopy(baseValues), 0.95)
-	candidateP95 := percentileFloatSorted(sortedFloatCopy(candidateValues), 0.95)
+	baseP95 := percentileSorted(sortedFloatCopy(baseValues), 0.95)
+	candidateP95 := percentileSorted(sortedFloatCopy(candidateValues), 0.95)
 	delta := candidateP95 - baseP95
 	deltaPct := 0.0
 	comparable := baseCount > 0 && candidateCount > 0
@@ -340,22 +340,6 @@ func robustFindings(stats []RobustStat) []Finding {
 		})
 	}
 	return findings
-}
-
-func compareRobustStatus(deltas []RobustDelta) string {
-	if len(deltas) == 0 {
-		return "medium"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
 }
 
 func compareRobustSummary(deltas []RobustDelta) string {
@@ -576,10 +560,10 @@ func bootstrapP95CI(values []float64) (float64, float64, bool) {
 			resample[i] = base[int(seed%uint64(len(base)))]
 		}
 		sort.Float64s(resample)
-		boot = append(boot, percentileFloatSorted(resample, 0.95))
+		boot = append(boot, percentileSorted(resample, 0.95))
 	}
 	sort.Float64s(boot)
-	return percentileFloatSorted(boot, 0.025), percentileFloatSorted(boot, 0.975), true
+	return percentileSorted(boot, 0.025), percentileSorted(boot, 0.975), true
 }
 
 func bootstrapBase(values []float64, limit int) []float64 {
@@ -598,20 +582,6 @@ func sortedFloatCopy(values []float64) []float64 {
 	out := append([]float64(nil), values...)
 	sort.Float64s(out)
 	return out
-}
-
-func percentileFloatSorted(values []float64, p float64) float64 {
-	if len(values) == 0 {
-		return 0
-	}
-	index := int(math.Ceil(float64(len(values))*p)) - 1
-	if index < 0 {
-		index = 0
-	}
-	if index >= len(values) {
-		index = len(values) - 1
-	}
-	return values[index]
 }
 
 func medianSorted(values []float64) float64 {

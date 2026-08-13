@@ -51,7 +51,6 @@ internal class RuntimeCollectorService(
             state.componentCallbackContext = appContext
         }
         state.memorySampler = MemorySampler(
-            appContext,
             config.memorySampleIntervalMs(),
             JankHunter::isAppForegroundForSampling,
         ).also { it.start(maintenanceScheduler) }
@@ -88,24 +87,24 @@ internal class RuntimeCollectorService(
     }
 
     fun stop() {
-        swallow {
+        RuntimeHookGuard.swallow {
             state.activityTracker?.let { tracker ->
                 state.application?.unregisterActivityLifecycleCallbacks(tracker)
                 tracker.close()
             }
         }
-        swallow { state.watchdog?.stop() }
-        swallow { state.dispatchMonitor?.stop() }
-        swallow {
+        RuntimeHookGuard.swallow { state.watchdog?.stop() }
+        RuntimeHookGuard.swallow { state.dispatchMonitor?.stop() }
+        RuntimeHookGuard.swallow {
             state.memoryTrimReporter?.let { reporter ->
                 state.componentCallbackContext?.unregisterComponentCallbacks(reporter)
             }
         }
-        swallow { state.memorySampler?.stop() }
-        swallow { state.systemContextSampler?.stop() }
-        swallow { state.objectRetentionWatcher?.stop() }
-        swallow { state.fpsMonitor?.stop() }
-        swallow { state.maintenanceScheduler?.shutdown() }
+        RuntimeHookGuard.swallow { state.memorySampler?.stop() }
+        RuntimeHookGuard.swallow { state.systemContextSampler?.stop() }
+        RuntimeHookGuard.swallow { state.objectRetentionWatcher?.stop() }
+        RuntimeHookGuard.swallow { state.fpsMonitor?.stop() }
+        RuntimeHookGuard.swallow { state.maintenanceScheduler?.shutdown() }
     }
 
     fun reset() {
@@ -124,10 +123,4 @@ internal class RuntimeCollectorService(
         state.fpsMonitor = null
     }
 
-    private inline fun swallow(block: () -> Unit) {
-        try {
-            block()
-        } catch (_: Throwable) {
-        }
-    }
 }

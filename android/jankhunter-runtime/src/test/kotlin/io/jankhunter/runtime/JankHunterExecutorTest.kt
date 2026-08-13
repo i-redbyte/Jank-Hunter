@@ -147,7 +147,7 @@ class JankHunterExecutorTest {
     }
 
     @Test
-    fun scheduledExecutorClearsPeriodicTrackingWhenTaskFails() {
+    fun scheduledExecutorCompletesPeriodicFutureWhenTaskFails() {
         val delegate = Executors.newSingleThreadScheduledExecutor()
         try {
             var now = 500L
@@ -171,7 +171,7 @@ class JankHunterExecutorTest {
 
             assertTrue(ran.await(1, TimeUnit.SECONDS))
             waitUntilDone(future)
-            assertEquals(0, trackedRunnableCount(wrapped))
+            assertTrue(future.isDone)
         } finally {
             delegate.shutdownNow()
         }
@@ -270,18 +270,6 @@ class JankHunterExecutorTest {
             Thread.sleep(10)
         }
         assertTrue("future did not complete", future.isDone)
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun trackedRunnableCount(executor: Any): Int {
-        val trackerField = executor.javaClass.getDeclaredField("tracker").apply {
-            isAccessible = true
-        }
-        val tracker = trackerField.get(executor)
-        val trackedField = tracker.javaClass.getDeclaredField("trackedRunnables").apply {
-            isAccessible = true
-        }
-        return (trackedField.get(tracker) as Map<Any, Any>).size
     }
 
 }

@@ -57,6 +57,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val maxSessionLogSizeMiB: Property<Int>
 
     @get:Input
+    abstract val logGrowthAnalyticsEnabled: Property<Boolean>
+
+    @get:Input
     abstract val symbolNamespace: Property<String>
 
     @get:OutputFile
@@ -65,6 +68,7 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     init {
         autoInit.convention(true)
         mainLooperDispatchMonitorEnabled.convention(false)
+        logGrowthAnalyticsEnabled.convention(true)
     }
 
     @TaskAction
@@ -134,6 +138,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.max_session_log_size_mib"
                         android:value="${maxSessionLogSizeMiB.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.log_growth_analytics_enabled"
+                        android:value="${logGrowthAnalyticsEnabled.get()}" />
                     <meta-data
                         android:name="io.jankhunter.symbol_namespace"
                         android:value="${symbolNamespace.get()}" />

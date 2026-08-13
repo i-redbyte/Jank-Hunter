@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -80,6 +81,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 	return execute(path, cachedInspectTemplate, map[string]any{
 		"GeneratedAt":                   options.generatedAt(),
 		"Summary":                       summary,
+		"LogGrowthJSON":                 logGrowthJSON(summary.LogGrowth),
 		"Analysis":                      inspectAnalysis(summary, lang),
 		"MathReportHref":                options.Links.Math,
 		"LeakReportHref":                options.Links.Leaks,
@@ -90,6 +92,14 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"AnimatedBackground":            options.AnimatedBackground,
 		"ReportStyle":                   options.Style.normalized(),
 	})
+}
+
+func logGrowthJSON(summary analyze.LogGrowthSummary) template.JS {
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return template.JS("null")
+	}
+	return template.JS(raw)
 }
 
 func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, baselineLogs, candidateLogs []LogReport, options ReportOptions) error {
@@ -278,10 +288,14 @@ func canonicalCompanionReportPath(path, suffix string) string {
 }
 
 func (o ReportOptions) generatedAt() string {
-	if o.GeneratedAt != "" {
-		return o.GeneratedAt
+	value := o.GeneratedAt
+	if value == "" {
+		value = time.Now().Format(time.RFC3339)
 	}
-	return time.Now().Format(time.RFC3339)
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.Format("02.01.2006, 15:04:05")
+	}
+	return displayDateText(value)
 }
 
 type cachedReportTemplate struct {
@@ -293,6 +307,7 @@ type cachedReportTemplate struct {
 }
 
 var sharedReportTemplateFuncs = reportTemplateFuncs()
+var isoDatePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 
 func newCachedReportTemplate(name, source string) *cachedReportTemplate {
 	return &cachedReportTemplate{name: name, source: source}
@@ -300,12 +315,107 @@ func newCachedReportTemplate(name, source string) *cachedReportTemplate {
 
 func (c *cachedReportTemplate) parsed() (*template.Template, error) {
 	c.once.Do(func() {
-		c.tmpl, c.err = template.New(c.name).Funcs(sharedReportTemplateFuncs).Parse(c.source)
+		funcs := make(template.FuncMap, len(sharedReportTemplateFuncs)+1)
+		for name, function := range sharedReportTemplateFuncs {
+			funcs[name] = function
+		}
+		var parsed *template.Template
+		funcs["deferredRows"] = func(rowTemplate string, rows any, initial, chunkSize, columns int, label string) (template.HTML, error) {
+			return renderDeferredRows(parsed, rowTemplate, rows, initial, chunkSize, columns, label)
+		}
+		parsed, c.err = template.New(c.name).Funcs(funcs).Parse(c.source)
+		c.tmpl = parsed
 	})
 	if c.err != nil {
 		return nil, fmt.Errorf("parse %s report template: %w", c.name, c.err)
 	}
 	return c.tmpl, nil
+}
+
+type deferredRow struct {
+	Index int
+	Value any
+}
+
+// renderDeferredRows keeps only the first page of a large table in the live DOM. Remaining pages
+// are independently encoded raw-text payloads and are parsed only after explicit user interaction.
+// It intentionally retains the source slice without copying its backing array while rendering.
+func renderDeferredRows(
+	tmpl *template.Template,
+	rowTemplate string,
+	rows any,
+	initial int,
+	chunkSize int,
+	columns int,
+	label string,
+) (template.HTML, error) {
+	value := reflect.ValueOf(rows)
+	if tmpl == nil || !value.IsValid() || value.Kind() != reflect.Slice {
+		return "", fmt.Errorf("deferred rows require a parsed template and a slice")
+	}
+	if initial < 0 {
+		initial = 0
+	}
+	if chunkSize <= 0 {
+		return "", fmt.Errorf("deferred row chunk size must be positive")
+	}
+	if columns < 1 {
+		columns = 1
+	}
+	total := value.Len()
+	if initial > total {
+		initial = total
+	}
+
+	var output strings.Builder
+	renderRange := func(target *strings.Builder, start, end int) error {
+		for index := start; index < end; index++ {
+			if err := tmpl.ExecuteTemplate(target, rowTemplate, deferredRow{Index: index, Value: value.Index(index).Interface()}); err != nil {
+				return fmt.Errorf("render deferred row %d with %s: %w", index, rowTemplate, err)
+			}
+		}
+		return nil
+	}
+	if err := renderRange(&output, 0, initial); err != nil {
+		return "", err
+	}
+	for start := initial; start < total; start += chunkSize {
+		end := min(start+chunkSize, total)
+		var chunk strings.Builder
+		if err := renderRange(&chunk, start, end); err != nil {
+			return "", err
+		}
+		var encoded strings.Builder
+		encoder := json.NewEncoder(&encoded)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(chunk.String()); err != nil {
+			return "", fmt.Errorf("encode deferred rows %d..%d: %w", start, end, err)
+		}
+		payload := strings.TrimSpace(encoded.String())
+		// JSON allows escaping a slash. Escaping every closing tag guarantees that an otherwise safe
+		// row can never terminate the raw-text script container after future template changes.
+		payload = strings.ReplaceAll(payload, "</", "<\\/")
+		fmt.Fprintf(
+			&output,
+			`<script type="application/json" data-table-chunk data-table-chunk-size="%d">%s</script>`,
+			end-start,
+			payload,
+		)
+	}
+	if total > initial {
+		next := min(chunkSize, total-initial)
+		fmt.Fprintf(
+			&output,
+			`<tr class="deferred-table-loader" data-deferred-loader data-deferred-total="%d" data-deferred-loaded="%d"><td colspan="%d"><button type="button" class="deferred-table-button" data-load-more-rows>Показать ещё %d</button><span data-deferred-remaining>Осталось строк: %d</span><span class="sr-only"> в таблице %s</span></td></tr>`,
+			total,
+			initial,
+			columns,
+			next,
+			total-initial,
+			template.HTMLEscapeString(label),
+		)
+	}
+	return template.HTML(output.String()), nil
 }
 
 func execute(path string, cached *cachedReportTemplate, data any) error {
@@ -328,6 +438,12 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"reportJS": func() template.JS {
 			return template.JS(reportJS)
+		},
+		"logGrowthCSS": func() template.CSS {
+			return template.CSS(logGrowthCSS)
+		},
+		"logGrowthJS": func() template.JS {
+			return template.JS(logGrowthJS)
 		},
 		"pctWidth": func(value float64) template.CSS {
 			return template.CSS(fmt.Sprintf("width:%.2f%%", clampPct(value)))
@@ -630,14 +746,14 @@ type influenceHTMLNode struct {
 }
 
 type influenceHTMLEdge struct {
-	ViewKey      string `json:"_Key,omitempty"`
-	From         string `json:",omitempty"`
-	To           string `json:",omitempty"`
-	RuntimeCount uint64 `json:",omitempty"`
-	StaticCount  uint64 `json:",omitempty"`
+	ViewKey      string  `json:"_Key,omitempty"`
+	From         string  `json:",omitempty"`
+	To           string  `json:",omitempty"`
+	RuntimeCount uint64  `json:",omitempty"`
+	StaticCount  uint64  `json:",omitempty"`
 	Influence    float64 `json:",omitempty"`
-	Evidence     string `json:",omitempty"`
-	Aggregate    bool   `json:",omitempty"`
+	Evidence     string  `json:",omitempty"`
+	Aggregate    bool    `json:",omitempty"`
 }
 
 func influenceGraphData(influence analyze.InfluenceSummary) template.JS {
@@ -1407,10 +1523,10 @@ func codeProblemLocation(row analyze.CodeProblemStats) string {
 }
 
 // limitRows bounds presentation-only evidence in autonomous HTML reports. The complete slices
-// remain in the analysis model (and therefore in JSON output and all aggregate calculations),
-// while the report keeps the highest-ranked rows because analyzers sort these collections before
-// rendering. Accepting any slice keeps the policy uniform across report-only view types without
-// copying the often large backing arrays.
+// remain in the caller-owned analysis model and all aggregate calculations; analyzer-derived
+// report types also retain them in JSON output. The report keeps the highest-ranked rows because
+// analyzers sort these collections before rendering. Accepting any slice keeps the policy uniform
+// across report-only view types without copying the often large backing arrays.
 func limitRows(rows any, limit int) any {
 	value := reflect.ValueOf(rows)
 	if !value.IsValid() || value.Kind() != reflect.Slice {
@@ -1910,7 +2026,7 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 		note := comparePresenceNote(hasBaseline, hasCandidate, "маршрут")
 		if comparable {
 			severity = latencyDeltaSeverity(b.P95MS, c.P95MS)
-			if minInt(b.Count, c.Count) < 3 {
+			if min(b.Count, c.Count) < 3 {
 				severity = capSeverity(severity, "medium")
 				note = "меньше трех запросов хотя бы в одном прогоне"
 			}
@@ -1987,7 +2103,7 @@ func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
 		note := comparePresenceNote(hasBaseline, hasCandidate, "экран")
 		if comparable {
 			severity = screenDeltaSeverity(deltaJank, deltaFPS)
-			if minReportUint64(b.Frames, c.Frames) < 120 {
+			if min(b.Frames, c.Frames) < 120 {
 				severity = capSeverity(severity, "medium")
 				note = "меньше 120 кадров хотя бы в одном прогоне"
 			}
@@ -2063,7 +2179,7 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 		note := comparePresenceNote(hasBaseline, hasCandidate, "источник")
 		if comparable {
 			severity = latencyDeltaSeverity(b.MaxMS, c.MaxMS)
-			if minInt(b.Count, c.Count) < 3 {
+			if min(b.Count, c.Count) < 3 {
 				severity = capSeverity(severity, "medium")
 				note = "меньше трех событий хотя бы в одном прогоне"
 			}
@@ -2248,20 +2364,6 @@ func capSeverity(value, maximum string) string {
 	return value
 }
 
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func minReportUint64(left, right uint64) uint64 {
-	if left < right {
-		return left
-	}
-	return right
-}
-
 func durationComparableForReport(baselineMS, candidateMS uint64) bool {
 	if baselineMS == 0 || candidateMS == 0 {
 		return false
@@ -2311,7 +2413,17 @@ func reportValue(value string, fallback string) string {
 	if isUnknownReportValue(value) {
 		return fallback
 	}
-	return value
+	return displayDateText(value)
+}
+
+func displayDateText(value string) string {
+	return isoDatePattern.ReplaceAllStringFunc(value, func(candidate string) string {
+		parsed, err := time.Parse("2006-01-02", candidate)
+		if err != nil {
+			return candidate
+		}
+		return parsed.Format("02.01.2006")
+	})
 }
 
 func reportValueHint(value string, fallback string, field string) template.HTML {

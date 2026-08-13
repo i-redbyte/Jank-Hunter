@@ -37,6 +37,7 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val maxQueueSize = builder.maxQueueSize
     private val sessionLogSizeLimitEnabled = builder.sessionLogSizeLimitEnabled
     private val maxSessionLogSizeMiB = builder.maxSessionLogSizeMiB
+    private val logGrowthAnalyticsEnabled = builder.logGrowthAnalyticsEnabled
     private val maxDictionaryEntries = builder.maxDictionaryEntries
     private val maxDictionaryValueBytes = builder.maxDictionaryValueBytes
     private val flushIntervalMs = builder.flushIntervalMs
@@ -118,6 +119,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun maxSessionLogSizeMiB(): Int = maxSessionLogSizeMiB.coerceAtLeast(1)
 
+    fun logGrowthAnalyticsEnabled(): Boolean = logGrowthAnalyticsEnabled
+
     internal fun sessionLogSizeLimitBytes(): Long {
         if (!sessionLogSizeLimitEnabled) return 0L
         val sizeMiB = maxSessionLogSizeMiB().toLong()
@@ -196,6 +199,7 @@ class JankHunterConfig private constructor(builder: Builder) {
             .maxQueueSize(maxQueueSize)
             .sessionLogSizeLimitEnabled(sessionLogSizeLimitEnabled)
             .maxSessionLogSizeMiB(maxSessionLogSizeMiB)
+            .logGrowthAnalyticsEnabled(logGrowthAnalyticsEnabled)
             .maxDictionaryEntries(maxDictionaryEntries)
             .maxDictionaryValueBytes(maxDictionaryValueBytes)
             .flushIntervalMs(flushIntervalMs)
@@ -255,6 +259,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxQueueSize = 2048
         internal var sessionLogSizeLimitEnabled = true
         internal var maxSessionLogSizeMiB = 16
+        internal var logGrowthAnalyticsEnabled = true
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = DictionaryIds.DEFAULT_MAX_VALUE_BYTES
         internal var flushIntervalMs = 5_000L
@@ -336,6 +341,8 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun maxSessionLogSizeMiB(value: Int) = apply { maxSessionLogSizeMiB = value }
 
+        fun logGrowthAnalyticsEnabled(value: Boolean) = apply { logGrowthAnalyticsEnabled = value }
+
         fun maxDictionaryEntries(value: Int) = apply { maxDictionaryEntries = value }
 
         fun maxDictionaryValueBytes(value: Int) = apply { maxDictionaryValueBytes = value }
@@ -415,6 +422,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
         const val META_SESSION_LOG_SIZE_LIMIT_ENABLED = "io.jankhunter.session_log_size_limit_enabled"
         const val META_MAX_SESSION_LOG_SIZE_MIB = "io.jankhunter.max_session_log_size_mib"
+        const val META_LOG_GROWTH_ANALYTICS_ENABLED = "io.jankhunter.log_growth_analytics_enabled"
         const val META_MAX_DICTIONARY_ENTRIES = "io.jankhunter.max_dictionary_entries"
         const val META_MAX_DICTIONARY_VALUE_BYTES = "io.jankhunter.max_dictionary_value_bytes"
         const val META_FLUSH_INTERVAL_MS = "io.jankhunter.flush_interval_ms"
@@ -478,6 +486,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                     metadataBoolean(metadata, META_SESSION_LOG_SIZE_LIMIT_ENABLED, true),
                 )
                 .maxSessionLogSizeMiB(metadataInt(metadata, META_MAX_SESSION_LOG_SIZE_MIB, 16))
+                .logGrowthAnalyticsEnabled(metadataBoolean(metadata, META_LOG_GROWTH_ANALYTICS_ENABLED, true))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(
                     metadataInt(

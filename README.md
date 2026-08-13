@@ -89,7 +89,7 @@ make build
 ./bin/jankhunter compare --baseline /tmp/baseline.jhlog --candidate /tmp/candidate.jhlog --out /tmp/jankhunter-compare.html
 ```
 
-`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Текущая версия утилиты: `1.0.3`, формат `.jhlog`: `9`.
+`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Текущая версия утилиты: `1.0.3`, основной формат `.jhlog`: `1.0`; чтение форматов 8 и 9 временно сохранено.
 
 Установка команды:
 
@@ -149,6 +149,7 @@ jankHunter {
     verboseLogs = false
     sessionLogSizeLimitEnabled = true
     maxSessionLogSizeMiB = 16
+    logGrowthAnalyticsEnabled = true
     // Отдельный build-time каталог Dagger/Hilt/Koin; по умолчанию DISABLED.
     dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
 
@@ -174,10 +175,18 @@ MainLooper `Printer` и coroutine ASM по умолчанию выключены
 дважды.
 
 Каждая сессия сбора создаёт один файл `jh-session-log.YYYY-MM-DD.<index>.jhlog`.
-Внутренний ограничитель по умолчанию включён и запечатывает файл при 16 МиБ; его можно
-настроить через `sessionLogSizeLimitEnabled` и `maxSessionLogSizeMiB`. Лимит пользовательского
-`JankHunterBinaryStorage` действует всегда, а встроенное хранилище держит до 64 МиБ закрытых
-сессий. Process/session identity находится внутри заголовка `.jhlog v9`, а не в имени файла.
+При включённом ограничителе это кольцевой `.jhlog 1.0`: размер берётся из
+`maxSessionLogSizeMiB`, а после заполнения старейшие целые блоки вытесняются и запись той же
+сессии продолжается в том же файле. Лимит пользовательского `JankHunterBinaryStorage` действует
+всегда, а встроенное хранилище держит до 64 МиБ закрытых сессий. Идентификаторы процесса и
+сессии находятся внутри заголовка, а не в имени файла.
+
+Лёгкая сводка роста по умолчанию включена через `logGrowthAnalyticsEnabled`. Она фиксирует
+максимальный размер, созданные и вытесненные байты, число переполнений и длительность сессии.
+Текущую сводку можно получить через `JankHunter.logGrowthSummary()`, а принудительно записать её
+в активный файл перед выгрузкой — через `JankHunter.writeLogGrowthSummary()`. Раздел «Рост
+журналов Jank Hunter» в главном отчёте строит графики по сессиям и дням; итоги недели, месяца
+или выбранных дат рассчитываются только по команде пользователя в самом HTML.
 
 OkHttp/WebSocket hooks используют support из `jankhunter-android-sdk`; дополнительных зависимостей для них нет.
 

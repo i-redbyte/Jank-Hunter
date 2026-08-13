@@ -108,22 +108,16 @@ internal class HookBytecodeEmitter(
     private val emitTryCatchBlock: (org.objectweb.asm.Label, org.objectweb.asm.Label, org.objectweb.asm.Label, String?) -> Unit,
 ) {
     fun wrapOkHttpEventListenerFactory() {
-        visitor.visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            OKHTTP_HELPERS,
+        invokeOkHttpHelper(
             "wrapEventListenerFactory",
             "(Lokhttp3/EventListener\$Factory;)Lokhttp3/EventListener\$Factory;",
-            false,
         )
     }
 
     fun installOkHttpEventListenerFactory() {
-        visitor.visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            OKHTTP_HELPERS,
+        invokeOkHttpHelper(
             "installEventListenerFactory",
             "(Lokhttp3/OkHttpClient\$Builder;)Lokhttp3/OkHttpClient\$Builder;",
-            false,
         )
     }
 
@@ -412,13 +406,9 @@ internal class HookBytecodeEmitter(
     }
 
     fun wrapTopClickListener() {
-        visitor.visitLdcInsn(ownerLabel())
-        visitor.visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            JANK_HUNTER_HOOKS,
+        wrapTop(
             "wrapClickListener",
             "(Landroid/view/View\$OnClickListener;Ljava/lang/String;)Landroid/view/View\$OnClickListener;",
-            false,
         )
     }
 
@@ -447,38 +437,32 @@ internal class HookBytecodeEmitter(
         )
     }
 
-    private fun wrapTopRunnable() {
+    private fun wrapTop(methodName: String, descriptor: String) {
         visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
-            "wrapRunnable",
-            "(Ljava/lang/Runnable;Ljava/lang/String;)Ljava/lang/Runnable;",
+            methodName,
+            descriptor,
             false,
         )
     }
 
-    private fun wrapTopCallable() {
-        visitor.visitLdcInsn(ownerLabel())
-        visitor.visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            JANK_HUNTER_HOOKS,
-            "wrapCallable",
-            "(Ljava/util/concurrent/Callable;Ljava/lang/String;)Ljava/util/concurrent/Callable;",
-            false,
-        )
+    private fun invokeOkHttpHelper(methodName: String, descriptor: String) {
+        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, OKHTTP_HELPERS, methodName, descriptor, false)
     }
 
-    private fun wrapTopCoroutineBlock() {
-        visitor.visitLdcInsn(ownerLabel())
-        visitor.visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            JANK_HUNTER_HOOKS,
+    private fun wrapTopRunnable() =
+        wrapTop("wrapRunnable", "(Ljava/lang/Runnable;Ljava/lang/String;)Ljava/lang/Runnable;")
+
+    private fun wrapTopCallable() =
+        wrapTop("wrapCallable", "(Ljava/util/concurrent/Callable;Ljava/lang/String;)Ljava/util/concurrent/Callable;")
+
+    private fun wrapTopCoroutineBlock() =
+        wrapTop(
             "wrapCoroutineBlock",
             "(Lkotlin/jvm/functions/Function2;Ljava/lang/String;)Lkotlin/jvm/functions/Function2;",
-            false,
         )
-    }
 
     private fun wrapRunnableBeforeObject() {
         val objectLocal = visitor.newLocal(OBJECT_TYPE)

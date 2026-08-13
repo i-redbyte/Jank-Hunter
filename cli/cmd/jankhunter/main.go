@@ -43,7 +43,7 @@ func configureCLIGarbageCollector() func() {
 
 func printVersion(out io.Writer) {
 	fmt.Fprintf(out, "Jank Hunter CLI %s\n", version)
-	fmt.Fprintf(out, ".jhlog format %d\n", jhlog.FormatVersion)
+	fmt.Fprintf(out, ".jhlog format %d.%d (also reads %d and %d)\n", jhlog.CurrentFormatMajor, jhlog.CurrentFormatMinor, jhlog.LegacyFormatVersion8, jhlog.FormatVersion)
 }
 
 func usage() {

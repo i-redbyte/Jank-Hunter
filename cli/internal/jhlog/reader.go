@@ -26,7 +26,7 @@ func StreamFileWithWarnings(path string, handle EventHandler) ([]string, error) 
 	return result.Warnings, err
 }
 
-// ReadSessionHeader reads only the bounded v9 file header. It does not scan,
+// ReadSessionHeader reads only the bounded 1.0/v9 file header. It does not scan,
 // allocate for, decompress, or validate any event chunk in the file.
 func ReadSessionHeader(path string) (SegmentHeader, error) {
 	file, err := os.Open(path)
@@ -39,11 +39,17 @@ func ReadSessionHeader(path string) (SegmentHeader, error) {
 	if _, err := io.ReadFull(file, prefix[:]); err != nil {
 		return SegmentHeader{}, fmt.Errorf("%s: read .jhlog magic: %w", path, err)
 	}
-	if !bytes.Equal(prefix[:], Magic) {
-		if bytes.Equal(prefix[:7], Magic[:7]) {
-			return SegmentHeader{}, fmt.Errorf("%s: unsupported jhlog version %d, CLI supports %d", path, prefix[7], FormatVersion)
-		}
+	if !bytes.Equal(prefix[:7], Magic[:7]) {
 		return SegmentHeader{}, fmt.Errorf("%s: invalid v9 .jhlog magic", path)
+	}
+	if prefix[7] == CurrentFormatMarker {
+		return readV1SessionHeader(file)
+	}
+	if prefix[7] == LegacyFormatVersion8 {
+		return SegmentHeader{}, nil
+	}
+	if prefix[7] != FormatVersion {
+		return SegmentHeader{}, fmt.Errorf("%s: unsupported jhlog version %d", path, prefix[7])
 	}
 	header, err := readV9Header(file)
 	if err != nil {
@@ -76,10 +82,26 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 	}
 	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
 		result.Version = prefix[7]
-		if prefix[7] != FormatVersion {
-			return corruptResult(result, fmt.Errorf("unsupported jhlog version %d, CLI supports %d", prefix[7], FormatVersion))
+		switch prefix[7] {
+		case CurrentFormatMarker:
+			var semantic [2]byte
+			if _, err := io.ReadFull(file, semantic[:]); err != nil {
+				return corruptResult(result, fmt.Errorf("read semantic format version: %w", err))
+			}
+			if semantic[0] != CurrentFormatMajor || semantic[1] != CurrentFormatMinor {
+				return corruptResult(result, fmt.Errorf("unsupported jhlog format %d.%d", semantic[0], semantic[1]))
+			}
+			result.Version = CurrentFormatMajor
+			result.FormatMajor = semantic[0]
+			result.FormatMinor = semantic[1]
+			return streamBinaryV1(file, result, handle)
+		case FormatVersion:
+			return streamBinaryV9(file, result, handle)
+		case LegacyFormatVersion8:
+			return streamBinaryV8(file, result, handle)
+		default:
+			return corruptResult(result, fmt.Errorf("unsupported jhlog version %d", prefix[7]))
 		}
-		return streamBinaryV9(file, result, handle)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return result, err
@@ -91,7 +113,6 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 func newStreamResult(source string) StreamResult {
 	return StreamResult{
 		Source:            source,
-		Version:           FormatVersion,
 		Status:            SegmentStatusOpenClean,
 		RecordBytesByType: map[EventType]uint64{},
 		RecordsByType:     map[EventType]uint64{},

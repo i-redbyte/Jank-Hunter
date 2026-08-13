@@ -186,16 +186,16 @@ internal object OwnerMapWriter {
             append(ArtifactSchemas.OWNER_MAP_FORMAT)
             append(",\"kind\":\"metadata\"")
             append(",\"variant\":\"")
-            append(escape(variantName))
+            append(escapeJsonString(variantName))
             append("\",\"idAlgorithm\":\"")
-            append(escape(OwnerIds.STABLE_ID_ALGORITHM))
+            append(escapeJsonString(OwnerIds.STABLE_ID_ALGORITHM))
             append("\",\"idEncoding\":\"")
-            append(escape(OwnerIds.STABLE_ID_ENCODING))
+            append(escapeJsonString(OwnerIds.STABLE_ID_ENCODING))
             append('"')
             append(",\"generatedOwners\":")
             append(generatedOwners)
             append(",\"symbolNamespace\":\"")
-            append(escape(symbolNamespace))
+            append(escapeJsonString(symbolNamespace))
             append('"')
             append(",\"includeWholeApplication\":")
             append(includeWholeApplication)
@@ -213,7 +213,7 @@ internal object OwnerMapWriter {
             appendHook("runtimeCallGraph", runtimeCallGraph)
             append('}')
             append(",\"androidNamespace\":\"")
-            append(escape(androidNamespace))
+            append(escapeJsonString(androidNamespace))
             append("\",\"includePackages\":")
             append(array(includePackages))
             append(",\"excludePackages\":")
@@ -240,13 +240,13 @@ internal object OwnerMapWriter {
             append(",\"id\":\"")
             append(OwnerIds.canonical(entry.id))
             append("\",\"owner\":\"")
-            append(escape(entry.owner))
+            append(escapeJsonString(entry.owner))
             append("\",\"class\":\"")
-            append(escape(entry.className))
+            append(escapeJsonString(entry.className))
             append("\",\"method\":\"")
-            append(escape(entry.methodName))
+            append(escapeJsonString(entry.methodName))
             append("\",\"descriptor\":\"")
-            append(escape(entry.descriptor))
+            append(escapeJsonString(entry.descriptor))
             append("\"}")
         }
     }
@@ -321,15 +321,7 @@ internal object OwnerMapWriter {
     }
 
     private fun array(values: Set<String>): String {
-        return values.sorted().joinToString(prefix = "[", postfix = "]") { "\"${escape(it)}\"" }
-    }
-
-    private fun escape(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
+        return values.sorted().joinToString(prefix = "[", postfix = "]") { "\"${escapeJsonString(it)}\"" }
     }
 
     private data class OwnerMapSymbol(

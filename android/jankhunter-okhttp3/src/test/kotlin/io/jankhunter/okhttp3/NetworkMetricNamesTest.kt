@@ -26,6 +26,23 @@ class NetworkMetricNamesTest {
     }
 
     @Test
+    fun routeStopsAtQueryOrFragmentWithoutParsingTheirSlashes() {
+        assertEquals("get_api_orders", NetworkMetricNames.route("GET", "/api/orders?next=/users/42"))
+        assertEquals("get_api_orders", NetworkMetricNames.route("GET", "/api/orders#next/users/42"))
+    }
+
+    @Test
+    fun routeCollapsesUnsafeCharactersAndBoundsCardinality() {
+        val route = NetworkMetricNames.route(
+            "CUSTOM METHOD",
+            "/api//orders---history/ABCDEF0123456789/${"item".repeat(20)}/ignored",
+        )
+
+        assertEquals("custom_method_api_orders_history_id_${"item".repeat(15)}", route)
+        assertEquals(96, route.length)
+    }
+
+    @Test
     fun throwableMetricKeyUsesExceptionClassName() {
         assertEquals("interruptedioexception", NetworkMetricNames.throwable(InterruptedIOException()))
     }

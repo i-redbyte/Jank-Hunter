@@ -993,10 +993,11 @@ func assertFileNotContains(t *testing.T, path string, needles ...string) {
 }
 
 type testBundlePage struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Href  string `json:"href"`
-	HTML  string `json:"html"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Href    string `json:"href"`
+	Payload string `json:"payload"`
+	HTML    string `json:"-"`
 }
 
 func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
@@ -1022,6 +1023,19 @@ func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
 	}
 	byID := make(map[string]testBundlePage, len(pages))
 	for _, page := range pages {
+		payloadMarker := `<script id="` + page.Payload + `" type="application/json" data-jankhunter-report-payload>`
+		payloadStart := strings.Index(text, payloadMarker)
+		if payloadStart < 0 {
+			t.Fatalf("%s has no embedded payload %q", path, page.Payload)
+		}
+		payloadStart += len(payloadMarker)
+		payloadEnd := strings.Index(text[payloadStart:], `</script>`)
+		if payloadEnd < 0 {
+			t.Fatalf("%s payload %q has no terminator", path, page.Payload)
+		}
+		if err := json.Unmarshal([]byte(text[payloadStart:payloadStart+payloadEnd]), &page.HTML); err != nil {
+			t.Fatalf("decode embedded page %q from %s: %v", page.ID, path, err)
+		}
 		byID[page.ID] = page
 	}
 	return byID

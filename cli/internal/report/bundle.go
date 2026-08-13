@@ -21,10 +21,10 @@ type BundlePage struct {
 }
 
 type encodedBundlePage struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Href  string `json:"href"`
-	HTML  string `json:"html"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Href    string `json:"href"`
+	Payload string `json:"payload"`
 }
 
 const bundledPageBridge = `<script>
@@ -66,7 +66,7 @@ func WriteBundle(path string, pages []BundlePage) error {
 }
 
 func WriteBundleWithOptions(path string, pages []BundlePage, options ReportOptions) error {
-	encoded, err := encodeBundlePages(pages)
+	manifest, err := encodeBundlePages(pages)
 	if err != nil {
 		return err
 	}
@@ -78,8 +78,26 @@ func WriteBundleWithOptions(path string, pages []BundlePage, options ReportOptio
 		if _, err := io.WriteString(file, prefix); err != nil {
 			return fmt.Errorf("write report bundle shell: %w", err)
 		}
-		if _, err := file.Write(encoded); err != nil {
-			return fmt.Errorf("write embedded report pages: %w", err)
+		if err := json.NewEncoder(file).Encode(manifest); err != nil {
+			return fmt.Errorf("write report page manifest: %w", err)
+		}
+		if _, err := io.WriteString(file, "</script>\n"); err != nil {
+			return fmt.Errorf("close report page manifest: %w", err)
+		}
+		for index, page := range pages {
+			if _, err := fmt.Fprintf(
+				file,
+				`  <script id="%s" type="application/json" data-jankhunter-report-payload>`,
+				manifest[index].Payload,
+			); err != nil {
+				return fmt.Errorf("write report page %d payload header: %w", index, err)
+			}
+			if err := writeScriptSafeJSONString(file, injectBundleBridge(string(page.HTML))); err != nil {
+				return fmt.Errorf("write report page %d payload: %w", index, err)
+			}
+			if _, err := io.WriteString(file, "</script>\n"); err != nil {
+				return fmt.Errorf("close report page %d payload: %w", index, err)
+			}
 		}
 		if _, err := io.WriteString(file, singleHTMLBundleSuffix); err != nil {
 			return fmt.Errorf("write report bundle runtime: %w", err)
@@ -88,7 +106,91 @@ func WriteBundleWithOptions(path string, pages []BundlePage, options ReportOptio
 	})
 }
 
-func encodeBundlePages(pages []BundlePage) ([]byte, error) {
+// scriptSafeJSONWriter leaves ordinary HTML tags compact while escaping every closing tag slash.
+// The escape is valid JSON and prevents an embedded </script> from terminating the raw-text payload.
+// Holding a trailing '<' makes the transformation correct even when the underlying encoder splits
+// the two-byte sequence across writes.
+type scriptSafeJSONWriter struct {
+	target      io.Writer
+	pendingLess bool
+}
+
+func (w *scriptSafeJSONWriter) Write(data []byte) (int, error) {
+	originalLength := len(data)
+	if w.pendingLess && len(data) > 0 {
+		prefix := []byte{'<'}
+		if data[0] == '/' {
+			prefix = []byte{'<', '\\'}
+		}
+		if err := writeAll(w.target, prefix); err != nil {
+			return 0, err
+		}
+		w.pendingLess = false
+	}
+	start := 0
+	for index, value := range data {
+		if value != '<' {
+			continue
+		}
+		if index+1 == len(data) {
+			if err := writeAll(w.target, data[start:index]); err != nil {
+				return 0, err
+			}
+			w.pendingLess = true
+			return originalLength, nil
+		}
+		if data[index+1] != '/' {
+			continue
+		}
+		if err := writeAll(w.target, data[start:index+1]); err != nil {
+			return 0, err
+		}
+		if err := writeAll(w.target, []byte{'\\'}); err != nil {
+			return 0, err
+		}
+		start = index + 1
+	}
+	if err := writeAll(w.target, data[start:]); err != nil {
+		return 0, err
+	}
+	return originalLength, nil
+}
+
+func (w *scriptSafeJSONWriter) flush() error {
+	if !w.pendingLess {
+		return nil
+	}
+	w.pendingLess = false
+	return writeAll(w.target, []byte{'<'})
+}
+
+func writeScriptSafeJSONString(target io.Writer, value string) error {
+	writer := &scriptSafeJSONWriter{target: target}
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return err
+	}
+	return writer.flush()
+}
+
+func writeAll(target io.Writer, data []byte) error {
+	for len(data) > 0 {
+		written, err := target.Write(data)
+		if written > 0 {
+			data = data[written:]
+		}
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+
+func encodeBundlePages(pages []BundlePage) ([]encodedBundlePage, error) {
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("report bundle needs at least one page")
 	}
@@ -111,17 +213,13 @@ func encodeBundlePages(pages []BundlePage) ([]byte, error) {
 		seenIDs[page.ID] = struct{}{}
 		seenHrefs[page.Href] = struct{}{}
 		encoded = append(encoded, encodedBundlePage{
-			ID:    page.ID,
-			Title: page.Title,
-			Href:  page.Href,
-			HTML:  injectBundleBridge(string(page.HTML)),
+			ID:      page.ID,
+			Title:   page.Title,
+			Href:    page.Href,
+			Payload: fmt.Sprintf("jankhunter-report-page-payload-%d", index),
 		})
 	}
-	payload, err := json.Marshal(encoded)
-	if err != nil {
-		return nil, fmt.Errorf("encode report bundle pages: %w", err)
-	}
-	return payload, nil
+	return encoded, nil
 }
 
 func injectBundleBridge(document string) string {
@@ -221,8 +319,7 @@ const legacySingleHTMLBundlePrefix = `<!doctype html>
   </main>
   <script id="jankhunter-report-pages" type="application/json">`
 
-const singleHTMLBundleSuffix = `</script>
-  <script>
+const singleHTMLBundleSuffix = `  <script>
     (function () {
       "use strict";
       var tabs = document.querySelector(".report-tabs");
@@ -256,12 +353,23 @@ const singleHTMLBundleSuffix = `</script>
       function ensureFrame(page) {
         var frame = framesByID.get(page.id);
         if (frame) return frame;
+
+        var html;
+        try {
+          var payload = document.getElementById(page.payload);
+          if (!payload) throw new Error("missing page payload");
+          html = JSON.parse(payload.textContent);
+          if (typeof html !== "string") throw new Error("invalid page payload");
+          payload.remove();
+        } catch (error) {
+          html = '<!doctype html><html lang="ru"><body><p>Не удалось прочитать выбранный раздел отчета.</p></body></html>';
+        }
         frame = document.createElement("iframe");
         frame.className = "report-frame";
         frame.id = "jankhunter-report-frame-" + page.id;
         frame.title = page.title;
         frame.dataset.page = page.id;
-        frame.srcdoc = page.html;
+        frame.srcdoc = html;
         frames.appendChild(frame);
         framesByID.set(page.id, frame);
         return frame;

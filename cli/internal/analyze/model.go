@@ -1,5 +1,7 @@
 package analyze
 
+import "github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
+
 type NamedValue struct {
 	Name  string
 	Value uint64
@@ -351,6 +353,7 @@ type Summary struct {
 	Warnings           []string
 	CollectionSegments []CollectionSegment
 	CollectionQuality  CollectionQuality
+	LogGrowth          LogGrowthSummary
 
 	Routes             []RouteStats
 	Screens            []ScreenStats
@@ -375,6 +378,15 @@ type Summary struct {
 	Counters           []NamedValue
 	Gauges             []NamedValue
 	Influence          InfluenceSummary
+}
+
+type LogGrowthSummary struct {
+	Available         bool                     `json:"available"`
+	HistoryGeneration uint64                   `json:"history_generation"`
+	CapturedAtMS      uint64                   `json:"captured_at_ms"`
+	Sessions          []jhlog.LogGrowthSession `json:"sessions,omitempty"`
+	Days              []jhlog.LogGrowthDay     `json:"days,omitempty"`
+	CurrentSession    *jhlog.LogGrowthSession  `json:"current_session,omitempty"`
 }
 
 type ClassGraph struct {

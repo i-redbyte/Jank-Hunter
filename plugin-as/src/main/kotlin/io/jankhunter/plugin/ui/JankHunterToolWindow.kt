@@ -260,10 +260,6 @@ class JankHunterToolWindow(
         runMode(if (currentTask == UserTask.REPORT) JankHunterMode.INSPECT else JankHunterMode.COMPARE)
     }
 
-    private fun exportProblems() {
-        runMode(JankHunterMode.PROBLEMS)
-    }
-
     private fun runScorecard() {
         if (currentTask != UserTask.COMPARE) {
             Messages.showInfoMessage(project, "Scorecard доступен для сравнения baseline и candidate.", "Jank Hunter")

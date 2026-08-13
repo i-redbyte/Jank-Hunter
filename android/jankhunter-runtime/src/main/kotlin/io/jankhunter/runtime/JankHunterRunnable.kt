@@ -27,15 +27,10 @@ internal class JankHunterRunnable internal constructor(
                 JankHunter.recordWrappedWork(
                     ownerName,
                     "runnable",
-                    elapsedSince(start),
+                    elapsedRealtimeSince(start),
                     failed,
                 )
             }
         }
-    }
-
-    private fun elapsedSince(startMs: Long): Long {
-        if (startMs <= 0L) return 0L
-        return (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
     }
 }

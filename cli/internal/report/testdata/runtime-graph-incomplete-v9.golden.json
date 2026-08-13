@@ -177,6 +177,11 @@
       "ограниченные runtime-реестры потеряли 9 элементов evidence"
     ]
   },
+  "LogGrowth": {
+    "available": false,
+    "history_generation": 0,
+    "captured_at_ms": 0
+  },
   "Routes": null,
   "Screens": null,
   "Owners": null,

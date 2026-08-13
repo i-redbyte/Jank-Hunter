@@ -3,6 +3,7 @@ package io.jankhunter.runtime
 import android.app.Application
 import android.content.Context
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.LogGrowthManager
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
@@ -31,6 +32,9 @@ internal class RuntimeState {
 
     @Volatile
     var writer: AsyncLogWriter? = null
+
+    @Volatile
+    var logGrowthManager: LogGrowthManager? = null
 
     @Volatile
     var config: JankHunterConfig? = null

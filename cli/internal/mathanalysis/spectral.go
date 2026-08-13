@@ -255,7 +255,7 @@ func decayHalfLife(lags []AutocorrelationLag) uint64 {
 }
 
 func spectralPeaks(signalName string, bucketMS uint64, points []float64, limit int) ([]SpectralPeak, float64) {
-	windowed := hannWindow(detrendMean(points))
+	windowed := hannWindow(centeredValues(points))
 	powers := dftPowers(windowed)
 	entropy := spectralEntropy(powers)
 	if len(powers) == 0 {
@@ -327,15 +327,6 @@ func dftPowers(points []float64) []float64 {
 		powers = append(powers, realPart*realPart+imagPart*imagPart)
 	}
 	return powers
-}
-
-func detrendMean(points []float64) []float64 {
-	mean := meanFloat(points)
-	out := make([]float64, 0, len(points))
-	for _, point := range points {
-		out = append(out, point-mean)
-	}
-	return out
 }
 
 func hannWindow(points []float64) []float64 {

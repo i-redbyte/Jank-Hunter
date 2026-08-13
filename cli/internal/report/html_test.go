@@ -1,13 +1,16 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 	"github.com/i-redbyte/jank-hunter/cli/internal/mathanalysis"
 )
 
@@ -161,7 +164,7 @@ func TestWriteReports(t *testing.T) {
 	}
 	assertModernReportStyle(t, inspectPath)
 	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Сценарии и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Удержания и возможные утечки памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "λ Анализ", `href="inspect-math.html"`, "approx-badge", "p95 рассчитан по reservoir-сэмплу: 20000 из 21000 запросов", "HTTP p95 сценария рассчитан по reservoir-сэмплу")
-	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "ensureSelectOption", "setSelectFromChip", "viewportBox", "node.closest('.metric')")
+	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "candidate.closest('.metric')")
 	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
@@ -297,6 +300,349 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 	}
 }
 
+func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "inspect.html")
+	summary := analyze.Summary{
+		Title: "growth.jhlog",
+		LogGrowth: analyze.LogGrowthSummary{
+			Available:         true,
+			HistoryGeneration: 7,
+			CapturedAtMS:      1_800_000,
+			Sessions: []jhlog.LogGrowthSession{{
+				SessionID:            "session-7",
+				DayKey:               20270115,
+				StartedAtMS:          1_000_000,
+				EndedAtMS:            1_600_000,
+				ConfiguredLimitBytes: 1_048_576,
+				MaximumRetainedBytes: 1_000_000,
+				GeneratedBytes:       1_700_000,
+				OverflowCount:        2,
+				EvictedChunkCount:    4,
+				EvictedBytes:         700_000,
+				Completed:            true,
+			}},
+			Days: []jhlog.LogGrowthDay{{
+				DayKey:                20270115,
+				SessionCount:          1,
+				TotalDurationMS:       600_000,
+				GeneratedBytes:        1_700_000,
+				MaximumRetainedBytes:  1_000_000,
+				MaximumFillPermille:   954,
+				SessionsReachingLimit: 1,
+				OverflowCount:         2,
+				EvictedChunkCount:     4,
+				EvictedBytes:          700_000,
+			}},
+		},
+	}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	qualityIndex := strings.Index(html, `id="collection-quality"`)
+	growthIndex := strings.Index(html, `id="log-growth"`)
+	if qualityIndex < 0 || growthIndex <= qualityIndex {
+		t.Fatalf("log growth section must be last: quality=%d growth=%d", qualityIndex, growthIndex)
+	}
+	growthSection := html[growthIndex:]
+	for _, expected := range []string{
+		`<details class="fold">`,
+		`data-log-growth-json`,
+		`"history_generation":7`,
+		`"overflow_count":2`,
+		`data-growth-period="week"`,
+		`data-growth-calculate`,
+		`data-growth-session-chart`,
+		`data-growth-day-chart`,
+		`data-growth-period-insight`,
+		`по горизонтали — дата начала сессии`,
+		`лимит достигнут, старые блоки вытеснялись`,
+		`Лимит достигается многократно`,
+		`const selected = days.filter`,
+	} {
+		if !strings.Contains(growthSection, expected) {
+			t.Fatalf("log growth report misses %q", expected)
+		}
+	}
+	if strings.Contains(growthSection, `<details class="fold" open>`) {
+		t.Fatal("log growth details must be collapsed by default")
+	}
+}
+
+func TestInspectRendersLogGrowthStateMatrix(t *testing.T) {
+	const limit = uint64(1024 * 1024)
+	tests := []struct {
+		name    string
+		session jhlog.LogGrowthSession
+		current bool
+	}{
+		{
+			name: "below limit",
+			session: jhlog.LogGrowthSession{
+				SessionID:            "below-limit",
+				DayKey:               20260701,
+				StartedAtMS:          1_700_000_000_000,
+				EndedAtMS:            1_700_000_060_000,
+				ConfiguredLimitBytes: limit,
+				MaximumRetainedBytes: limit / 2,
+				GeneratedBytes:       limit / 2,
+				Completed:            true,
+			},
+		},
+		{
+			name: "repeated overflow",
+			session: jhlog.LogGrowthSession{
+				SessionID:            "repeated-overflow",
+				DayKey:               20260702,
+				StartedAtMS:          1_700_086_400_000,
+				EndedAtMS:            1_700_086_520_000,
+				ConfiguredLimitBytes: limit,
+				MaximumRetainedBytes: limit,
+				GeneratedBytes:       4 * limit,
+				OverflowCount:        3,
+				EvictedChunkCount:    9,
+				EvictedBytes:         3 * limit,
+				FirstOverflowAtMS:    1_700_086_430_000,
+				LastOverflowAtMS:     1_700_086_510_000,
+				Completed:            true,
+			},
+		},
+		{
+			name: "active session",
+			session: jhlog.LogGrowthSession{
+				SessionID:            "active-session",
+				DayKey:               20260703,
+				StartedAtMS:          1_700_172_800_000,
+				EndedAtMS:            1_700_172_830_000,
+				ConfiguredLimitBytes: limit,
+				MaximumRetainedBytes: limit / 4,
+				GeneratedBytes:       limit / 4,
+			},
+			current: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			day := growthDayFromSession(test.session)
+			growth := analyze.LogGrowthSummary{
+				Available:         true,
+				HistoryGeneration: 11,
+				CapturedAtMS:      test.session.EndedAtMS,
+				Sessions:          []jhlog.LogGrowthSession{test.session},
+				Days:              []jhlog.LogGrowthDay{day},
+			}
+			if test.current {
+				current := test.session
+				growth.CurrentSession = &current
+			}
+
+			path := filepath.Join(t.TempDir(), "inspect.html")
+			if err := WriteInspectWithOptions(path, analyze.Summary{Title: test.name, LogGrowth: growth}, ReportOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			decoded := readEmbeddedLogGrowth(t, path)
+			if len(decoded.Sessions) != 1 || decoded.Sessions[0] != test.session {
+				t.Fatalf("sessions = %+v", decoded.Sessions)
+			}
+			if len(decoded.Days) != 1 || decoded.Days[0] != day {
+				t.Fatalf("days = %+v", decoded.Days)
+			}
+			if (decoded.CurrentSession != nil) != test.current {
+				t.Fatalf("current session = %+v, want present=%t", decoded.CurrentSession, test.current)
+			}
+		})
+	}
+}
+
+func TestInspectEmbedsCompleteCalendarMonthForOnDemandCalculation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inspect.html")
+	if err := WriteInspectWithOptions(
+		path,
+		analyze.Summary{Title: "calendar-month", LogGrowth: calendarMonthLogGrowthSummary()},
+		ReportOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	decoded := readEmbeddedLogGrowth(t, path)
+	if len(decoded.Sessions) != 31 || len(decoded.Days) != 31 {
+		t.Fatalf("month detail = %d sessions/%d days, want 31/31", len(decoded.Sessions), len(decoded.Days))
+	}
+	if decoded.Days[0].DayKey != 20260701 || decoded.Days[30].DayKey != 20260731 {
+		t.Fatalf("month bounds = %d..%d", decoded.Days[0].DayKey, decoded.Days[30].DayKey)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, expected := range []string{
+		`data-growth-period="current-month"`,
+		`data-growth-period="previous-month"`,
+		`data-growth-from`,
+		`data-growth-to`,
+		`data-growth-calculate`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("calendar-month report misses %q", expected)
+		}
+	}
+}
+
+func TestReportDatesUseDayMonthYearDisplayFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inspect.html")
+	summary := analyze.Summary{
+		Title: "dates",
+		Environment: analyze.RunEnvironment{
+			Items: []analyze.InfoItem{{
+				Label:  "Android",
+				Value:  "15",
+				Detail: "API 35 · патч безопасности 2026-07-09",
+			}},
+		},
+		LogGrowth: calendarMonthLogGrowthSummary(),
+	}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{GeneratedAt: "2026-08-08T14:05:06+03:00"}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, expected := range []string{
+		"создан 08.08.2026, 14:05:06",
+		"патч безопасности 09.07.2026",
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("report misses %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"создан 2026-08-08",
+		"патч безопасности 2026-07-09",
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("report contains internal date form %q", forbidden)
+		}
+	}
+}
+
+func TestWriteLogGrowthVisualFixture(t *testing.T) {
+	path := os.Getenv("JH_GROWTH_VISUAL_OUT")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "inspect.html")
+	}
+	if err := WriteInspectWithOptions(
+		path,
+		analyze.Summary{Title: "calendar-month", LogGrowth: calendarMonthLogGrowthSummary()},
+		ReportOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func calendarMonthLogGrowthSummary() analyze.LogGrowthSummary {
+	const limit = uint64(1024 * 1024)
+	const minuteMS = uint64(60_000)
+	sessions := make([]jhlog.LogGrowthSession, 0, 31)
+	days := make([]jhlog.LogGrowthDay, 0, 31)
+	for day := 1; day <= 31; day++ {
+		started := uint64(time.Date(2026, time.July, day, 12, 0, 0, 0, time.UTC).UnixMilli())
+		overflows := uint64(0)
+		maximum := limit / 2
+		generated := maximum
+		if day%5 == 0 {
+			overflows = uint64(day / 5)
+			maximum = limit
+			generated = (overflows + 1) * limit
+		}
+		session := jhlog.LogGrowthSession{
+			SessionID:            fmt.Sprintf("july-%02d", day),
+			DayKey:               uint32(20260700 + day),
+			StartedAtMS:          started,
+			EndedAtMS:            started + minuteMS,
+			ConfiguredLimitBytes: limit,
+			MaximumRetainedBytes: maximum,
+			GeneratedBytes:       generated,
+			OverflowCount:        overflows,
+			EvictedChunkCount:    overflows * 2,
+			EvictedBytes:         overflows * limit,
+			Completed:            true,
+		}
+		if overflows > 0 {
+			session.FirstOverflowAtMS = started + 10_000
+			session.LastOverflowAtMS = started + 50_000
+		}
+		sessions = append(sessions, session)
+		days = append(days, growthDayFromSession(session))
+	}
+	return analyze.LogGrowthSummary{
+		Available:         true,
+		HistoryGeneration: 31,
+		CapturedAtMS:      sessions[len(sessions)-1].EndedAtMS,
+		Sessions:          sessions,
+		Days:              days,
+	}
+}
+
+func growthDayFromSession(session jhlog.LogGrowthSession) jhlog.LogGrowthDay {
+	duration := uint64(0)
+	if session.EndedAtMS >= session.StartedAtMS {
+		duration = session.EndedAtMS - session.StartedAtMS
+	}
+	fill := uint64(0)
+	if session.ConfiguredLimitBytes > 0 {
+		fill = session.MaximumRetainedBytes * 1_000 / session.ConfiguredLimitBytes
+	}
+	reached := uint64(0)
+	if session.OverflowCount > 0 {
+		reached = 1
+	}
+	return jhlog.LogGrowthDay{
+		DayKey:                session.DayKey,
+		SessionCount:          1,
+		TotalDurationMS:       duration,
+		GeneratedBytes:        session.GeneratedBytes,
+		MaximumRetainedBytes:  session.MaximumRetainedBytes,
+		MaximumFillPermille:   fill,
+		SessionsReachingLimit: reached,
+		OverflowCount:         session.OverflowCount,
+		EvictedChunkCount:     session.EvictedChunkCount,
+		EvictedBytes:          session.EvictedBytes,
+	}
+}
+
+func readEmbeddedLogGrowth(t *testing.T, path string) analyze.LogGrowthSummary {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = `<script type="application/json" data-log-growth-json>`
+	start := strings.Index(string(data), marker)
+	if start < 0 {
+		t.Fatal("embedded log-growth JSON is missing")
+	}
+	start += len(marker)
+	end := strings.Index(string(data[start:]), `</script>`)
+	if end < 0 {
+		t.Fatal("embedded log-growth JSON is not terminated")
+	}
+	var summary analyze.LogGrowthSummary
+	if err := json.Unmarshal(data[start:start+end], &summary); err != nil {
+		t.Fatalf("decode embedded log-growth JSON: %v", err)
+	}
+	return summary
+}
+
 func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	summary := analyze.Summary{
 		Title: "leaks.jhlog",
@@ -368,8 +714,8 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	)
 }
 
-func TestLeakReportsBoundExplorerAndKeepFullRegistry(t *testing.T) {
-	const total = 30
+func TestLeakReportsDeferRegistryRowsWithoutTruncatingData(t *testing.T) {
+	const total = 300
 	graph := analyze.LeakGraph{
 		Title:    "Контекст удержания",
 		RootID:   "target",
@@ -423,8 +769,8 @@ func TestLeakReportsBoundExplorerAndKeepFullRegistry(t *testing.T) {
 					ReportOptions{},
 				)
 			},
-			panelTargetTail: `data-leak-target="leak-30"`,
-			expectedNotice:  "Интерактивные графы удержаний:</strong> показано 24 из 30",
+			panelTargetTail: `data-leak-target="leak-300"`,
+			expectedNotice:  "Интерактивные графы удержаний:</strong> показано 24 из 300",
 		},
 		{
 			name: "compare",
@@ -436,8 +782,8 @@ func TestLeakReportsBoundExplorerAndKeepFullRegistry(t *testing.T) {
 					ReportOptions{},
 				)
 			},
-			panelTargetTail: `data-leak-target="leak-delta-29"`,
-			expectedNotice:  "Интерактивные графы дельт:</strong> показано 24 из 30",
+			panelTargetTail: `data-leak-target="leak-delta-299"`,
+			expectedNotice:  "Интерактивные графы дельт:</strong> показано 24 из 300",
 		},
 	}
 	for _, test := range tests {
@@ -450,11 +796,16 @@ func TestLeakReportsBoundExplorerAndKeepFullRegistry(t *testing.T) {
 				t.Fatal(err)
 			}
 			html := string(data)
+			payloadIndex := strings.Index(html, `<script type="application/json" data-table-chunk`)
+			if payloadIndex < 0 {
+				t.Fatal("deferred registry payload is missing")
+			}
+			initialHTML := html[:payloadIndex]
 			for marker, want := range map[string]int{
 				`<button type="button" data-leak-select`:   24,
 				`class="leak-graph-panel" data-leak-panel`: 24,
 				`<svg class="leak-graph-svg"`:              24,
-				`<tr data-code-problem-row`:                total,
+				`<tr data-code-problem-row`:                300,
 				`<tr data-code-problem-row data-leak-row`:  24,
 			} {
 				if got := strings.Count(html, marker); got != want {
@@ -464,8 +815,16 @@ func TestLeakReportsBoundExplorerAndKeepFullRegistry(t *testing.T) {
 			if !strings.Contains(html, test.expectedNotice) {
 				t.Fatalf("truncation notice missing: %q", test.expectedNotice)
 			}
-			if !strings.Contains(html, "com.app.LeakClass29") {
-				t.Fatal("tail leak disappeared from the complete registry")
+			if got := strings.Count(initialHTML, `<tr data-code-problem-row`); got != 50 {
+				t.Fatalf("initial registry rows = %d, want 50", got)
+			}
+			for _, marker := range []string{`data-deferred-total="300"`, "Показать ещё 50", "Осталось строк: 250"} {
+				if !strings.Contains(html, marker) {
+					t.Fatalf("deferred registry control missing %q", marker)
+				}
+			}
+			if !strings.Contains(html, "com.app.LeakClass299") {
+				t.Fatal("tail leak disappeared from the deferred payload")
 			}
 			if strings.Contains(html, test.panelTargetTail) {
 				t.Fatalf("tail registry row still links to a missing explorer panel: %s", test.panelTargetTail)
@@ -958,6 +1317,53 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 				},
 			},
 		},
+	}
+}
+
+func TestDependencyInjectionReportDefersPresentationRows(t *testing.T) {
+	report := sampleDependencyInjectionReport()
+	report.Classes = make([]analyze.DependencyInjectionReportClass, 300)
+	for index := range report.Classes {
+		report.Classes[index].DependencyInjectionClass = analyze.DependencyInjectionClass{
+			Name:      fmt.Sprintf("com.app.Class%03d", index),
+			Framework: "hilt",
+		}
+	}
+	report.Edges = make([]analyze.DependencyInjectionReportEdge, 600)
+	for index := range report.Edges {
+		report.Edges[index].DependencyInjectionEdge = analyze.DependencyInjectionEdge{
+			Consumer:   fmt.Sprintf("com.app.Consumer%03d", index),
+			Dependency: fmt.Sprintf("com.app.Dependency%03d", index),
+			Framework:  "hilt",
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "inspect-di.html")
+	if err := WriteDependencyInjectionWithOptions(path, report, ReportOptions{}); err != nil {
+		t.Fatalf("WriteDependencyInjectionWithOptions() error = %v", err)
+	}
+	renderedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	rendered := string(renderedBytes)
+	if got := strings.Count(rendered, `class="di-class-row"`); got != 50 {
+		t.Fatalf("initial DI classes = %d, want 50", got)
+	}
+	if got := strings.Count(rendered, `class="di-edge-row"`); got != 50 {
+		t.Fatalf("initial DI edges = %d, want 50", got)
+	}
+	assertHTMLContains(
+		t,
+		path,
+		`data-deferred-total="300"`,
+		`data-deferred-total="600"`,
+		"Показать ещё 50",
+		"com.app.Class299",
+		"com.app.Dependency599",
+	)
+	if strings.Contains(rendered, "--json") {
+		t.Fatal("DI truncation notice must not claim that inspect --json contains the source catalog")
 	}
 }
 

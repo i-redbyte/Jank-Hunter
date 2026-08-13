@@ -135,20 +135,7 @@
       <table class="code-problem-table leak-table">
         <thead><tr><th>{{tip "Риск" "Приоритет проверки по score и evidence; не вероятность утечки."}}</th><th>{{tip "Объект" "Класс объекта, который оставался достижимым дольше ожидаемой задержки наблюдателя."}}</th><th>{{tip "Тип" "Предполагаемая категория объекта: Activity, Fragment, View, произвольный объект и т. п."}}</th><th>{{tip "Вероятный держатель" "Owner из runtime-контекста либо держатель из HPROF-пути. Без HPROF это подсказка, а не доказанная ссылка."}}</th><th>{{tip "Контекст" "Экран, сценарий и шаг, активные при записи события удержания."}}</th><th>{{tip "Оценка" (scoreHelp "default")}}</th><th>{{tip "Удержанный размер" "Оценка памяти, которая может оставаться достижимой вместе с объектом. Без HPROF точность ограничена."}}</th><th>{{tip "Цепочка" "С HPROF — сокращённый путь ссылок от корня GC. Без HPROF цепочки нет."}}</th><th>Что проверить</th><th>{{tip "Доказательства" "Уровень evidence, его уверенность и ограничения качества данных. Начинайте с HPROF-пути и повторяемых after-GC сигналов."}}</th></tr></thead>
         <tbody>
-          {{range $index, $item := .LeakReport.Items}}
-          <tr data-code-problem-row {{if lt $index 24}}data-leak-row data-leak-target="leak-{{.Rank}}"{{end}} data-score="{{printf "%.1f" .Suspect.Score}}" data-severity="{{.Suspect.Severity}}" data-class="{{.Suspect.ClassName}}" data-categories="{{.Suspect.ObjectKind}}">
-            <td><span class="problem-score {{severityClass .Suspect.Severity}}">{{severityLabel .Suspect.Severity}}</span></td>
-            <td><code>{{.Suspect.ClassName}}</code></td>
-            <td>{{leakObjectKindLabel .Suspect.ObjectKind}}</td>
-            <td><code>{{.Suspect.Holder}}</code><div class="muted">{{.Suspect.HolderQuality}}</div></td>
-            <td>{{if .Suspect.Screen}}экран <code>{{.Suspect.Screen}}</code><br>{{end}}{{if .Suspect.Flow}}сценарий <code>{{.Suspect.Flow}}</code><br>{{end}}{{if .Suspect.Step}}шаг <code>{{.Suspect.Step}}</code>{{end}}</td>
-            <td>{{printf "%.1f" .Suspect.Score}}<div class="muted">{{.Suspect.Count}} шт · {{humanDuration .Suspect.MaxAgeMS}}</div></td>
-            <td>{{if gt .Suspect.EstimatedRetainedKB 0}}{{dataSize .Suspect.EstimatedRetainedKB}}{{else}}нет оценки{{end}}<div class="muted">{{.Suspect.RetainedSizeConfidence}}</div></td>
-            <td><div class="leak-dominator">{{range .Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
-            <td>{{.Suspect.Recommendation}}</td>
-            <td><strong>{{.Suspect.EvidenceLabel}}</strong><div class="muted">{{.Suspect.EvidenceConfidence}}</div>{{.Suspect.Evidence}}{{range .Suspect.QualityWarnings}}<div class="warning">{{.}}</div>{{end}}{{if .Suspect.LeakPattern}}<div class="muted">паттерн: {{.Suspect.LeakPattern}}</div>{{end}}{{if .Suspect.GCRootCategory}}<div class="muted">категория корня: {{.Suspect.GCRootCategory}}</div>{{end}}</td>
-          </tr>
-          {{else}}<tr><td colspan="10" class="muted">Сигналы удержания не зафиксированы в доступных данных.</td></tr>{{end}}
+          {{if .LeakReport.Items}}{{deferredRows "leak-inspect-row" .LeakReport.Items 50 50 10 "реестр сигналов удержания"}}{{else}}<tr><td colspan="10" class="muted">Сигналы удержания не зафиксированы в доступных данных.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
@@ -164,3 +151,16 @@
 <script>{{reportJS}}</script>
 </body>
 </html>
+
+{{- define "leak-inspect-row"}}{{$index := .Index}}{{$item := .Value}}<tr data-code-problem-row {{if lt $index 24}}data-leak-row data-leak-target="leak-{{$item.Rank}}"{{end}} data-score="{{printf "%.1f" $item.Suspect.Score}}" data-severity="{{$item.Suspect.Severity}}" data-class="{{$item.Suspect.ClassName}}" data-categories="{{$item.Suspect.ObjectKind}}">
+  <td><span class="problem-score {{severityClass $item.Suspect.Severity}}">{{severityLabel $item.Suspect.Severity}}</span></td>
+  <td><code>{{$item.Suspect.ClassName}}</code></td>
+  <td>{{leakObjectKindLabel $item.Suspect.ObjectKind}}</td>
+  <td><code>{{$item.Suspect.Holder}}</code><div class="muted">{{$item.Suspect.HolderQuality}}</div></td>
+  <td>{{if $item.Suspect.Screen}}экран <code>{{$item.Suspect.Screen}}</code><br>{{end}}{{if $item.Suspect.Flow}}сценарий <code>{{$item.Suspect.Flow}}</code><br>{{end}}{{if $item.Suspect.Step}}шаг <code>{{$item.Suspect.Step}}</code>{{end}}</td>
+  <td>{{printf "%.1f" $item.Suspect.Score}}<div class="muted">{{$item.Suspect.Count}} шт · {{humanDuration $item.Suspect.MaxAgeMS}}</div></td>
+  <td>{{if gt $item.Suspect.EstimatedRetainedKB 0}}{{dataSize $item.Suspect.EstimatedRetainedKB}}{{else}}нет оценки{{end}}<div class="muted">{{$item.Suspect.RetainedSizeConfidence}}</div></td>
+  <td><div class="leak-dominator">{{range $item.Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
+  <td>{{$item.Suspect.Recommendation}}</td>
+  <td><strong>{{$item.Suspect.EvidenceLabel}}</strong><div class="muted">{{$item.Suspect.EvidenceConfidence}}</div>{{$item.Suspect.Evidence}}{{range $item.Suspect.QualityWarnings}}<div class="warning">{{.}}</div>{{end}}{{if $item.Suspect.LeakPattern}}<div class="muted">паттерн: {{$item.Suspect.LeakPattern}}</div>{{end}}{{if $item.Suspect.GCRootCategory}}<div class="muted">категория корня: {{$item.Suspect.GCRootCategory}}</div>{{end}}</td>
+</tr>{{end -}}

@@ -139,19 +139,7 @@
       <table class="code-problem-table leak-table">
         <thead><tr><th>{{tip "Статус" "Результат сопоставления отпечатка между базой и кандидатом. Статус не заменяет проверку одинакового сценария."}}</th><th>{{tip "Объект" "Класс и уровень evidence выбранного сигнала."}}</th><th>{{tip "Держатель" "Вероятный owner или держатель HPROF-цепочки. Качество указано ниже имени."}}</th><th>{{tip "Оценка" "Относительный score до и после. Сравним только для одинакового evidence и похожего сценария."}}</th><th>{{tip "Количество / возраст" "Число наблюдений и максимальный возраст объекта. Рост экспозиции сценария может увеличить оба значения."}}</th><th>{{tip "Оценка размера" "Оценка удержанного размера до и после. Без HPROF точность ограничена; ноль может означать отсутствие оценки."}}</th><th>{{tip "Объяснение" "Почему выбран этот статус и насколько уверенно совпали отпечатки."}}</th><th>Что проверить</th></tr></thead>
         <tbody>
-          {{range $index, $delta := .LeakReport.Deltas}}
-          {{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}
-          <tr data-code-problem-row {{if lt $index 24}}data-leak-row data-leak-target="leak-delta-{{$index}}"{{end}} data-score="{{printf "%.1f" $delta.DeltaScore}}" data-severity="{{$delta.Severity}}" data-class="{{$suspect.ClassName}}" data-categories="{{$delta.Status}}">
-            <td><span class="problem-score {{severityClass $delta.Severity}}">{{$delta.StatusLabel}}</span></td>
-            <td><code>{{$suspect.ClassName}}</code><div class="muted">{{leakObjectKindLabel $suspect.ObjectKind}} · <code>{{$suspect.EvidenceKind}}</code></div><div class="muted">{{$suspect.EvidenceConfidence}}</div></td>
-            <td><code>{{$suspect.Holder}}</code><div class="muted">{{$suspect.HolderQuality}}</div></td>
-            <td>{{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}}<div class="muted">{{printf "%+.1f" $delta.DeltaScore}}</div></td>
-            <td>{{$delta.CountBefore}} → {{$delta.CountAfter}}<div class="muted">{{printf "%+d" $delta.DeltaCount}} · {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}</div></td>
-            <td>{{if gt $delta.EstimatedBeforeKB 0}}{{dataSize $delta.EstimatedBeforeKB}}{{else}}нет оценки{{end}} → {{if gt $delta.EstimatedAfterKB 0}}{{dataSize $delta.EstimatedAfterKB}}{{else}}нет оценки{{end}}{{if and (gt $delta.EstimatedBeforeKB 0) (gt $delta.EstimatedAfterKB 0)}}<div class="muted">{{printf "%+d КБ" $delta.DeltaEstimatedKB}}</div>{{end}}</td>
-            <td>{{$delta.Explanation}}<div class="muted">{{$delta.MatchConfidence}}</div></td>
-            <td>{{$delta.Recommendation}}</td>
-          </tr>
-          {{else}}<tr><td colspan="8" class="muted">Дельт утечек нет.</td></tr>{{end}}
+          {{if .LeakReport.Deltas}}{{deferredRows "leak-compare-row" .LeakReport.Deltas 50 50 8 "реестр дельт удержания"}}{{else}}<tr><td colspan="8" class="muted">Дельт утечек нет.</td></tr>{{end}}
         </tbody>
       </table>
     </div>
@@ -167,3 +155,14 @@
 <script>{{reportJS}}</script>
 </body>
 </html>
+
+{{- define "leak-compare-row"}}{{$index := .Index}}{{$delta := .Value}}{{$suspect := $delta.Candidate}}{{if not $delta.HasCandidate}}{{$suspect = $delta.Baseline}}{{end}}<tr data-code-problem-row {{if lt $index 24}}data-leak-row data-leak-target="leak-delta-{{$index}}"{{end}} data-score="{{printf "%.1f" $delta.DeltaScore}}" data-severity="{{$delta.Severity}}" data-class="{{$suspect.ClassName}}" data-categories="{{$delta.Status}}">
+  <td><span class="problem-score {{severityClass $delta.Severity}}">{{$delta.StatusLabel}}</span></td>
+  <td><code>{{$suspect.ClassName}}</code><div class="muted">{{leakObjectKindLabel $suspect.ObjectKind}} · <code>{{$suspect.EvidenceKind}}</code></div><div class="muted">{{$suspect.EvidenceConfidence}}</div></td>
+  <td><code>{{$suspect.Holder}}</code><div class="muted">{{$suspect.HolderQuality}}</div></td>
+  <td>{{printf "%.1f" $delta.ScoreBefore}} → {{printf "%.1f" $delta.ScoreAfter}}<div class="muted">{{printf "%+.1f" $delta.DeltaScore}}</div></td>
+  <td>{{$delta.CountBefore}} → {{$delta.CountAfter}}<div class="muted">{{printf "%+d" $delta.DeltaCount}} · {{humanDuration $delta.AgeBeforeMS}} → {{humanDuration $delta.AgeAfterMS}}</div></td>
+  <td>{{if gt $delta.EstimatedBeforeKB 0}}{{dataSize $delta.EstimatedBeforeKB}}{{else}}нет оценки{{end}} → {{if gt $delta.EstimatedAfterKB 0}}{{dataSize $delta.EstimatedAfterKB}}{{else}}нет оценки{{end}}{{if and (gt $delta.EstimatedBeforeKB 0) (gt $delta.EstimatedAfterKB 0)}}<div class="muted">{{printf "%+d КБ" $delta.DeltaEstimatedKB}}</div>{{end}}</td>
+  <td>{{$delta.Explanation}}<div class="muted">{{$delta.MatchConfidence}}</div></td>
+  <td>{{$delta.Recommendation}}</td>
+</tr>{{end -}}

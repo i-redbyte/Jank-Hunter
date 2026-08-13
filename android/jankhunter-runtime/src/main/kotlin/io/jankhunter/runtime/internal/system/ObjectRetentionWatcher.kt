@@ -20,6 +20,14 @@ internal typealias RetentionReporter = (
     evidence: RetentionEvidence,
 ) -> Unit
 
+internal typealias HeapDumpReporter = (
+    className: String?,
+    ownerHint: String?,
+    context: JankHunterContext?,
+    ageMs: Long,
+    count: Long,
+) -> Unit
+
 internal class ObjectRetentionWatcher(
     retainedDelayMs: Long,
     private val forceGcBeforeReport: Boolean = false,
@@ -37,7 +45,7 @@ internal class ObjectRetentionWatcher(
         JankHunter.recordQuality(QualityCounterId.OBJECT_WATCHER_LIMIT, count)
     },
     heapDumpMinRetainedAgeMs: Long = 0L,
-    private val heapDumpReporter: RetentionReporter? = null,
+    private val heapDumpReporter: HeapDumpReporter? = null,
 ) {
     private val delayMs = max(1_000L, retainedDelayMs)
     private val checkIntervalMs = max(500L, min(delayMs / 2L, 2_000L))
@@ -154,7 +162,7 @@ internal class ObjectRetentionWatcher(
 
             if (heapDumpReporter != null && ageMs >= heapDumpAgeMs) {
                 heapDumpGroups.getOrPut(key) { ref.newGroup() }
-                    .add(ageMs, ref.evidence())
+                    .add(ageMs)
                 ref.removed = true
                 shouldCompact = true
             } else if (heapDumpReporter == null) {
@@ -181,7 +189,7 @@ internal class ObjectRetentionWatcher(
         }
         val dumpReporter = heapDumpReporter ?: return
         for (group in heapDumpGroups.values) {
-            dumpReporter(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count, group.evidence)
+            dumpReporter(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count)
         }
     }
 
@@ -224,12 +232,16 @@ internal class ObjectRetentionWatcher(
             private set
 
         fun add(ageMs: Long, observedEvidence: RetentionEvidence) {
+            add(ageMs)
+            if (observedEvidence == RetentionEvidence.TIME_ONLY) {
+                evidence = RetentionEvidence.TIME_ONLY
+            }
+        }
+
+        fun add(ageMs: Long) {
             count++
             if (ageMs > maxAgeMs) {
                 maxAgeMs = ageMs
-            }
-            if (observedEvidence == RetentionEvidence.TIME_ONLY) {
-                evidence = RetentionEvidence.TIME_ONLY
             }
         }
     }

@@ -44,6 +44,32 @@ interface JankHunterBinaryWriter {
     fun close()
 }
 
+/**
+ * Optional capability for the circular `.jhlog` 1.x format. A storage that does not implement this
+ * interface remains source/binary compatible and continues to receive sequential legacy v9 files.
+ */
+interface JankHunterRandomAccessBinaryStorage : JankHunterBinaryStorage {
+
+    fun openRandomAccessWriter(fileName: String): JankHunterRandomAccessBinaryWriter
+}
+
+interface JankHunterRandomAccessBinaryWriter {
+
+    val path: String
+
+    fun sizeBytes(): Long
+
+    fun readBytes(position: Long, target: ByteArray, offset: Int = 0, length: Int = target.size)
+
+    fun writeBytes(position: Long, source: ByteArray, offset: Int = 0, length: Int = source.size)
+
+    fun truncate(size: Long)
+
+    fun flush()
+
+    fun close()
+}
+
 interface JankHunterBinaryArtifact {
 
     val path: String

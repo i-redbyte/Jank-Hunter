@@ -240,6 +240,28 @@ object JankHunter {
     fun initDiagnostics(): JankHunterInitDiagnostics = initDiagnostics
 
     @JvmStatic
+    fun logGrowthSummary(): JankHunterLogGrowthSummary {
+        runtimeState.writer?.logGrowthSummary()?.let { return it }
+        val manager = runtimeState.logGrowthManager
+        if (manager != null) {
+            return runCatching(manager::summary).getOrElse {
+                JankHunterLogGrowthSummary.disabled(nowMs())
+            }
+        }
+        return JankHunterLogGrowthSummary.disabled(nowMs())
+    }
+
+    @JvmStatic
+    fun writeLogGrowthSummary(): Boolean {
+        if (config?.logGrowthAnalyticsEnabled() != true) return false
+        val activeWriter = writer ?: return false
+        flushMetricsBlocking()
+        if (!runtimeHookEvents.flushBlocking(flushTimeoutMs())) return false
+        if (!runtimeCallGraph.flushBlocking(flushTimeoutMs())) return false
+        return activeWriter.writeLogGrowthSummaryBlocking(flushTimeoutMs())
+    }
+
+    @JvmStatic
     fun lastInitFailure(): String? {
         val diagnostics = initDiagnostics
         return diagnostics.failureClass?.let { failureClass ->
@@ -289,6 +311,7 @@ object JankHunter {
             },
         )
         writer = asyncWriter
+        runtimeState.logGrowthManager = asyncWriter.logGrowthManager()
         if (providedConfig.runtimeCallGraphEnabled()) {
             val requestedMode = providedConfig.runtimeCallGraphMode()
             val effectiveMode = if (
@@ -312,7 +335,6 @@ object JankHunter {
             identity.versionCode,
             device.displayName,
             Build.VERSION.SDK_INT,
-            redactedProcessName,
             device.androidRelease,
             device.securityPatch,
             device.primaryAbi,
@@ -379,24 +401,24 @@ object JankHunter {
         val stopResources = coordinator.beginStop()
         if (stopResources) {
             val shutdownDeadlineNs = System.nanoTime() + BLOCKING_FLUSH_TIMEOUT_MS * NANOS_PER_MS
-            swallow { flushMetricsBlocking(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
-            swallow { runtimeHookEvents.stopAndFlush(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
-            swallow { runtimeCallGraph.flushForShutdown() }
-            swallow { collectors.stop() }
-            swallow { writer?.close(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
+            RuntimeHookGuard.swallow { flushMetricsBlocking(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
+            RuntimeHookGuard.swallow { runtimeHookEvents.stopAndFlush(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
+            RuntimeHookGuard.swallow { runtimeCallGraph.flushForShutdown() }
+            RuntimeHookGuard.swallow { collectors.stop() }
+            RuntimeHookGuard.swallow { writer?.close(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
         }
-        swallow { restoreCrashFlushHandler() }
+        RuntimeHookGuard.swallow { restoreCrashFlushHandler() }
         resetRuntimeState(clearInit)
     }
 
     private fun resetRuntimeState(clearInit: Boolean) {
         writer = null
-        swallow { collectors.reset() }
-        swallow { contextTracker.resetRecordedContext() }
-        swallow { metrics.reset() }
-        swallow { sampling.reset() }
-        swallow { runtimeHookEvents.clear() }
-        swallow { runtimeCallGraph.clear() }
+        RuntimeHookGuard.swallow { collectors.reset() }
+        RuntimeHookGuard.swallow { contextTracker.resetRecordedContext() }
+        RuntimeHookGuard.swallow { metrics.reset() }
+        RuntimeHookGuard.swallow { sampling.reset() }
+        RuntimeHookGuard.swallow { runtimeHookEvents.clear() }
+        RuntimeHookGuard.swallow { runtimeCallGraph.clear() }
         runtimeState.runtimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED
         coordinator.markStopped()
         if (clearInit) {
@@ -415,7 +437,7 @@ object JankHunter {
         val previous = current
         val handler = Thread.UncaughtExceptionHandler { thread, throwable ->
             try {
-                swallow {
+                RuntimeHookGuard.swallow {
                     val crashWriter = writer
                     crashWriter?.counter("jankhunter.runtime.crash.count", 1)
                     crashWriter?.flushBlocking(CRASH_FLUSH_TIMEOUT_MS)
@@ -435,13 +457,6 @@ object JankHunter {
         }
         runtimeState.crashFlushHandler = null
         runtimeState.previousCrashHandler = null
-    }
-
-    private inline fun swallow(block: () -> Unit) {
-        try {
-            block()
-        } catch (_: Throwable) {
-        }
     }
 
     private fun recordInitStatus(
@@ -1129,7 +1144,6 @@ object JankHunter {
         context: JankHunterContext?,
         ageMs: Long,
         count: Long,
-        @Suppress("UNUSED_PARAMETER") evidence: RetentionEvidence,
     ) {
         val retainedHolder = effectiveRetainedHolder(className, firstContextValue(holder, context?.owner))
         if (context == null) {
@@ -1399,8 +1413,7 @@ object JankHunter {
         }
     }
 
-    internal fun recordExecutorWait(name: String?, ownerName: String?, waitMs: Long) {
-        val executorName = metricExecutorName(name)
+    internal fun recordExecutorWait(executorName: String, ownerName: String?, waitMs: Long) {
         if (waitMs > 0) {
             recordGauge("executor.$executorName.wait_ms", waitMs)
         }
@@ -1410,8 +1423,7 @@ object JankHunter {
         }
     }
 
-    internal fun recordExecutorSnapshot(name: String?, executor: Executor, queued: Int) {
-        val executorName = metricExecutorName(name)
+    internal fun recordExecutorSnapshot(executorName: String, executor: Executor, queued: Int) {
         recordGauge("executor.$executorName.queue_depth", queued.toLong())
         if (executor is ThreadPoolExecutor) {
             recordGauge("executor.$executorName.active_count", executor.snapshotActiveCount().toLong())
@@ -1421,7 +1433,7 @@ object JankHunter {
     }
 
     internal fun runExecutorTask(
-        name: String?,
+        executorName: String,
         ownerName: String?,
         command: Runnable,
         clock: () -> Long = ::nowMs,
@@ -1436,7 +1448,6 @@ object JankHunter {
             failed = true
             throw throwable
         } finally {
-            val executorName = metricExecutorName(name)
             val durationMs = clock() - start
             recordGauge("executor.$executorName.service_ms", durationMs)
             if (failed) {
@@ -1447,7 +1458,7 @@ object JankHunter {
     }
 
     internal fun <T> callExecutorTask(
-        name: String?,
+        executorName: String,
         ownerName: String?,
         callable: Callable<T>,
         clock: () -> Long = ::nowMs,
@@ -1462,7 +1473,6 @@ object JankHunter {
             failed = true
             throw throwable
         } finally {
-            val executorName = metricExecutorName(name)
             val durationMs = clock() - start
             recordGauge("executor.$executorName.service_ms", durationMs)
             if (failed) {

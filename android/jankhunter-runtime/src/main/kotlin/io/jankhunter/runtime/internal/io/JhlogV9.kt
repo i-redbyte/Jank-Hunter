@@ -158,15 +158,6 @@ internal class LogQualityCounters {
         }
     }
 
-    /** Writer-thread accounting which is surfaced by an explicit pending/final snapshot. */
-    fun addHousekeeping(counterId: Int, delta: Long = 1L) {
-        if (counterId !in 1..MAX_COUNTER_ID || delta <= 0L) return
-        update {
-            values.addAndGet(counterId, delta)
-            generation.incrementAndGet()
-        }
-    }
-
     fun subtractHousekeeping(counterId: Int, delta: Long = 1L) {
         if (counterId !in 1..MAX_COUNTER_ID || delta <= 0L) return
         update {
