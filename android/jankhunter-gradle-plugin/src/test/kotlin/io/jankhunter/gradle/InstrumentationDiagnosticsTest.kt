@@ -153,11 +153,11 @@ class InstrumentationDiagnosticsTest {
     private fun fixture(): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Diagnostics", null, "java/lang/Object", null)
-        writer.visitAnnotation(OWNER_DESCRIPTOR, false).stringValue("FeedOwner")
-        writer.visitAnnotation(SCREEN_DESCRIPTOR, false).stringValue("FeedScreen")
-        writer.visitAnnotation(FLOW_DESCRIPTOR, false).stringValue("feed.open")
+        writer.visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue("FeedOwner")
+        writer.visitAnnotation(SCREEN_DESCRIPTOR, false).finishStringValue("FeedScreen")
+        writer.visitAnnotation(FLOW_DESCRIPTOR, false).finishStringValue("feed.open")
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).run {
-            visitAnnotation(TRACE_DESCRIPTOR, false).stringValue("refresh")
+            visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue("refresh")
             visitCode()
             val logLine = Label()
             visitLabel(logLine)
@@ -194,11 +194,6 @@ class InstrumentationDiagnosticsTest {
         }
         writer.visitEnd()
         return writer.toByteArray()
-    }
-
-    private fun AnnotationVisitor.stringValue(value: String) {
-        visit("value", value)
-        visitEnd()
     }
 
     private companion object {

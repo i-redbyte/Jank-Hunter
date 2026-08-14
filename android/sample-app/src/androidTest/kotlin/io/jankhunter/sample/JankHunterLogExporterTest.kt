@@ -7,6 +7,7 @@ import java.util.zip.ZipFile
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -49,5 +50,40 @@ class JankHunterLogExporterTest {
         val destination = File(context.cacheDir, "exporter-empty-output")
 
         assertNull(JankHunterLogExporter(context, source, destination).createArchive())
+    }
+
+    @Test
+    fun writesCurrentGrowthSummaryBeforeReadingArtifacts() {
+        val context = ApplicationProvider.getApplicationContext<SampleApplication>()
+        val source = File(context.cacheDir, "exporter-checkpoint-source").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val destination = File(context.cacheDir, "exporter-checkpoint-output").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val log = File(source, "active.jhlog").apply { writeBytes(byteArrayOf(1)) }
+        var summaryWritten = false
+        val exporter = JankHunterLogExporter(
+            context = context,
+            sourceDirectory = source,
+            exportDirectory = destination,
+            writeCurrentGrowthSummary = {
+                log.writeBytes(byteArrayOf(1, 2, 3))
+                summaryWritten = true
+                true
+            },
+        )
+
+        val archive = requireNotNull(exporter.createArchive())
+
+        assertTrue(summaryWritten)
+        ZipFile(archive).use { zip ->
+            assertArrayEquals(
+                byteArrayOf(1, 2, 3),
+                zip.getInputStream(zip.getEntry("active.jhlog")).readBytes(),
+            )
+        }
     }
 }

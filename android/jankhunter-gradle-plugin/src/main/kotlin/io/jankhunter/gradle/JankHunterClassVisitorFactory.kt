@@ -129,9 +129,7 @@ internal object InstrumentationMarker {
     private const val CLASS_NAME = "io.jankhunter.runtime.JankHunterInstrumented"
 
     fun isPresent(annotations: Iterable<String>): Boolean {
-        return annotations.any { annotation ->
-            annotation == DESCRIPTOR || annotation.replace('/', '.').removePrefix("L").removeSuffix(";") == CLASS_NAME
-        }
+        return hasInstrumentationMarker(annotations, DESCRIPTOR, CLASS_NAME)
     }
 }
 
@@ -140,9 +138,17 @@ internal object LifecycleInstrumentationMarker {
     private const val CLASS_NAME = "io.jankhunter.runtime.JankHunterLifecycleInstrumented"
 
     fun isPresent(annotations: Iterable<String>): Boolean {
-        return annotations.any { annotation ->
-            annotation == DESCRIPTOR || annotation.replace('/', '.').removePrefix("L").removeSuffix(";") == CLASS_NAME
-        }
+        return hasInstrumentationMarker(annotations, DESCRIPTOR, CLASS_NAME)
+    }
+}
+
+private fun hasInstrumentationMarker(
+    annotations: Iterable<String>,
+    descriptor: String,
+    className: String,
+): Boolean {
+    return annotations.any { annotation ->
+        annotation == descriptor || annotation.replace('/', '.').removePrefix("L").removeSuffix(";") == className
     }
 }
 
@@ -795,30 +801,22 @@ internal object ClassGraphWriter {
             append("{\"format\":")
             append(ArtifactSchemas.CLASS_GRAPH_FORMAT)
             append(",\"class\":\"")
-            append(escape(className))
+            append(escapeJsonString(className))
             append("\",\"edges\":[")
             edges.entries.forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"caller\":\"")
-                append(escape(entry.key.caller))
+                append(escapeJsonString(entry.key.caller))
                 append("\",\"calleeClass\":\"")
-                append(escape(entry.key.calleeClass))
+                append(escapeJsonString(entry.key.calleeClass))
                 append("\",\"calleeMethod\":\"")
-                append(escape(entry.key.calleeMethod))
+                append(escapeJsonString(entry.key.calleeMethod))
                 append("\",\"count\":")
                 append(entry.value)
                 append('}')
             }
             append("]}\n")
         }
-    }
-
-    private fun escape(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
     }
 
 }

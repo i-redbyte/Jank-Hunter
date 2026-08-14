@@ -22,6 +22,26 @@ const run = (args) => {
   }
 };
 
+const buildGrowthReport = () => {
+  const directory = resolve(outDir, "growth");
+  const reportPath = resolve(directory, "inspect.html");
+  mkdirSync(directory, { recursive: true });
+  const result = spawnSync(
+    "go",
+    ["test", "./internal/report", "-run", "^TestWriteLogGrowthVisualFixture$", "-count=1"],
+    {
+      cwd: cliRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, JH_GROWTH_VISUAL_OUT: reportPath },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Не удалось создать отчет роста журналов\n${result.stdout}\n${result.stderr}`);
+  }
+  return reportPath;
+};
+
 const buildReportSet = (name, presentation = false) => {
   const setDir = resolve(outDir, name);
   mkdirSync(setDir, { recursive: true });
@@ -189,6 +209,17 @@ const buildReportSet = (name, presentation = false) => {
 const reportPaths = [
   ...buildReportSet("short"),
   ...buildReportSet("long-presentation", true),
+  {
+    set: "growth",
+    type: "calendar-month",
+    path: buildGrowthReport(),
+    page: "overview",
+    section: "log-growth",
+    openDetails: true,
+    growthPeriod: "current-month",
+    plain: true,
+    readme: true,
+  },
 ];
 
 const browser = await chromium.launch();
@@ -215,8 +246,11 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
   const tallRows = Array.from(document.querySelectorAll("tr"))
     .map((row) => ({
       height: row.getBoundingClientRect().height,
+      top: row.getBoundingClientRect().top,
+      bottom: row.getBoundingClientRect().bottom,
       text: row.textContent.trim().replace(/\s+/g, " ").slice(0, 160),
     }))
+    .filter((row) => row.bottom > -200 && row.top < window.innerHeight + 200)
     .filter((row) => row.height > 180 && row.text.length > 0);
   const looseTableCells = Array.from(document.querySelectorAll("th, td"))
     .filter((cell) => {
@@ -420,6 +454,47 @@ const checkZeroToggle = async (page) => page.evaluate(() => {
   const hiddenAfter = rows.length - visibleCount();
   return { available: true, zeroRows: rows.length, hiddenBefore, visibleAfter, hiddenAfter };
 });
+
+const checkGrowthPeriod = async (frame, period) => frame.evaluate(async (selectedPeriod) => {
+  const panel = document.querySelector("[data-log-growth]");
+  if (!panel) return ["раздел роста журналов отсутствует"];
+  const issues = [];
+  const periodButton = panel.querySelector(`[data-growth-period="${selectedPeriod}"]`);
+  const calculateButton = panel.querySelector("[data-growth-calculate]");
+  if (!periodButton || !calculateButton) return ["кнопки расчета периода отсутствуют"];
+  periodButton.click();
+  calculateButton.click();
+  await new Promise((resolveTick) => requestAnimationFrame(() => resolveTick()));
+  const value = (name) => panel.querySelector(`[data-growth-value="${name}"]`)?.textContent.trim() || "";
+  const expected = {
+    sessions: "31",
+    duration: "31 мин",
+    generated: "39,5 МиБ",
+    retained: "1 МиБ",
+    fill: "100% лимита",
+    reached: "6 сессий достигли лимита",
+    overflows: "21",
+    chunks: "42 блоков",
+    evicted: "21 МиБ",
+  };
+  for (const [name, expectedValue] of Object.entries(expected)) {
+    if (value(name) !== expectedValue) issues.push(`${name}=${value(name)}, ожидалось ${expectedValue}`);
+  }
+  if (panel.querySelector("[data-growth-from]")?.value !== "01.07.2026" ||
+      panel.querySelector("[data-growth-to]")?.value !== "31.07.2026") {
+    issues.push("границы календарного месяца рассчитаны неверно");
+  }
+  if (panel.querySelectorAll("[data-growth-session-rows] tr").length !== 31) {
+    issues.push("таблица сессий не содержит 31 строку");
+  }
+  if (panel.querySelectorAll("[data-growth-session-rows] tr.has-overflow").length !== 6) {
+    issues.push("в таблице неверно отмечены сессии с переполнениями");
+  }
+  if (panel.querySelector("[data-growth-period-result]")?.hidden) {
+    issues.push("итог выбранного месяца остался скрыт");
+  }
+  return issues;
+}, period);
 
 const exerciseInfluenceScenario = async (frame, scenario) => frame.evaluate(async (selectedScenario) => {
   const root = document.querySelector("[data-influence-workbench]");
@@ -638,12 +713,17 @@ try {
       const reportURL = pathToFileURL(report.path);
       reportURL.hash = `page=${report.page}`;
       await page.goto(reportURL.href, { waitUntil: "load" });
-      const frameElement = await page.waitForSelector(`iframe.report-frame.active[data-page="${report.page}"]`);
-      const reportFrame = await frameElement.contentFrame();
-      if (!reportFrame) {
-        throw new Error(`В snapshot-наборе ${reportName} не загрузилась встроенная страница ${report.page}`);
+      let reportFrame;
+      if (report.plain) {
+        reportFrame = page.mainFrame();
+      } else {
+        const frameElement = await page.waitForSelector(`iframe.report-frame.active[data-page="${report.page}"]`);
+        reportFrame = await frameElement.contentFrame();
+        if (!reportFrame) {
+          throw new Error(`В snapshot-наборе ${reportName} не загрузилась встроенная страница ${report.page}`);
+        }
+        await reportFrame.waitForLoadState("load");
       }
-      await reportFrame.waitForLoadState("load");
       await page.addStyleTag({ content: visualStabilityCSS });
       await reportFrame.addStyleTag({ content: visualStabilityCSS });
       await reportFrame.evaluate(() => document.fonts?.ready);
@@ -659,6 +739,9 @@ try {
         }, { id: report.section, openDetails: Boolean(report.openDetails) });
         await page.waitForTimeout(80);
       }
+      const growthIssues = report.growthPeriod
+        ? await checkGrowthPeriod(reportFrame, report.growthPeriod)
+        : [];
       const issues = await collectLayoutIssues(reportFrame);
       const longCellToggle = await checkLongCellToggle(reportFrame);
       const zeroToggle = await checkZeroToggle(reportFrame);
@@ -732,6 +815,9 @@ try {
       for (const issue of fragmentIssues) {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
+      for (const issue of growthIssues) {
+        failures.push(`${viewport.name}/${displayName}: ${issue}`);
+      }
       if (influenceResult) {
         for (const issue of influenceResult.issues) {
           failures.push(`${viewport.name}/${displayName}: ${issue}`);
@@ -753,7 +839,7 @@ try {
         fullPage: !report.section,
       });
 
-      if (report.page === "overview" && !report.readme) {
+      if (report.page === "overview" && !report.readme && !report.plain) {
         const mathLink = await reportFrame.$('a[href$="-math.html"]');
         if (!mathLink) {
           failures.push(`${viewport.name}/${displayName}: в обзоре нет ссылки на математический анализ`);

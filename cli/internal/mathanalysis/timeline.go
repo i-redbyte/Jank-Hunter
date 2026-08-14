@@ -504,7 +504,7 @@ func timelineBucketMS(timeline []TimelineBucket, series []Series) uint64 {
 	return DefaultBucketMS
 }
 
-func percentileSorted(values []uint64, p float64) uint64 {
+func percentileSorted[T ~uint64 | ~float64](values []T, p float64) T {
 	if len(values) == 0 {
 		return 0
 	}

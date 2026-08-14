@@ -5,6 +5,9 @@ import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterLogGrowthSummary
+import io.jankhunter.runtime.JankHunterRandomAccessBinaryStorage
+import io.jankhunter.runtime.JankHunterRandomAccessBinaryWriter
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
 import io.jankhunter.runtime.internal.system.RetentionEvidence
@@ -39,6 +42,7 @@ internal class AsyncLogWriter private constructor(
     private val sessionLocalDate: String,
     private val collectorStartElapsedUs: Long,
     private val quality: LogQualityCounters,
+    private val logGrowthManager: LogGrowthManager?,
     private val onTerminalStop: (AsyncLogWriter, Int, Throwable?) -> Unit,
 ) {
     private val controlQueue = ArrayBlockingQueue<FlushControl>(CONTROL_QUEUE_CAPACITY)
@@ -77,7 +81,6 @@ internal class AsyncLogWriter private constructor(
         build: String?,
         device: String?,
         sdkInt: Int,
-        processName: String?,
         androidRelease: String?,
         securityPatch: String?,
         primaryAbi: String?,
@@ -96,7 +99,6 @@ internal class AsyncLogWriter private constructor(
                 build,
                 device,
                 sdkInt,
-                processName,
                 androidRelease,
                 securityPatch,
                 primaryAbi,
@@ -381,7 +383,7 @@ internal class AsyncLogWriter private constructor(
         val target = beginControlSubmission()
         if (target < 0L) return
         try {
-            if (!controlQueue.offer(FlushControl(target))) {
+            if (!controlQueue.offer(FlushControl(target, writeLogGrowth = false))) {
                 quality.add(QualityCounterId.CONTROL_LANE_FULL_TOTAL)
             }
         } finally {
@@ -390,12 +392,26 @@ internal class AsyncLogWriter private constructor(
     }
 
     fun flushBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
-        val target = beginControlSubmission()
-        if (target == CONTROL_NO_WORK) return true
+        return submitBlockingControl(timeoutMs, writeLogGrowth = false)
+    }
+
+    internal fun writeLogGrowthSummaryBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
+        if (logGrowthManager == null) return false
+        return submitBlockingControl(timeoutMs, writeLogGrowth = true)
+    }
+
+    internal fun logGrowthSummary(): JankHunterLogGrowthSummary? =
+        logGrowthManager?.summary(writer?.logGrowthStats())
+
+    internal fun logGrowthManager(): LogGrowthManager? = logGrowthManager
+
+    private fun submitBlockingControl(timeoutMs: Long, writeLogGrowth: Boolean): Boolean {
+        val target = beginControlSubmission(startIfNeeded = writeLogGrowth)
+        if (target == CONTROL_NO_WORK) return !writeLogGrowth
         if (target == CONTROL_NOT_ACCEPTING) return false
         val timeoutNs = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
         val startedAtNs = System.nanoTime()
-        val request = FlushControl(target, CountDownLatch(1))
+        val request = FlushControl(target, writeLogGrowth, CountDownLatch(1))
         val admitted = try {
             controlQueue.offer(request, timeoutNs, TimeUnit.NANOSECONDS)
         } catch (_: InterruptedException) {
@@ -409,6 +425,7 @@ internal class AsyncLogWriter private constructor(
             quality.add(QualityCounterId.CONTROL_TIMEOUT_TOTAL)
             return false
         }
+        queuedEvents.release()
 
         val remainingNs = timeoutNs - (System.nanoTime() - startedAtNs).coerceAtLeast(0L)
         if (remainingNs <= 0L) {
@@ -511,10 +528,10 @@ internal class AsyncLogWriter private constructor(
         }
     }
 
-    private fun beginControlSubmission(): Long {
+    private fun beginControlSubmission(startIfNeeded: Boolean = false): Long {
         return admissionLock.withLock {
             if (!accepting) return@withLock CONTROL_NOT_ACCEPTING
-            if (worker == null) return@withLock CONTROL_NO_WORK
+            if (worker == null && (!startIfNeeded || !startWorker())) return@withLock CONTROL_NO_WORK
             controlSubmitters.incrementAndGet()
             acceptedSequence
         }
@@ -640,6 +657,7 @@ internal class AsyncLogWriter private constructor(
                 localDate = sessionLocalDate,
                 collectorStartElapsedUs = collectorStartElapsedUs,
                 quality = quality,
+                logGrowthManager = logGrowthManager,
             )
             allocation = opened.allocation
             writer = opened.writer
@@ -691,7 +709,13 @@ internal class AsyncLogWriter private constructor(
             val request = controlQueue.peek() ?: return
             if (completedSequence < request.targetSequence) return
             if (controlQueue.poll() !== request) continue
-            request.complete(flushIfNeeded(force = true))
+            val flushed = flushIfNeeded(force = true)
+            val succeeded = if (flushed && request.writeLogGrowth) {
+                writer?.writeLogGrowthSummary() == true
+            } else {
+                flushed
+            }
+            request.complete(succeeded)
         }
     }
 
@@ -904,6 +928,7 @@ internal class AsyncLogWriter private constructor(
 
     private class FlushControl(
         val targetSequence: Long,
+        val writeLogGrowth: Boolean,
         private val completion: CountDownLatch? = null,
     ) {
         @Volatile
@@ -1004,6 +1029,11 @@ internal class AsyncLogWriter private constructor(
                 sessionLocalDate = localDate,
                 collectorStartElapsedUs = nowElapsedUs(),
                 quality = LogQualityCounters(),
+                logGrowthManager = if (config.logGrowthAnalyticsEnabled()) {
+                    createLogGrowthManager(directory, currentTimeMs)
+                } else {
+                    null
+                },
                 onTerminalStop = onTerminalStop,
             )
         }
@@ -1016,11 +1046,12 @@ internal class AsyncLogWriter private constructor(
             localDate: String,
             collectorStartElapsedUs: Long,
             quality: LogQualityCounters,
+            logGrowthManager: LogGrowthManager?,
         ): OpenedSession {
             val storage = config.binaryStorage()
             val physicalLimit = minPositiveLimit(
                 config.sessionLogSizeLimitBytes(),
-                storage?.fileSizeLimitBytes ?: 0L,
+                storage?.fileSizeLimitBytes?.takeIf { it < Long.MAX_VALUE } ?: 0L,
             )
             val header = BinaryLogFileHeader(
                 runId = BinaryLogFileHeader.randomId(),
@@ -1035,6 +1066,9 @@ internal class AsyncLogWriter private constructor(
                 processName = processName,
                 symbolNamespace = config.symbolNamespace(),
             )
+            val logGrowth = logGrowthManager?.let { manager ->
+                LogGrowthSessionBinding(manager, localDate, physicalLimit)
+            }
             var attempts = 0
             var minimumIndex = 0L
             while (attempts < MAX_OPEN_ATTEMPTS) {
@@ -1050,6 +1084,7 @@ internal class AsyncLogWriter private constructor(
                 )
                 var localFile: File? = null
                 var externalWriter: JankHunterBinaryWriter? = null
+                var randomAccessWriter: JankHunterRandomAccessBinaryWriter? = null
                 var binaryWriter: BinaryLogWriter? = null
                 try {
                     if (storage == null) {
@@ -1067,6 +1102,26 @@ internal class AsyncLogWriter private constructor(
                             header,
                             quality,
                             physicalLimit,
+                            circular = physicalLimit > 0L,
+                            logGrowth = logGrowth,
+                        )
+                    } else if (storage is JankHunterRandomAccessBinaryStorage && physicalLimit > 0L) {
+                        val candidate = storage.openRandomAccessWriter(allocation.fileName)
+                        randomAccessWriter = candidate
+                        if (candidate.sizeBytes() != 0L) {
+                            minimumIndex = allocation.index + 1L
+                            runCatching { candidate.close() }
+                            allocation.close()
+                            continue
+                        }
+                        binaryWriter = BinaryLogWriter(
+                            candidate,
+                            config.maxDictionaryEntries(),
+                            config.maxDictionaryValueBytes(),
+                            header,
+                            quality,
+                            physicalLimit,
+                            logGrowth,
                         )
                     } else {
                         val candidate = storage.openWriter(allocation.fileName)
@@ -1084,13 +1139,17 @@ internal class AsyncLogWriter private constructor(
                             header,
                             quality,
                             physicalLimit,
+                            logGrowth,
                         )
                     }
                     val openedWriter = checkNotNull(binaryWriter)
                     allocation.updateProtectedPath(openedWriter.path)
                     return OpenedSession(allocation, openedWriter)
                 } catch (error: Throwable) {
-                    binaryWriter?.abort() ?: runCatching { externalWriter?.close() }
+                    binaryWriter?.abort() ?: runCatching {
+                        randomAccessWriter?.close()
+                        externalWriter?.close()
+                    }
                     allocation.close()
                     localFile?.delete()
                     throw error
@@ -1103,6 +1162,15 @@ internal class AsyncLogWriter private constructor(
             val remainder = if (bulkCapacity % CRITICAL_QUEUE_CAPACITY_DIVISOR == 0) 0 else 1
             val proportional = bulkCapacity / CRITICAL_QUEUE_CAPACITY_DIVISOR + remainder
             return proportional.coerceIn(MIN_CRITICAL_QUEUE_CAPACITY, MAX_CRITICAL_QUEUE_CAPACITY)
+        }
+
+        private fun createLogGrowthManager(directory: File, currentTimeMs: () -> Long): LogGrowthManager? {
+            return try {
+                LogGrowthManager(directory, currentTimeMs)
+            } catch (error: Throwable) {
+                if (error.isFatal()) throw error
+                null
+            }
         }
 
         internal fun isCriticalMetricName(name: String?): Boolean {

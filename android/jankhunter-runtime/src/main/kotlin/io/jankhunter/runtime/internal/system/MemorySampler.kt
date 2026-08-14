@@ -1,11 +1,9 @@
 package io.jankhunter.runtime.internal.system
 
-import android.content.Context
 import android.os.Debug
 import io.jankhunter.runtime.JankHunter
 
 internal class MemorySampler(
-    @Suppress("UNUSED_PARAMETER") context: Context,
     private val intervalMs: Long,
     private val foreground: () -> Boolean = { true },
 ) {

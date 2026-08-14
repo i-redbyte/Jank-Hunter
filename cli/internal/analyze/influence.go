@@ -145,7 +145,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.addFlow(spam.Flow)
 		node.addScreen(spam.Screen)
 		node.addReason("спам логами")
-		node.score += scoreCount(spam.Count, 160)
+		node.score += scoreContribution(spam.Count, 160)
 	}
 	for _, problem := range summary.ProblemWindows {
 		if problem.Kind == "retained_object" || problem.Kind == "log_spam" {
@@ -164,8 +164,8 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.addFlow(problem.Flow)
 		node.addScreen(problem.Screen)
 		node.addReason(problemReason(problem.Kind))
-		node.score += scoreCount(problem.Count, 8)
-		node.score += scoreDuration(problem.MaxMS, 500)
+		node.score += scoreContribution(problem.Count, 8)
+		node.score += scoreContribution(problem.MaxMS, 500)
 	}
 	for _, leak := range summary.MemoryLeaks {
 		target := leak.ClassName
@@ -205,8 +205,8 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		callee.addScreen(call.Screen)
 		caller.addReason("runtime-вызов")
 		callee.addReason("runtime-вызов")
-		caller.score += scoreCount(call.Count, 220) * 0.45
-		callee.score += scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2200) + scoreDuration(call.MaxMS, 500)
+		caller.score += scoreContribution(call.Count, 220) * 0.45
+		callee.score += scoreContribution(call.Count, 160) + scoreContribution(call.TotalMS, 2200) + scoreContribution(call.MaxMS, 500)
 		caller.runtimeMS += call.TotalMS / 4
 		callee.runtimeMS += call.TotalMS
 		b.runtimeEdges = append(b.runtimeEdges, runtimeInfluenceEdge{
@@ -401,18 +401,6 @@ func (b *influenceBuilder) cycles(runtimeTargets map[string]struct{}) []Influenc
 	return cycles
 }
 
-func (b *influenceBuilder) influenceEdges(selected map[string]struct{}) []InfluenceEdge {
-	out := make([]InfluenceEdge, 0)
-	for _, edge := range b.allInfluenceEdges() {
-		_, fromSelected := selected[edge.From]
-		_, toSelected := selected[edge.To]
-		if fromSelected || toSelected {
-			out = append(out, edge)
-		}
-	}
-	return out
-}
-
 func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
 	dedup := map[string]*InfluenceEdge{}
 	for _, edge := range b.edges {
@@ -454,19 +442,6 @@ func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
 	}
 	sortInfluenceEdges(out)
 	return out
-}
-
-func (b *influenceBuilder) relevantStaticEdges(selected map[string]struct{}) []ClassGraphEdge {
-	runtimeTargets := map[string]struct{}{}
-	for className, node := range b.nodes {
-		if node.runtime {
-			runtimeTargets[className] = struct{}{}
-		}
-	}
-	if b.staticIndex == nil {
-		return nil
-	}
-	return b.staticIndex.RelevantEdges(selected, runtimeTargets)
 }
 
 func (b *influenceBuilder) node(className string) *influenceAccumulator {
@@ -658,14 +633,7 @@ func shortClassName(value string) string {
 	return strings.Join(parts[len(parts)-2:], ".")
 }
 
-func scoreDuration(value uint64, pivot uint64) float64 {
-	if value == 0 || pivot == 0 {
-		return 0
-	}
-	return math.Min(8, math.Log1p(float64(value))/math.Log1p(float64(pivot))*3)
-}
-
-func scoreCount(value uint64, pivot uint64) float64 {
+func scoreContribution(value uint64, pivot uint64) float64 {
 	if value == 0 || pivot == 0 {
 		return 0
 	}

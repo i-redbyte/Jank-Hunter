@@ -2,6 +2,7 @@ package jhlog
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -535,7 +536,7 @@ func TestCommittedPayloadCorruptionIsRejected(t *testing.T) {
 }
 
 func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
-	for _, version := range []byte{FormatVersion - 1, FormatVersion + 1} {
+	for _, version := range []byte{LegacyFormatVersion8 - 1, FormatVersion + 1} {
 		path := filepath.Join(t.TempDir(), "version.jhlog")
 		raw := append([]byte(nil), Magic...)
 		raw[7] = version
@@ -546,6 +547,38 @@ func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
 		if err == nil || result.Status != SegmentStatusCorrupt || !strings.Contains(err.Error(), "unsupported jhlog version") {
 			t.Fatalf("version=%d result=%+v err=%v", version, result, err)
 		}
+	}
+}
+
+func TestReaderKeepsLegacyV8Support(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-v8.jhlog")
+	var raw bytes.Buffer
+	raw.Write(Magic[:7])
+	raw.WriteByte(LegacyFormatVersion8)
+	gzipWriter := gzip.NewWriter(&raw)
+	gzipWriter.Write([]byte{byte(EventMemory), 11, 22, 33})
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var memory *MemoryEvent
+	result, err := StreamFileWithResult(path, func(event Event, _ map[uint64]string) error {
+		if event.Memory != nil {
+			memory = event.Memory
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamFileWithResult() error = %v", err)
+	}
+	if result.Version != LegacyFormatVersion8 || result.Status != SegmentStatusClosedClean {
+		t.Fatalf("result = %+v", result)
+	}
+	if memory == nil || memory.PSSKB != 11 || memory.JavaHeapKB != 22 || memory.NativeHeapKB != 33 {
+		t.Fatalf("memory = %+v", memory)
 	}
 }
 

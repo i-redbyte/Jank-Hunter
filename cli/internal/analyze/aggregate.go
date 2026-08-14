@@ -601,8 +601,8 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 	chains := map[jhlog.ID128]*segmentChain{}
 	var issues []string
 	for _, result := range results {
-		if result.Version != jhlog.FormatVersion {
-			issues = append(issues, fmt.Sprintf("лог %s не имеет проверяемой v9 identity/segment chain", result.Source))
+		if !result.HasSegmentIdentity() {
+			issues = append(issues, fmt.Sprintf("лог %s не имеет проверяемой цепочки и идентификаторов сегментов", result.Source))
 			continue
 		}
 		header := result.Header
@@ -923,7 +923,6 @@ type memoryLeakStats struct {
 	maxAgeMs             uint64
 	timeOnlyCount        uint64
 	afterExplicitGCCount uint64
-	heapOnlyCount        uint64
 }
 
 type retentionDataQuality struct {
@@ -1614,8 +1613,6 @@ func (c *collector) addMemoryLeakSuspect(
 		default:
 			stats.timeOnlyCount += count
 		}
-	} else {
-		stats.heapOnlyCount += count
 	}
 	if ageMs > stats.maxAgeMs {
 		stats.maxAgeMs = ageMs
@@ -1886,6 +1883,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Gauges)
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
+	summary.LogGrowth = buildLogGrowthSummary(c.streamResults)
 	return summary
 }
 
@@ -1946,9 +1944,9 @@ func (c *collector) finalizeCollectionQuality() {
 	}
 
 	for _, result := range c.streamResults {
-		if result.Version != jhlog.FormatVersion {
+		if !result.HasSegmentIdentity() {
 			quality.ChainValid = false
-			addReason("low", fmt.Sprintf("лог %s использует legacy-формат без v9 seal и identity", result.Source))
+			addReason("low", fmt.Sprintf("лог %s использует старый формат без проверяемых идентификаторов сегмента", result.Source))
 			continue
 		}
 		if result.Header.RunID.IsZero() || result.Header.ProcessInstanceID.IsZero() || result.Header.SessionID.IsZero() {
@@ -2902,17 +2900,6 @@ func sortNamed(values []NamedValue) {
 		}
 		return values[i].Value > values[j].Value
 	})
-}
-
-func namedSummary(values []NamedValue) string {
-	if len(values) == 0 {
-		return "неизвестно"
-	}
-	parts := make([]string, 0, len(values))
-	for _, value := range values {
-		parts = append(parts, fmt.Sprintf("%s:%d", humanSummaryName(value.Name), value.Value))
-	}
-	return strings.Join(parts, ",")
 }
 
 func namedValueTotal(values []NamedValue) uint64 {

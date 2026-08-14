@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: отчет</title>
   <style>{{reportCSS .ReportStyle false}}</style>
+  {{if .Summary.LogGrowth.Available}}<style>{{logGrowthCSS}}</style>{{end}}
 </head>
 <body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
@@ -52,6 +53,7 @@
   <a href="#custom">Метрики</a>
   <a href="#context">Контекст</a>
   <a href="#analysis">Итог</a>
+  <a href="#log-growth">Рост журналов</a>
 </nav>
 <main>
   <section id="overview" class="panel">
@@ -409,13 +411,12 @@
           <div>
             <h3>Счетчики</h3>
             <p class="help-text">Счетчик показывает накопленное количество или объем за сценарий. Для <code>gc.bytes_allocated.delta</code> значение <code>4092288</code> означает примерно 4 МБ новых аллокаций: это не всегда плохо само по себе, но опасно рядом с ростом PSS, GC и подтормаживаниями UI.</p>
-            <table><tr><th>Имя</th><th>Значение</th><th>Как читать</th></tr>{{range .Summary.Counters}}<tr><td>{{tip .Name (metricHelp .Name)}}</td><td>{{.Value}}</td><td class="muted">{{metricHelp .Name}}</td></tr>{{else}}<tr><td colspan="3" class="muted">Нет счетчиков.</td></tr>{{end}}</table>
+            <table><thead><tr><th>Имя</th><th>Значение</th><th>Как читать</th></tr></thead><tbody>{{if .Summary.Counters}}{{deferredRows "inspect-counter-row" .Summary.Counters 50 50 3 "счетчики"}}{{else}}<tr><td colspan="3" class="muted">Нет счетчиков.</td></tr>{{end}}</tbody></table>
           </div>
           <div>
             <h3>Gauge-метрики</h3>
             <p class="help-text">Gauge-метрика показывает уровень во времени: среднее, максимум или последнее значение. Высокое значение плохо не само по себе, а когда совпадает с задержками, очередями, памятью или сетевой активностью.</p>
-            {{rowLimitNote "Gauge-метрики" (len .Summary.Gauges) 128}}
-            <table><tr><th>Имя</th><th>Значение</th><th>Детали</th><th>Как читать</th></tr>{{range limitRows .Summary.Gauges 128}}<tr><td>{{tip .Name (metricHelp .Name)}}</td><td>{{.Value}}</td><td>{{.Extra}}</td><td class="muted">{{metricHelp .Name}}</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет gauge-метрик.</td></tr>{{end}}</table>
+            <table><thead><tr><th>Имя</th><th>Значение</th><th>Детали</th><th>Как читать</th></tr></thead><tbody>{{if .Summary.Gauges}}{{deferredRows "inspect-gauge-row" .Summary.Gauges 50 50 4 "gauge-метрики"}}{{else}}<tr><td colspan="4" class="muted">Нет gauge-метрик.</td></tr>{{end}}</tbody></table>
           </div>
           <div>
             <h3>JankStats</h3>
@@ -434,16 +435,16 @@
       <summary>Детали контекста</summary>
       <div class="fold-body">
         <div class="triad">
-          <div><h3>Версии приложения</h3><table>{{range .Summary.AppVersions}}<tr><td><code>{{reportHint .Name "неизвестно" "app"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных версии приложения.</td></tr>{{end}}</table></div>
-          <div><h3>SDK</h3><table>{{range .Summary.SDKs}}<tr><td><code>{{reportHint .Name "неизвестно" "sdk"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных SDK.</td></tr>{{end}}</table></div>
-          <div><h3>Устройства</h3><table>{{range .Summary.Devices}}<tr><td><code>{{reportHint .Name "неизвестно" "device"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных устройства.</td></tr>{{end}}</table></div>
+          <div><h3>Версии приложения</h3><table><tbody>{{if .Summary.AppVersions}}{{deferredRows "inspect-app-row" .Summary.AppVersions 50 50 2 "версии приложения"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных версии приложения.</td></tr>{{end}}</tbody></table></div>
+          <div><h3>SDK</h3><table><tbody>{{if .Summary.SDKs}}{{deferredRows "inspect-sdk-row" .Summary.SDKs 50 50 2 "SDK"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных SDK.</td></tr>{{end}}</tbody></table></div>
+          <div><h3>Устройства</h3><table><tbody>{{if .Summary.Devices}}{{deferredRows "inspect-device-row" .Summary.Devices 50 50 2 "устройства"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных устройства.</td></tr>{{end}}</tbody></table></div>
         </div>
         <h3>Разбивка по процессам</h3>
-        <table><tr><th>Процесс</th><th>Сессии</th></tr>{{range .Summary.Processes}}<tr><td><code>{{reportHint .Name "неизвестно" "process"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</table>
+        <table><thead><tr><th>Процесс</th><th>Сессии</th></tr></thead><tbody>{{if .Summary.Processes}}{{deferredRows "inspect-process-row" .Summary.Processes 50 50 2 "процессы"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных процессов.</td></tr>{{end}}</tbody></table>
         <h3>Сэмплы сети</h3>
-        <table><tr><th>Сеть</th><th>Сэмплы</th></tr>{{range .Summary.Network}}<tr><td><code>{{reportHint .Name "неизвестно" "network"}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет событий контекста.</td></tr>{{end}}</table>
+        <table><thead><tr><th>Сеть</th><th>Сэмплы</th></tr></thead><tbody>{{if .Summary.Network}}{{deferredRows "inspect-network-row" .Summary.Network 50 50 2 "сетевые контексты"}}{{else}}<tr><td colspan="2" class="muted">Нет событий контекста.</td></tr>{{end}}</tbody></table>
         <h3>Объединенные когорты</h3>
-        <table><tr><th>Когорта</th><th>События</th></tr>{{range .Summary.Cohorts}}<tr><td><code>{{cohortHint .Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</table>
+        <table><thead><tr><th>Когорта</th><th>События</th></tr></thead><tbody>{{if .Summary.Cohorts}}{{deferredRows "inspect-cohort-row" .Summary.Cohorts 50 50 2 "когорты"}}{{else}}<tr><td colspan="2" class="muted">Нет метаданных когорт.</td></tr>{{end}}</tbody></table>
       </div>
     </details>
   </section>
@@ -480,7 +481,77 @@
       </div>
     </details>
   </section>
+
+  <section id="log-growth" class="panel log-growth-panel" data-log-growth>
+    <details class="fold">
+      <summary><span>Рост журналов Jank Hunter</span><span class="fold-summary-meta">{{if .Summary.LogGrowth.Available}}{{ruCount (len .Summary.LogGrowth.Sessions) "сессия" "сессии" "сессий"}} · {{ruCount (len .Summary.LogGrowth.Days) "день" "дня" "дней"}}{{else}}нет данных{{end}}</span></summary>
+      <div class="fold-body">
+        {{if .Summary.LogGrowth.Available}}
+        <p class="help-text">Раздел показывает только рост собственных файлов <code>.jhlog</code>. Красные точки отмечают сессии, в которых кольцевой журнал удалял старые блоки после достижения лимита. Итоги выбранного периода рассчитываются в этом отчёте только после нажатия кнопки.</p>
+        <script type="application/json" data-log-growth-json>{{.LogGrowthJSON}}</script>
+
+        <div class="log-growth-range" data-log-growth-range>
+          <div class="log-growth-presets">
+            <button type="button" data-growth-period="week">Последние 7 дней</button>
+            <button type="button" data-growth-period="month">Последние 30 дней</button>
+            <button type="button" data-growth-period="current-month">Текущий месяц</button>
+            <button type="button" data-growth-period="previous-month">Предыдущий месяц</button>
+          </div>
+          <label>С <input type="text" inputmode="numeric" maxlength="10" placeholder="дд.мм.гггг" pattern="\d{2}\.\d{2}\.\d{4}" data-growth-from></label>
+          <label>По <input type="text" inputmode="numeric" maxlength="10" placeholder="дд.мм.гггг" pattern="\d{2}\.\d{2}\.\d{4}" data-growth-to></label>
+          <button type="button" class="log-growth-calculate" data-growth-calculate>Рассчитать</button>
+        </div>
+        <div class="grid log-growth-period-result" data-growth-period-result hidden>
+          <div class="metric"><div class="label">Сессии</div><div class="value" data-growth-value="sessions">0</div><div class="hint">в выбранные дни</div></div>
+          <div class="metric"><div class="label">Создано данных</div><div class="value" data-growth-value="generated">0 Б</div><div class="hint">включая перезаписанные блоки</div></div>
+          <div class="metric"><div class="label">Максимальный файл</div><div class="value" data-growth-value="retained">0 Б</div><div class="hint" data-growth-value="fill">0% лимита</div></div>
+          <div class="metric"><div class="label">Переполнения</div><div class="value" data-growth-value="overflows">0</div><div class="hint" data-growth-value="reached">0 сессий достигли лимита</div></div>
+          <div class="metric"><div class="label">Длительность</div><div class="value" data-growth-value="duration">0 мс</div><div class="hint">сумма длительностей сессий</div></div>
+          <div class="metric"><div class="label">Удалено старых данных</div><div class="value" data-growth-value="evicted">0 Б</div><div class="hint" data-growth-value="chunks">0 блоков</div></div>
+        </div>
+        <div class="log-growth-insight" data-growth-period-insight hidden>
+          <strong data-growth-insight-title>Краткая оценка периода</strong>
+          <p data-growth-insight-summary></p>
+          <p class="log-growth-insight-details" data-growth-insight-details></p>
+        </div>
+        <p class="quality-notice" data-growth-period-empty>Выберите готовый период или даты и нажмите «Рассчитать».</p>
+
+        <div class="split log-growth-charts">
+          <div>
+            <h3>Максимальный размер журнала по сессиям</h3>
+            <div class="log-growth-chart"><canvas data-growth-session-chart tabindex="0" aria-describedby="log-growth-session-help" aria-label="Максимальный размер журнала по сессиям"></canvas></div>
+            <div class="log-growth-legend"><span>максимальный размер журнала</span><span style="--legend-color:#fbbf24">выставленный лимит</span><span style="--legend-color:#ef4444">лимит достигнут, старые блоки вытеснялись</span></div>
+            <p id="log-growth-session-help" class="log-growth-chart-help"><strong>Как читать:</strong> по горизонтали — дата начала сессии, по вертикали — максимальный размер файла. Наведите указатель на точку или выберите график клавишей Tab; стрелки ← → переключают сессии.</p>
+          </div>
+          <div>
+            <h3>Создано данных по дням</h3>
+            <div class="log-growth-chart"><canvas data-growth-day-chart tabindex="0" aria-describedby="log-growth-day-help" aria-label="Объём данных, созданных по дням"></canvas></div>
+            <div class="log-growth-legend"><span style="--legend-color:#34d399">создано данных за день</span><span style="--legend-color:#ef4444">в этот день были переполнения</span></div>
+            <p id="log-growth-day-help" class="log-growth-chart-help"><strong>Как читать:</strong> по горизонтали — дата, по вертикали — весь объём созданных данных, включая впоследствии вытесненные блоки. Красная точка означает, что хотя бы одна сессия в этот день достигла лимита.</p>
+          </div>
+        </div>
+
+        <h3>Последние сессии</h3>
+        <table class="log-growth-table"><thead><tr><th>Дата</th><th>Длительность</th><th>Макс. размер</th><th>Создано</th><th>Скорость</th><th>Лимит</th><th>Переполнения</th></tr></thead><tbody data-growth-session-rows></tbody></table>
+        <h3>Итоги по дням</h3>
+        <table class="log-growth-table"><thead><tr><th>День</th><th>Сессии</th><th>Длительность</th><th>Создано</th><th>Макс. размер</th><th>Заполнение</th><th>Переполнения</th></tr></thead><tbody data-growth-day-rows></tbody></table>
+        {{else}}
+        <p class="quality-notice">В переданных журналах нет вложенной сводки роста. Она появляется в формате 1.0, когда анализ роста включён в настройках библиотеки.</p>
+        {{end}}
+      </div>
+    </details>
+  </section>
 </main>
 <script>{{reportJS}}</script>
+{{if .Summary.LogGrowth.Available}}<script>{{logGrowthJS}}</script>{{end}}
 </body>
 </html>
+
+{{- define "inspect-counter-row"}}{{$row := .Value}}<tr><td>{{tip $row.Name (metricHelp $row.Name)}}</td><td>{{$row.Value}}</td><td class="muted">{{metricHelp $row.Name}}</td></tr>{{end -}}
+{{- define "inspect-gauge-row"}}{{$row := .Value}}<tr><td>{{tip $row.Name (metricHelp $row.Name)}}</td><td>{{$row.Value}}</td><td>{{$row.Extra}}</td><td class="muted">{{metricHelp $row.Name}}</td></tr>{{end -}}
+{{- define "inspect-app-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "app"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-sdk-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "sdk"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-device-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "device"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-process-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "process"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-network-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "network"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-cohort-row"}}{{$row := .Value}}<tr><td><code>{{cohortHint $row.Name}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}

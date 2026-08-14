@@ -17,8 +17,10 @@ internal class JankHunterLogExporter(
     private val context: Context,
     private val sourceDirectory: File = File(context.filesDir, JANK_HUNTER_DIRECTORY),
     private val exportDirectory: File = File(context.cacheDir, EXPORT_DIRECTORY),
+    private val writeCurrentGrowthSummary: () -> Boolean = JankHunter::writeLogGrowthSummary,
 ) {
     fun createArchive(): File? {
+        writeCurrentGrowthSummary()
         val artifacts = sourceDirectory
             .walkTopDown()
             .filter(File::isFile)
@@ -77,7 +79,6 @@ internal class JankHunterShareLauncher(
     private val activity: Activity,
 ) {
     fun share() {
-        JankHunter.flush()
         Toast.makeText(activity, R.string.share_preparing, Toast.LENGTH_SHORT).show()
         Thread(
             {

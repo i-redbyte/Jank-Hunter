@@ -107,7 +107,7 @@ class ObjectRetentionWatcherTest {
     fun keepsWeakWatchUntilHeapDumpAgeWithoutDuplicatingRetainedReport() {
         var now = 0L
         val reports = mutableListOf<Report>()
-        val heapDumps = mutableListOf<Report>()
+        val heapDumps = mutableListOf<HeapDumpRequest>()
         val watcher = ObjectRetentionWatcher(
             retainedDelayMs = RETAINED_DELAY_MS,
             clock = { now },
@@ -115,8 +115,8 @@ class ObjectRetentionWatcherTest {
                 reports += Report(className, ownerHint, context, ageMs, count, evidence)
             },
             heapDumpMinRetainedAgeMs = HEAP_DUMP_AGE_MS,
-            heapDumpReporter = { className, ownerHint, context, ageMs, count, evidence ->
-                heapDumps += Report(className, ownerHint, context, ageMs, count, evidence)
+            heapDumpReporter = { className, ownerHint, context, ageMs, count ->
+                heapDumps += HeapDumpRequest(className, ownerHint, context, ageMs, count)
             },
         )
         val retained = Any()
@@ -140,13 +140,12 @@ class ObjectRetentionWatcherTest {
             assertEquals(1, reports.size)
             assertEquals(
                 listOf(
-                    Report(
+                    HeapDumpRequest(
                         "com.example.LeakyScreen",
                         "com.example.Holder",
                         null,
                         HEAP_DUMP_AGE_MS,
                         1L,
-                        RetentionEvidence.TIME_ONLY,
                     ),
                 ),
                 heapDumps,
@@ -270,6 +269,14 @@ class ObjectRetentionWatcherTest {
         val ageMs: Long,
         val count: Long,
         val evidence: RetentionEvidence,
+    )
+
+    private data class HeapDumpRequest(
+        val className: String?,
+        val ownerHint: String?,
+        val context: JankHunterContext?,
+        val ageMs: Long,
+        val count: Long,
     )
 
     private fun enableManualWatch(watcher: ObjectRetentionWatcher) {

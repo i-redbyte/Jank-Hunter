@@ -39,6 +39,7 @@ class JankHunterConfigTest {
             .maxQueueSize(99)
             .sessionLogSizeLimitEnabled(false)
             .maxSessionLogSizeMiB(8)
+            .logGrowthAnalyticsEnabled(false)
             .maxDictionaryEntries(1234)
             .maxDictionaryValueBytes(64)
             .flushIntervalMs(12)
@@ -86,6 +87,7 @@ class JankHunterConfigTest {
         assertEquals(99, config.maxQueueSize())
         assertFalse(config.sessionLogSizeLimitEnabled())
         assertEquals(8, config.maxSessionLogSizeMiB())
+        assertFalse(config.logGrowthAnalyticsEnabled())
         assertEquals(0L, config.sessionLogSizeLimitBytes())
         assertEquals(1234, config.maxDictionaryEntries())
         assertEquals(64, config.maxDictionaryValueBytes())
@@ -136,6 +138,7 @@ class JankHunterConfigTest {
         assertEquals(2048, config.maxQueueSize())
         assertTrue(config.sessionLogSizeLimitEnabled())
         assertEquals(16, config.maxSessionLogSizeMiB())
+        assertTrue(config.logGrowthAnalyticsEnabled())
         assertEquals(16L * 1024L * 1024L, config.sessionLogSizeLimitBytes())
         assertEquals(8192, config.maxDictionaryEntries())
         assertEquals(1024, config.maxDictionaryValueBytes())
@@ -158,6 +161,10 @@ class JankHunterConfigTest {
             JankHunterConfig.META_SESSION_LOG_SIZE_LIMIT_ENABLED,
         )
         assertEquals("io.jankhunter.max_session_log_size_mib", JankHunterConfig.META_MAX_SESSION_LOG_SIZE_MIB)
+        assertEquals(
+            "io.jankhunter.log_growth_analytics_enabled",
+            JankHunterConfig.META_LOG_GROWTH_ANALYTICS_ENABLED,
+        )
         assertEquals("io.jankhunter.symbol_namespace", JankHunterConfig.META_SYMBOL_NAMESPACE)
 
         val configMethods = JankHunterConfig::class.java.methods.mapTo(mutableSetOf()) { it.name }

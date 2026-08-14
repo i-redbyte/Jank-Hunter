@@ -1103,22 +1103,6 @@ func markovFindings(model MarkovModel) []Finding {
 	}}
 }
 
-func compareMarkovStatus(deltas []MarkovDelta) string {
-	if len(deltas) == 0 {
-		return "medium"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
-}
-
 func compareMarkovSummary(deltas []MarkovDelta) string {
 	if len(deltas) == 0 {
 		return "Недостаточно марковских метрик для сравнения."

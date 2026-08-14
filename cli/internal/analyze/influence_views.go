@@ -210,7 +210,7 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 		sort.Slice(aggregate.children, func(i, j int) bool {
 			return influenceNodeLess(aggregate.children[i], aggregate.children[j])
 		})
-		children := make([]string, 0, minInt(len(aggregate.children), packageChildSample))
+		children := make([]string, 0, min(len(aggregate.children), packageChildSample))
 		for index, child := range aggregate.children {
 			if index >= packageChildSample {
 				break
@@ -475,7 +475,7 @@ func (b *influenceViewBuilder) contexts() []InfluenceGraphContext {
 }
 
 func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) InfluenceGraphWorkspace {
-	nodes := make([]InfluenceGraphNode, 0, minInt(len(b.nodes), workspaceMaxNodes))
+	nodes := make([]InfluenceGraphNode, 0, min(len(b.nodes), workspaceMaxNodes))
 	selected := map[string]struct{}{}
 	for _, node := range b.nodes {
 		if len(nodes) >= workspaceMaxNodes {
@@ -484,7 +484,7 @@ func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) Influ
 		nodes = append(nodes, b.classNode(node, false))
 		selected[node.ClassName] = struct{}{}
 	}
-	edges := make([]InfluenceGraphEdge, 0, minInt(len(b.edges), workspaceMaxEdges))
+	edges := make([]InfluenceGraphEdge, 0, min(len(b.edges), workspaceMaxEdges))
 	for _, edge := range b.edges {
 		if len(edges) >= workspaceMaxEdges {
 			break
@@ -658,7 +658,7 @@ func boundedInfluenceView(
 	for _, node := range nodes {
 		selected[node.ID] = struct{}{}
 	}
-	visibleEdges := make([]InfluenceGraphEdge, 0, minInt(len(edges), limits.MaxEdges))
+	visibleEdges := make([]InfluenceGraphEdge, 0, min(len(edges), limits.MaxEdges))
 	for _, edge := range edges {
 		if _, fromOK := selected[edge.From]; !fromOK {
 			continue
@@ -843,13 +843,6 @@ func influenceGraphLegend() []InfluenceGraphLegend {
 		{Kind: "aggregate", Label: "Пакет", Help: "Группа классов; оценка равна максимуму дочернего класса."},
 		{Kind: "hprof", Label: "HPROF-дамп", Help: "Есть отдельное подтверждение пути удержания из дампа памяти."},
 	}
-}
-
-func minInt(left int, right int) int {
-	if left < right {
-		return left
-	}
-	return right
 }
 
 func roundedInfluence(value float64) float64 {

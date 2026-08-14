@@ -131,12 +131,15 @@ class JankHunterExtensionTest {
 
         assertEquals(true, extension.sessionLogSizeLimitEnabled.get())
         assertEquals(16, extension.maxSessionLogSizeMiB.get())
+        assertEquals(true, extension.logGrowthAnalyticsEnabled.get())
 
         extension.sessionLogSizeLimitEnabled.set(false)
         extension.maxSessionLogSizeMiB.set(32)
+        extension.logGrowthAnalyticsEnabled.set(false)
 
         assertEquals(false, extension.sessionLogSizeLimitEnabled.get())
         assertEquals(32, extension.maxSessionLogSizeMiB.get())
+        assertEquals(false, extension.logGrowthAnalyticsEnabled.get())
 
         val methodNames = JankHunterExtension::class.java.methods.mapTo(mutableSetOf()) { it.name }
         assertFalse("getMaxSessionLogBytes" in methodNames)

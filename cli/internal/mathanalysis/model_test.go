@@ -48,6 +48,32 @@ func TestCompareFindingsIncludeBaselineAndCandidateWarnings(t *testing.T) {
 	}
 }
 
+func TestComparisonStatusPreservesEmptyPolicyAndWorstSeverity(t *testing.T) {
+	if got := comparisonStatus([]RobustDelta(nil), "medium"); got != "medium" {
+		t.Fatalf("empty robust status = %q, want medium", got)
+	}
+	if got := comparisonStatus([]CausalDelta(nil), "ok"); got != "ok" {
+		t.Fatalf("empty causal status = %q, want ok", got)
+	}
+
+	tests := []struct {
+		name   string
+		deltas []RobustDelta
+		want   string
+	}{
+		{name: "all ok", deltas: []RobustDelta{{Severity: "ok"}}, want: "ok"},
+		{name: "medium", deltas: []RobustDelta{{Severity: "ok"}, {Severity: "medium"}}, want: "medium"},
+		{name: "high takes precedence", deltas: []RobustDelta{{Severity: "medium"}, {Severity: "high"}}, want: "high"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := comparisonStatus(test.deltas, "medium"); got != test.want {
+				t.Fatalf("comparisonStatus() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func findingDetailsContain(findings []Finding, want string) bool {
 	for _, finding := range findings {
 		if strings.Contains(finding.Detail, want) {

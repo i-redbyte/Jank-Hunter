@@ -6,6 +6,7 @@ internal class DictionaryIds(
 ) {
     private val idsByKind = arrayOfNulls<MutableMap<String, Long>>(FAST_KIND_COUNT)
     private val uncommonKinds = HashMap<Int, MutableMap<String, Long>>()
+    private val definitionsById = ArrayList<Definition?>().apply { add(null) }
     private var nextId = 1L
     private var regularEntryCount = 0
 
@@ -45,7 +46,15 @@ internal class DictionaryIds(
     private fun define(kind: Int, value: String, overflowed: Boolean, truncated: Boolean): Result {
         val id = nextId++
         idsFor(kind)[value] = id
-        return Result(id, Definition(kind, id, value), overflowed, truncated)
+        val definition = Definition(kind, id, value)
+        while (definitionsById.size <= id.toInt()) definitionsById.add(null)
+        definitionsById[id.toInt()] = definition
+        return Result(id, definition, overflowed, truncated)
+    }
+
+    fun definition(id: Long): Definition? {
+        if (id <= 0L || id > Int.MAX_VALUE.toLong()) return null
+        return definitionsById.getOrNull(id.toInt())
     }
 
     private fun sanitizeValue(rawValue: String?): SanitizedValue {

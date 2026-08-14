@@ -9,15 +9,24 @@
     }
   }
 
-  const markScrollableTables = () => {
-    document.querySelectorAll('.table-scroll').forEach((wrapper) => {
+  const tableScope = (root) => root && root.querySelectorAll ? root : document;
+
+  const markScrollableTables = (root = document) => {
+    tableScope(root).querySelectorAll('.table-scroll').forEach((wrapper) => {
       wrapper.classList.toggle('is-scrollable', wrapper.scrollWidth > wrapper.clientWidth + 4);
     });
   };
-  const scheduleTableMeasure = () => requestAnimationFrame(markScrollableTables);
+  let tableMeasureFrame = 0;
+  const scheduleTableMeasure = () => {
+    if (tableMeasureFrame) return;
+    tableMeasureFrame = requestAnimationFrame(() => {
+      tableMeasureFrame = 0;
+      markScrollableTables();
+    });
+  };
 
-  const wrapTables = () => {
-    document.querySelectorAll('table').forEach((table) => {
+  const wrapTables = (root = document) => {
+    tableScope(root).querySelectorAll('table').forEach((table) => {
       if (table.closest('.table-scroll')) return;
       const wrapper = document.createElement('div');
       wrapper.className = 'table-scroll';
@@ -26,7 +35,15 @@
     });
     scheduleTableMeasure();
   };
+
   wrapTables();
+
+  const visibleTableScope = (node) => !node.closest('details:not([open]), [hidden]');
+  const initialTableRoots = new Set();
+  document.querySelectorAll('.table-scroll').forEach((wrapper) => {
+    if (!visibleTableScope(wrapper)) return;
+    initialTableRoots.add(wrapper);
+  });
 
   const runIdle = (callback) => {
     if ('requestIdleCallback' in window) {
@@ -79,58 +96,164 @@
     return normalizeTooltipText(clone.textContent);
   };
 
-  document.querySelectorAll('code').forEach((node) => {
-    const text = node.textContent.trim();
-    if (text && !node.title) node.title = text;
-    if (text && node.closest('.metric') && !node.dataset.tip) {
-      node.dataset.tip = text;
+  const enhanceLongCell = (cell) => {
+    if (cell.dataset.cellEnhanced === 'true') return;
+    if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
+    const text = cell.textContent.trim().replace(/\s+/g, ' ');
+    const overflows = cell.scrollWidth > cell.clientWidth + 4 || cell.scrollHeight > 180;
+    if (text.length < 120 && !overflows) return;
+    const clip = document.createElement('div');
+    clip.className = 'table-cell-clip';
+    while (cell.firstChild) {
+      clip.appendChild(cell.firstChild);
     }
-  });
-
-  forEachChunk(Array.from(document.querySelectorAll('td, th')), 300, (node) => {
-    if (node.querySelector('details, table, canvas, svg, input, select, textarea, .cell-toggle')) return;
-    const text = readableTooltipText(node);
-    if (text.length > 80 && !node.dataset.tip) {
-      node.dataset.tip = text;
-    }
-  });
-
-  const enhanceLongCells = () => {
-    const cells = Array.from(document.querySelectorAll('.table-scroll td'));
-    forEachChunk(cells, 180, (cell) => {
-      if (cell.dataset.cellEnhanced === 'true') return;
-      if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
-      const text = cell.textContent.trim().replace(/\s+/g, ' ');
-      const overflows = cell.scrollWidth > cell.clientWidth + 4 || cell.scrollHeight > 180;
-      if (text.length < 120 && !overflows) return;
-      const clip = document.createElement('div');
-      clip.className = 'table-cell-clip';
-      while (cell.firstChild) {
-        clip.appendChild(cell.firstChild);
-      }
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'cell-toggle';
-      toggle.textContent = modernReport ? 'развернуть' : 'показать полностью';
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.addEventListener('click', () => {
-        const expanded = !clip.classList.contains('is-expanded');
-        clip.classList.toggle('is-expanded', expanded);
-        toggle.textContent = expanded ? 'свернуть' : (modernReport ? 'развернуть' : 'показать полностью');
-        toggle.setAttribute('aria-expanded', String(expanded));
-        scheduleTableMeasure();
-      });
-      cell.append(clip, toggle);
-      cell.dataset.cellEnhanced = 'true';
-    }, scheduleTableMeasure);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'cell-toggle';
+    toggle.textContent = modernReport ? 'развернуть' : 'показать полностью';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', () => {
+      const expanded = !clip.classList.contains('is-expanded');
+      clip.classList.toggle('is-expanded', expanded);
+      toggle.textContent = expanded ? 'свернуть' : (modernReport ? 'развернуть' : 'показать полностью');
+      toggle.setAttribute('aria-expanded', String(expanded));
+      scheduleTableMeasure();
+    });
+    cell.append(clip, toggle);
+    cell.dataset.cellEnhanced = 'true';
   };
-  enhanceLongCells();
+
+  const enhanceTableRow = (row) => {
+    row.querySelectorAll('td').forEach(enhanceLongCell);
+  };
+
+  let rowObserver = null;
+  if ('IntersectionObserver' in window) {
+    rowObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        rowObserver.unobserve(entry.target);
+        enhanceTableRow(entry.target);
+      });
+      scheduleTableMeasure();
+    }, { rootMargin: '600px 0px' });
+  }
+
+  const enhanceLongCells = (root = document) => {
+    const rows = Array.from(tableScope(root).querySelectorAll('.table-scroll tr'));
+    if (rowObserver) {
+      rows.forEach((row) => {
+        if (row.dataset.cellRowObserved === 'true') return;
+        row.dataset.cellRowObserved = 'true';
+        rowObserver.observe(row);
+      });
+      return;
+    }
+    forEachChunk(rows, 60, enhanceTableRow, scheduleTableMeasure);
+  };
+
+  const deferredLoads = new WeakMap();
+  const nextDeferredChunk = (tbody) => tbody.querySelector('script[data-table-chunk]');
+  const updateDeferredLoader = (tbody, loadedCount) => {
+    const loader = tbody.querySelector('[data-deferred-loader]');
+    if (!loader) return;
+    const loaded = Number(loader.dataset.deferredLoaded || 0) + loadedCount;
+    const total = Number(loader.dataset.deferredTotal || loaded);
+    const remaining = Math.max(0, total - loaded);
+    loader.dataset.deferredLoaded = String(loaded);
+    if (!remaining) {
+      loader.remove();
+      return;
+    }
+    const nextCount = Math.min(
+      remaining,
+      Number(nextDeferredChunk(tbody)?.dataset.tableChunkSize || remaining),
+    );
+    const button = loader.querySelector('[data-load-more-rows]');
+    const remainingLabel = loader.querySelector('[data-deferred-remaining]');
+    if (button) button.textContent = 'Показать ещё ' + nextCount;
+    if (remainingLabel) remainingLabel.textContent = 'Осталось строк: ' + remaining;
+  };
+
+  const materializeDeferredChunk = (tbody, announce = true) => {
+    const script = nextDeferredChunk(tbody);
+    if (!script) return [];
+    const markup = JSON.parse(script.textContent || '""');
+    const stagingTable = document.createElement('table');
+    const stagingBody = stagingTable.createTBody();
+    stagingBody.innerHTML = markup;
+    const rows = Array.from(stagingBody.rows);
+    const fragment = document.createDocumentFragment();
+    rows.forEach((row) => fragment.appendChild(row));
+    script.replaceWith(fragment);
+    updateDeferredLoader(tbody, rows.length);
+    enhanceLongCells(tbody);
+    scheduleTableMeasure();
+    if (announce && rows.length) {
+      tbody.dispatchEvent(new CustomEvent('report:rows-added', { bubbles: true, detail: { rows } }));
+    }
+    return rows;
+  };
+
+  const materializeAllDeferredRows = (tbody) => {
+    const active = deferredLoads.get(tbody);
+    if (active) return active;
+    const button = tbody.querySelector('[data-load-more-rows]');
+    if (button) {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.textContent = 'Загрузка…';
+    }
+    const promise = new Promise((resolve, reject) => {
+      const added = [];
+      const step = () => {
+        const started = performance.now();
+        try {
+          while (nextDeferredChunk(tbody) && performance.now() - started < 8) {
+            added.push(...materializeDeferredChunk(tbody, false));
+          }
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        if (nextDeferredChunk(tbody)) {
+          requestAnimationFrame(step);
+          return;
+        }
+        if (added.length) {
+          tbody.dispatchEvent(new CustomEvent('report:rows-added', { bubbles: true, detail: { rows: added } }));
+        }
+        resolve(added);
+      };
+      requestAnimationFrame(step);
+    });
+    deferredLoads.set(tbody, promise);
+    return promise;
+  };
+
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-load-more-rows]');
+    if (!button || button.disabled) return;
+    const tbody = button.closest('tbody');
+    if (!tbody) return;
+    try {
+      materializeDeferredChunk(tbody);
+    } catch (error) {
+      button.disabled = true;
+      button.textContent = 'Не удалось загрузить строки';
+      console.error(error);
+    }
+  });
+
+  initialTableRoots.forEach((root) => {
+    enhanceLongCells(root);
+  });
 
   document.querySelectorAll('details').forEach((details) => {
     details.addEventListener('toggle', () => {
       if (!details.open) return;
-      wrapTables();
-      enhanceLongCells();
+      wrapTables(details);
+      enhanceLongCells(details);
       scheduleTableMeasure();
     });
   });
@@ -196,17 +319,27 @@
     placeTooltip(target);
   };
 
+  const tooltipTarget = (node) => {
+    const explicit = node.closest('[data-tip]');
+    if (explicit) return explicit;
+    const candidate = node.closest('td, th, code');
+    if (!candidate || candidate.querySelector('details, table, canvas, svg, input, select, textarea, .cell-toggle')) {
+      return null;
+    }
+    const text = candidate.matches('code') ? candidate.textContent.trim() : readableTooltipText(candidate);
+    if (!text || (!candidate.matches('code') && text.length <= 80 && !candidate.closest('.metric'))) return null;
+    candidate.dataset.tip = text;
+    return candidate;
+  };
+
   const hideTooltip = () => {
     activeTarget = null;
     tooltip.classList.remove('is-visible');
   };
 
   document.addEventListener('pointerover', (event) => {
-    const target = event.target.closest('[data-tip]');
+    const target = tooltipTarget(event.target);
     if (target) showTooltip(target);
-  });
-  document.addEventListener('pointermove', () => {
-    if (activeTarget) placeTooltip(activeTarget);
   });
   document.addEventListener('pointerout', (event) => {
     const fromTarget = event.target.closest('[data-tip]');
@@ -218,7 +351,7 @@
     }
   });
   document.addEventListener('focusin', (event) => {
-    const target = event.target.closest('[data-tip]');
+    const target = tooltipTarget(event.target);
     if (target) showTooltip(target);
   });
   document.addEventListener('focusout', hideTooltip);
@@ -227,6 +360,7 @@
   }, { passive: true });
   window.addEventListener('resize', () => {
     if (activeTarget) placeTooltip(activeTarget);
+    scheduleTableMeasure();
   }, { passive: true });
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {
@@ -243,7 +377,7 @@
 
   document.querySelectorAll('[data-code-registry]').forEach((registry) => {
     const tbody = registry.querySelector('tbody');
-    const rows = Array.from(registry.querySelectorAll('[data-code-problem-row]'));
+    let rows = Array.from(registry.querySelectorAll('[data-code-problem-row]'));
     const search = registry.querySelector('[data-code-registry-search]');
     const severity = registry.querySelector('[data-code-registry-severity]');
     const category = registry.querySelector('[data-code-registry-category]');
@@ -255,6 +389,9 @@
     const severityRank = { high: 3, medium: 2, ok: 1 };
     let sortKey = 'score';
     let sortDir = 'desc';
+    let sortedRows = rows.slice();
+    let filterFrame = 0;
+    const deferredTotal = Number(tbody.querySelector('[data-deferred-loader]')?.dataset.deferredTotal || rows.length);
     const ensureSelectOption = (select, value, label) => {
       if (!select || !value || Array.from(select.options).some((option) => option.value === value)) return;
       select.appendChild(new Option(label || value, value));
@@ -279,27 +416,33 @@
       if (typeof av === 'number' && typeof bv === 'number') return av - bv;
       return String(av).localeCompare(String(bv), 'ru');
     };
-    const apply = () => {
-      const query = (search?.value || '').trim().toLowerCase();
-      const severityValue = severity?.value || '';
-      const categoryValue = category?.value || '';
-      const sorted = rows.slice().sort((a, b) => {
+    const sortRows = () => {
+      sortedRows.sort((a, b) => {
         const result = compareValues(a, b);
         return sortDir === 'asc' ? result : -result;
       });
+    };
+    const apply = (reorder = false) => {
+      const query = (search?.value || '').trim().toLowerCase();
+      const severityValue = severity?.value || '';
+      const categoryValue = category?.value || '';
       let visible = 0;
-      sorted.forEach((row) => {
-        const searchableText = (row.dataset.search || row.textContent || '').toLowerCase();
+      sortedRows.forEach((row) => {
+        if (!row.jhSearchText) row.jhSearchText = (row.dataset.search || row.textContent || '').toLowerCase();
+        const searchableText = row.jhSearchText;
         const matchesQuery = !query || searchableText.includes(query);
         const matchesSeverity = !severityValue || row.dataset.severity === severityValue;
         const matchesCategory = !categoryValue || (row.dataset.categories || '').split('|').includes(categoryValue);
         const hidden = !(matchesQuery && matchesSeverity && matchesCategory);
         row.hidden = hidden;
         if (!hidden) visible += 1;
-        tbody.appendChild(row);
+        if (reorder) {
+          const anchor = tbody.querySelector('script[data-table-chunk], [data-deferred-loader]');
+          tbody.insertBefore(row, anchor);
+        }
       });
       registry.classList.toggle('no-results', visible === 0);
-      if (counter) counter.textContent = visible + ' из ' + rows.length;
+      if (counter) counter.textContent = visible + ' из ' + deferredTotal;
       categoryButtons.forEach((button) => {
         button.classList.toggle('is-active', Boolean(categoryValue) && button.dataset.registryCategory === categoryValue);
       });
@@ -314,9 +457,23 @@
       });
       scheduleTableMeasure();
     };
-    search?.addEventListener('input', apply);
-    severity?.addEventListener('change', apply);
-    category?.addEventListener('change', apply);
+    const applyWithCompleteData = async (reorder = false) => {
+      if (nextDeferredChunk(tbody)) {
+        await materializeAllDeferredRows(tbody);
+      }
+      if (reorder) sortRows();
+      apply(reorder);
+    };
+    const scheduleFilter = () => {
+      if (filterFrame) cancelAnimationFrame(filterFrame);
+      filterFrame = requestAnimationFrame(async () => {
+        filterFrame = 0;
+        await applyWithCompleteData();
+      });
+    };
+    search?.addEventListener('input', scheduleFilter);
+    severity?.addEventListener('change', () => applyWithCompleteData());
+    category?.addEventListener('change', () => applyWithCompleteData());
     categoryButtons.forEach((button) => {
       button.addEventListener('click', () => {
         const value = button.dataset.registryCategory || '';
@@ -330,7 +487,7 @@
       });
     });
     sortButtons.forEach((button) => {
-      button.addEventListener('click', () => {
+      button.addEventListener('click', async () => {
         const nextKey = button.dataset.codeSort;
         if (sortKey === nextKey) {
           sortDir = sortDir === 'asc' ? 'desc' : 'asc';
@@ -338,10 +495,19 @@
           sortKey = nextKey;
           sortDir = nextKey === 'class' || nextKey === 'category' ? 'asc' : 'desc';
         }
-        apply();
+        await applyWithCompleteData(true);
       });
     });
-    apply();
+    registry.addEventListener('report:rows-added', (event) => {
+      const additions = (event.detail?.rows || []).filter((row) => row.matches('[data-code-problem-row]'));
+      if (!additions.length) return;
+      rows = rows.concat(additions);
+      sortedRows = sortedRows.concat(additions);
+      sortRows();
+      apply(true);
+    });
+    sortRows();
+    apply(true);
   });
 
   document.querySelectorAll('[data-leak-explorer]').forEach((explorer) => {

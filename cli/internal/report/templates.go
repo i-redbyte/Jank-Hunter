@@ -11,6 +11,12 @@ var modernCSS string
 //go:embed templates/report.js
 var reportJS string
 
+//go:embed templates/log-growth.css
+var logGrowthCSS string
+
+//go:embed templates/log-growth.js
+var logGrowthJS string
+
 //go:embed templates/math.css
 var mathCSS string
 

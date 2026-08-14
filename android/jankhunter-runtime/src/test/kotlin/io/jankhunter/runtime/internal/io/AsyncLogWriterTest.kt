@@ -4,11 +4,14 @@ import io.jankhunter.runtime.JankHunterBinaryArtifact
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterRandomAccessBinaryStorage
+import io.jankhunter.runtime.JankHunterRandomAccessBinaryWriter
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.text.SimpleDateFormat
@@ -44,7 +47,7 @@ class AsyncLogWriterTest {
             writer.counter("namespace.probe", 1L)
             assertTrue(writer.close())
 
-            assertArrayEquals(namespace, fileSymbolNamespace(logFiles(directory).single()))
+            assertArrayEquals(namespace, fileSymbolNamespace(sessionLogFiles(directory).single()))
         } finally {
             directory.deleteRecursively()
         }
@@ -78,6 +81,32 @@ class AsyncLogWriterTest {
     }
 
     @Test
+    fun explicitGrowthWriteCreatesSnapshotBeforeAnyEventIsAccepted() {
+        val root = Files.createTempDirectory("jankhunter-empty-growth-write").toFile()
+        val directory = File(root, "created-on-demand")
+        try {
+            val writer = AsyncLogWriter.open(directory, config(), "main")
+
+            assertTrue(writer.writeLogGrowthSummaryBlocking())
+
+            val file = sessionLogFiles(directory).single()
+            RandomAccessFile(file, "r").use { input ->
+                val firstLiveMagic = ByteArray(4)
+                val secondLiveMagic = ByteArray(4)
+                input.seek(JhlogV1.LIVE_SUMMARY_A_OFFSET)
+                input.readFully(firstLiveMagic)
+                input.seek(JhlogV1.LIVE_SUMMARY_B_OFFSET)
+                input.readFully(secondLiveMagic)
+                assertTrue(firstLiveMagic.matchesAscii(0, "JHGL") || secondLiveMagic.matchesAscii(0, "JHGL"))
+            }
+            assertNotNull(writer.logGrowthSummary()?.currentSession)
+            assertTrue(writer.close())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun directBinaryWriterCloseUsesNormalReason() {
         val directory = Files.createTempDirectory("jankhunter-normal-close").toFile()
         try {
@@ -101,7 +130,7 @@ class AsyncLogWriterTest {
             writer.counter("first.session.counter", 1L)
             assertTrue(writer.close())
 
-            val file = logFiles(directory).single()
+            val file = sessionLogFiles(directory).single()
             assertEquals("jh-session-log.$expectedDate.0.jhlog", file.name)
             assertEquals(JhlogV9.SEGMENT_END_SHUTDOWN, segmentEndReason(file))
             assertTrue(logFileText(file).contains("first.session.counter"))
@@ -124,7 +153,7 @@ class AsyncLogWriterTest {
                 close()
             }
 
-            val indices = logFiles(directory)
+            val indices = sessionLogFiles(directory)
                 .mapNotNull { file -> SessionLogName.parse(file.name)?.index }
                 .sorted()
             assertEquals(listOf(0L, 1L), indices)
@@ -145,7 +174,7 @@ class AsyncLogWriterTest {
             repeat(32) { index -> writer.counter("after.midnight.$index", index.toLong()) }
             assertTrue(writer.close())
 
-            assertEquals("jh-session-log.$expectedDate.0.jhlog", logFiles(directory).single().name)
+            assertEquals("jh-session-log.$expectedDate.0.jhlog", sessionLogFiles(directory).single().name)
         } finally {
             directory.deleteRecursively()
         }
@@ -164,7 +193,7 @@ class AsyncLogWriterTest {
 
             assertTrue(writer.close())
 
-            val text = logFileText(logFiles(directory).single())
+            val text = logFileText(sessionLogFiles(directory).single())
             assertTrue(text.contains("close.queue.0"))
             assertTrue(text.contains("close.queue.127"))
         } finally {
@@ -173,7 +202,7 @@ class AsyncLogWriterTest {
     }
 
     @Test
-    fun enabledInternalLimitSealsOneFileWithoutRotation() {
+    fun enabledInternalLimitKeepsOneCircularFileAndRecordsRepeatedWraps() {
         val directory = Files.createTempDirectory("jankhunter-size-limit").toFile()
         val limit = 1024L * 1024L
         try {
@@ -192,14 +221,140 @@ class AsyncLogWriterTest {
 
             assertTrue(writer.close(timeoutMs = 15_000L))
 
-            val file = logFiles(directory).single()
+            val file = sessionLogFiles(directory).single()
             assertTrue("physical limit exceeded: ${file.length()} > $limit", file.length() <= limit)
-            assertEquals(JhlogV9.SEGMENT_END_SIZE_LIMIT, segmentEndReason(file))
-            assertTrue(
-                (qualityCounters(file)[QualityCounterId.EVENT_LOST_AFTER_SIZE_LIMIT_TOTAL] ?: 0L) > 0L,
+            assertEquals(
+                "chunks=${v1SuperblockValue(file, 64)} first=${v1SuperblockValue(file, 48)} " +
+                    "next=${v1SuperblockValue(file, 56)} head=${v1SuperblockValue(file, 24)} " +
+                    "tail=${v1SuperblockValue(file, 32)} failure=${writer.terminalFailureCause()}",
+                JhlogV9.SEGMENT_END_SHUTDOWN,
+                segmentEndReason(file),
             )
+            assertTrue("circular file did not wrap", v1SuperblockValue(file, 72) > 1L)
+            assertTrue("circular file did not evict chunks", v1SuperblockValue(file, 80) > 1L)
+            assertEquals(0L, qualityCounters(file)[QualityCounterId.EVENT_LOST_AFTER_SIZE_LIMIT_TOTAL] ?: 0L)
+            val growth = requireNotNull(writer.logGrowthSummary())
+            assertEquals(1, growth.recentSessions.size)
+            assertTrue(growth.recentSessions.single().overflowCount > 1L)
+            assertEquals(1_048_576L, growth.recentSessions.single().configuredLimitBytes)
+            assertTrue(File(directory, "jh-log-growth.bin").isFile)
         } finally {
             directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun explicitGrowthWriteCommitsCurrentSnapshotIntoTheLog() {
+        val directory = Files.createTempDirectory("jankhunter-growth-write").toFile()
+        try {
+            val writer = AsyncLogWriter.open(directory, config(), "main")
+            writer.counter("growth.snapshot.probe", 1L)
+
+            assertTrue(writer.writeLogGrowthSummaryBlocking())
+
+            val file = sessionLogFiles(directory).single()
+            RandomAccessFile(file, "r").use { input ->
+                val historyMagic = ByteArray(4)
+                input.seek(JhlogV1.HISTORY_OFFSET)
+                input.readFully(historyMagic)
+                assertArrayEquals(byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'P'.code.toByte()), historyMagic)
+
+                val firstLiveMagic = ByteArray(4)
+                val secondLiveMagic = ByteArray(4)
+                input.seek(JhlogV1.LIVE_SUMMARY_A_OFFSET)
+                input.readFully(firstLiveMagic)
+                input.seek(JhlogV1.LIVE_SUMMARY_B_OFFSET)
+                input.readFully(secondLiveMagic)
+                assertTrue(firstLiveMagic.matchesAscii(0, "JHGL") || secondLiveMagic.matchesAscii(0, "JHGL"))
+            }
+            val current = requireNotNull(writer.logGrowthSummary()?.currentSession)
+            assertEquals(file.length(), current.maximumRetainedBytes)
+            assertEquals(file.length(), current.generatedBytes)
+            assertTrue(writer.close())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun disabledGrowthAnalyticsCreatesNoServiceFile() {
+        val directory = Files.createTempDirectory("jankhunter-growth-disabled").toFile()
+        try {
+            val writer = AsyncLogWriter.open(
+                directory,
+                JankHunterConfig.builder()
+                    .logGrowthAnalyticsEnabled(false)
+                    .flushIntervalMs(60_000L)
+                    .build(),
+                "main",
+            )
+            writer.counter("growth.disabled.probe", 1L)
+
+            assertFalse(writer.writeLogGrowthSummaryBlocking())
+            assertTrue(writer.close())
+
+            assertEquals(null, writer.logGrowthSummary())
+            assertFalse(File(directory, "jh-log-growth.bin").exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun randomAccessStorageReceivesCurrentCircularFormat() {
+        val root = Files.createTempDirectory("jankhunter-random-access-storage").toFile()
+        try {
+            val storage = TestRandomAccessBinaryStorage(File(root, "storage"))
+            val writer = AsyncLogWriter.open(
+                File(root, "leases"),
+                JankHunterConfig.builder()
+                    .binaryStorage(storage)
+                    .sessionLogSizeLimitEnabled(true)
+                    .maxSessionLogSizeMiB(1)
+                    .flushIntervalMs(60_000L)
+                    .build(),
+                "main",
+            )
+            writer.counter("random.access.probe", 1L)
+
+            assertTrue(writer.close())
+
+            val file = storage.logFiles().single()
+            RandomAccessFile(file, "r").use { input ->
+                input.seek(7L)
+                assertEquals(JhlogV1.FORMAT_MARKER, input.readUnsignedByte())
+                assertEquals(JhlogV1.FORMAT_MAJOR, input.readUnsignedByte())
+                assertEquals(JhlogV1.FORMAT_MINOR, input.readUnsignedByte())
+            }
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun unlimitedRandomAccessStorageKeepsForwardCompatibleV9Fallback() {
+        val root = Files.createTempDirectory("jankhunter-unlimited-random-access-storage").toFile()
+        try {
+            val storage = TestRandomAccessBinaryStorage(File(root, "storage"), Long.MAX_VALUE)
+            val writer = AsyncLogWriter.open(
+                File(root, "leases"),
+                JankHunterConfig.builder()
+                    .binaryStorage(storage)
+                    .sessionLogSizeLimitEnabled(false)
+                    .flushIntervalMs(60_000L)
+                    .build(),
+                "main",
+            )
+            writer.counter("random.access.unlimited.probe", 1L)
+
+            assertTrue(writer.close())
+
+            RandomAccessFile(storage.logFiles().single(), "r").use { input ->
+                input.seek(7L)
+                assertEquals(JhlogV9.FORMAT_VERSION, input.readUnsignedByte())
+            }
+        } finally {
+            root.deleteRecursively()
         }
     }
 
@@ -223,7 +378,7 @@ class AsyncLogWriterTest {
 
             assertTrue(writer.close(timeoutMs = 15_000L))
 
-            val file = logFiles(directory).single()
+            val file = sessionLogFiles(directory).single()
             assertTrue(
                 "disabled internal limit still capped the file: ${file.length()} <= $disabledLimit",
                 file.length() > disabledLimit,
@@ -435,7 +590,7 @@ class AsyncLogWriterTest {
             writer.counter("valid.counter", 1L)
             assertTrue(writer.close())
 
-            val file = logFiles(directory).single()
+            val file = sessionLogFiles(directory).single()
             assertEquals(2L, qualityCounters(file)[QualityCounterId.INVALID_METRIC] ?: 0L)
             assertFalse(logFileText(file).contains("invalid.counter"))
             assertFalse(logFileText(file).contains("invalid.gauge"))
@@ -530,7 +685,7 @@ class AsyncLogWriterTest {
             writer.runtimeCalls(batch)
             assertTrue(writer.close())
 
-            val file = logFiles(directory).single()
+            val file = sessionLogFiles(directory).single()
             val call = recordPayloads(file, JhlogV9.TYPE_RUNTIME_CALL).single()
             val caller = call.contextOwner
             val callee = readSymbolRef(call.bytes, call.offset)
@@ -571,7 +726,7 @@ class AsyncLogWriterTest {
             )
             assertTrue(writer.close())
 
-            val quality = qualityCounters(logFiles(directory).single())
+            val quality = qualityCounters(sessionLogFiles(directory).single())
             assertEquals(5L, quality[QualityCounterId.ACCEPTED_EVENT_TOTAL] ?: 0L)
             assertEquals(5L, quality[QualityCounterId.WRITTEN_EVENT_TOTAL] ?: 0L)
         } finally {
@@ -676,6 +831,9 @@ class AsyncLogWriterTest {
 
     private fun committedRawChunks(fileBytes: ByteArray): List<ByteArray> {
         if (fileBytes.size < FILE_PREFIX_BYTES) return emptyList()
+        if (fileBytes[7].toInt() and 0xff == JhlogV1.FORMAT_MARKER) {
+            return committedV1RawChunks(fileBytes)
+        }
         val headerLength = readUInt32Le(fileBytes, MAGIC_SIZE).toInt()
         var offset = FILE_PREFIX_BYTES + headerLength
         if (offset < FILE_PREFIX_BYTES || offset > fileBytes.size) return emptyList()
@@ -700,11 +858,47 @@ class AsyncLogWriterTest {
         return chunks
     }
 
+    private fun committedV1RawChunks(fileBytes: ByteArray): List<ByteArray> {
+        val superblock = latestV1Superblock(fileBytes) ?: return emptyList()
+        val capacity = readUInt64Le(fileBytes, superblock + 16)
+        var position = readUInt64Le(fileBytes, superblock + 24)
+        val count = readUInt64Le(fileBytes, superblock + 64).coerceAtMost(100_000L).toInt()
+        val chunks = ArrayList<ByteArray>(count)
+        repeat(count) {
+            var offset = JhlogV1.ARENA_OFFSET + position
+            if (offset > Int.MAX_VALUE || !fileBytes.matchesAscii(offset.toInt(), "JHC1")) {
+                position = 0L
+                offset = JhlogV1.ARENA_OFFSET
+            }
+            val intOffset = offset.toInt()
+            if (intOffset < 0 || intOffset + JhlogV1.CHUNK_HEADER_BYTES > fileBytes.size) return chunks
+            val flags = readUInt16Le(fileBytes, intOffset + 6)
+            val storedLength = readUInt32Le(fileBytes, intOffset + 16).toInt()
+            val payloadStart = intOffset + JhlogV1.CHUNK_HEADER_BYTES
+            val trailerStart = payloadStart + storedLength
+            val chunkEnd = trailerStart + JhlogV1.COMMIT_TRAILER_BYTES
+            if (storedLength < 0 || trailerStart < payloadStart || chunkEnd > fileBytes.size) return chunks
+            if (!fileBytes.matchesAscii(trailerStart, "JHCM")) return chunks
+            val stored = fileBytes.copyOfRange(payloadStart, trailerStart)
+            chunks += if (flags and JhlogV1.CHUNK_FLAG_GZIP != 0) {
+                GZIPInputStream(ByteArrayInputStream(stored)).use { input -> input.readBytes() }
+            } else {
+                stored
+            }
+            position += (JhlogV1.CHUNK_HEADER_BYTES + storedLength + JhlogV1.COMMIT_TRAILER_BYTES).toLong()
+            if (position >= capacity) position = 0L
+        }
+        return chunks
+    }
+
     private fun fileSymbolNamespace(file: File): ByteArray {
         val bytes = file.readBytes()
-        val headerLength = readUInt32Le(bytes, MAGIC_SIZE).toInt()
-        val headerEnd = FILE_PREFIX_BYTES + headerLength
-        var cursor = FILE_PREFIX_BYTES
+        val v1 = bytes.size > 9 && bytes[7].toInt() and 0xff == JhlogV1.FORMAT_MARKER
+        val headerFrame = if (v1) JhlogV1.FILE_HEADER_OFFSET.toInt() else MAGIC_SIZE
+        val headerLength = readUInt32Le(bytes, headerFrame).toInt()
+        val payloadStart = headerFrame + Int.SIZE_BYTES * 2
+        val headerEnd = payloadStart + headerLength
+        var cursor = payloadStart
         repeat(3) { cursor = readUvarint(bytes, cursor)?.nextOffset ?: return ByteArray(0) }
         cursor += 16 * 3
         repeat(6) { cursor = readUvarint(bytes, cursor)?.nextOffset ?: return ByteArray(0) }
@@ -713,14 +907,21 @@ class AsyncLogWriterTest {
         val namespaceLength = readUvarint(bytes, cursor) ?: return ByteArray(0)
         cursor = namespaceLength.nextOffset
         val end = cursor + namespaceLength.value.toInt()
-        if (cursor < FILE_PREFIX_BYTES || end < cursor || end > headerEnd || end > bytes.size) return ByteArray(0)
+        if (cursor < payloadStart || end < cursor || end > headerEnd || end > bytes.size) return ByteArray(0)
         return bytes.copyOfRange(cursor, end)
     }
 
-    private fun logFiles(directory: File): List<File> {
-        return directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
-            .orEmpty()
-            .toList()
+    private fun v1SuperblockValue(file: File, fieldOffset: Int): Long {
+        val bytes = file.readBytes()
+        val superblock = latestV1Superblock(bytes) ?: return 0L
+        return readUInt64Le(bytes, superblock + fieldOffset)
+    }
+
+    private fun latestV1Superblock(bytes: ByteArray): Int? {
+        val offsets = intArrayOf(JhlogV1.SUPERBLOCK_A_OFFSET.toInt(), JhlogV1.SUPERBLOCK_B_OFFSET.toInt())
+        return offsets
+            .filter { offset -> bytes.matchesAscii(offset, "JHSB") && offset + JhlogV1.SUPERBLOCK_BYTES <= bytes.size }
+            .maxByOrNull { offset -> readUInt64Le(bytes, offset + 8) }
     }
 
     private fun readUvarint(bytes: ByteArray, start: Int): Varint? {
@@ -759,6 +960,14 @@ class AsyncLogWriterTest {
         var value = 0L
         repeat(Int.SIZE_BYTES) { index ->
             value = value or ((bytes[offset + index].toLong() and 0xffL) shl (index * 8))
+        }
+        return value
+    }
+
+    private fun readUInt64Le(bytes: ByteArray, offset: Int): Long {
+        var value = 0L
+        repeat(Long.SIZE_BYTES) { index ->
+            value = value or ((bytes[offset + index].toLong() and 0xffL) shl (index * Byte.SIZE_BITS))
         }
         return value
     }
@@ -802,11 +1011,59 @@ class AsyncLogWriterTest {
 
         override fun listFiles(): List<String> = directory.listFiles().orEmpty().map { file -> file.absolutePath }
 
-        fun logFiles(): List<File> {
-            return directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
-                .orEmpty()
-                .toList()
+        fun logFiles(): List<File> = sessionLogFiles(directory)
+    }
+
+    private class TestRandomAccessBinaryStorage(
+        private val directory: File,
+        override val fileSizeLimitBytes: Long = 1024L * 1024L,
+    ) : JankHunterRandomAccessBinaryStorage {
+        override val archivesSizeLimitBytes = Long.MAX_VALUE
+
+        override fun openWriter(fileName: String): JankHunterBinaryWriter {
+            directory.mkdirs()
+            return FileBinaryWriter(File(directory, fileName))
         }
+
+        override fun openRandomAccessWriter(fileName: String): JankHunterRandomAccessBinaryWriter {
+            directory.mkdirs()
+            return FileRandomAccessBinaryWriter(File(directory, fileName))
+        }
+
+        override fun createArtifact(fileName: String): JankHunterBinaryArtifact =
+            error("Artifacts are not used in this test")
+
+        override fun cleanup(protectedPaths: Set<String>) = Unit
+
+        override fun listFiles(): List<String> = logFiles().map(File::getAbsolutePath)
+
+        fun logFiles(): List<File> = directory.listFiles().orEmpty().filter(File::isFile)
+    }
+
+    private class FileRandomAccessBinaryWriter(
+        private val file: File,
+    ) : JankHunterRandomAccessBinaryWriter {
+        private val access = RandomAccessFile(file, "rw")
+
+        override val path: String = file.absolutePath
+
+        override fun sizeBytes(): Long = access.length()
+
+        override fun readBytes(position: Long, target: ByteArray, offset: Int, length: Int) {
+            access.seek(position)
+            access.readFully(target, offset, length)
+        }
+
+        override fun writeBytes(position: Long, source: ByteArray, offset: Int, length: Int) {
+            access.seek(position)
+            access.write(source, offset, length)
+        }
+
+        override fun truncate(size: Long) = access.setLength(size)
+
+        override fun flush() = access.fd.sync()
+
+        override fun close() = access.close()
     }
 
     private class FailingBinaryStorage(
@@ -831,11 +1088,7 @@ class AsyncLogWriterTest {
 
         override fun listFiles(): List<String> = directory.listFiles().orEmpty().map { file -> file.absolutePath }
 
-        fun logFiles(): List<File> {
-            return directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
-                .orEmpty()
-                .toList()
-        }
+        fun logFiles(): List<File> = sessionLogFiles(directory)
     }
 
     private class BlockingOpenBinaryStorage(
@@ -870,11 +1123,7 @@ class AsyncLogWriterTest {
 
         fun awaitWriterCreated(): Boolean = writerCreated.await(5, TimeUnit.SECONDS)
 
-        fun logFiles(): List<File> {
-            return directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
-                .orEmpty()
-                .toList()
-        }
+        fun logFiles(): List<File> = sessionLogFiles(directory)
     }
 
     private fun awaitFlushWaitingForCompletion(flushThread: Thread): Boolean {
@@ -990,5 +1239,11 @@ class AsyncLogWriterTest {
     private companion object {
         const val MAGIC_SIZE = 8
         const val FILE_PREFIX_BYTES = MAGIC_SIZE + Int.SIZE_BYTES * 2
+
+        fun sessionLogFiles(directory: File): List<File> {
+            return directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
+                .orEmpty()
+                .toList()
+        }
     }
 }

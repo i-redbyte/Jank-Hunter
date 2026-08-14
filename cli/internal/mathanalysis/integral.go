@@ -415,22 +415,6 @@ func integralFindings(scores []IntegralScore) []Finding {
 	}}
 }
 
-func compareIntegralStatus(deltas []IntegralDelta) string {
-	if len(deltas) == 0 {
-		return "medium"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
-}
-
 func compareIntegralSummary(deltas []IntegralDelta) string {
 	if len(deltas) == 0 {
 		return "Недостаточно интегральных оценок для сравнения."

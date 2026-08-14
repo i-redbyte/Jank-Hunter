@@ -62,167 +62,6 @@ type codeProblemBuilder struct {
 	items map[string]*codeProblemAccumulator
 }
 
-func (b *codeProblemBuilder) addOwners(owners []OwnerStats) {
-	for _, owner := range owners {
-		className, method := codeLocationFromOwner(owner.Owner)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, owner.Owner)
-		item.runtimeEvidence = true
-		switch owner.Kind {
-		case "main_thread_stall":
-			item.addCategory(codeCategoryANR)
-			item.mainThreadMS += owner.TotalMS
-			item.problems += uint64(owner.Count)
-			item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Пауза главного потока",
-				Category: codeCategoryMainThread,
-				Severity: severityFromDuration(owner.MaxMS, 2_000, 8_000),
-				Score:    scoreDuration(owner.TotalMS, 1_800) + scoreDuration(owner.MaxMS, 500),
-				Count:    uint64(owner.Count),
-				TotalMS:  owner.TotalMS,
-				MaxMS:    owner.MaxMS,
-				Detail:   "Работа блокировала главный поток; это повышает риск АНР и пропуска кадров.",
-			})
-		case "http":
-			item.networkMS += owner.TotalMS
-			item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Сетевая задержка",
-				Category: codeCategoryNetwork,
-				Severity: severityFromDuration(owner.MaxMS, 700, 1_500),
-				Score:    scoreDuration(owner.TotalMS, 2_500) + scoreDuration(owner.MaxMS, 900),
-				Count:    uint64(owner.Count),
-				TotalMS:  owner.TotalMS,
-				MaxMS:    owner.MaxMS,
-				Detail:   "Источник связан с медленной сетевой работой.",
-			})
-		case "retained_object":
-			item.addCategory(codeCategoryLifecycle)
-			item.addCategory(codeCategoryOOM)
-			item.retained += uint64(owner.Count)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Удержанный объект",
-				Category: codeCategoryMemory,
-				Severity: severityFromCount(uint64(owner.Count), 2, 8),
-				Score:    scoreCount(uint64(owner.Count), 8) + scoreDuration(owner.MaxMS, 60_000),
-				Count:    uint64(owner.Count),
-				Value:    owner.MaxMS,
-				Unit:     "мс возраста",
-				Detail:   "Объекты живут дольше ожидаемого и могут усиливать давление памяти.",
-			})
-		default:
-			if owner.Count > 0 || owner.TotalMS > 0 {
-				item.runtimeCalls += uint64(owner.Count)
-				item.runtimeMS += owner.TotalMS
-				item.maxMS = maxUint64(item.maxMS, owner.MaxMS)
-				item.addSignal(CodeProblemSignal{
-					Name:     ownerKindForCodeProblem(owner.Kind),
-					Category: codeCategoryRuntime,
-					Severity: severityFromDuration(owner.MaxMS, 500, 2_000),
-					Score:    scoreCount(uint64(owner.Count), 120) + scoreDuration(owner.TotalMS, 2_500),
-					Count:    uint64(owner.Count),
-					TotalMS:  owner.TotalMS,
-					MaxMS:    owner.MaxMS,
-					Detail:   "Источник часто встречается в событиях выполнения.",
-				})
-			}
-		}
-	}
-}
-
-func (b *codeProblemBuilder) addFlows(flows []FlowStats) {
-	for _, flow := range flows {
-		className, method := codeLocationFromOwner(flow.Owner)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, flow.Owner)
-		item.runtimeEvidence = true
-		item.addContext(flow.Screen, flow.Flow, flow.Step, flow.RouteSample)
-		if flow.HTTPCount > 0 || flow.HTTPP95MS > 0 || flow.HTTPFailed > 0 {
-			item.networkMS += flow.HTTPP95MS
-			item.maxMS = maxUint64(item.maxMS, flow.HTTPP95MS)
-			score := scoreDuration(flow.HTTPP95MS, 900) + scoreCount(uint64(flow.HTTPFailed), 3)
-			item.addSignal(CodeProblemSignal{
-				Name:     "HTTP в сценарии",
-				Category: codeCategoryNetwork,
-				Severity: severityFromNetwork(flow.HTTPP95MS, flow.HTTPFailed),
-				Score:    score,
-				Count:    uint64(flow.HTTPCount),
-				MaxMS:    flow.HTTPP95MS,
-				Detail:   fmt.Sprintf("В этом контексте HTTP p95=%d мс, ошибок=%d.", flow.HTTPP95MS, flow.HTTPFailed),
-			})
-		}
-		if flow.UIJank > 0 || flow.UIJankPct > 0 {
-			item.uiJank += flow.UIJank
-			item.addSignal(CodeProblemSignal{
-				Name:     "UI-подтормаживания",
-				Category: codeCategoryUI,
-				Severity: severityFromPercent(flow.UIJankPct, 3, 8),
-				Score:    scoreCount(flow.UIJank, 50) + math.Min(flow.UIJankPct/2, 6),
-				Count:    flow.UIJank,
-				Value:    flow.UIFrames,
-				Unit:     "кадров",
-				Detail:   fmt.Sprintf("В сценарии медленных кадров %d из %d (%.2f%%).", flow.UIJank, flow.UIFrames, flow.UIJankPct),
-			})
-		}
-		if flow.StallCount > 0 || flow.StallMaxMS > 0 {
-			item.addCategory(codeCategoryANR)
-			item.mainThreadMS += flow.StallMaxMS
-			item.maxMS = maxUint64(item.maxMS, flow.StallMaxMS)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Пауза главного потока",
-				Category: codeCategoryMainThread,
-				Severity: severityFromDuration(flow.StallMaxMS, 2_000, 8_000),
-				Score:    scoreDuration(flow.StallMaxMS, 500) + scoreCount(uint64(flow.StallCount), 4),
-				Count:    uint64(flow.StallCount),
-				MaxMS:    flow.StallMaxMS,
-				Detail:   fmt.Sprintf("Максимальная пауза в сценарии: %d мс.", flow.StallMaxMS),
-			})
-		}
-		if flow.LogSpam > 0 {
-			item.addCategory(codeCategoryLogSpam)
-			item.logSpam += flow.LogSpam
-			item.addSignal(CodeProblemSignal{
-				Name:     "Спам логами",
-				Category: codeCategoryLogs,
-				Severity: severityFromCount(flow.LogSpam, 100, 1_000),
-				Score:    scoreCount(flow.LogSpam, 180),
-				Count:    flow.LogSpam,
-				Detail:   "Частые вызовы логирования в этом контексте могут мешать измерениям и добавлять работу.",
-			})
-		}
-		if flow.ProblemCount > 0 {
-			item.problems += flow.ProblemCount
-			item.addSignal(CodeProblemSignal{
-				Name:     "Проблемные окна",
-				Category: codeCategoryRuntime,
-				Severity: severityFromCount(flow.ProblemCount, 4, 20),
-				Score:    scoreCount(flow.ProblemCount, 10),
-				Count:    flow.ProblemCount,
-				MaxMS:    flow.ProblemMaxMS,
-				Detail:   "Сигналы попали в агрегированные проблемные окна.",
-			})
-		}
-		if flow.MemoryMaxKB > 0 {
-			item.addCategory(codeCategoryOOM)
-			item.memoryKB = maxUint64(item.memoryKB, flow.MemoryMaxKB)
-			item.addSignal(CodeProblemSignal{
-				Name:     "Память в сценарии",
-				Category: codeCategoryMemory,
-				Severity: severityFromKB(flow.MemoryMaxKB, 256*1024, 768*1024),
-				Score:    scoreDuration(flow.MemoryMaxKB, 256*1024),
-				Value:    flow.MemoryMaxKB,
-				Unit:     "КБ",
-				Detail:   "В этом контексте был высокий PSS процесса.",
-			})
-		}
-	}
-}
-
 func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 	for _, spam := range spamRows {
 		className, method := codeLocationFromOwner(spam.Owner)
@@ -238,7 +77,7 @@ func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 			Name:     "Спам логами",
 			Category: codeCategoryLogs,
 			Severity: severityFromCount(spam.Count, 100, 1_000),
-			Score:    scoreCount(spam.Count, 160),
+			Score:    scoreContribution(spam.Count, 160),
 			Count:    spam.Count,
 			Detail:   fmt.Sprintf("%s.%s вызван %d раз.", spam.Source, spam.Level, spam.Count),
 		})
@@ -268,37 +107,11 @@ func (b *codeProblemBuilder) addProblemWindows(windows []ProblemWindowStats) {
 			Name:     problemKindForCodeProblem(window.Kind),
 			Category: category,
 			Severity: severityFromProblemWindow(window),
-			Score:    scoreCount(window.Count, 8) + scoreDuration(window.MaxMS, 500),
+			Score:    scoreContribution(window.Count, 8) + scoreContribution(window.MaxMS, 500),
 			Count:    window.Count,
 			TotalMS:  window.TotalWindowMS,
 			MaxMS:    window.MaxMS,
 			Detail:   fmt.Sprintf("Окон: %d, событий: %d, максимальное значение: %d мс.", window.Windows, window.Count, window.MaxMS),
-		})
-	}
-}
-
-func (b *codeProblemBuilder) addRetained(retainedRows []NamedValue, lowMemoryCount int) {
-	for _, retained := range retainedRows {
-		className := normalizeClassName(retained.Name)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, "", retained.Name)
-		item.runtimeEvidence = true
-		item.addCategory(codeCategoryLifecycle)
-		item.addCategory(codeCategoryOOM)
-		item.retained += retained.Value
-		severity := severityFromCount(retained.Value, 2, 8)
-		if lowMemoryCount > 0 && severity != "high" {
-			severity = "medium"
-		}
-		item.addSignal(CodeProblemSignal{
-			Name:     "Удержанные объекты",
-			Category: codeCategoryMemory,
-			Severity: severity,
-			Score:    scoreCount(retained.Value, 8),
-			Count:    retained.Value,
-			Detail:   strings.TrimSpace("Класс встречается среди удержанных объектов. " + retained.Extra),
 		})
 	}
 }
@@ -367,34 +180,6 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 	}
 }
 
-func (b *codeProblemBuilder) addRoutes(routes []RouteStats) {
-	for _, route := range routes {
-		className, method := codeLocationFromOwner(route.OwnerSample)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, method, route.OwnerSample)
-		item.runtimeEvidence = true
-		item.networkMS += route.P95MS
-		item.maxMS = maxUint64(item.maxMS, route.MaxMS)
-		item.addContext("", "", "", route.Route)
-		if route.Count >= 5 {
-			item.addCategory(codeCategoryDuplicate)
-		}
-		item.addSignal(CodeProblemSignal{
-			Name:     "Сетевой маршрут",
-			Category: codeCategoryNetwork,
-			Severity: severityFromNetwork(route.P95MS, route.Failures),
-			Score:    scoreDuration(route.P95MS, 900) + scoreCount(uint64(route.Failures), 3) + scoreCount(uint64(route.Count), 120)*0.25,
-			Count:    uint64(route.Count),
-			Value:    route.P95MS,
-			Unit:     "мс p95",
-			MaxMS:    route.MaxMS,
-			Detail:   fmt.Sprintf("Маршрут %s: p95=%d мс, ошибок=%d.", route.Route, route.P95MS, route.Failures),
-		})
-	}
-}
-
 func (b *codeProblemBuilder) addRuntimeCalls(calls []RuntimeCallStats) {
 	for _, call := range calls {
 		b.addRuntimeCallEndpoint(call.Caller, call, 0.45, "Инициатор вызова")
@@ -420,51 +205,12 @@ func (b *codeProblemBuilder) addRuntimeCallEndpoint(owner string, call RuntimeCa
 		Name:     name,
 		Category: codeCategoryRuntime,
 		Severity: severityFromDuration(call.MaxMS, 500, 2_000),
-		Score:    (scoreCount(call.Count, 160) + scoreDuration(call.TotalMS, 2_200) + scoreDuration(call.MaxMS, 500)) * weight,
+		Score:    (scoreContribution(call.Count, 160) + scoreContribution(call.TotalMS, 2_200) + scoreContribution(call.MaxMS, 500)) * weight,
 		Count:    call.Count,
 		TotalMS:  call.TotalMS,
 		MaxMS:    call.MaxMS,
 		Detail:   fmt.Sprintf("Связка %s → %s, вызовов %d.", call.Caller, call.Callee, call.Count),
 	})
-}
-
-func (b *codeProblemBuilder) addInfluence(influence InfluenceSummary) {
-	if !influence.Available {
-		return
-	}
-	for _, node := range influence.TopNodes {
-		className := normalizeClassName(node.ClassName)
-		if className == "" {
-			continue
-		}
-		item := b.item(className, "", className)
-		if node.RuntimeEvidence {
-			item.runtimeEvidence = true
-		}
-		for _, flow := range node.Flows {
-			item.addContext("", flow, "", "")
-		}
-		for _, screen := range node.Screens {
-			item.addContext(screen, "", "", "")
-		}
-		for _, route := range node.Routes {
-			item.addContext("", "", "", route)
-		}
-		item.problems += node.Problems
-		item.logSpam += node.LogSpam
-		item.mainThreadMS += node.MainThreadMS
-		item.networkMS += node.NetworkMS
-		item.memoryKB += node.MemoryPressure
-		item.uiJank += node.UIJank
-		item.retained += node.Retained
-		item.addSignal(CodeProblemSignal{
-			Name:     "Класс в графе влияния",
-			Category: codeCategoryInfluence,
-			Severity: influenceProblemSeverity(node),
-			Score:    node.Score * 0.35,
-			Detail:   influenceDetail(node),
-		})
-	}
 }
 
 func (b *codeProblemBuilder) finish() []CodeProblemStats {
@@ -844,28 +590,6 @@ func codeProblemEvidence(a *codeProblemAccumulator) string {
 	return "Сводка сигналов: " + strings.Join(parts, ", ") + "."
 }
 
-func ownerKindForCodeProblem(kind string) string {
-	switch kind {
-	case "wrapped_runnable":
-		return "Долгая Runnable-задача"
-	case "wrapped_callable":
-		return "Долгая Callable-задача"
-	case "wrapped_coroutine":
-		return "Долгая корутинная задача"
-	case "wrapped_executor":
-		return "Долгая executor-задача"
-	case "wrapped_click":
-		return "Долгий click-handler"
-	case "main_thread_dispatch":
-		return "Медленный dispatch главного потока"
-	default:
-		if kind == "" {
-			return "Источник выполнения"
-		}
-		return strings.ReplaceAll(kind, "_", " ")
-	}
-}
-
 func problemKindForCodeProblem(kind string) string {
 	switch kind {
 	case "http_slow_or_failed":
@@ -964,16 +688,6 @@ func likelyMainThreadOwner(owner string) bool {
 		strings.Contains(lower, "bind")
 }
 
-func severityFromNetwork(p95 uint64, failures int) string {
-	if p95 >= 1_500 || failures >= 3 {
-		return "high"
-	}
-	if p95 >= 700 || failures > 0 {
-		return "medium"
-	}
-	return "ok"
-}
-
 func severityFromDuration(value, medium, high uint64) string {
 	switch {
 	case value >= high && high > 0:
@@ -996,21 +710,6 @@ func severityFromCount(value, medium, high uint64) string {
 	}
 }
 
-func severityFromPercent(value, medium, high float64) string {
-	switch {
-	case value >= high:
-		return "high"
-	case value >= medium:
-		return "medium"
-	default:
-		return "ok"
-	}
-}
-
-func severityFromKB(value, medium, high uint64) string {
-	return severityFromCount(value, medium, high)
-}
-
 func maxSeverity(a, b string) string {
 	return severityRankMax(a, b)
 }
@@ -1030,34 +729,6 @@ func codeProblemSeverityRank(value string) int {
 		return 2
 	default:
 		return 1
-	}
-}
-
-func influenceDetail(node InfluenceNode) string {
-	parts := []string{}
-	parts = append(parts, "класс связан с симптомами через граф влияния; сам по себе этот сигнал не доказывает дефект")
-	if len(node.Reasons) > 0 {
-		parts = append(parts, "причины: "+strings.Join(node.Reasons, ", "))
-	}
-	if len(node.Flows) > 0 {
-		parts = append(parts, "сценарии: "+strings.Join(node.Flows, ", "))
-	}
-	if node.RuntimeEvidence {
-		parts = append(parts, "есть доказательства выполнения")
-	} else {
-		parts = append(parts, "только статический след")
-	}
-	return strings.Join(parts, "; ")
-}
-
-func influenceProblemSeverity(node InfluenceNode) string {
-	switch {
-	case node.RuntimeEvidence && node.Score >= 30:
-		return "high"
-	case node.Score >= 7 || node.Severity == "high" || node.Severity == "medium":
-		return "medium"
-	default:
-		return "ok"
 	}
 }
 

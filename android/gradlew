@@ -102,6 +102,48 @@ die () {
     exit 1
 } >&2
 
+WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+TEMP_GRADLE_WRAPPER_DIR=
+
+cleanup_ci_gradle_wrapper () {
+    case $TEMP_GRADLE_WRAPPER_DIR in
+      "${TMPDIR:-/tmp}"/jank-hunter-gradle-wrapper.*)
+        rm -rf -- "$TEMP_GRADLE_WRAPPER_DIR" ;;
+    esac
+}
+
+if [ "${GITLAB_CI:-}" = true ]; then
+    wrapper_properties="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
+    source_distribution_path=$(sed -n 's/^distributionUrl=//p' "$wrapper_properties" | sed -n '1p')
+    distribution_file=${source_distribution_path##*/}
+    case $distribution_file in
+      gradle-*-bin.zip) ;;
+      *) die "Unexpected Gradle distribution file: $distribution_file" ;;
+    esac
+
+    distribution_url=${JANK_HUNTER_GRADLE_DISTRIBUTION_URL:-https://nexus.vkteam.ru/repository/raw-gradle-dist-remote/$distribution_file}
+    case $distribution_url in
+      https://* | file://*) ;;
+      *) die "JANK_HUNTER_GRADLE_DISTRIBUTION_URL must use https:// or file://" ;;
+    esac
+
+    TEMP_GRADLE_WRAPPER_DIR=$(mktemp -d "${TMPDIR:-/tmp}/jank-hunter-gradle-wrapper.XXXXXX") ||
+        die "Could not create temporary Gradle wrapper directory"
+    cp "$WRAPPER_JAR" "$TEMP_GRADLE_WRAPPER_DIR/gradle-wrapper.jar" ||
+        die "Could not copy Gradle wrapper jar"
+    awk -v distribution_url="$distribution_url" '
+        /^distributionUrl=/ {
+            print "distributionUrl=" distribution_url
+            next
+        }
+        { print }
+    ' "$wrapper_properties" > "$TEMP_GRADLE_WRAPPER_DIR/gradle-wrapper.properties" ||
+        die "Could not prepare GitLab Gradle wrapper properties"
+    WRAPPER_JAR="$TEMP_GRADLE_WRAPPER_DIR/gradle-wrapper.jar"
+    trap cleanup_ci_gradle_wrapper EXIT HUP INT TERM
+    printf '%s\n' "[jankhunter-wrapper] Gradle distribution: $distribution_url"
+fi
+
 # OS specific support (must be 'true' or 'false').
 cygwin=false
 msys=false
@@ -213,7 +255,7 @@ DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 set -- \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \
         -classpath "$CLASSPATH" \
-        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
+        -jar "$WRAPPER_JAR" \
         "$@"
 
 # Stop when "xargs" is not available.
@@ -247,5 +289,13 @@ eval "set -- $(
         sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
         tr '\n' ' '
     )" '"$@"'
+
+if [ -n "$TEMP_GRADLE_WRAPPER_DIR" ]; then
+    "$JAVACMD" "$@"
+    gradle_exit_code=$?
+    cleanup_ci_gradle_wrapper
+    trap - EXIT HUP INT TERM
+    exit "$gradle_exit_code"
+fi
 
 exec "$JAVACMD" "$@"

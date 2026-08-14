@@ -170,12 +170,12 @@ class InstrumentationAnnotationsTest {
     ): ByteArray {
         val writer = ClassWriter(ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Annotated", null, "java/lang/Object", null)
-        writer.visitAnnotation(OWNER_DESCRIPTOR, false).stringValue(classOwner ?: "FeedOwner")
+        writer.visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue(classOwner ?: "FeedOwner")
         if (classScreen != null) {
-            writer.visitAnnotation(SCREEN_DESCRIPTOR, false).stringValue(classScreen)
+            writer.visitAnnotation(SCREEN_DESCRIPTOR, false).finishStringValue(classScreen)
         }
         if (classFlow != null) {
-            writer.visitAnnotation(FLOW_DESCRIPTOR, false).stringValue(classFlow)
+            writer.visitAnnotation(FLOW_DESCRIPTOR, false).finishStringValue(classFlow)
         }
         if (classIgnored) {
             writer.visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
@@ -190,7 +190,7 @@ class InstrumentationAnnotationsTest {
 
         writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
             if (constructorTrace != null) {
-                visitAnnotation(TRACE_DESCRIPTOR, false).stringValue(constructorTrace)
+                visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue(constructorTrace)
             }
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
@@ -202,12 +202,12 @@ class InstrumentationAnnotationsTest {
 
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).apply {
             if (methodOwner != null) {
-                visitAnnotation(OWNER_DESCRIPTOR, false).stringValue(methodOwner)
+                visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue(methodOwner)
             }
             if (methodTrace != null) {
                 val annotation = visitAnnotation(TRACE_DESCRIPTOR, false)
                 if (methodTrace.isNotEmpty()) {
-                    annotation.stringValue(methodTrace)
+                    annotation.finishStringValue(methodTrace)
                 } else {
                     annotation.visitEnd()
                 }
@@ -353,11 +353,6 @@ class InstrumentationAnnotationsTest {
             0,
         )
         return count
-    }
-
-    private fun AnnotationVisitor.stringValue(value: String) {
-        visit("value", value)
-        visitEnd()
     }
 
     private companion object {

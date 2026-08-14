@@ -2,10 +2,6 @@
     <string name="app_name">Jank Hunter Демо</string>
 
     <string name="status_ready">готово</string>
-    <string name="hero_status_ready">Готово: запустите baseline, создайте регрессию, выполните flush и заберите отчет.</string>
-    <string name="hero_label">Jank Hunter · демо-лаборатория</string>
-    <string name="hero_title">Лаборатория производительности и утечек</string>
-    <string name="hero_description">Пошаговое демо для UI-фризов, сети, давления памяти, шумных логов, кастомных метрик, удержанных объектов, сравнения с LeakCanary, compare-отчетов и динамического feature flag SDK.</string>
 
     <string name="section_control_tower">Пульт управления</string>
     <string name="section_control_tower_subtitle">Готовые сценарии для чистого baseline и шумного candidate-прогона.</string>
@@ -28,7 +24,6 @@
     <string name="runtime_collecting">сбор идет</string>
     <string name="runtime_paused">пауза</string>
     <string name="runtime_flag_line">Runtime-флаг: %1$s · %2$s · %3$s</string>
-    <string name="runtime_status_line">Runtime-флаг %1$s: %2$s</string>
 
     <string name="section_performance_lab">Лаборатория производительности</string>
     <string name="section_performance_lab_subtitle">Сигналы, которые видны в inspect, math, influence и code-problem отчетах.</string>
@@ -140,7 +135,6 @@
     <string name="auto_result_fact_truth">Системные данные отражают состояние эмулятора, а не заранее заданные значения.</string>
     <string name="auto_result_fact_heap">При подтвержденном retention в директории Jank Hunter создается один HPROF.</string>
     <string name="auto_result_fact_cli">Выгрузите артефакты и сравните JSON/HTML с этой цепочкой.</string>
-    <string name="auto_restart">Повторить автоматический прогон</string>
     <string name="action_open_manual_mode">Открыть ручную лабораторию</string>
     <string name="manual_mode_label">Jank Hunter · ручной режим</string>
     <string name="manual_mode_title">Ручная лаборатория</string>

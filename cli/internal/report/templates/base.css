@@ -1152,6 +1152,47 @@ main {
   font-size: 12px;
 }
 .report-limit-note strong { color: var(--text); }
+.deferred-table-loader td {
+  padding: 14px 12px;
+  text-align: center;
+  background: rgba(111,247,255,0.035);
+}
+.deferred-table-button {
+  appearance: none;
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid rgba(111,247,255,0.34);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(111,247,255,0.08);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.deferred-table-button:hover,
+.deferred-table-button:focus-visible {
+  border-color: var(--cyan);
+  background: rgba(111,247,255,0.14);
+  outline: none;
+}
+.deferred-table-button:disabled { cursor: progress; opacity: 0.7; }
+[data-deferred-remaining] {
+  display: inline-block;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .explain {
   position: relative;
   display: inline-flex;
@@ -1324,6 +1365,15 @@ main {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: rgba(111,247,255,0.36) rgba(255,255,255,0.05);
+}
+@supports (content-visibility: auto) {
+  main > section,
+  main > details,
+  .fold-body > section,
+  .details-body > section {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 720px;
+  }
 }
 .table-scroll::-webkit-scrollbar {
   height: 10px;

@@ -716,7 +716,7 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 		{
 			ID:       "robust",
 			Title:    "Робастная статистика",
-			Status:   compareRobustStatus(robustDeltas),
+			Status:   comparisonStatus(robustDeltas, "medium"),
 			Summary:  compareRobustSummary(robustDeltas),
 			Findings: compareRobustFindings(robustDeltas),
 		},
@@ -737,32 +737,58 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 		{
 			ID:       "network-loops",
 			Title:    "Сетевые циклы",
-			Status:   compareNetworkLoopStatus(networkLoopDeltas),
+			Status:   comparisonStatus(networkLoopDeltas, "ok"),
 			Summary:  compareNetworkLoopSummary(networkLoopDeltas),
 			Findings: compareNetworkLoopFindings(networkLoopDeltas),
 		},
 		{
 			ID:       "integral",
 			Title:    "Интегральная нагрузка",
-			Status:   compareIntegralStatus(integralDeltas),
+			Status:   comparisonStatus(integralDeltas, "medium"),
 			Summary:  compareIntegralSummary(integralDeltas),
 			Findings: compareIntegralFindings(integralDeltas),
 		},
 		{
 			ID:       "markov",
 			Title:    "Марковская модель состояний",
-			Status:   compareMarkovStatus(markovDeltas),
+			Status:   comparisonStatus(markovDeltas, "medium"),
 			Summary:  compareMarkovSummary(markovDeltas),
 			Findings: compareMarkovFindings(markovDeltas),
 		},
 		{
 			ID:       "graph",
 			Title:    "Граф связей и гипотез",
-			Status:   compareCausalGraphStatus(causalDeltas),
+			Status:   comparisonStatus(causalDeltas, "ok"),
 			Summary:  compareCausalGraphSummary(causalDeltas),
 			Findings: compareCausalGraphFindings(causalDeltas),
 		},
 	}
+}
+
+type comparisonDelta interface {
+	comparisonSeverity() string
+}
+
+func (delta RobustDelta) comparisonSeverity() string      { return delta.Severity }
+func (delta NetworkLoopDelta) comparisonSeverity() string { return delta.Severity }
+func (delta IntegralDelta) comparisonSeverity() string    { return delta.Severity }
+func (delta MarkovDelta) comparisonSeverity() string      { return delta.Severity }
+func (delta CausalDelta) comparisonSeverity() string      { return delta.Severity }
+
+func comparisonStatus[T comparisonDelta](deltas []T, emptyStatus string) string {
+	if len(deltas) == 0 {
+		return emptyStatus
+	}
+	status := "ok"
+	for _, delta := range deltas {
+		switch delta.comparisonSeverity() {
+		case "high":
+			return "high"
+		case "medium":
+			status = "medium"
+		}
+	}
+	return status
 }
 
 func sectionStatus(findings []Finding) string {

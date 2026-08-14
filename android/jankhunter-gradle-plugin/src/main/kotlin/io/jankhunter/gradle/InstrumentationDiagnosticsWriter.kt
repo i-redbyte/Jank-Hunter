@@ -162,7 +162,7 @@ internal object InstrumentationDiagnosticsWriter {
             append("{\"format\":")
             append(ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT)
             append(",\"class\":\"")
-            append(escape(record.className))
+            append(escapeJsonString(record.className))
             append("\",\"methods\":")
             append(record.methods)
             append(",\"ignoredMethods\":")
@@ -193,7 +193,7 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"reason\":\"")
-                append(escape(entry.key))
+                append(escapeJsonString(entry.key))
                 append("\",\"count\":")
                 append(entry.value)
                 append('}')
@@ -211,17 +211,17 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"intent\":\"")
-                append(escape(entry.key.intent))
+                append(escapeJsonString(entry.key.intent))
                 append("\",\"signature\":\"")
-                append(escape(entry.key.signature))
+                append(escapeJsonString(entry.key.signature))
                 append("\",\"count\":")
                 append(entry.value)
                 append(",\"method\":\"")
-                append(escape(entry.key.method))
+                append(escapeJsonString(entry.key.method))
                 append('"')
                 entry.key.bridge?.let {
                     append(",\"bridge\":\"")
-                    append(escape(it))
+                    append(escapeJsonString(it))
                     append('"')
                 }
                 entry.key.line?.let {
@@ -244,17 +244,17 @@ internal object InstrumentationDiagnosticsWriter {
             .forEachIndexed { index, entry ->
                 if (index > 0) append(',')
                 append("{\"kind\":\"")
-                append(escape(entry.key.kind))
+                append(escapeJsonString(entry.key.kind))
                 append("\",\"module\":\"")
-                append(escape(entry.key.module))
+                append(escapeJsonString(entry.key.module))
                 append("\",\"family\":\"")
-                append(escape(entry.key.family))
+                append(escapeJsonString(entry.key.family))
                 append("\",\"reason\":\"")
-                append(escape(entry.key.reason))
+                append(escapeJsonString(entry.key.reason))
                 append("\",\"count\":")
                 append(entry.value)
                 append(",\"method\":\"")
-                append(escape(entry.key.method))
+                append(escapeJsonString(entry.key.method))
                 append('"')
                 entry.key.line?.let {
                     append(",\"line\":")
@@ -288,16 +288,9 @@ internal object InstrumentationDiagnosticsWriter {
         append('"')
         append(name)
         append("\":\"")
-        append(escape(value))
+        append(escapeJsonString(value))
         append('"')
         return fieldCount + 1
     }
 
-    private fun escape(value: String): String {
-        return value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-    }
 }

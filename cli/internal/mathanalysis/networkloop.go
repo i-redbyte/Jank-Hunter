@@ -650,22 +650,6 @@ func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
 	}}
 }
 
-func compareNetworkLoopStatus(deltas []NetworkLoopDelta) string {
-	if len(deltas) == 0 {
-		return "ok"
-	}
-	status := "ok"
-	for _, delta := range deltas {
-		if delta.Severity == "high" {
-			return "high"
-		}
-		if delta.Severity == "medium" {
-			status = "medium"
-		}
-	}
-	return status
-}
-
 func compareNetworkLoopSummary(deltas []NetworkLoopDelta) string {
 	if len(deltas) == 0 {
 		return "Новых, исчезнувших или заметно усилившихся сетевых циклов не найдено."
