@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: граф влияния кода</title>
-  <style>{{reportCSS .ReportStyle true}}</style>
+  <style>{{reportCSS true}}</style>
 </head>
-<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -517,8 +517,6 @@
       const path = createSVG('path', {
         class: 'influence-edge evidence-' + kind + (edge.Aggregate ? ' aggregate' : ''),
         d: edgePath(from, to),
-        'data-from': edge.From,
-        'data-to': edge.To,
         'data-edge-index': index,
         'stroke-width': clamp(1.5 + Math.log1p(number(edge.Influence)) * 0.72, 1.5, 6).toFixed(2),
         'marker-end': 'url(#influence-arrow-' + kind + ')',
@@ -629,7 +627,7 @@
     if (number(node.NetworkMS)) signals.push(number(node.NetworkMS) + ' мс сетевой нагрузки');
     if (number(node.Retained)) signals.push(number(node.Retained) + ' сигналов удержания');
     if (number(node.LogSpam)) signals.push(number(node.LogSpam) + ' вызовов шумных логов');
-    let result = 'Класс записан во время этого прогона' + (signals.length ? ' и получил score ' + number(node.Score).toFixed(1) + ' из-за фактических данных: ' + signals.join(', ') : '') + '. Score используется для приоритизации и сам по себе не доказывает причинную связь.';
+    let result = 'Класс записан во время этого прогона' + (signals.length ? ' и получил оценку ' + number(node.Score).toFixed(1) + ' из-за данных: ' + signals.join(', ') : '') + '. Чем выше оценка, тем раньше стоит проверить этот класс.';
     const confirmed = asArray(paths).find((item) => item.RuntimeTarget && asArray(item.Nodes).length > 1);
     if (confirmed) result += ' Подтвержденный runtime-путь: ' + asArray(confirmed.Nodes).join(' → ') + '.';
     return result;
@@ -671,7 +669,7 @@
     const pathBlock = paths.length ? '<div class="influence-detail-section"><strong>Пути для проверки</strong><div class="influence-detail-list">' + paths.map((item) => '<code>' + escapeHTML(asArray(item.Nodes).join(' → ')) + '</code>').join('') + '</div></div>' : '';
     detail.innerHTML = '<div class="influence-detail-head"><div><span>' + escapeHTML(statusLabel(node)) + '</span><h3>' + escapeHTML(className) + '</h3></div>' + (node.HeapEvidence ? '<span class="influence-hprof-badge">HPROF</span>' : '') + '</div>' +
       '<div class="influence-breadcrumbs">' + breadcrumbs.map((item) => '<span>' + escapeHTML(item) + '</span>').join('<b>→</b>') + '</div>' +
-      '<p class="influence-explanation data-ticket" data-ticket-label="Контекст расчёта">' + escapeHTML(node.Explanation || factualExplanation(node, paths)) + '</p>' +
+      '<p class="influence-explanation data-ticket" data-ticket-label="Как получена оценка">' + escapeHTML(node.Explanation || factualExplanation(node, paths)) + '</p>' +
       '<div class="influence-detail-metrics">' + metrics.map((item) => renderMetric(item[0], item[1])).join('') + '</div>' +
       '<div class="influence-detail-section"><strong>Основания</strong><p>' + escapeHTML(asArray(node.Reasons).join(', ') || 'нет проблемных сигналов') + '</p></div>' +
       '<div class="influence-detail-section"><strong>Screen / Flow / Route</strong><p>' + escapeHTML(contexts.join(' · ') || 'контекст не записан') + '</p></div>' +

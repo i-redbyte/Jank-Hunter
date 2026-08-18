@@ -262,6 +262,75 @@ class ObjectRetentionWatcherTest {
         }
     }
 
+    @Test
+    fun exactAdmissionStillHonorsHardWatchLimit() {
+        var now = 0L
+        var losses = 0L
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            clock = { now },
+            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+            maxWatchedReferences = 1,
+            exactAdmission = true,
+            onCardinalityLoss = { losses += it },
+        )
+        val first = Any()
+        val second = Any()
+        enableManualWatch(watcher)
+        try {
+            watcher.watch(first, "first", null, null)
+            watcher.watch(second, "second", null, null)
+            now = RETAINED_DELAY_MS
+            watcher.checkRetained()
+
+            assertEquals(1L, losses)
+            assertEquals(listOf("first"), reports.map { it.className })
+        } finally {
+            watcher.stop()
+        }
+    }
+
+    @Test
+    fun exactStopSealsEligibleRetentionAfterOptionalGc() {
+        var now = 0L
+        var gcRequests = 0
+        val reports = mutableListOf<Report>()
+        val watcher = ObjectRetentionWatcher(
+            retainedDelayMs = RETAINED_DELAY_MS,
+            forceGcBeforeReport = true,
+            clock = { now },
+            requestGc = { gcRequests++ },
+            reporter = { className, ownerHint, context, ageMs, count, evidence ->
+                reports += Report(className, ownerHint, context, ageMs, count, evidence)
+            },
+            exactAdmission = true,
+        )
+        val retained = Any()
+        enableManualWatch(watcher)
+        watcher.watch(retained, "shutdown-retained", "shutdown-holder", null)
+        now = RETAINED_DELAY_MS
+
+        watcher.stop()
+
+        assertEquals(1, gcRequests)
+        assertEquals(
+            listOf(
+                Report(
+                    "shutdown-retained",
+                    "shutdown-holder",
+                    null,
+                    RETAINED_DELAY_MS,
+                    1L,
+                    RetentionEvidence.AFTER_EXPLICIT_GC,
+                ),
+            ),
+            reports,
+        )
+    }
+
     private data class Report(
         val className: String?,
         val ownerHint: String?,

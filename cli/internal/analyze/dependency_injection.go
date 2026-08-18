@@ -47,20 +47,16 @@ type DependencyInjectionFrameworkSummary struct {
 }
 
 type DependencyInjectionReport struct {
-	Available        bool
-	Source           string
-	Variant          string
-	Disclaimer       string
-	ClassCount       int
-	EdgeCount        int
-	ShownClassCount  int
-	ShownEdgeCount   int
-	ClassesTruncated bool
-	EdgesTruncated   bool
-	Frameworks       []DependencyInjectionFrameworkSummary
-	Classes          []DependencyInjectionReportClass
-	Edges            []DependencyInjectionReportEdge
-	Warnings         []string
+	Available  bool
+	Source     string
+	Variant    string
+	Disclaimer string
+	ClassCount int
+	EdgeCount  int
+	Frameworks []DependencyInjectionFrameworkSummary
+	Classes    []DependencyInjectionReportClass
+	Edges      []DependencyInjectionReportEdge
+	Warnings   []string
 }
 
 type DependencyInjectionReportClass struct {
@@ -277,18 +273,8 @@ func BuildDependencyInjectionReport(catalog *DependencyInjectionCatalog, summary
 		Frameworks: append([]DependencyInjectionFrameworkSummary(nil), catalog.Frameworks...),
 		Warnings:   append([]string(nil), catalog.Warnings...),
 	}
-	if len(classes) > dependencyInjectionReportClassLimit {
-		report.ClassesTruncated = true
-		classes = classes[:dependencyInjectionReportClassLimit]
-	}
-	if len(edges) > dependencyInjectionReportEdgeLimit {
-		report.EdgesTruncated = true
-		edges = edges[:dependencyInjectionReportEdgeLimit]
-	}
 	report.Classes = classes
 	report.Edges = edges
-	report.ShownClassCount = len(classes)
-	report.ShownEdgeCount = len(edges)
 	return report
 }
 
@@ -512,8 +498,6 @@ func dependencyInjectionFrameworkPresent(values []DependencyInjectionFrameworkSu
 }
 
 const (
-	dependencyInjectionMaxLineBytes     = 4 * 1024 * 1024
-	dependencyInjectionMaxRecords       = 250_000
-	dependencyInjectionReportClassLimit = 500
-	dependencyInjectionReportEdgeLimit  = 2_000
+	dependencyInjectionMaxLineBytes = 4 * 1024 * 1024
+	dependencyInjectionMaxRecords   = 250_000
 )

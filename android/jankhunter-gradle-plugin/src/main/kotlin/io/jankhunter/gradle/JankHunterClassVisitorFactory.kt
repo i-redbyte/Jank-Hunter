@@ -6,6 +6,7 @@ import com.android.build.api.instrumentation.ClassData
 import org.gradle.api.GradleException
 import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.FieldVisitor
 import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
@@ -20,9 +21,10 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
         val params = parameters.get()
         val classData = classContext.currentClassData
         val hookConfig = HookConfig(
+            autoInit = params.autoInit.getOrElse(false),
             embeddedSymbols = params.embeddedSymbols.getOrElse(true),
             methodCounters = params.methodCounters.getOrElse(false),
-            methodFilterMode = params.methodFilterMode.getOrElse(JankHunterMethodFilterMode.DIAGNOSTICS),
+            methodFilterMode = params.methodFilterMode.getOrElse(JankHunterMethodFilterMode.ENABLED),
             okhttp = params.okhttp.getOrElse(false),
             webSockets = params.webSockets.getOrElse(false),
             okHttpHelperAvailable = params.okHttpHelperAvailable.getOrElse(false),
@@ -33,14 +35,19 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             logSpam = params.logSpam.getOrElse(false),
             classGraph = params.classGraph.getOrElse(false),
             runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
+            composeTracing = params.composeTracing.getOrElse(true),
+            roomTracing = params.roomTracing.getOrElse(true),
+            workerTracing = params.workerTracing.getOrElse(true),
             classGraphDirectory = params.classGraphDirectory.getOrElse(""),
             instrumentationDiagnosticsDirectory = params.instrumentationDiagnosticsDirectory.getOrElse(""),
             ownerMapEntriesDirectory = params.ownerMapEntriesDirectory.getOrElse(""),
             lifecycleLeaks = params.lifecycleLeaks.getOrElse(false),
         )
+        val runtimeHooksMatch = runtimeInstrumentationMatches(classData, params)
+        val autoInitMatch = autoInitMatches(classData, params)
         if (params.asmProgressLog.getOrElse(false)) {
             val progressLabel = buildList {
-                if (runtimeInstrumentationMatches(classData, params)) add(hookConfig.progressLabel())
+                if (runtimeHooksMatch || autoInitMatch) add(hookConfig.progressLabel())
                 if (dependencyInjectionAnalysisMatches(classData, params)) add("di")
             }.joinToString("+").ifEmpty { "none" }
             AsmProgressReporter.recordInstrumented(
@@ -50,14 +57,16 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             )
         }
         var visitor = nextClassVisitor
-        if (runtimeInstrumentationMatches(classData, params)) {
+        if (runtimeHooksMatch || autoInitMatch) {
             val hierarchyResolver = ClassHierarchyResolver(classContext)
             visitor = JankHunterClassVisitor(
                 visitor,
                 classData.className,
-                hookConfig,
+                if (runtimeHooksMatch) hookConfig else hookConfig.autoInitOnly(),
                 classHierarchy = hierarchyResolver.resolve(classData.className),
                 resolveOwnerHierarchy = hierarchyResolver::resolve,
+                markerOnlyWhenHookApplied = !runtimeHooksMatch,
+                diagnosticsOnlyWhenHookApplied = !runtimeHooksMatch,
             )
         }
         if (dependencyInjectionAnalysisMatches(classData, params)) {
@@ -75,6 +84,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     override fun isInstrumentable(classData: ClassData): Boolean {
         val params = parameters.get()
         val matched = runtimeInstrumentationMatches(classData, params) ||
+            autoInitMatches(classData, params) ||
             dependencyInjectionAnalysisMatches(classData, params)
         if (params.asmProgressLog.getOrElse(false)) {
             AsmProgressReporter.recordScanned(
@@ -84,6 +94,16 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             )
         }
         return matched
+    }
+
+    private fun autoInitMatches(
+        classData: ClassData,
+        params: JankHunterInstrumentationParameters,
+    ): Boolean {
+        if (!params.autoInit.getOrElse(false)) return false
+        if (InstrumentationMarker.isPresent(classData.classAnnotations)) return false
+        if (classData.className.startsWith("io.jankhunter.runtime.")) return false
+        return AndroidComponentAutoInit.matches(classData)
     }
 
     private fun runtimeInstrumentationMatches(
@@ -100,7 +120,10 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
             params.lifecycleLeaks.getOrElse(false) ||
             params.logSpam.getOrElse(false) ||
             params.classGraph.getOrElse(false) ||
-            params.runtimeCallGraph.getOrElse(false)
+            params.runtimeCallGraph.getOrElse(false) ||
+            params.composeTracing.getOrElse(true) ||
+            params.roomTracing.getOrElse(true) ||
+            params.workerTracing.getOrElse(true)
         if (!hooksEnabled) return false
         if (InstrumentationMarker.isPresent(classData.classAnnotations)) return false
         if (DependencyInjectionClassMatcher.isGeneratedDiClass(classData)) return false
@@ -181,9 +204,10 @@ private class ClassHierarchyResolver(
 }
 
 internal data class HookConfig(
+    val autoInit: Boolean = false,
     val embeddedSymbols: Boolean = true,
     val methodCounters: Boolean,
-    val methodFilterMode: JankHunterMethodFilterMode = JankHunterMethodFilterMode.DIAGNOSTICS,
+    val methodFilterMode: JankHunterMethodFilterMode = JankHunterMethodFilterMode.ENABLED,
     val okhttp: Boolean,
     val webSockets: Boolean,
     val okHttpHelperAvailable: Boolean = true,
@@ -198,9 +222,13 @@ internal data class HookConfig(
     val instrumentationDiagnosticsDirectory: String,
     val ownerMapEntriesDirectory: String,
     val lifecycleLeaks: Boolean = false,
+    val composeTracing: Boolean = true,
+    val roomTracing: Boolean = true,
+    val workerTracing: Boolean = true,
 ) {
     fun progressLabel(): String {
         return buildList {
+            if (autoInit) add("autoinit")
             if (methodCounters) add("methods")
             if (okhttp) add("okhttp")
             if (webSockets) add("websocket")
@@ -212,7 +240,75 @@ internal data class HookConfig(
             if (logSpam) add("logspam")
             if (classGraph) add("graph")
             if (runtimeCallGraph) add("runtimegraph")
+            if (composeTracing) add("compose")
+            if (roomTracing) add("room")
+            if (workerTracing) add("worker")
         }.joinToString("+").ifEmpty { "none" }
+    }
+
+    fun autoInitOnly(): HookConfig = copy(
+        methodCounters = false,
+        okhttp = false,
+        webSockets = false,
+        handlers = false,
+        executors = false,
+        coroutines = false,
+        flowInteractions = false,
+        logSpam = false,
+        classGraph = false,
+        runtimeCallGraph = false,
+        lifecycleLeaks = false,
+        composeTracing = false,
+        roomTracing = false,
+        workerTracing = false,
+    )
+}
+
+private object AndroidComponentAutoInit {
+    private val componentBases = setOf(
+        "android.app.Application",
+        "android.app.Activity",
+        "android.app.Service",
+        "android.content.ContentProvider",
+        "android.content.BroadcastReceiver",
+    )
+
+    fun matches(classData: ClassData): Boolean {
+        return classData.superClasses.any { it.replace('/', '.') in componentBases }
+    }
+}
+
+private enum class AutoInitComponent(
+    val methodName: String,
+    val methodDescriptor: String,
+    val syntheticAccess: Int?,
+) {
+    APPLICATION("onCreate", "()V", Opcodes.ACC_PUBLIC),
+    ACTIVITY("onCreate", "(Landroid/os/Bundle;)V", Opcodes.ACC_PROTECTED),
+    SERVICE("onCreate", "()V", Opcodes.ACC_PUBLIC),
+    CONTENT_PROVIDER("onCreate", "()Z", null),
+    BROADCAST_RECEIVER(
+        "onReceive",
+        "(Landroid/content/Context;Landroid/content/Intent;)V",
+        null,
+    ),
+    ;
+
+    fun matches(name: String, descriptor: String): Boolean {
+        return name == methodName && descriptor == methodDescriptor
+    }
+
+    companion object {
+        fun fromHierarchy(hierarchy: Set<String>): AutoInitComponent? {
+            return when {
+                "android/app/Application" in hierarchy -> APPLICATION
+                "android/app/Activity" in hierarchy -> ACTIVITY
+                "android/app/Service" in hierarchy -> SERVICE
+                "android/content/ContentProvider" in hierarchy -> CONTENT_PROVIDER
+                "android/content/BroadcastReceiver" in hierarchy -> BROADCAST_RECEIVER
+                else -> null
+            }
+        }
     }
 }
 
@@ -231,10 +327,18 @@ internal class JankHunterClassVisitor(
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
     private val classHierarchy = classHierarchy.mapTo(linkedSetOf()) { it.replace('.', '/') }
-    private val generatedHelperClass = MethodFilterClassifier.isGeneratedHelperClass(className)
+    private val autoInitComponent = if (config.autoInit) {
+        AutoInitComponent.fromHierarchy(this.classHierarchy)
+    } else {
+        null
+    }
+    private var kotlinGeneratedMethods = KotlinGeneratedMethodIndex.EMPTY
     private var superName: String? = null
+    private var classAccess: Int = 0
+    private var autoInitMethodPresent = false
     private var alreadyInstrumented = false
     private var classHookApplied = false
+    private var roomDatabaseFieldPresent = false
 
     override fun visit(
         version: Int,
@@ -245,6 +349,7 @@ internal class JankHunterClassVisitor(
         interfaces: Array<out String>?,
     ) {
         this.superName = superName
+        this.classAccess = access
         name?.let { classHierarchy.add(it.replace('.', '/')) }
         superName?.let { classHierarchy.add(it.replace('.', '/')) }
         interfaces.orEmpty().forEach { classHierarchy.add(it.replace('.', '/')) }
@@ -257,7 +362,24 @@ internal class JankHunterClassVisitor(
             alreadyInstrumented = true
             return delegate
         }
+        if (
+            descriptor == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR &&
+            config.methodFilterMode != JankHunterMethodFilterMode.DISABLED
+        ) {
+            return KotlinGeneratedMethodIndex.collectingVisitor(delegate) { kotlinGeneratedMethods = it }
+        }
         return JankAnnotationParser.visitorFor(descriptor, delegate, classAnnotations)
+    }
+
+    override fun visitField(
+        access: Int,
+        name: String?,
+        descriptor: String,
+        signature: String?,
+        value: Any?,
+    ): FieldVisitor? {
+        if (descriptor == ROOM_DATABASE_DESCRIPTOR) roomDatabaseFieldPresent = true
+        return super.visitField(access, name, descriptor, signature, value)
     }
 
     override fun visitMethod(
@@ -268,6 +390,8 @@ internal class JankHunterClassVisitor(
         exceptions: Array<out String>?,
     ): MethodVisitor {
         val next = super.visitMethod(access, name, descriptor, signature, exceptions)
+        val autoInitEntryPoint = autoInitComponent?.matches(name, descriptor) == true
+        if (autoInitEntryPoint) autoInitMethodPresent = true
         if (alreadyInstrumented) {
             diagnostics.recordSkippedMethod("already_instrumented")
             return next
@@ -290,7 +414,8 @@ internal class JankHunterClassVisitor(
             name,
             descriptor,
             className,
-            generatedHelperClass,
+            classAccess,
+            kotlinGeneratedMethods.origin(name, descriptor),
             config,
             classAnnotations.snapshot(),
             name == "<init>",
@@ -298,15 +423,28 @@ internal class JankHunterClassVisitor(
             classHierarchy,
             resolveOwnerHierarchy,
             diagnostics,
+            autoInitComponent = autoInitComponent.takeIf { autoInitEntryPoint },
             recordClassHookApplied = { classHookApplied = true },
             recordOwnerMapEntry = ownerMapEntries::add,
             recordStaticEdge = { calleeOwner, calleeName ->
                 recordStaticEdge(name, descriptor, calleeOwner, calleeName)
             },
+            roomDaoMethod = isRoomDaoBoundary(access, name),
         )
     }
 
+    private fun isRoomDaoBoundary(access: Int, name: String): Boolean {
+        val excludedFlags = Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_BRIDGE
+        return config.roomTracing &&
+            roomDatabaseFieldPresent &&
+            access and Opcodes.ACC_PUBLIC != 0 &&
+            access and excludedFlags == 0 &&
+            name != "<init>" &&
+            name != "getRequiredConverters"
+    }
+
     override fun visitEnd() {
+        emitSyntheticAutoInitMethodIfNeeded()
         if (!alreadyInstrumented && (!markerOnlyWhenHookApplied || classHookApplied)) {
             super.visitAnnotation(instrumentationMarkerDescriptor, false)?.visitEnd()
         }
@@ -323,6 +461,46 @@ internal class JankHunterClassVisitor(
             )
         }
         super.visitEnd()
+    }
+
+    private fun emitSyntheticAutoInitMethodIfNeeded() {
+        val component = autoInitComponent ?: return
+        val access = component.syntheticAccess ?: return
+        val parent = superName ?: return
+        if (alreadyInstrumented || autoInitMethodPresent) return
+        if (classAccess and (Opcodes.ACC_ABSTRACT or Opcodes.ACC_INTERFACE) != 0) return
+
+        super.visitMethod(access, component.methodName, component.methodDescriptor, null, null).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_RUNTIME,
+                "autoInit",
+                "(Landroid/content/Context;)V",
+                false,
+            )
+            visitVarInsn(Opcodes.ALOAD, 0)
+            if (component == AutoInitComponent.ACTIVITY) {
+                visitVarInsn(Opcodes.ALOAD, 1)
+            }
+            visitMethodInsn(
+                Opcodes.INVOKESPECIAL,
+                parent,
+                component.methodName,
+                component.methodDescriptor,
+                false,
+            )
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(if (component == AutoInitComponent.ACTIVITY) 2 else 1, if (component == AutoInitComponent.ACTIVITY) 2 else 1)
+            visitEnd()
+        }
+        classHookApplied = true
+    }
+
+    private companion object {
+        private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
+        private const val ROOM_DATABASE_DESCRIPTOR = "Landroidx/room/RoomDatabase;"
     }
 
     private fun recordStaticEdge(
@@ -348,7 +526,8 @@ private class JankHunterMethodVisitor(
     private val methodName: String,
     private val methodDescriptor: String,
     private val className: String,
-    private val generatedHelperClass: Boolean,
+    private val classAccessFlags: Int,
+    private val kotlinMethodOrigin: KotlinMethodOrigin,
     private val config: HookConfig,
     private val classAnnotations: JankAnnotationMetadata,
     private val constructor: Boolean,
@@ -356,9 +535,11 @@ private class JankHunterMethodVisitor(
     private val classHierarchy: Set<String>,
     private val resolveOwnerHierarchy: (String) -> Set<String>,
     private val diagnostics: InstrumentationDiagnosticsClassBuilder,
+    private val autoInitComponent: AutoInitComponent?,
     private val recordClassHookApplied: () -> Unit,
     private val recordOwnerMapEntry: (OwnerMapEntry) -> Unit,
     private val recordStaticEdge: (String, String) -> Unit,
+    private val roomDaoMethod: Boolean = false,
 ) : AdviceAdapter(Opcodes.ASM9, next, accessFlags, methodName, methodDescriptor) {
     private val methodId = OwnerIds.methodId(className, methodName, methodDescriptor)
     private val generatedOwnerLabel = OwnerIds.readableOwner(className, methodName)
@@ -388,11 +569,11 @@ private class JankHunterMethodVisitor(
             methodAnnotations.tracePresent ||
             methodAnnotations.owner?.takeIf { it.isNotBlank() } != null
     private val hasAnnotationContext: Boolean
-        get() = !constructor && (annotationScreen != null ||
+        get() = annotationScreen != null ||
             annotationFlow != null ||
             annotationTrace != null ||
             methodAnnotations.owner?.takeIf { it.isNotBlank() } != null ||
-            classAnnotations.owner != null)
+            classAnnotations.owner != null && (!constructor || constructorHasDirectAnnotationContext)
     private val hookEmitter = HookBytecodeEmitter(
         visitor = this,
         ownerLabel = { ownerLabel },
@@ -401,6 +582,8 @@ private class JankHunterMethodVisitor(
     )
     private var runtimeCallStartLocal = -1
     private var annotationScopeLocal = -1
+    private var semanticStartLocal = -1
+    private var semanticOutcomeLocal = -1
     private val methodTryStart = Label()
     private val methodTryEnd = Label()
     private val methodExceptionHandler = Label()
@@ -409,10 +592,12 @@ private class JankHunterMethodVisitor(
     private var constructorBodyEntered = false
     private val methodFilterDecision = MethodFilterClassifier.classify(
         config.methodFilterMode,
-        generatedHelperClass,
+        classAccessFlags,
         accessFlags,
+        className,
         methodName,
         methodDescriptor,
+        kotlinMethodOrigin,
     )
 
     override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? {
@@ -427,11 +612,14 @@ private class JankHunterMethodVisitor(
 
     override fun onMethodEnter() {
         if (constructor) {
-            // AdviceAdapter calls this only after the first this()/super() invocation. Constructor
-            // call sites are safe from this point on, but method-boundary hooks would change the
-            // constructor's lifecycle and add disproportionate startup overhead.
+            // The JVM forbids using an uninitialized `this`. AdviceAdapter calls this only after
+            // the first this()/super() invocation, which is the earliest safe constructor boundary.
             constructorBodyEntered = true
-            return
+        }
+        autoInitComponent?.let {
+            emitAutoInit(it)
+            recordClassHookApplied()
+            hookApplied = true
         }
         if (!shouldInstrumentMethod()) return
         if (shouldWatchLifecycleOnEnter()) {
@@ -467,19 +655,50 @@ private class JankHunterMethodVisitor(
             storeLocal(runtimeCallStartLocal)
             hookApplied = true
         }
+        semanticKind()?.let { kind ->
+            visitLdcInsn(kind)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "enterSemantic",
+                "(I)J",
+                false,
+            )
+            semanticStartLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(semanticStartLocal)
+            if (kind == SEMANTIC_WORKER) {
+                semanticOutcomeLocal = newLocal(Type.INT_TYPE)
+                visitLdcInsn(SEMANTIC_OUTCOME_UNKNOWN)
+                storeLocal(semanticOutcomeLocal)
+            }
+            hookApplied = true
+        }
         if (requiresCatchAllExit()) {
             visitLabel(methodTryStart)
         }
     }
 
     override fun onMethodExit(opcode: Int) {
-        if (constructor) return
         if (!shouldInstrumentMethod()) return
         if (shouldWatchLifecycleOnExit() && opcode != Opcodes.ATHROW) {
             emitLifecycleWatch()
         }
         if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
+        }
+        if (semanticStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            if (semanticOutcomeLocal >= 0 && opcode == Opcodes.ARETURN) {
+                dup()
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    JANK_HUNTER_HOOKS,
+                    "classifyWorkerOutcome",
+                    "(Ljava/lang/Object;)I",
+                    false,
+                )
+                storeLocal(semanticOutcomeLocal)
+            }
+            emitSemanticExit(outcome = SEMANTIC_OUTCOME_SUCCESS, outcomeLocal = semanticOutcomeLocal)
         }
         if (annotationScopeLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitExitAnnotatedContext()
@@ -488,14 +707,58 @@ private class JankHunterMethodVisitor(
 
     private fun emitRuntimeCallExit() {
         loadLocal(runtimeCallStartLocal)
+        if (constructor) {
+            // AdviceAdapter conservatively treats every constructor exception handler as a
+            // pre-super branch. Real Kotlin constructors commonly have post-super handlers, so
+            // returning through one can reset its simulated stack even though `this` is already
+            // initialized. GeneratorAdapter emits loadLocal directly to `mv`; keep the rest of
+            // this synthetic sequence on the same path to avoid consuming that empty simulation.
+            mv.visitLdcInsn(methodId)
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "exitMethod", "(JJ)V", false)
+        } else {
+            visitLdcInsn(methodId)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "exitMethod",
+                "(JJ)V",
+                false,
+            )
+        }
+    }
+
+    private fun emitSemanticExit(outcome: Int, outcomeLocal: Int = -1) {
+        val kind = semanticKind() ?: return
+        loadLocal(semanticStartLocal)
+        visitLdcInsn(kind)
         visitLdcInsn(methodId)
+        pushNullableString(if (config.embeddedSymbols) generatedOwnerLabel else null)
+        if (outcomeLocal >= 0) {
+            loadLocal(outcomeLocal)
+        } else {
+            visitLdcInsn(outcome)
+        }
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
-            "exitMethod",
-            "(JJ)V",
+            "exitSemantic",
+            "(JIJLjava/lang/String;I)V",
             false,
         )
+    }
+
+    private fun semanticKind(): Int? {
+        if (constructor) return null
+        if (accessFlags and (Opcodes.ACC_SYNTHETIC or Opcodes.ACC_BRIDGE) != 0) return null
+        if (config.composeTracing && methodAnnotations.composable) return SEMANTIC_COMPOSE_COMPOSITION
+        if (roomDaoMethod) return SEMANTIC_ROOM_DAO
+        if (config.workerTracing && isSynchronousWorkerMethod()) return SEMANTIC_WORKER
+        return null
+    }
+
+    private fun isSynchronousWorkerMethod(): Boolean {
+        return methodName == "doWork" && methodDescriptor == WORKER_DO_WORK_DESCRIPTOR &&
+            ANDROIDX_WORKER in classHierarchy
     }
 
     override fun visitMethodInsn(
@@ -616,14 +879,21 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
-        if (!constructor && shouldInstrumentMethod() && requiresCatchAllExit()) {
+        if (shouldInstrumentMethod() && requiresCatchAllExit()) {
             visitLabel(methodTryEnd)
-            visitTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+            if (constructor) {
+                emitPostSuperTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+            } else {
+                visitTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+            }
             visitLabel(methodExceptionHandler)
             val throwableLocal = newLocal(Type.getType(Throwable::class.java))
             storeLocal(throwableLocal)
             if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
                 emitRuntimeCallExit()
+            }
+            if (semanticStartLocal >= 0) {
+                emitSemanticExit(outcome = SEMANTIC_OUTCOME_FAILURE)
             }
             if (annotationScopeLocal >= 0) {
                 emitExitAnnotatedContext()
@@ -663,11 +933,47 @@ private class JankHunterMethodVisitor(
 
     private companion object {
         private const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
+        private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
         private const val ANDROID_ACTIVITY = "android/app/Activity"
         private const val ANDROID_FRAGMENT = "android/app/Fragment"
         private const val ANDROID_SERVICE = "android/app/Service"
         private const val ANDROIDX_FRAGMENT = "androidx/fragment/app/Fragment"
         private const val ANDROIDX_VIEW_MODEL = "androidx/lifecycle/ViewModel"
+        private const val ANDROIDX_WORKER = "androidx/work/Worker"
+        private const val WORKER_DO_WORK_DESCRIPTOR = "()Landroidx/work/ListenableWorker${'$'}Result;"
+        private const val SEMANTIC_COMPOSE_COMPOSITION = 1
+        private const val SEMANTIC_ROOM_DAO = 5
+        private const val SEMANTIC_WORKER = 6
+        private const val SEMANTIC_OUTCOME_SUCCESS = 0
+        private const val SEMANTIC_OUTCOME_FAILURE = 1
+        private const val SEMANTIC_OUTCOME_UNKNOWN = 4
+    }
+
+    private fun emitAutoInit(component: AutoInitComponent) {
+        when (component) {
+            AutoInitComponent.APPLICATION,
+            AutoInitComponent.ACTIVITY,
+            AutoInitComponent.SERVICE,
+            -> loadThis()
+            AutoInitComponent.CONTENT_PROVIDER -> {
+                loadThis()
+                visitMethodInsn(
+                    Opcodes.INVOKEVIRTUAL,
+                    "android/content/ContentProvider",
+                    "getContext",
+                    "()Landroid/content/Context;",
+                    false,
+                )
+            }
+            AutoInitComponent.BROADCAST_RECEIVER -> loadArg(0)
+        }
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_RUNTIME,
+            "autoInit",
+            "(Landroid/content/Context;)V",
+            false,
+        )
     }
 
     private fun emitEnterAnnotatedContext() {
@@ -688,13 +994,23 @@ private class JankHunterMethodVisitor(
 
     private fun emitExitAnnotatedContext() {
         loadLocal(annotationScopeLocal)
-        visitMethodInsn(
-            Opcodes.INVOKESTATIC,
-            JANK_HUNTER_HOOKS,
-            "exitAnnotatedContext",
-            "(Ljava/lang/Object;)V",
-            false,
-        )
+        if (constructor) {
+            mv.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "exitAnnotatedContext",
+                "(Ljava/lang/Object;)V",
+                false,
+            )
+        } else {
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "exitAnnotatedContext",
+                "(Ljava/lang/Object;)V",
+                false,
+            )
+        }
     }
 
     private fun pushNullableString(value: String?) {
@@ -706,7 +1022,8 @@ private class JankHunterMethodVisitor(
     }
 
     private fun requiresCatchAllExit(): Boolean {
-        return (config.runtimeCallGraph && runtimeCallStartLocal >= 0) || annotationScopeLocal >= 0
+        return (config.runtimeCallGraph && runtimeCallStartLocal >= 0) || annotationScopeLocal >= 0 ||
+            semanticStartLocal >= 0
     }
 
     private fun instrumentationIgnored(): Boolean {

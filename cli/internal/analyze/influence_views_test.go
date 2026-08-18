@@ -141,6 +141,23 @@ func TestInfluenceContextViewMarksConnectorWithoutChangingScore(t *testing.T) {
 	}
 }
 
+func TestInfluenceClassNodeCacheKeepsConnectorProjectionIndependent(t *testing.T) {
+	node := influenceViewTestNode("com.app.shared.Dispatcher", 3, true)
+	builder := newInfluenceViewBuilder([]InfluenceNode{node}, nil)
+
+	classNode := builder.classNode(node, false)
+	connectorNode := builder.classNode(node, true)
+	if classNode.Kind != "class" || classNode.Connector {
+		t.Fatalf("class projection changed: %+v", classNode)
+	}
+	if connectorNode.Kind != "connector" || !connectorNode.Connector {
+		t.Fatalf("connector projection changed: %+v", connectorNode)
+	}
+	if classNode.Score != connectorNode.Score || classNode.Explanation != connectorNode.Explanation {
+		t.Fatal("cache changed source metrics or explanation between projections")
+	}
+}
+
 func TestInfluenceViewTotalsAndOmissionsAreCalculatedBeforeLimits(t *testing.T) {
 	nodes := make([]InfluenceNode, 0, problemViewMaxNodes+20)
 	edges := make([]InfluenceEdge, 0, problemViewMaxNodes+19)
@@ -212,26 +229,6 @@ func TestInfluenceViewsHandleEmptyRuntimeOnlyAndStaticOnlyGraphs(t *testing.T) {
 	}
 	if staticOnly.TotalEdges != 1 || staticOnly.Workspace.Edges[0].Evidence != "static" {
 		t.Fatalf("static evidence is incorrect: %+v", staticOnly.Workspace.Edges)
-	}
-}
-
-func TestEnsureInfluenceViewsPreservesLegacyModelFields(t *testing.T) {
-	legacy := InfluenceSummary{
-		Available:  true,
-		ShownNodes: 2,
-		ShownEdges: 1,
-		TopNodes: []InfluenceNode{
-			influenceViewTestNode("com.app.A", 5, true),
-			influenceViewTestNode("com.app.B", 0, false),
-		},
-		TopEdges: []InfluenceEdge{{From: "com.app.A", To: "com.app.B", Count: 2, RuntimeConfirmed: true}},
-	}
-	prepared := EnsureInfluenceViews(legacy)
-	if !reflect.DeepEqual(prepared.TopNodes, legacy.TopNodes) || !reflect.DeepEqual(prepared.TopEdges, legacy.TopEdges) {
-		t.Fatal("view hydration changed legacy nodes or edges")
-	}
-	if len(prepared.Views) == 0 || prepared.Workspace.TotalNodes != 2 {
-		t.Fatalf("legacy summary was not hydrated: %+v", prepared)
 	}
 }
 

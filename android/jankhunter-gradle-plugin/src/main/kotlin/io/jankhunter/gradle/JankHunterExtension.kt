@@ -14,7 +14,7 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
     val autoInit: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
     val sessionLogSizeLimitEnabled: Property<Boolean> =
         objects.property(Boolean::class.java).convention(true)
-    val maxSessionLogSizeMiB: Property<Int> = objects.property(Int::class.java).convention(16)
+    val maxSessionLogSizeMiB: Property<Int> = objects.property(Int::class.java).convention(50)
     val logGrowthAnalyticsEnabled: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
     val verboseLogs: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
     val symbolMode: Property<JankHunterSymbolMode> =
@@ -53,8 +53,11 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
         val classGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val runtimeCallGraph: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val methodCounters: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val composeTracing: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val roomTracing: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val workerTracing: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val methodFilterMode: Property<JankHunterMethodFilterMode> =
-            objects.property(JankHunterMethodFilterMode::class.java).convention(JankHunterMethodFilterMode.DIAGNOSTICS)
+            objects.property(JankHunterMethodFilterMode::class.java).convention(JankHunterMethodFilterMode.ENABLED)
         val includeAndroidNamespace: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val includeWholeApplication: Property<Boolean> =
             objects.property(Boolean::class.java).convention(false)
@@ -97,16 +100,22 @@ open class JankHunterExtension @Inject constructor(objects: ObjectFactory) {
         val httpSlowThresholdMs: Property<Long> = objects.property(Long::class.java).convention(1_000L)
         val jankFrameThresholdMs: Property<Long> = objects.property(Long::class.java).convention(32L)
         val uiWindowP95ThresholdMs: Property<Long> = objects.property(Long::class.java).convention(32L)
+        /** Preserves accepted evidence; configured memory/storage limits remain hard boundaries. */
+        val exactEventCollection: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val maxQueueSize: Property<Int> = objects.property(Int::class.java).convention(65_536)
+        val mainThreadAdmissionWaitMs: Property<Long> = objects.property(Long::class.java).convention(0L)
+        val backgroundAdmissionWaitMs: Property<Long> = objects.property(Long::class.java).convention(5L)
         val mainLooperDispatchMonitor: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val jankStats: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
-        val mainProcessOnly: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val ioTracing: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
+        val mainProcessOnly: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
     }
 
     open class ReleaseSafety @Inject constructor(objects: ObjectFactory) {
         val allowInstrumentation: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val privacyReviewed: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
         val allowHeapDumps: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
-        val allowSecondaryProcesses: Property<Boolean> = objects.property(Boolean::class.java).convention(false)
+        val allowSecondaryProcesses: Property<Boolean> = objects.property(Boolean::class.java).convention(true)
         val performanceBudgetEvidence: Property<String> = objects.property(String::class.java)
     }
 }

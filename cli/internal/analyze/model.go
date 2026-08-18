@@ -37,6 +37,9 @@ type Options struct {
 	HeapEvidence               *HeapEvidence
 	BaselineHeapEvidence       *HeapEvidence
 	CandidateHeapEvidence      *HeapEvidence
+	ArtifactDirectory          string
+	ArtifactsAutoDiscovered    bool
+	ArtifactSymbolNamespace    []byte
 	// ExternalSymbols opts into resolving stable ASM IDs from OwnerMap instead of the log.
 	ExternalSymbols bool
 	// RequireExplicitExternalSymbols is enabled by the CLI to prevent silent broken reports.
@@ -44,31 +47,66 @@ type Options struct {
 }
 
 type RouteStats struct {
-	Route          string
-	Count          int
-	Sampled        int
-	Failures       int
-	P50MS          uint64
-	P95MS          uint64
-	P95Approximate bool
-	MaxMS          uint64
-	AvgTTFBMS      uint64
-	BytesRx        uint64
-	BytesTx        uint64
-	OwnerSample    string
+	Route                 string
+	Count                 int
+	Failures              int
+	P50MS                 uint64
+	P95MS                 uint64
+	MaxMS                 uint64
+	AvgTTFBMS             uint64
+	BytesRx               uint64
+	BytesTx               uint64
+	OwnerSample           string
+	PeakRequestsPerSecond uint64
+	PeakWindowStartMS     uint64
+	BurstEstimateStatus   string
 }
 
 type ScreenStats struct {
-	Screen      string
-	WindowCount int
-	WindowMS    uint64
-	Frames      uint64
-	JankyFrames uint64
-	JankRatePct float64
-	AvgFPS      float64
-	MinFPS      float64
-	P95MS       uint64
-	MaxP99MS    uint64
+	Screen                 string
+	WindowCount            int
+	WindowMS               uint64
+	Frames                 uint64
+	JankyFrames            uint64
+	JankRatePct            float64
+	FPSMeasuredFrames      uint64
+	FPSMeasuredWindowMS    uint64
+	FPSMeasuredWindowCount int
+	FPSStatus              string
+	AvgFPS                 float64
+	MinFPS                 float64
+	FrameP50MS             uint64
+	FrameP95MS             uint64
+	FrameP99MS             uint64
+	FrameSource            string
+	FrameDeadlineUS        uint64
+	FrameDeadlineStatus    string
+	FrameDurationBuckets   []uint64
+	FrameDistributionState string
+}
+
+type ProcessExitStats struct {
+	Reason                uint64
+	ReasonLabel           string
+	Count                 uint64
+	LatestTimestampUnixMS uint64
+	Importance            uint64
+	MaxPSSKB              uint64
+	MaxRSSKB              uint64
+	Process               string
+}
+
+type IOStats struct {
+	Operation       string
+	MainThread      bool
+	Count           uint64
+	TotalDurationUS uint64
+	MaxDurationUS   uint64
+	Bytes           uint64
+	Screen          string
+	Flow            string
+	Step            string
+	Owner           string
 }
 
 type OwnerStats struct {
@@ -81,25 +119,24 @@ type OwnerStats struct {
 }
 
 type FlowStats struct {
-	Screen             string
-	Flow               string
-	Step               string
-	Owner              string
-	RouteSample        string
-	HTTPCount          int
-	HTTPFailed         int
-	HTTPP95MS          uint64
-	HTTPP95Approximate bool
-	StallCount         int
-	StallMaxMS         uint64
-	UIWindows          int
-	UIFrames           uint64
-	UIJank             uint64
-	UIJankPct          float64
-	LogSpam            uint64
-	ProblemCount       uint64
-	ProblemMaxMS       uint64
-	MemoryMaxKB        uint64
+	Screen       string
+	Flow         string
+	Step         string
+	Owner        string
+	RouteSample  string
+	HTTPCount    int
+	HTTPFailed   int
+	HTTPP95MS    uint64
+	StallCount   int
+	StallMaxMS   uint64
+	UIWindows    int
+	UIFrames     uint64
+	UIJank       uint64
+	UIJankPct    float64
+	LogSpam      uint64
+	ProblemCount uint64
+	ProblemMaxMS uint64
+	MemoryMaxKB  uint64
 }
 
 type LogSpamStats struct {
@@ -265,125 +302,239 @@ type HeapPathElement struct {
 }
 
 type CollectionSegment struct {
-	Source            string
-	Version           uint8
-	Status            string
-	Sealed            bool
-	TailBytes         uint64
-	TotalRecords      uint64
-	DataRecords       uint64
-	DictionaryRecords uint64
-	ControlRecords    uint64
-	RunID             string
-	ProcessInstanceID string
-	SessionID         string
-	SegmentIndex      uint64
-	ProcessName       string
-	EndReason         string
-	EndReasonCode     uint64
-	QualitySequence   uint64
-	QualityCounters   []NamedValue
+	Source                           string
+	Status                           string
+	Sealed                           bool
+	TailBytes                        uint64
+	TotalRecords                     uint64
+	DataRecords                      uint64
+	DictionaryRecords                uint64
+	ControlRecords                   uint64
+	RuntimeGraphLogicalCalls         uint64
+	RunID                            string
+	ProcessInstanceID                string
+	SessionID                        string
+	SegmentIndex                     uint64
+	ProcessName                      string
+	ProcessScope                     string
+	AllowedProcessCount              uint64
+	ProcessScopeFingerprint          string
+	ExpectedProcessCount             uint64
+	ExpectedProcessFingerprint       string
+	ProcessRosterDeclarationComplete bool
+	EndReason                        string
+	EndReasonCode                    uint64
+	QualitySequence                  uint64
+	QualityCounters                  []NamedValue
 }
 
 type CollectionQuality struct {
-	Level                         string   `json:"level"`
-	Complete                      bool     `json:"complete"`
-	ChainValid                    bool     `json:"chain_valid"`
-	SealedSegments                int      `json:"sealed_segments"`
-	UnsealedSegments              int      `json:"unsealed_segments"`
-	SegmentsWithQuality           int      `json:"segments_with_quality"`
-	SegmentsWithoutQuality        int      `json:"segments_without_quality"`
-	AcceptedEvents                uint64   `json:"accepted_events"`
-	WrittenEvents                 uint64   `json:"written_events"`
-	KnownLostEvents               uint64   `json:"known_lost_events"`
-	RuntimeGraphInputEvents       uint64   `json:"runtime_graph_input_events"`
-	RuntimeGraphEmittedEvents     uint64   `json:"runtime_graph_emitted_events"`
-	RuntimeGraphCompletenessRatio float64  `json:"runtime_graph_completeness_ratio"`
-	DictionaryOverflow            uint64   `json:"dictionary_overflow"`
-	DictionaryTruncated           uint64   `json:"dictionary_truncated"`
-	ChainIssues                   []string `json:"chain_issues,omitempty"`
-	Notices                       []string `json:"notices,omitempty"`
-	Reasons                       []string `json:"reasons,omitempty"`
+	Level                            string                     `json:"level"`
+	TrustScorePercent                float64                    `json:"trust_score_percent"`
+	TrustScoreModel                  string                     `json:"trust_score_model"`
+	TrustLevel                       string                     `json:"trust_level"`
+	TrustLevelExplanation            string                     `json:"trust_level_explanation"`
+	TrustComponents                  []CollectionTrustComponent `json:"trust_components"`
+	Complete                         bool                       `json:"complete"`
+	ChainValid                       bool                       `json:"chain_valid"`
+	ExactAdmission                   bool                       `json:"exact_admission"`
+	ProcessScope                     string                     `json:"process_scope"`
+	AllowedProcessCount              uint64                     `json:"allowed_process_count,omitempty"`
+	ProcessScopeFingerprint          string                     `json:"process_scope_fingerprint,omitempty"`
+	ExpectedProcessCount             uint64                     `json:"expected_process_count"`
+	ExpectedProcessFingerprint       string                     `json:"expected_process_fingerprint,omitempty"`
+	ObservedProcessCount             uint64                     `json:"observed_process_count"`
+	ProcessRosterDeclarationComplete bool                       `json:"process_roster_declaration_complete"`
+	ProcessRosterComplete            bool                       `json:"process_roster_complete"`
+	RunCohortCount                   uint64                     `json:"run_cohort_count"`
+	RunCohortConsistent              bool                       `json:"run_cohort_consistent"`
+	AllProcessesConfigured           bool                       `json:"all_processes_configured"`
+	ProcessScopeConsistent           bool                       `json:"process_scope_consistent"`
+	CounterInvariantsValid           bool                       `json:"counter_invariants_valid"`
+	QualityProgressionValid          bool                       `json:"quality_progression_valid"`
+	SealedSegments                   int                        `json:"sealed_segments"`
+	UnsealedSegments                 int                        `json:"unsealed_segments"`
+	SegmentsWithQuality              int                        `json:"segments_with_quality"`
+	SegmentsWithoutQuality           int                        `json:"segments_without_quality"`
+	AcceptedEvents                   uint64                     `json:"accepted_events"`
+	WrittenEvents                    uint64                     `json:"written_events"`
+	DecodedCommittedChunks           uint64                     `json:"decoded_committed_chunks"`
+	ReportedCommittedChunks          uint64                     `json:"reported_committed_chunks"`
+	KnownLostEvents                  uint64                     `json:"known_lost_events"`
+	WriterBackpressureCount          uint64                     `json:"writer_backpressure_count"`
+	WriterBackpressureNanos          uint64                     `json:"writer_backpressure_nanos"`
+	RuntimeHookFailures              uint64                     `json:"runtime_hook_failures,omitempty"`
+	CriticalRuntimeHookFailures      uint64                     `json:"critical_runtime_hook_failures,omitempty"`
+	RuntimeHookFailureDetails        []RuntimeHookFailureDetail `json:"runtime_hook_failure_details,omitempty"`
+	ArchiveEvictedRuns               uint64                     `json:"archive_evicted_runs,omitempty"`
+	ArchiveEvictedSegments           uint64                     `json:"archive_evicted_segments,omitempty"`
+	ArchiveEvictedBytes              uint64                     `json:"archive_evicted_bytes,omitempty"`
+	RuntimeGraphInputEvents          uint64                     `json:"runtime_graph_input_events"`
+	RuntimeGraphEmittedEvents        uint64                     `json:"runtime_graph_emitted_events"`
+	DecodedRuntimeGraphCalls         uint64                     `json:"decoded_runtime_graph_calls"`
+	RuntimeGraphEnabled              bool                       `json:"runtime_graph_enabled"`
+	RuntimeGraphCompletenessRatio    float64                    `json:"runtime_graph_completeness_ratio"`
+	RuntimeGraphStackMismatches      uint64                     `json:"runtime_graph_stack_mismatches"`
+	DamagedSegments                  int                        `json:"damaged_segments"`
+	ControlFailures                  uint64                     `json:"control_failures"`
+	BoundedEvidenceLoss              uint64                     `json:"bounded_evidence_loss"`
+	OtherEvidenceLoss                uint64                     `json:"other_evidence_loss"`
+	DictionaryOverflow               uint64                     `json:"dictionary_overflow"`
+	DictionaryTruncated              uint64                     `json:"dictionary_truncated"`
+	ChainIssues                      []string                   `json:"chain_issues,omitempty"`
+	Notices                          []string                   `json:"notices,omitempty"`
+	Reasons                          []string                   `json:"reasons,omitempty"`
+}
+
+type RuntimeHookFailureDetail struct {
+	Reason      string `json:"reason"`
+	Count       uint64 `json:"count"`
+	Impact      string `json:"impact"`
+	Explanation string `json:"explanation"`
+}
+
+type CollectionTrustComponent struct {
+	ID              string  `json:"id"`
+	Label           string  `json:"label"`
+	Weight          float64 `json:"weight"`
+	Excluded        bool    `json:"excluded"`
+	CoveragePercent float64 `json:"coverage_percent"`
+	EarnedPoints    float64 `json:"earned_points"`
+	MissingPoints   float64 `json:"missing_points"`
+	Explanation     string  `json:"explanation"`
 }
 
 type Summary struct {
-	Title              string
-	LogCount           int
-	EventCount         int
-	TotalRecordCount   uint64
-	DataRecordCount    uint64
-	DictionaryRecords  uint64
-	ControlRecords     uint64
-	DurationMS         uint64
-	Dictionary         int
-	HTTPCount          int
-	HTTPFailed         int
-	HTTPP95MS          uint64
-	HTTPP95Approximate bool
-	UIFrames           uint64
-	UIJank             uint64
-	UIWindowMS         uint64
-	UIJankPct          float64
-	UIAvgFPS           float64
-	UIMinFPS           float64
-	StallCount         int
-	StallMaxMS         uint64
-	ContextCount       int
-	MemoryCount        int
-	BatteryMinPct      uint64
-	BatteryLastPct     uint64
-	AvailMemoryMinKB   uint64
-	LowMemoryCount     int
-	TrafficRxMax       uint64
-	TrafficTxMax       uint64
-	BatteryStateLast   uint64
-	BatteryTempDeciC   int64
-	AvailMemoryLastKB  uint64
-	TotalMemoryKB      uint64
-	FreeStorageKB      uint64
-	TotalStorageKB     uint64
-	NetworkMetered     bool
-	NetworkValidated   bool
-	NetworkVPN         bool
-	DeviceRootKnown    bool
-	DeviceRooted       bool
-	MemoryMaxKB        uint64
-	Retained           uint64
-	Environment        RunEnvironment
-	Warnings           []string
-	CollectionSegments []CollectionSegment
-	CollectionQuality  CollectionQuality
-	LogGrowth          LogGrowthSummary
+	Title                    string
+	LogCount                 int
+	EventCount               int
+	TotalRecordCount         uint64
+	DataRecordCount          uint64
+	DictionaryRecords        uint64
+	ControlRecords           uint64
+	DurationMS               uint64
+	Dictionary               int
+	HTTPCount                int
+	HTTPFailed               int
+	HTTPP95MS                uint64
+	UIFrames                 uint64
+	UIJank                   uint64
+	UIWindowMS               uint64
+	UIJankPct                float64
+	UIFPSMeasuredFrames      uint64
+	UIFPSMeasuredWindowMS    uint64
+	UIFPSMeasuredWindowCount int
+	UIFPSStatus              string
+	UIAvgFPS                 float64
+	UIMinFPS                 float64
+	StallCount               int
+	StallMaxMS               uint64
+	ContextCount             int
+	MemoryCount              int
+	BatteryMinPct            uint64
+	BatteryLastPct           uint64
+	AvailMemoryMinKB         uint64
+	LowMemoryCount           int
+	TrafficRxMax             uint64
+	TrafficTxMax             uint64
+	BatteryStateLast         uint64
+	BatteryTempDeciC         int64
+	AvailMemoryLastKB        uint64
+	TotalMemoryKB            uint64
+	FreeStorageKB            uint64
+	TotalStorageKB           uint64
+	NetworkMetered           bool
+	NetworkValidated         bool
+	NetworkVPN               bool
+	DeviceRootKnown          bool
+	DeviceRooted             bool
+	MemoryMaxKB              uint64
+	Retained                 uint64
+	Environment              RunEnvironment
+	Warnings                 []string
+	CollectionSegments       []CollectionSegment
+	CollectionQuality        CollectionQuality
+	AnalysisInputs           AnalysisInputCompleteness
+	LogGrowth                LogGrowthSummary
+	EvidenceQuality          EvidenceQualityVector `json:"evidence_quality"`
+	CollectorSessions        int
+	CollectorFlagsAny        uint64
+	CollectorFlagsAll        uint64
 
-	Routes             []RouteStats
-	Screens            []ScreenStats
-	Owners             []OwnerStats
-	Flows              []FlowStats
-	LogSpam            []LogSpamStats
-	ProblemWindows     []ProblemWindowStats
-	RuntimeCalls       []RuntimeCallStats
-	CodeProblems       []CodeProblemStats
-	MemoryLeaks        []MemoryLeakSuspect
-	AppVersions        []NamedValue
-	Builds             []NamedValue
-	Devices            []NamedValue
-	SDKs               []NamedValue
-	Cohorts            []NamedValue
-	Processes          []NamedValue
-	Network            []NamedValue
-	Memory             []NamedValue
-	RetainedClasses    []NamedValue
-	RetainedAgeBuckets []NamedValue
-	JankStats          []NamedValue
-	Counters           []NamedValue
-	Gauges             []NamedValue
-	Influence          InfluenceSummary
+	Routes               []RouteStats
+	Screens              []ScreenStats
+	ProcessExits         []ProcessExitStats
+	IOOperations         []IOStats
+	Owners               []OwnerStats
+	Flows                []FlowStats
+	LogSpam              []LogSpamStats
+	ProblemWindows       []ProblemWindowStats
+	RuntimeCalls         []RuntimeCallStats
+	CodeProblems         []CodeProblemStats
+	MemoryLeaks          []MemoryLeakSuspect
+	AppVersions          []NamedValue
+	Builds               []NamedValue
+	Devices              []NamedValue
+	SDKs                 []NamedValue
+	Cohorts              []NamedValue
+	Processes            []NamedValue
+	Network              []NamedValue
+	Memory               []NamedValue
+	RetainedClasses      []NamedValue
+	RetainedAgeBuckets   []NamedValue
+	JankStats            []NamedValue
+	Counters             []NamedValue
+	Gauges               []NamedValue
+	Influence            InfluenceSummary
+	ProblemSchemaVersion string             `json:"problem_schema_version"`
+	ProblemSummary       ProblemSummary     `json:"problem_summary"`
+	Problems             []ProblemFinding   `json:"problems"`
+	ProblemIncidents     []ProblemFinding   `json:"problem_incidents"`
+	CategoryCoverage     []CategoryCoverage `json:"category_coverage"`
+	Detectors            []DetectorMetadata `json:"detectors"`
+}
+
+type EvidenceQualityVector struct {
+	SchemaVersion string                     `json:"schema_version"`
+	Overall       string                     `json:"overall"`
+	Headline      string                     `json:"headline"`
+	Dimensions    []EvidenceQualityDimension `json:"dimensions"`
+}
+
+type EvidenceQualityDimension struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Status      string `json:"status"`
+	Explanation string `json:"explanation"`
+}
+
+type AnalysisInputCompleteness struct {
+	Status                     string   `json:"status"`
+	Complete                   bool     `json:"complete"`
+	RuntimeEvidence            bool     `json:"runtime_evidence"`
+	SymbolsResolved            bool     `json:"symbols_resolved"`
+	SymbolMode                 string   `json:"symbol_mode"`
+	ClassGraph                 bool     `json:"class_graph"`
+	InstrumentationDiagnostics bool     `json:"instrumentation_diagnostics"`
+	HeapEvidence               bool     `json:"heap_evidence"`
+	ArtifactDirectory          string   `json:"artifact_directory,omitempty"`
+	ArtifactsAutoDiscovered    bool     `json:"artifacts_auto_discovered"`
+	ArtifactIdentityVerified   bool     `json:"artifact_identity_verified"`
+	Missing                    []string `json:"missing,omitempty"`
+	Explanation                string   `json:"explanation"`
 }
 
 type LogGrowthSummary struct {
 	Available         bool                     `json:"available"`
 	HistoryGeneration uint64                   `json:"history_generation"`
 	CapturedAtMS      uint64                   `json:"captured_at_ms"`
+	LiveCapturedAtMS  uint64                   `json:"live_captured_at_ms,omitempty"`
+	LatestDataEventMS uint64                   `json:"latest_data_event_at_ms,omitempty"`
+	InputBytes        uint64                   `json:"input_bytes,omitempty"`
+	SnapshotLagMS     uint64                   `json:"snapshot_lag_ms,omitempty"`
+	SnapshotLagBytes  uint64                   `json:"snapshot_lag_bytes,omitempty"`
+	FreshnessStatus   string                   `json:"freshness_status"`
+	FreshnessReason   string                   `json:"freshness_reason,omitempty"`
 	Sessions          []jhlog.LogGrowthSession `json:"sessions,omitempty"`
 	Days              []jhlog.LogGrowthDay     `json:"days,omitempty"`
 	CurrentSession    *jhlog.LogGrowthSession  `json:"current_session,omitempty"`
@@ -599,13 +750,29 @@ type Delta struct {
 }
 
 type Comparison struct {
-	Baseline         Summary
-	Candidate        Summary
-	Deltas           []Delta
-	Warnings         []string
-	CohortWarnings   []string
-	QualityWarnings  []string
-	ExposureWarnings []string
+	Baseline          Summary
+	Candidate         Summary
+	Deltas            []Delta
+	Warnings          []string
+	CohortWarnings    []string
+	QualityWarnings   []string
+	ExposureWarnings  []string
+	ProblemComparison ProblemComparison `json:"problem_comparison"`
+}
+
+type ProblemComparison struct {
+	SchemaVersion string         `json:"schema_version"`
+	Summary       ProblemSummary `json:"summary"`
+	Deltas        []ProblemDelta `json:"deltas"`
+}
+
+type ProblemDelta struct {
+	Fingerprint string          `json:"fingerprint"`
+	Status      string          `json:"status"`
+	Comparable  bool            `json:"comparable"`
+	Note        string          `json:"note,omitempty"`
+	Baseline    *ProblemFinding `json:"baseline,omitempty"`
+	Candidate   *ProblemFinding `json:"candidate,omitempty"`
 }
 
 type ThresholdConfig struct {
@@ -614,6 +781,20 @@ type ThresholdConfig struct {
 	RequireCleanCohorts bool                       `json:"require_clean_cohorts"`
 	Metrics             map[string]MetricThreshold `json:"metrics"`
 	Leaks               LeakThreshold              `json:"leaks"`
+	Problems            ProblemGateThreshold       `json:"problems"`
+}
+
+type ProblemGateThreshold struct {
+	MaxCritical       *int     `json:"max_critical,omitempty"`
+	MaxHigh           *int     `json:"max_high,omitempty"`
+	MaxMedium         *int     `json:"max_medium,omitempty"`
+	MaxSeverity       string   `json:"max_severity,omitempty"`
+	MinConfidence     string   `json:"min_confidence,omitempty"`
+	FailOnNew         bool     `json:"fail_on_new,omitempty"`
+	FailOnRegressed   bool     `json:"fail_on_regressed,omitempty"`
+	ExcludeCategories []string `json:"exclude_categories,omitempty"`
+	ExcludeDetectors  []string `json:"exclude_detectors,omitempty"`
+	RequiredCoverage  []string `json:"required_coverage,omitempty"`
 }
 
 type MetricThreshold struct {

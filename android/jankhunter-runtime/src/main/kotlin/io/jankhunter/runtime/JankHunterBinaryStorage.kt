@@ -11,7 +11,7 @@ interface JankHunterBinaryStorage {
      */
     val fileSizeLimitBytes: Long
 
-    /** Archive-retention budget owned and enforced by the storage implementation. */
+    /** Total budget for canonical Jank Hunter `.jhlog` files; unrelated artifacts do not consume it. */
     val archivesSizeLimitBytes: Long
 
     /**
@@ -22,6 +22,14 @@ interface JankHunterBinaryStorage {
     fun openWriter(fileName: String): JankHunterBinaryWriter
 
     fun createArtifact(fileName: String): JankHunterBinaryArtifact
+
+    /** Retains an existing path until [JankHunterBinaryArtifact.commit] releases it. */
+    fun protect(fileName: String): JankHunterBinaryArtifact = createArtifact(fileName)
+
+    /** Deletes an existing closed artifact without requiring a storage-specific adapter method. */
+    fun delete(fileName: String) {
+        createArtifact(fileName).abort()
+    }
 
     /** Removes closed artifacts while preserving every path or file name in [protectedPaths]. */
     fun cleanup(protectedPaths: Set<String> = emptySet())
@@ -38,32 +46,6 @@ interface JankHunterBinaryWriter {
     fun writeByte(byte: Byte)
 
     fun writeBytes(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size)
-
-    fun flush()
-
-    fun close()
-}
-
-/**
- * Optional capability for the circular `.jhlog` 1.x format. A storage that does not implement this
- * interface remains source/binary compatible and continues to receive sequential legacy v9 files.
- */
-interface JankHunterRandomAccessBinaryStorage : JankHunterBinaryStorage {
-
-    fun openRandomAccessWriter(fileName: String): JankHunterRandomAccessBinaryWriter
-}
-
-interface JankHunterRandomAccessBinaryWriter {
-
-    val path: String
-
-    fun sizeBytes(): Long
-
-    fun readBytes(position: Long, target: ByteArray, offset: Int = 0, length: Int = target.size)
-
-    fun writeBytes(position: Long, source: ByteArray, offset: Int = 0, length: Int = source.size)
-
-    fun truncate(size: Long)
 
     fun flush()
 

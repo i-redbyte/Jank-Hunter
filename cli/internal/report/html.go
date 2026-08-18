@@ -1,15 +1,21 @@
 package report
 
 import (
+	"bufio"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,8 +42,11 @@ type ReportOptions struct {
 	PresentationMode   bool
 	AnimatedBackground bool
 	GeneratedAt        string
-	Style              ReportStyle
 	Links              ReportLinks
+	// TransientOutput skips durability barriers for companion pages created inside a private
+	// temporary directory and immediately consumed by WriteBundle. Standalone and final reports
+	// keep the default durable atomic write path.
+	TransientOutput bool
 }
 
 // ReportLinks contains only artifacts that were successfully generated. Keeping links explicit
@@ -90,8 +99,7 @@ func WriteInspectWithOptions(path string, summary analyze.Summary, options Repor
 		"DependencyInjectionReportHref": options.Links.DependencyInjection,
 		"PresentationMode":              options.PresentationMode,
 		"AnimatedBackground":            options.AnimatedBackground,
-		"ReportStyle":                   options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func logGrowthJSON(summary analyze.LogGrowthSummary) template.JS {
@@ -119,8 +127,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"DependencyInjectionReportHref": options.Links.DependencyInjection,
 		"PresentationMode":              options.PresentationMode,
 		"AnimatedBackground":            options.AnimatedBackground,
-		"ReportStyle":                   options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport, options ReportOptions) error {
@@ -132,8 +139,7 @@ func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
-		"ReportStyle":         options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMathReport, options ReportOptions) error {
@@ -145,8 +151,7 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
-		"ReportStyle":         options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, options ReportOptions) error {
@@ -156,8 +161,7 @@ func WriteLeakInspectWithOptions(path string, leakReport analyze.LeakReport, opt
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
-		"ReportStyle":        options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareReport, options ReportOptions) error {
@@ -167,12 +171,10 @@ func WriteLeakCompareWithOptions(path string, leakReport analyze.LeakCompareRepo
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
-		"ReportStyle":        options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, title string, options ReportOptions) error {
-	influence = analyze.EnsureInfluenceViews(influence)
 	return execute(path, cachedInfluenceTemplate, map[string]any{
 		"GeneratedAt":        options.generatedAt(),
 		"Title":              title,
@@ -180,8 +182,7 @@ func WriteInfluenceWithOptions(path string, influence analyze.InfluenceSummary, 
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
-		"ReportStyle":        options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteInstrumentationDiagnosticsWithOptions(
@@ -195,8 +196,7 @@ func WriteInstrumentationDiagnosticsWithOptions(
 		"MainReportHref":     options.Links.Main,
 		"PresentationMode":   options.PresentationMode,
 		"AnimatedBackground": options.AnimatedBackground,
-		"ReportStyle":        options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func WriteDependencyInjectionWithOptions(
@@ -210,48 +210,27 @@ func WriteDependencyInjectionWithOptions(
 		"MainReportHref":      options.Links.Main,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
-		"ReportStyle":         options.Style.normalized(),
-	})
+	}, options.TransientOutput)
 }
 
 func MathReportPath(path string) string {
 	return canonicalCompanionReportPath(path, "math")
 }
 
-func MathReportHref(path string) string {
-	return filepath.Base(MathReportPath(path))
-}
-
 func LeakReportPath(path string) string {
 	return canonicalCompanionReportPath(path, "leaks")
-}
-
-func LeakReportHref(path string) string {
-	return filepath.Base(LeakReportPath(path))
 }
 
 func InfluenceReportPath(path string) string {
 	return canonicalCompanionReportPath(path, "influence")
 }
 
-func InfluenceReportHref(path string) string {
-	return filepath.Base(InfluenceReportPath(path))
-}
-
 func DiagnosticsReportPath(path string) string {
 	return canonicalCompanionReportPath(path, "diagnostics")
 }
 
-func DiagnosticsReportHref(path string) string {
-	return filepath.Base(DiagnosticsReportPath(path))
-}
-
 func DependencyInjectionReportPath(path string) string {
 	return canonicalCompanionReportPath(path, "di")
-}
-
-func DependencyInjectionReportHref(path string) string {
-	return filepath.Base(DependencyInjectionReportPath(path))
 }
 
 func companionReportPath(primary, suffix string) string {
@@ -323,7 +302,7 @@ func (c *cachedReportTemplate) parsed() (*template.Template, error) {
 		funcs["deferredRows"] = func(rowTemplate string, rows any, initial, chunkSize, columns int, label string) (template.HTML, error) {
 			return renderDeferredRows(parsed, rowTemplate, rows, initial, chunkSize, columns, label)
 		}
-		parsed, c.err = template.New(c.name).Funcs(funcs).Parse(c.source)
+		parsed, c.err = template.New(c.name).Funcs(funcs).Parse(sharedComponentsTemplate + c.source)
 		c.tmpl = parsed
 	})
 	if c.err != nil {
@@ -418,26 +397,61 @@ func renderDeferredRows(
 	return template.HTML(output.String()), nil
 }
 
-func execute(path string, cached *cachedReportTemplate, data any) error {
+func execute(path string, cached *cachedReportTemplate, data any, transient bool) error {
 	tmpl, err := cached.parsed()
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(path, 0o644, func(file *os.File) error {
-		if err := tmpl.Execute(file, data); err != nil {
-			return fmt.Errorf("render %s report: %w", cached.name, err)
+	write := func(file *os.File) error {
+		// Pagination deliberately emits small script-safe fragments around every closing HTML tag.
+		// Buffering keeps that safety property without turning a large report into hundreds of
+		// thousands of file system calls. The buffer is flushed only after both rendering stages
+		// succeed, so the durable atomic writer never publishes a partial report.
+		buffered := bufio.NewWriterSize(file, 256*1024)
+		reader, writer := io.Pipe()
+		rendered := make(chan error, 1)
+		go func() {
+			renderErr := tmpl.Execute(writer, data)
+			if renderErr != nil {
+				renderErr = fmt.Errorf("render %s report: %w", cached.name, renderErr)
+			}
+			_ = writer.CloseWithError(renderErr)
+			rendered <- renderErr
+		}()
+		paginateErr := paginateReportTables(reader, buffered)
+		_ = reader.CloseWithError(paginateErr)
+		renderErr := <-rendered
+		if paginateErr != nil {
+			return fmt.Errorf("paginate %s report tables: %w", cached.name, paginateErr)
+		}
+		if renderErr != nil {
+			return renderErr
+		}
+		if err := buffered.Flush(); err != nil {
+			return fmt.Errorf("flush %s report: %w", cached.name, err)
 		}
 		return nil
-	})
+	}
+	if !transient {
+		return atomicfile.Write(path, 0o644, write)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create transient %s report: %w", cached.name, err)
+	}
+	return errors.Join(write(file), file.Close())
 }
 
 func reportTemplateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"reportCSS": func(style ReportStyle, includeMath bool) template.CSS {
-			return template.CSS(reportStylesheet(style, includeMath))
+		"reportCSS": func(includeMath bool) template.CSS {
+			return template.CSS(reportStylesheet(includeMath))
 		},
 		"reportJS": func() template.JS {
 			return template.JS(reportJS)
+		},
+		"problemSearchJS": func() template.JS {
+			return template.JS(problemSearchJS)
 		},
 		"logGrowthCSS": func() template.CSS {
 			return template.CSS(logGrowthCSS)
@@ -492,15 +506,22 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return float64(part) * 100 / float64(total)
 		},
+		"sub": func(left, right int) int {
+			return max(0, left-right)
+		},
 		"fpsScore": func(value float64) float64 {
 			return clampPct(value * 100 / 60)
 		},
 		"severityClass": func(value string) string {
 			switch value {
+			case "critical":
+				return "sev-critical"
 			case "high":
 				return "sev-high"
 			case "medium":
 				return "sev-medium"
+			case "low":
+				return "sev-low"
 			default:
 				return "sev-ok"
 			}
@@ -532,6 +553,9 @@ func reportTemplateFuncs() template.FuncMap {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
 		"humanDuration":              humanDuration,
+		"humanMicros":                humanMicroseconds,
+		"unixMillisTime":             unixMillisTime,
+		"formatDurationNs":           formatDurationNs,
 		"dataSize":                   humanDataSizeKB,
 		"ruCount":                    russianCount,
 		"tip":                        tooltipHTML,
@@ -549,6 +573,9 @@ func reportTemplateFuncs() template.FuncMap {
 		"codeProblemCategoryOptions": codeProblemCategoryOptions,
 		"codeProblemCategories":      codeProblemCategoryStats,
 		"codeProblemSeverities":      codeProblemSeverityStats,
+		"codeProblemEvidenceKey":     codeProblemEvidenceKey,
+		"codeProblemEvidenceArchive": codeProblemEvidenceArchive,
+		"codeProblemCompareArchive":  codeProblemCompareArchive,
 		"limitRows":                  limitRows,
 		"rowLimitNote":               rowLimitNote,
 		"leakObjectKindOptions":      leakObjectKindOptions,
@@ -570,13 +597,64 @@ func reportTemplateFuncs() template.FuncMap {
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
-		"influenceRoleLabel":     influenceRoleLabel,
-		"influenceGraphData":     influenceGraphData,
-		"influenceEvidenceLabel": influenceEvidenceLabel,
-		"routeCompareRows":       routeCompareRows,
-		"screenCompareRows":      screenCompareRows,
-		"ownerCompareRows":       ownerCompareRows,
-		"flowCompareRows":        flowCompareRows,
+		"problemCategoryLabel":       problemCategoryLabel,
+		"problemCoverageStatusLabel": problemCoverageStatusLabel,
+		"evidenceQualityStatusLabel": evidenceQualityStatusLabel,
+		"problemStatusLabel":         problemStatusLabel,
+		"problemClaimLabel":          problemClaimLabel,
+		"problemLocationText":        problemLocationText,
+		"problemEvidenceLabel":       problemEvidenceLabel,
+		"problemEvidenceHelp":        problemEvidenceHelp,
+		"problemEvidenceDisplay":     problemEvidenceDisplay,
+		"problemEvidenceUnit":        problemEvidenceUnit,
+		"problemEvidenceThreshold":   problemEvidenceThreshold,
+		"problemRiskComponentLabel":  problemRiskComponentLabel,
+		"problemPrimaryRecommendation": func(value analyze.ProblemFinding) *analyze.ProblemRecommendation {
+			if len(value.Recommendations) == 0 {
+				return nil
+			}
+			return &value.Recommendations[0]
+		},
+		"problemDeltaFinding": func(value analyze.ProblemDelta) analyze.ProblemFinding {
+			if value.Candidate != nil {
+				return *value.Candidate
+			}
+			if value.Baseline != nil {
+				return *value.Baseline
+			}
+			return analyze.ProblemFinding{}
+		},
+		"riskWidth": func(value int) template.CSS {
+			return template.CSS(fmt.Sprintf("width:%d%%", min(100, max(0, value))))
+		},
+		"trustLevelLabel": trustLevelLabel,
+		"processScopeLabel": func(value string) string {
+			return processScopeLabel(value)
+		},
+		"influenceRoleLabel":      influenceRoleLabel,
+		"influenceGraphData":      influenceGraphData,
+		"influenceEvidenceLabel":  influenceEvidenceLabel,
+		"routeCompareRows":        routeCompareRows,
+		"screenCompareRows":       screenCompareRows,
+		"ownerCompareRows":        ownerCompareRows,
+		"flowCompareRows":         flowCompareRows,
+		"uiScreenInsights":        uiScreenInsights,
+		"semanticWorkOverviews":   semanticWorkOverviews,
+		"semanticWorkRows":        semanticWorkRows,
+		"ordinaryRuntimeCalls":    ordinaryRuntimeCalls,
+		"scenarioInsights":        scenarioInsights,
+		"customMetricInsights":    customMetricInsights,
+		"primaryCategoryCoverage": primaryCategoryCoverage,
+		"findingCategoryCoverage": findingCategoryCoverage,
+		"problemCards": func(summary analyze.Summary) []analyze.ProblemFinding {
+			if len(summary.ProblemIncidents) > 0 {
+				return summary.ProblemIncidents
+			}
+			return summary.Problems
+		},
+		"hiddenCoverageSummary":  hiddenCoverageSummary,
+		"collectionWindowNotice": collectionWindowNotice,
+		"collectorCapabilities":  collectorCapabilities,
 		"summaryLogSpam":         summaryLogSpamTotal,
 		"summaryProblemWindows":  summaryProblemWindowTotal,
 		"perMinute":              perMinute,
@@ -972,6 +1050,30 @@ func humanDuration(ms uint64) string {
 		parts = append(parts, fmt.Sprintf("%d сек", seconds))
 	}
 	return strings.Join(parts, " ")
+}
+
+func humanMicroseconds(us uint64) string {
+	if us < 1_000 {
+		return fmt.Sprintf("%d мкс", us)
+	}
+	return fmt.Sprintf("%.2f мс", float64(us)/1_000)
+}
+
+func unixMillisTime(ms uint64) string {
+	if ms == 0 || ms > math.MaxInt64 {
+		return "нет данных"
+	}
+	return time.UnixMilli(int64(ms)).UTC().Format(time.RFC3339)
+}
+
+func formatDurationNs(ns uint64) string {
+	if ns == 0 {
+		return "0 мс"
+	}
+	if ns < 1_000_000 {
+		return fmt.Sprintf("%.3f мс", float64(ns)/1_000_000)
+	}
+	return humanDuration(ns / 1_000_000)
 }
 
 func humanDataSizeKB(kb uint64) string {
@@ -1639,6 +1741,108 @@ func codeProblemMetric(signal analyze.CodeProblemSignal) string {
 	return strings.Join(parts, " · ")
 }
 
+func codeProblemEvidenceKey(problem analyze.CodeProblemStats) string {
+	return fmt.Sprintf("%d:%s%s", len(problem.ClassName), problem.ClassName, problem.Method)
+}
+
+// codeProblemEvidenceArchive stores the complete registry model once instead of repeating deeply
+// nested evidence markup in every autonomous report row. The gzip/base64 stream is inert until a
+// user searches the complete registry or opens a row; the visible table remains paginated.
+type codeProblemEvidencePayload struct {
+	Mode     string                     `json:"mode"`
+	Problems []analyze.CodeProblemStats `json:"problems,omitempty"`
+	Rows     []codeProblemCompareRow    `json:"rows,omitempty"`
+}
+
+func encodeCodeProblemEvidenceArchive(payload codeProblemEvidencePayload) template.JS {
+	var output strings.Builder
+	encoded := base64.NewEncoder(base64.RawURLEncoding, &output)
+	compressed, err := gzip.NewWriterLevel(encoded, gzip.BestSpeed)
+	if err != nil {
+		_ = encoded.Close()
+		return ""
+	}
+	encodeErr := writeCodeProblemEvidencePayload(compressed, payload)
+	compressErr := compressed.Close()
+	base64Err := encoded.Close()
+	if encodeErr != nil || compressErr != nil || base64Err != nil {
+		return ""
+	}
+	return template.JS(output.String())
+}
+
+// writeCodeProblemEvidencePayload encodes the large registry one record at a time. json.Encoder
+// otherwise marshals the complete top-level slice into an intermediate buffer before the first
+// gzip write; a representative registry is tens of megabytes before compression and used to
+// dominate report-generation peak RSS. Marshaling one record at a time preserves the compact wire
+// representation while keeping the largest transient allocation bounded by one evidence record.
+func writeCodeProblemEvidencePayload(target io.Writer, payload codeProblemEvidencePayload) error {
+	mode, err := json.Marshal(payload.Mode)
+	if err != nil {
+		return fmt.Errorf("encode code problem evidence mode: %w", err)
+	}
+	if err := writeAll(target, []byte(`{"mode":`)); err != nil {
+		return err
+	}
+	if err := writeAll(target, mode); err != nil {
+		return err
+	}
+	if len(payload.Problems) > 0 {
+		if err := writeAll(target, []byte(`,"problems":[`)); err != nil {
+			return err
+		}
+		for index := range payload.Problems {
+			if index > 0 {
+				if err := writeAll(target, []byte{','}); err != nil {
+					return err
+				}
+			}
+			row, err := json.Marshal(&payload.Problems[index])
+			if err != nil {
+				return fmt.Errorf("encode code problem evidence row %d: %w", index, err)
+			}
+			if err := writeAll(target, row); err != nil {
+				return err
+			}
+		}
+		if err := writeAll(target, []byte{']'}); err != nil {
+			return err
+		}
+	}
+	if len(payload.Rows) > 0 {
+		if err := writeAll(target, []byte(`,"rows":[`)); err != nil {
+			return err
+		}
+		for index := range payload.Rows {
+			if index > 0 {
+				if err := writeAll(target, []byte{','}); err != nil {
+					return err
+				}
+			}
+			row, err := json.Marshal(&payload.Rows[index])
+			if err != nil {
+				return fmt.Errorf("encode code problem comparison row %d: %w", index, err)
+			}
+			if err := writeAll(target, row); err != nil {
+				return err
+			}
+		}
+		if err := writeAll(target, []byte{']'}); err != nil {
+			return err
+		}
+	}
+	return writeAll(target, []byte("}\n"))
+}
+
+func codeProblemEvidenceArchive(problems []analyze.CodeProblemStats) template.JS {
+	return encodeCodeProblemEvidenceArchive(codeProblemEvidencePayload{Mode: "inspect", Problems: problems})
+}
+
+func codeProblemCompareArchive(comparison analyze.Comparison) template.JS {
+	rows := codeProblemCompareRows(comparison)
+	return encodeCodeProblemEvidenceArchive(codeProblemEvidencePayload{Mode: "compare", Rows: rows})
+}
+
 type memoryLeakCompareRow struct {
 	Candidate       analyze.MemoryLeakSuspect
 	HasBaseline     bool
@@ -1685,20 +1889,17 @@ func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow
 		}
 		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
 	})
-	if len(out) > 80 {
-		out = out[:80]
-	}
 	return out
 }
 
 type codeProblemCompareRow struct {
-	Candidate     analyze.CodeProblemStats
-	HasBaseline   bool
-	Comparable    bool
-	BaselineScore float64
-	DeltaScore    float64
-	Status        string
-	Severity      string
+	Candidate     analyze.CodeProblemStats `json:"candidate"`
+	HasBaseline   bool                     `json:"has_baseline"`
+	Comparable    bool                     `json:"comparable"`
+	BaselineScore float64                  `json:"baseline_score"`
+	DeltaScore    float64                  `json:"delta_score"`
+	Status        string                   `json:"status"`
+	Severity      string                   `json:"severity"`
 }
 
 func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareRow {
@@ -1760,9 +1961,6 @@ func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareR
 		}
 		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
 	})
-	if len(out) > 120 {
-		out = out[:120]
-	}
 	return out
 }
 
@@ -1955,15 +2153,283 @@ func compareDeltaInterval(value string) string {
 
 func severityLabel(value string) string {
 	switch value {
-	case "high":
+	case "critical":
 		return "критично"
+	case "high":
+		return "высокий риск"
 	case "medium":
-		return "предупреждение"
+		return "средний риск"
+	case "low":
+		return "низкий риск"
+	case "info":
+		return "информация"
 	case "ok":
 		return "норма"
 	default:
 		return "норма"
 	}
+}
+
+func problemCategoryLabel(value string) string {
+	switch value {
+	case analyze.ProblemCategoryStability:
+		return "Стабильность"
+	case analyze.ProblemCategoryUI:
+		return "UI и главный поток"
+	case analyze.ProblemCategoryNetwork:
+		return "Сеть"
+	case analyze.ProblemCategoryMemory:
+		return "Память и GC"
+	case analyze.ProblemCategoryIO:
+		return "I/O и хранилище"
+	case analyze.ProblemCategoryCPU:
+		return "CPU и задачи"
+	case analyze.ProblemCategoryPower:
+		return "Энергия и нагрев"
+	case analyze.ProblemCategoryLogs:
+		return "Логи"
+	default:
+		return value
+	}
+}
+
+func problemCoverageStatusLabel(value string) string {
+	switch value {
+	case "healthy":
+		return "проблем не найдено"
+	case "problems_found":
+		return "есть проблемы"
+	case "not_measured":
+		return "данные не собирались"
+	case "insufficient_data":
+		return "нужно больше данных"
+	case "collection_degraded":
+		return "часть данных потеряна"
+	default:
+		return value
+	}
+}
+
+func evidenceQualityStatusLabel(value string) string {
+	switch value {
+	case analyze.EvidenceQualityComplete:
+		return "данных достаточно"
+	case analyze.EvidenceQualityDegraded:
+		return "есть ограничения сбора"
+	case analyze.EvidenceQualityInsufficient:
+		return "данных недостаточно"
+	case analyze.EvidenceQualityNotMeasured:
+		return "не проверялось"
+	case analyze.EvidenceQualityNotCalibrated:
+		return "нет эталонной проверки"
+	default:
+		return value
+	}
+}
+
+func problemStatusLabel(value string) string {
+	switch value {
+	case "new":
+		return "новая"
+	case "regressed":
+		return "ухудшилась"
+	case "persistent":
+		return "сохранилась"
+	case "improved":
+		return "улучшилась"
+	case "resolved":
+		return "исправлена"
+	default:
+		return "зафиксирована"
+	}
+}
+
+func problemClaimLabel(value string) string {
+	switch value {
+	case "linked":
+		return "связь подтверждена данными"
+	case "correlated":
+		return "события совпали по контексту"
+	case "hypothesis":
+		return "вероятная причина"
+	default:
+		return "причину нужно проверить"
+	}
+}
+
+func problemEvidenceLabel(value analyze.ProblemEvidence) string {
+	lower := strings.ToLower(value.Name)
+	if strings.Contains(lower, "p95") {
+		if value.Sample != nil && *value.Sample == 1 {
+			return "Длительность вызова"
+		}
+		if value.Sample != nil && *value.Sample < 20 {
+			return "Задержка верхней части выборки"
+		}
+		return "Задержка верхних 5%"
+	}
+	replacer := strings.NewReplacer(
+		"Jank rate", "Доля медленных кадров",
+		"Frame deadline", "Целевое время кадра",
+		"Retained size", "Оценка удержанной памяти",
+		"Low-memory samples", "Сигналы нехватки памяти",
+		"Max PSS", "Максимальный PSS",
+	)
+	return replacer.Replace(value.Name)
+}
+
+func problemEvidenceHelp(value analyze.ProblemEvidence) string {
+	lower := strings.ToLower(value.Name)
+	if strings.Contains(lower, "p95") {
+		if value.Sample != nil && *value.Sample == 1 {
+			return "Длительность единственного записанного вызова. Процентиль для одного наблюдения не используется, потому что он вводит в заблуждение."
+		}
+		if value.Sample != nil && *value.Sample < 20 {
+			return "Оценка задержки среди самых медленных вызовов. Выборка небольшая, поэтому значение нужно подтвердить повторным прогоном."
+		}
+		return "95-й процентиль: 95% вызовов завершились не дольше этого времени, а оставшиеся 5% были медленнее."
+	}
+	if strings.Contains(lower, "jank rate") {
+		return "Доля кадров, которые не уложились в целевое время отображения и могли выглядеть как рывок интерфейса."
+	}
+	return "Измеренное значение, на котором основана карточка проблемы. Сравните его с ориентиром ниже."
+}
+
+func problemEvidenceUnit(value string) string {
+	replacer := strings.NewReplacer(
+		"requests/s", "запросов/с",
+		"events/s", "операций/с",
+		"requests", "запросов",
+		"events", "событий",
+		"samples", "замеров",
+		"bytes", "байт",
+		"ms", "мс",
+		"KB", "КБ",
+	)
+	return replacer.Replace(value)
+}
+
+func problemEvidenceDisplay(value analyze.ProblemEvidence) string {
+	observed := strings.TrimSpace(value.Observed)
+	if count, err := strconv.ParseUint(observed, 10, 64); err == nil {
+		switch value.Unit {
+		case "requests":
+			return russianCount(count, "запрос", "запроса", "запросов")
+		case "events":
+			return russianCount(count, "событие", "события", "событий")
+		case "samples":
+			return russianCount(count, "замер", "замера", "замеров")
+		}
+	}
+	if value.Unit == "" {
+		return observed
+	}
+	return observed + " " + problemEvidenceUnit(value.Unit)
+}
+
+func problemEvidenceThreshold(value string) string {
+	localized := problemEvidenceUnit(value)
+	if strings.HasPrefix(localized, "< ") {
+		return "обычно меньше " + strings.TrimPrefix(localized, "< ")
+	}
+	return "ориентир " + localized
+}
+
+func problemRiskComponentLabel(value string) string {
+	switch value {
+	case "impact":
+		return "Влияние на пользователя"
+	case "magnitude":
+		return "Сила отклонения"
+	case "exposure":
+		return "Частота проявления"
+	case "breadth":
+		return "Охват сценариев"
+	case "compounding":
+		return "Сочетание симптомов"
+	default:
+		return value
+	}
+}
+
+func problemLocationText(values []analyze.ProblemLocation) string {
+	type location struct {
+		fields map[string]string
+		text   string
+	}
+
+	candidates := make([]location, 0, len(values))
+	for _, value := range values {
+		parts := make([]string, 0, 8)
+		fields := make(map[string]string, 8)
+		for _, item := range []struct {
+			name  string
+			label string
+			value string
+		}{
+			{name: "screen", label: "экран", value: value.Screen},
+			{name: "flow", label: "сценарий", value: value.Flow},
+			{name: "step", label: "шаг", value: value.Step},
+			{name: "route", label: "маршрут", value: value.Route},
+			{name: "owner", label: "источник", value: value.Owner},
+			{name: "class", label: "класс", value: value.Class},
+			{name: "method", label: "метод", value: value.Method},
+			{name: "process", label: "процесс", value: value.Process},
+		} {
+			item.value = strings.TrimSpace(item.value)
+			if !isUnknownReportValue(item.value) {
+				fields[item.name] = item.value
+				parts = append(parts, item.label+" "+item.value)
+			}
+		}
+		if len(parts) > 0 {
+			candidates = append(candidates, location{fields: fields, text: strings.Join(parts, " · ")})
+		}
+	}
+	locations := make([]string, 0, len(candidates))
+	for index, candidate := range candidates {
+		contained := false
+		for otherIndex, other := range candidates {
+			if index == otherIndex || len(candidate.fields) >= len(other.fields) {
+				continue
+			}
+			if problemLocationContainedBy(candidate.fields, other.fields) {
+				contained = true
+				break
+			}
+		}
+		if !contained {
+			locations = append(locations, candidate.text)
+		}
+	}
+	locations = uniqueProblemStrings(locations)
+	if len(locations) == 0 {
+		return "точное место не определено"
+	}
+	return strings.Join(locations, "; ")
+}
+
+func problemLocationContainedBy(candidate, other map[string]string) bool {
+	for name, value := range candidate {
+		otherValue, ok := other[name]
+		if !ok || !strings.EqualFold(value, otherValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueProblemStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func codeSeverityLabel(value string) string {
@@ -1983,6 +2449,38 @@ func confidenceLabel(value string) string {
 		return "низкое"
 	default:
 		return "неизвестно"
+	}
+}
+
+func trustLevelLabel(value string) string {
+	switch value {
+	case "excellent":
+		return "максимальное"
+	case "high":
+		return "высокое"
+	case "sufficient":
+		return "достаточное"
+	case "limited":
+		return "ограниченное"
+	case "low":
+		return "низкое"
+	default:
+		return "неизвестно"
+	}
+}
+
+func processScopeLabel(value string) string {
+	switch value {
+	case "all_processes":
+		return "все процессы"
+	case "main_process_only":
+		return "только main-процесс"
+	case "process_allowlist":
+		return "allowlist процессов"
+	case "mixed":
+		return "смешанный"
+	default:
+		return "неизвестный"
 	}
 }
 
@@ -2062,22 +2560,26 @@ func routeCompareRows(baseline, candidate analyze.Summary) []routeCompareRow {
 }
 
 type screenCompareRow struct {
-	Screen           string
-	BaselineFrames   uint64
-	CandidateFrames  uint64
-	BaselineJankPct  float64
-	CandidateJankPct float64
-	DeltaJankPct     float64
-	BaselineAvgFPS   float64
-	CandidateAvgFPS  float64
-	DeltaFPS         float64
-	BaselineP95MS    uint64
-	CandidateP95MS   uint64
-	Severity         string
-	Comparable       bool
-	ComparisonNote   string
-	BaselinePresent  bool
-	CandidatePresent bool
+	Screen                       string
+	BaselineFrames               uint64
+	CandidateFrames              uint64
+	BaselineJankPct              float64
+	CandidateJankPct             float64
+	DeltaJankPct                 float64
+	BaselineAvgFPS               float64
+	CandidateAvgFPS              float64
+	DeltaFPS                     float64
+	BaselineFPSAvailable         bool
+	CandidateFPSAvailable        bool
+	FPSComparable                bool
+	BaselineFrameP95MS           uint64
+	CandidateFrameP95MS          uint64
+	FrameTailComparisonAvailable bool
+	Severity                     string
+	Comparable                   bool
+	ComparisonNote               string
+	BaselinePresent              bool
+	CandidatePresent             bool
 }
 
 func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
@@ -2097,7 +2599,13 @@ func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
 		b, hasBaseline := base[name]
 		c, hasCandidate := cand[name]
 		deltaJank := c.JankRatePct - b.JankRatePct
-		deltaFPS := c.AvgFPS - b.AvgFPS
+		baselineFPSAvailable := b.AvgFPS > 0
+		candidateFPSAvailable := c.AvgFPS > 0
+		fpsComparable := baselineFPSAvailable && candidateFPSAvailable
+		deltaFPS := 0.0
+		if fpsComparable {
+			deltaFPS = c.AvgFPS - b.AvgFPS
+		}
 		comparable := hasBaseline && hasCandidate && b.Frames > 0 && c.Frames > 0
 		severity := "ok"
 		note := comparePresenceNote(hasBaseline, hasCandidate, "экран")
@@ -2109,22 +2617,26 @@ func screenCompareRows(baseline, candidate analyze.Summary) []screenCompareRow {
 			}
 		}
 		rows = append(rows, screenCompareRow{
-			Screen:           name,
-			BaselineFrames:   b.Frames,
-			CandidateFrames:  c.Frames,
-			BaselineJankPct:  b.JankRatePct,
-			CandidateJankPct: c.JankRatePct,
-			DeltaJankPct:     deltaJank,
-			BaselineAvgFPS:   b.AvgFPS,
-			CandidateAvgFPS:  c.AvgFPS,
-			DeltaFPS:         deltaFPS,
-			BaselineP95MS:    b.P95MS,
-			CandidateP95MS:   c.P95MS,
-			Severity:         severity,
-			Comparable:       comparable,
-			ComparisonNote:   note,
-			BaselinePresent:  hasBaseline,
-			CandidatePresent: hasCandidate,
+			Screen:                       name,
+			BaselineFrames:               b.Frames,
+			CandidateFrames:              c.Frames,
+			BaselineJankPct:              b.JankRatePct,
+			CandidateJankPct:             c.JankRatePct,
+			DeltaJankPct:                 deltaJank,
+			BaselineAvgFPS:               b.AvgFPS,
+			CandidateAvgFPS:              c.AvgFPS,
+			DeltaFPS:                     deltaFPS,
+			BaselineFPSAvailable:         baselineFPSAvailable,
+			CandidateFPSAvailable:        candidateFPSAvailable,
+			FPSComparable:                fpsComparable,
+			BaselineFrameP95MS:           b.FrameP95MS,
+			CandidateFrameP95MS:          c.FrameP95MS,
+			FrameTailComparisonAvailable: b.FrameDistributionState == "mergeable_histogram_v2" && c.FrameDistributionState == "mergeable_histogram_v2",
+			Severity:                     severity,
+			Comparable:                   comparable,
+			ComparisonNote:               note,
+			BaselinePresent:              hasBaseline,
+			CandidatePresent:             hasCandidate,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -2837,6 +3349,405 @@ func flowCardSeverity(flow analyze.FlowStats) string {
 		return "medium"
 	}
 	return "ok"
+}
+
+type scenarioInsight struct {
+	Title       string
+	Severity    string
+	Status      string
+	Context     string
+	Summary     string
+	Impact      string
+	FirstCheck  string
+	SignalCount int
+	Tooltip     string
+}
+
+func scenarioInsights(summary analyze.Summary) []scenarioInsight {
+	insights := make([]scenarioInsight, 0, len(summary.Flows))
+	for _, flow := range summary.Flows {
+		if !flowNeedsAttention(flow) {
+			continue
+		}
+		severity, status := scenarioVerdict(flow)
+		signals := scenarioSignalSummary(flow)
+		insights = append(insights, scenarioInsight{
+			Title:       scenarioTitle(flow),
+			Severity:    severity,
+			Status:      status,
+			Context:     scenarioContext(flow),
+			Summary:     strings.Join(signals, " "),
+			Impact:      scenarioImpact(flow),
+			FirstCheck:  scenarioFirstCheck(flow),
+			SignalCount: scenarioSignalCount(flow),
+			Tooltip:     "Карточка объединяет сигналы, записанные в одном экранном и сценарном контексте, и предлагает первый практический шаг проверки.",
+		})
+	}
+	sort.SliceStable(insights, func(i, j int) bool {
+		left := severityOrder(insights[i].Severity)
+		right := severityOrder(insights[j].Severity)
+		if left != right {
+			return left > right
+		}
+		if insights[i].SignalCount != insights[j].SignalCount {
+			return insights[i].SignalCount > insights[j].SignalCount
+		}
+		return insights[i].Title < insights[j].Title
+	})
+	if len(insights) > 8 {
+		return insights[:8]
+	}
+	return insights
+}
+
+func flowNeedsAttention(flow analyze.FlowStats) bool {
+	return flow.ProblemCount > 0 || flow.HTTPFailed > 0 || flow.HTTPP95MS >= 700 ||
+		flow.StallCount > 0 || flow.UIJank > 0 || flow.LogSpam >= 10 || flow.MemoryMaxKB >= 256*1024
+}
+
+func scenarioVerdict(flow analyze.FlowStats) (string, string) {
+	switch {
+	case flow.StallMaxMS >= 1500 || flow.UIJankPct >= 20 || flow.HTTPFailed >= 3:
+		return "critical", "критично"
+	case flow.StallMaxMS >= 700 || flow.UIJankPct >= 10 || flow.HTTPP95MS >= 1500 || flow.HTTPFailed > 0:
+		return "high", "высокий риск"
+	case flow.StallCount > 0 || flow.UIJankPct >= 5 || flow.HTTPP95MS >= 700 || flow.LogSpam >= 50 || flow.ProblemCount > 0:
+		return "medium", "нужно проверить"
+	default:
+		return "low", "наблюдение"
+	}
+}
+
+func scenarioTitle(flow analyze.FlowStats) string {
+	parts := make([]string, 0, 2)
+	if !isUnknownReportValue(flow.Flow) {
+		parts = append(parts, flow.Flow)
+	} else if !isUnknownReportValue(flow.Screen) {
+		parts = append(parts, flow.Screen)
+	} else if !isUnknownReportValue(flow.Owner) {
+		parts = append(parts, flow.Owner)
+	} else if !isUnknownReportValue(flow.RouteSample) {
+		parts = append(parts, flow.RouteSample)
+	} else {
+		parts = append(parts, "Сценарий без названия")
+	}
+	if !isUnknownReportValue(flow.Step) {
+		parts = append(parts, flow.Step)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func scenarioContext(flow analyze.FlowStats) string {
+	parts := make([]string, 0, 4)
+	if !isUnknownReportValue(flow.Screen) {
+		parts = append(parts, "экран "+flow.Screen)
+	}
+	if !isUnknownReportValue(flow.Owner) {
+		parts = append(parts, "источник "+flow.Owner)
+	}
+	if !isUnknownReportValue(flow.RouteSample) {
+		parts = append(parts, "маршрут "+flow.RouteSample)
+	}
+	if len(parts) == 0 {
+		return "Точное место не размечено; добавьте экран, сценарий или источник работ."
+	}
+	return strings.Join(parts, " · ")
+}
+
+func scenarioSignalSummary(flow analyze.FlowStats) []string {
+	parts := make([]string, 0, 6)
+	if flow.UIFrames > 0 && flow.UIJank > 0 {
+		parts = append(parts, fmt.Sprintf("Медленными были %s из %s (%.1f%%).", russianCount(flow.UIJank, "кадр", "кадра", "кадров"), russianCount(flow.UIFrames, "кадра", "кадров", "кадров"), flow.UIJankPct))
+	}
+	if flow.StallCount > 0 {
+		parts = append(parts, fmt.Sprintf("Главный поток останавливался %s; максимум — %d мс.", russianCount(flow.StallCount, "раз", "раза", "раз"), flow.StallMaxMS))
+	}
+	if flow.HTTPCount > 0 {
+		parts = append(parts, scenarioHTTPText(flow))
+	}
+	if flow.LogSpam > 0 {
+		parts = append(parts, fmt.Sprintf("Лишних записей в лог — %d.", flow.LogSpam))
+	}
+	if flow.ProblemCount > 0 {
+		parts = append(parts, fmt.Sprintf("Объединённых проблемных сигналов — %d.", flow.ProblemCount))
+	}
+	if flow.MemoryMaxKB > 0 {
+		parts = append(parts, fmt.Sprintf("Память в этом контексте доходила до %s.", humanDataSizeKB(flow.MemoryMaxKB)))
+	}
+	return parts
+}
+
+func scenarioHTTPText(flow analyze.FlowStats) string {
+	var text string
+	switch {
+	case flow.HTTPCount == 1:
+		text = fmt.Sprintf("Единственный сетевой вызов занял до %d мс", flow.HTTPP95MS)
+	case flow.HTTPCount < 20:
+		text = fmt.Sprintf("В небольшой выборке из %d сетевых вызовов верхняя задержка составила %d мс", flow.HTTPCount, flow.HTTPP95MS)
+	default:
+		text = fmt.Sprintf("У 95%% из %d сетевых вызовов длительность не превышала %d мс", flow.HTTPCount, flow.HTTPP95MS)
+	}
+	if flow.HTTPFailed > 0 {
+		text += fmt.Sprintf("; с ошибкой завершилось %d", flow.HTTPFailed)
+	}
+	return text + "."
+}
+
+func scenarioSignalCount(flow analyze.FlowStats) int {
+	count := 0
+	for _, present := range []bool{
+		flow.UIJank > 0,
+		flow.StallCount > 0,
+		flow.HTTPCount > 0,
+		flow.LogSpam > 0,
+		flow.ProblemCount > 0,
+		flow.MemoryMaxKB > 0,
+	} {
+		if present {
+			count++
+		}
+	}
+	return count
+}
+
+func scenarioImpact(flow analyze.FlowStats) string {
+	impacts := make([]string, 0, 3)
+	if flow.UIJank > 0 || flow.StallCount > 0 {
+		impacts = append(impacts, "рывки интерфейса и задержка реакции на действие")
+	}
+	if flow.HTTPFailed > 0 {
+		impacts = append(impacts, "ошибка или незавершённый пользовательский сценарий")
+	} else if flow.HTTPP95MS >= 700 {
+		impacts = append(impacts, "долгое ожидание данных")
+	}
+	if flow.MemoryMaxKB >= 256*1024 {
+		impacts = append(impacts, "рост числа сборок мусора и риск нехватки памяти")
+	}
+	if flow.LogSpam >= 50 {
+		impacts = append(impacts, "лишняя нагрузка на процессор и I/O из-за частого логирования")
+	}
+	if len(impacts) == 0 {
+		return "Влияние на пользователя по текущим данным невелико, но сигнал стоит перепроверить."
+	}
+	return "Для пользователя это может означать: " + strings.Join(impacts, "; ") + "."
+}
+
+func scenarioFirstCheck(flow analyze.FlowStats) string {
+	place := "в этом сценарии"
+	if !isUnknownReportValue(flow.Owner) {
+		place = "в " + flow.Owner
+	}
+	switch {
+	case flow.StallCount > 0:
+		return "Сначала откройте трассу главного потока " + place + " и найдите синхронную работу вокруг самой длинной паузы."
+	case flow.HTTPFailed > 0:
+		return "Сначала проверьте ошибки, повторные вызовы и обработку ответа маршрута " + reportValue(flow.RouteSample, "в этом сценарии") + "."
+	case flow.HTTPP95MS >= 700:
+		return "Сначала проверьте длительный и повторный сетевой вызов маршрута " + reportValue(flow.RouteSample, "в этом сценарии") + "."
+	case flow.UIJank > 0:
+		return "Сначала профилируйте отрисовку экрана и работу " + place + " во время медленных кадров."
+	case flow.LogSpam >= 10:
+		return "Сначала сократите частое логирование " + place + " и повторите сценарий."
+	default:
+		return "Повторите сценарий с теми же входными данными и сравните длительность, память и плавность."
+	}
+}
+
+func severityOrder(value string) int {
+	switch value {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func primaryCategoryCoverage(items []analyze.CategoryCoverage) []analyze.CategoryCoverage {
+	visible := make([]analyze.CategoryCoverage, 0, len(items))
+	for _, item := range items {
+		if item.FindingCount > 0 || item.Status == "healthy" {
+			visible = append(visible, item)
+		}
+	}
+	return visible
+}
+
+func findingCategoryCoverage(items []analyze.CategoryCoverage) []analyze.CategoryCoverage {
+	visible := make([]analyze.CategoryCoverage, 0, len(items))
+	for _, item := range items {
+		if item.FindingCount > 0 {
+			visible = append(visible, item)
+		}
+	}
+	return visible
+}
+
+func hiddenCoverageSummary(items []analyze.CategoryCoverage) string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.FindingCount == 0 && item.Status != "healthy" {
+			labels = append(labels, item.Label)
+		}
+	}
+	if len(labels) == 0 {
+		return ""
+	}
+	return "Не проверено из-за отсутствия или малого объёма данных: " + strings.Join(labels, ", ") + ". Эти категории не показаны как нулевые, потому что ноль проблем здесь не доказан."
+}
+
+func collectionWindowNotice(summary analyze.Summary) string {
+	reason := ""
+	const prefix = "jankhunter.runtime.enabled.reason."
+	const suffix = ".count"
+	for _, item := range summary.Counters {
+		if item.Value == 0 || !strings.HasPrefix(item.Name, prefix) || !strings.HasSuffix(item.Name, suffix) {
+			continue
+		}
+		reason = strings.TrimSuffix(strings.TrimPrefix(item.Name, prefix), suffix)
+		break
+	}
+	if reason == "" {
+		return ""
+	}
+	inactiveBeforeStartMS := uint64(0)
+	for _, item := range summary.Gauges {
+		if item.Name == "jankhunter.runtime.collection_inactive_before_start_ms" {
+			inactiveBeforeStartMS = item.Value
+			break
+		}
+	}
+	message := "Сбор был включён переключателем «" + reason + "» уже во время работы приложения. В отчёт вошли только события за " + humanDuration(summary.DurationMS) + " после включения; более ранние действия отсутствуют в журнале."
+	if inactiveBeforeStartMS > 0 {
+		message = "До включения сбора приложение работало " + humanDuration(inactiveBeforeStartMS) + ". Затем переключатель «" + reason + "» включил Jank Hunter, и в отчёт вошли события за следующие " + humanDuration(summary.DurationMS) + "."
+	}
+	return message
+}
+
+type customMetricInsight struct {
+	Title    string
+	Severity string
+	Count    int
+	Names    string
+	Relation string
+	Action   string
+	Tooltip  string
+}
+
+func customMetricInsights(summary analyze.Summary) []customMetricInsight {
+	type metricGroup struct {
+		id    string
+		title string
+		names []string
+	}
+	groups := []metricGroup{
+		{id: "memory", title: "Память и GC"},
+		{id: "network", title: "Сеть"},
+		{id: "ui", title: "UI и отрисовка"},
+		{id: "tasks", title: "Очереди и задачи"},
+		{id: "io", title: "I/O и хранилище"},
+		{id: "other", title: "Остальные показатели"},
+	}
+	add := func(item analyze.NamedValue) {
+		id := customMetricGroupID(item.Name)
+		for index := range groups {
+			if groups[index].id == id {
+				groups[index].names = append(groups[index].names, item.Name)
+				return
+			}
+		}
+	}
+	for _, item := range summary.Counters {
+		add(item)
+	}
+	for _, item := range summary.Gauges {
+		add(item)
+	}
+	for _, item := range summary.JankStats {
+		add(item)
+	}
+
+	insights := make([]customMetricInsight, 0, len(groups))
+	for _, group := range groups {
+		if len(group.names) == 0 {
+			continue
+		}
+		names := group.names
+		if len(names) > 4 {
+			names = names[:4]
+		}
+		nameSummary := strings.Join(names, ", ")
+		if omitted := len(group.names) - len(names); omitted > 0 {
+			nameSummary += fmt.Sprintf(" и ещё %d", omitted)
+		}
+		severity, relation, action := customMetricRelation(group.id, summary)
+		insights = append(insights, customMetricInsight{
+			Title:    group.title,
+			Severity: severity,
+			Count:    len(group.names),
+			Names:    nameSummary,
+			Relation: relation,
+			Action:   action,
+			Tooltip:  "Группа объединяет пользовательские показатели по смыслу и подсказывает, с какими основными сигналами отчёта их проверять вместе.",
+		})
+	}
+	return insights
+}
+
+func customMetricGroupID(name string) string {
+	value := strings.ToLower(name)
+	value = strings.TrimPrefix(value, "jankhunter.")
+	switch {
+	case strings.Contains(value, "gc"), strings.Contains(value, "alloc"), strings.Contains(value, "heap"), strings.Contains(value, "memory"), strings.Contains(value, "pss"), strings.Contains(value, "object_watcher"), strings.Contains(value, "retained"), strings.Contains(value, "leak"):
+		return "memory"
+	case strings.Contains(value, "http"), strings.Contains(value, "network"), strings.Contains(value, "request"), strings.Contains(value, "socket"):
+		return "network"
+	case strings.Contains(value, "frame"), strings.Contains(value, "jank"), strings.Contains(value, "fps"), strings.Contains(value, "render"), strings.Contains(value, "layout"):
+		return "ui"
+	case strings.Contains(value, "queue"), strings.Contains(value, "thread"), strings.Contains(value, "task"), strings.Contains(value, "cpu"), strings.Contains(value, "dispatcher"):
+		return "tasks"
+	case strings.Contains(value, "storage"), strings.Contains(value, "disk"), strings.Contains(value, "file"), strings.Contains(value, "database"), strings.Contains(value, "sqlite"), strings.Contains(value, "io."):
+		return "io"
+	default:
+		return "other"
+	}
+}
+
+func customMetricRelation(group string, summary analyze.Summary) (string, string, string) {
+	switch group {
+	case "memory":
+		if summary.Retained > 0 || summary.MemoryMaxKB > 0 {
+			return "medium", fmt.Sprintf("В этом же прогоне: удержанных объектов — %d, максимум PSS — %s. Смотрите эти значения вместе с аллокациями и частотой GC.", summary.Retained, humanDataSizeKB(summary.MemoryMaxKB)), "Повторите сценарий и проверьте, возвращаются ли память и число удержаний к исходному уровню."
+		}
+		return "low", "Основных событий памяти рядом не записано.", "Используйте эти показатели для сравнения одинаковых сценариев между прогонами."
+	case "network":
+		if summary.HTTPCount > 0 {
+			return "medium", fmt.Sprintf("В этом же прогоне записано %s; задержка верхней части выборки — %d мс.", russianCount(summary.HTTPCount, "сетевой вызов", "сетевых вызова", "сетевых вызовов"), summary.HTTPP95MS), "Сопоставьте пользовательские показатели сети с маршрутом и сценарием в разделе проблем."
+		}
+		return "low", "Основных сетевых событий рядом не записано.", "Проверьте, записывает ли сценарий маршрут и источник сетевой работы."
+	case "ui":
+		if summary.UIFrames > 0 {
+			return "medium", fmt.Sprintf("Основной сборщик UI увидел %.1f%% медленных кадров из %d.", summary.UIJankPct, summary.UIFrames), "Сверьте название показателя с экраном и причиной в разделе «Плавность UI»."
+		}
+		return "low", "Основные события UI в этом прогоне не записаны.", "Для связи с экраном повторите сценарий со включённым сбором кадров."
+	case "tasks":
+		if summary.StallCount > 0 {
+			return "medium", fmt.Sprintf("В этом же прогоне главный поток останавливался %s; максимум — %d мс.", russianCount(summary.StallCount, "раз", "раза", "раз"), summary.StallMaxMS), "Ищите рост очереди рядом с длинными задачами главного потока."
+		}
+		return "low", "Длинные паузы главного потока в этом прогоне не записаны.", "Сравнивайте размер очереди в одинаковых сценариях и на одинаковом устройстве."
+	case "io":
+		if len(summary.IOOperations) > 0 {
+			return "medium", fmt.Sprintf("Типизированных I/O-операций в прогоне — %d.", len(summary.IOOperations)), "Сопоставьте рост показателя с операцией, потоком и источником в сценарии."
+		}
+		return "low", "Типизированные I/O-операции в этом прогоне не записаны.", "Для точной привязки добавьте запись операции с потоком и источником."
+	default:
+		return "low", "Эти показатели пока не относятся к известной группе Jank Hunter.", "Добавьте понятное имя и описание единицы измерения, затем сравнивайте одинаковые сценарии."
+	}
 }
 
 func topFlowDelta(baseline, candidate analyze.Summary) (flowCompareRow, bool) {

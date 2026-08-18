@@ -2,53 +2,38 @@ package io.jankhunter.plugin.settings
 
 import com.intellij.util.xmlb.XmlSerializer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterSettingsTest {
     @Test
-    fun migratesLegacyStateWithoutDroppingSavedValues() {
+    fun roundTripsCurrentStateDirectly() {
         val recentRun = JankHunterRecentRun().apply {
             timestamp = "2026-08-10T12:00:00"
-            output = "/tmp/old-report.html"
+            output = "/tmp/report.html"
         }
-        val legacy = JankHunterSettings.State().apply {
-            schemaVersion = 0
+        val current = JankHunterSettings.State().apply {
             outputDirectory = "/tmp/custom-reports"
-            openReportInIde = true
             openReportExternally = false
-            packageName = "com.example.app"
             lastRun = recentRun
             recentRuns = mutableListOf(recentRun)
         }
 
         val restored = XmlSerializer.deserialize(
-            XmlSerializer.serialize(legacy),
+            XmlSerializer.serialize(current),
             JankHunterSettings.State::class.java,
         )
         val settings = JankHunterSettings()
         settings.loadState(restored)
-        val migrated = settings.state
+        val loaded = settings.state
 
-        assertEquals(JankHunterSettings.CURRENT_SCHEMA_VERSION, migrated.schemaVersion)
-        assertEquals("/tmp/custom-reports", migrated.outputDirectory)
-        assertTrue(migrated.openReportExternally)
-        assertEquals("com.example.app", migrated.packageName)
-        assertEquals("/tmp/old-report.html", migrated.lastRun?.output)
-        assertEquals("2026-08-10T12:00:00", migrated.recentRuns.single().timestamp)
+        assertEquals("/tmp/custom-reports", loaded.outputDirectory)
+        assertEquals(false, loaded.openReportExternally)
+        assertEquals("/tmp/report.html", loaded.lastRun?.output)
+        assertEquals("2026-08-10T12:00:00", loaded.recentRuns.single().timestamp)
     }
 
     @Test
-    fun suppliesDefaultOutputDirectoryForBlankLegacyValue() {
-        val legacy = JankHunterSettings.State().apply {
-            schemaVersion = 0
-            outputDirectory = ""
-            openReportInIde = false
-        }
-
-        val settings = JankHunterSettings()
-        settings.loadState(legacy)
-
-        assertEquals(JankHunterSettings.defaultOutputDirectory(), settings.state.outputDirectory)
+    fun newStateUsesCurrentDefaultOutputDirectory() {
+        assertEquals(JankHunterSettings.defaultOutputDirectory(), JankHunterSettings.State().outputDirectory)
     }
 }

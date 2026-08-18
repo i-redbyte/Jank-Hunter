@@ -59,6 +59,10 @@ class JankHunterPlugin : Plugin<Project> {
                 "jankHunter.maxSessionLogSizeMiB",
                 extension.maxSessionLogSizeMiB.get(),
             )
+            val maxQueueSize = validatedPositive(
+                "jankHunter.runtime.maxQueueSize",
+                extension.runtime.maxQueueSize.get(),
+            )
             val releaseVariant = VariantBuildTypeMatcher.isReleaseLike(variant.name)
             if (releaseVariant) {
                 validateReleaseSafety(project, extension, variant.name)
@@ -82,8 +86,17 @@ class JankHunterPlugin : Plugin<Project> {
                     it.retainedHeapDumpMaxCount.set(extension.retainedHeapDump.maxCount)
                     it.retainedHeapDumpMinRetainedAgeMs.set(extension.retainedHeapDump.minRetainedAgeMs)
                     it.jankStatsEnabled.set(extension.runtime.jankStats)
+                    it.ioTracingEnabled.set(extension.runtime.ioTracing)
                     it.jankFrameThresholdMs.set(extension.runtime.jankFrameThresholdMs)
                     it.uiWindowP95ThresholdMs.set(extension.runtime.uiWindowP95ThresholdMs)
+                    it.exactEventCollectionEnabled.set(extension.runtime.exactEventCollection)
+                    it.maxQueueSize.set(maxQueueSize)
+                    it.mainThreadAdmissionWaitMs.set(extension.runtime.mainThreadAdmissionWaitMs)
+                    it.backgroundAdmissionWaitMs.set(extension.runtime.backgroundAdmissionWaitMs)
+                    it.runtimeCallGraphEnabled.set(extension.instrument.runtimeCallGraph)
+                    it.composeTracingEnabled.set(extension.instrument.composeTracing)
+                    it.roomTracingEnabled.set(extension.instrument.roomTracing)
+                    it.workerTracingEnabled.set(extension.instrument.workerTracing)
                     it.mainProcessOnly.set(extension.runtime.mainProcessOnly)
                     it.sessionLogSizeLimitEnabled.set(extension.sessionLogSizeLimitEnabled)
                     it.maxSessionLogSizeMiB.set(maxSessionLogSizeMiB)
@@ -234,6 +247,7 @@ class JankHunterPlugin : Plugin<Project> {
                 JankHunterClassVisitorFactory::class.java,
                 effectiveInstrumentationScope,
             ) { params ->
+                params.autoInit.set(extension.autoInit)
                 params.embeddedSymbols.set(
                     extension.symbolMode.map { mode -> mode == JankHunterSymbolMode.EMBEDDED },
                 )
@@ -251,6 +265,9 @@ class JankHunterPlugin : Plugin<Project> {
                 params.logSpam.set(extension.instrument.logSpam)
                 params.classGraph.set(extension.instrument.classGraph)
                 params.runtimeCallGraph.set(extension.instrument.runtimeCallGraph)
+                params.composeTracing.set(extension.instrument.composeTracing)
+                params.roomTracing.set(extension.instrument.roomTracing)
+                params.workerTracing.set(extension.instrument.workerTracing)
                 params.classGraphDirectory.set(classGraphDirectory.map { it.asFile.absolutePath })
                 params.instrumentationDiagnosticsDirectory.set(
                     diagnosticsDirectory.map { it.asFile.absolutePath },
@@ -290,11 +307,13 @@ class JankHunterPlugin : Plugin<Project> {
                     "Jank Hunter variant {} configured. " +
                         "methodCounters={} okhttp={} webSockets={} handlers={} executors={} coroutines={} " +
                         "flowInteractions={} lifecycleLeaks={} logSpam={} classGraph={} runtimeCallGraph={} " +
+                        "composeTracing={} roomTracing={} workerTracing={} " +
                         "dependencyInjectionAnalysis={} " +
                         "includeWholeApplication={} asmProgressLog={} autoInit={} " +
                         "retainedHeapDump={} retainedHeapDumpMinIntervalMs={} retainedHeapDumpMaxCount={} " +
                         "retainedHeapDumpMinRetainedAgeMs={} instrumentationScope={} generatedRuntimeManifest={} " +
-                        "sessionLogSizeLimitEnabled={} maxSessionLogSizeMiB={} logGrowthAnalyticsEnabled={} " +
+                        "exactEventCollection={} maxQueueSize={} sessionLogSizeLimitEnabled={} " +
+                        "maxSessionLogSizeMiB={} logGrowthAnalyticsEnabled={} ioTracing={} " +
                         "symbolMode={} " +
                         "ownerMapTask={} mergeArtifactsTask={}",
                     variant.name,
@@ -309,6 +328,9 @@ class JankHunterPlugin : Plugin<Project> {
                     extension.instrument.logSpam.get(),
                     extension.instrument.classGraph.get(),
                     extension.instrument.runtimeCallGraph.get(),
+                    extension.instrument.composeTracing.get(),
+                    extension.instrument.roomTracing.get(),
+                    extension.instrument.workerTracing.get(),
                     extension.dependencyInjectionAnalysis.get(),
                     extension.instrument.includeWholeApplication.get(),
                     extension.instrument.asmProgressLog.get(),
@@ -319,9 +341,12 @@ class JankHunterPlugin : Plugin<Project> {
                     extension.retainedHeapDump.minRetainedAgeMs.get(),
                     effectiveInstrumentationScope,
                     shouldGenerateRuntimeManifest,
+                    extension.runtime.exactEventCollection.get(),
+                    maxQueueSize,
                     extension.sessionLogSizeLimitEnabled.get(),
                     maxSessionLogSizeMiB,
                     extension.logGrowthAnalyticsEnabled.get(),
+                    extension.runtime.ioTracing.get(),
                     extension.symbolMode.get(),
                     ownerMap.name,
                     mergeArtifacts.name,
@@ -374,7 +399,10 @@ class JankHunterPlugin : Plugin<Project> {
             logSpam.getOrElse(false) ||
             // Annotation context boundaries are emitted while classGraph scans methods.
             classGraph.getOrElse(false) ||
-            runtimeCallGraph.getOrElse(false)
+            runtimeCallGraph.getOrElse(false) ||
+            composeTracing.getOrElse(false) ||
+            roomTracing.getOrElse(false) ||
+            workerTracing.getOrElse(false)
     }
 
     private fun String.capitalized(): String {
@@ -388,6 +416,10 @@ class JankHunterPlugin : Plugin<Project> {
     }
 
     private fun validatedPositiveMiB(name: String, value: Int): Int {
+        return validatedPositive(name, value)
+    }
+
+    private fun validatedPositive(name: String, value: Int): Int {
         if (value > 0) return value
         throw GradleException("$name must be greater than zero, but was $value.")
     }
@@ -423,7 +455,7 @@ class JankHunterPlugin : Plugin<Project> {
             )
         }
         if (
-            !extension.runtime.mainProcessOnly.getOrElse(true) &&
+            !extension.runtime.mainProcessOnly.getOrElse(false) &&
             !safety.allowSecondaryProcesses.getOrElse(false)
         ) {
             throw GradleException(

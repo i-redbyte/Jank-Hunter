@@ -7,6 +7,9 @@ import org.gradle.api.tasks.Input
 
 interface JankHunterInstrumentationParameters : InstrumentationParameters {
     @get:Input
+    val autoInit: Property<Boolean>
+
+    @get:Input
     val embeddedSymbols: Property<Boolean>
 
     @get:Input
@@ -50,6 +53,15 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
 
     @get:Input
     val runtimeCallGraph: Property<Boolean>
+
+    @get:Input
+    val composeTracing: Property<Boolean>
+
+    @get:Input
+    val roomTracing: Property<Boolean>
+
+    @get:Input
+    val workerTracing: Property<Boolean>
 
     @get:Input
     val classGraphDirectory: Property<String>

@@ -58,30 +58,32 @@ class AndroidIntegrationScriptTest(unittest.TestCase):
 
     @staticmethod
     def settings_text(existing_integration: bool) -> str:
-        legacy_plugin = ""
-        legacy_dependency = ""
+        managed_plugin = ""
+        managed_dependency = ""
         if existing_integration:
-            legacy_plugin = """    // Jank Hunter plugin repository
+            managed_plugin = """    // Jank Hunter integration managed plugin repository - BEGIN
     repositories {
-        maven { url = uri("legacy/jankhunter-maven") }
+        maven { url = uri("current/jankhunter-maven") }
     }
+    // Jank Hunter integration managed plugin repository - END
 
 """
-            legacy_dependency = """    // Jank Hunter dependency repository
+            managed_dependency = """    // Jank Hunter integration managed dependency repository - BEGIN
     repositories {
-        maven { url = uri("legacy/jankhunter-maven") }
+        maven { url = uri("current/jankhunter-maven") }
     }
+    // Jank Hunter integration managed dependency repository - END
 
 """
         return f"""pluginManagement {{
-{legacy_plugin}    repositories {{
+{managed_plugin}    repositories {{
         google()
         gradlePluginPortal()
     }}
 }}
 
 dependencyResolutionManagement {{
-{legacy_dependency}    repositories {{
+{managed_dependency}    repositories {{
         google()
         mavenCentral()
     }}
@@ -105,11 +107,11 @@ include(":app")
     implementation("com.example:user-owned:1")
 }
 """
-            legacy_helper = """// Jank Hunter optional OkHttp/WebSocket helper
+            managed_helper = """// Jank Hunter optional helper dependencies - BEGIN
 dependencies {
     debugImplementation("io.jankhunter:jankhunter-okhttp3:0.9.0")
-    implementation("com.example:inside-legacy-block:1")
 }
+// Jank Hunter optional helper dependencies - END
 """
         else:
             jh_plugin = (
@@ -123,11 +125,11 @@ dependencies {
     implementation 'com.example:user-owned:1'
 }
 """
-            legacy_helper = """// Jank Hunter optional OkHttp/WebSocket helper
+            managed_helper = """// Jank Hunter optional helper dependencies - BEGIN
 dependencies {
     debugImplementation 'io.jankhunter:jankhunter-okhttp3:0.9.0'
-    implementation 'com.example:inside-legacy-block:1'
 }
+// Jank Hunter optional helper dependencies - END
 """
 
         manual_dsl = """jankHunter {
@@ -139,7 +141,7 @@ dependencies {
 """
         if not existing_integration:
             manual_dsl = ""
-            legacy_helper = ""
+            managed_helper = ""
         return f"""plugins {{
     id("com.android.application")
 {jh_plugin}}}
@@ -150,7 +152,7 @@ android {{
 
 {manual_dependencies}
 {manual_dsl}
-{legacy_helper}"""
+{managed_helper}"""
 
     def create_artifacts(self, project: Path, maven_dir: str, cli_dir: str) -> None:
         repository = project / maven_dir
@@ -303,7 +305,6 @@ android {{
         self.assertIn("jankhunter-runtime:manual-version", second_build)
         self.assertIn("jankhunter-okhttp3:manual-version", second_build)
         self.assertIn("com.example:user-owned:1", second_build)
-        self.assertIn("com.example:inside-legacy-block:1", second_build)
         self.assertNotIn("jankhunter-okhttp3:0.9.0", second_build)
         self.assertEqual(1, second_build.count("optional helper dependencies - BEGIN"))
         self.assertIn(f"jankhunter-android-sdk:{VERSION}", second_build)
@@ -691,47 +692,6 @@ android {{
         self.assertEqual(before, build.read_bytes())
         self.assertFalse((project / ".jankhunter-backups").exists())
 
-    def test_legacy_helper_migration_ignores_braces_in_comments(self) -> None:
-        for dsl in ("kts", "groovy"):
-            with self.subTest(dsl=dsl):
-                project = self.create_project(dsl, existing_integration=False)
-                suffix = ".kts" if dsl == "kts" else ""
-                build = project / "app" / f"build.gradle{suffix}"
-                dependency = (
-                    '    implementation("com.example:keep:1") // } documentation\n'
-                    '    implementation("com.example:also-keep:1")\n'
-                    '    debugImplementation("io.jankhunter:jankhunter-okhttp3:0.9.0")\n'
-                    if dsl == "kts"
-                    else "    implementation 'com.example:keep:1' // } documentation\n"
-                    "    implementation 'com.example:also-keep:1'\n"
-                    "    debugImplementation 'io.jankhunter:jankhunter-okhttp3:0.9.0'\n"
-                )
-                build.write_text(
-                    'plugins { id("com.android.application") }\n'
-                    '// Jank Hunter optional OkHttp/WebSocket helper\n'
-                    f'dependencies {{\n{dependency}}}\n'
-                    'android { namespace = "com.example.fixture" }\n',
-                    encoding="utf-8",
-                )
-                self.create_artifacts(project, "repo/maven", "repo/bin")
-
-                self.run_script(
-                    project,
-                    *self.integration_arguments("repo/maven", "repo/bin"),
-                    "--no-okhttp",
-                    "--no-websockets",
-                )
-
-                result = build.read_text(encoding="utf-8")
-                self.assertIn("com.example:keep:1", result)
-                self.assertIn("com.example:also-keep:1", result)
-                self.assertNotIn("jankhunter-okhttp3:0.9.0", result)
-                dependencies_start = result.index("dependencies {")
-                dependencies_end = result.index("\n}", dependencies_start)
-                self.assertLess(
-                    result.index("com.example:also-keep:1"), dependencies_end
-                )
-
     def test_reversed_managed_markers_fail_before_writes(self) -> None:
         project = self.create_project("kts", existing_integration=False)
         build = project / "app/build.gradle.kts"
@@ -956,7 +916,7 @@ android {{
         self.assertEqual(before_build, build.read_bytes())
         self.assertTrue((project / ".jankhunter-backups").is_dir())
 
-    def test_default_overlay_preserves_manual_dsl_and_legacy_helper(self) -> None:
+    def test_default_overlay_preserves_manual_dsl_and_current_helper(self) -> None:
         for dsl in ("kts", "groovy"):
             with self.subTest(dsl=dsl):
                 project = self.create_project(dsl, existing_integration=True)
@@ -982,7 +942,6 @@ android {{
                 self.assertNotIn("managed configuration - BEGIN", first)
                 self.assertIn("optional helper dependencies - BEGIN", first)
                 self.assertIn(f"jankhunter-android-sdk:{VERSION}", first)
-                self.assertIn("com.example:inside-legacy-block:1", first)
 
                 self.run_script(project, *arguments)
                 self.assertEqual(first, build.read_text(encoding="utf-8"))
@@ -1381,7 +1340,10 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         )
         device_logs = self.root / "device-logs"
         device_logs.mkdir()
-        (device_logs / "jh-session-log.2026-07-14.0.jhlog").write_bytes(b"fixture")
+        (
+            device_logs
+            / "jh-session-log.2026-07-14.01000000000000000000000000000000.0.jhlog"
+        ).write_bytes(b"fixture")
 
         adb = self.bin / "adb-full"
         adb_args = self.root / "adb-args.txt"

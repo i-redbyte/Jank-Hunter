@@ -6,7 +6,7 @@ enum class JankHunterLogScope(
 ) {
     LATEST_LOG(
         "Latest session log",
-        "Use the greatest date and numeric index from canonical jh-session-log.YYYY-MM-DD.<index>.jhlog names.",
+        "Use every process and segment from the run with the greatest canonical date and numeric index.",
     ),
     ALL_SELECTED(
         "All selected logs (--all-sessions)",

@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.Bundle
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeHookGuard
 import io.jankhunter.runtime.integration.JankHunterJankStats
 import io.jankhunter.runtime.internal.io.QualityCounterId
 
@@ -17,14 +18,16 @@ internal class ActivityTracker(
 ) : Application.ActivityLifecycleCallbacks {
     private var startedActivities = 0
     private val createdAtMs = SystemClock.elapsedRealtime()
-    private val activityStates = linkedMapOf<Activity, ActivityState>()
+    private val activityStates = BoundedRegistry<Activity, ActivityState>(MAX_TRACKED_ACTIVITIES) { state ->
+        state.resumedAtMs == 0L
+    }
     private val jankStatsHandles = linkedMapOf<Activity, JankHunterJankStats.Handle>()
     private val resumedActivities = LastResumedRegistry<Activity>()
     private var activeJankStatsActivity: Activity? = null
     private var lastResumedScreen: String? = null
     private var firstResumeRecorded = false
 
-    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = RuntimeHookGuard.run {
         val screenName = screenName(activity)
         val now = now()
         makeRoomFor(activity)
@@ -36,7 +39,7 @@ internal class ActivityTracker(
         }
     }
 
-    override fun onActivityStarted(activity: Activity) {
+    override fun onActivityStarted(activity: Activity) = RuntimeHookGuard.run {
         if (startedActivities == 0) {
             JankHunter.setAppForeground(true)
             JankHunter.recordCounter("app.lifecycle.foreground.count", 1)
@@ -51,7 +54,7 @@ internal class ActivityTracker(
         installJankStats(activity)
     }
 
-    override fun onActivityResumed(activity: Activity) {
+    override fun onActivityResumed(activity: Activity) = RuntimeHookGuard.run {
         val screenName = screenName(activity)
         val state = state(activity, screenName)
         val now = now()
@@ -70,7 +73,7 @@ internal class ActivityTracker(
         setJankStatsTracking(activity, true)
     }
 
-    override fun onActivityPaused(activity: Activity) {
+    override fun onActivityPaused(activity: Activity) = RuntimeHookGuard.run {
         val screenName = screenName(activity)
         val state = state(activity, screenName)
         val now = now()
@@ -82,7 +85,7 @@ internal class ActivityTracker(
         setJankStatsTracking(activity, false)
     }
 
-    override fun onActivityStopped(activity: Activity) {
+    override fun onActivityStopped(activity: Activity) = RuntimeHookGuard.run {
         val screenName = screenName(activity)
         val state = state(activity, screenName)
         val now = now()
@@ -103,11 +106,11 @@ internal class ActivityTracker(
         }
     }
 
-    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = RuntimeHookGuard.run {
         JankHunter.recordCounter("screen.${screenKey(screenName(activity))}.lifecycle.save_state.count", 1)
     }
 
-    override fun onActivityDestroyed(activity: Activity) {
+    override fun onActivityDestroyed(activity: Activity) = RuntimeHookGuard.run {
         val screenName = screenName(activity)
         recordLifecycle(screenName, "destroyed")
         activityStates.remove(activity)?.let { state ->
@@ -178,17 +181,9 @@ internal class ActivityTracker(
     }
 
     private fun makeRoomFor(activity: Activity) {
-        if (activityStates.containsKey(activity) || activityStates.size < MAX_TRACKED_ACTIVITIES) return
-        val evicted = activityStates.entries.firstOrNull { it.value.resumedAtMs == 0L }?.key
-            ?: activityStates.keys.firstOrNull()
-            ?: return
-        activityStates.remove(evicted)
+        val evicted = activityStates.makeRoomFor(activity) ?: return
         removeJankStatsHandle(evicted)
-        try {
-            onCardinalityLoss()
-        } catch (throwable: Throwable) {
-            if (throwable is VirtualMachineError || throwable is ThreadDeath) throw throwable
-        }
+        RuntimeHookGuard.run(onCardinalityLoss)
     }
 
     private fun state(activity: Activity, screenName: String): ActivityState {
@@ -232,4 +227,37 @@ internal class ActivityTracker(
     private companion object {
         private const val MAX_TRACKED_ACTIVITIES = 64
     }
+}
+
+internal class BoundedRegistry<K : Any, V : Any>(
+    private val capacity: Int,
+    private val preferredEviction: (V) -> Boolean,
+) {
+    private val entries = linkedMapOf<K, V>()
+
+    init {
+        require(capacity > 0) { "bounded registry capacity must be positive" }
+    }
+
+    operator fun set(key: K, value: V) {
+        entries[key] = value
+    }
+
+    fun containsKey(key: K): Boolean = entries.containsKey(key)
+
+    fun remove(key: K): V? = entries.remove(key)
+
+    fun clear() = entries.clear()
+
+    fun getOrPut(key: K, defaultValue: () -> V): V = entries.getOrPut(key, defaultValue)
+
+    fun makeRoomFor(key: K): K? {
+        if (entries.containsKey(key) || entries.size < capacity) return null
+        val evicted = entries.entries.firstOrNull { preferredEviction(it.value) }?.key
+            ?: entries.keys.first()
+        entries.remove(evicted)
+        return evicted
+    }
+
+    internal fun size(): Int = entries.size
 }

@@ -10,17 +10,17 @@ import org.junit.Test
 class JankHunterLogDiscoveryTest {
     @Test
     fun sortsCanonicalLogsByDateAndNumericIndex() = withTempDirectory { directory ->
-        File(directory, "jh-session-log.2026-08-07.9.jhlog").writeText("nine")
-        File(directory, "jh-session-log.2026-08-07.10.jhlog").writeText("ten")
-        File(directory, "jh-session-log.2026-08-06.99.jhlog").writeText("old")
+        File(directory, sessionName("2026-08-07", 9)).writeText("nine")
+        File(directory, sessionName("2026-08-07", 10)).writeText("ten")
+        File(directory, sessionName("2026-08-06", 99)).writeText("old")
 
         val snapshot = JankHunterLogDiscovery.scan(directory, emptySet())
 
         assertEquals(
             listOf(
-                "jh-session-log.2026-08-07.10.jhlog",
-                "jh-session-log.2026-08-07.9.jhlog",
-                "jh-session-log.2026-08-06.99.jhlog",
+                sessionName("2026-08-07", 10),
+                sessionName("2026-08-07", 9),
+                sessionName("2026-08-06", 99),
             ),
             snapshot.logs.map { it.file.name },
         )
@@ -28,7 +28,7 @@ class JankHunterLogDiscoveryTest {
 
     @Test
     fun marksFingerprintAsProcessedAndFindsHeapCandidates() = withTempDirectory { directory ->
-        val log = File(directory, "jh-session-log.2026-08-07.1.jhlog").apply { writeText("log") }
+        val log = File(directory, sessionName("2026-08-07", 1)).apply { writeText("log") }
         val heap = File(directory, "retained.hprof").apply { writeText("heap") }
         val fingerprint = JankHunterLogDiscovery.fingerprint(log)
 
@@ -65,4 +65,7 @@ class JankHunterLogDiscoveryTest {
             directory.deleteRecursively()
         }
     }
+
+    private fun sessionName(date: String, index: Long): String =
+        "jh-session-log.$date.01000000000000000000000000000000.$index.jhlog"
 }

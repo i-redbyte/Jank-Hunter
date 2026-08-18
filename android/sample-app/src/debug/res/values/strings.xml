@@ -1,0 +1,3 @@
+<resources>
+    <string name="leakcanary_debug_status">LeakCanary debug: ВКЛ · threshold retained = 1 · notification / launcher report</string>
+</resources>

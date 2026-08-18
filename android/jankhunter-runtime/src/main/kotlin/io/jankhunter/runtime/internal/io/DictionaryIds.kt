@@ -59,9 +59,6 @@ internal class DictionaryIds(
 
     private fun sanitizeValue(rawValue: String?): SanitizedValue {
         val value = rawValue?.takeIf { it.isNotEmpty() } ?: UNKNOWN_VALUE
-        if (value == OVERFLOW_VALUE) {
-            return SanitizedValue(value, truncated = false, forcedOverflow = true)
-        }
         val maxBytes = maxValueBytes.coerceAtLeast(0)
         if (maxBytes == 0) {
             return SanitizedValue(

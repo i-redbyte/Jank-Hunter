@@ -32,7 +32,7 @@ class HandlerWrapperRegistryTest {
 
     @Test
     fun unregisterByWrapperOnlyRemovesMatchingOriginalWrapper() {
-        val registry = HandlerWrapperRegistry { }
+        val registry = HandlerWrapperRegistry(droppedCounter = { })
         val handlerA = Handler()
         val handlerB = Handler()
         val original = Runnable {}
@@ -50,7 +50,7 @@ class HandlerWrapperRegistryTest {
 
     @Test
     fun unregisterHandlerTokenUsesHandlerScope() {
-        val registry = HandlerWrapperRegistry { }
+        val registry = HandlerWrapperRegistry(droppedCounter = { })
         val handlerA = Handler()
         val handlerB = Handler()
         val token = Any()
@@ -70,7 +70,7 @@ class HandlerWrapperRegistryTest {
 
     @Test
     fun nullTokenUnregisterRemovesAllWrappersForRunnable() {
-        val registry = HandlerWrapperRegistry { }
+        val registry = HandlerWrapperRegistry(droppedCounter = { })
         val handler = Handler()
         val original = Runnable {}
         val wrapperA = Runnable {}
@@ -104,5 +104,21 @@ class HandlerWrapperRegistryTest {
             dropped,
         )
         assertSame(wrapper, registry.wrappers(handler, original, null).single())
+    }
+
+    @Test
+    fun exactAdmissionStillHonorsHardMemoryLimits() {
+        val dropped = mutableListOf<HandlerWrapperLoss>()
+        val registry = HandlerWrapperRegistry(dropped::add) { true }
+        val handler = Handler()
+        val original = Runnable {}
+        val first = Runnable {}
+        val second = Runnable {}
+
+        assertTrue(registry.register(handler, original, null, first, maxEntries = 1, maxWrappers = 1))
+        assertFalse(registry.register(handler, original, null, second, maxEntries = 1, maxWrappers = 1))
+        assertFalse(registry.register(Handler(), Runnable {}, null, Runnable {}, maxEntries = 1, maxWrappers = 1))
+        assertEquals(listOf(first), registry.wrappers(handler, original, null))
+        assertEquals(listOf(HandlerWrapperLoss.WRAPPER_LIMIT, HandlerWrapperLoss.ENTRY_LIMIT), dropped)
     }
 }

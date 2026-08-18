@@ -49,6 +49,32 @@ class ManualControlsViewModelTest {
         assertEquals(ManualControlsEffect.ShareDiagnostics, effect.await())
     }
 
+    @Test
+    fun convertsOpenCustomViewUpdateIntoNavigationEffect() = runBlocking {
+        lateinit var runner: FakeManualScenarioRunner
+        val viewModel = ManualControlsViewModel(INITIAL_STATE) { stateSink ->
+            FakeManualScenarioRunner(stateSink).also { runner = it }
+        }
+        val effect = async { viewModel.effects.first() }
+
+        runner.emit(ManualStateUpdate.OpenCustomViewLab)
+
+        assertEquals(ManualControlsEffect.OpenCustomViewLab, effect.await())
+    }
+
+    @Test
+    fun convertsOpenComposeUpdateIntoNavigationEffect() = runBlocking {
+        lateinit var runner: FakeManualScenarioRunner
+        val viewModel = ManualControlsViewModel(INITIAL_STATE) { stateSink ->
+            FakeManualScenarioRunner(stateSink).also { runner = it }
+        }
+        val effect = async { viewModel.effects.first() }
+
+        runner.emit(ManualStateUpdate.OpenComposeLab)
+
+        assertEquals(ManualControlsEffect.OpenComposeLab, effect.await())
+    }
+
     private class FakeManualScenarioRunner(
         private val stateSink: ManualStateSink,
     ) : ManualScenarioRunner {

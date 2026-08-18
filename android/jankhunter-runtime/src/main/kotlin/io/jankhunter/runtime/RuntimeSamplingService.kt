@@ -80,7 +80,7 @@ internal class RuntimeSamplingService(
     private var strategy: RuntimeSamplingStrategy = AlwaysRecordRuntimeSamplingStrategy
 
     fun configure(config: JankHunterConfig) {
-        strategy = if (config.adaptiveSamplingEnabled()) {
+        strategy = if (!config.exactEventCollectionEnabled() && config.adaptiveSamplingEnabled()) {
             AdaptiveRuntimeSamplingStrategy(
                 config.adaptiveMemoryStableIntervalMs(),
                 config.adaptiveContextStableIntervalMs(),

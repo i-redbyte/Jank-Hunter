@@ -354,7 +354,6 @@ class JankHunterToolWindow(
             format = "csv",
             json = false,
             presentation = advanced.presentation,
-            reportStyle = advanced.reportStyle,
             animatedBackground = false,
         )
     }
@@ -459,9 +458,7 @@ class JankHunterToolWindow(
             JankHunterNotifications.reportReady(
                 project,
                 output.path,
-                problemCount = null,
                 openReport = { BrowserUtil.browse(output.toURI()) },
-                openProblems = null,
                 rerun = { runMode(request.mode) },
             )
         }
@@ -499,7 +496,6 @@ class JankHunterToolWindow(
         settings.cliPath = advancedPanel.cliPath()
         if (includeAdvanced) {
             settings.presentationMode = advanced.presentation
-            settings.reportStyle = advanced.reportStyle
         }
     }
 

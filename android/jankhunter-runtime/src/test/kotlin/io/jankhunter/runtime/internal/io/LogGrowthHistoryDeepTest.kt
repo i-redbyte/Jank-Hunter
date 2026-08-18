@@ -58,18 +58,18 @@ class LogGrowthHistoryDeepTest {
             val manager = LogGrowthManager(directory) { now }
             manager.beginSession(sessionId(1), "2027-01-15", now, LIMIT_BYTES, stats(10L, 10L))
             now += 1_000L
-            manager.checkpoint(stats(20L, 20L, overflows = 1L, evictedChunks = 1L, evictedBytes = 2L))
+            manager.checkpoint(stats(20L, 20L, limitReached = 1L, rotations = 1L, archiveEvicted = 2L))
             now += 1_000L
-            manager.checkpoint(stats(30L, 30L, overflows = 2L, evictedChunks = 2L, evictedBytes = 4L))
+            manager.checkpoint(stats(30L, 30L, limitReached = 2L, rotations = 2L, archiveEvicted = 4L))
 
             damageByte(File(directory, HISTORY_FILE_NAME), ACTIVE_B_OFFSET + ACTIVE_RECORD_BYTES - 1L)
 
             val recovered = requireNotNull(LogGrowthManager(directory) { now }.summary().currentSession)
             assertEquals(20L, recovered.generatedBytes)
             assertEquals(20L, recovered.maximumRetainedBytes)
-            assertEquals(1L, recovered.overflowCount)
-            assertEquals(1L, recovered.evictedChunkCount)
-            assertEquals(2L, recovered.evictedBytes)
+            assertEquals(1L, recovered.limitReachedCount)
+            assertEquals(1L, recovered.segmentRotationCount)
+            assertEquals(2L, recovered.archiveEvictedBytes)
             assertFalse(recovered.completed)
         } finally {
             directory.deleteRecursively()
@@ -112,22 +112,22 @@ class LogGrowthHistoryDeepTest {
             val manager = LogGrowthManager(directory) { now }
             manager.beginSession(sessionId(1), "2027-01-15", now, 1L, stats(0L, 0L))
             now += 1_000L
-            manager.onChunkCommitted(
+            manager.checkpoint(
                 stats(
                     retained = Long.MAX_VALUE - 1L,
                     generated = Long.MAX_VALUE - 1L,
-                    overflows = Long.MAX_VALUE - 1L,
-                    evictedChunks = Long.MAX_VALUE - 1L,
-                    evictedBytes = Long.MAX_VALUE - 1L,
+                    limitReached = Long.MAX_VALUE - 1L,
+                    rotations = Long.MAX_VALUE - 1L,
+                    archiveEvicted = Long.MAX_VALUE - 1L,
                 ),
             )
             now += 1_000L
-            manager.checkpoint(stats(1L, 1L, overflows = 1L, evictedChunks = 1L, evictedBytes = 1L))
+            manager.checkpoint(stats(1L, 1L, limitReached = 1L, rotations = 1L, archiveEvicted = 1L))
             val first = requireNotNull(manager.summary().currentSession)
             assertEquals(Long.MAX_VALUE - 1L, first.generatedBytes)
-            assertEquals(Long.MAX_VALUE - 1L, first.overflowCount)
-            assertEquals(now - 1_000L, first.firstOverflowAtMs)
-            assertEquals(now - 1_000L, first.lastOverflowAtMs)
+            assertEquals(Long.MAX_VALUE - 1L, first.limitReachedCount)
+            assertEquals(now - 1_000L, first.firstLimitReachedAtMs)
+            assertEquals(now - 1_000L, first.lastLimitReachedAtMs)
             manager.complete(stats(Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE))
 
             now += 1_000L
@@ -143,17 +143,17 @@ class LogGrowthHistoryDeepTest {
             assertEquals(Long.MAX_VALUE, day.maximumRetainedBytes)
             assertEquals(Long.MAX_VALUE, day.maximumFillPermille)
             assertEquals(2L, day.sessionsReachingLimit)
-            assertEquals(Long.MAX_VALUE, day.overflowCount)
-            assertEquals(Long.MAX_VALUE, day.evictedChunkCount)
-            assertEquals(Long.MAX_VALUE, day.evictedBytes)
+            assertEquals(Long.MAX_VALUE, day.limitReachedCount)
+            assertEquals(Long.MAX_VALUE, day.segmentRotationCount)
+            assertEquals(Long.MAX_VALUE, day.archiveEvictedBytes)
         } finally {
             directory.deleteRecursively()
         }
     }
 
     @Test
-    fun everyIncreaseOfOverflowCounterUpdatesOnlyTheLastOverflowTime() {
-        val directory = Files.createTempDirectory("jankhunter-growth-overflows").toFile()
+    fun everyHardLimitSignalUpdatesOnlyTheLastLimitTime() {
+        val directory = Files.createTempDirectory("jankhunter-growth-limit-reached").toFile()
         var now = 1_800_000_000_000L
         try {
             val manager = LogGrowthManager(directory) { now }
@@ -161,19 +161,18 @@ class LogGrowthHistoryDeepTest {
             val startedAt = now
 
             now += 1_000L
-            manager.onChunkCommitted(stats(10L, 10L, overflows = 1L))
+            manager.checkpoint(stats(10L, 10L, limitReached = 1L))
             now += 1_000L
-            assertNull(manager.onChunkCommitted(stats(20L, 20L, overflows = 1L)))
-            manager.checkpoint(stats(20L, 20L, overflows = 1L))
+            manager.checkpoint(stats(20L, 20L, limitReached = 1L))
             now += 1_000L
-            manager.onChunkCommitted(stats(30L, 30L, overflows = 4L))
+            manager.checkpoint(stats(30L, 30L, limitReached = 4L))
             now += 1_000L
-            manager.complete(stats(40L, 40L, overflows = 7L))
+            manager.complete(stats(40L, 40L, limitReached = 7L))
 
             val completed = manager.summary().recentSessions.single()
-            assertEquals(7L, completed.overflowCount)
-            assertEquals(startedAt + 1_000L, completed.firstOverflowAtMs)
-            assertEquals(startedAt + 4_000L, completed.lastOverflowAtMs)
+            assertEquals(7L, completed.limitReachedCount)
+            assertEquals(startedAt + 1_000L, completed.firstLimitReachedAtMs)
+            assertEquals(startedAt + 4_000L, completed.lastLimitReachedAtMs)
             assertTrue(completed.reachedLimit)
         } finally {
             directory.deleteRecursively()
@@ -193,11 +192,11 @@ class LogGrowthHistoryDeepTest {
             configuredLimitBytes = LIMIT_BYTES,
             maximumRetainedBytes = generatedBytes.coerceAtMost(LIMIT_BYTES),
             generatedBytes = generatedBytes,
-            overflowCount = 0L,
-            evictedChunkCount = 0L,
-            evictedBytes = 0L,
-            firstOverflowAtMs = 0L,
-            lastOverflowAtMs = 0L,
+            limitReachedCount = 0L,
+            segmentRotationCount = 0L,
+            archiveEvictedBytes = 0L,
+            firstLimitReachedAtMs = 0L,
+            lastLimitReachedAtMs = 0L,
             recoveredAfterInterruption = false,
         )
     }
@@ -205,10 +204,10 @@ class LogGrowthHistoryDeepTest {
     private fun stats(
         retained: Long,
         generated: Long,
-        overflows: Long = 0L,
-        evictedChunks: Long = 0L,
-        evictedBytes: Long = 0L,
-    ): LogContainerStats = LogContainerStats(retained, generated, overflows, evictedChunks, evictedBytes)
+        limitReached: Long = 0L,
+        rotations: Long = 0L,
+        archiveEvicted: Long = 0L,
+    ): LogContainerStats = LogContainerStats(retained, generated, limitReached, rotations, archiveEvicted)
 
     private fun sessionId(value: Int): ByteArray = ByteArray(16).also { result ->
         repeat(Int.SIZE_BYTES) { index -> result[index] = (value ushr (index * Byte.SIZE_BITS)).toByte() }

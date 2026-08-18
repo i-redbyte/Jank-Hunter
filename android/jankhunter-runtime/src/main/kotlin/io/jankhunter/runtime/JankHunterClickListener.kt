@@ -14,11 +14,11 @@ internal class JankHunterClickListener internal constructor(
             delegate.onClick(view)
             return
         }
-        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
+        val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         JankHunter.callWithContext(capturedContext, ownerName) {
-            val currentFlow = RuntimeHookGuard.value("unknown") { JankHunter.currentFlow() }
+            val currentFlow = RuntimeHookGuard.value("unknown", RuntimeHookFailureReason.ASYNC_WRAPPER) { JankHunter.currentFlow() }
             val flowToken = if (currentFlow == "unknown") {
-                RuntimeHookGuard.value<JankHunterFlow?>(null) {
+                RuntimeHookGuard.value<JankHunterFlow?>(null, RuntimeHookFailureReason.ASYNC_WRAPPER) {
                     JankHunter.startFlow("click.${ownerName ?: "unknown"}")
                 }
             } else {
@@ -26,13 +26,13 @@ internal class JankHunterClickListener internal constructor(
             }
             var failed = false
             try {
-                RuntimeHookGuard.run { JankHunter.markFlowStep("click") }
+                RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) { JankHunter.markFlowStep("click") }
                 delegate.onClick(view)
             } catch (throwable: Throwable) {
                 failed = true
                 throw throwable
             } finally {
-                RuntimeHookGuard.run {
+                RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                     val durationMs = if (start > 0L) {
                         (SystemClock.elapsedRealtime() - start).coerceAtLeast(0L)
                     } else {
@@ -40,7 +40,7 @@ internal class JankHunterClickListener internal constructor(
                     }
                     JankHunter.recordClick(ownerName, durationMs, failed)
                 }
-                RuntimeHookGuard.run { JankHunter.endFlow(flowToken) }
+                RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) { JankHunter.endFlow(flowToken) }
             }
         }
     }

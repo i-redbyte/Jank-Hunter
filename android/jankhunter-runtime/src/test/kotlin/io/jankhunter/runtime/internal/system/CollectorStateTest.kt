@@ -67,16 +67,78 @@ class CollectorStateTest {
     }
 
     @Test
-    fun durationHistogramCalculatesPercentilesWithoutSortingOrAllocatingPerFrame() {
+    fun durationHistogramCalculatesCommonFramePercentilesExactly() {
         val histogram = FrameDurationHistogram(maxExactDurationMs = 100)
         repeat(100) { histogram.add(10L) }
         repeat(10) { histogram.add(1_000L) }
 
         histogram.calculatePercentiles()
 
-        assertEquals(10L, histogram.p50Ms)
         assertEquals(1_000L, histogram.p95Ms)
-        assertEquals(1_000L, histogram.p99Ms)
+    }
+
+    @Test
+    fun durationHistogramKeepsDistinctSevereFrameDurations() {
+        val histogram = FrameDurationHistogram(maxExactDurationMs = 100)
+        repeat(6) { histogram.add(600L) }
+        repeat(4) { histogram.add(1_000L) }
+
+        histogram.calculatePercentiles()
+
+        assertEquals(1_000L, histogram.p95Ms)
+    }
+
+    @Test
+    fun exactFrameWindowsSealPartialEvidenceAtScreenAndShutdownBoundaries() {
+        val windows = FrameWindowAccumulator(
+            windowNanos = 1_000_000_000L,
+            preservePartialWindows = true,
+        )
+
+        assertEquals(null, windows.add("Feed", 100_000_000L, 10L, isJank = false))
+        val feed = requireNotNull(windows.add("Chat", 200_000_000L, 20L, isJank = true))
+        val chat = requireNotNull(windows.finish(300_000_000L))
+
+        assertEquals("Feed", feed.screen)
+        assertEquals(1L, feed.frameCount)
+        assertEquals(10L, feed.p95Ms)
+        assertEquals("Chat", chat.screen)
+        assertEquals(1L, chat.frameCount)
+        assertEquals(1L, chat.jankCount)
+        assertEquals(20L, chat.p95Ms)
+    }
+
+    @Test
+    fun exactFrameWindowsDoNotReattributeUnknownScreenFrames() {
+        val windows = FrameWindowAccumulator(
+            windowNanos = 1_000_000_000L,
+            preservePartialWindows = true,
+        )
+
+        assertEquals(null, windows.add(null, 100_000_000L, 10L, isJank = false))
+        val unknown = requireNotNull(windows.add("Feed", 200_000_000L, 12L, isJank = false))
+
+        assertEquals(null, unknown.screen)
+        assertEquals(1L, unknown.frameCount)
+    }
+
+    @Test
+    fun exactFrameWindowsRemainBoundedAcrossHighScreenCardinality() {
+        val windows = FrameWindowAccumulator(
+            windowNanos = 1_000_000_000L,
+            preservePartialWindows = true,
+        )
+        var emitted = 0
+
+        repeat(HIGH_CARDINALITY_SCREEN_COUNT) { index ->
+            windows.add("Screen$index", index.toLong() + 1L, 1L, isJank = false)?.let { snapshot ->
+                assertEquals(1L, snapshot.frameCount)
+                emitted++
+            }
+        }
+        windows.finish(HIGH_CARDINALITY_SCREEN_COUNT.toLong() + 1L)?.let { emitted++ }
+
+        assertEquals(HIGH_CARDINALITY_SCREEN_COUNT, emitted)
     }
 
     @Test
@@ -96,5 +158,9 @@ class CollectorStateTest {
         assertFalse((belowCustomThreshold and BinaryLogWriter.FLAG_UI_PROBLEM) != 0L)
         assertTrue((aboveCustomThreshold and BinaryLogWriter.FLAG_UI_CLASSIFIED) != 0L)
         assertTrue((aboveCustomThreshold and BinaryLogWriter.FLAG_UI_PROBLEM) != 0L)
+    }
+
+    private companion object {
+        const val HIGH_CARDINALITY_SCREEN_COUNT = 10_000
     }
 }

@@ -111,6 +111,23 @@ func TestAnalyzeInspectBuildsTimelineBuckets(t *testing.T) {
 	}
 }
 
+func typedUIWindow(windowMS, frames, jank, targetP95MS uint64) *jhlog.UIWindowEvent {
+	buckets := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	targetUS := targetP95MS * 1_000
+	index := len(jhlog.UIFrameHistogramUpperUS)
+	for candidate, upper := range jhlog.UIFrameHistogramUpperUS {
+		if targetUS <= upper {
+			index = candidate
+			break
+		}
+	}
+	buckets[index] = frames
+	return &jhlog.UIWindowEvent{
+		WindowMS: windowMS, FrameCount: frames, JankCount: jank,
+		Source: jhlog.UIFrameSourceJankStats, FrameDeadlineUS: 16_667, FrameDurationBuckets: buckets,
+	}
+}
+
 func TestAnalyzeInspectResolvesEmbeddedStableSymbols(t *testing.T) {
 	path := writeStableSymbolTimelineFixture(t)
 
@@ -256,7 +273,6 @@ func writeTimelineFixture(t *testing.T) string {
 		{Kind: jhlog.DictAppVersion, ID: 4, Value: "1.0"},
 		{Kind: jhlog.DictBuild, ID: 5, Value: "100"},
 		{Kind: jhlog.DictDevice, ID: 6, Value: "Pixel"},
-		{Kind: jhlog.DictProcess, ID: 7, Value: "main"},
 		{Kind: jhlog.DictOwner, ID: 8, Value: "jankhunter.heap_dump"},
 		{Kind: jhlog.DictFlow, ID: 9, Value: "jankhunter.diagnostics"},
 		{Kind: jhlog.DictStep, ID: 10, Value: "heap_dump"},
@@ -268,15 +284,15 @@ func writeTimelineFixture(t *testing.T) string {
 	}
 
 	events := []jhlog.Event{
-		{Type: jhlog.EventSession, TimeMS: 1, Session: &jhlog.SessionEvent{AppVersionID: 4, BuildID: 5, DeviceID: 6, SDKInt: 35, ProcessID: 7}},
-		{Type: jhlog.EventHTTP, TimeMS: 100, HTTP: &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 100, DNSMS: 5, TTFBMS: 20, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 1200, HTTP: &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 200, DNSMS: 10, ConnectMS: 50, TTFBMS: 80, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 1500, Flags: uint64(jhlog.FlagHTTPFailed), HTTP: &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 300, TTFBMS: 90, Status: jhlog.Status5xx}},
-		{Type: jhlog.EventUIWindow, TimeMS: 1600, UIWindow: &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 1000, FrameCount: 60, JankCount: 6, P95MS: 22}},
+		{Type: jhlog.EventSession, TimeMS: 1, Session: &jhlog.SessionEvent{AppVersionRef: jhlog.LocalSymbol(4), BuildRef: jhlog.LocalSymbol(5), DeviceRef: jhlog.LocalSymbol(6), SDKInt: 35}},
+		{Type: jhlog.EventHTTP, TimeMS: 100, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 100, DNSMS: 5, TTFBMS: 20, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 1200, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 200, DNSMS: 10, ConnectMS: 50, TTFBMS: 80, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 1500, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)}, Flags: uint64(jhlog.FlagHTTPFailed), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 300, TTFBMS: 90, Status: jhlog.Status5xx}},
+		{Type: jhlog.EventUIWindow, TimeMS: 1600, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(3)}, UIWindow: typedUIWindow(1000, 60, 6, 22)},
 		{Type: jhlog.EventMemory, TimeMS: 2400, Memory: &jhlog.MemoryEvent{PSSKB: 123000, JavaHeapKB: 32000, NativeHeapKB: 18000}},
 		{Type: jhlog.EventContext, TimeMS: 2500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 90, AvailMemoryKB: 1000, RxBytes: 1000, TxBytes: 200}},
-		{Type: jhlog.EventStall, TimeMS: 2700, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(8), Flow: jhlog.LocalSymbol(9), Step: jhlog.LocalSymbol(10)}, Stall: &jhlog.StallEvent{OwnerID: 8, DurationMS: 2_500}},
-		{Type: jhlog.EventUIWindow, TimeMS: 3200, UIWindow: &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 500, FrameCount: 30, JankCount: 3, P95MS: 28}},
+		{Type: jhlog.EventStall, TimeMS: 2700, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(8), Flow: jhlog.LocalSymbol(9), Step: jhlog.LocalSymbol(10)}, Stall: &jhlog.StallEvent{DurationMS: 2_500}},
+		{Type: jhlog.EventUIWindow, TimeMS: 3200, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(3)}, UIWindow: typedUIWindow(500, 30, 3, 28)},
 		{Type: jhlog.EventContext, TimeMS: 3500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 89, AvailMemoryKB: 900, RxBytes: 1600, TxBytes: 260}},
 	}
 	for _, event := range events {
@@ -308,8 +324,8 @@ func writeStableSymbolTimelineFixture(t *testing.T) string {
 		}
 	}
 	for _, event := range []jhlog.Event{
-		{Type: jhlog.EventHTTP, TimeMS: 100, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.StableSymbol(0x1001), OwnerRef: jhlog.StableSymbol(0x1002), DurationMS: 120, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventUIWindow, TimeMS: 200, UIWindow: &jhlog.UIWindowEvent{ScreenRef: jhlog.StableSymbol(0x1003), WindowMS: 1_000, FrameCount: 60, JankCount: 2, P95MS: 20}},
+		{Type: jhlog.EventHTTP, TimeMS: 100, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.StableSymbol(0x1002)}, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.StableSymbol(0x1001), DurationMS: 120, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventUIWindow, TimeMS: 200, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.StableSymbol(0x1003)}, UIWindow: typedUIWindow(1_000, 60, 2, 20)},
 	} {
 		if err := writer.WriteEvent(event); err != nil {
 			t.Fatalf("WriteEvent(event) error = %v", err)
@@ -346,11 +362,11 @@ func writeRunOffsetTimelineFixture(t *testing.T, name string, runByte byte, base
 
 	for _, timeMS := range []uint64{baseMS + 100, baseMS + 3_100} {
 		event := jhlog.Event{
-			Type:   jhlog.EventHTTP,
-			TimeMS: timeMS,
+			Type:        jhlog.EventHTTP,
+			TimeMS:      timeMS,
+			Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
 			HTTP: &jhlog.HTTPEvent{
-				OwnerID:    1,
-				RouteID:    2,
+				RouteRef:   jhlog.LocalSymbol(2),
 				DurationMS: 100,
 				Status:     jhlog.Status2xx,
 			},

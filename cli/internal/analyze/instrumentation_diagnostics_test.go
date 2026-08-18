@@ -1,8 +1,10 @@
 package analyze
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,11 +52,35 @@ func TestLoadInstrumentationDiagnosticsAggregatesJSONL(t *testing.T) {
 	if got := diagnostics.Decisions[0].Method; got != "client()V" {
 		t.Fatalf("decision method = %q", got)
 	}
-	if got := diagnostics.TopClasses[0].ClassName; got != "com.app.Feed" {
+	if got := diagnostics.Classes[0].ClassName; got != "com.app.Feed" {
 		t.Fatalf("top class = %q", got)
 	}
 	if len(diagnostics.Classes) != 2 {
 		t.Fatalf("all diagnostic classes were not retained: %+v", diagnostics.Classes)
+	}
+}
+
+func TestLoadInstrumentationDiagnosticsRetainsEveryClass(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
+	var contents strings.Builder
+	for index := 0; index < 250; index++ {
+		fmt.Fprintf(
+			&contents,
+			"{\"format\":1,\"class\":\"com.app.Class%03d\",\"methods\":1,\"ignoredMethods\":0,\"annotatedMethods\":0}\n",
+			index,
+		)
+	}
+	if err := os.WriteFile(path, []byte(contents.String()), 0o644); err != nil {
+		t.Fatalf("write diagnostics fixture: %v", err)
+	}
+
+	diagnostics, err := LoadInstrumentationDiagnostics(path)
+	if err != nil {
+		t.Fatalf("LoadInstrumentationDiagnostics() error = %v", err)
+	}
+	if got := len(diagnostics.Classes); got != 250 {
+		t.Fatalf("diagnostic classes = %d, want 250", got)
 	}
 }
 

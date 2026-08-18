@@ -17,8 +17,6 @@ internal data class RetainedLifecycleTarget(
 )
 
 internal object RetainedLifecycleClassifier {
-    private const val MAX_ASSOCIATED_TARGETS = 8
-
     fun targets(instance: Any?, lifecycleEvent: String?, ownerHint: String?): List<RetainedLifecycleTarget> {
         if (instance == null) return emptyList()
         val event = normalizeEvent(lifecycleEvent)
@@ -101,7 +99,6 @@ internal object RetainedLifecycleClassifier {
                 "onDestroyView",
                 "$fragmentClassName.${field.name}",
             )
-            if (out.size >= MAX_ASSOCIATED_TARGETS) break
         }
         return out
     }

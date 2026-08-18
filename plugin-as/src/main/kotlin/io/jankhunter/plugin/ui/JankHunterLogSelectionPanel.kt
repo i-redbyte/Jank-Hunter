@@ -136,19 +136,6 @@ internal class JankHunterLogSelectionPanel(
 
     fun heapInput(): String = JankHunterUserPaths.expandHome(heapField.text)
 
-    fun setDirectory(path: String) {
-        directoryField.text = path
-        scan()
-    }
-
-    fun setHeapInput(path: String) {
-        heapField.text = path
-        updateStatus()
-        onSelectionChanged()
-    }
-
-    fun selectAll() = updateSelection { true }
-
     fun scan() {
         val directory = directory()
         val generation = ++scanGeneration

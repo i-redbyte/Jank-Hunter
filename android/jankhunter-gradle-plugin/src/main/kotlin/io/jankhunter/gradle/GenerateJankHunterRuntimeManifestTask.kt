@@ -42,10 +42,37 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val jankStatsEnabled: Property<Boolean>
 
     @get:Input
+    abstract val ioTracingEnabled: Property<Boolean>
+
+    @get:Input
     abstract val jankFrameThresholdMs: Property<Long>
 
     @get:Input
     abstract val uiWindowP95ThresholdMs: Property<Long>
+
+    @get:Input
+    abstract val exactEventCollectionEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val maxQueueSize: Property<Int>
+
+    @get:Input
+    abstract val mainThreadAdmissionWaitMs: Property<Long>
+
+    @get:Input
+    abstract val backgroundAdmissionWaitMs: Property<Long>
+
+    @get:Input
+    abstract val runtimeCallGraphEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val composeTracingEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val roomTracingEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val workerTracingEnabled: Property<Boolean>
 
     @get:Input
     abstract val mainProcessOnly: Property<Boolean>
@@ -68,6 +95,15 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     init {
         autoInit.convention(true)
         mainLooperDispatchMonitorEnabled.convention(false)
+        ioTracingEnabled.convention(true)
+        exactEventCollectionEnabled.convention(true)
+        maxQueueSize.convention(65_536)
+        mainThreadAdmissionWaitMs.convention(0L)
+        backgroundAdmissionWaitMs.convention(5L)
+        runtimeCallGraphEnabled.convention(false)
+        composeTracingEnabled.convention(true)
+        roomTracingEnabled.convention(true)
+        workerTracingEnabled.convention(true)
         logGrowthAnalyticsEnabled.convention(true)
     }
 
@@ -124,11 +160,38 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                         android:name="io.jankhunter.jankstats_enabled"
                         android:value="${jankStatsEnabled.get()}" />
                     <meta-data
+                        android:name="io.jankhunter.io_tracing_enabled"
+                        android:value="${ioTracingEnabled.get()}" />
+                    <meta-data
                         android:name="io.jankhunter.jank_frame_threshold_ms"
                         android:value="${jankFrameThresholdMs.get()}" />
                     <meta-data
                         android:name="io.jankhunter.ui_window_p95_threshold_ms"
                         android:value="${uiWindowP95ThresholdMs.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.exact_event_collection_enabled"
+                        android:value="${exactEventCollectionEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.max_queue_size"
+                        android:value="${maxQueueSize.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.main_thread_admission_wait_ms"
+                        android:value="${mainThreadAdmissionWaitMs.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.background_admission_wait_ms"
+                        android:value="${backgroundAdmissionWaitMs.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.runtime_call_graph_enabled"
+                        android:value="${runtimeCallGraphEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.compose_tracing_enabled"
+                        android:value="${composeTracingEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.room_tracing_enabled"
+                        android:value="${roomTracingEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.worker_tracing_enabled"
+                        android:value="${workerTracingEnabled.get()}" />
                     <meta-data
                         android:name="io.jankhunter.main_process_only"
                         android:value="${mainProcessOnly.get()}" />

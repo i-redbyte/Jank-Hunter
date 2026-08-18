@@ -10,7 +10,7 @@ import (
 
 const (
 	ownerIDBase         uint64 = 1_000
-	metadataSchema             = 2
+	metadataSchema             = 4
 	finalControlRecords        = 2
 )
 
@@ -19,8 +19,8 @@ type Profile struct {
 	OwnerDictionaryEntries int
 	RuntimeCallEvents      int
 	RuntimeUniqueEdges     int
-	FlowEvents             int
-	FlowTuples             int
+	AttributedEvents       int
+	AttributionTuples      int
 	SignalEvents           int
 }
 
@@ -34,9 +34,10 @@ type Metadata struct {
 	ControlRecords     int    `json:"control_records"`
 	TotalRecords       int    `json:"total_records"`
 	RuntimeCallEvents  int    `json:"runtime_call_events"`
+	RuntimeCallBlocks  int    `json:"runtime_call_blocks"`
 	RuntimeUniqueEdges int    `json:"runtime_unique_edges"`
-	FlowEvents         int    `json:"flow_events"`
-	FlowTuples         int    `json:"flow_tuples"`
+	AttributedEvents   int    `json:"attributed_events"`
+	AttributionTuples  int    `json:"attribution_tuples"`
 	SignalEvents       int    `json:"signal_events"`
 	DurationMS         uint64 `json:"duration_ms"`
 	CompressedBytes    int64  `json:"compressed_bytes"`
@@ -48,8 +49,8 @@ var profiles = map[string]Profile{
 		OwnerDictionaryEntries: 256,
 		RuntimeCallEvents:      1_500,
 		RuntimeUniqueEdges:     700,
-		FlowEvents:             2_000,
-		FlowTuples:             64,
+		AttributedEvents:       2_000,
+		AttributionTuples:      64,
 		SignalEvents:           400,
 	},
 	"representative": {
@@ -57,8 +58,8 @@ var profiles = map[string]Profile{
 		OwnerDictionaryEntries: 7_800,
 		RuntimeCallEvents:      20_566,
 		RuntimeUniqueEdges:     12_925,
-		FlowEvents:             28_389,
-		FlowTuples:             346,
+		AttributedEvents:       28_389,
+		AttributionTuples:      346,
 		SignalEvents:           2_186,
 	},
 }
@@ -83,9 +84,9 @@ func Write(path string, profile Profile) (Metadata, error) {
 	header.RunID = jhlog.ID128{0x10, 0x8a, 0x3c, 0x51, 0x92, 0x47, 0x4e, 0x11, 0xa4, 0xe3, 0x77, 0x20, 0x18, 0x04, 0x90, 0x01}
 	header.ProcessInstanceID = jhlog.ID128{0x20, 0x8a, 0x3c, 0x51, 0x92, 0x47, 0x4e, 0x11, 0xa4, 0xe3, 0x77, 0x20, 0x18, 0x04, 0x90, 0x02}
 	header.SessionID = jhlog.ID128{0x30, 0x8a, 0x3c, 0x51, 0x92, 0x47, 0x4e, 0x11, 0xa4, 0xe3, 0x77, 0x20, 0x18, 0x04, 0x90, 0x03}
-	header.PID = 4242
+	header.OSPID = 4242
 	header.ProcessName = "main"
-	header.SymbolNamespace = []byte("benchmark-v9")
+	header.SymbolNamespace = []byte("benchmark-jh100")
 	file, writer, err := jhlog.CreateWithHeader(path, header)
 	if err != nil {
 		return Metadata{}, err
@@ -120,44 +121,56 @@ func Write(path string, profile Profile) (Metadata, error) {
 		TimeMS: 1,
 		Flags:  uint64(jhlog.FlagAppForeground),
 		Session: &jhlog.SessionEvent{
-			AppVersionID:     1,
-			BuildID:          2,
-			DeviceID:         3,
-			SDKInt:           35,
-			ProcessID:        4,
-			AndroidReleaseID: 90,
-			SecurityPatchID:  91,
-			PrimaryABIID:     92,
-			SupportedABIsID:  93,
-			ManufacturerID:   94,
-			BrandID:          95,
-			HardwareID:       96,
-			BoardID:          97,
-			ProductID:        98,
+			AppVersionRef:     jhlog.LocalSymbol(1),
+			BuildRef:          jhlog.LocalSymbol(2),
+			DeviceRef:         jhlog.LocalSymbol(3),
+			SDKInt:            35,
+			AndroidReleaseRef: jhlog.LocalSymbol(90),
+			SecurityPatchRef:  jhlog.LocalSymbol(91),
+			PrimaryABIRef:     jhlog.LocalSymbol(92),
+			SupportedABIsRef:  jhlog.LocalSymbol(93),
+			ManufacturerRef:   jhlog.LocalSymbol(94),
+			BrandRef:          jhlog.LocalSymbol(95),
+			HardwareRef:       jhlog.LocalSymbol(96),
+			BoardRef:          jhlog.LocalSymbol(97),
+			ProductRef:        jhlog.LocalSymbol(98),
 		},
 	}); err != nil {
 		return Metadata{}, err
 	}
 
 	runtimeRemaining := profile.RuntimeCallEvents
-	flowRemaining := profile.FlowEvents
+	attributedRemaining := profile.AttributedEvents
 	signalRemaining := profile.SignalEvents
 	runtimeIndex := 0
-	flowIndex := 0
+	attributedIndex := 0
 	signalIndex := 0
 	sequence := 0
 	timeMS := uint64(1)
+	runtimeCallBlocks := 0
+	runtimeBatch := make([]jhlog.Event, 0, jhlog.MaxRuntimeCallBlockRows)
+	flushRuntimeBatch := func() error {
+		if len(runtimeBatch) == 0 {
+			return nil
+		}
+		if err := writer.WriteRuntimeCallBlock(runtimeBatch); err != nil {
+			return err
+		}
+		runtimeCallBlocks++
+		runtimeBatch = runtimeBatch[:0]
+		return nil
+	}
 
-	for runtimeRemaining+flowRemaining+signalRemaining > 0 {
+	for runtimeRemaining+attributedRemaining+signalRemaining > 0 {
 		timeMS += 2
 		slot := sequence % 51
 		sequence++
 		var event jhlog.Event
 		switch {
-		case slot < 28 && flowRemaining > 0:
-			event = flowEvent(flowIndex, profile, timeMS)
-			flowIndex++
-			flowRemaining--
+		case slot < 28 && attributedRemaining > 0:
+			event = attributedEvent(attributedIndex, profile, timeMS)
+			attributedIndex++
+			attributedRemaining--
 		case slot < 49 && runtimeRemaining > 0:
 			event = runtimeCallEvent(runtimeIndex, profile, timeMS)
 			runtimeIndex++
@@ -166,18 +179,36 @@ func Write(path string, profile Profile) (Metadata, error) {
 			event = signalEvent(signalIndex, profile, timeMS)
 			signalIndex++
 			signalRemaining--
-		case flowRemaining > 0:
-			event = flowEvent(flowIndex, profile, timeMS)
-			flowIndex++
-			flowRemaining--
+		case attributedRemaining > 0:
+			event = attributedEvent(attributedIndex, profile, timeMS)
+			attributedIndex++
+			attributedRemaining--
 		default:
 			event = runtimeCallEvent(runtimeIndex, profile, timeMS)
 			runtimeIndex++
 			runtimeRemaining--
 		}
+		if event.Type == jhlog.EventRuntimeCall {
+			if len(runtimeBatch) > 0 {
+				event.TimeMS = runtimeBatch[0].TimeMS
+			}
+			runtimeBatch = append(runtimeBatch, event)
+			if len(runtimeBatch) == jhlog.MaxRuntimeCallBlockRows {
+				if err := flushRuntimeBatch(); err != nil {
+					return Metadata{}, err
+				}
+			}
+			continue
+		}
+		if err := flushRuntimeBatch(); err != nil {
+			return Metadata{}, err
+		}
 		if err := writer.WriteEvent(event); err != nil {
 			return Metadata{}, err
 		}
+	}
+	if err := flushRuntimeBatch(); err != nil {
+		return Metadata{}, err
 	}
 
 	if err := file.Close(); err != nil {
@@ -189,7 +220,7 @@ func Write(path string, profile Profile) (Metadata, error) {
 		return Metadata{}, err
 	}
 	dictionaryEntries := len(core) + profile.OwnerDictionaryEntries
-	semanticEvents := 1 + profile.RuntimeCallEvents + profile.FlowEvents + profile.SignalEvents
+	semanticEvents := 1 + profile.RuntimeCallEvents + profile.AttributedEvents + profile.SignalEvents
 	return Metadata{
 		Schema:             metadataSchema,
 		Profile:            profile.Name,
@@ -200,9 +231,10 @@ func Write(path string, profile Profile) (Metadata, error) {
 		ControlRecords:     finalControlRecords,
 		TotalRecords:       semanticEvents + dictionaryEntries + finalControlRecords,
 		RuntimeCallEvents:  profile.RuntimeCallEvents,
+		RuntimeCallBlocks:  runtimeCallBlocks,
 		RuntimeUniqueEdges: profile.RuntimeUniqueEdges,
-		FlowEvents:         profile.FlowEvents,
-		FlowTuples:         profile.FlowTuples,
+		AttributedEvents:   profile.AttributedEvents,
+		AttributionTuples:  profile.AttributionTuples,
 		SignalEvents:       profile.SignalEvents,
 		DurationMS:         timeMS,
 		CompressedBytes:    stat.Size(),
@@ -219,8 +251,8 @@ func validateProfile(profile Profile) error {
 	if profile.RuntimeCallEvents < 0 || profile.RuntimeUniqueEdges < 1 || profile.RuntimeUniqueEdges > profile.RuntimeCallEvents {
 		return fmt.Errorf("invalid runtime call cardinality")
 	}
-	if profile.FlowEvents < 0 || profile.FlowTuples < 1 || profile.FlowTuples > profile.FlowEvents {
-		return fmt.Errorf("invalid flow cardinality")
+	if profile.AttributedEvents < 0 || profile.AttributionTuples < 1 || profile.AttributionTuples > profile.AttributedEvents {
+		return fmt.Errorf("invalid attribution cardinality")
 	}
 	if profile.SignalEvents < 0 {
 		return fmt.Errorf("invalid signal event count")
@@ -278,22 +310,17 @@ func mix64(value uint64) uint64 {
 	return value ^ (value >> 31)
 }
 
-func flowEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
-	tuple := index % profile.FlowTuples
+func attributedEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
+	tuple := index % profile.AttributionTuples
 	screenID := 30 + uint64(tuple%2)
 	ownerID := ownerIDBase + uint64(tuple%profile.OwnerDictionaryEntries)
 	flowID := 70 + uint64(tuple%2)
 	stepID := 72 + uint64(tuple%3)
 	return jhlog.Event{
-		Type:        jhlog.EventFlow,
+		Type:        jhlog.EventLogSpam,
 		TimeMS:      timeMS,
 		Attribution: attribution(screenID, ownerID, flowID, stepID),
-		Flow: &jhlog.FlowEvent{
-			ScreenID: screenID,
-			OwnerID:  ownerID,
-			FlowID:   flowID,
-			StepID:   stepID,
-		},
+		LogSpam:     &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(80), Level: 2, Count: 1},
 	}
 }
 
@@ -311,14 +338,10 @@ func runtimeCallEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 		Flags:       uint64(jhlog.FlagAppForeground),
 		Attribution: attribution(screenID, callerID, flowID, stepID),
 		RuntimeCall: &jhlog.RuntimeCallEvent{
-			ScreenID: screenID,
-			CallerID: callerID,
-			FlowID:   flowID,
-			StepID:   stepID,
-			CalleeID: ownerIDBase + uint64(callee),
-			Count:    uint64(1 + index%500),
-			TotalMS:  uint64(1 + index%4_000),
-			MaxMS:    uint64(1 + index%250),
+			CalleeRef: jhlog.LocalSymbol(ownerIDBase + uint64(callee)),
+			Count:     uint64(1 + index%500),
+			TotalMS:   uint64(1 + index%4_000),
+			MaxMS:     uint64(1 + index%250),
 		},
 	}
 }
@@ -337,23 +360,23 @@ func signalEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 	attr := attribution(context.screen, ownerID, context.flow, context.step)
 	switch index % 9 {
 	case 0:
-		return jhlog.Event{Type: jhlog.EventHTTP, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagHTTPTLS | jhlog.FlagAppForeground), HTTP: &jhlog.HTTPEvent{OwnerID: ownerID, RouteID: 20 + uint64(index%2), DurationMS: uint64(40 + index%1_500), DNSMS: 5, ConnectMS: 12, TTFBMS: uint64(20 + index%500), Status: jhlog.Status2xx, RxBytes: uint64(4_096 + index), TxBytes: 512}}
+		return jhlog.Event{Type: jhlog.EventHTTP, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagHTTPTLS | jhlog.FlagAppForeground), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(20 + uint64(index%2)), DurationMS: uint64(40 + index%1_500), DNSMS: 5, ConnectMS: 12, TTFBMS: uint64(20 + index%500), Status: jhlog.Status2xx, RxBytes: uint64(4_096 + index), TxBytes: 512}}
 	case 1:
-		return jhlog.Event{Type: jhlog.EventUIWindow, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagThreadMain | jhlog.FlagAppForeground), UIWindow: &jhlog.UIWindowEvent{ScreenID: context.screen, WindowMS: 10_000, FrameCount: 580, JankCount: uint64(5 + index%60), P50MS: 12, P95MS: uint64(20 + index%45), P99MS: uint64(40 + index%90)}}
+		return jhlog.Event{Type: jhlog.EventUIWindow, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagThreadMain | jhlog.FlagAppForeground), UIWindow: benchmarkUIWindow(uint64(5 + index%60))}
 	case 2:
-		return jhlog.Event{Type: jhlog.EventStall, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagThreadMain | jhlog.FlagAppForeground), Stall: &jhlog.StallEvent{OwnerID: ownerID, StackID: 50, DurationMS: uint64(100 + index%1_200)}}
+		return jhlog.Event{Type: jhlog.EventStall, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagThreadMain | jhlog.FlagAppForeground), Stall: &jhlog.StallEvent{StackRef: jhlog.LocalSymbol(50), DurationMS: uint64(100 + index%1_200)}}
 	case 3:
 		return jhlog.Event{Type: jhlog.EventMemory, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagAppForeground), Memory: &jhlog.MemoryEvent{PSSKB: uint64(150_000 + index%80_000), JavaHeapKB: uint64(70_000 + index%30_000), NativeHeapKB: uint64(25_000 + index%20_000)}}
 	case 4:
-		return jhlog.Event{Type: jhlog.EventRetained, TimeMS: timeMS, Attribution: attr, Retained: &jhlog.RetainedEvent{ScreenID: context.screen, OwnerID: ownerID, FlowID: context.flow, StepID: context.step, ClassID: 40 + uint64(index%2), HolderID: ownerID, AgeMS: uint64(15_000 + index%60_000), Count: uint64(1 + index%4)}}
+		return jhlog.Event{Type: jhlog.EventRetained, TimeMS: timeMS, Attribution: attr, Retained: &jhlog.RetainedEvent{ClassRef: jhlog.LocalSymbol(40 + uint64(index%2)), HolderRef: jhlog.LocalSymbol(ownerID), AgeMS: uint64(15_000 + index%60_000), Count: uint64(1 + index%4)}}
 	case 5:
-		return jhlog.Event{Type: jhlog.EventCounter, TimeMS: timeMS, Attribution: attr, Metric: &jhlog.MetricEvent{MetricID: 60, Value: uint64(1 + index%20)}}
+		return jhlog.Event{Type: jhlog.EventCounter, TimeMS: timeMS, Attribution: attr, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(60), Value: uint64(1 + index%20)}}
 	case 6:
-		return jhlog.Event{Type: jhlog.EventGauge, TimeMS: timeMS, Attribution: attr, Metric: &jhlog.MetricEvent{MetricID: 61, Value: uint64(5_000 + index%1_000)}}
+		return jhlog.Event{Type: jhlog.EventGauge, TimeMS: timeMS, Attribution: attr, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(61), Value: uint64(5_000 + index%1_000)}}
 	case 7:
-		return jhlog.Event{Type: jhlog.EventLogSpam, TimeMS: timeMS, Attribution: attr, LogSpam: &jhlog.LogSpamEvent{ScreenID: context.screen, OwnerID: ownerID, FlowID: context.flow, StepID: context.step, SourceID: 80, Level: 3, Count: uint64(1 + index%40)}}
+		return jhlog.Event{Type: jhlog.EventLogSpam, TimeMS: timeMS, Attribution: attr, LogSpam: &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(80), Level: 3, Count: uint64(1 + index%40)}}
 	default:
-		return jhlog.Event{Type: jhlog.EventProblem, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagAppForeground), Problem: &jhlog.ProblemEvent{ScreenID: context.screen, OwnerID: ownerID, FlowID: context.flow, StepID: context.step, KindID: 62 + uint64(index%2), WindowMS: 10_000, Count: uint64(1 + index%30), MaxMS: uint64(20 + index%200)}}
+		return jhlog.Event{Type: jhlog.EventProblem, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagAppForeground), Problem: &jhlog.ProblemEvent{KindRef: jhlog.LocalSymbol(62 + uint64(index%2)), WindowMS: 10_000, Count: uint64(1 + index%30), MaxMS: uint64(20 + index%200)}}
 	}
 }
 
@@ -364,5 +387,16 @@ func attribution(screenID, ownerID, flowID, stepID uint64) jhlog.AttributionCont
 		Owner:   jhlog.LocalSymbol(ownerID),
 		Flow:    jhlog.LocalSymbol(flowID),
 		Step:    jhlog.LocalSymbol(stepID),
+	}
+}
+
+func benchmarkUIWindow(jank uint64) *jhlog.UIWindowEvent {
+	const frames = uint64(580)
+	buckets := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	buckets[1] = frames - jank
+	buckets[8] = jank
+	return &jhlog.UIWindowEvent{
+		WindowMS: 10_000, FrameCount: frames, JankCount: jank,
+		Source: jhlog.UIFrameSourceJankStats, FrameDeadlineUS: 16_667, FrameDurationBuckets: buckets,
 	}
 }

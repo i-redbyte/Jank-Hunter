@@ -15,14 +15,11 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
-const maxAggregateSamplesPerSignal = 20_000
-
 const (
-	legacyHTTPSlowThresholdMS        = 1_000
-	legacyUIP95ThresholdMS           = 32
 	canonicalLogSpamWindowMS         = 5_000
 	canonicalLogSpamCount            = 50
 	heapDumpStallAttributionWindowMS = 2_000
+	collectionTrustScoreModel        = "evidence-v2:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20"
 )
 
 type qualityCounterWarning struct {
@@ -61,8 +58,15 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		if err := validateOwnerMapNamespace(options.OwnerMap, result.Header, result.Source); err != nil {
 			return Summary{}, err
 		}
+		if err := validateArtifactNamespace(
+			options.ArtifactSymbolNamespace,
+			result.Header,
+			result.Source,
+			options.ArtifactDirectory,
+		); err != nil {
+			return Summary{}, err
+		}
 		collector.addStreamResult(result)
-		collector.summary.Warnings = append(collector.summary.Warnings, result.Warnings...)
 		collector.finishLog()
 	}
 	if err := collector.validateStableSymbols(); err != nil {
@@ -82,10 +86,52 @@ func LoadOwnerMap(path string) (*OwnerMap, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ownerMap, ok, err := loadOwnerMapObject(path, data); ok || err != nil {
-		return ownerMap, err
-	}
 	return loadOwnerMapJSONL(path, data)
+}
+
+// ReadOwnerMapNamespace validates and returns only the bounded first metadata record. Artifact
+// discovery uses it to avoid loading every symbol entry from every build variant into memory.
+func ReadOwnerMapNamespace(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		lineData := []byte(line)
+		var envelope ownerMapEnvelope
+		if err := json.Unmarshal(lineData, &envelope); err != nil {
+			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
+		}
+		if err := validateOwnerMapFormat(path, envelope.Format); err != nil {
+			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
+		}
+		if envelope.Kind != "metadata" {
+			return nil, fmt.Errorf("%s: parse owner map line %d: metadata must be the first record", path, lineNumber)
+		}
+		var raw ownerMapMetadataRecord
+		if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
+			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+		}
+		namespace, err := decodeOwnerMapNamespace(raw.SymbolNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+		}
+		return namespace, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%s: owner map has no metadata record", path)
 }
 
 // LoadOwnerMaps loads and combines module-local owner maps into the single
@@ -153,69 +199,84 @@ func LoadOwnerMaps(paths []string) (*OwnerMap, error) {
 	return merged, nil
 }
 
-type ownerMapRecord struct {
-	Format          int               `json:"format"`
-	Kind            string            `json:"kind"`
-	SymbolNamespace string            `json:"symbolNamespace"`
-	Owners          map[string]string `json:"owners"`
-	Entries         []ownerMapEntry   `json:"entries"`
-	ID              string            `json:"id"`
-	Owner           string            `json:"owner"`
-	Name            string            `json:"name"`
-	Value           string            `json:"value"`
+type ownerMapEnvelope struct {
+	Format int    `json:"format"`
+	Kind   string `json:"kind"`
 }
 
-type ownerMapEntry struct {
-	ID    string `json:"id"`
-	Owner string `json:"owner"`
-	Name  string `json:"name"`
-	Value string `json:"value"`
+type ownerMapMetadataRecord struct {
+	Format                  int             `json:"format"`
+	Kind                    string          `json:"kind"`
+	Variant                 string          `json:"variant"`
+	IDAlgorithm             string          `json:"idAlgorithm"`
+	IDEncoding              string          `json:"idEncoding"`
+	GeneratedOwners         bool            `json:"generatedOwners"`
+	SymbolNamespace         string          `json:"symbolNamespace"`
+	IncludeWholeApplication bool            `json:"includeWholeApplication"`
+	Hooks                   map[string]bool `json:"hooks"`
+	AndroidNamespace        string          `json:"androidNamespace"`
+	IncludePackages         []string        `json:"includePackages"`
+	ExcludePackages         []string        `json:"excludePackages"`
 }
 
-func loadOwnerMapObject(path string, data []byte) (*OwnerMap, bool, error) {
-	var raw ownerMapRecord
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, false, nil
-	}
-	if err := validateOwnerMapFormat(path, raw.Format); err != nil {
-		return nil, true, err
-	}
-	out := &OwnerMap{Entries: map[string]string{}}
-	if err := addOwnerMapMetadata(out, raw); err != nil {
-		return nil, true, fmt.Errorf("%s: parse owner map: %w", path, err)
-	}
-	if err := addOwnerMapRecord(out.Entries, raw); err != nil {
-		return nil, true, fmt.Errorf("%s: parse owner map: %w", path, err)
-	}
-	if err := validateLoadedOwnerMap(out); err != nil {
-		return nil, true, fmt.Errorf("%s: parse owner map: %w", path, err)
-	}
-	return out, true, nil
+type ownerMapEntryRecord struct {
+	Format     int    `json:"format"`
+	Kind       string `json:"kind"`
+	ID         string `json:"id"`
+	Owner      string `json:"owner"`
+	ClassName  string `json:"class"`
+	MethodName string `json:"method"`
+	Descriptor string `json:"descriptor"`
 }
 
 func loadOwnerMapJSONL(path string, data []byte) (*OwnerMap, error) {
 	out := &OwnerMap{Entries: map[string]string{}}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	lineNumber := 0
+	recordNumber := 0
+	metadataSeen := false
 	for scanner.Scan() {
 		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		var raw ownerMapRecord
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		recordNumber++
+		lineData := []byte(line)
+		var envelope ownerMapEnvelope
+		if err := json.Unmarshal(lineData, &envelope); err != nil {
 			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
 		}
-		if err := validateOwnerMapFormat(path, raw.Format); err != nil {
+		if err := validateOwnerMapFormat(path, envelope.Format); err != nil {
 			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
 		}
-		if err := addOwnerMapMetadata(out, raw); err != nil {
-			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-		}
-		if err := addOwnerMapRecord(out.Entries, raw); err != nil {
-			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+		switch envelope.Kind {
+		case "metadata":
+			if metadataSeen || recordNumber != 1 {
+				return nil, fmt.Errorf("%s: parse owner map line %d: metadata must be the first and only metadata record", path, lineNumber)
+			}
+			var raw ownerMapMetadataRecord
+			if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
+				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+			}
+			if err := addOwnerMapMetadata(out, raw); err != nil {
+				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+			}
+			metadataSeen = true
+		case "entry":
+			if !metadataSeen {
+				return nil, fmt.Errorf("%s: parse owner map line %d: entry appears before metadata", path, lineNumber)
+			}
+			var raw ownerMapEntryRecord
+			if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
+				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+			}
+			if err := addOwnerMapEntry(out.Entries, raw); err != nil {
+				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
+			}
+		default:
+			return nil, fmt.Errorf("%s: parse owner map line %d: unsupported record kind %q", path, lineNumber, envelope.Kind)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -227,13 +288,13 @@ func loadOwnerMapJSONL(path string, data []byte) (*OwnerMap, error) {
 	return out, nil
 }
 
-func addOwnerMapMetadata(out *OwnerMap, raw ownerMapRecord) error {
-	if raw.Kind != "metadata" {
-		if raw.SymbolNamespace != "" {
-			return fmt.Errorf("symbolNamespace is only allowed on the metadata record")
-		}
-		return nil
-	}
+func decodeOwnerMapRecord(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
+}
+
+func addOwnerMapMetadata(out *OwnerMap, raw ownerMapMetadataRecord) error {
 	decoded, err := decodeOwnerMapNamespace(raw.SymbolNamespace)
 	if err != nil {
 		return err
@@ -268,35 +329,11 @@ func validateLoadedOwnerMap(ownerMap *OwnerMap) error {
 
 const ownerMapNamespaceBytes = 16
 
-func addOwnerMapRecord(out map[string]string, raw ownerMapRecord) error {
-	for id, owner := range raw.Owners {
-		if err := addOwnerMapEntry(out, ownerMapEntry{ID: id, Owner: owner}); err != nil {
-			return err
-		}
-	}
-	for _, entry := range raw.Entries {
-		if err := addOwnerMapEntry(out, entry); err != nil {
-			return err
-		}
-	}
-	if raw.ID != "" || raw.Kind == "entry" {
-		if err := addOwnerMapEntry(out, ownerMapEntry{
-			ID:    raw.ID,
-			Owner: raw.Owner,
-			Name:  raw.Name,
-			Value: raw.Value,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func addOwnerMapEntry(out map[string]string, entry ownerMapEntry) error {
+func addOwnerMapEntry(out map[string]string, entry ownerMapEntryRecord) error {
 	if !isCanonicalStableOwnerID(entry.ID) {
 		return fmt.Errorf("owner map id %q is not canonical; expected stable:0x followed by 16 lowercase hexadecimal digits", entry.ID)
 	}
-	name := strings.TrimSpace(firstNonEmpty(entry.Owner, entry.Name, entry.Value))
+	name := strings.TrimSpace(entry.Owner)
 	if name == "" {
 		return fmt.Errorf("owner map entry %q has no owner", entry.ID)
 	}
@@ -322,6 +359,9 @@ type collector struct {
 	classGraph          *ClassGraph
 	diagnostics         *InstrumentationDiagnostics
 	heap                *HeapEvidence
+	artifactDirectory   string
+	artifactAuto        bool
+	artifactNamespace   []byte
 	seenEvent           bool
 	firstTime           uint64
 	lastTime            uint64
@@ -335,8 +375,6 @@ type collector struct {
 	logTrafficFirstTx   uint64
 	logTrafficLastRx    uint64
 	logTrafficLastTx    uint64
-	logCanonical        map[string]struct{}
-	logLegacy           map[string]*ProblemWindowStats
 	totalTrafficRxBytes uint64
 	totalTrafficTxBytes uint64
 	dictionaryOverflow  int
@@ -353,8 +391,11 @@ type collector struct {
 	routeTTFB      map[string]uint64
 	routeTTFBCount map[string]uint64
 	routeOwner     map[string]string
+	routeBursts    map[string]*routeBurstAccumulator
 
 	screenStats        map[string]*ScreenStats
+	processExitStats   map[string]*ProcessExitStats
+	ioStats            map[string]*IOStats
 	ownerStats         map[ownerStatKey]*OwnerStats
 	flowStats          map[string]*FlowStats
 	flowHTTPDurations  map[string]*uint64SampleSet
@@ -391,6 +432,7 @@ type collector struct {
 	currentProduct    string
 	currentRootKnown  bool
 	currentRooted     bool
+	currentLogIndex   uint64
 	currentAttrScreen string
 	currentAttrOwner  string
 	currentAttrFlow   string
@@ -415,6 +457,9 @@ func newCollector(title string, logCount int, options Options) *collector {
 		classGraph:         DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
 		diagnostics:        options.InstrumentationDiagnostics,
 		heap:               DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
+		artifactDirectory:  options.ArtifactDirectory,
+		artifactAuto:       options.ArtifactsAutoDiscovered,
+		artifactNamespace:  append([]byte(nil), options.ArtifactSymbolNamespace...),
 		routeDurations:     map[string]*uint64SampleSet{},
 		routeFailures:      map[string]int{},
 		routeRx:            map[string]uint64{},
@@ -422,7 +467,10 @@ func newCollector(title string, logCount int, options Options) *collector {
 		routeTTFB:          map[string]uint64{},
 		routeTTFBCount:     map[string]uint64{},
 		routeOwner:         map[string]string{},
+		routeBursts:        map[string]*routeBurstAccumulator{},
 		screenStats:        map[string]*ScreenStats{},
+		processExitStats:   map[string]*ProcessExitStats{},
+		ioStats:            map[string]*IOStats{},
 		ownerStats:         map[ownerStatKey]*OwnerStats{},
 		flowStats:          map[string]*FlowStats{},
 		flowHTTPDurations:  map[string]*uint64SampleSet{},
@@ -442,8 +490,6 @@ func newCollector(title string, logCount int, options Options) *collector {
 		retainedClasses:    map[string]*retainedClassStats{},
 		retainedAgeBuckets: map[string]uint64{},
 		memoryLeakStats:    map[string]*memoryLeakStats{},
-		logCanonical:       map[string]struct{}{},
-		logLegacy:          map[string]*ProblemWindowStats{},
 		currentAppVersion:  "unknown",
 		currentBuild:       "unknown",
 		currentDevice:      "unknown",
@@ -473,6 +519,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 }
 
 func (c *collector) startLog() {
+	c.currentLogIndex++
 	clear(c.stableSymbols.embedded)
 	c.resetAttribution()
 	c.logSeen = false
@@ -483,12 +530,9 @@ func (c *collector) startLog() {
 	c.logTrafficFirstTx = 0
 	c.logTrafficLastRx = 0
 	c.logTrafficLastTx = 0
-	clear(c.logCanonical)
-	clear(c.logLegacy)
 }
 
 func (c *collector) finishLog() {
-	c.mergeLegacyProblems()
 	if !c.logSeen {
 		return
 	}
@@ -526,20 +570,26 @@ type segmentQualityState struct {
 
 func (c *collector) addStreamResult(result jhlog.StreamResult) {
 	segment := CollectionSegment{
-		Source:            result.Source,
-		Version:           result.Version,
-		Status:            string(result.Status),
-		Sealed:            result.Sealed,
-		TailBytes:         result.TailBytes,
-		TotalRecords:      result.TotalRecords,
-		DataRecords:       result.DataRecords,
-		DictionaryRecords: result.DictionaryRecords,
-		ControlRecords:    result.ControlRecords,
-		RunID:             fmt.Sprintf("%x", result.Header.RunID[:]),
-		ProcessInstanceID: fmt.Sprintf("%x", result.Header.ProcessInstanceID[:]),
-		SessionID:         fmt.Sprintf("%x", result.Header.SessionID[:]),
-		SegmentIndex:      result.Header.SegmentIndex,
-		ProcessName:       result.Header.ProcessName,
+		Source:                           result.Source,
+		Status:                           string(result.Status),
+		Sealed:                           result.Sealed,
+		TailBytes:                        result.TailBytes,
+		TotalRecords:                     result.TotalRecords,
+		DataRecords:                      result.DataRecords,
+		DictionaryRecords:                result.DictionaryRecords,
+		ControlRecords:                   result.ControlRecords,
+		RuntimeGraphLogicalCalls:         result.RuntimeGraphLogicalCalls,
+		RunID:                            fmt.Sprintf("%x", result.Header.RunID[:]),
+		ProcessInstanceID:                fmt.Sprintf("%x", result.Header.ProcessInstanceID[:]),
+		SessionID:                        fmt.Sprintf("%x", result.Header.SessionID[:]),
+		SegmentIndex:                     result.Header.SegmentIndex,
+		ProcessName:                      result.Header.ProcessName,
+		ProcessScope:                     result.Header.ProcessScope.String(),
+		AllowedProcessCount:              result.Header.AllowedProcessCount,
+		ProcessScopeFingerprint:          hex.EncodeToString(result.Header.ProcessScopeFingerprint),
+		ExpectedProcessCount:             result.Header.ExpectedProcessCount,
+		ExpectedProcessFingerprint:       hex.EncodeToString(result.Header.ExpectedProcessFingerprint),
+		ProcessRosterDeclarationComplete: result.Header.ProcessRosterDeclarationComplete,
 	}
 	c.summary.TotalRecordCount += result.TotalRecords
 	c.summary.DataRecordCount += result.DataRecords
@@ -601,10 +651,6 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 	chains := map[jhlog.ID128]*segmentChain{}
 	var issues []string
 	for _, result := range results {
-		if !result.HasSegmentIdentity() {
-			issues = append(issues, fmt.Sprintf("лог %s не имеет проверяемой цепочки и идентификаторов сегментов", result.Source))
-			continue
-		}
 		header := result.Header
 		missing := make([]string, 0, 3)
 		if header.RunID.IsZero() {
@@ -621,6 +667,12 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 		}
 		if strings.TrimSpace(header.ProcessName) == "" {
 			issues = append(issues, fmt.Sprintf("сегмент %s не содержит process_name", result.Source))
+		}
+		if header.SegmentIndex == 0 && len(header.PreviousSegmentDigest) != 0 {
+			issues = append(issues, fmt.Sprintf("первый сегмент %s содержит недопустимую predecessor-ссылку", result.Source))
+		}
+		if header.SegmentIndex > 0 && len(header.PreviousSegmentDigest) != 32 {
+			issues = append(issues, fmt.Sprintf("сегмент %s не содержит полный SHA-256 digest предшественника", result.Source))
 		}
 		if header.SessionID.IsZero() {
 			continue
@@ -671,6 +723,23 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 					current.Header.SegmentIndex,
 				))
 			}
+			if current.Header.SegmentIndex == previous.Header.SegmentIndex+1 {
+				if len(previous.SegmentDigest) != 32 || len(current.Header.PreviousSegmentDigest) != 32 {
+					issues = append(issues, fmt.Sprintf(
+						"session %x не может проверить SHA-256 handoff segment %d → %d",
+						sessionID,
+						previous.Header.SegmentIndex,
+						current.Header.SegmentIndex,
+					))
+				} else if !bytes.Equal(current.Header.PreviousSegmentDigest, previous.SegmentDigest) {
+					return nil, fmt.Errorf(
+						"session %x segment %d predecessor digest does not match sealed segment %d",
+						sessionID,
+						current.Header.SegmentIndex,
+						previous.Header.SegmentIndex,
+					)
+				}
+			}
 			if current.Header.SegmentStartElapsedUS < previous.Header.SegmentStartElapsedUS {
 				issues = append(issues, fmt.Sprintf(
 					"session %x имеет немонотонное elapsed-время segment %d → %d",
@@ -695,6 +764,26 @@ func validateSegmentChains(results []jhlog.StreamResult) ([]string, error) {
 					previous.Header.SegmentIndex,
 				))
 			}
+			if previous.SegmentEnd == nil || previous.SegmentEnd.Reason != jhlog.SegmentEndRotation {
+				reason := "без segment_end"
+				if previous.SegmentEnd != nil {
+					reason = previous.SegmentEnd.Reason.String()
+				}
+				issues = append(issues, fmt.Sprintf(
+					"session %x продолжилась после segment %d с причиной %s вместо rotation",
+					sessionID,
+					previous.Header.SegmentIndex,
+					reason,
+				))
+			}
+		}
+		last := chain.segments[len(chain.segments)-1]
+		if last.SegmentEnd != nil && last.SegmentEnd.Reason == jhlog.SegmentEndRotation {
+			issues = append(issues, fmt.Sprintf(
+				"session %x обрывается после rotation segment %d; ожидаемый следующий сегмент не передан",
+				sessionID,
+				last.Header.SegmentIndex,
+			))
 		}
 	}
 	return uniqueStrings(issues), nil
@@ -713,6 +802,20 @@ func validateChainIdentity(expected, actual jhlog.SegmentHeader, source string) 
 		return fmt.Errorf("session %s changes collector_start_elapsed_us in %q", session, source)
 	case expected.IdentitySource != actual.IdentitySource:
 		return fmt.Errorf("session %s changes identity_source in %q", session, source)
+	case expected.RequiredFeatures != actual.RequiredFeatures:
+		return fmt.Errorf("session %s changes required_features in %q", session, source)
+	case expected.ProcessScope != actual.ProcessScope:
+		return fmt.Errorf("session %s changes process_scope in %q", session, source)
+	case expected.AllowedProcessCount != actual.AllowedProcessCount:
+		return fmt.Errorf("session %s changes allowed_process_count in %q", session, source)
+	case !bytes.Equal(expected.ProcessScopeFingerprint, actual.ProcessScopeFingerprint):
+		return fmt.Errorf("session %s changes process_scope_fingerprint in %q", session, source)
+	case expected.ExpectedProcessCount != actual.ExpectedProcessCount:
+		return fmt.Errorf("session %s changes expected_process_count in %q", session, source)
+	case !bytes.Equal(expected.ExpectedProcessFingerprint, actual.ExpectedProcessFingerprint):
+		return fmt.Errorf("session %s changes expected_process_fingerprint in %q", session, source)
+	case expected.ProcessRosterDeclarationComplete != actual.ProcessRosterDeclarationComplete:
+		return fmt.Errorf("session %s changes process_roster_declaration_complete in %q", session, source)
 	case expected.ProcessName != actual.ProcessName:
 		return fmt.Errorf("session %s changes process_name in %q", session, source)
 	case !bytes.Equal(expected.SymbolNamespace, actual.SymbolNamespace):
@@ -724,7 +827,7 @@ func validateChainIdentity(expected, actual jhlog.SegmentHeader, source string) 
 
 func segmentEndWarning(source string, reason jhlog.SegmentEndReason) string {
 	switch reason {
-	case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown:
+	case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown, jhlog.SegmentEndRotation:
 		return ""
 	case jhlog.SegmentEndSizeLimit:
 		return "Качество сбора: " + sizeLimitCollectionReason(source) + "."
@@ -773,44 +876,140 @@ type retainedClassStats struct {
 }
 
 type uint64SampleSet struct {
-	values       []uint64
-	seen         int
-	max          uint64
-	approximated bool
+	values             []uint64
+	denseCounts        []uint64
+	denseOffset        uint64
+	outlierCounts      map[uint64]uint64
+	orderedFrequencies []uint64Frequency
+	seen               int
+	min                uint64
+	max                uint64
+	sorted             bool
+	nextPromotionCheck int
 }
 
 func (s *uint64SampleSet) add(value uint64) {
+	if s.seen == 0 {
+		s.min = value
+		s.nextPromotionCheck = uint64SampleSetPromotionThreshold
+	}
 	s.seen++
+	if value < s.min {
+		s.min = value
+	}
 	if value > s.max {
 		s.max = value
 	}
-	if len(s.values) < maxAggregateSamplesPerSignal {
-		s.values = append(s.values, value)
+	if len(s.denseCounts) > 0 {
+		if value >= s.denseOffset && value-s.denseOffset < uint64(len(s.denseCounts)) {
+			s.denseCounts[value-s.denseOffset]++
+		} else {
+			if s.outlierCounts == nil {
+				s.outlierCounts = make(map[uint64]uint64)
+			}
+			s.outlierCounts[value]++
+		}
+		s.sorted = false
 		return
 	}
-	s.approximated = true
-	index := deterministicAggregateReservoirIndex(s.seen)
-	if index < maxAggregateSamplesPerSignal {
-		s.values[index] = value
+	s.values = append(s.values, value)
+	s.sorted = false
+	if s.seen >= s.nextPromotionCheck {
+		s.promoteDenseIfBeneficial()
+		if s.nextPromotionCheck <= s.seen {
+			if s.seen > int(^uint(0)>>1)/2 {
+				s.nextPromotionCheck = int(^uint(0) >> 1)
+			} else {
+				s.nextPromotionCheck = s.seen * 2
+			}
+		}
 	}
 }
 
-func (s *uint64SampleSet) sortedValues() []uint64 {
-	if len(s.values) == 0 {
-		return nil
+func (s *uint64SampleSet) percentile(p float64) uint64 {
+	if s.seen == 0 {
+		return 0
 	}
-	values := append([]uint64(nil), s.values...)
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
-	return values
+	target := int(math.Ceil(float64(s.seen) * p))
+	if target < 1 {
+		target = 1
+	}
+	if target > s.seen {
+		target = s.seen
+	}
+	if len(s.denseCounts) == 0 {
+		if !s.sorted {
+			sort.Slice(s.values, func(i, j int) bool { return s.values[i] < s.values[j] })
+			s.sorted = true
+		}
+		return s.values[target-1]
+	}
+	s.prepareOrderedFrequencies()
+	seen := uint64(0)
+	for _, frequency := range s.orderedFrequencies {
+		seen += frequency.count
+		if seen >= uint64(target) {
+			return frequency.value
+		}
+	}
+	return s.max
 }
 
-func (s *uint64SampleSet) sampled() int {
-	return len(s.values)
+func (s *uint64SampleSet) promoteDenseIfBeneficial() {
+	if len(s.values) == 0 || s.max < s.min || s.max-s.min >= uint64SampleSetMaxDenseBins {
+		return
+	}
+	span := int(s.max-s.min) + 1
+	if span > s.seen/uint64SampleSetMinimumCompression {
+		return
+	}
+	counts := make([]uint64, span)
+	for _, value := range s.values {
+		counts[value-s.min]++
+	}
+	s.denseCounts = counts
+	s.denseOffset = s.min
+	s.values = nil
+	s.sorted = false
 }
 
-func (s *uint64SampleSet) isApproximated() bool {
-	return s.approximated || s.seen > len(s.values)
+func (s *uint64SampleSet) prepareOrderedFrequencies() {
+	if s.sorted {
+		return
+	}
+	unique := len(s.outlierCounts)
+	for _, count := range s.denseCounts {
+		if count > 0 {
+			unique++
+		}
+	}
+	frequencies := make([]uint64Frequency, 0, unique)
+	for index, count := range s.denseCounts {
+		if count > 0 {
+			frequencies = append(frequencies, uint64Frequency{
+				value: s.denseOffset + uint64(index),
+				count: count,
+			})
+		}
+	}
+	for value, count := range s.outlierCounts {
+		frequencies = append(frequencies, uint64Frequency{value: value, count: count})
+	}
+	sort.Slice(frequencies, func(i, j int) bool { return frequencies[i].value < frequencies[j].value })
+	s.orderedFrequencies = frequencies
+	s.sorted = true
 }
+
+type uint64Frequency struct {
+	value uint64
+	count uint64
+}
+
+const (
+	uint64SampleSetPromotionThreshold = 4_096
+	uint64SampleSetMaxDenseBins       = 65_536
+	uint64SampleSetMinimumCompression = 2
+)
 
 type gaugeStats struct {
 	count uint64
@@ -818,6 +1017,115 @@ type gaugeStats struct {
 	max   uint64
 	last  uint64
 	mode  jhlog.MetricMode
+}
+
+type routeBurstBucket struct {
+	logIndex uint64
+	second   uint64
+	count    uint64
+}
+
+type routeBurstAccumulator struct {
+	buckets           []routeBurstBucket
+	peak              uint64
+	peakWindowStartMS uint64
+	approximate       bool
+}
+
+func (s *routeBurstAccumulator) add(logIndex, timeMS uint64) {
+	second := timeMS / 1_000
+	for index := range s.buckets {
+		bucket := &s.buckets[index]
+		if bucket.logIndex != logIndex || bucket.second != second {
+			continue
+		}
+		bucket.count++
+		s.updatePeak(*bucket)
+		return
+	}
+	bucket := routeBurstBucket{logIndex: logIndex, second: second, count: 1}
+	if len(s.buckets) < routeBurstRetainedSeconds {
+		s.buckets = append(s.buckets, bucket)
+	} else {
+		oldest := 0
+		for index := 1; index < len(s.buckets); index++ {
+			if routeBurstBucketBefore(s.buckets[index], s.buckets[oldest]) {
+				oldest = index
+			}
+		}
+		s.buckets[oldest] = bucket
+		s.approximate = true
+	}
+	s.updatePeak(bucket)
+}
+
+func (s *routeBurstAccumulator) updatePeak(bucket routeBurstBucket) {
+	if bucket.count > s.peak {
+		s.peak = bucket.count
+		s.peakWindowStartMS = bucket.second * 1_000
+	}
+}
+
+func routeBurstBucketBefore(left, right routeBurstBucket) bool {
+	if left.logIndex != right.logIndex {
+		return left.logIndex < right.logIndex
+	}
+	return left.second < right.second
+}
+
+const routeBurstRetainedSeconds = 8
+
+func mergeFrameWindow(stats *ScreenStats, window *jhlog.UIWindowEvent) {
+	if len(stats.FrameDurationBuckets) == 0 {
+		stats.FrameDurationBuckets = make([]uint64, jhlog.UIFrameHistogramBucketCount)
+		stats.FrameSource = uiFrameSourceName(window.Source)
+		stats.FrameDeadlineUS = window.FrameDeadlineUS
+		stats.FrameDeadlineStatus = "consistent"
+	} else {
+		if stats.FrameSource != uiFrameSourceName(window.Source) {
+			stats.FrameSource = "mixed"
+		}
+		if stats.FrameDeadlineUS != window.FrameDeadlineUS {
+			stats.FrameDeadlineUS = 0
+			stats.FrameDeadlineStatus = "mixed"
+		}
+	}
+	for index, count := range window.FrameDurationBuckets {
+		stats.FrameDurationBuckets[index] = saturatingUint64Sum(stats.FrameDurationBuckets[index], count)
+	}
+	stats.FrameDistributionState = "mergeable_histogram_v2"
+}
+
+func uiFrameSourceName(source jhlog.UIFrameSource) string {
+	switch source {
+	case jhlog.UIFrameSourceJankStats:
+		return "jankstats"
+	case jhlog.UIFrameSourceChoreographer:
+		return "choreographer"
+	default:
+		return "unknown"
+	}
+}
+
+func ioOperationName(operation jhlog.IOOperationKind) string {
+	switch operation {
+	case jhlog.IOOperationFileRead:
+		return "file_read"
+	case jhlog.IOOperationFileWrite:
+		return "file_write"
+	case jhlog.IOOperationFileSync:
+		return "file_sync"
+	case jhlog.IOOperationDatabaseRead:
+		return "database_read"
+	case jhlog.IOOperationDatabaseWrite:
+		return "database_write"
+	case jhlog.IOOperationContentRead:
+		return "content_read"
+	case jhlog.IOOperationContentWrite:
+		return "content_write"
+	default:
+		return "unknown"
+	}
 }
 
 func (s *gaugeStats) add(value, count, sum, max uint64, mode jhlog.MetricMode) {
@@ -889,8 +1197,6 @@ func metricModeForGauge(name string) jhlog.MetricMode {
 		"battery.plugged",
 		"battery.health",
 		"device.thermal.status",
-		"process.exit.last.reason",
-		"process.exit.last.importance",
 		"memory.trim.last_level":
 		return jhlog.MetricModeState
 	case "battery.charging",
@@ -899,9 +1205,6 @@ func metricModeForGauge(name string) jhlog.MetricMode {
 		"device.idle_mode",
 		"network.request.connection_released":
 		return jhlog.MetricModeBooleanRate
-	}
-	if strings.HasPrefix(metric, "process.exit.last.reason_") && strings.HasSuffix(metric, ".count") {
-		return jhlog.MetricModeLast
 	}
 	if strings.HasSuffix(metric, ".last_id") ||
 		strings.Contains(metric, ".last.") ||
@@ -933,11 +1236,6 @@ type retentionDataQuality struct {
 	runtimeNotes           []string
 	dictionaryNotes        []string
 	heapNotes              []string
-}
-
-func deterministicAggregateReservoirIndex(seen int) int {
-	x := uint64(seen)*2862933555777941757 + 3037000493
-	return int(x % uint64(seen))
 }
 
 func normalizeFilter(filter Filter) Filter {
@@ -1041,20 +1339,27 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	}
 	switch {
 	case event.Session != nil:
-		c.currentAppVersion = resolveEventSymbol(dict, event.Session.AppVersionRef, event.Session.AppVersionID)
-		c.currentBuild = resolveEventSymbol(dict, event.Session.BuildRef, event.Session.BuildID)
-		c.currentDevice = resolveEventSymbol(dict, event.Session.DeviceRef, event.Session.DeviceID)
+		c.summary.CollectorSessions++
+		c.summary.CollectorFlagsAny |= event.Session.CollectorFlags
+		if c.summary.CollectorSessions == 1 {
+			c.summary.CollectorFlagsAll = event.Session.CollectorFlags
+		} else {
+			c.summary.CollectorFlagsAll &= event.Session.CollectorFlags
+		}
+		c.currentAppVersion = jhlog.ResolveSymbol(dict, event.Session.AppVersionRef)
+		c.currentBuild = jhlog.ResolveSymbol(dict, event.Session.BuildRef)
+		c.currentDevice = jhlog.ResolveSymbol(dict, event.Session.DeviceRef)
 		c.currentSDK = fmt.Sprintf("api-%d", event.Session.SDKInt)
-		c.currentProcess = firstNonEmpty(event.Session.ProcessName, jhlog.Resolve(dict, event.Session.ProcessID))
-		c.currentAndroid = resolveEventSymbol(dict, event.Session.AndroidReleaseRef, event.Session.AndroidReleaseID)
-		c.currentPatch = resolveEventSymbol(dict, event.Session.SecurityPatchRef, event.Session.SecurityPatchID)
-		c.currentPrimaryABI = resolveEventSymbol(dict, event.Session.PrimaryABIRef, event.Session.PrimaryABIID)
-		c.currentABIs = resolveEventSymbol(dict, event.Session.SupportedABIsRef, event.Session.SupportedABIsID)
-		c.currentMaker = resolveEventSymbol(dict, event.Session.ManufacturerRef, event.Session.ManufacturerID)
-		c.currentBrand = resolveEventSymbol(dict, event.Session.BrandRef, event.Session.BrandID)
-		c.currentHardware = resolveEventSymbol(dict, event.Session.HardwareRef, event.Session.HardwareID)
-		c.currentBoard = resolveEventSymbol(dict, event.Session.BoardRef, event.Session.BoardID)
-		c.currentProduct = resolveEventSymbol(dict, event.Session.ProductRef, event.Session.ProductID)
+		c.currentProcess = firstNonEmpty(event.Session.ProcessName, "unknown")
+		c.currentAndroid = jhlog.ResolveSymbol(dict, event.Session.AndroidReleaseRef)
+		c.currentPatch = jhlog.ResolveSymbol(dict, event.Session.SecurityPatchRef)
+		c.currentPrimaryABI = jhlog.ResolveSymbol(dict, event.Session.PrimaryABIRef)
+		c.currentABIs = jhlog.ResolveSymbol(dict, event.Session.SupportedABIsRef)
+		c.currentMaker = jhlog.ResolveSymbol(dict, event.Session.ManufacturerRef)
+		c.currentBrand = jhlog.ResolveSymbol(dict, event.Session.BrandRef)
+		c.currentHardware = jhlog.ResolveSymbol(dict, event.Session.HardwareRef)
+		c.currentBoard = jhlog.ResolveSymbol(dict, event.Session.BoardRef)
+		c.currentProduct = jhlog.ResolveSymbol(dict, event.Session.ProductRef)
 		c.currentRootKnown = true
 		c.currentRooted = event.Session.DeviceRooted
 		c.summary.DeviceRootKnown = true
@@ -1064,18 +1369,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.devices[c.currentDevice]++
 		c.sdks[c.currentSDK]++
 		c.processSamples[c.currentProcess]++
-	case event.Flow != nil:
-		// A flow transition describes only itself. Atomic envelope attribution was
-		// applied above and is never carried into the next event.
-		context := c.eventContext("", "", "", "")
-		if !c.matchesFilters("", context, nil, context.Owner) {
-			return
-		}
-		c.markCohort()
-		c.ensureFlow(c.flowKey("", ""))
 	case event.HTTP != nil:
-		route := resolveEventSymbol(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-		owner := c.resolveOwnerRef(dict, firstEventSymbol(event.HTTP.OwnerRef, event.HTTP.OwnerID))
+		route := jhlog.ResolveSymbol(dict, event.HTTP.RouteRef)
+		owner := c.currentAttrOwner
 		context := c.eventContext("", owner, "", "")
 		if !c.matchesFilters(route, context, nil, owner) {
 			return
@@ -1084,6 +1380,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.summary.HTTPCount++
 		c.httpDurations.add(event.HTTP.DurationMS)
 		c.sampleSet(c.routeDurations, route).add(event.HTTP.DurationMS)
+		c.routeBurst(route).add(c.currentLogIndex, event.TimeMS)
 		c.routeRx[route] += event.HTTP.RxBytes
 		c.routeTx[route] += event.HTTP.TxBytes
 		c.routeTTFB[route] += event.HTTP.TTFBMS
@@ -1105,13 +1402,12 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			flow.HTTPFailed++
 		}
 		failed := event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx
-		classified := event.Flags&uint64(jhlog.FlagHTTPClassified) != 0
 		slow := event.Flags&uint64(jhlog.FlagHTTPSlow) != 0
-		if failed || slow || (!classified && event.HTTP.DurationMS >= legacyHTTPSlowThresholdMS) {
+		if failed || slow {
 			c.addProblemWindow(context, "http_slow_or_failed", event.HTTP.DurationMS, 1, event.HTTP.DurationMS)
 		}
 	case event.UIWindow != nil:
-		screen := resolveEventSymbol(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
+		screen := c.currentAttrScreen
 		context := c.eventContext(screen, "", "", "")
 		if !c.matchesFilters("", context, nil) {
 			return
@@ -1126,30 +1422,32 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats.WindowMS += event.UIWindow.WindowMS
 		stats.Frames += event.UIWindow.FrameCount
 		stats.JankyFrames += event.UIWindow.JankCount
-		windowFPS := fps(event.UIWindow.FrameCount, event.UIWindow.WindowMS)
-		if stats.MinFPS == 0 || windowFPS < stats.MinFPS {
-			stats.MinFPS = windowFPS
+		if fpsWindowReliable(event.UIWindow) {
+			windowFPS := fps(event.UIWindow.FrameCount, event.UIWindow.WindowMS)
+			stats.FPSMeasuredFrames += event.UIWindow.FrameCount
+			stats.FPSMeasuredWindowMS += event.UIWindow.WindowMS
+			stats.FPSMeasuredWindowCount++
+			if stats.MinFPS == 0 || windowFPS < stats.MinFPS {
+				stats.MinFPS = windowFPS
+			}
+			c.summary.UIFPSMeasuredFrames += event.UIWindow.FrameCount
+			c.summary.UIFPSMeasuredWindowMS += event.UIWindow.WindowMS
+			c.summary.UIFPSMeasuredWindowCount++
+			if c.summary.UIMinFPS == 0 || windowFPS < c.summary.UIMinFPS {
+				c.summary.UIMinFPS = windowFPS
+			}
 		}
-		if event.UIWindow.P95MS > stats.P95MS {
-			stats.P95MS = event.UIWindow.P95MS
-		}
-		if event.UIWindow.P99MS > stats.MaxP99MS {
-			stats.MaxP99MS = event.UIWindow.P99MS
-		}
+		mergeFrameWindow(stats, event.UIWindow)
 		c.summary.UIFrames += event.UIWindow.FrameCount
 		c.summary.UIJank += event.UIWindow.JankCount
 		c.summary.UIWindowMS += event.UIWindow.WindowMS
-		if c.summary.UIMinFPS == 0 || windowFPS < c.summary.UIMinFPS {
-			c.summary.UIMinFPS = windowFPS
-		}
 		flowKey := c.flowKey(screen, "")
 		flow := c.ensureFlow(flowKey)
 		flow.UIWindows++
 		flow.UIFrames += event.UIWindow.FrameCount
 		flow.UIJank += event.UIWindow.JankCount
-		classified := event.Flags&uint64(jhlog.FlagUIClassified) != 0
 		problem := event.Flags&uint64(jhlog.FlagUIProblem) != 0
-		if problem || (!classified && (event.UIWindow.JankCount > 0 || event.UIWindow.P95MS >= legacyUIP95ThresholdMS)) {
+		if problem {
 			c.addProblemWindow(
 				context,
 				"ui_jank",
@@ -1159,8 +1457,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			)
 		}
 	case event.Stall != nil:
-		owner := c.resolveOwnerRef(dict, firstEventSymbol(event.Stall.OwnerRef, event.Stall.OwnerID))
-		stack := resolveEventSymbol(dict, event.Stall.StackRef, event.Stall.StackID)
+		owner := c.currentAttrOwner
+		stack := jhlog.ResolveSymbol(dict, event.Stall.StackRef)
 		flowOverride := ""
 		stepOverride := ""
 		if c.isHeapDumpStall(event.TimeMS, owner) {
@@ -1224,16 +1522,48 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Memory.PSSKB > flow.MemoryMaxKB {
 			flow.MemoryMaxKB = event.Memory.PSSKB
 		}
+	case event.ProcessExit != nil:
+		process := firstKnown(jhlog.ResolveSymbol(dict, event.ProcessExit.ProcessRef), c.currentProcess)
+		key := fmt.Sprintf("%d\x00%s", event.ProcessExit.Reason, process)
+		stats := c.processExitStats[key]
+		if stats == nil {
+			label, _ := processExitReason(event.ProcessExit.Reason)
+			stats = &ProcessExitStats{Reason: event.ProcessExit.Reason, ReasonLabel: label, Process: attrValue(process)}
+			c.processExitStats[key] = stats
+		}
+		stats.Count++
+		if event.ProcessExit.TimestampUnixMS >= stats.LatestTimestampUnixMS {
+			stats.LatestTimestampUnixMS = event.ProcessExit.TimestampUnixMS
+			stats.Importance = event.ProcessExit.Importance
+		}
+		stats.MaxPSSKB = maxUint64(stats.MaxPSSKB, event.ProcessExit.PSSKB)
+		stats.MaxRSSKB = maxUint64(stats.MaxRSSKB, event.ProcessExit.RSSKB)
+	case event.IO != nil:
+		context := c.eventContext("", "", "", "")
+		if !c.matchesFilters("", context, nil, context.Owner) {
+			return
+		}
+		c.markCohort()
+		operation := ioOperationName(event.IO.Operation)
+		mainThread := event.Flags&uint64(jhlog.FlagThreadMain) != 0
+		key := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step) + fmt.Sprintf("\x00%s\x00%t", operation, mainThread)
+		stats := c.ioStats[key]
+		if stats == nil {
+			stats = &IOStats{
+				Operation: operation, MainThread: mainThread,
+				Screen: context.Screen, Flow: context.Flow, Step: context.Step, Owner: context.Owner,
+			}
+			c.ioStats[key] = stats
+		}
+		stats.Count++
+		stats.TotalDurationUS = saturatingUint64Sum(stats.TotalDurationUS, event.IO.DurationUS)
+		stats.MaxDurationUS = maxUint64(stats.MaxDurationUS, event.IO.DurationUS)
+		stats.Bytes = saturatingUint64Sum(stats.Bytes, event.IO.Bytes)
 	case event.Retained != nil:
-		className := c.deobfuscate(resolveEventSymbol(dict, event.Retained.ClassRef, event.Retained.ClassID))
-		holder := c.resolveOwnerRef(dict, firstEventSymbol(event.Retained.HolderRef, event.Retained.HolderID))
-		owner := c.resolveOwner(dict, event.Retained.OwnerID)
-		context := c.eventContext(
-			jhlog.Resolve(dict, event.Retained.ScreenID),
-			owner,
-			jhlog.Resolve(dict, event.Retained.FlowID),
-			jhlog.Resolve(dict, event.Retained.StepID),
-		)
+		className := c.deobfuscate(jhlog.ResolveSymbol(dict, event.Retained.ClassRef))
+		holder := c.resolveOwnerRef(dict, event.Retained.HolderRef)
+		context := c.eventContext("", "", "", "")
+		owner := context.Owner
 		holder = firstKnown(holder, context.Owner)
 		if !c.matchesFilters("", context, []string{className}, holder, owner) {
 			return
@@ -1268,14 +1598,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			event.Retained.AgeMS,
 		)
 	case event.LogSpam != nil:
-		key := c.contextKey(
-			jhlog.Resolve(dict, event.LogSpam.ScreenID),
-			c.resolveOwner(dict, event.LogSpam.OwnerID),
-			jhlog.Resolve(dict, event.LogSpam.FlowID),
-			jhlog.Resolve(dict, event.LogSpam.StepID),
-		)
+		key := c.contextKey("", "", "", "")
 		context := c.flowContextFromKey(key)
-		source := resolveEventSymbol(dict, event.LogSpam.SourceRef, event.LogSpam.SourceID)
+		source := jhlog.ResolveSymbol(dict, event.LogSpam.SourceRef)
 		if !c.matchesFilters("", context, []string{source}, context.Owner) {
 			return
 		}
@@ -1307,32 +1632,18 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			)
 		}
 	case event.Problem != nil:
-		key := c.contextKey(
-			jhlog.Resolve(dict, event.Problem.ScreenID),
-			c.resolveOwner(dict, event.Problem.OwnerID),
-			jhlog.Resolve(dict, event.Problem.FlowID),
-			jhlog.Resolve(dict, event.Problem.StepID),
-		)
+		key := c.contextKey("", "", "", "")
 		context := c.flowContextFromKey(key)
 		if !c.matchesFilters("", context, nil, context.Owner) {
 			return
 		}
 		c.markCohort()
-		kind := resolveEventSymbol(dict, event.Problem.KindRef, event.Problem.KindID)
-		if isLegacyDerivedProblemKind(kind) {
-			c.addLegacyProblem(context, kind, event.Problem.WindowMS, event.Problem.Count, event.Problem.MaxMS)
-		} else {
-			c.addProblemWindow(context, kind, event.Problem.WindowMS, event.Problem.Count, event.Problem.MaxMS)
-		}
+		kind := jhlog.ResolveSymbol(dict, event.Problem.KindRef)
+		c.addProblemWindow(context, kind, event.Problem.WindowMS, event.Problem.Count, event.Problem.MaxMS)
 	case event.RuntimeCall != nil:
-		caller := c.resolveOwnerRef(dict, firstEventSymbol(event.RuntimeCall.CallerRef, event.RuntimeCall.CallerID))
-		callee := c.resolveOwnerRef(dict, firstEventSymbol(event.RuntimeCall.CalleeRef, event.RuntimeCall.CalleeID))
-		key := c.contextKey(
-			jhlog.Resolve(dict, event.RuntimeCall.ScreenID),
-			caller,
-			jhlog.Resolve(dict, event.RuntimeCall.FlowID),
-			jhlog.Resolve(dict, event.RuntimeCall.StepID),
-		)
+		caller := c.currentAttrOwner
+		callee := c.resolveOwnerRef(dict, event.RuntimeCall.CalleeRef)
+		key := c.contextKey("", "", "", "")
 		context := c.flowContextFromKey(key)
 		if !c.matchesFilters("", context, []string{caller, callee}, caller, callee) {
 			return
@@ -1357,7 +1668,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		}
 	case event.Metric != nil:
 		c.markCohort()
-		name := resolveEventSymbol(dict, event.Metric.MetricRef, event.Metric.MetricID)
+		name := jhlog.ResolveSymbol(dict, event.Metric.MetricRef)
 		if event.Type == jhlog.EventCounter && event.Metric.MetricRef.Stable {
 			name = c.resolveOwnerRef(dict, event.Metric.MetricRef)
 		}
@@ -1396,15 +1707,11 @@ func (c *collector) markCohort() {
 	)]++
 }
 
-func (c *collector) resolveOwner(dict map[uint64]string, id uint64) string {
-	return c.deobfuscate(ResolveOwnerAlias(c.ownerMap, jhlog.Resolve(dict, id)))
-}
-
 func (c *collector) resolveOwnerRef(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	if !ref.Stable {
-		return c.deobfuscate(jhlog.ResolveSymbol(dict, ref))
+		return c.deobfuscate(ResolveOwnerAlias(c.ownerMap, jhlog.ResolveSymbol(dict, ref)))
 	}
-	if embedded := c.stableSymbols.embedded[ref.StableID]; embedded != "" {
+	if embedded := c.stableSymbols.embedded[ref.ID]; embedded != "" {
 		return c.deobfuscate(embedded)
 	}
 	canonical := jhlog.ResolveSymbol(dict, ref)
@@ -1433,17 +1740,6 @@ func (c *collector) validateStableSymbols() error {
 		return fmt.Errorf("log uses external stable symbols; rerun with --external-symbols and the matching --artifacts-dir (or --owner-map)")
 	}
 	return nil
-}
-
-func firstEventSymbol(ref jhlog.SymbolRef, legacyID uint64) jhlog.SymbolRef {
-	if !ref.IsUnknown() {
-		return ref
-	}
-	return jhlog.LocalSymbol(legacyID)
-}
-
-func resolveEventSymbol(dict map[uint64]string, ref jhlog.SymbolRef, legacyID uint64) string {
-	return jhlog.ResolveSymbol(dict, firstEventSymbol(ref, legacyID))
 }
 
 func (c *collector) deobfuscate(value string) string {
@@ -1496,28 +1792,9 @@ func (c *collector) ensureFlow(key string) *FlowStats {
 }
 
 func (c *collector) addProblemWindow(context FlowStats, kind string, windowMS, count, maxMS uint64) {
-	problemKey := c.accumulateProblem(c.problemStats, context, kind, windowMS, count, maxMS)
-	c.logCanonical[problemKey] = struct{}{}
-	flow := c.ensureFlow(c.contextKey(context.Screen, context.Owner, context.Flow, context.Step))
-	flow.ProblemCount += count
-	flow.ProblemMaxMS = maxUint64(flow.ProblemMaxMS, maxMS)
-}
-
-func (c *collector) addLegacyProblem(context FlowStats, kind string, windowMS, count, maxMS uint64) {
-	c.accumulateProblem(c.logLegacy, context, kind, windowMS, count, maxMS)
-}
-
-func (c *collector) accumulateProblem(
-	target map[string]*ProblemWindowStats,
-	context FlowStats,
-	kind string,
-	windowMS,
-	count,
-	maxMS uint64,
-) string {
 	key := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step)
 	problemKey := key + "\x00" + kind
-	stats := target[problemKey]
+	stats := c.problemStats[problemKey]
 	if stats == nil {
 		stats = &ProblemWindowStats{
 			Screen: context.Screen,
@@ -1526,42 +1803,15 @@ func (c *collector) accumulateProblem(
 			Owner:  context.Owner,
 			Kind:   kind,
 		}
-		target[problemKey] = stats
+		c.problemStats[problemKey] = stats
 	}
 	stats.Windows++
 	stats.Count += count
 	stats.TotalWindowMS += windowMS
 	stats.MaxMS = maxUint64(stats.MaxMS, maxMS)
-	return problemKey
-}
-
-func (c *collector) mergeLegacyProblems() {
-	for problemKey, legacy := range c.logLegacy {
-		if _, canonical := c.logCanonical[problemKey]; canonical {
-			continue
-		}
-		stats := c.problemStats[problemKey]
-		if stats == nil {
-			c.problemStats[problemKey] = legacy
-		} else {
-			stats.Windows += legacy.Windows
-			stats.Count += legacy.Count
-			stats.TotalWindowMS += legacy.TotalWindowMS
-			stats.MaxMS = maxUint64(stats.MaxMS, legacy.MaxMS)
-		}
-		flow := c.ensureFlow(c.contextKey(legacy.Screen, legacy.Owner, legacy.Flow, legacy.Step))
-		flow.ProblemCount += legacy.Count
-		flow.ProblemMaxMS = maxUint64(flow.ProblemMaxMS, legacy.MaxMS)
-	}
-}
-
-func isLegacyDerivedProblemKind(kind string) bool {
-	switch kind {
-	case "http_slow_or_failed", "main_thread_stall", "ui_jank", "retained_object", "log_spam":
-		return true
-	default:
-		return false
-	}
+	flow := c.ensureFlow(key)
+	flow.ProblemCount += count
+	flow.ProblemMaxMS = maxUint64(flow.ProblemMaxMS, maxMS)
 }
 
 func (c *collector) sampleSet(target map[string]*uint64SampleSet, key string) *uint64SampleSet {
@@ -1571,6 +1821,15 @@ func (c *collector) sampleSet(target map[string]*uint64SampleSet, key string) *u
 		target[key] = set
 	}
 	return set
+}
+
+func (c *collector) routeBurst(route string) *routeBurstAccumulator {
+	stats := c.routeBursts[route]
+	if stats == nil {
+		stats = &routeBurstAccumulator{}
+		c.routeBursts[route] = stats
+	}
+	return stats
 }
 
 func (c *collector) gauge(name string) *gaugeStats {
@@ -1735,48 +1994,59 @@ func (c *collector) finish() Summary {
 	summary.TrafficTxMax = c.totalTrafficTxBytes
 
 	for route, set := range c.routeDurations {
-		durations := set.sortedValues()
 		ttfbAvg := uint64(0)
 		if c.routeTTFBCount[route] > 0 {
 			ttfbAvg = c.routeTTFB[route] / c.routeTTFBCount[route]
 		}
-		summary.Routes = append(summary.Routes, RouteStats{
-			Route:          route,
-			Count:          set.seen,
-			Sampled:        set.sampled(),
-			Failures:       c.routeFailures[route],
-			P50MS:          percentileSorted(durations, 0.50),
-			P95MS:          percentileSorted(durations, 0.95),
-			P95Approximate: set.isApproximated(),
-			MaxMS:          set.max,
-			AvgTTFBMS:      ttfbAvg,
-			BytesRx:        c.routeRx[route],
-			BytesTx:        c.routeTx[route],
-			OwnerSample:    c.routeOwner[route],
-		})
+		burst := c.routeBursts[route]
+		burstStatus := "exact_rolling_second"
+		if burst != nil && burst.approximate {
+			burstStatus = "bounded_approximation"
+		}
+		row := RouteStats{
+			Route:               route,
+			Count:               set.seen,
+			Failures:            c.routeFailures[route],
+			P50MS:               set.percentile(0.50),
+			P95MS:               set.percentile(0.95),
+			MaxMS:               set.max,
+			AvgTTFBMS:           ttfbAvg,
+			BytesRx:             c.routeRx[route],
+			BytesTx:             c.routeTx[route],
+			OwnerSample:         c.routeOwner[route],
+			BurstEstimateStatus: burstStatus,
+		}
+		if burst != nil {
+			row.PeakRequestsPerSecond = burst.peak
+			row.PeakWindowStartMS = burst.peakWindowStartMS
+		}
+		summary.Routes = append(summary.Routes, row)
 	}
-	summary.HTTPP95MS = percentileSorted(c.httpDurations.sortedValues(), 0.95)
-	summary.HTTPP95Approximate = c.httpDurations.isApproximated()
+	summary.HTTPP95MS = c.httpDurations.percentile(0.95)
 
 	for _, stats := range c.screenStats {
 		if stats.Frames > 0 {
 			stats.JankRatePct = float64(stats.JankyFrames) * 100 / float64(stats.Frames)
 		}
-		stats.AvgFPS = fps(stats.Frames, stats.WindowMS)
+		stats.AvgFPS = fps(stats.FPSMeasuredFrames, stats.FPSMeasuredWindowMS)
+		stats.FPSStatus = fpsMeasurementStatus(stats.Frames, stats.FPSMeasuredWindowCount)
+		stats.FrameP50MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 50)
+		stats.FrameP95MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 95)
+		stats.FrameP99MS = jhlog.UIFrameHistogramQuantileMS(stats.FrameDurationBuckets, 99)
 		summary.Screens = append(summary.Screens, *stats)
 	}
 	if summary.UIFrames > 0 {
 		summary.UIJankPct = float64(summary.UIJank) * 100 / float64(summary.UIFrames)
 	}
-	summary.UIAvgFPS = fps(summary.UIFrames, summary.UIWindowMS)
+	summary.UIAvgFPS = fps(summary.UIFPSMeasuredFrames, summary.UIFPSMeasuredWindowMS)
+	summary.UIFPSStatus = fpsMeasurementStatus(summary.UIFrames, summary.UIFPSMeasuredWindowCount)
 
 	for _, stats := range c.ownerStats {
 		summary.Owners = append(summary.Owners, *stats)
 	}
 	for key, stats := range c.flowStats {
 		if durations := c.flowHTTPDurations[key]; durations != nil {
-			stats.HTTPP95MS = percentileSorted(durations.sortedValues(), 0.95)
-			stats.HTTPP95Approximate = durations.isApproximated()
+			stats.HTTPP95MS = durations.percentile(0.95)
 		}
 		if stats.UIFrames > 0 {
 			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
@@ -1792,9 +2062,15 @@ func (c *collector) finish() Summary {
 	for _, stats := range c.runtimeCallStats {
 		summary.RuntimeCalls = append(summary.RuntimeCalls, *stats)
 	}
+	for _, stats := range c.processExitStats {
+		summary.ProcessExits = append(summary.ProcessExits, *stats)
+	}
+	for _, stats := range c.ioStats {
+		summary.IOOperations = append(summary.IOOperations, *stats)
+	}
 	for name, value := range c.counterValues {
 		summary.Counters = append(summary.Counters, NamedValue{Name: name, Value: value})
-		if strings.HasPrefix(name, "jankstats.") {
+		if isJankStatsMetric(name) {
 			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value})
 		}
 	}
@@ -1802,7 +2078,7 @@ func (c *collector) finish() Summary {
 		value := values.value()
 		extra := values.extra()
 		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: value, Extra: extra})
-		if strings.HasPrefix(name, "jankstats.") {
+		if isJankStatsMetric(name) {
 			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value, Extra: extra})
 		}
 	}
@@ -1858,7 +2134,6 @@ func (c *collector) finish() Summary {
 	}
 	summary.Environment = c.runEnvironment(summary)
 	summary.Warnings = append(summary.Warnings, c.telemetryHealthWarnings(summary)...)
-	summary.Warnings = append(summary.Warnings, c.sampleWarnings(summary)...)
 	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
 
 	sortRoutes(summary.Routes)
@@ -1868,6 +2143,8 @@ func (c *collector) finish() Summary {
 	sortLogSpam(summary.LogSpam)
 	sortProblems(summary.ProblemWindows)
 	sortRuntimeCalls(summary.RuntimeCalls)
+	sortProcessExits(summary.ProcessExits)
+	sortIOOperations(summary.IOOperations)
 	sortNamed(summary.AppVersions)
 	sortNamed(summary.Builds)
 	sortNamed(summary.Devices)
@@ -1881,10 +2158,132 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.JankStats)
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
+	summary.LogGrowth = buildLogGrowthSummary(c.streamResults)
+	// Every base aggregate has been copied into Summary. Drop the mutable collection maps before
+	// materializing influence views and the code-problem registry so both representations do not
+	// coexist at peak heap usage on large applications.
+	c.releaseAggregationState()
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
-	summary.LogGrowth = buildLogGrowthSummary(c.streamResults)
+	summary.AnalysisInputs = c.analysisInputCompleteness(summary)
+	problemReport, problemErr := BuildProblemReport(summary)
+	if problemErr != nil {
+		summary.Warnings = append(summary.Warnings, "problem engine: "+problemErr.Error())
+	} else {
+		summary.ProblemSchemaVersion = ProblemSchemaVersion
+		summary.ProblemSummary = problemReport.Summary
+		summary.Problems = problemReport.Problems
+		summary.ProblemIncidents = problemReport.Incidents
+		summary.CategoryCoverage = problemReport.Coverage
+		summary.Detectors = problemReport.Registry
+	}
+	summary.EvidenceQuality = BuildEvidenceQualityVector(summary)
 	return summary
+}
+
+func (c *collector) releaseAggregationState() {
+	c.ownerMap = nil
+	c.nameMap = nil
+	c.routeDurations = nil
+	c.routeFailures = nil
+	c.routeRx = nil
+	c.routeTx = nil
+	c.routeTTFB = nil
+	c.routeTTFBCount = nil
+	c.routeOwner = nil
+	c.routeBursts = nil
+	c.screenStats = nil
+	c.processExitStats = nil
+	c.ioStats = nil
+	c.ownerStats = nil
+	c.flowStats = nil
+	c.flowHTTPDurations = nil
+	c.logSpamStats = nil
+	c.problemStats = nil
+	c.runtimeCallStats = nil
+	c.counterValues = nil
+	c.gaugeValues = nil
+	c.appVersions = nil
+	c.builds = nil
+	c.devices = nil
+	c.sdks = nil
+	c.cohortSamples = nil
+	c.networkSamples = nil
+	c.processSamples = nil
+	c.retainedClasses = nil
+	c.retainedAgeBuckets = nil
+	c.memoryLeakStats = nil
+	c.qualitySnapshots = nil
+	c.streamResults = nil
+	c.stableSymbols.embedded = nil
+}
+
+func isJankStatsMetric(name string) bool {
+	return strings.HasPrefix(name, "jankstats.")
+}
+
+func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputCompleteness {
+	runtimeEvidence := summary.LogCount > 0 && summary.DataRecordCount > 0
+	classGraph := summary.Influence.HasClassGraph
+	diagnostics := c.diagnostics != nil && c.diagnostics.Available && c.diagnostics.ClassCount > 0
+	symbolMode := "embedded"
+	if c.stableSymbols.externalResolved {
+		symbolMode = "external"
+	}
+	missing := make([]string, 0, 4)
+	if !runtimeEvidence {
+		missing = append(missing, "runtime events")
+	}
+	if !classGraph {
+		missing = append(missing, "class-graph.jsonl")
+	}
+	if !diagnostics {
+		missing = append(missing, "instrumentation-diagnostics.jsonl")
+	}
+	artifactIdentityVerified := len(c.artifactNamespace) == ownerMapNamespaceBytes
+	if (classGraph || diagnostics) && !artifactIdentityVerified {
+		missing = append(missing, "matching artifact symbolNamespace")
+	}
+	complete := len(missing) == 0
+	status := "complete"
+	explanation := "runtime evidence, статический class graph и ASM diagnostics подключены"
+	if !complete {
+		status = "partial"
+		explanation = "часть аналитических входов отсутствует; соответствующие выводы и companion reports ограничены"
+		if runtimeEvidence && !classGraph && !diagnostics {
+			status = "runtime_only"
+			explanation = "доступны runtime evidence, но статический граф, hot paths, cycles и ASM diagnostics неполны"
+		}
+	}
+	return AnalysisInputCompleteness{
+		Status:                     status,
+		Complete:                   complete,
+		RuntimeEvidence:            runtimeEvidence,
+		SymbolsResolved:            len(c.stableSymbols.unresolved) == 0,
+		SymbolMode:                 symbolMode,
+		ClassGraph:                 classGraph,
+		InstrumentationDiagnostics: diagnostics,
+		HeapEvidence:               c.heap != nil && len(c.heap.Sources) > 0,
+		ArtifactDirectory:          c.artifactDirectory,
+		ArtifactsAutoDiscovered:    c.artifactAuto,
+		ArtifactIdentityVerified:   artifactIdentityVerified,
+		Missing:                    missing,
+		Explanation:                explanation,
+	}
+}
+
+func validateArtifactNamespace(namespace []byte, header jhlog.SegmentHeader, source, directory string) error {
+	if len(namespace) == 0 {
+		return nil
+	}
+	if len(namespace) != ownerMapNamespaceBytes || !bytes.Equal(namespace, header.SymbolNamespace) {
+		return fmt.Errorf(
+			"Jank Hunter artifact bundle %q does not match .jhlog %q symbol namespace; rebuild the same app variant or pass its exact --artifacts-dir",
+			directory,
+			source,
+		)
+	}
+	return nil
 }
 
 func (c *collector) telemetryHealthWarnings(summary Summary) []string {
@@ -1909,7 +2308,14 @@ func (c *collector) runtimeQualityWarnings() []string {
 	if dictionaryOverflow > 0 {
 		warnings = append(warnings, fmt.Sprintf("Качество сбора: словарь .jhlog использовал overflow-ссылки: %d; соответствующие имена могли стать неразличимыми.", dictionaryOverflow))
 	}
-	warnings = append(warnings, qualityCounterWarnings(quality)...)
+	exactAdmission := true
+	for _, result := range c.streamResults {
+		if result.Header.RequiredFeatures&jhlog.FeatureExactEventAdmission == 0 {
+			exactAdmission = false
+			break
+		}
+	}
+	warnings = append(warnings, qualityCounterWarnings(quality, exactAdmission)...)
 	return warnings
 }
 
@@ -1928,11 +2334,28 @@ func (c *collector) finalizeCollectionQuality() {
 		return
 	}
 	quality := CollectionQuality{
-		Level:       "high",
-		Complete:    true,
-		ChainValid:  true,
-		ChainIssues: append([]string(nil), c.chainIssues...),
+		Level:                   "high",
+		Complete:                true,
+		ChainValid:              true,
+		ExactAdmission:          true,
+		ProcessScopeConsistent:  true,
+		RunCohortConsistent:     true,
+		CounterInvariantsValid:  true,
+		QualityProgressionValid: true,
+		RuntimeGraphEnabled:     true,
+		ChainIssues:             append([]string(nil), c.chainIssues...),
 	}
+	type processScopeConfig struct {
+		scope                     jhlog.ProcessScope
+		allowedCount              uint64
+		fingerprint               string
+		expectedCount             uint64
+		expectedFingerprint       string
+		rosterDeclarationComplete bool
+	}
+	processScopes := map[processScopeConfig]struct{}{}
+	observedProcesses := map[string]struct{}{}
+	runCohorts := map[jhlog.ID128]struct{}{}
 	addReason := func(level, reason string) {
 		quality.Complete = false
 		quality.Level = lowerConfidenceLevel(quality.Level, level)
@@ -1944,10 +2367,35 @@ func (c *collector) finalizeCollectionQuality() {
 	}
 
 	for _, result := range c.streamResults {
-		if !result.HasSegmentIdentity() {
-			quality.ChainValid = false
-			addReason("low", fmt.Sprintf("лог %s использует старый формат без проверяемых идентификаторов сегмента", result.Source))
-			continue
+		segmentDamaged := false
+		if !result.Header.RunID.IsZero() {
+			runCohorts[result.Header.RunID] = struct{}{}
+		}
+		if processName := strings.TrimSpace(result.Header.ProcessName); processName != "" {
+			observedProcesses[processName] = struct{}{}
+		}
+		if result.Header.RequiredFeatures&jhlog.FeatureProcessScope == 0 {
+			processScopes[processScopeConfig{}] = struct{}{}
+			addReason("low", fmt.Sprintf(
+				"сегмент %s не содержит обязательный process scope; охват процессов подтвердить невозможно",
+				result.Source,
+			))
+		} else {
+			processScopes[processScopeConfig{
+				scope:                     result.Header.ProcessScope,
+				allowedCount:              result.Header.AllowedProcessCount,
+				fingerprint:               hex.EncodeToString(result.Header.ProcessScopeFingerprint),
+				expectedCount:             result.Header.ExpectedProcessCount,
+				expectedFingerprint:       hex.EncodeToString(result.Header.ExpectedProcessFingerprint),
+				rosterDeclarationComplete: result.Header.ProcessRosterDeclarationComplete,
+			}] = struct{}{}
+		}
+		if result.Header.RequiredFeatures&jhlog.FeatureExactEventAdmission == 0 {
+			quality.ExactAdmission = false
+			addReason("medium", fmt.Sprintf(
+				"сегмент %s собран без EXACT admission; отсутствие потерь очереди нельзя гарантировать архитектурно",
+				result.Source,
+			))
 		}
 		if result.Header.RunID.IsZero() || result.Header.ProcessInstanceID.IsZero() || result.Header.SessionID.IsZero() {
 			quality.ChainValid = false
@@ -1959,6 +2407,7 @@ func (c *collector) finalizeCollectionQuality() {
 			quality.UnsealedSegments++
 			switch result.Status {
 			case jhlog.SegmentStatusOpenWithTail, jhlog.SegmentStatusCorrupt:
+				segmentDamaged = true
 				addReason("low", fmt.Sprintf("сегмент %s не запечатан и имеет статус %s (хвост %d байт)", result.Source, result.Status, result.TailBytes))
 			case jhlog.SegmentStatusOpenClean:
 				addNotice(fmt.Sprintf(
@@ -1966,6 +2415,7 @@ func (c *collector) finalizeCollectionQuality() {
 					result.Source,
 				))
 			default:
+				segmentDamaged = true
 				addReason("medium", fmt.Sprintf("сегмент %s не содержит FINAL seal (статус %s)", result.Source, result.Status))
 			}
 		}
@@ -1978,14 +2428,92 @@ func (c *collector) finalizeCollectionQuality() {
 		if result.SegmentEnd != nil {
 			switch result.SegmentEnd.Reason {
 			case jhlog.SegmentEndIOError:
+				segmentDamaged = true
 				addReason("low", fmt.Sprintf("сегмент %s завершен после ошибки ввода-вывода", result.Source))
 			case jhlog.SegmentEndSizeLimit:
+				segmentDamaged = true
 				addReason("medium", sizeLimitCollectionReason(result.Source))
-			case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown:
+			case jhlog.SegmentEndStorageBudget:
+				segmentDamaged = true
+				addReason("medium", fmt.Sprintf(
+					"сегмент %s запечатан с storage_budget_exhausted: активный запуск исчерпал общий бюджет .jhlog; последующие события не собирались",
+					result.Source,
+				))
+			case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown, jhlog.SegmentEndRotation:
 			default:
+				segmentDamaged = true
 				addReason("low", fmt.Sprintf("сегмент %s завершен с неизвестной причиной %d", result.Source, uint64(result.SegmentEnd.Reason)))
 			}
 		}
+		if segmentDamaged {
+			quality.DamagedSegments++
+		}
+	}
+	quality.RunCohortCount = uint64(len(runCohorts))
+	if len(runCohorts) != 1 {
+		quality.RunCohortConsistent = false
+		addReason("low", fmt.Sprintf(
+			"входные сегменты относятся к %d разным запускам приложения; all-process roster нельзя объединять между запусками",
+			len(runCohorts),
+		))
+	}
+
+	switch len(processScopes) {
+	case 1:
+		for scope := range processScopes {
+			quality.ProcessScope = scope.scope.String()
+			quality.AllowedProcessCount = scope.allowedCount
+			quality.ProcessScopeFingerprint = scope.fingerprint
+			quality.ExpectedProcessCount = scope.expectedCount
+			quality.ExpectedProcessFingerprint = scope.expectedFingerprint
+			quality.ProcessRosterDeclarationComplete = scope.rosterDeclarationComplete
+			quality.ObservedProcessCount = uint64(len(observedProcesses))
+			if scope.scope == jhlog.ProcessScopeUnknown {
+				quality.ProcessScopeConsistent = false
+			}
+			quality.AllProcessesConfigured = scope.scope == jhlog.ProcessScopeAll
+			if !scope.rosterDeclarationComplete {
+				addReason("low", "runtime не смог полностью объявить process roster из Android manifest")
+			} else {
+				observedNames := make([]string, 0, len(observedProcesses))
+				for processName := range observedProcesses {
+					observedNames = append(observedNames, processName)
+				}
+				observedFingerprint := hex.EncodeToString(jhlog.ProcessRosterFingerprint(observedNames))
+				quality.ProcessRosterComplete = quality.RunCohortConsistent &&
+					uint64(len(observedProcesses)) == scope.expectedCount &&
+					observedFingerprint == scope.expectedFingerprint
+				if !quality.RunCohortConsistent {
+					addReason("low", "process roster не доказан: процессы принадлежат разным run cohort")
+				} else if !quality.ProcessRosterComplete {
+					addNotice(fmt.Sprintf(
+						"наблюдается %d процессов из %d объявленных в configured scope; отсутствующие процессы могли не запускаться либо их сегменты не были переданы, поэтому это неопределённость охвата, а не доказанная потеря",
+						len(observedProcesses),
+						scope.expectedCount,
+					))
+				}
+			}
+			switch scope.scope {
+			case jhlog.ProcessScopeMainOnly:
+				quality.Notices = append(
+					quality.Notices,
+					"сбор намеренно ограничен main-процессом; полнота относится только к этому scope",
+				)
+			case jhlog.ProcessScopeAllowlist:
+				quality.Notices = append(quality.Notices, fmt.Sprintf(
+					"сбор намеренно ограничен allowlist из %d процессов; полнота относится только к этому scope",
+					scope.allowedCount,
+				))
+			}
+		}
+	case 0:
+		quality.ProcessScope = jhlog.ProcessScopeUnknown.String()
+		quality.ProcessScopeConsistent = false
+		addReason("low", "process scope отсутствует во всех входных сегментах")
+	default:
+		quality.ProcessScope = "mixed"
+		quality.ProcessScopeConsistent = false
+		addReason("low", "входные сегменты используют разные process scope или разные process allowlist")
 	}
 
 	if len(c.chainIssues) > 0 {
@@ -1994,49 +2522,150 @@ func (c *collector) finalizeCollectionQuality() {
 			addReason("low", issue)
 		}
 	}
+	for _, issue := range qualityProgressionIssues(c.streamResults) {
+		quality.ChainValid = false
+		quality.QualityProgressionValid = false
+		quality.ChainIssues = append(quality.ChainIssues, issue)
+		addReason("low", issue)
+	}
 
 	counters := c.latestQualityTotals()
 	quality.AcceptedEvents = counters[jhlog.QualityAcceptedEventTotal]
 	quality.WrittenEvents = counters[jhlog.QualityWrittenEventTotal]
+	quality.ReportedCommittedChunks = counters[jhlog.QualityCommittedChunkTotal]
+	for _, result := range c.streamResults {
+		quality.DecodedCommittedChunks = saturatingUint64Sum(
+			quality.DecodedCommittedChunks,
+			uint64(result.CommittedChunks),
+		)
+		quality.DecodedRuntimeGraphCalls = saturatingUint64Sum(
+			quality.DecodedRuntimeGraphCalls,
+			result.RuntimeGraphLogicalCalls,
+		)
+	}
 	quality.RuntimeGraphInputEvents = counters[jhlog.QualityRuntimeGraphInputTotal]
 	quality.RuntimeGraphEmittedEvents = counters[jhlog.QualityRuntimeGraphEmittedTotal]
+	quality.RuntimeGraphStackMismatches = counters[jhlog.QualityRuntimeStackMismatch]
+	quality.RuntimeGraphEnabled = counters[jhlog.QualityRuntimeGraphDisabled] == 0
+	quality.ArchiveEvictedRuns = counters[jhlog.QualityArchiveEvictedRunTotal]
+	quality.ArchiveEvictedSegments = counters[jhlog.QualityArchiveEvictedSegmentTotal]
+	quality.ArchiveEvictedBytes = counters[jhlog.QualityArchiveEvictedBytesTotal]
+	if quality.ArchiveEvictedRuns > 0 {
+		addNotice(fmt.Sprintf(
+			"циклическое хранение освободило %d байт: удалено %d завершённых запусков (%d сегментов); текущий run cohort сохранён целиком",
+			quality.ArchiveEvictedBytes,
+			quality.ArchiveEvictedRuns,
+			quality.ArchiveEvictedSegments,
+		))
+	}
 	quality.RuntimeGraphCompletenessRatio = 1
-	if quality.RuntimeGraphInputEvents > 0 {
-		quality.RuntimeGraphCompletenessRatio = math.Min(
-			1,
-			float64(quality.RuntimeGraphEmittedEvents)/float64(quality.RuntimeGraphInputEvents),
-		)
-		if quality.RuntimeGraphCompletenessRatio < 1 {
+	if !quality.RuntimeGraphEnabled {
+		quality.RuntimeGraphCompletenessRatio = 0
+		if quality.RuntimeGraphInputEvents > 0 || quality.RuntimeGraphEmittedEvents > 0 || quality.DecodedRuntimeGraphCalls > 0 {
+			addReason("low", fmt.Sprintf(
+				"runtime-граф отмечен отключённым, но содержит input/emitted/decoded=%d/%d/%d; конфигурация и evidence противоречат друг другу",
+				quality.RuntimeGraphInputEvents,
+				quality.RuntimeGraphEmittedEvents,
+				quality.DecodedRuntimeGraphCalls,
+			))
+		} else {
+			quality.Notices = append(quality.Notices, fmt.Sprintf(
+				"runtime-граф отключён конфигурацией в %d quality snapshot(s) и полностью исключён из индекса доверия",
+				counters[jhlog.QualityRuntimeGraphDisabled],
+			))
+		}
+	} else if quality.RuntimeGraphInputEvents > 0 {
+		quality.RuntimeGraphCompletenessRatio =
+			float64(quality.DecodedRuntimeGraphCalls) / float64(quality.RuntimeGraphInputEvents)
+		if quality.RuntimeGraphEmittedEvents > quality.RuntimeGraphInputEvents {
+			quality.CounterInvariantsValid = false
+			addReason("low", fmt.Sprintf(
+				"невозможное состояние runtime-графа: writer сообщает %d emitted при %d input",
+				quality.RuntimeGraphEmittedEvents,
+				quality.RuntimeGraphInputEvents,
+			))
+		}
+		if quality.DecodedRuntimeGraphCalls > quality.RuntimeGraphInputEvents {
+			quality.RuntimeGraphCompletenessRatio = 0
+			quality.CounterInvariantsValid = false
+			addReason("low", fmt.Sprintf(
+				"невозможное состояние runtime-графа: декодировано %d логических вызовов при %d входных",
+				quality.DecodedRuntimeGraphCalls,
+				quality.RuntimeGraphInputEvents,
+			))
+		} else if quality.RuntimeGraphCompletenessRatio < 1 {
 			level := "medium"
 			if quality.RuntimeGraphCompletenessRatio < 0.99 {
 				level = "low"
 			}
 			addReason(level, fmt.Sprintf(
-				"полнота runtime-графа %.2f%% (%d из %d событий)",
+				"полнота runtime-графа %.2f%% (%d из %d логических вызовов)",
 				quality.RuntimeGraphCompletenessRatio*100,
-				quality.RuntimeGraphEmittedEvents,
+				quality.DecodedRuntimeGraphCalls,
 				quality.RuntimeGraphInputEvents,
 			))
 		}
+	} else if quality.RuntimeGraphEmittedEvents > 0 || quality.DecodedRuntimeGraphCalls > 0 {
+		quality.RuntimeGraphCompletenessRatio = 0
+		quality.CounterInvariantsValid = false
+		addReason("low", fmt.Sprintf(
+			"невозможное состояние runtime-графа: reported=%d, decoded=%d при нулевом input counter",
+			quality.RuntimeGraphEmittedEvents,
+			quality.DecodedRuntimeGraphCalls,
+		))
 	}
 	preAdmissionLoss := saturatingUint64Sum(
 		counters[jhlog.QualityQueueFullTotal],
 		counters[jhlog.QualityNotAcceptingTotal],
-		counters[jhlog.QualityWriterAdmissionContentionTotal],
 	)
+	if !quality.ExactAdmission {
+		preAdmissionLoss = saturatingUint64Sum(
+			preAdmissionLoss,
+			counters[jhlog.QualityWriterAdmissionContentionTotal],
+		)
+	}
 	postAdmissionCounters := saturatingUint64Sum(
 		counters[jhlog.QualityEventLostAfterIOTotal],
 		counters[jhlog.QualityEventLostAfterSizeLimitTotal],
+		counters[jhlog.QualityEventLostAfterStorageBudget],
 		counters[jhlog.QualityOversizedRecordTotal],
 	)
 	acceptedGap := uint64(0)
 	if quality.AcceptedEvents > quality.WrittenEvents {
 		acceptedGap = quality.AcceptedEvents - quality.WrittenEvents
+	} else if quality.WrittenEvents > quality.AcceptedEvents {
+		quality.CounterInvariantsValid = false
+		addReason("low", fmt.Sprintf(
+			"невозможное состояние writer: записано %d событий при %d принятых",
+			quality.WrittenEvents,
+			quality.AcceptedEvents,
+		))
 	}
 	if acceptedGap > postAdmissionCounters {
 		postAdmissionCounters = acceptedGap
 	}
 	quality.KnownLostEvents = saturatingUint64Sum(preAdmissionLoss, postAdmissionCounters)
+	quality.WriterBackpressureCount = counters[jhlog.QualityWriterBackpressureCount]
+	quality.WriterBackpressureNanos = counters[jhlog.QualityWriterBackpressureNanos]
+	quality.RuntimeHookFailures = counters[jhlog.QualityRuntimeHookFailureTotal]
+	var classifiedRuntimeHookFailures uint64
+	quality.RuntimeHookFailureDetails, quality.CriticalRuntimeHookFailures, classifiedRuntimeHookFailures =
+		runtimeHookFailureDetails(counters)
+	if classifiedRuntimeHookFailures > quality.RuntimeHookFailures {
+		quality.CounterInvariantsValid = false
+		addReason("low", fmt.Sprintf(
+			"reason-coded hook failures=%d превышают общий runtime_hook_failure_total=%d",
+			classifiedRuntimeHookFailures,
+			quality.RuntimeHookFailures,
+		))
+	}
+	if quality.ExactAdmission && counters[jhlog.QualityWriterAdmissionContentionTotal] > 0 {
+		quality.Notices = append(quality.Notices, fmt.Sprintf(
+			"EXACT writer ожидал admission lock %d раз (%s backpressure); все принятые события сохранены",
+			counters[jhlog.QualityWriterAdmissionContentionTotal],
+			formatDurationNanos(quality.WriterBackpressureNanos),
+		))
+	}
 	if quality.KnownLostEvents > 0 {
 		level := "medium"
 		denominator := saturatingUint64Sum(quality.WrittenEvents, quality.KnownLostEvents)
@@ -2044,6 +2673,39 @@ func (c *collector) finalizeCollectionQuality() {
 			level = "low"
 		}
 		addReason(level, fmt.Sprintf("quality snapshots фиксируют потерю как минимум %d событий", quality.KnownLostEvents))
+	}
+	if c.summary.DataRecordCount > 0 && quality.AcceptedEvents == 0 && quality.WrittenEvents == 0 {
+		quality.CounterInvariantsValid = false
+		addReason("low", fmt.Sprintf(
+			"%d data records присутствуют без accepted/written quality counters",
+			c.summary.DataRecordCount,
+		))
+	}
+	if quality.UnsealedSegments == 0 && quality.SegmentsWithoutQuality == 0 {
+		if quality.RuntimeGraphEmittedEvents != quality.DecodedRuntimeGraphCalls {
+			quality.CounterInvariantsValid = false
+			addReason("low", fmt.Sprintf(
+				"writer сообщает %d записанных runtime-вызовов, но декодировано %d",
+				quality.RuntimeGraphEmittedEvents,
+				quality.DecodedRuntimeGraphCalls,
+			))
+		}
+		if quality.WrittenEvents != c.summary.DataRecordCount {
+			quality.CounterInvariantsValid = false
+			addReason("low", fmt.Sprintf(
+				"writer сообщает %d записанных событий, но декодировано %d data records",
+				quality.WrittenEvents,
+				c.summary.DataRecordCount,
+			))
+		}
+		if quality.ReportedCommittedChunks != quality.DecodedCommittedChunks {
+			quality.CounterInvariantsValid = false
+			addReason("low", fmt.Sprintf(
+				"writer сообщает %d committed chunks, но декодировано %d",
+				quality.ReportedCommittedChunks,
+				quality.DecodedCommittedChunks,
+			))
+		}
 	}
 	if counters[jhlog.QualityWriterIOErrorTotal] > 0 || counters[jhlog.QualityFailedChunkTotal] > 0 {
 		addReason("low", fmt.Sprintf(
@@ -2058,6 +2720,7 @@ func (c *collector) finalizeCollectionQuality() {
 		counters[jhlog.QualityControlInterruptedTotal],
 		counters[jhlog.QualityCloseTimeoutTotal],
 	)
+	quality.ControlFailures = controlFailures
 	if controlFailures > 0 {
 		addReason("medium", fmt.Sprintf("служебный канал writer сообщил %d сбоев или таймаутов", controlFailures))
 	}
@@ -2075,26 +2738,14 @@ func (c *collector) finalizeCollectionQuality() {
 	}
 	boundedEvidenceLoss := saturatingUint64Sum(
 		counters[jhlog.QualityMetricCardinalityLoss],
-		counters[jhlog.QualityRuntimeGraphCapacityLoss],
-		counters[jhlog.QualityRuntimeGraphContentionLoss],
-		counters[jhlog.QualityRuntimeGraphBufferCapacityLoss],
-		counters[jhlog.QualityRuntimeGraphRegistryCapacityLoss],
-		counters[jhlog.QualityRuntimeGraphStaleEpochLoss],
 		counters[jhlog.QualityRuntimeGraphShutdownLoss],
 		counters[jhlog.QualityRuntimeGraphWriterRejectionLoss],
 		counters[jhlog.QualityRuntimeStackMismatch],
-		counters[jhlog.QualityRuntimeStackCapacityLoss],
-		counters[jhlog.QualityMethodCounterContentionLoss],
 		counters[jhlog.QualityHandlerContentionBypass],
-		counters[jhlog.QualityRuntimeGraphKillSwitch],
-		counters[jhlog.QualityRuntimeGraphShadowCapacityLoss],
-		counters[jhlog.QualityRuntimeGraphShadowProductionFallback],
 		counters[jhlog.QualityRuntimeEventBufferCapacityLoss],
 		counters[jhlog.QualityRuntimeEventRegistryCapacityLoss],
 		counters[jhlog.QualityMethodCounterCardinalityLoss],
 		counters[jhlog.QualityRuntimeEventWriterRejectionLoss],
-		counters[jhlog.QualityRuntimeGraphCircuitBreakerTrip],
-		counters[jhlog.QualityRuntimeGraphCircuitBreakerDrop],
 		counters[jhlog.QualityLogSpamCardinalityLoss],
 		counters[jhlog.QualityHandlerEntryLimit],
 		counters[jhlog.QualityHandlerWrapperLimit],
@@ -2103,22 +2754,291 @@ func (c *collector) finalizeCollectionQuality() {
 		counters[jhlog.QualityJankStatsHandleLimit],
 		counters[jhlog.QualityMetricFlushTimeout],
 	)
+	quality.BoundedEvidenceLoss = boundedEvidenceLoss
+	graphEvidenceLoss := saturatingUint64Sum(
+		counters[jhlog.QualityRuntimeGraphShutdownLoss],
+		counters[jhlog.QualityRuntimeGraphWriterRejectionLoss],
+	)
+	graphEvidenceLoss = saturatingUint64Sum(graphEvidenceLoss, quality.RuntimeGraphStackMismatches)
+	if boundedEvidenceLoss > graphEvidenceLoss {
+		quality.OtherEvidenceLoss = boundedEvidenceLoss - graphEvidenceLoss
+	}
 	if boundedEvidenceLoss > 0 {
 		addReason("medium", fmt.Sprintf("ограниченные runtime-реестры потеряли %d элементов evidence", boundedEvidenceLoss))
 	}
-	if c.summary.DataRecordCount > uint64(c.summary.EventCount) {
-		addReason("medium", fmt.Sprintf(
-			"%d data records не были декодированы как известные semantic events",
-			c.summary.DataRecordCount-uint64(c.summary.EventCount),
+	availabilityFailures := saturatingUint64Sum(
+		counters[jhlog.QualityJankStatsDependencyMissing],
+		counters[jhlog.QualityJankStatsInstallFailure],
+	)
+	if availabilityFailures > 0 {
+		addNotice(fmt.Sprintf(
+			"JankStats недоступен %d раз до активации; использован Choreographer fallback, транспорт событий не повреждён",
+			availabilityFailures,
+		))
+	}
+	if quality.CriticalRuntimeHookFailures > 0 {
+		addReason("low", fmt.Sprintf(
+			"fail-open границы runtime подавили %d сбоев, влияющих на evidence; причины: %s",
+			quality.CriticalRuntimeHookFailures,
+			runtimeHookFailureReasonSummary(quality.RuntimeHookFailureDetails, true),
 		))
 	}
 	quality.ChainIssues = uniqueStrings(quality.ChainIssues)
 	quality.Notices = uniqueStrings(quality.Notices)
 	quality.Reasons = uniqueStrings(quality.Reasons)
+	quality.TrustScorePercent, quality.TrustComponents = collectionTrustScore(quality)
+	quality.TrustScoreModel = collectionTrustScoreModel
+	quality.TrustLevel, quality.TrustLevelExplanation = describeCollectionTrust(
+		quality.TrustScorePercent,
+		quality.TrustComponents,
+	)
 	c.summary.CollectionQuality = quality
 	for _, reason := range quality.Reasons {
 		c.summary.Warnings = append(c.summary.Warnings, "Качество сбора: "+reason+".")
 	}
+}
+
+func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrustComponent) {
+	components := make([]CollectionTrustComponent, 0, 4)
+	activeWeight := 0.0
+	earnedWeight := 0.0
+	appendComponent := func(id, label string, weight, coverage float64, excluded bool, explanation string) {
+		coverage = math.Max(0, math.Min(1, coverage))
+		earned := 0.0
+		missing := 0.0
+		if !excluded {
+			earned = weight * coverage
+			missing = weight - earned
+			activeWeight += weight
+			earnedWeight += earned
+		}
+		components = append(components, CollectionTrustComponent{
+			ID:              id,
+			Label:           label,
+			Weight:          weight,
+			Excluded:        excluded,
+			CoveragePercent: roundTrustValue(coverage * 100),
+			EarnedPoints:    roundTrustValue(earned),
+			MissingPoints:   roundTrustValue(missing),
+			Explanation:     explanation,
+		})
+	}
+
+	transportCoverage := 1.0
+	transportExplanation := fmt.Sprintf(
+		"EXACT admission; записано %d событий, известных потерь нет",
+		quality.WrittenEvents,
+	)
+	if !quality.ExactAdmission {
+		transportCoverage = 0
+		transportExplanation = "BEST_EFFORT admission не доказывает отсутствие событий, потерянных до регистрации"
+	} else if quality.KnownLostEvents > 0 {
+		transportTotal := saturatingUint64Sum(quality.WrittenEvents, quality.KnownLostEvents)
+		if transportTotal == 0 {
+			transportCoverage = 0
+		} else {
+			transportCoverage = float64(quality.WrittenEvents) / float64(transportTotal)
+		}
+		transportExplanation = fmt.Sprintf(
+			"записано %d из как минимум %d событий; известно потеряно %d",
+			quality.WrittenEvents,
+			transportTotal,
+			quality.KnownLostEvents,
+		)
+	}
+	appendComponent("transport", "Доставка событий", 40, transportCoverage, false, transportExplanation)
+
+	runtimeCoverage := quality.RuntimeGraphCompletenessRatio
+	runtimeDenominator := saturatingUint64Sum(
+		quality.RuntimeGraphInputEvents,
+		quality.RuntimeGraphStackMismatches,
+	)
+	runtimeExplanation := fmt.Sprintf(
+		"декодировано %d из %d входных runtime-вызовов",
+		quality.DecodedRuntimeGraphCalls,
+		runtimeDenominator,
+	)
+	if !quality.RuntimeGraphEnabled {
+		runtimeCoverage = 1
+		runtimeExplanation = "Runtime-граф отключён конфигурацией и исключён из расчёта индекса"
+	} else if runtimeDenominator == 0 {
+		runtimeCoverage = 1
+		runtimeExplanation = "runtime-граф включён; входных вызовов и признаков их потери не зарегистрировано"
+	} else {
+		runtimeCoverage = float64(quality.DecodedRuntimeGraphCalls) / float64(runtimeDenominator)
+		if quality.RuntimeGraphStackMismatches > 0 {
+			runtimeExplanation = fmt.Sprintf(
+				"декодировано %d из как минимум %d runtime-вызовов; stack mismatch=%d",
+				quality.DecodedRuntimeGraphCalls,
+				runtimeDenominator,
+				quality.RuntimeGraphStackMismatches,
+			)
+		}
+	}
+	appendComponent(
+		"runtime_graph",
+		"Runtime-граф",
+		20,
+		runtimeCoverage,
+		!quality.RuntimeGraphEnabled,
+		runtimeExplanation,
+	)
+
+	processCoverage := 0.0
+	processExplanation := fmt.Sprintf(
+		"наблюдается %d из %d потенциальных процессов configured scope; manifest не доказывает запуск отсутствующих процессов",
+		quality.ObservedProcessCount,
+		quality.ExpectedProcessCount,
+	)
+	if quality.ProcessRosterComplete {
+		processCoverage = 1
+		processExplanation = fmt.Sprintf(
+			"подтверждены все %d процессов configured scope %s",
+			quality.ExpectedProcessCount,
+			quality.ProcessScope,
+		)
+	} else if quality.ProcessRosterDeclarationComplete && quality.RunCohortConsistent &&
+		quality.ProcessScopeConsistent && quality.ExpectedProcessCount > 0 &&
+		quality.ObservedProcessCount < quality.ExpectedProcessCount {
+		processCoverage = float64(quality.ObservedProcessCount) / float64(quality.ExpectedProcessCount)
+	} else if !quality.ProcessRosterDeclarationComplete {
+		processExplanation = "Android manifest не позволил доказать полный список процессов configured scope"
+	} else if !quality.RunCohortConsistent {
+		processExplanation = "входные сегменты относятся к разным run cohort"
+	} else if !quality.ProcessScopeConsistent {
+		processExplanation = "process scope или allowlist не согласованы между сегментами"
+	} else {
+		processExplanation = "количество или fingerprint процессов не совпадает с объявленным roster"
+	}
+	appendComponent("process_roster", "Охват процессов", 20, processCoverage, false, processExplanation)
+
+	integrityIssues := make([]string, 0, 9)
+	if !quality.ChainValid {
+		integrityIssues = append(integrityIssues, "цепочка сегментов")
+	}
+	if !quality.CounterInvariantsValid {
+		integrityIssues = append(integrityIssues, "инварианты счётчиков")
+	}
+	if !quality.QualityProgressionValid {
+		integrityIssues = append(integrityIssues, "монотонность quality")
+	}
+	if quality.DamagedSegments > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf("повреждённые/аварийные сегменты=%d", quality.DamagedSegments))
+	}
+	if quality.SegmentsWithoutQuality > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf("сегменты без quality=%d", quality.SegmentsWithoutQuality))
+	}
+	if quality.CriticalRuntimeHookFailures > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf(
+			"hook failures с влиянием на evidence=%d (%s)",
+			quality.CriticalRuntimeHookFailures,
+			runtimeHookFailureReasonSummary(quality.RuntimeHookFailureDetails, true),
+		))
+	}
+	if quality.DictionaryOverflow > 0 || quality.DictionaryTruncated > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf(
+			"dictionary overflow/truncated=%d/%d",
+			quality.DictionaryOverflow,
+			quality.DictionaryTruncated,
+		))
+	}
+	if quality.ControlFailures > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf("control failures=%d", quality.ControlFailures))
+	}
+	if quality.OtherEvidenceLoss > 0 {
+		integrityIssues = append(integrityIssues, fmt.Sprintf("потери прочих runtime evidence=%d", quality.OtherEvidenceLoss))
+	}
+	integrityCoverage := 1.0
+	integrityExplanation := "digest chain, quality progression, schema и счётчики согласованы"
+	if len(integrityIssues) > 0 {
+		integrityCoverage = 0
+		integrityExplanation = "не доказаны: " + strings.Join(integrityIssues, "; ")
+	}
+	appendComponent("integrity", "Целостность доказательств", 20, integrityCoverage, false, integrityExplanation)
+	if activeWeight == 0 {
+		return 100, components
+	}
+	return roundTrustValue(earnedWeight * 100 / activeWeight), components
+}
+
+func describeCollectionTrust(score float64, components []CollectionTrustComponent) (string, string) {
+	level, explanation := collectionTrustTier(score)
+	missing := make([]string, 0, len(components))
+	excluded := make([]string, 0, len(components))
+	for _, component := range components {
+		if component.Excluded {
+			excluded = append(excluded, component.Label)
+			continue
+		}
+		if component.MissingPoints > 0 {
+			missing = append(missing, fmt.Sprintf(
+				"%s: −%.2f из %.0f (%s)",
+				component.Label,
+				component.MissingPoints,
+				component.Weight,
+				component.Explanation,
+			))
+		}
+	}
+	if len(missing) == 0 {
+		explanation += " Недостающих баллов нет."
+	} else {
+		explanation += " Почему не 100%: " + strings.Join(missing, "; ") + "."
+	}
+	if len(excluded) > 0 {
+		explanation += " Отключены конфигурацией и не входят в denominator: " + strings.Join(excluded, ", ") + "."
+	}
+	return level, explanation
+}
+
+func collectionTrustTier(score float64) (string, string) {
+	switch {
+	case score >= 95:
+		return "excellent", "Максимальное доверие: индекс 95–100%; все активные источники evidence практически полностью подтверждены."
+	case score >= 85:
+		return "high", "Высокое доверие: индекс 85–94,99%; основные evidence подтверждены, оставшиеся ограничения явно перечислены."
+	case score >= 65:
+		return "sufficient", "Достаточное доверие: индекс 65–84,99%; выводы применимы с учётом перечисленных ограничений."
+	case score >= 40:
+		return "limited", "Ограниченное доверие: индекс 40–64,99%; существенная часть активного evidence не подтверждена."
+	default:
+		return "low", "Низкое доверие: индекс ниже 40%; отчёт нельзя использовать для уверенных выводов без повторного сбора."
+	}
+}
+
+func roundTrustValue(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
+func qualityProgressionIssues(results []jhlog.StreamResult) []string {
+	chains := map[string][]jhlog.StreamResult{}
+	for _, result := range results {
+		chains[qualityIdentityKey(result)] = append(chains[qualityIdentityKey(result)], result)
+	}
+	var issues []string
+	for _, chain := range chains {
+		sort.Slice(chain, func(i, j int) bool {
+			return chain[i].Header.SegmentIndex < chain[j].Header.SegmentIndex
+		})
+		for index := 1; index < len(chain); index++ {
+			previous := chain[index-1]
+			current := chain[index]
+			if previous.LatestQuality == nil || current.LatestQuality == nil {
+				continue
+			}
+			if err := jhlog.ValidateQualityProgression(*previous.LatestQuality, *current.LatestQuality); err != nil {
+				issues = append(issues, fmt.Sprintf(
+					"session %x имеет немонотонные quality snapshots между segment %d и %d: %v",
+					current.Header.SessionID,
+					previous.Header.SegmentIndex,
+					current.Header.SegmentIndex,
+					err,
+				))
+			}
+		}
+	}
+	sort.Strings(issues)
+	return uniqueStrings(issues)
 }
 
 func lowerConfidenceLevel(current, candidate string) string {
@@ -2149,6 +3069,7 @@ func (c *collector) retentionDataQuality() retentionDataQuality {
 		jhlog.QualityLossOversized,
 		jhlog.QualityLossSizeLimit,
 		jhlog.QualityLossAdmissionContention,
+		jhlog.QualityLossStorageBudget,
 	} {
 		result.runtimeLoss += quality[jhlog.EventQualityCounterID(jhlog.EventRetained, reason)]
 	}
@@ -2205,7 +3126,7 @@ func (c *collector) retentionDataQuality() retentionDataQuality {
 	return result
 }
 
-func qualityCounterWarnings(counters map[uint64]uint64) []string {
+func qualityCounterWarnings(counters map[uint64]uint64, exactAdmission bool) []string {
 	items := []struct {
 		id    uint64
 		label string
@@ -2218,34 +3139,23 @@ func qualityCounterWarnings(counters map[uint64]uint64) []string {
 		{jhlog.QualityWriterIOErrorTotal, "writer встретил ошибки ввода-вывода"},
 		{jhlog.QualityEventLostAfterIOTotal, "события потеряны после ошибки записи"},
 		{jhlog.QualityEventLostAfterSizeLimitTotal, "события потеряны после достижения лимита session-файла"},
+		{jhlog.QualityEventLostAfterStorageBudget, "storage_budget_exhausted: активный запуск исчерпал общий бюджет .jhlog"},
 		{jhlog.QualityDictionaryValueTruncated, "значения словаря были усечены"},
 		{jhlog.QualityOversizedRecordTotal, "слишком крупные записи не поместились в чанк"},
 		{jhlog.QualityFailedChunkTotal, "чанки не удалось зафиксировать"},
 		{jhlog.QualityRecoveryTotal, "writer выполнял восстановление после ошибки"},
 		{jhlog.QualityCloseTimeoutTotal, "закрытие writer завершилось по таймауту"},
-		{jhlog.QualityWriterAdmissionContentionTotal, "writer admission был обойдён из-за конкуренции producers"},
 		{jhlog.QualityMetricCardinalityLoss, "метрики потеряны из-за лимита кардинальности"},
 		{jhlog.QualityInvalidMetric, "некорректные метрики отклонены"},
-		{jhlog.QualityRuntimeGraphCapacityLoss, "runtime-граф достиг лимита рёбер"},
-		{jhlog.QualityRuntimeGraphContentionLoss, "runtime-граф пропустил рёбра из-за конкуренции потоков"},
-		{jhlog.QualityRuntimeGraphBufferCapacityLoss, "producer buffer runtime-графа был заполнен"},
-		{jhlog.QualityRuntimeGraphRegistryCapacityLoss, "реестр producer buffers runtime-графа был заполнен"},
-		{jhlog.QualityRuntimeGraphStaleEpochLoss, "runtime-граф отклонил событие старой epoch"},
 		{jhlog.QualityRuntimeGraphShutdownLoss, "runtime-граф не успел завершить drain при shutdown"},
 		{jhlog.QualityRuntimeGraphWriterRejectionLoss, "writer отклонил batch runtime-графа"},
 		{jhlog.QualityRuntimeStackMismatch, "runtime-стек вызовов рассинхронизировался"},
-		{jhlog.QualityRuntimeStackCapacityLoss, "runtime-стек вызовов достиг ограничения глубины"},
-		{jhlog.QualityMethodCounterContentionLoss, "runtime method counters пропустили события из-за конкуренции"},
 		{jhlog.QualityHandlerContentionBypass, "Handler instrumentation была обойдена из-за конкуренции registry"},
-		{jhlog.QualityRuntimeGraphKillSwitch, "runtime-граф отключён отдельным kill switch"},
-		{jhlog.QualityRuntimeGraphShadowCapacityLoss, "shadow comparison достиг лимита кардинальности"},
-		{jhlog.QualityRuntimeGraphShadowProductionFallback, "SHADOW запрещён в production и заменён на BUFFERED"},
+		{jhlog.QualityRuntimeGraphDisabled, "runtime-граф явно отключён конфигурацией"},
 		{jhlog.QualityRuntimeEventBufferCapacityLoss, "producer buffer method/log events был заполнен"},
 		{jhlog.QualityRuntimeEventRegistryCapacityLoss, "реестр producer buffers method/log events был заполнен"},
 		{jhlog.QualityMethodCounterCardinalityLoss, "method counters достигли лимита кардинальности"},
 		{jhlog.QualityRuntimeEventWriterRejectionLoss, "writer отклонил batch method/log events"},
-		{jhlog.QualityRuntimeGraphCircuitBreakerTrip, "circuit breaker runtime-графа разомкнул сбор"},
-		{jhlog.QualityRuntimeGraphCircuitBreakerDrop, "circuit breaker runtime-графа отбросил события"},
 		{jhlog.QualityLogSpamCardinalityLoss, "агрегатор логов достиг лимита кардинальности"},
 		{jhlog.QualityHandlerEntryLimit, "реестр Handler достиг лимита записей"},
 		{jhlog.QualityHandlerWrapperLimit, "реестр Handler достиг лимита wrapper-объектов"},
@@ -2253,6 +3163,12 @@ func qualityCounterWarnings(counters map[uint64]uint64) []string {
 		{jhlog.QualityObjectWatcherLimit, "наблюдатель удержания достиг лимита объектов"},
 		{jhlog.QualityJankStatsHandleLimit, "реестр JankStats достиг лимита активных окон"},
 		{jhlog.QualityMetricFlushTimeout, "агрегированные метрики не успели попасть в writer до таймаута"},
+	}
+	if !exactAdmission {
+		items = append(items, struct {
+			id    uint64
+			label string
+		}{jhlog.QualityWriterAdmissionContentionTotal, "BEST_EFFORT writer обошёл admission из-за конкуренции producers"})
 	}
 	warnings := make([]string, 0, len(items)+1)
 	for _, item := range items {
@@ -2266,6 +3182,77 @@ func qualityCounterWarnings(counters map[uint64]uint64) []string {
 		warnings = append(warnings, fmt.Sprintf("Качество сбора: принято %d событий, но зафиксировано %d; разница: %d.", accepted, written, accepted-written))
 	}
 	return warnings
+}
+
+func runtimeHookFailureDetails(counters map[uint64]uint64) ([]RuntimeHookFailureDetail, uint64, uint64) {
+	descriptors := []struct {
+		id          uint64
+		reason      string
+		impact      string
+		explanation string
+	}{
+		{jhlog.QualityRuntimeHookInstrumentationFailure, "instrumentation_hook", "evidence_loss", "инжектированный hook завершился через fail-open"},
+		{jhlog.QualityRuntimeHookAsyncWrapperFailure, "async_wrapper", "evidence_loss", "обёртка Runnable, Callable или coroutine не записала evidence"},
+		{jhlog.QualityRuntimeHookLifecycleFailure, "runtime_lifecycle", "evidence_loss", "операция запуска, остановки или flush runtime завершилась ошибкой"},
+		{jhlog.QualityRuntimeHookCollectorFailure, "collector", "evidence_loss", "runtime collector подавил внутреннюю ошибку"},
+		{jhlog.QualityRuntimeHookContextFailure, "context", "evidence_loss", "контекст screen, owner или flow мог быть неполным"},
+		{jhlog.QualityRuntimeHookSchedulerFailure, "scheduler", "evidence_loss", "служебная задача runtime не была выполнена штатно"},
+		{jhlog.QualityJankStatsDependencyMissing, "jankstats_dependency_missing", "fallback", "AndroidX Metrics отсутствовал; использован Choreographer fallback"},
+		{jhlog.QualityJankStatsInstallFailure, "jankstats_install", "fallback", "JankStats не установился; использован Choreographer fallback"},
+		{jhlog.QualityJankStatsFrameFailure, "jankstats_frame", "evidence_loss", "активный JankStats не смог декодировать frame evidence"},
+		{jhlog.QualityJankStatsControlFailure, "jankstats_control", "evidence_loss", "не удалось переключить состояние активного JankStats"},
+		{jhlog.QualityRuntimeHookUnclassifiedFailure, "unclassified", "evidence_loss", "источник fail-open ошибки не был классифицирован"},
+	}
+	details := make([]RuntimeHookFailureDetail, 0, len(descriptors)+1)
+	classified := uint64(0)
+	critical := uint64(0)
+	for _, descriptor := range descriptors {
+		count := counters[descriptor.id]
+		if count == 0 {
+			continue
+		}
+		classified = saturatingUint64Sum(classified, count)
+		if descriptor.impact == "evidence_loss" {
+			critical = saturatingUint64Sum(critical, count)
+		}
+		details = append(details, RuntimeHookFailureDetail{
+			Reason: descriptor.reason, Count: count, Impact: descriptor.impact, Explanation: descriptor.explanation,
+		})
+	}
+	total := counters[jhlog.QualityRuntimeHookFailureTotal]
+	if total > classified {
+		unclassified := total - classified
+		critical = saturatingUint64Sum(critical, unclassified)
+		details = append(details, RuntimeHookFailureDetail{
+			Reason: "unclassified", Count: unclassified, Impact: "evidence_loss",
+			Explanation: "quality snapshot не содержит reason-coded разбивку для этой части ошибок",
+		})
+	}
+	return details, critical, classified
+}
+
+func runtimeHookFailureReasonSummary(details []RuntimeHookFailureDetail, criticalOnly bool) string {
+	parts := make([]string, 0, len(details))
+	for _, detail := range details {
+		if criticalOnly && detail.Impact != "evidence_loss" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", detail.Reason, detail.Count))
+	}
+	if len(parts) == 0 {
+		return "нет"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatDurationNanos(value uint64) string {
+	if value < 1_000 {
+		return fmt.Sprintf("%d нс", value)
+	}
+	if value < 1_000_000 {
+		return fmt.Sprintf("%.3f мкс", float64(value)/1_000)
+	}
+	return fmt.Sprintf("%.3f мс", float64(value)/1_000_000)
 }
 
 func (c *collector) instrumentationQualityWarnings() []string {
@@ -2362,25 +3349,6 @@ func unknownFlowContextRate(flows []FlowStats) float64 {
 	return float64(unknown) / float64(total)
 }
 
-func (c *collector) sampleWarnings(summary Summary) []string {
-	var warnings []string
-	if summary.HTTPP95Approximate {
-		warnings = append(warnings, fmt.Sprintf("HTTP p95 рассчитан по reservoir-сэмплу: использовано %d из %d запросов.", c.httpDurations.sampled(), c.httpDurations.seen))
-	}
-	var approximateRoutes int
-	var totalRoutes int
-	for _, route := range summary.Routes {
-		if route.P95Approximate {
-			approximateRoutes++
-			totalRoutes += route.Count
-		}
-	}
-	if approximateRoutes > 0 {
-		warnings = append(warnings, fmt.Sprintf("P95 маршрутов приблизительный для %d маршрутов; суммарно %d запросов ограничены reservoir-сэмплингом.", approximateRoutes, totalRoutes))
-	}
-	return warnings
-}
-
 func (c *collector) filterWarnings(summary Summary) []string {
 	if !filterActive(c.filter) {
 		return nil
@@ -2445,7 +3413,7 @@ func Compare(baseline, candidate Summary) Comparison {
 		observedDelta("HTTP p95", baseline.HTTPP95MS, candidate.HTTPP95MS, "мс", true, uint64(baseline.HTTPCount), uint64(candidate.HTTPCount), "HTTP-запросы не зафиксированы"),
 		observedDeltaFloat("HTTP failure rate", percentCount(baseline.HTTPFailed, baseline.HTTPCount), percentCount(candidate.HTTPFailed, candidate.HTTPCount), "п.п.", true, uint64(baseline.HTTPCount), uint64(candidate.HTTPCount), "HTTP-запросы не зафиксированы"),
 		observedDeltaFloat("UI jank rate", baseline.UIJankPct, candidate.UIJankPct, "п.п.", true, baseline.UIFrames, candidate.UIFrames, "UI-кадры не зафиксированы"),
-		observedDeltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, baseline.UIFrames, candidate.UIFrames, "UI-кадры не зафиксированы"),
+		observedDeltaFloat("UI avg FPS", baseline.UIAvgFPS, candidate.UIAvgFPS, "FPS", false, baseline.UIFPSMeasuredFrames, candidate.UIFPSMeasuredFrames, "недостаточно непрерывных UI-кадров для оценки FPS"),
 		delta("Main-thread stall max", baseline.StallMaxMS, candidate.StallMaxMS, "мс", true, minUint64(uint64(baseline.StallCount), uint64(candidate.StallCount))),
 		observedDelta("Max PSS", baseline.MemoryMaxKB, candidate.MemoryMaxKB, "КБ", true, uint64(baseline.MemoryCount), uint64(candidate.MemoryCount), "PSS не измерялся"),
 		observedDelta("Min available memory", baseline.AvailMemoryMinKB, candidate.AvailMemoryMinKB, "КБ", false, uint64(baseline.ContextCount), uint64(candidate.ContextCount), "снимки контекста памяти отсутствуют"),
@@ -2473,6 +3441,7 @@ func Compare(baseline, candidate Summary) Comparison {
 	comparison.QualityWarnings = comparisonQualityWarnings(baseline, candidate)
 	comparison.ExposureWarnings = durationComparisonWarnings(baseline, candidate)
 	comparison.Warnings = append(append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...), comparison.ExposureWarnings...)
+	comparison.ProblemComparison = CompareProblems(baseline, candidate, len(comparison.CohortWarnings) == 0)
 	return comparison
 }
 
@@ -2700,9 +3669,27 @@ func humanDurationMS(value uint64) string {
 func confidence(baseline, candidate Summary) string {
 	sampleLevel := sampleConfidence(baseline, candidate)
 	return lowerConfidenceLevel(
-		lowerConfidenceLevel(sampleLevel, collectionConfidenceCap(baseline)),
+		lowerConfidenceLevel(
+			lowerConfidenceLevel(sampleLevel, collectionConfidenceCap(baseline)),
+			comparisonScopeConfidenceCap(baseline, candidate),
+		),
 		collectionConfidenceCap(candidate),
 	)
+}
+
+func comparisonScopeConfidenceCap(baseline, candidate Summary) string {
+	base := baseline.CollectionQuality
+	next := candidate.CollectionQuality
+	if base.ProcessScope == "" || next.ProcessScope == "" {
+		return "high"
+	}
+	if base.ProcessScope != next.ProcessScope || base.AllowedProcessCount != next.AllowedProcessCount ||
+		base.ProcessScopeFingerprint != next.ProcessScopeFingerprint ||
+		base.ExpectedProcessCount != next.ExpectedProcessCount ||
+		base.ExpectedProcessFingerprint != next.ExpectedProcessFingerprint {
+		return "low"
+	}
+	return "high"
 }
 
 func sampleConfidence(baseline, candidate Summary) string {
@@ -2733,6 +3720,22 @@ func collectionConfidenceCap(summary Summary) string {
 
 func comparisonQualityWarnings(baseline, candidate Summary) []string {
 	var warnings []string
+	baseScope := baseline.CollectionQuality
+	candidateScope := candidate.CollectionQuality
+	if baseScope.ProcessScope != "" && candidateScope.ProcessScope != "" &&
+		(baseScope.ProcessScope != candidateScope.ProcessScope ||
+			baseScope.AllowedProcessCount != candidateScope.AllowedProcessCount ||
+			baseScope.ProcessScopeFingerprint != candidateScope.ProcessScopeFingerprint ||
+			baseScope.ExpectedProcessCount != candidateScope.ExpectedProcessCount ||
+			baseScope.ExpectedProcessFingerprint != candidateScope.ExpectedProcessFingerprint) {
+		warnings = append(warnings, fmt.Sprintf(
+			"Process scope отличается: база %s (%d), кандидат %s (%d); сравнение ограничено низким доверием.",
+			baseScope.ProcessScope,
+			baseScope.AllowedProcessCount,
+			candidateScope.ProcessScope,
+			candidateScope.AllowedProcessCount,
+		))
+	}
 	for _, item := range []struct {
 		label   string
 		summary Summary
@@ -2780,25 +3783,39 @@ func addOwner(stats map[ownerStatKey]*OwnerStats, owner, kind string, duration u
 	}
 }
 
-func percentileSorted(values []uint64, p float64) uint64 {
-	if len(values) == 0 {
-		return 0
-	}
-	index := int(math.Ceil(float64(len(values))*p)) - 1
-	if index < 0 {
-		index = 0
-	}
-	if index >= len(values) {
-		index = len(values) - 1
-	}
-	return values[index]
-}
-
 func fps(frames uint64, windowMS uint64) float64 {
 	if frames == 0 || windowMS == 0 {
 		return 0
 	}
 	return float64(frames) * 1000 / float64(windowMS)
+}
+
+const (
+	minimumReliableFPSFrames = 30
+	fpsIdleTolerance         = 6
+)
+
+// FPS is meaningful only while the UI is continuously producing enough frames. A partial window
+// can contain one quick frame and then stay open while the screen is idle; dividing that frame by
+// the whole wall-clock interval produces a false near-zero FPS. Frame tails remain available for
+// every sample, while FPS uses only windows whose cadence is compatible with recorded durations.
+func fpsWindowReliable(window *jhlog.UIWindowEvent) bool {
+	if window == nil || window.FrameCount < minimumReliableFPSFrames || window.WindowMS == 0 {
+		return false
+	}
+	typicalFrameMS := maxUint64(window.P95MS, maxUint64((window.FrameDeadlineUS+999)/1000, 16))
+	averageIntervalMS := float64(window.WindowMS) / float64(window.FrameCount)
+	return averageIntervalMS <= float64(typicalFrameMS*fpsIdleTolerance)
+}
+
+func fpsMeasurementStatus(frames uint64, measuredWindows int) string {
+	if measuredWindows > 0 {
+		return "measured"
+	}
+	if frames < minimumReliableFPSFrames {
+		return "insufficient_frames"
+	}
+	return "sparse_rendering"
 }
 
 func sortRoutes(routes []RouteStats) {
@@ -2813,9 +3830,36 @@ func sortRoutes(routes []RouteStats) {
 func sortScreens(screens []ScreenStats) {
 	sort.Slice(screens, func(i, j int) bool {
 		if screens[i].JankRatePct == screens[j].JankRatePct {
-			return screens[i].P95MS > screens[j].P95MS
+			return screens[i].FrameP95MS > screens[j].FrameP95MS
 		}
 		return screens[i].JankRatePct > screens[j].JankRatePct
+	})
+}
+
+func sortProcessExits(exits []ProcessExitStats) {
+	sort.Slice(exits, func(i, j int) bool {
+		if exits[i].LatestTimestampUnixMS != exits[j].LatestTimestampUnixMS {
+			return exits[i].LatestTimestampUnixMS > exits[j].LatestTimestampUnixMS
+		}
+		if exits[i].Reason != exits[j].Reason {
+			return exits[i].Reason < exits[j].Reason
+		}
+		return exits[i].Process < exits[j].Process
+	})
+}
+
+func sortIOOperations(operations []IOStats) {
+	sort.Slice(operations, func(i, j int) bool {
+		if operations[i].MainThread != operations[j].MainThread {
+			return operations[i].MainThread
+		}
+		if operations[i].TotalDurationUS != operations[j].TotalDurationUS {
+			return operations[i].TotalDurationUS > operations[j].TotalDurationUS
+		}
+		if operations[i].Operation != operations[j].Operation {
+			return operations[i].Operation < operations[j].Operation
+		}
+		return operations[i].Owner < operations[j].Owner
 	})
 }
 

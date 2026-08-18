@@ -25,6 +25,7 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.retainedHeapDumpMaxCount.set(2)
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
         task.jankStatsEnabled.set(true)
+        task.ioTracingEnabled.set(true)
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
@@ -46,8 +47,21 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         assertTrue(manifest.contains("io.jankhunter.http_slow_threshold_ms"))
         assertTrue(manifest.contains("io.jankhunter.main_looper_dispatch_monitor_enabled"))
         assertTrue(manifest.contains("io.jankhunter.jankstats_enabled"))
+        assertTrue(
+            Regex("""android:name="io\.jankhunter\.io_tracing_enabled"\s+android:value="true"""")
+                .containsMatchIn(manifest),
+        )
         assertTrue(manifest.contains("io.jankhunter.jank_frame_threshold_ms"))
         assertTrue(manifest.contains("io.jankhunter.ui_window_p95_threshold_ms"))
+        assertTrue(manifest.contains("io.jankhunter.exact_event_collection_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.max_queue_size"))
+        assertTrue(manifest.contains("io.jankhunter.main_thread_admission_wait_ms"))
+        assertTrue(manifest.contains("io.jankhunter.background_admission_wait_ms"))
+        assertTrue(manifest.contains("io.jankhunter.runtime_call_graph_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.compose_tracing_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.room_tracing_enabled"))
+        assertTrue(manifest.contains("io.jankhunter.worker_tracing_enabled"))
+        assertTrue(manifest.contains("""android:value="65536"""))
         assertTrue(manifest.contains("""android:value="true""""))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_privacy_approved"))
         assertTrue(manifest.contains("io.jankhunter.retained_heap_dump_min_interval_ms"))
@@ -87,6 +101,7 @@ class GenerateJankHunterRuntimeManifestTaskTest {
         task.retainedHeapDumpMaxCount.set(2)
         task.retainedHeapDumpMinRetainedAgeMs.set(45_000L)
         task.jankStatsEnabled.set(true)
+        task.ioTracingEnabled.set(false)
         task.jankFrameThresholdMs.set(32L)
         task.uiWindowP95ThresholdMs.set(32L)
         task.mainProcessOnly.set(true)
@@ -98,6 +113,10 @@ class GenerateJankHunterRuntimeManifestTaskTest {
 
         val manifest = task.outputFile.get().asFile.readText()
         assertTrue(manifest.contains("io.jankhunter.enabled"))
+        assertTrue(
+            Regex("""android:name="io\.jankhunter\.io_tracing_enabled"\s+android:value="false"""")
+                .containsMatchIn(manifest),
+        )
         assertTrue(manifest.contains("""android:value="true""""))
         assertFalse(manifest.contains("io.jankhunter.runtime.JankHunterAutoInitProvider"))
         assertTrue(manifest.contains("io.jankhunter.session_log_size_limit_enabled"))

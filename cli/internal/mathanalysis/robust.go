@@ -4,14 +4,10 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
-
-const maxRobustSamplesPerSignal = 20_000
-const maxRobustWeightExpansion = 200_000
 
 type robustKey struct {
 	Dimension string
@@ -21,9 +17,20 @@ type robustKey struct {
 }
 
 type robustSampleSet struct {
-	values       []float64
-	seen         int
-	approximated bool
+	values             []float64
+	denseCounts        []uint64
+	denseOffset        uint64
+	outlierCounts      map[uint64]uint64
+	orderedFrequencies []robustFrequency
+	cumulativeCounts   []uint64
+	seen               int
+	sorted             bool
+	nextPromotionCheck int
+}
+
+type robustFrequency struct {
+	value float64
+	count uint64
 }
 
 type robustSampleMap map[robustKey]*robustSampleSet
@@ -37,8 +44,8 @@ type robustCollector struct {
 func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
 	switch {
 	case event.HTTP != nil:
-		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -52,12 +59,12 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 			c.addValue("Маршрут", route, "Задержка соединения", "мс", float64(event.HTTP.ConnectMS))
 		}
 	case event.UIWindow != nil:
-		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.Attribution.Screen)
 		if !timelineContainsFilter(screen, c.filter.ScreenContains) {
 			return
 		}
 		if event.UIWindow.P95MS > 0 {
-			c.addValue("Экран", screen, "UI p95 кадра", "мс", float64(event.UIWindow.P95MS))
+			c.addValue("Экран", screen, "UI window-p95", "мс", float64(event.UIWindow.P95MS))
 		}
 		if event.UIWindow.FrameCount > 0 {
 			c.addValue("Экран", screen, "Доля подтормаживаний UI", "%", jankRate(event.UIWindow.JankCount, event.UIWindow.FrameCount))
@@ -66,13 +73,13 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 		if isMathDiagnosticStall(event, dict, symbols) {
 			return
 		}
-		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
 		c.addValue("Источник", owner, "Пауза главного потока", "мс", float64(event.Stall.DurationMS))
 	case event.Retained != nil:
-		className := symbols.resolve(dict, event.Retained.ClassRef, event.Retained.ClassID)
+		className := symbols.resolve(dict, event.Retained.ClassRef)
 		if !timelineContainsFilter(className, c.filter.ClassContains) {
 			return
 		}
@@ -88,10 +95,7 @@ func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols
 			c.addValue("Память", "процесс", "Нативная куча", "КБ", float64(event.Memory.NativeHeapKB))
 		}
 	case event.Metric != nil && event.Type == jhlog.EventGauge:
-		name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
-		if name == "" {
-			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
-		}
+		name := symbols.resolve(dict, event.Metric.MetricRef)
 		c.addMetricValue(name, event.Metric)
 	}
 }
@@ -104,14 +108,7 @@ func (c *robustCollector) addMetricValue(name string, metric *jhlog.MetricEvent)
 }
 
 func (c *robustCollector) addValue(dimension, name, metric, unit string, value float64) {
-	c.addWeightedValue(dimension, name, metric, unit, value, 1)
-}
-
-func (c *robustCollector) addWeightedValue(dimension, name, metric, unit string, value float64, weight uint64) {
 	if name == "" || math.IsNaN(value) || math.IsInf(value, 0) {
-		return
-	}
-	if weight == 0 {
 		return
 	}
 	key := robustKey{Dimension: dimension, Name: name, Metric: metric, Unit: unit}
@@ -120,43 +117,144 @@ func (c *robustCollector) addWeightedValue(dimension, name, metric, unit string,
 		set = &robustSampleSet{}
 		c.samples[key] = set
 	}
-	set.addWeighted(value, weight)
+	set.add(value)
 }
 
-func (s *robustSampleSet) addWeighted(value float64, weight uint64) {
-	if weight == 0 {
-		return
+func (s *robustSampleSet) add(value float64) {
+	if s.seen == 0 {
+		s.nextPromotionCheck = robustSampleSetPromotionThreshold
 	}
-	expanded := weight
-	if expanded > maxRobustWeightExpansion {
-		expanded = maxRobustWeightExpansion
-		s.approximated = true
-	}
-	for i := uint64(0); i < expanded; i++ {
-		s.addOne(value)
-	}
-	if skipped := weight - expanded; skipped > 0 {
-		s.seen += int(skipped)
-	}
-}
-
-func (s *robustSampleSet) addOne(value float64) {
 	s.seen++
-	if len(s.values) < maxRobustSamplesPerSignal {
-		s.values = append(s.values, value)
+	if len(s.denseCounts) > 0 {
+		integer, integral := exactNonNegativeInteger(value)
+		if integral && integer >= s.denseOffset && integer-s.denseOffset < uint64(len(s.denseCounts)) {
+			s.denseCounts[integer-s.denseOffset]++
+		} else {
+			if s.outlierCounts == nil {
+				s.outlierCounts = make(map[uint64]uint64)
+			}
+			s.outlierCounts[math.Float64bits(value)]++
+		}
+		s.sorted = false
 		return
 	}
-	s.approximated = true
-	index := deterministicReservoirIndex(s.seen)
-	if index < maxRobustSamplesPerSignal {
-		s.values[index] = value
+	s.values = append(s.values, value)
+	s.sorted = false
+	if s.seen >= s.nextPromotionCheck {
+		if !s.promoteDenseIfBeneficial() && s.nextPromotionCheck <= s.seen {
+			maxInt := int(^uint(0) >> 1)
+			if s.seen > maxInt/robustSampleSetPromotionBackoff {
+				s.nextPromotionCheck = maxInt
+			} else {
+				s.nextPromotionCheck = s.seen * robustSampleSetPromotionBackoff
+			}
+		}
 	}
 }
 
-func deterministicReservoirIndex(seen int) int {
-	x := uint64(seen)*2862933555777941757 + 3037000493
-	return int(x % uint64(seen))
+func (s *robustSampleSet) sortedValues() []float64 {
+	if s == nil || s.seen == 0 || len(s.denseCounts) > 0 {
+		return nil
+	}
+	if !s.sorted {
+		sort.Float64s(s.values)
+		s.sorted = true
+	}
+	return s.values
 }
+
+func (s *robustSampleSet) compacted() bool {
+	return s != nil && len(s.denseCounts) > 0
+}
+
+func (s *robustSampleSet) promoteDenseIfBeneficial() bool {
+	if len(s.values) == 0 {
+		return false
+	}
+	minInteger, integral := exactNonNegativeInteger(s.values[0])
+	if !integral {
+		return false
+	}
+	maxInteger := minInteger
+	for _, value := range s.values[1:] {
+		integer, exact := exactNonNegativeInteger(value)
+		if !exact {
+			return false
+		}
+		if integer < minInteger {
+			minInteger = integer
+		}
+		if integer > maxInteger {
+			maxInteger = integer
+		}
+	}
+	if maxInteger-minInteger >= robustSampleSetMaxDenseBins {
+		return false
+	}
+	span := int(maxInteger-minInteger) + 1
+	if span > s.seen/robustSampleSetMinimumCompression {
+		return false
+	}
+	counts := make([]uint64, span)
+	for _, value := range s.values {
+		integer, _ := exactNonNegativeInteger(value)
+		counts[integer-minInteger]++
+	}
+	s.denseCounts = counts
+	s.denseOffset = minInteger
+	s.values = nil
+	s.sorted = false
+	return true
+}
+
+func (s *robustSampleSet) prepareOrderedFrequencies() {
+	if s == nil || s.sorted || len(s.denseCounts) == 0 {
+		return
+	}
+	unique := len(s.outlierCounts)
+	for _, count := range s.denseCounts {
+		if count > 0 {
+			unique++
+		}
+	}
+	frequencies := make([]robustFrequency, 0, unique)
+	for index, count := range s.denseCounts {
+		if count > 0 {
+			frequencies = append(frequencies, robustFrequency{
+				value: float64(s.denseOffset + uint64(index)),
+				count: count,
+			})
+		}
+	}
+	for bits, count := range s.outlierCounts {
+		frequencies = append(frequencies, robustFrequency{value: math.Float64frombits(bits), count: count})
+	}
+	sort.Slice(frequencies, func(i, j int) bool { return frequencies[i].value < frequencies[j].value })
+	cumulative := make([]uint64, len(frequencies))
+	var total uint64
+	for index, frequency := range frequencies {
+		total += frequency.count
+		cumulative[index] = total
+	}
+	s.orderedFrequencies = frequencies
+	s.cumulativeCounts = cumulative
+	s.sorted = true
+}
+
+func exactNonNegativeInteger(value float64) (uint64, bool) {
+	if value < 0 || value > float64(^uint64(0)>>1) {
+		return 0, false
+	}
+	integer := uint64(value)
+	return integer, float64(integer) == value
+}
+
+const (
+	robustSampleSetPromotionThreshold = 4_096
+	robustSampleSetPromotionBackoff   = 8
+	robustSampleSetMaxDenseBins       = 65_536
+	robustSampleSetMinimumCompression = 2
+)
 
 func summarizeRobustSamples(samples robustSampleMap) []RobustStat {
 	stats := make([]RobustStat, 0, len(samples))
@@ -171,13 +269,12 @@ func summarizeRobustSamples(samples robustSampleMap) []RobustStat {
 }
 
 func summarizeRobustSet(key robustKey, set *robustSampleSet) RobustStat {
-	values := sortedFloatCopy(set.values)
-	if len(values) == 0 {
+	if sampleCount(set) == 0 {
 		return RobustStat{}
 	}
-	median := medianSorted(values)
-	quality, severity, detail := sampleQuality(set.seen, len(values), set.approximated)
-	low, high, hasCI := bootstrapP95CI(values)
+	median := set.median()
+	quality, severity, detail := sampleQuality(set.seen)
+	low, high, hasCI := bootstrapP95CISet(set)
 	return RobustStat{
 		Dimension:             key.Dimension,
 		Name:                  key.Name,
@@ -185,13 +282,13 @@ func summarizeRobustSet(key robustKey, set *robustSampleSet) RobustStat {
 		Unit:                  key.Unit,
 		Count:                 set.seen,
 		Median:                median,
-		P90:                   percentileSorted(values, 0.90),
-		P95:                   percentileSorted(values, 0.95),
-		P99:                   percentileSorted(values, 0.99),
-		MAD:                   medianAbsoluteDeviation(values, median),
-		TrimmedMean:           trimmedMeanSorted(values, 0.10),
-		Min:                   values[0],
-		Max:                   values[len(values)-1],
+		P90:                   set.percentile(0.90),
+		P95:                   set.percentile(0.95),
+		P99:                   set.percentile(0.99),
+		MAD:                   set.medianAbsoluteDeviation(median),
+		TrimmedMean:           set.trimmedMean(0.10),
+		Min:                   set.minimum(),
+		Max:                   set.maximum(),
 		P95ConfidenceLow:      low,
 		P95ConfidenceHigh:     high,
 		HasP95Confidence:      hasCI,
@@ -235,12 +332,10 @@ func compareRobustSamples(baseline, candidate robustSampleMap) []RobustDelta {
 }
 
 func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) RobustDelta {
-	baseValues := valuesOrEmpty(baseline)
-	candidateValues := valuesOrEmpty(candidate)
 	baseCount := sampleCount(baseline)
 	candidateCount := sampleCount(candidate)
-	baseP95 := percentileSorted(sortedFloatCopy(baseValues), 0.95)
-	candidateP95 := percentileSorted(sortedFloatCopy(candidateValues), 0.95)
+	baseP95 := robustPercentile(baseline, 0.95)
+	candidateP95 := robustPercentile(candidate, 0.95)
 	delta := candidateP95 - baseP95
 	deltaPct := 0.0
 	comparable := baseCount > 0 && candidateCount > 0
@@ -251,7 +346,7 @@ func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) Robus
 	cliff := 0.0
 	effect := "не применимо"
 	if comparable {
-		cliff = cliffDelta(candidateValues, baseValues)
+		cliff = cliffDeltaSets(candidate, baseline)
 		effect = effectSizeLabel(cliff)
 	}
 	confidence := compareConfidence(baseCount, candidateCount, deltaPct, cliff)
@@ -299,16 +394,12 @@ func robustSummary(stats []RobustStat) string {
 		return "Недостаточно данных для робастной статистики: нет распределений по маршрутам, экранам, источникам или пользовательским gauge-метрикам."
 	}
 	withCI := 0
-	approximated := 0
 	for _, stat := range stats {
 		if stat.HasP95Confidence {
 			withCI++
 		}
-		if strings.Contains(stat.SampleDetail, "выборка=") {
-			approximated++
-		}
 	}
-	return fmt.Sprintf("Посчитано %d распределений: медиана, p90/p95/p99, MAD, 10%% усеченное среднее; bootstrap-интервал для p95 есть у %d сигналов.", len(stats), withCI) + robustApproxSuffix(approximated)
+	return fmt.Sprintf("Посчитано %d распределений: медиана, p90/p95/p99, MAD, 10%% усеченное среднее; bootstrap-интервал для p95 есть у %d сигналов.", len(stats), withCI)
 }
 
 func robustFindings(stats []RobustStat) []Finding {
@@ -390,14 +481,7 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 	}}
 }
 
-func robustApproxSuffix(count int) string {
-	if count == 0 {
-		return ""
-	}
-	return fmt.Sprintf(" Для %d сигналов использована ограниченная детерминированная выборка, потому что лог слишком большой.", count)
-}
-
-func sampleQuality(total, sampled int, approximated bool) (string, string, string) {
+func sampleQuality(total int) (string, string, string) {
 	quality := "хорошая"
 	severity := "ok"
 	switch {
@@ -409,9 +493,6 @@ func sampleQuality(total, sampled int, approximated bool) (string, string, strin
 		severity = "medium"
 	case total < 50:
 		quality = "достаточная"
-	}
-	if approximated {
-		return quality, severity, fmt.Sprintf("сэмплов=%d, выборка=%d", total, sampled)
 	}
 	return quality, severity, fmt.Sprintf("сэмплов=%d", total)
 }
@@ -527,17 +608,16 @@ func effectSizeLabel(delta float64) string {
 	}
 }
 
-func cliffDelta(candidate, baseline []float64) float64 {
+func cliffDeltaSorted(candidate, baseline []float64) float64 {
 	if len(candidate) == 0 || len(baseline) == 0 {
 		return 0
 	}
-	baseSorted := sortedFloatCopy(baseline)
 	var greater int64
 	var less int64
 	for _, value := range candidate {
-		lessCount := sort.SearchFloat64s(baseSorted, value)
-		greaterCount := len(baseSorted) - sort.Search(len(baseSorted), func(i int) bool {
-			return baseSorted[i] > value
+		lessCount := sort.SearchFloat64s(baseline, value)
+		greaterCount := len(baseline) - sort.Search(len(baseline), func(i int) bool {
+			return baseline[i] > value
 		})
 		greater += int64(lessCount)
 		less += int64(greaterCount)
@@ -545,14 +625,102 @@ func cliffDelta(candidate, baseline []float64) float64 {
 	return float64(greater-less) / float64(len(candidate)*len(baseline))
 }
 
+func cliffDeltaSets(candidate, baseline *robustSampleSet) float64 {
+	if sampleCount(candidate) == 0 || sampleCount(baseline) == 0 {
+		return 0
+	}
+	if !candidate.compacted() && !baseline.compacted() {
+		return cliffDeltaSorted(candidate.sortedValues(), baseline.sortedValues())
+	}
+	var greater float64
+	var less float64
+	visitRobustFrequencies(candidate, func(value float64, count uint64) {
+		baselineLess, baselineGreater := baseline.lessAndGreater(value)
+		greater += float64(count) * float64(baselineLess)
+		less += float64(count) * float64(baselineGreater)
+	})
+	denominator := float64(candidate.seen) * float64(baseline.seen)
+	return (greater - less) / denominator
+}
+
+func visitRobustFrequencies(set *robustSampleSet, visit func(value float64, count uint64)) {
+	if set == nil {
+		return
+	}
+	if !set.compacted() {
+		values := set.sortedValues()
+		for index := 0; index < len(values); {
+			next := index + 1
+			for next < len(values) && values[next] == values[index] {
+				next++
+			}
+			visit(values[index], uint64(next-index))
+			index = next
+		}
+		return
+	}
+	set.prepareOrderedFrequencies()
+	for _, frequency := range set.orderedFrequencies {
+		visit(frequency.value, frequency.count)
+	}
+}
+
+func (s *robustSampleSet) lessAndGreater(value float64) (uint64, uint64) {
+	if s == nil || s.seen == 0 {
+		return 0, 0
+	}
+	if !s.compacted() {
+		values := s.sortedValues()
+		less := sort.SearchFloat64s(values, value)
+		greaterStart := sort.Search(len(values), func(index int) bool { return values[index] > value })
+		return uint64(less), uint64(len(values) - greaterStart)
+	}
+	s.prepareOrderedFrequencies()
+	first := sort.Search(len(s.orderedFrequencies), func(index int) bool {
+		return s.orderedFrequencies[index].value >= value
+	})
+	after := sort.Search(len(s.orderedFrequencies), func(index int) bool {
+		return s.orderedFrequencies[index].value > value
+	})
+	less := uint64(0)
+	if first > 0 {
+		less = s.cumulativeCounts[first-1]
+	}
+	lessOrEqual := uint64(0)
+	if after > 0 {
+		lessOrEqual = s.cumulativeCounts[after-1]
+	}
+	return less, uint64(s.seen) - lessOrEqual
+}
+
 func bootstrapP95CI(values []float64) (float64, float64, bool) {
 	if len(values) < 20 {
 		return 0, 0, false
 	}
 	base := bootstrapBase(values, 512)
+	return bootstrapP95CIFromBase(base, len(values))
+}
+
+func bootstrapP95CISet(set *robustSampleSet) (float64, float64, bool) {
+	if sampleCount(set) < 20 {
+		return 0, 0, false
+	}
+	if !set.compacted() {
+		return bootstrapP95CI(set.sortedValues())
+	}
+	const limit = 512
+	base := make([]float64, 0, limit)
+	step := float64(set.seen-1) / float64(limit-1)
+	for index := 0; index < limit; index++ {
+		base = append(base, set.valueAt(int(math.Round(float64(index)*step))))
+	}
+	return bootstrapP95CIFromBase(base, set.seen)
+}
+
+func bootstrapP95CIFromBase(base []float64, originalCount int) (float64, float64, bool) {
 	const rounds = 200
 	boot := make([]float64, 0, rounds)
-	seed := uint64(len(values))*1469598103934665603 + 1099511628211
+	seed := uint64(originalCount)*1469598103934665603 + 1099511628211
 	for round := 0; round < rounds; round++ {
 		resample := make([]float64, len(base))
 		for i := range resample {
@@ -576,6 +744,141 @@ func bootstrapBase(values []float64, limit int) []float64 {
 		out = append(out, values[int(math.Round(float64(i)*step))])
 	}
 	return out
+}
+
+func (s *robustSampleSet) percentile(p float64) float64 {
+	if s == nil || s.seen == 0 {
+		return 0
+	}
+	rank := int(math.Ceil(float64(s.seen)*p)) - 1
+	if rank < 0 {
+		rank = 0
+	}
+	if rank >= s.seen {
+		rank = s.seen - 1
+	}
+	return s.valueAt(rank)
+}
+
+func robustPercentile(set *robustSampleSet, p float64) float64 {
+	if set == nil {
+		return 0
+	}
+	return set.percentile(p)
+}
+
+func (s *robustSampleSet) valueAt(rank int) float64 {
+	if s == nil || s.seen == 0 {
+		return 0
+	}
+	if rank < 0 {
+		rank = 0
+	}
+	if rank >= s.seen {
+		rank = s.seen - 1
+	}
+	if !s.compacted() {
+		return s.sortedValues()[rank]
+	}
+	s.prepareOrderedFrequencies()
+	target := uint64(rank + 1)
+	index := sort.Search(len(s.cumulativeCounts), func(index int) bool {
+		return s.cumulativeCounts[index] >= target
+	})
+	if index >= len(s.orderedFrequencies) {
+		return s.orderedFrequencies[len(s.orderedFrequencies)-1].value
+	}
+	return s.orderedFrequencies[index].value
+}
+
+func (s *robustSampleSet) median() float64 {
+	if s == nil || s.seen == 0 {
+		return 0
+	}
+	mid := s.seen / 2
+	if s.seen%2 == 1 {
+		return s.valueAt(mid)
+	}
+	return (s.valueAt(mid-1) + s.valueAt(mid)) / 2
+}
+
+func (s *robustSampleSet) minimum() float64 {
+	return s.valueAt(0)
+}
+
+func (s *robustSampleSet) maximum() float64 {
+	if s == nil {
+		return 0
+	}
+	return s.valueAt(s.seen - 1)
+}
+
+func (s *robustSampleSet) medianAbsoluteDeviation(median float64) float64 {
+	if s == nil || s.seen == 0 {
+		return 0
+	}
+	if !s.compacted() {
+		return medianAbsoluteDeviation(s.sortedValues(), median)
+	}
+	deviations := make([]robustFrequency, 0, len(s.orderedFrequencies))
+	visitRobustFrequencies(s, func(value float64, count uint64) {
+		deviations = append(deviations, robustFrequency{value: math.Abs(value - median), count: count})
+	})
+	sort.Slice(deviations, func(i, j int) bool { return deviations[i].value < deviations[j].value })
+	leftRank := (s.seen - 1) / 2
+	rightRank := s.seen / 2
+	left := weightedFrequencyValueAt(deviations, leftRank)
+	right := weightedFrequencyValueAt(deviations, rightRank)
+	return (left + right) / 2
+}
+
+func (s *robustSampleSet) trimmedMean(ratio float64) float64 {
+	if s == nil || s.seen == 0 {
+		return 0
+	}
+	if !s.compacted() {
+		return trimmedMeanSorted(s.sortedValues(), ratio)
+	}
+	trim := int(math.Floor(float64(s.seen) * ratio))
+	if trim*2 >= s.seen {
+		trim = 0
+	}
+	start := uint64(trim)
+	end := uint64(s.seen - trim)
+	var position uint64
+	var sum float64
+	var count uint64
+	visitRobustFrequencies(s, func(value float64, frequency uint64) {
+		frequencyStart := position
+		frequencyEnd := position + frequency
+		includedStart := max(frequencyStart, start)
+		includedEnd := min(frequencyEnd, end)
+		if includedEnd > includedStart {
+			included := includedEnd - includedStart
+			sum += value * float64(included)
+			count += included
+		}
+		position = frequencyEnd
+	})
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func weightedFrequencyValueAt(frequencies []robustFrequency, rank int) float64 {
+	if len(frequencies) == 0 {
+		return 0
+	}
+	target := uint64(rank + 1)
+	var seen uint64
+	for _, frequency := range frequencies {
+		seen += frequency.count
+		if seen >= target {
+			return frequency.value
+		}
+	}
+	return frequencies[len(frequencies)-1].value
 }
 
 func sortedFloatCopy(values []float64) []float64 {
@@ -629,13 +932,6 @@ func sampleCount(set *robustSampleSet) int {
 		return 0
 	}
 	return set.seen
-}
-
-func valuesOrEmpty(set *robustSampleSet) []float64 {
-	if set == nil {
-		return nil
-	}
-	return set.values
 }
 
 func sortRobustStats(stats []RobustStat) {

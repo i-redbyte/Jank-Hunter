@@ -76,6 +76,12 @@ internal class MainActivity : ComponentActivity() {
                                     ManualControlsEffect.ShareDiagnostics -> {
                                         JankHunterShareLauncher(this@MainActivity).share()
                                     }
+                                    ManualControlsEffect.OpenCustomViewLab -> {
+                                        startActivity(Intent(this@MainActivity, CustomViewJankActivity::class.java))
+                                    }
+                                    ManualControlsEffect.OpenComposeLab -> {
+                                        startActivity(Intent(this@MainActivity, ComposeJankActivity::class.java))
+                                    }
                                 }
                             }
                         }

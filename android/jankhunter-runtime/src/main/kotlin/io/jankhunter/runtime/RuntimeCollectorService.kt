@@ -19,47 +19,64 @@ internal class RuntimeCollectorService(
     private val state: RuntimeState,
 ) {
     fun start(appContext: Context, config: JankHunterConfig, logDirectory: File) {
-        val maintenanceScheduler = RuntimeMaintenanceScheduler()
+        val maintenanceScheduler = RuntimeMaintenanceScheduler(
+            exactShutdown = config.exactEventCollectionEnabled(),
+        )
         state.maintenanceScheduler = maintenanceScheduler
         if (!config.autoStartCollectors()) return
         if (config.fpsMonitorEnabled() || config.jankStatsEnabled()) {
-            state.fpsMonitor = FpsMonitor(
-                config.fpsWindowMs(),
-                config.jankFrameThresholdMs(),
-                choreographerFallbackEnabled = config.fpsMonitorEnabled(),
-            ).also { it.start() }
+            RuntimeHookGuard.run {
+                state.fpsMonitor = FpsMonitor(
+                    config.fpsWindowMs(),
+                    config.jankFrameThresholdMs(),
+                    choreographerFallbackEnabled = config.fpsMonitorEnabled(),
+                    exactAdmission = config.exactEventCollectionEnabled(),
+                ).also { it.start() }
+            }
         }
         if (appContext is Application) {
-            state.application = appContext
-            state.activityTracker = ActivityTracker(
-                config.jankStatsEnabled(),
-                state.fpsMonitor,
-            ).also {
-                appContext.registerActivityLifecycleCallbacks(it)
+            RuntimeHookGuard.run {
+                state.application = appContext
+                state.activityTracker = ActivityTracker(
+                    config.jankStatsEnabled(),
+                    state.fpsMonitor,
+                ).also {
+                    appContext.registerActivityLifecycleCallbacks(it)
+                }
             }
         } else {
             JankHunter.recordCounter("jankhunter.activity_tracker.unavailable.count", 1)
         }
-        state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs()).also { it.start() }
+        RuntimeHookGuard.run {
+            state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs()).also { it.start() }
+        }
         if (config.mainLooperDispatchMonitorEnabled()) {
-            state.dispatchMonitor = MainLooperDispatchMonitor(config.mainThreadStallThresholdMs()).also {
-                it.start()
+            RuntimeHookGuard.run {
+                state.dispatchMonitor = MainLooperDispatchMonitor(config.mainThreadStallThresholdMs()).also {
+                    it.start()
+                }
             }
         }
-        state.memoryTrimReporter = MemoryTrimReporter().also {
-            appContext.registerComponentCallbacks(it)
-            state.componentCallbackContext = appContext
+        RuntimeHookGuard.run {
+            state.memoryTrimReporter = MemoryTrimReporter().also {
+                appContext.registerComponentCallbacks(it)
+                state.componentCallbackContext = appContext
+            }
         }
-        state.memorySampler = MemorySampler(
-            config.memorySampleIntervalMs(),
-            JankHunter::isAppForegroundForSampling,
-        ).also { it.start(maintenanceScheduler) }
-        if (config.systemSamplerEnabled()) {
-            state.systemContextSampler = SystemContextSampler(
-                appContext,
-                config.systemSampleIntervalMs(),
+        RuntimeHookGuard.run {
+            state.memorySampler = MemorySampler(
+                config.memorySampleIntervalMs(),
                 JankHunter::isAppForegroundForSampling,
             ).also { it.start(maintenanceScheduler) }
+        }
+        if (config.systemSamplerEnabled()) {
+            RuntimeHookGuard.run {
+                state.systemContextSampler = SystemContextSampler(
+                    appContext,
+                    config.systemSampleIntervalMs(),
+                    JankHunter::isAppForegroundForSampling,
+                ).also { it.start(maintenanceScheduler) }
+            }
         }
         if (config.processExitInfoEnabled()) {
             maintenanceScheduler.execute {
@@ -67,22 +84,25 @@ internal class RuntimeCollectorService(
             }
         }
         if (config.objectWatcherEnabled()) {
-            val heapDumpEnabled = config.retainedHeapDumpEnabled()
-            if (heapDumpEnabled) {
-                state.retainedHeapDumper = RetainedHeapDumper(
-                    config.retainedHeapDumpDirectory() ?: logDirectory,
-                    config.binaryStorage(),
-                    config.retainedHeapDumpMinIntervalMs(),
-                    config.retainedHeapDumpMaxCount(),
-                    config.retainedHeapDumpMinRetainedAgeMs(),
-                )
+            RuntimeHookGuard.run {
+                val heapDumpEnabled = config.retainedHeapDumpEnabled()
+                if (heapDumpEnabled) {
+                    state.retainedHeapDumper = RetainedHeapDumper(
+                        config.retainedHeapDumpDirectory() ?: logDirectory,
+                        config.binaryStorage(),
+                        config.retainedHeapDumpMinIntervalMs(),
+                        config.retainedHeapDumpMaxCount(),
+                        config.retainedHeapDumpMinRetainedAgeMs(),
+                    )
+                }
+                state.objectRetentionWatcher = ObjectRetentionWatcher(
+                    config.retainedObjectDelayMs(),
+                    config.retainedObjectForceGcEnabled(),
+                    exactAdmission = config.exactEventCollectionEnabled(),
+                    heapDumpMinRetainedAgeMs = config.retainedHeapDumpMinRetainedAgeMs(),
+                    heapDumpReporter = if (heapDumpEnabled) JankHunter::dumpWatchedRetainedHeap else null,
+                ).also { it.start(maintenanceScheduler) }
             }
-            state.objectRetentionWatcher = ObjectRetentionWatcher(
-                config.retainedObjectDelayMs(),
-                config.retainedObjectForceGcEnabled(),
-                heapDumpMinRetainedAgeMs = config.retainedHeapDumpMinRetainedAgeMs(),
-                heapDumpReporter = if (heapDumpEnabled) JankHunter::dumpWatchedRetainedHeap else null,
-            ).also { it.start(maintenanceScheduler) }
         }
     }
 

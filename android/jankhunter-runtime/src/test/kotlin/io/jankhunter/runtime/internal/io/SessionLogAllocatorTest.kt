@@ -10,21 +10,39 @@ import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class SessionLogAllocatorTest {
     @Test
+    fun legacyNameRemainsVisibleToAllocationAndRetention() {
+        val parsed = SessionLogName.parse("jh-session-log.2027-01-02.41.jhlog")
+
+        assertEquals(DATE, parsed?.localDate)
+        assertNull(parsed?.runId)
+        assertEquals(41L, parsed?.index)
+    }
+
+    @Test
+    fun malformedLegacyNamesRemainRejected() {
+        assertNull(SessionLogName.parse("jh-session-log.2027-01-02.01.jhlog"))
+        assertNull(SessionLogName.parse("jh-session-log.2027-02-30.1.jhlog"))
+        assertNull(SessionLogName.parse("jh-session-log.2027-01-02.-1.jhlog"))
+        assertNull(SessionLogName.parse("jh-session-log.2027-01-02.jhlog"))
+    }
+
+    @Test
     fun deletedHighestIndexIsNeverReused() {
         val directory = Files.createTempDirectory("jankhunter-sequence-delete").toFile()
         try {
-            val first = SessionLogAllocator.reserve(directory, DATE)
+            val first = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             val firstFile = File(directory, first.fileName).apply { writeBytes(byteArrayOf(1)) }
             first.close()
             assertTrue(firstFile.delete())
 
-            val second = SessionLogAllocator.reserve(directory, DATE)
+            val second = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             try {
                 assertEquals(1L, second.index)
             } finally {
@@ -47,7 +65,7 @@ class SessionLogAllocatorTest {
             sequenceFile(directory).writeBytes(corrupt)
 
             try {
-                SessionLogAllocator.reserve(directory, DATE)
+                SessionLogAllocator.reserve(directory, DATE, RUN_ID)
                 fail("corrupt sequence must not allocate an index")
             } catch (_: IOException) {
                 // Expected: reusing an index is less safe than disabling this session.
@@ -63,7 +81,7 @@ class SessionLogAllocatorTest {
         try {
             sequenceFile(directory).writeBytes(byteArrayOf(1, 2, 3, 4))
 
-            val allocation = SessionLogAllocator.reserve(directory, DATE)
+            val allocation = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             try {
                 assertEquals(0L, allocation.index)
                 assertEquals(Long.SIZE_BYTES * 2L, sequenceFile(directory).length())
@@ -79,11 +97,12 @@ class SessionLogAllocatorTest {
     fun authoritativeExternalStorageReusesUnpublishedZeroReservation() {
         val directory = Files.createTempDirectory("jankhunter-external-sequence-reset").toFile()
         try {
-            SessionLogAllocator.reserve(directory, DATE).close()
+            SessionLogAllocator.reserve(directory, DATE, RUN_ID).close()
 
             val allocation = SessionLogAllocator.reserve(
                 directory,
                 DATE,
+                RUN_ID,
                 authoritativeStoragePaths = emptyList(),
             )
             try {
@@ -100,12 +119,13 @@ class SessionLogAllocatorTest {
     fun authoritativeExternalStorageContinuesAfterVisibleZero() {
         val directory = Files.createTempDirectory("jankhunter-external-sequence-visible").toFile()
         try {
-            SessionLogAllocator.reserve(directory, DATE).close()
-            val visibleZero = "/external/storage/${SessionLogName.create(DATE, 0L)}"
+            SessionLogAllocator.reserve(directory, DATE, RUN_ID).close()
+            val visibleZero = "/external/storage/${SessionLogName.create(DATE, RUN_ID, 0L)}"
 
             val allocation = SessionLogAllocator.reserve(
                 directory,
                 DATE,
+                RUN_ID,
                 authoritativeStoragePaths = listOf(visibleZero),
             )
             try {
@@ -127,7 +147,7 @@ class SessionLogAllocatorTest {
             val workers = List(32) {
                 thread(start = true) {
                     start.await()
-                    allocations += SessionLogAllocator.reserve(directory, DATE)
+                    allocations += SessionLogAllocator.reserve(directory, DATE, RUN_ID)
                 }
             }
             start.countDown()
@@ -152,6 +172,7 @@ class SessionLogAllocatorTest {
                     allocations += SessionLogAllocator.reserve(
                         directory,
                         DATE,
+                        RUN_ID,
                         authoritativeStoragePaths = emptyList(),
                     )
                 }
@@ -170,16 +191,21 @@ class SessionLogAllocatorTest {
     fun retentionNeverDeletesFilesOwnedByActiveLeases() {
         val directory = Files.createTempDirectory("jankhunter-retention-leases").toFile()
         try {
-            val active = SessionLogAllocator.reserve(directory, DATE)
+            val active = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             val activeFile = File(directory, active.fileName).apply { writeBytes(ByteArray(100)) }
-            val stale = SessionLogAllocator.reserve(directory, DATE)
+            val stale = SessionLogAllocator.reserve(directory, DATE, OLD_RUN_ID)
             val staleFile = File(directory, stale.fileName).apply { writeBytes(ByteArray(100)) }
             stale.close()
-            val current = SessionLogAllocator.reserve(directory, DATE)
+            val current = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             val currentFile = File(directory, current.fileName).apply { writeBytes(ByteArray(100)) }
 
             try {
-                SessionLogRetention.enforce(directory, currentFile, historyLimitBytes = 150L)
+                SessionLogRetention.enforce(
+                    directory,
+                    currentRunId = SessionLogName.runIdHex(RUN_ID),
+                    protectedPaths = SessionLogAllocator.activeLeases(directory).protectedPaths,
+                    historyLimitBytes = 150L,
+                )
 
                 assertTrue(activeFile.exists())
                 assertTrue(currentFile.exists())
@@ -197,7 +223,7 @@ class SessionLogAllocatorTest {
     fun activeLeasePublishesExternalProtectedPath() {
         val directory = Files.createTempDirectory("jankhunter-external-lease").toFile()
         try {
-            val allocation = SessionLogAllocator.reserve(directory, DATE)
+            val allocation = SessionLogAllocator.reserve(directory, DATE, RUN_ID)
             val externalPath = "/external/storage/${allocation.fileName}"
             allocation.updateProtectedPath(externalPath)
 
@@ -215,5 +241,7 @@ class SessionLogAllocatorTest {
 
     private companion object {
         const val DATE = "2027-01-02"
+        val RUN_ID = ByteArray(16) { index -> index.toByte() }
+        val OLD_RUN_ID = ByteArray(16) { 42 }
     }
 }

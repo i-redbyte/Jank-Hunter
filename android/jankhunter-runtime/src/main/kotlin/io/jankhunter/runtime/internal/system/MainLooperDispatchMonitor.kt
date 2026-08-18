@@ -4,6 +4,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Printer
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
@@ -32,21 +35,29 @@ internal class MainLooperDispatchMonitor(
         } catch (_: Throwable) {
         }
         if (!running.get()) return@Printer
-        tracker.onMessage(line)?.let { sample ->
-            recordDispatch(sample.durationMs, this.thresholdMs, sample.source)
+        RuntimeHookGuard.run {
+            tracker.onMessage(line)?.let { sample ->
+                recordDispatch(sample.durationMs, this.thresholdMs, sample.source)
+            }
         }
     }
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
         previousPrinter = safeCurrentPrinter()?.takeUnless { it === printer }
-        setMessageLogging(printer)
+        try {
+            setMessageLogging(printer)
+        } catch (throwable: Throwable) {
+            running.set(false)
+            previousPrinter = null
+            throwable.recordOrRethrow()
+        }
     }
 
     fun stop() {
         if (!running.getAndSet(false)) return
         if (safeCurrentPrinter() === printer) {
-            setMessageLogging(previousPrinter)
+            RuntimeHookGuard.run { setMessageLogging(previousPrinter) }
         }
         // If a later profiler replaced the global printer, replacing it here would break that profiler.
         // Leave its chain in place; this wrapper is inactive and only forwards to the printer it captured.
@@ -59,6 +70,11 @@ internal class MainLooperDispatchMonitor(
             null
         }
     }
+}
+
+private fun Throwable.recordOrRethrow() {
+    if (this is VirtualMachineError || this is ThreadDeath) throw this
+    RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
 }
 
 private fun readMainLooperPrinter(): Printer? {

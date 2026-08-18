@@ -1,7 +1,5 @@
 package io.jankhunter.runtime
 
-import java.util.concurrent.atomic.AtomicReference
-
 internal class ContextTracker(
     initialScreen: String = "unknown",
 ) {
@@ -9,7 +7,6 @@ internal class ContextTracker(
     private val owner = ThreadLocal<String>()
     private val flow = ThreadLocal<String>()
     private val flowStep = ThreadLocal<String>()
-    private val lastRecordedContext = AtomicReference<JankHunterContext?>()
 
     @Volatile
     private var screen = initialScreen
@@ -122,14 +119,6 @@ internal class ContextTracker(
             RuntimeHookGuard.run { setThreadLocal(flowStep, previousStep) }
             RuntimeHookGuard.run(onContextChanged)
         }
-    }
-
-    fun shouldRecord(tuple: JankHunterContext): Boolean {
-        return lastRecordedContext.getAndSet(tuple) != tuple
-    }
-
-    fun resetRecordedContext() {
-        lastRecordedContext.set(null)
     }
 
     private fun <T> setThreadLocal(target: ThreadLocal<T>, value: T?) {

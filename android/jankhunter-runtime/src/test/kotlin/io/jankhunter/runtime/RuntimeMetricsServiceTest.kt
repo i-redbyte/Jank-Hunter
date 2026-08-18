@@ -49,8 +49,19 @@ class RuntimeMetricsServiceTest {
         }
     }
 
+    @Test
+    fun exactBlockingFlushDoesNotDependOnMaintenanceQueue() {
+        withService(maintenanceWaitAccepted = false) { service, _, _, writer ->
+            service.recordCounter("exact.metric", 1L)
+
+            assertTrue(service.flushBlocking(1L))
+            assertTrue(writer.flushBlocking())
+        }
+    }
+
     private fun withService(
         ensureContextRecorded: () -> Unit = {},
+        maintenanceWaitAccepted: Boolean = true,
         block: (
             service: RuntimeMetricsService,
             immediate: MutableList<() -> Unit>,
@@ -83,11 +94,11 @@ class RuntimeMetricsServiceTest {
                 true
             },
             executeMaintenanceAndWait = { _, task ->
-                task()
-                true
+                if (maintenanceWaitAccepted) task()
+                maintenanceWaitAccepted
             },
         )
-        service.configure(16)
+        service.configure(16, exactAdmission = true)
         try {
             block(service, immediate, delayed, writer)
         } finally {

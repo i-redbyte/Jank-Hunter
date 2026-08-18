@@ -1,5 +1,7 @@
 package io.jankhunter.runtime.integration
 
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -71,6 +73,21 @@ class JankHunterJankStatsTest {
         }
     }
 
+    @Test
+    fun suppressedReflectionFailureIsCountedAsTrustEvidence() {
+        val before = RuntimeHookFailureTracker.total()
+        val reasonBefore = RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.JANKSTATS_CONTROL.ordinal]
+        val handle = JankHunterJankStats.Handle(ThrowingFakeJankStats())
+
+        handle.setTrackingEnabled(true)
+
+        assertEquals(before + 1L, RuntimeHookFailureTracker.total())
+        assertEquals(
+            reasonBefore + 1L,
+            RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.JANKSTATS_CONTROL.ordinal],
+        )
+    }
+
     class FakeJankStats {
         var trackingEnabledState = true
         var setTrackingEnabledCalls = 0
@@ -102,6 +119,12 @@ class JankHunterJankStatsTest {
     class FatalFakeJankStats {
         fun setTrackingEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
             throw FatalTestError()
+        }
+    }
+
+    class ThrowingFakeJankStats {
+        fun setTrackingEnabled(enabled: Boolean) {
+            error("setTrackingEnabled($enabled) failed")
         }
     }
 

@@ -51,7 +51,8 @@ internal sealed class PendingLogEvent(
         private val board: String?,
         private val product: String?,
         private val deviceRooted: Boolean,
-    ) : PendingLogEvent(JhlogV9.TYPE_SESSION, producerContext) {
+        private val collectorFlags: Long,
+    ) : PendingLogEvent(Jhlog.TYPE_SESSION, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.session(
                 appVersion,
@@ -68,6 +69,7 @@ internal sealed class PendingLogEvent(
                 board,
                 product,
                 deviceRooted,
+                collectorFlags,
                 appForeground = false,
             )
         }
@@ -90,7 +92,7 @@ internal sealed class PendingLogEvent(
         private val totalStorageKb: Long,
         private val networkVpn: Boolean,
         private val foreground: Boolean,
-    ) : PendingLogEvent(JhlogV9.TYPE_DEVICE_CONTEXT, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_DEVICE_CONTEXT, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.context(
                 networkKind,
@@ -124,7 +126,7 @@ internal sealed class PendingLogEvent(
         private val rxBytes: Long,
         private val txBytes: Long,
         private val flags: Long,
-    ) : PendingLogEvent(JhlogV9.TYPE_HTTP, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_HTTP, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.http(owner, route, durationMs, dnsMs, connectMs, ttfbMs, statusClass, rxBytes, txBytes, flags)
         }
@@ -136,14 +138,50 @@ internal sealed class PendingLogEvent(
         private val windowMs: Long,
         private val frameCount: Long,
         private val jankCount: Long,
-        private val p50Ms: Long,
-        private val p95Ms: Long,
-        private val p99Ms: Long,
+        private val source: Long,
+        private val frameDeadlineUs: Long,
+        private val frameDurationBuckets: LongArray,
         private val foreground: Boolean,
         private val flags: Long,
-    ) : PendingLogEvent(JhlogV9.TYPE_UI_WINDOW, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_UI_WINDOW, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.uiWindow(screen, windowMs, frameCount, jankCount, p50Ms, p95Ms, p99Ms, foreground, flags)
+            writer.uiWindow(
+                screen,
+                windowMs,
+                frameCount,
+                jankCount,
+                source,
+                frameDeadlineUs,
+                frameDurationBuckets,
+                foreground,
+                flags,
+            )
+        }
+    }
+
+    class ProcessExit(
+        producerContext: LogEventContext?,
+        private val reason: Long,
+        private val timestampUnixMs: Long,
+        private val importance: Long,
+        private val pssKb: Long,
+        private val rssKb: Long,
+        private val processName: String?,
+    ) : PendingLogEvent(Jhlog.TYPE_PROCESS_EXIT, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.processExit(reason, timestampUnixMs, importance, pssKb, rssKb, processName)
+        }
+    }
+
+    class IO(
+        producerContext: LogEventContext?,
+        private val operation: Long,
+        private val durationUs: Long,
+        private val bytes: Long,
+        private val mainThread: Boolean,
+    ) : PendingLogEvent(Jhlog.TYPE_IO, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.io(operation, durationUs, bytes, mainThread)
         }
     }
 
@@ -156,7 +194,7 @@ internal sealed class PendingLogEvent(
         private val stackHint: String?,
         private val durationMs: Long,
         private val foreground: Boolean,
-    ) : PendingLogEvent(JhlogV9.TYPE_STALL, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_STALL, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.stall(screen, owner, flow, step, stackHint, durationMs, foreground)
         }
@@ -168,7 +206,7 @@ internal sealed class PendingLogEvent(
         private val javaHeapKb: Long,
         private val nativeHeapKb: Long,
         private val foreground: Boolean,
-    ) : PendingLogEvent(JhlogV9.TYPE_MEMORY, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_MEMORY, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.memory(pssKb, javaHeapKb, nativeHeapKb, foreground)
         }
@@ -186,7 +224,7 @@ internal sealed class PendingLogEvent(
         private val count: Long,
         private val foreground: Boolean,
         private val evidence: Long,
-    ) : PendingLogEvent(JhlogV9.TYPE_RETAINED, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_RETAINED, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.retained(screen, owner, flow, step, className, holder, ageMs, count, foreground, evidence)
         }
@@ -196,14 +234,14 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val name: String?,
         private val value: Long,
-    ) : PendingLogEvent(JhlogV9.TYPE_COUNTER, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_COUNTER, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) = writer.counter(name, value)
     }
 
     class StableCounters(
         producerContext: LogEventContext?,
         private val batch: StableCounterBatch,
-    ) : PendingLogEvent(JhlogV9.TYPE_COUNTER, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_COUNTER, producerContext) {
         private var written = 0
 
         override val logicalEventCount: Long
@@ -229,18 +267,8 @@ internal sealed class PendingLogEvent(
         private val sum: Long,
         private val max: Long,
         private val mode: MetricAggregationMode,
-    ) : PendingLogEvent(JhlogV9.TYPE_GAUGE, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_GAUGE, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) = writer.gauge(name, value, count, sum, max, mode)
-    }
-
-    class Flow(
-        producerContext: LogEventContext?,
-        private val screen: String?,
-        private val owner: String?,
-        private val flow: String?,
-        private val step: String?,
-    ) : PendingLogEvent(JhlogV9.TYPE_FLOW_TRANSITION, producerContext) {
-        override fun writePayload(writer: BinaryLogWriter) = writer.flowContext(screen, owner, flow, step)
     }
 
     class LogSpam(
@@ -252,7 +280,7 @@ internal sealed class PendingLogEvent(
         private val source: String?,
         private val level: Int,
         private val count: Long,
-    ) : PendingLogEvent(JhlogV9.TYPE_LOG_SPAM, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_LOG_SPAM, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.logSpam(screen, owner, flow, step, source, level, count)
         }
@@ -269,7 +297,7 @@ internal sealed class PendingLogEvent(
         private val count: Long,
         private val maxMs: Long,
         private val foreground: Boolean,
-    ) : PendingLogEvent(JhlogV9.TYPE_PROBLEM, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_PROBLEM, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
             writer.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs, foreground)
         }
@@ -278,7 +306,7 @@ internal sealed class PendingLogEvent(
     class RuntimeCalls(
         producerContext: LogEventContext?,
         private val batch: RuntimeCallBatch,
-    ) : PendingLogEvent(JhlogV9.TYPE_RUNTIME_CALL, producerContext) {
+    ) : PendingLogEvent(Jhlog.TYPE_RUNTIME_CALL, producerContext) {
         private var written = 0
 
         override val logicalEventCount: Long
@@ -288,22 +316,9 @@ internal sealed class PendingLogEvent(
             get() = (batch.size - written).coerceAtLeast(0).toLong()
 
         override fun writePayload(writer: BinaryLogWriter) {
-            while (written < batch.size) {
-                val index = written
-                writer.runtimeCall(
-                    batch.screen(index),
-                    batch.callerId(index),
-                    batch.callerName(index),
-                    batch.flow(index),
-                    batch.step(index),
-                    batch.calleeId(index),
-                    batch.calleeName(index),
-                    batch.count(index),
-                    batch.totalMs(index),
-                    batch.maxMs(index),
-                )
-                written++
-            }
+            if (written >= batch.size) return
+            writer.runtimeCalls(batch)
+            written = batch.size
         }
     }
 }

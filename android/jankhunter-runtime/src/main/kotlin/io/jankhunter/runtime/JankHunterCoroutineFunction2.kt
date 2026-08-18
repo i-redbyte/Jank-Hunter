@@ -14,11 +14,11 @@ internal class JankHunterCoroutineFunction2 internal constructor(
 
     override fun invoke(p1: Any?, p2: Any?): Any? {
         if (!JankHunter.isRuntimeActiveForCallbacks()) return delegate.invoke(p1, p2)
-        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
+        val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var completedByContinuation = false
         var failed = false
         val continuation = if (p2 is Continuation<*>) {
-            val wrapped = RuntimeHookGuard.value<Any?>(p2) {
+            val wrapped = RuntimeHookGuard.value<Any?>(p2, RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 JankHunterContinuation(p2 as Continuation<Any?>, ownerName, capturedContext, start)
             }
             if (wrapped === p2) return delegate.invoke(p1, p2)
@@ -48,7 +48,7 @@ internal class JankHunterCoroutineFunction2 internal constructor(
     }
 
     private fun recordCompletion(startedAtMs: Long, failed: Boolean) {
-        RuntimeHookGuard.run {
+        RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
             val durationMs = if (startedAtMs > 0L) {
                 (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(0L)
             } else {
@@ -79,7 +79,7 @@ private class JankHunterContinuation<T>(
                 delegate.resumeWith(result)
             }
         } finally {
-            RuntimeHookGuard.run {
+            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 val durationMs = if (startedAtMs > 0L) {
                     (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(0L)
                 } else {

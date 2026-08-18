@@ -28,7 +28,7 @@ class LogGrowthManagerTest {
         )
 
         assertEquals(64 + 256 * 96 + 400 * 80, projection.size)
-        assertTrue(projection.size <= JhlogV1.HISTORY_MAX_BYTES)
+        assertTrue(projection.size <= LogGrowthWire.HISTORY_MAX_BYTES)
     }
 
     @Test
@@ -44,23 +44,22 @@ class LogGrowthManagerTest {
                 configuredLimitBytes = 1_048_576L,
                 stats = stats(retained = 81_920L, generated = 81_920L),
             )
-            assertTrue(started.history.size <= JhlogV1.HISTORY_MAX_BYTES)
+            assertTrue(started.history.size <= LogGrowthWire.HISTORY_MAX_BYTES)
             assertEquals(LogGrowthWire.LIVE_BYTES, started.live.size)
-            assertNull(manager.onChunkCommitted(stats(retained = 200_000L, generated = 300_000L)))
-
             now += 60_000L
-            val overflowLive = manager.onChunkCommitted(
+            val limitLive = manager.checkpoint(
                 stats(
                     retained = 1_048_576L,
                     generated = 1_300_000L,
-                    overflows = 2L,
-                    evictedChunks = 3L,
-                    evictedBytes = 250_000L,
+                    limitReached = 1L,
+                    rotations = 2L,
+                    archiveEvictedBytes = 250_000L,
                 ),
             )
-            assertNotNull(overflowLive)
+            assertNotNull(limitLive)
             val current = requireNotNull(manager.summary().currentSession)
-            assertEquals(2L, current.overflowCount)
+            assertEquals(1L, current.limitReachedCount)
+            assertEquals(2L, current.segmentRotationCount)
             assertTrue(current.reachedLimit)
 
             now += 60_000L
@@ -69,9 +68,9 @@ class LogGrowthManagerTest {
                     stats(
                         retained = 1_048_576L,
                         generated = 1_600_000L,
-                        overflows = 2L,
-                        evictedChunks = 3L,
-                        evictedBytes = 250_000L,
+                        limitReached = 1L,
+                        rotations = 2L,
+                        archiveEvictedBytes = 250_000L,
                     ),
                 ),
             )
@@ -84,8 +83,30 @@ class LogGrowthManagerTest {
             assertEquals(120_000L, persisted.recentSessions.single().durationMs)
             assertEquals(1, persisted.days.size)
             assertEquals("15.01.2027", persisted.days.single().localDate)
-            assertEquals(2L, persisted.days.single().overflowCount)
+            assertEquals(1L, persisted.days.single().limitReachedCount)
+            assertEquals(2L, persisted.days.single().segmentRotationCount)
             assertEquals(1L, persisted.days.single().sessionsReachingLimit)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun everyCheckpointPersistsTheLatestActiveStateForCrashRecovery() {
+        val directory = Files.createTempDirectory("jankhunter-growth-live-snapshot").toFile()
+        var now = 1_800_000_000_000L
+        try {
+            val manager = LogGrowthManager(directory) { now }
+            manager.beginSession(sessionId(1), "2027-01-15", now, 1_048_576L, stats(100L, 100L))
+
+            now += 5_000L
+            assertNotNull(manager.checkpoint(stats(200L, 220L)))
+            assertEquals(220L, manager.summary().currentSession?.generatedBytes)
+            assertEquals(220L, LogGrowthManager(directory) { now }.summary().currentSession?.generatedBytes)
+
+            now += 55_000L
+            assertNotNull(manager.checkpoint(stats(300L, 330L)))
+            assertEquals(330L, LogGrowthManager(directory) { now }.summary().currentSession?.generatedBytes)
         } finally {
             directory.deleteRecursively()
         }
@@ -162,11 +183,11 @@ class LogGrowthManagerTest {
         configuredLimitBytes = 3L,
         maximumRetainedBytes = 4L,
         generatedBytes = 5L,
-        overflowCount = 6L,
-        evictedChunkCount = 7L,
-        evictedBytes = 8L,
-        firstOverflowAtMs = 9L,
-        lastOverflowAtMs = 10L,
+        limitReachedCount = 6L,
+        segmentRotationCount = 7L,
+        archiveEvictedBytes = 8L,
+        firstLimitReachedAtMs = 9L,
+        lastLimitReachedAtMs = 10L,
         recoveredAfterInterruption = false,
     )
 
@@ -180,16 +201,22 @@ class LogGrowthManagerTest {
         maximumRetainedBytes = 4L,
         maximumFillPermille = 5L,
         sessionsReachingLimit = 6L,
-        overflowCount = 7L,
-        evictedChunkCount = 8L,
-        evictedBytes = 9L,
+        limitReachedCount = 7L,
+        segmentRotationCount = 8L,
+        archiveEvictedBytes = 9L,
     )
 
     private fun stats(
         retained: Long,
         generated: Long,
-        overflows: Long = 0L,
-        evictedChunks: Long = 0L,
-        evictedBytes: Long = 0L,
-    ): LogContainerStats = LogContainerStats(retained, generated, overflows, evictedChunks, evictedBytes)
+        limitReached: Long = 0L,
+        rotations: Long = 0L,
+        archiveEvictedBytes: Long = 0L,
+    ): LogContainerStats = LogContainerStats(
+        retained,
+        generated,
+        limitReached,
+        rotations,
+        archiveEvictedBytes,
+    )
 }

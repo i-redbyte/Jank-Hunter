@@ -27,7 +27,8 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 		config.MinConfidence == "" &&
 		!config.RequireCleanCohorts &&
 		len(config.Metrics) == 0 &&
-		!hasLeakThreshold(config.Leaks) {
+		!hasLeakThreshold(config.Leaks) &&
+		!hasProblemThreshold(config.Problems) {
 		return GateResult{}
 	}
 	var failures []string
@@ -69,7 +70,79 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 		}
 	}
 	failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)
+	failures = append(failures, evaluateProblemGate(comparison, config.Problems)...)
 	return GateResult{Failed: len(failures) > 0, Failures: failures}
+}
+
+func evaluateProblemGate(comparison Comparison, config ProblemGateThreshold) []string {
+	if !hasProblemThreshold(config) {
+		return nil
+	}
+	excludedCategories := stringSet(config.ExcludeCategories)
+	excludedDetectors := stringSet(config.ExcludeDetectors)
+	minimumConfidence := firstNonEmpty(config.MinConfidence, "low")
+	counts := map[string]int{}
+	var failures []string
+	for _, delta := range comparison.ProblemComparison.Deltas {
+		finding := delta.Candidate
+		if finding == nil {
+			continue
+		}
+		if _, excluded := excludedCategories[finding.Category]; excluded {
+			continue
+		}
+		if _, excluded := excludedDetectors[finding.DetectorID]; excluded {
+			continue
+		}
+		counts[finding.Severity]++
+		if problemConfidenceRank(finding.Confidence) < problemConfidenceRank(minimumConfidence) {
+			continue
+		}
+		if config.MaxSeverity != "" && problemSeverityRank(finding.Severity) > problemSeverityRank(config.MaxSeverity) {
+			failures = append(failures, fmt.Sprintf("problem %s severity=%s exceeds %s", finding.Fingerprint, finding.Severity, config.MaxSeverity))
+		}
+		if config.FailOnNew && delta.Status == "new" {
+			failures = append(failures, fmt.Sprintf("new problem %s (%s)", finding.Fingerprint, finding.Title))
+		}
+		if config.FailOnRegressed && delta.Status == "regressed" {
+			failures = append(failures, fmt.Sprintf("regressed problem %s (%s)", finding.Fingerprint, finding.Title))
+		}
+	}
+	for _, limit := range []struct {
+		severity string
+		value    *int
+	}{{"critical", config.MaxCritical}, {"high", config.MaxHigh}, {"medium", config.MaxMedium}} {
+		if limit.value != nil && counts[limit.severity] > *limit.value {
+			failures = append(failures, fmt.Sprintf("problems %s=%d exceeds %d", limit.severity, counts[limit.severity], *limit.value))
+		}
+	}
+	coverage := map[string]CategoryCoverage{}
+	for _, item := range comparison.Candidate.CategoryCoverage {
+		coverage[item.Category] = item
+	}
+	for _, category := range config.RequiredCoverage {
+		item, ok := coverage[category]
+		if !ok || (item.Status != "healthy" && item.Status != "problems_found") {
+			status := "missing"
+			if ok {
+				status = item.Status
+			}
+			failures = append(failures, fmt.Sprintf("required problem coverage %s is %s", category, status))
+		}
+	}
+	return failures
+}
+
+func hasProblemThreshold(config ProblemGateThreshold) bool {
+	return config.MaxCritical != nil || config.MaxHigh != nil || config.MaxMedium != nil || config.MaxSeverity != "" || config.MinConfidence != "" || config.FailOnNew || config.FailOnRegressed || len(config.ExcludeCategories) > 0 || len(config.ExcludeDetectors) > 0 || len(config.RequiredCoverage) > 0
+}
+
+func stringSet(values []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, value := range values {
+		out[strings.TrimSpace(value)] = struct{}{}
+	}
+	return out
 }
 
 func collectionQualityGateDetail(label string, summary Summary) string {
@@ -147,12 +220,16 @@ func leakGateClass(delta LeakDelta) string {
 
 func severityRank(value string) int {
 	switch value {
+	case "critical":
+		return 4
 	case "high":
 		return 3
 	case "medium":
 		return 2
-	default:
+	case "low":
 		return 1
+	default:
+		return 0
 	}
 }
 

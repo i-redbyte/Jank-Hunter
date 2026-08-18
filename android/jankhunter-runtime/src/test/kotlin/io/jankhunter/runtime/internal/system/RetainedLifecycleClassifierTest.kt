@@ -52,12 +52,50 @@ class RetainedLifecycleClassifierTest {
         assertTrue(targets.isEmpty())
     }
 
+    @Test
+    fun fragmentDestroyViewWatchesEveryAssociatedBindingField() {
+        val fragment = LargeFragment()
+        assertEquals(10, fragment.reachableBindings().size)
+
+        val targets = RetainedLifecycleClassifier.targets(fragment, "onDestroyView", null)
+
+        assertEquals(10, targets.size)
+    }
+
     private class CheckoutFragment {
         @Suppress("unused")
         private val binding = CheckoutBinding()
     }
 
     private class CheckoutBinding
+
+    private class LargeFragment {
+        private val binding0 = CheckoutBinding()
+        private val binding1 = CheckoutBinding()
+        private val binding2 = CheckoutBinding()
+        private val binding3 = CheckoutBinding()
+        private val binding4 = CheckoutBinding()
+        private val binding5 = CheckoutBinding()
+        private val binding6 = CheckoutBinding()
+        private val binding7 = CheckoutBinding()
+        private val binding8 = CheckoutBinding()
+        private val binding9 = CheckoutBinding()
+
+        fun reachableBindings(): List<CheckoutBinding> {
+            return listOf(
+                binding0,
+                binding1,
+                binding2,
+                binding3,
+                binding4,
+                binding5,
+                binding6,
+                binding7,
+                binding8,
+                binding9,
+            )
+        }
+    }
 
     private class CheckoutViewModel
 

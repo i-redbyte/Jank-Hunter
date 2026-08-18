@@ -4,17 +4,22 @@ import io.jankhunter.runtime.internal.saturatingAdd
 import io.jankhunter.runtime.internal.concurrent.SpscSlotSequencer
 import io.jankhunter.runtime.internal.io.RuntimeCallBatch
 import java.lang.ref.WeakReference
+import java.util.concurrent.atomic.AtomicLong
 
-internal const val RUNTIME_GRAPH_BUFFER_CAPACITY = 256
+internal const val RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY = 4
+internal const val RUNTIME_GRAPH_PAGE_MAX_KEYS = 64
 internal const val RUNTIME_GRAPH_MAX_FLUSH_RECORDS = 128
+internal const val RUNTIME_GRAPH_ADD_FULL = 0
+internal const val RUNTIME_GRAPH_ADD_AGGREGATED = 1
+internal const val RUNTIME_GRAPH_ADD_PAGE_PUBLISHED = 2
 
 internal class RuntimeCallStack {
-    private val ids = LongArray(MAX_DEPTH)
-    private val startedAtMs = LongArray(MAX_DEPTH)
-    private val names = arrayOfNulls<String>(MAX_DEPTH)
-    private val screens = arrayOfNulls<String>(MAX_DEPTH)
-    private val flows = arrayOfNulls<String>(MAX_DEPTH)
-    private val steps = arrayOfNulls<String>(MAX_DEPTH)
+    private var ids = LongArray(INITIAL_DEPTH)
+    private var startedAtMs = LongArray(INITIAL_DEPTH)
+    private var names = arrayOfNulls<String>(INITIAL_DEPTH)
+    private var screens = arrayOfNulls<String>(INITIAL_DEPTH)
+    private var flows = arrayOfNulls<String>(INITIAL_DEPTH)
+    private var steps = arrayOfNulls<String>(INITIAL_DEPTH)
 
     var depth: Int = 0
         private set
@@ -42,8 +47,8 @@ internal class RuntimeCallStack {
         screen: String?,
         flow: String?,
         step: String?,
-    ): Boolean {
-        if (depth >= ids.size) return false
+    ) {
+        ensureCapacity(depth + 1)
         ids[depth] = methodId
         this.startedAtMs[depth] = startedAtMs
         names[depth] = methodName
@@ -51,7 +56,17 @@ internal class RuntimeCallStack {
         flows[depth] = flow
         steps[depth] = step
         depth++
-        return true
+    }
+
+    private fun ensureCapacity(required: Int) {
+        if (required <= ids.size) return
+        val capacity = ids.size shl 1
+        ids = ids.copyOf(capacity)
+        startedAtMs = startedAtMs.copyOf(capacity)
+        names = names.copyOf(capacity)
+        screens = screens.copyOf(capacity)
+        flows = flows.copyOf(capacity)
+        steps = steps.copyOf(capacity)
     }
 
     /** Returns false and discards unmatched inner frames when exits arrive out of LIFO order. */
@@ -118,25 +133,142 @@ internal class RuntimeCallStack {
     }
 
     private companion object {
-        const val MAX_DEPTH = 256
+        const val INITIAL_DEPTH = 64
     }
 }
 
-internal class RuntimeGraphEdgeBuffer(thread: Thread) {
+internal class RuntimeGraphAggregateBuffer(thread: Thread) {
     val owner = WeakReference(thread)
-    val sequencer = SpscSlotSequencer(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val epochs = LongArray(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val callers = LongArray(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val callerNames = arrayOfNulls<String>(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val callees = LongArray(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val calleeNames = arrayOfNulls<String>(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val screens = arrayOfNulls<String>(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val flows = arrayOfNulls<String>(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val steps = arrayOfNulls<String>(RUNTIME_GRAPH_BUFFER_CAPACITY)
-    val durationsMs = LongArray(RUNTIME_GRAPH_BUFFER_CAPACITY)
+    private val pages = Array(RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY) { RuntimeGraphAggregatePage() }
+    private val sequencer = SpscSlotSequencer(RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY)
+    private val publishedLogicalEvents = AtomicLong()
+    private var producerPosition = SpscSlotSequencer.NO_POSITION
 
-    fun publish(
-        eventEpoch: Long,
+    @Volatile private var producerAttempted = 0L
+    @Volatile private var producerAccepted = 0L
+
+    @Volatile var producerWaiting = false
+    @Volatile var producerActive = false
+    // Stays true while a producer temporarily yields producerActive to a consumer page rotation.
+    @Volatile var producerAdmitted = false
+
+    @Volatile var rotationRequested = false
+
+    fun recordAttempted() {
+        producerAttempted = saturatingAdd(producerAttempted, 1L)
+    }
+
+    fun recordAccepted() {
+        producerAccepted = saturatingAdd(producerAccepted, 1L)
+    }
+
+    fun attemptedCount(): Long = producerAttempted
+
+    fun acceptedCount(): Long = producerAccepted
+
+    fun tryAdd(
+        callerId: Long,
+        callerName: String?,
+        calleeId: Long,
+        calleeName: String?,
+        screen: String?,
+        flow: String?,
+        step: String?,
+        durationMs: Long,
+    ): Int {
+        if (!ensureActivePage()) return RUNTIME_GRAPH_ADD_FULL
+        var page = activePage()
+        if (page.add(callerId, callerName, calleeId, calleeName, screen, flow, step, durationMs)) {
+            return RUNTIME_GRAPH_ADD_AGGREGATED
+        }
+        publishActivePage()
+        if (!ensureActivePage()) return RUNTIME_GRAPH_ADD_FULL
+        page = activePage()
+        check(page.add(callerId, callerName, calleeId, calleeName, screen, flow, step, durationMs)) {
+            "Runtime graph edge did not fit an empty producer page"
+        }
+        return RUNTIME_GRAPH_ADD_PAGE_PUBLISHED
+    }
+
+    fun publishActivePage(): Boolean {
+        if (producerPosition == SpscSlotSequencer.NO_POSITION) return false
+        val page = activePage()
+        if (page.size == 0) return false
+        publishedLogicalEvents.addAndGet(page.logicalEventCount())
+        sequencer.publish(producerPosition)
+        producerPosition = SpscSlotSequencer.NO_POSITION
+        return true
+    }
+
+    fun tryClaimConsumer(): Long = sequencer.tryClaimConsumer()
+
+    fun pageAt(position: Long): RuntimeGraphAggregatePage = pages[sequencer.slotIndex(position)]
+
+    fun release(position: Long) {
+        val page = pageAt(position)
+        publishedLogicalEvents.addAndGet(-page.logicalEventCount())
+        page.clear()
+        sequencer.release(position)
+    }
+
+    fun hasPublishedPages(): Boolean = !sequencer.isEmpty()
+
+    fun hasActiveData(): Boolean {
+        return producerPosition != SpscSlotSequencer.NO_POSITION && activePage().size > 0
+    }
+
+    fun bufferedLogicalEventCount(): Long {
+        val published = publishedLogicalEvents.get().coerceAtLeast(0L)
+        val active = if (producerPosition == SpscSlotSequencer.NO_POSITION) 0L else activePage().logicalEventCount()
+        return saturatingAdd(published, active)
+    }
+
+    fun clear() {
+        pages.forEach(RuntimeGraphAggregatePage::clear)
+        publishedLogicalEvents.set(0L)
+        producerPosition = SpscSlotSequencer.NO_POSITION
+        producerWaiting = false
+        producerActive = false
+        producerAdmitted = false
+        rotationRequested = false
+        producerAttempted = 0L
+        producerAccepted = 0L
+    }
+
+    private fun ensureActivePage(): Boolean {
+        if (producerPosition != SpscSlotSequencer.NO_POSITION) return true
+        val position = sequencer.tryClaimProducer()
+        if (position == SpscSlotSequencer.NO_POSITION) return false
+        producerPosition = position
+        return true
+    }
+
+    private fun activePage(): RuntimeGraphAggregatePage {
+        check(producerPosition != SpscSlotSequencer.NO_POSITION) { "Runtime graph producer page is not claimed" }
+        return pageAt(producerPosition)
+    }
+}
+
+internal class RuntimeGraphAggregatePage {
+    private val states = ByteArray(TABLE_CAPACITY)
+    private val hashes = IntArray(TABLE_CAPACITY)
+    val callers = LongArray(TABLE_CAPACITY)
+    val callerNames = arrayOfNulls<String>(TABLE_CAPACITY)
+    val callees = LongArray(TABLE_CAPACITY)
+    val calleeNames = arrayOfNulls<String>(TABLE_CAPACITY)
+    val screens = arrayOfNulls<String>(TABLE_CAPACITY)
+    val flows = arrayOfNulls<String>(TABLE_CAPACITY)
+    val steps = arrayOfNulls<String>(TABLE_CAPACITY)
+    val counts = LongArray(TABLE_CAPACITY)
+    val totalsMs = LongArray(TABLE_CAPACITY)
+    val maximaMs = LongArray(TABLE_CAPACITY)
+
+    var size = 0
+        private set
+    private var lastIndex = -1
+    private var logicalEvents = 0L
+
+    fun add(
         callerId: Long,
         callerName: String?,
         calleeId: Long,
@@ -146,136 +278,110 @@ internal class RuntimeGraphEdgeBuffer(thread: Thread) {
         step: String?,
         durationMs: Long,
     ): Boolean {
-        val position = sequencer.tryClaimProducer()
-        if (position == SpscSlotSequencer.NO_POSITION) return false
-        val slot = sequencer.slotIndex(position)
-        epochs[slot] = eventEpoch
-        callers[slot] = callerId
-        callerNames[slot] = callerName
-        callees[slot] = calleeId
-        calleeNames[slot] = calleeName
-        screens[slot] = screen
-        flows[slot] = flow
-        steps[slot] = step
-        durationsMs[slot] = durationMs
-        sequencer.publish(position)
-        return true
-    }
-
-    fun clearReferences(slot: Int) {
-        callerNames[slot] = null
-        calleeNames[slot] = null
-        screens[slot] = null
-        flows[slot] = null
-        steps[slot] = null
-    }
-
-    fun clear() {
-        callerNames.fill(null)
-        calleeNames.fill(null)
-        screens.fill(null)
-        flows.fill(null)
-        steps.fill(null)
-    }
-}
-
-internal data class RuntimeGraphShadowComparisonResult(
-    val missingEdges: Long,
-    val extraEdges: Long,
-    val countDifferences: Long,
-    val durationDifferences: Long,
-    val contextSplits: Long,
-) {
-    companion object {
-        val EMPTY = RuntimeGraphShadowComparisonResult(0L, 0L, 0L, 0L, 0L)
-    }
-}
-
-internal class RuntimeGraphShadowComparison {
-    private val legacy = HashMap<PairKey, Aggregate>()
-    private val buffered = HashMap<ContextKey, Aggregate>()
-
-    fun record(buffer: RuntimeGraphEdgeBuffer, slot: Int, limit: Int): Boolean {
-        val pair = PairKey(buffer.callers[slot], buffer.callees[slot])
-        val context = ContextKey(pair, buffer.screens[slot], buffer.flows[slot], buffer.steps[slot])
-        return add(legacy, pair, buffer.durationsMs[slot], limit) &&
-            add(buffered, context, buffer.durationsMs[slot], limit)
-    }
-
-    fun compareAndClear(): RuntimeGraphShadowComparisonResult {
-        if (legacy.isEmpty() && buffered.isEmpty()) return RuntimeGraphShadowComparisonResult.EMPTY
-        val projected = HashMap<PairKey, Aggregate>()
-        val contexts = HashMap<PairKey, Int>()
-        buffered.forEach { (key, value) ->
-            projected.getOrPut(key.pair, ::Aggregate).merge(value)
-            contexts[key.pair] = (contexts[key.pair] ?: 0) + 1
-        }
-        var missing = 0L
-        var countDifferences = 0L
-        var durationDifferences = 0L
-        legacy.forEach { (key, value) ->
-            val other = projected[key]
-            if (other == null) {
-                missing++
-            } else {
-                if (value.count != other.count) countDifferences++
-                if (value.totalMs != other.totalMs || value.maxMs != other.maxMs) durationDifferences++
-            }
-        }
-        val result = RuntimeGraphShadowComparisonResult(
-            missingEdges = missing,
-            extraEdges = projected.keys.count { !legacy.containsKey(it) }.toLong(),
-            countDifferences = countDifferences,
-            durationDifferences = durationDifferences,
-            contextSplits = contexts.values.count { it > 1 }.toLong(),
-        )
-        legacy.clear()
-        buffered.clear()
-        return result
-    }
-
-    private fun <K> add(target: MutableMap<K, Aggregate>, key: K, durationMs: Long, limit: Int): Boolean {
-        val existing = target[key]
-        if (existing != null) {
-            existing.add(durationMs)
+        val cached = lastIndex
+        if (cached >= 0 && matches(cached, callerId, calleeId, screen, flow, step)) {
+            updateNames(cached, callerName, calleeName)
+            merge(cached, 1L, durationMs, durationMs)
+            logicalEvents = saturatingAdd(logicalEvents, 1L)
             return true
         }
-        if (limit <= 0 || target.size >= limit) return false
-        target[key] = Aggregate().also { it.add(durationMs) }
-        return true
+        val hash = runtimeGraphEdgeHash(callerId, calleeId, screen, flow, step)
+        var index = hash and TABLE_MASK
+        repeat(TABLE_CAPACITY) {
+            if (states[index] == EMPTY) {
+                if (size >= RUNTIME_GRAPH_PAGE_MAX_KEYS) return false
+                states[index] = OCCUPIED
+                hashes[index] = hash
+                callers[index] = callerId
+                callerNames[index] = callerName
+                callees[index] = calleeId
+                calleeNames[index] = calleeName
+                screens[index] = screen
+                flows[index] = flow
+                steps[index] = step
+                counts[index] = 1L
+                totalsMs[index] = durationMs
+                maximaMs[index] = durationMs
+                size++
+                lastIndex = index
+                logicalEvents = saturatingAdd(logicalEvents, 1L)
+                return true
+            }
+            if (hashes[index] == hash && matches(index, callerId, calleeId, screen, flow, step)) {
+                updateNames(index, callerName, calleeName)
+                merge(index, 1L, durationMs, durationMs)
+                lastIndex = index
+                logicalEvents = saturatingAdd(logicalEvents, 1L)
+                return true
+            }
+            index = (index + 1) and TABLE_MASK
+        }
+        return false
     }
 
-    private data class PairKey(val callerId: Long, val calleeId: Long)
-
-    private data class ContextKey(
-        val pair: PairKey,
-        val screen: String?,
-        val flow: String?,
-        val step: String?,
-    )
-
-    private class Aggregate {
-        var count = 0L
-        var totalMs = 0L
-        var maxMs = 0L
-
-        fun add(durationMs: Long) {
-            count = saturatingAdd(count, 1L)
-            totalMs = saturatingAdd(totalMs, durationMs)
-            if (durationMs > maxMs) maxMs = durationMs
+    fun nextOccupiedIndex(from: Int): Int {
+        for (index in from.coerceAtLeast(0) until TABLE_CAPACITY) {
+            if (states[index] == OCCUPIED) return index
         }
+        return -1
+    }
 
-        fun merge(other: Aggregate) {
-            count = saturatingAdd(count, other.count)
-            totalMs = saturatingAdd(totalMs, other.totalMs)
-            if (other.maxMs > maxMs) maxMs = other.maxMs
+    fun logicalEventCount(): Long = logicalEvents
+
+    fun clear() {
+        var index = nextOccupiedIndex(0)
+        while (index >= 0) {
+            states[index] = EMPTY
+            callerNames[index] = null
+            calleeNames[index] = null
+            screens[index] = null
+            flows[index] = null
+            steps[index] = null
+            counts[index] = 0L
+            totalsMs[index] = 0L
+            maximaMs[index] = 0L
+            index = nextOccupiedIndex(index + 1)
         }
+        size = 0
+        lastIndex = -1
+        logicalEvents = 0L
+    }
+
+    private fun matches(
+        index: Int,
+        callerId: Long,
+        calleeId: Long,
+        screen: String?,
+        flow: String?,
+        step: String?,
+    ): Boolean {
+        return callers[index] == callerId &&
+            callees[index] == calleeId &&
+            screens[index] == screen &&
+            flows[index] == flow &&
+            steps[index] == step
+    }
+
+    private fun merge(index: Int, count: Long, totalMs: Long, maxMs: Long) {
+        counts[index] = saturatingAdd(counts[index], count)
+        totalsMs[index] = saturatingAdd(totalsMs[index], totalMs)
+        if (maxMs > maximaMs[index]) maximaMs[index] = maxMs
+    }
+
+    private fun updateNames(index: Int, callerName: String?, calleeName: String?) {
+        if (callerNames[index] == null && callerName != null) callerNames[index] = callerName
+        if (calleeNames[index] == null && calleeName != null) calleeNames[index] = calleeName
+    }
+
+    private companion object {
+        const val TABLE_CAPACITY = RUNTIME_GRAPH_PAGE_MAX_KEYS * 2
+        const val TABLE_MASK = TABLE_CAPACITY - 1
+        const val EMPTY: Byte = 0
+        const val OCCUPIED: Byte = 1
     }
 }
 
-internal class RuntimeGraphEdgeTable(
-    private val contextAware: Boolean,
-) {
+internal class RuntimeGraphEdgeTable {
     private var states = ByteArray(INITIAL_CAPACITY)
     private var hashes = IntArray(INITIAL_CAPACITY)
     private var callers = LongArray(INITIAL_CAPACITY)
@@ -293,20 +399,25 @@ internal class RuntimeGraphEdgeTable(
     private var used = 0
     private var drainCursor = 0
 
-    fun add(buffer: RuntimeGraphEdgeBuffer, slot: Int, limit: Int): Boolean {
-        val hash = edgeHash(
-            buffer.callers[slot],
-            buffer.callees[slot],
-            buffer.screens[slot].takeIf { contextAware },
-            buffer.flows[slot].takeIf { contextAware },
-            buffer.steps[slot].takeIf { contextAware },
+    fun add(page: RuntimeGraphAggregatePage, source: Int, limit: Int): Boolean {
+        val hash = runtimeGraphEdgeHash(
+            page.callers[source],
+            page.callees[source],
+            page.screens[source],
+            page.flows[source],
+            page.steps[source],
         )
-        val existing = find(buffer, slot, hash)
-        val duration = buffer.durationsMs[slot]
+        val existing = find(page, source, hash)
         if (existing >= 0) {
-            counts[existing] = saturatingAdd(counts[existing], 1L)
-            totalsMs[existing] = saturatingAdd(totalsMs[existing], duration)
-            if (duration > maximaMs[existing]) maximaMs[existing] = duration
+            if (callerNames[existing] == null && page.callerNames[source] != null) {
+                callerNames[existing] = page.callerNames[source]
+            }
+            if (calleeNames[existing] == null && page.calleeNames[source] != null) {
+                calleeNames[existing] = page.calleeNames[source]
+            }
+            counts[existing] = saturatingAdd(counts[existing], page.counts[source])
+            totalsMs[existing] = saturatingAdd(totalsMs[existing], page.totalsMs[source])
+            if (page.maximaMs[source] > maximaMs[existing]) maximaMs[existing] = page.maximaMs[source]
             return true
         }
         if (limit <= 0 || size >= limit) return false
@@ -315,16 +426,16 @@ internal class RuntimeGraphEdgeTable(
         if (states[index] == EMPTY) used++
         states[index] = OCCUPIED
         hashes[index] = hash
-        callers[index] = buffer.callers[slot]
-        callerNames[index] = buffer.callerNames[slot]
-        callees[index] = buffer.callees[slot]
-        calleeNames[index] = buffer.calleeNames[slot]
-        screens[index] = buffer.screens[slot]
-        flows[index] = buffer.flows[slot]
-        steps[index] = buffer.steps[slot]
-        counts[index] = 1L
-        totalsMs[index] = duration
-        maximaMs[index] = duration
+        callers[index] = page.callers[source]
+        callerNames[index] = page.callerNames[source]
+        callees[index] = page.callees[source]
+        calleeNames[index] = page.calleeNames[source]
+        screens[index] = page.screens[source]
+        flows[index] = page.flows[source]
+        steps[index] = page.steps[source]
+        counts[index] = page.counts[source]
+        totalsMs[index] = page.totalsMs[source]
+        maximaMs[index] = page.maximaMs[source]
         size++
         return true
     }
@@ -357,27 +468,25 @@ internal class RuntimeGraphEdgeTable(
 
     fun capacityForTest(): Int = states.size
 
-    private fun find(buffer: RuntimeGraphEdgeBuffer, slot: Int, hash: Int): Int {
+    private fun find(page: RuntimeGraphAggregatePage, source: Int, hash: Int): Int {
         var index = hash and (states.size - 1)
         repeat(states.size) {
             when (states[index]) {
                 EMPTY -> return -1
-                OCCUPIED -> if (matches(buffer, slot, index, hash)) return index
+                OCCUPIED -> if (matches(page, source, index, hash)) return index
             }
             index = (index + 1) and (states.size - 1)
         }
         return -1
     }
 
-    private fun matches(buffer: RuntimeGraphEdgeBuffer, slot: Int, index: Int, hash: Int): Boolean {
+    private fun matches(page: RuntimeGraphAggregatePage, source: Int, index: Int, hash: Int): Boolean {
         return hashes[index] == hash &&
-            callers[index] == buffer.callers[slot] &&
-            callees[index] == buffer.callees[slot] &&
-            (!contextAware || (
-                screens[index] == buffer.screens[slot] &&
-                    flows[index] == buffer.flows[slot] &&
-                    steps[index] == buffer.steps[slot]
-                ))
+            callers[index] == page.callers[source] &&
+            callees[index] == page.callees[source] &&
+            screens[index] == page.screens[source] &&
+            flows[index] == page.flows[source] &&
+            steps[index] == page.steps[source]
     }
 
     private fun findInsertIndex(hash: Int): Int {
@@ -492,14 +601,15 @@ internal class RuntimeGraphEdgeTable(
         const val OCCUPIED: Byte = 1
         const val DELETED: Byte = 2
 
-        fun edgeHash(caller: Long, callee: Long, screen: String?, flow: String?, step: String?): Int {
-            var mixed = caller xor java.lang.Long.rotateLeft(callee, 29)
-            mixed = mixed xor ((screen?.hashCode() ?: 0).toLong() shl 32)
-            mixed = mixed xor (flow?.hashCode() ?: 0).toLong()
-            mixed = mixed xor java.lang.Long.rotateLeft((step?.hashCode() ?: 0).toLong(), 17)
-            mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
-            mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
-            return (mixed xor (mixed ushr 32)).toInt()
-        }
     }
+}
+
+private fun runtimeGraphEdgeHash(caller: Long, callee: Long, screen: String?, flow: String?, step: String?): Int {
+    var mixed = caller xor java.lang.Long.rotateLeft(callee, 29)
+    mixed = mixed xor ((screen?.hashCode() ?: 0).toLong() shl 32)
+    mixed = mixed xor (flow?.hashCode() ?: 0).toLong()
+    mixed = mixed xor java.lang.Long.rotateLeft((step?.hashCode() ?: 0).toLong(), 17)
+    mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
+    mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
+    return (mixed xor (mixed ushr 32)).toInt()
 }

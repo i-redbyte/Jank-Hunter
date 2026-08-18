@@ -5,6 +5,9 @@ import android.os.Looper
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterContextSnapshot
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 
@@ -26,7 +29,9 @@ internal class MainThreadWatchdog(
         val expectedGeneration = runState.start() ?: return
         activeStallBeatMs.set(NO_ACTIVE_STALL)
         lastBeatMs.set(SystemClock.elapsedRealtime())
-        postBeat(expectedGeneration)
+        if (!postBeat(expectedGeneration)) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
+        }
         thread = Thread({ monitorMainThread(expectedGeneration) }, "JankHunterMainWatchdog").apply {
             isDaemon = true
             priority = Thread.MIN_PRIORITY
@@ -41,20 +46,24 @@ internal class MainThreadWatchdog(
         current?.interrupt()
     }
 
-    private fun postBeat(expectedGeneration: Long) {
-        mainHandler.post(
+    private fun postBeat(expectedGeneration: Long): Boolean {
+        return mainHandler.post(
             object : Runnable {
                 override fun run() {
-                    if (!isCurrent(expectedGeneration)) return
-                    val now = SystemClock.elapsedRealtime()
-                    val stalledSince = activeStallBeatMs.get()
-                    if (stalledSince == NO_ACTIVE_STALL) {
-                        lastBeatMs.set(now)
-                    } else {
-                        // Preserve the first recovery heartbeat until the watchdog consumes it.
-                        lastBeatMs.compareAndSet(stalledSince, now)
+                    RuntimeHookGuard.run {
+                        if (!isCurrent(expectedGeneration)) return@run
+                        val now = SystemClock.elapsedRealtime()
+                        val stalledSince = activeStallBeatMs.get()
+                        if (stalledSince == NO_ACTIVE_STALL) {
+                            lastBeatMs.set(now)
+                        } else {
+                            // Preserve the first recovery heartbeat until the watchdog consumes it.
+                            lastBeatMs.compareAndSet(stalledSince, now)
+                        }
+                        if (!mainHandler.postDelayed(this, pollIntervalMs)) {
+                            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
+                        }
                     }
-                    mainHandler.postDelayed(this, pollIntervalMs)
                 }
             },
         )
@@ -64,26 +73,28 @@ internal class MainThreadWatchdog(
         val episodeTracker = StallEpisodeTracker(thresholdMs)
         var pendingStall: StallCapture? = null
         while (isCurrent(expectedGeneration)) {
-            val now = SystemClock.elapsedRealtime()
-            val observedBeatMs = lastBeatMs.get()
-            when (episodeTracker.update(observedBeatMs, now)) {
-                StallEpisodeChange.STARTED -> {
-                    activeStallBeatMs.compareAndSet(NO_ACTIVE_STALL, observedBeatMs)
-                    pendingStall = captureStall()
-                }
-                StallEpisodeChange.RECOVERED -> {
-                    val captured = pendingStall
-                    pendingStall = null
-                    activeStallBeatMs.set(NO_ACTIVE_STALL)
-                    if (captured != null && isCurrent(expectedGeneration)) {
-                        JankHunter.recordMainThreadStall(
-                            captured.context,
-                            captured.stackHint,
-                            episodeTracker.completedDurationMs,
-                        )
+            RuntimeHookGuard.run {
+                val now = SystemClock.elapsedRealtime()
+                val observedBeatMs = lastBeatMs.get()
+                when (episodeTracker.update(observedBeatMs, now)) {
+                    StallEpisodeChange.STARTED -> {
+                        activeStallBeatMs.compareAndSet(NO_ACTIVE_STALL, observedBeatMs)
+                        pendingStall = captureStall()
                     }
+                    StallEpisodeChange.RECOVERED -> {
+                        val captured = pendingStall
+                        pendingStall = null
+                        activeStallBeatMs.set(NO_ACTIVE_STALL)
+                        if (captured != null && isCurrent(expectedGeneration)) {
+                            JankHunter.recordMainThreadStall(
+                                captured.context,
+                                captured.stackHint,
+                                episodeTracker.completedDurationMs,
+                            )
+                        }
+                    }
+                    StallEpisodeChange.NONE -> Unit
                 }
-                StallEpisodeChange.NONE -> Unit
             }
             try {
                 Thread.sleep(pollIntervalMs)

@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.system
 
 import android.util.Printer
+import io.jankhunter.runtime.RuntimeHookFailureTracker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -156,5 +157,54 @@ class MainLooperDispatchMonitorTest {
         assertEquals(2, laterProfilerLines.size)
         assertEquals(2, previousLines.size)
         assertEquals(emptyList<Long>(), recordedDurations)
+    }
+
+    @Test
+    fun callbackFailureIsContainedAndMakesCollectionTrustFailClosed() {
+        var installed: Printer? = null
+        var now = 1_000L
+        val before = RuntimeHookFailureTracker.total()
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { installed },
+            setMessageLogging = { installed = it },
+            clockMs = { now },
+            recordDispatch = { _, _, _ -> error("collector failure") },
+        )
+
+        monitor.start()
+        val printer = requireNotNull(installed)
+        printer.println(">>>>> Dispatching to Handler (android.os.Handler) {abc} callback: work")
+        now += 5L
+        printer.println("<<<<< Finished to Handler (android.os.Handler) {abc} callback: work")
+
+        assertEquals(before + 1L, RuntimeHookFailureTracker.total())
+        now += 5L
+        printer.println(">>>>> Dispatching to Handler (android.os.Handler) {abc} callback: next")
+    }
+
+    @Test
+    fun failedInstallationIsCountedAndCanBeRetried() {
+        var installed: Printer? = null
+        var attempts = 0
+        val before = RuntimeHookFailureTracker.total()
+        val monitor = MainLooperDispatchMonitor(
+            thresholdMs = 1L,
+            getMessageLogging = { installed },
+            setMessageLogging = { printer ->
+                attempts++
+                if (attempts == 1) error("install failure")
+                installed = printer
+            },
+            clockMs = { 0L },
+            recordDispatch = { _, _, _ -> },
+        )
+
+        monitor.start()
+        monitor.start()
+
+        assertEquals(2, attempts)
+        assertNotNull(installed)
+        assertEquals(before + 1L, RuntimeHookFailureTracker.total())
     }
 }

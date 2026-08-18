@@ -44,6 +44,31 @@
     <string name="status_network_http">Сеть: %1$s HTTP %2$d, %3$d Б</string>
     <string name="status_network_exception">Сеть: %1$s %2$s</string>
 
+    <string name="section_ui_jank_lab">Лаборатория UI-подвисаний</string>
+    <string name="section_ui_jank_lab_subtitle">Отдельные экраны воспроизводят частые ошибки custom View и Jetpack Compose с известным местом в коде.</string>
+    <string name="action_open_custom_view_lab">Открыть проблемную custom View</string>
+    <string name="custom_view_lab_title">Проблемная custom View</string>
+    <string name="custom_view_lab_description">Выберите один дефект. Сценарий ограничен несколькими кадрами, но намеренно блокирует главный поток и должен появиться в UI-анализе отчёта.</string>
+    <string name="custom_view_lab_idle">Сценарий не запущен.</string>
+    <string name="custom_view_lab_running">Выполняется: %1$s</string>
+    <string name="custom_view_lab_finished">Завершено: %1$s. Можно проверить следующий вариант или выгрузить журнал.</string>
+    <string name="custom_view_action_heavy_draw">Тяжёлые вычисления в onDraw</string>
+    <string name="custom_view_action_allocations">Аллокации и сложные Path в onDraw</string>
+    <string name="custom_view_action_layout_storm">requestLayout + invalidate на каждом кадре</string>
+    <string name="custom_view_hint">Ожидаемые причины в отчёте: CustomJankView.onDraw/onMeasure, владелец проблемной операции и экран sample.custom_view_jank.</string>
+    <string name="action_open_compose_lab">Открыть проблемный Compose-экран</string>
+    <string name="compose_lab_title">Проблемный Jetpack Compose</string>
+    <string name="compose_lab_description">Экран содержит намеренно неэффективный список и отдельные примеры дорогой отрисовки и измерения. Каждый запуск ограничен и размечен для Jank Hunter.</string>
+    <string name="compose_lab_idle">Выберите один сценарий.</string>
+    <string name="compose_lab_running">Выполняется: %1$s</string>
+    <string name="compose_lab_finished">Завершено: %1$s. Журнал содержит экран, сценарий, шаг и Compose-фазу.</string>
+    <string name="compose_action_complex_list">Тяжёлый LazyColumn и частые рекомпозиции</string>
+    <string name="compose_action_heavy_draw">Дорогая отрисовка Canvas</string>
+    <string name="compose_action_heavy_measure">Дорогое измерение Layout</string>
+    <string name="compose_list_problem_hint">В списке намеренно нет стабильных ключей, порядок элементов меняется, все строки читают общее состояние, а форматирование выполняется прямо в композиции.</string>
+    <string name="compose_draw_preview">Область дорогой Compose-отрисовки</string>
+    <string name="compose_measure_preview">Область дорогого измерения Compose Layout</string>
+
     <string name="section_leak_lab">Лаборатория утечек</string>
     <string name="section_leak_lab_subtitle">Одни и те же удержанные объекты наблюдают Jank Hunter и, в debug-сборке, LeakCanary.</string>
     <string name="action_clean_object">Чистый объект</string>
@@ -78,8 +103,6 @@
     <string name="status_cache_burst_queued">cache burst отправлен</string>
     <string name="status_comparison_hint_shown">подсказка по сравнению показана</string>
     <string name="status_compare_hint">Jank Hunter: заберите report.html и откройте вкладку «Утечки памяти». LeakCanary: подождите несколько секунд, сверните приложение и откройте notification или launcher report.</string>
-    <string name="leakcanary_debug_status">LeakCanary debug: ВКЛ · threshold retained = 1 · notification / launcher report</string>
-    <string name="leakcanary_release_status">LeakCanary release: не входит в сборку; для benchmark используйте debug</string>
     <string name="leakcanary_status_line">%1$s · %2$s</string>
 
     <string name="section_compare_lab">Лаборатория сравнения</string>

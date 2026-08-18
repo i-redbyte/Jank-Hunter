@@ -3,7 +3,6 @@ package io.jankhunter.runtime
 import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +10,8 @@ import android.os.SystemClock
 import android.view.View
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
+import io.jankhunter.runtime.internal.io.Jhlog
+import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
@@ -24,6 +25,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class JankHunterInitDiagnostics(
     val status: String,
@@ -39,6 +41,11 @@ data class JankHunterInitDiagnostics(
 object JankHunter {
     private const val DEFAULT_RUNTIME_TOGGLE_REASON = "manual"
 
+    private val autoInitAttempted = AtomicBoolean(false)
+    @Volatile
+    private var cachedProcessForeground = false
+    @Volatile
+    private var processForegroundCheckedAtMs = Long.MIN_VALUE
     private val runtimeState = RuntimeState()
     private val started get() = runtimeState.started
     private val initAttempts get() = runtimeState.initAttempts
@@ -59,6 +66,7 @@ object JankHunter {
     private val runtimeHookEvents = RuntimeHookEventTransport(
         maxCounterKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
         maxLogSpamKeys = { config?.maxLogSpamKeys() ?: DEFAULT_MAX_LOG_SPAM_KEYS },
+        exactAdmission = { config?.exactEventCollectionEnabled() != false },
     )
     private val runtimeCallGraph = RuntimeCallGraph(
         nowMs = ::nowMs,
@@ -66,15 +74,28 @@ object JankHunter {
         captureFlow = contextTracker::currentFlowOrNull,
         captureStep = contextTracker::currentFlowStepOrNull,
         maxKeys = { config?.maxRuntimeCallGraphKeys() ?: DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS },
+        exactAdmission = { config?.exactEventCollectionEnabled() != false },
+        admissionWaitNanos = {
+            val activeConfig = config
+            val waitMs = if (Thread.currentThread().name == "main") {
+                activeConfig?.mainThreadAdmissionWaitMs() ?: 0L
+            } else {
+                activeConfig?.backgroundAdmissionWaitMs() ?: 5L
+            }
+            java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(waitMs)
+        },
     )
-    private val handlerWrappers = HandlerWrapperRegistry { loss ->
-        val qualityId = when (loss) {
-            HandlerWrapperLoss.ENTRY_LIMIT -> QualityCounterId.HANDLER_ENTRY_LIMIT
-            HandlerWrapperLoss.WRAPPER_LIMIT -> QualityCounterId.HANDLER_WRAPPER_LIMIT
-            HandlerWrapperLoss.CONTENTION -> QualityCounterId.HANDLER_CONTENTION_BYPASS
-        }
-        writer?.recordQuality(qualityId)
-    }
+    private val handlerWrappers = HandlerWrapperRegistry(
+        droppedCounter = { loss ->
+            val qualityId = when (loss) {
+                HandlerWrapperLoss.ENTRY_LIMIT -> QualityCounterId.HANDLER_ENTRY_LIMIT
+                HandlerWrapperLoss.WRAPPER_LIMIT -> QualityCounterId.HANDLER_WRAPPER_LIMIT
+                HandlerWrapperLoss.CONTENTION -> QualityCounterId.HANDLER_CONTENTION_BYPASS
+            }
+            writer?.recordQuality(qualityId)
+        },
+        exactAdmission = { config?.exactEventCollectionEnabled() != false },
+    )
 
     private var writer: AsyncLogWriter?
         get() = runtimeState.writer?.takeIf { it.isAcceptingEvents() }
@@ -106,6 +127,21 @@ object JankHunter {
             ?: JankHunterConfig.builder().build()
         synchronized(runtimeState.lifecycleLock) {
             initLocked(context, manifestConfig)
+        }
+    }
+
+    /**
+     * Idempotent, process-local bootstrap used by generated Android component hooks.
+     * The one-shot CAS keeps every component invocation after the first one allocation-free.
+     */
+    @JvmStatic
+    fun autoInit(context: Context?) {
+        if (context == null) return
+        if (!autoInitAttempted.compareAndSet(false, true)) return
+        try {
+            init(context)
+        } catch (_: Throwable) {
+            // Generated startup instrumentation must never take the host process down.
         }
     }
 
@@ -157,6 +193,10 @@ object JankHunter {
 
             runtimeState.initContext = appContext
             config = providedConfig
+            runtimeState.collectionInactiveSinceElapsedMs.compareAndSet(
+                0L,
+                SystemClock.elapsedRealtime(),
+            )
             runtimeState.runtimeEnabled.set(providedConfig.runtimeEnabled())
             if (!providedConfig.runtimeEnabled()) {
                 recordInitStatus("runtime_disabled", attempt, processName)
@@ -165,6 +205,7 @@ object JankHunter {
             directoryForDiagnostics = runtimeLogDirectory(appContext, providedConfig)
             directoryForDiagnostics = startRuntime(appContext, providedConfig, attempt, processName)
         } catch (throwable: Throwable) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
             stopRuntime(clearInit = true)
             recordInitFailure(throwable, attempt, processNameForDiagnostics, directoryForDiagnostics)
         }
@@ -187,6 +228,7 @@ object JankHunter {
     private fun setRuntimeEnabledLocked(enabled: Boolean, reason: String?): Boolean {
         runtimeState.runtimeEnabled.set(enabled)
         if (!enabled) {
+            runtimeState.collectionInactiveSinceElapsedMs.set(SystemClock.elapsedRealtime())
             if (coordinator.isStarting()) {
                 recordCounter("jankhunter.runtime.disabled.count", 1)
                 recordRuntimeToggleReason("disabled", reason)
@@ -230,6 +272,7 @@ object JankHunter {
             requestFlush()
             true
         } catch (throwable: Throwable) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
             stopRuntime(clearInit = false)
             recordInitFailure(throwable, attempt, processNameForDiagnostics, directoryForDiagnostics)
             false
@@ -255,10 +298,44 @@ object JankHunter {
     fun writeLogGrowthSummary(): Boolean {
         if (config?.logGrowthAnalyticsEnabled() != true) return false
         val activeWriter = writer ?: return false
-        flushMetricsBlocking()
+        if (!flushMetricsBlocking()) return false
         if (!runtimeHookEvents.flushBlocking(flushTimeoutMs())) return false
         if (!runtimeCallGraph.flushBlocking(flushTimeoutMs())) return false
         return activeWriter.writeLogGrowthSummaryBlocking(flushTimeoutMs())
+    }
+
+    /**
+     * Seals a coordinated vector frontier in every live application process and immediately
+     * continues collection in new segments. A null result means no trustworthy frontier was made.
+     */
+    @JvmStatic
+    fun captureLogSnapshot(): JankHunterLogSnapshot? {
+        val snapshotCoordinator = runtimeState.logSnapshotCoordinator
+        return when {
+            snapshotCoordinator != null -> snapshotCoordinator.capture()
+            runtimeState.snapshotExpectedProcessCount <= 1 -> captureProcessLogSnapshot()
+            else -> null
+        }
+    }
+
+    /**
+     * Captures every live process at one vector frontier and atomically publishes one ZIP file.
+     * This performs file I/O and must be called from a background thread. Existing destinations
+     * are never overwritten.
+     */
+    @JvmStatic
+    fun captureLogArchive(destination: File): JankHunterLogArchive? {
+        val snapshot = captureLogSnapshot() ?: return null
+        return runCatching { JankHunterLogArchiveWriter.write(destination, snapshot) }.getOrNull()
+    }
+
+    private fun captureProcessLogSnapshot(): JankHunterLogSnapshot? {
+        val activeWriter = writer ?: return null
+        if (!flushMetricsBlocking()) return null
+        if (!runtimeHookEvents.flushBlocking(flushTimeoutMs())) return null
+        if (!runtimeCallGraph.flushBlocking(flushTimeoutMs())) return null
+        val snapshot = activeWriter.captureSnapshotBlocking(flushTimeoutMs()) ?: return null
+        return JankHunterLogSnapshot(snapshot.capturedAtMs, snapshot.logPaths)
     }
 
     @JvmStatic
@@ -288,17 +365,36 @@ object JankHunter {
         }
 
         config = providedConfig
-        metrics.configure(providedConfig.maxMetricAggregationKeys())
+        metrics.configure(
+            providedConfig.maxMetricAggregationKeys(),
+            providedConfig.exactEventCollectionEnabled(),
+        )
         sampling.configure(providedConfig)
 
         val directory = runtimeLogDirectory(appContext, providedConfig)
         val redactedProcessName = providedConfig.redactProcessName(processName)
-            ?.takeIf { it.isNotBlank() }
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
             ?: "unknown"
+        val rawRoster = when {
+            providedConfig.allowedProcesses().isNotEmpty() ->
+                ProcessNames.Roster(providedConfig.allowedProcesses(), declarationComplete = true)
+            providedConfig.mainProcessOnly() ->
+                ProcessNames.Roster(setOf(appContext.packageName), declarationComplete = true)
+            else -> ProcessNames.declared(appContext)
+        }
+        val expectedProcesses = rawRoster.names.mapNotNullTo(linkedSetOf()) { name ->
+            providedConfig.redactProcessName(name)?.trim()?.takeIf(String::isNotEmpty)
+        }
+        val rosterDeclarationComplete = rawRoster.declarationComplete &&
+            expectedProcesses.size == rawRoster.names.size && expectedProcesses.isNotEmpty()
+        runtimeState.snapshotExpectedProcessCount = expectedProcesses.size.coerceAtLeast(1)
         val asyncWriter = AsyncLogWriter.open(
             directory,
             providedConfig,
             redactedProcessName,
+            expectedProcesses = expectedProcesses.ifEmpty { setOf(redactedProcessName) },
+            rosterDeclarationComplete = rosterDeclarationComplete,
             onTerminalStop = { stoppedWriter, reason, failure ->
                 onWriterTerminalStop(
                     stoppedWriter = stoppedWriter,
@@ -312,20 +408,8 @@ object JankHunter {
         )
         writer = asyncWriter
         runtimeState.logGrowthManager = asyncWriter.logGrowthManager()
-        if (providedConfig.runtimeCallGraphEnabled()) {
-            val requestedMode = providedConfig.runtimeCallGraphMode()
-            val effectiveMode = if (
-                requestedMode == JankHunterRuntimeGraphMode.SHADOW &&
-                appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0
-            ) {
-                asyncWriter.recordQuality(QualityCounterId.RUNTIME_GRAPH_SHADOW_PRODUCTION_FALLBACK)
-                JankHunterRuntimeGraphMode.BUFFERED
-            } else {
-                requestedMode
-            }
-            runtimeState.runtimeGraphMode = effectiveMode
-        } else {
-            asyncWriter.recordQuality(QualityCounterId.RUNTIME_GRAPH_KILL_SWITCH)
+        if (!providedConfig.runtimeCallGraphEnabled()) {
+            asyncWriter.recordQuality(QualityCounterId.RUNTIME_GRAPH_DISABLED)
         }
 
         val identity = appIdentity(appContext)
@@ -345,19 +429,28 @@ object JankHunter {
             device.board,
             device.product,
             device.rooted,
+            collectorFlags(providedConfig),
         )
         if (!sessionAccepted) {
             throw asyncWriter.terminalFailureCause()
                 ?: IllegalStateException("Jank Hunter writer failed to start")
         }
-        if (providedConfig.runtimeCallGraphEnabled()) {
-            runtimeCallGraph.resetFlushState(asyncWriter, runtimeState.runtimeGraphMode)
+        if (providedConfig.runtimeCallGraphEnabled() || providedConfig.semanticTracingEnabled()) {
+            runtimeCallGraph.resetFlushState(asyncWriter)
         }
         runtimeHookEvents.start(asyncWriter)
         installCrashFlushHandler()
         recordRuntimeStartMetadata(asyncWriter, attempt)
 
         collectors.start(appContext, providedConfig, directory)
+        runtimeState.logSnapshotCoordinator = runCatching {
+            ProcessLogSnapshotCoordinator.start(
+                context = appContext,
+                directory = directory,
+                processName = redactedProcessName,
+                captureLocal = ::captureProcessLogSnapshot,
+            )
+        }.getOrNull()
         if (!runtimeState.runtimeEnabled.get()) {
             stopRuntime(clearInit = false)
             recordRuntimeDisabledStatus()
@@ -377,7 +470,9 @@ object JankHunter {
         logDirectory: File,
     ) {
         val terminalFailure = failure ?: IllegalStateException(
-            if (reason == QualityCounterId.REASON_SIZE_LIMIT) {
+            if (reason == QualityCounterId.REASON_STORAGE_BUDGET) {
+                "Jank Hunter stopped: storage_budget_exhausted"
+            } else if (reason == QualityCounterId.REASON_SIZE_LIMIT) {
                 "Jank Hunter session log reached its configured size limit"
             } else {
                 "Jank Hunter writer stopped after a terminal I/O failure"
@@ -401,10 +496,12 @@ object JankHunter {
         val stopResources = coordinator.beginStop()
         if (stopResources) {
             val shutdownDeadlineNs = System.nanoTime() + BLOCKING_FLUSH_TIMEOUT_MS * NANOS_PER_MS
+            RuntimeHookGuard.swallow { runtimeState.logSnapshotCoordinator?.close() }
+            runtimeState.logSnapshotCoordinator = null
+            RuntimeHookGuard.swallow { collectors.stop() }
             RuntimeHookGuard.swallow { flushMetricsBlocking(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
             RuntimeHookGuard.swallow { runtimeHookEvents.stopAndFlush(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
             RuntimeHookGuard.swallow { runtimeCallGraph.flushForShutdown() }
-            RuntimeHookGuard.swallow { collectors.stop() }
             RuntimeHookGuard.swallow { writer?.close(remainingShutdownTimeoutMs(shutdownDeadlineNs)) }
         }
         RuntimeHookGuard.swallow { restoreCrashFlushHandler() }
@@ -413,17 +510,20 @@ object JankHunter {
 
     private fun resetRuntimeState(clearInit: Boolean) {
         writer = null
+        RuntimeHookGuard.swallow { runtimeState.logSnapshotCoordinator?.close() }
+        runtimeState.logSnapshotCoordinator = null
+        runtimeState.snapshotExpectedProcessCount = 0
         RuntimeHookGuard.swallow { collectors.reset() }
-        RuntimeHookGuard.swallow { contextTracker.resetRecordedContext() }
         RuntimeHookGuard.swallow { metrics.reset() }
         RuntimeHookGuard.swallow { sampling.reset() }
         RuntimeHookGuard.swallow { runtimeHookEvents.clear() }
         RuntimeHookGuard.swallow { runtimeCallGraph.clear() }
-        runtimeState.runtimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED
+        RuntimeHookGuard.swallow { handlerWrappers.clear() }
         coordinator.markStopped()
         if (clearInit) {
             config = null
             runtimeState.initContext = null
+            runtimeState.collectionInactiveSinceElapsedMs.set(0L)
             runtimeState.runtimeEnabled.set(true)
         }
     }
@@ -440,7 +540,10 @@ object JankHunter {
                 RuntimeHookGuard.swallow {
                     val crashWriter = writer
                     crashWriter?.counter("jankhunter.runtime.crash.count", 1)
-                    crashWriter?.flushBlocking(CRASH_FLUSH_TIMEOUT_MS)
+                    crashWriter?.flushBlocking(
+                        timeoutMs = CRASH_FLUSH_TIMEOUT_MS,
+                        waitForExactFrontier = false,
+                    )
                 }
             } finally {
                 previous?.uncaughtException(thread, throwable) ?: throw throwable
@@ -498,11 +601,15 @@ object JankHunter {
     ) {
         asyncWriter.counter("jankhunter.runtime.session.start.count", 1)
         asyncWriter.gauge("jankhunter.runtime.init_attempt", attempt)
-        val graphMode = if (config?.runtimeCallGraphEnabled() == true) {
-            runtimeState.runtimeGraphMode.name.lowercase()
-        } else {
-            "disabled"
+        val inactiveSince = runtimeState.collectionInactiveSinceElapsedMs.getAndSet(0L)
+        if (inactiveSince > 0L) {
+            val inactiveBeforeStartMs = (SystemClock.elapsedRealtime() - inactiveSince).coerceAtLeast(0L)
+            asyncWriter.gauge(
+                "jankhunter.runtime.collection_inactive_before_start_ms",
+                inactiveBeforeStartMs,
+            )
         }
+        val graphMode = if (config?.runtimeCallGraphEnabled() == true) "exact" else "disabled"
         asyncWriter.counter("jankhunter.runtime_graph.mode.$graphMode.count", 1)
     }
 
@@ -907,6 +1014,41 @@ object JankHunter {
     @JvmStatic
     fun exitMethod(token: Long, methodId: Long) {
         RuntimeHookGuard.run { runtimeCallGraph.exit(token, methodId) }
+    }
+
+    @JvmStatic
+    internal fun enterSemantic(kind: Int): Long {
+        return RuntimeHookGuard.value(0L) {
+            if (!isRuntimeActiveForHooks() || !semanticKindEnabled(kind)) 0L else {
+                SystemClock.elapsedRealtimeNanos().coerceAtLeast(1L)
+            }
+        }
+    }
+
+    @JvmStatic
+    internal fun exitSemantic(
+        token: Long,
+        kind: Int,
+        methodId: Long,
+        methodName: String?,
+        outcome: Int,
+    ) {
+        RuntimeHookGuard.run {
+            if (token == 0L || !semanticKindEnabled(kind)) return@run
+            val durationNanos = (SystemClock.elapsedRealtimeNanos() - token).coerceAtLeast(0L)
+            recordSemanticBoundary(
+                kind = kind,
+                calleeId = methodId,
+                calleeName = methodName,
+                durationNanos = durationNanos,
+                outcome = workerOutcome(outcome),
+            )
+        }
+    }
+
+    @JvmStatic
+    internal fun classifyWorkerOutcome(result: Any?): Int {
+        return inferWorkerOutcome(result).code
     }
 
     @JvmStatic
@@ -1319,9 +1461,10 @@ object JankHunter {
         windowMs: Long,
         frameCount: Long,
         jankCount: Long,
-        p50Ms: Long,
         p95Ms: Long,
-        p99Ms: Long,
+        source: Long,
+        frameDeadlineUs: Long,
+        frameDurationBuckets: LongArray,
     ) {
         val attributedScreen = firstContextValue(screen, contextTracker.currentScreen())
         ensureContextRecorded(screenOverride = attributedScreen)
@@ -1331,9 +1474,9 @@ object JankHunter {
             windowMs,
             frameCount,
             jankCount,
-            p50Ms,
-            p95Ms,
-            p99Ms,
+            source,
+            frameDeadlineUs,
+            frameDurationBuckets,
             foreground = isAppForeground(),
             flags = flags,
         )
@@ -1349,8 +1492,218 @@ object JankHunter {
         RuntimeHookGuard.run { metrics.recordGauge(name, value) }
     }
 
+    /** Records one completed non-network I/O operation with atomic runtime attribution. */
+    @JvmStatic
+    @JvmOverloads
+    fun recordIO(
+        operation: JankHunterIOOperation,
+        durationNanos: Long,
+        bytes: Long = 0L,
+        ownerName: String? = null,
+    ) {
+        if (config?.ioTracingEnabled() != true) return
+        ensureContextRecorded(ownerOverride = firstContextValue(ownerName, contextTracker.ownerOrNull()))
+        val mainLooper = Looper.getMainLooper()
+        writer?.io(
+            operation.wireValue,
+            durationNanos.coerceAtLeast(0L) / NANOS_PER_MICROSECOND,
+            bytes.coerceAtLeast(0L),
+            mainLooper != null && Looper.myLooper() === mainLooper,
+        )
+    }
+
+    /** Measures [block] with a monotonic clock and records it when manual I/O tracing is enabled. */
+    @JvmStatic
+    @JvmOverloads
+    fun <T> traceIO(
+        operation: JankHunterIOOperation,
+        bytes: Long = 0L,
+        ownerName: String? = null,
+        block: () -> T,
+    ): T {
+        if (config?.ioTracingEnabled() != true) return block()
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        try {
+            return block()
+        } finally {
+            recordIO(operation, SystemClock.elapsedRealtimeNanos() - startedAt, bytes, ownerName)
+        }
+    }
+
+    /** Records an explicitly measured Compose composition/layout/draw phase. */
+    @JvmStatic
+    fun recordComposeWork(
+        phase: JankHunterComposePhase,
+        name: String,
+        durationNanos: Long,
+    ) {
+        RuntimeHookGuard.run {
+            if (!semanticKindEnabled(phase.semanticKind())) return@run
+            recordNamedSemanticBoundary(phase.semanticKind(), name, durationNanos)
+        }
+    }
+
+    /** Measures custom Compose work that cannot be classified safely from bytecode alone. */
+    @JvmStatic
+    fun <T> traceComposeWork(
+        phase: JankHunterComposePhase,
+        name: String,
+        block: () -> T,
+    ): T {
+        if (!semanticKindEnabled(phase.semanticKind())) return block()
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        try {
+            return block()
+        } finally {
+            recordComposeWork(phase, name, SystemClock.elapsedRealtimeNanos() - startedAt)
+        }
+    }
+
+    /** Records a complete worker execution, including retry/cancellation outcomes. */
+    @JvmStatic
+    fun recordWorker(
+        name: String,
+        durationNanos: Long,
+        outcome: JankHunterWorkerOutcome,
+    ) {
+        RuntimeHookGuard.run {
+            if (!semanticKindEnabled(JankHunterSemanticWork.WORKER)) return@run
+            recordNamedSemanticBoundary(JankHunterSemanticWork.WORKER, name, durationNanos, outcome)
+        }
+    }
+
+    /** Measures a synchronous Worker/ListenableWorker body. */
+    @JvmStatic
+    fun <T> traceWorker(name: String, block: () -> T): T {
+        if (!semanticKindEnabled(JankHunterSemanticWork.WORKER)) return block()
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        var outcome = JankHunterWorkerOutcome.UNKNOWN
+        try {
+            val result = block()
+            outcome = inferWorkerOutcome(result)
+            return result
+        } catch (throwable: Throwable) {
+            outcome = JankHunterWorkerOutcome.FAILURE
+            throw throwable
+        } finally {
+            recordWorker(name, SystemClock.elapsedRealtimeNanos() - startedAt, outcome)
+        }
+    }
+
+    /**
+     * Measures a suspending CoroutineWorker body through its real completion, not only until the
+     * first suspension point.
+     */
+    suspend fun <T> traceSuspendingWorker(name: String, block: suspend () -> T): T {
+        if (!semanticKindEnabled(JankHunterSemanticWork.WORKER)) return block()
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        var outcome = JankHunterWorkerOutcome.UNKNOWN
+        try {
+            val result = block()
+            outcome = inferWorkerOutcome(result)
+            return result
+        } catch (throwable: Throwable) {
+            outcome = JankHunterWorkerOutcome.FAILURE
+            throw throwable
+        } finally {
+            recordWorker(name, SystemClock.elapsedRealtimeNanos() - startedAt, outcome)
+        }
+    }
+
+    private fun recordNamedSemanticBoundary(
+        kind: Int,
+        name: String,
+        durationNanos: Long,
+        outcome: JankHunterWorkerOutcome? = null,
+    ) {
+        val normalized = name.trim().takeIf(String::isNotEmpty) ?: "unknown"
+        val targetId = JankHunterSemanticWork.stableId("jankhunter.semantic.target.v1\u0000$normalized")
+        recordSemanticBoundary(kind, targetId, normalized, durationNanos, outcome)
+    }
+
+    private fun recordSemanticBoundary(
+        kind: Int,
+        calleeId: Long,
+        calleeName: String?,
+        durationNanos: Long,
+        outcome: JankHunterWorkerOutcome?,
+    ) {
+        val mainLooper = Looper.getMainLooper()
+        val mainThread = mainLooper != null && Looper.myLooper() === mainLooper
+        val callerName = JankHunterSemanticWork.callerLabel(kind, mainThread, outcome) ?: return
+        runtimeCallGraph.recordSemantic(
+            callerId = JankHunterSemanticWork.stableId(callerName),
+            callerName = callerName,
+            calleeId = calleeId,
+            calleeName = calleeName,
+            durationMs = durationNanos.coerceAtLeast(0L) / NANOS_PER_MILLISECOND,
+            enabled = isRuntimeActiveForHooks() && semanticKindEnabled(kind),
+        )
+    }
+
+    private fun semanticKindEnabled(kind: Int): Boolean {
+        val active = config ?: return false
+        return when (kind) {
+            JankHunterSemanticWork.COMPOSE_COMPOSITION,
+            JankHunterSemanticWork.COMPOSE_MEASURE,
+            JankHunterSemanticWork.COMPOSE_LAYOUT,
+            JankHunterSemanticWork.COMPOSE_DRAW,
+            -> active.composeTracingEnabled()
+            JankHunterSemanticWork.ROOM_DAO -> active.roomTracingEnabled()
+            JankHunterSemanticWork.WORKER -> active.workerTracingEnabled()
+            else -> false
+        }
+    }
+
+    private fun JankHunterComposePhase.semanticKind(): Int {
+        return when (this) {
+            JankHunterComposePhase.COMPOSITION -> JankHunterSemanticWork.COMPOSE_COMPOSITION
+            JankHunterComposePhase.MEASURE -> JankHunterSemanticWork.COMPOSE_MEASURE
+            JankHunterComposePhase.LAYOUT -> JankHunterSemanticWork.COMPOSE_LAYOUT
+            JankHunterComposePhase.DRAW -> JankHunterSemanticWork.COMPOSE_DRAW
+        }
+    }
+
+    private fun workerOutcome(value: Int): JankHunterWorkerOutcome? {
+        return when (value) {
+            JankHunterWorkerOutcome.SUCCESS.code -> JankHunterWorkerOutcome.SUCCESS
+            JankHunterWorkerOutcome.FAILURE.code -> JankHunterWorkerOutcome.FAILURE
+            JankHunterWorkerOutcome.RETRY.code -> JankHunterWorkerOutcome.RETRY
+            JankHunterWorkerOutcome.CANCELLED.code -> JankHunterWorkerOutcome.CANCELLED
+            else -> JankHunterWorkerOutcome.UNKNOWN
+        }
+    }
+
+    private fun inferWorkerOutcome(result: Any?): JankHunterWorkerOutcome {
+        val className = result?.javaClass?.name ?: return JankHunterWorkerOutcome.UNKNOWN
+        return when {
+            className.endsWith("${'$'}Success") -> JankHunterWorkerOutcome.SUCCESS
+            className.endsWith("${'$'}Failure") -> JankHunterWorkerOutcome.FAILURE
+            className.endsWith("${'$'}Retry") -> JankHunterWorkerOutcome.RETRY
+            else -> JankHunterWorkerOutcome.SUCCESS
+        }
+    }
+
     internal fun recordQuality(counterId: Int, delta: Long = 1L) {
         writer?.recordQuality(counterId, delta)
+    }
+
+    internal fun recordProcessExit(
+        reason: Long,
+        timestampUnixMs: Long,
+        importance: Long,
+        pssKb: Long,
+        rssKb: Long,
+        processName: String?,
+    ) {
+        writer?.processExit(
+            reason,
+            timestampUnixMs,
+            importance,
+            pssKb,
+            rssKb,
+            config?.redactProcessName(processName) ?: processName,
+        )
     }
 
     @JvmStatic
@@ -1554,8 +1907,9 @@ object JankHunter {
         return coordinator.isActiveForHooks()
     }
 
-    private fun flushMetricsBlocking(timeoutMs: Long = flushTimeoutMs()) {
-        if (!metrics.flushBlocking(timeoutMs)) {
+    private fun flushMetricsBlocking(timeoutMs: Long = flushTimeoutMs()): Boolean {
+        return metrics.flushBlocking(timeoutMs).also { succeeded ->
+            if (succeeded) return@also
             writer?.recordQuality(QualityCounterId.METRIC_FLUSH_TIMEOUT)
         }
     }
@@ -1607,11 +1961,23 @@ object JankHunter {
             runtimeState.mainThreadContext = tuple
         }
         asyncWriter.updateProducerContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
-        if (!contextTracker.shouldRecord(tuple)) return
-        asyncWriter.flowContext(tuple.screen, tuple.owner, tuple.flow, tuple.step)
     }
 
     private fun nowMs(): Long = SystemClock.elapsedRealtime()
+
+    private fun collectorFlags(config: JankHunterConfig): Long {
+        var flags = Jhlog.COLLECTOR_MAIN_THREAD_STALLS
+        if (config.fpsMonitorEnabled()) flags = flags or Jhlog.COLLECTOR_FPS
+        if (config.jankStatsEnabled()) flags = flags or Jhlog.COLLECTOR_JANKSTATS
+        if (config.processExitInfoEnabled()) flags = flags or Jhlog.COLLECTOR_PROCESS_EXIT
+        if (config.ioTracingEnabled()) flags = flags or Jhlog.COLLECTOR_IO_TRACING
+        if (config.systemSamplerEnabled()) flags = flags or Jhlog.COLLECTOR_SYSTEM_SAMPLER
+        if (config.objectWatcherEnabled()) flags = flags or Jhlog.COLLECTOR_RETAINED_OBJECTS
+        if (config.composeTracingEnabled()) flags = flags or Jhlog.COLLECTOR_COMPOSE
+        if (config.roomTracingEnabled()) flags = flags or Jhlog.COLLECTOR_ROOM
+        if (config.workerTracingEnabled()) flags = flags or Jhlog.COLLECTOR_WORKER
+        return flags
+    }
 
     private fun shouldRecordOwnerStall(durationMs: Long): Boolean {
         val mainLooper = Looper.getMainLooper() ?: return false
@@ -1625,13 +1991,22 @@ object JankHunter {
 
     private fun isAppForeground(): Boolean {
         if (runtimeState.appForeground.get()) return true
-        return try {
+        // Once lifecycle tracking is installed its false state is authoritative. Avoid allocating
+        // RunningAppProcessInfo and crossing into the framework on every sampled event.
+        if (runtimeState.activityTracker != null) return false
+        val checkedAtMs = processForegroundCheckedAtMs
+        val nowMs = nowMs()
+        if (checkedAtMs != Long.MIN_VALUE && nowMs - checkedAtMs in 0 until PROCESS_FOREGROUND_CACHE_MS) {
+            return cachedProcessForeground
+        }
+        val foreground = RuntimeHookGuard.value(false, RuntimeHookFailureReason.COLLECTOR) {
             val info = ActivityManager.RunningAppProcessInfo()
             ActivityManager.getMyMemoryState(info)
             info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-        } catch (_: Throwable) {
-            false
         }
+        cachedProcessForeground = foreground
+        processForegroundCheckedAtMs = nowMs
+        return foreground
     }
 
     private fun foregroundFlag(): Long = if (isAppForeground()) BinaryLogWriter.FLAG_APP_FOREGROUND else 0L
@@ -1678,6 +2053,7 @@ object JankHunter {
     private const val DEFAULT_OWNER_BLOCK_THRESHOLD_MS = 250L
     private const val DEFAULT_UI_WINDOW_P95_THRESHOLD_MS = 32L
     private const val DEFAULT_HTTP_SLOW_THRESHOLD_MS = 1_000L
+    private const val PROCESS_FOREGROUND_CACHE_MS = 1_000L
     private const val DEFAULT_MAX_METRIC_AGGREGATION_KEYS = 2048
     private const val DEFAULT_MAX_RUNTIME_CALL_GRAPH_KEYS = 4096
     private const val DEFAULT_MAX_LOG_SPAM_KEYS = 2048
@@ -1687,6 +2063,8 @@ object JankHunter {
     private const val HEAP_DUMP_ATTRIBUTION_MIN_MS = 500L
     private const val CRASH_FLUSH_TIMEOUT_MS = 100L
     private const val NANOS_PER_MS = 1_000_000L
+    private const val NANOS_PER_MICROSECOND = 1_000L
+    private const val NANOS_PER_MILLISECOND = 1_000_000L
     private val OWNER_WHITESPACE = Regex("\\s+")
 
 }

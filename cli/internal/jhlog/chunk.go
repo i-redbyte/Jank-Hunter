@@ -15,6 +15,8 @@ const (
 	defaultRawChunkTarget = 64 * 1024
 	maxRawChunkSize       = 256 * 1024
 	maxStoredChunkSize    = 512 * 1024
+	processScopeHashSize  = 32
+	segmentDigestSize     = 32
 	chunkHeaderSize       = 32
 	commitTrailerSize     = 20
 
@@ -24,7 +26,7 @@ const (
 )
 
 var (
-	chunkMagic  = [4]byte{'J', 'H', 'C', '9'}
+	chunkMagic  = [4]byte{'J', 'H', 'C', '1'}
 	commitMagic = [4]byte{'J', 'H', 'C', 'M'}
 )
 
@@ -38,24 +40,22 @@ type chunkMetadata struct {
 }
 
 func normalizedHeader(header SegmentHeader) SegmentHeader {
-	if header.Schema == 0 {
-		header.Schema = HeaderSchemaV1
+	if header.ProcessScope == ProcessScopeUnknown {
+		header.ProcessScope = ProcessScopeAll
 	}
-	if header.RequiredFeatures == 0 {
-		header.RequiredFeatures = RequiredFeaturesV9
-	}
-	if header.OptionalFeatures == 0 {
-		header.OptionalFeatures = OptionalFeaturesV9
-	}
-	if header.OSPID == 0 {
-		header.OSPID = header.PID
-	}
-	header.PID = header.OSPID
-	if header.SegmentStartUnixMS == 0 {
-		header.SegmentStartUnixMS = header.SegmentStartWallUnixMS
-	}
-	header.SegmentStartWallUnixMS = header.SegmentStartUnixMS
 	header.SymbolNamespace = append([]byte(nil), header.SymbolNamespace...)
+	header.ProcessScopeFingerprint = append([]byte(nil), header.ProcessScopeFingerprint...)
+	header.PreviousSegmentDigest = append([]byte(nil), header.PreviousSegmentDigest...)
+	header.ExpectedProcessFingerprint = append([]byte(nil), header.ExpectedProcessFingerprint...)
+	if header.ExpectedProcessCount == 0 {
+		processName := header.ProcessName
+		if processName == "" {
+			processName = "unknown"
+		}
+		header.ExpectedProcessCount = 1
+		header.ExpectedProcessFingerprint = ProcessRosterFingerprint([]string{processName})
+		header.ProcessRosterDeclarationComplete = true
+	}
 	return header
 }
 
@@ -64,11 +64,14 @@ func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 	if header.Schema != HeaderSchemaV1 {
 		return nil, SegmentHeader{}, fmt.Errorf("unsupported header schema %d", header.Schema)
 	}
-	if header.RequiredFeatures&^RequiredFeaturesV9 != 0 {
-		return nil, SegmentHeader{}, fmt.Errorf("unsupported required feature bits 0x%x", header.RequiredFeatures&^RequiredFeaturesV9)
+	if err := validateFeatureContract(header.RequiredFeatures, header.OptionalFeatures); err != nil {
+		return nil, SegmentHeader{}, err
 	}
 	if !utf8.ValidString(header.ProcessName) {
 		return nil, SegmentHeader{}, fmt.Errorf("process name is not valid UTF-8")
+	}
+	if err := validateProcessScope(header.ProcessScope, header.AllowedProcessCount, header.ProcessScopeFingerprint); err != nil {
+		return nil, SegmentHeader{}, err
 	}
 
 	var payload bytes.Buffer
@@ -102,6 +105,37 @@ func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 		return nil, SegmentHeader{}, err
 	}
 	if err := writeLengthDelimited(&payload, header.SymbolNamespace); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeUvarint(&payload, uint64(header.ProcessScope)); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeUvarint(&payload, header.AllowedProcessCount); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeLengthDelimited(&payload, header.ProcessScopeFingerprint); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := validatePreviousSegmentDigest(header.SegmentIndex, header.PreviousSegmentDigest); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeLengthDelimited(&payload, header.PreviousSegmentDigest); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := validateProcessRoster(header.ExpectedProcessCount, header.ExpectedProcessFingerprint); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeUvarint(&payload, header.ExpectedProcessCount); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	if err := writeLengthDelimited(&payload, header.ExpectedProcessFingerprint); err != nil {
+		return nil, SegmentHeader{}, err
+	}
+	complete := uint64(0)
+	if header.ProcessRosterDeclarationComplete {
+		complete = 1
+	}
+	if err := writeUvarint(&payload, complete); err != nil {
 		return nil, SegmentHeader{}, err
 	}
 	if payload.Len() > maxHeaderPayloadSize {
@@ -140,10 +174,10 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	if header.RequiredFeatures, err = read("required features"); err != nil {
 		return SegmentHeader{}, err
 	}
-	if unsupported := header.RequiredFeatures &^ RequiredFeaturesV9; unsupported != 0 {
-		return SegmentHeader{}, fmt.Errorf("unsupported required feature bits 0x%x", unsupported)
-	}
 	if header.OptionalFeatures, err = read("optional features"); err != nil {
+		return SegmentHeader{}, err
+	}
+	if err := validateFeatureContract(header.RequiredFeatures, header.OptionalFeatures); err != nil {
 		return SegmentHeader{}, err
 	}
 	for _, target := range []*ID128{&header.RunID, &header.ProcessInstanceID, &header.SessionID} {
@@ -172,8 +206,6 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 			return SegmentHeader{}, err
 		}
 	}
-	header.PID = header.OSPID
-	header.SegmentStartWallUnixMS = header.SegmentStartUnixMS
 	processName, err := readBoundedBytes(reader, "process name", maxHeaderPayloadSize)
 	if err != nil {
 		return SegmentHeader{}, err
@@ -186,8 +218,113 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	if err != nil {
 		return SegmentHeader{}, err
 	}
-	// Schema 1 is positional. Remaining bytes belong to future trailing fields.
+	scope, readErr := read("process scope")
+	if readErr != nil {
+		return SegmentHeader{}, readErr
+	}
+	header.ProcessScope = ProcessScope(scope)
+	if header.AllowedProcessCount, readErr = read("allowed process count"); readErr != nil {
+		return SegmentHeader{}, readErr
+	}
+	header.ProcessScopeFingerprint, readErr = readBoundedBytes(reader, "process scope fingerprint", processScopeHashSize)
+	if readErr != nil {
+		return SegmentHeader{}, readErr
+	}
+	if err := validateProcessScope(header.ProcessScope, header.AllowedProcessCount, header.ProcessScopeFingerprint); err != nil {
+		return SegmentHeader{}, err
+	}
+	header.PreviousSegmentDigest, err = readBoundedBytes(reader, "previous segment digest", segmentDigestSize)
+	if err != nil {
+		return SegmentHeader{}, err
+	}
+	if err := validatePreviousSegmentDigest(header.SegmentIndex, header.PreviousSegmentDigest); err != nil {
+		return SegmentHeader{}, err
+	}
+	if header.ExpectedProcessCount, err = read("expected process count"); err != nil {
+		return SegmentHeader{}, err
+	}
+	header.ExpectedProcessFingerprint, err = readBoundedBytes(reader, "expected process fingerprint", processScopeHashSize)
+	if err != nil {
+		return SegmentHeader{}, err
+	}
+	complete, readErr := read("process roster declaration complete")
+	if readErr != nil {
+		return SegmentHeader{}, readErr
+	}
+	if complete > 1 {
+		return SegmentHeader{}, fmt.Errorf("process roster declaration flag %d is not boolean", complete)
+	}
+	header.ProcessRosterDeclarationComplete = complete == 1
+	if err := validateProcessRoster(header.ExpectedProcessCount, header.ExpectedProcessFingerprint); err != nil {
+		return SegmentHeader{}, err
+	}
+	if reader.Len() != 0 {
+		return SegmentHeader{}, fmt.Errorf("header schema %d leaves %d trailing bytes", header.Schema, reader.Len())
+	}
 	return header, nil
+}
+
+func validateFeatureContract(required, optional uint64) error {
+	if required != RequiredFeatures && required != BestEffortFeatures {
+		return fmt.Errorf(
+			"required feature contract 0x%x is not JHLOG %s EXACT 0x%x or BEST_EFFORT 0x%x",
+			required,
+			FormatVersionString,
+			RequiredFeatures,
+			BestEffortFeatures,
+		)
+	}
+	if optional != OptionalFeatures {
+		return fmt.Errorf(
+			"optional feature contract 0x%x differs from JHLOG %s contract 0x%x",
+			optional,
+			FormatVersionString,
+			OptionalFeatures,
+		)
+	}
+	return nil
+}
+
+func validatePreviousSegmentDigest(segmentIndex uint64, digest []byte) error {
+	if segmentIndex == 0 {
+		if len(digest) != 0 {
+			return fmt.Errorf("first segment cannot declare a predecessor digest")
+		}
+		return nil
+	}
+	if len(digest) != segmentDigestSize {
+		return fmt.Errorf("segment %d predecessor digest has %d bytes, want %d", segmentIndex, len(digest), segmentDigestSize)
+	}
+	return nil
+}
+
+func validateProcessRoster(expectedCount uint64, fingerprint []byte) error {
+	if expectedCount == 0 {
+		return fmt.Errorf("process roster must contain at least one process")
+	}
+	if len(fingerprint) != processScopeHashSize {
+		return fmt.Errorf("process roster fingerprint has %d bytes, want %d", len(fingerprint), processScopeHashSize)
+	}
+	return nil
+}
+
+func validateProcessScope(scope ProcessScope, allowedProcessCount uint64, fingerprint []byte) error {
+	switch scope {
+	case ProcessScopeAll, ProcessScopeMainOnly:
+		if allowedProcessCount != 0 || len(fingerprint) != 0 {
+			return fmt.Errorf("process scope %s cannot declare an allowlist identity", scope)
+		}
+	case ProcessScopeAllowlist:
+		if allowedProcessCount == 0 {
+			return fmt.Errorf("process allowlist scope must declare at least one process")
+		}
+		if len(fingerprint) != processScopeHashSize {
+			return fmt.Errorf("process allowlist fingerprint has %d bytes, want %d", len(fingerprint), processScopeHashSize)
+		}
+	default:
+		return fmt.Errorf("unknown process scope %d", scope)
+	}
+	return nil
 }
 
 func writeLengthDelimited(w io.Writer, value []byte) error {

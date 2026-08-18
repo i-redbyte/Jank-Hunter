@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -155,6 +156,28 @@ func TestInfluenceSeverityUsesPublishedBandsAndCapsStaticNodes(t *testing.T) {
 	node := (&influenceAccumulator{className: "com.app.StaticOnly", score: 30, static: true, flows: map[string]struct{}{}, screens: map[string]struct{}{}, routes: map[string]struct{}{}, reasons: map[string]struct{}{}}).toNode()
 	if node.Severity != "medium" || node.RuntimeEvidence {
 		t.Fatalf("static-only node was presented as runtime critical: %+v", node)
+	}
+}
+
+func TestInfluenceNodeKeepsEveryContextAndReason(t *testing.T) {
+	node := &influenceAccumulator{
+		className: "com.app.CompleteEvidence",
+		runtime:   true,
+		flows:     map[string]struct{}{},
+		screens:   map[string]struct{}{},
+		routes:    map[string]struct{}{},
+		reasons:   map[string]struct{}{},
+	}
+	for index := range 12 {
+		node.addFlow(fmt.Sprintf("flow-%02d", index))
+		node.addScreen(fmt.Sprintf("screen-%02d", index))
+		node.addRoute(fmt.Sprintf("route-%02d", index))
+		node.addReason(fmt.Sprintf("reason-%02d", index))
+	}
+
+	got := node.toNode()
+	if len(got.Flows) != 12 || len(got.Screens) != 12 || len(got.Routes) != 12 || len(got.Reasons) != 12 {
+		t.Fatalf("influence evidence was silently truncated: %+v", got)
 	}
 }
 

@@ -44,7 +44,6 @@ internal data class JankHunterAdvancedOptions(
     val screen: String,
     val owner: String,
     val className: String,
-    val reportStyle: String,
     val presentation: Boolean,
 ) {
     companion object {
@@ -58,7 +57,6 @@ internal data class JankHunterAdvancedOptions(
             screen = "",
             owner = "",
             className = "",
-            reportStyle = "modern",
             presentation = false,
         )
     }
@@ -91,7 +89,6 @@ internal class JankHunterAdvancedPanel(
     private val screenField = JBTextField()
     private val ownerField = JBTextField()
     private val classField = JBTextField()
-    private val reportStyleCombo = JComboBox(arrayOf("modern", "legacy"))
     private val presentationCheckBox = JBCheckBox("Presentation mode")
     private val cliPathField = fileField()
     private val consoleArea = JBTextArea()
@@ -113,7 +110,6 @@ internal class JankHunterAdvancedPanel(
     init {
         val settings = JankHunterSettings.getInstance().state
         cliPathField.text = settings.cliPath
-        reportStyleCombo.selectedItem = settings.reportStyle.ifBlank { "modern" }
         presentationCheckBox.isSelected = settings.presentationMode
 
         reportTaskButton.addActionListener { onSelectReport() }
@@ -162,8 +158,7 @@ internal class JankHunterAdvancedPanel(
         addRow(filtersForm, 3, "Class", classField)
 
         val appearanceForm = formPanel()
-        addRow(appearanceForm, 0, "Стиль отчёта", reportStyleCombo)
-        addWideRow(appearanceForm, 1, presentationCheckBox)
+        addWideRow(appearanceForm, 0, presentationCheckBox)
 
         val diagnosticsForm = formPanel()
         addRow(diagnosticsForm, 0, "CLI", cliPathField)
@@ -223,15 +218,10 @@ internal class JankHunterAdvancedPanel(
         screen = screenField.text.trim(),
         owner = ownerField.text.trim(),
         className = classField.text.trim(),
-        reportStyle = reportStyleCombo.selectedItem?.toString().orEmpty().ifBlank { "modern" },
         presentation = presentationCheckBox.isSelected,
     )
 
     fun cliPath(): String = cliPathField.text.trim()
-
-    fun setCliPath(path: String) {
-        cliPathField.text = path
-    }
 
     fun setContext(text: String, compare: Boolean) {
         contextLabel.text = text

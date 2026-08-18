@@ -105,8 +105,8 @@ func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string, sy
 	if event.HTTP == nil || !c.scale.hasData || c.scale.bucketCount == 0 {
 		return
 	}
-	route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-	owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+	route := symbols.resolve(dict, event.HTTP.RouteRef)
+	owner := symbols.resolve(dict, event.Attribution.Owner)
 	if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 		return
 	}

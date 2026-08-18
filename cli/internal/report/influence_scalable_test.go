@@ -15,46 +15,42 @@ import (
 
 func TestInfluenceReportContainsScalableNavigationAndEvidenceModel(t *testing.T) {
 	influence := buildReportInfluenceFixture()
-	for _, style := range []report.ReportStyle{report.ReportStyleModern, report.ReportStyleLegacy} {
-		t.Run(string(style), func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "influence.html")
-			if err := report.WriteInfluenceWithOptions(path, influence, "Граф влияния", report.ReportOptions{Style: style}); err != nil {
-				t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
-			}
-			html := readInfluenceHTML(t, path)
-			for _, expected := range []string{
-				`data-influence-view="problems"`,
-				`data-influence-view="runtime"`,
-				`data-influence-view="packages"`,
-				`data-influence-view="neighborhood"`,
-				`data-influence-view="context"`,
-				`data-influence-search`,
-				`data-influence-package-depth`,
-				`data-influence-direction`,
-				`data-influence-depth`,
-				`data-influence-runtime-only`,
-				`data-influence-center`,
-				`data-influence-detail`,
-				`data-influence-legend`,
-				`history.replaceState`,
-				`URLSearchParams`,
-				`buildNeighborhood`,
-				`expandPackage`,
-				`fitSVGText`,
-				`data-ticket-label="Контекст расчёта"`,
-				`prefers-reduced-motion`,
-				`Показано`,
-				`Исключено`,
-				`RuntimeCount`,
-				`StaticCount`,
-				`"ID":"packages:3"`,
-				`"Kind":"connector"`,
-			} {
-				if !strings.Contains(html, expected) {
-					t.Fatalf("influence report style %s does not contain %q", style, expected)
-				}
-			}
-		})
+	path := filepath.Join(t.TempDir(), "influence.html")
+	if err := report.WriteInfluenceWithOptions(path, influence, "Граф влияния", report.ReportOptions{}); err != nil {
+		t.Fatalf("WriteInfluenceWithOptions() error = %v", err)
+	}
+	html := readInfluenceHTML(t, path)
+	for _, expected := range []string{
+		`data-influence-view="problems"`,
+		`data-influence-view="runtime"`,
+		`data-influence-view="packages"`,
+		`data-influence-view="neighborhood"`,
+		`data-influence-view="context"`,
+		`data-influence-search`,
+		`data-influence-package-depth`,
+		`data-influence-direction`,
+		`data-influence-depth`,
+		`data-influence-runtime-only`,
+		`data-influence-center`,
+		`data-influence-detail`,
+		`data-influence-legend`,
+		`history.replaceState`,
+		`URLSearchParams`,
+		`buildNeighborhood`,
+		`expandPackage`,
+		`fitSVGText`,
+		`data-ticket-label="Как получена оценка"`,
+		`prefers-reduced-motion`,
+		`Показано`,
+		`Исключено`,
+		`RuntimeCount`,
+		`StaticCount`,
+		`"ID":"packages:3"`,
+		`"Kind":"connector"`,
+	} {
+		if !strings.Contains(html, expected) {
+			t.Fatalf("influence report does not contain %q", expected)
+		}
 	}
 }
 
@@ -74,24 +70,7 @@ func TestInfluenceReportStaticDOMIDsAreUnique(t *testing.T) {
 	}
 }
 
-func TestInfluenceReportHandlesEmptyGraphAndLegacySummary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty.html")
-	legacy := analyze.InfluenceSummary{Available: true, TopNodes: []analyze.InfluenceNode{{
-		ClassName:       "com.app.Legacy",
-		Label:           "app.Legacy",
-		Score:           5,
-		Severity:        "medium",
-		Status:          "runtime",
-		RuntimeEvidence: true,
-	}}}
-	if err := report.WriteInfluenceWithOptions(path, legacy, "Legacy", report.ReportOptions{}); err != nil {
-		t.Fatalf("WriteInfluenceWithOptions(legacy) error = %v", err)
-	}
-	html := readInfluenceHTML(t, path)
-	if !strings.Contains(html, `"ID":"problems"`) || !strings.Contains(html, "com.app.Legacy") {
-		t.Fatal("legacy influence model was not hydrated into graph views")
-	}
-
+func TestInfluenceReportHandlesEmptyGraph(t *testing.T) {
 	emptyPath := filepath.Join(t.TempDir(), "empty-graph.html")
 	if err := report.WriteInfluenceWithOptions(emptyPath, analyze.InfluenceSummary{}, "Пустой граф", report.ReportOptions{}); err != nil {
 		t.Fatalf("WriteInfluenceWithOptions(empty) error = %v", err)

@@ -10,7 +10,6 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
     private val runtimeEnabled = builder.runtimeEnabled
     private val runtimeCallGraphEnabled = builder.runtimeCallGraphEnabled
-    private val runtimeCallGraphMode = builder.runtimeCallGraphMode
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
     private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
@@ -20,6 +19,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val systemSampleIntervalMs = builder.systemSampleIntervalMs
     private val mainLooperDispatchMonitorEnabled = builder.mainLooperDispatchMonitorEnabled
     private val processExitInfoEnabled = builder.processExitInfoEnabled
+    private val ioTracingEnabled = builder.ioTracingEnabled
+    private val composeTracingEnabled = builder.composeTracingEnabled
+    private val roomTracingEnabled = builder.roomTracingEnabled
+    private val workerTracingEnabled = builder.workerTracingEnabled
     private val objectWatcherEnabled = builder.objectWatcherEnabled
     private val retainedObjectDelayMs = builder.retainedObjectDelayMs
     private val retainedObjectForceGcEnabled = builder.retainedObjectForceGcEnabled
@@ -34,7 +37,10 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val fpsWindowMs = builder.fpsWindowMs
     private val jankFrameThresholdMs = builder.jankFrameThresholdMs
     private val uiWindowP95ThresholdMs = builder.uiWindowP95ThresholdMs
+    private val exactEventCollectionEnabled = builder.exactEventCollectionEnabled
     private val maxQueueSize = builder.maxQueueSize
+    private val mainThreadAdmissionWaitMs = builder.mainThreadAdmissionWaitMs
+    private val backgroundAdmissionWaitMs = builder.backgroundAdmissionWaitMs
     private val sessionLogSizeLimitEnabled = builder.sessionLogSizeLimitEnabled
     private val maxSessionLogSizeMiB = builder.maxSessionLogSizeMiB
     private val logGrowthAnalyticsEnabled = builder.logGrowthAnalyticsEnabled
@@ -65,8 +71,6 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun runtimeCallGraphEnabled(): Boolean = runtimeCallGraphEnabled
 
-    fun runtimeCallGraphMode(): JankHunterRuntimeGraphMode = runtimeCallGraphMode
-
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
     fun mainThreadStallThresholdMs(): Long = mainThreadStallThresholdMs.coerceAtLeast(1L)
@@ -84,6 +88,17 @@ class JankHunterConfig private constructor(builder: Builder) {
     fun mainLooperDispatchMonitorEnabled(): Boolean = mainLooperDispatchMonitorEnabled
 
     fun processExitInfoEnabled(): Boolean = processExitInfoEnabled
+
+    fun ioTracingEnabled(): Boolean = ioTracingEnabled
+
+    fun composeTracingEnabled(): Boolean = composeTracingEnabled
+
+    fun roomTracingEnabled(): Boolean = roomTracingEnabled
+
+    fun workerTracingEnabled(): Boolean = workerTracingEnabled
+
+    internal fun semanticTracingEnabled(): Boolean =
+        composeTracingEnabled || roomTracingEnabled || workerTracingEnabled
 
     fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
 
@@ -113,7 +128,20 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun uiWindowP95ThresholdMs(): Long = uiWindowP95ThresholdMs.coerceAtLeast(1L)
 
+    /**
+     * Preserves accepted evidence through bounded admission and shutdown paths. Configured
+     * cardinality and storage limits remain hard safety boundaries; every rejection is reported
+     * by a quality counter.
+     */
+    fun exactEventCollectionEnabled(): Boolean = exactEventCollectionEnabled
+
     fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
+
+    /** Maximum time a main-thread producer may wait for bounded log admission. */
+    fun mainThreadAdmissionWaitMs(): Long = mainThreadAdmissionWaitMs.coerceAtLeast(0L)
+
+    /** Maximum time a background producer may wait for bounded log admission. */
+    fun backgroundAdmissionWaitMs(): Long = backgroundAdmissionWaitMs.coerceAtLeast(0L)
 
     fun sessionLogSizeLimitEnabled(): Boolean = sessionLogSizeLimitEnabled
 
@@ -172,7 +200,6 @@ class JankHunterConfig private constructor(builder: Builder) {
             .enabled(enabled)
             .runtimeEnabled(runtimeEnabled)
             .runtimeCallGraphEnabled(runtimeCallGraphEnabled)
-            .runtimeCallGraphMode(runtimeCallGraphMode)
             .autoStartCollectors(autoStartCollectors)
             .mainThreadStallThresholdMs(mainThreadStallThresholdMs)
             .ownerBlockThresholdMs(ownerBlockThresholdMs)
@@ -182,6 +209,10 @@ class JankHunterConfig private constructor(builder: Builder) {
             .systemSampleIntervalMs(systemSampleIntervalMs)
             .mainLooperDispatchMonitorEnabled(mainLooperDispatchMonitorEnabled)
             .processExitInfoEnabled(processExitInfoEnabled)
+            .ioTracingEnabled(ioTracingEnabled)
+            .composeTracingEnabled(composeTracingEnabled)
+            .roomTracingEnabled(roomTracingEnabled)
+            .workerTracingEnabled(workerTracingEnabled)
             .objectWatcherEnabled(objectWatcherEnabled)
             .retainedObjectDelayMs(retainedObjectDelayMs)
             .retainedObjectForceGcEnabled(retainedObjectForceGcEnabled)
@@ -196,7 +227,10 @@ class JankHunterConfig private constructor(builder: Builder) {
             .fpsWindowMs(fpsWindowMs)
             .jankFrameThresholdMs(jankFrameThresholdMs)
             .uiWindowP95ThresholdMs(uiWindowP95ThresholdMs)
+            .exactEventCollectionEnabled(exactEventCollectionEnabled)
             .maxQueueSize(maxQueueSize)
+            .mainThreadAdmissionWaitMs(mainThreadAdmissionWaitMs)
+            .backgroundAdmissionWaitMs(backgroundAdmissionWaitMs)
             .sessionLogSizeLimitEnabled(sessionLogSizeLimitEnabled)
             .maxSessionLogSizeMiB(maxSessionLogSizeMiB)
             .logGrowthAnalyticsEnabled(logGrowthAnalyticsEnabled)
@@ -232,7 +266,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var enabled = true
         internal var runtimeEnabled = true
         internal var runtimeCallGraphEnabled = true
-        internal var runtimeCallGraphMode = JankHunterRuntimeGraphMode.BUFFERED
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
         internal var ownerBlockThresholdMs = 250L
@@ -242,6 +275,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var systemSampleIntervalMs = 15_000L
         internal var mainLooperDispatchMonitorEnabled = false
         internal var processExitInfoEnabled = true
+        internal var ioTracingEnabled = true
+        internal var composeTracingEnabled = true
+        internal var roomTracingEnabled = true
+        internal var workerTracingEnabled = true
         internal var objectWatcherEnabled = true
         internal var retainedObjectDelayMs = 5_000L
         internal var retainedObjectForceGcEnabled = false
@@ -256,9 +293,12 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var fpsWindowMs = 1_000L
         internal var jankFrameThresholdMs = 32L
         internal var uiWindowP95ThresholdMs = 32L
-        internal var maxQueueSize = 2048
+        internal var exactEventCollectionEnabled = true
+        internal var maxQueueSize = 65_536
+        internal var mainThreadAdmissionWaitMs = 0L
+        internal var backgroundAdmissionWaitMs = 5L
         internal var sessionLogSizeLimitEnabled = true
-        internal var maxSessionLogSizeMiB = 16
+        internal var maxSessionLogSizeMiB = 50
         internal var logGrowthAnalyticsEnabled = true
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = DictionaryIds.DEFAULT_MAX_VALUE_BYTES
@@ -275,7 +315,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var maxHandlerWrappersPerRunnable = 32
         internal var routeRedactor: JankHunterRedactor = JankHunterRedactor.default()
         internal var logDirectory: File? = null
-        internal var mainProcessOnly = true
+        internal var mainProcessOnly = false
         internal var allowedProcesses: List<String> = emptyList()
         internal var processNameRedactor: JankHunterProcessNameRedactor = JankHunterProcessNameRedactor.none()
         internal var binaryStorage: JankHunterBinaryStorage? = null
@@ -286,8 +326,6 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun runtimeEnabled(value: Boolean) = apply { runtimeEnabled = value }
 
         fun runtimeCallGraphEnabled(value: Boolean) = apply { runtimeCallGraphEnabled = value }
-
-        fun runtimeCallGraphMode(value: JankHunterRuntimeGraphMode) = apply { runtimeCallGraphMode = value }
 
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 
@@ -306,6 +344,14 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun mainLooperDispatchMonitorEnabled(value: Boolean) = apply { mainLooperDispatchMonitorEnabled = value }
 
         fun processExitInfoEnabled(value: Boolean) = apply { processExitInfoEnabled = value }
+
+        fun ioTracingEnabled(value: Boolean) = apply { ioTracingEnabled = value }
+
+        fun composeTracingEnabled(value: Boolean) = apply { composeTracingEnabled = value }
+
+        fun roomTracingEnabled(value: Boolean) = apply { roomTracingEnabled = value }
+
+        fun workerTracingEnabled(value: Boolean) = apply { workerTracingEnabled = value }
 
         fun objectWatcherEnabled(value: Boolean) = apply { objectWatcherEnabled = value }
 
@@ -335,7 +381,13 @@ class JankHunterConfig private constructor(builder: Builder) {
 
         fun uiWindowP95ThresholdMs(value: Long) = apply { uiWindowP95ThresholdMs = value }
 
+        fun exactEventCollectionEnabled(value: Boolean) = apply { exactEventCollectionEnabled = value }
+
         fun maxQueueSize(value: Int) = apply { maxQueueSize = value }
+
+        fun mainThreadAdmissionWaitMs(value: Long) = apply { mainThreadAdmissionWaitMs = value }
+
+        fun backgroundAdmissionWaitMs(value: Long) = apply { backgroundAdmissionWaitMs = value }
 
         fun sessionLogSizeLimitEnabled(value: Boolean) = apply { sessionLogSizeLimitEnabled = value }
 
@@ -405,6 +457,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_SYSTEM_SAMPLE_INTERVAL_MS = "io.jankhunter.system_sample_interval_ms"
         const val META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED = "io.jankhunter.main_looper_dispatch_monitor_enabled"
         const val META_PROCESS_EXIT_INFO_ENABLED = "io.jankhunter.process_exit_info_enabled"
+        const val META_IO_TRACING_ENABLED = "io.jankhunter.io_tracing_enabled"
+        const val META_COMPOSE_TRACING_ENABLED = "io.jankhunter.compose_tracing_enabled"
+        const val META_ROOM_TRACING_ENABLED = "io.jankhunter.room_tracing_enabled"
+        const val META_WORKER_TRACING_ENABLED = "io.jankhunter.worker_tracing_enabled"
         const val META_OBJECT_WATCHER_ENABLED = "io.jankhunter.object_watcher_enabled"
         const val META_RETAINED_OBJECT_DELAY_MS = "io.jankhunter.retained_object_delay_ms"
         const val META_RETAINED_OBJECT_FORCE_GC_ENABLED = "io.jankhunter.retained_object_force_gc_enabled"
@@ -419,7 +475,10 @@ class JankHunterConfig private constructor(builder: Builder) {
         const val META_FPS_WINDOW_MS = "io.jankhunter.fps_window_ms"
         const val META_JANK_FRAME_THRESHOLD_MS = "io.jankhunter.jank_frame_threshold_ms"
         const val META_UI_WINDOW_P95_THRESHOLD_MS = "io.jankhunter.ui_window_p95_threshold_ms"
+        const val META_EXACT_EVENT_COLLECTION_ENABLED = "io.jankhunter.exact_event_collection_enabled"
         const val META_MAX_QUEUE_SIZE = "io.jankhunter.max_queue_size"
+        const val META_MAIN_THREAD_ADMISSION_WAIT_MS = "io.jankhunter.main_thread_admission_wait_ms"
+        const val META_BACKGROUND_ADMISSION_WAIT_MS = "io.jankhunter.background_admission_wait_ms"
         const val META_SESSION_LOG_SIZE_LIMIT_ENABLED = "io.jankhunter.session_log_size_limit_enabled"
         const val META_MAX_SESSION_LOG_SIZE_MIB = "io.jankhunter.max_session_log_size_mib"
         const val META_LOG_GROWTH_ANALYTICS_ENABLED = "io.jankhunter.log_growth_analytics_enabled"
@@ -462,6 +521,10 @@ class JankHunterConfig private constructor(builder: Builder) {
                     metadataBoolean(metadata, META_MAIN_LOOPER_DISPATCH_MONITOR_ENABLED, false),
                 )
                 .processExitInfoEnabled(metadataBoolean(metadata, META_PROCESS_EXIT_INFO_ENABLED, true))
+                .ioTracingEnabled(metadataBoolean(metadata, META_IO_TRACING_ENABLED, true))
+                .composeTracingEnabled(metadataBoolean(metadata, META_COMPOSE_TRACING_ENABLED, true))
+                .roomTracingEnabled(metadataBoolean(metadata, META_ROOM_TRACING_ENABLED, true))
+                .workerTracingEnabled(metadataBoolean(metadata, META_WORKER_TRACING_ENABLED, true))
                 .objectWatcherEnabled(metadataBoolean(metadata, META_OBJECT_WATCHER_ENABLED, true))
                 .retainedObjectDelayMs(metadataLong(metadata, META_RETAINED_OBJECT_DELAY_MS, 5_000L))
                 .retainedObjectForceGcEnabled(metadataBoolean(metadata, META_RETAINED_OBJECT_FORCE_GC_ENABLED, false))
@@ -481,11 +544,16 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .fpsWindowMs(metadataLong(metadata, META_FPS_WINDOW_MS, 1_000L))
                 .jankFrameThresholdMs(metadataLong(metadata, META_JANK_FRAME_THRESHOLD_MS, 32L))
                 .uiWindowP95ThresholdMs(metadataLong(metadata, META_UI_WINDOW_P95_THRESHOLD_MS, 32L))
-                .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 2048))
+                .exactEventCollectionEnabled(
+                    metadataBoolean(metadata, META_EXACT_EVENT_COLLECTION_ENABLED, true),
+                )
+                .maxQueueSize(metadataInt(metadata, META_MAX_QUEUE_SIZE, 65_536))
+                .mainThreadAdmissionWaitMs(metadataLong(metadata, META_MAIN_THREAD_ADMISSION_WAIT_MS, 0L))
+                .backgroundAdmissionWaitMs(metadataLong(metadata, META_BACKGROUND_ADMISSION_WAIT_MS, 5L))
                 .sessionLogSizeLimitEnabled(
                     metadataBoolean(metadata, META_SESSION_LOG_SIZE_LIMIT_ENABLED, true),
                 )
-                .maxSessionLogSizeMiB(metadataInt(metadata, META_MAX_SESSION_LOG_SIZE_MIB, 16))
+                .maxSessionLogSizeMiB(metadataInt(metadata, META_MAX_SESSION_LOG_SIZE_MIB, 50))
                 .logGrowthAnalyticsEnabled(metadataBoolean(metadata, META_LOG_GROWTH_ANALYTICS_ENABLED, true))
                 .maxDictionaryEntries(metadataInt(metadata, META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(
@@ -512,7 +580,7 @@ class JankHunterConfig private constructor(builder: Builder) {
                 .maxHandlerWrappersPerRunnable(
                     metadataInt(metadata, META_MAX_HANDLER_WRAPPERS_PER_RUNNABLE, 32),
                 )
-                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, true))
+                .mainProcessOnly(metadataBoolean(metadata, META_MAIN_PROCESS_ONLY, false))
                 .allowedProcesses(parseProcessList(metadataString(metadata, META_ALLOWED_PROCESSES)))
                 .symbolNamespace(decodeSymbolNamespace(metadataString(metadata, META_SYMBOL_NAMESPACE)))
                 .build()

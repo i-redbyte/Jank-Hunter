@@ -5,32 +5,14 @@ import (
 	"sort"
 )
 
-const (
-	defaultMaxGraphIndexEdges          = 150_000
-	defaultMaxRelevantGraphEdges       = 2_500
-	defaultMaxStrongComponentNodes     = 10_000
-	defaultMaxHotPathSources           = 80
-	defaultMaxHotPathExploredPerSource = 2_048
-)
-
-type GraphIndexBudget struct {
-	MaxEdges           int
-	MaxRelevantEdges   int
-	MaxSCCNodes        int
-	MaxHotPathSources  int
-	MaxHotPathExplored int
-}
-
 type ClassGraphIndex struct {
 	Outgoing map[string][]ClassGraphEdge
 	Incoming map[string][]ClassGraphEdge
-	budget   GraphIndexBudget
 }
 
 type MethodGraphIndex struct {
 	Outgoing map[string][]MethodGraphEdge
 	Incoming map[string][]MethodGraphEdge
-	budget   GraphIndexBudget
 }
 
 type MethodGraphEdge struct {
@@ -42,15 +24,9 @@ type MethodGraphEdge struct {
 }
 
 func NewClassGraphIndex(edges []ClassGraphEdge) *ClassGraphIndex {
-	return NewClassGraphIndexWithBudget(edges, GraphIndexBudget{})
-}
-
-func NewClassGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudget) *ClassGraphIndex {
-	budget = normalizeGraphIndexBudget(budget)
 	index := &ClassGraphIndex{
 		Outgoing: map[string][]ClassGraphEdge{},
 		Incoming: map[string][]ClassGraphEdge{},
-		budget:   budget,
 	}
 	merged := map[string]ClassGraphEdge{}
 	for _, edge := range edges {
@@ -69,7 +45,7 @@ func NewClassGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudge
 		if existing.From == "" {
 			existing = edge
 		} else {
-			existing.Count += edge.Count
+			existing.Count = saturatingUint64Sum(existing.Count, edge.Count)
 		}
 		merged[key] = existing
 	}
@@ -77,7 +53,6 @@ func NewClassGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudge
 	for _, edge := range merged {
 		mergedEdges = append(mergedEdges, edge)
 	}
-	mergedEdges = limitClassGraphEdgesByWeight(mergedEdges, budget.MaxEdges)
 	for _, edge := range mergedEdges {
 		index.Outgoing[edge.From] = append(index.Outgoing[edge.From], edge)
 		index.Incoming[edge.To] = append(index.Incoming[edge.To], edge)
@@ -87,15 +62,9 @@ func NewClassGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudge
 }
 
 func NewMethodGraphIndex(edges []ClassGraphEdge) *MethodGraphIndex {
-	return NewMethodGraphIndexWithBudget(edges, GraphIndexBudget{})
-}
-
-func NewMethodGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudget) *MethodGraphIndex {
-	budget = normalizeGraphIndexBudget(budget)
 	index := &MethodGraphIndex{
 		Outgoing: map[string][]MethodGraphEdge{},
 		Incoming: map[string][]MethodGraphEdge{},
-		budget:   budget,
 	}
 	merged := map[string]MethodGraphEdge{}
 	for _, edge := range edges {
@@ -119,7 +88,7 @@ func NewMethodGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudg
 		if existing.FromClass == "" {
 			existing = methodEdge
 		} else {
-			existing.Count += methodEdge.Count
+			existing.Count = saturatingUint64Sum(existing.Count, methodEdge.Count)
 		}
 		merged[key] = existing
 	}
@@ -127,7 +96,6 @@ func NewMethodGraphIndexWithBudget(edges []ClassGraphEdge, budget GraphIndexBudg
 	for _, edge := range merged {
 		mergedEdges = append(mergedEdges, edge)
 	}
-	mergedEdges = limitMethodGraphEdgesByWeight(mergedEdges, budget.MaxEdges)
 	for _, edge := range mergedEdges {
 		from := methodNodeKey(edge.FromClass, edge.FromMethod)
 		to := methodNodeKey(edge.ToClass, edge.ToMethod)
@@ -154,7 +122,6 @@ func (i *ClassGraphIndex) RelevantEdges(selected map[string]struct{}, runtimeTar
 	for _, edge := range edgesByKey {
 		out = append(out, edge)
 	}
-	out = limitClassGraphEdgesByWeight(out, i.budget.MaxRelevantEdges)
 	sort.Slice(out, func(a, b int) bool {
 		if out[a].From == out[b].From {
 			if out[a].To == out[b].To {
@@ -169,9 +136,6 @@ func (i *ClassGraphIndex) RelevantEdges(selected map[string]struct{}, runtimeTar
 
 func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycle {
 	if i == nil || limit == 0 {
-		return nil
-	}
-	if i.budget.MaxSCCNodes > 0 && len(i.Outgoing) > i.budget.MaxSCCNodes {
 		return nil
 	}
 	index := 0
@@ -224,7 +188,7 @@ func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycl
 			for _, item := range component {
 				for _, edge := range i.Outgoing[item] {
 					if _, inside := componentSet[edge.To]; inside {
-						weight += edge.Count
+						weight = saturatingUint64Sum(weight, edge.Count)
 					}
 				}
 			}
@@ -273,10 +237,6 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 		}
 		return sources[a].score > sources[b].score
 	})
-	if i.budget.MaxHotPathSources > 0 && len(sources) > i.budget.MaxHotPathSources {
-		sources = sources[:i.budget.MaxHotPathSources]
-	}
-
 	type candidate struct {
 		nodes         []string
 		weight        float64
@@ -290,11 +250,9 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 	for _, src := range sources {
 		queue := []state{{node: src.className}}
 		seenDepth := map[string]int{src.className: 0}
-		explored := 0
-		for len(queue) > 0 && explored < i.budget.MaxHotPathExplored {
+		for len(queue) > 0 {
 			current := queue[0]
 			queue = queue[1:]
-			explored++
 			if len(current.edges) >= 4 {
 				continue
 			}
@@ -372,7 +330,7 @@ func (i *MethodGraphIndex) HotMethods(scores map[string]float64, runtimeTargets 
 			}}
 			aggregates[key] = row
 		}
-		row.item.Count += count
+		row.item.Count = saturatingUint64Sum(row.item.Count, count)
 		row.item.Weight += math.Log1p(float64(count)) * (1 + score)
 		row.item.RuntimeTouched = row.item.RuntimeTouched || runtimeTouched
 	}
@@ -526,69 +484,4 @@ func hotPathWeight(edges []ClassGraphEdge, sourceScore float64, targetScore floa
 		weight *= 1.35
 	}
 	return weight
-}
-
-func normalizeGraphIndexBudget(budget GraphIndexBudget) GraphIndexBudget {
-	if budget.MaxEdges <= 0 {
-		budget.MaxEdges = defaultMaxGraphIndexEdges
-	}
-	if budget.MaxRelevantEdges <= 0 {
-		budget.MaxRelevantEdges = defaultMaxRelevantGraphEdges
-	}
-	if budget.MaxSCCNodes <= 0 {
-		budget.MaxSCCNodes = defaultMaxStrongComponentNodes
-	}
-	if budget.MaxHotPathSources <= 0 {
-		budget.MaxHotPathSources = defaultMaxHotPathSources
-	}
-	if budget.MaxHotPathExplored <= 0 {
-		budget.MaxHotPathExplored = defaultMaxHotPathExploredPerSource
-	}
-	return budget
-}
-
-func limitClassGraphEdgesByWeight(edges []ClassGraphEdge, limit int) []ClassGraphEdge {
-	if limit <= 0 || len(edges) <= limit {
-		return edges
-	}
-	sort.Slice(edges, func(a, b int) bool {
-		if edges[a].Count != edges[b].Count {
-			return edges[a].Count > edges[b].Count
-		}
-		if edges[a].From != edges[b].From {
-			return edges[a].From < edges[b].From
-		}
-		if edges[a].To != edges[b].To {
-			return edges[a].To < edges[b].To
-		}
-		if edges[a].CallerMethod != edges[b].CallerMethod {
-			return edges[a].CallerMethod < edges[b].CallerMethod
-		}
-		return edges[a].CalleeMethod < edges[b].CalleeMethod
-	})
-	out := make([]ClassGraphEdge, limit)
-	copy(out, edges[:limit])
-	return out
-}
-
-func limitMethodGraphEdgesByWeight(edges []MethodGraphEdge, limit int) []MethodGraphEdge {
-	if limit <= 0 || len(edges) <= limit {
-		return edges
-	}
-	sort.Slice(edges, func(a, b int) bool {
-		if edges[a].Count != edges[b].Count {
-			return edges[a].Count > edges[b].Count
-		}
-		leftFrom := methodNodeKey(edges[a].FromClass, edges[a].FromMethod)
-		rightFrom := methodNodeKey(edges[b].FromClass, edges[b].FromMethod)
-		if leftFrom != rightFrom {
-			return leftFrom < rightFrom
-		}
-		leftTo := methodNodeKey(edges[a].ToClass, edges[a].ToMethod)
-		rightTo := methodNodeKey(edges[b].ToClass, edges[b].ToMethod)
-		return leftTo < rightTo
-	})
-	out := make([]MethodGraphEdge, limit)
-	copy(out, edges[:limit])
-	return out
 }

@@ -9,6 +9,7 @@ import kotlin.concurrent.withLock
 
 internal class HandlerWrapperRegistry(
     private val droppedCounter: (HandlerWrapperLoss) -> Unit,
+    private val exactAdmission: () -> Boolean = { false },
 ) {
     private val shards = Array(SHARD_COUNT) { Shard() }
     private val entryCount = AtomicInteger()
@@ -22,10 +23,8 @@ internal class HandlerWrapperRegistry(
         maxWrappers: Int,
     ): Boolean {
         val shard = shardFor(handler)
-        if (!shard.lock.tryLock()) {
-            droppedCounter(HandlerWrapperLoss.CONTENTION)
-            return false
-        }
+        val exact = exactAdmission()
+        if (!acquire(shard, exact)) return false
         try {
             cleanLocked(shard)
             val lookupKey = LookupKey(handler, runnable)
@@ -86,11 +85,9 @@ internal class HandlerWrapperRegistry(
 
     fun unregister(delegate: Runnable, wrapper: Runnable) {
         val originalHash = System.identityHashCode(delegate)
+        val exact = exactAdmission()
         shards.forEach { shard ->
-            if (!shard.lock.tryLock()) {
-                droppedCounter(HandlerWrapperLoss.CONTENTION)
-                return@forEach
-            }
+            if (!acquire(shard, exact)) return@forEach
             try {
                 cleanLocked(shard)
                 val keys = shard.keysByOriginalHash[originalHash]?.toList().orEmpty()
@@ -117,10 +114,7 @@ internal class HandlerWrapperRegistry(
 
     fun unregister(handler: Handler, runnable: Runnable, token: Any?) {
         val shard = shardFor(handler)
-        if (!shard.lock.tryLock()) {
-            droppedCounter(HandlerWrapperLoss.CONTENTION)
-            return
-        }
+        if (!acquire(shard, exactAdmission())) return
         try {
             cleanLocked(shard)
             val entry = shard.entriesByKey[LookupKey(handler, runnable)] ?: return
@@ -138,10 +132,7 @@ internal class HandlerWrapperRegistry(
 
     fun unregister(handler: Handler, token: Any?) {
         val shard = shardFor(handler)
-        if (!shard.lock.tryLock()) {
-            droppedCounter(HandlerWrapperLoss.CONTENTION)
-            return
-        }
+        if (!acquire(shard, exactAdmission())) return
         try {
             cleanLocked(shard)
             val keys = shard.keysByHandlerHash[System.identityHashCode(handler)]?.toList() ?: return
@@ -238,6 +229,16 @@ internal class HandlerWrapperRegistry(
             if (current >= maxEntries) return false
             if (entryCount.compareAndSet(current, current + 1)) return true
         }
+    }
+
+    private fun acquire(shard: Shard, exact: Boolean): Boolean {
+        if (exact) {
+            shard.lock.lock()
+            return true
+        }
+        if (shard.lock.tryLock()) return true
+        droppedCounter(HandlerWrapperLoss.CONTENTION)
+        return false
     }
 
     private fun shardFor(handler: Handler): Shard = shards[shardIndex(System.identityHashCode(handler))]

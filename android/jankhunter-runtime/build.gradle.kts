@@ -15,6 +15,8 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.metrics.performance)
+
     androidTestImplementation(libs.bundles.androidx.test)
     testImplementation(libs.junit)
 }

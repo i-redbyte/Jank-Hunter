@@ -47,9 +47,6 @@ func buildMemoryLeakSuspects(
 		}
 		return out[i].Score > out[j].Score
 	})
-	if len(out) > 80 {
-		out = out[:80]
-	}
 	return out
 }
 

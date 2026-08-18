@@ -26,6 +26,7 @@ gradlePlugin {
 dependencies {
     compileOnly(libs.android.gradle.plugin)
     implementation(libs.asm.commons)
+    implementation(libs.kotlin.metadata.jvm)
     testImplementation(libs.android.gradle.plugin)
     testImplementation(libs.asm.util)
     testImplementation(libs.junit)

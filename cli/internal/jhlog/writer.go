@@ -2,9 +2,11 @@ package jhlog
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"math"
@@ -26,20 +28,23 @@ type recordEncodeState struct {
 }
 
 type Writer struct {
-	w               io.Writer
-	header          SegmentHeader
-	chunkTarget     int
-	gzipChunks      bool
-	raw             bytes.Buffer
-	recordCount     uint32
-	sequence        uint32
-	state           recordEncodeState
-	closed          bool
-	poisoned        error
-	latestQuality   QualitySnapshot
-	totalEvents     uint64
-	totalDictionary uint64
-	lastElapsedUS   uint64
+	w                        io.Writer
+	header                   SegmentHeader
+	chunkTarget              int
+	gzipChunks               bool
+	raw                      bytes.Buffer
+	recordCount              uint32
+	sequence                 uint32
+	state                    recordEncodeState
+	closed                   bool
+	poisoned                 error
+	latestQuality            QualitySnapshot
+	totalEvents              uint64
+	totalDictionary          uint64
+	runtimeGraphLogicalCalls uint64
+	lastElapsedUS            uint64
+	digest                   hash.Hash
+	segmentDigest            []byte
 }
 
 func NewWriter(w io.Writer) (*Writer, error) {
@@ -71,11 +76,13 @@ func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
 	if target < 1 || target > maxRawChunkSize {
 		return nil, fmt.Errorf("raw chunk target %d is outside 1..%d", target, maxRawChunkSize)
 	}
-	if err := writeAll(w, headerBytes); err != nil {
+	digest := sha256.New()
+	tracked := io.MultiWriter(w, digest)
+	if err := writeAll(tracked, headerBytes); err != nil {
 		return nil, fmt.Errorf("write file header: %w", err)
 	}
 	return &Writer{
-		w:           w,
+		w:           tracked,
 		header:      header,
 		chunkTarget: target,
 		gzipChunks:  options.GZIP,
@@ -84,6 +91,7 @@ func NewWriterWithOptions(w io.Writer, options WriterOptions) (*Writer, error) {
 		},
 		latestQuality: QualitySnapshot{Counters: map[uint64]uint64{}},
 		lastElapsedUS: header.SegmentStartElapsedUS,
+		digest:        digest,
 	}, nil
 }
 
@@ -121,17 +129,16 @@ func (f *logFile) Close() error {
 	return errors.Join(writerErr, fileErr)
 }
 
-func (w *Writer) Header() SegmentHeader {
-	header := w.header
-	header.SymbolNamespace = append([]byte(nil), header.SymbolNamespace...)
-	return header
-}
-
 func (w *Writer) SetQualitySnapshot(snapshot QualitySnapshot) {
 	w.latestQuality = cloneQualitySnapshot(snapshot)
 	if w.latestQuality.Counters == nil {
 		w.latestQuality.Counters = map[uint64]uint64{}
 	}
+}
+
+// SegmentDigest returns the exact SHA-256 of a successfully sealed segment.
+func (w *Writer) SegmentDigest() []byte {
+	return append([]byte(nil), w.segmentDigest...)
 }
 
 func (w *Writer) WriteEvent(event Event) error {
@@ -145,27 +152,117 @@ func (w *Writer) WriteEvent(event Event) error {
 		if event.Quality == nil {
 			return fmt.Errorf("quality snapshot payload is nil")
 		}
+		for id := range event.Quality.Counters {
+			if !IsKnownQualityCounter(id) {
+				return fmt.Errorf("unsupported quality counter id %d", id)
+			}
+		}
 		w.SetQualitySnapshot(*event.Quality)
 		return nil
 	}
 	if event.Type == EventSegmentEnd {
 		return fmt.Errorf("segment end is reserved for Writer.Close")
 	}
+	if event.Type == EventRuntimeCall {
+		return w.WriteRuntimeCallBlock([]Event{event})
+	}
+	return w.writeSemanticRecord(event.Type, 1, func(state recordEncodeState) ([]byte, recordEncodeState, uint64, error) {
+		return encodeRecord(event, state)
+	})
+}
 
-	record, nextState, elapsedUS, err := encodeRecord(event, w.state)
+// WriteRuntimeCallBlock writes up to MaxRuntimeCallBlockRows observations as one SoA wire record.
+func (w *Writer) WriteRuntimeCallBlock(events []Event) error {
+	if w.closed {
+		return fmt.Errorf("jhlog writer is closed")
+	}
+	if w.poisoned != nil {
+		return w.poisoned
+	}
+	if len(events) == 0 || len(events) > MaxRuntimeCallBlockRows {
+		return fmt.Errorf("runtime call block row count %d is outside 1..%d", len(events), MaxRuntimeCallBlockRows)
+	}
+	firstElapsedUS, firstHasTime, err := eventElapsedUS(events[0])
+	if err != nil {
+		return err
+	}
+	firstHasThread := events[0].Producer.HasThread || events[0].Producer.ThreadID != 0
+	calls := make([]runtimeCallRow, len(events))
+	logicalCalls := uint64(0)
+	for index := range events {
+		event := events[index]
+		if event.Type != EventRuntimeCall || event.RuntimeCall == nil {
+			return fmt.Errorf("runtime call block row %d is not a runtime call", index)
+		}
+		elapsedUS, hasTime, err := eventElapsedUS(event)
+		if err != nil {
+			return err
+		}
+		hasThread := event.Producer.HasThread || event.Producer.ThreadID != 0
+		if hasTime != firstHasTime || elapsedUS != firstElapsedUS || hasThread != firstHasThread ||
+			event.Producer.ThreadID != events[0].Producer.ThreadID || eventAttributes(event) != eventAttributes(events[0]) {
+			return fmt.Errorf("runtime call block row %d has different producer metadata", index)
+		}
+		if event.RuntimeCall.Count == 0 {
+			return fmt.Errorf("runtime call block row %d has zero logical calls", index)
+		}
+		if event.RuntimeCall.MaxMS > event.RuntimeCall.TotalMS {
+			return fmt.Errorf(
+				"runtime call block row %d max duration %d exceeds total %d",
+				index,
+				event.RuntimeCall.MaxMS,
+				event.RuntimeCall.TotalMS,
+			)
+		}
+		if math.MaxUint64-logicalCalls < event.RuntimeCall.Count {
+			return fmt.Errorf("runtime call block logical call count overflows uint64")
+		}
+		logicalCalls += event.RuntimeCall.Count
+		context := eventAttribution(event)
+		calls[index] = runtimeCallRow{
+			screen: context.Screen,
+			caller: context.Owner,
+			flow:   context.Flow,
+			step:   context.Step,
+			callee: event.RuntimeCall.CalleeRef,
+			count:  event.RuntimeCall.Count,
+			total:  event.RuntimeCall.TotalMS,
+			max:    event.RuntimeCall.MaxMS,
+		}
+	}
+	synthetic := events[0]
+	synthetic.runtimeCalls = calls
+	if math.MaxUint64-w.runtimeGraphLogicalCalls < logicalCalls {
+		return fmt.Errorf("runtime graph logical call total overflows uint64")
+	}
+	err = w.writeSemanticRecord(EventRuntimeCall, uint64(len(events)), func(state recordEncodeState) ([]byte, recordEncodeState, uint64, error) {
+		return encodeRecord(synthetic, state)
+	})
+	if err == nil {
+		w.runtimeGraphLogicalCalls += logicalCalls
+	}
+	return err
+}
+
+func (w *Writer) writeSemanticRecord(
+	eventType EventType,
+	semanticCount uint64,
+	encode func(recordEncodeState) ([]byte, recordEncodeState, uint64, error),
+) error {
+	record, nextState, elapsedUS, err := encode(w.state)
 	if err != nil {
 		return err
 	}
 	if len(record) > maxRawChunkSize {
 		w.incrementQuality(QualityOversizedRecordTotal, 1)
-		w.incrementQuality(EventQualityCounterID(event.Type, QualityLossOversized), 1)
-		return fmt.Errorf("event type %d record is too large: %d > %d", event.Type, len(record), maxRawChunkSize)
+		w.incrementQuality(EventQualityCounterID(eventType, QualityLossOversized), semanticCount)
+		return fmt.Errorf("event type %d record is too large: %d > %d", eventType, len(record), maxRawChunkSize)
 	}
 	if w.raw.Len() > 0 && w.raw.Len()+len(record) > w.chunkTarget {
 		if err := w.Flush(); err != nil {
 			return err
 		}
-		record, nextState, elapsedUS, err = encodeRecord(event, w.state)
+		record, nextState, elapsedUS, err = encode(w.state)
 		if err != nil {
 			return err
 		}
@@ -175,15 +272,15 @@ func (w *Writer) WriteEvent(event Event) error {
 			if err := w.Flush(); err != nil {
 				return err
 			}
-			record, nextState, elapsedUS, err = encodeRecord(event, w.state)
+			record, nextState, elapsedUS, err = encode(w.state)
 			if err != nil {
 				return err
 			}
 		}
 		if len(record) > maxRawChunkSize {
 			w.incrementQuality(QualityOversizedRecordTotal, 1)
-			w.incrementQuality(EventQualityCounterID(event.Type, QualityLossOversized), 1)
-			return fmt.Errorf("event type %d record is too large: %d > %d", event.Type, len(record), maxRawChunkSize)
+			w.incrementQuality(EventQualityCounterID(eventType, QualityLossOversized), semanticCount)
+			return fmt.Errorf("event type %d record is too large: %d > %d", eventType, len(record), maxRawChunkSize)
 		}
 	}
 	if _, err := w.raw.Write(record); err != nil {
@@ -192,12 +289,12 @@ func (w *Writer) WriteEvent(event Event) error {
 	w.recordCount++
 	w.state = nextState
 	w.lastElapsedUS = elapsedUS
-	if event.Type == EventDictionary {
-		w.totalDictionary++
-	} else {
-		w.totalEvents++
-		w.incrementQuality(QualityAcceptedEventTotal, 1)
-		w.incrementQuality(QualityWrittenEventTotal, 1)
+	if eventType == EventDictionary {
+		w.totalDictionary += semanticCount
+	} else if eventType.IsSemanticData() {
+		w.totalEvents += semanticCount
+		w.incrementQuality(QualityAcceptedEventTotal, semanticCount)
+		w.incrementQuality(QualityWrittenEventTotal, semanticCount)
 	}
 	return nil
 }
@@ -234,6 +331,9 @@ func (w *Writer) CloseWithReason(reason SegmentEndReason) error {
 		w.closed = true
 		return w.poisoned
 	}
+	if !reason.supported() {
+		return fmt.Errorf("unsupported segment end reason %d", reason)
+	}
 	if err := w.Flush(); err != nil {
 		w.closed = true
 		return err
@@ -251,6 +351,11 @@ func (w *Writer) CloseWithReason(reason SegmentEndReason) error {
 	}
 	quality.Counters[QualityAcceptedEventTotal] = maxUint64(quality.Counters[QualityAcceptedEventTotal], w.totalEvents)
 	quality.Counters[QualityWrittenEventTotal] = maxUint64(quality.Counters[QualityWrittenEventTotal], w.totalEvents)
+	quality.Counters[QualityRuntimeGraphInputTotal] = maxUint64(
+		quality.Counters[QualityRuntimeGraphInputTotal],
+		w.runtimeGraphLogicalCalls,
+	)
+	quality.Counters[QualityRuntimeGraphEmittedTotal] = w.runtimeGraphLogicalCalls
 	// A terminal snapshot is observable only after its FINAL chunk commits, so
 	// it can truthfully include that chunk before the bytes are encoded.
 	committedBeforeFinal := maxUint64(quality.Counters[QualityCommittedChunkTotal], uint64(w.sequence))
@@ -289,6 +394,7 @@ func (w *Writer) CloseWithReason(reason SegmentEndReason) error {
 		return err
 	}
 	w.latestQuality = quality
+	w.segmentDigest = w.digest.Sum(nil)
 	w.closed = true
 	return nil
 }
@@ -368,6 +474,10 @@ func encodeRecord(event Event, state recordEncodeState) ([]byte, recordEncodeSta
 		return nil, state, 0, fmt.Errorf("event type is zero")
 	}
 	context := eventAttribution(event)
+	if event.Type == EventRuntimeCall {
+		// Runtime calls carry per-row attribution inside their columnar payload.
+		context = AttributionContext{}
+	}
 	attributes := eventAttributes(event)
 	elapsedUS, hasTime, err := eventElapsedUS(event)
 	if err != nil {
@@ -481,49 +591,7 @@ func eventAttributes(event Event) uint64 {
 }
 
 func eventAttribution(event Event) AttributionContext {
-	if event.Attribution.Present {
-		return event.Attribution
-	}
-	context := AttributionContext{Present: true}
-	switch {
-	case event.HTTP != nil:
-		context.Owner = firstSymbol(event.HTTP.OwnerRef, event.HTTP.OwnerID)
-	case event.UIWindow != nil:
-		context.Screen = firstSymbol(event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
-	case event.Stall != nil:
-		context.Owner = firstSymbol(event.Stall.OwnerRef, event.Stall.OwnerID)
-	case event.Retained != nil:
-		context = legacyContext(event.Retained.ScreenID, event.Retained.OwnerID, event.Retained.FlowID, event.Retained.StepID)
-	case event.Flow != nil:
-		context = legacyContext(event.Flow.ScreenID, event.Flow.OwnerID, event.Flow.FlowID, event.Flow.StepID)
-	case event.LogSpam != nil:
-		context = legacyContext(event.LogSpam.ScreenID, event.LogSpam.OwnerID, event.LogSpam.FlowID, event.LogSpam.StepID)
-	case event.Problem != nil:
-		context = legacyContext(event.Problem.ScreenID, event.Problem.OwnerID, event.Problem.FlowID, event.Problem.StepID)
-	case event.RuntimeCall != nil:
-		context = legacyContext(event.RuntimeCall.ScreenID, event.RuntimeCall.CallerID, event.RuntimeCall.FlowID, event.RuntimeCall.StepID)
-		context.Owner = firstSymbol(event.RuntimeCall.CallerRef, event.RuntimeCall.CallerID)
-	default:
-		return AttributionContext{}
-	}
-	return context
-}
-
-func legacyContext(screenID, ownerID, flowID, stepID uint64) AttributionContext {
-	return AttributionContext{
-		Present: true,
-		Screen:  LocalSymbol(screenID),
-		Owner:   LocalSymbol(ownerID),
-		Flow:    LocalSymbol(flowID),
-		Step:    LocalSymbol(stepID),
-	}
-}
-
-func firstSymbol(ref SymbolRef, legacyID uint64) SymbolRef {
-	if !ref.IsUnknown() {
-		return ref
-	}
-	return LocalSymbol(legacyID)
+	return event.Attribution
 }
 
 func equalAttribution(a, b AttributionContext) bool {
@@ -566,13 +634,13 @@ func writeSymbolRef(w io.Writer, ref SymbolRef) error {
 			return err
 		}
 		var raw [8]byte
-		binary.LittleEndian.PutUint64(raw[:], ref.StableID)
+		binary.LittleEndian.PutUint64(raw[:], ref.ID)
 		return writeAll(w, raw[:])
 	}
-	if ref.LocalID > math.MaxUint64>>1 {
-		return fmt.Errorf("local symbol id %d is too large", ref.LocalID)
+	if ref.ID > math.MaxUint64>>1 {
+		return fmt.Errorf("local symbol id %d is too large", ref.ID)
 	}
-	return writeUvarint(w, ref.LocalID<<1)
+	return writeUvarint(w, ref.ID<<1)
 }
 
 func encodeEventPayload(w io.Writer, event Event) error {
@@ -599,6 +667,12 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("dictionary payload is nil")
 		}
+		if p.Kind > DictStableSymbol {
+			return fmt.Errorf("unsupported dictionary kind %d", p.Kind)
+		}
+		if p.Encoding != 0 {
+			return fmt.Errorf("unsupported dictionary encoding %d", p.Encoding)
+		}
 		data := p.Data
 		if data == nil {
 			data = []byte(p.Value)
@@ -615,27 +689,33 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("session payload is nil")
 		}
+		if p.CollectorFlags&^uint64(CollectorKnownMask) != 0 {
+			return fmt.Errorf("unsupported collector flags 0x%x", p.CollectorFlags)
+		}
 		if err := writeRefs(
-			firstSymbol(p.AppVersionRef, p.AppVersionID),
-			firstSymbol(p.BuildRef, p.BuildID),
-			firstSymbol(p.DeviceRef, p.DeviceID),
+			p.AppVersionRef,
+			p.BuildRef,
+			p.DeviceRef,
 		); err != nil {
 			return err
 		}
 		if err := writeValues(p.SDKInt); err != nil {
 			return err
 		}
-		return writeRefs(
-			firstSymbol(p.AndroidReleaseRef, p.AndroidReleaseID),
-			firstSymbol(p.SecurityPatchRef, p.SecurityPatchID),
-			firstSymbol(p.PrimaryABIRef, p.PrimaryABIID),
-			firstSymbol(p.SupportedABIsRef, p.SupportedABIsID),
-			firstSymbol(p.ManufacturerRef, p.ManufacturerID),
-			firstSymbol(p.BrandRef, p.BrandID),
-			firstSymbol(p.HardwareRef, p.HardwareID),
-			firstSymbol(p.BoardRef, p.BoardID),
-			firstSymbol(p.ProductRef, p.ProductID),
-		)
+		if err := writeRefs(
+			p.AndroidReleaseRef,
+			p.SecurityPatchRef,
+			p.PrimaryABIRef,
+			p.SupportedABIsRef,
+			p.ManufacturerRef,
+			p.BrandRef,
+			p.HardwareRef,
+			p.BoardRef,
+			p.ProductRef,
+		); err != nil {
+			return err
+		}
+		return writeValues(p.CollectorFlags)
 	case EventContext:
 		p := event.Context
 		if p == nil {
@@ -651,7 +731,7 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("http payload is nil")
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.RouteRef, p.RouteID)); err != nil {
+		if err := writeSymbolRef(w, p.RouteRef); err != nil {
 			return err
 		}
 		return writeValues(p.DurationMS, p.DNSMS, p.ConnectMS, p.TTFBMS, uint64(p.Status), p.RxBytes, p.TxBytes)
@@ -660,13 +740,19 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("ui window payload is nil")
 		}
-		return writeValues(p.WindowMS, p.FrameCount, p.JankCount, p.P50MS, p.P95MS, p.P99MS)
+		if err := validateUIWindow(p); err != nil {
+			return err
+		}
+		if err := writeValues(p.WindowMS, p.FrameCount, p.JankCount, uint64(p.Source), p.FrameDeadlineUS); err != nil {
+			return err
+		}
+		return writeValues(p.FrameDurationBuckets...)
 	case EventStall:
 		p := event.Stall
 		if p == nil {
 			return fmt.Errorf("stall payload is nil")
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.StackRef, p.StackID)); err != nil {
+		if err := writeSymbolRef(w, p.StackRef); err != nil {
 			return err
 		}
 		return writeValues(p.DurationMS)
@@ -681,7 +767,7 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("retained payload is nil")
 		}
-		if err := writeRefs(firstSymbol(p.ClassRef, p.ClassID), firstSymbol(p.HolderRef, p.HolderID)); err != nil {
+		if err := writeRefs(p.ClassRef, p.HolderRef); err != nil {
 			return err
 		}
 		return writeValues(p.AgeMS, p.Count, uint64(p.Evidence.Effective()))
@@ -702,22 +788,16 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if max == 0 {
 			max = p.Value
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.MetricRef, p.MetricID)); err != nil {
+		if err := writeSymbolRef(w, p.MetricRef); err != nil {
 			return err
 		}
 		return writeValues(p.Value, count, sum, max, uint64(p.Mode))
-	case EventFlow:
-		p := event.Flow
-		if p == nil {
-			return fmt.Errorf("flow payload is nil")
-		}
-		return writeValues(p.Phase, p.InstanceID)
 	case EventLogSpam:
 		p := event.LogSpam
 		if p == nil {
 			return fmt.Errorf("log spam payload is nil")
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.SourceRef, p.SourceID)); err != nil {
+		if err := writeSymbolRef(w, p.SourceRef); err != nil {
 			return err
 		}
 		return writeValues(p.Level, p.Count)
@@ -726,7 +806,7 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("problem payload is nil")
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.KindRef, p.KindID)); err != nil {
+		if err := writeSymbolRef(w, p.KindRef); err != nil {
 			return err
 		}
 		return writeValues(p.WindowMS, p.Count, p.MaxMS)
@@ -735,10 +815,88 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("runtime call payload is nil")
 		}
-		if err := writeSymbolRef(w, firstSymbol(p.CalleeRef, p.CalleeID)); err != nil {
+		calls := event.runtimeCalls
+		if len(calls) == 0 {
+			context := eventAttribution(event)
+			calls = []runtimeCallRow{{
+				screen: context.Screen,
+				caller: context.Owner,
+				flow:   context.Flow,
+				step:   context.Step,
+				callee: p.CalleeRef,
+				count:  p.Count,
+				total:  p.TotalMS,
+				max:    p.MaxMS,
+			}}
+		}
+		if len(calls) > MaxRuntimeCallBlockRows {
+			return fmt.Errorf("runtime call block row count %d exceeds %d", len(calls), MaxRuntimeCallBlockRows)
+		}
+		if err := writeValues(uint64(len(calls))); err != nil {
 			return err
 		}
-		return writeValues(p.Count, p.TotalMS, p.MaxMS)
+		for index := range calls {
+			if err := writeSymbolRef(w, calls[index].screen); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeSymbolRef(w, calls[index].caller); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeSymbolRef(w, calls[index].flow); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeSymbolRef(w, calls[index].step); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeSymbolRef(w, calls[index].callee); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeValues(calls[index].count); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeValues(calls[index].total); err != nil {
+				return err
+			}
+		}
+		for index := range calls {
+			if err := writeValues(calls[index].max); err != nil {
+				return err
+			}
+		}
+		return nil
+	case EventProcessExit:
+		p := event.ProcessExit
+		if p == nil {
+			return fmt.Errorf("process exit payload is nil")
+		}
+		if p.TimestampUnixMS == 0 || p.TimestampUnixMS > math.MaxInt64 {
+			return fmt.Errorf("process exit timestamp must be positive")
+		}
+		if err := writeValues(p.Reason, p.TimestampUnixMS, p.Importance, p.PSSKB, p.RSSKB); err != nil {
+			return err
+		}
+		return writeSymbolRef(w, p.ProcessRef)
+	case EventIO:
+		p := event.IO
+		if p == nil {
+			return fmt.Errorf("I/O payload is nil")
+		}
+		if p.Operation <= IOOperationUnknown || p.Operation > IOOperationContentWrite {
+			return fmt.Errorf("unsupported I/O operation %d", p.Operation)
+		}
+		return writeValues(uint64(p.Operation), p.DurationUS, p.Bytes)
 	case EventQualitySnapshot:
 		p := event.Quality
 		if p == nil {
@@ -746,6 +904,9 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		}
 		ids := make([]uint64, 0, len(p.Counters))
 		for id := range p.Counters {
+			if !IsKnownQualityCounter(id) {
+				return fmt.Errorf("unsupported quality counter id %d", id)
+			}
 			ids = append(ids, id)
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
@@ -763,10 +924,57 @@ func encodeEventPayload(w io.Writer, event Event) error {
 		if p == nil {
 			return fmt.Errorf("segment end payload is nil")
 		}
+		if !p.Reason.supported() {
+			return fmt.Errorf("unsupported segment end reason %d", p.Reason)
+		}
 		return writeValues(uint64(p.Reason), p.TotalEventRecords, p.TotalDictionaryRecords, p.LastQualitySequence)
+	case EventLogGrowth:
+		p := event.LogGrowth
+		if p == nil {
+			return fmt.Errorf("log-growth payload is nil")
+		}
+		if p.Kind != LogGrowthHistory && p.Kind != LogGrowthLive {
+			return fmt.Errorf("unsupported log-growth record kind %d", p.Kind)
+		}
+		if len(p.Raw) == 0 {
+			return fmt.Errorf("log-growth raw payload is empty")
+		}
+		if err := writeValues(uint64(p.Kind), uint64(len(p.Raw))); err != nil {
+			return err
+		}
+		return writeAll(w, p.Raw)
 	default:
 		return fmt.Errorf("unsupported event type %d", event.Type)
 	}
+}
+
+func validateUIWindow(window *UIWindowEvent) error {
+	if window.WindowMS == 0 {
+		return fmt.Errorf("UI window duration must be positive")
+	}
+	if window.JankCount > window.FrameCount {
+		return fmt.Errorf("UI jank count %d exceeds frame count %d", window.JankCount, window.FrameCount)
+	}
+	if window.Source <= UIFrameSourceUnknown || window.Source > UIFrameSourceChoreographer {
+		return fmt.Errorf("unsupported UI frame source %d", window.Source)
+	}
+	if window.FrameDeadlineUS == 0 {
+		return fmt.Errorf("UI frame deadline must be positive")
+	}
+	if len(window.FrameDurationBuckets) != UIFrameHistogramBucketCount {
+		return fmt.Errorf("UI frame histogram has %d buckets; want %d", len(window.FrameDurationBuckets), UIFrameHistogramBucketCount)
+	}
+	var total uint64
+	for _, count := range window.FrameDurationBuckets {
+		if math.MaxUint64-total < count {
+			return fmt.Errorf("UI frame histogram count overflow")
+		}
+		total += count
+	}
+	if total != window.FrameCount {
+		return fmt.Errorf("UI frame histogram count %d differs from frame count %d", total, window.FrameCount)
+	}
+	return nil
 }
 
 func writeUvarint(w io.Writer, value uint64) error {

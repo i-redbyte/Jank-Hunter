@@ -1,0 +1,3 @@
+<resources>
+    <string name="leakcanary_release_status">LeakCanary release: не входит в сборку; для benchmark используйте debug</string>
+</resources>
