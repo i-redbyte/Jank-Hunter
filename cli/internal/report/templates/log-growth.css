@@ -166,8 +166,8 @@
   background: var(--legend-color, #38bdf8);
 }
 .log-growth-table { min-width: 940px; }
-.log-growth-table tr.has-overflow td { background: rgba(239,68,68,0.055); }
-.log-growth-overflow {
+.log-growth-table tr.has-limit td { background: rgba(239,68,68,0.055); }
+.log-growth-limit {
   color: #fca5a5;
   font-weight: 800;
 }

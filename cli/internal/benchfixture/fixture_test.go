@@ -32,11 +32,18 @@ func TestMetadataCountsSemanticEventsSeparatelyFromDictionaryRecords(t *testing.
 		t.Fatal(err)
 	}
 
-	if metadata.Events != 1+profile.RuntimeCallEvents+profile.FlowEvents+profile.SignalEvents {
+	if metadata.Events != 1+profile.RuntimeCallEvents+profile.AttributedEvents+profile.SignalEvents {
 		t.Fatalf("metadata events = %d, want semantic profile total", metadata.Events)
 	}
-	if metadata.Schema != 2 {
-		t.Fatalf("metadata schema = %d, want 2", metadata.Schema)
+	if metadata.Schema != 4 {
+		t.Fatalf("metadata schema = %d, want 4", metadata.Schema)
+	}
+	if metadata.RuntimeCallBlocks <= 0 || metadata.RuntimeCallBlocks >= metadata.RuntimeCallEvents {
+		t.Fatalf(
+			"runtime call blocks = %d, want a positive batched count below %d events",
+			metadata.RuntimeCallBlocks,
+			metadata.RuntimeCallEvents,
+		)
 	}
 	if semanticEvents != metadata.Events || result.Events != uint64(metadata.Events) {
 		t.Fatalf("semantic events: callbacks=%d result=%d metadata=%d", semanticEvents, result.Events, metadata.Events)
@@ -71,7 +78,7 @@ func TestRepresentativeProfileKeepsPerformanceQualityEventVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	const wantEvents = 51_142
-	if got := 1 + profile.RuntimeCallEvents + profile.FlowEvents + profile.SignalEvents; got != wantEvents {
+	if got := 1 + profile.RuntimeCallEvents + profile.AttributedEvents + profile.SignalEvents; got != wantEvents {
 		t.Fatalf("representative semantic events = %d, want %d", got, wantEvents)
 	}
 }

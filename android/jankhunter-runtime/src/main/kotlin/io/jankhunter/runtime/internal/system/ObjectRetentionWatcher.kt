@@ -3,6 +3,7 @@ package io.jankhunter.runtime.internal.system
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterContext
+import io.jankhunter.runtime.RuntimeHookGuard
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
@@ -41,6 +42,7 @@ internal class ObjectRetentionWatcher(
             JankHunter.recordWatchedRetained(className, ownerHint, context, ageMs, count, evidence)
         },
     maxWatchedReferences: Int = DEFAULT_MAX_WATCHED_REFERENCES,
+    private val exactAdmission: Boolean = false,
     private val onCardinalityLoss: (Long) -> Unit = { count ->
         JankHunter.recordQuality(QualityCounterId.OBJECT_WATCHER_LIMIT, count)
     },
@@ -53,6 +55,7 @@ internal class ObjectRetentionWatcher(
     private val queue = ReferenceQueue<Any>()
     private val watched = ConcurrentLinkedQueue<WatchedReference>()
     private val registryLock = Any()
+    private val checkLock = Any()
     private val capacity = maxWatchedReferences.coerceAtLeast(0)
     private val heapDumpAgeMs = max(delayMs, heapDumpMinRetainedAgeMs.coerceAtLeast(0L))
     private var watchedCount = 0
@@ -64,9 +67,17 @@ internal class ObjectRetentionWatcher(
     }
 
     fun stop() {
-        running.set(false)
         maintenance?.cancel()
         maintenance = null
+        synchronized(checkLock) {
+            if (exactAdmission && running.get()) {
+                checkRetainedLocked()
+                // A force-GC first pass marks candidates and requests collection. The second pass
+                // seals survivors instead of waiting for a periodic task that has been cancelled.
+                checkRetainedLocked()
+            }
+            running.set(false)
+        }
         synchronized(registryLock) {
             watched.clear()
             watchedCount = 0
@@ -123,6 +134,12 @@ internal class ObjectRetentionWatcher(
     }
 
     internal fun checkRetained() {
+        synchronized(checkLock) {
+            checkRetainedLocked()
+        }
+    }
+
+    private fun checkRetainedLocked() {
         if (!running.get()) return
         val now = clock()
         val retainedGroups = linkedMapOf<String, RetainedGroup>()
@@ -208,11 +225,7 @@ internal class ObjectRetentionWatcher(
     }
 
     private fun recordCardinalityLoss() {
-        try {
-            onCardinalityLoss(1L)
-        } catch (throwable: Throwable) {
-            if (throwable is VirtualMachineError || throwable is ThreadDeath) throw throwable
-        }
+        RuntimeHookGuard.run { onCardinalityLoss(1L) }
     }
 
     private fun safeClassName(instance: Any, description: String?): String {

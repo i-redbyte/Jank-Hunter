@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -46,7 +47,35 @@ class RuntimeCallGraphTest {
 
         assertEquals(1L, graph.acceptedForTest())
         assertTrue(graph.flushBlocking(2_000L))
-        assertEquals(1L, graph.emittedForTest() + graph.acceptedEventLossForTest())
+        assertEquals(1L, graph.emittedForTest())
+        assertEquals(0L, graph.acceptedEventLossForTest())
+    }
+
+    @Test
+    fun semanticRootIsPublishedWithoutAnOrdinaryCallStack() = withGraph { graph ->
+        repeat(250) {
+            graph.recordSemantic(
+                callerId = 11L,
+                callerName = "jankhunter.semantic.v1.compose.composition.main",
+                calleeId = 12L,
+                calleeName = "example.FeedScreen",
+                durationMs = 3L,
+                enabled = true,
+            )
+        }
+
+        assertEquals(250L, graph.acceptedForTest())
+        assertTrue(graph.flushBlocking(2_000L))
+        assertEquals(250L, graph.emittedForTest())
+        assertTrue(graph.aggregatedEdgeKeysForTest() < 4L)
+        assertEquals(0L, graph.acceptedEventLossForTest())
+    }
+
+    @Test
+    fun disabledSemanticRootDoesNotPublish() = withGraph { graph ->
+        graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = false)
+
+        assertEquals(0L, graph.acceptedForTest())
     }
 
     @Test
@@ -75,43 +104,12 @@ class RuntimeCallGraphTest {
         assertEquals(2L, graph.acceptedForTest())
         assertTrue(graph.flushBlocking(2_000L))
         assertEquals(2L, graph.aggregatedEdgeKeysForTest())
-        assertEquals(2L, graph.emittedForTest() + graph.acceptedEventLossForTest())
+        assertEquals(2L, graph.emittedForTest())
+        assertEquals(0L, graph.acceptedEventLossForTest())
     }
 
     @Test
-    fun legacyModePreservesFirstContextEdgeIdentity() = withGraph(
-        initialScreen = "screen-a",
-        mode = JankHunterRuntimeGraphMode.LEGACY,
-    ) { graph, screen ->
-        graph.recordEdge(1L, 2L)
-        screen.set("screen-b")
-        graph.recordEdge(1L, 2L)
-
-        assertTrue(graph.flushBlocking(2_000L))
-        assertEquals(1L, graph.aggregatedEdgeKeysForTest())
-    }
-
-    @Test
-    fun shadowModeProjectsBufferedContextsToEquivalentLegacyEdge() = withGraph(
-        initialScreen = "screen-a",
-        mode = JankHunterRuntimeGraphMode.SHADOW,
-    ) { graph, screen ->
-        graph.recordEdge(1L, 2L)
-        screen.set("screen-b")
-        graph.recordEdge(1L, 2L)
-
-        assertTrue(graph.flushBlocking(2_000L))
-        val comparison = graph.shadowComparisonForTest()
-        assertEquals(0L, comparison.missingEdges)
-        assertEquals(0L, comparison.extraEdges)
-        assertEquals(0L, comparison.countDifferences)
-        assertEquals(0L, comparison.durationDifferences)
-        assertEquals(1L, comparison.contextSplits)
-        assertEquals(2L, graph.aggregatedEdgeKeysForTest())
-    }
-
-    @Test
-    fun producersMakeProgressWithoutWaitingForConsumerOrWriterMonitor() = withGraph { graph ->
+    fun producersMakeProgressWithExactAccounting() = withGraph { graph ->
         val producerCount = 32
         val eventsPerProducer = 2_000
         val pool = Executors.newFixedThreadPool(producerCount)
@@ -134,6 +132,11 @@ class RuntimeCallGraphTest {
             }
             start.countDown()
             assertTrue("producer progress timed out", done.await(10, TimeUnit.SECONDS))
+            assertTrue(graph.flushBlocking(5_000L))
+            val expected = producerCount.toLong() * eventsPerProducer
+            assertEquals(expected, graph.attemptedForTest())
+            assertEquals(expected, graph.emittedForTest())
+            assertEquals(0L, graph.acceptedEventLossForTest())
         } finally {
             pool.shutdownNow()
         }
@@ -147,25 +150,68 @@ class RuntimeCallGraphTest {
             graph.exit(child, 2L)
             graph.exit(parent, 1L)
         }
-        val accepted = graph.acceptedForTest()
-        assertTrue(accepted > 0L)
-
         assertTrue(graph.flushBlocking(5_000L))
-
-        assertEquals(accepted, graph.emittedForTest() + graph.acceptedEventLossForTest())
+        assertEquals(10_000L, graph.acceptedForTest())
+        assertEquals(10_000L, graph.emittedForTest())
+        assertTrue(graph.aggregatedEdgeKeysForTest() < 16L)
+        assertEquals(0L, graph.backpressureCountForTest())
+        assertEquals(0L, graph.acceptedEventLossForTest())
     }
 
     @Test
-    fun circuitBreakerStopsCollectionAfterSustainedLoss() = withGraph(maxKeys = 0) { graph, _ ->
+    fun periodicFlushKeepsEdgesAggregatedAcrossFormerFiveSecondBoundary() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-window").toFile()
+        val writer = writer(directory)
+        val now = AtomicLong(0L)
+        val consumerStarted = CountDownLatch(1)
+        val observedAfterFormerBoundary = CountDownLatch(2)
+        val emitted = CountDownLatch(1)
+        val graph = RuntimeCallGraph(
+            nowMs = now::get,
+            captureScreen = { "screen" },
+            captureFlow = { "flow" },
+            captureStep = { "step" },
+            maxKeys = { 128 },
+            periodicFlushIntervalMs = 30_000L,
+            batchObserver = { emitted.countDown() },
+            consumerLoopObserver = {
+                if (now.get() == 0L) consumerStarted.countDown()
+                if (now.get() == 6_000L) observedAfterFormerBoundary.countDown()
+            },
+        )
+        graph.resetFlushState(writer)
+        try {
+            assertTrue("runtime graph consumer did not start", consumerStarted.await(2L, TimeUnit.SECONDS))
+            graph.recordEdge(1L, 2L)
+            now.set(6_000L)
+            assertTrue(
+                "consumer did not observe the former five-second boundary",
+                observedAfterFormerBoundary.await(2L, TimeUnit.SECONDS),
+            )
+            assertFalse("runtime edge flushed at the former boundary", emitted.await(100L, TimeUnit.MILLISECONDS))
+
+            now.set(30_000L)
+            assertTrue("runtime edge did not flush at the bounded window", emitted.await(2L, TimeUnit.SECONDS))
+            val admissionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L)
+            while (graph.emittedForTest() < 1L && System.nanoTime() < admissionDeadline) Thread.yield()
+            assertEquals(1L, graph.emittedForTest())
+            assertEquals(0L, graph.acceptedEventLossForTest())
+        } finally {
+            graph.flushForShutdown()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aggregateCapacityIsAFlushThresholdInsteadOfALossLimit() = withGraph(maxKeys = 1) { graph, _ ->
         repeat(512) { graph.recordEdge(1L, it.toLong() + 2L) }
         assertTrue(graph.flushBlocking(5_000L))
-        assertTrue(graph.circuitBreakerOpenForTest())
-
-        val attemptsBefore = graph.attemptedForTest()
-        graph.recordEdge(1L, 999L)
-
-        assertEquals(attemptsBefore + 1L, graph.attemptedForTest())
-        assertEquals(1L, graph.circuitBreakerDropsForTest())
+        assertEquals(512L, graph.attemptedForTest())
+        assertEquals(512L, graph.emittedForTest())
+        assertEquals(0L, graph.acceptedEventLossForTest())
+        assertEquals(512L, graph.aggregatedEdgeKeysForTest())
     }
 
     @Test
@@ -185,9 +231,90 @@ class RuntimeCallGraphTest {
         directory.deleteRecursively()
     }
 
+    @Test
+    fun exactShutdownDrainsExitAdmittedAtTheShutdownBoundary() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-frontier").toFile()
+        val writer = writer(directory)
+        val admitted = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val admissions = AtomicInteger()
+        val graph = graph(
+            publisherAdmissionObserver = {
+                if (admissions.incrementAndGet() == 1) {
+                    admitted.countDown()
+                    assertTrue("publisher release timed out", release.await(5L, TimeUnit.SECONDS))
+                }
+            },
+        )
+        val executor = Executors.newFixedThreadPool(2)
+        graph.resetFlushState(writer)
+        try {
+            val publisher = executor.submit {
+                val parent = graph.enter(1L, enabled = true)
+                val child = graph.enter(2L, enabled = true)
+                graph.exit(child, 2L)
+                graph.exit(parent, 1L)
+            }
+            assertTrue("publisher was not admitted", admitted.await(5L, TimeUnit.SECONDS))
+            val shutdown = executor.submit { graph.flushForShutdown() }
+            awaitPublisherGateClosed(graph)
+
+            release.countDown()
+
+            publisher.get(5L, TimeUnit.SECONDS)
+            shutdown.get(5L, TimeUnit.SECONDS)
+            assertEquals(1L, graph.attemptedForTest())
+            assertEquals(1L, graph.acceptedForTest())
+            assertEquals(1L, graph.emittedForTest())
+            assertEquals(0L, graph.acceptedEventLossForTest())
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerFailureClosesAdmissionAndAccountsForActivePage() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-consumer-failure").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val failConsumer = CountDownLatch(1)
+        val graph = graph(
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                assertTrue("consumer failure trigger timed out", failConsumer.await(5L, TimeUnit.SECONDS))
+                error("injected consumer failure")
+            },
+        )
+        graph.resetFlushState(writer)
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            val parent = graph.enter(1L, enabled = true)
+            val child = graph.enter(2L, enabled = true)
+            graph.exit(child, 2L)
+            graph.exit(parent, 1L)
+
+            failConsumer.countDown()
+            awaitConsumerStopped(graph)
+
+            assertFalse(graph.acceptingPublishersForTest())
+            assertEquals(0L, graph.enter(3L, enabled = true))
+            assertEquals(1L, graph.acceptedForTest())
+            assertEquals(0L, graph.emittedForTest())
+            assertEquals(1L, graph.acceptedEventLossForTest())
+        } finally {
+            failConsumer.countDown()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun withGraph(
         initialScreen: String = "screen",
-        mode: JankHunterRuntimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED,
         maxKeys: Int = 128,
         block: (RuntimeCallGraph, AtomicText) -> Unit,
     ) {
@@ -195,7 +322,7 @@ class RuntimeCallGraphTest {
         val writer = writer(directory)
         val screen = AtomicText(initialScreen)
         val graph = graph(screen, maxKeys)
-        graph.resetFlushState(writer, mode)
+        graph.resetFlushState(writer)
         try {
             block(graph, screen)
         } finally {
@@ -210,7 +337,12 @@ class RuntimeCallGraphTest {
         withGraph { graph, _ -> block(graph) }
     }
 
-    private fun graph(screen: AtomicText = AtomicText("screen"), maxKeys: Int = 128): RuntimeCallGraph {
+    private fun graph(
+        screen: AtomicText = AtomicText("screen"),
+        maxKeys: Int = 128,
+        publisherAdmissionObserver: (() -> Unit)? = null,
+        consumerLoopObserver: (() -> Unit)? = null,
+    ): RuntimeCallGraph {
         val now = AtomicLong(1L)
         return RuntimeCallGraph(
             nowMs = { now.getAndIncrement() },
@@ -218,7 +350,25 @@ class RuntimeCallGraphTest {
             captureFlow = { "flow" },
             captureStep = { "step" },
             maxKeys = { maxKeys },
+            publisherAdmissionObserver = publisherAdmissionObserver,
+            consumerLoopObserver = consumerLoopObserver,
         )
+    }
+
+    private fun awaitPublisherGateClosed(graph: RuntimeCallGraph) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
+        while (graph.acceptingPublishersForTest()) {
+            assertTrue("publisher gate did not close", System.nanoTime() < deadline)
+            Thread.yield()
+        }
+    }
+
+    private fun awaitConsumerStopped(graph: RuntimeCallGraph) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5L)
+        while (graph.consumerForTest()?.isAlive == true) {
+            assertTrue("consumer did not stop", System.nanoTime() < deadline)
+            Thread.yield()
+        }
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {

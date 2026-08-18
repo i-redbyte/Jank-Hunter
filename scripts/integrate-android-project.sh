@@ -49,7 +49,6 @@ BUILD_TYPES=("debug")
 MODULE_BUILD_FILES=()
 MODULE_USES_JH_ALIAS=()
 MODULE_ADD_LITERAL_VERSION=()
-MODULE_LEGACY_HELPER=()
 MODULE_MANAGED_HELPER=()
 MODULE_CURRENT_SDK_DEPENDENCY=()
 MODULE_MANAGED_CONFIGURATION=()
@@ -1308,49 +1307,6 @@ sub remove_managed_block {
   return $source;
 }
 
-sub migrate_legacy_helper {
-  my ($source) = @_;
-  my $marker = '// Jank Hunter optional OkHttp/WebSocket helper';
-  my @markers;
-  while ($source =~ /^[ \t]*\Q$marker\E[ \t]*\r?(?:\n|\z)/mg) {
-    push @markers, [$-[0], $+[0]];
-  }
-  die "multiple legacy Jank Hunter helper markers in $file\n" if @markers > 1;
-  return $source unless @markers;
-  my ($marker_start, $marker_end) = @{$markers[0]};
-  my $tokens = tokenise($source);
-  my $opening_index = -1;
-  for (my $index = 0; $index + 1 < @$tokens; $index++) {
-    next if $tokens->[$index]{start} < $marker_end;
-    die "legacy helper marker is not followed by dependencies { ... } in $file\n"
-      unless $tokens->[$index]{type} eq 'identifier' && $tokens->[$index]{value} eq 'dependencies' &&
-        $tokens->[$index + 1]{type} eq 'symbol' && $tokens->[$index + 1]{value} eq '{';
-    $opening_index = $index + 1;
-    last;
-  }
-  die "legacy helper marker has no dependencies block in $file\n" if $opening_index < 0;
-  my $closing_index = matching_symbol($tokens, $opening_index, '{', '}');
-  my $block_start = $tokens->[$opening_index - 1]{start};
-  my $block_end = $tokens->[$closing_index]{end};
-  my $between = substr($source, $marker_end, $block_start - $marker_end);
-  my $block = substr($source, $block_start, $block_end - $block_start);
-  my $group = quotemeta($ENV{JH_GROUP} // die "JH_GROUP is required\n");
-  my @lines = split(/(?<=\n)/, $block, -1);
-  my @kept;
-  for my $line (@lines) {
-    if ($line =~ /^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*Implementation|add)\b[^\n]*["']$group:jankhunter-okhttp3:[^"']+["'][^\n]*(?:\n|\z)$/) {
-      next;
-    }
-    push @kept, $line;
-  }
-  my $migrated = join('', @kept);
-  if ($migrated =~ /["']$group:jankhunter-okhttp3:[^"']+["']/) {
-    die "legacy helper dependency uses unsupported multiline/custom syntax in $file; migrate it manually\n";
-  }
-  substr($source, $marker_start, $block_end - $marker_start, $between . $migrated);
-  return $source;
-}
-
 sub top_level_block {
   my ($source, $name) = @_;
   my $blocks = named_blocks($source, $name, 0);
@@ -1380,7 +1336,7 @@ sub inspect_aliases {
     if ($prefix =~ /(?:^|\s)apply\s+plugin\s*:\s*$/ ||
         $prefix =~ /(?:^|\s)apply\s*\(\s*plugin\s*=\s*$/ ||
         $prefix =~ /pluginManager\s*\.\s*apply\s*\(\s*$/) {
-      die "legacy/programmatic Jank Hunter plugin application in $file cannot be versioned safely; migrate it to plugins { id(...) }\n";
+      die "programmatic Jank Hunter plugin application in $file cannot be versioned safely; use plugins { id(...) }\n";
     }
   }
   die "multiple top-level plugins blocks in $file\n" if @$blocks > 1;
@@ -1420,8 +1376,6 @@ if ($command eq 'preflight-settings') {
   my @versioned = grep { $_->{version} } @$declarations;
   print scalar(@versioned);
 } elsif ($command eq 'preflight-module') {
-  my $legacy_marker = '// Jank Hunter optional OkHttp/WebSocket helper';
-  my $legacy_count = exact_marker_count($text, $legacy_marker);
   my $managed_helper_count = exact_marker_count($text, '// Jank Hunter optional helper dependencies - BEGIN');
   my $managed_configuration_count = exact_marker_count($text, '// Jank Hunter integration managed configuration - BEGIN');
   my $sdk_dependency = $ENV{JH_SDK_DEPENDENCY} // '';
@@ -1430,9 +1384,8 @@ if ($command eq 'preflight-settings') {
       $text =~ m{^[ \t]*// Jank Hunter optional helper dependencies - BEGIN[ \t]*\r?\n(.*?)^[ \t]*// Jank Hunter optional helper dependencies - END[ \t]*\r?$}ms) {
     $current_sdk_dependency = index($1, $sdk_dependency) >= 0 ? 1 : 0;
   }
-  migrate_legacy_helper($text);
   my ($literal, $alias, $missing) = inspect_aliases($text);
-  print "$literal|$alias|$missing|$legacy_count|$managed_helper_count|$managed_configuration_count|$current_sdk_dependency";
+  print "$literal|$alias|$missing|$managed_helper_count|$managed_configuration_count|$current_sdk_dependency";
 } elsif ($command eq 'patch-central') {
   print replace_plugin_versions($text, 0, 0);
 } elsif ($command eq 'patch-settings') {
@@ -1442,8 +1395,6 @@ if ($command eq 'preflight-settings') {
   my $dependency_end = $ENV{JH_DEPENDENCY_REPOSITORY_END} // die "dependency end marker is required\n";
   $text = remove_managed_block($text, $plugin_begin, $plugin_end);
   $text = remove_managed_block($text, $dependency_begin, $dependency_end);
-  $text =~ s{^[ \t]*// Jank Hunter plugin repository[ \t]*\r?\n[ \t]*repositories\s*\{\s*maven\s*\{[^{}]*\}\s*\}[ \t]*(?:\r?\n|\z)}{}msg;
-  $text =~ s{^[ \t]*// Jank Hunter dependency repository[ \t]*\r?\n[ \t]*repositories\s*\{\s*maven\s*\{[^{}]*\}\s*\}[ \t]*(?:\r?\n|\z)}{}msg;
   $text = replace_plugin_versions($text, 0, 0);
   my $plugin_block = $ENV{PLUGIN_BLOCK} // die "PLUGIN_BLOCK is required\n";
   my $dependency_block = $ENV{DEPENDENCY_BLOCK} // die "DEPENDENCY_BLOCK is required\n";
@@ -1461,7 +1412,6 @@ if ($command eq 'preflight-settings') {
   my $preserve_configuration = ($ENV{JH_PRESERVE_MANAGED_CONFIGURATION} // '0') eq '1';
   $text = remove_managed_block($text, $dependencies_begin, $dependencies_end) unless $preserve_helper;
   $text = remove_managed_block($text, $configuration_begin, $configuration_end) unless $preserve_configuration;
-  $text = migrate_legacy_helper($text);
   my ($blocks, $declarations, $aliases) = jh_declarations($text, 1);
   die "multiple top-level plugins blocks in $file\n" if @$blocks > 1;
   die "multiple literal Jank Hunter plugin declarations in $file\n" if @$declarations > 1;
@@ -2222,11 +2172,10 @@ preflight_target_project() {
 
   MODULE_USES_JH_ALIAS=()
   MODULE_ADD_LITERAL_VERSION=()
-  MODULE_LEGACY_HELPER=()
   MODULE_MANAGED_HELPER=()
   MODULE_CURRENT_SDK_DEPENDENCY=()
   MODULE_MANAGED_CONFIGURATION=()
-  local index file result literal alias missing legacy managed_helper managed_configuration current_sdk_dependency
+  local index file result literal alias missing managed_helper managed_configuration current_sdk_dependency
   for ((index = 0; index < ${#MODULE_BUILD_FILES[@]}; index++)); do
     file="${MODULE_BUILD_FILES[$index]}"
     validate_target_file_path "module build file" "$file"
@@ -2237,20 +2186,19 @@ preflight_target_project() {
       "// Jank Hunter optional helper dependencies - BEGIN" \
       "// Jank Hunter optional helper dependencies - END"
     if ! result="$(
-      JH_GROUP="$GROUP" JH_SDK_DEPENDENCY="$GROUP:jankhunter-android-sdk:$VERSION" \
+      JH_SDK_DEPENDENCY="$GROUP:jankhunter-android-sdk:$VERSION" \
         JH_CATALOG_ALIAS="$CATALOG_JH_ALIAS" CATALOG_ALIASES="$CATALOG_ALIASES" \
         HAS_STANDARD_CATALOG="$([[ -n "$CATALOG_FILE" ]] && printf 1 || printf 0)" \
         gradle_file_tool preflight-module "$file"
     )"; then
       fail "module Gradle structure is ambiguous or unsafe to patch: $file"
     fi
-    IFS='|' read -r literal alias missing legacy managed_helper managed_configuration current_sdk_dependency <<< "$result"
+    IFS='|' read -r literal alias missing managed_helper managed_configuration current_sdk_dependency <<< "$result"
     [[ "$literal" =~ ^[0-9]+$ && "$alias" =~ ^[0-9]+$ && "$missing" =~ ^[01]$ &&
-      "$legacy" =~ ^[01]$ && "$managed_helper" =~ ^[01]$ && "$managed_configuration" =~ ^[01]$ &&
+      "$managed_helper" =~ ^[01]$ && "$managed_configuration" =~ ^[01]$ &&
       "$current_sdk_dependency" =~ ^[01]$ ]] ||
       fail "invalid module preflight result for $file: $result"
     MODULE_USES_JH_ALIAS+=("$alias")
-    MODULE_LEGACY_HELPER+=("$legacy")
     MODULE_MANAGED_HELPER+=("$managed_helper")
     MODULE_CURRENT_SDK_DEPENDENCY+=("$current_sdk_dependency")
     MODULE_MANAGED_CONFIGURATION+=("$managed_configuration")

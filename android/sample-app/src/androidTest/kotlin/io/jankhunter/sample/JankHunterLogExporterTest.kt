@@ -30,7 +30,12 @@ class JankHunterLogExporterTest {
         File(source, "retained.hprof").writeBytes(heapBytes)
         File(source, "ignored.txt").writeText("ignored")
 
-        val archive = JankHunterLogExporter(context, source, destination).createArchive()
+        val archive = JankHunterLogExporter(
+            context,
+            source,
+            destination,
+            captureCurrentLogPaths = { listOf(File(source, "session.jhlog").absolutePath) },
+        ).createArchive()
         requireNotNull(archive)
         ZipFile(archive).use { zip ->
             val names = zip.entries().asSequence().map { it.name }.toList()
@@ -49,11 +54,39 @@ class JankHunterLogExporterTest {
         }
         val destination = File(context.cacheDir, "exporter-empty-output")
 
-        assertNull(JankHunterLogExporter(context, source, destination).createArchive())
+        assertNull(
+            JankHunterLogExporter(
+                context,
+                source,
+                destination,
+                captureCurrentLogPaths = { emptyList() },
+            ).createArchive(),
+        )
     }
 
     @Test
-    fun writesCurrentGrowthSummaryBeforeReadingArtifacts() {
+    fun returnsNullWhenConsistentSnapshotCannotBeCaptured() {
+        val context = ApplicationProvider.getApplicationContext<SampleApplication>()
+        val source = File(context.cacheDir, "exporter-failed-snapshot-source").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val destination = File(context.cacheDir, "exporter-failed-snapshot-output")
+        File(source, "unsealed.jhlog").writeBytes(byteArrayOf(1, 2, 3))
+
+        val archive = JankHunterLogExporter(
+            context,
+            source,
+            destination,
+            captureCurrentLogPaths = { null },
+        ).createArchive()
+
+        assertNull(archive)
+        assertTrue(!destination.exists() || destination.listFiles().isNullOrEmpty())
+    }
+
+    @Test
+    fun capturesSealedLogFrontierBeforeReadingArtifacts() {
         val context = ApplicationProvider.getApplicationContext<SampleApplication>()
         val source = File(context.cacheDir, "exporter-checkpoint-source").apply {
             deleteRecursively()
@@ -64,26 +97,51 @@ class JankHunterLogExporterTest {
             mkdirs()
         }
         val log = File(source, "active.jhlog").apply { writeBytes(byteArrayOf(1)) }
-        var summaryWritten = false
+        var snapshotCaptured = false
         val exporter = JankHunterLogExporter(
             context = context,
             sourceDirectory = source,
             exportDirectory = destination,
-            writeCurrentGrowthSummary = {
+            captureCurrentLogPaths = {
                 log.writeBytes(byteArrayOf(1, 2, 3))
-                summaryWritten = true
-                true
+                snapshotCaptured = true
+                listOf(log.absolutePath)
             },
         )
 
         val archive = requireNotNull(exporter.createArchive())
 
-        assertTrue(summaryWritten)
+        assertTrue(snapshotCaptured)
         ZipFile(archive).use { zip ->
             assertArrayEquals(
                 byteArrayOf(1, 2, 3),
                 zip.getInputStream(zip.getEntry("active.jhlog")).readBytes(),
             )
+        }
+    }
+
+    @Test
+    fun excludesOpenLogThatIsNotPartOfTheSealedSnapshot() {
+        val context = ApplicationProvider.getApplicationContext<SampleApplication>()
+        val source = File(context.cacheDir, "exporter-frontier-source").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val destination = File(context.cacheDir, "exporter-frontier-output")
+        val sealed = File(source, "sealed.jhlog").apply { writeBytes(byteArrayOf(1)) }
+        File(source, "open.jhlog").writeBytes(byteArrayOf(2))
+
+        val archive = requireNotNull(
+            JankHunterLogExporter(
+                context,
+                source,
+                destination,
+                captureCurrentLogPaths = { listOf(sealed.absolutePath) },
+            ).createArchive(),
+        )
+
+        ZipFile(archive).use { zip ->
+            assertEquals(listOf("sealed.jhlog"), zip.entries().asSequence().map { it.name }.toList())
         }
     }
 }

@@ -1,5 +1,6 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.saturatingAdd
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReferenceArray
@@ -15,6 +16,13 @@ internal fun advanceRuntimeEpoch(epoch: AtomicLong) {
 internal fun recordAndResetQuality(writer: AsyncLogWriter, counterId: Int, counter: AtomicLong) {
     val value = counter.getAndSet(0L)
     if (value > 0L) writer.recordQuality(counterId, value)
+}
+
+internal fun addSaturating(target: AtomicLong, delta: Long) {
+    var current = target.get()
+    while (!target.compareAndSet(current, saturatingAdd(current, delta))) {
+        current = target.get()
+    }
 }
 
 internal inline fun <T> registerFirstAvailable(

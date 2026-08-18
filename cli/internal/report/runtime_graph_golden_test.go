@@ -10,11 +10,10 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 )
 
-func TestRuntimeGraphV9JSONAndHTMLGoldens(t *testing.T) {
+func TestRuntimeGraphJH100JSONAndHTMLGoldens(t *testing.T) {
 	fixtures := []string{
-		"runtime-graph-legacy-v9",
-		"runtime-graph-buffered-v9",
-		"runtime-graph-incomplete-v9",
+		"runtime-graph-contextual-100",
+		"runtime-graph-incomplete-100",
 	}
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {
@@ -52,33 +51,9 @@ func normalizeGoldenHTML(payload []byte) []byte {
 	return bytes.Join(lines, []byte{'\n'})
 }
 
-func TestRuntimeGraphLegacyAndBufferedFixturesPreserveProjectedTotals(t *testing.T) {
-	legacy, err := analyze.InspectFilesWithOptions(
-		"legacy", []string{filepath.Join("testdata", "runtime-graph-legacy-v9.jhlog")}, analyze.Options{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	buffered, err := analyze.InspectFilesWithOptions(
-		"buffered", []string{filepath.Join("testdata", "runtime-graph-buffered-v9.jhlog")}, analyze.Options{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(legacy.RuntimeCalls) != 1 || len(buffered.RuntimeCalls) != 2 {
-		t.Fatalf("context split mismatch: legacy=%+v buffered=%+v", legacy.RuntimeCalls, buffered.RuntimeCalls)
-	}
-	legacyCount, legacyTotal, legacyMax := runtimeGraphTotals(legacy)
-	bufferedCount, bufferedTotal, bufferedMax := runtimeGraphTotals(buffered)
-	if legacyCount != bufferedCount || legacyTotal != bufferedTotal || legacyMax != bufferedMax {
-		t.Fatalf("projected totals changed: legacy=%d/%d/%d buffered=%d/%d/%d",
-			legacyCount, legacyTotal, legacyMax, bufferedCount, bufferedTotal, bufferedMax)
-	}
-}
-
-func TestIncompleteFixtureReportsCircuitBreakerAndTwentyPercentCompleteness(t *testing.T) {
+func TestIncompleteFixtureReportsTwentyPercentCompleteness(t *testing.T) {
 	summary, err := analyze.InspectFilesWithOptions(
-		"incomplete", []string{filepath.Join("testdata", "runtime-graph-incomplete-v9.jhlog")}, analyze.Options{},
+		"incomplete", []string{filepath.Join("testdata", "runtime-graph-incomplete-100.jhlog")}, analyze.Options{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -97,15 +72,4 @@ func assertGoldenBytes(t *testing.T, path string, actual []byte) {
 	if !bytes.Equal(expected, actual) {
 		t.Fatalf("golden mismatch for %s; regenerate with `go run ./testdata/generate.go`", path)
 	}
-}
-
-func runtimeGraphTotals(summary analyze.Summary) (count, total, max uint64) {
-	for _, edge := range summary.RuntimeCalls {
-		count += edge.Count
-		total += edge.TotalMS
-		if edge.MaxMS > max {
-			max = edge.MaxMS
-		}
-	}
-	return count, total, max
 }

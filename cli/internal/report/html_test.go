@@ -1,8 +1,12 @@
 package report
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +65,20 @@ func TestCompareRowsDoNotCallOneSidedDimensionsRegressions(t *testing.T) {
 	}
 }
 
+func TestScreenComparisonDoesNotTreatMissingFPSAsZero(t *testing.T) {
+	baseline := analyze.Summary{Screens: []analyze.ScreenStats{{
+		Screen: "Feed", Frames: 240, JankRatePct: 2, AvgFPS: 60,
+	}}}
+	candidate := analyze.Summary{Screens: []analyze.ScreenStats{{
+		Screen: "Feed", Frames: 240, JankRatePct: 2, AvgFPS: 0, FPSStatus: "sparse_rendering",
+	}}}
+
+	row := screenCompareRows(baseline, candidate)[0]
+	if row.DeltaFPS != 0 || row.FPSComparable || row.Severity != "ok" {
+		t.Fatalf("missing candidate FPS became a regression: %+v", row)
+	}
+}
+
 func TestInspectAnalysisCapsSmallSamplesAndAvoidsHealthyClaim(t *testing.T) {
 	analysis := inspectAnalysis(analyze.Summary{
 		LogCount:   1,
@@ -73,6 +91,99 @@ func TestInspectAnalysisCapsSmallSamplesAndAvoidsHealthyClaim(t *testing.T) {
 	}
 	if analysis.Status == "Все хорошо" || strings.Contains(analysis.Summary, "прогон здоров") {
 		t.Fatalf("analysis made a categorical health claim: %+v", analysis)
+	}
+}
+
+func TestTransientReportOutputMatchesDurableOutput(t *testing.T) {
+	directory := t.TempDir()
+	durablePath := filepath.Join(directory, "durable.html")
+	transientPath := filepath.Join(directory, "transient.html")
+	summary := analyze.Summary{
+		Title:             "sample.jhlog",
+		LogCount:          1,
+		EventCount:        1,
+		CollectionQuality: sampleCollectionQuality(),
+	}
+	options := ReportOptions{GeneratedAt: "2026-08-17T12:00:00+03:00"}
+	if err := WriteInspectWithOptions(durablePath, summary, options); err != nil {
+		t.Fatalf("write durable report: %v", err)
+	}
+	options.TransientOutput = true
+	if err := WriteInspectWithOptions(transientPath, summary, options); err != nil {
+		t.Fatalf("write transient report: %v", err)
+	}
+	durable, err := os.ReadFile(durablePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transient, err := os.ReadFile(transientPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(transient, durable) {
+		t.Fatal("transient report differs from the durable report")
+	}
+}
+
+func TestInspectDoesNotPresentSparseFramesAsZeroFPS(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sparse-ui.html")
+	summary := analyze.Summary{
+		Title:       "sparse-ui",
+		UIFrames:    30,
+		UIFPSStatus: "sparse_rendering",
+		UIAvgFPS:    0,
+		UIMinFPS:    0,
+		Screens: []analyze.ScreenStats{{
+			Screen: "IdleActivity", Frames: 30, WindowCount: 1, WindowMS: 90_000,
+			FPSStatus: "sparse_rendering",
+		}},
+	}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{GeneratedAt: "2026-08-18T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(payload)
+	if !strings.Contains(html, "не оценивается: редкая отрисовка") {
+		t.Fatalf("sparse FPS explanation missing")
+	}
+	if strings.Contains(html, `<div class="value">0.0</div>`) || strings.Contains(html, `<td>0.0</td>`) {
+		t.Fatalf("sparse frames were rendered as a measured zero FPS")
+	}
+}
+
+func TestInspectUsesGroupedIncidentsOnMainPage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incidents.html")
+	raw := []analyze.ProblemFinding{
+		{ID: "raw-stall", Title: "Сырая пауза", Category: analyze.ProblemCategoryStability},
+		{ID: "raw-ui", Title: "Сырой UI-сигнал", Category: analyze.ProblemCategoryUI},
+	}
+	incident := analyze.ProblemFinding{
+		ID: "incident-feed", Title: "Экран Feed: связанный инцидент", Category: analyze.ProblemCategoryUI,
+		Severity: "high", Confidence: "high", Status: "observed",
+		RelatedCategories: []string{analyze.ProblemCategoryStability, analyze.ProblemCategoryUI},
+	}
+	summary := analyze.Summary{
+		ProblemSchemaVersion: analyze.ProblemSchemaVersion,
+		ProblemSummary:       analyze.ProblemSummary{Verdict: "problems_found", Headline: "Один инцидент", Total: 1, SignalTotal: 2},
+		Problems:             raw,
+		ProblemIncidents:     []analyze.ProblemFinding{incident},
+	}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{GeneratedAt: "2026-08-18T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(payload)
+	if !strings.Contains(html, "Экран Feed: связанный инцидент") || !strings.Contains(html, `data-category="stability ui_main_thread"`) {
+		t.Fatalf("grouped incident or its categories are missing")
+	}
+	if strings.Contains(html, "Сырая пауза") || strings.Contains(html, "Сырой UI-сигнал") {
+		t.Fatalf("raw duplicate findings leaked into the main problem cards")
 	}
 }
 
@@ -100,17 +211,18 @@ func TestWriteReports(t *testing.T) {
 				{Label: "Рут-доступ", Value: "нет", Detail: "признаки рут-доступа не найдены"},
 			},
 		},
+		CollectionQuality: sampleCollectionQuality(),
 		Routes: []analyze.RouteStats{
-			{Route: "GET /feed", Count: 21_000, Sampled: 20_000, Failures: 0, P95MS: 612, P95Approximate: true, MaxMS: 612, OwnerSample: "FeedRepository.refresh"},
+			{Route: "GET /feed", Count: 21_000, Failures: 0, P95MS: 612, MaxMS: 612, OwnerSample: "FeedRepository.refresh"},
 		},
 		Screens: []analyze.ScreenStats{
-			{Screen: "Feed", Frames: 1122, JankyFrames: 90, JankRatePct: 8.02, AvgFPS: 56.1, P95MS: 24},
+			{Screen: "Feed", Frames: 1122, JankyFrames: 90, JankRatePct: 8.02, AvgFPS: 56.1, WindowCount: 3, FrameP95MS: 24, FrameDistributionState: "mergeable_histogram_v2"},
 		},
 		Owners: []analyze.OwnerStats{
 			{Owner: "FeedRepository.refresh", Kind: "http", Count: 2, MaxMS: 612},
 		},
 		Flows: []analyze.FlowStats{
-			{Screen: "Feed", Flow: "feed.open", Step: "network", Owner: "FeedRepository.refresh", HTTPCount: 21_000, HTTPP95MS: 612, HTTPP95Approximate: true, UIFrames: 1122, UIJank: 90, UIJankPct: 8.02},
+			{Screen: "Feed", Flow: "feed.open", Step: "network", Owner: "FeedRepository.refresh", HTTPCount: 21_000, HTTPP95MS: 612, UIFrames: 1122, UIJank: 90, UIJankPct: 8.02},
 		},
 		LogSpam: []analyze.LogSpamStats{
 			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Source: "android.util.Log.w", Level: "warn", Count: 7},
@@ -152,6 +264,7 @@ func TestWriteReports(t *testing.T) {
 		Influence: sampleInfluence(),
 	}
 	summary.CodeProblems = analyze.BuildCodeProblemRegistry(summary)
+	attachProblemReport(t, &summary)
 
 	dir := t.TempDir()
 	inspectPath := filepath.Join(dir, "inspect.html")
@@ -162,10 +275,11 @@ func TestWriteReports(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertModernReportStyle(t, inspectPath)
-	assertHTMLContains(t, inspectPath, "Отчет по сигналам выполнения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Сетевые маршруты", "Сценарии и причины", "Спам логами", "Проблемные окна", "Вызовы выполнения", "Реестр проблем кода", "Удержания и возможные утечки памяти", "Шкала реестра кода", "Категории", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "λ Анализ", `href="inspect-math.html"`, "approx-badge", "p95 рассчитан по reservoir-сэмплу: 20000 из 21000 запросов", "HTTP p95 сценария рассчитан по reservoir-сэмплу")
-	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "candidate.closest('.metric')")
-	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)")
+	assertCurrentReportStyle(t, inspectPath)
+	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск охватывает не только карточки проблем", "Поиск по всем данным страницы", "все классы и строки подробных разделов этой страницы, включая ещё не раскрытые", "Фильтры справа изменяют только карточки проблем", "Что делать", "Состав приоритета", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Сценарии и причины", "Спам логами", "Проблемные окна", "Связи вызовов", "Код и полные доказательства", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "data-registry-category", "data-registry-severity", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Индекс доверия: 80.00", "Runtime-граф отключён", "Не хватает", "Подробный анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "descriptiveBlock", ".problem-card[hidden]", "minmax(min(100%, 340px), 1fr)", "indexDeferredScript", "report-search-deferred", "revealDeferredSearchEntry", "details.parentElement?.closest('details')")
+	assertHTMLContains(t, inspectPath, "Достаточность данных для выводов", "Проверка правил на эталонных данных", "нет эталонной проверки", "Задержка верхних 5% кадров", "Плавность UI и возможные причины", "Итог анализа", "Что могло замедлить интерфейс", "Уровень связи", "кандидат из кода", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
+	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)", "reservoir", "approx-badge", `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр реестра проблем кода")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspectWithOptions(mathInspectPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{
@@ -174,8 +288,8 @@ func TestWriteReports(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
-	assertModernReportStyle(t, mathInspectPath)
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция сценариев и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Экспозиция плохих состояний", "Контекстная липкость", "Вклады симптомов", "Прогноз траектории", "Методика и наблюдения", "Пропуск означает отсутствие memory-сэмпла", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Уверенность: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, "← Обзор")
+	assertCurrentReportStyle(t, mathInspectPath)
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция сценариев и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Экспозиция плохих состояний", "Контекстная липкость", "Вклады симптомов", "In-sample проекция траектории", "Методика и наблюдения", "Пропуск означает отсутствие memory-сэмпла", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Поддержка модели: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, `href="inspect.html#runtime-calls"`, "не дублируется второй раз", "← Обзор")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -188,28 +302,30 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertModernReportStyle(t, comparePath)
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Контекст сравнения", "Сеть и трафик", "Реестр проблем кода кандидата", "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "data-registry-category", "data-registry-severity", "code-problem-details", "Доказательства и рекомендация", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "кандидат против базы", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение сценариев и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "λ Анализ", `href="compare-math.html"`)
+	assertCurrentReportStyle(t, comparePath)
+	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Код и подтверждающие данные кандидата", "Открыть сравнительный реестр кода и подтверждающие данные", "Сравнение сигналов удержания памяти", "Шкала сравнения", "data-registry-category", "data-registry-severity", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение сценариев и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Индекс доверия: база 80.00%", "Доверие кандидата", "Runtime-граф отключён", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLNotContains(t, comparePath, `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр сравнительного реестра проблем кода")
 
+	assertHTMLContains(t, comparePath, "Достаточность данных кандидата", "Проверка правил на эталонных данных", "Frame p95 кандидата")
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
-	assertModernReportStyle(t, mathComparePath)
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение сценариев и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Экспозиция плохих состояний кандидата", "Граф связей и гипотез", "База · прогноз траектории", "Кандидат · прогноз траектории", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
+	assertCurrentReportStyle(t, mathComparePath)
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение сценариев и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Экспозиция плохих состояний кандидата", "Граф связей и гипотез", "База · in-sample проекция", "Кандидат · in-sample проекция", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluenceWithOptions(influencePath, sampleInfluence(), "Граф влияния кода", ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
-	assertModernReportStyle(t, influencePath)
+	assertCurrentReportStyle(t, influencePath)
 	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Классы для проверки", "Связи между классами", "Пути для расследования", "Методы для проверки", "Показать классы для проверки", "Показать связи", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", "data-influence-view=\"packages\"", "data-influence-highlight=\"tree\"", "data-influence-selection", "data-influence-viewport", "buildNeighborhood", "expandPackage", "RuntimeCount", "StaticCount", `href="inspect.html"`, "← Обзор")
 
 	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
 	if err := WriteInstrumentationDiagnosticsWithOptions(diagnosticsPath, sampleInstrumentationDiagnostics(), ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
-	assertModernReportStyle(t, diagnosticsPath)
+	assertCurrentReportStyle(t, diagnosticsPath)
 	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
 
 	dependencyInjectionPath := filepath.Join(dir, "inspect-di.html")
@@ -220,7 +336,7 @@ func TestWriteReports(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteDependencyInjectionWithOptions() error = %v", err)
 	}
-	assertModernReportStyle(t, dependencyInjectionPath)
+	assertCurrentReportStyle(t, dependencyInjectionPath)
 	assertHTMLContains(
 		t,
 		dependencyInjectionPath,
@@ -271,8 +387,11 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 	directory := t.TempDir()
 	path := filepath.Join(directory, "inspect.html")
 	summary := analyze.Summary{
-		Title:    "active.jhlog",
-		LogCount: 1,
+		Title:             "active.jhlog",
+		LogCount:          1,
+		CollectorSessions: 1,
+		CollectorFlagsAny: uint64(jhlog.CollectorKnownMask &^ jhlog.CollectorIOTracing),
+		CollectorFlagsAll: uint64(jhlog.CollectorKnownMask &^ jhlog.CollectorIOTracing),
 		CollectionQuality: analyze.CollectionQuality{
 			Level:   "high",
 			Notices: []string{"снимок активной сессии прочитан корректно"},
@@ -298,6 +417,17 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 		strings.Contains(qualitySection, `<details class="fold" open>`) {
 		t.Fatal("technical quality details must be collapsed by default")
 	}
+	for _, expected := range []string{
+		"Какие сборщики реально были включены",
+		"Статусы прочитаны из самого журнала",
+		"collector-capability-disabled",
+		"Типизированные I/O операции",
+		"В этом прогоне данные этого типа не собирались",
+	} {
+		if !strings.Contains(qualitySection, expected) {
+			t.Fatalf("technical quality misses %q", expected)
+		}
+	}
 }
 
 func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testing.T) {
@@ -317,9 +447,9 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 				ConfiguredLimitBytes: 1_048_576,
 				MaximumRetainedBytes: 1_000_000,
 				GeneratedBytes:       1_700_000,
-				OverflowCount:        2,
-				EvictedChunkCount:    4,
-				EvictedBytes:         700_000,
+				LimitReachedCount:    1,
+				SegmentRotationCount: 4,
+				ArchiveEvictedBytes:  700_000,
 				Completed:            true,
 			}},
 			Days: []jhlog.LogGrowthDay{{
@@ -330,9 +460,9 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 				MaximumRetainedBytes:  1_000_000,
 				MaximumFillPermille:   954,
 				SessionsReachingLimit: 1,
-				OverflowCount:         2,
-				EvictedChunkCount:     4,
-				EvictedBytes:          700_000,
+				LimitReachedCount:     1,
+				SegmentRotationCount:  4,
+				ArchiveEvictedBytes:   700_000,
 			}},
 		},
 	}
@@ -354,15 +484,15 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 		`<details class="fold">`,
 		`data-log-growth-json`,
 		`"history_generation":7`,
-		`"overflow_count":2`,
+		`"limit_reached_count":1`,
 		`data-growth-period="week"`,
 		`data-growth-calculate`,
 		`data-growth-session-chart`,
 		`data-growth-day-chart`,
 		`data-growth-period-insight`,
 		`по горизонтали — дата начала сессии`,
-		`лимит достигнут, старые блоки вытеснялись`,
-		`Лимит достигается многократно`,
+		`сбор остановлен по лимиту`,
+		`Общий лимит часто исчерпывается`,
 		`const selected = days.filter`,
 	} {
 		if !strings.Contains(growthSection, expected) {
@@ -371,6 +501,57 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 	}
 	if strings.Contains(growthSection, `<details class="fold" open>`) {
 		t.Fatal("log growth details must be collapsed by default")
+	}
+}
+
+func TestInspectMakesStaleGrowthProjectionProminent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stale-growth.html")
+	summary := analyze.Summary{LogGrowth: analyze.LogGrowthSummary{
+		Available:       true,
+		FreshnessStatus: "stale",
+		FreshnessReason: "lag=82507 мс, хвост=20609 байт",
+	}}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	html, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"Growth snapshot устарел", "lag=82507 мс", "согласованный export snapshot"} {
+		if !strings.Contains(string(html), expected) {
+			t.Fatalf("stale growth report misses %q", expected)
+		}
+	}
+}
+
+func TestInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis-inputs.html")
+	summary := analyze.Summary{AnalysisInputs: analyze.AnalysisInputCompleteness{
+		Status:          "runtime_only",
+		RuntimeEvidence: true,
+		SymbolsResolved: true,
+		SymbolMode:      "embedded",
+		Missing:         []string{"class-graph.jsonl", "instrumentation-diagnostics.jsonl"},
+		Explanation:     "доступны только runtime evidence",
+	}}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	html, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`id="collection-quality"`,
+		"Источники технического анализа",
+		"Часть углублённого анализа недоступна",
+		"class-graph.jsonl, instrumentation-diagnostics.jsonl",
+		"События запуска",
+	} {
+		if !strings.Contains(string(html), expected) {
+			t.Fatalf("analysis completeness report misses %q", expected)
+		}
 	}
 }
 
@@ -395,20 +576,20 @@ func TestInspectRendersLogGrowthStateMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "repeated overflow",
+			name: "archive limit reached",
 			session: jhlog.LogGrowthSession{
-				SessionID:            "repeated-overflow",
+				SessionID:            "archive-limit-reached",
 				DayKey:               20260702,
 				StartedAtMS:          1_700_086_400_000,
 				EndedAtMS:            1_700_086_520_000,
 				ConfiguredLimitBytes: limit,
 				MaximumRetainedBytes: limit,
 				GeneratedBytes:       4 * limit,
-				OverflowCount:        3,
-				EvictedChunkCount:    9,
-				EvictedBytes:         3 * limit,
-				FirstOverflowAtMS:    1_700_086_430_000,
-				LastOverflowAtMS:     1_700_086_510_000,
+				LimitReachedCount:    1,
+				SegmentRotationCount: 9,
+				ArchiveEvictedBytes:  3 * limit,
+				FirstLimitReachedMS:  1_700_086_430_000,
+				LastLimitReachedMS:   1_700_086_510_000,
 				Completed:            true,
 			},
 		},
@@ -549,6 +730,51 @@ func TestWriteLogGrowthVisualFixture(t *testing.T) {
 	}
 }
 
+func TestWriteLogGrowthPaginationFixture(t *testing.T) {
+	path := os.Getenv("JH_GROWTH_PAGINATION_OUT")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "inspect-pagination.html")
+	}
+	if err := WriteInspectWithOptions(
+		path,
+		analyze.Summary{Title: "log-growth-pagination", LogGrowth: largeLogGrowthSummary(120)},
+		ReportOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func largeLogGrowthSummary(count int) analyze.LogGrowthSummary {
+	const limit = uint64(1024 * 1024)
+	const minuteMS = uint64(60_000)
+	startedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	sessions := make([]jhlog.LogGrowthSession, 0, count)
+	days := make([]jhlog.LogGrowthDay, 0, count)
+	for index := range count {
+		started := startedAt.AddDate(0, 0, index)
+		startedMS := uint64(started.UnixMilli())
+		session := jhlog.LogGrowthSession{
+			SessionID:            fmt.Sprintf("pagination-%03d", index),
+			DayKey:               uint32(started.Year()*10_000 + int(started.Month())*100 + started.Day()),
+			StartedAtMS:          startedMS,
+			EndedAtMS:            startedMS + minuteMS,
+			ConfiguredLimitBytes: limit,
+			MaximumRetainedBytes: limit / 2,
+			GeneratedBytes:       limit / 2,
+			Completed:            true,
+		}
+		sessions = append(sessions, session)
+		days = append(days, growthDayFromSession(session))
+	}
+	return analyze.LogGrowthSummary{
+		Available:         true,
+		HistoryGeneration: uint64(count),
+		CapturedAtMS:      sessions[len(sessions)-1].EndedAtMS,
+		Sessions:          sessions,
+		Days:              days,
+	}
+}
+
 func calendarMonthLogGrowthSummary() analyze.LogGrowthSummary {
 	const limit = uint64(1024 * 1024)
 	const minuteMS = uint64(60_000)
@@ -556,13 +782,13 @@ func calendarMonthLogGrowthSummary() analyze.LogGrowthSummary {
 	days := make([]jhlog.LogGrowthDay, 0, 31)
 	for day := 1; day <= 31; day++ {
 		started := uint64(time.Date(2026, time.July, day, 12, 0, 0, 0, time.UTC).UnixMilli())
-		overflows := uint64(0)
+		limitReached := uint64(0)
 		maximum := limit / 2
 		generated := maximum
 		if day%5 == 0 {
-			overflows = uint64(day / 5)
+			limitReached = uint64(day / 5)
 			maximum = limit
-			generated = (overflows + 1) * limit
+			generated = (limitReached + 1) * limit
 		}
 		session := jhlog.LogGrowthSession{
 			SessionID:            fmt.Sprintf("july-%02d", day),
@@ -572,14 +798,14 @@ func calendarMonthLogGrowthSummary() analyze.LogGrowthSummary {
 			ConfiguredLimitBytes: limit,
 			MaximumRetainedBytes: maximum,
 			GeneratedBytes:       generated,
-			OverflowCount:        overflows,
-			EvictedChunkCount:    overflows * 2,
-			EvictedBytes:         overflows * limit,
+			LimitReachedCount:    limitReached,
+			SegmentRotationCount: limitReached * 2,
+			ArchiveEvictedBytes:  limitReached * limit,
 			Completed:            true,
 		}
-		if overflows > 0 {
-			session.FirstOverflowAtMS = started + 10_000
-			session.LastOverflowAtMS = started + 50_000
+		if limitReached > 0 {
+			session.FirstLimitReachedMS = started + 10_000
+			session.LastLimitReachedMS = started + 50_000
 		}
 		sessions = append(sessions, session)
 		days = append(days, growthDayFromSession(session))
@@ -603,7 +829,7 @@ func growthDayFromSession(session jhlog.LogGrowthSession) jhlog.LogGrowthDay {
 		fill = session.MaximumRetainedBytes * 1_000 / session.ConfiguredLimitBytes
 	}
 	reached := uint64(0)
-	if session.OverflowCount > 0 {
+	if session.LimitReachedCount > 0 {
 		reached = 1
 	}
 	return jhlog.LogGrowthDay{
@@ -614,9 +840,9 @@ func growthDayFromSession(session jhlog.LogGrowthSession) jhlog.LogGrowthDay {
 		MaximumRetainedBytes:  session.MaximumRetainedBytes,
 		MaximumFillPermille:   fill,
 		SessionsReachingLimit: reached,
-		OverflowCount:         session.OverflowCount,
-		EvictedChunkCount:     session.EvictedChunkCount,
-		EvictedBytes:          session.EvictedBytes,
+		LimitReachedCount:     session.LimitReachedCount,
+		SegmentRotationCount:  session.SegmentRotationCount,
+		ArchiveEvictedBytes:   session.ArchiveEvictedBytes,
 	}
 }
 
@@ -676,7 +902,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	if err := WriteLeakInspectWithOptions(inspectPath, analyze.BuildLeakReport(summary), ReportOptions{Links: ReportLinks{Main: "report.html"}}); err != nil {
 		t.Fatalf("WriteLeakInspectWithOptions() error = %v", err)
 	}
-	assertModernReportStyle(t, inspectPath)
+	assertCurrentReportStyle(t, inspectPath)
 	assertHTMLContains(
 		t,
 		inspectPath,
@@ -688,6 +914,10 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 		`linkedRows`,
 		`scrollIntoView`,
 		`tipCache`,
+		`prepareLeakCardTables`,
+		`cell.dataset.leakField = leakFieldForHeader`,
+		`.leak-card-table .leak-card-row`,
+		`.table-scroll.leak-card-scroll`,
 		`.leak-graph-panel[hidden]`,
 		`class="node-title"`,
 		"Контекст обнаружения удержанного объекта",
@@ -701,7 +931,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	if err := WriteLeakCompareWithOptions(comparePath, analyze.BuildLeakCompareReport(analyze.Compare(analyze.Summary{}, summary)), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteLeakCompareWithOptions() error = %v", err)
 	}
-	assertModernReportStyle(t, comparePath)
+	assertCurrentReportStyle(t, comparePath)
 	assertHTMLContains(
 		t,
 		comparePath,
@@ -833,7 +1063,7 @@ func TestLeakReportsDeferRegistryRowsWithoutTruncatingData(t *testing.T) {
 	}
 }
 
-func TestCompareReportBoundsLogGroupsAndHighCardinalityTables(t *testing.T) {
+func TestCompareReportPreservesAllLogGroupsAndDefersCompleteHighCardinalityTables(t *testing.T) {
 	const (
 		routeTotal  = 70
 		screenTotal = 70
@@ -889,39 +1119,206 @@ func TestCompareReportBoundsLogGroupsAndHighCardinalityTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(data)
-	if got := strings.Count(html, `class="log-card"`); got != 24 {
-		t.Fatalf("log-card count = %d, want 24", got)
+	if got := strings.Count(html, `class="log-card"`); got != 29 {
+		t.Fatalf("log-card count = %d, want 29", got)
 	}
 	for _, want := range []string{
-		"Логи базы:</strong> показано 12 из 15 исходных логов",
-		"Логи кандидата:</strong> показано 12 из 14 исходных логов",
-		"объединённые метрики сравнения выше учитывают всю группу",
-		"Сравнение маршрутов:</strong> показано 64 из 70",
-		"Сравнение экранов:</strong> показано 64 из 70",
-		"Маршруты этого лога:</strong> показано 64 из 70",
-		"Экраны этого лога:</strong> показано 64 из 70",
-		"Gauge-метрики этого лога:</strong> показано 128 из 130",
-		"baseline-11.jhlog",
-		"candidate-11.jhlog",
-		"GET /bounded/route-063",
-		"BoundedScreen063",
-		"bounded.gauge.127",
+		`data-deferred-total="70"`,
+		`data-deferred-total="131"`,
+		"Показать ещё 20",
+		"baseline-14.jhlog",
+		"candidate-13.jhlog",
+		"GET /bounded/route-069",
+		"BoundedScreen069",
+		"bounded.gauge.129",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("bounded compare report does not contain %q", want)
 		}
 	}
 	for _, unwanted := range []string{
-		"baseline-12.jhlog",
-		"candidate-12.jhlog",
-		"GET /bounded/route-064",
-		"BoundedScreen064",
-		"bounded.gauge.128",
+		"исходных логов; объединённые метрики",
+		"Сравнение маршрутов:</strong> показано 64 из 70",
+		"Сравнение экранов:</strong> показано 64 из 70",
+		"Gauge-метрики этого лога:</strong> показано 128 из 130",
 	} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("bounded compare report unexpectedly contains %q", unwanted)
 		}
 	}
+}
+
+func TestCodeProblemReportsPreserveEverySignalAndDrillDown(t *testing.T) {
+	problem := analyze.CodeProblemStats{
+		ClassName:      "com.app.CompleteEvidence",
+		Score:          10,
+		Severity:       "high",
+		Categories:     []string{"performance"},
+		Recommendation: "Inspect every item.",
+	}
+	for index := range 7 {
+		problem.Signals = append(problem.Signals, analyze.CodeProblemSignal{
+			Name:     fmt.Sprintf("complete-signal-%d", index),
+			Category: "performance",
+			Severity: "high",
+			Detail:   fmt.Sprintf("complete signal detail %d", index),
+		})
+	}
+	for index := range 6 {
+		problem.DrillDown = append(problem.DrillDown, analyze.CodeProblemDrillDown{
+			ClassName:      problem.ClassName,
+			Flow:           fmt.Sprintf("complete-flow-%d", index),
+			Evidence:       fmt.Sprintf("complete evidence %d", index),
+			Recommendation: "Inspect this flow.",
+		})
+	}
+	summary := analyze.Summary{CodeProblems: []analyze.CodeProblemStats{problem}}
+	comparison := analyze.Compare(summary, summary)
+	dir := t.TempDir()
+	tests := []struct {
+		name  string
+		write func(string) error
+	}{
+		{name: "inspect", write: func(path string) error {
+			return WriteInspectWithOptions(path, summary, ReportOptions{})
+		}},
+		{name: "compare", write: func(path string) error {
+			return WriteCompareReportWithOptions(path, comparison, nil, nil, ReportOptions{})
+		}},
+		{name: "math-inspect", write: func(path string) error {
+			return WriteMathInspectWithOptions(path, sampleMathReport(summary), ReportOptions{})
+		}},
+		{name: "math-compare", write: func(path string) error {
+			return WriteMathCompareWithOptions(path, sampleCompareMathReport(comparison, summary), ReportOptions{})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(dir, test.name+".html")
+			if err := test.write(path); err != nil {
+				t.Fatalf("write report: %v", err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			html := string(data)
+			archived := decodeCodeProblemEvidenceArchive(t, html)
+			if len(archived) != 1 {
+				t.Fatalf("archived code problems = %d, want 1", len(archived))
+			}
+			encodedEvidence, err := json.Marshal(archived[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"complete-signal-6", "complete-flow-5", "complete evidence 5"} {
+				if !strings.Contains(string(encodedEvidence), want) {
+					t.Fatalf("complete report does not contain tail evidence %q", want)
+				}
+			}
+			for _, unwanted := range []string{"Сценарии этой строки:</strong> показано", "Сигналы этой строки:</strong> показано"} {
+				if strings.Contains(html, unwanted) {
+					t.Fatalf("complete report unexpectedly truncates evidence with %q", unwanted)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeProblemReportKeepsHighCardinalityRegistryInCompressedArchive(t *testing.T) {
+	const total = 75
+	problems := make([]analyze.CodeProblemStats, 0, total)
+	for index := range total {
+		problems = append(problems, analyze.CodeProblemStats{
+			ClassName:      fmt.Sprintf("com.app.ArchivedProblem%03d", index),
+			Score:          float64(total - index),
+			Severity:       "medium",
+			Categories:     []string{"performance"},
+			Evidence:       fmt.Sprintf("archived evidence %03d", index),
+			Recommendation: "Inspect the archived evidence.",
+		})
+	}
+	path := os.Getenv("JH_DEFERRED_SEARCH_OUT")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "inspect.html")
+	}
+	if err := WriteInspectWithOptions(path, analyze.Summary{CodeProblems: problems}, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(data)
+	if got := strings.Count(document, `<tr data-code-problem-row `); got != 50 {
+		t.Fatalf("initial code problem rows = %d, want 50", got)
+	}
+	for _, marker := range []string{`data-code-problem-loader`, `data-deferred-total="75"`, `data-deferred-loaded="50"`} {
+		if !strings.Contains(document, marker) {
+			t.Fatalf("high-cardinality registry is missing %q", marker)
+		}
+	}
+	for _, marker := range []string{
+		"indexDeferredScript",
+		"archivedCodeSearchEntries",
+		"Ищу по всем строкам подробных разделов",
+		"dataset.reportSearchId",
+		"revealDeferredSearchEntry",
+	} {
+		if !strings.Contains(document, marker) {
+			t.Fatalf("full-report search is missing deferred-row support %q", marker)
+		}
+	}
+	archived := decodeCodeProblemEvidenceArchive(t, document)
+	tail := ""
+	if len(archived) > 0 {
+		tail = archived[len(archived)-1].Evidence
+	}
+	if len(archived) != total || tail != "archived evidence 074" {
+		t.Fatalf("archived registry is incomplete: count=%d tail=%q", len(archived), tail)
+	}
+}
+
+func decodeCodeProblemEvidenceArchive(t *testing.T, document string) []analyze.CodeProblemStats {
+	t.Helper()
+	const marker = `data-code-problem-evidence-archive data-encoding="gzip-base64url">`
+	start := strings.Index(document, marker)
+	if start < 0 {
+		t.Fatal("code problem evidence archive is missing")
+	}
+	start += len(marker)
+	end := strings.Index(document[start:], "</script>")
+	if end < 0 {
+		t.Fatal("code problem evidence archive is unterminated")
+	}
+	encoded := strings.TrimSpace(document[start : start+end])
+	if strings.HasPrefix(encoded, `"`) {
+		if err := json.Unmarshal([]byte(encoded), &encoded); err != nil {
+			t.Fatalf("parse encoded code problem archive: %v", err)
+		}
+	}
+	decoded := base64.NewDecoder(base64.RawURLEncoding, strings.NewReader(encoded))
+	compressed, err := gzip.NewReader(decoded)
+	if err != nil {
+		t.Fatalf("open code problem evidence archive: %v (prefix %q)", err, encoded[:min(len(encoded), 96)])
+	}
+	payload, readErr := io.ReadAll(compressed)
+	closeErr := compressed.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("decode code problem evidence archive: read=%v close=%v (prefix %q)", readErr, closeErr, encoded[:min(len(encoded), 96)])
+	}
+	var archive codeProblemEvidencePayload
+	if err := json.Unmarshal(payload, &archive); err != nil {
+		t.Fatalf("parse code problem evidence archive: %v", err)
+	}
+	if archive.Mode == "compare" {
+		problems := make([]analyze.CodeProblemStats, 0, len(archive.Rows))
+		for _, row := range archive.Rows {
+			problems = append(problems, row.Candidate)
+		}
+		return problems
+	}
+	return archive.Problems
 }
 
 func TestCodeProblemCategoryOptions(t *testing.T) {
@@ -968,6 +1365,44 @@ func TestFlowKeyLabelHidesUnknownParts(t *testing.T) {
 	}
 	if got := string(flowKeyLabelHint("unknown", "unknown", "unknown", "unknown")); !strings.Contains(got, "owner-map") {
 		t.Fatalf("flowKeyLabelHint(all unknown) = %q, want attribution hint", got)
+	}
+}
+
+func TestProblemLocationTextHidesUnknownAndMergesRepeatedContext(t *testing.T) {
+	locations := []analyze.ProblemLocation{
+		{Route: "POST /omicron", Owner: "unknown"},
+		{
+			Screen: "ru.mail.im.registration.ui.RegistrationActivity",
+			Flow:   "unknown",
+			Step:   "unknown",
+			Route:  "POST /omicron",
+			Owner:  "unknown",
+		},
+	}
+
+	got := problemLocationText(locations)
+	want := "экран ru.mail.im.registration.ui.RegistrationActivity · маршрут POST /omicron"
+	if got != want {
+		t.Fatalf("problemLocationText() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "unknown") || strings.Contains(got, "→") {
+		t.Fatalf("problemLocationText() contains a placeholder or a misleading chain: %q", got)
+	}
+}
+
+func TestProblemLocationTextPreservesDistinctKnownLocations(t *testing.T) {
+	locations := []analyze.ProblemLocation{
+		{Screen: "FeedActivity", Route: "GET /feed"},
+		{Screen: "SearchActivity", Route: "GET /feed"},
+	}
+
+	got := problemLocationText(locations)
+	want := "экран FeedActivity · маршрут GET /feed; экран SearchActivity · маршрут GET /feed"
+	if got != want {
+		t.Fatalf("problemLocationText() = %q, want %q", got, want)
+	}
+	if got := problemLocationText([]analyze.ProblemLocation{{Screen: "unknown"}}); got != "точное место не определено" {
+		t.Fatalf("problemLocationText(all unknown) = %q", got)
 	}
 }
 
@@ -1069,13 +1504,15 @@ func TestWriteReportsRussian(t *testing.T) {
 			{Route: "GET /feed", Count: 2, P95MS: 612},
 		},
 	}
+	attachProblemReport(t, &summary)
 
 	dir := t.TempDir()
 	inspectPath := filepath.Join(dir, "inspect-ru.html")
 	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{Links: ReportLinks{Math: "inspect-ru-math.html"}}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Отчет по сигналам выполнения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Сетевые маршруты", "Сценарии и причины", "Эвристический итог", "λ Анализ")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Проблемы приложения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Все записанные сетевые маршруты", "Эвристический итог", "Подробный анализ")
+	assertHTMLNotContains(t, inspectPath, "Сценарии и причины")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReportWithOptions(
@@ -1087,7 +1524,56 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Панель контроля регрессий", "Матрица регрессий", "Где изменилось", "Сравнение сценариев и причин", "Детали по каждому логу", "Эвристический итог", "Логи базы", "λ Анализ")
+	assertHTMLContains(t, comparePath, "Изменения проблем", "Матрица регрессий", "Где изменилось", "Сравнение сценариев и причин", "Детали по каждому логу", "Эвристический итог", "Логи базы", "λ Анализ")
+}
+
+func attachProblemReport(t *testing.T, summary *analyze.Summary) {
+	t.Helper()
+	report, err := analyze.BuildProblemReport(*summary)
+	if err != nil {
+		t.Fatalf("BuildProblemReport() error = %v", err)
+	}
+	summary.ProblemSchemaVersion = analyze.ProblemSchemaVersion
+	summary.ProblemSummary = report.Summary
+	summary.Problems = report.Problems
+	summary.ProblemIncidents = report.Incidents
+	summary.CategoryCoverage = report.Coverage
+	summary.Detectors = report.Registry
+	summary.EvidenceQuality = analyze.BuildEvidenceQualityVector(*summary)
+}
+
+func TestCollectionWindowNoticeExplainsLateRuntimeEnablement(t *testing.T) {
+	summary := analyze.Summary{
+		DurationMS: 61_344,
+		Counters: []analyze.NamedValue{{
+			Name:  "jankhunter.runtime.enabled.reason.omicron.count",
+			Value: 1,
+		}},
+		Gauges: []analyze.NamedValue{{
+			Name:  "jankhunter.runtime.collection_inactive_before_start_ms",
+			Value: 9 * 60_000,
+		}},
+	}
+	got := collectionWindowNotice(summary)
+	for _, expected := range []string{"9 мин", "omicron", "1 мин 1 сек"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("collectionWindowNotice() = %q, missing %q", got, expected)
+		}
+	}
+}
+
+func TestPrimaryCategoryCoverageHidesUnknownZeroes(t *testing.T) {
+	items := []analyze.CategoryCoverage{
+		{Category: analyze.ProblemCategoryNetwork, Label: "Сеть", Status: "problems_found", FindingCount: 2},
+		{Category: analyze.ProblemCategoryUI, Label: "UI", Status: "healthy"},
+		{Category: analyze.ProblemCategoryIO, Label: "I/O", Status: "not_measured"},
+	}
+	if got := primaryCategoryCoverage(items); len(got) != 2 {
+		t.Fatalf("primaryCategoryCoverage() = %+v, want problems and healthy only", got)
+	}
+	if got := hiddenCoverageSummary(items); !strings.Contains(got, "I/O") || strings.Contains(got, "Сеть") {
+		t.Fatalf("hiddenCoverageSummary() = %q", got)
+	}
 }
 
 func TestMathReportPath(t *testing.T) {
@@ -1303,7 +1789,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		Annotations: []analyze.InstrumentationAnnotationSummary{
 			{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
 		},
-		TopClasses: []analyze.InstrumentationClassDiagnostic{
+		Classes: []analyze.InstrumentationClassDiagnostic{
 			{
 				ClassName:        "com.app.FeedRepository",
 				Methods:          3,
@@ -1369,14 +1855,12 @@ func TestDependencyInjectionReportDefersPresentationRows(t *testing.T) {
 
 func sampleDependencyInjectionReport() analyze.DependencyInjectionReport {
 	return analyze.DependencyInjectionReport{
-		Available:       true,
-		Source:          "di-catalog.jsonl",
-		Variant:         "debug",
-		Disclaimer:      analyze.DependencyInjectionDisclaimer,
-		ClassCount:      2,
-		EdgeCount:       1,
-		ShownClassCount: 2,
-		ShownEdgeCount:  1,
+		Available:  true,
+		Source:     "di-catalog.jsonl",
+		Variant:    "debug",
+		Disclaimer: analyze.DependencyInjectionDisclaimer,
+		ClassCount: 2,
+		EdgeCount:  1,
 		Frameworks: []analyze.DependencyInjectionFrameworkSummary{
 			{Name: "hilt", Classes: 2, Edges: 1},
 		},
@@ -1411,6 +1895,23 @@ func sampleDependencyInjectionReport() analyze.DependencyInjectionReport {
 				},
 				ConsumerObserved: true,
 			},
+		},
+	}
+}
+
+func sampleCollectionQuality() analyze.CollectionQuality {
+	return analyze.CollectionQuality{
+		Level:                 "medium",
+		TrustScorePercent:     80,
+		TrustScoreModel:       "evidence-v2:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20",
+		TrustLevel:            "sufficient",
+		TrustLevelExplanation: "Достаточное доверие: основные evidence подтверждены с ограничениями.",
+		RuntimeGraphEnabled:   false,
+		TrustComponents: []analyze.CollectionTrustComponent{
+			{ID: "transport", Label: "Доставка событий", Weight: 40, CoveragePercent: 100, EarnedPoints: 40, Explanation: "известных потерь нет"},
+			{ID: "runtime_graph", Label: "Runtime-граф", Weight: 20, Excluded: true, Explanation: "Runtime-граф отключён и не входит в индекс"},
+			{ID: "process_roster", Label: "Охват процессов", Weight: 20, CoveragePercent: 100, EarnedPoints: 20, Explanation: "configured scope подтверждён"},
+			{ID: "integrity", Label: "Целостность доказательств", Weight: 20, CoveragePercent: 100, EarnedPoints: 20, Explanation: "инварианты согласованы"},
 		},
 	}
 }
@@ -1655,6 +2156,79 @@ func TestPerMinuteNormalizesByRunDuration(t *testing.T) {
 	}
 	if got := perMinute(60, 0); got != 0 {
 		t.Fatalf("perMinute(60, 0) = %.2f, want 0", got)
+	}
+}
+
+func TestScenarioInsightsExplainSingleNetworkRequestWithoutRateOrPercentile(t *testing.T) {
+	insights := scenarioInsights(analyze.Summary{Flows: []analyze.FlowStats{{
+		Screen:      "RegistrationActivity",
+		Flow:        "registration",
+		Owner:       "RegistrationController.loadConfig",
+		RouteSample: "GET /myteam-config.json",
+		HTTPCount:   1,
+		HTTPP95MS:   1662,
+	}}})
+	if len(insights) != 1 {
+		t.Fatalf("scenarioInsights() count = %d, want 1", len(insights))
+	}
+	if !strings.Contains(insights[0].Summary, "Единственный сетевой вызов занял до 1662 мс") {
+		t.Fatalf("scenario summary = %q", insights[0].Summary)
+	}
+	for _, confusing := range []string{"0.00/с", "p95"} {
+		if strings.Contains(insights[0].Summary, confusing) {
+			t.Fatalf("scenario summary contains %q: %q", confusing, insights[0].Summary)
+		}
+	}
+}
+
+func TestProblemEvidenceDisplayUsesRussianCountForm(t *testing.T) {
+	if got := problemEvidenceDisplay(analyze.ProblemEvidence{Observed: "1", Unit: "requests"}); got != "1 запрос" {
+		t.Fatalf("problemEvidenceDisplay() = %q, want %q", got, "1 запрос")
+	}
+	if got := problemEvidenceDisplay(analyze.ProblemEvidence{Observed: "2", Unit: "requests"}); got != "2 запроса" {
+		t.Fatalf("problemEvidenceDisplay() = %q, want %q", got, "2 запроса")
+	}
+}
+
+func TestUIScreenInsightsConnectNearbyScenarioSignals(t *testing.T) {
+	insights := uiScreenInsights(analyze.Summary{
+		Screens: []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 100, JankyFrames: 18, JankRatePct: 18, AvgFPS: 42, MinFPS: 28}},
+		Flows:   []analyze.FlowStats{{Screen: "FeedActivity", Flow: "feed", Owner: "FeedPresenter.render", StallCount: 2, StallMaxMS: 820}},
+	})
+	if len(insights) != 1 {
+		t.Fatalf("uiScreenInsights() count = %d, want 1", len(insights))
+	}
+	if insights[0].Status != "плохо" || !strings.Contains(insights[0].Nearby, "2 паузы") || !strings.Contains(insights[0].Where, "FeedPresenter.render") {
+		t.Fatalf("unexpected UI insight: %+v", insights[0])
+	}
+}
+
+func TestUIScreenInsightsDoNotCallSparseRenderingAJankFailure(t *testing.T) {
+	insights := uiScreenInsights(analyze.Summary{Screens: []analyze.ScreenStats{{
+		Screen: "RegistrationActivity", Frames: 248, JankyFrames: 0, JankRatePct: 0, AvgFPS: 16.9, MinFPS: 2,
+	}}})
+	if len(insights) != 1 || insights[0].Status != "данные расходятся" {
+		t.Fatalf("unexpected sparse-rendering verdict: %+v", insights)
+	}
+	if strings.Contains(insights[0].Headline, "зависает") {
+		t.Fatalf("sparse rendering was mislabeled as a freeze: %+v", insights[0])
+	}
+}
+
+func TestCustomMetricInsightsGroupMetricsAndRelateThemToMainSignals(t *testing.T) {
+	insights := customMetricInsights(analyze.Summary{
+		HTTPCount: 3,
+		HTTPP95MS: 1200,
+		Counters:  []analyze.NamedValue{{Name: "network.retry.count", Value: 2}, {Name: "gc.bytes_allocated.delta", Value: 4096}},
+	})
+	if len(insights) != 2 {
+		t.Fatalf("customMetricInsights() count = %d, want 2", len(insights))
+	}
+	if insights[0].Title != "Память и GC" || insights[1].Title != "Сеть" {
+		t.Fatalf("custom metric groups = %+v", insights)
+	}
+	if !strings.Contains(insights[1].Relation, "3 сетевых вызова") {
+		t.Fatalf("network relation = %q", insights[1].Relation)
 	}
 }
 

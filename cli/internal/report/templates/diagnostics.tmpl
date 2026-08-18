@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: ASM диагностика</title>
-  <style>{{reportCSS .ReportStyle false}}</style>
+  <style>{{reportCSS false}}</style>
 </head>
-<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
+<body class="{{bodyClass "" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -21,7 +21,7 @@
         <div class="env-subtitle">Методы {{.Diagnostics.MethodCount}} · перехватчиков {{.Diagnostics.HookCount}} · аннотаций {{.Diagnostics.AnnotatedMethodCount}}</div>
         <div class="env-grid">
           <div class="env-item"><div class="env-label">Игнорировано</div><div class="env-value">{{.Diagnostics.IgnoredMethodCount}}</div><div class="env-detail">методов с @JankHunterIgnore или игнором на уровне класса</div></div>
-          <div class="env-item"><div class="env-label">Топ-классы</div><div class="env-value">{{len .Diagnostics.TopClasses}}</div><div class="env-detail">ограниченный список для стабильного HTML</div></div>
+          <div class="env-item"><div class="env-label">Классы в отчёте</div><div class="env-value">{{len .Diagnostics.Classes}}</div><div class="env-detail">полный список без скрытого ограничения</div></div>
         </div>
       </div>
       {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
@@ -102,15 +102,15 @@
 
   <section id="classes" class="panel">
     <div class="panel-head">
-      <div><h2>Классы</h2><div class="panel-kicker">Топ классов по числу срабатываний перехватчиков и аннотированных методов.</div></div>
+      <div><h2>Классы</h2><div class="panel-kicker">Все классы по числу срабатываний перехватчиков и аннотированных методов.</div></div>
     </div>
     <details class="fold" open>
-      <summary><span>Показать классы</span><span class="method-kind">{{len .Diagnostics.TopClasses}} записей</span></summary>
+      <summary><span>Показать классы</span><span class="method-kind">{{len .Diagnostics.Classes}} записей</span></summary>
       <div class="fold-body">
         <div class="table-scroll">
           <table>
             <tr><th>Класс</th><th>{{tip "Методы" "Сколько методов класса просмотрено build-time анализом."}}</th><th>{{tip "Hooks" "Сколько мест инструментирования добавлено в классе."}}</th><th>{{tip "Аннотации" "Сколько методов класса получили распознанный Jank Hunter context."}}</th><th>{{tip "Игнорировано" "Методы, исключенные через @JankHunterIgnore или игнор на уровне класса."}}</th><th>{{tip "Пропущено" "Методы, которые нельзя или не нужно безопасно менять: причина указана в строке."}}</th><th>{{tip "Главные hooks" "Наиболее частые правила инструментирования в классе. Количество относится к байткоду сборки."}}</th></tr>
-            {{range .Diagnostics.TopClasses}}
+            {{range .Diagnostics.Classes}}
             <tr>
               <td><code>{{.ClassName}}</code></td>
               <td>{{.Methods}}</td>

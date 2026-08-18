@@ -138,25 +138,63 @@ class InstrumentationSmokeTest {
     }
 
     @Test
-    fun constructorsOnlyInstrumentCallSitesAfterSuperAndClassInitializersStayUntouched() {
+    fun constructorsInstrumentBoundariesAndCallSitesAfterSuperWhileClassInitializersStayUntouched() {
         val instrumented = instrument(mixedHookFixture())
         val constructorCalls = methodCalls(instrumented, "<init>")
         val classInitializerCalls = methodCalls(instrumented, "<clinit>")
 
         assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
         assertEquals(1, countMethodCalls(instrumented, "<init>", "android/os/Handler", "post"))
-        setOf(
-            "recordMethodCall",
-            "enterMethod",
-            "exitMethod",
-            "enterAnnotatedContext",
-            "exitAnnotatedContext",
-            "watchLifecycleObject",
-        ).forEach { forbidden ->
-            assertTrue(constructorCalls.none { it == Call("io/jankhunter/runtime/JankHunterHooks", forbidden) })
-        }
+        setOf("recordMethodCall", "enterMethod", "exitMethod", "enterAnnotatedContext", "exitAnnotatedContext")
+            .forEach { expected ->
+                assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", expected)))
+            }
+        assertTrue(
+            constructorCalls.none {
+                it == Call("io/jankhunter/runtime/JankHunterHooks", "watchLifecycleObject")
+            },
+        )
         assertTrue(classInitializerCalls.none { it.owner.startsWith("io/jankhunter/") })
         assertTrue(classInitializerCalls.contains(Call("android/util/Log", "d")))
+    }
+
+    @Test
+    fun constructorBoundariesSurviveKotlinStylePostSuperExceptionHandlers() {
+        val instrumented = instrument(kotlinStyleConstructorWithExceptionHandlerFixture())
+        val verifierDiagnostics = java.io.StringWriter()
+
+        CheckClassAdapter.verify(ClassReader(instrumented), false, java.io.PrintWriter(verifierDiagnostics))
+
+        assertTrue(
+            "ASM verifier rejected instrumented constructor bytecode:\n$verifierDiagnostics",
+            verifierDiagnostics.toString().isBlank(),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(instrumented, "<init>", "io/jankhunter/runtime/JankHunterHooks", "enterMethod"),
+        )
+        assertEquals(
+            2,
+            countMethodCalls(instrumented, "<init>", "io/jankhunter/runtime/JankHunterHooks", "exitMethod"),
+        )
+        assertEquals(
+            1,
+            countMethodCalls(
+                instrumented,
+                "<init>",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "enterAnnotatedContext",
+            ),
+        )
+        assertEquals(
+            2,
+            countMethodCalls(
+                instrumented,
+                "<init>",
+                "io/jankhunter/runtime/JankHunterHooks",
+                "exitAnnotatedContext",
+            ),
+        )
     }
 
     private fun instrument(
@@ -366,6 +404,51 @@ class InstrumentationSmokeTest {
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
         writer.visitMethod(Opcodes.ACC_PUBLIC, "work", "()V", null, null).apply {
             visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 0)
+            visitEnd()
+        }
+        writer.visitEnd()
+        return writer.toByteArray()
+    }
+
+    private fun kotlinStyleConstructorWithExceptionHandlerFixture(): ByteArray {
+        val writer = SafeClassWriter(null, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/AsmSmoke", null, "java/lang/Object", null)
+        writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "(Ljava/lang/Object;)V", null, null).apply {
+            visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue("constructor-with-handler")
+            val tryStart = Label()
+            val tryEnd = Label()
+            val handler = Label()
+            val returnLabel = Label()
+            visitTryCatchBlock(tryStart, tryEnd, handler, "java/lang/RuntimeException")
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 1)
+            visitLdcInsn("value")
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "kotlin/jvm/internal/Intrinsics",
+                "checkNotNullParameter",
+                "(Ljava/lang/Object;Ljava/lang/String;)V",
+                false,
+            )
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+            visitLabel(tryStart)
+            visitLdcInsn("1")
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Integer",
+                "parseInt",
+                "(Ljava/lang/String;)I",
+                false,
+            )
+            visitInsn(Opcodes.POP)
+            visitLabel(tryEnd)
+            visitJumpInsn(Opcodes.GOTO, returnLabel)
+            visitLabel(handler)
+            visitInsn(Opcodes.POP)
+            visitLabel(returnLabel)
             visitInsn(Opcodes.RETURN)
             visitMaxs(0, 0)
             visitEnd()

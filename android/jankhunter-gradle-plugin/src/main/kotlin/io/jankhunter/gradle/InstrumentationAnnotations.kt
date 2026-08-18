@@ -10,6 +10,7 @@ internal data class JankAnnotationMetadata(
     val flow: String? = null,
     val screen: String? = null,
     val ignored: Boolean = false,
+    val composable: Boolean = false,
 ) {
     class Builder {
         var owner: String? = null
@@ -18,6 +19,7 @@ internal data class JankAnnotationMetadata(
         var flow: String? = null
         var screen: String? = null
         var ignored: Boolean = false
+        var composable: Boolean = false
 
         fun snapshot(): JankAnnotationMetadata {
             return JankAnnotationMetadata(
@@ -27,6 +29,7 @@ internal data class JankAnnotationMetadata(
                 flow = flow?.takeIf { it.isNotBlank() },
                 screen = screen?.takeIf { it.isNotBlank() },
                 ignored = ignored,
+                composable = composable,
             )
         }
     }
@@ -50,6 +53,10 @@ internal object JankAnnotationParser {
                 metadata.ignored = true
                 delegate
             }
+            COMPOSABLE_DESCRIPTOR -> {
+                metadata.composable = true
+                delegate
+            }
             else -> delegate
         }
     }
@@ -59,6 +66,7 @@ internal object JankAnnotationParser {
     private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
     private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
     private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterIgnore;"
+    private const val COMPOSABLE_DESCRIPTOR = "Landroidx/compose/runtime/Composable;"
 }
 
 private class StringValueAnnotationVisitor(

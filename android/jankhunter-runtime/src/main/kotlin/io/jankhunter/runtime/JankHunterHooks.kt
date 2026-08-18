@@ -16,7 +16,8 @@ internal object JankHunterHooks {
     fun enterMethod(methodId: Long): Long {
         return try {
             JankHunter.enterMethod(methodId)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             0L
         }
     }
@@ -25,7 +26,8 @@ internal object JankHunterHooks {
     fun enterMethod(methodId: Long, methodName: String?): Long {
         return try {
             JankHunter.enterMethod(methodId, methodName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             0L
         }
     }
@@ -34,7 +36,37 @@ internal object JankHunterHooks {
     fun exitMethod(token: Long, methodId: Long) {
         try {
             JankHunter.exitMethod(token, methodId)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun enterSemantic(kind: Int): Long {
+        return try {
+            JankHunter.enterSemantic(kind)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            0L
+        }
+    }
+
+    @JvmStatic
+    fun exitSemantic(token: Long, kind: Int, methodId: Long, methodName: String?, outcome: Int) {
+        try {
+            JankHunter.exitSemantic(token, kind, methodId, methodName, outcome)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+        }
+    }
+
+    @JvmStatic
+    fun classifyWorkerOutcome(result: Any?): Int {
+        return try {
+            JankHunter.classifyWorkerOutcome(result)
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
+            JankHunterWorkerOutcome.UNKNOWN.code
         }
     }
 
@@ -42,7 +74,8 @@ internal object JankHunterHooks {
     fun recordMethodCall(methodId: Long) {
         try {
             JankHunter.recordMethodCall(methodId)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -50,7 +83,8 @@ internal object JankHunterHooks {
     fun recordMethodCall(methodId: Long, methodName: String?) {
         try {
             JankHunter.recordMethodCall(methodId, methodName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -58,7 +92,8 @@ internal object JankHunterHooks {
     fun recordCounter(name: String?, value: Long) {
         try {
             JankHunter.recordCounter(name, value)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -66,7 +101,8 @@ internal object JankHunterHooks {
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
         try {
             JankHunter.recordLogSpam(ownerName, source, level)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -74,7 +110,8 @@ internal object JankHunterHooks {
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         return try {
             JankHunter.wrapRunnable(runnable, ownerName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             runnable
         }
     }
@@ -83,7 +120,8 @@ internal object JankHunterHooks {
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
         return try {
             JankHunter.wrapCallable(callable, ownerName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             callable
         }
     }
@@ -92,7 +130,8 @@ internal object JankHunterHooks {
     fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
         return try {
             JankHunter.wrapCoroutineBlock(block, ownerName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             block
         }
     }
@@ -101,7 +140,8 @@ internal object JankHunterHooks {
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         return try {
             JankHunter.wrapClickListener(listener, ownerName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             listener
         }
     }
@@ -120,7 +160,8 @@ internal object JankHunterHooks {
                 token,
                 ownerName,
             )
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             runnable
         }
     }
@@ -131,7 +172,8 @@ internal object JankHunterHooks {
             if (original != null && wrapped != null) {
                 JankHunter.onHandlerPostResult(original, wrapped, posted)
             }
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -143,7 +185,8 @@ internal object JankHunterHooks {
                 runnable,
                 token,
             )
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             emptyArray()
         }
     }
@@ -154,7 +197,8 @@ internal object JankHunterHooks {
             if (handler != null && runnable != null) {
                 JankHunter.clearHandlerWrappers(handler, runnable, token)
             }
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -162,7 +206,8 @@ internal object JankHunterHooks {
     fun clearHandlerWrappers(handler: Handler?, token: Any?) {
         try {
             if (handler != null) JankHunter.clearHandlerWrappers(handler, token)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -175,7 +220,8 @@ internal object JankHunterHooks {
     ): Any? {
         return try {
             JankHunter.enterAnnotatedContext(screenName, ownerName, flowName, traceName)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
             null
         }
     }
@@ -184,7 +230,8 @@ internal object JankHunterHooks {
     fun exitAnnotatedContext(token: Any?) {
         try {
             JankHunter.exitAnnotatedContext(token)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
     }
 
@@ -192,7 +239,13 @@ internal object JankHunterHooks {
     fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
         try {
             JankHunter.watchLifecycleObject(instance, lifecycleEvent, ownerHint)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            recordFailure(throwable)
         }
+    }
+
+    private fun recordFailure(throwable: Throwable) {
+        RuntimeHookGuard.rethrowFatal(throwable)
+        RuntimeHookFailureTracker.record(RuntimeHookFailureReason.INSTRUMENTATION_HOOK)
     }
 }

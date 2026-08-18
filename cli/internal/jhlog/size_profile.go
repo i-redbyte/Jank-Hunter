@@ -1,19 +1,15 @@
 package jhlog
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"sort"
 )
 
 type SizeProfile struct {
-	Files    []SizeProfileFile `json:"files"`
-	Types    []SizeProfileType `json:"types"`
-	Warnings []string          `json:"warnings,omitempty"`
+	Files []SizeProfileFile `json:"files"`
+	Types []SizeProfileType `json:"types"`
 }
 
 type SizeProfileFile struct {
@@ -31,7 +27,6 @@ type SizeProfileFile struct {
 	DataRecords     uint64        `json:"data_records"`
 	Dictionary      uint64        `json:"dictionary_records"`
 	Control         uint64        `json:"control_records"`
-	Warnings        []string      `json:"warnings,omitempty"`
 	CompressionRate float64       `json:"compression_rate,omitempty"`
 }
 
@@ -56,7 +51,6 @@ func ProfileFiles(paths []string) (SizeProfile, error) {
 			return SizeProfile{}, err
 		}
 		profile.Files = append(profile.Files, fileProfile)
-		profile.Warnings = append(profile.Warnings, fileProfile.Warnings...)
 		totalBody += fileProfile.BodyBytes
 		clear(seenInFile)
 		for eventType, byteCount := range typeBytes {
@@ -98,17 +92,13 @@ func ProfileFile(path string) (SizeProfileFile, map[EventType]uint64, map[EventT
 	if err != nil {
 		return SizeProfileFile{}, nil, nil, err
 	}
-	format, err := detectProfileFormat(path)
-	if err != nil {
-		return SizeProfileFile{}, nil, nil, err
-	}
 	result, err := StreamFileWithResult(path, nil)
 	if err != nil {
 		return SizeProfileFile{}, nil, nil, err
 	}
 	fileProfile := SizeProfileFile{
 		Path:            path,
-		Format:          format,
+		Format:          "jhlog-" + FormatVersionString,
 		Status:          result.Status,
 		Sealed:          result.Sealed,
 		TailBytes:       result.TailBytes,
@@ -121,27 +111,9 @@ func ProfileFile(path string) (SizeProfileFile, map[EventType]uint64, map[EventT
 		DataRecords:     result.DataRecords,
 		Dictionary:      result.DictionaryRecords,
 		Control:         result.ControlRecords,
-		Warnings:        append([]string(nil), result.Warnings...),
 	}
 	fileProfile.CompressionRate = compressionRate(fileProfile.BodyBytes, fileProfile.FileBytes)
 	return fileProfile, result.RecordBytesByType, result.RecordsByType, nil
-}
-
-func detectProfileFormat(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	var prefix [magicSize]byte
-	n, err := io.ReadFull(file, prefix[:])
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return "", err
-	}
-	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
-		return "binary-v9-chunked", nil
-	}
-	return "jsonl", nil
 }
 
 func EventTypeName(eventType EventType) string {
@@ -166,8 +138,6 @@ func EventTypeName(eventType EventType) string {
 		return "counter"
 	case EventGauge:
 		return "gauge"
-	case EventFlow:
-		return "flow_transition"
 	case EventLogSpam:
 		return "log_spam"
 	case EventProblem:
@@ -178,6 +148,12 @@ func EventTypeName(eventType EventType) string {
 		return "quality_snapshot"
 	case EventSegmentEnd:
 		return "segment_end"
+	case EventLogGrowth:
+		return "log_growth"
+	case EventProcessExit:
+		return "process_exit"
+	case EventIO:
+		return "io"
 	default:
 		return fmt.Sprintf("event_%d", eventType)
 	}

@@ -14,7 +14,6 @@ internal object MetricSemantics {
         return when {
             metric in STATE_METRICS -> MetricAggregationMode.STATE
             metric in BOOLEAN_METRICS -> MetricAggregationMode.BOOLEAN_RATE
-            metric.startsWith("process.exit.last.reason_") && metric.endsWith(".count") -> MetricAggregationMode.LAST
             metric.endsWith(".last_id") || metric.contains(".last.") -> MetricAggregationMode.LAST
             metric.endsWith(".last_level") -> MetricAggregationMode.LAST
             metric.endsWith(".core_count") -> MetricAggregationMode.LAST
@@ -28,8 +27,6 @@ internal object MetricSemantics {
         "battery.plugged",
         "battery.health",
         "device.thermal.status",
-        "process.exit.last.reason",
-        "process.exit.last.importance",
         "memory.trim.last_level",
     )
 

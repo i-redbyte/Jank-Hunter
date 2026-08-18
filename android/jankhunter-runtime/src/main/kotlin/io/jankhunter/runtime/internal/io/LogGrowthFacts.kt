@@ -19,11 +19,11 @@ internal data class LogGrowthSessionFact(
     val configuredLimitBytes: Long,
     val maximumRetainedBytes: Long,
     val generatedBytes: Long,
-    val overflowCount: Long,
-    val evictedChunkCount: Long,
-    val evictedBytes: Long,
-    val firstOverflowAtMs: Long,
-    val lastOverflowAtMs: Long,
+    val limitReachedCount: Long,
+    val segmentRotationCount: Long,
+    val archiveEvictedBytes: Long,
+    val firstLimitReachedAtMs: Long,
+    val lastLimitReachedAtMs: Long,
     val recoveredAfterInterruption: Boolean,
 ) : LogGrowthSequencedRecord {
     fun toPublic(completed: Boolean = true): JankHunterLogGrowthSessionSummary {
@@ -39,12 +39,12 @@ internal data class LogGrowthSessionFact(
             maximumRetainedBytes = maximumRetainedBytes,
             generatedBytes = generatedBytes,
             averageGrowthBytesPerMinute = rate,
-            reachedLimit = overflowCount > 0L,
-            overflowCount = overflowCount,
-            evictedChunkCount = evictedChunkCount,
-            evictedBytes = evictedBytes,
-            firstOverflowAtMs = firstOverflowAtMs,
-            lastOverflowAtMs = lastOverflowAtMs,
+            reachedLimit = limitReachedCount > 0L,
+            limitReachedCount = limitReachedCount,
+            segmentRotationCount = segmentRotationCount,
+            archiveEvictedBytes = archiveEvictedBytes,
+            firstLimitReachedAtMs = firstLimitReachedAtMs,
+            lastLimitReachedAtMs = lastLimitReachedAtMs,
             completed = completed,
             recoveredAfterInterruption = recoveredAfterInterruption,
         )
@@ -61,9 +61,9 @@ internal data class LogGrowthDayFact(
     val maximumRetainedBytes: Long,
     val maximumFillPermille: Long,
     val sessionsReachingLimit: Long,
-    val overflowCount: Long,
-    val evictedChunkCount: Long,
-    val evictedBytes: Long,
+    val limitReachedCount: Long,
+    val segmentRotationCount: Long,
+    val archiveEvictedBytes: Long,
 ) : LogGrowthSequencedRecord {
     fun toPublic(): JankHunterLogGrowthDaySummary = JankHunterLogGrowthDaySummary(
         localDate = dayKeyToDisplayString(dayKey),
@@ -73,9 +73,9 @@ internal data class LogGrowthDayFact(
         maximumRetainedBytes = maximumRetainedBytes,
         maximumFillPermille = maximumFillPermille,
         sessionsReachingLimit = sessionsReachingLimit,
-        overflowCount = overflowCount,
-        evictedChunkCount = evictedChunkCount,
-        evictedBytes = evictedBytes,
+        limitReachedCount = limitReachedCount,
+        segmentRotationCount = segmentRotationCount,
+        archiveEvictedBytes = archiveEvictedBytes,
     )
 }
 
@@ -89,11 +89,11 @@ internal data class ActiveLogGrowthFact(
     val configuredLimitBytes: Long,
     val maximumRetainedBytes: Long,
     val generatedBytes: Long,
-    val overflowCount: Long,
-    val evictedChunkCount: Long,
-    val evictedBytes: Long,
-    val firstOverflowAtMs: Long,
-    val lastOverflowAtMs: Long,
+    val limitReachedCount: Long,
+    val segmentRotationCount: Long,
+    val archiveEvictedBytes: Long,
+    val firstLimitReachedAtMs: Long,
+    val lastLimitReachedAtMs: Long,
 ) {
     fun toSessionFact(
         sequence: Long,
@@ -110,11 +110,11 @@ internal data class ActiveLogGrowthFact(
         configuredLimitBytes = configuredLimitBytes,
         maximumRetainedBytes = maximumRetainedBytes,
         generatedBytes = generatedBytes,
-        overflowCount = overflowCount,
-        evictedChunkCount = evictedChunkCount,
-        evictedBytes = evictedBytes,
-        firstOverflowAtMs = firstOverflowAtMs,
-        lastOverflowAtMs = lastOverflowAtMs,
+        limitReachedCount = limitReachedCount,
+        segmentRotationCount = segmentRotationCount,
+        archiveEvictedBytes = archiveEvictedBytes,
+        firstLimitReachedAtMs = firstLimitReachedAtMs,
+        lastLimitReachedAtMs = lastLimitReachedAtMs,
         recoveredAfterInterruption = recovered,
     )
 }
@@ -135,10 +135,14 @@ internal data class LogGrowthHistoryState(
 internal data class LogContainerStats(
     val retainedBytes: Long,
     val generatedBytes: Long,
-    val overflowCount: Long,
-    val evictedChunkCount: Long,
-    val evictedBytes: Long,
-)
+    val limitReachedCount: Long,
+    val segmentRotationCount: Long,
+    val archiveEvictedBytes: Long,
+) {
+    companion object {
+        val EMPTY = LogContainerStats(0L, 0L, 0L, 0L, 0L)
+    }
+}
 
 internal fun dayKey(localDate: String): Int {
     if (localDate.length != DATE_LENGTH) return 0

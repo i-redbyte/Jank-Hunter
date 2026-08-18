@@ -122,18 +122,40 @@ try {
 
   const registryPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await registryPage.goto(pathToFileURL(deferredRegistryPath).href, { waitUntil: "load" });
-  const registry = registryPage.locator("[data-code-registry]");
-  await registry.locator("[data-code-registry-search]").fill("DeferredLeak299");
+  const registry = registryPage.locator("[data-code-registry]").first();
+  const registryInitial = {
+    rows: await registry.locator("[data-code-problem-row]").count(),
+    archives: await registry.locator("script[data-code-problem-evidence-archive]").count(),
+    remaining: await registry.locator("[data-deferred-remaining]").textContent(),
+  };
+  assert(registryInitial.rows === 50, `архивный реестр создал ${registryInitial.rows} строк, ожидалось 50`);
+  assert(registryInitial.archives === 1, `архивов evidence = ${registryInitial.archives}, ожидался 1`);
+  assert(registryInitial.remaining?.includes("250"), `неверный начальный остаток архивного реестра: ${registryInitial.remaining}`);
+  await registry.getByRole("button", { name: "Показать ещё 50" }).click();
+  await registryPage.waitForFunction(() => document.querySelectorAll("[data-code-problem-row]").length === 100);
+  const registryLoaded = {
+    rows: await registry.locator("[data-code-problem-row]").count(),
+    remaining: await registry.locator("[data-deferred-remaining]").textContent(),
+  };
+  assert(registryLoaded.rows === 100, `архивный реестр загрузил ${registryLoaded.rows} строк, ожидалось 100`);
+  assert(registryLoaded.remaining?.includes("200"), `неверный остаток архивного реестра: ${registryLoaded.remaining}`);
+  await registry.locator("[data-code-registry-search]").fill("DeferredProblem299");
   await registryPage.waitForFunction(() => document.querySelector("[data-code-registry-count]")?.textContent === "1 из 300");
   const registryFiltered = {
     rows: await registry.locator("[data-code-problem-row]").count(),
     visibleRows: await registry.locator("[data-code-problem-row]:not([hidden])").count(),
-    payloads: await registry.locator("script[data-table-chunk]").count(),
+    archives: await registry.locator("script[data-code-problem-evidence-archive]").count(),
     counter: await registry.locator("[data-code-registry-count]").textContent(),
   };
-  assert(registryFiltered.rows === 300, `фильтр материализовал ${registryFiltered.rows} строк, ожидалось 300`);
+  assert(registryFiltered.rows === 1, `фильтр материализовал ${registryFiltered.rows} строк, ожидалась только совпавшая строка`);
   assert(registryFiltered.visibleRows === 1, `фильтр оставил ${registryFiltered.visibleRows} строк, ожидалась 1`);
-  assert(registryFiltered.payloads === 0, `после полного поиска осталось payload: ${registryFiltered.payloads}`);
+  assert(registryFiltered.archives === 0, `после декодирования остался evidence archive: ${registryFiltered.archives}`);
+  const filteredDetails = registry.locator(".code-problem-details").first();
+  await filteredDetails.locator("summary").click();
+  await registryPage.waitForFunction(() => document.querySelector(".code-problem-details")?.dataset.evidenceLoaded === "true");
+  const expandedEvidence = await filteredDetails.textContent();
+  assert(expandedEvidence.includes("Deferred signal 299"), "хвостовой сигнал не раскрылся из evidence archive");
+  assert(expandedEvidence.includes("deferred.flow.299"), "хвостовой сценарий не раскрылся из evidence archive");
   await registryPage.close();
 
   process.stdout.write(`${JSON.stringify({
@@ -145,6 +167,8 @@ try {
     scrolled,
     deferredInitial,
     deferredLoaded,
+    registryInitial,
+    registryLoaded,
     registryFiltered,
   })}\n`);
 } finally {

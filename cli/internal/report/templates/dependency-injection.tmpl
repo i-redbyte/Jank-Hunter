@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: DI-каталог</title>
-  <style>{{reportCSS .ReportStyle false}}</style>
+  <style>{{reportCSS false}}</style>
 </head>
-<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "di-page" .PresentationMode .AnimatedBackground}}">
+<body class="{{bodyClass "di-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero di-hero">
   <div class="hero-grid">
     <div>
@@ -22,8 +22,8 @@
         <strong class="env-device">{{ruCount .DependencyInjection.ClassCount "класс" "класса" "классов"}}</strong>
         <div class="env-subtitle">{{.DependencyInjection.EdgeCount}} направленных связей consumer → dependency</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Показано классов</div><div class="env-value">{{.DependencyInjection.ShownClassCount}}</div><div class="env-detail">{{if .DependencyInjection.ClassesTruncated}}список ограничен{{else}}полный список{{end}}</div></div>
-          <div class="env-item"><div class="env-label">Показано связей</div><div class="env-value">{{.DependencyInjection.ShownEdgeCount}}</div><div class="env-detail">{{if .DependencyInjection.EdgesTruncated}}список ограничен{{else}}полный список{{end}}</div></div>
+          <div class="env-item"><div class="env-label">Классы в отчёте</div><div class="env-value">{{len .DependencyInjection.Classes}}</div><div class="env-detail">полный список без скрытого ограничения</div></div>
+          <div class="env-item"><div class="env-label">Связи в отчёте</div><div class="env-value">{{len .DependencyInjection.Edges}}</div><div class="env-detail">полный список без скрытого ограничения</div></div>
         </div>
       </div>
     </div>

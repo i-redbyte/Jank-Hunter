@@ -14,6 +14,7 @@ import (
 type problemsDataset string
 
 const (
+	datasetProblems     problemsDataset = "problems"
 	datasetCodeProblems problemsDataset = "code-problems"
 	datasetLeaks        problemsDataset = "leaks"
 	datasetInfluence    problemsDataset = "influence"
@@ -22,7 +23,9 @@ const (
 
 func parseProblemsDataset(raw string) (problemsDataset, error) {
 	switch problemsDataset(strings.ToLower(strings.TrimSpace(raw))) {
-	case "", datasetCodeProblems:
+	case "", datasetProblems:
+		return datasetProblems, nil
+	case datasetCodeProblems:
 		return datasetCodeProblems, nil
 	case datasetLeaks:
 		return datasetLeaks, nil
@@ -44,6 +47,15 @@ func writeProblemsDatasetJSON(
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
 	switch dataset {
+	case datasetProblems:
+		return encoder.Encode(problemExportEnvelope{
+			SchemaVersion:    summary.ProblemSchemaVersion,
+			Summary:          summary.ProblemSummary,
+			Problems:         summary.Problems,
+			Incidents:        summary.ProblemIncidents,
+			CategoryCoverage: summary.CategoryCoverage,
+			Detectors:        summary.Detectors,
+		})
 	case datasetCodeProblems:
 		return encoder.Encode(summary.CodeProblems)
 	case datasetLeaks:
@@ -64,6 +76,8 @@ func writeProblemsDatasetCSV(
 	mathReport *mathanalysis.MathReport,
 ) error {
 	switch dataset {
+	case datasetProblems:
+		return writeCSVTable(writer, problemsTable(summary.Problems))
 	case datasetCodeProblems:
 		return writeCSVTable(writer, codeProblemsTable(summary.CodeProblems))
 	case datasetLeaks:
@@ -75,6 +89,71 @@ func writeProblemsDatasetCSV(
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
 	}
+}
+
+type problemExportEnvelope struct {
+	SchemaVersion    string                     `json:"schema_version"`
+	Summary          analyze.ProblemSummary     `json:"problem_summary"`
+	Problems         []analyze.ProblemFinding   `json:"problems"`
+	Incidents        []analyze.ProblemFinding   `json:"incidents"`
+	CategoryCoverage []analyze.CategoryCoverage `json:"category_coverage"`
+	Detectors        []analyze.DetectorMetadata `json:"detectors"`
+}
+
+func problemsTable(rows []analyze.ProblemFinding) csvTable {
+	table := csvTable{header: []string{
+		"fingerprint", "detector_id", "detector_version", "category", "subcategory", "severity", "status",
+		"risk_score", "confidence", "title", "what_happened", "where", "claim_level", "why", "impact",
+		"evidence", "recommendation", "limitations",
+	}}
+	for _, row := range rows {
+		table.rows = append(table.rows, []string{
+			row.Fingerprint, row.DetectorID, row.DetectorVersion, row.Category, row.Subcategory, row.Severity, row.Status,
+			fmt.Sprint(row.RiskScore), row.Confidence, row.Title, row.WhatHappened, problemLocationsText(row.Where),
+			row.Why.ClaimLevel, row.Why.Summary, strings.Join(row.Impact, " | "), problemEvidenceText(row.Evidence),
+			problemRecommendationText(row.Recommendations), strings.Join(row.Limitations, " | "),
+		})
+	}
+	return table
+}
+
+func problemLocationsText(values []analyze.ProblemLocation) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		fields := []string{}
+		for _, pair := range []struct{ key, value string }{{"process", value.Process}, {"screen", value.Screen}, {"flow", value.Flow}, {"step", value.Step}, {"route", value.Route}, {"owner", value.Owner}, {"class", value.Class}, {"method", value.Method}} {
+			if pair.value != "" {
+				fields = append(fields, pair.key+"="+pair.value)
+			}
+		}
+		if len(fields) > 0 {
+			parts = append(parts, strings.Join(fields, ";"))
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func problemEvidenceText(values []analyze.ProblemEvidence) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		item := value.Name + "=" + value.Observed
+		if value.Unit != "" {
+			item += " " + value.Unit
+		}
+		if value.ExpectedOrThreshold != "" {
+			item += " (threshold " + value.ExpectedOrThreshold + ")"
+		}
+		parts = append(parts, item)
+	}
+	return strings.Join(parts, " | ")
+}
+
+func problemRecommendationText(values []analyze.ProblemRecommendation) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, value.Action+"; verify: "+value.Verification)
+	}
+	return strings.Join(parts, " | ")
 }
 
 type csvTable struct {

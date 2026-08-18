@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.LogGrowthManager
+import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
@@ -24,6 +25,7 @@ internal class RuntimeState {
     val initFailures = AtomicLong()
     val appForeground = AtomicBoolean(false)
     val runtimeEnabled = AtomicBoolean(true)
+    val collectionInactiveSinceElapsedMs = AtomicLong()
     val heapDumpInProgress = AtomicBoolean(false)
     val heapDumpAttributionUntilMs = AtomicLong()
 
@@ -37,10 +39,13 @@ internal class RuntimeState {
     var logGrowthManager: LogGrowthManager? = null
 
     @Volatile
-    var config: JankHunterConfig? = null
+    var logSnapshotCoordinator: ProcessLogSnapshotCoordinator? = null
 
     @Volatile
-    var runtimeGraphMode = JankHunterRuntimeGraphMode.BUFFERED
+    var snapshotExpectedProcessCount: Int = 0
+
+    @Volatile
+    var config: JankHunterConfig? = null
 
     @Volatile
     var initContext: Context? = null

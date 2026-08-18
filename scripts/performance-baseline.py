@@ -28,9 +28,9 @@ ANDROID = ROOT / "android"
 DEFAULT_ACCEPTANCE = ROOT / "benchmarks" / "acceptance.json"
 DIAGNOSTICS = ROOT / "benchmarks" / "fixtures" / "instrumentation-diagnostics.jsonl"
 TIME_TOOL = Path("/usr/bin/time")
-CAPTURE_SCHEMA = 4
+CAPTURE_SCHEMA = 9
 ACCEPTANCE_SCHEMA = 3
-FIXTURE_SCHEMA = 2
+FIXTURE_SCHEMA = 4
 ARTIFACT_DIRECTORY_MARKER = ".jankhunter-performance-artifacts-v1"
 ARTIFACT_DIRECTORY_MARKER_CONTENT = "owned by scripts/performance-baseline.py\n"
 CAPTURE_LOCK_MAGIC = b"JANK_HUNTER_PERFORMANCE_LOCK_V1\n"
@@ -100,16 +100,42 @@ COLLECTION_QUALITY_FIELDS = (
     "level",
     "complete",
     "chain_valid",
+    "exact_admission",
+    "process_scope",
+    "allowed_process_count",
+    "process_scope_fingerprint",
+    "expected_process_count",
+    "expected_process_fingerprint",
+    "observed_process_count",
+    "process_roster_declaration_complete",
+    "process_roster_complete",
+    "run_cohort_count",
+    "run_cohort_consistent",
+    "all_processes_configured",
+    "process_scope_consistent",
+    "counter_invariants_valid",
+    "quality_progression_valid",
     "sealed_segments",
     "unsealed_segments",
     "segments_with_quality",
     "segments_without_quality",
     "accepted_events",
     "written_events",
+    "decoded_committed_chunks",
+    "reported_committed_chunks",
     "known_lost_events",
+    "writer_backpressure_count",
+    "writer_backpressure_nanos",
+    "runtime_hook_failures",
+    "runtime_graph_input_events",
+    "runtime_graph_emitted_events",
+    "decoded_runtime_graph_calls",
+    "runtime_graph_completeness_ratio",
     "dictionary_overflow",
     "dictionary_truncated",
+    "unknown_quality_counters",
     "chain_issues",
+    "notices",
     "reasons",
 )
 
@@ -465,16 +491,44 @@ def extract_collection_quality(summary: dict[str, Any]) -> dict[str, Any]:
         "level": raw.get("level"),
         "complete": raw.get("complete"),
         "chain_valid": raw.get("chain_valid"),
+        "exact_admission": raw.get("exact_admission"),
+        "process_scope": raw.get("process_scope"),
+        "allowed_process_count": raw.get("allowed_process_count", 0),
+        "process_scope_fingerprint": raw.get("process_scope_fingerprint", ""),
+        "expected_process_count": raw.get("expected_process_count"),
+        "expected_process_fingerprint": raw.get("expected_process_fingerprint", ""),
+        "observed_process_count": raw.get("observed_process_count"),
+        "process_roster_declaration_complete": raw.get(
+            "process_roster_declaration_complete"
+        ),
+        "process_roster_complete": raw.get("process_roster_complete"),
+        "run_cohort_count": raw.get("run_cohort_count"),
+        "run_cohort_consistent": raw.get("run_cohort_consistent"),
+        "all_processes_configured": raw.get("all_processes_configured"),
+        "process_scope_consistent": raw.get("process_scope_consistent"),
+        "counter_invariants_valid": raw.get("counter_invariants_valid"),
+        "quality_progression_valid": raw.get("quality_progression_valid"),
         "sealed_segments": raw.get("sealed_segments"),
         "unsealed_segments": raw.get("unsealed_segments"),
         "segments_with_quality": raw.get("segments_with_quality"),
         "segments_without_quality": raw.get("segments_without_quality"),
         "accepted_events": raw.get("accepted_events"),
         "written_events": raw.get("written_events"),
+        "decoded_committed_chunks": raw.get("decoded_committed_chunks"),
+        "reported_committed_chunks": raw.get("reported_committed_chunks"),
         "known_lost_events": raw.get("known_lost_events"),
+        "writer_backpressure_count": raw.get("writer_backpressure_count"),
+        "writer_backpressure_nanos": raw.get("writer_backpressure_nanos"),
+        "runtime_hook_failures": raw.get("runtime_hook_failures", 0),
+        "runtime_graph_input_events": raw.get("runtime_graph_input_events"),
+        "runtime_graph_emitted_events": raw.get("runtime_graph_emitted_events"),
+        "decoded_runtime_graph_calls": raw.get("decoded_runtime_graph_calls"),
+        "runtime_graph_completeness_ratio": raw.get("runtime_graph_completeness_ratio"),
         "dictionary_overflow": raw.get("dictionary_overflow"),
         "dictionary_truncated": raw.get("dictionary_truncated"),
+        "unknown_quality_counters": raw.get("unknown_quality_counters", []),
         "chain_issues": raw.get("chain_issues", []),
+        "notices": raw.get("notices", []),
         "reasons": raw.get("reasons", []),
     }
 
@@ -875,11 +929,74 @@ def validate_android_artifact_path(artifact: Path) -> None:
 
 def report_measurement(directory: Path, prefix: str) -> dict[str, Any]:
     pages = sorted(directory.glob(f"{prefix}*.html"))
-    suffixes = [page.name.removeprefix(prefix) for page in pages]
+    suffixes: list[str] = []
+    seen: set[str] = set()
+    for page in pages:
+        physical_suffix = page.name.removeprefix(prefix)
+        if physical_suffix not in seen:
+            suffixes.append(physical_suffix)
+            seen.add(physical_suffix)
+        for embedded_suffix in embedded_report_page_suffixes(page, prefix):
+            if embedded_suffix not in seen:
+                suffixes.append(embedded_suffix)
+                seen.add(embedded_suffix)
     return {
         "bundle_bytes": sum(page.stat().st_size for page in pages),
         "pages": suffixes,
     }
+
+
+def embedded_report_page_suffixes(page: Path, prefix: str) -> list[str]:
+    document = page.read_bytes()
+    manifest_marker = (
+        b'<script id="jankhunter-report-pages" type="application/json">'
+    )
+    manifest_start = document.find(manifest_marker)
+    if manifest_start < 0:
+        return []
+    manifest_start += len(manifest_marker)
+    manifest_end = document.find(b"</script>", manifest_start)
+    if manifest_end < 0:
+        raise RuntimeError(f"report bundle manifest is unterminated: {page}")
+    try:
+        manifest = json.loads(document[manifest_start:manifest_end])
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise RuntimeError(f"report bundle manifest is invalid: {page}: {error}") from error
+    if not isinstance(manifest, list) or not manifest:
+        raise RuntimeError(f"report bundle manifest has no pages: {page}")
+
+    suffixes: list[str] = []
+    payloads: set[str] = set()
+    for index, entry in enumerate(manifest):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"report bundle page {index} is not an object: {page}")
+        values = [entry.get(name) for name in ("id", "title", "href", "payload")]
+        if any(not isinstance(value, str) or not value for value in values):
+            raise RuntimeError(f"report bundle page {index} is incomplete: {page}")
+        href = entry["href"]
+        payload = entry["payload"]
+        if not href.startswith(prefix) or not href.endswith(".html"):
+            raise RuntimeError(
+                f"report bundle page {index} has an unexpected href {href!r}: {page}"
+            )
+        suffix = href.removeprefix(prefix)
+        if suffix in suffixes:
+            raise RuntimeError(f"report bundle page href is duplicated: {href!r}: {page}")
+        if payload in payloads:
+            raise RuntimeError(
+                f"report bundle payload id is duplicated: {payload!r}: {page}"
+            )
+        payload_marker = (
+            f'<script id="{payload}" type="application/octet-stream" '
+            'data-jankhunter-report-payload data-encoding="gzip-base64">'
+        ).encode()
+        if document.count(payload_marker) != 1:
+            raise RuntimeError(
+                f"report bundle payload {payload!r} is missing or duplicated: {page}"
+            )
+        suffixes.append(suffix)
+        payloads.add(payload)
+    return suffixes
 
 
 def environment_metadata(*, include_java: bool = True) -> dict[str, str]:
@@ -1250,6 +1367,26 @@ def validate_result_against_acceptance(
         (collection["level"] == "high", "level is not high"),
         (collection["complete"] is True, "capture is not complete"),
         (collection["chain_valid"] is True, "segment chain is invalid"),
+        (collection["exact_admission"] is True, "exact admission is not enabled"),
+        (collection["process_scope"] == "all_processes", "process scope is not all-process"),
+        (collection["allowed_process_count"] == 0, "all-process scope declares an allowlist"),
+        (collection["process_scope_fingerprint"] == "", "all-process scope has an allowlist fingerprint"),
+        (collection["expected_process_count"] > 0, "expected process roster is empty"),
+        (
+            collection["observed_process_count"] == collection["expected_process_count"],
+            "observed process count differs from the expected roster",
+        ),
+        (
+            collection["process_roster_declaration_complete"] is True,
+            "process roster declaration is incomplete",
+        ),
+        (collection["process_roster_complete"] is True, "process roster coverage is incomplete"),
+        (collection["run_cohort_count"] == 1, "capture mixes application run cohorts"),
+        (collection["run_cohort_consistent"] is True, "application run cohort is inconsistent"),
+        (collection["all_processes_configured"] is True, "all-process collection is not configured"),
+        (collection["process_scope_consistent"] is True, "process scope is inconsistent"),
+        (collection["counter_invariants_valid"] is True, "counter invariants are invalid"),
+        (collection["quality_progression_valid"] is True, "quality progression is invalid"),
         (collection["sealed_segments"] > 0, "no sealed segments were observed"),
         (collection["unsealed_segments"] == 0, "unsealed segments were observed"),
         (
@@ -1274,13 +1411,50 @@ def validate_result_against_acceptance(
             collection["written_events"] == expected_events,
             "written event count differs from fixture metadata",
         ),
+        (
+            collection["decoded_committed_chunks"] > 0,
+            "no committed chunks were decoded",
+        ),
+        (
+            collection["reported_committed_chunks"]
+            == collection["decoded_committed_chunks"],
+            "committed chunk accounting is inconsistent",
+        ),
+        (
+            collection["runtime_graph_emitted_events"]
+            == collection["decoded_runtime_graph_calls"],
+            "runtime graph emitted counter differs from decoded logical calls",
+        ),
+        (
+            result["fixture"]["runtime_call_events"] == 0
+            or collection["decoded_runtime_graph_calls"] > 0,
+            "runtime graph fixture produced no decoded logical calls",
+        ),
+        (
+            collection["runtime_graph_completeness_ratio"] == 1,
+            "runtime graph is not logically complete",
+        ),
         (collection["known_lost_events"] == 0, "known event loss was recorded"),
+        (
+            collection["runtime_hook_failures"] == 0,
+            "runtime fail-open hook failures were recorded",
+        ),
         (collection["dictionary_overflow"] == 0, "dictionary overflow was recorded"),
         (
             collection["dictionary_truncated"] == 0,
             "dictionary truncation was recorded",
         ),
+        (
+            collection["runtime_graph_emitted_events"]
+            <= collection["runtime_graph_input_events"],
+            "runtime graph output exceeds its input",
+        ),
+        (
+            collection["unknown_quality_counters"] == [],
+            "unknown quality counters were recorded",
+        ),
         (collection["chain_issues"] == [], "segment chain issues were recorded"),
+        (collection["notices"] == [], "collection notices were recorded"),
         (collection["reasons"] == [], "collection degradation reasons were recorded"),
     )
     for passed, reason in pristine_requirements:
@@ -1521,23 +1695,85 @@ def validate_collection_quality(raw: Any, label: str, failures: list[str]) -> No
     )
     if raw.get("level") not in ("low", "medium", "high"):
         failures.append(f"{label} collection quality level is missing or invalid")
-    for field in ("complete", "chain_valid"):
+    for field in (
+        "complete",
+        "chain_valid",
+        "exact_admission",
+        "process_roster_declaration_complete",
+        "process_roster_complete",
+        "run_cohort_consistent",
+        "all_processes_configured",
+        "process_scope_consistent",
+        "counter_invariants_valid",
+        "quality_progression_valid",
+    ):
         if not isinstance(raw.get(field), bool):
             failures.append(f"{label} collection quality {field} is missing or invalid")
+    if raw.get("process_scope") not in (
+        "all_processes",
+        "main_process_only",
+        "process_allowlist",
+        "mixed",
+        "unknown",
+    ):
+        failures.append(f"{label} collection quality process_scope is missing or invalid")
+    fingerprint = raw.get("process_scope_fingerprint")
+    if not isinstance(fingerprint, str) or (
+        fingerprint
+        and (
+            len(fingerprint) != 64
+            or any(character not in "0123456789abcdef" for character in fingerprint)
+        )
+    ):
+        failures.append(
+            f"{label} collection quality process_scope_fingerprint is missing or invalid"
+        )
+    roster_fingerprint = raw.get("expected_process_fingerprint")
+    if not isinstance(roster_fingerprint, str) or (
+        len(roster_fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in roster_fingerprint)
+    ):
+        failures.append(
+            f"{label} collection quality expected_process_fingerprint is missing or invalid"
+        )
     for field in (
+        "allowed_process_count",
+        "expected_process_count",
+        "observed_process_count",
+        "run_cohort_count",
         "sealed_segments",
         "unsealed_segments",
         "segments_with_quality",
         "segments_without_quality",
         "accepted_events",
         "written_events",
+        "decoded_committed_chunks",
+        "reported_committed_chunks",
         "known_lost_events",
+        "writer_backpressure_count",
+        "writer_backpressure_nanos",
+        "runtime_hook_failures",
+        "runtime_graph_input_events",
+        "runtime_graph_emitted_events",
+        "decoded_runtime_graph_calls",
         "dictionary_overflow",
         "dictionary_truncated",
     ):
         if not is_nonnegative_int(raw.get(field)):
             failures.append(f"{label} collection quality {field} is missing or invalid")
-    for field in ("chain_issues", "reasons"):
+    completeness = raw.get("runtime_graph_completeness_ratio")
+    if not is_number(completeness) or completeness < 0 or completeness > 1:
+        failures.append(
+            f"{label} collection quality runtime_graph_completeness_ratio is missing or invalid"
+        )
+    unknown_counters = raw.get("unknown_quality_counters")
+    if not isinstance(unknown_counters, list) or any(
+        not isinstance(counter, dict) for counter in unknown_counters
+    ):
+        failures.append(
+            f"{label} collection quality unknown_quality_counters is missing or invalid"
+        )
+    for field in ("chain_issues", "notices", "reasons"):
         values = raw.get(field)
         if not isinstance(values, list) or any(
             not isinstance(value, str) or not value for value in values
@@ -1562,9 +1798,10 @@ def validate_fixture_quality_contract(
         "control_records",
         "total_records",
         "runtime_call_events",
+        "runtime_call_blocks",
         "runtime_unique_edges",
-        "flow_events",
-        "flow_tuples",
+        "attributed_events",
+        "attribution_tuples",
         "signal_events",
         "duration_ms",
         "compressed_bytes",
@@ -1592,9 +1829,10 @@ def validate_fixture_quality_contract(
         "control_records",
         "total_records",
         "runtime_call_events",
+        "runtime_call_blocks",
         "runtime_unique_edges",
-        "flow_events",
-        "flow_tuples",
+        "attributed_events",
+        "attribution_tuples",
         "signal_events",
         "duration_ms",
         "compressed_bytes",
@@ -1606,6 +1844,14 @@ def validate_fixture_quality_contract(
             failures.append(f"{label} fixture count is missing or invalid: {name}")
         else:
             counts[name] = value
+
+    if "runtime_call_blocks" in counts and "runtime_call_events" in counts:
+        if counts["runtime_call_blocks"] >= counts["runtime_call_events"]:
+            failures.append(
+                f"{label} fixture runtime calls are not columnar-batched: "
+                f"{counts['runtime_call_blocks']} blocks for "
+                f"{counts['runtime_call_events']} events"
+            )
 
     core_count_names = (
         "events",

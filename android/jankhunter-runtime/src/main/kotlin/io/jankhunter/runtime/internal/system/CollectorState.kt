@@ -1,5 +1,7 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.internal.io.Jhlog
+import java.util.TreeMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -62,66 +64,63 @@ internal enum class StallEpisodeChange {
 internal class FrameDurationHistogram(
     maxExactDurationMs: Int = DEFAULT_MAX_EXACT_DURATION_MS,
 ) {
-    private val overflowBin = maxExactDurationMs.coerceIn(1, DEFAULT_MAX_EXACT_DURATION_MS) + 1
-    private val bins = LongArray(overflowBin + 1)
+    private val overflowStartMs = maxExactDurationMs.coerceIn(1, DEFAULT_MAX_EXACT_DURATION_MS) + 1
+    private val bins = LongArray(overflowStartMs)
+    private val overflowBins = TreeMap<Long, Long>()
+    private val mergeableBuckets = LongArray(Jhlog.UI_FRAME_HISTOGRAM_BUCKET_COUNT)
     private var count = 0L
-    private var maxObservedMs = 0L
 
-    var p50Ms: Long = 0L
-        private set
     var p95Ms: Long = 0L
-        private set
-    var p99Ms: Long = 0L
         private set
 
     fun add(durationMs: Long) {
         val safeDuration = durationMs.coerceAtLeast(0L)
-        val index = if (safeDuration >= overflowBin) overflowBin else safeDuration.toInt()
-        if (bins[index] < Long.MAX_VALUE) bins[index]++
+        if (safeDuration < overflowStartMs) {
+            val index = safeDuration.toInt()
+            if (bins[index] < Long.MAX_VALUE) bins[index]++
+        } else {
+            val current = overflowBins[safeDuration] ?: 0L
+            if (current < Long.MAX_VALUE) overflowBins[safeDuration] = current + 1L
+        }
         if (count < Long.MAX_VALUE) count++
-        if (safeDuration > maxObservedMs) maxObservedMs = safeDuration
+        val durationUs = if (safeDuration > Long.MAX_VALUE / 1_000L) Long.MAX_VALUE else safeDuration * 1_000L
+        val bucket = Jhlog.UI_FRAME_HISTOGRAM_UPPER_US.indexOfFirst { durationUs <= it }
+            .let { if (it >= 0) it else mergeableBuckets.lastIndex }
+        if (mergeableBuckets[bucket] < Long.MAX_VALUE) mergeableBuckets[bucket]++
     }
 
     fun calculatePercentiles() {
         if (count == 0L) {
-            p50Ms = 0L
             p95Ms = 0L
-            p99Ms = 0L
             return
         }
-        val p50Target = percentileIndex(50)
         val p95Target = percentileIndex(95)
-        val p99Target = percentileIndex(99)
         var seen = 0L
-        var found50 = false
-        var found95 = false
         for (index in bins.indices) {
             seen += bins[index]
-            val duration = if (index == overflowBin) maxObservedMs else index.toLong()
-            if (!found50 && seen > p50Target) {
-                p50Ms = duration
-                found50 = true
-            }
-            if (!found95 && seen > p95Target) {
-                p95Ms = duration
-                found95 = true
-            }
-            if (seen > p99Target) {
-                p99Ms = duration
+            if (seen > p95Target) {
+                p95Ms = index.toLong()
                 return
             }
         }
-        p99Ms = maxObservedMs
+        for ((duration, durationCount) in overflowBins) {
+            seen += durationCount
+            if (seen > p95Target) {
+                p95Ms = duration
+                return
+            }
+        }
     }
 
     fun clear() {
         bins.fill(0L)
+        overflowBins.clear()
+        mergeableBuckets.fill(0L)
         count = 0L
-        maxObservedMs = 0L
-        p50Ms = 0L
         p95Ms = 0L
-        p99Ms = 0L
     }
+
+    fun mergeableBuckets(): LongArray = mergeableBuckets.copyOf()
 
     private fun percentileIndex(percentile: Long): Long {
         val lastIndex = count - 1L
@@ -130,6 +129,93 @@ internal class FrameDurationHistogram(
 
     private companion object {
         private const val DEFAULT_MAX_EXACT_DURATION_MS = 510
+    }
+}
+
+internal data class FrameWindowSnapshot(
+    val screen: String?,
+    val elapsedMs: Long,
+    val frameCount: Long,
+    val jankCount: Long,
+    val p95Ms: Long,
+    val frameDurationBuckets: LongArray,
+)
+
+internal class FrameWindowAccumulator(
+    private val windowNanos: Long,
+    private val preservePartialWindows: Boolean,
+) {
+    private var screen: String? = null
+    private var startNanos = 0L
+    private var frameCount = 0L
+    private var jankCount = 0L
+    private val durationHistogram = FrameDurationHistogram()
+
+    fun add(
+        nextScreen: String?,
+        frameTimeNanos: Long,
+        durationMs: Long,
+        isJank: Boolean,
+    ): FrameWindowSnapshot? {
+        var completed: FrameWindowSnapshot? = null
+        if (frameCount > 0L && screen != nextScreen) {
+            completed = if (preservePartialWindows) finish(frameTimeNanos) else null
+            if (!preservePartialWindows) reset(frameTimeNanos)
+        }
+        if (screen == null) screen = nextScreen
+        if (startNanos == 0L) {
+            val durationNanos = millisecondsToNanos(durationMs)
+            startNanos = if (durationNanos >= frameTimeNanos) 1L else frameTimeNanos - durationNanos
+        }
+
+        frameCount++
+        if (isJank) {
+            jankCount++
+        }
+        durationHistogram.add(durationMs)
+
+        val elapsedNanos = (frameTimeNanos - startNanos).coerceAtLeast(0L)
+        if (elapsedNanos >= windowNanos) {
+            check(completed == null)
+            completed = finish(frameTimeNanos)
+            screen = nextScreen
+        }
+        return completed
+    }
+
+    fun finish(endNanos: Long): FrameWindowSnapshot? {
+        if (frameCount == 0L) {
+            reset()
+            return null
+        }
+        durationHistogram.calculatePercentiles()
+        val snapshot = FrameWindowSnapshot(
+            screen = screen,
+            elapsedMs = maxOf(1L, (endNanos - startNanos).coerceAtLeast(0L) / NANOS_PER_MS),
+            frameCount = frameCount,
+            jankCount = jankCount,
+            p95Ms = durationHistogram.p95Ms,
+            frameDurationBuckets = durationHistogram.mergeableBuckets(),
+        )
+        reset(endNanos)
+        return snapshot
+    }
+
+    fun reset(nextStartNanos: Long = 0L) {
+        startNanos = nextStartNanos
+        screen = null
+        frameCount = 0L
+        jankCount = 0L
+        durationHistogram.clear()
+    }
+
+    private fun millisecondsToNanos(milliseconds: Long): Long {
+        val positive = milliseconds.coerceAtLeast(0L)
+        return if (positive > Long.MAX_VALUE / NANOS_PER_MS) Long.MAX_VALUE else positive * NANOS_PER_MS
+    }
+
+    private companion object {
+        private const val NANOS_PER_MS = 1_000_000L
     }
 }
 

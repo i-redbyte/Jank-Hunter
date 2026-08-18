@@ -42,6 +42,26 @@ const buildGrowthReport = () => {
   return reportPath;
 };
 
+const buildDeferredSearchReport = () => {
+  const directory = resolve(outDir, "deferred-search");
+  const reportPath = resolve(directory, "inspect.html");
+  mkdirSync(directory, { recursive: true });
+  const result = spawnSync(
+    "go",
+    ["test", "./internal/report", "-run", "^TestCodeProblemReportKeepsHighCardinalityRegistryInCompressedArchive$", "-count=1"],
+    {
+      cwd: cliRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, JH_DEFERRED_SEARCH_OUT: reportPath },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(`Не удалось создать отчет для проверки поиска\n${result.stdout}\n${result.stderr}`);
+  }
+  return reportPath;
+};
+
 const buildReportSet = (name, presentation = false) => {
   const setDir = resolve(outDir, name);
   mkdirSync(setDir, { recursive: true });
@@ -132,16 +152,32 @@ const buildReportSet = (name, presentation = false) => {
   const ownerMapArgs = [];
   if (presentation) {
     const ownerMapPath = resolve(setDir, "owner-map.json");
-    writeFileSync(ownerMapPath, JSON.stringify({
-      format: 4,
-      kind: "metadata",
-      symbolNamespace: "00112233445566778899aabbccddeeff",
-      owners: {
-        "stable:0x0000000000001001": "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
-        "stable:0x0000000000001002": "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
-        "stable:0x0000000000001003": "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
+    const ownerRecords = [
+      {
+        format: 4,
+        kind: "metadata",
+        symbolNamespace: "00112233445566778899aabbccddeeff",
       },
-    }, null, 2));
+      {
+        format: 4,
+        kind: "entry",
+        id: "stable:0x0000000000001001",
+        owner: "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
+      },
+      {
+        format: 4,
+        kind: "entry",
+        id: "stable:0x0000000000001002",
+        owner: "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
+      },
+      {
+        format: 4,
+        kind: "entry",
+        id: "stable:0x0000000000001003",
+        owner: "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
+      },
+    ];
+    writeFileSync(ownerMapPath, ownerRecords.map((record) => JSON.stringify(record)).join("\n") + "\n");
     ownerMapArgs.push("--owner-map", ownerMapPath);
   }
   run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
@@ -210,6 +246,14 @@ const reportPaths = [
   ...buildReportSet("short"),
   ...buildReportSet("long-presentation", true),
   {
+    set: "deferred-search",
+    type: "inspect",
+    path: buildDeferredSearchReport(),
+    page: "overview",
+    plain: true,
+    searchQuery: "ArchivedProblem074",
+  },
+  {
     set: "growth",
     type: "calendar-month",
     path: buildGrowthReport(),
@@ -236,6 +280,80 @@ const visualStabilityCSS = `
   }
 `;
 const failures = [];
+
+const checkCodeProblemEvidence = async (frame) => {
+  const details = await frame.$(".code-problem-details[data-code-problem-evidence-key]");
+  if (!details) return { available: false };
+  await details.evaluate((element) => { element.open = true; });
+  const loaded = await frame.waitForFunction(
+    () => document.querySelector(".code-problem-details[data-evidence-loaded='true']"),
+    null,
+    { timeout: 2000 },
+  ).then(() => true, () => false);
+  if (!loaded) return { available: true, loaded: false, signals: 0, drilldowns: 0 };
+  const result = await details.evaluate((element) => ({
+    available: true,
+    loaded: true,
+    signals: element.querySelectorAll(".problem-signal").length,
+    drilldowns: element.querySelectorAll(".problem-drill").length,
+    error: element.textContent.includes("Не удалось прочитать полные доказательства"),
+  }));
+  await details.evaluate((element) => { element.open = false; });
+  return result;
+};
+
+const checkProblemSearch = async (frame, query) => frame.evaluate(async (searchQuery) => {
+  const search = document.querySelector("[data-problem-search]");
+  const feedback = document.querySelector("[data-problem-search-feedback]");
+  const results = document.querySelector("[data-problem-search-results]");
+  const scope = document.querySelector("[data-problem-card-scope]");
+  if (!search || !feedback || !results || !scope) {
+    return ["элементы поиска отсутствуют"];
+  }
+  const issues = [];
+  const liveRows = Array.from(document.querySelectorAll("[data-code-problem-row]"));
+  if (liveRows.some((row) => row.textContent.includes(searchQuery))) {
+    issues.push("хвостовая строка уже находилась в DOM до поиска");
+  }
+  if (!scope.textContent.includes("все классы и строки подробностей")) {
+    issues.push("область поиска не объясняет охват подробных строк");
+  }
+  search.value = searchQuery;
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  const waitUntil = async (predicate, attempts = 180) => {
+    for (let index = 0; index < attempts; index += 1) {
+      if (predicate()) return true;
+      await new Promise((resolveTick) => requestAnimationFrame(resolveTick));
+    }
+    return false;
+  };
+  const indexed = await waitUntil(() => !feedback.textContent.includes("Ищу по всем строкам"));
+  if (!indexed) {
+    issues.push("индекс отложенных строк не завершился");
+    return issues;
+  }
+  const resultButton = results.querySelector("button");
+  if (!resultButton || !results.textContent.includes(searchQuery)) {
+    issues.push("класс из отложенной строки не появился в результатах");
+    return issues;
+  }
+  resultButton.click();
+  const revealed = await waitUntil(() => {
+    const target = document.querySelector(".report-search-highlight");
+    return target?.textContent.includes(searchQuery);
+  });
+  if (!revealed) {
+    issues.push("переход не материализовал и не подсветил найденную строку");
+  }
+  const target = document.querySelector(".report-search-highlight");
+  let details = target?.closest("details");
+  while (details) {
+    if (!details.open) issues.push("родительский раздел найденной строки остался закрыт");
+    details = details.parentElement?.closest("details");
+  }
+  document.querySelector("[data-problem-search-clear]")?.click();
+  return issues;
+}, query);
 
 const collectLayoutIssues = async (page) => page.evaluate(() => {
   const root = document.documentElement;
@@ -290,6 +408,20 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
         });
     })
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
+  const escapedScenarioContent = Array.from(document.querySelectorAll(".scenario-insight-card, .ui-screen-insight, .ui-cause-card"))
+    .flatMap((card) => {
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.width <= 0 || cardRect.height <= 0) return [];
+      return Array.from(card.querySelectorAll("h3, h5, p, dt, dd, strong, small, span"))
+        .filter((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && (
+            rect.left < cardRect.left - 2 ||
+            rect.right > cardRect.right + 2
+          );
+        })
+        .map((node) => node.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
+    });
   const graphEdges = Array.from(document.querySelectorAll(".leak-graph-edge, .influence-edge"));
   const missingArrowMarkers = graphEdges.filter((edge) => {
     const marker = edge.getAttribute("marker-end") || "";
@@ -412,6 +544,7 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     clippedCells,
     nakedOverflowCells,
     escapedProblemCells,
+    escapedScenarioContent,
     missingArrowMarkers,
     leakLabelOverlaps,
     influenceTextOverflow,
@@ -473,8 +606,8 @@ const checkGrowthPeriod = async (frame, period) => frame.evaluate(async (selecte
     retained: "1 МиБ",
     fill: "100% лимита",
     reached: "6 сессий достигли лимита",
-    overflows: "21",
-    chunks: "42 блоков",
+    "limit-reached": "21",
+    rotations: "42",
     evicted: "21 МиБ",
   };
   for (const [name, expectedValue] of Object.entries(expected)) {
@@ -487,8 +620,8 @@ const checkGrowthPeriod = async (frame, period) => frame.evaluate(async (selecte
   if (panel.querySelectorAll("[data-growth-session-rows] tr").length !== 31) {
     issues.push("таблица сессий не содержит 31 строку");
   }
-  if (panel.querySelectorAll("[data-growth-session-rows] tr.has-overflow").length !== 6) {
-    issues.push("в таблице неверно отмечены сессии с переполнениями");
+  if (panel.querySelectorAll("[data-growth-session-rows] tr.has-limit").length !== 6) {
+    issues.push("в таблице неверно отмечены сессии с остановкой по лимиту");
   }
   if (panel.querySelector("[data-growth-period-result]")?.hidden) {
     issues.push("итог выбранного месяца остался скрыт");
@@ -742,6 +875,12 @@ try {
       const growthIssues = report.growthPeriod
         ? await checkGrowthPeriod(reportFrame, report.growthPeriod)
         : [];
+      const codeEvidence = report.page === "overview" || report.page === "math"
+        ? await checkCodeProblemEvidence(reportFrame)
+        : { available: false };
+      const problemSearchIssues = report.searchQuery
+        ? await checkProblemSearch(reportFrame, report.searchQuery)
+        : [];
       const issues = await collectLayoutIssues(reportFrame);
       const longCellToggle = await checkLongCellToggle(reportFrame);
       const zeroToggle = await checkZeroToggle(reportFrame);
@@ -780,6 +919,9 @@ try {
       if (issues.escapedProblemCells.length > 0) {
         failures.push(`${viewport.name}/${displayName}: содержимое problem/leak таблицы вышло за границы ячейки: ${JSON.stringify(issues.escapedProblemCells.slice(0, 3))}`);
       }
+      if (issues.escapedScenarioContent.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: содержимое сценарной карточки вышло за границы: ${JSON.stringify(issues.escapedScenarioContent.slice(0, 3))}`);
+      }
       if (issues.missingArrowMarkers > 0) {
         failures.push(`${viewport.name}/${displayName}: у ${issues.missingArrowMarkers} SVG-связей отсутствует рабочий marker-end`);
       }
@@ -816,6 +958,12 @@ try {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
       for (const issue of growthIssues) {
+        failures.push(`${viewport.name}/${displayName}: ${issue}`);
+      }
+      if (codeEvidence.available && (!codeEvidence.loaded || codeEvidence.error || codeEvidence.signals === 0)) {
+        failures.push(`${viewport.name}/${displayName}: полные доказательства строки кода не раскрылись (${JSON.stringify(codeEvidence)})`);
+      }
+      for (const issue of problemSearchIssues) {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
       if (influenceResult) {

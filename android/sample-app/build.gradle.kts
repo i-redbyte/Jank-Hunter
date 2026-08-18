@@ -17,6 +17,9 @@ jankHunter {
     enabledBuildTypes.set(setOf("debug"))
     autoInit.set(true)
     verboseLogs.set(true)
+    sessionLogSizeLimitEnabled.set(true)
+    maxSessionLogSizeMiB.set(50)
+    logGrowthAnalyticsEnabled.set(true)
 
     runtime {
         mainThreadStallThresholdMs.set(150)
@@ -24,15 +27,17 @@ jankHunter {
         httpSlowThresholdMs.set(500)
         jankFrameThresholdMs.set(32)
         uiWindowP95ThresholdMs.set(32)
+        exactEventCollection.set(true)
+        maxQueueSize.set(65_536)
         mainLooperDispatchMonitor.set(true)
         jankStats.set(true)
-        mainProcessOnly.set(true)
+        mainProcessOnly.set(false)
     }
 
     instrument {
         classGraph.set(true)
         runtimeCallGraph.set(true)
-        methodCounters.set(false)
+        methodCounters.set(true)
         okhttp.set(true)
         webSockets.set(true)
         handlers.set(true)
@@ -41,7 +46,8 @@ jankHunter {
         flowInteractions.set(true)
         lifecycleLeaks.set(true)
         logSpam.set(true)
-        includeAndroidNamespace.set(false)
+        includeAndroidNamespace.set(true)
+        includeWholeApplication.set(false)
         includePackages("io.jankhunter.sample.graph")
     }
 

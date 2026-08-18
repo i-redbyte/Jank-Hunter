@@ -8,14 +8,16 @@ import (
 )
 
 type ValidationScorecard struct {
-	SchemaVersion int                     `json:"schema_version"`
-	Purpose       string                  `json:"purpose"`
-	GeneratedAt   string                  `json:"generated_at"`
-	Artifacts     ScorecardArtifacts      `json:"artifacts"`
-	DataQuality   ScorecardDataQuality    `json:"data_quality"`
-	LeakCompare   LeakCompareStats        `json:"leak_compare"`
-	Scores        map[string]ScorecardRow `json:"scores"`
-	Summary       ScorecardSummary        `json:"summary"`
+	SchemaVersion  int                     `json:"schema_version"`
+	Purpose        string                  `json:"purpose"`
+	GeneratedAt    string                  `json:"generated_at"`
+	Artifacts      ScorecardArtifacts      `json:"artifacts"`
+	DataQuality    ScorecardDataQuality    `json:"data_quality"`
+	LeakCompare    LeakCompareStats        `json:"leak_compare"`
+	ProblemSummary ProblemSummary          `json:"problem_summary"`
+	ProblemDeltas  []ProblemDelta          `json:"problem_deltas"`
+	Scores         map[string]ScorecardRow `json:"scores"`
+	Summary        ScorecardSummary        `json:"summary"`
 }
 
 type ScorecardArtifacts struct {
@@ -78,7 +80,7 @@ func BuildValidationScorecard(
 	}
 	summary := scorecardSummary(scores, comparison, leakCompare)
 	return ValidationScorecard{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Purpose:       "Real-world validation readiness scorecard for Jank Hunter Android logs.",
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 		Artifacts: ScorecardArtifacts{
@@ -103,9 +105,11 @@ func BuildValidationScorecard(
 				comparison.Candidate.Warnings...,
 			)),
 		},
-		LeakCompare: leakCompare.Stats,
-		Scores:      scores,
-		Summary:     summary,
+		LeakCompare:    leakCompare.Stats,
+		ProblemSummary: comparison.ProblemComparison.Summary,
+		ProblemDeltas:  append([]ProblemDelta{}, comparison.ProblemComparison.Deltas...),
+		Scores:         scores,
+		Summary:        summary,
 	}
 }
 

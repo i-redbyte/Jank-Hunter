@@ -59,17 +59,14 @@ func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *netw
 func networkLoopEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, symbols *mathSymbolResolver) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
-		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !networkLoopPassesFilter(filter, route, owner) {
 			return 0, false
 		}
 		return event.TimeMS, true
 	case event.Metric != nil && (event.Type == jhlog.EventCounter || event.Type == jhlog.EventGauge):
-		name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
-		if name == "" {
-			name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
-		}
+		name := symbols.resolve(dict, event.Metric.MetricRef)
 		network := classifyNetworkMetric(name)
 		if !network.ok || !networkLoopPassesFilter(filter, network.route, network.owner) {
 			return 0, false
@@ -97,8 +94,8 @@ func (c *networkLoopCollector) add(event jhlog.Event, dict map[uint64]string, sy
 }
 
 func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
-	route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-	owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+	route := symbols.resolve(dict, event.HTTP.RouteRef)
+	owner := symbols.resolve(dict, event.Attribution.Owner)
 	if !c.passesFilter(route, owner) {
 		return
 	}
@@ -140,10 +137,7 @@ func (c *networkLoopCollector) addHTTP(event jhlog.Event, dict map[uint64]string
 }
 
 func (c *networkLoopCollector) addMetric(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
-	name := symbols.resolve(dict, event.Metric.MetricRef, event.Metric.MetricID)
-	if name == "" {
-		name = fmt.Sprintf("metric:%d", event.Metric.MetricID)
-	}
+	name := symbols.resolve(dict, event.Metric.MetricRef)
 	network := classifyNetworkMetric(name)
 	if !network.ok || !c.passesFilter(network.route, network.owner) {
 		return

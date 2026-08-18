@@ -16,30 +16,95 @@ import java.util.concurrent.atomic.AtomicLong
 internal object SessionLogName {
     const val PREFIX = "jh-session-log."
     const val SUFFIX = ".jhlog"
+    private const val LOCAL_DATE_LENGTH = 10
+    private const val RUN_ID_BYTES = 16
+    private const val RUN_ID_HEX_LENGTH = RUN_ID_BYTES * 2
 
-    fun create(localDate: String, index: Long): String {
-        require(LOCAL_DATE.matches(localDate)) { "session log date must use yyyy-MM-dd" }
+    fun create(localDate: String, runId: ByteArray, index: Long): String {
+        require(isLocalDate(localDate)) { "session log date must use yyyy-MM-dd" }
+        require(runId.size == RUN_ID_BYTES) { "session log run ID must have $RUN_ID_BYTES bytes" }
+        require(runId.any { value -> value != 0.toByte() }) { "session log run ID must not be zero" }
         require(index >= 0L) { "session log index must be non-negative" }
-        return "$PREFIX$localDate.$index$SUFFIX"
+        return "$PREFIX$localDate.${runIdHex(runId)}.$index$SUFFIX"
+    }
+
+    fun runIdHex(runId: ByteArray): String {
+        require(runId.size == RUN_ID_BYTES) { "session log run ID must have $RUN_ID_BYTES bytes" }
+        return runId.toHex()
     }
 
     fun parse(fileName: String): Parsed? {
         if (!fileName.startsWith(PREFIX) || !fileName.endsWith(SUFFIX)) return null
         val body = fileName.removePrefix(PREFIX).removeSuffix(SUFFIX)
-        val separator = body.lastIndexOf('.')
-        if (separator <= 0 || separator == body.lastIndex) return null
-        val localDate = body.substring(0, separator)
-        if (!LOCAL_DATE.matches(localDate)) return null
-        val index = body.substring(separator + 1).toLongOrNull()?.takeIf { it >= 0L } ?: return null
-        return Parsed(localDate, index)
+        parseLegacy(body)?.let { return it }
+        val runSeparator = LOCAL_DATE_LENGTH
+        val indexSeparator = runSeparator + 1 + RUN_ID_HEX_LENGTH
+        if (body.length <= indexSeparator + 1 || body[runSeparator] != '.' || body[indexSeparator] != '.') {
+            return null
+        }
+        val localDate = body.substring(0, runSeparator)
+        if (!isLocalDate(localDate)) return null
+        val runId = body.substring(runSeparator + 1, indexSeparator)
+        if (!runId.all(::isLowerHex) || runId.all { value -> value == '0' }) return null
+        val indexText = body.substring(indexSeparator + 1)
+        if (indexText.length > 1 && indexText[0] == '0') return null
+        val index = indexText.toLongOrNull()?.takeIf { it >= 0L } ?: return null
+        return Parsed(localDate, runId, index)
     }
 
     data class Parsed(
         val localDate: String,
+        val runId: String?,
         val index: Long,
-    )
+    ) {
+        val retentionUnitId: String
+            get() = runId ?: "legacy:$localDate:$index"
+    }
 
-    private val LOCAL_DATE = Regex("\\d{4}-\\d{2}-\\d{2}")
+    private fun parseLegacy(body: String): Parsed? {
+        if (body.length <= LOCAL_DATE_LENGTH + 1 || body[LOCAL_DATE_LENGTH] != '.') return null
+        val localDate = body.substring(0, LOCAL_DATE_LENGTH)
+        if (!isLocalDate(localDate)) return null
+        val indexText = body.substring(LOCAL_DATE_LENGTH + 1)
+        if (indexText.length > 1 && indexText[0] == '0') return null
+        val index = indexText.toLongOrNull()?.takeIf { it >= 0L } ?: return null
+        return Parsed(localDate, runId = null, index)
+    }
+
+    private fun isLocalDate(value: String): Boolean {
+        if (value.length != LOCAL_DATE_LENGTH || value[4] != '-' || value[7] != '-') return false
+        if (!value.indices.all { index -> index == 4 || index == 7 || value[index] in '0'..'9' }) return false
+        val year = value.decimal(0, 4)
+        val month = value.decimal(5, 7)
+        val day = value.decimal(8, 10)
+        if (month !in 1..12) return false
+        val days = when (month) {
+            2 -> if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) 29 else 28
+            4, 6, 9, 11 -> 30
+            else -> 31
+        }
+        return day in 1..days
+    }
+
+    private fun String.decimal(start: Int, end: Int): Int {
+        var value = 0
+        for (index in start until end) value = value * 10 + (this[index] - '0')
+        return value
+    }
+
+    private fun isLowerHex(value: Char): Boolean = value in '0'..'9' || value in 'a'..'f'
+
+    private fun ByteArray.toHex(): String {
+        val chars = CharArray(size * 2)
+        for (index in indices) {
+            val value = this[index].toInt() and 0xff
+            chars[index * 2] = HEX[value ushr 4]
+            chars[index * 2 + 1] = HEX[value and 0x0f]
+        }
+        return String(chars)
+    }
+
+    private val HEX = "0123456789abcdef".toCharArray()
 }
 
 internal object SessionLogAllocator {
@@ -51,16 +116,17 @@ internal object SessionLogAllocator {
     fun reserve(
         directory: File,
         localDate: String,
+        runId: ByteArray,
         authoritativeStoragePaths: Collection<String>? = null,
         minimumIndex: Long = 0L,
     ): Allocation {
-        SessionLogName.create(localDate, 0L)
+        SessionLogName.create(localDate, runId, 0L)
         require(minimumIndex >= 0L) { "minimum session log index must be non-negative" }
         ensureDirectory(directory)
         val directoryKey = runCatching { directory.canonicalPath }.getOrElse { directory.absolutePath }
         val processLock = directoryLocks.getOrPut(directoryKey) { Any() }
         return synchronized(processLock) {
-            reserveLocked(directory, localDate, authoritativeStoragePaths, minimumIndex)
+            reserveLocked(directory, localDate, runId, authoritativeStoragePaths, minimumIndex)
         }
     }
 
@@ -89,6 +155,7 @@ internal object SessionLogAllocator {
     private fun reserveLocked(
         directory: File,
         localDate: String,
+        runId: ByteArray,
         authoritativeStoragePaths: Collection<String>?,
         minimumIndex: Long,
     ): Allocation {
@@ -113,7 +180,7 @@ internal object SessionLogAllocator {
                     throw IOException("Jank Hunter session index exhausted for $localDate")
                 }
                 appendNext(channel, candidate + 1L)
-                val fileName = SessionLogName.create(localDate, candidate)
+                val fileName = SessionLogName.create(localDate, runId, candidate)
                 val lease = createLease(directory, fileName)
                 return Allocation(fileName, localDate, candidate, lease)
             } finally {
@@ -339,27 +406,123 @@ internal object SessionLogAllocator {
 }
 
 internal object SessionLogRetention {
-    fun enforce(directory: File, currentFile: File, historyLimitBytes: Long) {
-        if (historyLimitBytes <= 0L) return
-        val active = SessionLogAllocator.activeLeases(directory).localLogPaths
-        val currentPath = currentFile.absolutePath
-        val logs = directory.listFiles { file -> file.isFile && SessionLogName.parse(file.name) != null }
+    fun enforce(
+        directory: File,
+        currentRunId: String,
+        protectedPaths: Set<String>,
+        historyLimitBytes: Long,
+    ): Result = enforce(
+        paths = directory.listFiles { file -> file.isFile }
             .orEmpty()
-            .toList()
-        var totalBytes = logs.sumOf(File::length)
-        if (totalBytes <= historyLimitBytes) return
+            .map(File::getAbsolutePath),
+        currentRunId = currentRunId,
+        protectedPaths = protectedPaths,
+        historyLimitBytes = historyLimitBytes,
+        delete = { artifact -> artifact.file.delete() },
+    )
 
-        val candidates = logs.asSequence()
-            .filterNot { file -> file.absolutePath == currentPath || file.absolutePath in active }
-            .sortedWith(
-                compareBy<File> { file -> SessionLogName.parse(file.name)?.localDate.orEmpty() }
-                    .thenBy { file -> SessionLogName.parse(file.name)?.index ?: Long.MAX_VALUE }
-                    .thenBy(File::lastModified),
-            )
-        for (file in candidates) {
-            if (totalBytes <= historyLimitBytes) return
-            val bytes = file.length()
-            if (file.delete()) totalBytes -= bytes
+    fun enforce(
+        storage: io.jankhunter.runtime.JankHunterBinaryStorage,
+        currentRunId: String,
+        protectedPaths: Set<String>,
+        historyLimitBytes: Long,
+    ): Result = enforce(
+        paths = storage.listFiles(),
+        currentRunId = currentRunId,
+        protectedPaths = protectedPaths,
+        historyLimitBytes = historyLimitBytes,
+        delete = { artifact ->
+            storage.delete(artifact.file.name)
+            !artifact.file.exists()
+        },
+    )
+
+    private fun enforce(
+        paths: List<String>,
+        currentRunId: String,
+        protectedPaths: Set<String>,
+        historyLimitBytes: Long,
+        delete: (Artifact) -> Boolean,
+    ): Result {
+        if (historyLimitBytes <= 0L || historyLimitBytes == Long.MAX_VALUE) return Result.EMPTY
+        val units = LinkedHashMap<String, RetentionUnit>()
+        var totalBytes = 0L
+        var currentRunBytes = 0L
+        paths.forEach { path ->
+            val file = File(path)
+            val parsed = SessionLogName.parse(file.name) ?: return@forEach
+            val bytes = file.length().coerceAtLeast(0L)
+            totalBytes = saturatedAdd(totalBytes, bytes)
+            if (parsed.runId == currentRunId) currentRunBytes = saturatedAdd(currentRunBytes, bytes)
+            val retentionUnitId = parsed.retentionUnitId
+            val unit = units.getOrPut(retentionUnitId) { RetentionUnit(retentionUnitId) }
+            unit.artifacts += Artifact(file, bytes)
+            unit.order = maxOf(unit.order, file.lastModified())
+            if (
+                parsed.runId == currentRunId ||
+                file.absolutePath in protectedPaths ||
+                file.name in protectedPaths ||
+                path in protectedPaths
+            ) {
+                unit.protected = true
+            }
         }
+        val totalBefore = totalBytes
+        if (totalBytes <= historyLimitBytes) {
+            return Result(totalBefore, totalBytes, 0L, 0L, 0L, currentRunBytes, fits = true)
+        }
+
+        val candidates = units.values.asSequence()
+            .filterNot(RetentionUnit::protected)
+            .sortedWith(compareBy<RetentionUnit>(RetentionUnit::order).thenBy(RetentionUnit::runId))
+        var deletedRuns = 0L
+        var deletedSegments = 0L
+        for (unit in candidates) {
+            if (totalBytes <= historyLimitBytes) break
+            var complete = true
+            unit.artifacts.forEach { artifact ->
+                if (delete(artifact)) {
+                    totalBytes = (totalBytes - artifact.bytes).coerceAtLeast(0L)
+                    deletedSegments++
+                } else {
+                    complete = false
+                }
+            }
+            if (complete) deletedRuns++
+        }
+        return Result(
+            totalBefore = totalBefore,
+            totalAfter = totalBytes,
+            deletedBytes = (totalBefore - totalBytes).coerceAtLeast(0L),
+            deletedRuns = deletedRuns,
+            deletedSegments = deletedSegments,
+            currentRunBytes = currentRunBytes,
+            fits = totalBytes <= historyLimitBytes,
+        )
+    }
+
+    data class Result(
+        val totalBefore: Long,
+        val totalAfter: Long,
+        val deletedBytes: Long,
+        val deletedRuns: Long,
+        val deletedSegments: Long,
+        val currentRunBytes: Long,
+        val fits: Boolean,
+    ) {
+        companion object {
+            val EMPTY = Result(0L, 0L, 0L, 0L, 0L, 0L, fits = true)
+        }
+    }
+
+    private data class Artifact(
+        val file: File,
+        val bytes: Long,
+    )
+
+    private class RetentionUnit(val runId: String) {
+        val artifacts = ArrayList<Artifact>()
+        var order = Long.MIN_VALUE
+        var protected = false
     }
 }

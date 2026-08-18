@@ -122,11 +122,11 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 		for bucket := uint64(0); bucket <= 24; bucket += 4 {
 			for offset := uint64(0); offset < 3; offset++ {
 				event := jhlog.Event{
-					Type:   jhlog.EventHTTP,
-					TimeMS: baseMS + bucket*DefaultBucketMS + 100 + offset*80,
+					Type:        jhlog.EventHTTP,
+					TimeMS:      baseMS + bucket*DefaultBucketMS + 100 + offset*80,
+					Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
 					HTTP: &jhlog.HTTPEvent{
-						OwnerID:    1,
-						RouteID:    2,
+						RouteRef:   jhlog.LocalSymbol(2),
 						DurationMS: 180,
 						DNSMS:      70,
 						TTFBMS:     80,
@@ -141,11 +141,11 @@ func writeDNSLoopFixtureWithBase(t *testing.T, loop bool, baseMS uint64) string 
 	} else {
 		for _, timeMS := range []uint64{100, 11_000, 24_000} {
 			event := jhlog.Event{
-				Type:   jhlog.EventHTTP,
-				TimeMS: baseMS + timeMS,
+				Type:        jhlog.EventHTTP,
+				TimeMS:      baseMS + timeMS,
+				Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(1)},
 				HTTP: &jhlog.HTTPEvent{
-					OwnerID:    1,
-					RouteID:    2,
+					RouteRef:   jhlog.LocalSymbol(2),
 					DurationMS: 120,
 					TTFBMS:     70,
 					Status:     jhlog.Status2xx,
@@ -179,8 +179,8 @@ func writeReconnectLoopFixture(t *testing.T) string {
 			Type:   jhlog.EventCounter,
 			TimeMS: bucket * DefaultBucketMS,
 			Metric: &jhlog.MetricEvent{
-				MetricID: 10,
-				Value:    1,
+				MetricRef: jhlog.LocalSymbol(10),
+				Value:     1,
 			},
 		}
 		if err := writer.WriteEvent(event); err != nil {

@@ -27,9 +27,9 @@ internal class RuntimeMetricsService(
     @Volatile
     private var aggregator = MetricAggregator(defaultMaxKeys)
 
-    fun configure(maxKeys: Int) {
+    fun configure(maxKeys: Int, exactAdmission: Boolean) {
         synchronized(flushLock) {
-            aggregator = MetricAggregator(maxKeys)
+            aggregator = MetricAggregator(maxKeys, exactAdmission)
             lastFlushAtMs.set(nowMs())
             metricGeneration.set(0L)
             windowFlushQueued.set(false)
@@ -84,6 +84,10 @@ internal class RuntimeMetricsService(
     fun flushBlocking(timeoutMs: Long): Boolean {
         val localConfig = config() ?: return true
         if (!localConfig.metricAggregationEnabled() || localConfig.maxMetricAggregationKeys() <= 0) return true
+        if (localConfig.exactEventCollectionEnabled()) {
+            flushNow()
+            return true
+        }
         return executeMaintenanceAndWait(timeoutMs.coerceAtLeast(1L)) {
             flushNow()
         }

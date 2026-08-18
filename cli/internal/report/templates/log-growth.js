@@ -239,8 +239,8 @@
     series.forEach((point, index) => {
       const hovered = index === chart.hovered;
       context.beginPath();
-      context.fillStyle = point.overflow ? '#ef4444' : options.color;
-      context.arc(x(index), y(point.value), hovered ? 6 : point.overflow ? 4.5 : 3, 0, Math.PI * 2);
+      context.fillStyle = point.limitReached ? '#ef4444' : options.color;
+      context.arc(x(index), y(point.value), hovered ? 6 : point.limitReached ? 4.5 : 3, 0, Math.PI * 2);
       context.fill();
       if (hovered) {
         context.lineWidth = 2;
@@ -353,6 +353,47 @@
     });
   };
 
+  const renderGrowthRowPages = (tbody, items, columns, renderRow, panel, reverse = false) => {
+    let loaded = 0;
+    let loader = null;
+    const appendPage = () => {
+      const end = Math.min(items.length, loaded + 50);
+      const fragment = document.createDocumentFragment();
+      while (loaded < end) {
+        const index = reverse ? items.length - loaded - 1 : loaded;
+        fragment.appendChild(renderRow(items[index]));
+        loaded += 1;
+      }
+      if (loader) loader.before(fragment);
+      else tbody.appendChild(fragment);
+      const remaining = items.length - loaded;
+      if (!remaining) {
+        loader?.remove();
+        loader = null;
+      } else if (!loader) {
+        loader = document.createElement('tr');
+        loader.className = 'deferred-table-loader';
+        const cell = document.createElement('td');
+        cell.colSpan = columns;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'deferred-table-button';
+        const remainingLabel = document.createElement('span');
+        remainingLabel.dataset.deferredRemaining = '';
+        cell.append(button, remainingLabel);
+        loader.appendChild(cell);
+        tbody.appendChild(loader);
+        button.addEventListener('click', appendPage);
+      }
+      if (loader) {
+        loader.querySelector('button').textContent = `Показать ещё ${Math.min(50, remaining)}`;
+        loader.querySelector('[data-deferred-remaining]').textContent = `Осталось строк: ${remaining}`;
+      }
+      requestAnimationFrame(() => measureGrowthTables(panel));
+    };
+    appendPage();
+  };
+
   document.querySelectorAll('[data-log-growth]').forEach((panel) => {
     const source = panel.querySelector('[data-log-growth-json]');
     if (!source) return;
@@ -362,8 +403,13 @@
     } catch (_) {
       return;
     }
-    const sessions = Array.isArray(data.sessions) ? data.sessions.slice(-256) : [];
-    const days = Array.isArray(data.days) ? data.days.slice(-400) : [];
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const days = Array.isArray(data.days) ? data.days : [];
+    // Tables retain every available record. Charts deliberately keep a bounded point window:
+    // beyond it points overlap and canvas work grows without adding readable information.
+    const chartSessions = sessions.slice(-256);
+    const chartDays = days.slice(-400);
+    const chartSessionOffset = sessions.length - chartSessions.length;
     const details = panel.querySelector('details');
     const fromInput = panel.querySelector('[data-growth-from]');
     const toInput = panel.querySelector('[data-growth-to]');
@@ -380,9 +426,9 @@
 
     const renderTables = () => {
       const sessionBody = panel.querySelector('[data-growth-session-rows]');
-      sessions.slice().reverse().forEach((session) => {
+      renderGrowthRowPages(sessionBody, sessions, 7, (session) => {
         const row = document.createElement('tr');
-        if (Number(session.overflow_count) > 0) row.className = 'has-overflow';
+        if (Number(session.limit_reached_count) > 0) row.className = 'has-limit';
         const started = Number(session.started_at_ms) || 0;
         const ended = Math.max(started, Number(session.ended_at_ms) || started);
         const duration = ended - started;
@@ -394,53 +440,57 @@
         addGrowthCell(row, formatGrowthBytes(session.generated_bytes));
         addGrowthCell(row, speed > 0 ? `${formatGrowthBytes(speed)}/с` : '—');
         addGrowthCell(row, formatGrowthBytes(session.configured_limit_bytes));
-        addGrowthCell(row, String(session.overflow_count || 0), Number(session.overflow_count) > 0 ? 'log-growth-overflow' : '');
-        sessionBody.appendChild(row);
-      });
+        addGrowthCell(row, String(session.segment_rotation_count || 0));
+        addGrowthCell(row, Number(session.limit_reached_count) > 0 ? 'да' : 'нет', Number(session.limit_reached_count) > 0 ? 'log-growth-limit' : '');
+        addGrowthCell(row, formatGrowthBytes(session.archive_evicted_bytes));
+        return row;
+      }, panel, true);
 
       const dayBody = panel.querySelector('[data-growth-day-rows]');
-      days.slice().reverse().forEach((day) => {
+      renderGrowthRowPages(dayBody, days, 7, (day) => {
         const row = document.createElement('tr');
-        if (Number(day.overflow_count) > 0) row.className = 'has-overflow';
+        if (Number(day.limit_reached_count) > 0) row.className = 'has-limit';
         addGrowthCell(row, growthDayDisplay(growthDayISO(day.day_key)));
         addGrowthCell(row, String(day.session_count || 0));
         addGrowthCell(row, formatGrowthDuration(day.total_duration_ms));
         addGrowthCell(row, formatGrowthBytes(day.generated_bytes));
         addGrowthCell(row, formatGrowthBytes(day.maximum_retained_bytes));
         addGrowthCell(row, `${((Number(day.maximum_fill_permille) || 0) / 10).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`);
-        addGrowthCell(row, String(day.overflow_count || 0), Number(day.overflow_count) > 0 ? 'log-growth-overflow' : '');
-        dayBody.appendChild(row);
-      });
+        addGrowthCell(row, String(day.segment_rotation_count || 0));
+        addGrowthCell(row, String(day.limit_reached_count || 0), Number(day.limit_reached_count) > 0 ? 'log-growth-limit' : '');
+        addGrowthCell(row, formatGrowthBytes(day.archive_evicted_bytes));
+        return row;
+      }, panel, true);
       prepareGrowthTables(panel);
     };
 
     const renderCharts = () => {
       drawGrowthChart(
         panel.querySelector('[data-growth-session-chart]'),
-        sessions.map((session, index) => ({
+        chartSessions.map((session, index) => ({
           axisLabel: growthTimestampDisplay(
             Number(session.started_at_ms) || 0,
             growthDayISO(session.day_key),
           ).split(',')[0],
           value: Number(session.maximum_retained_bytes) || 0,
           limit: Number(session.configured_limit_bytes) || 0,
-          overflow: Number(session.overflow_count) > 0,
-          title: `Сессия №${index + 1} · ${growthTimestampDisplay(Number(session.started_at_ms) || 0, growthDayISO(session.day_key))}`,
+          limitReached: Number(session.limit_reached_count) > 0,
+          title: `Сессия №${chartSessionOffset + index + 1} · ${growthTimestampDisplay(Number(session.started_at_ms) || 0, growthDayISO(session.day_key))}`,
           lines: [
             { label: 'Максимальный размер', value: formatGrowthBytes(session.maximum_retained_bytes) },
             { label: 'Выставленный лимит', value: Number(session.configured_limit_bytes) > 0 ? formatGrowthBytes(session.configured_limit_bytes) : 'не задан' },
             { label: 'Создано за сессию', value: formatGrowthBytes(session.generated_bytes) },
             {
-              label: 'Переполнения',
-              value: Number(session.overflow_count) > 0
-                ? `${growthRussianCount(session.overflow_count, 'раз', 'раза', 'раз')} · удалено ${formatGrowthBytes(session.evicted_bytes)}`
-                : 'не было',
-              danger: Number(session.overflow_count) > 0,
+              label: 'Общий лимит',
+              value: Number(session.limit_reached_count) > 0 ? 'исчерпан' : 'не исчерпан',
+              danger: Number(session.limit_reached_count) > 0,
             },
+            { label: 'Ротации сегментов', value: String(session.segment_rotation_count || 0) },
+            { label: 'Удалено из архива', value: formatGrowthBytes(session.archive_evicted_bytes) },
           ],
         })),
         {
-          ariaLabel: 'Максимальный размер журнала в каждой сессии. Красные точки обозначают сессии с переполнением.',
+          ariaLabel: 'Максимальный объём журналов в каждом запуске. Красные точки обозначают исчерпание общего лимита.',
           color: '#38bdf8',
           showLimit: true,
           xTitle: 'Дата начала сессии',
@@ -449,26 +499,26 @@
       );
       drawGrowthChart(
         panel.querySelector('[data-growth-day-chart]'),
-        days.map((day) => ({
+        chartDays.map((day) => ({
           axisLabel: growthDayDisplay(growthDayISO(day.day_key)),
           value: Number(day.generated_bytes) || 0,
-          overflow: Number(day.overflow_count) > 0,
+          limitReached: Number(day.limit_reached_count) > 0,
           title: `День · ${growthDayDisplay(growthDayISO(day.day_key))}`,
           lines: [
             { label: 'Создано за день', value: formatGrowthBytes(day.generated_bytes) },
             { label: 'Сессии', value: growthRussianCount(day.session_count, 'сессия', 'сессии', 'сессий') },
-            { label: 'Максимальный файл', value: formatGrowthBytes(day.maximum_retained_bytes) },
+            { label: 'Максимум за запуск', value: formatGrowthBytes(day.maximum_retained_bytes) },
             {
-              label: 'Переполнения',
-              value: Number(day.overflow_count) > 0
-                ? `${growthRussianCount(day.overflow_count, 'раз', 'раза', 'раз')} · удалено ${formatGrowthBytes(day.evicted_bytes)}`
-                : 'не было',
-              danger: Number(day.overflow_count) > 0,
+              label: 'Исчерпания общего лимита',
+              value: String(day.limit_reached_count || 0),
+              danger: Number(day.limit_reached_count) > 0,
             },
+            { label: 'Ротации сегментов', value: String(day.segment_rotation_count || 0) },
+            { label: 'Удалено из архива', value: formatGrowthBytes(day.archive_evicted_bytes) },
           ],
         })),
         {
-          ariaLabel: 'Объём данных, созданных за каждый день. Красные точки обозначают дни с переполнением.',
+          ariaLabel: 'Объём данных, созданных за каждый день. Красные точки обозначают дни с остановкой по общему лимиту.',
           color: '#34d399',
           showLimit: false,
           xTitle: 'Дата',
@@ -530,39 +580,39 @@
         retained: Math.max(result.retained, Number(day.maximum_retained_bytes) || 0),
         fill: Math.max(result.fill, Number(day.maximum_fill_permille) || 0),
         reached: result.reached + (Number(day.sessions_reaching_limit) || 0),
-        overflows: result.overflows + (Number(day.overflow_count) || 0),
-        chunks: result.chunks + (Number(day.evicted_chunk_count) || 0),
-        evicted: result.evicted + (Number(day.evicted_bytes) || 0),
-      }), { sessions: 0, duration: 0, generated: 0, retained: 0, fill: 0, reached: 0, overflows: 0, chunks: 0, evicted: 0 });
+        limitReached: result.limitReached + (Number(day.limit_reached_count) || 0),
+        rotations: result.rotations + (Number(day.segment_rotation_count) || 0),
+        evicted: result.evicted + (Number(day.archive_evicted_bytes) || 0),
+      }), { sessions: 0, duration: 0, generated: 0, retained: 0, fill: 0, reached: 0, limitReached: 0, rotations: 0, evicted: 0 });
       valueNodes.get('sessions').textContent = totals.sessions.toLocaleString('ru-RU');
       valueNodes.get('duration').textContent = formatGrowthDuration(totals.duration);
       valueNodes.get('generated').textContent = formatGrowthBytes(totals.generated);
       valueNodes.get('retained').textContent = formatGrowthBytes(totals.retained);
       valueNodes.get('fill').textContent = `${(totals.fill / 10).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% лимита`;
       valueNodes.get('reached').textContent = `${totals.reached.toLocaleString('ru-RU')} сессий достигли лимита`;
-      valueNodes.get('overflows').textContent = totals.overflows.toLocaleString('ru-RU');
-      valueNodes.get('chunks').textContent = `${totals.chunks.toLocaleString('ru-RU')} блоков`;
+      valueNodes.get('limit-reached').textContent = totals.limitReached.toLocaleString('ru-RU');
+      valueNodes.get('rotations').textContent = totals.rotations.toLocaleString('ru-RU');
       valueNodes.get('evicted').textContent = formatGrowthBytes(totals.evicted);
       const reachedShare = totals.sessions > 0 ? totals.reached / totals.sessions : 0;
       const fillPercent = totals.fill / 10;
       const peakDay = selected.reduce((peak, day) => (
         Number(day.generated_bytes) > Number(peak.generated_bytes) ? day : peak
       ), selected[0]);
-      if (totals.overflows === 0) {
+      if (totals.limitReached === 0) {
         periodInsight.className = 'log-growth-insight is-calm';
-        insightTitle.textContent = 'Лимит не достигался';
-        insightSummary.textContent = `За выбранный период переполнений не было. Наибольшее заполнение — ${fillPercent.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% лимита.`;
-      } else if (reachedShare >= 0.3 || totals.overflows > totals.reached) {
+        insightTitle.textContent = 'Общий лимит не исчерпывался';
+        insightSummary.textContent = `За выбранный период сбор не останавливался по лимиту. Наибольшее заполнение — ${fillPercent.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}% общего бюджета; ротаций сегментов — ${totals.rotations.toLocaleString('ru-RU')}.`;
+      } else if (reachedShare >= 0.3) {
         periodInsight.className = 'log-growth-insight is-warning';
-        insightTitle.textContent = 'Лимит достигается многократно';
-        insightSummary.textContent = `Лимит достигли ${totals.reached.toLocaleString('ru-RU')} из ${totals.sessions.toLocaleString('ru-RU')} сессий; старые блоки перезаписывались ${growthRussianCount(totals.overflows, 'раз', 'раза', 'раз')}. Проверьте, достаточен ли лимит и нет ли избыточной записи.`;
+        insightTitle.textContent = 'Общий лимит часто исчерпывается';
+        insightSummary.textContent = `Сбор остановился по лимиту в ${totals.reached.toLocaleString('ru-RU')} из ${totals.sessions.toLocaleString('ru-RU')} сессий. Проверьте объём полезных событий и достаточность общего бюджета.`;
       } else {
         periodInsight.className = 'log-growth-insight is-attention';
-        insightTitle.textContent = 'Есть отдельные переполнения';
-        insightSummary.textContent = `Лимит достигли ${totals.reached.toLocaleString('ru-RU')} из ${totals.sessions.toLocaleString('ru-RU')} сессий. Посмотрите сессии с красными точками: они покажут, когда старые блоки начали вытесняться.`;
+        insightTitle.textContent = 'Есть отдельные остановки по лимиту';
+        insightSummary.textContent = `Сбор остановился по лимиту в ${totals.reached.toLocaleString('ru-RU')} из ${totals.sessions.toLocaleString('ru-RU')} сессий. Красные точки показывают конкретные запуски.`;
       }
       const averageRate = totals.duration > 0 ? totals.generated * 1000 / totals.duration : 0;
-      insightDetails.textContent = `Средняя скорость создания данных — ${averageRate > 0 ? `${formatGrowthBytes(averageRate)}/с` : 'нет данных'}. Самый объёмный день — ${growthDayDisplay(growthDayISO(peakDay.day_key))}: ${formatGrowthBytes(peakDay.generated_bytes)}.${totals.evicted > 0 ? ` При перезаписи удалено ${formatGrowthBytes(totals.evicted)} старых данных.` : ''}`;
+      insightDetails.textContent = `Средняя скорость создания данных — ${averageRate > 0 ? `${formatGrowthBytes(averageRate)}/с` : 'нет данных'}. Самый объёмный день — ${growthDayDisplay(growthDayISO(peakDay.day_key))}: ${formatGrowthBytes(peakDay.generated_bytes)}.${totals.evicted > 0 ? ` Для соблюдения бюджета удалено ${formatGrowthBytes(totals.evicted)} завершённых архивных журналов.` : ''}`;
       periodResult.hidden = false;
       periodInsight.hidden = false;
       periodNotice.hidden = true;

@@ -7,7 +7,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.math.min
 
 /**
- * Bounded metric accumulator.
+ * Concurrent metric accumulator. [maxKeys] is a hard memory-safety boundary in every admission
+ * mode. EXACT admission preserves already accepted keys and rejects excess cardinality with an
+ * explicit loss counter; BEST_EFFORT may evict a cold key to keep newer evidence.
  *
  * Existing keys are updated without a global exclusive monitor. A shared lifecycle read lock keeps
  * flush lossless, while the admission lock is only taken for a new key or an LRU eviction. Flush
@@ -16,9 +18,10 @@ import kotlin.math.min
  */
 internal class MetricAggregator(
     maxKeys: Int,
+    private val exactAdmission: Boolean = false,
 ) {
-    private val capacity = maxKeys.coerceAtLeast(0)
-    private val lruEvictionEnabled = capacity in 1..BitLruCache.MAX_CAPACITY
+    private val capacity = maxKeys.coerceIn(0, MAX_KEYS_HARD_LIMIT)
+    private val lruEvictionEnabled = !exactAdmission && capacity in 1..BitLruCache.MAX_CAPACITY
     private val initialMapCapacity = min(capacity, DEFAULT_INITIAL_MAP_CAPACITY)
     private val lifecycleLocks = Array(producerStripeCount(capacity)) { ReentrantReadWriteLock() }
     private val producerLocks = Array(lifecycleLocks.size) { lifecycleLocks[it].readLock() }
@@ -40,7 +43,12 @@ internal class MetricAggregator(
                 return
             }
 
-            val key = MetricKey(MetricKind.COUNTER, metricName(name))
+            val normalizedName = metricName(name)
+            if (normalizedName == null) {
+                saturatedAddAndGet(batch.dropped, 1L)
+                return
+            }
+            val key = MetricKey(MetricKind.COUNTER, normalizedName)
             while (true) {
                 val existing = batch.metrics[key] as? CounterValue
                 if (existing != null && existing.add(value)) return
@@ -76,7 +84,12 @@ internal class MetricAggregator(
                 return
             }
 
-            val key = MetricKey(MetricKind.GAUGE, metricName(name))
+            val normalizedName = metricName(name)
+            if (normalizedName == null) {
+                saturatedAddAndGet(batch.dropped, 1L)
+                return
+            }
+            val key = MetricKey(MetricKind.GAUGE, normalizedName)
             while (true) {
                 val existing = batch.metrics[key] as? GaugeValue
                 if (existing != null && existing.add(value, mode)) return
@@ -150,9 +163,16 @@ internal class MetricAggregator(
             }
             MetricAggregationMode.UNKNOWN,
             MetricAggregationMode.AVERAGE -> {
-                sink.gauge(name, gauge.total / gauge.count, gauge.count, gauge.total, gauge.max, gauge.mode)
+                sink.gauge(name, roundedAverage(gauge.total, gauge.count), gauge.count, gauge.total, gauge.max, gauge.mode)
             }
         }
+    }
+
+    private fun roundedAverage(total: Long, count: Long): Long {
+        val quotient = total / count
+        val remainder = total % count
+        val halfRoundedUp = count / 2L + count % 2L
+        return if (remainder >= halfRoundedUp && quotient < Long.MAX_VALUE) quotient + 1L else quotient
     }
 
     /** Called with [Batch.admissionLock] held. */
@@ -162,6 +182,10 @@ internal class MetricAggregator(
             return false
         }
         if (batch.metrics.size < capacity) return true
+        if (exactAdmission) {
+            saturatedAddAndGet(batch.dropped, 1L)
+            return false
+        }
 
         // Small bounded sets retain the previous LRU behavior. For large sets, scanning thousands
         // of keys would cost more than dropping a new high-cardinality metric.
@@ -313,6 +337,8 @@ internal class MetricAggregator(
         const val DROPPED_METRIC_NAME = "jankhunter.metric_aggregation.dropped.count"
         const val INVALID_METRIC_NAME = "jankhunter.metric.invalid_negative.count"
         private const val DEFAULT_INITIAL_MAP_CAPACITY = 16
+        private const val MAX_KEYS_HARD_LIMIT = 65_536
+        private const val MAX_METRIC_NAME_CHARS = 1_024
         private const val MAX_PRODUCER_STRIPES = 8
         private const val PRODUCER_HASH_SHIFT = 16
 
@@ -323,8 +349,9 @@ internal class MetricAggregator(
             return stripes
         }
 
-        private fun metricName(name: String?): String {
-            return name?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown"
+        private fun metricName(name: String?): String? {
+            val normalized = name?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown"
+            return normalized.takeIf { it.length <= MAX_METRIC_NAME_CHARS }
         }
 
         private fun saturatedAddAndGet(target: AtomicLong, delta: Long): Long {

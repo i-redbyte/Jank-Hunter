@@ -336,7 +336,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		HotPaths:         hotPaths,
 		MethodHotspots:   methodHotspots,
 		Cycles:           cycles,
-		StandaloneReason: "Полный индекс анализируется отдельно, а HTML получает ограниченные представления с явными totals и причинами исключения.",
+		StandaloneReason: "Все связи участвуют в анализе; HTML получает ограниченные представления с явными totals и причинами исключения.",
 	}
 	out.Heuristic = influenceHeuristic(out)
 	return out
@@ -487,10 +487,10 @@ func (n *influenceAccumulator) toNode() InfluenceNode {
 		UIJank:          n.uiJank,
 		Retained:        n.retained,
 		HeapEvidence:    n.heap,
-		Flows:           sortedSet(n.flows, 4),
-		Screens:         sortedSet(n.screens, 4),
-		Routes:          sortedSet(n.routes, 4),
-		Reasons:         sortedSet(n.reasons, 5),
+		Flows:           sortedSet(n.flows, 0),
+		Screens:         sortedSet(n.screens, 0),
+		Routes:          sortedSet(n.routes, 0),
+		Reasons:         sortedSet(n.reasons, 0),
 	}
 }
 

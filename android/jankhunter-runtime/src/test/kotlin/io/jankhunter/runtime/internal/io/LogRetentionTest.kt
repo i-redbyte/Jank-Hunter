@@ -2,26 +2,64 @@ package io.jankhunter.runtime.internal.io
 
 import java.io.File
 import java.nio.file.Files
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LogRetentionTest {
     @Test
-    fun deletesOldestCanonicalSessionUntilBudgetFits() {
+    fun legacySegmentsConsumeBudgetAndAreDeletedOldestFirst() {
+        val directory = Files.createTempDirectory("jankhunter-retention-legacy").toFile()
+        try {
+            val legacy = segment(directory, "jh-session-log.2027-01-01.7.jhlog", bytes = 20, modifiedAt = 100)
+            val current = segment(
+                directory,
+                SessionLogName.create("2027-01-02", CURRENT_RUN, 0L),
+                bytes = 20,
+                modifiedAt = 300,
+            )
+
+            val result = SessionLogRetention.enforce(
+                directory,
+                currentRunId = SessionLogName.runIdHex(CURRENT_RUN),
+                protectedPaths = setOf(current.absolutePath),
+                historyLimitBytes = 25,
+            )
+
+            assertFalse(legacy.exists())
+            assertTrue(current.exists())
+            assertEquals(40L, result.totalBefore)
+            assertEquals(20L, result.totalAfter)
+            assertEquals(20L, result.deletedBytes)
+            assertTrue(result.fits)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deletesEverySegmentOfTheOldestRunUntilBudgetFits() {
         val directory = Files.createTempDirectory("jankhunter-retention").toFile()
         try {
-            val oldest = segment(directory, SessionLogName.create("2027-01-01", 0L), bytes = 10, modifiedAt = 100)
-            val newer = segment(directory, SessionLogName.create("2027-01-01", 1L), bytes = 10, modifiedAt = 200)
-            val current = segment(directory, SessionLogName.create("2027-01-02", 0L), bytes = 10, modifiedAt = 300)
+            val oldest = segment(directory, SessionLogName.create("2027-01-01", OLD_RUN, 0L), bytes = 10, modifiedAt = 100)
+            val newer = segment(directory, SessionLogName.create("2027-01-01", OLD_RUN, 1L), bytes = 10, modifiedAt = 200)
+            val current = segment(directory, SessionLogName.create("2027-01-02", CURRENT_RUN, 0L), bytes = 10, modifiedAt = 300)
             val unrelated = segment(directory, "unrelated.jhlog", bytes = 100, modifiedAt = 100)
 
-            SessionLogRetention.enforce(directory, current, historyLimitBytes = 25)
+            val result = SessionLogRetention.enforce(
+                directory,
+                currentRunId = SessionLogName.runIdHex(CURRENT_RUN),
+                protectedPaths = setOf(current.absolutePath),
+                historyLimitBytes = 25,
+            )
 
             assertFalse(oldest.exists())
-            assertTrue(newer.exists())
+            assertFalse(newer.exists())
             assertTrue(current.exists())
             assertTrue(unrelated.exists())
+            assertTrue(result.fits)
+            assertTrue(result.totalAfter == 10L)
         } finally {
             directory.deleteRecursively()
         }
@@ -31,11 +69,43 @@ class LogRetentionTest {
     fun keepsCurrentSegmentWhenBudgetIsSmallerThanCurrentFile() {
         val directory = Files.createTempDirectory("jankhunter-retention").toFile()
         try {
-            val current = segment(directory, SessionLogName.create("2027-01-01", 0L), bytes = 32, modifiedAt = 100)
+            val current = segment(directory, SessionLogName.create("2027-01-01", CURRENT_RUN, 0L), bytes = 32, modifiedAt = 100)
 
-            SessionLogRetention.enforce(directory, current, historyLimitBytes = 8)
+            val result = SessionLogRetention.enforce(
+                directory,
+                currentRunId = SessionLogName.runIdHex(CURRENT_RUN),
+                protectedPaths = setOf(current.absolutePath),
+                historyLimitBytes = 8,
+            )
 
             assertTrue(current.exists())
+            assertFalse(result.fits)
+            assertTrue(result.currentRunBytes == 32L)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun hprofDoesNotConsumeJhlogArchiveBudget() {
+        val directory = Files.createTempDirectory("jankhunter-retention-hprof").toFile()
+        try {
+            val old = segment(directory, SessionLogName.create("2027-01-01", OLD_RUN, 0L), 20, 100)
+            val current = segment(directory, SessionLogName.create("2027-01-02", CURRENT_RUN, 0L), 20, 300)
+            val heap = segment(directory, "retained-1.hprof", 1_000, 50)
+
+            val result = SessionLogRetention.enforce(
+                directory,
+                currentRunId = SessionLogName.runIdHex(CURRENT_RUN),
+                protectedPaths = setOf(current.absolutePath),
+                historyLimitBytes = 25,
+            )
+
+            assertFalse(old.exists())
+            assertTrue(current.exists())
+            assertTrue(heap.exists())
+            assertTrue(result.fits)
+            assertTrue(result.totalBefore == 40L)
         } finally {
             directory.deleteRecursively()
         }
@@ -46,5 +116,10 @@ class LogRetentionTest {
         file.writeBytes(ByteArray(bytes) { 1 })
         assertTrue(file.setLastModified(modifiedAt))
         return file
+    }
+
+    private companion object {
+        val OLD_RUN = ByteArray(16) { 1 }
+        val CURRENT_RUN = ByteArray(16) { 2 }
     }
 }

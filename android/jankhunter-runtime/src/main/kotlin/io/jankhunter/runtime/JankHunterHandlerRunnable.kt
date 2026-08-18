@@ -21,7 +21,7 @@ internal class JankHunterHandlerRunnable internal constructor(
     }
 
     private fun runWithTelemetry() {
-        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
+        val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
             JankHunter.callWithContext(capturedContext, ownerName) {
@@ -31,7 +31,7 @@ internal class JankHunterHandlerRunnable internal constructor(
             failed = true
             throw throwable
         } finally {
-            RuntimeHookGuard.run {
+            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 val durationMs = if (start > 0L) {
                     (SystemClock.elapsedRealtime() - start).coerceAtLeast(0L)
                 } else {

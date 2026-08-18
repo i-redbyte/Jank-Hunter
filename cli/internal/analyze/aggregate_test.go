@@ -2,15 +2,134 @@ package analyze
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
+
+var benchmarkUint64Percentile uint64
+
+func BenchmarkUint64SampleSetRepeatedMillion(b *testing.B) {
+	for range b.N {
+		var set uint64SampleSet
+		for index := range 1_000_000 {
+			set.add(uint64(index % 1_500))
+		}
+		benchmarkUint64Percentile = set.percentile(0.95)
+	}
+}
+
+func BenchmarkUint64SampleSetUniqueMillion(b *testing.B) {
+	for range b.N {
+		var set uint64SampleSet
+		for index := range 1_000_000 {
+			set.add(uint64(index))
+		}
+		benchmarkUint64Percentile = set.percentile(0.95)
+	}
+}
+
+func TestUint64SampleSetCompactsRepeatedValuesWithoutApproximation(t *testing.T) {
+	var set uint64SampleSet
+	for index := range 100_000 {
+		set.add(uint64(index % 1_500))
+	}
+	if len(set.values) != 0 || len(set.denseCounts) != 1_500 {
+		t.Fatalf("repeated exact set was not compacted: values=%d dense=%d", len(set.values), len(set.denseCounts))
+	}
+	if got := set.percentile(0.50); got != 746 {
+		t.Fatalf("p50 = %d, want 746", got)
+	}
+	if got := set.percentile(0.95); got != 1_424 {
+		t.Fatalf("p95 = %d, want 1424", got)
+	}
+	if set.seen != 100_000 || set.max != 1_499 {
+		t.Fatalf("exact cardinality/max changed: seen=%d max=%d", set.seen, set.max)
+	}
+}
+
+func TestUint64SampleSetKeepsSparseUniqueValuesExact(t *testing.T) {
+	var set uint64SampleSet
+	for index := range 20_025 {
+		set.add(uint64(index) * 1_000_003)
+	}
+	if len(set.denseCounts) != 0 || len(set.values) != set.seen {
+		t.Fatalf("sparse unique set used a lossy representation: values=%d dense=%d seen=%d", len(set.values), len(set.denseCounts), set.seen)
+	}
+	if got, want := set.percentile(0.95), uint64(19_023)*1_000_003; got != want {
+		t.Fatalf("p95 = %d, want %d", got, want)
+	}
+}
+
+func TestUint64SampleSetPreservesOutliersAfterDensePromotion(t *testing.T) {
+	var set uint64SampleSet
+	for index := range 10_000 {
+		set.add(uint64(index % 100))
+	}
+	set.add(1_000_000)
+	set.add(2)
+	if got := set.percentile(1); got != 1_000_000 {
+		t.Fatalf("max percentile lost exact outlier: %d", got)
+	}
+	if set.seen != 10_002 || set.max != 1_000_000 {
+		t.Fatalf("outlier changed exact counters: seen=%d max=%d", set.seen, set.max)
+	}
+}
+
+func TestUint64SampleSetMatchesSortedReferenceAfterDensePromotion(t *testing.T) {
+	random := rand.New(rand.NewSource(32_597))
+	for scenario := range 48 {
+		values := make([]uint64, 0, 6_144)
+		var set uint64SampleSet
+		for index := 0; index < cap(values); index++ {
+			value := uint64(random.Intn(257))
+			if index >= 4_096 && index%13 == 0 {
+				value = uint64(random.Int63()) + uint64(scenario)
+			}
+			values = append(values, value)
+			set.add(value)
+		}
+		if len(set.denseCounts) == 0 || len(set.values) != 0 {
+			t.Fatalf("scenario %d did not exercise exact dense promotion", scenario)
+		}
+		sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+		for _, percentile := range []float64{-1, 0, 0.01, 0.50, 0.90, 0.95, 0.99, 1, 2} {
+			got := set.percentile(percentile)
+			target := int(math.Ceil(float64(len(values)) * percentile))
+			if target < 1 {
+				target = 1
+			}
+			if target > len(values) {
+				target = len(values)
+			}
+			want := values[target-1]
+			if got != want {
+				t.Fatalf("scenario %d percentile %v = %d, want %d", scenario, percentile, got, want)
+			}
+		}
+		if set.seen != len(values) || set.min != values[0] || set.max != values[len(values)-1] {
+			t.Fatalf(
+				"scenario %d metadata = seen:%d min:%d max:%d, want seen:%d min:%d max:%d",
+				scenario,
+				set.seen,
+				set.min,
+				set.max,
+				len(values),
+				values[0],
+				values[len(values)-1],
+			)
+		}
+	}
+}
 
 func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
@@ -61,6 +180,51 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	}
 }
 
+func TestFPSRequiresContinuousFrameEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		window *jhlog.UIWindowEvent
+		want   bool
+	}{
+		{
+			name: "single frame across idle screen",
+			window: &jhlog.UIWindowEvent{
+				WindowMS: 90_000, FrameCount: 1, P95MS: 12, FrameDeadlineUS: 16_667,
+			},
+			want: false,
+		},
+		{
+			name: "many sparse frames",
+			window: &jhlog.UIWindowEvent{
+				WindowMS: 90_000, FrameCount: 30, P95MS: 16, FrameDeadlineUS: 16_667,
+			},
+			want: false,
+		},
+		{
+			name: "continuous frames",
+			window: &jhlog.UIWindowEvent{
+				WindowMS: 1_000, FrameCount: 60, P95MS: 16, FrameDeadlineUS: 16_667,
+			},
+			want: true,
+		},
+		{
+			name: "genuinely slow continuous frames",
+			window: &jhlog.UIWindowEvent{
+				WindowMS: 6_000, FrameCount: 30, P95MS: 300, FrameDeadlineUS: 16_667,
+			},
+			want: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := fpsWindowReliable(test.window); got != test.want {
+				t.Fatalf("fpsWindowReliable(%+v) = %v, want %v", test.window, got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadOwnerMapResolvesNamespacedStableOwner(t *testing.T) {
 	dir := t.TempDir()
 	mapPath := filepath.Join(dir, "owner-map.json")
@@ -81,11 +245,31 @@ func TestLoadOwnerMapResolvesNamespacedStableOwner(t *testing.T) {
 	}
 }
 
+func TestReadOwnerMapNamespaceReadsOnlyBoundedMetadataRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owner-map.json")
+	const namespaceHex = "00112233445566778899aabbccddeeff"
+	data := strings.Join([]string{
+		`{"format":4,"kind":"metadata","symbolNamespace":"` + namespaceHex + `"}`,
+		`this intentionally invalid trailing entry must not be read`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	namespace, err := ReadOwnerMapNamespace(path)
+	if err != nil {
+		t.Fatalf("ReadOwnerMapNamespace() error = %v", err)
+	}
+	if got := hex.EncodeToString(namespace); got != namespaceHex {
+		t.Fatalf("namespace = %q, want %q", got, namespaceHex)
+	}
+}
+
 func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
 	validNamespace := "aabb0000000000000000000000000000"
 	tests := map[string]string{
 		"missing format":       `{"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
-		"old format":           `{"format":3,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
+		"unsupported format":   `{"format":3,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
 		"missing namespace":    `{"format":4,"kind":"metadata"}`,
 		"short namespace":      `{"format":4,"kind":"metadata","symbolNamespace":"aabb"}`,
 		"uppercase namespace":  `{"format":4,"kind":"metadata","symbolNamespace":"AABB0000000000000000000000000000"}`,
@@ -94,6 +278,11 @@ func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
 			`{"format":4,"kind":"entry","symbolNamespace":"` + validNamespace + `","id":"stable:0x0123456789abcdef","owner":"com.app.Owner.call"}`,
 		"conflicting namespace": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
 			`{"format":4,"kind":"metadata","symbolNamespace":"ccdd0000000000000000000000000000"}`,
+		"object entries": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace +
+			`","entries":[{"id":"stable:0x0123456789abcdef","owner":"com.app.Owner.call"}]}`,
+		"entry aliases": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
+			`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","name":"com.app.Owner.call"}`,
+		"unknown record kind": `{"format":4,"kind":"owners","symbolNamespace":"` + validNamespace + `"}`,
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -318,6 +507,30 @@ func TestResolveOwnerAliasRequiresMatchingStableNamespace(t *testing.T) {
 	}
 }
 
+func TestInspectAppliesManualAliasToEnvelopeOwner(t *testing.T) {
+	log := jhlog.Log{
+		Dict: map[uint64]string{1: "manual", 2: "GET /feed"},
+		Events: []jhlog.Event{{
+			Type:        jhlog.EventHTTP,
+			Attribution: attributionForTest(0, 1, 0, 0),
+			HTTP:        &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 42, Status: jhlog.Status2xx},
+		}},
+	}
+	collector := newCollector("manual alias", 1, Options{OwnerMap: &OwnerMap{
+		Entries:         map[string]string{"manual": "com.app.Repository.load"},
+		SymbolNamespace: make([]byte, ownerMapNamespaceBytes),
+	}})
+	collector.startLog()
+	for _, event := range log.Events {
+		collector.add(log.Dict, event)
+	}
+	collector.finishLog()
+	summary := collector.finish()
+	if len(summary.Owners) != 1 || summary.Owners[0].Owner != "com.app.Repository.load" {
+		t.Fatalf("manual envelope owner alias was not applied: %+v", summary.Owners)
+	}
+}
+
 func TestInspectFilesRejectsOwnerMapFromAnotherSymbolNamespace(t *testing.T) {
 	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
 	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
@@ -482,11 +695,10 @@ func TestValidateSegmentChainsRejectsDuplicatesAndIdentityChanges(t *testing.T) 
 	header := collectionTestHeader(7, 0)
 	sealed := func(source string, value jhlog.SegmentHeader) jhlog.StreamResult {
 		return jhlog.StreamResult{
-			Source:  source,
-			Version: jhlog.FormatVersion,
-			Header:  value,
-			Status:  jhlog.SegmentStatusClosedClean,
-			Sealed:  true,
+			Source: source,
+			Header: value,
+			Status: jhlog.SegmentStatusClosedClean,
+			Sealed: true,
 		}
 	}
 
@@ -511,8 +723,8 @@ func TestValidateSegmentChainsReportsGaps(t *testing.T) {
 	first := collectionTestHeader(9, 0)
 	third := collectionTestHeader(9, 2)
 	issues, err := validateSegmentChains([]jhlog.StreamResult{
-		{Source: "first.jhlog", Version: jhlog.FormatVersion, Header: first, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
-		{Source: "third.jhlog", Version: jhlog.FormatVersion, Header: third, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
+		{Source: "first.jhlog", Header: first, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
+		{Source: "third.jhlog", Header: third, Status: jhlog.SegmentStatusClosedClean, Sealed: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -522,12 +734,450 @@ func TestValidateSegmentChainsReportsGaps(t *testing.T) {
 	}
 }
 
+func TestValidateSegmentChainsAcceptsExactRotationHandoff(t *testing.T) {
+	first := collectionTestHeader(10, 0)
+	second := collectionTestHeader(10, 1)
+	digest := bytes.Repeat([]byte{0x5a}, 32)
+	second.PreviousSegmentDigest = append([]byte(nil), digest...)
+	issues, err := validateSegmentChains([]jhlog.StreamResult{
+		{
+			Source:        "first.jhlog",
+			Header:        first,
+			Status:        jhlog.SegmentStatusClosedClean,
+			Sealed:        true,
+			SegmentDigest: digest,
+			SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndRotation},
+		},
+		{
+			Source:        "second.jhlog",
+			Header:        second,
+			Status:        jhlog.SegmentStatusClosedClean,
+			Sealed:        true,
+			SegmentDigest: bytes.Repeat([]byte{0x6b}, 32),
+			SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("valid rotation chain issues = %+v", issues)
+	}
+}
+
+func TestValidateSegmentChainsRejectsValidCRCSubstitutionByDigest(t *testing.T) {
+	first := collectionTestHeader(20, 0)
+	second := collectionTestHeader(20, 1)
+	firstDigest := bytes.Repeat([]byte{0x11}, 32)
+	second.PreviousSegmentDigest = bytes.Repeat([]byte{0x22}, 32)
+	_, err := validateSegmentChains([]jhlog.StreamResult{
+		{
+			Source: "first.jhlog", Header: first, Sealed: true,
+			SegmentDigest: firstDigest, SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndRotation},
+		},
+		{
+			Source: "substitute.jhlog", Header: second, Sealed: true,
+			SegmentDigest: bytes.Repeat([]byte{0x33}, 32), SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "predecessor digest does not match") {
+		t.Fatalf("substitution error = %v", err)
+	}
+}
+
+func TestValidateSegmentChainsRequiresRotationSuccessor(t *testing.T) {
+	header := collectionTestHeader(11, 0)
+	issues, err := validateSegmentChains([]jhlog.StreamResult{{
+		Source:     "orphaned-rotation.jhlog",
+		Header:     header,
+		Status:     jhlog.SegmentStatusClosedClean,
+		Sealed:     true,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndRotation},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !warningsContain(issues, "ожидаемый следующий сегмент не передан") {
+		t.Fatalf("orphaned rotation issues = %+v", issues)
+	}
+}
+
+func TestCollectionQualityRequiresExactAdmissionFeature(t *testing.T) {
+	collector := newCollector("best effort", 1, Options{})
+	header := collectionTestHeader(14, 0)
+	header.RequiredFeatures &^= jhlog.FeatureExactEventAdmission
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source:        "best-effort.jhlog",
+		Header:        header,
+		Status:        jhlog.SegmentStatusClosedClean,
+		Sealed:        true,
+		LatestQuality: &quality,
+		SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	if err := collector.validateSegmentIdentityConsistency(); err != nil {
+		t.Fatal(err)
+	}
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.ExactAdmission || got.Complete || got.Level != "medium" {
+		t.Fatalf("best-effort collection quality = %+v", got)
+	}
+	if !warningsContain(got.Reasons, "без EXACT admission") {
+		t.Fatalf("best-effort reasons = %+v", got.Reasons)
+	}
+}
+
+func TestCollectionQualityTreatsExactBackpressureAsNoLoss(t *testing.T) {
+	collector := newCollector("exact", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityAcceptedEventTotal:             2,
+		jhlog.QualityWrittenEventTotal:              2,
+		jhlog.QualityWriterAdmissionContentionTotal: 7,
+		jhlog.QualityWriterBackpressureCount:        1,
+		jhlog.QualityWriterBackpressureNanos:        250_000,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source:        "exact.jhlog",
+		Header:        collectionTestHeader(15, 0),
+		Status:        jhlog.SegmentStatusClosedClean,
+		Sealed:        true,
+		LatestQuality: &quality,
+		SegmentEnd:    &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+		DataRecords:   2,
+	})
+	collector.summary.EventCount = 2
+	if err := collector.validateSegmentIdentityConsistency(); err != nil {
+		t.Fatal(err)
+	}
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if !got.ExactAdmission || !got.Complete || got.Level != "high" || got.KnownLostEvents != 0 {
+		t.Fatalf("exact collection quality = %+v", got)
+	}
+	if got.WriterBackpressureCount != 1 || got.WriterBackpressureNanos != 250_000 {
+		t.Fatalf("exact backpressure = %+v", got)
+	}
+}
+
+func TestCollectionQualityFailsClosedOnSuppressedRuntimeHookFailure(t *testing.T) {
+	collector := newCollector("hook failure", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityRuntimeHookFailureTotal: 3,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "hook-failure.jhlog",
+		Header: collectionTestHeader(27, 0), Status: jhlog.SegmentStatusClosedClean,
+		Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.Level != "low" || got.Complete || got.RuntimeHookFailures != 3 ||
+		got.CriticalRuntimeHookFailures != 3 ||
+		!warningsContain(got.Reasons, "влияющих на evidence") {
+		t.Fatalf("suppressed hook failure quality = %+v", got)
+	}
+}
+
+func TestCollectionQualityExplainsJankStatsFallbackWithoutClaimingEvidenceCorruption(t *testing.T) {
+	collector := newCollector("jankstats fallback", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityRuntimeHookFailureTotal:    1,
+		jhlog.QualityJankStatsDependencyMissing: 1,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "jankstats-fallback.jhlog", Header: collectionTestHeader(28, 0),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.Level != "high" || got.Complete || got.TrustScorePercent != 100 ||
+		got.CriticalRuntimeHookFailures != 0 || len(got.RuntimeHookFailureDetails) != 1 ||
+		!warningsContain(got.Notices, "Choreographer fallback") {
+		t.Fatalf("jankstats fallback quality = %+v", got)
+	}
+}
+
+func TestQualityWarningsDescribeExactAdmissionContentionAsLosslessBackpressure(t *testing.T) {
+	counters := map[uint64]uint64{jhlog.QualityWriterAdmissionContentionTotal: 2}
+	if warnings := qualityCounterWarnings(counters, true); len(warnings) != 0 {
+		t.Fatalf("EXACT contention warnings = %+v", warnings)
+	}
+	warnings := qualityCounterWarnings(counters, false)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "BEST_EFFORT") {
+		t.Fatalf("BEST_EFFORT contention warnings = %+v", warnings)
+	}
+}
+
+func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvidence(t *testing.T) {
+	runtimeOnlyCollector := &collector{stableSymbols: stableSymbolResolver{unresolved: map[string]struct{}{}}}
+	runtimeOnly := runtimeOnlyCollector.analysisInputCompleteness(Summary{
+		LogCount:        1,
+		DataRecordCount: 10,
+	})
+	missing := strings.Join(runtimeOnly.Missing, ",")
+	if runtimeOnly.Status != "runtime_only" || runtimeOnly.Complete ||
+		!strings.Contains(missing, "class-graph.jsonl") ||
+		!strings.Contains(missing, "instrumentation-diagnostics.jsonl") {
+		t.Fatalf("runtime-only completeness = %+v", runtimeOnly)
+	}
+
+	completeCollector := &collector{
+		diagnostics: &InstrumentationDiagnostics{Available: true, ClassCount: 1},
+		stableSymbols: stableSymbolResolver{
+			unresolved: map[string]struct{}{},
+		},
+		artifactDirectory: "/project/app/build/generated/jankhunter/debug",
+		artifactAuto:      true,
+		artifactNamespace: make([]byte, ownerMapNamespaceBytes),
+	}
+	complete := completeCollector.analysisInputCompleteness(Summary{
+		LogCount:        1,
+		DataRecordCount: 10,
+		Influence:       InfluenceSummary{HasClassGraph: true},
+	})
+	if !complete.Complete || complete.Status != "complete" || len(complete.Missing) != 0 ||
+		!complete.ArtifactsAutoDiscovered || !complete.ArtifactIdentityVerified || complete.ArtifactDirectory == "" {
+		t.Fatalf("complete developer inputs = %+v", complete)
+	}
+}
+
+func TestArtifactNamespaceRejectsAnotherBuildVariant(t *testing.T) {
+	header := jhlog.SegmentHeader{SymbolNamespace: bytes.Repeat([]byte{0x01}, ownerMapNamespaceBytes)}
+	wrongNamespace := bytes.Repeat([]byte{0xff}, ownerMapNamespaceBytes)
+
+	err := validateArtifactNamespace(wrongNamespace, header, "session.jhlog", "/project/wrong-variant")
+	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact --artifacts-dir") {
+		t.Fatalf("namespace mismatch error = %v", err)
+	}
+}
+
+func TestCollectionQualityReportsConfiguredProcessScope(t *testing.T) {
+	tests := []struct {
+		name            string
+		scope           jhlog.ProcessScope
+		allowed         uint64
+		fingerprint     []byte
+		want            string
+		allProcesses    bool
+		wantScopeNotice bool
+	}{
+		{name: "all", scope: jhlog.ProcessScopeAll, want: "all_processes", allProcesses: true},
+		{name: "main", scope: jhlog.ProcessScopeMainOnly, want: "main_process_only", wantScopeNotice: true},
+		{
+			name: "allowlist", scope: jhlog.ProcessScopeAllowlist, allowed: 2,
+			fingerprint: bytes.Repeat([]byte{0xa5}, 32), want: "process_allowlist", wantScopeNotice: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			collector := newCollector(test.name, 1, Options{})
+			header := collectionTestHeader(16, 0)
+			header.ProcessScope = test.scope
+			header.AllowedProcessCount = test.allowed
+			header.ProcessScopeFingerprint = test.fingerprint
+			quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+			collector.addStreamResult(jhlog.StreamResult{
+				Source: "scope.jhlog", Header: header,
+				Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+				SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+			})
+			collector.finalizeCollectionQuality()
+
+			got := collector.summary.CollectionQuality
+			if got.ProcessScope != test.want || got.AllProcessesConfigured != test.allProcesses ||
+				!got.ProcessScopeConsistent || !got.Complete || got.Level != "high" {
+				t.Fatalf("process scope quality = %+v", got)
+			}
+			if got.ProcessScopeFingerprint != hex.EncodeToString(test.fingerprint) {
+				t.Fatalf("process scope fingerprint = %q", got.ProcessScopeFingerprint)
+			}
+			if test.wantScopeNotice != (len(got.Notices) > 0) {
+				t.Fatalf("process scope notices = %+v", got.Notices)
+			}
+		})
+	}
+}
+
+func TestCollectionQualityRequiresCompleteDeclaredProcessRoster(t *testing.T) {
+	expectedNames := []string{"main", "remote"}
+	fingerprint := jhlog.ProcessRosterFingerprint(expectedNames)
+	stream := func(session byte, processName string) jhlog.StreamResult {
+		header := collectionTestHeader(session, 0)
+		header.ProcessName = processName
+		header.ExpectedProcessCount = 2
+		header.ExpectedProcessFingerprint = append([]byte(nil), fingerprint...)
+		header.ProcessRosterDeclarationComplete = true
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+		return jhlog.StreamResult{
+			Source: processName + ".jhlog", Header: header,
+			Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+			SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+		}
+	}
+
+	incomplete := newCollector("incomplete roster", 1, Options{})
+	incomplete.addStreamResult(stream(21, "main"))
+	incomplete.finalizeCollectionQuality()
+	if got := incomplete.summary.CollectionQuality; got.Complete || got.ProcessRosterComplete ||
+		got.ObservedProcessCount != 1 || got.ExpectedProcessCount != 2 ||
+		got.Level != "high" || warningsContain(got.Reasons, "process roster неполон") ||
+		!warningsContain(got.Notices, "могли не запускаться") {
+		t.Fatalf("incomplete roster quality = %+v", got)
+	}
+
+	complete := newCollector("complete roster", 2, Options{})
+	complete.addStreamResult(stream(22, "main"))
+	complete.addStreamResult(stream(23, "remote"))
+	complete.finalizeCollectionQuality()
+	if got := complete.summary.CollectionQuality; !got.Complete || !got.ProcessRosterComplete ||
+		got.ObservedProcessCount != 2 || !got.RunCohortConsistent || got.RunCohortCount != 1 ||
+		got.ExpectedProcessFingerprint != hex.EncodeToString(fingerprint) {
+		t.Fatalf("complete roster quality = %+v", got)
+	}
+
+	mixed := newCollector("mixed run roster", 2, Options{})
+	main := stream(25, "main")
+	remote := stream(26, "remote")
+	remote.Header.RunID[1] = 9
+	mixed.addStreamResult(main)
+	mixed.addStreamResult(remote)
+	mixed.finalizeCollectionQuality()
+	if got := mixed.summary.CollectionQuality; got.Complete || got.ProcessRosterComplete ||
+		got.RunCohortConsistent || got.RunCohortCount != 2 ||
+		!warningsContain(got.Reasons, "разным запускам приложения") {
+		t.Fatalf("mixed run roster quality = %+v", got)
+	}
+}
+
+func TestCollectionQualityFailsClosedWhenManifestRosterDiscoveryFailed(t *testing.T) {
+	collector := newCollector("unknown roster", 1, Options{})
+	header := collectionTestHeader(24, 0)
+	header.ProcessRosterDeclarationComplete = false
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "main.jhlog", Header: header,
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+	if got := collector.summary.CollectionQuality; got.Complete || got.ProcessRosterDeclarationComplete ||
+		!warningsContain(got.Reasons, "не смог полностью объявить process roster") {
+		t.Fatalf("failed roster discovery quality = %+v", got)
+	}
+}
+
+func TestCollectionQualityFailsClosedWithoutProcessScopeFeature(t *testing.T) {
+	collector := newCollector("missing scope", 1, Options{})
+	header := collectionTestHeader(19, 0)
+	header.RequiredFeatures &^= jhlog.FeatureProcessScope
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "missing-scope.jhlog", Header: header,
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.Level != "low" || got.Complete || got.ProcessScope != "unknown" ||
+		got.ProcessScopeConsistent || !warningsContain(got.Reasons, "охват процессов подтвердить невозможно") {
+		t.Fatalf("missing process scope quality = %+v", got)
+	}
+}
+
+func TestCollectionQualityFailsClosedOnImpossibleCounters(t *testing.T) {
+	tests := []struct {
+		name     string
+		counters map[uint64]uint64
+		decoded  uint64
+		reason   string
+	}{
+		{
+			name: "written exceeds accepted",
+			counters: map[uint64]uint64{
+				jhlog.QualityAcceptedEventTotal: 10,
+				jhlog.QualityWrittenEventTotal:  11,
+			},
+			reason: "невозможное состояние writer",
+		},
+		{
+			name: "graph output exceeds input",
+			counters: map[uint64]uint64{
+				jhlog.QualityRuntimeGraphInputTotal:   10,
+				jhlog.QualityRuntimeGraphEmittedTotal: 11,
+			},
+			decoded: 11,
+			reason:  "невозможное состояние runtime-графа",
+		},
+		{
+			name: "graph emitted counter misses decoded calls",
+			counters: map[uint64]uint64{
+				jhlog.QualityRuntimeGraphInputTotal: 5,
+			},
+			decoded: 5,
+			reason:  "writer сообщает 0 записанных runtime-вызовов, но декодировано 5",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			collector := newCollector(test.name, 1, Options{})
+			quality := jhlog.QualitySnapshot{Sequence: 1, Counters: test.counters}
+			collector.addStreamResult(jhlog.StreamResult{
+				Source: "invalid.jhlog",
+				Header: collectionTestHeader(17, 0), Status: jhlog.SegmentStatusClosedClean,
+				Sealed: true, LatestQuality: &quality,
+				RuntimeGraphLogicalCalls: test.decoded,
+				SegmentEnd:               &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+			})
+			collector.finalizeCollectionQuality()
+
+			got := collector.summary.CollectionQuality
+			if got.Level != "low" || got.Complete || !warningsContain(got.Reasons, test.reason) {
+				t.Fatalf("fail-closed quality = %+v", got)
+			}
+		})
+	}
+}
+
+func TestCollectionQualityRejectsRegressedCrossSegmentSnapshot(t *testing.T) {
+	collector := newCollector("regressed", 2, Options{})
+	first := jhlog.QualitySnapshot{Sequence: 4, CapturedElapsedUS: 2_000, Counters: map[uint64]uint64{
+		jhlog.QualityAcceptedEventTotal: 10,
+	}}
+	second := jhlog.QualitySnapshot{Sequence: 5, CapturedElapsedUS: 3_000, Counters: map[uint64]uint64{
+		jhlog.QualityAcceptedEventTotal: 9,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "first.jhlog", Header: collectionTestHeader(18, 0),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &first,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndRotation},
+	})
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "second.jhlog", Header: collectionTestHeader(18, 1),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &second,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.Level != "low" || got.Complete || got.QualityProgressionValid || got.ChainValid ||
+		!warningsContain(got.Reasons, "counter 1 regressed from 10 to 9") {
+		t.Fatalf("regressed quality = %+v", got)
+	}
+}
+
 func TestCollectionQualityTreatsSizeLimitAsIncompleteWithApparentSuccessor(t *testing.T) {
 	collector := newCollector("size limit", 2, Options{})
 	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
 	collector.addStreamResult(jhlog.StreamResult{
 		Source:        "size-limited.jhlog",
-		Version:       jhlog.FormatVersion,
 		Header:        collectionTestHeader(12, 0),
 		Status:        jhlog.SegmentStatusClosedClean,
 		Sealed:        true,
@@ -536,7 +1186,6 @@ func TestCollectionQualityTreatsSizeLimitAsIncompleteWithApparentSuccessor(t *te
 	})
 	collector.addStreamResult(jhlog.StreamResult{
 		Source:        "apparent-successor.jhlog",
-		Version:       jhlog.FormatVersion,
 		Header:        collectionTestHeader(12, 1),
 		Status:        jhlog.SegmentStatusClosedClean,
 		Sealed:        true,
@@ -549,17 +1198,14 @@ func TestCollectionQualityTreatsSizeLimitAsIncompleteWithApparentSuccessor(t *te
 	collector.finalizeCollectionQuality()
 
 	got := collector.summary.CollectionQuality
-	if got.Level != "medium" || got.Complete {
+	if got.Level != "low" || got.Complete || got.ChainValid {
 		t.Fatalf("size-limited quality = %+v", got)
 	}
 	reasons := strings.Join(got.Reasons, "\n")
-	if !strings.Contains(reasons, "достиг лимита размера") || !strings.Contains(reasons, "сбор завершён раньше") {
+	if !strings.Contains(reasons, "достиг лимита размера") ||
+		!strings.Contains(reasons, "сбор завершён раньше") ||
+		!strings.Contains(reasons, "вместо rotation") {
 		t.Fatalf("size-limited reasons = %q", reasons)
-	}
-	for _, stale := range []string{"следующ", "продолж", "segment chain"} {
-		if strings.Contains(strings.ToLower(reasons), stale) {
-			t.Fatalf("size-limited reasons contain stale continuation wording %q: %q", stale, reasons)
-		}
 	}
 }
 
@@ -569,7 +1215,6 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
 		collector.addStreamResult(jhlog.StreamResult{
 			Source:        "active.jhlog",
-			Version:       jhlog.FormatVersion,
 			Header:        collectionTestHeader(9, 0),
 			Status:        jhlog.SegmentStatusOpenClean,
 			TailBytes:     0,
@@ -591,7 +1236,6 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{}}
 		collector.addStreamResult(jhlog.StreamResult{
 			Source:        "open.jhlog",
-			Version:       jhlog.FormatVersion,
 			Header:        collectionTestHeader(10, 0),
 			Status:        jhlog.SegmentStatusOpenWithTail,
 			TailBytes:     17,
@@ -615,10 +1259,11 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 			jhlog.QualityQueueFullTotal:                 10,
 			jhlog.QualityWriterAdmissionContentionTotal: 7,
 		}}
+		header := collectionTestHeader(11, 0)
+		header.RequiredFeatures &^= jhlog.FeatureExactEventAdmission
 		collector.addStreamResult(jhlog.StreamResult{
 			Source:        "lossy.jhlog",
-			Version:       jhlog.FormatVersion,
-			Header:        collectionTestHeader(11, 0),
+			Header:        header,
 			Status:        jhlog.SegmentStatusClosedClean,
 			Sealed:        true,
 			LatestQuality: &quality,
@@ -638,21 +1283,139 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 	t.Run("runtime graph completeness", func(t *testing.T) {
 		collector := newCollector("runtime graph", 1, Options{})
 		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
-			jhlog.QualityRuntimeGraphInputTotal:   1_000,
-			jhlog.QualityRuntimeGraphEmittedTotal: 980,
+			jhlog.QualityRuntimeGraphInputTotal:          1_000,
+			jhlog.QualityRuntimeGraphEmittedTotal:        980,
+			jhlog.QualityRuntimeGraphWriterRejectionLoss: 20,
 		}}
 		collector.addStreamResult(jhlog.StreamResult{
-			Source: "graph.jhlog", Version: jhlog.FormatVersion,
+			Source: "graph.jhlog",
 			Header: collectionTestHeader(13, 0), Status: jhlog.SegmentStatusClosedClean,
-			Sealed: true, LatestQuality: &quality,
+			Sealed: true, LatestQuality: &quality, RuntimeGraphLogicalCalls: 980,
 		})
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
-		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" ||
+		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" || got.TrustScorePercent != 99.6 ||
+			got.BoundedEvidenceLoss != 20 || got.OtherEvidenceLoss != 0 ||
 			!warningsContain(got.Reasons, "полнота runtime-графа 98.00%") {
 			t.Fatalf("runtime graph completeness = %+v", got)
 		}
 	})
+
+	t.Run("other evidence loss is isolated from graph coverage", func(t *testing.T) {
+		collector := newCollector("other evidence loss", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+			jhlog.QualityMetricCardinalityLoss: 1,
+		}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source: "metric-loss.jhlog",
+			Header: collectionTestHeader(15, 0), Status: jhlog.SegmentStatusClosedClean,
+			Sealed: true, LatestQuality: &quality,
+		})
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.RuntimeGraphCompletenessRatio != 1 || got.OtherEvidenceLoss != 1 ||
+			got.TrustScorePercent != 80 || got.TrustComponents[3].MissingPoints != 20 {
+			t.Fatalf("other evidence loss quality = %+v", got)
+		}
+	})
+
+	t.Run("runtime graph disabled", func(t *testing.T) {
+		collector := newCollector("runtime graph disabled", 1, Options{})
+		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+			jhlog.QualityRuntimeGraphDisabled: 1,
+		}}
+		collector.addStreamResult(jhlog.StreamResult{
+			Source: "graph-disabled.jhlog",
+			Header: collectionTestHeader(14, 0), Status: jhlog.SegmentStatusClosedClean,
+			Sealed: true, LatestQuality: &quality,
+		})
+		collector.finalizeCollectionQuality()
+		got := collector.summary.CollectionQuality
+		if got.RuntimeGraphEnabled || got.RuntimeGraphCompletenessRatio != 0 || got.TrustScorePercent != 100 ||
+			got.Level != "high" || !got.Complete || warningsContain(got.Reasons, "runtime-граф отключён") ||
+			!warningsContain(got.Notices, "полностью исключён") {
+			t.Fatalf("disabled runtime graph quality = %+v", got)
+		}
+		if len(got.TrustComponents) != 4 || got.TrustComponents[1].ID != "runtime_graph" ||
+			!got.TrustComponents[1].Excluded || got.TrustComponents[1].MissingPoints != 0 {
+			t.Fatalf("disabled runtime graph trust breakdown = %+v", got.TrustComponents)
+		}
+	})
+}
+
+func TestCollectionTrustUsesFiveExplicitTiers(t *testing.T) {
+	cases := []struct {
+		score float64
+		want  string
+	}{
+		{score: 100, want: "excellent"},
+		{score: 95, want: "excellent"},
+		{score: 94.99, want: "high"},
+		{score: 85, want: "high"},
+		{score: 84.99, want: "sufficient"},
+		{score: 65, want: "sufficient"},
+		{score: 64.99, want: "limited"},
+		{score: 40, want: "limited"},
+		{score: 39.99, want: "low"},
+	}
+	for _, test := range cases {
+		got, explanation := describeCollectionTrust(test.score, nil)
+		if got != test.want || explanation == "" {
+			t.Fatalf("score %.2f = %q (%q), want %q", test.score, got, explanation, test.want)
+		}
+	}
+}
+
+func TestCollectionTrustScoreExplainsWeightedKnownLoss(t *testing.T) {
+	quality := CollectionQuality{
+		ExactAdmission:                   true,
+		WrittenEvents:                    800,
+		KnownLostEvents:                  200,
+		RuntimeGraphEnabled:              true,
+		RuntimeGraphCompletenessRatio:    1,
+		ProcessRosterComplete:            true,
+		ExpectedProcessCount:             1,
+		ProcessScope:                     jhlog.ProcessScopeAll.String(),
+		ChainValid:                       true,
+		CounterInvariantsValid:           true,
+		QualityProgressionValid:          true,
+		ProcessRosterDeclarationComplete: true,
+		RunCohortConsistent:              true,
+		ProcessScopeConsistent:           true,
+	}
+	score, components := collectionTrustScore(quality)
+	if score != 92 || len(components) != 4 {
+		t.Fatalf("trust score = %.2f components=%+v", score, components)
+	}
+	transport := components[0]
+	if transport.ID != "transport" || transport.CoveragePercent != 80 ||
+		transport.EarnedPoints != 32 || transport.MissingPoints != 8 ||
+		!strings.Contains(transport.Explanation, "потеряно 200") {
+		t.Fatalf("transport trust component = %+v", transport)
+	}
+}
+
+func TestCollectionTrustScoreDoesNotDoubleCountRuntimeGraphLoss(t *testing.T) {
+	quality := CollectionQuality{
+		ExactAdmission:                true,
+		WrittenEvents:                 3,
+		RuntimeGraphEnabled:           true,
+		RuntimeGraphInputEvents:       10,
+		DecodedRuntimeGraphCalls:      2,
+		RuntimeGraphCompletenessRatio: 0.2,
+		ProcessRosterComplete:         true,
+		ExpectedProcessCount:          1,
+		ProcessScope:                  jhlog.ProcessScopeAll.String(),
+		ChainValid:                    true,
+		CounterInvariantsValid:        true,
+		QualityProgressionValid:       true,
+		BoundedEvidenceLoss:           8,
+	}
+
+	score, components := collectionTrustScore(quality)
+	if score != 84 || components[1].EarnedPoints != 4 || components[3].EarnedPoints != 20 {
+		t.Fatalf("runtime graph loss must affect only graph component: score=%v components=%+v", score, components)
+	}
 }
 
 func collectionTestHeader(session byte, segmentIndex uint64) jhlog.SegmentHeader {
@@ -661,12 +1424,18 @@ func collectionTestHeader(session byte, segmentIndex uint64) jhlog.SegmentHeader
 	header.ProcessInstanceID[0] = 2
 	header.SessionID[0] = session
 	header.SegmentIndex = segmentIndex
+	if segmentIndex > 0 {
+		header.PreviousSegmentDigest = make([]byte, 32)
+	}
 	header.OSPID = 42
 	header.CollectorStartElapsedUS = 1_000
 	header.SegmentStartElapsedUS = 1_000 + segmentIndex*100
 	header.SegmentStartUnixMS = 2_000 + segmentIndex*100
 	header.IdentitySource = 1
 	header.ProcessName = "main"
+	header.ExpectedProcessCount = 1
+	header.ExpectedProcessFingerprint = jhlog.ProcessRosterFingerprint([]string{"main"})
+	header.ProcessRosterDeclarationComplete = true
 	header.SymbolNamespace = []byte{3}
 	return header
 }
@@ -730,7 +1499,7 @@ func TestInspectDurationIgnoresInitialAndroidUptimeDelta(t *testing.T) {
 			Type:   jhlog.EventHTTP,
 			TimeMS: uptimeOffsetMS + 120_000,
 			HTTP: &jhlog.HTTPEvent{
-				RouteID:    1,
+				RouteRef:   jhlog.LocalSymbol(1),
 				DurationMS: 120,
 				Status:     jhlog.Status2xx,
 			},
@@ -805,9 +1574,8 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "FeedRepository.refresh"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 4, Value: "feed.refresh"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 5, Value: "network"}},
-		{Type: jhlog.EventFlow, TimeMS: 1, Attribution: attributionForTest(2, 3, 4, 5), Flow: &jhlog.FlowEvent{ScreenID: 2, OwnerID: 3, FlowID: 4, StepID: 5}},
-		{Type: jhlog.EventHTTP, TimeMS: 2, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{OwnerID: 3, RouteID: 1, DurationMS: 100, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventHTTP, TimeMS: 3, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{OwnerID: 3, RouteID: 1, DurationMS: 1000, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 2, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(1), DurationMS: 100, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 3, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(1), DurationMS: 1000, Status: jhlog.Status2xx}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
@@ -844,9 +1612,9 @@ func TestInspectKeepsOwnerKindsSeparate(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 2, Value: "GET /shared"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStack, ID: 3, Value: "SharedOwner.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 4, Value: "SharedOwner"}},
-		{Type: jhlog.EventHTTP, TimeMS: 1, HTTP: &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 100, Status: jhlog.Status2xx}},
-		{Type: jhlog.EventStall, TimeMS: 2, Stall: &jhlog.StallEvent{OwnerID: 1, StackID: 3, DurationMS: 250}},
-		{Type: jhlog.EventRetained, TimeMS: 3, Retained: &jhlog.RetainedEvent{ClassID: 4, AgeMS: 10_000, Count: 1}},
+		{Type: jhlog.EventHTTP, TimeMS: 1, Attribution: attributionForTest(0, 1, 0, 0), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 100, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventStall, TimeMS: 2, Attribution: attributionForTest(0, 1, 0, 0), Stall: &jhlog.StallEvent{StackRef: jhlog.LocalSymbol(3), DurationMS: 250}},
+		{Type: jhlog.EventRetained, TimeMS: 3, Retained: &jhlog.RetainedEvent{ClassRef: jhlog.LocalSymbol(4), AgeMS: 10_000, Count: 1}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
@@ -890,8 +1658,8 @@ func TestInspectInfersRetainedHolderFromOwnerOrClass(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 1, Value: "com.example.LeakyActivity"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictClass, ID: 2, Value: "com.example.LeakyView"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "com.example.LeakOwner"}},
-		{Type: jhlog.EventRetained, TimeMS: 1, Retained: &jhlog.RetainedEvent{ClassID: 1, OwnerID: 3, AgeMS: 10_000, Count: 1}},
-		{Type: jhlog.EventRetained, TimeMS: 2, Retained: &jhlog.RetainedEvent{ClassID: 2, AgeMS: 12_000, Count: 1}},
+		{Type: jhlog.EventRetained, TimeMS: 1, Attribution: attributionForTest(0, 3, 0, 0), Retained: &jhlog.RetainedEvent{ClassRef: jhlog.LocalSymbol(1), AgeMS: 10_000, Count: 1}},
+		{Type: jhlog.EventRetained, TimeMS: 2, Retained: &jhlog.RetainedEvent{ClassRef: jhlog.LocalSymbol(2), AgeMS: 12_000, Count: 1}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
@@ -916,8 +1684,8 @@ func TestInspectInfersRetainedHolderFromOwnerOrClass(t *testing.T) {
 	}
 }
 
-func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "bounded-aggregate.jhlog")
+func TestInspectFilesKeepsExactPercentilesBeyondFormerReservoirBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "exact-aggregate.jhlog")
 	file, writer, err := jhlog.Create(path)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -932,15 +1700,15 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 			t.Fatalf("WriteEvent(dictionary) error = %v", err)
 		}
 	}
-	const total = maxAggregateSamplesPerSignal + 25
+	const total = 20_025
 	for i := 1; i <= total; i++ {
 		value := uint64(i)
 		if err := writer.WriteEvent(jhlog.Event{
-			Type:   jhlog.EventHTTP,
-			TimeMS: value,
+			Type:        jhlog.EventHTTP,
+			TimeMS:      value,
+			Attribution: attributionForTest(0, 2, 0, 0),
 			HTTP: &jhlog.HTTPEvent{
-				OwnerID:    2,
-				RouteID:    1,
+				RouteRef:   jhlog.LocalSymbol(1),
 				DurationMS: value,
 				Status:     jhlog.Status2xx,
 			},
@@ -951,8 +1719,8 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 			Type:   jhlog.EventGauge,
 			TimeMS: value,
 			Metric: &jhlog.MetricEvent{
-				MetricID: 3,
-				Value:    value,
+				MetricRef: jhlog.LocalSymbol(3),
+				Value:     value,
 			},
 		}); err != nil {
 			t.Fatalf("WriteEvent(gauge %d) error = %v", i, err)
@@ -973,17 +1741,17 @@ func TestInspectFilesBoundsAggregateSamplesButKeepsCounts(t *testing.T) {
 		t.Fatalf("Routes = %+v, want one route", summary.Routes)
 	}
 	route := summary.Routes[0]
-	if route.Count != total || route.MaxMS != total || route.P95MS == 0 {
-		t.Fatalf("route stats lost exact count/max or percentile: %+v", route)
+	expectedP50 := uint64((total*50 + 99) / 100)
+	expectedP95 := uint64((total*95 + 99) / 100)
+	if route.Count != total || route.MaxMS != total ||
+		route.P50MS != expectedP50 || route.P95MS != expectedP95 {
+		t.Fatalf("route stats are not exact: %+v", route)
 	}
-	if !route.P95Approximate || route.Sampled != maxAggregateSamplesPerSignal {
-		t.Fatalf("route approximation was not marked: %+v", route)
+	if summary.HTTPP95MS != expectedP95 {
+		t.Fatalf("global HTTP p95 is not exact: %d", summary.HTTPP95MS)
 	}
-	if !summary.HTTPP95Approximate {
-		t.Fatalf("HTTP p95 approximation was not marked")
-	}
-	if !warningsContain(summary.Warnings, "reservoir-сэмплу") {
-		t.Fatalf("expected reservoir warning, got %+v", summary.Warnings)
+	if len(summary.Flows) != 1 || summary.Flows[0].HTTPP95MS != expectedP95 {
+		t.Fatalf("flow HTTP p95 is not exact: %+v", summary.Flows)
 	}
 	if len(summary.Gauges) != 1 {
 		t.Fatalf("Gauges = %+v, want one gauge", summary.Gauges)
@@ -1006,7 +1774,8 @@ func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 2, Value: "CheckoutPresenter.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 3, Value: "checkout.open"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 4, Value: "render_list"}},
-		{Type: jhlog.EventFlow, TimeMS: 1, Attribution: attributionForTest(1, 2, 3, 4), Flow: &jhlog.FlowEvent{ScreenID: 1, OwnerID: 2, FlowID: 3, StepID: 4}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 5, Value: "test"}},
+		{Type: jhlog.EventLogSpam, TimeMS: 1, Attribution: attributionForTest(1, 2, 3, 4), LogSpam: &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(5), Level: 2, Count: 1}},
 	}
 	for _, event := range firstEvents {
 		if err := firstWriter.WriteEvent(event); err != nil {
@@ -1024,7 +1793,7 @@ func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 	}
 	secondEvents := []jhlog.Event{
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 1, Value: "GET /feed"}},
-		{Type: jhlog.EventHTTP, TimeMS: 1, HTTP: &jhlog.HTTPEvent{RouteID: 1, DurationMS: 120, Status: jhlog.Status2xx}},
+		{Type: jhlog.EventHTTP, TimeMS: 1, HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(1), DurationMS: 120, Status: jhlog.Status2xx}},
 	}
 	for _, event := range secondEvents {
 		if err := secondWriter.WriteEvent(event); err != nil {
@@ -1040,7 +1809,7 @@ func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
 	if len(summary.Flows) != 2 {
-		t.Fatalf("Flows = %+v, want a semantic flow transition and an unattributed HTTP flow", summary.Flows)
+		t.Fatalf("Flows = %+v, want an attributed log event and an unattributed HTTP flow", summary.Flows)
 	}
 	var httpFlow *FlowStats
 	for index := range summary.Flows {
@@ -1158,59 +1927,6 @@ func TestInspectFilesExposesOpenTailWithoutCorruptionWarning(t *testing.T) {
 	}
 }
 
-func TestLegacyProblemWindowsAreDeduplicatedPerLog(t *testing.T) {
-	dict := map[uint64]string{
-		1: "FeedScreen",
-		2: "FeedOwner",
-		3: "feed.open",
-		4: "render",
-		5: "main_thread_stall",
-	}
-	context := attributionForTest(1, 2, 3, 4)
-	legacy := jhlog.Event{
-		Type:        jhlog.EventProblem,
-		TimeMS:      20,
-		Attribution: context,
-		Problem: &jhlog.ProblemEvent{
-			ScreenID: 1,
-			OwnerID:  2,
-			FlowID:   3,
-			StepID:   4,
-			KindID:   5,
-			WindowMS: 5_000,
-			Count:    7,
-			MaxMS:    80,
-		},
-	}
-	logs := []jhlog.Log{
-		{
-			Dict: dict,
-			Events: []jhlog.Event{
-				{
-					Type:        jhlog.EventStall,
-					TimeMS:      10,
-					Attribution: context,
-					Stall:       &jhlog.StallEvent{OwnerID: 2, DurationMS: 80},
-				},
-				legacy,
-			},
-		},
-		{
-			Dict:   dict,
-			Events: []jhlog.Event{legacy},
-		},
-	}
-
-	summary := inspectLogsForTest("legacy problem dedup", logs)
-	if len(summary.ProblemWindows) != 1 {
-		t.Fatalf("problem windows = %+v", summary.ProblemWindows)
-	}
-	problem := summary.ProblemWindows[0]
-	if problem.Kind != "main_thread_stall" || problem.Count != 8 || problem.Windows != 2 || problem.MaxMS != 80 {
-		t.Fatalf("problem window = %+v, want canonical count 1 plus unmatched legacy count 7", problem)
-	}
-}
-
 func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -1222,7 +1938,8 @@ func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
 		{name: "size limit", reason: jhlog.SegmentEndSizeLimit, wantReason: "size_limit", warningFragment: "достиг лимита размера"},
 		{name: "io error", reason: jhlog.SegmentEndIOError, wantReason: "io_error", warningFragment: "из-за ошибки ввода-вывода"},
 		{name: "shutdown", reason: jhlog.SegmentEndShutdown, wantReason: "shutdown"},
-		{name: "future", reason: 99, wantReason: "unknown(99)", warningFragment: "неизвестной причиной 99"},
+		{name: "rotation", reason: jhlog.SegmentEndRotation, wantReason: "rotation"},
+		{name: "storage budget", reason: jhlog.SegmentEndStorageBudget, wantReason: "storage_budget_exhausted", warningFragment: "storage_budget_exhausted"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -1260,6 +1977,29 @@ func TestInspectFilesExplainsSegmentEndReasons(t *testing.T) {
 	}
 }
 
+func TestCollectionQualityReportsWholeRunArchiveEvictionAsNotice(t *testing.T) {
+	collector := newCollector("archive eviction", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityArchiveEvictedRunTotal:     2,
+		jhlog.QualityArchiveEvictedSegmentTotal: 7,
+		jhlog.QualityArchiveEvictedBytesTotal:   12_345,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "current-run.jhlog", Header: collectionTestHeader(42, 0),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd: &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.ArchiveEvictedRuns != 2 || got.ArchiveEvictedSegments != 7 || got.ArchiveEvictedBytes != 12_345 {
+		t.Fatalf("archive eviction evidence = %+v", got)
+	}
+	if !warningsContain(got.Notices, "удалено 2 завершённых запусков") || warningsContain(got.Reasons, "циклическое хранение") {
+		t.Fatalf("archive eviction notices=%+v reasons=%+v", got.Notices, got.Reasons)
+	}
+}
+
 func writeJhlogWithEndReason(t *testing.T, path string, reason jhlog.SegmentEndReason) {
 	t.Helper()
 	var output bytes.Buffer
@@ -1294,12 +2034,12 @@ func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 10, Value: "FeedLogger.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 11, Value: "CheckoutLogger.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 12, Value: "main_thread_stall"}},
-		{Type: jhlog.EventLogSpam, TimeMS: 1, LogSpam: &jhlog.LogSpamEvent{ScreenID: 1, OwnerID: 3, FlowID: 7, StepID: 9, SourceID: 10, Level: 5, Count: 3}},
-		{Type: jhlog.EventLogSpam, TimeMS: 2, LogSpam: &jhlog.LogSpamEvent{ScreenID: 2, OwnerID: 4, FlowID: 8, StepID: 9, SourceID: 11, Level: 5, Count: 5}},
-		{Type: jhlog.EventProblem, TimeMS: 3, Problem: &jhlog.ProblemEvent{ScreenID: 1, OwnerID: 3, FlowID: 7, StepID: 9, KindID: 12, WindowMS: 5000, Count: 2, MaxMS: 80}},
-		{Type: jhlog.EventProblem, TimeMS: 4, Problem: &jhlog.ProblemEvent{ScreenID: 2, OwnerID: 4, FlowID: 8, StepID: 9, KindID: 12, WindowMS: 5000, Count: 4, MaxMS: 120}},
-		{Type: jhlog.EventRuntimeCall, TimeMS: 5, RuntimeCall: &jhlog.RuntimeCallEvent{ScreenID: 1, CallerID: 3, FlowID: 7, StepID: 9, CalleeID: 5, Count: 1, TotalMS: 20, MaxMS: 20}},
-		{Type: jhlog.EventRuntimeCall, TimeMS: 6, RuntimeCall: &jhlog.RuntimeCallEvent{ScreenID: 2, CallerID: 4, FlowID: 8, StepID: 9, CalleeID: 6, Count: 1, TotalMS: 30, MaxMS: 30}},
+		{Type: jhlog.EventLogSpam, TimeMS: 1, Attribution: attributionForTest(1, 3, 7, 9), LogSpam: &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(10), Level: 5, Count: 3}},
+		{Type: jhlog.EventLogSpam, TimeMS: 2, Attribution: attributionForTest(2, 4, 8, 9), LogSpam: &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(11), Level: 5, Count: 5}},
+		{Type: jhlog.EventProblem, TimeMS: 3, Attribution: attributionForTest(1, 3, 7, 9), Problem: &jhlog.ProblemEvent{KindRef: jhlog.LocalSymbol(12), WindowMS: 5000, Count: 2, MaxMS: 80}},
+		{Type: jhlog.EventProblem, TimeMS: 4, Attribution: attributionForTest(2, 4, 8, 9), Problem: &jhlog.ProblemEvent{KindRef: jhlog.LocalSymbol(12), WindowMS: 5000, Count: 4, MaxMS: 120}},
+		{Type: jhlog.EventRuntimeCall, TimeMS: 5, Attribution: attributionForTest(1, 3, 7, 9), RuntimeCall: &jhlog.RuntimeCallEvent{CalleeRef: jhlog.LocalSymbol(5), Count: 1, TotalMS: 20, MaxMS: 20}},
+		{Type: jhlog.EventRuntimeCall, TimeMS: 6, Attribution: attributionForTest(2, 4, 8, 9), RuntimeCall: &jhlog.RuntimeCallEvent{CalleeRef: jhlog.LocalSymbol(6), Count: 1, TotalMS: 30, MaxMS: 30}},
 	}
 	for _, event := range events {
 		if err := writer.WriteEvent(event); err != nil {
@@ -1352,17 +2092,23 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 		Dict: map[uint64]string{
 			1: "jankstats.frame.count",
 			2: "jankstats.frame.duration_ms",
+			3: "ui.frame.source.choreographer",
 		},
 		Events: []jhlog.Event{
-			{Type: jhlog.EventCounter, Metric: &jhlog.MetricEvent{MetricID: 1, Value: 3}},
-			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricID: 2, Value: 18}},
-			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricID: 2, Value: 22}},
+			{Type: jhlog.EventCounter, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(1), Value: 3}},
+			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(2), Value: 18}},
+			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(2), Value: 22}},
+			{Type: jhlog.EventGauge, Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(3), Value: 1}},
 		},
 	}
 
 	summary := inspectLogsForTest("jankstats", []jhlog.Log{log})
 	if len(summary.JankStats) != 2 {
 		t.Fatalf("unexpected jankstats metrics: %+v", summary.JankStats)
+	}
+	metrics := namedValuesByName(summary.JankStats)
+	if _, leaked := metrics["ui.frame.source.choreographer"]; leaked {
+		t.Fatalf("non-JankStats source leaked into JankStats metrics: %+v", summary.JankStats)
 	}
 }
 
@@ -1386,8 +2132,8 @@ func TestInspectResolvesStableCounterMetricThroughOwnerMap(t *testing.T) {
 			{
 				Type: jhlog.EventCounter,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 1,
-					Value:    3,
+					MetricRef: jhlog.LocalSymbol(1),
+					Value:     3,
 				},
 			},
 		},
@@ -1474,48 +2220,48 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 			{
 				Type: jhlog.EventGauge,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 1,
-					Value:    100,
-					Count:    2,
-					Sum:      200,
-					Max:      140,
-					Mode:     jhlog.MetricModeAverage,
+					MetricRef: jhlog.LocalSymbol(1),
+					Value:     100,
+					Count:     2,
+					Sum:       200,
+					Max:       140,
+					Mode:      jhlog.MetricModeAverage,
 				},
 			},
 			{
 				Type: jhlog.EventGauge,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 1,
-					Value:    200,
-					Count:    4,
-					Sum:      800,
-					Max:      260,
-					Mode:     jhlog.MetricModeAverage,
+					MetricRef: jhlog.LocalSymbol(1),
+					Value:     200,
+					Count:     4,
+					Sum:       800,
+					Max:       260,
+					Mode:      jhlog.MetricModeAverage,
 				},
 			},
 			{
 				Type: jhlog.EventGauge,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 2,
-					Value:    2,
+					MetricRef: jhlog.LocalSymbol(2),
+					Value:     2,
 				},
 			},
 			{
 				Type: jhlog.EventGauge,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 2,
-					Value:    5,
+					MetricRef: jhlog.LocalSymbol(2),
+					Value:     5,
 				},
 			},
 			{
 				Type: jhlog.EventGauge,
 				Metric: &jhlog.MetricEvent{
-					MetricID: 3,
-					Value:    50,
-					Count:    2,
-					Sum:      1,
-					Max:      1,
-					Mode:     jhlog.MetricModeBooleanRate,
+					MetricRef: jhlog.LocalSymbol(3),
+					Value:     50,
+					Count:     2,
+					Sum:       1,
+					Max:       1,
+					Mode:      jhlog.MetricModeBooleanRate,
 				},
 			},
 		},
@@ -1791,6 +2537,54 @@ func TestEvaluateGateExplainsCollectionQualityConfidenceCap(t *testing.T) {
 	}
 }
 
+func TestComparisonFailsClosedWhenProcessScopesDiffer(t *testing.T) {
+	baseline := Summary{
+		LogCount: 5, EventCount: 500,
+		CollectionQuality: CollectionQuality{Level: "high", ProcessScope: "main_process_only"},
+	}
+	candidate := Summary{
+		LogCount: 5, EventCount: 500,
+		CollectionQuality: CollectionQuality{Level: "high", ProcessScope: "all_processes"},
+	}
+
+	comparison := Compare(baseline, candidate)
+	if len(comparison.Deltas) == 0 || comparison.Deltas[0].Confidence != "low" {
+		t.Fatalf("scope mismatch confidence = %+v", comparison.Deltas)
+	}
+	if !warningsContain(comparison.QualityWarnings, "Process scope отличается") {
+		t.Fatalf("scope mismatch warnings = %+v", comparison.QualityWarnings)
+	}
+	result := EvaluateGate(comparison, ThresholdConfig{MinConfidence: "high"})
+	if !result.Failed {
+		t.Fatalf("scope mismatch must fail a high-confidence gate: %+v", result)
+	}
+}
+
+func TestComparisonFailsClosedWhenAllowlistFingerprintsDiffer(t *testing.T) {
+	baseline := Summary{
+		LogCount: 5, EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level: "high", ProcessScope: "process_allowlist", AllowedProcessCount: 2,
+			ProcessScopeFingerprint: strings.Repeat("a5", 32),
+		},
+	}
+	candidate := Summary{
+		LogCount: 5, EventCount: 500,
+		CollectionQuality: CollectionQuality{
+			Level: "high", ProcessScope: "process_allowlist", AllowedProcessCount: 2,
+			ProcessScopeFingerprint: strings.Repeat("5a", 32),
+		},
+	}
+
+	comparison := Compare(baseline, candidate)
+	if len(comparison.Deltas) == 0 || comparison.Deltas[0].Confidence != "low" {
+		t.Fatalf("allowlist fingerprint mismatch confidence = %+v", comparison.Deltas)
+	}
+	if !warningsContain(comparison.QualityWarnings, "Process scope отличается") {
+		t.Fatalf("comparison warnings = %+v", comparison.QualityWarnings)
+	}
+}
+
 func TestEvaluateGateFailsOnDirtyCohortsWhenRequired(t *testing.T) {
 	comparison := Compare(
 		Summary{
@@ -1998,6 +2792,48 @@ func TestSignedUint64DeltaFloatDoesNotWrapThroughInt64(t *testing.T) {
 	}
 }
 
+func TestCollectorMergesTypedUIFrameHistogramsAcrossWindows(t *testing.T) {
+	dict := map[uint64]string{1: "Feed"}
+	first := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	first[1], first[8] = 95, 5
+	second := make([]uint64, jhlog.UIFrameHistogramBucketCount)
+	second[5], second[8] = 95, 5
+	summary := inspectLogsForTest("ui", []jhlog.Log{{Dict: dict, Events: []jhlog.Event{
+		{Type: jhlog.EventSession, TimeMS: 1, Session: &jhlog.SessionEvent{CollectorFlags: uint64(jhlog.CollectorFPS | jhlog.CollectorJankStats)}},
+		{Type: jhlog.EventUIWindow, TimeMS: 10_000, Attribution: attributionForTest(1, 0, 0, 0), UIWindow: &jhlog.UIWindowEvent{WindowMS: 10_000, FrameCount: 100, JankCount: 5, Source: jhlog.UIFrameSourceJankStats, FrameDeadlineUS: 16_667, FrameDurationBuckets: first}},
+		{Type: jhlog.EventUIWindow, TimeMS: 20_000, Attribution: attributionForTest(1, 0, 0, 0), UIWindow: &jhlog.UIWindowEvent{WindowMS: 10_000, FrameCount: 100, JankCount: 5, Source: jhlog.UIFrameSourceJankStats, FrameDeadlineUS: 16_667, FrameDurationBuckets: second}},
+	}}})
+	if len(summary.Screens) != 1 {
+		t.Fatalf("screens = %+v", summary.Screens)
+	}
+	screen := summary.Screens[0]
+	if screen.FrameP50MS != 32 || screen.FrameP95MS != 32 || screen.FrameP99MS != 67 ||
+		screen.FrameSource != "jankstats" || screen.FrameDeadlineUS != 16_667 ||
+		screen.FrameDistributionState != "mergeable_histogram_v2" {
+		t.Fatalf("merged screen = %+v", screen)
+	}
+	if summary.CollectorFlagsAll != uint64(jhlog.CollectorFPS|jhlog.CollectorJankStats) {
+		t.Fatalf("collector flags = 0x%x", summary.CollectorFlagsAll)
+	}
+	quality := semanticEvidenceQuality(summary)
+	if quality.Status != EvidenceQualityComplete {
+		t.Fatalf("semantic evidence = %+v", quality)
+	}
+}
+
+func TestRouteBurstAccumulatorKeepsPeakInBoundedState(t *testing.T) {
+	var burst routeBurstAccumulator
+	for index := uint64(0); index < 12; index++ {
+		burst.add(1, 2_000+index)
+	}
+	for second := uint64(3); second < 20; second++ {
+		burst.add(1, second*1_000)
+	}
+	if burst.peak != 12 || burst.peakWindowStartMS != 2_000 || len(burst.buckets) != routeBurstRetainedSeconds || !burst.approximate {
+		t.Fatalf("burst = %+v", burst)
+	}
+}
+
 func warningsContain(warnings []string, fragment string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, fragment) {
@@ -2032,10 +2868,9 @@ func readJhlogForTest(t *testing.T, path string) jhlog.Log {
 	t.Helper()
 
 	log := jhlog.Log{
-		Source:  path,
-		Version: jhlog.FormatVersion,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]jhlog.DictKind{},
+		Source: path,
+		Dict:   map[uint64]string{},
+		Kinds:  map[uint64]jhlog.DictKind{},
 	}
 	result, err := jhlog.StreamFileWithResult(path, func(event jhlog.Event, _ map[uint64]string) error {
 		if event.Dictionary != nil {
@@ -2054,7 +2889,6 @@ func readJhlogForTest(t *testing.T, path string) jhlog.Log {
 	if err != nil {
 		t.Fatalf("StreamFileWithResult(%q) error = %v", path, err)
 	}
-	log.Warnings = result.Warnings
 	log.Result = result
 	return log
 }

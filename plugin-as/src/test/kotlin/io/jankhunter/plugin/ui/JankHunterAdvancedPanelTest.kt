@@ -55,7 +55,6 @@ class JankHunterAdvancedPanelTest : BasePlatformTestCase() {
         assertTrue(options.screen.isBlank())
         assertTrue(options.owner.isBlank())
         assertTrue(options.className.isBlank())
-        assertEquals("modern", options.reportStyle)
         assertFalse(options.presentation)
     }
 

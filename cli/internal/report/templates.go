@@ -2,6 +2,9 @@ package report
 
 import _ "embed"
 
+//go:embed templates/components.tmpl
+var sharedComponentsTemplate string
+
 //go:embed templates/base.css
 var baseCSS string
 
@@ -10,6 +13,9 @@ var modernCSS string
 
 //go:embed templates/report.js
 var reportJS string
+
+//go:embed templates/problem-search.js
+var problemSearchJS string
 
 //go:embed templates/log-growth.css
 var logGrowthCSS string

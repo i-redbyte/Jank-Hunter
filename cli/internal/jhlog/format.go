@@ -1,16 +1,21 @@
 package jhlog
 
-import "fmt"
+import (
+	"encoding/hex"
+	"fmt"
+)
 
-const FormatVersion = 9
-const LegacyFormatVersion8 = 8
-const CurrentFormatMarker = 0x80
-const CurrentFormatMajor = 1
-const CurrentFormatMinor = 0
+const FormatMarker = 0x81
+const FormatMajor = 2
+const FormatMinor = 0
+const FormatPatch = 0
+const FormatVersionString = "2.0.0"
 
-const magicSize = 8
+const magicSize = 11
 
-var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatVersion}
+var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatMarker, FormatMajor, FormatMinor, FormatPatch}
+
+var legacyV1Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 0x80, 1, 0}
 
 const (
 	HeaderSchemaV1 uint64 = 1
@@ -22,10 +27,20 @@ const (
 	FeatureChunkLocalContext     uint64 = 1 << 4
 	FeatureQualityRecords        uint64 = 1 << 5
 	FeatureEmbeddedStableSymbols uint64 = 1 << 6
+	FeatureLogGrowthRecords      uint64 = 1 << 7
+	FeatureExactEventAdmission   uint64 = 1 << 8
+	FeatureProcessScope          uint64 = 1 << 9
+	FeatureColumnarRuntimeCalls  uint64 = 1 << 10
+	FeatureSegmentDigestChain    uint64 = 1 << 11
+	FeatureProcessRoster         uint64 = 1 << 12
 	FeatureGZIPChunks            uint64 = 1 << 0
-	RequiredFeaturesV9                  = FeatureChunkCRCCommit | FeatureLengthDelimited | FeatureSymbolRefs |
-		FeatureProducerMetadata | FeatureChunkLocalContext | FeatureQualityRecords | FeatureEmbeddedStableSymbols
-	OptionalFeaturesV9 = FeatureGZIPChunks
+	RequiredFeatures                    = FeatureChunkCRCCommit | FeatureLengthDelimited | FeatureSymbolRefs |
+		FeatureProducerMetadata | FeatureChunkLocalContext | FeatureQualityRecords | FeatureEmbeddedStableSymbols |
+		FeatureLogGrowthRecords | FeatureExactEventAdmission | FeatureProcessScope | FeatureColumnarRuntimeCalls |
+		FeatureSegmentDigestChain | FeatureProcessRoster
+	BestEffortFeatures      = RequiredFeatures &^ FeatureExactEventAdmission
+	OptionalFeatures        = FeatureGZIPChunks
+	MaxRuntimeCallBlockRows = 128
 )
 
 type ID128 [16]byte
@@ -34,30 +49,58 @@ func (id ID128) IsZero() bool {
 	return id == ID128{}
 }
 
+type ProcessScope uint64
+
+const (
+	ProcessScopeUnknown ProcessScope = iota
+	ProcessScopeAll
+	ProcessScopeMainOnly
+	ProcessScopeAllowlist
+)
+
+func (scope ProcessScope) String() string {
+	switch scope {
+	case ProcessScopeAll:
+		return "all_processes"
+	case ProcessScopeMainOnly:
+		return "main_process_only"
+	case ProcessScopeAllowlist:
+		return "process_allowlist"
+	default:
+		return "unknown"
+	}
+}
+
 type SegmentHeader struct {
-	Schema                  uint64 `json:"schema"`
-	RequiredFeatures        uint64 `json:"required_features"`
-	OptionalFeatures        uint64 `json:"optional_features"`
-	RunID                   ID128  `json:"run_id"`
-	ProcessInstanceID       ID128  `json:"process_instance_id"`
-	SessionID               ID128  `json:"session_id"`
-	SegmentIndex            uint64 `json:"segment_index"`
-	OSPID                   uint64 `json:"os_pid"`
-	PID                     uint64 `json:"-"` // Compatibility alias for OSPID.
-	CollectorStartElapsedUS uint64 `json:"collector_start_elapsed_us"`
-	SegmentStartElapsedUS   uint64 `json:"segment_start_elapsed_us"`
-	SegmentStartUnixMS      uint64 `json:"segment_start_unix_ms"`
-	SegmentStartWallUnixMS  uint64 `json:"-"` // Compatibility alias for SegmentStartUnixMS.
-	IdentitySource          uint64 `json:"identity_source"`
-	ProcessName             string `json:"process_name"`
-	SymbolNamespace         []byte `json:"symbol_namespace,omitempty"`
+	Schema                           uint64       `json:"schema"`
+	RequiredFeatures                 uint64       `json:"required_features"`
+	OptionalFeatures                 uint64       `json:"optional_features"`
+	RunID                            ID128        `json:"run_id"`
+	ProcessInstanceID                ID128        `json:"process_instance_id"`
+	SessionID                        ID128        `json:"session_id"`
+	SegmentIndex                     uint64       `json:"segment_index"`
+	OSPID                            uint64       `json:"os_pid"`
+	CollectorStartElapsedUS          uint64       `json:"collector_start_elapsed_us"`
+	SegmentStartElapsedUS            uint64       `json:"segment_start_elapsed_us"`
+	SegmentStartUnixMS               uint64       `json:"segment_start_unix_ms"`
+	IdentitySource                   uint64       `json:"identity_source"`
+	ProcessName                      string       `json:"process_name"`
+	SymbolNamespace                  []byte       `json:"symbol_namespace,omitempty"`
+	ProcessScope                     ProcessScope `json:"process_scope"`
+	AllowedProcessCount              uint64       `json:"allowed_process_count,omitempty"`
+	ProcessScopeFingerprint          []byte       `json:"process_scope_fingerprint,omitempty"`
+	PreviousSegmentDigest            []byte       `json:"previous_segment_digest,omitempty"`
+	ExpectedProcessCount             uint64       `json:"expected_process_count"`
+	ExpectedProcessFingerprint       []byte       `json:"expected_process_fingerprint,omitempty"`
+	ProcessRosterDeclarationComplete bool         `json:"process_roster_declaration_complete"`
 }
 
 func DefaultSegmentHeader() SegmentHeader {
 	return SegmentHeader{
 		Schema:           HeaderSchemaV1,
-		RequiredFeatures: RequiredFeaturesV9,
-		OptionalFeatures: OptionalFeaturesV9,
+		RequiredFeatures: RequiredFeatures,
+		OptionalFeatures: OptionalFeatures,
+		ProcessScope:     ProcessScopeAll,
 	}
 }
 
@@ -71,41 +114,38 @@ const (
 )
 
 type StreamResult struct {
-	Source            string               `json:"source"`
-	Version           uint8                `json:"version"`
-	FormatMajor       uint8                `json:"format_major,omitempty"`
-	FormatMinor       uint8                `json:"format_minor,omitempty"`
-	Header            SegmentHeader        `json:"header"`
-	Status            SegmentStatus        `json:"status"`
-	Sealed            bool                 `json:"sealed"`
-	TailBytes         uint64               `json:"tail_bytes,omitempty"`
-	CommittedChunks   uint32               `json:"committed_chunks"`
-	TotalRecords      uint64               `json:"total_records"`
-	DataRecords       uint64               `json:"data_records"`
-	DictionaryRecords uint64               `json:"dictionary_records"`
-	ControlRecords    uint64               `json:"control_records"`
-	Events            uint64               `json:"events"` // Known semantic data events delivered to the handler.
-	LatestQuality     *QualitySnapshot     `json:"latest_quality,omitempty"`
-	SegmentEnd        *SegmentEndEvent     `json:"segment_end,omitempty"`
-	Warnings          []string             `json:"warnings,omitempty"`
-	RawRecordBytes    uint64               `json:"raw_record_bytes,omitempty"`
-	StoredChunkBytes  uint64               `json:"stored_chunk_bytes,omitempty"`
-	RecordBytesByType map[EventType]uint64 `json:"record_bytes_by_type,omitempty"`
-	RecordsByType     map[EventType]uint64 `json:"records_by_type,omitempty"`
-	LogGrowth         *LogGrowthProjection `json:"log_growth,omitempty"`
-}
-
-func (result StreamResult) HasSegmentIdentity() bool {
-	return result.Version == FormatVersion ||
-		(result.Version == CurrentFormatMajor && result.FormatMajor == CurrentFormatMajor)
+	Source                   string               `json:"source"`
+	Header                   SegmentHeader        `json:"header"`
+	Status                   SegmentStatus        `json:"status"`
+	Sealed                   bool                 `json:"sealed"`
+	TailBytes                uint64               `json:"tail_bytes,omitempty"`
+	CommittedChunks          uint32               `json:"committed_chunks"`
+	TotalRecords             uint64               `json:"total_records"`
+	DataRecords              uint64               `json:"data_records"`
+	DictionaryRecords        uint64               `json:"dictionary_records"`
+	ControlRecords           uint64               `json:"control_records"`
+	Events                   uint64               `json:"events"` // Semantic data events delivered to the handler.
+	LatestQuality            *QualitySnapshot     `json:"latest_quality,omitempty"`
+	SegmentEnd               *SegmentEndEvent     `json:"segment_end,omitempty"`
+	RawRecordBytes           uint64               `json:"raw_record_bytes,omitempty"`
+	StoredChunkBytes         uint64               `json:"stored_chunk_bytes,omitempty"`
+	RecordBytesByType        map[EventType]uint64 `json:"record_bytes_by_type,omitempty"`
+	RecordsByType            map[EventType]uint64 `json:"records_by_type,omitempty"`
+	RuntimeGraphLogicalCalls uint64               `json:"runtime_graph_logical_calls"`
+	LogGrowth                *LogGrowthProjection `json:"log_growth,omitempty"`
+	SegmentDigest            []byte               `json:"segment_digest,omitempty"`
+	InputBytes               uint64               `json:"input_bytes,omitempty"`
+	LatestDataEventUnixMS    uint64               `json:"latest_data_event_unix_ms,omitempty"`
 }
 
 type LogGrowthProjection struct {
-	Generation   uint64             `json:"generation"`
-	CapturedAtMS uint64             `json:"captured_at_ms"`
-	Sessions     []LogGrowthSession `json:"sessions,omitempty"`
-	Days         []LogGrowthDay     `json:"days,omitempty"`
-	Live         *LogGrowthSession  `json:"live,omitempty"`
+	Generation     uint64             `json:"generation"`
+	LiveGeneration uint64             `json:"live_generation,omitempty"`
+	HasHistory     bool               `json:"has_history,omitempty"`
+	CapturedAtMS   uint64             `json:"captured_at_ms"`
+	Sessions       []LogGrowthSession `json:"sessions,omitempty"`
+	Days           []LogGrowthDay     `json:"days,omitempty"`
+	Live           *LogGrowthSession  `json:"live,omitempty"`
 }
 
 type LogGrowthSession struct {
@@ -116,11 +156,11 @@ type LogGrowthSession struct {
 	ConfiguredLimitBytes uint64 `json:"configured_limit_bytes"`
 	MaximumRetainedBytes uint64 `json:"maximum_retained_bytes"`
 	GeneratedBytes       uint64 `json:"generated_bytes"`
-	OverflowCount        uint64 `json:"overflow_count"`
-	EvictedChunkCount    uint64 `json:"evicted_chunk_count"`
-	EvictedBytes         uint64 `json:"evicted_bytes"`
-	FirstOverflowAtMS    uint64 `json:"first_overflow_at_ms"`
-	LastOverflowAtMS     uint64 `json:"last_overflow_at_ms"`
+	LimitReachedCount    uint64 `json:"limit_reached_count"`
+	SegmentRotationCount uint64 `json:"segment_rotation_count"`
+	ArchiveEvictedBytes  uint64 `json:"archive_evicted_bytes"`
+	FirstLimitReachedMS  uint64 `json:"first_limit_reached_at_ms"`
+	LastLimitReachedMS   uint64 `json:"last_limit_reached_at_ms"`
 	Completed            bool   `json:"completed"`
 	Recovered            bool   `json:"recovered_after_interruption"`
 }
@@ -133,42 +173,48 @@ type LogGrowthDay struct {
 	MaximumRetainedBytes  uint64 `json:"maximum_retained_bytes"`
 	MaximumFillPermille   uint64 `json:"maximum_fill_permille"`
 	SessionsReachingLimit uint64 `json:"sessions_reaching_limit"`
-	OverflowCount         uint64 `json:"overflow_count"`
-	EvictedChunkCount     uint64 `json:"evicted_chunk_count"`
-	EvictedBytes          uint64 `json:"evicted_bytes"`
+	LimitReachedCount     uint64 `json:"limit_reached_count"`
+	SegmentRotationCount  uint64 `json:"segment_rotation_count"`
+	ArchiveEvictedBytes   uint64 `json:"archive_evicted_bytes"`
 }
 
 type EventType uint64
 
 const (
-	EventDictionary      EventType = 1
-	EventSession         EventType = 2
-	EventContext         EventType = 3
-	EventHTTP            EventType = 4
-	EventUIWindow        EventType = 5
-	EventStall           EventType = 6
-	EventMemory          EventType = 7
-	EventRetained        EventType = 8
-	EventCounter         EventType = 9
-	EventGauge           EventType = 10
-	EventFlow            EventType = 11
+	EventDictionary EventType = 1
+	EventSession    EventType = 2
+	EventContext    EventType = 3
+	EventHTTP       EventType = 4
+	EventUIWindow   EventType = 5
+	EventStall      EventType = 6
+	EventMemory     EventType = 7
+	EventRetained   EventType = 8
+	EventCounter    EventType = 9
+	EventGauge      EventType = 10
+	// Event type 11 was an early continuous FLOW_TRANSITION record. It is
+	// intentionally retired: attribution is carried atomically by each useful event.
 	EventLogSpam         EventType = 12
 	EventProblem         EventType = 13
 	EventRuntimeCall     EventType = 14
 	EventQualitySnapshot EventType = 15
 	EventSegmentEnd      EventType = 16
-
-	EventDictionaryDefinition = EventDictionary
-	EventSessionMetadata      = EventSession
-	EventDeviceContext        = EventContext
-	EventFlowTransition       = EventFlow
+	EventLogGrowth       EventType = 17
+	EventProcessExit     EventType = 18
+	EventIO              EventType = 19
 )
 
 // IsSemanticData reports whether a record contributes an application/runtime
 // observation. Dictionary and control records are transport metadata and must
 // not inflate event sample sizes or observed durations.
 func (eventType EventType) IsSemanticData() bool {
-	return eventType >= EventSession && eventType <= EventRuntimeCall
+	switch eventType {
+	case EventSession, EventContext, EventHTTP, EventUIWindow, EventStall, EventMemory,
+		EventRetained, EventCounter, EventGauge, EventLogSpam, EventProblem, EventRuntimeCall,
+		EventProcessExit, EventIO:
+		return true
+	default:
+		return false
+	}
 }
 
 type EnvelopeFlag uint64
@@ -179,12 +225,6 @@ const (
 	EnvelopeHasContext    EnvelopeFlag = 1 << 2
 	EnvelopeSameContext   EnvelopeFlag = 1 << 3
 	EnvelopeHasAttributes EnvelopeFlag = 1 << 4
-
-	EnvelopeFlagHasTime       = EnvelopeHasTime
-	EnvelopeFlagHasThread     = EnvelopeHasThread
-	EnvelopeFlagHasContext    = EnvelopeHasContext
-	EnvelopeFlagSameContext   = EnvelopeSameContext
-	EnvelopeFlagHasAttributes = EnvelopeHasAttributes
 )
 
 type Flag uint64
@@ -204,39 +244,23 @@ const (
 	FlagUIProblem            Flag = 1 << 16
 	FlagHTTPClassified       Flag = 1 << 17
 	FlagUIClassified         Flag = 1 << 18
-
-	// Compatibility aliases. In v9 attribution is encoded in the record envelope,
-	// never in event attributes.
-	FlagHasScreen   Flag = 1 << 10
-	FlagHasOwner    Flag = 1 << 11
-	FlagHasFlow     Flag = 1 << 12
-	FlagHasStep     Flag = 1 << 13
-	FlagSameContext Flag = 1 << 14
 )
 
 const semanticAttributeMask = uint64((1<<10)-1) |
 	uint64(FlagHTTPSlow|FlagUIProblem|FlagHTTPClassified|FlagUIClassified)
 
 type SymbolRef struct {
-	LocalID   uint64 `json:"local_id,omitempty"`
-	StableID  uint64 `json:"stable_id,omitempty"`
-	Stable    bool   `json:"stable,omitempty"`
+	ID        uint64 `json:"id,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
+	Stable    bool   `json:"stable,omitempty"`
 }
 
-func LocalSymbol(id uint64) SymbolRef  { return SymbolRef{LocalID: id} }
-func StableSymbol(id uint64) SymbolRef { return SymbolRef{StableID: id, Stable: true} }
+func LocalSymbol(id uint64) SymbolRef  { return SymbolRef{ID: id} }
+func StableSymbol(id uint64) SymbolRef { return SymbolRef{ID: id, Stable: true} }
 func StableSymbolInNamespace(id uint64, namespace []byte) SymbolRef {
-	return SymbolRef{StableID: id, Stable: true, Namespace: fmt.Sprintf("%x", namespace)}
+	return SymbolRef{ID: id, Stable: true, Namespace: hex.EncodeToString(namespace)}
 }
-func (r SymbolRef) IsUnknown() bool { return !r.Stable && r.LocalID == 0 }
-
-func (r SymbolRef) LegacyID() uint64 {
-	if r.Stable {
-		return 0
-	}
-	return r.LocalID
-}
+func (r SymbolRef) IsUnknown() bool { return !r.Stable && r.ID == 0 }
 
 type ProducerMetadata struct {
 	ElapsedUS uint64 `json:"elapsed_us,omitempty"`
@@ -330,6 +354,78 @@ func (e RetentionEvidence) Effective() RetentionEvidence {
 	return RetentionEvidenceTimeOnly
 }
 
+type CollectorFlag uint64
+
+const (
+	CollectorFPS CollectorFlag = 1 << iota
+	CollectorJankStats
+	CollectorProcessExit
+	CollectorIOTracing
+	CollectorSystemSampler
+	CollectorMainThreadStalls
+	CollectorRetainedObjects
+	CollectorCompose
+	CollectorRoom
+	CollectorWorker
+)
+
+const CollectorKnownMask = CollectorFPS | CollectorJankStats | CollectorProcessExit | CollectorIOTracing |
+	CollectorSystemSampler | CollectorMainThreadStalls | CollectorRetainedObjects | CollectorCompose |
+	CollectorRoom | CollectorWorker
+
+type UIFrameSource uint64
+
+const (
+	UIFrameSourceUnknown UIFrameSource = iota
+	UIFrameSourceJankStats
+	UIFrameSourceChoreographer
+)
+
+// UIFrameHistogramUpperUS is the shared mergeable frame-duration histogram contract. The final
+// bucket is overflow (> the last boundary). Changing these boundaries requires a wire-major bump.
+var UIFrameHistogramUpperUS = [...]uint64{8_000, 12_000, 16_000, 20_000, 24_000, 32_000, 40_000, 50_000, 67_000, 100_000, 250_000, 1_000_000}
+
+const UIFrameHistogramBucketCount = len(UIFrameHistogramUpperUS) + 1
+
+func UIFrameHistogramQuantileMS(buckets []uint64, percentile uint64) uint64 {
+	if percentile > 100 || len(buckets) != UIFrameHistogramBucketCount {
+		return 0
+	}
+	var total uint64
+	for _, count := range buckets {
+		total += count
+	}
+	if total == 0 {
+		return 0
+	}
+	target := ((total-1)*percentile)/100 + 1
+	var seen uint64
+	for index, count := range buckets {
+		seen += count
+		if seen < target {
+			continue
+		}
+		if index < len(UIFrameHistogramUpperUS) {
+			return (UIFrameHistogramUpperUS[index] + 999) / 1_000
+		}
+		return UIFrameHistogramUpperUS[len(UIFrameHistogramUpperUS)-1]/1_000 + 1
+	}
+	return 0
+}
+
+type IOOperationKind uint64
+
+const (
+	IOOperationUnknown IOOperationKind = iota
+	IOOperationFileRead
+	IOOperationFileWrite
+	IOOperationFileSync
+	IOOperationDatabaseRead
+	IOOperationDatabaseWrite
+	IOOperationContentRead
+	IOOperationContentWrite
+)
+
 func (e RetentionEvidence) String() string {
 	switch e.Effective() {
 	case RetentionEvidenceAfterExplicitGC:
@@ -358,43 +454,44 @@ type Event struct {
 	Attribution AttributionContext `json:"attribution,omitempty"`
 	Position    RecordPosition     `json:"position,omitempty"`
 	Source      string             `json:"source,omitempty"`
-	Warnings    []string           `json:"warnings,omitempty"`
+	Dictionary  *DictionaryEntry   `json:"dictionary,omitempty"`
+	Session     *SessionEvent      `json:"session,omitempty"`
+	Context     *ContextEvent      `json:"context,omitempty"`
+	HTTP        *HTTPEvent         `json:"http,omitempty"`
+	UIWindow    *UIWindowEvent     `json:"ui_window,omitempty"`
+	Stall       *StallEvent        `json:"stall,omitempty"`
+	Memory      *MemoryEvent       `json:"memory,omitempty"`
+	Retained    *RetainedEvent     `json:"retained,omitempty"`
+	Metric      *MetricEvent       `json:"metric,omitempty"`
+	LogSpam     *LogSpamEvent      `json:"log_spam,omitempty"`
+	Problem     *ProblemEvent      `json:"problem,omitempty"`
+	RuntimeCall *RuntimeCallEvent  `json:"runtime_call,omitempty"`
+	ProcessExit *ProcessExitEvent  `json:"process_exit,omitempty"`
+	IO          *IOEvent           `json:"io,omitempty"`
+	Quality     *QualitySnapshot   `json:"quality,omitempty"`
+	SegmentEnd  *SegmentEndEvent   `json:"segment_end,omitempty"`
+	LogGrowth   *LogGrowthRecord   `json:"log_growth,omitempty"`
 
-	Dictionary  *DictionaryEntry  `json:"dictionary,omitempty"`
-	Session     *SessionEvent     `json:"session,omitempty"`
-	Context     *ContextEvent     `json:"context,omitempty"`
-	HTTP        *HTTPEvent        `json:"http,omitempty"`
-	UIWindow    *UIWindowEvent    `json:"ui_window,omitempty"`
-	Stall       *StallEvent       `json:"stall,omitempty"`
-	Memory      *MemoryEvent      `json:"memory,omitempty"`
-	Retained    *RetainedEvent    `json:"retained,omitempty"`
-	Metric      *MetricEvent      `json:"metric,omitempty"`
-	Flow        *FlowEvent        `json:"flow,omitempty"`
-	LogSpam     *LogSpamEvent     `json:"log_spam,omitempty"`
-	Problem     *ProblemEvent     `json:"problem,omitempty"`
-	RuntimeCall *RuntimeCallEvent `json:"runtime_call,omitempty"`
-	Quality     *QualitySnapshot  `json:"quality,omitempty"`
-	SegmentEnd  *SegmentEndEvent  `json:"segment_end,omitempty"`
+	// runtimeCalls exists only while one columnar wire record is expanded into semantic events.
+	runtimeCalls []runtimeCallRow
+}
+
+type LogGrowthRecordKind uint64
+
+const (
+	LogGrowthHistory LogGrowthRecordKind = 1
+	LogGrowthLive    LogGrowthRecordKind = 2
+)
+
+type LogGrowthRecord struct {
+	Kind       LogGrowthRecordKind  `json:"kind"`
+	Generation uint64               `json:"generation"`
+	Projection *LogGrowthProjection `json:"projection,omitempty"`
+	Live       *LogGrowthSession    `json:"live,omitempty"`
+	Raw        []byte               `json:"-"`
 }
 
 type SessionEvent struct {
-	AppVersionID     uint64 `json:"app_version_id"`
-	BuildID          uint64 `json:"build_id"`
-	DeviceID         uint64 `json:"device_id"`
-	SDKInt           uint64 `json:"sdk_int"`
-	ProcessID        uint64 `json:"process_id,omitempty"`
-	ProcessName      string `json:"process_name,omitempty"`
-	AndroidReleaseID uint64 `json:"android_release_id,omitempty"`
-	SecurityPatchID  uint64 `json:"security_patch_id,omitempty"`
-	PrimaryABIID     uint64 `json:"primary_abi_id,omitempty"`
-	SupportedABIsID  uint64 `json:"supported_abis_id,omitempty"`
-	ManufacturerID   uint64 `json:"manufacturer_id,omitempty"`
-	BrandID          uint64 `json:"brand_id,omitempty"`
-	HardwareID       uint64 `json:"hardware_id,omitempty"`
-	BoardID          uint64 `json:"board_id,omitempty"`
-	ProductID        uint64 `json:"product_id,omitempty"`
-	DeviceRooted     bool   `json:"device_rooted,omitempty"`
-
 	AppVersionRef     SymbolRef `json:"app_version_ref,omitempty"`
 	BuildRef          SymbolRef `json:"build_ref,omitempty"`
 	DeviceRef         SymbolRef `json:"device_ref,omitempty"`
@@ -407,6 +504,10 @@ type SessionEvent struct {
 	HardwareRef       SymbolRef `json:"hardware_ref,omitempty"`
 	BoardRef          SymbolRef `json:"board_ref,omitempty"`
 	ProductRef        SymbolRef `json:"product_ref,omitempty"`
+	SDKInt            uint64    `json:"sdk_int"`
+	CollectorFlags    uint64    `json:"collector_flags,omitempty"`
+	ProcessName       string    `json:"process_name,omitempty"`
+	DeviceRooted      bool      `json:"device_rooted,omitempty"`
 }
 
 type ContextEvent struct {
@@ -427,9 +528,6 @@ type ContextEvent struct {
 }
 
 type HTTPEvent struct {
-	OwnerID    uint64      `json:"owner_id"`
-	RouteID    uint64      `json:"route_id"`
-	OwnerRef   SymbolRef   `json:"owner_ref,omitempty"`
 	RouteRef   SymbolRef   `json:"route_ref,omitempty"`
 	DurationMS uint64      `json:"duration_ms"`
 	DNSMS      uint64      `json:"dns_ms"`
@@ -441,20 +539,18 @@ type HTTPEvent struct {
 }
 
 type UIWindowEvent struct {
-	ScreenID   uint64    `json:"screen_id"`
-	ScreenRef  SymbolRef `json:"screen_ref,omitempty"`
-	WindowMS   uint64    `json:"window_ms"`
-	FrameCount uint64    `json:"frame_count"`
-	JankCount  uint64    `json:"jank_count"`
-	P50MS      uint64    `json:"p50_ms"`
-	P95MS      uint64    `json:"p95_ms"`
-	P99MS      uint64    `json:"p99_ms"`
+	WindowMS             uint64        `json:"window_ms"`
+	FrameCount           uint64        `json:"frame_count"`
+	JankCount            uint64        `json:"jank_count"`
+	Source               UIFrameSource `json:"source"`
+	FrameDeadlineUS      uint64        `json:"frame_deadline_us"`
+	FrameDurationBuckets []uint64      `json:"frame_duration_buckets"`
+	P50MS                uint64        `json:"derived_p50_ms"`
+	P95MS                uint64        `json:"derived_p95_ms"`
+	P99MS                uint64        `json:"derived_p99_ms"`
 }
 
 type StallEvent struct {
-	OwnerID    uint64    `json:"owner_id"`
-	StackID    uint64    `json:"stack_id"`
-	OwnerRef   SymbolRef `json:"owner_ref,omitempty"`
 	StackRef   SymbolRef `json:"stack_ref,omitempty"`
 	DurationMS uint64    `json:"duration_ms"`
 }
@@ -466,12 +562,6 @@ type MemoryEvent struct {
 }
 
 type RetainedEvent struct {
-	ScreenID  uint64            `json:"screen_id,omitempty"`
-	OwnerID   uint64            `json:"owner_id,omitempty"`
-	FlowID    uint64            `json:"flow_id,omitempty"`
-	StepID    uint64            `json:"step_id,omitempty"`
-	ClassID   uint64            `json:"class_id"`
-	HolderID  uint64            `json:"holder_id,omitempty"`
 	ClassRef  SymbolRef         `json:"class_ref,omitempty"`
 	HolderRef SymbolRef         `json:"holder_ref,omitempty"`
 	AgeMS     uint64            `json:"age_ms"`
@@ -480,7 +570,6 @@ type RetainedEvent struct {
 }
 
 type MetricEvent struct {
-	MetricID  uint64     `json:"metric_id"`
 	MetricRef SymbolRef  `json:"metric_ref,omitempty"`
 	Value     uint64     `json:"value"`
 	Count     uint64     `json:"count,omitempty"`
@@ -489,32 +578,13 @@ type MetricEvent struct {
 	Mode      MetricMode `json:"mode,omitempty"`
 }
 
-type FlowEvent struct {
-	ScreenID   uint64 `json:"screen_id,omitempty"`
-	OwnerID    uint64 `json:"owner_id,omitempty"`
-	FlowID     uint64 `json:"flow_id,omitempty"`
-	StepID     uint64 `json:"step_id,omitempty"`
-	Phase      uint64 `json:"phase,omitempty"`
-	InstanceID uint64 `json:"instance_id,omitempty"`
-}
-
 type LogSpamEvent struct {
-	ScreenID  uint64    `json:"screen_id,omitempty"`
-	OwnerID   uint64    `json:"owner_id,omitempty"`
-	FlowID    uint64    `json:"flow_id,omitempty"`
-	StepID    uint64    `json:"step_id,omitempty"`
-	SourceID  uint64    `json:"source_id"`
 	SourceRef SymbolRef `json:"source_ref,omitempty"`
 	Level     uint64    `json:"level"`
 	Count     uint64    `json:"count"`
 }
 
 type ProblemEvent struct {
-	ScreenID uint64    `json:"screen_id,omitempty"`
-	OwnerID  uint64    `json:"owner_id,omitempty"`
-	FlowID   uint64    `json:"flow_id,omitempty"`
-	StepID   uint64    `json:"step_id,omitempty"`
-	KindID   uint64    `json:"kind_id"`
 	KindRef  SymbolRef `json:"kind_ref,omitempty"`
 	WindowMS uint64    `json:"window_ms"`
 	Count    uint64    `json:"count"`
@@ -522,16 +592,36 @@ type ProblemEvent struct {
 }
 
 type RuntimeCallEvent struct {
-	ScreenID  uint64    `json:"screen_id,omitempty"`
-	CallerID  uint64    `json:"caller_id,omitempty"`
-	FlowID    uint64    `json:"flow_id,omitempty"`
-	StepID    uint64    `json:"step_id,omitempty"`
-	CallerRef SymbolRef `json:"caller_ref,omitempty"`
-	CalleeID  uint64    `json:"callee_id"`
 	CalleeRef SymbolRef `json:"callee_ref,omitempty"`
 	Count     uint64    `json:"count"`
 	TotalMS   uint64    `json:"total_ms"`
 	MaxMS     uint64    `json:"max_ms"`
+}
+
+type ProcessExitEvent struct {
+	Reason          uint64    `json:"reason"`
+	TimestampUnixMS uint64    `json:"timestamp_unix_ms"`
+	Importance      uint64    `json:"importance"`
+	PSSKB           uint64    `json:"pss_kb"`
+	RSSKB           uint64    `json:"rss_kb"`
+	ProcessRef      SymbolRef `json:"process_ref,omitempty"`
+}
+
+type IOEvent struct {
+	Operation  IOOperationKind `json:"operation"`
+	DurationUS uint64          `json:"duration_us"`
+	Bytes      uint64          `json:"bytes,omitempty"`
+}
+
+type runtimeCallRow struct {
+	screen SymbolRef
+	caller SymbolRef
+	flow   SymbolRef
+	step   SymbolRef
+	callee SymbolRef
+	count  uint64
+	total  uint64
+	max    uint64
 }
 
 type QualitySnapshot struct {
@@ -547,6 +637,8 @@ const (
 	SegmentEndSizeLimit
 	SegmentEndIOError
 	SegmentEndShutdown
+	SegmentEndRotation
+	SegmentEndStorageBudget
 )
 
 func (reason SegmentEndReason) String() string {
@@ -559,6 +651,10 @@ func (reason SegmentEndReason) String() string {
 		return "io_error"
 	case SegmentEndShutdown:
 		return "shutdown"
+	case SegmentEndRotation:
+		return "rotation"
+	case SegmentEndStorageBudget:
+		return "storage_budget_exhausted"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint64(reason))
 	}
@@ -571,6 +667,10 @@ type SegmentEndEvent struct {
 	LastQualitySequence    uint64           `json:"last_quality_sequence"`
 }
 
+func (reason SegmentEndReason) supported() bool {
+	return reason >= SegmentEndNormal && reason <= SegmentEndStorageBudget
+}
+
 const (
 	QualityAcceptedEventTotal             uint64 = 1
 	QualityWrittenEventTotal              uint64 = 2
@@ -581,10 +681,8 @@ const (
 	QualityControlInterruptedTotal        uint64 = 7
 	QualityWriterIOErrorTotal             uint64 = 8
 	QualityEventLostAfterIOTotal          uint64 = 9
-	QualityEventLostAfterIORetryTotal            = QualityEventLostAfterIOTotal // Compatibility alias.
 	QualityDictionaryOverflowTotal        uint64 = 10
 	QualityDictionaryValueTruncated       uint64 = 11
-	QualityDictionaryValueTruncatedTotal         = QualityDictionaryValueTruncated
 	QualityOversizedRecordTotal           uint64 = 12
 	QualityCommittedChunkTotal            uint64 = 13
 	QualityFailedChunkTotal               uint64 = 14
@@ -592,38 +690,49 @@ const (
 	QualityCloseTimeoutTotal              uint64 = 16
 	QualityEventLostAfterSizeLimitTotal   uint64 = 17
 	QualityWriterAdmissionContentionTotal uint64 = 18
+	QualityEventLostAfterStorageBudget    uint64 = 19
 
-	QualityMetricCardinalityLoss                uint64 = 0x2000
-	QualityInvalidMetric                        uint64 = 0x2001
-	QualityRuntimeGraphCapacityLoss             uint64 = 0x2002
-	QualityRuntimeStackMismatch                 uint64 = 0x2003
-	QualityLogSpamCardinalityLoss               uint64 = 0x2004
-	QualityHandlerEntryLimit                    uint64 = 0x2005
-	QualityHandlerWrapperLimit                  uint64 = 0x2006
-	QualityLifecycleRegistryLimit               uint64 = 0x2007
-	QualityObjectWatcherLimit                   uint64 = 0x2008
-	QualityJankStatsHandleLimit                 uint64 = 0x2009
-	QualityMetricFlushTimeout                   uint64 = 0x200a
-	QualityRuntimeGraphContentionLoss           uint64 = 0x200b
-	QualityRuntimeGraphBufferCapacityLoss       uint64 = 0x200c
-	QualityRuntimeGraphRegistryCapacityLoss     uint64 = 0x200d
-	QualityRuntimeGraphStaleEpochLoss           uint64 = 0x200e
-	QualityRuntimeGraphShutdownLoss             uint64 = 0x200f
-	QualityRuntimeGraphWriterRejectionLoss      uint64 = 0x2010
-	QualityRuntimeStackCapacityLoss             uint64 = 0x2011
-	QualityMethodCounterContentionLoss          uint64 = 0x2012
-	QualityHandlerContentionBypass              uint64 = 0x2013
-	QualityRuntimeGraphKillSwitch               uint64 = 0x2014
-	QualityRuntimeGraphShadowCapacityLoss       uint64 = 0x2015
-	QualityRuntimeGraphShadowProductionFallback uint64 = 0x2016
-	QualityRuntimeEventBufferCapacityLoss       uint64 = 0x2017
-	QualityRuntimeEventRegistryCapacityLoss     uint64 = 0x2018
-	QualityMethodCounterCardinalityLoss         uint64 = 0x2019
-	QualityRuntimeEventWriterRejectionLoss      uint64 = 0x201a
-	QualityRuntimeGraphInputTotal               uint64 = 0x201b
-	QualityRuntimeGraphEmittedTotal             uint64 = 0x201c
-	QualityRuntimeGraphCircuitBreakerTrip       uint64 = 0x201d
-	QualityRuntimeGraphCircuitBreakerDrop       uint64 = 0x201e
+	QualityMetricCardinalityLoss             uint64 = 0x2000
+	QualityInvalidMetric                     uint64 = 0x2001
+	QualityRuntimeStackMismatch              uint64 = 0x2003
+	QualityLogSpamCardinalityLoss            uint64 = 0x2004
+	QualityHandlerEntryLimit                 uint64 = 0x2005
+	QualityHandlerWrapperLimit               uint64 = 0x2006
+	QualityLifecycleRegistryLimit            uint64 = 0x2007
+	QualityObjectWatcherLimit                uint64 = 0x2008
+	QualityJankStatsHandleLimit              uint64 = 0x2009
+	QualityMetricFlushTimeout                uint64 = 0x200a
+	QualityRuntimeGraphShutdownLoss          uint64 = 0x200f
+	QualityRuntimeGraphWriterRejectionLoss   uint64 = 0x2010
+	QualityHandlerContentionBypass           uint64 = 0x2013
+	QualityRuntimeEventBufferCapacityLoss    uint64 = 0x2017
+	QualityRuntimeEventRegistryCapacityLoss  uint64 = 0x2018
+	QualityMethodCounterCardinalityLoss      uint64 = 0x2019
+	QualityRuntimeEventWriterRejectionLoss   uint64 = 0x201a
+	QualityRuntimeGraphInputTotal            uint64 = 0x201b
+	QualityRuntimeGraphEmittedTotal          uint64 = 0x201c
+	QualityRuntimeGraphBackpressureCount     uint64 = 0x201f
+	QualityRuntimeGraphBackpressureNanos     uint64 = 0x2020
+	QualityWriterBackpressureCount           uint64 = 0x2021
+	QualityWriterBackpressureNanos           uint64 = 0x2022
+	QualityRuntimeEventBackpressureCount     uint64 = 0x2023
+	QualityRuntimeEventBackpressureNanos     uint64 = 0x2024
+	QualityRuntimeGraphDisabled              uint64 = 0x2025
+	QualityRuntimeHookFailureTotal           uint64 = 0x2026
+	QualityArchiveEvictedRunTotal            uint64 = 0x2027
+	QualityArchiveEvictedSegmentTotal        uint64 = 0x2028
+	QualityArchiveEvictedBytesTotal          uint64 = 0x2029
+	QualityRuntimeHookInstrumentationFailure uint64 = 0x202a
+	QualityRuntimeHookAsyncWrapperFailure    uint64 = 0x202b
+	QualityRuntimeHookLifecycleFailure       uint64 = 0x202c
+	QualityRuntimeHookCollectorFailure       uint64 = 0x202d
+	QualityRuntimeHookContextFailure         uint64 = 0x202e
+	QualityRuntimeHookSchedulerFailure       uint64 = 0x202f
+	QualityJankStatsDependencyMissing        uint64 = 0x2030
+	QualityJankStatsInstallFailure           uint64 = 0x2031
+	QualityJankStatsFrameFailure             uint64 = 0x2032
+	QualityJankStatsControlFailure           uint64 = 0x2033
+	QualityRuntimeHookUnclassifiedFailure    uint64 = 0x2034
 )
 
 type QualityLossReason uint64
@@ -632,10 +741,10 @@ const (
 	QualityLossQueueFull           QualityLossReason = 1
 	QualityLossNotAccepting        QualityLossReason = 2
 	QualityLossIOLost              QualityLossReason = 3
-	QualityLossIORetry                               = QualityLossIOLost // Compatibility alias.
 	QualityLossOversized           QualityLossReason = 4
 	QualityLossSizeLimit           QualityLossReason = 5
 	QualityLossAdmissionContention QualityLossReason = 6
+	QualityLossStorageBudget       QualityLossReason = 7
 )
 
 func EventQualityCounterID(eventType EventType, reason QualityLossReason) uint64 {
@@ -680,12 +789,12 @@ func QualityCounterName(id uint64) string {
 		return "event_lost_after_size_limit_total"
 	case QualityWriterAdmissionContentionTotal:
 		return "writer_admission_contention_total"
+	case QualityEventLostAfterStorageBudget:
+		return "event_lost_after_storage_budget_total"
 	case QualityMetricCardinalityLoss:
 		return "metric_cardinality_loss_total"
 	case QualityInvalidMetric:
 		return "invalid_metric_total"
-	case QualityRuntimeGraphCapacityLoss:
-		return "runtime_graph_capacity_loss_total"
 	case QualityRuntimeStackMismatch:
 		return "runtime_stack_mismatch_total"
 	case QualityLogSpamCardinalityLoss:
@@ -702,30 +811,12 @@ func QualityCounterName(id uint64) string {
 		return "jankstats_handle_limit_total"
 	case QualityMetricFlushTimeout:
 		return "metric_flush_timeout_total"
-	case QualityRuntimeGraphContentionLoss:
-		return "runtime_graph_contention_loss_total"
-	case QualityRuntimeGraphBufferCapacityLoss:
-		return "runtime_graph_buffer_capacity_loss_total"
-	case QualityRuntimeGraphRegistryCapacityLoss:
-		return "runtime_graph_registry_capacity_loss_total"
-	case QualityRuntimeGraphStaleEpochLoss:
-		return "runtime_graph_stale_epoch_loss_total"
 	case QualityRuntimeGraphShutdownLoss:
 		return "runtime_graph_shutdown_loss_total"
 	case QualityRuntimeGraphWriterRejectionLoss:
 		return "runtime_graph_writer_rejection_loss_total"
-	case QualityRuntimeStackCapacityLoss:
-		return "runtime_stack_capacity_loss_total"
-	case QualityMethodCounterContentionLoss:
-		return "method_counter_contention_loss_total"
 	case QualityHandlerContentionBypass:
 		return "handler_contention_bypass_total"
-	case QualityRuntimeGraphKillSwitch:
-		return "runtime_graph_kill_switch_total"
-	case QualityRuntimeGraphShadowCapacityLoss:
-		return "runtime_graph_shadow_capacity_loss_total"
-	case QualityRuntimeGraphShadowProductionFallback:
-		return "runtime_graph_shadow_production_fallback_total"
 	case QualityRuntimeEventBufferCapacityLoss:
 		return "runtime_event_buffer_capacity_loss_total"
 	case QualityRuntimeEventRegistryCapacityLoss:
@@ -738,10 +829,50 @@ func QualityCounterName(id uint64) string {
 		return "runtime_graph_input_total"
 	case QualityRuntimeGraphEmittedTotal:
 		return "runtime_graph_emitted_total"
-	case QualityRuntimeGraphCircuitBreakerTrip:
-		return "runtime_graph_circuit_breaker_trip_total"
-	case QualityRuntimeGraphCircuitBreakerDrop:
-		return "runtime_graph_circuit_breaker_drop_total"
+	case QualityRuntimeGraphBackpressureCount:
+		return "runtime_graph_backpressure_count_total"
+	case QualityRuntimeGraphBackpressureNanos:
+		return "runtime_graph_backpressure_nanos_total"
+	case QualityWriterBackpressureCount:
+		return "writer_backpressure_count_total"
+	case QualityWriterBackpressureNanos:
+		return "writer_backpressure_nanos_total"
+	case QualityRuntimeEventBackpressureCount:
+		return "runtime_event_backpressure_count_total"
+	case QualityRuntimeEventBackpressureNanos:
+		return "runtime_event_backpressure_nanos_total"
+	case QualityRuntimeGraphDisabled:
+		return "runtime_graph_disabled_total"
+	case QualityRuntimeHookFailureTotal:
+		return "runtime_hook_failure_total"
+	case QualityArchiveEvictedRunTotal:
+		return "archive_evicted_run_total"
+	case QualityArchiveEvictedSegmentTotal:
+		return "archive_evicted_segment_total"
+	case QualityArchiveEvictedBytesTotal:
+		return "archive_evicted_bytes_total"
+	case QualityRuntimeHookInstrumentationFailure:
+		return "runtime_hook_instrumentation_failure_total"
+	case QualityRuntimeHookAsyncWrapperFailure:
+		return "runtime_hook_async_wrapper_failure_total"
+	case QualityRuntimeHookLifecycleFailure:
+		return "runtime_hook_lifecycle_failure_total"
+	case QualityRuntimeHookCollectorFailure:
+		return "runtime_hook_collector_failure_total"
+	case QualityRuntimeHookContextFailure:
+		return "runtime_hook_context_failure_total"
+	case QualityRuntimeHookSchedulerFailure:
+		return "runtime_hook_scheduler_failure_total"
+	case QualityJankStatsDependencyMissing:
+		return "jankstats_dependency_missing_total"
+	case QualityJankStatsInstallFailure:
+		return "jankstats_install_failure_total"
+	case QualityJankStatsFrameFailure:
+		return "jankstats_frame_failure_total"
+	case QualityJankStatsControlFailure:
+		return "jankstats_control_failure_total"
+	case QualityRuntimeHookUnclassifiedFailure:
+		return "runtime_hook_unclassified_failure_total"
 	}
 	if id >= 0x1000 && id < 0x2000 {
 		return fmt.Sprintf("event_%d_reason_%d_total", (id-0x1000)/16, (id-0x1000)%16)
@@ -749,14 +880,69 @@ func QualityCounterName(id uint64) string {
 	return fmt.Sprintf("quality_%d", id)
 }
 
+func IsKnownQualityCounter(id uint64) bool {
+	if id >= QualityAcceptedEventTotal && id <= QualityEventLostAfterStorageBudget {
+		return true
+	}
+	switch id {
+	case QualityMetricCardinalityLoss,
+		QualityInvalidMetric,
+		QualityRuntimeStackMismatch,
+		QualityLogSpamCardinalityLoss,
+		QualityHandlerEntryLimit,
+		QualityHandlerWrapperLimit,
+		QualityLifecycleRegistryLimit,
+		QualityObjectWatcherLimit,
+		QualityJankStatsHandleLimit,
+		QualityMetricFlushTimeout,
+		QualityRuntimeGraphShutdownLoss,
+		QualityRuntimeGraphWriterRejectionLoss,
+		QualityHandlerContentionBypass,
+		QualityRuntimeEventBufferCapacityLoss,
+		QualityRuntimeEventRegistryCapacityLoss,
+		QualityMethodCounterCardinalityLoss,
+		QualityRuntimeEventWriterRejectionLoss,
+		QualityRuntimeGraphInputTotal,
+		QualityRuntimeGraphEmittedTotal,
+		QualityRuntimeGraphBackpressureCount,
+		QualityRuntimeGraphBackpressureNanos,
+		QualityWriterBackpressureCount,
+		QualityWriterBackpressureNanos,
+		QualityRuntimeEventBackpressureCount,
+		QualityRuntimeEventBackpressureNanos,
+		QualityRuntimeGraphDisabled,
+		QualityRuntimeHookFailureTotal,
+		QualityArchiveEvictedRunTotal,
+		QualityArchiveEvictedSegmentTotal,
+		QualityArchiveEvictedBytesTotal,
+		QualityRuntimeHookInstrumentationFailure,
+		QualityRuntimeHookAsyncWrapperFailure,
+		QualityRuntimeHookLifecycleFailure,
+		QualityRuntimeHookCollectorFailure,
+		QualityRuntimeHookContextFailure,
+		QualityRuntimeHookSchedulerFailure,
+		QualityJankStatsDependencyMissing,
+		QualityJankStatsInstallFailure,
+		QualityJankStatsFrameFailure,
+		QualityJankStatsControlFailure,
+		QualityRuntimeHookUnclassifiedFailure:
+		return true
+	}
+	if id < 0x1000 || id >= 0x2000 {
+		return false
+	}
+	eventType := EventType((id - 0x1000) / 16)
+	reason := QualityLossReason((id - 0x1000) % 16)
+	return eventType >= EventDictionary && eventType <= EventIO &&
+		reason >= QualityLossQueueFull && reason <= QualityLossStorageBudget
+}
+
 type Log struct {
-	Source   string
-	Version  uint8
-	Events   []Event
-	Dict     map[uint64]string
-	Kinds    map[uint64]DictKind
-	Warnings []string
-	Result   StreamResult
+	Source string
+	Events []Event
+	Dict   map[uint64]string
+	Kinds  map[uint64]DictKind
+	Result StreamResult
 }
 
 func NetworkName(n NetworkKind) string {
@@ -776,24 +962,20 @@ func NetworkName(n NetworkKind) string {
 	}
 }
 
-func Resolve(dict map[uint64]string, id uint64) string {
-	return ResolveSymbol(dict, LocalSymbol(id))
-}
-
 func ResolveSymbol(dict map[uint64]string, ref SymbolRef) string {
 	if ref.Stable {
 		if ref.Namespace != "" {
-			return fmt.Sprintf("stable:%s:0x%016x", ref.Namespace, ref.StableID)
+			return fmt.Sprintf("stable:%s:0x%016x", ref.Namespace, ref.ID)
 		}
-		return fmt.Sprintf("stable:0x%016x", ref.StableID)
+		return fmt.Sprintf("stable:0x%016x", ref.ID)
 	}
-	if ref.LocalID == 0 {
+	if ref.ID == 0 {
 		return "unknown"
 	}
-	if value, ok := dict[ref.LocalID]; ok && value != "" {
+	if value, ok := dict[ref.ID]; ok && value != "" {
 		return value
 	}
-	return "id:" + formatUint(ref.LocalID)
+	return "id:" + formatUint(ref.ID)
 }
 
 func formatUint(v uint64) string {

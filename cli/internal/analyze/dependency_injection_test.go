@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,6 +47,40 @@ func TestLoadDependencyInjectionCatalogAndBuildReport(t *testing.T) {
 	}
 	if len(report.Edges) != 1 || !report.Edges[0].ConsumerObserved {
 		t.Fatalf("report edges = %+v", report.Edges)
+	}
+}
+
+func TestBuildDependencyInjectionReportRetainsEveryCatalogEntry(t *testing.T) {
+	const classCount = 501
+	const edgeCount = 2_001
+	catalog := &DependencyInjectionCatalog{
+		Available: true,
+		Classes:   make([]DependencyInjectionClass, classCount),
+		Edges:     make([]DependencyInjectionEdge, edgeCount),
+	}
+	for index := range catalog.Classes {
+		catalog.Classes[index] = DependencyInjectionClass{
+			Name:      fmt.Sprintf("com.app.Class%04d", index),
+			Framework: "hilt",
+		}
+	}
+	for index := range catalog.Edges {
+		catalog.Edges[index] = DependencyInjectionEdge{
+			Consumer:      fmt.Sprintf("com.app.Consumer%04d", index),
+			Dependency:    fmt.Sprintf("com.app.Dependency%04d", index),
+			Framework:     "hilt",
+			InjectionKind: "constructor",
+			Site:          fmt.Sprintf("site-%04d", index),
+			Resolution:    "declared",
+		}
+	}
+
+	report := BuildDependencyInjectionReport(catalog, Summary{})
+	if got := len(report.Classes); got != classCount {
+		t.Fatalf("DI report classes = %d, want %d", got, classCount)
+	}
+	if got := len(report.Edges); got != edgeCount {
+		t.Fatalf("DI report edges = %d, want %d", got, edgeCount)
 	}
 }
 

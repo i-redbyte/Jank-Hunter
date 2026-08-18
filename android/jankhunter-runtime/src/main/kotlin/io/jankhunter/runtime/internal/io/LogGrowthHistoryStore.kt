@@ -3,11 +3,17 @@ package io.jankhunter.runtime.internal.io
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.security.MessageDigest
 
 internal class LogGrowthHistoryStore(
     directory: File,
+    processScope: String? = null,
 ) {
-    private val file = File(directory, FILE_NAME)
+    private val file = File(directory, fileName(processScope))
+
+    init {
+        if (processScope != null) File(directory, FILE_NAME).delete()
+    }
 
     fun load(): LogGrowthHistoryState {
         if (!file.isFile) return LogGrowthHistoryState.EMPTY
@@ -99,20 +105,29 @@ internal class LogGrowthHistoryStore(
 
     private fun readState(access: RandomAccessFile): LogGrowthHistoryState {
         if (!hasPrefix(access)) return LogGrowthHistoryState.EMPTY
-        val superblock = listOfNotNull(
-            decodeSuperblock(readAt(access, SUPERBLOCK_A_OFFSET, SUPERBLOCK_BYTES)),
-            decodeSuperblock(readAt(access, SUPERBLOCK_B_OFFSET, SUPERBLOCK_BYTES)),
-        ).maxByOrNull(Superblock::generation) ?: return LogGrowthHistoryState.EMPTY
+        val superblockRaw = ByteArray(SUPERBLOCK_BYTES)
+        readAt(access, SUPERBLOCK_A_OFFSET, superblockRaw)
+        val firstSuperblock = decodeSuperblock(superblockRaw)
+        readAt(access, SUPERBLOCK_B_OFFSET, superblockRaw)
+        val secondSuperblock = decodeSuperblock(superblockRaw)
+        val superblock = when {
+            firstSuperblock == null -> secondSuperblock
+            secondSuperblock == null -> firstSuperblock
+            secondSuperblock.generation > firstSuperblock.generation -> secondSuperblock
+            else -> firstSuperblock
+        } ?: return LogGrowthHistoryState.EMPTY
 
         val sessionFirst = superblock.nextSessionSequence - superblock.sessionCount
         val sessions = ArrayList<LogGrowthSessionFact>(superblock.sessionCount.toInt())
+        val sessionRaw = ByteArray(SESSION_RECORD_BYTES)
         for (sequence in sessionFirst until superblock.nextSessionSequence) {
-            readSession(access, sequence, superblock.generation)?.let(sessions::add)
+            readSession(access, sequence, superblock.generation, sessionRaw)?.let(sessions::add)
         }
         val dayFirst = superblock.nextDaySequence - superblock.dayCount
         val days = ArrayList<LogGrowthDayFact>(superblock.dayCount.toInt())
+        val dayRaw = ByteArray(DAY_RECORD_BYTES)
         for (sequence in dayFirst until superblock.nextDaySequence) {
-            readDay(access, sequence, superblock.generation)?.let(days::add)
+            readDay(access, sequence, superblock.generation, dayRaw)?.let(days::add)
         }
         return LogGrowthHistoryState(
             generation = superblock.generation,
@@ -128,38 +143,63 @@ internal class LogGrowthHistoryStore(
         access: RandomAccessFile,
         sequence: Long,
         maximumGeneration: Long,
+        raw: ByteArray,
     ): LogGrowthSessionFact? {
         val base = sessionOffset(sequence)
-        return listOfNotNull(
-            decodeSession(readAt(access, base, SESSION_RECORD_BYTES)),
-            decodeSession(readAt(access, base + SESSION_RECORD_BYTES, SESSION_RECORD_BYTES)),
-        ).filter { it.sequence == sequence && it.commitGeneration <= maximumGeneration }
-            .maxByOrNull(LogGrowthSessionFact::commitGeneration)
+        readAt(access, base, raw)
+        val first = decodeSession(raw)
+        readAt(access, base + SESSION_RECORD_BYTES, raw)
+        val second = decodeSession(raw)
+        return newestValidRecord(first, second, sequence, maximumGeneration)
     }
 
     private fun readDay(
         access: RandomAccessFile,
         sequence: Long,
         maximumGeneration: Long,
+        raw: ByteArray,
     ): LogGrowthDayFact? {
         val base = dayOffset(sequence)
-        return listOfNotNull(
-            decodeDay(readAt(access, base, DAY_RECORD_BYTES)),
-            decodeDay(readAt(access, base + DAY_RECORD_BYTES, DAY_RECORD_BYTES)),
-        ).filter { it.sequence == sequence && it.commitGeneration <= maximumGeneration }
-            .maxByOrNull(LogGrowthDayFact::commitGeneration)
+        readAt(access, base, raw)
+        val first = decodeDay(raw)
+        readAt(access, base + DAY_RECORD_BYTES, raw)
+        val second = decodeDay(raw)
+        return newestValidRecord(first, second, sequence, maximumGeneration)
     }
 
     private fun readActive(access: RandomAccessFile): ActiveLogGrowthFact? {
-        val records = activeRecords(access)
-        val newest = records.maxByOrNull(ActiveRecord::generation) ?: return null
-        return newest.fact
+        return newestActiveRecord(access)?.fact
     }
 
-    private fun activeRecords(access: RandomAccessFile): List<ActiveRecord> = listOfNotNull(
-        decodeActive(readAt(access, ACTIVE_A_OFFSET, ACTIVE_RECORD_BYTES), 0),
-        decodeActive(readAt(access, ACTIVE_B_OFFSET, ACTIVE_RECORD_BYTES), 1),
-    )
+    private fun newestActiveRecord(access: RandomAccessFile): ActiveRecord? {
+        val raw = ByteArray(ACTIVE_RECORD_BYTES)
+        readAt(access, ACTIVE_A_OFFSET, raw)
+        val first = decodeActive(raw, 0)
+        readAt(access, ACTIVE_B_OFFSET, raw)
+        val second = decodeActive(raw, 1)
+        return when {
+            first == null -> second
+            second == null -> first
+            second.generation > first.generation -> second
+            else -> first
+        }
+    }
+
+    private fun <T : LogGrowthSequencedRecord> newestValidRecord(
+        first: T?,
+        second: T?,
+        sequence: Long,
+        maximumGeneration: Long,
+    ): T? {
+        val validFirst = first?.takeIf { it.sequence == sequence && it.commitGeneration <= maximumGeneration }
+        val validSecond = second?.takeIf { it.sequence == sequence && it.commitGeneration <= maximumGeneration }
+        return when {
+            validFirst == null -> validSecond
+            validSecond == null -> validFirst
+            validSecond.commitGeneration > validFirst.commitGeneration -> validSecond
+            else -> validFirst
+        }
+    }
 
     private fun writeSession(
         access: RandomAccessFile,
@@ -172,8 +212,11 @@ internal class LogGrowthHistoryStore(
         } else {
             -1L
         }
-        val first = decodeSession(readAt(access, base, SESSION_RECORD_BYTES))
-        val second = decodeSession(readAt(access, base + SESSION_RECORD_BYTES, SESSION_RECORD_BYTES))
+        val raw = ByteArray(SESSION_RECORD_BYTES)
+        readAt(access, base, raw)
+        val first = decodeSession(raw)
+        readAt(access, base + SESSION_RECORD_BYTES, raw)
+        val second = decodeSession(raw)
         val slot = protectedAlternateSlot(first, second, protectedSequence, state.generation)
         writeAt(access, base + slot * SESSION_RECORD_BYTES, encodeSession(session))
     }
@@ -190,8 +233,11 @@ internal class LogGrowthHistoryStore(
         } else {
             -1L
         }
-        val first = decodeDay(readAt(access, base, DAY_RECORD_BYTES))
-        val second = decodeDay(readAt(access, base + DAY_RECORD_BYTES, DAY_RECORD_BYTES))
+        val raw = ByteArray(DAY_RECORD_BYTES)
+        readAt(access, base, raw)
+        val first = decodeDay(raw)
+        readAt(access, base + DAY_RECORD_BYTES, raw)
+        val second = decodeDay(raw)
         val slot = protectedAlternateSlot(first, second, protectedSequence, state.generation)
         writeAt(access, base + slot * DAY_RECORD_BYTES, encodeDay(day))
     }
@@ -217,7 +263,7 @@ internal class LogGrowthHistoryStore(
         state: LogGrowthHistoryState,
         active: ActiveLogGrowthFact?,
     ): LogGrowthHistoryState {
-        val previous = activeRecords(access).maxByOrNull(ActiveRecord::generation)
+        val previous = newestActiveRecord(access)
         val generation = maxOf(previous?.generation ?: 0L, state.active?.generation ?: 0L) + 1L
         val slot = if (previous?.slot == 0) 1 else 0
         val next = active?.copy(generation = generation)
@@ -253,11 +299,20 @@ internal class LogGrowthHistoryStore(
             maximumFillPermille = maxOf(previous?.maximumFillPermille ?: 0L, fillPermille),
             sessionsReachingLimit = saturatedAdd(
                 previous?.sessionsReachingLimit ?: 0L,
-                if (session.overflowCount > 0L) 1L else 0L,
+                if (session.limitReachedCount > 0L) 1L else 0L,
             ),
-            overflowCount = saturatedAdd(previous?.overflowCount ?: 0L, session.overflowCount),
-            evictedChunkCount = saturatedAdd(previous?.evictedChunkCount ?: 0L, session.evictedChunkCount),
-            evictedBytes = saturatedAdd(previous?.evictedBytes ?: 0L, session.evictedBytes),
+            limitReachedCount = saturatedAdd(
+                previous?.limitReachedCount ?: 0L,
+                session.limitReachedCount,
+            ),
+            segmentRotationCount = saturatedAdd(
+                previous?.segmentRotationCount ?: 0L,
+                session.segmentRotationCount,
+            ),
+            archiveEvictedBytes = saturatedAdd(
+                previous?.archiveEvictedBytes ?: 0L,
+                session.archiveEvictedBytes,
+            ),
         )
     }
 
@@ -302,19 +357,16 @@ internal class LogGrowthHistoryStore(
         putUInt64Le(raw, 24, session.idHigh)
         putUInt64Le(raw, 32, session.idLow)
         putUInt32Le(raw, 40, session.dayKey.toLong())
-        val values = longArrayOf(
-            session.startedAtMs,
-            session.endedAtMs,
-            session.configuredLimitBytes,
-            session.maximumRetainedBytes,
-            session.generatedBytes,
-            session.overflowCount,
-            session.evictedChunkCount,
-            session.evictedBytes,
-            session.firstOverflowAtMs,
-            session.lastOverflowAtMs,
-        )
-        values.forEachIndexed { index, value -> putUInt64Le(raw, 48 + index * Long.SIZE_BYTES, value) }
+        putUInt64Le(raw, 48, session.startedAtMs)
+        putUInt64Le(raw, 56, session.endedAtMs)
+        putUInt64Le(raw, 64, session.configuredLimitBytes)
+        putUInt64Le(raw, 72, session.maximumRetainedBytes)
+        putUInt64Le(raw, 80, session.generatedBytes)
+        putUInt64Le(raw, 88, session.limitReachedCount)
+        putUInt64Le(raw, 96, session.segmentRotationCount)
+        putUInt64Le(raw, 104, session.archiveEvictedBytes)
+        putUInt64Le(raw, 112, session.firstLimitReachedAtMs)
+        putUInt64Le(raw, 120, session.lastLimitReachedAtMs)
         putCrc(raw)
         return raw
     }
@@ -332,11 +384,11 @@ internal class LogGrowthHistoryStore(
             configuredLimitBytes = uint64Le(raw, 64),
             maximumRetainedBytes = uint64Le(raw, 72),
             generatedBytes = uint64Le(raw, 80),
-            overflowCount = uint64Le(raw, 88),
-            evictedChunkCount = uint64Le(raw, 96),
-            evictedBytes = uint64Le(raw, 104),
-            firstOverflowAtMs = uint64Le(raw, 112),
-            lastOverflowAtMs = uint64Le(raw, 120),
+            limitReachedCount = uint64Le(raw, 88),
+            segmentRotationCount = uint64Le(raw, 96),
+            archiveEvictedBytes = uint64Le(raw, 104),
+            firstLimitReachedAtMs = uint64Le(raw, 112),
+            lastLimitReachedAtMs = uint64Le(raw, 120),
             recoveredAfterInterruption = uint16Le(raw, 6) and FLAG_RECOVERED != 0,
         )
     }
@@ -348,18 +400,15 @@ internal class LogGrowthHistoryStore(
         putUInt64Le(raw, 8, day.commitGeneration)
         putUInt64Le(raw, 16, day.sequence)
         putUInt32Le(raw, 24, day.dayKey.toLong())
-        val values = longArrayOf(
-            day.sessionCount,
-            day.totalDurationMs,
-            day.generatedBytes,
-            day.maximumRetainedBytes,
-            day.maximumFillPermille,
-            day.sessionsReachingLimit,
-            day.overflowCount,
-            day.evictedChunkCount,
-            day.evictedBytes,
-        )
-        values.forEachIndexed { index, value -> putUInt64Le(raw, 32 + index * Long.SIZE_BYTES, value) }
+        putUInt64Le(raw, 32, day.sessionCount)
+        putUInt64Le(raw, 40, day.totalDurationMs)
+        putUInt64Le(raw, 48, day.generatedBytes)
+        putUInt64Le(raw, 56, day.maximumRetainedBytes)
+        putUInt64Le(raw, 64, day.maximumFillPermille)
+        putUInt64Le(raw, 72, day.sessionsReachingLimit)
+        putUInt64Le(raw, 80, day.limitReachedCount)
+        putUInt64Le(raw, 88, day.segmentRotationCount)
+        putUInt64Le(raw, 96, day.archiveEvictedBytes)
         putCrc(raw)
         return raw
     }
@@ -376,9 +425,9 @@ internal class LogGrowthHistoryStore(
             maximumRetainedBytes = uint64Le(raw, 56),
             maximumFillPermille = uint64Le(raw, 64),
             sessionsReachingLimit = uint64Le(raw, 72),
-            overflowCount = uint64Le(raw, 80),
-            evictedChunkCount = uint64Le(raw, 88),
-            evictedBytes = uint64Le(raw, 96),
+            limitReachedCount = uint64Le(raw, 80),
+            segmentRotationCount = uint64Le(raw, 88),
+            archiveEvictedBytes = uint64Le(raw, 96),
         )
     }
 
@@ -392,19 +441,16 @@ internal class LogGrowthHistoryStore(
             putUInt64Le(raw, 16, fact.idHigh)
             putUInt64Le(raw, 24, fact.idLow)
             putUInt32Le(raw, 32, fact.dayKey.toLong())
-            val values = longArrayOf(
-                fact.startedAtMs,
-                fact.updatedAtMs,
-                fact.configuredLimitBytes,
-                fact.maximumRetainedBytes,
-                fact.generatedBytes,
-                fact.overflowCount,
-                fact.evictedChunkCount,
-                fact.evictedBytes,
-                fact.firstOverflowAtMs,
-                fact.lastOverflowAtMs,
-            )
-            values.forEachIndexed { index, value -> putUInt64Le(raw, 40 + index * Long.SIZE_BYTES, value) }
+            putUInt64Le(raw, 40, fact.startedAtMs)
+            putUInt64Le(raw, 48, fact.updatedAtMs)
+            putUInt64Le(raw, 56, fact.configuredLimitBytes)
+            putUInt64Le(raw, 64, fact.maximumRetainedBytes)
+            putUInt64Le(raw, 72, fact.generatedBytes)
+            putUInt64Le(raw, 80, fact.limitReachedCount)
+            putUInt64Le(raw, 88, fact.segmentRotationCount)
+            putUInt64Le(raw, 96, fact.archiveEvictedBytes)
+            putUInt64Le(raw, 104, fact.firstLimitReachedAtMs)
+            putUInt64Le(raw, 112, fact.lastLimitReachedAtMs)
         }
         putCrc(raw)
         return raw
@@ -426,11 +472,11 @@ internal class LogGrowthHistoryStore(
                 configuredLimitBytes = uint64Le(raw, 56),
                 maximumRetainedBytes = uint64Le(raw, 64),
                 generatedBytes = uint64Le(raw, 72),
-                overflowCount = uint64Le(raw, 80),
-                evictedChunkCount = uint64Le(raw, 88),
-                evictedBytes = uint64Le(raw, 96),
-                firstOverflowAtMs = uint64Le(raw, 104),
-                lastOverflowAtMs = uint64Le(raw, 112),
+                limitReachedCount = uint64Le(raw, 80),
+                segmentRotationCount = uint64Le(raw, 88),
+                archiveEvictedBytes = uint64Le(raw, 96),
+                firstLimitReachedAtMs = uint64Le(raw, 104),
+                lastLimitReachedAtMs = uint64Le(raw, 112),
             )
         }
         return ActiveRecord(generation, fact, slot)
@@ -438,7 +484,9 @@ internal class LogGrowthHistoryStore(
 
     private fun hasPrefix(access: RandomAccessFile): Boolean {
         if (access.length() < FILE_PREFIX.size) return false
-        return readAt(access, 0L, FILE_PREFIX.size).contentEquals(FILE_PREFIX)
+        val raw = ByteArray(FILE_PREFIX.size)
+        readAt(access, 0L, raw)
+        return raw.contentEquals(FILE_PREFIX)
     }
 
     private fun sessionOffset(sequence: Long): Long =
@@ -449,12 +497,14 @@ internal class LogGrowthHistoryStore(
 
     private fun activeOffset(slot: Int): Long = if (slot == 0) ACTIVE_A_OFFSET else ACTIVE_B_OFFSET
 
-    private fun readAt(access: RandomAccessFile, offset: Long, size: Int): ByteArray {
-        val raw = ByteArray(size)
-        if (offset < 0L || offset + size > access.length()) return raw
+    private fun readAt(access: RandomAccessFile, offset: Long, raw: ByteArray) {
+        val length = access.length()
+        if (offset < 0L || offset > length || raw.size.toLong() > length - offset) {
+            raw.fill(0)
+            return
+        }
         access.seek(offset)
         access.readFully(raw)
-        return raw
     }
 
     private fun writeAt(access: RandomAccessFile, offset: Long, bytes: ByteArray) {
@@ -502,13 +552,16 @@ internal class LogGrowthHistoryStore(
         val slot: Int,
     )
 
-    private companion object {
+    internal companion object {
         const val FILE_NAME = "jh-log-growth.bin"
-        const val SCHEMA = 1
+        private const val SCOPED_FILE_PREFIX = "jh-log-growth."
+        private const val SCOPED_FILE_SUFFIX = ".bin"
+        const val SCHEMA = 2
         const val CRC_BYTES = Int.SIZE_BYTES
         const val FLAG_ACTIVE = 1
         const val FLAG_RECOVERED = 1
         const val FILL_SCALE = 1_000L
+        const val PROCESS_SCOPE_ID_BYTES = 16
 
         const val SUPERBLOCK_BYTES = 256
         const val ACTIVE_RECORD_BYTES = 128
@@ -525,10 +578,64 @@ internal class LogGrowthHistoryStore(
         const val DAY_OFFSET = SESSION_OFFSET + SESSION_CAPACITY * SESSION_RECORD_BYTES * 2L
         const val FILE_BYTES = DAY_OFFSET + DAY_CAPACITY * DAY_RECORD_BYTES * 2L
 
-        val FILE_PREFIX = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'H'.code.toByte(), 1, 0)
+        val FILE_PREFIX = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'H'.code.toByte(), 2, 0)
         val SUPERBLOCK_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'S'.code.toByte())
         val ACTIVE_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'A'.code.toByte())
         val SESSION_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'R'.code.toByte())
         val DAY_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'G'.code.toByte(), 'D'.code.toByte())
+
+        fun fileName(processScope: String?): String {
+            if (processScope == null) return FILE_NAME
+            val identity = MessageDigest.getInstance("SHA-256")
+                .digest(processScope.toByteArray(Charsets.UTF_8))
+                .copyOf(PROCESS_SCOPE_ID_BYTES)
+            return "$SCOPED_FILE_PREFIX${SessionLogName.runIdHex(identity)}$SCOPED_FILE_SUFFIX"
+        }
+
+        fun deleteObsoleteProcessScopes(
+            directory: File,
+            retainedProcessScopes: Set<String>,
+        ): Int {
+            val retainedNames = HashSet<String>(retainedProcessScopes.size)
+            retainedProcessScopes.forEach { processScope -> retainedNames += fileName(processScope) }
+            val candidates = try {
+                directory.listFiles()
+            } catch (_: SecurityException) {
+                null
+            } ?: return 0
+            var deleted = 0
+            candidates.forEach { candidate ->
+                if (
+                    isScopedFileName(candidate.name) &&
+                    candidate.name !in retainedNames &&
+                    candidate.isFile
+                ) {
+                    val removed = try {
+                        candidate.delete()
+                    } catch (_: SecurityException) {
+                        false
+                    }
+                    if (removed) deleted++
+                }
+            }
+            return deleted
+        }
+
+        private fun isScopedFileName(name: String): Boolean {
+            val identityStart = SCOPED_FILE_PREFIX.length
+            val identityEnd = identityStart + PROCESS_SCOPE_ID_BYTES * 2
+            if (
+                name.length != identityEnd + SCOPED_FILE_SUFFIX.length ||
+                !name.startsWith(SCOPED_FILE_PREFIX) ||
+                !name.endsWith(SCOPED_FILE_SUFFIX)
+            ) {
+                return false
+            }
+            for (index in identityStart until identityEnd) {
+                val character = name[index]
+                if (character !in '0'..'9' && character !in 'a'..'f') return false
+            }
+            return true
+        }
     }
 }

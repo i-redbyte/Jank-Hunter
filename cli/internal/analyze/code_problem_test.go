@@ -145,8 +145,50 @@ func TestCodeProblemFinishMatchesMaterializeAllSelection(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("optimized top problems differ from materialize-all reference\ngot:  %+v\nwant: %+v", got, want)
 	}
-	if len(got) != 200 || cap(got) != len(got) {
-		t.Fatalf("bounded result len/cap = %d/%d, want 200/200", len(got), cap(got))
+	if len(got) != 260 || cap(got) != len(got) {
+		t.Fatalf("complete result len/cap = %d/%d, want 260/260", len(got), cap(got))
+	}
+}
+
+func TestCodeProblemDrillDownKeepsOnlyObservedContextTuples(t *testing.T) {
+	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	item := builder.item("com.app.FeedPresenter", "render", "com.app.FeedPresenter.render")
+	for index := range 15 {
+		item.addContextSignal(
+			fmt.Sprintf("screen-%02d", index),
+			fmt.Sprintf("flow-%02d", index),
+			fmt.Sprintf("step-%02d", index),
+			"",
+			CodeProblemSignal{
+				Name:     fmt.Sprintf("signal-%02d", index),
+				Category: codeCategoryRuntime,
+				Severity: "medium",
+				Score:    1,
+				Count:    uint64(index + 1),
+			},
+		)
+	}
+
+	rows := builder.finish()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if len(row.Screens) != 15 || len(row.Flows) != 15 || len(row.Steps) != 15 || len(row.DrillDown) != 15 {
+		t.Fatalf("context evidence was truncated: %+v", row)
+	}
+	for index, detail := range row.DrillDown {
+		wantSuffix := fmt.Sprintf("%02d", index)
+		if detail.Screen != "screen-"+wantSuffix || detail.Flow != "flow-"+wantSuffix || detail.Step != "step-"+wantSuffix {
+			t.Fatalf("drill-down %d fabricated a context tuple: %+v", index, detail)
+		}
+		wantSignal := "signal-" + wantSuffix
+		if !reflect.DeepEqual(detail.Signals, []string{wantSignal}) {
+			t.Fatalf("drill-down %d signals = %v, want only %q", index, detail.Signals, wantSignal)
+		}
+		if !strings.Contains(detail.Evidence, fmt.Sprintf("наблюдений=%d", index+1)) {
+			t.Fatalf("drill-down %d evidence is not context-specific: %q", index, detail.Evidence)
+		}
 	}
 }
 
@@ -171,27 +213,26 @@ func codeProblemSelectionFixture() codeProblemBuilder {
 		className := fmt.Sprintf("com.app.problem.Class%03d", index)
 		method := fmt.Sprintf("method%02d", index%17)
 		item := builder.item(className, method, className+"."+method)
-		item.addContext(
+		item.addContextSignal(
 			fmt.Sprintf("screen-%d", index%4),
 			fmt.Sprintf("flow-%d", index%7),
 			fmt.Sprintf("step-%d", index%3),
 			fmt.Sprintf("route-%d", index%5),
+			CodeProblemSignal{
+				Name:     fmt.Sprintf("signal-%d", index%3),
+				Category: codeCategoryRuntime,
+				Severity: "medium",
+				Score:    float64((index*37)%53)/10 + 0.04,
+				Count:    uint64(index + 1),
+				Detail:   fmt.Sprintf("evidence-%03d", index),
+			},
 		)
-		item.addSignal(CodeProblemSignal{
-			Name:     fmt.Sprintf("signal-%d", index%3),
-			Category: codeCategoryRuntime,
-			Severity: "medium",
-			Score:    float64((index*37)%53)/10 + 0.04,
-			Count:    uint64(index + 1),
-			Detail:   fmt.Sprintf("evidence-%03d", index),
-		})
 	}
 	return builder
 }
 
-// finishCodeProblemsMaterializeAllForTest preserves the pre-optimization
-// algorithm so the bounded implementation must select and serialize exactly
-// the same top rows, including rounded-score ties.
+// finishCodeProblemsMaterializeAllForTest independently materializes and sorts
+// every row so finish must preserve the full registry and rounded-score ties.
 func finishCodeProblemsMaterializeAllForTest(builder *codeProblemBuilder) []CodeProblemStats {
 	out := make([]CodeProblemStats, 0, len(builder.items))
 	for _, item := range builder.items {
@@ -210,8 +251,5 @@ func finishCodeProblemsMaterializeAllForTest(builder *codeProblemBuilder) []Code
 		}
 		return out[i].Score > out[j].Score
 	})
-	if len(out) > 200 {
-		out = out[:200]
-	}
 	return out
 }

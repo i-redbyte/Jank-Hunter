@@ -16,15 +16,13 @@ import (
 
 type fixtureSpec struct {
 	name       string
-	contextual bool
 	incomplete bool
 }
 
 func main() {
 	specs := []fixtureSpec{
-		{name: "runtime-graph-legacy-v9"},
-		{name: "runtime-graph-buffered-v9", contextual: true},
-		{name: "runtime-graph-incomplete-v9", contextual: true, incomplete: true},
+		{name: "runtime-graph-contextual-100"},
+		{name: "runtime-graph-incomplete-100", incomplete: true},
 	}
 	for _, spec := range specs {
 		if err := generate(spec); err != nil {
@@ -35,7 +33,7 @@ func main() {
 
 func generate(spec fixtureSpec) error {
 	base := filepath.Join("testdata", spec.name)
-	if err := writeLog(base+".jhlog", spec.contextual, spec.incomplete); err != nil {
+	if err := writeLog(base+".jhlog", spec.incomplete); err != nil {
 		return err
 	}
 	summary, err := analyze.InspectFilesWithOptions(spec.name, []string{base + ".jhlog"}, analyze.Options{})
@@ -69,7 +67,7 @@ func normalizeHTML(payload []byte) []byte {
 	return bytes.Join(lines, []byte{'\n'})
 }
 
-func writeLog(path string, contextual, incomplete bool) (result error) {
+func writeLog(path string, incomplete bool) (result error) {
 	header := jhlog.DefaultSegmentHeader()
 	header.RunID[0], header.ProcessInstanceID[0], header.SessionID[0] = 1, 2, 3
 	header.OSPID = 42
@@ -105,41 +103,40 @@ func writeLog(path string, contextual, incomplete bool) (result error) {
 	}
 	if err := writer.WriteEvent(jhlog.Event{
 		Type: jhlog.EventSession, TimeMS: 1,
-		Session: &jhlog.SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, ProcessID: 4, SDKInt: 35},
+		Session: &jhlog.SessionEvent{AppVersionRef: jhlog.LocalSymbol(1), BuildRef: jhlog.LocalSymbol(2), DeviceRef: jhlog.LocalSymbol(3), SDKInt: 35},
 	}); err != nil {
 		return err
 	}
-	if contextual {
-		for _, event := range []jhlog.Event{
-			{Type: jhlog.EventRuntimeCall, TimeMS: 10, RuntimeCall: runtimeCall(10, 31, 1, 10, 10)},
-			{Type: jhlog.EventRuntimeCall, TimeMS: 20, RuntimeCall: runtimeCall(11, 32, 1, 20, 20)},
-		} {
-			if err := writer.WriteEvent(event); err != nil {
-				return err
-			}
+	for _, event := range []jhlog.Event{
+		runtimeCall(10, 10, 31, 1, 10, 10),
+		runtimeCall(20, 11, 32, 1, 20, 20),
+	} {
+		if err := writer.WriteEvent(event); err != nil {
+			return err
 		}
-	} else if err := writer.WriteEvent(jhlog.Event{
-		Type: jhlog.EventRuntimeCall, TimeMS: 20, RuntimeCall: runtimeCall(10, 31, 2, 30, 20),
-	}); err != nil {
-		return err
 	}
-	quality := map[uint64]uint64{}
-	if contextual {
-		quality[jhlog.QualityRuntimeGraphInputTotal] = 2
-		quality[jhlog.QualityRuntimeGraphEmittedTotal] = 2
+	quality := map[uint64]uint64{
+		jhlog.QualityRuntimeGraphInputTotal:   2,
+		jhlog.QualityRuntimeGraphEmittedTotal: 2,
 	}
 	if incomplete {
 		quality[jhlog.QualityRuntimeGraphInputTotal] = 10
-		quality[jhlog.QualityRuntimeGraphCircuitBreakerTrip] = 1
-		quality[jhlog.QualityRuntimeGraphCircuitBreakerDrop] = 8
+		quality[jhlog.QualityRuntimeGraphWriterRejectionLoss] = 8
 	}
 	writer.SetQualitySnapshot(jhlog.QualitySnapshot{Sequence: 1, Counters: quality})
 	return nil
 }
 
-func runtimeCall(screen, step, count, total, max uint64) *jhlog.RuntimeCallEvent {
-	return &jhlog.RuntimeCallEvent{
-		ScreenID: screen, CallerID: 20, FlowID: 30, StepID: step, CalleeID: 21,
-		Count: count, TotalMS: total, MaxMS: max,
+func runtimeCall(timeMS, screen, step, count, total, max uint64) jhlog.Event {
+	return jhlog.Event{
+		Type:   jhlog.EventRuntimeCall,
+		TimeMS: timeMS,
+		Attribution: jhlog.AttributionContext{
+			Present: true, Screen: jhlog.LocalSymbol(screen), Owner: jhlog.LocalSymbol(20),
+			Flow: jhlog.LocalSymbol(30), Step: jhlog.LocalSymbol(step),
+		},
+		RuntimeCall: &jhlog.RuntimeCallEvent{
+			CalleeRef: jhlog.LocalSymbol(21), Count: count, TotalMS: total, MaxMS: max,
+		},
 	}
 }

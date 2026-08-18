@@ -35,7 +35,7 @@ class InstrumentationAnnotationsTest {
     fun ignoreAnnotationSkipsMethodInstrumentation() {
         val instrumented = instrument(ownerFixture(methodIgnored = true))
 
-        assertEquals(0, countRuntimeCalls(instrumented, "recordMethodCall"))
+        assertEquals(0, countRuntimeCallsInMethod(instrumented, "load", "recordMethodCall"))
     }
 
     @Test
@@ -103,14 +103,17 @@ class InstrumentationAnnotationsTest {
     }
 
     @Test
-    fun constructorsRemainUntouchedEvenWhenAnnotated() {
+    fun declaredConstructorsReceiveBoundaryAndAnnotationHooksAfterSuper() {
         val instrumented = instrument(ownerFixture(constructorTrace = "create"))
 
         val strings = collectMethodStrings(instrumented, "<init>")
 
-        assertTrue(strings.isEmpty())
-        assertEquals(0, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
-        assertEquals(0, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+        assertTrue(strings.contains("create"))
+        assertTrue(strings.contains("FeedOwner"))
+        assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "recordMethodCall"))
+        assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
+        assertEquals(2, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+        assertEquals(1, countCatchAllHandlers(instrumented, "<init>"))
     }
 
     @Test

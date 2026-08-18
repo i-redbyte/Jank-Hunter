@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: математическое сравнение</title>
-  <style>{{reportCSS .ReportStyle true}}</style>
+  <style>{{reportCSS true}}</style>
 </head>
-<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
+<body class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -60,7 +60,6 @@
       <summary><span>Реестр проблем кода кандидата</span><span class="fold-summary-meta">{{ruCount (len .Math.Candidate.Summary.CodeProblems) "строка" "строки" "строк"}}</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает классы и методы кандидата, которые стали заметнее относительно базы или уже несут высокий риск. Дельта оценки помогает быстро отделить новые регрессии от старого технического долга.</p>
-        {{rowLimitNote "Реестр проблем на математической странице" (len .Math.Candidate.Summary.CodeProblems) 16}}
         {{scoreGuide "code"}}
         {{with codeProblemCategories .Math.Candidate.Summary.CodeProblems}}
         <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -68,7 +67,7 @@
         {{with codeProblemSeverities .Math.Candidate.Summary.CodeProblems}}
         <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
         {{end}}
-        <div class="code-registry" data-code-registry>
+        <div class="code-registry" data-code-registry data-code-problem-mode="compare">
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, сценарию, маршруту или проблеме" aria-label="Фильтр сравнительного реестра проблем кода">
             <select data-code-registry-severity aria-label="Фильтр по риску">
@@ -95,29 +94,25 @@
               </tr>
             </thead>
             <tbody>
-              {{range limitRows (codeProblemCompareRows .Math.Comparison) 16}}
+              {{$codeRows := codeProblemCompareRows .Math.Comparison}}
+              {{range limitRows $codeRows 50}}
               <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .Candidate}}" data-categories="{{join .Candidate.Categories "|"}}">
                 <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
                 <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code>{{if .Candidate.Method}}<div class="method"><code>{{.Candidate.Method}}</code></div>{{end}}</div></td>
                 <td><div>база {{printf "%.1f" .BaselineScore}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div><div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div></td>
                 <td><div class="problem-tags">{{range .Candidate.Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Candidate.Problems ", "}}</div></td>
                 <td>
-                  <details class="code-problem-details">
+                  <details class="code-problem-details" data-code-problem-evidence-key="{{codeProblemEvidenceKey .Candidate}}">
                     <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Candidate.Evidence}}</em></span><small>{{ruCount (len .Candidate.Signals) "сигнал" "сигнала" "сигналов"}}{{if .Candidate.DrillDown}} · {{ruCount (len .Candidate.DrillDown) "сценарий" "сценария" "сценариев"}}{{end}}</small></summary>
-                    <div class="code-problem-detail-body">
-                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Candidate.Evidence}}</p></div>
-                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Candidate.Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Candidate.Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Candidate.Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Candidate.Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
-                      <div class="code-problem-detail-block"><strong>Влияние кандидата</strong><p>{{.Candidate.Impact}}</p></div>
-                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Candidate.Recommendation}}</p></div>
-                      {{if .Candidate.DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong>{{rowLimitNote "Сценарии этой строки" (len .Candidate.DrillDown) 3}}<div class="problem-drilldown">{{range limitRows .Candidate.DrillDown 3}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                      <div class="code-problem-detail-block span-all"><strong>Сигналы кандидата</strong>{{rowLimitNote "Сигналы этой строки" (len .Candidate.Signals) 4}}<div class="problem-signals">{{range limitRows .Candidate.Signals 4}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
-                    </div>
+                    <div class="code-problem-detail-body" data-code-problem-evidence-body data-impact-label="Влияние кандидата" data-signals-label="Сигналы кандидата"><div class="code-problem-detail-block span-all"><strong>Полные доказательства</strong><p>Откройте строку, чтобы развернуть все сигналы и сценарии без усечения.</p></div></div>
                   </details>
                 </td>
               </tr>
               {{else}}<tr><td colspan="5" class="muted">Реестр проблем кода кандидата пуст: в сравнении нет привязанных к классу сигналов.</td></tr>{{end}}
+              {{if gt (len $codeRows) 50}}<tr class="deferred-table-loader" data-code-problem-loader data-deferred-total="{{len $codeRows}}" data-deferred-loaded="50"><th colspan="5"><button type="button" class="deferred-table-button" data-load-more-code-problems>Показать ещё 50</button><span data-deferred-remaining>Осталось строк: {{sub (len $codeRows) 50}}</span><span class="sr-only"> в математическом сравнительном реестре проблем кода</span></th></tr>{{end}}
             </tbody>
           </table>
+          <script type="application/octet-stream" data-code-problem-evidence-archive data-encoding="gzip-base64url">{{codeProblemCompareArchive .Math.Comparison}}</script>
         </div>
       </div>
     </details>
@@ -125,7 +120,6 @@
       <summary><span>Сравнение сигналов удержания памяти</span></summary>
       <div class="fold-body">
         <p class="help-text">Показывает удержанные объекты кандидата, которые появились или усилились относительно базы. Оценка учитывает количество, возраст удержания, тип объекта и наличие пользовательского держателя.</p>
-        {{rowLimitNote "Сигналы удержания на математической странице" (len .Math.Candidate.Summary.MemoryLeaks) 10}}
         {{scoreGuide "leak"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
@@ -160,7 +154,7 @@
               </tr>
             </thead>
             <tbody>
-              {{range limitRows (memoryLeakCompareRows .Math.Comparison) 10}}
+              {{range memoryLeakCompareRows .Math.Comparison}}
               <tr data-code-problem-row data-score="{{printf "%.1f" .DeltaScore}}" data-severity="{{.Severity}}" data-class="{{.Candidate.ClassName}}" data-categories="{{.Candidate.ObjectKind}}">
                 <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span><div class="muted">{{.Status}}</div></td>
                 <td><div class="problem-location"><code>{{.Candidate.ClassName}}</code></div></td>
@@ -193,10 +187,9 @@
     {{end}}
     <h3>Сравнение сценариев и источников</h3>
     {{$flowRows := flowCompareRows .Math.Baseline.Summary .Math.Candidate.Summary}}
-    {{rowLimitNote "Сравнение сценариев на математической странице" (len $flowRows) 64}}
     <table class="timeline-table">
       <tr><th>Контекст</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>Δ проблем</th><th>Спам базы</th><th>Спам кандидата</th><th>Δ спама</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>UI база</th><th>UI кандидат</th><th>Серьезность</th></tr>
-      {{range limitRows $flowRows 64}}
+      {{range $flowRows}}
       <tr>
         <td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td>
         <td>{{.BaselineProblems}}</td><td>{{.CandidateProblems}}</td><td>{{.DeltaProblems}}</td>
@@ -236,16 +229,16 @@
       {{with $math.Baseline.Markov.Forecast}}
       <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
         <div class="markov-forecast-copy">
-          <div class="markov-forecast-heading"><span>База · прогноз траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+          <div class="markov-forecast-heading"><span>База · in-sample проекция</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
           <strong class="markov-forecast-title">{{.Label}}</strong>
           <p>{{.Summary}}</p>
-          <div class="markov-forecast-confidence">Уверенность: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}}</div>
+          <div class="markov-forecast-confidence">Поддержка модели: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}} · не калибровано как прогноз будущего запуска</div>
         </div>
         {{if .HorizonWindows}}
         <div class="markov-forecast-metrics">
           <div><span>Начало</span><strong>{{printf "%.1f" (percent01 .EarlyBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
           <div><span>Последняя часть</span><strong>{{printf "%.1f" (percent01 .RecentBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
-          <div><span>Прогноз</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>плохого состояния</small></div>
+          <div><span>Проекция</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>модельная доля плохих состояний</small></div>
           <div><span>Горизонт</span><strong>{{.HorizonWindows}}</strong><small>интервалов · {{humanDuration .HorizonMS}}</small></div>
         </div>
         {{end}}
@@ -254,16 +247,16 @@
       {{with $math.Candidate.Markov.Forecast}}
       <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
         <div class="markov-forecast-copy">
-          <div class="markov-forecast-heading"><span>Кандидат · прогноз траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+          <div class="markov-forecast-heading"><span>Кандидат · in-sample проекция</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
           <strong class="markov-forecast-title">{{.Label}}</strong>
           <p>{{.Summary}}</p>
-          <div class="markov-forecast-confidence">Уверенность: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}}</div>
+          <div class="markov-forecast-confidence">Поддержка модели: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}} · не калибровано как прогноз будущего запуска</div>
         </div>
         {{if .HorizonWindows}}
         <div class="markov-forecast-metrics">
           <div><span>Начало</span><strong>{{printf "%.1f" (percent01 .EarlyBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
           <div><span>Последняя часть</span><strong>{{printf "%.1f" (percent01 .RecentBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
-          <div><span>Прогноз</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>плохого состояния</small></div>
+          <div><span>Проекция</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>модельная доля плохих состояний</small></div>
           <div><span>Горизонт</span><strong>{{.HorizonWindows}}</strong><small>интервалов · {{humanDuration .HorizonMS}}</small></div>
         </div>
         {{end}}

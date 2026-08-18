@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/benchfixture"
@@ -18,7 +22,9 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-const maxRepresentativeReportBundleBytes int64 = 5 * 1024 * 1024
+// Full canonical registries intentionally replaced the former silent 200/80-row caps.
+// Keep enough headroom for useful evidence while still catching accidental duplication.
+const maxRepresentativeReportBundleBytes int64 = 8 * 1024 * 1024
 
 func TestConfigureCLIGarbageCollectorUsesBoundedMemoryDefault(t *testing.T) {
 	restoreGCAndEnvironment := preserveGCAndGOGC(t)
@@ -56,6 +62,44 @@ func TestConfigureCLIGarbageCollectorRespectsExplicitGOGC(t *testing.T) {
 	}
 }
 
+func TestConfigureCLIMemoryLimitUsesBoundedMemoryDefault(t *testing.T) {
+	restoreMemoryAndEnvironment := preserveMemoryLimitAndEnvironment(t)
+	defer restoreMemoryAndEnvironment()
+	if err := os.Unsetenv("GOMEMLIMIT"); err != nil {
+		t.Fatal(err)
+	}
+	const previousLimit int64 = 137 * 1024 * 1024
+	debug.SetMemoryLimit(previousLimit)
+
+	restore := configureCLIMemoryLimit()
+	if current := currentMemoryLimit(); current != defaultCLIMemoryLimitBytes {
+		t.Fatalf("memory limit = %d, want %d", current, defaultCLIMemoryLimitBytes)
+	}
+	restore()
+	if current := currentMemoryLimit(); current != previousLimit {
+		t.Fatalf("restored memory limit = %d, want %d", current, previousLimit)
+	}
+}
+
+func TestConfigureCLIMemoryLimitRespectsExplicitGOMEMLIMIT(t *testing.T) {
+	restoreMemoryAndEnvironment := preserveMemoryLimitAndEnvironment(t)
+	defer restoreMemoryAndEnvironment()
+	if err := os.Setenv("GOMEMLIMIT", "200MiB"); err != nil {
+		t.Fatal(err)
+	}
+	const explicitRuntimeLimit int64 = 149 * 1024 * 1024
+	debug.SetMemoryLimit(explicitRuntimeLimit)
+
+	restore := configureCLIMemoryLimit()
+	if current := currentMemoryLimit(); current != explicitRuntimeLimit {
+		t.Fatalf("memory limit = %d, want explicit runtime value %d", current, explicitRuntimeLimit)
+	}
+	restore()
+	if current := currentMemoryLimit(); current != explicitRuntimeLimit {
+		t.Fatalf("memory limit after no-op restore = %d, want %d", current, explicitRuntimeLimit)
+	}
+}
+
 func preserveGCAndGOGC(t *testing.T) func() {
 	t.Helper()
 	previousGC := currentGCPercent()
@@ -75,6 +119,28 @@ func preserveGCAndGOGC(t *testing.T) func() {
 func currentGCPercent() int {
 	current := debug.SetGCPercent(-1)
 	debug.SetGCPercent(current)
+	return current
+}
+
+func preserveMemoryLimitAndEnvironment(t *testing.T) func() {
+	t.Helper()
+	previousLimit := currentMemoryLimit()
+	previousEnvironment, hadEnvironment := os.LookupEnv("GOMEMLIMIT")
+	return func() {
+		debug.SetMemoryLimit(previousLimit)
+		if hadEnvironment {
+			if err := os.Setenv("GOMEMLIMIT", previousEnvironment); err != nil {
+				t.Errorf("restore GOMEMLIMIT: %v", err)
+			}
+		} else if err := os.Unsetenv("GOMEMLIMIT"); err != nil {
+			t.Errorf("restore absent GOMEMLIMIT: %v", err)
+		}
+	}
+}
+
+func currentMemoryLimit() int64 {
+	current := debug.SetMemoryLimit(-1)
+	debug.SetMemoryLimit(current)
 	return current
 }
 
@@ -105,10 +171,12 @@ func TestRepresentativeReportBundlesStayWithinBudget(t *testing.T) {
 		t,
 		inspectPath,
 		"overview",
-		"Ребра runtime-графа:</strong> показано 256 из 12925",
-		"Полный машинный набор доступен в JSON-выводе",
+		`data-deferred-total="12925"`,
+		"Показать ещё 50",
 	)
-	assertBundlePageNotContains(t, inspectPath, "overview", `data-search=`)
+	assertBundlePageNotContains(t, inspectPath, "overview", `data-search=`, "Ребра runtime-графа:</strong> показано 256 из 12925")
+	assertBundlePageContains(t, inspectPath, "math", `href="inspect.html#runtime-calls"`, "не дублируется второй раз")
+	assertBundlePageNotContains(t, inspectPath, "math", `data-deferred-total="12925"`)
 
 	candidate := copyFileForTest(t, fixture, filepath.Join(directory, "candidate.jhlog"))
 	comparePath := filepath.Join(directory, "compare.html")
@@ -121,8 +189,8 @@ func TestRepresentativeReportBundlesStayWithinBudget(t *testing.T) {
 		t.Fatalf("runCompare(representative) error = %v", err)
 	}
 	assertReportBundleWithinBudget(t, comparePath)
-	assertBundlePageContains(t, comparePath, "overview", "Реестр проблем кандидата:</strong> показано 64 из 200")
-	assertBundlePageNotContains(t, comparePath, "overview", `data-search=`)
+	assertBundlePageContains(t, comparePath, "overview", "Показать ещё 50")
+	assertBundlePageNotContains(t, comparePath, "overview", `data-search=`, "Реестр проблем кандидата:</strong> показано 64 из 200")
 }
 
 func assertReportBundleWithinBudget(t *testing.T, path string) {
@@ -134,6 +202,7 @@ func assertReportBundleWithinBudget(t *testing.T, path string) {
 	if info.Size() > maxRepresentativeReportBundleBytes {
 		t.Fatalf("report bundle = %d bytes, want <= %d", info.Size(), maxRepresentativeReportBundleBytes)
 	}
+	t.Logf("report bundle %s = %d bytes", filepath.Base(path), info.Size())
 	assertNoCompanionReports(t, path)
 }
 
@@ -152,7 +221,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 		t.Fatalf("runInspect() error = %v", err)
 	}
 	assertFileContains(t, inspectPath, `data-jankhunter-single-html`)
-	assertBundlePageContains(t, inspectPath, "overview", "λ Анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Удержания и возможные утечки памяти")
+	assertBundlePageContains(t, inspectPath, "overview", "Подробный анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Удержания и возможные утечки памяти")
 	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Что измеряет")
 	assertBundlePageContains(t, inspectPath, "leaks", "Удержания и возможные утечки памяти", "Проводник утечек", "Сигналы достижимости", "легкий режим", "Контекст обнаружения удержанного объекта")
 	assertNoCompanionReports(t, inspectPath)
@@ -167,7 +236,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runInspect(diagnostics) error = %v", err)
 	}
-	assertBundlePageContains(t, inspectWithDiagnosticsPath, "overview", "ASM диагностика", `href="report-with-diagnostics-diagnostics.html"`)
+	assertBundlePageContains(t, inspectWithDiagnosticsPath, "overview", "Технические данные ASM", `href="report-with-diagnostics-diagnostics.html"`)
 	assertBundlePageContains(t, inspectWithDiagnosticsPath, "diagnostics", "ASM диагностика", "okhttp3.bridge.v3", "FeedOwner")
 	assertNoCompanionReports(t, inspectWithDiagnosticsPath)
 
@@ -181,7 +250,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runInspect(di catalog) error = %v", err)
 	}
-	assertBundlePageContains(t, inspectWithDIPath, "overview", "DI-каталог", `href="report-with-di-di.html"`)
+	assertBundlePageContains(t, inspectWithDIPath, "overview", "Каталог DI", `href="report-with-di-di.html"`)
 	assertBundlePageContains(
 		t,
 		inspectWithDIPath,
@@ -277,7 +346,7 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	printVersion(&buffer)
 
 	text := buffer.String()
-	if !strings.Contains(text, "Jank Hunter CLI 1.0.3") {
+	if !strings.Contains(text, "Jank Hunter CLI 1.0.0") {
 		t.Fatalf("version output missing CLI version: %q", text)
 	}
 	if !strings.Contains(text, ".jhlog format") {
@@ -285,20 +354,20 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 	}
 }
 
-func TestSelectLatestSessionLogsKeepsLatestSessionPerProcess(t *testing.T) {
+func TestSelectLatestSessionLogsKeepsOnlyLatestRunCohortAcrossProcesses(t *testing.T) {
 	dir := t.TempDir()
-	newMainEarlierSegment := filepath.Join(dir, "jh-session-log.2026-07-13.8.jhlog")
-	oldMain := filepath.Join(dir, "jh-session-log.2026-07-13.9.jhlog")
-	newMainLatestSegment := filepath.Join(dir, "jh-session-log.2026-07-13.10.jhlog")
-	oldRemote := filepath.Join(dir, "jh-session-log.2026-07-12.500.jhlog")
-	newRemote := filepath.Join(dir, "jh-session-log.2026-07-14.1.jhlog")
+	oldMain := sessionSelectionPath(dir, "2026-07-13", 1, 8)
+	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 9)
+	newMainEarlierSegment := sessionSelectionPath(dir, "2026-07-13", 2, 10)
+	newRemote := sessionSelectionPath(dir, "2026-07-13", 2, 11)
+	newMainLatestSegment := sessionSelectionPath(dir, "2026-07-13", 2, 12)
 	nonCanonical := filepath.Join(dir, "sample.jhlog")
 
-	writeSessionSelectionLog(t, newMainEarlierSegment, "com.example", 2, 8)
-	writeSessionSelectionLog(t, oldMain, "com.example", 1, 9)
-	writeSessionSelectionLog(t, newMainLatestSegment, "com.example", 2, 10)
-	writeSessionSelectionLog(t, oldRemote, "com.example:remote", 3, 500)
-	writeSessionSelectionLog(t, newRemote, "com.example:remote", 4, 1)
+	writeSessionSelectionLog(t, oldMain, "com.example", 1, 1, 0)
+	writeSessionSelectionLog(t, oldRemote, "com.example:remote", 1, 2, 0)
+	writeSessionSelectionLog(t, newMainEarlierSegment, "com.example", 2, 3, 0)
+	writeSessionSelectionLog(t, newRemote, "com.example:remote", 2, 4, 0)
+	writeSessionSelectionLog(t, newMainLatestSegment, "com.example", 2, 3, 1)
 
 	paths := []string{oldMain, newMainEarlierSegment, newMainLatestSegment, oldRemote, newRemote, nonCanonical}
 	selected, warnings := selectLatestSessionLogs(paths, false)
@@ -322,6 +391,41 @@ func TestSelectLatestSessionLogsKeepsLatestSessionPerProcess(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("all sessions warnings = %#v, want none", warnings)
+	}
+}
+
+func TestSelectLatestSessionLogsDoesNotMixStaleRemoteProcessIntoNewRun(t *testing.T) {
+	dir := t.TempDir()
+	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 40)
+	newMain := sessionSelectionPath(dir, "2026-07-13", 2, 41)
+	writeSessionSelectionLog(t, oldRemote, "com.example:remote", 1, 1, 0)
+	writeSessionSelectionLog(t, newMain, "com.example", 2, 2, 0)
+
+	selected, warnings := selectLatestSessionLogs([]string{oldRemote, newMain}, false)
+	if !sameStrings(selected, []string{newMain}) {
+		t.Fatalf("selected = %#v, want only latest run %#v", selected, []string{newMain})
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], oldRemote) {
+		t.Fatalf("warnings = %#v, want stale remote path", warnings)
+	}
+}
+
+func TestSelectLatestSessionLogsKeepsAllRunIDsTiedAcrossDirectories(t *testing.T) {
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+	firstEarlier := sessionSelectionPath(firstDir, "2026-07-13", 1, 8)
+	firstLatest := sessionSelectionPath(firstDir, "2026-07-13", 1, 9)
+	secondEarlier := sessionSelectionPath(secondDir, "2026-07-13", 2, 7)
+	secondLatest := sessionSelectionPath(secondDir, "2026-07-13", 2, 9)
+	writeSessionSelectionLog(t, firstEarlier, "com.first", 1, 1, 0)
+	writeSessionSelectionLog(t, firstLatest, "com.first", 1, 1, 1)
+	writeSessionSelectionLog(t, secondEarlier, "com.second", 2, 2, 0)
+	writeSessionSelectionLog(t, secondLatest, "com.second", 2, 2, 1)
+
+	paths := []string{firstEarlier, secondLatest, secondEarlier, firstLatest}
+	selected, warnings := selectLatestSessionLogs(paths, false)
+	if !sameStrings(selected, paths) || len(warnings) != 0 {
+		t.Fatalf("selected=%#v warnings=%#v, want both tied run cohorts", selected, warnings)
 	}
 }
 
@@ -437,14 +541,24 @@ func TestRejectLogInputOverlapUsesPhysicalIdentity(t *testing.T) {
 	}
 }
 
-func writeSessionSelectionLog(t *testing.T, path, processName string, sessionByte byte, segmentIndex uint64) {
+func writeSessionSelectionLog(
+	t *testing.T,
+	path string,
+	processName string,
+	runByte byte,
+	sessionByte byte,
+	segmentIndex uint64,
+) {
 	t.Helper()
 	header := jhlog.DefaultSegmentHeader()
 	header.ProcessName = processName
+	header.RunID[0] = runByte
 	header.SessionID[0] = sessionByte
 	header.ProcessInstanceID[0] = sessionByte
-	header.RunID[0] = sessionByte
 	header.SegmentIndex = segmentIndex
+	if segmentIndex > 0 {
+		header.PreviousSegmentDigest = make([]byte, 32)
+	}
 	file, _, err := jhlog.CreateWithHeader(path, header)
 	if err != nil {
 		t.Fatalf("CreateWithHeader(%q) error = %v", path, err)
@@ -454,9 +568,15 @@ func writeSessionSelectionLog(t *testing.T, path, processName string, sessionByt
 	}
 }
 
+func sessionSelectionPath(directory string, date string, runByte byte, index uint64) string {
+	var runID jhlog.ID128
+	runID[0] = runByte
+	return filepath.Join(directory, "jh-session-log."+date+"."+hex.EncodeToString(runID[:])+"."+strconv.FormatUint(index, 10)+".jhlog")
+}
+
 func TestDiscoverHeapDumpsNearLogs(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "jh-session-log.2026-07-14.0.jhlog")
+	logPath := sessionSelectionPath(dir, "2026-07-14", 1, 0)
 	if err := os.WriteFile(logPath, []byte("jhlog"), 0o600); err != nil {
 		t.Fatalf("WriteFile(log) error = %v", err)
 	}
@@ -468,16 +588,16 @@ func TestDiscoverHeapDumpsNearLogs(t *testing.T) {
 	if err := os.Mkdir(heapDumpDir, 0o700); err != nil {
 		t.Fatalf("Mkdir(heap-dumps) error = %v", err)
 	}
-	legacyHeap := filepath.Join(heapDumpDir, "retained-legacy.hprof")
-	if err := os.WriteFile(legacyHeap, []byte("hprof"), 0o600); err != nil {
-		t.Fatalf("WriteFile(legacy heap) error = %v", err)
+	nestedHeap := filepath.Join(heapDumpDir, "retained-nested.hprof")
+	if err := os.WriteFile(nestedHeap, []byte("hprof"), 0o600); err != nil {
+		t.Fatalf("WriteFile(nested heap) error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("skip"), 0o600); err != nil {
 		t.Fatalf("WriteFile(notes) error = %v", err)
 	}
 
 	discovered := discoverHeapDumpsNearLogs([]string{logPath, logPath})
-	expected := []string{rootHeap, legacyHeap}
+	expected := []string{rootHeap, nestedHeap}
 	if !sameStrings(discovered, expected) {
 		t.Fatalf("heap dumps = %#v, want %#v", discovered, expected)
 	}
@@ -490,7 +610,7 @@ func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	if err := registry.run([]string{"version"}); err != nil {
 		t.Fatalf("registry version error = %v", err)
 	}
-	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.3") {
+	if !strings.Contains(buffer.String(), "Jank Hunter CLI 1.0.0") {
 		t.Fatalf("version command output = %q", buffer.String())
 	}
 	if err := registry.run([]string{"missing"}); err == nil {
@@ -534,13 +654,19 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	if err := runProblems([]string{samplePath, "--out", csvPath}); err != nil {
 		t.Fatalf("runProblems(csv) error = %v", err)
 	}
-	assertFileContains(t, csvPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation", "Утечка жизненного цикла")
+	assertFileContains(t, csvPath, "fingerprint,detector_id,detector_version,category,subcategory,severity,status,risk_score,confidence,title,what_happened,where,claim_level,why,impact,evidence,recommendation,limitations")
 
 	jsonPath := filepath.Join(dir, "problems.json")
 	if err := runProblems([]string{samplePath, "--format", "json", "--out", jsonPath}); err != nil {
 		t.Fatalf("runProblems(json) error = %v", err)
 	}
-	assertFileContains(t, jsonPath, `"drill_down"`, `"categories"`, `"recommendation"`)
+	assertFileContains(t, jsonPath, `"schema_version"`, `"problem_summary"`, `"problems"`, `"incidents"`, `"category_coverage"`, `"detectors"`)
+
+	codeProblemsPath := filepath.Join(dir, "code-problems.csv")
+	if err := runProblems([]string{samplePath, "--dataset", "code-problems", "--out", codeProblemsPath}); err != nil {
+		t.Fatalf("runProblems(code-problems csv) error = %v", err)
+	}
+	assertFileContains(t, codeProblemsPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation")
 
 	leaksPath := filepath.Join(dir, "leaks.csv")
 	if err := runProblems([]string{samplePath, "--dataset", "leaks", "--out", leaksPath}); err != nil {
@@ -652,7 +778,7 @@ func TestAnimatedBackgroundFlagDefaultsOff(t *testing.T) {
 	assertNoCompanionReports(t, comparePath)
 }
 
-func TestReportStyleDefaultsToModernAndPreservesLegacy(t *testing.T) {
+func TestReportUsesSoleCurrentStyleAndRejectsRemovedFlag(t *testing.T) {
 	t.Setenv("JH_LANG", "ru")
 	dir := t.TempDir()
 	samplePath := filepath.Join(dir, "sample.jhlog")
@@ -660,44 +786,29 @@ func TestReportStyleDefaultsToModernAndPreservesLegacy(t *testing.T) {
 		t.Fatalf("runSample() error = %v", err)
 	}
 
-	modernPath := filepath.Join(dir, "modern.html")
-	if err := runInspect([]string{samplePath, "--out", modernPath}); err != nil {
-		t.Fatalf("runInspect(modern) error = %v", err)
+	reportPath := filepath.Join(dir, "report.html")
+	if err := runInspect([]string{samplePath, "--out", reportPath}); err != nil {
+		t.Fatalf("runInspect() error = %v", err)
 	}
 	assertFileContains(
 		t,
-		modernPath,
-		`data-report-style="modern"`,
+		reportPath,
 		`class="report-logo"`,
 		"РАЗДЕЛЫ ОТЧЁТА",
 	)
+	assertFileNotContains(t, reportPath, "data-report-style", "modernReport")
 	for _, pageID := range []string{"overview", "math", "leaks", "influence"} {
 		assertBundlePageContains(
 			t,
-			modernPath,
+			reportPath,
 			pageID,
-			`data-report-style="modern"`,
-			"--bg: #06140b",
+			"--bg: #111512",
 			"padding: 8px !important",
 		)
 	}
 
-	legacyPath := filepath.Join(dir, "legacy.html")
-	if err := runInspect([]string{samplePath, "--report-style", "legacy", "--out", legacyPath}); err != nil {
-		t.Fatalf("runInspect(legacy) error = %v", err)
-	}
-	assertFileContains(
-		t,
-		legacyPath,
-		`data-report-style="legacy"`,
-		`<div class="report-brand">Jank <span>Hunter</span></div>`,
-	)
-	assertFileNotContains(t, legacyPath, `class="report-logo"`)
-	assertBundlePageContains(t, legacyPath, "overview", `data-report-style="legacy"`, "--cyan: #6ff7ff")
-	assertBundlePageNotContains(t, legacyPath, "overview", "--bg: #06140b")
-
-	if err := runInspect([]string{samplePath, "--report-style", "unknown", "--out", filepath.Join(dir, "invalid.html")}); err == nil {
-		t.Fatal("runInspect(unknown report style) succeeded")
+	if err := runInspect([]string{samplePath, "--report-style", "modern", "--out", filepath.Join(dir, "invalid.html")}); err == nil {
+		t.Fatal("runInspect() accepted removed --report-style flag")
 	}
 }
 
@@ -719,14 +830,11 @@ func TestExportStreamsSampleJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveLogArgs() error = %v", err)
 	}
-	warnings, err := jhlog.StreamFileWithWarnings(canonicalPaths[0], func(event jhlog.Event, _ map[uint64]string) error {
+	err = jhlog.StreamFile(canonicalPaths[0], func(event jhlog.Event, _ map[uint64]string) error {
 		return encoder.Encode(event)
 	})
 	if err != nil {
-		t.Fatalf("StreamFileWithWarnings() error = %v", err)
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected export fixture warnings: %+v", warnings)
+		t.Fatalf("StreamFile() error = %v", err)
 	}
 	actual, err := os.ReadFile(exportPath)
 	if err != nil {
@@ -838,6 +946,7 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 }
 
 func TestExternalSymbolsRequireArtifactsOrOwnerMap(t *testing.T) {
+	changeWorkingDirectory(t, t.TempDir())
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{"--external-symbols", "sample.jhlog"})
 	if err != nil {
 		t.Fatalf("takeAnalysisOptionsBuilder() error = %v", err)
@@ -855,6 +964,7 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	writeAndroidArtifactBundle(t, directory, true)
 
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
+		"--external-symbols",
 		"--artifacts-dir", directory,
 		"sample.jhlog",
 	})
@@ -882,28 +992,19 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	}
 }
 
-func TestArtifactDiscoverySelectsNewestCoherentVariant(t *testing.T) {
+func TestAnalysisOptionsBuilderDoesNotAttachUnrequestedArtifacts(t *testing.T) {
 	root := t.TempDir()
-	oldDirectory := filepath.Join(root, "app", "build", "generated", "jankhunter", "release")
-	newDirectory := filepath.Join(root, "app", "build", "generated", "jankhunter", "debug")
-	writeAndroidArtifactBundle(t, oldDirectory, false)
-	writeAndroidArtifactBundle(t, newDirectory, false)
-	oldTime := time.Now().Add(-time.Hour)
-	newTime := time.Now()
-	for _, directory := range []string{oldDirectory, newDirectory} {
-		stamp := oldTime
-		if directory == newDirectory {
-			stamp = newTime
-		}
-		for _, name := range []string{"owner-map.json", "class-graph.jsonl", "instrumentation-diagnostics.jsonl"} {
-			if err := os.Chtimes(filepath.Join(directory, name), stamp, stamp); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
+	directory := filepath.Join(root, "android", "sample-app", "build", "generated", "jankhunter", "debug")
+	writeAndroidArtifactBundle(t, directory, false)
 
-	if got := discoverAndroidArtifactDirectory([]string{root}); got != newDirectory {
-		t.Fatalf("discovered directory = %q, want %q", got, newDirectory)
+	options, err := (analysisOptionsBuilder{}).build()
+	if err != nil {
+		t.Fatalf("build() error = %v", err)
+	}
+	if options.OwnerMap != nil || options.ClassGraph != nil || options.InstrumentationDiagnostics != nil ||
+		options.DependencyInjectionCatalog != nil || options.ArtifactDirectory != "" ||
+		options.ArtifactsAutoDiscovered {
+		t.Fatalf("unrequested artifact inputs = %+v", options)
 	}
 }
 
@@ -915,6 +1016,20 @@ func TestAnalysisOptionsBuilderRejectsIncompleteArtifactBundle(t *testing.T) {
 	builder := analysisOptionsBuilder{artifactsDir: directory}
 	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "class-graph.jsonl") {
 		t.Fatalf("build() error = %v, want missing class graph", err)
+	}
+}
+
+func TestAnalysisOptionsBuilderRejectsExplicitMismatchedBundleBeforeLogScan(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "app", "build", "generated", "jankhunter", "debug")
+	writeAndroidArtifactBundle(t, directory, false)
+	logPath := filepath.Join(t.TempDir(), "sample.jhlog")
+	if err := jhlog.WriteSample(logPath); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (analysisOptionsBuilder{artifactsDir: directory}).buildForLogs([]string{logPath})
+	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact artifact directory") {
+		t.Fatalf("explicit mismatch error = %v", err)
 	}
 }
 
@@ -1023,7 +1138,7 @@ func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
 	}
 	byID := make(map[string]testBundlePage, len(pages))
 	for _, page := range pages {
-		payloadMarker := `<script id="` + page.Payload + `" type="application/json" data-jankhunter-report-payload>`
+		payloadMarker := `<script id="` + page.Payload + `" type="application/octet-stream" data-jankhunter-report-payload data-encoding="gzip-base64">`
 		payloadStart := strings.Index(text, payloadMarker)
 		if payloadStart < 0 {
 			t.Fatalf("%s has no embedded payload %q", path, page.Payload)
@@ -1033,9 +1148,17 @@ func readBundlePages(t *testing.T, path string) map[string]testBundlePage {
 		if payloadEnd < 0 {
 			t.Fatalf("%s payload %q has no terminator", path, page.Payload)
 		}
-		if err := json.Unmarshal([]byte(text[payloadStart:payloadStart+payloadEnd]), &page.HTML); err != nil {
-			t.Fatalf("decode embedded page %q from %s: %v", page.ID, path, err)
+		decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(text[payloadStart:payloadStart+payloadEnd]))
+		compressed, err := gzip.NewReader(decoded)
+		if err != nil {
+			t.Fatalf("open embedded page %q from %s: %v", page.ID, path, err)
 		}
+		html, readErr := io.ReadAll(compressed)
+		closeErr := compressed.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatalf("decode embedded page %q from %s: read=%v close=%v", page.ID, path, readErr, closeErr)
+		}
+		page.HTML = string(html)
 		byID[page.ID] = page
 	}
 	return byID
@@ -1122,4 +1245,45 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 	if includeDI {
 		writeDependencyInjectionFixture(t, filepath.Join(directory, "di-catalog.jsonl"))
 	}
+}
+
+func rewriteArtifactNamespace(t *testing.T, directory, namespace string) []byte {
+	t.Helper()
+	path := filepath.Join(directory, "owner-map.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("aabb0000000000000000000000000000"), []byte(namespace), 1)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := hex.DecodeString(namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decoded
+}
+
+func changeWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+}
+
+func samePath(t *testing.T, left, right string) bool {
+	t.Helper()
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }

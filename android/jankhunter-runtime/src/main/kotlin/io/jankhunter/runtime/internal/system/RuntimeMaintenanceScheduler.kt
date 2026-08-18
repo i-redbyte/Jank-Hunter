@@ -1,5 +1,6 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.RuntimeHookGuard
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
@@ -14,7 +15,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Tasks schedule their next run only after the current run finishes. This prevents an expensive
  * sample from creating a backlog and keeps all collector failures isolated from the host app.
  */
-internal class RuntimeMaintenanceScheduler {
+internal class RuntimeMaintenanceScheduler(
+    private val exactShutdown: Boolean = false,
+) {
     private val closed = AtomicBoolean(false)
 
     @Volatile
@@ -86,16 +89,19 @@ internal class RuntimeMaintenanceScheduler {
 
     fun shutdown() {
         if (!closed.compareAndSet(false, true)) return
-        executor.shutdownNow()
+        if (exactShutdown) {
+            executor.shutdown()
+            if (Thread.currentThread() !== maintenanceThread) {
+                awaitTerminationUninterruptibly()
+            }
+        } else {
+            executor.shutdownNow()
+        }
         executor.purge()
     }
 
     private fun runSafely(task: () -> Unit) {
-        try {
-            task()
-        } catch (throwable: Throwable) {
-            if (throwable is VirtualMachineError || throwable is ThreadDeath) throw throwable
-        }
+        RuntimeHookGuard.run(task)
     }
 
     private inner class RecurringTask(
@@ -131,13 +137,22 @@ internal class RuntimeMaintenanceScheduler {
         }
 
         private fun safeDelay(): Long {
-            return try {
+            return RuntimeHookGuard.value(DEFAULT_RETRY_DELAY_MS) {
                 delayMs().coerceAtLeast(MIN_DELAY_MS)
-            } catch (throwable: Throwable) {
-                if (throwable is VirtualMachineError || throwable is ThreadDeath) throw throwable
-                DEFAULT_RETRY_DELAY_MS
             }
         }
+    }
+
+    private fun awaitTerminationUninterruptibly() {
+        var interrupted = false
+        while (!executor.isTerminated) {
+            try {
+                executor.awaitTermination(TERMINATION_POLL_MS, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     private inner class MaintenanceThreadFactory : ThreadFactory {
@@ -153,6 +168,7 @@ internal class RuntimeMaintenanceScheduler {
     private companion object {
         private const val MIN_DELAY_MS = 100L
         private const val DEFAULT_RETRY_DELAY_MS = 5_000L
+        private const val TERMINATION_POLL_MS = 1_000L
     }
 }
 

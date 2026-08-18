@@ -1,6 +1,8 @@
 package io.jankhunter.runtime.integration
 
 import android.view.Window
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -27,16 +29,20 @@ internal object JankHunterJankStats {
                     try {
                         args[0]?.let(::readFrameData)?.let(onFrame)
                     } catch (throwable: Throwable) {
-                        throwable.rethrowIfFatal()
+                        throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
                     }
                 }
                 null
             }
 
-            val instance = bridge.createAndTrack.invoke(null, window, proxy) ?: return null
+            val instance = bridge.createAndTrack.invoke(null, window, proxy)
+            if (instance == null) {
+                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
+                return null
+            }
             Handle(instance)
         } catch (throwable: Throwable) {
-            throwable.rethrowIfFatal()
+            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_INSTALL)
             null
         }
     }
@@ -55,7 +61,7 @@ internal object JankHunterJankStats {
                     .getMethod("setTrackingEnabled", Boolean::class.javaPrimitiveType)
                     .invoke(instance, enabled)
             } catch (throwable: Throwable) {
-                throwable.rethrowIfFatal()
+                throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_CONTROL)
             }
         }
 
@@ -96,7 +102,7 @@ internal object JankHunterJankStats {
         return try {
             getMethod(name)
         } catch (throwable: Throwable) {
-            throwable.rethrowIfFatal()
+            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
             null
         }
     }
@@ -105,7 +111,7 @@ internal object JankHunterJankStats {
         return try {
             this?.invoke(target)
         } catch (throwable: Throwable) {
-            throwable.rethrowIfFatal()
+            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
             null
         }
     }
@@ -122,8 +128,14 @@ internal object JankHunterJankStats {
                     listenerClass,
                 ),
             )
+        } catch (_: ClassNotFoundException) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
+            null
+        } catch (_: NoClassDefFoundError) {
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
+            null
         } catch (throwable: Throwable) {
-            throwable.rethrowIfFatal()
+            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_INSTALL)
             null
         }
     }
@@ -133,7 +145,7 @@ internal object JankHunterJankStats {
         val createAndTrack: Method,
     )
 
-    private fun Throwable.rethrowIfFatal() {
+    private fun Throwable.recordOrRethrow(reason: RuntimeHookFailureReason) {
         val fatal = when (this) {
             is VirtualMachineError,
             is ThreadDeath -> this
@@ -147,5 +159,6 @@ internal object JankHunterJankStats {
             else -> null
         }
         if (fatal != null) throw fatal
+        RuntimeHookFailureTracker.record(reason)
     }
 }

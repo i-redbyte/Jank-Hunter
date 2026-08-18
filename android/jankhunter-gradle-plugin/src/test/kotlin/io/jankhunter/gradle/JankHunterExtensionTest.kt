@@ -50,7 +50,7 @@ class JankHunterExtensionTest {
         instrumentation.includePackages("com.myapp", " com.myapp.feature ")
         instrumentation.includePackages(listOf("com.myapp.data", ""))
         instrumentation.excludePackages("com.myapp.generated", "com.myapp.di")
-        instrumentation.excludePackages(listOf("com.myapp.legacy"))
+        instrumentation.excludePackages(listOf("com.myapp.internal"))
         instrumentation.asmProgressLog.set(true)
         instrumentation.classGraph.set(true)
         instrumentation.runtimeCallGraph.set(true)
@@ -61,7 +61,7 @@ class JankHunterExtensionTest {
             instrumentation.includePackages.get(),
         )
         assertEquals(
-            linkedSetOf("com.myapp.generated", "com.myapp.di", "com.myapp.legacy"),
+            linkedSetOf("com.myapp.generated", "com.myapp.di", "com.myapp.internal"),
             instrumentation.excludePackages.get(),
         )
         assertEquals(true, instrumentation.asmProgressLog.get())
@@ -84,7 +84,10 @@ class JankHunterExtensionTest {
         assertEquals(true, instrumentation.executors.get())
         assertEquals(false, instrumentation.coroutines.get())
         assertEquals(false, instrumentation.methodCounters.get())
-        assertEquals(JankHunterMethodFilterMode.DIAGNOSTICS, instrumentation.methodFilterMode.get())
+        assertEquals(true, instrumentation.composeTracing.get())
+        assertEquals(true, instrumentation.roomTracing.get())
+        assertEquals(true, instrumentation.workerTracing.get())
+        assertEquals(JankHunterMethodFilterMode.ENABLED, instrumentation.methodFilterMode.get())
         assertEquals(true, instrumentation.lifecycleLeaks.get())
         assertEquals(false, instrumentation.includeWholeApplication.get())
         assertEquals(emptySet<String>(), instrumentation.includePackages.get())
@@ -130,7 +133,7 @@ class JankHunterExtensionTest {
         val extension = extension()
 
         assertEquals(true, extension.sessionLogSizeLimitEnabled.get())
-        assertEquals(16, extension.maxSessionLogSizeMiB.get())
+        assertEquals(50, extension.maxSessionLogSizeMiB.get())
         assertEquals(true, extension.logGrowthAnalyticsEnabled.get())
 
         extension.sessionLogSizeLimitEnabled.set(false)
@@ -155,9 +158,12 @@ class JankHunterExtensionTest {
         assertEquals(1_000L, extension.runtime.httpSlowThresholdMs.get())
         assertEquals(32L, extension.runtime.jankFrameThresholdMs.get())
         assertEquals(32L, extension.runtime.uiWindowP95ThresholdMs.get())
+        assertEquals(true, extension.runtime.exactEventCollection.get())
+        assertEquals(65_536, extension.runtime.maxQueueSize.get())
         assertEquals(false, extension.runtime.mainLooperDispatchMonitor.get())
         assertEquals(true, extension.runtime.jankStats.get())
-        assertEquals(true, extension.runtime.mainProcessOnly.get())
+        assertEquals(true, extension.runtime.ioTracing.get())
+        assertEquals(false, extension.runtime.mainProcessOnly.get())
 
         extension.runtime {
             it.mainThreadStallThresholdMs.set(900L)
@@ -167,7 +173,8 @@ class JankHunterExtensionTest {
             it.uiWindowP95ThresholdMs.set(40L)
             it.mainLooperDispatchMonitor.set(false)
             it.jankStats.set(false)
-            it.mainProcessOnly.set(false)
+            it.ioTracing.set(false)
+            it.mainProcessOnly.set(true)
         }
 
         assertEquals(900L, extension.runtime.mainThreadStallThresholdMs.get())
@@ -177,7 +184,8 @@ class JankHunterExtensionTest {
         assertEquals(40L, extension.runtime.uiWindowP95ThresholdMs.get())
         assertEquals(false, extension.runtime.mainLooperDispatchMonitor.get())
         assertEquals(false, extension.runtime.jankStats.get())
-        assertEquals(false, extension.runtime.mainProcessOnly.get())
+        assertEquals(false, extension.runtime.ioTracing.get())
+        assertEquals(true, extension.runtime.mainProcessOnly.get())
     }
 
     @Test
@@ -200,13 +208,13 @@ class JankHunterExtensionTest {
     }
 
     @Test
-    fun releaseSafetyDslIsExplicitByDefault() {
+    fun releaseSafetyDslMatchesAllProcessCollectionDefault() {
         val releaseSafety = extension().releaseSafety
 
         assertEquals(false, releaseSafety.allowInstrumentation.get())
         assertEquals(false, releaseSafety.privacyReviewed.get())
         assertEquals(false, releaseSafety.allowHeapDumps.get())
-        assertEquals(false, releaseSafety.allowSecondaryProcesses.get())
+        assertEquals(true, releaseSafety.allowSecondaryProcesses.get())
         assertNull(releaseSafety.performanceBudgetEvidence.orNull)
     }
 

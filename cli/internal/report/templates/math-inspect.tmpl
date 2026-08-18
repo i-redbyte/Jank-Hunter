@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jank Hunter: математический анализ</title>
-  <style>{{reportCSS .ReportStyle true}}</style>
+  <style>{{reportCSS true}}</style>
 </head>
-<body data-report-style="{{.ReportStyle}}" class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
+<body class="{{bodyClass "math-page" .PresentationMode .AnimatedBackground}}">
 <header class="hero">
   <div class="hero-grid">
     <div>
@@ -66,7 +66,6 @@
       <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{ruCount (len .Math.Summary.CodeProblems) "строка" "строки" "строк"}}</span></summary>
       <div class="fold-body">
         <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, сценарии и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
-        {{rowLimitNote "Реестр проблем на математической странице" (len .Math.Summary.CodeProblems) 16}}
         {{scoreGuide "code"}}
         {{with codeProblemCategories .Math.Summary.CodeProblems}}
         <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -74,7 +73,7 @@
         {{with codeProblemSeverities .Math.Summary.CodeProblems}}
         <div class="registry-insights"><span class="registry-insights-label">Риск</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-severity="{{.Name}}">{{severityLabel .Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
         {{end}}
-        <div class="code-registry" data-code-registry>
+        <div class="code-registry" data-code-registry data-code-problem-mode="inspect">
           <div class="registry-toolbar">
             <input type="search" data-code-registry-search placeholder="Фильтр по классу, методу, экрану, сценарию, маршруту или проблеме" aria-label="Фильтр реестра проблем кода">
             <select data-code-registry-severity aria-label="Фильтр по риску">
@@ -100,28 +99,24 @@
               </tr>
             </thead>
             <tbody>
-              {{range limitRows .Math.Summary.CodeProblems 16}}
+              {{$codeProblems := .Math.Summary.CodeProblems}}
+              {{range limitRows $codeProblems 50}}
               <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}">
                 <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть runtime-сигналы</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
                 <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
                 <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
                 <td>
-                  <details class="code-problem-details">
+                  <details class="code-problem-details" data-code-problem-evidence-key="{{codeProblemEvidenceKey .}}">
                     <summary><span class="code-problem-summary-main"><strong>Доказательства и рекомендация</strong><em>{{.Evidence}}</em></span><small>{{ruCount (len .Signals) "сигнал" "сигнала" "сигналов"}}{{if .DrillDown}} · {{ruCount (len .DrillDown) "сценарий" "сценария" "сценариев"}}{{end}}</small></summary>
-                    <div class="code-problem-detail-body">
-                      <div class="code-problem-detail-block span-all"><strong>Доказательство</strong><p>{{.Evidence}}</p></div>
-                      <div class="code-problem-detail-block"><strong>Контекст</strong><div class="problem-context">{{range .Screens}}<div>экран <code>{{.}}</code></div>{{end}}{{range .Flows}}<div>сценарий <code>{{.}}</code></div>{{end}}{{range .Steps}}<div>шаг <code>{{.}}</code></div>{{end}}{{range .Routes}}<div>маршрут <code>{{.}}</code></div>{{end}}</div></div>
-                      <div class="code-problem-detail-block"><strong>Влияние</strong><p>{{.Impact}}</p></div>
-                      <div class="code-problem-detail-block span-all"><strong>Что проверить</strong><p>{{.Recommendation}}</p></div>
-                      {{if .DrillDown}}<div class="code-problem-detail-block span-all"><strong>Детализация</strong>{{rowLimitNote "Сценарии этой строки" (len .DrillDown) 3}}<div class="problem-drilldown">{{range limitRows .DrillDown 3}}<div class="problem-drill"><strong>{{codeProblemDrillPath .}}</strong><span>Доказательство: {{.Evidence}}</span><span>Рекомендация: {{.Recommendation}}</span></div>{{end}}</div></div>{{end}}
-                      <div class="code-problem-detail-block span-all"><strong>Сигналы</strong>{{rowLimitNote "Сигналы этой строки" (len .Signals) 4}}<div class="problem-signals">{{range limitRows .Signals 4}}<div class="problem-signal {{severityClass .Severity}}"><strong>{{.Name}}</strong><small>{{.Category}} · {{codeProblemMetric .}}<br>{{.Detail}}</small></div>{{end}}</div></div>
-                    </div>
+                    <div class="code-problem-detail-body" data-code-problem-evidence-body data-impact-label="Влияние" data-signals-label="Сигналы"><div class="code-problem-detail-block span-all"><strong>Полные доказательства</strong><p>Откройте строку, чтобы развернуть все сигналы и сценарии без усечения.</p></div></div>
                   </details>
                 </td>
               </tr>
               {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+              {{if gt (len $codeProblems) 50}}<tr class="deferred-table-loader" data-code-problem-loader data-deferred-total="{{len $codeProblems}}" data-deferred-loaded="50"><th colspan="4"><button type="button" class="deferred-table-button" data-load-more-code-problems>Показать ещё 50</button><span data-deferred-remaining>Осталось строк: {{sub (len $codeProblems) 50}}</span><span class="sr-only"> в математическом реестре проблем кода</span></th></tr>{{end}}
             </tbody>
           </table>
+          <script type="application/octet-stream" data-code-problem-evidence-archive data-encoding="gzip-base64url">{{codeProblemEvidenceArchive $codeProblems}}</script>
         </div>
       </div>
     </details>
@@ -130,7 +125,6 @@
       <div class="fold-body">
         <p class="help-text">Показывает удержанные объекты с вероятным держателем и контекстом. Системные классы выводятся только как симптом, основной фокус — пользовательский держатель, экран и сценарий.</p>
         <div class="leak-limitations">Точный путь до корня GC требует дампа памяти. В легком режиме выполнения отчет показывает подсказку владельца, текущий контекст или место вызова watch-метода и честно помечает строки, где держатель не определен.</div>
-        {{rowLimitNote "Сигналы удержания в математическом обзоре" (len .Math.Summary.MemoryLeaks) 10}}
         {{scoreGuide "leak"}}
         <div class="code-registry" data-code-registry>
           <div class="registry-toolbar">
@@ -150,7 +144,7 @@
           <div class="problem-empty">По текущим фильтрам подозрений утечек не найдено.</div>
           <table class="code-problem-table leak-table">
             <tr><th><button type="button" data-code-sort="severity">Риск</button></th><th><button type="button" data-code-sort="class">Удержанный объект</button></th><th><button type="button" data-code-sort="category">Тип</button></th><th>Вероятный держатель</th><th>Контекст</th><th><button type="button" data-code-sort="score">Оценка</button></th><th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th><th>{{tip "Путь / контекст удержания" "С HPROF здесь показан путь ссылок от корня GC. Без HPROF — только контекст обнаружения, не являющийся цепочкой ссылок."}}</th><th>Влияние</th><th>Что проверить</th><th>Доказательства</th></tr>
-            {{range limitRows .Math.Summary.MemoryLeaks 10}}
+            {{range .Math.Summary.MemoryLeaks}}
             <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{.ClassName}}" data-categories="{{.ObjectKind}}">
               <td><span class="problem-score {{severityClass .Severity}}">{{severityLabel .Severity}}</span></td>
               <td><code>{{.ClassName}}</code></td>
@@ -179,37 +173,37 @@
           <p>Чтобы заполнить контекст, добавьте в сбор имена сценариев/шагов через API Jank Hunter или включите ASM-опцию <code>flowInteractions</code>, а для источников проверьте <code>owner-map</code> и <code>withOwner/ownerHint</code>.</p>
         </div>
         <h3>Сценарии и источники</h3>
-        {{rowLimitNote "Сценарии на математической странице" (len .Math.Summary.Flows) 64}}
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
-          {{range limitRows .Math.Summary.Flows 64}}
+          {{range .Math.Summary.Flows}}
           <tr><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
           {{else}}<tr><td colspan="9" class="muted">Нет событий контекста сценария. Чтобы связать сигналы со сценарием, включите API сценариев или ASM-опцию flowInteractions.</td></tr>{{end}}
         </table>
         <div class="split">
           <div>
             <h3>Спам логами</h3>
-            {{rowLimitNote "Источники спама логами" (len .Math.Summary.LogSpam) 64}}
-            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range limitRows .Math.Summary.LogSpam 64}}<tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
           </div>
           <div>
             <h3>Проблемные окна</h3>
-            {{rowLimitNote "Проблемные окна" (len .Math.Summary.ProblemWindows) 64}}
-            <table class="timeline-table"><tr><th>Тип сигнала</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range limitRows .Math.Summary.ProblemWindows 64}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Тип сигнала</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
           </div>
         </div>
         <h3>Вызовы выполнения</h3>
-        {{rowLimitNote "Ребра runtime-графа на математической странице" (len .Math.Summary.RuntimeCalls) 64}}
         <div class="explain-note">
           <strong>Зачем здесь вызовы</strong>
           <p>Это не список “все плохо”. Таблица показывает измеренные ребра цепочки выполнения, которые попали в горячий сценарий: кто вызвал, кого вызвал, сколько раз и сколько времени это заняло. Приоритетны строки с большим “Итого” или “Макс.”, особенно если тот же класс есть в реестре проблем кода.</p>
         </div>
+        {{if .MainReportHref}}
+        <p class="help-text"><a href="{{.MainReportHref}}#runtime-calls">Открыть полную таблицу runtime-вызовов в обзоре</a>. Она используется математическим анализом целиком, но не дублируется второй раз внутри автономного HTML.</p>
+        {{else}}
         <table class="timeline-table">
           <tr><th>Экран / сценарий / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
-          {{range limitRows .Math.Summary.RuntimeCalls 64}}
+          {{range .Math.Summary.RuntimeCalls}}
           <tr><td><code>{{flowKeyHint .Screen .Flow .Step ""}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
           {{else}}<tr><td colspan="6" class="muted">Нет графа runtime-вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
+        {{end}}
         {{if .Math.Summary.Influence.Available}}
         <h3>Граф влияния кода</h3>
         <p class="help-text">Этот блок связывает математические симптомы с классами. “Узел графа влияния” означает, что класс оказался рядом с симптомами или связан с ними через статический/измеренный граф. Это подсказка для расследования, а не доказательство бага без соседних runtime-сигналов. Статические связи между классами доступны при передаче <code>--class-graph</code>.</p>
@@ -251,16 +245,16 @@
     {{with $math.Markov.Forecast}}
     <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
       <div class="markov-forecast-copy">
-        <div class="markov-forecast-heading"><span>Прогноз траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+        <div class="markov-forecast-heading"><span>In-sample проекция траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
         <strong class="markov-forecast-title">{{.Label}}</strong>
         <p>{{.Summary}}</p>
-        <div class="markov-forecast-confidence">Уверенность: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}}</div>
+        <div class="markov-forecast-confidence">Поддержка модели: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}} · модель не калибрована как прогноз будущего запуска</div>
       </div>
       {{if .HorizonWindows}}
       <div class="markov-forecast-metrics">
         <div><span>Начало прогона</span><strong>{{printf "%.1f" (percent01 .EarlyBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
         <div><span>Последняя часть</span><strong>{{printf "%.1f" (percent01 .RecentBadExposure)}}%</strong><small>плохих состояний · {{.SegmentWindows}} интервалов</small></div>
-        <div><span>Прогноз</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>вероятность плохого состояния</small></div>
+        <div><span>Проекция</span><strong>{{printf "%.1f" (percent01 .ProjectedBadProbability)}}%</strong><small>модельная доля плохих состояний</small></div>
         <div><span>Горизонт</span><strong>{{.HorizonWindows}}</strong><small>интервалов · {{humanDuration .HorizonMS}}</small></div>
       </div>
       {{end}}

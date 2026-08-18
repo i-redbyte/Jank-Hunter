@@ -11,7 +11,7 @@ internal class JankHunterCallable<T> internal constructor(
 
     override fun call(): T {
         if (!JankHunter.isRuntimeActiveForCallbacks()) return delegate.call()
-        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
+        val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
             return JankHunter.callWithContext(capturedContext, ownerName) {
@@ -21,7 +21,7 @@ internal class JankHunterCallable<T> internal constructor(
             failed = true
             throw throwable
         } finally {
-            RuntimeHookGuard.run {
+            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 JankHunter.recordWrappedWork(
                     ownerName,
                     "callable",

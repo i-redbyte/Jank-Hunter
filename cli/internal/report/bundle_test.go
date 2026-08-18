@@ -1,8 +1,12 @@
 package report
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +42,6 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	html := string(data)
 	for _, marker := range []string{
 		`data-jankhunter-single-html`,
-		`data-report-style="modern"`,
 		`class="report-logo"`,
 		`РАЗДЕЛЫ ОТЧЁТА`,
 		`grid-template-columns: 232px minmax(0, 1fr)`,
@@ -47,15 +50,18 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 		`"id":"math"`,
 		`"payload":"jankhunter-report-page-payload-0"`,
 		`data-jankhunter-report-payload`,
-		`JSON.parse(payload.textContent)`,
+		`data-encoding="gzip-base64"`,
+		`new DecompressionStream("gzip")`,
 		`payload.remove()`,
 		`jankhunter-report:navigate`,
-		`scrollToFragment`,
 		`#page=`,
 	} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("bundle does not contain %q", marker)
 		}
+	}
+	if strings.Contains(html, "data-report-style") {
+		t.Fatal("bundle contains removed report-style selection marker")
 	}
 	if strings.Count(html, bundledPageBridge) != 0 {
 		t.Fatal("embedded bridge must be JSON escaped inside the bundle payload")
@@ -85,6 +91,68 @@ func TestWriteBundleEmbedsPagesAndNavigationBridge(t *testing.T) {
 	secondPage := decodeBundlePagePayload(t, html, pages[1].Payload)
 	if !strings.Contains(firstPage, bundledPageBridge) || !strings.Contains(secondPage, bundledPageBridge) {
 		t.Fatal("navigation bridge is not injected into every embedded page")
+	}
+}
+
+func TestWriteBundleStreamsPageFromFile(t *testing.T) {
+	directory := t.TempDir()
+	pagePath := filepath.Join(directory, "large-page.html")
+	document := largeBundleDocument(0, 1_000)
+	if err := os.WriteFile(pagePath, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(directory, "report.html")
+	if err := WriteBundle(bundlePath, []BundlePage{{
+		ID:    "overview",
+		Title: "Обзор",
+		Href:  "large-page.html",
+		Path:  pagePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeBundlePagePayload(t, string(bundle), "jankhunter-report-page-payload-0")
+	if !strings.Contains(decoded, "com.production.feature00999") {
+		t.Fatal("streamed bundle lost the final table row")
+	}
+	if strings.Count(decoded, bundledPageBridge) != 1 {
+		t.Fatal("streamed bundle must inject exactly one navigation bridge")
+	}
+	if strings.Index(decoded, bundledPageBridge) > strings.LastIndex(strings.ToLower(decoded), "</body>") {
+		t.Fatal("navigation bridge must be injected before the closing body tag")
+	}
+}
+
+func TestLastASCIIFoldIndexReaderAtFindsTagAcrossScanBoundary(t *testing.T) {
+	const blockSize = 64 * 1024
+	document := bytes.Repeat([]byte{'x'}, blockSize*2)
+	tag := []byte("</BoDy>")
+	want := blockSize - 3
+	copy(document[want:], tag)
+
+	got, err := lastASCIIFoldIndexReaderAt(bytes.NewReader(document), int64(len(document)), []byte("</body>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != int64(want) {
+		t.Fatalf("last tag index = %d, want %d", got, want)
+	}
+}
+
+func TestWriteBundleRequiresExactlyOneDocumentSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.html")
+	for _, page := range []BundlePage{
+		{ID: "overview", Title: "Обзор", Href: "report.html"},
+		{ID: "overview", Title: "Обзор", Href: "report.html", HTML: []byte("page"), Path: "page.html"},
+	} {
+		err := WriteBundle(path, []BundlePage{page})
+		if err == nil || !strings.Contains(err.Error(), "exactly one document source") {
+			t.Fatalf("WriteBundle error = %v, want document source error", err)
+		}
 	}
 }
 
@@ -129,7 +197,7 @@ func TestWriteScriptSafeJSONStringKeepsHTMLCompactAndRawTextSafe(t *testing.T) {
 
 func decodeBundlePagePayload(t *testing.T, document, payloadID string) string {
 	t.Helper()
-	marker := `<script id="` + payloadID + `" type="application/json" data-jankhunter-report-payload>`
+	marker := `<script id="` + payloadID + `" type="application/octet-stream" data-jankhunter-report-payload data-encoding="gzip-base64">`
 	start := strings.Index(document, marker)
 	if start < 0 {
 		t.Fatalf("bundle payload %q not found", payloadID)
@@ -139,41 +207,17 @@ func decodeBundlePagePayload(t *testing.T, document, payloadID string) string {
 	if end < 0 {
 		t.Fatalf("bundle payload %q has no terminator", payloadID)
 	}
-	var page string
-	if err := json.Unmarshal([]byte(document[start:start+end]), &page); err != nil {
-		t.Fatalf("decode bundle payload %q: %v", payloadID, err)
-	}
-	return page
-}
-
-func TestWriteBundleWithOptionsPreservesLegacyShell(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.html")
-	err := WriteBundleWithOptions(path, []BundlePage{{
-		ID:    "overview",
-		Title: "Обзор",
-		Href:  "report.html",
-		HTML:  []byte("<!doctype html><html><body>legacy</body></html>"),
-	}}, ReportOptions{Style: ReportStyleLegacy})
+	decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(document[start:start+end]))
+	compressed, err := gzip.NewReader(decoded)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open bundle payload %q: %v", payloadID, err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	page, readErr := io.ReadAll(compressed)
+	closeErr := compressed.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("decode bundle payload %q: read=%v close=%v", payloadID, readErr, closeErr)
 	}
-	html := string(data)
-	for _, marker := range []string{
-		`data-report-style="legacy"`,
-		`<div class="report-brand">Jank <span>Hunter</span></div>`,
-		`grid-template-rows: auto minmax(0, 1fr)`,
-	} {
-		if !strings.Contains(html, marker) {
-			t.Fatalf("legacy bundle does not contain %q", marker)
-		}
-	}
-	if strings.Contains(html, `class="report-logo"`) {
-		t.Fatal("legacy bundle contains modern logo")
-	}
+	return string(page)
 }
 
 func TestWriteBundleRejectsDuplicatePageIdentity(t *testing.T) {
@@ -220,16 +264,16 @@ func TestWriteLargeBundlePerformanceFixture(t *testing.T) {
 	if deferredPath == "" {
 		return
 	}
-	counters := make([]analyze.NamedValue, rowCount)
-	for index := range counters {
-		counters[index] = analyze.NamedValue{
-			Name:  fmt.Sprintf("performance.counter.%05d", index),
+	jankStats := make([]analyze.NamedValue, rowCount)
+	for index := range jankStats {
+		jankStats[index] = analyze.NamedValue{
+			Name:  fmt.Sprintf("performance.jankstat.%05d", index),
 			Value: uint64(index),
 		}
 	}
 	if err := WriteInspectWithOptions(deferredPath, analyze.Summary{
-		Title:    "Большая таблица",
-		Counters: counters,
+		Title:     "Большая таблица",
+		JankStats: jankStats,
 	}, ReportOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -238,21 +282,30 @@ func TestWriteLargeBundlePerformanceFixture(t *testing.T) {
 	if registryPath == "" {
 		return
 	}
-	leaks := make([]analyze.LeakReportItem, 300)
-	for index := range leaks {
-		leaks[index] = analyze.LeakReportItem{
-			Rank: index + 1,
-			Suspect: analyze.MemoryLeakSuspect{
-				ClassName:      fmt.Sprintf("com.performance.DeferredLeak%03d", index),
-				Holder:         "com.performance.Owner",
-				Score:          float64(300 - index),
-				Severity:       "medium",
-				ObjectKind:     "object",
-				Recommendation: "Проверить время жизни объекта.",
-			},
+	problems := make([]analyze.CodeProblemStats, 300)
+	for index := range problems {
+		problems[index] = analyze.CodeProblemStats{
+			ClassName:      fmt.Sprintf("com.performance.DeferredProblem%03d", index),
+			Score:          float64(300 - index),
+			Severity:       "medium",
+			Categories:     []string{"performance"},
+			Evidence:       fmt.Sprintf("Archived evidence %03d", index),
+			Recommendation: "Проверить стоимость операции.",
+			Signals: []analyze.CodeProblemSignal{{
+				Name:     fmt.Sprintf("Deferred signal %03d", index),
+				Category: "performance",
+				Severity: "medium",
+				Detail:   fmt.Sprintf("Complete signal detail %03d", index),
+			}},
+			DrillDown: []analyze.CodeProblemDrillDown{{
+				ClassName:      fmt.Sprintf("com.performance.DeferredProblem%03d", index),
+				Flow:           fmt.Sprintf("deferred.flow.%03d", index),
+				Evidence:       fmt.Sprintf("Complete drill evidence %03d", index),
+				Recommendation: "Проверить этот сценарий.",
+			}},
 		}
 	}
-	if err := WriteLeakInspectWithOptions(registryPath, analyze.LeakReport{Items: leaks}, ReportOptions{}); err != nil {
+	if err := WriteInspectWithOptions(registryPath, analyze.Summary{Title: "Большой реестр", CodeProblems: problems}, ReportOptions{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -262,7 +315,7 @@ func largeBundleDocument(page, rowCount int) []byte {
 	document.Grow(rowCount * 320)
 	fmt.Fprintf(
 		&document,
-		`<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>%s%s</style></head><body data-report-style="modern"><main><section class="panel"><h1>Большой раздел %d</h1><table><thead><tr><th>Класс</th><th>Метрика</th><th>Значение</th><th>Детали</th></tr></thead><tbody>`,
+		`<!doctype html><html lang="ru"><head><meta charset="utf-8"><style>%s%s</style></head><body><main><section class="panel"><h1>Большой раздел %d</h1><table><thead><tr><th>Класс</th><th>Метрика</th><th>Значение</th><th>Детали</th></tr></thead><tbody>`,
 		baseCSS,
 		modernCSS,
 		page+1,

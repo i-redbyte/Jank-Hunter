@@ -36,7 +36,6 @@ data class JankHunterRunRequest(
     val format: String,
     val json: Boolean,
     val presentation: Boolean,
-    val reportStyle: String = "modern",
     val animatedBackground: Boolean = false,
 )
 
@@ -106,9 +105,6 @@ object JankHunterCommandBuilder {
         }
 
         fun addReportAppearanceFlags() {
-            request.reportStyle.trim()
-                .takeIf { it.isNotEmpty() && !it.equals("modern", ignoreCase = true) }
-                ?.let { addFlag("report-style", it) }
             if (request.presentation) args += "--presentation"
             if (request.animatedBackground) args += "--animated-background"
         }
@@ -229,12 +225,12 @@ object JankHunterCommandBuilder {
         if (parts.isEmpty()) return emptyList()
         return when (scope) {
             JankHunterLogScope.ALL_SELECTED -> parts
-            JankHunterLogScope.LATEST_LOG -> latestExistingLog(project, raw)?.let { listOf(it) } ?: parts.take(1)
+            JankHunterLogScope.LATEST_LOG -> latestExistingRun(project, raw).ifEmpty { parts.take(1) }
         }
     }
 
-    private fun latestExistingLog(project: Project, raw: String): String? =
-        JankHunterSessionLogFiles.latest(
+    private fun latestExistingRun(project: Project, raw: String): List<String> =
+        JankHunterSessionLogFiles.latestRun(
             JankHunterInputPaths.expandExistingFiles(project, raw).map { it.toFile() },
-        )?.toPath()?.normalize()?.toString()
+        ).map { file -> file.toPath().normalize().toString() }
 }

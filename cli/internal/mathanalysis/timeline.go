@@ -67,14 +67,14 @@ func mathScaleEventTimeMS(event jhlog.Event, dict map[uint64]string, filter anal
 func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analyze.Filter, symbols *mathSymbolResolver) (uint64, bool) {
 	switch {
 	case event.HTTP != nil:
-		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(route, filter.RouteContains) || !timelineContainsFilter(owner, filter.OwnerContains) {
 			return 0, false
 		}
 		return event.TimeMS, true
 	case event.UIWindow != nil:
-		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.Attribution.Screen)
 		if !timelineContainsFilter(screen, filter.ScreenContains) {
 			return 0, false
 		}
@@ -83,7 +83,7 @@ func timelineEventTimeMS(event jhlog.Event, dict map[uint64]string, filter analy
 		if isMathDiagnosticStall(event, dict, symbols) {
 			return 0, false
 		}
-		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(owner, filter.OwnerContains) {
 			return 0, false
 		}
@@ -179,8 +179,8 @@ func (s timelineScale) bucketMSOrDefault() uint64 {
 func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state *timelineStreamState, symbols *mathSymbolResolver) {
 	switch {
 	case event.HTTP != nil:
-		route := symbols.resolve(dict, event.HTTP.RouteRef, event.HTTP.RouteID)
-		owner := symbols.resolve(dict, event.HTTP.OwnerRef, event.HTTP.OwnerID)
+		route := symbols.resolve(dict, event.HTTP.RouteRef)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(route, c.filter.RouteContains) || !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}
@@ -209,7 +209,7 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 			agg.ttfbCount = saturatingAddUint64(agg.ttfbCount, 1)
 		}
 	case event.UIWindow != nil:
-		screen := symbols.resolve(dict, event.UIWindow.ScreenRef, event.UIWindow.ScreenID)
+		screen := symbols.resolve(dict, event.Attribution.Screen)
 		if !timelineContainsFilter(screen, c.filter.ScreenContains) {
 			return
 		}
@@ -224,7 +224,7 @@ func (c *timelineCollector) add(event jhlog.Event, dict map[uint64]string, state
 		if isMathDiagnosticStall(event, dict, symbols) {
 			return
 		}
-		owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
+		owner := symbols.resolve(dict, event.Attribution.Owner)
 		if !timelineContainsFilter(owner, c.filter.OwnerContains) {
 			return
 		}

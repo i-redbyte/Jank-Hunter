@@ -5,9 +5,10 @@ import java.io.File
 
 internal class LogGrowthManager(
     directory: File,
+    processScope: String? = null,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
-    private val store = LogGrowthHistoryStore(directory)
+    private val store = LogGrowthHistoryStore(directory, processScope)
     private var state = store.load()
 
     @Synchronized
@@ -32,24 +33,15 @@ internal class LogGrowthManager(
             configuredLimitBytes = configuredLimitBytes.coerceAtLeast(0L),
             maximumRetainedBytes = stats.retainedBytes.coerceAtLeast(0L),
             generatedBytes = stats.generatedBytes.coerceAtLeast(0L),
-            overflowCount = stats.overflowCount.coerceAtLeast(0L),
-            evictedChunkCount = stats.evictedChunkCount.coerceAtLeast(0L),
-            evictedBytes = stats.evictedBytes.coerceAtLeast(0L),
-            firstOverflowAtMs = 0L,
-            lastOverflowAtMs = 0L,
+            limitReachedCount = stats.limitReachedCount.coerceAtLeast(0L),
+            segmentRotationCount = stats.segmentRotationCount.coerceAtLeast(0L),
+            archiveEvictedBytes = stats.archiveEvictedBytes.coerceAtLeast(0L),
+            firstLimitReachedAtMs = 0L,
+            lastLimitReachedAtMs = 0L,
         )
         state = store.writeActive(state, active)
         val persisted = requireNotNull(state.active)
         return StartedLogGrowth(history, LogGrowthWire.live(persisted, completed = false))
-    }
-
-    @Synchronized
-    fun onChunkCommitted(stats: LogContainerStats): ByteArray? {
-        val current = state.active ?: return null
-        if (stats.overflowCount <= current.overflowCount) return null
-        val updated = updateActive(current, stats, nowMs())
-        state = store.writeActive(state, updated)
-        return state.active?.let { LogGrowthWire.live(it, completed = false) }
     }
 
     @Synchronized
@@ -110,22 +102,28 @@ internal class LogGrowthManager(
         stats: LogContainerStats,
         updatedAtMs: Long,
     ): ActiveLogGrowthFact {
-        val overflows = maxOf(current.overflowCount, stats.overflowCount.coerceAtLeast(0L))
-        val newOverflow = overflows > current.overflowCount
+        val limitReached = maxOf(current.limitReachedCount, stats.limitReachedCount.coerceAtLeast(0L))
+        val newlyReachedLimit = limitReached > current.limitReachedCount
         val time = maxOf(current.startedAtMs, updatedAtMs)
         return current.copy(
             updatedAtMs = maxOf(current.updatedAtMs, time),
             maximumRetainedBytes = maxOf(current.maximumRetainedBytes, stats.retainedBytes.coerceAtLeast(0L)),
             generatedBytes = maxOf(current.generatedBytes, stats.generatedBytes.coerceAtLeast(0L)),
-            overflowCount = overflows,
-            evictedChunkCount = maxOf(current.evictedChunkCount, stats.evictedChunkCount.coerceAtLeast(0L)),
-            evictedBytes = maxOf(current.evictedBytes, stats.evictedBytes.coerceAtLeast(0L)),
-            firstOverflowAtMs = when {
-                current.firstOverflowAtMs > 0L -> current.firstOverflowAtMs
-                newOverflow -> time
+            limitReachedCount = limitReached,
+            segmentRotationCount = maxOf(
+                current.segmentRotationCount,
+                stats.segmentRotationCount.coerceAtLeast(0L),
+            ),
+            archiveEvictedBytes = maxOf(
+                current.archiveEvictedBytes,
+                stats.archiveEvictedBytes.coerceAtLeast(0L),
+            ),
+            firstLimitReachedAtMs = when {
+                current.firstLimitReachedAtMs > 0L -> current.firstLimitReachedAtMs
+                newlyReachedLimit -> time
                 else -> 0L
             },
-            lastOverflowAtMs = if (newOverflow) time else current.lastOverflowAtMs,
+            lastLimitReachedAtMs = if (newlyReachedLimit) time else current.lastLimitReachedAtMs,
         )
     }
 }
@@ -139,4 +137,5 @@ internal data class LogGrowthSessionBinding(
     val manager: LogGrowthManager,
     val localDate: String,
     val configuredLimitBytes: Long,
+    val baseStats: LogContainerStats = LogContainerStats.EMPTY,
 )

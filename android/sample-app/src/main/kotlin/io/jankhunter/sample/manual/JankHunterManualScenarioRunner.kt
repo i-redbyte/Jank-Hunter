@@ -22,6 +22,8 @@ internal class JankHunterManualScenarioRunner(
             ManualAction.RUN_NOISY_CANDIDATE to { runNoisyCandidate(requireNotNull(it)) },
             ManualAction.FLUSH_DIAGNOSTICS to { flushDiagnostics() },
             ManualAction.SHARE_DIAGNOSTICS to { stateSink.emit(ManualStateUpdate.ShareDiagnostics) },
+            ManualAction.OPEN_CUSTOM_VIEW_LAB to { stateSink.emit(ManualStateUpdate.OpenCustomViewLab) },
+            ManualAction.OPEN_COMPOSE_LAB to { stateSink.emit(ManualStateUpdate.OpenComposeLab) },
             ManualAction.BOTH_CLEAN_OBJECT to { runCleanLeakCanaryBenchmark() },
             ManualAction.BOTH_RETAINED_OBJECT to { runRetainedLeakCanaryBenchmark(requireNotNull(it)) },
             ManualAction.BOTH_CACHE_BURST to { runCacheLeakCanaryBenchmark() },

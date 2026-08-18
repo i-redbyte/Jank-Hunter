@@ -20,13 +20,13 @@ func TestClassifiedBaseEventsRespectRuntimeProblemDecision(t *testing.T) {
 				Type:        jhlog.EventHTTP,
 				Flags:       uint64(jhlog.FlagHTTPClassified),
 				Attribution: attributionForTest(3, 1, 0, 0),
-				HTTP:        &jhlog.HTTPEvent{OwnerID: 1, RouteID: 2, DurationMS: 5_000, Status: jhlog.Status2xx},
+				HTTP:        &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 5_000, Status: jhlog.Status2xx},
 			},
 			{
 				Type:        jhlog.EventUIWindow,
 				Flags:       uint64(jhlog.FlagUIClassified),
 				Attribution: attributionForTest(3, 1, 0, 0),
-				UIWindow:    &jhlog.UIWindowEvent{ScreenID: 3, WindowMS: 1_000, FrameCount: 60, JankCount: 5, P95MS: 80},
+				UIWindow:    &jhlog.UIWindowEvent{WindowMS: 1_000, FrameCount: 60, JankCount: 5, P95MS: 80},
 			},
 		},
 	}})
@@ -41,10 +41,10 @@ func TestUIProblemWindowUsesObservedP99AsMaximum(t *testing.T) {
 	summary := inspectLogsForTest("ui p99", []jhlog.Log{{
 		Dict: dict,
 		Events: []jhlog.Event{{
-			Type:  jhlog.EventUIWindow,
-			Flags: uint64(jhlog.FlagUIClassified | jhlog.FlagUIProblem),
+			Type:        jhlog.EventUIWindow,
+			Flags:       uint64(jhlog.FlagUIClassified | jhlog.FlagUIProblem),
+			Attribution: attributionForTest(1, 0, 0, 0),
 			UIWindow: &jhlog.UIWindowEvent{
-				ScreenID:   1,
 				WindowMS:   1_000,
 				FrameCount: 60,
 				JankCount:  2,
@@ -71,12 +71,13 @@ func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
 			{
 				Type:   jhlog.EventCounter,
 				TimeMS: 1_000,
-				Metric: &jhlog.MetricEvent{MetricID: 1, Value: 1},
+				Metric: &jhlog.MetricEvent{MetricRef: jhlog.LocalSymbol(1), Value: 1},
 			},
 			{
-				Type:   jhlog.EventStall,
-				TimeMS: 1_200,
-				Stall:  &jhlog.StallEvent{OwnerID: 2, StackID: 3, DurationMS: 700},
+				Type:        jhlog.EventStall,
+				TimeMS:      1_200,
+				Attribution: attributionForTest(0, 2, 0, 0),
+				Stall:       &jhlog.StallEvent{StackRef: jhlog.LocalSymbol(3), DurationMS: 700},
 			},
 		},
 	}})
@@ -127,33 +128,6 @@ func TestJankHunterRuntimeClassIsSystemOwned(t *testing.T) {
 
 	if suspect.UserOwned || !suspect.SystemRetained {
 		t.Fatalf("runtime retention ownership is incorrect: %+v", suspect)
-	}
-}
-
-func TestLegacyDerivedProblemDoesNotDoubleCanonicalBaseWindow(t *testing.T) {
-	dict := map[uint64]string{
-		1: "com.app.MainThreadOwner.run",
-		2: "main_thread_stall",
-	}
-	attr := attributionForTest(0, 1, 0, 0)
-	summary := inspectLogsForTest("legacy", []jhlog.Log{{
-		Dict: dict,
-		Events: []jhlog.Event{
-			{Type: jhlog.EventStall, Attribution: attr, Stall: &jhlog.StallEvent{OwnerID: 1, DurationMS: 2_000}},
-			{
-				Type:        jhlog.EventProblem,
-				Attribution: attr,
-				Problem:     &jhlog.ProblemEvent{OwnerID: 1, KindID: 2, WindowMS: 2_000, Count: 1, MaxMS: 2_000},
-			},
-		},
-	}})
-
-	if len(summary.ProblemWindows) != 1 {
-		t.Fatalf("problem windows = %+v", summary.ProblemWindows)
-	}
-	window := summary.ProblemWindows[0]
-	if window.Kind != "main_thread_stall" || window.Windows != 1 || window.Count != 1 {
-		t.Fatalf("canonical window was double-counted: %+v", window)
 	}
 }
 

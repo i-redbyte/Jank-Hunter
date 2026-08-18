@@ -37,12 +37,14 @@ make install PREFIX="$HOME/.local"
 jankhunter version
 ```
 
-Текущие значения:
+Формат текущего исходного дерева:
 
 ```text
-Jank Hunter CLI 1.0.3
-.jhlog format 1.0 (also reads 8 and 9)
+.jhlog format 2.0.0
 ```
+
+Версию бинарника задаёт release-сборка. CLI читает только JHLOG 2.0.0 и fail-closed отклоняет
+устаревший или семантически несовместимый wire-контракт.
 
 Сборка под другую систему:
 
@@ -80,17 +82,10 @@ make build
 /tmp/compare.html
 ```
 
-Обзор, математический анализ, утечки и граф влияния доступны во вкладках внутри HTML.
+Problem-first обзор, математический анализ, утечки и граф влияния доступны во вкладках внутри HTML.
 `--instrumentation-diagnostics` добавляет вкладку «ASM диагностика», а `--di-catalog` —
-вкладку «DI-каталог». Внешние ресурсы и соседние HTML-файлы отчёту не нужны.
-
-Новый зелёный интерфейс используется для всех HTML-отчётов по умолчанию. Предыдущий
-вариант сохранён и доступен через `--report-style legacy`:
-
-```bash
-jankhunter inspect logs/*.jhlog --report-style legacy --out report.html
-jankhunter compare --baseline old/*.jhlog --candidate new/*.jhlog --report-style legacy --out compare.html
-```
+вкладку «DI-каталог». Неоткрытые страницы остаются сжатыми и загружаются лениво; внешние ресурсы и
+соседние HTML-файлы отчёту не нужны. Устаревший `--report-style` не поддерживается.
 
 Для доклада или обсуждения с командой можно включить более крупные акценты:
 
@@ -133,9 +128,11 @@ jankhunter help
 jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-Что видно в отчёте:
+Что видно в отчёте, в порядке чтения:
 
-- верхний срез: сеть, плавность, частота кадров, память, паузы главного потока и трафик;
+- verdict, качество evidence и coverage каждой категории: `healthy`, `problems_found`, `not_measured`, `insufficient_data` или `collection_degraded`;
+- единый ранжированный inbox с danger/confidence, объяснимым score, location, impact, evidence и проверяемыми рекомендациями;
+- compound findings: связанные slow/storm/retry/jank сигналы объединяются по стабильному fingerprint вместо дублирующих карточек;
 - сведения об устройстве: Android, API, патч безопасности, ABI, сеть, VPN, батарея, память, хранилище и root-доступ;
 - маршруты HTTP и WebSocket-сигналы;
 - экраны и окна кадров;
@@ -145,7 +142,7 @@ jankhunter inspect logs/*.jhlog --out report.html
 - проблемные окна и спам логами;
 - граф влияния кода;
 - математический разбор;
-- итоговая эвристика.
+- detector registry с порогами, minimum sample и ограничениями каждого утверждения.
 
 Фильтры:
 
@@ -164,7 +161,10 @@ JSON вместо HTML:
 jankhunter inspect logs/*.jhlog --json > inspect.json
 ```
 
-По умолчанию, если в список попали несколько файлов вида `jh-session-log.YYYY-MM-DD.<index>.jhlog`, `inspect` определяет сессию и процесс по идентификаторам внутри файла и берёт последнюю сессию для каждого процесса. Одна сессия хранится в одном файле; в формате 1.0 достижение лимита вытесняет старейшие блоки, но не завершает сессию. Чтобы разобрать все выбранные сессии вместе:
+По умолчанию, если в список попали файлы вида
+`jh-session-log.YYYY-MM-DD.<run-id>.<index>.jhlog`, `inspect` проверяет digest-chain, process scope и
+roster, объединяет сегменты последнего целого run cohort и исключает несвязанные запуски. Чтобы
+намеренно разобрать все выбранные когорты вместе:
 
 ```bash
 jankhunter inspect logs/*.jhlog --all-sessions --out report.html
@@ -321,8 +321,8 @@ jankhunter compare \
 
 В отчёте есть:
 
-- сводная панель базы и кандидата;
-- матрица регрессий по сети, плавности, памяти, контексту и проблемным окнам;
+- problem deltas со статусами `new`, `regressed`, `persistent`, `improved` и `resolved`, сопоставленные по стабильному fingerprint;
+- тот же risk/confidence/coverage язык, что в inspect, CSV/JSON и scorecard;
 - проверка когорт: устройство, сеть, версия приложения, SDK, процесс;
 - таблицы «где изменилось»;
 - сравнение утечек со статусами `new`, `worse`, `same`, `better`, `resolved`;
@@ -422,7 +422,7 @@ jankhunter scorecard \
 
 ## Problems
 
-Реестр проблем кода:
+Канонический реестр проблем приложения:
 
 ```bash
 jankhunter problems logs/*.jhlog --out problems.csv
@@ -438,7 +438,10 @@ jankhunter problems logs/*.jhlog --dataset influence --out influence.csv
 jankhunter problems logs/*.jhlog --dataset math-findings --out math.csv
 ```
 
-`code-problems` содержит строки вида `класс -> метод -> экран/сценарий/шаг/маршрут -> доказательства -> рекомендация`.
+Dataset по умолчанию `problems` экспортирует `ProblemFinding`: fingerprint, detector/version,
+category, severity, risk breakdown, confidence, location, claim level, evidence, impact и
+рекомендации. `code-problems` оставлен как явный глубокий срез
+`класс -> метод -> экран/сценарий/шаг/маршрут -> доказательства -> рекомендация`.
 
 `leaks` добавляет `gc_root_category`, `chain_fingerprint`, `alternative_paths`, `investigation_steps`, `fix_examples` и `verification_steps`.
 
@@ -469,12 +472,12 @@ HTML-отчёта. Там же можно по требованию рассчи
 По умолчанию Android-библиотека пишет:
 
 ```text
-context.filesDir/jankhunter/jh-session-log.YYYY-MM-DD.<index>.jhlog
+context.filesDir/jankhunter/jh-session-log.YYYY-MM-DD.<run-id>.<index>.jhlog
 ```
 
-Одна сессия сбора пишется в один файл. Формат 1.0 использует его как кольцо: при достижении
-лимита старейшие целые блоки вытесняются, а запись текущей сессии продолжается без
-файла-продолжения.
+Один запуск может состоять из нескольких сегментов. При достижении лимита runtime FINAL-запечатывает
+текущий файл и продолжает запись в следующем `index`; CLI проверяет их digest-chain и объединяет
+как один run cohort.
 
 Через `adb`:
 
@@ -561,11 +564,13 @@ jankhunter inspect logs/*.jhlog \
 - каждый chunk имеет CRC, независимый gzip payload и commit trailer;
 - незакоммиченный хвост активного файла отделяется от реального повреждения;
 - loss/overflow/truncation публикуются накопительными quality snapshots;
-- основной формат записи: `1.0`, один кольцевой файл на сессию;
-- чтение прежних форматов 8 и 9 сохранено в отдельных обработчиках, которые можно удалить
-  независимо после завершения переходного периода;
-- в зарезервированной области формата 1.0 находится ограниченная сводка роста: последние
-  сессии, дневные итоги и два чередующихся снимка текущей сессии.
+- основной и единственный формат записи/чтения: `2.0.0`;
+- header фиксирует run/process/session identity, process scope и ожидаемый process roster;
+- independently committed gzip-chunks связаны SHA-256 digest-chain между сегментами;
+- typed UI frame histogram, process-exit и attributed I/O не кодируются динамическими gauge names;
+- runtime call blocks хранят physical rows отдельно от представленного logical call count;
+- continuous Flow records удалены: screen/owner/flow/step передаются только atomic attribution;
+- старые форматы не читаются и не имеют fallback-ветки.
 
 Семантика числовых метрик:
 

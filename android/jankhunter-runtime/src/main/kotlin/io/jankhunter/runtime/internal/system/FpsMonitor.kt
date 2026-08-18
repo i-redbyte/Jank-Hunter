@@ -5,6 +5,11 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeHookGuard
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.internal.io.Jhlog
+import java.util.concurrent.CountDownLatch
 import kotlin.math.max
 
 /**
@@ -17,29 +22,23 @@ internal class FpsMonitor(
     windowMs: Long,
     jankFrameThresholdMs: Long,
     choreographerFallbackEnabled: Boolean = true,
+    private val exactAdmission: Boolean = false,
 ) : Choreographer.FrameCallback {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val runState = CollectorRunState()
     private val sourceSelector = FrameSourceSelector(choreographerFallbackEnabled)
     private val windowNanos = millisecondsToNanos(max(250L, windowMs))
     private val jankFrameThresholdMs = max(1L, jankFrameThresholdMs)
+    private val window = FrameWindowAccumulator(windowNanos, exactAdmission)
 
     private var choreographer: Choreographer? = null
     private var callbackPosted = false
-    private var windowScreen: String? = null
-    private var windowStartNanos = 0L
     private var lastFallbackFrameNanos = 0L
-    private var frameCount = 0L
-    private var jankCount = 0L
-    private var deadlineMissCount = 0L
-    private var maxFrameOverrunMs = 0L
-    private var maxFrameDurationMs = 0L
-    private val durationHistogram = FrameDurationHistogram()
 
     fun start() {
         val expectedGeneration = runState.start() ?: return
-        mainHandler.post {
-            if (!isCurrent(expectedGeneration)) return@post
+        runOnMain {
+            if (!isCurrent(expectedGeneration)) return@runOnMain
             choreographer = Choreographer.getInstance()
             resetWindow()
             updateFallbackRegistration()
@@ -48,7 +47,8 @@ internal class FpsMonitor(
 
     fun stop() {
         if (!runState.stop()) return
-        mainHandler.post {
+        runOnMain(waitForCompletion = exactAdmission) {
+            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
             removeFallbackCallback()
             sourceSelector.updateJankStats(false)
             resetWindow()
@@ -59,12 +59,13 @@ internal class FpsMonitor(
     fun setJankStatsActive(active: Boolean, sourceChanged: Boolean = false) {
         runOnMain {
             if (!runState.isRunning()) return@runOnMain
-            val activeChanged = sourceSelector.updateJankStats(active)
+            val activeChanged = sourceSelector.jankStatsActive != active
             if (!activeChanged && !sourceChanged) return@runOnMain
+            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
+            sourceSelector.updateJankStats(active)
             resetWindow()
             if (activeChanged) {
                 updateFallbackRegistration()
-                JankHunter.recordGauge("ui.frame.source.jankstats", if (active) 1L else 0L)
             }
         }
     }
@@ -85,20 +86,22 @@ internal class FpsMonitor(
         callbackPosted = false
         if (!shouldUseFallback()) return
 
-        val previousFrameNanos = lastFallbackFrameNanos
-        lastFallbackFrameNanos = frameTimeNanos
-        if (previousFrameNanos != 0L) {
-            val durationMs = ((frameTimeNanos - previousFrameNanos).coerceAtLeast(0L)) / NANOS_PER_MS
-            recordFrame(
-                screen = JankHunter.currentScreen(),
-                frameTimeNanos = frameTimeNanos,
-                durationMs = durationMs,
-                isJank = durationMs >= jankFrameThresholdMs,
-            )
-        } else {
-            windowStartNanos = frameTimeNanos
+        RuntimeHookGuard.run {
+            val previousFrameNanos = lastFallbackFrameNanos
+            lastFallbackFrameNanos = frameTimeNanos
+            if (previousFrameNanos != 0L) {
+                val durationMs = ((frameTimeNanos - previousFrameNanos).coerceAtLeast(0L)) / NANOS_PER_MS
+                recordFrame(
+                    screen = JankHunter.currentScreen(),
+                    frameTimeNanos = frameTimeNanos,
+                    durationMs = durationMs,
+                    isJank = durationMs >= jankFrameThresholdMs,
+                )
+            } else {
+                window.reset(frameTimeNanos)
+            }
         }
-        postFallbackCallback()
+        RuntimeHookGuard.run(::postFallbackCallback)
     }
 
     private fun recordFrame(
@@ -107,46 +110,29 @@ internal class FpsMonitor(
         durationMs: Long,
         isJank: Boolean,
     ) {
-        if (windowScreen != null && screen != null && windowScreen != screen) {
-            resetWindow(frameTimeNanos)
-        }
-        if (windowScreen == null) {
-            windowScreen = screen
-        }
-        if (windowStartNanos == 0L) {
-            val durationNanos = millisecondsToNanos(durationMs)
-            windowStartNanos = if (durationNanos >= frameTimeNanos) 1L else frameTimeNanos - durationNanos
-        }
-        val safeDurationMs = durationMs.coerceAtLeast(0L)
-        frameCount++
-        if (isJank) {
-            jankCount++
-            deadlineMissCount++
-            maxFrameOverrunMs = max(maxFrameOverrunMs, safeDurationMs - jankFrameThresholdMs)
-        }
-        maxFrameDurationMs = max(maxFrameDurationMs, safeDurationMs)
-        durationHistogram.add(safeDurationMs)
+        window.add(screen, frameTimeNanos, durationMs, isJank)?.let(::emitWindow)
+    }
 
-        val elapsedNanos = (frameTimeNanos - windowStartNanos).coerceAtLeast(0L)
-        if (elapsedNanos < windowNanos) return
-
-        val elapsedMs = max(1L, elapsedNanos / NANOS_PER_MS)
-        durationHistogram.calculatePercentiles()
+    private fun emitWindow(snapshot: FrameWindowSnapshot) {
+        val source = if (sourceSelector.useJankStats()) {
+            Jhlog.UI_SOURCE_JANKSTATS
+        } else {
+            Jhlog.UI_SOURCE_CHOREOGRAPHER
+        }
         JankHunter.recordUiWindow(
-            windowScreen,
-            elapsedMs,
-            frameCount,
-            jankCount,
-            durationHistogram.p50Ms,
-            durationHistogram.p95Ms,
-            durationHistogram.p99Ms,
+            snapshot.screen,
+            snapshot.elapsedMs,
+            snapshot.frameCount,
+            snapshot.jankCount,
+            snapshot.p95Ms,
+            source,
+            jankFrameThresholdMs * NANOS_PER_MS / 1_000L,
+            snapshot.frameDurationBuckets,
         )
-        JankHunter.recordGauge("ui.fps_x100", saturatedFpsX100(frameCount, elapsedMs))
-        JankHunter.recordGauge("ui.frame_deadline_miss.count", deadlineMissCount)
-        JankHunter.recordGauge("ui.frame_overrun.max_ms", maxFrameOverrunMs)
-        JankHunter.recordGauge("ui.frame_duration.max_ms", maxFrameDurationMs)
-        resetWindow(frameTimeNanos)
-        windowScreen = screen
+    }
+
+    private fun finishWindow(endNanos: Long) {
+        window.finish(endNanos)?.let(::emitWindow)
     }
 
     private fun updateFallbackRegistration() {
@@ -164,8 +150,8 @@ internal class FpsMonitor(
     private fun postFallbackCallback() {
         val local = choreographer ?: return
         if (!callbackPosted && shouldUseFallback()) {
-            callbackPosted = true
             local.postFrameCallback(this)
+            callbackPosted = true
         }
     }
 
@@ -178,31 +164,41 @@ internal class FpsMonitor(
     }
 
     private fun resetWindow(frameTimeNanos: Long = 0L) {
-        windowStartNanos = frameTimeNanos
-        windowScreen = null
+        window.reset(frameTimeNanos)
         lastFallbackFrameNanos = 0L
-        frameCount = 0L
-        jankCount = 0L
-        deadlineMissCount = 0L
-        maxFrameOverrunMs = 0L
-        maxFrameDurationMs = 0L
-        durationHistogram.clear()
     }
 
-    private fun saturatedFpsX100(frames: Long, elapsedMs: Long): Long {
-        return if (frames > Long.MAX_VALUE / FPS_SCALE) {
-            Long.MAX_VALUE / elapsedMs
-        } else {
-            frames * FPS_SCALE / elapsedMs
-        }
-    }
-
-    private fun runOnMain(block: () -> Unit) {
+    private fun runOnMain(waitForCompletion: Boolean = false, block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            block()
+            RuntimeHookGuard.run(block)
         } else {
-            mainHandler.post(block)
+            val completed = if (waitForCompletion) CountDownLatch(1) else null
+            val accepted = mainHandler.post {
+                try {
+                    RuntimeHookGuard.run(block)
+                } finally {
+                    completed?.countDown()
+                }
+            }
+            if (!accepted) {
+                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
+                return
+            }
+            if (completed != null) awaitUninterruptibly(completed)
         }
+    }
+
+    private fun awaitUninterruptibly(completed: CountDownLatch) {
+        var interrupted = false
+        while (true) {
+            try {
+                completed.await()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
     }
 
     private fun isCurrent(expectedGeneration: Long): Boolean {
@@ -216,6 +212,5 @@ internal class FpsMonitor(
 
     private companion object {
         private const val NANOS_PER_MS = 1_000_000L
-        private const val FPS_SCALE = 100_000L
     }
 }

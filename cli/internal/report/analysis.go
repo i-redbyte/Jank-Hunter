@@ -29,12 +29,16 @@ func inspectAnalysis(summary analyze.Summary, lang string) ReportAnalysis {
 		summary.EventCount,
 		summary.LogCount,
 	))
-	if summary.CollectionQuality.Level != "" && summary.CollectionQuality.Level != "high" {
+	if summary.CollectionQuality.TrustLevel != "" && summary.CollectionQuality.TrustLevel != "excellent" {
 		detail := textf(lang,
-			"Collection quality limits confidence to %s.",
-			"Качество сбора ограничивает доверие уровнем %s.",
-			summary.CollectionQuality.Level,
+			"Collection trust is %s (%.2f%%).",
+			"Доверие к сбору: %s (%.2f%%).",
+			trustLevelLabel(summary.CollectionQuality.TrustLevel),
+			summary.CollectionQuality.TrustScorePercent,
 		)
+		if summary.CollectionQuality.TrustLevelExplanation != "" {
+			detail += " " + summary.CollectionQuality.TrustLevelExplanation
+		}
 		if len(summary.CollectionQuality.Reasons) > 0 {
 			detail += " " + strings.Join(summary.CollectionQuality.Reasons, "; ") + "."
 		}

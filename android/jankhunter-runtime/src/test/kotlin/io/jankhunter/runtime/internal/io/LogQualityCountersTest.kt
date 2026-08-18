@@ -12,7 +12,7 @@ class LogQualityCountersTest {
             thread(start = true) {
                 repeat(UPDATES_PER_WORKER) {
                     counters.addRejected(
-                        JhlogV9.TYPE_RUNTIME_CALL,
+                        Jhlog.TYPE_RUNTIME_CALL,
                         QualityCounterId.REASON_QUEUE_FULL,
                     )
                 }
@@ -20,7 +20,7 @@ class LogQualityCountersTest {
         }
 
         val perEventId = QualityCounterId.eventReason(
-            JhlogV9.TYPE_RUNTIME_CALL,
+            Jhlog.TYPE_RUNTIME_CALL,
             QualityCounterId.REASON_QUEUE_FULL,
         )
         while (workers.any { it.isAlive }) {

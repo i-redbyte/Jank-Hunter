@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,10 +17,13 @@ import (
 	"github.com/i-redbyte/jank-hunter/cli/internal/report"
 )
 
-var version = "1.0.3"
+var version = "1.0.0"
+
+const defaultCLIMemoryLimitBytes int64 = 64 * 1024 * 1024
 
 func main() {
 	configureCLIGarbageCollector()
+	configureCLIMemoryLimit()
 	err := newCommandRegistry(os.Stdout).run(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jankhunter:", err)
@@ -41,9 +43,20 @@ func configureCLIGarbageCollector() func() {
 	return func() { debug.SetGCPercent(previous) }
 }
 
+// The limit is soft: large inputs can exceed it, while the runtime returns unused pages sooner for
+// ordinary reports. Operators retain full control through the standard GOMEMLIMIT environment
+// variable, matching the GOGC override above.
+func configureCLIMemoryLimit() func() {
+	if _, explicit := os.LookupEnv("GOMEMLIMIT"); explicit {
+		return func() {}
+	}
+	previous := debug.SetMemoryLimit(defaultCLIMemoryLimitBytes)
+	return func() { debug.SetMemoryLimit(previous) }
+}
+
 func printVersion(out io.Writer) {
 	fmt.Fprintf(out, "Jank Hunter CLI %s\n", version)
-	fmt.Fprintf(out, ".jhlog format %d.%d (also reads %d and %d)\n", jhlog.CurrentFormatMajor, jhlog.CurrentFormatMinor, jhlog.LegacyFormatVersion8, jhlog.FormatVersion)
+	fmt.Fprintf(out, ".jhlog format %s\n", jhlog.FormatVersionString)
 }
 
 func usage() {
@@ -51,11 +64,11 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--report-style modern|legacy] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--report-style modern|legacy] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset code-problems|leaks|influence|math-findings] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 `)
@@ -94,14 +107,6 @@ func runInspect(args []string) error {
 	if err != nil {
 		return err
 	}
-	reportStyleValue, remaining, err := takeStringFlag(remaining, "report-style", string(report.ReportStyleModern))
-	if err != nil {
-		return err
-	}
-	reportStyle, err := report.ParseReportStyle(reportStyleValue)
-	if err != nil {
-		return err
-	}
 	allSessions, remaining, err := takeBoolFlag(remaining, "all-sessions")
 	if err != nil {
 		return err
@@ -118,7 +123,7 @@ func runInspect(args []string) error {
 		return fmt.Errorf("inspect needs at least one log file")
 	}
 	paths, sessionWarnings := selectLatestSessionLogs(paths, allSessions)
-	options, err := builder.build()
+	options, err := builder.buildForLogs(paths)
 	if err != nil {
 		return err
 	}
@@ -146,7 +151,6 @@ func runInspect(args []string) error {
 		reportOptions := report.ReportOptions{
 			PresentationMode:   presentation,
 			AnimatedBackground: animatedBackground,
-			Style:              reportStyle,
 		}
 		if err := writeInspectReportSet(out, summary, paths, options, reportOptions); err != nil {
 			return err
@@ -156,58 +160,51 @@ func runInspect(args []string) error {
 	return nil
 }
 
-type latestProcessSession struct {
-	name       jhlog.SessionLogFilename
-	sessionIDs map[jhlog.ID128]struct{}
+type latestRunCohort struct {
+	name   jhlog.SessionLogFilename
+	runIDs map[jhlog.ID128]struct{}
 }
 
 func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []string) {
 	if allSessions || len(paths) < 2 {
 		return paths, nil
 	}
-	headerByPath := map[string]jhlog.SegmentHeader{}
-	latestByProcess := map[string]latestProcessSession{}
+	nameByPath := make(map[string]jhlog.SessionLogFilename, len(paths))
+	latest := latestRunCohort{}
+	hasLatest := false
 	for _, path := range paths {
 		name, ok := jhlog.ParseSessionLogFilename(path)
 		if !ok {
 			continue
 		}
-		header, err := jhlog.ReadSessionHeader(path)
-		if err != nil {
-			// Keep the file in the input set. The normal analyzer path will return
-			// the full integrity error instead of silently hiding a broken log.
-			continue
-		}
-		headerByPath[path] = header
+		nameByPath[path] = name
 
-		latest, exists := latestByProcess[header.ProcessName]
 		switch {
-		case !exists || name.Compare(latest.name) > 0:
-			latestByProcess[header.ProcessName] = latestProcessSession{
-				name:       name,
-				sessionIDs: map[jhlog.ID128]struct{}{header.SessionID: struct{}{}},
+		case !hasLatest || name.Compare(latest.name) > 0:
+			latest = latestRunCohort{
+				name:   name,
+				runIDs: map[jhlog.ID128]struct{}{name.RunID: {}},
 			}
+			hasLatest = true
 		case name.Compare(latest.name) == 0:
 			// Equal canonical keys can occur when files from multiple devices or
-			// directories are passed together. Retaining every tied session avoids
+			// directories are passed together. Retaining every tied run avoids
 			// an input-order-dependent data loss decision.
-			latest.sessionIDs[header.SessionID] = struct{}{}
-			latestByProcess[header.ProcessName] = latest
+			latest.runIDs[name.RunID] = struct{}{}
 		}
 	}
-	if len(headerByPath) == 0 {
+	if !hasLatest {
 		return paths, nil
 	}
 	selected := make([]string, 0, len(paths))
 	skipped := make([]string, 0)
 	for _, path := range paths {
-		header, ok := headerByPath[path]
-		latest, hasLatest := latestByProcess[header.ProcessName]
-		if !ok || !hasLatest {
+		name, ok := nameByPath[path]
+		if !ok {
 			selected = append(selected, path)
 			continue
 		}
-		if _, keep := latest.sessionIDs[header.SessionID]; keep {
+		if _, keep := latest.runIDs[name.RunID]; keep {
 			selected = append(selected, path)
 			continue
 		}
@@ -218,7 +215,7 @@ func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []stri
 	}
 	return selected, []string{
 		fmt.Sprintf(
-			"Inspect обнаружил несколько Jank Hunter session для одного процесса и по дате и числовому индексу canonical-имени оставил только последнюю; старые файлы исключены из отчета: %s. Identity процесса и session прочитаны из v9 header. Чтобы анализировать все session вместе, передайте --all-sessions.",
+			"Inspect обнаружил несколько Jank Hunter run cohort и по дате и числовому индексу canonical-имени оставил только последнюю целиком; файлы других запусков исключены из отчета: %s. Чтобы анализировать все запуски вместе, передайте --all-sessions.",
 			strings.Join(skipped, ", "),
 		),
 	}
@@ -257,14 +254,6 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
-	reportStyleValue, remaining, err := takeStringFlag(remaining, "report-style", string(report.ReportStyleModern))
-	if err != nil {
-		return err
-	}
-	reportStyle, err := report.ParseReportStyle(reportStyleValue)
-	if err != nil {
-		return err
-	}
 	thresholdsPath, remaining, err := takeStringFlag(remaining, "thresholds", "")
 	if err != nil {
 		return err
@@ -287,7 +276,7 @@ func runCompare(args []string) error {
 	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
 		return err
 	}
-	options, err := builder.build()
+	options, err := builder.buildForLogs(append(append([]string{}, baselinePaths...), candidatePaths...))
 	if err != nil {
 		return err
 	}
@@ -345,7 +334,6 @@ func runCompare(args []string) error {
 		reportOptions := report.ReportOptions{
 			PresentationMode:   presentation,
 			AnimatedBackground: animatedBackground,
-			Style:              reportStyle,
 		}
 		baselineReports, err := buildLogReports("baseline", baselinePaths, baselineOptions, baseline)
 		if err != nil {
@@ -412,7 +400,7 @@ func runScorecard(args []string) error {
 	if err := rejectLogInputOverlap("baseline", baselinePaths, "candidate", candidatePaths); err != nil {
 		return err
 	}
-	options, err := builder.build()
+	options, err := builder.buildForLogs(append(append([]string{}, baselinePaths...), candidatePaths...))
 	if err != nil {
 		return err
 	}
@@ -448,7 +436,8 @@ func runScorecard(args []string) error {
 }
 
 func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
-	return writeSingleHTMLReport(out, reportOptions, func(renderPath string) error {
+	reportOptions.TransientOutput = true
+	return writeSingleHTMLReport(out, func(renderPath string) error {
 		return writeInspectReportSetUsing(renderPath, summary, paths, options, reportOptions, inspectReportSetWriters{
 			primary: report.WriteInspectWithOptions,
 			math:    report.WriteMathInspectWithOptions,
@@ -548,7 +537,8 @@ func writeCompareReportSet(
 	options analyze.Options,
 	reportOptions report.ReportOptions,
 ) error {
-	return writeSingleHTMLReport(out, reportOptions, func(renderPath string) error {
+	reportOptions.TransientOutput = true
+	return writeSingleHTMLReport(out, func(renderPath string) error {
 		return writeCompareReportSetFiles(
 			renderPath,
 			comparison,
@@ -645,7 +635,7 @@ func writeCompareReportSetFiles(
 	return report.WriteCompareReportWithOptions(reportPaths.Main, comparison, baselineReports, candidateReports, reportOptions)
 }
 
-func writeSingleHTMLReport(out string, reportOptions report.ReportOptions, writePages func(string) error) error {
+func writeSingleHTMLReport(out string, writePages func(string) error) error {
 	temporaryDirectory, err := os.MkdirTemp("", "jankhunter-report-")
 	if err != nil {
 		return fmt.Errorf("create temporary report directory: %w", err)
@@ -660,7 +650,7 @@ func writeSingleHTMLReport(out string, reportOptions report.ReportOptions, write
 	if err != nil {
 		return err
 	}
-	if err := report.WriteBundleWithOptions(out, pages, reportOptions); err != nil {
+	if err := report.WriteBundle(out, pages); err != nil {
 		return fmt.Errorf("write single HTML report: %w", err)
 	}
 	return nil
@@ -683,18 +673,21 @@ func readReportBundlePages(mainPath string) ([]report.BundlePage, error) {
 	}
 	pages := make([]report.BundlePage, 0, len(candidates))
 	for _, candidate := range candidates {
-		document, err := os.ReadFile(candidate.path)
+		info, err := os.Stat(candidate.path)
 		if err != nil {
 			if !candidate.required && os.IsNotExist(err) {
 				continue
 			}
 			return nil, fmt.Errorf("read generated report page %s: %w", candidate.path, err)
 		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return nil, fmt.Errorf("generated report page %s is not a non-empty regular file", candidate.path)
+		}
 		pages = append(pages, report.BundlePage{
 			ID:    candidate.id,
 			Title: candidate.title,
 			Href:  filepath.Base(candidate.path),
-			HTML:  document,
+			Path:  candidate.path,
 		})
 	}
 	return pages, nil
@@ -758,6 +751,7 @@ type analysisOptionsBuilder struct {
 	classGraphPath  string
 	diagnosticsPath string
 	diCatalogPath   string
+	artifactNS      []byte
 }
 
 func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
@@ -806,7 +800,19 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 }
 
 func (b analysisOptionsBuilder) build() (analyze.Options, error) {
-	b, err := b.withResolvedArtifacts()
+	return b.buildWithArtifactNamespaces(nil)
+}
+
+func (b analysisOptionsBuilder) buildForLogs(paths []string) (analyze.Options, error) {
+	namespaces, err := logArtifactNamespaces(paths)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	return b.buildWithArtifactNamespaces(namespaces)
+}
+
+func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[string]struct{}) (analyze.Options, error) {
+	b, err := b.withExplicitArtifactsForNamespaces(namespaces)
 	if err != nil {
 		return analyze.Options{}, err
 	}
@@ -840,36 +846,43 @@ func (b analysisOptionsBuilder) build() (analyze.Options, error) {
 		ClassGraph:                     classGraph,
 		InstrumentationDiagnostics:     diagnostics,
 		DependencyInjectionCatalog:     diCatalog,
+		ArtifactDirectory:              b.artifactsDir,
+		ArtifactSymbolNamespace:        append([]byte(nil), b.artifactNS...),
 		ExternalSymbols:                b.externalSymbols,
 		RequireExplicitExternalSymbols: true,
 	}, nil
 }
 
 type androidArtifactBundle struct {
-	directory      string
-	ownerMap       string
-	classGraph     string
-	diagnostics    string
-	diCatalog      string
-	lastModifiedAt time.Time
+	directory       string
+	ownerMap        string
+	classGraph      string
+	diagnostics     string
+	diCatalog       string
+	symbolNamespace []byte
 }
 
-func (b analysisOptionsBuilder) withResolvedArtifacts() (analysisOptionsBuilder, error) {
+func (b analysisOptionsBuilder) withExplicitArtifactsForNamespaces(
+	namespaces map[string]struct{},
+) (analysisOptionsBuilder, error) {
 	directory := strings.TrimSpace(b.artifactsDir)
-	if directory == "" && b.externalSymbols && len(b.ownerMapPaths) == 0 {
-		directory = discoverAndroidArtifactDirectory(integratedProjectRoots())
-	}
 	if directory == "" {
 		return b, nil
 	}
 	bundle, err := loadAndroidArtifactBundle(directory)
 	if err != nil {
-		if b.artifactsDir == "" {
-			return b, nil
-		}
 		return b, err
 	}
-	if len(b.ownerMapPaths) == 0 {
+	if len(namespaces) > 0 && !artifactNamespaceMatches(bundle, namespaces) {
+		return b, fmt.Errorf(
+			"Jank Hunter --artifacts-dir %q does not match the input .jhlog symbol namespace; rebuild the same app variant or pass its exact artifact directory",
+			directory,
+		)
+	}
+	b.artifactsDir = bundle.directory
+	classGraphFromBundle := b.classGraphPath == ""
+	diagnosticsFromBundle := b.diagnosticsPath == ""
+	if b.externalSymbols && len(b.ownerMapPaths) == 0 {
 		b.ownerMapPaths = []string{bundle.ownerMap}
 	}
 	if b.classGraphPath == "" {
@@ -878,66 +891,24 @@ func (b analysisOptionsBuilder) withResolvedArtifacts() (analysisOptionsBuilder,
 	if b.diagnosticsPath == "" {
 		b.diagnosticsPath = bundle.diagnostics
 	}
+	if classGraphFromBundle && diagnosticsFromBundle {
+		b.artifactNS = append([]byte(nil), bundle.symbolNamespace...)
+	}
 	if b.diCatalogPath == "" && bundle.diCatalog != "" {
 		b.diCatalogPath = bundle.diCatalog
 	}
 	return b, nil
 }
 
-func integratedProjectRoots() []string {
-	roots := linkedStringSet{}
-	if executable, err := os.Executable(); err == nil {
-		if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
-			executable = resolved
-		}
-		binDirectory := filepath.Dir(executable)
-		integrationDirectory := filepath.Dir(binDirectory)
-		if filepath.Base(binDirectory) == "bin" && filepath.Base(integrationDirectory) == ".jankhunter" {
-			roots.add(filepath.Dir(integrationDirectory))
-		}
+func artifactNamespaceMatches(bundle androidArtifactBundle, namespaces map[string]struct{}) bool {
+	if len(namespaces) == 0 {
+		return true
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		for current, depth := cwd, 0; depth < 8; depth++ {
-			candidate := filepath.Join(current, ".jankhunter", "bin", "jankhunter")
-			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-				roots.add(current)
-				break
-			}
-			parent := filepath.Dir(current)
-			if parent == current {
-				break
-			}
-			current = parent
-		}
+	if len(namespaces) != 1 {
+		return false
 	}
-	return roots.values
-}
-
-func discoverAndroidArtifactDirectory(projectRoots []string) string {
-	var bundles []androidArtifactBundle
-	for _, root := range projectRoots {
-		modulePattern := root
-		for depth := 0; depth <= 4; depth++ {
-			pattern := filepath.Join(modulePattern, "build", "generated", "jankhunter", "*")
-			matches, _ := filepath.Glob(pattern)
-			for _, match := range matches {
-				if bundle, err := loadAndroidArtifactBundle(match); err == nil {
-					bundles = append(bundles, bundle)
-				}
-			}
-			modulePattern = filepath.Join(modulePattern, "*")
-		}
-	}
-	if len(bundles) == 0 {
-		return ""
-	}
-	sort.Slice(bundles, func(left, right int) bool {
-		if bundles[left].lastModifiedAt.Equal(bundles[right].lastModifiedAt) {
-			return bundles[left].directory < bundles[right].directory
-		}
-		return bundles[left].lastModifiedAt.After(bundles[right].lastModifiedAt)
-	})
-	return bundles[0].directory
+	_, matches := namespaces[string(bundle.symbolNamespace)]
+	return matches
 }
 
 func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) {
@@ -972,18 +943,29 @@ func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) 
 				label,
 			)
 		}
-		if info.ModTime().After(bundle.lastModifiedAt) {
-			bundle.lastModifiedAt = info.ModTime()
-		}
 	}
+	namespace, err := analyze.ReadOwnerMapNamespace(bundle.ownerMap)
+	if err != nil {
+		return androidArtifactBundle{}, fmt.Errorf("invalid Jank Hunter --artifacts-dir %q: owner-map.json identity cannot be read", directory)
+	}
+	bundle.symbolNamespace = append([]byte(nil), namespace...)
 	diCatalog := filepath.Join(absolute, "di-catalog.jsonl")
 	if info, statErr := os.Stat(diCatalog); statErr == nil && !info.IsDir() && info.Size() > 0 {
 		bundle.diCatalog = diCatalog
-		if info.ModTime().After(bundle.lastModifiedAt) {
-			bundle.lastModifiedAt = info.ModTime()
-		}
 	}
 	return bundle, nil
+}
+
+func logArtifactNamespaces(paths []string) (map[string]struct{}, error) {
+	namespaces := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		header, err := jhlog.ReadSessionHeader(path)
+		if err != nil {
+			return nil, err
+		}
+		namespaces[string(header.SymbolNamespace)] = struct{}{}
+	}
+	return namespaces, nil
 }
 
 func diagnosticsAvailable(options analyze.Options) bool {
@@ -1190,14 +1172,11 @@ func runExport(args []string) error {
 func writeExportEvents(writer io.Writer, paths []string) error {
 	encoder := json.NewEncoder(writer)
 	for _, path := range paths {
-		warnings, err := jhlog.StreamFileWithWarnings(path, func(event jhlog.Event, _ map[uint64]string) error {
+		err := jhlog.StreamFile(path, func(event jhlog.Event, _ map[uint64]string) error {
 			return encoder.Encode(event)
 		})
 		if err != nil {
 			return err
-		}
-		for _, warning := range warnings {
-			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
 	}
 	return nil
@@ -1264,9 +1243,6 @@ func printSizeProfile(profile jhlog.SizeProfile) {
 			row.Files,
 		)
 	}
-	for _, warning := range profile.Warnings {
-		fmt.Printf("warning: %s\n", warning)
-	}
 }
 
 func compressionRatio(bodyBytes uint64, fileBytes uint64) float64 {
@@ -1303,7 +1279,7 @@ func runProblems(args []string) error {
 	if err != nil {
 		return err
 	}
-	datasetRaw, remaining, err := takeStringFlag(remaining, "dataset", string(datasetCodeProblems))
+	datasetRaw, remaining, err := takeStringFlag(remaining, "dataset", string(datasetProblems))
 	if err != nil {
 		return err
 	}
@@ -1322,7 +1298,7 @@ func runProblems(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("problems needs at least one log file")
 	}
-	options, err := builder.build()
+	options, err := builder.buildForLogs(paths)
 	if err != nil {
 		return err
 	}
@@ -1577,7 +1553,11 @@ func printSummary(summary analyze.Summary) {
 	)
 	quality := summary.CollectionQuality
 	fmt.Printf("http: count=%d failed=%d p95=%dms\n", summary.HTTPCount, summary.HTTPFailed, summary.HTTPP95MS)
-	fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
+	if summary.UIAvgFPS > 0 {
+		fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% avg_fps=%.1f min_fps=%.1f\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIAvgFPS, summary.UIMinFPS)
+	} else {
+		fmt.Printf("ui: frames=%d janky=%d rate=%.2f%% fps=not_measured(%s)\n", summary.UIFrames, summary.UIJank, summary.UIJankPct, summary.UIFPSStatus)
+	}
 	if len(summary.AppVersions) > 0 {
 		fmt.Printf("app_versions: %s\n", namedValues(summary.AppVersions))
 	}
@@ -1602,6 +1582,22 @@ func printSummary(summary analyze.Summary) {
 	}
 	fmt.Printf("context: samples=%d battery_min=%d%% avail_mem_min=%dKB low_mem=%d rx_max=%d tx_max=%d\n", summary.ContextCount, summary.BatteryMinPct, summary.AvailMemoryMinKB, summary.LowMemoryCount, summary.TrafficRxMax, summary.TrafficTxMax)
 	fmt.Printf("memory: max_pss=%dKB retained=%d\n", summary.MemoryMaxKB, summary.Retained)
+	inputs := summary.AnalysisInputs
+	fmt.Printf(
+		"analysis_inputs: status=%s complete=%t runtime=%t symbols=%t(%s) class_graph=%t asm_diagnostics=%t heap=%t artifact_identity=%t auto_discovered=%t artifacts=%q missing=%s\n",
+		inputs.Status,
+		inputs.Complete,
+		inputs.RuntimeEvidence,
+		inputs.SymbolsResolved,
+		inputs.SymbolMode,
+		inputs.ClassGraph,
+		inputs.InstrumentationDiagnostics,
+		inputs.HeapEvidence,
+		inputs.ArtifactIdentityVerified,
+		inputs.ArtifactsAutoDiscovered,
+		inputs.ArtifactDirectory,
+		strings.Join(inputs.Missing, ","),
+	)
 	if len(summary.RetainedClasses) > 0 {
 		fmt.Printf("retained_classes: %s\n", namedValues(summary.RetainedClasses))
 	}
@@ -1609,15 +1605,31 @@ func printSummary(summary analyze.Summary) {
 		fmt.Printf("top_owners: %s\n", ownerValues(summary.Owners, 5))
 	}
 	fmt.Printf(
-		"collection_quality: level=%s complete=%t chain_valid=%t sealed=%d unsealed=%d accepted=%d written=%d known_lost=%d dictionary_overflow=%d dictionary_truncated=%d\n",
+		"collection_quality: level=%s complete=%t chain_valid=%t process_scope=%s all_processes=%t process_roster=%d/%d roster_complete=%t roster_declared=%t run_cohorts=%d cohort_consistent=%t counters_valid=%t quality_progression=%t sealed=%d unsealed=%d accepted=%d written=%d committed_chunks=%d/%d runtime_graph=%d/%d/%d known_lost=%d hook_failures=%d dictionary_overflow=%d dictionary_truncated=%d\n",
 		quality.Level,
 		quality.Complete,
 		quality.ChainValid,
+		quality.ProcessScope,
+		quality.AllProcessesConfigured,
+		quality.ObservedProcessCount,
+		quality.ExpectedProcessCount,
+		quality.ProcessRosterComplete,
+		quality.ProcessRosterDeclarationComplete,
+		quality.RunCohortCount,
+		quality.RunCohortConsistent,
+		quality.CounterInvariantsValid,
+		quality.QualityProgressionValid,
 		quality.SealedSegments,
 		quality.UnsealedSegments,
 		quality.AcceptedEvents,
 		quality.WrittenEvents,
+		quality.ReportedCommittedChunks,
+		quality.DecodedCommittedChunks,
+		quality.DecodedRuntimeGraphCalls,
+		quality.RuntimeGraphEmittedEvents,
+		quality.RuntimeGraphInputEvents,
 		quality.KnownLostEvents,
+		quality.RuntimeHookFailures,
 		quality.DictionaryOverflow,
 		quality.DictionaryTruncated,
 	)
@@ -1629,6 +1641,9 @@ func printSummary(summary analyze.Summary) {
 		for _, warning := range summary.Warnings {
 			fmt.Printf("warning: %s\n", warning)
 		}
+	}
+	for _, detail := range quality.RuntimeHookFailureDetails {
+		fmt.Printf("hook_failure: reason=%s count=%d impact=%s explanation=%s\n", detail.Reason, detail.Count, detail.Impact, detail.Explanation)
 	}
 }
 

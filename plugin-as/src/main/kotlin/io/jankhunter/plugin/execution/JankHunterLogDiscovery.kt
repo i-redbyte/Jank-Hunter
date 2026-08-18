@@ -1,8 +1,6 @@
 package io.jankhunter.plugin.execution
 
 import java.io.File
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 data class JankHunterDiscoveredLog(
     val file: File,
@@ -60,29 +58,21 @@ object JankHunterLogDiscovery {
         .toList()
 
     private val logComparator = Comparator<File> { left, right ->
-        val leftKey = sessionKey(left)
-        val rightKey = sessionKey(right)
+        val leftKey = JankHunterSessionLogName.parse(left)
+        val rightKey = JankHunterSessionLogName.parse(right)
         when {
-            leftKey != null && rightKey != null -> compareValuesBy(rightKey, leftKey, SessionKey::date, SessionKey::index)
+            leftKey != null && rightKey != null -> compareValuesBy(
+                rightKey,
+                leftKey,
+                JankHunterSessionLogName::date,
+                JankHunterSessionLogName::index,
+            )
             leftKey != null -> -1
             rightKey != null -> 1
             else -> compareValuesBy(right, left, File::lastModified, File::getPath)
         }
     }
 
-    private fun sessionKey(file: File): SessionKey? {
-        val match = CANONICAL_NAME.matchEntire(file.name) ?: return null
-        val date = runCatching { LocalDate.parse(match.groupValues[1], DateTimeFormatter.ISO_LOCAL_DATE) }.getOrNull()
-            ?: return null
-        val indexText = match.groupValues[2]
-        val index = indexText.toLongOrNull() ?: return null
-        if (index.toString() != indexText) return null
-        return SessionKey(date, index)
-    }
-
-    private data class SessionKey(val date: LocalDate, val index: Long)
-
-    private val CANONICAL_NAME = Regex("^jh-session-log\\.(\\d{4}-\\d{2}-\\d{2})\\.(\\d+)\\.jhlog$")
     private val SUPPORTED_EXTENSIONS = setOf("jhlog", "hprof")
     private const val MAX_SCAN_DEPTH = 6
     private const val MAX_SCANNED_FILES = 5_000

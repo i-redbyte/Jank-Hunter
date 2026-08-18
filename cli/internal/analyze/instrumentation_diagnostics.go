@@ -22,7 +22,6 @@ type InstrumentationDiagnostics struct {
 	Decisions            []InstrumentationDecisionSummary
 	Annotations          []InstrumentationAnnotationSummary
 	Classes              []InstrumentationClassDiagnostic
-	TopClasses           []InstrumentationClassDiagnostic
 	Warnings             []string
 }
 
@@ -202,7 +201,6 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		Decisions:            decisionMapSummaries(b.decisions),
 		Annotations:          annotationMapSummaries(b.annotations),
 		Classes:              b.classes,
-		TopClasses:           limitInstrumentationClasses(b.classes, 200),
 		Warnings:             b.warnings,
 	}
 }
@@ -438,13 +436,4 @@ func sortAnnotationSummaries(values []InstrumentationAnnotationSummary) {
 		}
 		return values[i].Trace < values[j].Trace
 	})
-}
-
-func limitInstrumentationClasses(values []InstrumentationClassDiagnostic, limit int) []InstrumentationClassDiagnostic {
-	if len(values) <= limit {
-		return values
-	}
-	out := make([]InstrumentationClassDiagnostic, limit)
-	copy(out, values[:limit])
-	return out
 }

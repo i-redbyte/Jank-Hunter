@@ -30,13 +30,10 @@ func (r *mathSymbolResolver) observe(event jhlog.Event) {
 	}
 }
 
-func (r *mathSymbolResolver) resolve(dict map[uint64]string, ref jhlog.SymbolRef, legacyID uint64) string {
-	if ref.IsUnknown() {
-		ref = jhlog.LocalSymbol(legacyID)
-	}
+func (r *mathSymbolResolver) resolve(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	value := ""
 	if ref.Stable {
-		value = r.embedded[ref.StableID]
+		value = r.embedded[ref.ID]
 	}
 	if value == "" {
 		value = jhlog.ResolveSymbol(dict, ref)
@@ -49,11 +46,10 @@ func isMathDiagnosticStall(event jhlog.Event, dict map[uint64]string, symbols *m
 	if event.Stall == nil {
 		return false
 	}
-	owner := symbols.resolve(dict, event.Stall.OwnerRef, event.Stall.OwnerID)
-	contextOwner := symbols.resolve(dict, event.Attribution.Owner, 0)
-	flow := symbols.resolve(dict, event.Attribution.Flow, 0)
-	step := symbols.resolve(dict, event.Attribution.Step, 0)
-	return isMathDiagnosticValue(owner) || isMathDiagnosticValue(contextOwner) || strings.EqualFold(flow, "jankhunter.diagnostics") || strings.EqualFold(step, "heap_dump")
+	owner := symbols.resolve(dict, event.Attribution.Owner)
+	flow := symbols.resolve(dict, event.Attribution.Flow)
+	step := symbols.resolve(dict, event.Attribution.Step)
+	return isMathDiagnosticValue(owner) || strings.EqualFold(flow, "jankhunter.diagnostics") || strings.EqualFold(step, "heap_dump")
 }
 
 func isMathDiagnosticValue(value string) bool {

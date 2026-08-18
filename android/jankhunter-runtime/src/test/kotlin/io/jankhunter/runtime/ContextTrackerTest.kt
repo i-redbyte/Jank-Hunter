@@ -2,48 +2,13 @@ package io.jankhunter.runtime
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ContextTrackerTest {
-    @Test
-    fun concurrentEqualContextsProduceOneTransition() {
-        val tracker = ContextTracker()
-        val context = JankHunterContext("screen", "owner", "flow", "step")
-        val start = CountDownLatch(1)
-        val recorded = AtomicInteger()
-        val threads = List(16) {
-            Thread {
-                start.await()
-                if (tracker.shouldRecord(context)) recorded.incrementAndGet()
-            }
-        }
-
-        threads.forEach(Thread::start)
-        start.countDown()
-        threads.forEach(Thread::join)
-
-        assertEquals(1, recorded.get())
-    }
-
-    @Test
-    fun contextSnapshotDeduplicationResetsCleanly() {
-        val tracker = ContextTracker()
-        tracker.setScreen("Home")
-        val first = tracker.capture()
-
-        assertTrue(tracker.shouldRecord(first))
-        assertFalse(tracker.shouldRecord(first.copy()))
-
-        tracker.resetRecordedContext()
-        assertTrue(tracker.shouldRecord(first))
-    }
-
     @Test
     fun propagatedScreenDoesNotOverwriteGlobalScreenUpdatesFromOtherThreads() {
         val tracker = ContextTracker()

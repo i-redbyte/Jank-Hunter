@@ -33,6 +33,17 @@ class JankHunterInitDiagnosticsTest {
     }
 
     @Test
+    fun generatedAutoInitDoesNotConsumeOneShotGateWithoutContext() {
+        val previousAttempts = JankHunter.initDiagnostics().attempts
+
+        JankHunter.autoInit(null)
+        JankHunter.autoInit(null)
+
+        val diagnostics = JankHunter.initDiagnostics()
+        assertEquals(previousAttempts, diagnostics.attempts)
+    }
+
+    @Test
     fun lazyWriterFailureCleansRuntimeAndKeepsInitForRetry() {
         val filesDir = File(tempDir(), "files").apply {
             writeText("not a directory")

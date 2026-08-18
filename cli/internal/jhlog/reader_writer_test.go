@@ -2,15 +2,120 @@ package jhlog
 
 import (
 	"bytes"
-	"compress/gzip"
+	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestWriteSampleStreamsCommittedV9(t *testing.T) {
+func TestLogGrowthControlRecordRoundTripsWithoutInflatingEventTotals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "growth.jhlog")
+	closer, writer, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := testGrowthLivePayload(7, 0x11, 0x22, 1_000, 2_000, true)
+	if err := writer.WriteEvent(Event{
+		Type: EventLogGrowth,
+		LogGrowth: &LogGrowthRecord{
+			Kind: LogGrowthLive,
+			Raw:  live,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.Result.Events != 0 || log.Result.DataRecords != 0 {
+		t.Fatalf("growth metadata inflated data totals: %+v", log.Result)
+	}
+	if log.Result.ControlRecords != 3 {
+		t.Fatalf("control records = %d, want growth + quality + end", log.Result.ControlRecords)
+	}
+	if log.Result.LogGrowth == nil || log.Result.LogGrowth.Live == nil {
+		t.Fatalf("log growth was not decoded: %+v", log.Result.LogGrowth)
+	}
+	if got := log.Result.LogGrowth.Live; got.SessionID != "0000000000000033" ||
+		got.GeneratedBytes != 2_000 || !got.Completed {
+		t.Fatalf("decoded live growth = %+v", got)
+	}
+}
+
+func TestLogGrowthKeepsHistoryAndLiveGenerationsIndependent(t *testing.T) {
+	history := &LogGrowthProjection{
+		Generation: 4,
+		HasHistory: true,
+		Sessions:   []LogGrowthSession{{SessionID: "completed", Completed: true}},
+	}
+	newestLive := &LogGrowthSession{SessionID: "active", GeneratedBytes: 200}
+	staleLive := &LogGrowthSession{SessionID: "active", GeneratedBytes: 100}
+	result := StreamResult{}
+
+	applyLogGrowthRecord(&result, &LogGrowthRecord{Generation: 4, Projection: history})
+	applyLogGrowthRecord(&result, &LogGrowthRecord{Generation: 100, Live: newestLive})
+	applyLogGrowthRecord(&result, &LogGrowthRecord{Generation: 99, Live: staleLive})
+
+	if result.LogGrowth == nil || result.LogGrowth.Generation != 4 || result.LogGrowth.LiveGeneration != 100 {
+		t.Fatalf("independent growth generations were conflated: %+v", result.LogGrowth)
+	}
+	if len(result.LogGrowth.Sessions) != 1 || result.LogGrowth.Live != newestLive {
+		t.Fatalf("history or newest live snapshot was lost: %+v", result.LogGrowth)
+	}
+
+	newerHistory := &LogGrowthProjection{
+		Generation: 5,
+		HasHistory: true,
+		Sessions:   []LogGrowthSession{{SessionID: "newer", Completed: true}},
+	}
+	applyLogGrowthRecord(&result, &LogGrowthRecord{Generation: 5, Projection: newerHistory})
+	if result.LogGrowth != newerHistory || result.LogGrowth.Live != newestLive || result.LogGrowth.LiveGeneration != 100 {
+		t.Fatalf("newer history did not preserve the newest live snapshot: %+v", result.LogGrowth)
+	}
+}
+
+func testGrowthLivePayload(generation, high, low, retained, generated uint64, completed bool) []byte {
+	raw := make([]byte, growthLiveBytes)
+	copy(raw, growthLiveMagic)
+	raw[4] = 2
+	raw[5] = 0
+	binary.LittleEndian.PutUint16(raw[6:8], growthLiveBytes)
+	binary.LittleEndian.PutUint64(raw[8:16], generation)
+	binary.LittleEndian.PutUint64(raw[16:24], high)
+	binary.LittleEndian.PutUint64(raw[24:32], low)
+	binary.LittleEndian.PutUint32(raw[32:36], 20260814)
+	if completed {
+		binary.LittleEndian.PutUint32(raw[36:40], 1)
+	}
+	binary.LittleEndian.PutUint64(raw[40:48], 1_000)
+	binary.LittleEndian.PutUint64(raw[48:56], 2_000)
+	binary.LittleEndian.PutUint64(raw[56:64], 50*1024*1024)
+	binary.LittleEndian.PutUint64(raw[64:72], retained)
+	binary.LittleEndian.PutUint64(raw[72:80], generated)
+	binary.LittleEndian.PutUint32(raw[len(raw)-4:], crc32.ChecksumIEEE(raw[:len(raw)-4]))
+	return raw
+}
+
+func TestLogGrowthRejectsPreBudgetSemanticsSchema(t *testing.T) {
+	raw := testGrowthLivePayload(1, 2, 3, 4, 5, false)
+	raw[4] = 1
+	binary.LittleEndian.PutUint32(raw[len(raw)-4:], crc32.ChecksumIEEE(raw[:len(raw)-4]))
+	if _, _, err := decodeGrowthLive(raw); err == nil {
+		t.Fatal("growth schema 1 must not be interpreted with the total-budget semantics")
+	}
+}
+
+func TestWriteSampleStreamsCommittedVersionTwo(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -24,7 +129,22 @@ func TestWriteSampleStreamsCommittedV9(t *testing.T) {
 		t.Fatalf("status = %q, want %q", log.Result.Status, SegmentStatusClosedClean)
 	}
 	if !log.Result.Sealed {
-		t.Fatal("sample v9 log is closed but not FINAL-sealed")
+		t.Fatal("sample 2.0.0 log is closed but not FINAL-sealed")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.Result.InputBytes != uint64(info.Size()) || log.Result.LatestDataEventUnixMS != 30_100 {
+		t.Fatalf("physical/freshness metadata = bytes %d, latest %d", log.Result.InputBytes, log.Result.LatestDataEventUnixMS)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := sha256.Sum256(raw)
+	if !bytes.Equal(log.Result.SegmentDigest, wantDigest[:]) {
+		t.Fatalf("segment digest = %x, want %x", log.Result.SegmentDigest, wantDigest)
 	}
 	if log.Result.LatestQuality == nil || log.Result.SegmentEnd == nil {
 		t.Fatalf("terminal metadata missing: %+v", log.Result)
@@ -39,7 +159,7 @@ func TestWriteSampleStreamsCommittedV9(t *testing.T) {
 		t.Fatalf("result events = %d, callback events = %d", log.Result.Events, len(log.Events))
 	}
 	if log.Result.Events != log.Result.DataRecords {
-		t.Fatalf("known semantic events = %d, data records = %d", log.Result.Events, log.Result.DataRecords)
+		t.Fatalf("semantic events = %d, data records = %d", log.Result.Events, log.Result.DataRecords)
 	}
 	if log.Result.TotalRecords != log.Result.DataRecords+log.Result.DictionaryRecords+log.Result.ControlRecords {
 		t.Fatalf("record classes do not add up: %+v", log.Result)
@@ -57,12 +177,350 @@ func TestWriteSampleStreamsCommittedV9(t *testing.T) {
 }
 
 func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
-	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 9}
+	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 0x81, 2, 0, 0}
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeaturesV9 != 0x7f || OptionalFeaturesV9 != 0x01 {
-		t.Fatalf("features = required 0x%x optional 0x%x", RequiredFeaturesV9, OptionalFeaturesV9)
+	if RequiredFeatures != 0x1fff || OptionalFeatures != 0x01 {
+		t.Fatalf("features = required 0x%x optional 0x%x", RequiredFeatures, OptionalFeatures)
+	}
+}
+
+func TestDeclaredProcessRosterRoundTripsInHeader(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.ProcessName = "main"
+	header.ExpectedProcessCount = 2
+	header.ExpectedProcessFingerprint = ProcessRosterFingerprint([]string{"main", "remote"})
+	header.ProcessRosterDeclarationComplete = true
+	raw, normalized, err := encodeFileHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeHeaderPayload(raw[magicSize+8:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ExpectedProcessCount != 2 || !decoded.ProcessRosterDeclarationComplete ||
+		!bytes.Equal(decoded.ExpectedProcessFingerprint, normalized.ExpectedProcessFingerprint) {
+		t.Fatalf("process roster did not round-trip: decoded=%+v normalized=%+v", decoded, normalized)
+	}
+}
+
+func TestVersionTwoHeaderRejectsUnparsedTrailingBytes(t *testing.T) {
+	raw, _, err := encodeFileHeader(DefaultSegmentHeader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := append([]byte(nil), raw[magicSize+8:]...)
+	payload = append(payload, 0)
+	if _, err := decodeHeaderPayload(payload); err == nil || !strings.Contains(err.Error(), "trailing bytes") {
+		t.Fatalf("trailing header payload error = %v", err)
+	}
+}
+
+func TestDeclaredProcessRosterRejectsMissingFingerprint(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.ExpectedProcessCount = 1
+	header.ExpectedProcessFingerprint = nil
+	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("missing process roster fingerprint error = %v", err)
+	}
+}
+
+func TestVersionTwoRejectsMissingMandatoryWireFeatures(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.RequiredFeatures &^= FeatureSegmentDigestChain
+	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "required feature contract") {
+		t.Fatalf("missing digest-chain feature error = %v", err)
+	}
+}
+
+func TestVersionTwoAcceptsOnlyCanonicalFeatureContracts(t *testing.T) {
+	tests := []struct {
+		name     string
+		required uint64
+		optional uint64
+		wantErr  bool
+	}{
+		{name: "exact", required: RequiredFeatures, optional: OptionalFeatures},
+		{name: "best effort", required: BestEffortFeatures, optional: OptionalFeatures},
+		{name: "unknown required bit", required: RequiredFeatures | 1<<63, optional: OptionalFeatures, wantErr: true},
+		{name: "missing required bit", required: RequiredFeatures &^ FeatureProcessRoster, optional: OptionalFeatures, wantErr: true},
+		{name: "unknown optional bit", required: RequiredFeatures, optional: OptionalFeatures | 1<<63, wantErr: true},
+		{name: "missing optional contract", required: RequiredFeatures, optional: 0, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			header := DefaultSegmentHeader()
+			header.RequiredFeatures = test.required
+			header.OptionalFeatures = test.optional
+			_, _, err := encodeFileHeader(header)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("encodeFileHeader() error = %v, wantErr = %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestSegmentDigestCanBeLinkedIntoSuccessorHeader(t *testing.T) {
+	firstPath := filepath.Join(t.TempDir(), "first.jhlog")
+	firstFile, firstWriter, err := Create(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWriter.WriteEvent(Event{Type: EventCounter, Metric: &MetricEvent{MetricRef: LocalSymbol(1), Value: 7}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWriter.CloseWithReason(SegmentEndRotation); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	predecessor := firstWriter.SegmentDigest()
+	if len(predecessor) != segmentDigestSize {
+		t.Fatalf("sealed predecessor digest has %d bytes", len(predecessor))
+	}
+
+	header := DefaultSegmentHeader()
+	header.SegmentIndex = 1
+	header.PreviousSegmentDigest = predecessor
+	var second bytes.Buffer
+	secondWriter, err := NewWriterWithHeader(&second, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondWriter.CloseWithReason(SegmentEndShutdown); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeHeaderPayload(second.Bytes()[magicSize+8 : firstChunkOffset(t, second.Bytes())])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded.PreviousSegmentDigest, predecessor) {
+		t.Fatalf("successor predecessor digest = %x, want %x", decoded.PreviousSegmentDigest, predecessor)
+	}
+}
+
+func TestRuntimeCallColumnarBlockRoundTripsAsSemanticRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-block.jhlog")
+	closer, writer, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []Event{
+		{Type: EventRuntimeCall, TimeUS: 10_000, Producer: ProducerMetadata{HasThread: true, ThreadID: 7}, Attribution: AttributionContext{
+			Present: true, Screen: LocalSymbol(11), Owner: StableSymbol(0x101), Flow: LocalSymbol(21), Step: LocalSymbol(31),
+		}, RuntimeCall: &RuntimeCallEvent{
+			CalleeRef: StableSymbol(0x201), Count: 3, TotalMS: 12, MaxMS: 7,
+		}},
+		{Type: EventRuntimeCall, TimeUS: 10_000, Producer: ProducerMetadata{HasThread: true, ThreadID: 7}, Attribution: AttributionContext{
+			Present: true, Screen: LocalSymbol(12), Owner: StableSymbol(0x102), Flow: LocalSymbol(22), Step: LocalSymbol(32),
+		}, RuntimeCall: &RuntimeCallEvent{
+			CalleeRef: StableSymbol(0x202), Count: 4, TotalMS: 19, MaxMS: 9,
+		}},
+	}
+	if err := writer.WriteRuntimeCallBlock(events); err != nil {
+		t.Fatal(err)
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offset := firstChunkOffset(t, raw)
+	metadata, err := parseChunkHeader(raw[offset:offset+chunkHeaderSize], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.RecordCount != 1 {
+		t.Fatalf("physical runtime block records = %d, want 1", metadata.RecordCount)
+	}
+
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != 2 || log.Result.DataRecords != 2 || log.Result.Events != 2 ||
+		log.Result.RecordsByType[EventRuntimeCall] != 2 || log.Result.RuntimeGraphLogicalCalls != 7 {
+		t.Fatalf("columnar semantic accounting = events:%d result:%+v", len(log.Events), log.Result)
+	}
+	first, second := log.Events[0], log.Events[1]
+	if first.Attribution.Owner.ID != 0x101 || second.RuntimeCall.CalleeRef.ID != 0x202 ||
+		first.Attribution.Screen.ID != 11 || second.Attribution.Flow.ID != 22 || second.RuntimeCall.Count != 4 ||
+		first.TimeUS != second.TimeUS || second.DeltaUS != 0 {
+		t.Fatalf("decoded runtime rows = first:%+v second:%+v", first, second)
+	}
+	if log.Result.SegmentEnd == nil || log.Result.SegmentEnd.TotalEventRecords != 2 ||
+		log.Result.LatestQuality.Counters[QualityWrittenEventTotal] != 2 ||
+		log.Result.LatestQuality.Counters[QualityRuntimeGraphInputTotal] != 7 ||
+		log.Result.LatestQuality.Counters[QualityRuntimeGraphEmittedTotal] != 7 {
+		t.Fatalf("columnar terminal proof = end:%+v quality:%+v", log.Result.SegmentEnd, log.Result.LatestQuality)
+	}
+}
+
+func TestRuntimeCallWriterRejectsInvalidLogicalAggregates(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		call RuntimeCallEvent
+	}{
+		{name: "zero count", call: RuntimeCallEvent{}},
+		{name: "max exceeds total", call: RuntimeCallEvent{Count: 1, TotalMS: 2, MaxMS: 3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writer, err := NewWriter(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = writer.WriteEvent(Event{Type: EventRuntimeCall, RuntimeCall: &test.call})
+			if err == nil {
+				t.Fatalf("invalid runtime call was accepted: %+v", test.call)
+			}
+		})
+	}
+}
+
+func TestRuntimeCallColumnarBlockRejectsInvalidRowCounts(t *testing.T) {
+	for _, rowCount := range []uint64{0, MaxRuntimeCallBlockRows + 1} {
+		var body bytes.Buffer
+		_ = writeUvarint(&body, uint64(EventRuntimeCall))
+		_ = writeUvarint(&body, 0)
+		_ = writeUvarint(&body, rowCount)
+		_, _, err := decodeRecord(
+			body.Bytes(),
+			recordDecodeState{},
+			DefaultSegmentHeader(),
+			"",
+			"invalid",
+			RecordPosition{},
+			nil,
+		)
+		if err == nil || !strings.Contains(err.Error(), "row count") {
+			t.Fatalf("row count %d error = %v", rowCount, err)
+		}
+	}
+}
+
+func TestRuntimeCallColumnarBlockRejectsInvalidLogicalAggregates(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		count uint64
+		total uint64
+		max   uint64
+	}{
+		{name: "zero count", count: 0},
+		{name: "max exceeds total", count: 1, total: 2, max: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var body bytes.Buffer
+			_ = writeUvarint(&body, uint64(EventRuntimeCall))
+			_ = writeUvarint(&body, 0)
+			_ = writeUvarint(&body, 1)
+			for range 5 {
+				_ = writeUvarint(&body, 0)
+			}
+			_ = writeUvarint(&body, test.count)
+			_ = writeUvarint(&body, test.total)
+			_ = writeUvarint(&body, test.max)
+			if _, _, err := decodeRecord(
+				body.Bytes(),
+				recordDecodeState{},
+				DefaultSegmentHeader(),
+				"",
+				"invalid",
+				RecordPosition{},
+				nil,
+			); err == nil {
+				t.Fatal("invalid runtime aggregate was decoded")
+			}
+		})
+	}
+}
+
+func TestProcessScopeRoundTripsInVersionTwoHeader(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.ProcessScope = ProcessScopeAllowlist
+	header.AllowedProcessCount = 3
+	header.ProcessScopeFingerprint = bytes.Repeat([]byte{0xa5}, processScopeHashSize)
+	raw, normalized, err := encodeFileHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeHeaderPayload(raw[magicSize+8:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.ProcessScope != ProcessScopeAllowlist || decoded.AllowedProcessCount != 3 ||
+		normalized.ProcessScope != ProcessScopeAllowlist ||
+		!bytes.Equal(decoded.ProcessScopeFingerprint, header.ProcessScopeFingerprint) {
+		t.Fatalf("process scope did not round-trip: decoded=%+v normalized=%+v", decoded, normalized)
+	}
+}
+
+func TestProcessScopeRejectsContradictoryHeader(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.ProcessScope = ProcessScopeAll
+	header.AllowedProcessCount = 1
+	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "cannot declare") {
+		t.Fatalf("encodeFileHeader() error = %v", err)
+	}
+}
+
+func TestProcessAllowlistRequiresFullFingerprint(t *testing.T) {
+	header := DefaultSegmentHeader()
+	header.ProcessScope = ProcessScopeAllowlist
+	header.AllowedProcessCount = 1
+	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("encodeFileHeader() error = %v", err)
+	}
+}
+
+func TestQualityProgressionRejectsRegressedCounter(t *testing.T) {
+	previous := QualitySnapshot{
+		Sequence: 1, CapturedElapsedUS: 100,
+		Counters: map[uint64]uint64{QualityAcceptedEventTotal: 5},
+	}
+	current := QualitySnapshot{
+		Sequence: 2, CapturedElapsedUS: 200,
+		Counters: map[uint64]uint64{QualityAcceptedEventTotal: 4},
+	}
+
+	err := ValidateQualityProgression(previous, current)
+	if err == nil || !strings.Contains(err.Error(), "counter 1 regressed from 5 to 4") {
+		t.Fatalf("ValidateQualityProgression() error = %v", err)
+	}
+}
+
+func TestKnownQualityCounterSetIsClosedForVersionTwo(t *testing.T) {
+	known := []uint64{
+		QualityAcceptedEventTotal,
+		QualityRuntimeEventBackpressureNanos,
+		QualityRuntimeGraphDisabled,
+		QualityRuntimeHookFailureTotal,
+		QualityJankStatsDependencyMissing,
+		QualityRuntimeHookUnclassifiedFailure,
+		EventQualityCounterID(EventRuntimeCall, QualityLossAdmissionContention),
+	}
+	for _, id := range known {
+		if !IsKnownQualityCounter(id) {
+			t.Fatalf("counter %d should be known", id)
+		}
+	}
+	for _, id := range []uint64{
+		0,
+		0x1000,
+		0x1fff,
+		0x2002,
+		0x201e,
+		0x7fff,
+	} {
+		if IsKnownQualityCounter(id) {
+			t.Fatalf("counter %d should be unknown", id)
+		}
 	}
 }
 
@@ -115,44 +573,12 @@ func TestReaderAcceptsRawChunkCodec(t *testing.T) {
 	}
 }
 
-func TestLegacyJSONLAccountsRecordClassesWithoutInflatingEvents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.jhlog")
-	raw := strings.Join([]string{
-		`{"type":1,"dictionary":{"id":1,"value":"memory.pss"}}`,
-		`{"type":7,"time_ms":10,"memory":{"pss_kb":42}}`,
-		`{"type":99,"time_ms":11}`,
-		`{"type":15,"quality":{"sequence":1}}`,
-		`{"type":16,"segment_end":{"reason":0}}`,
-	}, "\n")
-	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	callbacks := 0
-	result, err := StreamFileWithResult(path, func(Event, map[uint64]string) error {
-		callbacks++
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Version != 0 || result.Sealed || result.Status != SegmentStatusClosedClean {
-		t.Fatalf("legacy stream identity/status = %+v", result)
-	}
-	if result.TotalRecords != 5 || result.DictionaryRecords != 1 || result.DataRecords != 2 || result.ControlRecords != 2 {
-		t.Fatalf("legacy record accounting = %+v", result)
-	}
-	if result.Events != 1 || callbacks != 2 {
-		t.Fatalf("semantic events=%d callbacks=%d, want one event plus one dictionary callback", result.Events, callbacks)
-	}
-}
-
 func TestRetainedEvidenceRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "retained-evidence.jhlog")
 	writeClosedEvents(t, path, []Event{{
 		Type: EventRetained,
 		Retained: &RetainedEvent{
-			ClassID:  1,
+			ClassRef: LocalSymbol(1),
 			AgeMS:    30_000,
 			Count:    2,
 			Evidence: RetentionEvidenceAfterExplicitGC,
@@ -174,33 +600,51 @@ func TestRetainedEvidenceRoundTrips(t *testing.T) {
 	}
 }
 
-func TestLegacyRetainedPayloadDefaultsToTimeOnly(t *testing.T) {
-	var payload bytes.Buffer
-	for _, value := range []uint64{2, 0, 30_000, 1} { // local class id=1, no holder, age, count
-		if err := writeUvarint(&payload, value); err != nil {
-			t.Fatal(err)
-		}
+func TestRetainedPayloadRequiresKnownEvidence(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence *uint64
+		message  string
+	}{
+		{name: "missing", message: "retention evidence"},
+		{name: "unknown zero", evidence: pointerTo(uint64(RetentionEvidenceUnknown)), message: "unsupported retention evidence 0"},
+		{name: "unknown future value", evidence: pointerTo(uint64(99)), message: "unsupported retention evidence 99"},
 	}
-	event := Event{Type: EventRetained}
-	known, err := decodeEventPayload(bytes.NewReader(payload.Bytes()), &event, DefaultSegmentHeader())
-	if err != nil || !known {
-		t.Fatalf("decodeEventPayload() known=%t err=%v", known, err)
-	}
-	if event.Retained == nil || event.Retained.Evidence != RetentionEvidenceTimeOnly {
-		t.Fatalf("legacy retained evidence = %+v", event.Retained)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var payload bytes.Buffer
+			for _, value := range []uint64{2, 0, 30_000, 1} { // local class id=1, no holder, age, count
+				if err := writeUvarint(&payload, value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.evidence != nil {
+				if err := writeUvarint(&payload, *test.evidence); err != nil {
+					t.Fatal(err)
+				}
+			}
+			event := Event{Type: EventRetained}
+			err := decodeEventPayload(bytes.NewReader(payload.Bytes()), &event, DefaultSegmentHeader(), "", nil)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("invalid retained evidence: err=%v event=%+v", err, event.Retained)
+			}
+		})
 	}
 }
 
-func TestSegmentEndReasonsRoundTripAndRemainForwardCompatible(t *testing.T) {
-	if SegmentEndNormal != 0 || SegmentEndSizeLimit != 1 || SegmentEndIOError != 2 || SegmentEndShutdown != 3 {
-		t.Fatalf("segment end reason wire values changed: normal=%d size=%d io=%d shutdown=%d", SegmentEndNormal, SegmentEndSizeLimit, SegmentEndIOError, SegmentEndShutdown)
+func pointerTo[T any](value T) *T { return &value }
+
+func TestSegmentEndReasonsUseClosedJH100Contract(t *testing.T) {
+	if SegmentEndNormal != 0 || SegmentEndSizeLimit != 1 || SegmentEndIOError != 2 || SegmentEndShutdown != 3 || SegmentEndRotation != 4 || SegmentEndStorageBudget != 5 {
+		t.Fatalf("segment end reason wire values changed: normal=%d size=%d io=%d shutdown=%d rotation=%d storage=%d", SegmentEndNormal, SegmentEndSizeLimit, SegmentEndIOError, SegmentEndShutdown, SegmentEndRotation, SegmentEndStorageBudget)
 	}
 	for _, reason := range []SegmentEndReason{
 		SegmentEndNormal,
 		SegmentEndSizeLimit,
 		SegmentEndIOError,
 		SegmentEndShutdown,
-		99,
+		SegmentEndRotation,
+		SegmentEndStorageBudget,
 	} {
 		t.Run(reason.String(), func(t *testing.T) {
 			var output bytes.Buffer
@@ -224,6 +668,14 @@ func TestSegmentEndReasonsRoundTripAndRemainForwardCompatible(t *testing.T) {
 			}
 		})
 	}
+	var output bytes.Buffer
+	writer, err := NewWriter(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.CloseWithReason(99); err == nil || !strings.Contains(err.Error(), "unsupported segment end reason") {
+		t.Fatalf("unknown segment end reason error = %v", err)
+	}
 }
 
 func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
@@ -235,23 +687,14 @@ func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
 	}
 }
 
-func TestRuntimeGraphContentionQualityCounterKeepsWireName(t *testing.T) {
-	if QualityRuntimeGraphContentionLoss != 0x200b {
-		t.Fatalf("runtime graph contention quality wire value changed: %d", QualityRuntimeGraphContentionLoss)
-	}
-	if got := QualityCounterName(QualityRuntimeGraphContentionLoss); got != "runtime_graph_contention_loss_total" {
-		t.Fatalf("QualityCounterName() = %q", got)
-	}
-}
-
 func TestBufferedRuntimeGraphQualityCountersKeepWireNames(t *testing.T) {
 	cases := map[uint64]string{
-		QualityRuntimeGraphBufferCapacityLoss:   "runtime_graph_buffer_capacity_loss_total",
-		QualityRuntimeGraphRegistryCapacityLoss: "runtime_graph_registry_capacity_loss_total",
-		QualityRuntimeGraphStaleEpochLoss:       "runtime_graph_stale_epoch_loss_total",
-		QualityRuntimeGraphShutdownLoss:         "runtime_graph_shutdown_loss_total",
-		QualityRuntimeGraphWriterRejectionLoss:  "runtime_graph_writer_rejection_loss_total",
-		QualityRuntimeStackCapacityLoss:         "runtime_stack_capacity_loss_total",
+		QualityRuntimeGraphShutdownLoss:        "runtime_graph_shutdown_loss_total",
+		QualityRuntimeGraphWriterRejectionLoss: "runtime_graph_writer_rejection_loss_total",
+		QualityRuntimeGraphDisabled:            "runtime_graph_disabled_total",
+		QualityRuntimeHookFailureTotal:         "runtime_hook_failure_total",
+		QualityJankStatsDependencyMissing:      "jankstats_dependency_missing_total",
+		QualityRuntimeHookUnclassifiedFailure:  "runtime_hook_unclassified_failure_total",
 	}
 	for id, want := range cases {
 		if got := QualityCounterName(id); got != want {
@@ -268,8 +711,12 @@ func TestRuntimeEventTransportQualityCountersKeepWireNames(t *testing.T) {
 		QualityRuntimeEventWriterRejectionLoss:  "runtime_event_writer_rejection_loss_total",
 		QualityRuntimeGraphInputTotal:           "runtime_graph_input_total",
 		QualityRuntimeGraphEmittedTotal:         "runtime_graph_emitted_total",
-		QualityRuntimeGraphCircuitBreakerTrip:   "runtime_graph_circuit_breaker_trip_total",
-		QualityRuntimeGraphCircuitBreakerDrop:   "runtime_graph_circuit_breaker_drop_total",
+		QualityRuntimeGraphBackpressureCount:    "runtime_graph_backpressure_count_total",
+		QualityRuntimeGraphBackpressureNanos:    "runtime_graph_backpressure_nanos_total",
+		QualityWriterBackpressureCount:          "writer_backpressure_count_total",
+		QualityWriterBackpressureNanos:          "writer_backpressure_nanos_total",
+		QualityRuntimeEventBackpressureCount:    "runtime_event_backpressure_count_total",
+		QualityRuntimeEventBackpressureNanos:    "runtime_event_backpressure_nanos_total",
 	}
 	for id, want := range cases {
 		if got := QualityCounterName(id); got != want {
@@ -278,7 +725,7 @@ func TestRuntimeEventTransportQualityCountersKeepWireNames(t *testing.T) {
 	}
 }
 
-func TestProfileFilesReportsV9ControlAndEventSizes(t *testing.T) {
+func TestProfileFilesReportsJH100ControlAndEventSizes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatal(err)
@@ -287,7 +734,7 @@ func TestProfileFilesReportsV9ControlAndEventSizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Files) != 1 || profile.Files[0].Format != "binary-v9-chunked" || profile.Files[0].Status != SegmentStatusClosedClean {
+	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-2.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
 		t.Fatalf("file profile = %+v", profile.Files)
 	}
 	rows := map[EventType]SizeProfileType{}
@@ -304,9 +751,9 @@ func TestProfileFilesReportsV9ControlAndEventSizes(t *testing.T) {
 func TestSessionContextAndMetricRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "payloads.jhlog")
 	events := []Event{
-		{Type: EventSession, TimeMS: 1, Session: &SessionEvent{AppVersionID: 1, BuildID: 2, DeviceID: 3, SDKInt: 35, DeviceRooted: true}},
+		{Type: EventSession, TimeMS: 1, Session: &SessionEvent{AppVersionRef: LocalSymbol(1), BuildRef: LocalSymbol(2), DeviceRef: LocalSymbol(3), SDKInt: 35, DeviceRooted: true}},
 		{Type: EventContext, TimeMS: 2, Flags: uint64(FlagAppForeground), Context: &ContextEvent{Network: NetworkVPN, BatteryPct: 50, AvailMemoryKB: 1024, BatteryState: 3, BatteryTempDeciC: -45, LowMemory: true, NetworkMetered: true, NetworkValidated: true, NetworkVPN: true, RxBytes: 1000, TxBytes: 2000, TotalMemoryKB: 4096, FreeStorageKB: 8192, TotalStorageKB: 16384}},
-		{Type: EventGauge, TimeMS: 3, Metric: &MetricEvent{MetricID: 4, Value: 130, Count: 2, Sum: 260, Max: 160, Mode: MetricModeAverage}},
+		{Type: EventGauge, TimeMS: 3, Metric: &MetricEvent{MetricRef: LocalSymbol(4), Value: 130, Count: 2, Sum: 260, Max: 160, Mode: MetricModeAverage}},
 	}
 	writeClosedEvents(t, path, events)
 	log, err := readLog(path)
@@ -329,24 +776,100 @@ func TestSessionContextAndMetricRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAtomicContextAndSameContextRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "context.jhlog")
-	context := AttributionContext{Present: true, Screen: LocalSymbol(1), Owner: LocalSymbol(2), Flow: LocalSymbol(3)}
+func TestVersionTwoTypedEvidenceRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "typed-evidence.jhlog")
+	buckets := make([]uint64, UIFrameHistogramBucketCount)
+	buckets[1] = 50
+	buckets[5] = 45
+	buckets[8] = 5
 	events := []Event{
-		{Type: EventFlow, TimeMS: 10, Attribution: context, Flow: &FlowEvent{}},
-		{Type: EventLogSpam, TimeMS: 20, Attribution: context, LogSpam: &LogSpamEvent{SourceID: 4, Level: 5, Count: 9}},
-		{Type: EventProblem, TimeMS: 30, Attribution: context, Problem: &ProblemEvent{KindID: 5, WindowMS: 5000, Count: 9, MaxMS: 9}},
+		{
+			Type: EventSession, TimeMS: 1,
+			Session: &SessionEvent{CollectorFlags: uint64(CollectorFPS | CollectorJankStats | CollectorProcessExit | CollectorIOTracing)},
+		},
+		{
+			Type: EventUIWindow, TimeMS: 10_000, Flags: uint64(FlagThreadMain),
+			UIWindow: &UIWindowEvent{
+				WindowMS: 10_000, FrameCount: 100, JankCount: 5,
+				Source: UIFrameSourceJankStats, FrameDeadlineUS: 16_667, FrameDurationBuckets: buckets,
+			},
+		},
+		{
+			Type: EventProcessExit, TimeMS: 10_100,
+			ProcessExit: &ProcessExitEvent{
+				Reason: 6, TimestampUnixMS: 1_750_000_000_000, Importance: 100,
+				PSSKB: 256_000, RSSKB: 320_000, ProcessRef: LocalSymbol(10),
+			},
+		},
+		{
+			Type: EventIO, TimeMS: 10_200, Flags: uint64(FlagThreadMain),
+			IO: &IOEvent{Operation: IOOperationDatabaseRead, DurationUS: 275_000, Bytes: 4_096},
+		},
 	}
 	writeClosedEvents(t, path, events)
 	log, err := readLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !log.Events[0].Attribution.Present || log.Events[0].Flags&uint64(FlagSameContext) != 0 {
-		t.Fatalf("first context = %+v flags=%x", log.Events[0].Attribution, log.Events[0].Flags)
+	if len(log.Events) != len(events) {
+		t.Fatalf("events = %d, want %d", len(log.Events), len(events))
+	}
+	if got := log.Events[0].Session.CollectorFlags; got != events[0].Session.CollectorFlags {
+		t.Fatalf("collector flags = 0x%x, want 0x%x", got, events[0].Session.CollectorFlags)
+	}
+	window := log.Events[1].UIWindow
+	if window == nil || window.Source != UIFrameSourceJankStats || window.FrameDeadlineUS != 16_667 ||
+		window.P50MS != 12 || window.P95MS != 32 || window.P99MS != 67 || !slices.Equal(window.FrameDurationBuckets, buckets) {
+		t.Fatalf("UI window = %+v", window)
+	}
+	exit := log.Events[2].ProcessExit
+	if exit == nil || exit.Reason != 6 || exit.TimestampUnixMS != 1_750_000_000_000 || exit.ProcessRef != LocalSymbol(10) {
+		t.Fatalf("process exit = %+v", exit)
+	}
+	ioEvent := log.Events[3]
+	if ioEvent.IO == nil || ioEvent.IO.Operation != IOOperationDatabaseRead || ioEvent.IO.DurationUS != 275_000 ||
+		ioEvent.IO.Bytes != 4_096 || ioEvent.Flags&uint64(FlagThreadMain) == 0 {
+		t.Fatalf("I/O event = %+v", ioEvent)
+	}
+}
+
+func TestAtomicContextAndSameContextRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "context.jhlog")
+	context := AttributionContext{Present: true, Screen: LocalSymbol(1), Owner: LocalSymbol(2), Flow: LocalSymbol(3)}
+	events := []Event{
+		{Type: EventProblem, TimeMS: 10, Attribution: context, Problem: &ProblemEvent{KindRef: LocalSymbol(5), WindowMS: 1000, Count: 1, MaxMS: 10}},
+		{Type: EventLogSpam, TimeMS: 20, Attribution: context, LogSpam: &LogSpamEvent{SourceRef: LocalSymbol(4), Level: 5, Count: 9}},
+		{Type: EventProblem, TimeMS: 30, Attribution: context, Problem: &ProblemEvent{KindRef: LocalSymbol(5), WindowMS: 5000, Count: 9, MaxMS: 9}},
+	}
+	_, state, _, err := encodeRecord(events[0], recordEncodeState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRecord, _, _, err := encodeRecord(events[1], state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bytes.NewReader(secondRecord)
+	if _, err := binary.ReadUvarint(reader); err != nil {
+		t.Fatal(err)
+	}
+	envelopeFlags, err := binary.ReadUvarint(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelopeFlags&uint64(EnvelopeSameContext) == 0 {
+		t.Fatalf("second record envelope flags = 0x%x, want SAME_CONTEXT", envelopeFlags)
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.Events[0].Attribution != context {
+		t.Fatalf("first context = %+v", log.Events[0].Attribution)
 	}
 	for _, event := range log.Events[1:] {
-		if event.Flags&uint64(FlagSameContext) == 0 || event.Attribution != context {
+		if event.Attribution != context {
 			t.Fatalf("same context not preserved: %+v", event)
 		}
 	}
@@ -383,8 +906,8 @@ func TestContextStateResetsAtChunkBoundary(t *testing.T) {
 		t.Fatalf("chunks=%d events=%d", result.CommittedChunks, len(events))
 	}
 	for _, event := range events {
-		if event.Flags&uint64(FlagSameContext) != 0 {
-			t.Fatalf("context incorrectly reused across chunks: %+v", event)
+		if event.Attribution != context {
+			t.Fatalf("context not preserved across chunks: %+v", event)
 		}
 	}
 }
@@ -413,7 +936,7 @@ func TestStableRuntimeSymbolsKeepHeaderNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.WriteEvent(Event{Type: EventRuntimeCall, TimeMS: 1, RuntimeCall: &RuntimeCallEvent{CallerRef: StableSymbol(0x11), CalleeRef: StableSymbol(0x22), Count: 1}}); err != nil {
+	if err := writer.WriteEvent(Event{Type: EventRuntimeCall, TimeMS: 1, Attribution: AttributionContext{Present: true, Owner: StableSymbol(0x11)}, RuntimeCall: &RuntimeCallEvent{CalleeRef: StableSymbol(0x22), Count: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -424,11 +947,9 @@ func TestStableRuntimeSymbolsKeepHeaderNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := log.Events[0].RuntimeCall
-	if call == nil || !call.CallerRef.Stable || !call.CalleeRef.Stable || call.CallerRef.Namespace != "aabb" || call.CalleeRef.Namespace != "aabb" {
-		t.Fatalf("runtime symbols = %+v", call)
-	}
-	if call.CallerID != 0 || call.CalleeID != 0 {
-		t.Fatalf("stable symbols leaked into local IDs: %+v", call)
+	if call == nil || !log.Events[0].Attribution.Owner.Stable || !call.CalleeRef.Stable ||
+		log.Events[0].Attribution.Owner.Namespace != "aabb" || call.CalleeRef.Namespace != "aabb" {
+		t.Fatalf("runtime event = %+v", log.Events[0])
 	}
 }
 
@@ -437,13 +958,13 @@ func TestEmbeddedStableDefinitionsDoNotOverwriteLocalDictionaryIDs(t *testing.T)
 	writeClosedEvents(t, path, []Event{
 		{Type: EventDictionary, Dictionary: &DictionaryEntry{Kind: DictOwner, ID: 1, Value: "local.Owner.call"}},
 		{Type: EventDictionary, Dictionary: &DictionaryEntry{Kind: DictStableSymbol, ID: 1, Value: "stable.Owner.call"}},
-		{Type: EventHTTP, HTTP: &HTTPEvent{OwnerID: 1, Status: Status2xx}},
+		{Type: EventHTTP, Attribution: AttributionContext{Present: true, Owner: LocalSymbol(1)}, HTTP: &HTTPEvent{Status: Status2xx}},
 	})
 
 	var resolved string
 	if _, err := StreamFileWithResult(path, func(event Event, dict map[uint64]string) error {
 		if event.HTTP != nil {
-			resolved = Resolve(dict, event.HTTP.OwnerID)
+			resolved = ResolveSymbol(dict, event.Attribution.Owner)
 		}
 		return nil
 	}); err != nil {
@@ -475,7 +996,7 @@ func TestOpenCleanAndOpenWithTailAreStructuredStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != SegmentStatusOpenClean || result.TailBytes != 0 || len(result.Warnings) != 0 || result.Events != 1 {
+	if result.Status != SegmentStatusOpenClean || result.TailBytes != 0 || result.Events != 1 {
 		t.Fatalf("open result = %+v", result)
 	}
 
@@ -489,7 +1010,7 @@ func TestOpenCleanAndOpenWithTailAreStructuredStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != SegmentStatusOpenWithTail || result.TailBytes != uint64(len(partialHeader)) || len(result.Warnings) != 0 || result.Events != 1 {
+	if result.Status != SegmentStatusOpenWithTail || result.TailBytes != uint64(len(partialHeader)) || result.Events != 1 {
 		t.Fatalf("tail result = %+v", result)
 	}
 }
@@ -536,7 +1057,7 @@ func TestCommittedPayloadCorruptionIsRejected(t *testing.T) {
 }
 
 func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
-	for _, version := range []byte{LegacyFormatVersion8 - 1, FormatVersion + 1} {
+	for _, version := range []byte{0x80, 8, 9, 0x82} {
 		path := filepath.Join(t.TempDir(), "version.jhlog")
 		raw := append([]byte(nil), Magic...)
 		raw[7] = version
@@ -544,62 +1065,116 @@ func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
 			t.Fatal(err)
 		}
 		result, err := StreamFileWithResult(path, nil)
-		if err == nil || result.Status != SegmentStatusCorrupt || !strings.Contains(err.Error(), "unsupported jhlog version") {
+		if err == nil || result.Status != SegmentStatusCorrupt || !strings.Contains(err.Error(), "unsupported .jhlog format") {
 			t.Fatalf("version=%d result=%+v err=%v", version, result, err)
 		}
 	}
 }
 
-func TestReaderKeepsLegacyV8Support(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-v8.jhlog")
-	var raw bytes.Buffer
-	raw.Write(Magic[:7])
-	raw.WriteByte(LegacyFormatVersion8)
-	gzipWriter := gzip.NewWriter(&raw)
-	gzipWriter.Write([]byte{byte(EventMemory), 11, 22, 33})
-	if err := gzipWriter.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, raw.Bytes(), 0o600); err != nil {
+func TestReaderRejectsLegacyVersionOneWithMigrationMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-v1.jhlog")
+	raw := append(append([]byte(nil), legacyV1Magic...), 0)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	var memory *MemoryEvent
-	result, err := StreamFileWithResult(path, func(event Event, _ map[uint64]string) error {
-		if event.Memory != nil {
-			memory = event.Memory
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("StreamFileWithResult() error = %v", err)
+	result, err := StreamFileWithResult(path, nil)
+	if err == nil || result.Status != SegmentStatusCorrupt {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if result.Version != LegacyFormatVersion8 || result.Status != SegmentStatusClosedClean {
-		t.Fatalf("result = %+v", result)
-	}
-	if memory == nil || memory.PSSKB != 11 || memory.JavaHeapKB != 22 || memory.NativeHeapKB != 33 {
-		t.Fatalf("memory = %+v", memory)
+	assertLegacyV1MigrationError(t, err)
+	_, err = ReadSessionHeader(path)
+	assertLegacyV1MigrationError(t, err)
+}
+
+func assertLegacyV1MigrationError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "legacy JHLOG 1.0") ||
+		!strings.Contains(err.Error(), "capture a new log") {
+		t.Fatalf("legacy format error = %v", err)
 	}
 }
 
-func TestReaderSurfacesUnsupportedDictionaryEncoding(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "unsupported-dictionary-encoding.jhlog")
-	writeClosedEvents(t, path, []Event{{
-		Type: EventDictionary,
-		Dictionary: &DictionaryEntry{
-			Kind:     DictOwner,
-			ID:       42,
-			Encoding: 7,
-			Data:     []byte{0x01, 0x02},
-		},
-	}})
-
-	result, err := StreamFileWithResult(path, nil)
+func TestWriterRejectsUnsupportedDictionaryEncoding(t *testing.T) {
+	var output bytes.Buffer
+	writer, err := NewWriter(&output)
 	if err != nil {
-		t.Fatalf("StreamFileWithResult() error = %v", err)
+		t.Fatal(err)
 	}
-	if warning := strings.Join(result.Warnings, "\n"); !strings.Contains(warning, "dictionary value 42 uses unsupported encoding 7") {
-		t.Fatalf("warnings = %q", warning)
+	err = writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &DictionaryEntry{
+		Kind: DictOwner, ID: 42, Encoding: 7, Data: []byte{0x01, 0x02},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported dictionary encoding 7") {
+		t.Fatalf("dictionary encoding error = %v", err)
+	}
+}
+
+func TestVersionTwoRejectsUnsupportedRecordContracts(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		want  string
+	}{
+		{
+			name:  "retired flow event type",
+			event: Event{Type: EventType(11)},
+			want:  "unsupported event type 11",
+		},
+		{
+			name:  "event type",
+			event: Event{Type: EventType(99)},
+			want:  "unsupported event type 99",
+		},
+		{
+			name: "dictionary kind",
+			event: Event{Type: EventDictionary, Dictionary: &DictionaryEntry{
+				Kind: DictKind(99), ID: 1, Value: "value",
+			}},
+			want: "unsupported dictionary kind 99",
+		},
+		{
+			name: "quality counter",
+			event: Event{Type: EventQualitySnapshot, Quality: &QualitySnapshot{
+				Sequence: 1, Counters: map[uint64]uint64{0x7fff: 1},
+			}},
+			want: "unsupported quality counter id 32767",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writer, err := NewWriter(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = writer.WriteEvent(test.event)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("WriteEvent() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestVersionTwoWriterRejectsUnknownSegmentEndReason(t *testing.T) {
+	var output bytes.Buffer
+	writer, err := NewWriter(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = writer.CloseWithReason(99)
+	if err == nil || !strings.Contains(err.Error(), "unsupported segment end reason 99") {
+		t.Fatalf("CloseWithReason() error = %v", err)
+	}
+}
+
+func TestVersionTwoDecoderRejectsUnsupportedEventTypes(t *testing.T) {
+	for _, eventType := range []EventType{11, 99} {
+		event := Event{Type: eventType}
+		err := decodeEventPayload(bytes.NewReader(nil), &event, DefaultSegmentHeader(), "test", nil)
+		want := fmt.Sprintf("unsupported event type %d", eventType)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("event type %d: decodeEventPayload() error = %v", eventType, err)
+		}
 	}
 }
 
@@ -638,10 +1213,9 @@ func firstChunkOffset(t *testing.T, raw []byte) int {
 
 func readLog(path string) (Log, error) {
 	log := Log{
-		Source:  path,
-		Version: FormatVersion,
-		Dict:    map[uint64]string{},
-		Kinds:   map[uint64]DictKind{},
+		Source: path,
+		Dict:   map[uint64]string{},
+		Kinds:  map[uint64]DictKind{},
 	}
 	result, err := StreamFileWithResult(path, func(event Event, _ map[uint64]string) error {
 		if event.Dictionary != nil && event.Dictionary.Kind != DictStableSymbol {
@@ -653,7 +1227,6 @@ func readLog(path string) (Log, error) {
 		}
 		return nil
 	})
-	log.Warnings = result.Warnings
 	log.Result = result
 	return log, err
 }

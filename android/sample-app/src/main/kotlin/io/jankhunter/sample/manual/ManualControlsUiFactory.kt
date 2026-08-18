@@ -42,6 +42,22 @@ internal object ManualControlsUiFactory {
             ),
         ),
         SectionSpec(
+            title = R.string.section_ui_jank_lab,
+            subtitle = R.string.section_ui_jank_lab_subtitle,
+            actions = listOf(
+                ActionSpec(
+                    R.string.action_open_custom_view_lab,
+                    ManualAction.OPEN_CUSTOM_VIEW_LAB,
+                    SampleActionTone.WARNING,
+                ),
+                ActionSpec(
+                    R.string.action_open_compose_lab,
+                    ManualAction.OPEN_COMPOSE_LAB,
+                    SampleActionTone.EMPHASIS,
+                ),
+            ),
+        ),
+        SectionSpec(
             title = R.string.section_leak_lab,
             subtitle = R.string.section_leak_lab_subtitle,
             actions = listOf(

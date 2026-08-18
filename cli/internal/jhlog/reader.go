@@ -1,12 +1,13 @@
 package jhlog
 
 import (
-	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"math"
@@ -21,12 +22,7 @@ func StreamFile(path string, handle EventHandler) error {
 	return err
 }
 
-func StreamFileWithWarnings(path string, handle EventHandler) ([]string, error) {
-	result, err := StreamFileWithResult(path, handle)
-	return result.Warnings, err
-}
-
-// ReadSessionHeader reads only the bounded 1.0/v9 file header. It does not scan,
+// ReadSessionHeader reads only the bounded current-version file header. It does not scan,
 // allocate for, decompress, or validate any event chunk in the file.
 func ReadSessionHeader(path string) (SegmentHeader, error) {
 	file, err := os.Open(path)
@@ -36,27 +32,25 @@ func ReadSessionHeader(path string) (SegmentHeader, error) {
 	defer file.Close()
 
 	var prefix [magicSize]byte
-	if _, err := io.ReadFull(file, prefix[:]); err != nil {
+	n, err := io.ReadFull(file, prefix[:])
+	if isLegacyV1(prefix[:n]) {
+		return SegmentHeader{}, legacyV1UnsupportedError(path)
+	}
+	if err != nil {
 		return SegmentHeader{}, fmt.Errorf("%s: read .jhlog magic: %w", path, err)
 	}
-	if !bytes.Equal(prefix[:7], Magic[:7]) {
-		return SegmentHeader{}, fmt.Errorf("%s: invalid v9 .jhlog magic", path)
+	if !bytes.Equal(prefix[:], Magic) {
+		return SegmentHeader{}, fmt.Errorf("%s: unsupported .jhlog format; expected %s", path, FormatVersionString)
 	}
-	if prefix[7] == CurrentFormatMarker {
-		return readV1SessionHeader(file)
-	}
-	if prefix[7] == LegacyFormatVersion8 {
-		return SegmentHeader{}, nil
-	}
-	if prefix[7] != FormatVersion {
-		return SegmentHeader{}, fmt.Errorf("%s: unsupported jhlog version %d", path, prefix[7])
-	}
-	header, err := readV9Header(file)
+	header, err := readHeader(file)
 	if err != nil {
-		return SegmentHeader{}, fmt.Errorf("%s: read v9 session header: %w", path, err)
+		return SegmentHeader{}, fmt.Errorf("%s: read session header: %w", path, err)
 	}
-	if err := validateV9Header(header); err != nil {
-		return SegmentHeader{}, fmt.Errorf("%s: invalid v9 session header: %w", path, err)
+	if err := validateHeader(header); err != nil {
+		return SegmentHeader{}, fmt.Errorf("%s: invalid session header: %w", path, err)
+	}
+	if err := validateSessionLogFilename(path, header); err != nil {
+		return SegmentHeader{}, err
 	}
 	return header, nil
 }
@@ -72,42 +66,38 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 	defer file.Close()
 
 	result := newStreamResult(path)
+	if info, statErr := file.Stat(); statErr == nil && info.Size() > 0 {
+		result.InputBytes = uint64(info.Size())
+	}
 	var prefix [magicSize]byte
 	n, prefixErr := io.ReadFull(file, prefix[:])
 	if prefixErr != nil && !errors.Is(prefixErr, io.EOF) && !errors.Is(prefixErr, io.ErrUnexpectedEOF) {
 		return result, prefixErr
 	}
+	if isLegacyV1(prefix[:n]) {
+		return corruptResult(result, legacyV1UnsupportedError(path))
+	}
 	if n < len(Magic) && bytes.Equal(prefix[:n], Magic[:n]) {
 		return corruptResult(result, fmt.Errorf("incomplete file magic: %d of %d bytes", n, len(Magic)))
 	}
-	if n == len(Magic) && bytes.Equal(prefix[:7], Magic[:7]) {
-		result.Version = prefix[7]
-		switch prefix[7] {
-		case CurrentFormatMarker:
-			var semantic [2]byte
-			if _, err := io.ReadFull(file, semantic[:]); err != nil {
-				return corruptResult(result, fmt.Errorf("read semantic format version: %w", err))
-			}
-			if semantic[0] != CurrentFormatMajor || semantic[1] != CurrentFormatMinor {
-				return corruptResult(result, fmt.Errorf("unsupported jhlog format %d.%d", semantic[0], semantic[1]))
-			}
-			result.Version = CurrentFormatMajor
-			result.FormatMajor = semantic[0]
-			result.FormatMinor = semantic[1]
-			return streamBinaryV1(file, result, handle)
-		case FormatVersion:
-			return streamBinaryV9(file, result, handle)
-		case LegacyFormatVersion8:
-			return streamBinaryV8(file, result, handle)
-		default:
-			return corruptResult(result, fmt.Errorf("unsupported jhlog version %d", prefix[7]))
-		}
+	if n == len(Magic) && bytes.Equal(prefix[:], Magic) {
+		digest := sha256.New()
+		_, _ = digest.Write(prefix[:])
+		return streamBinary(file, result, handle, digest)
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return result, err
-	}
-	result.Version = 0
-	return streamJSONL(file, result, handle)
+	return corruptResult(result, fmt.Errorf("unsupported .jhlog format; expected %s", FormatVersionString))
+}
+
+func isLegacyV1(prefix []byte) bool {
+	return len(prefix) >= len(legacyV1Magic) && bytes.Equal(prefix[:len(legacyV1Magic)], legacyV1Magic)
+}
+
+func legacyV1UnsupportedError(path string) error {
+	return fmt.Errorf(
+		"%s: legacy JHLOG 1.0 is not supported; capture a new log (expected JHLOG %s)",
+		path,
+		FormatVersionString,
+	)
 }
 
 func newStreamResult(source string) StreamResult {
@@ -119,28 +109,34 @@ func newStreamResult(source string) StreamResult {
 	}
 }
 
-func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (StreamResult, error) {
-	header, err := readV9Header(file)
+func streamBinary(file *os.File, result StreamResult, handle EventHandler, digest hash.Hash) (StreamResult, error) {
+	tracked := io.TeeReader(file, digest)
+	header, err := readHeader(tracked)
 	if err != nil {
 		return corruptResult(result, err)
 	}
-	if err := validateV9Header(header); err != nil {
-		return corruptResult(result, fmt.Errorf("invalid v9 session header: %w", err))
+	if err := validateHeader(header); err != nil {
+		return corruptResult(result, fmt.Errorf("invalid session header: %w", err))
+	}
+	if err := validateSessionLogFilename(result.Source, header); err != nil {
+		return corruptResult(result, err)
 	}
 	result.Header = header
+	symbolNamespace := hex.EncodeToString(header.SymbolNamespace)
 
 	dict := map[uint64]string{}
 	kinds := map[uint64]DictKind{}
 	var expectedSequence uint32
 	var dataRecords uint64
 	var dictionaryRecords uint64
+	runtimeCallScratch := make([]runtimeCallRow, MaxRuntimeCallBlockRows)
 	for {
 		chunkStart, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return result, err
 		}
 		var rawHeader [chunkHeaderSize]byte
-		n, err := io.ReadFull(file, rawHeader[:])
+		n, err := io.ReadFull(tracked, rawHeader[:])
 		if errors.Is(err, io.EOF) && n == 0 {
 			result.Status = SegmentStatusOpenClean
 			return result, nil
@@ -159,7 +155,7 @@ func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (St
 		}
 
 		stored := make([]byte, int(metadata.StoredLen))
-		if _, err := io.ReadFull(file, stored); err != nil {
+		if _, err := io.ReadFull(tracked, stored); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				result.Status = SegmentStatusOpenWithTail
 				result.TailBytes = physicalTailBytes(file, chunkStart, chunkHeaderSize)
@@ -168,7 +164,7 @@ func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (St
 			return result, fmt.Errorf("%s: read chunk %d payload: %w", result.Source, metadata.Sequence, err)
 		}
 		var trailer [commitTrailerSize]byte
-		if _, err := io.ReadFull(file, trailer[:]); err != nil {
+		if _, err := io.ReadFull(tracked, trailer[:]); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				result.Status = SegmentStatusOpenWithTail
 				result.TailBytes = physicalTailBytes(file, chunkStart, uint64(chunkHeaderSize)+uint64(metadata.StoredLen))
@@ -190,7 +186,18 @@ func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (St
 			return corruptResult(result, fmt.Errorf("chunk %d raw CRC mismatch: stored %08x, computed %08x", metadata.Sequence, metadata.RawCRC, computed))
 		}
 
-		chunkSummary, err := decodeChunkRecords(raw, metadata, header, result.Source, dict, kinds, handle, &result)
+		chunkSummary, err := decodeChunkRecords(
+			raw,
+			metadata,
+			header,
+			symbolNamespace,
+			result.Source,
+			dict,
+			kinds,
+			runtimeCallScratch,
+			handle,
+			&result,
+		)
 		if err != nil {
 			var callback callbackError
 			if errors.As(err, &callback) {
@@ -228,7 +235,7 @@ func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (St
 			return corruptResult(result, fmt.Errorf("segment end dictionary count %d differs from decoded %d", result.SegmentEnd.TotalDictionaryRecords, dictionaryRecords))
 		}
 		var extra [1]byte
-		if n, err := file.Read(extra[:]); n != 0 || !errors.Is(err, io.EOF) {
+		if n, err := tracked.Read(extra[:]); n != 0 || !errors.Is(err, io.EOF) {
 			if err != nil && !errors.Is(err, io.EOF) {
 				return result, fmt.Errorf("%s: verify EOF after FINAL: %w", result.Source, err)
 			}
@@ -237,11 +244,12 @@ func streamBinaryV9(file *os.File, result StreamResult, handle EventHandler) (St
 		result.Status = SegmentStatusClosedClean
 		result.Sealed = true
 		result.TailBytes = 0
+		result.SegmentDigest = digest.Sum(nil)
 		return result, nil
 	}
 }
 
-func validateV9Header(header SegmentHeader) error {
+func validateHeader(header SegmentHeader) error {
 	if header.SegmentStartElapsedUS > math.MaxInt64 {
 		return fmt.Errorf("segment start elapsed time %d exceeds signed timestamp range", header.SegmentStartElapsedUS)
 	}
@@ -255,7 +263,7 @@ func validateV9Header(header SegmentHeader) error {
 	return nil
 }
 
-func readV9Header(reader io.Reader) (SegmentHeader, error) {
+func readHeader(reader io.Reader) (SegmentHeader, error) {
 	var fixed [8]byte
 	if _, err := io.ReadFull(reader, fixed[:]); err != nil {
 		return SegmentHeader{}, fmt.Errorf("read file header fields: %w", err)
@@ -311,9 +319,11 @@ func decodeChunkRecords(
 	raw []byte,
 	metadata chunkMetadata,
 	header SegmentHeader,
+	symbolNamespace string,
 	source string,
 	dict map[uint64]string,
 	kinds map[uint64]DictKind,
+	runtimeCallScratch []runtimeCallRow,
 	handle EventHandler,
 	result *StreamResult,
 ) (chunkDecodeSummary, error) {
@@ -336,10 +346,10 @@ func decodeChunkRecords(
 			return summary, fmt.Errorf("record %d body seek: %w", index, err)
 		}
 		recordBytes := uint64(before - reader.Len())
-		event, known, nextState, err := decodeRecord(body, state, header, source, RecordPosition{
+		event, nextState, err := decodeRecord(body, state, header, symbolNamespace, source, RecordPosition{
 			ChunkSequence: metadata.Sequence,
 			RecordIndex:   index,
-		})
+		}, runtimeCallScratch)
 		if err != nil {
 			return summary, fmt.Errorf("record %d: %w", index, err)
 		}
@@ -350,10 +360,12 @@ func decodeChunkRecords(
 		summary.lastRecordType = event.Type
 		result.RawRecordBytes += recordBytes
 		result.RecordBytesByType[event.Type] += recordBytes
-		result.RecordsByType[event.Type]++
-		result.TotalRecords++
-		result.Warnings = append(result.Warnings, event.Warnings...)
-
+		semanticRecords := uint64(1)
+		if event.Type == EventRuntimeCall {
+			semanticRecords = uint64(len(event.runtimeCalls))
+		}
+		result.RecordsByType[event.Type] += semanticRecords
+		result.TotalRecords += semanticRecords
 		switch event.Type {
 		case EventDictionary:
 			summary.dictionaryRecords++
@@ -364,12 +376,15 @@ func decodeChunkRecords(
 		case EventSegmentEnd:
 			summary.segmentEndRecords++
 			result.ControlRecords++
+		case EventLogGrowth:
+			result.ControlRecords++
 		default:
-			summary.dataRecords++
-			result.DataRecords++
-		}
-		if !known {
-			continue
+			summary.dataRecords += semanticRecords
+			result.DataRecords += semanticRecords
+			result.LatestDataEventUnixMS = maxUint64(
+				result.LatestDataEventUnixMS,
+				eventUnixMS(header, event.TimeMS),
+			)
 		}
 		if event.Dictionary != nil {
 			if event.Dictionary.Kind != DictStableSymbol {
@@ -380,6 +395,11 @@ func decodeChunkRecords(
 			}
 		}
 		if event.Quality != nil {
+			if result.LatestQuality != nil {
+				if err := ValidateQualityProgression(*result.LatestQuality, *event.Quality); err != nil {
+					return chunkDecodeSummary{}, fmt.Errorf("quality snapshot: %w", err)
+				}
+			}
 			if result.LatestQuality == nil || event.Quality.Sequence >= result.LatestQuality.Sequence {
 				quality := cloneQualitySnapshot(*event.Quality)
 				result.LatestQuality = &quality
@@ -389,6 +409,44 @@ func decodeChunkRecords(
 		if event.SegmentEnd != nil {
 			end := *event.SegmentEnd
 			result.SegmentEnd = &end
+			continue
+		}
+		if event.LogGrowth != nil {
+			applyLogGrowthRecord(result, event.LogGrowth)
+			continue
+		}
+		if event.Type == EventRuntimeCall {
+			for rowIndex := range event.runtimeCalls {
+				row := event.runtimeCalls[rowIndex]
+				if math.MaxUint64-result.RuntimeGraphLogicalCalls < row.count {
+					return summary, fmt.Errorf("runtime graph logical call total overflows uint64")
+				}
+				result.RuntimeGraphLogicalCalls += row.count
+				call := RuntimeCallEvent{
+					CalleeRef: row.callee,
+					Count:     row.count,
+					TotalMS:   row.total,
+					MaxMS:     row.max,
+				}
+				expanded := event
+				expanded.runtimeCalls = nil
+				expanded.RuntimeCall = &call
+				expanded.Attribution = AttributionContext{
+					Present: true,
+					Screen:  row.screen,
+					Owner:   row.caller,
+					Flow:    row.flow,
+					Step:    row.step,
+				}
+				if rowIndex > 0 {
+					expanded.DeltaUS = 0
+					expanded.DeltaMS = 0
+				}
+				result.Events++
+				if err := handle(expanded, dict); err != nil {
+					return summary, callbackError{err}
+				}
+			}
 			continue
 		}
 		if event.Type.IsSemanticData() {
@@ -404,30 +462,63 @@ func decodeChunkRecords(
 	return summary, nil
 }
 
+func eventUnixMS(header SegmentHeader, eventElapsedMS uint64) uint64 {
+	segmentElapsedMS := header.SegmentStartElapsedUS / 1_000
+	if eventElapsedMS <= segmentElapsedMS {
+		return header.SegmentStartUnixMS
+	}
+	delta := eventElapsedMS - segmentElapsedMS
+	if math.MaxUint64-header.SegmentStartUnixMS < delta {
+		return math.MaxUint64
+	}
+	return header.SegmentStartUnixMS + delta
+}
+
+func ValidateQualityProgression(previous, current QualitySnapshot) error {
+	if current.Sequence < previous.Sequence {
+		return fmt.Errorf("sequence regressed from %d to %d", previous.Sequence, current.Sequence)
+	}
+	if current.CapturedElapsedUS < previous.CapturedElapsedUS {
+		return fmt.Errorf(
+			"captured elapsed time regressed from %d to %d",
+			previous.CapturedElapsedUS,
+			current.CapturedElapsedUS,
+		)
+	}
+	for id, previousValue := range previous.Counters {
+		if currentValue := current.Counters[id]; currentValue < previousValue {
+			return fmt.Errorf("counter %d regressed from %d to %d", id, previousValue, currentValue)
+		}
+	}
+	return nil
+}
+
 type callbackError struct{ error }
 
 func decodeRecord(
 	body []byte,
 	state recordDecodeState,
 	header SegmentHeader,
+	symbolNamespace string,
 	source string,
 	position RecordPosition,
-) (Event, bool, recordDecodeState, error) {
+	runtimeCallScratch []runtimeCallRow,
+) (Event, recordDecodeState, error) {
 	reader := bytes.NewReader(body)
 	eventType, err := binary.ReadUvarint(reader)
 	if err != nil {
-		return Event{}, false, state, fmt.Errorf("type: %w", err)
+		return Event{}, state, fmt.Errorf("type: %w", err)
 	}
 	flags, err := binary.ReadUvarint(reader)
 	if err != nil {
-		return Event{}, false, state, fmt.Errorf("envelope flags: %w", err)
+		return Event{}, state, fmt.Errorf("envelope flags: %w", err)
 	}
 	knownEnvelopeFlags := uint64(EnvelopeHasTime | EnvelopeHasThread | EnvelopeHasContext | EnvelopeSameContext | EnvelopeHasAttributes)
 	if flags&^knownEnvelopeFlags != 0 {
-		return Event{}, false, state, fmt.Errorf("unsupported envelope flags 0x%x", flags&^knownEnvelopeFlags)
+		return Event{}, state, fmt.Errorf("unsupported envelope flags 0x%x", flags&^knownEnvelopeFlags)
 	}
 	if flags&uint64(EnvelopeSameContext) != 0 && flags&uint64(EnvelopeHasContext) == 0 {
-		return Event{}, false, state, fmt.Errorf("SAME_CONTEXT without HAS_CONTEXT")
+		return Event{}, state, fmt.Errorf("SAME_CONTEXT without HAS_CONTEXT")
 	}
 
 	event := Event{
@@ -439,12 +530,12 @@ func decodeRecord(
 	if flags&uint64(EnvelopeHasTime) != 0 {
 		rawDelta, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return Event{}, false, state, fmt.Errorf("producer timestamp delta: %w", err)
+			return Event{}, state, fmt.Errorf("producer timestamp delta: %w", err)
 		}
 		delta := decodeSVarint(rawDelta)
 		elapsed, err := addSignedTimestamp(state.lastElapsedUS, delta)
 		if err != nil {
-			return Event{}, false, state, err
+			return Event{}, state, err
 		}
 		event.DeltaUS = delta
 		if delta >= 0 {
@@ -459,7 +550,7 @@ func decodeRecord(
 	if flags&uint64(EnvelopeHasThread) != 0 {
 		threadID, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return Event{}, false, state, fmt.Errorf("producer thread: %w", err)
+			return Event{}, state, fmt.Errorf("producer thread: %w", err)
 		}
 		event.Producer.HasThread = true
 		event.Producer.ThreadID = threadID
@@ -467,35 +558,35 @@ func decodeRecord(
 	if flags&uint64(EnvelopeHasContext) != 0 {
 		if flags&uint64(EnvelopeSameContext) != 0 {
 			if !state.hasContext {
-				return Event{}, false, state, fmt.Errorf("SAME_CONTEXT without prior context in chunk")
+				return Event{}, state, fmt.Errorf("SAME_CONTEXT without prior context in chunk")
 			}
 			event.Attribution = state.lastContext
 			event.Attribution.Present = true
-			event.Flags |= uint64(FlagSameContext)
 		} else {
-			context, err := readAttribution(reader, header.SymbolNamespace)
+			context, err := readAttribution(reader, symbolNamespace)
 			if err != nil {
-				return Event{}, false, state, err
+				return Event{}, state, err
 			}
 			event.Attribution = context
 			nextState.lastContext = context
 			nextState.hasContext = true
 		}
-		event.Flags |= compatibilityContextFlags(event.Attribution)
 	}
 	if flags&uint64(EnvelopeHasAttributes) != 0 {
 		attributes, err := binary.ReadUvarint(reader)
 		if err != nil {
-			return Event{}, false, state, fmt.Errorf("event attributes: %w", err)
+			return Event{}, state, fmt.Errorf("event attributes: %w", err)
 		}
 		event.Flags |= attributes
 	}
 
-	known, err := decodeEventPayload(reader, &event, header)
-	if err != nil {
-		return Event{}, false, state, err
+	if err := decodeEventPayload(reader, &event, header, symbolNamespace, runtimeCallScratch); err != nil {
+		return Event{}, state, err
 	}
-	return event, known, nextState, nil
+	if reader.Len() != 0 {
+		return Event{}, state, fmt.Errorf("event type %d leaves %d trailing payload bytes", event.Type, reader.Len())
+	}
+	return event, nextState, nil
 }
 
 func addSignedTimestamp(current, delta int64) (int64, error) {
@@ -508,7 +599,7 @@ func addSignedTimestamp(current, delta int64) (int64, error) {
 	return current + delta, nil
 }
 
-func readAttribution(reader *bytes.Reader, namespace []byte) (AttributionContext, error) {
+func readAttribution(reader *bytes.Reader, symbolNamespace string) (AttributionContext, error) {
 	mask, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return AttributionContext{}, fmt.Errorf("context presence mask: %w", err)
@@ -530,7 +621,7 @@ func readAttribution(reader *bytes.Reader, namespace []byte) (AttributionContext
 		if mask&item.bit == 0 {
 			continue
 		}
-		ref, err := readSymbolRef(reader, namespace)
+		ref, err := readSymbolRef(reader, symbolNamespace)
 		if err != nil {
 			return AttributionContext{}, fmt.Errorf("context symbol: %w", err)
 		}
@@ -539,24 +630,7 @@ func readAttribution(reader *bytes.Reader, namespace []byte) (AttributionContext
 	return context, nil
 }
 
-func compatibilityContextFlags(context AttributionContext) uint64 {
-	var flags uint64
-	if !context.Screen.IsUnknown() {
-		flags |= uint64(FlagHasScreen)
-	}
-	if !context.Owner.IsUnknown() {
-		flags |= uint64(FlagHasOwner)
-	}
-	if !context.Flow.IsUnknown() {
-		flags |= uint64(FlagHasFlow)
-	}
-	if !context.Step.IsUnknown() {
-		flags |= uint64(FlagHasStep)
-	}
-	return flags
-}
-
-func readSymbolRef(reader *bytes.Reader, namespace []byte) (SymbolRef, error) {
+func readSymbolRef(reader *bytes.Reader, symbolNamespace string) (SymbolRef, error) {
 	token, err := binary.ReadUvarint(reader)
 	if err != nil {
 		return SymbolRef{}, err
@@ -569,7 +643,7 @@ func readSymbolRef(reader *bytes.Reader, namespace []byte) (SymbolRef, error) {
 		if _, err := io.ReadFull(reader, raw[:]); err != nil {
 			return SymbolRef{}, err
 		}
-		return StableSymbolInNamespace(binary.LittleEndian.Uint64(raw[:]), namespace), nil
+		return SymbolRef{ID: binary.LittleEndian.Uint64(raw[:]), Namespace: symbolNamespace, Stable: true}, nil
 	case token&1 == 0:
 		return LocalSymbol(token >> 1), nil
 	default:
@@ -577,7 +651,13 @@ func readSymbolRef(reader *bytes.Reader, namespace []byte) (SymbolRef, error) {
 	}
 }
 
-func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader) (bool, error) {
+func decodeEventPayload(
+	reader *bytes.Reader,
+	event *Event,
+	header SegmentHeader,
+	symbolNamespace string,
+	runtimeCallScratch []runtimeCallRow,
+) error {
 	read := func(name string) (uint64, error) {
 		value, err := binary.ReadUvarint(reader)
 		if err != nil {
@@ -586,7 +666,7 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 		return value, nil
 	}
 	readRef := func(name string) (SymbolRef, error) {
-		ref, err := readSymbolRef(reader, header.SymbolNamespace)
+		ref, err := readSymbolRef(reader, symbolNamespace)
 		if err != nil {
 			return SymbolRef{}, fmt.Errorf("%s: %w", name, err)
 		}
@@ -608,24 +688,26 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 	case EventDictionary:
 		values, err := readValues("dictionary kind", "dictionary local id", "dictionary encoding", "dictionary data length")
 		if err != nil {
-			return true, err
+			return err
 		}
 		if values[3] > uint64(reader.Len()) {
-			return true, fmt.Errorf("dictionary data length %d exceeds remaining %d", values[3], reader.Len())
+			return fmt.Errorf("dictionary data length %d exceeds remaining %d", values[3], reader.Len())
 		}
 		data := make([]byte, int(values[3]))
 		if _, err := io.ReadFull(reader, data); err != nil {
-			return true, fmt.Errorf("dictionary data: %w", err)
+			return fmt.Errorf("dictionary data: %w", err)
 		}
 		entry := &DictionaryEntry{Kind: DictKind(values[0]), ID: values[1], Encoding: values[2], Data: data}
-		if entry.Encoding == 0 {
-			if !utf8.Valid(data) {
-				return true, fmt.Errorf("dictionary value %d is not valid UTF-8", entry.ID)
-			}
-			entry.Value = string(data)
-		} else {
-			event.Warnings = append(event.Warnings, fmt.Sprintf("dictionary value %d uses unsupported encoding %d", entry.ID, entry.Encoding))
+		if entry.Kind > DictStableSymbol {
+			return fmt.Errorf("unsupported dictionary kind %d", entry.Kind)
 		}
+		if entry.Encoding != 0 {
+			return fmt.Errorf("unsupported dictionary encoding %d for value %d", entry.Encoding, entry.ID)
+		}
+		if !utf8.Valid(data) {
+			return fmt.Errorf("dictionary value %d is not valid UTF-8", entry.ID)
+		}
+		entry.Value = string(data)
 		event.Dictionary = entry
 	case EventSession:
 		refs := make([]SymbolRef, 12)
@@ -634,13 +716,13 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 		} {
 			ref, err := readRef(name)
 			if err != nil {
-				return true, err
+				return err
 			}
 			refs[i] = ref
 		}
 		sdk, err := read("SDK")
 		if err != nil {
-			return true, err
+			return err
 		}
 		for i, name := range []string{
 			"Android release", "security patch", "primary ABI", "supported ABIs",
@@ -648,30 +730,49 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 		} {
 			ref, err := readRef(name)
 			if err != nil {
-				return true, err
+				return err
 			}
 			refs[i+3] = ref
 		}
+		collectorFlags, err := read("collector flags")
+		if err != nil {
+			return err
+		}
+		if collectorFlags&^uint64(CollectorKnownMask) != 0 {
+			return fmt.Errorf("unsupported collector flags 0x%x", collectorFlags)
+		}
 		event.Session = &SessionEvent{
-			AppVersionRef: refs[0], AppVersionID: refs[0].LegacyID(),
-			BuildRef: refs[1], BuildID: refs[1].LegacyID(),
-			DeviceRef: refs[2], DeviceID: refs[2].LegacyID(),
-			SDKInt: sdk, ProcessName: header.ProcessName,
-			AndroidReleaseRef: refs[3], AndroidReleaseID: refs[3].LegacyID(),
-			SecurityPatchRef: refs[4], SecurityPatchID: refs[4].LegacyID(),
-			PrimaryABIRef: refs[5], PrimaryABIID: refs[5].LegacyID(),
-			SupportedABIsRef: refs[6], SupportedABIsID: refs[6].LegacyID(),
-			ManufacturerRef: refs[7], ManufacturerID: refs[7].LegacyID(),
-			BrandRef: refs[8], BrandID: refs[8].LegacyID(),
-			HardwareRef: refs[9], HardwareID: refs[9].LegacyID(),
-			BoardRef: refs[10], BoardID: refs[10].LegacyID(),
-			ProductRef: refs[11], ProductID: refs[11].LegacyID(),
-			DeviceRooted: event.Flags&uint64(FlagDeviceRooted) != 0,
+			AppVersionRef: refs[0],
+			BuildRef:      refs[1],
+			DeviceRef:     refs[2],
+			SDKInt:        sdk, CollectorFlags: collectorFlags, ProcessName: header.ProcessName,
+			AndroidReleaseRef: refs[3],
+			SecurityPatchRef:  refs[4],
+			PrimaryABIRef:     refs[5],
+			SupportedABIsRef:  refs[6],
+			ManufacturerRef:   refs[7],
+			BrandRef:          refs[8],
+			HardwareRef:       refs[9],
+			BoardRef:          refs[10],
+			ProductRef:        refs[11],
+			DeviceRooted:      event.Flags&uint64(FlagDeviceRooted) != 0,
 		}
 	case EventContext:
 		values, err := readValues("network", "battery percent", "available memory", "battery state", "battery temperature", "rx bytes", "tx bytes", "total memory", "free storage", "total storage")
 		if err != nil {
-			return true, err
+			return err
+		}
+		if values[0] > uint64(NetworkVPN) {
+			return fmt.Errorf("unsupported network kind %d", values[0])
+		}
+		if values[1] > 100 {
+			return fmt.Errorf("battery percent %d exceeds 100", values[1])
+		}
+		if values[7] > 0 && values[2] > values[7] {
+			return fmt.Errorf("available memory %d exceeds total memory %d", values[2], values[7])
+		}
+		if values[9] > 0 && values[8] > values[9] {
+			return fmt.Errorf("free storage %d exceeds total storage %d", values[8], values[9])
 		}
 		event.Context = &ContextEvent{
 			Network: NetworkKind(values[0]), BatteryPct: values[1], AvailMemoryKB: values[2],
@@ -686,154 +787,268 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 	case EventHTTP:
 		route, err := readRef("route")
 		if err != nil {
-			return true, err
+			return err
 		}
 		values, err := readValues("duration", "DNS", "connect", "TTFB", "status", "rx bytes", "tx bytes")
 		if err != nil {
-			return true, err
+			return err
+		}
+		if values[4] > uint64(Status5xx) {
+			return fmt.Errorf("unsupported HTTP status class %d", values[4])
+		}
+		for index, phase := range values[1:4] {
+			if phase > values[0] {
+				return fmt.Errorf("HTTP phase %d duration %d exceeds request duration %d", index, phase, values[0])
+			}
 		}
 		event.HTTP = &HTTPEvent{
-			OwnerRef: event.Attribution.Owner, OwnerID: event.Attribution.Owner.LegacyID(),
-			RouteRef: route, RouteID: route.LegacyID(), DurationMS: values[0], DNSMS: values[1],
+			RouteRef: route, DurationMS: values[0], DNSMS: values[1],
 			ConnectMS: values[2], TTFBMS: values[3], Status: StatusClass(values[4]), RxBytes: values[5], TxBytes: values[6],
 		}
 	case EventUIWindow:
-		values, err := readValues("window", "frames", "jank", "p50", "p95", "p99")
+		values, err := readValues("window", "frames", "jank", "source", "frame deadline")
 		if err != nil {
-			return true, err
+			return err
 		}
-		event.UIWindow = &UIWindowEvent{
-			ScreenRef: event.Attribution.Screen, ScreenID: event.Attribution.Screen.LegacyID(),
-			WindowMS: values[0], FrameCount: values[1], JankCount: values[2], P50MS: values[3], P95MS: values[4], P99MS: values[5],
+		buckets, err := readValues(
+			"frames <=8ms", "frames <=12ms", "frames <=16ms", "frames <=20ms", "frames <=24ms",
+			"frames <=32ms", "frames <=40ms", "frames <=50ms", "frames <=67ms", "frames <=100ms",
+			"frames <=250ms", "frames <=1000ms", "frames >1000ms",
+		)
+		if err != nil {
+			return err
 		}
+		window := &UIWindowEvent{
+			WindowMS: values[0], FrameCount: values[1], JankCount: values[2], Source: UIFrameSource(values[3]),
+			FrameDeadlineUS: values[4], FrameDurationBuckets: buckets,
+		}
+		if err := validateUIWindow(window); err != nil {
+			return err
+		}
+		window.P50MS = UIFrameHistogramQuantileMS(buckets, 50)
+		window.P95MS = UIFrameHistogramQuantileMS(buckets, 95)
+		window.P99MS = UIFrameHistogramQuantileMS(buckets, 99)
+		event.UIWindow = window
 	case EventStall:
 		stack, err := readRef("stack")
 		if err != nil {
-			return true, err
+			return err
 		}
 		duration, err := read("duration")
 		if err != nil {
-			return true, err
+			return err
 		}
 		event.Stall = &StallEvent{
-			OwnerRef: event.Attribution.Owner, OwnerID: event.Attribution.Owner.LegacyID(),
-			StackRef: stack, StackID: stack.LegacyID(), DurationMS: duration,
+			StackRef: stack, DurationMS: duration,
 		}
 	case EventMemory:
 		values, err := readValues("PSS", "Java heap", "native heap")
 		if err != nil {
-			return true, err
+			return err
 		}
 		event.Memory = &MemoryEvent{PSSKB: values[0], JavaHeapKB: values[1], NativeHeapKB: values[2]}
 	case EventRetained:
 		classRef, err := readRef("retained class")
 		if err != nil {
-			return true, err
+			return err
 		}
 		holderRef, err := readRef("holder")
 		if err != nil {
-			return true, err
+			return err
 		}
 		values, err := readValues("age", "count")
 		if err != nil {
-			return true, err
+			return err
 		}
-		evidence := RetentionEvidenceTimeOnly
-		if reader.Len() > 0 {
-			value, err := read("retention evidence")
-			if err != nil {
-				return true, err
-			}
-			evidence = RetentionEvidence(value)
-			if evidence != RetentionEvidenceTimeOnly && evidence != RetentionEvidenceAfterExplicitGC {
-				return true, fmt.Errorf("unsupported retention evidence %d", value)
-			}
+		value, err := read("retention evidence")
+		if err != nil {
+			return err
+		}
+		evidence := RetentionEvidence(value)
+		if evidence != RetentionEvidenceTimeOnly && evidence != RetentionEvidenceAfterExplicitGC {
+			return fmt.Errorf("unsupported retention evidence %d", value)
 		}
 		event.Retained = &RetainedEvent{
-			ScreenID: event.Attribution.Screen.LegacyID(), OwnerID: event.Attribution.Owner.LegacyID(),
-			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
-			ClassRef: classRef, ClassID: classRef.LegacyID(), HolderRef: holderRef, HolderID: holderRef.LegacyID(),
+			ClassRef: classRef, HolderRef: holderRef,
 			AgeMS: values[0], Count: values[1], Evidence: evidence,
 		}
 	case EventCounter, EventGauge:
 		metricRef, err := readRef("metric")
 		if err != nil {
-			return true, err
+			return err
 		}
 		values, err := readValues("value", "count", "sum", "max", "mode")
 		if err != nil {
-			return true, err
+			return err
 		}
-		event.Metric = &MetricEvent{MetricRef: metricRef, MetricID: metricRef.LegacyID(), Value: values[0], Count: values[1], Sum: values[2], Max: values[3], Mode: MetricMode(values[4])}
-	case EventFlow:
-		values, err := readValues("phase", "instance id")
-		if err != nil {
-			return true, err
+		if values[1] == 0 {
+			return fmt.Errorf("metric count must be positive")
 		}
-		event.Flow = &FlowEvent{
-			ScreenID: event.Attribution.Screen.LegacyID(), OwnerID: event.Attribution.Owner.LegacyID(),
-			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
-			Phase: values[0], InstanceID: values[1],
+		if values[4] > uint64(MetricModeBooleanRate) {
+			return fmt.Errorf("unsupported metric mode %d", values[4])
 		}
+		if values[3] > values[2] {
+			return fmt.Errorf("metric max %d exceeds sum %d", values[3], values[2])
+		}
+		event.Metric = &MetricEvent{MetricRef: metricRef, Value: values[0], Count: values[1], Sum: values[2], Max: values[3], Mode: MetricMode(values[4])}
 	case EventLogSpam:
 		sourceRef, err := readRef("log source")
 		if err != nil {
-			return true, err
+			return err
 		}
 		values, err := readValues("level", "count")
 		if err != nil {
-			return true, err
+			return err
 		}
 		event.LogSpam = &LogSpamEvent{
-			ScreenID: event.Attribution.Screen.LegacyID(), OwnerID: event.Attribution.Owner.LegacyID(),
-			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
-			SourceRef: sourceRef, SourceID: sourceRef.LegacyID(), Level: values[0], Count: values[1],
+			SourceRef: sourceRef, Level: values[0], Count: values[1],
 		}
 	case EventProblem:
 		kindRef, err := readRef("problem kind")
 		if err != nil {
-			return true, err
+			return err
 		}
 		values, err := readValues("window", "count", "max")
 		if err != nil {
-			return true, err
+			return err
 		}
 		event.Problem = &ProblemEvent{
-			ScreenID: event.Attribution.Screen.LegacyID(), OwnerID: event.Attribution.Owner.LegacyID(),
-			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
-			KindRef: kindRef, KindID: kindRef.LegacyID(), WindowMS: values[0], Count: values[1], MaxMS: values[2],
+			KindRef: kindRef, WindowMS: values[0], Count: values[1], MaxMS: values[2],
 		}
 	case EventRuntimeCall:
-		calleeRef, err := readRef("callee")
+		rowCount, err := read("runtime call row count")
 		if err != nil {
-			return true, err
+			return err
 		}
-		values, err := readValues("count", "total", "max")
+		if rowCount == 0 || rowCount > MaxRuntimeCallBlockRows {
+			return fmt.Errorf("runtime call row count %d is outside 1..%d", rowCount, MaxRuntimeCallBlockRows)
+		}
+		if rowCount > uint64(reader.Len()/8) {
+			return fmt.Errorf("runtime call row count %d exceeds remaining payload", rowCount)
+		}
+		var calls []runtimeCallRow
+		if int(rowCount) <= len(runtimeCallScratch) {
+			calls = runtimeCallScratch[:int(rowCount)]
+			clear(calls)
+		} else {
+			calls = make([]runtimeCallRow, int(rowCount))
+		}
+		for index := range calls {
+			ref, err := readRef("screen")
+			if err != nil {
+				return err
+			}
+			calls[index].screen = ref
+		}
+		for index := range calls {
+			ref, err := readRef("caller")
+			if err != nil {
+				return err
+			}
+			calls[index].caller = ref
+		}
+		for index := range calls {
+			ref, err := readRef("flow")
+			if err != nil {
+				return err
+			}
+			calls[index].flow = ref
+		}
+		for index := range calls {
+			ref, err := readRef("step")
+			if err != nil {
+				return err
+			}
+			calls[index].step = ref
+		}
+		for index := range calls {
+			ref, err := readRef("callee")
+			if err != nil {
+				return err
+			}
+			calls[index].callee = ref
+		}
+		for index := range calls {
+			value, err := read("count")
+			if err != nil {
+				return err
+			}
+			calls[index].count = value
+		}
+		for index := range calls {
+			value, err := read("total")
+			if err != nil {
+				return err
+			}
+			calls[index].total = value
+		}
+		for index := range calls {
+			value, err := read("max")
+			if err != nil {
+				return err
+			}
+			calls[index].max = value
+		}
+		for index := range calls {
+			if calls[index].count == 0 {
+				return fmt.Errorf("runtime call row %d has zero logical calls", index)
+			}
+			if calls[index].max > calls[index].total {
+				return fmt.Errorf(
+					"runtime call row %d max duration %d exceeds total %d",
+					index,
+					calls[index].max,
+					calls[index].total,
+				)
+			}
+		}
+		event.runtimeCalls = calls
+	case EventProcessExit:
+		values, err := readValues("exit reason", "exit timestamp", "exit importance", "exit PSS", "exit RSS")
 		if err != nil {
-			return true, err
+			return err
 		}
-		event.RuntimeCall = &RuntimeCallEvent{
-			ScreenID: event.Attribution.Screen.LegacyID(), CallerRef: event.Attribution.Owner, CallerID: event.Attribution.Owner.LegacyID(),
-			FlowID: event.Attribution.Flow.LegacyID(), StepID: event.Attribution.Step.LegacyID(),
-			CalleeRef: calleeRef, CalleeID: calleeRef.LegacyID(), Count: values[0], TotalMS: values[1], MaxMS: values[2],
+		processRef, err := readRef("exit process")
+		if err != nil {
+			return err
 		}
+		if values[1] == 0 || values[1] > math.MaxInt64 {
+			return fmt.Errorf("process exit timestamp must be positive")
+		}
+		event.ProcessExit = &ProcessExitEvent{
+			Reason: values[0], TimestampUnixMS: values[1], Importance: values[2],
+			PSSKB: values[3], RSSKB: values[4], ProcessRef: processRef,
+		}
+	case EventIO:
+		values, err := readValues("I/O operation", "I/O duration", "I/O bytes")
+		if err != nil {
+			return err
+		}
+		operation := IOOperationKind(values[0])
+		if operation <= IOOperationUnknown || operation > IOOperationContentWrite {
+			return fmt.Errorf("unsupported I/O operation %d", operation)
+		}
+		event.IO = &IOEvent{Operation: operation, DurationUS: values[1], Bytes: values[2]}
 	case EventQualitySnapshot:
 		values, err := readValues("quality sequence", "quality captured time", "quality entry count")
 		if err != nil {
-			return true, err
+			return err
 		}
 		entryCount := values[2]
 		if entryCount > uint64(reader.Len()/2) {
-			return true, fmt.Errorf("quality entry count %d exceeds remaining payload", entryCount)
+			return fmt.Errorf("quality entry count %d exceeds remaining payload", entryCount)
 		}
 		quality := &QualitySnapshot{Sequence: values[0], CapturedElapsedUS: values[1], Counters: make(map[uint64]uint64, int(entryCount))}
 		for i := uint64(0); i < entryCount; i++ {
 			entry, err := readValues("quality counter id", "quality counter value")
 			if err != nil {
-				return true, err
+				return err
 			}
 			if _, duplicate := quality.Counters[entry[0]]; duplicate {
-				return true, fmt.Errorf("duplicate quality counter id %d", entry[0])
+				return fmt.Errorf("duplicate quality counter id %d", entry[0])
+			}
+			if !IsKnownQualityCounter(entry[0]) {
+				return fmt.Errorf("unsupported quality counter id %d", entry[0])
 			}
 			quality.Counters[entry[0]] = entry[1]
 		}
@@ -841,70 +1056,32 @@ func decodeEventPayload(reader *bytes.Reader, event *Event, header SegmentHeader
 	case EventSegmentEnd:
 		values, err := readValues("segment end reason", "total event records", "total dictionary records", "last quality sequence")
 		if err != nil {
-			return true, err
+			return err
 		}
-		event.SegmentEnd = &SegmentEndEvent{Reason: SegmentEndReason(values[0]), TotalEventRecords: values[1], TotalDictionaryRecords: values[2], LastQualitySequence: values[3]}
+		reason := SegmentEndReason(values[0])
+		if !reason.supported() {
+			return fmt.Errorf("unsupported segment end reason %d", reason)
+		}
+		event.SegmentEnd = &SegmentEndEvent{Reason: reason, TotalEventRecords: values[1], TotalDictionaryRecords: values[2], LastQualitySequence: values[3]}
+	case EventLogGrowth:
+		values, err := readValues("log-growth kind", "log-growth payload length")
+		if err != nil {
+			return err
+		}
+		if values[1] > uint64(reader.Len()) {
+			return fmt.Errorf("log-growth payload length %d exceeds remaining %d", values[1], reader.Len())
+		}
+		raw := make([]byte, int(values[1]))
+		if _, err := io.ReadFull(reader, raw); err != nil {
+			return fmt.Errorf("log-growth payload: %w", err)
+		}
+		record, err := decodeLogGrowthRecord(LogGrowthRecordKind(values[0]), raw)
+		if err != nil {
+			return err
+		}
+		event.LogGrowth = record
 	default:
-		return false, nil
+		return fmt.Errorf("unsupported event type %d", event.Type)
 	}
-	return true, nil
-}
-
-func streamJSONL(r io.Reader, result StreamResult, handle EventHandler) (StreamResult, error) {
-	dict := map[uint64]string{}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024), 8*1024*1024)
-	line := 0
-	for scanner.Scan() {
-		line++
-		raw := bytes.TrimSpace(scanner.Bytes())
-		if len(raw) == 0 {
-			continue
-		}
-		var event Event
-		if err := json.Unmarshal(raw, &event); err != nil {
-			return result, fmt.Errorf("%s:%d: decode JSONL: %w", result.Source, line, err)
-		}
-		event.Source = result.Source
-		result.TotalRecords++
-		result.Warnings = append(result.Warnings, event.Warnings...)
-		result.RecordBytesByType[event.Type] += uint64(len(raw))
-		result.RecordsByType[event.Type]++
-		result.RawRecordBytes += uint64(len(raw))
-		if event.Type == EventDictionary || event.Dictionary != nil {
-			result.DictionaryRecords++
-			if event.Dictionary != nil && event.Dictionary.Kind != DictStableSymbol {
-				dict[event.Dictionary.ID] = event.Dictionary.Value
-			}
-			if err := handle(event, dict); err != nil {
-				return result, err
-			}
-			continue
-		}
-		if event.Quality != nil || event.SegmentEnd != nil || event.Type == EventQualitySnapshot || event.Type == EventSegmentEnd {
-			result.ControlRecords++
-			if event.Quality != nil && (result.LatestQuality == nil || event.Quality.Sequence >= result.LatestQuality.Sequence) {
-				quality := cloneQualitySnapshot(*event.Quality)
-				result.LatestQuality = &quality
-			}
-			if event.SegmentEnd != nil {
-				end := *event.SegmentEnd
-				result.SegmentEnd = &end
-			}
-			continue
-		}
-		result.DataRecords++
-		if !event.Type.IsSemanticData() {
-			continue
-		}
-		result.Events++
-		if err := handle(event, dict); err != nil {
-			return result, err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return result, err
-	}
-	result.Status = SegmentStatusClosedClean
-	return result, nil
+	return nil
 }

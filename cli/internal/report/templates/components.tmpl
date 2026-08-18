@@ -1,0 +1,21 @@
+{{- define "problem-search-scope" -}}
+<div class="problem-search-scope" data-problem-search-scope>
+  <strong data-problem-card-scope>Поиск охватывает не только карточки проблем</strong>
+  <span>Он проверяет все классы и строки подробных разделов этой страницы, включая ещё не раскрытые</span>
+</div>
+{{- end -}}
+
+{{- define "collector-capability-grid" -}}
+<div class="collector-capability-grid">
+  {{- range .}}
+  <article class="collector-capability collector-capability-{{.Status}}">
+    <div class="collector-capability-head">
+      <strong>{{.Label}}</strong>
+      <span>{{.StatusLabel}}</span>
+    </div>
+    <p>{{.Description}}</p>
+    <small>{{.Observation}}</small>
+  </article>
+  {{- end}}
+</div>
+{{- end -}}

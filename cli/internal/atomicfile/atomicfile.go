@@ -47,6 +47,11 @@ func Write(path string, mode fs.FileMode, write func(*os.File) error) (resultErr
 	if err := write(temporary); err != nil {
 		return fmt.Errorf("write temporary output for %q: %w", path, err)
 	}
+	// Persist data and final permission metadata with one durability barrier. Chmod used to happen
+	// after the first Sync and forced a second open+Sync cycle for every report page.
+	if err := temporary.Chmod(effectiveMode); err != nil {
+		return fmt.Errorf("set temporary output mode for %q: %w", path, err)
+	}
 	if err := temporary.Sync(); err != nil {
 		return fmt.Errorf("sync temporary output for %q: %w", path, err)
 	}
@@ -55,12 +60,6 @@ func Write(path string, mode fs.FileMode, write func(*os.File) error) (resultErr
 		return fmt.Errorf("close temporary output for %q: %w", path, err)
 	}
 	closed = true
-	if err := os.Chmod(temporaryPath, effectiveMode); err != nil {
-		return fmt.Errorf("set temporary output mode for %q: %w", path, err)
-	}
-	if err := syncFile(temporaryPath); err != nil {
-		return fmt.Errorf("sync temporary output metadata for %q: %w", path, err)
-	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace output %q: %w", path, err)
 	}
@@ -94,14 +93,6 @@ func outputMode(path string, fallback fs.FileMode) (fs.FileMode, error) {
 	default:
 		return 0, fmt.Errorf("inspect output mode for %q: %w", path, err)
 	}
-}
-
-func syncFile(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	return errors.Join(file.Sync(), file.Close())
 }
 
 func syncDirectory(path string) error {

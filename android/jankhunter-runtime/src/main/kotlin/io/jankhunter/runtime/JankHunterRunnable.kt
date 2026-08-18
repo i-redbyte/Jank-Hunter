@@ -13,7 +13,7 @@ internal class JankHunterRunnable internal constructor(
             delegate.run()
             return
         }
-        val start = RuntimeHookGuard.value(0L) { SystemClock.elapsedRealtime() }
+        val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
             JankHunter.callWithContext(capturedContext, ownerName) {
@@ -23,7 +23,7 @@ internal class JankHunterRunnable internal constructor(
             failed = true
             throw throwable
         } finally {
-            RuntimeHookGuard.run {
+            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
                 JankHunter.recordWrappedWork(
                     ownerName,
                     "runnable",
