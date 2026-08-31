@@ -15,6 +15,13 @@ import org.junit.Test
 
 class RunArchiveBudgetTest {
     @Test
+    fun reclamationUsesPrimitivePort() {
+        val field = RunArchiveBudget::class.java.getDeclaredField("reclaimBytesTo")
+
+        assertFalse(field.type == Function1::class.java)
+    }
+
+    @Test
     fun activeSegmentsShareOneHardCrossProcessQuota() {
         val directory = Files.createTempDirectory("jankhunter-run-budget").toFile()
         try {

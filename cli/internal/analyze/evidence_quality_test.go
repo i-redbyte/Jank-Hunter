@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestEvidenceQualityKeepsProcessCoverageIndependentFromLegacyTrustScore(t *testing.T) {
+func TestEvidenceQualityKeepsProcessCoverageIndependentFromDiagnosticCompleteness(t *testing.T) {
 	summary := evidenceQualityFixture()
-	summary.CollectionQuality.TrustScorePercent = 100
+	summary.CollectionQuality.DiagnosticCompletenessPercent = 100
 	summary.CollectionQuality.ProcessRosterComplete = false
 	summary.CollectionQuality.ExpectedProcessCount = 2
 	summary.CollectionQuality.ObservedProcessCount = 1
@@ -32,7 +32,7 @@ func TestEvidenceQualityRejectsCleanVerdictWhenCollectorIsMissing(t *testing.T) 
 	if acquisition.Status != EvidenceQualityInsufficient {
 		t.Fatalf("acquisition = %+v, want insufficient", acquisition)
 	}
-	if quality.Overall != EvidenceQualityInsufficient || !strings.Contains(quality.Headline, "clean-вывода") {
+	if quality.Overall != EvidenceQualityInsufficient || !strings.Contains(quality.Headline, "недостаточно для общего вывода") {
 		t.Fatalf("quality = %+v, want explicit clean-verdict prohibition", quality)
 	}
 }
@@ -51,6 +51,39 @@ func TestEvidenceQualityDoesNotExposeProbabilityLookingScalar(t *testing.T) {
 	estimator := evidenceDimension(t, quality, "estimator_calibration")
 	if estimator.Status != EvidenceQualityNotCalibrated {
 		t.Fatalf("estimator quality = %+v, want not calibrated", estimator)
+	}
+}
+
+func TestEvidenceQualityUsesRussianProblemOrientedExplanations(t *testing.T) {
+	summary := evidenceQualityFixture()
+	summary.CollectionQuality.BoundedEvidenceLoss = 25661
+	summary.CollectionQuality.ProcessRosterComplete = false
+	summary.CollectionQuality.ExpectedProcessCount = 3
+	summary.CollectionQuality.ObservedProcessCount = 1
+	summary.AnalysisInputs = AnalysisInputCompleteness{
+		Status:          "runtime_only",
+		RuntimeEvidence: true,
+		Explanation:     "доступны runtime evidence, но static graph отсутствует",
+	}
+
+	quality := BuildEvidenceQualityVector(summary)
+	parts := []string{quality.Headline}
+	for _, dimension := range quality.Dimensions {
+		parts = append(parts, dimension.Label, dimension.Explanation)
+	}
+	visible := strings.ToLower(strings.Join(parts, " "))
+	for _, forbidden := range []string{
+		"evidence", "clean", "claim", "payload", "control", "committed", "chain",
+		"collectors", "detector", "first-class", "configured scope", "run",
+		"sealed", "terminal", "sensor", "frames", "source", "deadline",
+		"distribution", "runtime", "build-time", "static graph",
+	} {
+		if strings.Contains(visible, forbidden) {
+			t.Fatalf("quality explanation contains untranslated term %q: %s", forbidden, visible)
+		}
+	}
+	if strings.Contains(visible, "25661") || !strings.Contains(visible, "часть диагностических данных") {
+		t.Fatalf("quality explanation is not problem-oriented: %s", visible)
 	}
 }
 

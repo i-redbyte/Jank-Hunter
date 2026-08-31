@@ -12,6 +12,7 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
+import org.objectweb.asm.tree.MethodNode
 
 abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunterInstrumentationParameters> {
     override fun createClassVisitor(
@@ -20,56 +21,35 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     ): ClassVisitor {
         val params = parameters.get()
         val classData = classContext.currentClassData
-        val hookConfig = HookConfig(
-            autoInit = params.autoInit.getOrElse(false),
-            embeddedSymbols = params.embeddedSymbols.getOrElse(true),
-            methodCounters = params.methodCounters.getOrElse(false),
-            methodFilterMode = params.methodFilterMode.getOrElse(JankHunterMethodFilterMode.ENABLED),
-            okhttp = params.okhttp.getOrElse(false),
-            webSockets = params.webSockets.getOrElse(false),
-            okHttpHelperAvailable = params.okHttpHelperAvailable.getOrElse(false),
-            handlers = params.handlers.getOrElse(false),
-            executors = params.executors.getOrElse(false),
-            coroutines = params.coroutines.getOrElse(false),
-            flowInteractions = params.flowInteractions.getOrElse(false),
-            logSpam = params.logSpam.getOrElse(false),
-            classGraph = params.classGraph.getOrElse(false),
-            runtimeCallGraph = params.runtimeCallGraph.getOrElse(false),
-            composeTracing = params.composeTracing.getOrElse(true),
-            roomTracing = params.roomTracing.getOrElse(true),
-            workerTracing = params.workerTracing.getOrElse(true),
-            classGraphDirectory = params.classGraphDirectory.getOrElse(""),
-            instrumentationDiagnosticsDirectory = params.instrumentationDiagnosticsDirectory.getOrElse(""),
-            ownerMapEntriesDirectory = params.ownerMapEntriesDirectory.getOrElse(""),
-            lifecycleLeaks = params.lifecycleLeaks.getOrElse(false),
-        )
-        val runtimeHooksMatch = runtimeInstrumentationMatches(classData, params)
-        val autoInitMatch = autoInitMatches(classData, params)
-        if (params.asmProgressLog.getOrElse(false)) {
-            val progressLabel = buildList {
-                if (runtimeHooksMatch || autoInitMatch) add(hookConfig.progressLabel())
-                if (dependencyInjectionAnalysisMatches(classData, params)) add("di")
-            }.joinToString("+").ifEmpty { "none" }
-            AsmProgressReporter.recordInstrumented(
-                params.progressLabel.getOrElse("unknown"),
-                classData.className,
-                progressLabel,
-            )
-        }
+        val selection = InstrumentationClassSelector(params).evaluate(classData)
+        val hookConfig = InstrumentationHookConfigFactory.create(params)
         var visitor = nextClassVisitor
-        if (runtimeHooksMatch || autoInitMatch) {
-            val hierarchyResolver = ClassHierarchyResolver(classContext)
+        if (selection.runtime || selection.autoInit || selection.networkBoundary || selection.databaseBoundary) {
+            val hierarchyResolver = if (selection.runtime || selection.autoInit) {
+                ClassHierarchyResolver(classContext)
+            } else {
+                null
+            }
             visitor = JankHunterClassVisitor(
                 visitor,
                 classData.className,
-                if (runtimeHooksMatch) hookConfig else hookConfig.autoInitOnly(),
-                classHierarchy = hierarchyResolver.resolve(classData.className),
-                resolveOwnerHierarchy = hierarchyResolver::resolve,
-                markerOnlyWhenHookApplied = !runtimeHooksMatch,
-                diagnosticsOnlyWhenHookApplied = !runtimeHooksMatch,
+                when {
+                    selection.runtime -> hookConfig
+                    selection.networkBoundary || selection.databaseBoundary -> hookConfig.boundaryOnly(
+                        network = selection.networkBoundary,
+                        database = selection.databaseBoundary,
+                    )
+                    else -> hookConfig.autoInitOnly()
+                },
+                classHierarchy = hierarchyResolver?.resolve(classData.className).orEmpty(),
+                resolveOwnerHierarchy = hierarchyResolver
+                    ?.let { resolver -> resolver::resolve }
+                    ?: { emptySet() },
+                markerOnlyWhenHookApplied = !selection.runtime,
+                diagnosticsOnlyWhenHookApplied = !selection.runtime,
             )
         }
-        if (dependencyInjectionAnalysisMatches(classData, params)) {
+        if (selection.dependencyInjection) {
             visitor = DependencyInjectionClassVisitor(
                 visitor,
                 classData.className,
@@ -82,233 +62,7 @@ abstract class JankHunterClassVisitorFactory : AsmClassVisitorFactory<JankHunter
     }
 
     override fun isInstrumentable(classData: ClassData): Boolean {
-        val params = parameters.get()
-        val matched = runtimeInstrumentationMatches(classData, params) ||
-            autoInitMatches(classData, params) ||
-            dependencyInjectionAnalysisMatches(classData, params)
-        if (params.asmProgressLog.getOrElse(false)) {
-            AsmProgressReporter.recordScanned(
-                params.progressLabel.getOrElse("unknown"),
-                classData.className,
-                matched,
-            )
-        }
-        return matched
-    }
-
-    private fun autoInitMatches(
-        classData: ClassData,
-        params: JankHunterInstrumentationParameters,
-    ): Boolean {
-        if (!params.autoInit.getOrElse(false)) return false
-        if (InstrumentationMarker.isPresent(classData.classAnnotations)) return false
-        if (classData.className.startsWith("io.jankhunter.runtime.")) return false
-        return AndroidComponentAutoInit.matches(classData)
-    }
-
-    private fun runtimeInstrumentationMatches(
-        classData: ClassData,
-        params: JankHunterInstrumentationParameters,
-    ): Boolean {
-        val hooksEnabled = params.methodCounters.getOrElse(false) ||
-            params.okhttp.getOrElse(false) ||
-            params.webSockets.getOrElse(false) ||
-            params.handlers.getOrElse(false) ||
-            params.executors.getOrElse(false) ||
-            params.coroutines.getOrElse(false) ||
-            params.flowInteractions.getOrElse(false) ||
-            params.lifecycleLeaks.getOrElse(false) ||
-            params.logSpam.getOrElse(false) ||
-            params.classGraph.getOrElse(false) ||
-            params.runtimeCallGraph.getOrElse(false) ||
-            params.composeTracing.getOrElse(true) ||
-            params.roomTracing.getOrElse(true) ||
-            params.workerTracing.getOrElse(true)
-        if (!hooksEnabled) return false
-        if (InstrumentationMarker.isPresent(classData.classAnnotations)) return false
-        if (DependencyInjectionClassMatcher.isGeneratedDiClass(classData)) return false
-        return InstrumentationMatcher(
-            params.includePackages.getOrElse(emptySet()),
-            params.excludePackages.getOrElse(emptySet()),
-            params.includeWholeApplication.getOrElse(false),
-        ).matches(classData.className)
-    }
-
-    private fun dependencyInjectionAnalysisMatches(
-        classData: ClassData,
-        params: JankHunterInstrumentationParameters,
-    ): Boolean {
-        if (!params.dependencyInjectionAnalysis.getOrElse(false)) return false
-        return DependencyInjectionClassMatcher.shouldScan(
-            classData,
-            params.includePackages.getOrElse(emptySet()),
-            params.includeWholeApplication.getOrElse(false),
-        )
-    }
-}
-
-internal object InstrumentationMarker {
-    const val DESCRIPTOR = "Lio/jankhunter/runtime/JankHunterInstrumented;"
-    private const val CLASS_NAME = "io.jankhunter.runtime.JankHunterInstrumented"
-
-    fun isPresent(annotations: Iterable<String>): Boolean {
-        return hasInstrumentationMarker(annotations, DESCRIPTOR, CLASS_NAME)
-    }
-}
-
-internal object LifecycleInstrumentationMarker {
-    const val DESCRIPTOR = "Lio/jankhunter/runtime/JankHunterLifecycleInstrumented;"
-    private const val CLASS_NAME = "io.jankhunter.runtime.JankHunterLifecycleInstrumented"
-
-    fun isPresent(annotations: Iterable<String>): Boolean {
-        return hasInstrumentationMarker(annotations, DESCRIPTOR, CLASS_NAME)
-    }
-}
-
-private fun hasInstrumentationMarker(
-    annotations: Iterable<String>,
-    descriptor: String,
-    className: String,
-): Boolean {
-    return annotations.any { annotation ->
-        annotation == descriptor || annotation.replace('/', '.').removePrefix("L").removeSuffix(";") == className
-    }
-}
-
-private class ClassHierarchyResolver(
-    private val classContext: ClassContext,
-) {
-    private val cache = mutableMapOf<String, Set<String>>()
-
-    fun resolve(className: String): Set<String> {
-        val root = className.toInternalClassName()
-        return cache.getOrPut(root) {
-            val resolved = linkedSetOf(root)
-            val pending = ArrayDeque<String>()
-            pending.add(root)
-            while (pending.isNotEmpty()) {
-                val candidate = pending.removeFirst()
-                val data = runCatching {
-                    classContext.loadClassData(candidate.replace('/', '.'))
-                }.getOrNull() ?: continue
-                (data.superClasses + data.interfaces).forEach { parent ->
-                    val normalized = parent.toInternalClassName()
-                    if (resolved.add(normalized)) pending.add(normalized)
-                }
-            }
-            resolved
-        }
-    }
-
-    private fun String.toInternalClassName(): String = replace('.', '/')
-}
-
-internal data class HookConfig(
-    val autoInit: Boolean = false,
-    val embeddedSymbols: Boolean = true,
-    val methodCounters: Boolean,
-    val methodFilterMode: JankHunterMethodFilterMode = JankHunterMethodFilterMode.ENABLED,
-    val okhttp: Boolean,
-    val webSockets: Boolean,
-    val okHttpHelperAvailable: Boolean = true,
-    val handlers: Boolean,
-    val executors: Boolean,
-    val coroutines: Boolean,
-    val flowInteractions: Boolean,
-    val logSpam: Boolean,
-    val classGraph: Boolean,
-    val runtimeCallGraph: Boolean,
-    val classGraphDirectory: String,
-    val instrumentationDiagnosticsDirectory: String,
-    val ownerMapEntriesDirectory: String,
-    val lifecycleLeaks: Boolean = false,
-    val composeTracing: Boolean = true,
-    val roomTracing: Boolean = true,
-    val workerTracing: Boolean = true,
-) {
-    fun progressLabel(): String {
-        return buildList {
-            if (autoInit) add("autoinit")
-            if (methodCounters) add("methods")
-            if (okhttp) add("okhttp")
-            if (webSockets) add("websocket")
-            if (handlers) add("handler")
-            if (executors) add("executor")
-            if (coroutines) add("coroutine")
-            if (flowInteractions) add("flow")
-            if (lifecycleLeaks) add("lifecycle")
-            if (logSpam) add("logspam")
-            if (classGraph) add("graph")
-            if (runtimeCallGraph) add("runtimegraph")
-            if (composeTracing) add("compose")
-            if (roomTracing) add("room")
-            if (workerTracing) add("worker")
-        }.joinToString("+").ifEmpty { "none" }
-    }
-
-    fun autoInitOnly(): HookConfig = copy(
-        methodCounters = false,
-        okhttp = false,
-        webSockets = false,
-        handlers = false,
-        executors = false,
-        coroutines = false,
-        flowInteractions = false,
-        logSpam = false,
-        classGraph = false,
-        runtimeCallGraph = false,
-        lifecycleLeaks = false,
-        composeTracing = false,
-        roomTracing = false,
-        workerTracing = false,
-    )
-}
-
-private object AndroidComponentAutoInit {
-    private val componentBases = setOf(
-        "android.app.Application",
-        "android.app.Activity",
-        "android.app.Service",
-        "android.content.ContentProvider",
-        "android.content.BroadcastReceiver",
-    )
-
-    fun matches(classData: ClassData): Boolean {
-        return classData.superClasses.any { it.replace('/', '.') in componentBases }
-    }
-}
-
-private enum class AutoInitComponent(
-    val methodName: String,
-    val methodDescriptor: String,
-    val syntheticAccess: Int?,
-) {
-    APPLICATION("onCreate", "()V", Opcodes.ACC_PUBLIC),
-    ACTIVITY("onCreate", "(Landroid/os/Bundle;)V", Opcodes.ACC_PROTECTED),
-    SERVICE("onCreate", "()V", Opcodes.ACC_PUBLIC),
-    CONTENT_PROVIDER("onCreate", "()Z", null),
-    BROADCAST_RECEIVER(
-        "onReceive",
-        "(Landroid/content/Context;Landroid/content/Intent;)V",
-        null,
-    ),
-    ;
-
-    fun matches(name: String, descriptor: String): Boolean {
-        return name == methodName && descriptor == methodDescriptor
-    }
-
-    companion object {
-        fun fromHierarchy(hierarchy: Set<String>): AutoInitComponent? {
-            return when {
-                "android/app/Application" in hierarchy -> APPLICATION
-                "android/app/Activity" in hierarchy -> ACTIVITY
-                "android/app/Service" in hierarchy -> SERVICE
-                "android/content/ContentProvider" in hierarchy -> CONTENT_PROVIDER
-                "android/content/BroadcastReceiver" in hierarchy -> BROADCAST_RECEIVER
-                else -> null
-            }
-        }
+        return InstrumentationClassSelector(parameters.get()).evaluate(classData).any()
     }
 }
 
@@ -323,10 +77,11 @@ internal class JankHunterClassVisitor(
     private val diagnosticsOnlyWhenHookApplied: Boolean = false,
 ) : ClassVisitor(Opcodes.ASM9, next) {
     private val edges = linkedMapOf<ClassGraphEdgeKey, Int>()
-    private val ownerMapEntries = mutableListOf<OwnerMapEntry>()
     private val classAnnotations = JankAnnotationMetadata.Builder()
     private val diagnostics = InstrumentationDiagnosticsClassBuilder(className)
+    private val roomPolicy = RoomDaoInstrumentationPolicy(config.roomTracing, config.databaseTracing)
     private val classHierarchy = classHierarchy.mapTo(linkedSetOf()) { it.replace('.', '/') }
+    private val androidComponentCatalog = AndroidComponentCatalogClassBuilder(className, this.classHierarchy)
     private val autoInitComponent = if (config.autoInit) {
         AutoInitComponent.fromHierarchy(this.classHierarchy)
     } else {
@@ -350,9 +105,16 @@ internal class JankHunterClassVisitor(
     ) {
         this.superName = superName
         this.classAccess = access
+        androidComponentCatalog.recordClass(access)
         name?.let { classHierarchy.add(it.replace('.', '/')) }
-        superName?.let { classHierarchy.add(it.replace('.', '/')) }
-        interfaces.orEmpty().forEach { classHierarchy.add(it.replace('.', '/')) }
+        superName?.let {
+            classHierarchy.add(it.replace('.', '/'))
+            androidComponentCatalog.recordHierarchyType(it)
+        }
+        interfaces.orEmpty().forEach {
+            classHierarchy.add(it.replace('.', '/'))
+            androidComponentCatalog.recordHierarchyType(it)
+        }
         super.visit(version, access, name, signature, superName, interfaces)
     }
 
@@ -364,7 +126,7 @@ internal class JankHunterClassVisitor(
         }
         if (
             descriptor == KotlinGeneratedMethodIndex.METADATA_DESCRIPTOR &&
-            config.methodFilterMode != JankHunterMethodFilterMode.DISABLED
+            config.methodFilterMode != JankHunterMethodFilterMode.NONE
         ) {
             return KotlinGeneratedMethodIndex.collectingVisitor(delegate) { kotlinGeneratedMethods = it }
         }
@@ -378,6 +140,7 @@ internal class JankHunterClassVisitor(
         signature: String?,
         value: Any?,
     ): FieldVisitor? {
+        name?.let { androidComponentCatalog.recordField(access, it, descriptor, value) }
         if (descriptor == ROOM_DATABASE_DESCRIPTOR) roomDatabaseFieldPresent = true
         return super.visitField(access, name, descriptor, signature, value)
     }
@@ -389,8 +152,30 @@ internal class JankHunterClassVisitor(
         signature: String?,
         exceptions: Array<out String>?,
     ): MethodVisitor {
+        androidComponentCatalog.recordMethod(access, name, descriptor)
         val next = super.visitMethod(access, name, descriptor, signature, exceptions)
         val autoInitEntryPoint = autoInitComponent?.matches(name, descriptor) == true
+        val serviceCallback = if (
+            config.androidComponents && AndroidServiceInstrumentationPolicy.isService(classHierarchy)
+        ) {
+            AndroidServiceInstrumentationPolicy.callback(name, descriptor)
+        } else {
+            null
+        }
+        val receiverCallback = if (
+            config.androidComponents && AndroidBroadcastReceiverInstrumentationPolicy.isReceiver(classHierarchy)
+        ) {
+            AndroidBroadcastReceiverInstrumentationPolicy.callback(name, descriptor)
+        } else {
+            null
+        }
+        val binderServer = config.binderIPC &&
+            AndroidBinderInstrumentationPolicy.isServer(classHierarchy) &&
+            AndroidBinderInstrumentationPolicy.serverCallback(name, descriptor) != null
+        val binderDescriptor = AndroidBinderInstrumentationPolicy.runtimeDescriptor(
+            className,
+            androidComponentCatalog.declaredAidlDescriptor(),
+        )
         if (autoInitEntryPoint) autoInitMethodPresent = true
         if (alreadyInstrumented) {
             diagnostics.recordSkippedMethod("already_instrumented")
@@ -408,39 +193,93 @@ internal class JankHunterClassVisitor(
             diagnostics.recordSkippedMethod("native")
             return next
         }
-        return JankHunterMethodVisitor(
-            next,
-            access,
-            name,
-            descriptor,
-            className,
-            classAccess,
-            kotlinGeneratedMethods.origin(name, descriptor),
-            config,
-            classAnnotations.snapshot(),
-            name == "<init>",
-            superName,
-            classHierarchy,
-            resolveOwnerHierarchy,
-            diagnostics,
-            autoInitComponent = autoInitComponent.takeIf { autoInitEntryPoint },
-            recordClassHookApplied = { classHookApplied = true },
-            recordOwnerMapEntry = ownerMapEntries::add,
-            recordStaticEdge = { calleeOwner, calleeName ->
-                recordStaticEdge(name, descriptor, calleeOwner, calleeName)
-            },
-            roomDaoMethod = isRoomDaoBoundary(access, name),
-        )
+        val instrument = {
+                target: MethodVisitor,
+                origins: List<DatabaseInvocationOrigin>,
+                recordPriorityHandler: (Label) -> Unit,
+            ->
+            JankHunterMethodVisitor(
+                target,
+                access,
+                name,
+                descriptor,
+                className,
+                classAccess,
+                kotlinGeneratedMethods.origin(name, descriptor),
+                config,
+                classAnnotations.snapshot(),
+                name == "<init>",
+                superName,
+                classHierarchy,
+                resolveOwnerHierarchy,
+                diagnostics,
+                autoInitComponent = autoInitComponent.takeIf { autoInitEntryPoint },
+                recordClassHookApplied = { classHookApplied = true },
+                recordStaticEdge = { calleeOwner, calleeName ->
+                    recordStaticEdge(name, descriptor, calleeOwner, calleeName)
+                },
+                roomDaoMethod = roomPolicy.isDaoBoundary(roomDatabaseFieldPresent, access, name),
+                roomSqlBoundary = roomPolicy.sqlBoundary(roomDatabaseFieldPresent, access, name, descriptor),
+                databaseInvocationOrigins = origins,
+                recordPriorityHandler = recordPriorityHandler,
+                serviceClass = config.androidComponents &&
+                    AndroidServiceInstrumentationPolicy.isService(classHierarchy),
+                serviceCallback = serviceCallback,
+                recordServiceHookApplied = {
+                    androidComponentCatalog.recordInstrumented(name, descriptor)
+                    classHookApplied = true
+                },
+                receiverCallback = receiverCallback,
+                recordReceiverHookApplied = {
+                    androidComponentCatalog.recordInstrumented(name, descriptor)
+                    classHookApplied = true
+                },
+                binderServer = binderServer,
+                binderDescriptor = binderDescriptor,
+                recordBinderHookApplied = {
+                    androidComponentCatalog.recordInstrumented(name, descriptor)
+                    classHookApplied = true
+                },
+            )
+        }
+        if (!config.databaseTracing) return instrument(next, emptyList()) {}
+        return object : MethodNode(Opcodes.ASM9, access, name, descriptor, signature, exceptions) {
+            override fun visitEnd() {
+                super.visitEnd()
+                val origins = analyzeDatabaseInvocationOrigins(className, this)
+                if (!requiresDatabaseCatchPriority(name, descriptor, origins)) {
+                    accept(instrument(next, origins) {})
+                    return
+                }
+                val transformed = DatabasePriorityMethodNode(access, name, descriptor, signature, exceptions)
+                accept(instrument(transformed, origins, transformed::recordPriorityHandler))
+                transformed.promotePriorityBlocks()
+                transformed.accept(next)
+            }
+        }
     }
 
-    private fun isRoomDaoBoundary(access: Int, name: String): Boolean {
-        val excludedFlags = Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_BRIDGE
-        return config.roomTracing &&
-            roomDatabaseFieldPresent &&
-            access and Opcodes.ACC_PUBLIC != 0 &&
-            access and excludedFlags == 0 &&
-            name != "<init>" &&
-            name != "getRequiredConverters"
+    private fun requiresDatabaseCatchPriority(
+        methodName: String,
+        methodDescriptor: String,
+        origins: List<DatabaseInvocationOrigin>,
+    ): Boolean {
+        return origins.any { origin ->
+            val call = MethodCall(
+                owner = origin.owner,
+                name = origin.name,
+                descriptor = origin.descriptor,
+                caller = CallerMethod(className, methodName, methodDescriptor),
+                ownerHierarchy = resolveOwnerHierarchy(origin.owner),
+                databaseQuery = origin.normalizedLiteral,
+                databaseQueryArgument = databaseQueryArgumentIndex(origin.owner, origin.name, origin.descriptor),
+            )
+            when (val intent = (HookIntentResolver.resolve(call, config) as? HookDecision.Matched)?.intent) {
+                is HookIntent.DatabaseCall -> intent.statementAction != DatabaseStatementAction.REGISTER
+                is HookIntent.DatabaseTransaction -> intent.action == DatabaseTransactionAction.END
+                else -> false
+            }
+        }
     }
 
     override fun visitEnd() {
@@ -451,15 +290,17 @@ internal class JankHunterClassVisitor(
         if (config.classGraph) {
             ClassGraphWriter.write(config.classGraphDirectory, className, edges)
         }
-        if (ownerMapEntries.isNotEmpty()) {
-            OwnerMapWriter.writeEntries(config.ownerMapEntriesDirectory, className, ownerMapEntries)
-        }
         if (!diagnosticsOnlyWhenHookApplied || classHookApplied) {
             InstrumentationDiagnosticsWriter.write(
                 config.instrumentationDiagnosticsDirectory,
                 diagnostics.finish(),
             )
         }
+        AndroidComponentCatalogWriter.write(
+            config.androidComponentCatalogDirectory,
+            className,
+            androidComponentCatalog.finish(),
+        )
         super.visitEnd()
     }
 
@@ -470,16 +311,8 @@ internal class JankHunterClassVisitor(
         if (alreadyInstrumented || autoInitMethodPresent) return
         if (classAccess and (Opcodes.ACC_ABSTRACT or Opcodes.ACC_INTERFACE) != 0) return
 
-        super.visitMethod(access, component.methodName, component.methodDescriptor, null, null).apply {
+        visitMethod(access, component.methodName, component.methodDescriptor, null, null).apply {
             visitCode()
-            visitVarInsn(Opcodes.ALOAD, 0)
-            visitMethodInsn(
-                Opcodes.INVOKESTATIC,
-                JANK_HUNTER_RUNTIME,
-                "autoInit",
-                "(Landroid/content/Context;)V",
-                false,
-            )
             visitVarInsn(Opcodes.ALOAD, 0)
             if (component == AutoInitComponent.ACTIVITY) {
                 visitVarInsn(Opcodes.ALOAD, 1)
@@ -499,7 +332,6 @@ internal class JankHunterClassVisitor(
     }
 
     private companion object {
-        private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
         private const val ROOM_DATABASE_DESCRIPTOR = "Landroidx/room/RoomDatabase;"
     }
 
@@ -522,74 +354,66 @@ internal class JankHunterClassVisitor(
 
 private class JankHunterMethodVisitor(
     next: MethodVisitor,
-    private val accessFlags: Int,
+    accessFlags: Int,
     private val methodName: String,
     private val methodDescriptor: String,
     private val className: String,
-    private val classAccessFlags: Int,
-    private val kotlinMethodOrigin: KotlinMethodOrigin,
+    classAccessFlags: Int,
+    kotlinMethodOrigin: KotlinMethodOrigin,
     private val config: HookConfig,
-    private val classAnnotations: JankAnnotationMetadata,
+    classAnnotations: JankAnnotationMetadata,
     private val constructor: Boolean,
     private val superName: String?,
-    private val classHierarchy: Set<String>,
+    classHierarchy: Set<String>,
     private val resolveOwnerHierarchy: (String) -> Set<String>,
     private val diagnostics: InstrumentationDiagnosticsClassBuilder,
     private val autoInitComponent: AutoInitComponent?,
     private val recordClassHookApplied: () -> Unit,
-    private val recordOwnerMapEntry: (OwnerMapEntry) -> Unit,
     private val recordStaticEdge: (String, String) -> Unit,
-    private val roomDaoMethod: Boolean = false,
+    roomDaoMethod: Boolean = false,
+    private val roomSqlBoundary: RoomSqlBoundary? = null,
+    private val databaseInvocationOrigins: List<DatabaseInvocationOrigin> = emptyList(),
+    private val recordPriorityHandler: (Label) -> Unit = {},
+    private val serviceClass: Boolean = false,
+    private val serviceCallback: AndroidServiceCallback? = null,
+    private val recordServiceHookApplied: () -> Unit = {},
+    private val receiverCallback: AndroidReceiverInvocation? = null,
+    private val recordReceiverHookApplied: () -> Unit = {},
+    private val binderServer: Boolean = false,
+    private val binderDescriptor: String? = null,
+    private val recordBinderHookApplied: () -> Unit = {},
 ) : AdviceAdapter(Opcodes.ASM9, next, accessFlags, methodName, methodDescriptor) {
     private val methodId = OwnerIds.methodId(className, methodName, methodDescriptor)
     private val generatedOwnerLabel = OwnerIds.readableOwner(className, methodName)
     private val methodDiagnosticName = "$methodName$methodDescriptor"
-    private val methodAnnotations = JankAnnotationMetadata.Builder()
-    private val ownerLabel: String
-        get() = methodAnnotations.owner?.takeIf { it.isNotBlank() } ?: classAnnotations.owner ?: generatedOwnerLabel
-    private val annotationScreen: String?
-        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() }
-            ?: classAnnotations.screen.takeIf { !constructor || constructorHasDirectAnnotationContext }
-    private val annotationFlow: String?
-        get() = methodAnnotations.flow?.takeIf { it.isNotBlank() }
-            ?: classAnnotations.flow.takeIf { !constructor || constructorHasDirectAnnotationContext }
-    private val annotationTrace: String?
-        get() {
-            methodAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
-            if (methodAnnotations.tracePresent) return methodName
-            if (constructor && !constructorHasDirectAnnotationContext) return null
-            classAnnotations.trace?.takeIf { it.isNotBlank() }?.let { return it }
-            if (classAnnotations.tracePresent) return methodName
-            return null
-        }
-    private val constructorHasDirectAnnotationContext: Boolean
-        get() = methodAnnotations.screen?.takeIf { it.isNotBlank() } != null ||
-            methodAnnotations.flow?.takeIf { it.isNotBlank() } != null ||
-            methodAnnotations.trace?.takeIf { it.isNotBlank() } != null ||
-            methodAnnotations.tracePresent ||
-            methodAnnotations.owner?.takeIf { it.isNotBlank() } != null
-    private val hasAnnotationContext: Boolean
-        get() = annotationScreen != null ||
-            annotationFlow != null ||
-            annotationTrace != null ||
-            methodAnnotations.owner?.takeIf { it.isNotBlank() } != null ||
-            classAnnotations.owner != null && (!constructor || constructorHasDirectAnnotationContext)
+    private val annotationContext = MethodAnnotationContext(classAnnotations, constructor, generatedOwnerLabel)
+    private val methodAnnotations = annotationContext.methodAnnotations
+    private val semanticPolicy = SemanticInstrumentationPolicy(
+        constructor,
+        accessFlags,
+        config.composeTracing,
+        config.workerTracing,
+        roomDaoMethod,
+        methodName,
+        methodDescriptor,
+        classHierarchy,
+    )
+    private val lifecyclePolicy = LifecycleInstrumentationPolicy(
+        enabled = config.lifecycleLeaks,
+        constructor = constructor,
+        staticMethod = accessFlags and Opcodes.ACC_STATIC != 0,
+        methodName = methodName,
+        methodDescriptor = methodDescriptor,
+        hierarchy = classHierarchy,
+    )
     private val hookEmitter = HookBytecodeEmitter(
         visitor = this,
-        ownerLabel = { ownerLabel },
+        ownerLabel = { annotationContext.owner },
+        ownerId = { methodId },
         emitOriginal = ::emitOriginalInvocation,
-        emitTryCatchBlock = ::emitPostSuperTryCatchBlock,
+        emitTryCatchBlock = ::emitInvocationTryCatchBlock,
     )
-    private var runtimeCallStartLocal = -1
-    private var annotationScopeLocal = -1
-    private var semanticStartLocal = -1
-    private var semanticOutcomeLocal = -1
-    private val methodTryStart = Label()
-    private val methodTryEnd = Label()
-    private val methodExceptionHandler = Label()
-    private var currentLine: Int? = null
-    private var hookApplied = false
-    private var constructorBodyEntered = false
+    private val state = MethodInstrumentationState()
     private val methodFilterDecision = MethodFilterClassifier.classify(
         config.methodFilterMode,
         classAccessFlags,
@@ -606,7 +430,7 @@ private class JankHunterMethodVisitor(
     }
 
     override fun visitLineNumber(line: Int, start: Label) {
-        currentLine = line
+        state.currentLine = line
         super.visitLineNumber(line, start)
     }
 
@@ -614,80 +438,179 @@ private class JankHunterMethodVisitor(
         if (constructor) {
             // The JVM forbids using an uninitialized `this`. AdviceAdapter calls this only after
             // the first this()/super() invocation, which is the earliest safe constructor boundary.
-            constructorBodyEntered = true
+            state.constructorBodyEntered = true
         }
         autoInitComponent?.let {
             emitAutoInit(it)
             recordClassHookApplied()
-            hookApplied = true
         }
         if (!shouldInstrumentMethod()) return
-        if (shouldWatchLifecycleOnEnter()) {
+        if (binderServer) emitBinderServerEnter()
+        if (receiverCallback == AndroidReceiverInvocation.RECEIVE) emitReceiverCallbackEnter()
+        serviceCallback?.let(::emitServiceCallbackEnter)
+        if (lifecyclePolicy.hookPoint == LifecycleHookPoint.ENTER) {
             emitLifecycleWatch()
         }
-        if (hasAnnotationContext) {
+        if (annotationContext.hasContext) {
             emitEnterAnnotatedContext()
-            hookApplied = true
+        }
+        if (annotationContext.operation != null) {
+            emitStartAnnotatedOperation()
         }
         if (config.methodCounters && methodBoundaryHooksEnabled()) {
             visitLdcInsn(methodId)
-            if (config.embeddedSymbols) visitLdcInsn(generatedOwnerLabel)
+            visitLdcInsn(generatedOwnerLabel)
             visitMethodInsn(
                 Opcodes.INVOKESTATIC,
                 JANK_HUNTER_HOOKS,
                 "recordMethodCall",
-                if (config.embeddedSymbols) "(JLjava/lang/String;)V" else "(J)V",
+                "(JLjava/lang/String;)V",
                 false,
             )
-            hookApplied = true
         }
         if (config.runtimeCallGraph && methodBoundaryHooksEnabled()) {
             visitLdcInsn(methodId)
-            if (config.embeddedSymbols) visitLdcInsn(generatedOwnerLabel)
+            visitLdcInsn(generatedOwnerLabel)
             visitMethodInsn(
                 Opcodes.INVOKESTATIC,
                 JANK_HUNTER_HOOKS,
                 "enterMethod",
-                if (config.embeddedSymbols) "(JLjava/lang/String;)J" else "(J)J",
+                "(JLjava/lang/String;)J",
                 false,
             )
-            runtimeCallStartLocal = newLocal(Type.LONG_TYPE)
-            storeLocal(runtimeCallStartLocal)
-            hookApplied = true
+            state.runtimeCallStartLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(state.runtimeCallStartLocal)
         }
-        semanticKind()?.let { kind ->
-            visitLdcInsn(kind)
+        roomSqlBoundary?.let { boundary ->
+            loadArg(boundary.queryArgument)
             visitMethodInsn(
                 Opcodes.INVOKESTATIC,
                 JANK_HUNTER_HOOKS,
-                "enterSemantic",
-                "(I)J",
+                "normalizeDatabaseQuery",
+                "(Ljava/lang/String;)Ljava/lang/String;",
                 false,
             )
-            semanticStartLocal = newLocal(Type.LONG_TYPE)
-            storeLocal(semanticStartLocal)
-            if (kind == SEMANTIC_WORKER) {
-                semanticOutcomeLocal = newLocal(Type.INT_TYPE)
-                visitLdcInsn(SEMANTIC_OUTCOME_UNKNOWN)
-                storeLocal(semanticOutcomeLocal)
+            state.databaseMethodQueryLocal = newLocal(Type.getType(String::class.java))
+            storeLocal(state.databaseMethodQueryLocal)
+            loadLocal(state.databaseMethodQueryLocal)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "databaseStatementFingerprint",
+                "(Ljava/lang/String;)J",
+                false,
+            )
+            state.databaseMethodFingerprintLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(state.databaseMethodFingerprintLocal)
+            loadLocal(state.databaseMethodQueryLocal)
+            push(boundary.operation.wireValue)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "databaseQueryOperation",
+                "(Ljava/lang/String;I)I",
+                false,
+            )
+            state.databaseMethodOperationLocal = newLocal(Type.INT_TYPE)
+            storeLocal(state.databaseMethodOperationLocal)
+            visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, "enterDatabase", "()J", false)
+            state.databaseMethodStartLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(state.databaseMethodStartLocal)
+        }
+        state.semanticKind = semanticPolicy.select(annotationContext.composable)
+        state.semanticKind?.let { kind ->
+            if (kind == SemanticHookKind.WORKER) {
+                emitWorkerEnter()
+            } else {
+                visitLdcInsn(kind.id)
+                visitMethodInsn(
+                    Opcodes.INVOKESTATIC,
+                    JANK_HUNTER_HOOKS,
+                    "enterSemantic",
+                    "(I)J",
+                    false,
+                )
             }
-            hookApplied = true
+            state.semanticStartLocal = newLocal(Type.LONG_TYPE)
+            storeLocal(state.semanticStartLocal)
+            if (kind == SemanticHookKind.WORKER) {
+                state.semanticOutcomeLocal = newLocal(Type.INT_TYPE)
+                visitLdcInsn(SEMANTIC_OUTCOME_UNKNOWN)
+                storeLocal(state.semanticOutcomeLocal)
+            }
         }
         if (requiresCatchAllExit()) {
-            visitLabel(methodTryStart)
+            visitLabel(state.methodTryStart)
         }
+    }
+
+    private fun emitWorkerEnter() {
+        loadThis()
+        visitMethodInsn(
+            Opcodes.INVOKEVIRTUAL,
+            ANDROIDX_LISTENABLE_WORKER,
+            "getId",
+            "()Ljava/util/UUID;",
+            false,
+        )
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "workerInstanceId",
+            "(Ljava/lang/Object;)J",
+            false,
+        )
+        state.workerInstanceLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(state.workerInstanceLocal)
+
+        loadThis()
+        visitMethodInsn(
+            Opcodes.INVOKEVIRTUAL,
+            ANDROIDX_LISTENABLE_WORKER,
+            "getRunAttemptCount",
+            "()I",
+            false,
+        )
+        state.workerRunAttemptLocal = newLocal(Type.INT_TYPE)
+        storeLocal(state.workerRunAttemptLocal)
+
+        loadLocal(state.workerInstanceLocal)
+        visitLdcInsn(methodId)
+        visitLdcInsn(generatedOwnerLabel)
+        loadLocal(state.workerRunAttemptLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "enterWorker",
+            "(JJLjava/lang/String;I)J",
+            false,
+        )
     }
 
     override fun onMethodExit(opcode: Int) {
         if (!shouldInstrumentMethod()) return
-        if (shouldWatchLifecycleOnExit() && opcode != Opcodes.ATHROW) {
+        if (state.binderServerStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            captureBinderServerResult(opcode)
+            emitBinderServerExit(throwableLocal = -1)
+        }
+        if (state.receiverCallbackStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            emitReceiverCallbackExit(failed = false)
+        }
+        if (state.serviceCallbackStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            captureServiceCallbackResult(opcode)
+            emitServiceCallbackExit(failed = false)
+        }
+        if (lifecyclePolicy.hookPoint == LifecycleHookPoint.EXIT && opcode != Opcodes.ATHROW) {
             emitLifecycleWatch()
         }
-        if (config.runtimeCallGraph && runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+        if (config.runtimeCallGraph && state.runtimeCallStartLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitRuntimeCallExit()
         }
-        if (semanticStartLocal >= 0 && opcode != Opcodes.ATHROW) {
-            if (semanticOutcomeLocal >= 0 && opcode == Opcodes.ARETURN) {
+        if (state.databaseMethodStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            emitDatabaseMethodExit(succeeded = true, throwableLocal = -1)
+        }
+        if (state.semanticStartLocal >= 0 && opcode != Opcodes.ATHROW) {
+            if (state.semanticOutcomeLocal >= 0 && opcode == Opcodes.ARETURN) {
                 dup()
                 visitMethodInsn(
                     Opcodes.INVOKESTATIC,
@@ -696,17 +619,20 @@ private class JankHunterMethodVisitor(
                     "(Ljava/lang/Object;)I",
                     false,
                 )
-                storeLocal(semanticOutcomeLocal)
+                storeLocal(state.semanticOutcomeLocal)
             }
-            emitSemanticExit(outcome = SEMANTIC_OUTCOME_SUCCESS, outcomeLocal = semanticOutcomeLocal)
+            emitSemanticExit(outcome = SEMANTIC_OUTCOME_SUCCESS, outcomeLocal = state.semanticOutcomeLocal)
         }
-        if (annotationScopeLocal >= 0 && opcode != Opcodes.ATHROW) {
+        if (state.annotationOperationLocal >= 0 && opcode != Opcodes.ATHROW) {
+            emitFinishAnnotatedOperation(failed = false)
+        }
+        if (state.annotationScopeLocal >= 0 && opcode != Opcodes.ATHROW) {
             emitExitAnnotatedContext()
         }
     }
 
     private fun emitRuntimeCallExit() {
-        loadLocal(runtimeCallStartLocal)
+        loadLocal(state.runtimeCallStartLocal)
         if (constructor) {
             // AdviceAdapter conservatively treats every constructor exception handler as a
             // pre-super branch. Real Kotlin constructors commonly have post-super handlers, so
@@ -727,12 +653,41 @@ private class JankHunterMethodVisitor(
         }
     }
 
-    private fun emitSemanticExit(outcome: Int, outcomeLocal: Int = -1) {
-        val kind = semanticKind() ?: return
-        loadLocal(semanticStartLocal)
-        visitLdcInsn(kind)
+    private fun emitDatabaseMethodExit(succeeded: Boolean, throwableLocal: Int) {
+        if (roomSqlBoundary == null) return
+        loadLocal(state.databaseMethodStartLocal)
         visitLdcInsn(methodId)
-        pushNullableString(if (config.embeddedSymbols) generatedOwnerLabel else null)
+        visitLdcInsn(generatedOwnerLabel)
+        loadLocal(state.databaseMethodQueryLocal)
+        loadLocal(state.databaseMethodFingerprintLocal)
+        push(DatabaseFrameworkKind.ROOM.wireValue)
+        loadLocal(state.databaseMethodOperationLocal)
+        push(DatabaseBoundaryKind.MATERIALIZE.wireValue)
+        push(false)
+        push(0)
+        push(0)
+        visitLdcInsn(0L)
+        push(succeeded)
+        if (throwableLocal >= 0) loadLocal(throwableLocal) else visitInsn(Opcodes.ACONST_NULL)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "exitDatabase",
+            "(JJLjava/lang/String;Ljava/lang/String;JIIIZIIJZLjava/lang/Throwable;)V",
+            false,
+        )
+    }
+
+    private fun emitSemanticExit(outcome: Int, outcomeLocal: Int = -1) {
+        val kind = state.semanticKind ?: return
+        if (kind == SemanticHookKind.WORKER) {
+            emitWorkerExit(outcome, outcomeLocal)
+            return
+        }
+        loadLocal(state.semanticStartLocal)
+        visitLdcInsn(kind.id)
+        visitLdcInsn(methodId)
+        visitLdcInsn(generatedOwnerLabel)
         if (outcomeLocal >= 0) {
             loadLocal(outcomeLocal)
         } else {
@@ -747,18 +702,24 @@ private class JankHunterMethodVisitor(
         )
     }
 
-    private fun semanticKind(): Int? {
-        if (constructor) return null
-        if (accessFlags and (Opcodes.ACC_SYNTHETIC or Opcodes.ACC_BRIDGE) != 0) return null
-        if (config.composeTracing && methodAnnotations.composable) return SEMANTIC_COMPOSE_COMPOSITION
-        if (roomDaoMethod) return SEMANTIC_ROOM_DAO
-        if (config.workerTracing && isSynchronousWorkerMethod()) return SEMANTIC_WORKER
-        return null
-    }
-
-    private fun isSynchronousWorkerMethod(): Boolean {
-        return methodName == "doWork" && methodDescriptor == WORKER_DO_WORK_DESCRIPTOR &&
-            ANDROIDX_WORKER in classHierarchy
+    private fun emitWorkerExit(outcome: Int, outcomeLocal: Int) {
+        loadLocal(state.semanticStartLocal)
+        loadLocal(state.workerInstanceLocal)
+        visitLdcInsn(methodId)
+        visitLdcInsn(generatedOwnerLabel)
+        if (outcomeLocal >= 0) {
+            loadLocal(outcomeLocal)
+        } else {
+            visitLdcInsn(outcome)
+        }
+        loadLocal(state.workerRunAttemptLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "exitWorker",
+            "(JJJLjava/lang/String;II)V",
+            false,
+        )
     }
 
     override fun visitMethodInsn(
@@ -773,13 +734,92 @@ private class JankHunterMethodVisitor(
             return
         }
         recordStaticEdge(owner, name)
+        if (config.androidComponents) {
+            val receiverInvocation = AndroidBroadcastReceiverInstrumentationPolicy.invocation(owner, name, descriptor)
+                ?: if (AndroidBroadcastReceiverInstrumentationPolicy.needsOwnerHierarchy(name, descriptor)) {
+                    AndroidBroadcastReceiverInstrumentationPolicy.invocation(
+                        owner,
+                        name,
+                        descriptor,
+                        resolveOwnerHierarchy(owner),
+                    )
+                } else {
+                    null
+                }
+            when (receiverInvocation) {
+                AndroidReceiverInvocation.GO_ASYNC -> if (state.receiverCallbackStartLocal >= 0) {
+                    emitReceiverGoAsync(MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface))
+                    recordReceiverHookApplied()
+                    return
+                }
+                AndroidReceiverInvocation.FINISH_ASYNC -> {
+                    emitReceiverAsyncFinish(MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface))
+                    recordClassHookApplied()
+                    return
+                }
+                AndroidReceiverInvocation.RECEIVE,
+                null,
+                -> Unit
+            }
+        }
+        if (config.binderIPC) {
+            val binderInvocation = AndroidBinderInstrumentationPolicy.clientInvocation(owner, name, descriptor)
+                ?: if (AndroidBinderInstrumentationPolicy.needsOwnerHierarchy(owner, name, descriptor)) {
+                    AndroidBinderInstrumentationPolicy.clientInvocation(
+                        owner,
+                        name,
+                        descriptor,
+                        resolveOwnerHierarchy(owner),
+                    )
+                } else {
+                    null
+                }
+            if (binderInvocation == AndroidBinderInvocation.CLIENT_TRANSACTION) {
+                emitBinderClientTransaction(
+                    MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                )
+                recordBinderHookApplied()
+                return
+            }
+        }
+        if (serviceClass) {
+            val foregroundCall = AndroidServiceInstrumentationPolicy.foregroundCall(
+                opcodeAndSource,
+                owner,
+                name,
+                descriptor,
+                emptySet(),
+            ) ?: if (AndroidServiceInstrumentationPolicy.needsOwnerHierarchy(owner, name, descriptor)) {
+                AndroidServiceInstrumentationPolicy.foregroundCall(
+                    opcodeAndSource,
+                    owner,
+                    name,
+                    descriptor,
+                    resolveOwnerHierarchy(owner),
+                )
+            } else {
+                null
+            }
+            if (foregroundCall != null) {
+                emitServiceForegroundCall(
+                    MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface),
+                    foregroundCall,
+                )
+                recordServiceHookApplied()
+                return
+            }
+        }
+        val staticDatabaseQuery = consumeDatabaseInvocationOrigin(owner, name, descriptor)
+        val databaseQueryArgument = databaseQueryArgumentIndex(owner, name, descriptor)
         val call = MethodCall(
             owner = owner,
             name = name,
             descriptor = descriptor,
             caller = CallerMethod(className, methodName, methodDescriptor),
-            line = currentLine,
+            line = state.currentLine,
             ownerHierarchy = resolveOwnerHierarchy(owner),
+            databaseQuery = staticDatabaseQuery,
+            databaseQueryArgument = databaseQueryArgument,
         )
         val decision = HookIntentResolver.resolve(call, config)
         if (
@@ -790,7 +830,8 @@ private class JankHunterMethodVisitor(
             throw missingOkHttpHelper(call)
         }
         val invocation = MethodInvocation(opcodeAndSource, owner, name, descriptor, isInterface)
-        if (decision is HookDecision.Matched && emitHook(decision.intent, invocation)) {
+        val matchedIntent = (decision as? HookDecision.Matched)?.intent
+        if (matchedIntent != null && emitHook(matchedIntent, invocation)) {
             diagnostics.recordHook(decision, methodDiagnosticName, call.line)
             return
         }
@@ -810,10 +851,19 @@ private class JankHunterMethodVisitor(
         super.visitMethodInsn(opcodeAndSource, owner, name, descriptor, isInterface)
     }
 
+    private fun consumeDatabaseInvocationOrigin(owner: String, name: String, descriptor: String): String? {
+        val origin = databaseInvocationOrigins.getOrNull(state.databaseInvocationOriginIndex) ?: return null
+        if (origin.owner != owner || origin.name != name || origin.descriptor != descriptor) return null
+        state.databaseInvocationOriginIndex++
+        return origin.normalizedLiteral
+    }
+
     private fun HookIntent.requiresOkHttpHelper(): Boolean {
         return when (this) {
             HookIntent.WrapOkHttpEventListenerFactory,
+            HookIntent.InstallOkHttpEventListener,
             HookIntent.InstallOkHttpEventListenerFactory,
+            HookIntent.GuardOkHttpNewCall,
             HookIntent.WrapWebSocketListener,
             -> true
             is HookIntent.HandlerRunnable,
@@ -826,6 +876,9 @@ private class JankHunterMethodVisitor(
             is HookIntent.CoroutineBlock,
             HookIntent.WrapClickListener,
             is HookIntent.LogSpam,
+            is HookIntent.CriticalIO,
+            is HookIntent.DatabaseCall,
+            is HookIntent.DatabaseTransaction,
             -> false
         }
     }
@@ -846,7 +899,7 @@ private class JankHunterMethodVisitor(
                 "${call.owner.replace('/', '.')}.${call.name}${call.descriptor} in $sourceLocation, " +
                 "but runtime helper '$dependency' is not declared for this variant. " +
                 "Add implementation(\"$dependency\") (or the matching variantImplementation dependency) " +
-                "before enabling jankHunter.instrument.okhttp/webSockets. Instrumentation stopped before " +
+                "before enabling JankHunter NETWORK/WEBSOCKETS features. Instrumentation stopped before " +
                 "emitting bytecode that could crash the host app.",
         )
     }
@@ -854,7 +907,6 @@ private class JankHunterMethodVisitor(
     private fun emitHook(intent: HookIntent, invocation: MethodInvocation): Boolean {
         val command = BytecodeCommandFactory.commandFor(intent)
         command.emit(hookEmitter, invocation)
-        hookApplied = true
         return command.replacesOriginalCall
     }
 
@@ -878,53 +930,62 @@ private class JankHunterMethodVisitor(
         mv.visitTryCatchBlock(start, end, handler, type)
     }
 
+    private fun emitInvocationTryCatchBlock(start: Label, end: Label, handler: Label, type: String?) {
+        recordPriorityHandler(handler)
+        emitPostSuperTryCatchBlock(start, end, handler, type)
+    }
+
     override fun visitMaxs(maxStack: Int, maxLocals: Int) {
         if (shouldInstrumentMethod() && requiresCatchAllExit()) {
-            visitLabel(methodTryEnd)
+            visitLabel(state.methodTryEnd)
             if (constructor) {
-                emitPostSuperTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+                emitPostSuperTryCatchBlock(state.methodTryStart, state.methodTryEnd, state.methodExceptionHandler, null)
             } else {
-                visitTryCatchBlock(methodTryStart, methodTryEnd, methodExceptionHandler, null)
+                visitTryCatchBlock(state.methodTryStart, state.methodTryEnd, state.methodExceptionHandler, null)
             }
-            visitLabel(methodExceptionHandler)
+            visitLabel(state.methodExceptionHandler)
             val throwableLocal = newLocal(Type.getType(Throwable::class.java))
             storeLocal(throwableLocal)
-            if (config.runtimeCallGraph && runtimeCallStartLocal >= 0) {
+            if (config.runtimeCallGraph && state.runtimeCallStartLocal >= 0) {
                 emitRuntimeCallExit()
             }
-            if (semanticStartLocal >= 0) {
+            if (state.databaseMethodStartLocal >= 0) {
+                emitDatabaseMethodExit(succeeded = false, throwableLocal = throwableLocal)
+            }
+            if (state.serviceCallbackStartLocal >= 0) {
+                emitServiceCallbackExit(failed = true)
+            }
+            if (state.receiverCallbackStartLocal >= 0) {
+                emitReceiverCallbackExit(failed = true)
+            }
+            if (state.binderServerStartLocal >= 0) {
+                emitBinderServerExit(throwableLocal)
+            }
+            if (state.semanticStartLocal >= 0) {
                 emitSemanticExit(outcome = SEMANTIC_OUTCOME_FAILURE)
             }
-            if (annotationScopeLocal >= 0) {
+            if (state.annotationOperationLocal >= 0) {
+                emitFinishAnnotatedOperation(failed = true)
+            }
+            if (state.annotationScopeLocal >= 0) {
                 emitExitAnnotatedContext()
             }
             loadLocal(throwableLocal)
             mv.visitInsn(Opcodes.ATHROW)
         }
-        super.visitMaxs(maxStack + 6, maxLocals)
+        super.visitMaxs(maxStack + 10, maxLocals)
     }
 
     override fun visitEnd() {
         val ignored = instrumentationIgnored()
-        if (!ignored && shouldInstrumentMethod() && hookApplied) {
-            recordOwnerMapEntry(
-                OwnerMapEntry(
-                    id = methodId,
-                    owner = OwnerIds.readableOwner(className, methodName),
-                    className = className.replace('/', '.'),
-                    methodName = methodName,
-                    descriptor = methodDescriptor,
-                ),
-            )
-        }
         diagnostics.recordMethod(
             ignored = ignored,
-            annotation = if (!ignored) annotationDiagnosticKey() else null,
+            annotation = if (!ignored) annotationContext.diagnosticKey() else null,
         )
-        if (config.methodFilterMode != JankHunterMethodFilterMode.DISABLED) {
+        if (config.methodFilterMode != JankHunterMethodFilterMode.NONE) {
             diagnostics.recordMethodFilter(
                 methodFilterDecision,
-                excluded = config.methodFilterMode == JankHunterMethodFilterMode.ENABLED &&
+                excluded = config.methodFilterMode == JankHunterMethodFilterMode.FILTER &&
                     methodFilterDecision.exclusionReason != null,
             )
         }
@@ -933,20 +994,15 @@ private class JankHunterMethodVisitor(
 
     private companion object {
         private const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
+        private const val JANK_HUNTER_ANDROID_HOOKS = "io/jankhunter/runtime/JankHunterAndroidHooks"
         private const val JANK_HUNTER_RUNTIME = "io/jankhunter/runtime/JankHunter"
-        private const val ANDROID_ACTIVITY = "android/app/Activity"
-        private const val ANDROID_FRAGMENT = "android/app/Fragment"
-        private const val ANDROID_SERVICE = "android/app/Service"
-        private const val ANDROIDX_FRAGMENT = "androidx/fragment/app/Fragment"
-        private const val ANDROIDX_VIEW_MODEL = "androidx/lifecycle/ViewModel"
-        private const val ANDROIDX_WORKER = "androidx/work/Worker"
-        private const val WORKER_DO_WORK_DESCRIPTOR = "()Landroidx/work/ListenableWorker${'$'}Result;"
-        private const val SEMANTIC_COMPOSE_COMPOSITION = 1
-        private const val SEMANTIC_ROOM_DAO = 5
-        private const val SEMANTIC_WORKER = 6
+        private const val ANDROIDX_LISTENABLE_WORKER = "androidx/work/ListenableWorker"
         private const val SEMANTIC_OUTCOME_SUCCESS = 0
         private const val SEMANTIC_OUTCOME_FAILURE = 1
         private const val SEMANTIC_OUTCOME_UNKNOWN = 4
+        private const val RECEIVER_INTENT_ARGUMENT = 1
+        private const val BINDER_CODE_ARGUMENT = 0
+        private const val BINDER_FLAGS_ARGUMENT = 3
     }
 
     private fun emitAutoInit(component: AutoInitComponent) {
@@ -977,23 +1033,59 @@ private class JankHunterMethodVisitor(
     }
 
     private fun emitEnterAnnotatedContext() {
-        pushNullableString(annotationScreen)
-        pushNullableString(ownerLabel)
-        pushNullableString(annotationFlow)
-        pushNullableString(annotationTrace)
+        pushNullableString(annotationContext.screen)
+        pushNullableString(annotationContext.owner)
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
             "enterAnnotatedContext",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
             false,
         )
-        annotationScopeLocal = newLocal(Type.getType("Ljava/lang/Object;"))
-        storeLocal(annotationScopeLocal)
+        state.annotationScopeLocal = newLocal(Type.getType("Ljava/lang/Object;"))
+        storeLocal(state.annotationScopeLocal)
+    }
+
+    private fun emitStartAnnotatedOperation() {
+        pushNullableString(annotationContext.operation)
+        visitLdcInsn(annotationOperationKindWireValue(annotationContext.operationKind))
+        visitLdcInsn(annotationContext.operationBudgetMs)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_HOOKS,
+            "startAnnotatedOperation",
+            "(Ljava/lang/String;IJ)Ljava/lang/Object;",
+            false,
+        )
+        state.annotationOperationLocal = newLocal(Type.getType("Ljava/lang/Object;"))
+        storeLocal(state.annotationOperationLocal)
+    }
+
+    private fun emitFinishAnnotatedOperation(failed: Boolean) {
+        loadLocal(state.annotationOperationLocal)
+        if (constructor) {
+            mv.visitInsn(if (failed) Opcodes.ICONST_1 else Opcodes.ICONST_0)
+            mv.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "finishAnnotatedOperation",
+                "(Ljava/lang/Object;Z)V",
+                false,
+            )
+        } else {
+            push(failed)
+            visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                JANK_HUNTER_HOOKS,
+                "finishAnnotatedOperation",
+                "(Ljava/lang/Object;Z)V",
+                false,
+            )
+        }
     }
 
     private fun emitExitAnnotatedContext() {
-        loadLocal(annotationScopeLocal)
+        loadLocal(state.annotationScopeLocal)
         if (constructor) {
             mv.visitMethodInsn(
                 Opcodes.INVOKESTATIC,
@@ -1022,57 +1114,31 @@ private class JankHunterMethodVisitor(
     }
 
     private fun requiresCatchAllExit(): Boolean {
-        return (config.runtimeCallGraph && runtimeCallStartLocal >= 0) || annotationScopeLocal >= 0 ||
-            semanticStartLocal >= 0
+        return (config.runtimeCallGraph && state.runtimeCallStartLocal >= 0) || state.annotationScopeLocal >= 0 ||
+            state.annotationOperationLocal >= 0 ||
+            state.semanticStartLocal >= 0 || state.databaseMethodStartLocal >= 0
+            || state.serviceCallbackStartLocal >= 0
+            || state.receiverCallbackStartLocal >= 0
+            || state.binderServerStartLocal >= 0
     }
 
     private fun instrumentationIgnored(): Boolean {
-        return classAnnotations.ignored || methodAnnotations.ignored
+        return annotationContext.ignored
     }
 
     private fun shouldInstrumentMethod(): Boolean {
-        return !instrumentationIgnored() && (!constructor || constructorBodyEntered)
+        return !instrumentationIgnored() && (!constructor || state.constructorBodyEntered)
     }
 
     private fun methodBoundaryHooksEnabled(): Boolean {
-        return config.methodFilterMode != JankHunterMethodFilterMode.ENABLED ||
+        return config.methodFilterMode != JankHunterMethodFilterMode.FILTER ||
             methodFilterDecision.exclusionReason == null
-    }
-
-    private fun shouldWatchLifecycleOnEnter(): Boolean {
-        if (!config.lifecycleLeaks || constructor || methodIsStatic()) return false
-        return methodName == "onDestroyView" &&
-            methodDescriptor == "()V" &&
-            isLifecycleType(ANDROIDX_FRAGMENT, ANDROID_FRAGMENT)
-    }
-
-    private fun shouldWatchLifecycleOnExit(): Boolean {
-        if (!config.lifecycleLeaks || constructor || methodIsStatic()) return false
-        if (!lifecycleMethodDescriptorSupported()) return false
-        if (methodName == "onDestroyView") return false
-        return when (methodName) {
-            "onDestroy" -> isLifecycleType(ANDROID_ACTIVITY, ANDROIDX_FRAGMENT, ANDROID_FRAGMENT, ANDROID_SERVICE)
-            "onCleared" -> isLifecycleType(ANDROIDX_VIEW_MODEL)
-            else -> false
-        }
-    }
-
-    private fun lifecycleMethodDescriptorSupported(): Boolean {
-        return methodDescriptor == "()V"
-    }
-
-    private fun methodIsStatic(): Boolean {
-        return accessFlags and Opcodes.ACC_STATIC != 0
-    }
-
-    private fun isLifecycleType(vararg baseTypes: String): Boolean {
-        return baseTypes.any(classHierarchy::contains)
     }
 
     private fun emitLifecycleWatch() {
         loadThis()
         visitLdcInsn(methodName)
-        visitLdcInsn(ownerLabel)
+        visitLdcInsn(annotationContext.owner)
         visitMethodInsn(
             Opcodes.INVOKESTATIC,
             JANK_HUNTER_HOOKS,
@@ -1082,60 +1148,297 @@ private class JankHunterMethodVisitor(
         )
         diagnostics.recordLifecycleHook(methodName, methodDescriptor, superName)
         recordClassHookApplied()
-        hookApplied = true
     }
 
-    private fun annotationDiagnosticKey(): AnnotationDiagnosticKey? {
-        if (!hasAnnotationContext) return null
-        return AnnotationDiagnosticKey(
-            owner = ownerLabel,
-            screen = annotationScreen,
-            flow = annotationFlow,
-            trace = annotationTrace,
+    private fun emitServiceCallbackEnter(callback: AndroidServiceCallback) {
+        when (callback.resultKind) {
+            AndroidServiceResultKind.INT -> {
+                state.serviceResultCodeLocal = newLocal(Type.INT_TYPE)
+                push(Int.MIN_VALUE)
+                storeLocal(state.serviceResultCodeLocal)
+            }
+            AndroidServiceResultKind.OBJECT -> {
+                state.serviceResultObjectLocal = newLocal(Type.getType(Any::class.java))
+                visitInsn(Opcodes.ACONST_NULL)
+                storeLocal(state.serviceResultObjectLocal)
+            }
+            AndroidServiceResultKind.NONE -> Unit
+        }
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "enterServiceCallback",
+            "()J",
+            false,
+        )
+        state.serviceCallbackStartLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(state.serviceCallbackStartLocal)
+        recordServiceHookApplied()
+    }
+
+    private fun captureServiceCallbackResult(opcode: Int) {
+        when {
+            state.serviceResultCodeLocal >= 0 && opcode == Opcodes.IRETURN -> {
+                dup()
+                storeLocal(state.serviceResultCodeLocal)
+            }
+            state.serviceResultObjectLocal >= 0 && opcode == Opcodes.ARETURN -> {
+                dup()
+                storeLocal(state.serviceResultObjectLocal)
+            }
+        }
+    }
+
+    private fun emitServiceCallbackExit(failed: Boolean) {
+        val callback = serviceCallback ?: return
+        loadLocal(state.serviceCallbackStartLocal)
+        loadThis()
+        if (callback.intentArgument >= 0) loadArg(callback.intentArgument) else visitInsn(Opcodes.ACONST_NULL)
+        visitLdcInsn(OwnerIds.methodId(className, "<android-component>", "service"))
+        visitLdcInsn(className.replace('/', '.'))
+        push(callback.stage)
+        if (state.serviceResultCodeLocal >= 0) loadLocal(state.serviceResultCodeLocal) else push(Int.MIN_VALUE)
+        if (state.serviceResultObjectLocal >= 0) {
+            loadLocal(state.serviceResultObjectLocal)
+        } else {
+            visitInsn(Opcodes.ACONST_NULL)
+        }
+        push(failed)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "exitServiceCallback",
+            "(JLjava/lang/Object;Ljava/lang/Object;JLjava/lang/String;IILjava/lang/Object;Z)V",
+            false,
+        )
+    }
+
+    private fun emitServiceForegroundCall(
+        invocation: MethodInvocation,
+        foregroundCall: AndroidServiceForegroundCall,
+    ) {
+        val argumentTypes = Type.getArgumentTypes(invocation.descriptor)
+        val argumentLocals = IntArray(argumentTypes.size)
+        for (index in argumentTypes.indices.reversed()) {
+            val type = argumentTypes[index]
+            argumentLocals[index] = newLocal(type)
+            storeLocal(argumentLocals[index], type)
+        }
+        val receiverLocal = if (foregroundCall.serviceArgument == AndroidServiceForegroundCall.INVOCATION_RECEIVER) {
+            newLocal(Type.getObjectType(invocation.owner)).also { storeLocal(it) }
+        } else {
+            -1
+        }
+        if (receiverLocal >= 0) loadLocal(receiverLocal)
+        argumentTypes.indices.forEach { index -> loadLocal(argumentLocals[index], argumentTypes[index]) }
+        emitOriginalInvocation(invocation)
+        if (receiverLocal >= 0) {
+            loadLocal(receiverLocal)
+        } else {
+            loadLocal(argumentLocals[foregroundCall.serviceArgument])
+        }
+        visitLdcInsn(OwnerIds.methodId(className, "<android-component>", "service"))
+        visitLdcInsn(className.replace('/', '.'))
+        push(foregroundCall.stage)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "recordServiceForegroundTransition",
+            "(Ljava/lang/Object;JLjava/lang/String;I)V",
+            false,
+        )
+    }
+
+    private fun emitReceiverCallbackEnter() {
+        state.receiverAsyncStartedLocal = newLocal(Type.BOOLEAN_TYPE)
+        push(false)
+        storeLocal(state.receiverAsyncStartedLocal)
+        state.receiverPendingResultLocal = newLocal(Type.getType(Any::class.java))
+        visitInsn(Opcodes.ACONST_NULL)
+        storeLocal(state.receiverPendingResultLocal)
+        loadThis()
+        loadArg(RECEIVER_INTENT_ARGUMENT)
+        visitLdcInsn(OwnerIds.methodId(className, "<android-component>", "receiver"))
+        visitLdcInsn(className.replace('/', '.'))
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "enterReceiverCallback",
+            "(Ljava/lang/Object;Ljava/lang/Object;JLjava/lang/String;)J",
+            false,
+        )
+        state.receiverCallbackStartLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(state.receiverCallbackStartLocal)
+        recordReceiverHookApplied()
+    }
+
+    private fun emitReceiverCallbackExit(failed: Boolean) {
+        loadLocal(state.receiverCallbackStartLocal)
+        loadThis()
+        loadArg(RECEIVER_INTENT_ARGUMENT)
+        visitLdcInsn(OwnerIds.methodId(className, "<android-component>", "receiver"))
+        visitLdcInsn(className.replace('/', '.'))
+        loadLocal(state.receiverAsyncStartedLocal)
+        loadLocal(state.receiverPendingResultLocal)
+        push(failed)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "exitReceiverCallback",
+            "(JLjava/lang/Object;Ljava/lang/Object;JLjava/lang/String;ZLjava/lang/Object;Z)V",
+            false,
+        )
+    }
+
+    private fun emitReceiverGoAsync(invocation: MethodInvocation) {
+        emitOriginalInvocation(invocation)
+        dup()
+        storeLocal(state.receiverPendingResultLocal)
+        loadLocal(state.receiverPendingResultLocal)
+        loadThis()
+        loadArg(RECEIVER_INTENT_ARGUMENT)
+        loadLocal(state.receiverCallbackStartLocal)
+        visitLdcInsn(OwnerIds.methodId(className, "<android-component>", "receiver"))
+        visitLdcInsn(className.replace('/', '.'))
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "registerReceiverAsync",
+            "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;JJLjava/lang/String;)Z",
+            false,
+        )
+        storeLocal(state.receiverAsyncStartedLocal)
+    }
+
+    private fun emitReceiverAsyncFinish(invocation: MethodInvocation) {
+        val pendingResultLocal = newLocal(Type.getObjectType(invocation.owner))
+        storeLocal(pendingResultLocal)
+        loadLocal(pendingResultLocal)
+        emitOriginalInvocation(invocation)
+        loadLocal(pendingResultLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "finishReceiverAsync",
+            "(Ljava/lang/Object;)V",
+            false,
+        )
+    }
+
+    private fun emitBinderServerEnter() {
+        state.binderServerResultLocal = newLocal(Type.BOOLEAN_TYPE)
+        push(false)
+        storeLocal(state.binderServerResultLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "enterBinderServer",
+            "()J",
+            false,
+        )
+        state.binderServerStartLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(state.binderServerStartLocal)
+        recordBinderHookApplied()
+    }
+
+    private fun captureBinderServerResult(opcode: Int) {
+        if (opcode != Opcodes.IRETURN) return
+        dup()
+        storeLocal(state.binderServerResultLocal)
+    }
+
+    private fun emitBinderServerExit(throwableLocal: Int) {
+        loadLocal(state.binderServerStartLocal)
+        pushNullableString(binderDescriptor)
+        visitInsn(Opcodes.ACONST_NULL)
+        loadArg(BINDER_CODE_ARGUMENT)
+        loadArg(BINDER_FLAGS_ARGUMENT)
+        loadLocal(state.binderServerResultLocal)
+        if (throwableLocal >= 0) loadLocal(throwableLocal) else visitInsn(Opcodes.ACONST_NULL)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "exitBinderServer",
+            "(JLjava/lang/String;Ljava/lang/String;IIZLjava/lang/Throwable;)V",
+            false,
+        )
+    }
+
+    private fun emitBinderClientTransaction(invocation: MethodInvocation) {
+        val argumentTypes = Type.getArgumentTypes(invocation.descriptor)
+        val argumentLocals = IntArray(argumentTypes.size)
+        for (index in argumentTypes.indices.reversed()) {
+            val type = argumentTypes[index]
+            argumentLocals[index] = newLocal(type)
+            storeLocal(argumentLocals[index], type)
+        }
+        val receiverLocal = newLocal(Type.getObjectType(invocation.owner))
+        storeLocal(receiverLocal)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "enterBinderClient",
+            "()J",
+            false,
+        )
+        val tokenLocal = newLocal(Type.LONG_TYPE)
+        storeLocal(tokenLocal)
+        val start = Label()
+        val end = Label()
+        val handler = Label()
+        val done = Label()
+        visitLabel(start)
+        loadLocal(receiverLocal)
+        argumentTypes.indices.forEach { index -> loadLocal(argumentLocals[index], argumentTypes[index]) }
+        emitOriginalInvocation(invocation)
+        val resultLocal = newLocal(Type.BOOLEAN_TYPE)
+        storeLocal(resultLocal)
+        visitLabel(end)
+        emitInvocationTryCatchBlock(start, end, handler, "java/lang/Throwable")
+        emitBinderClientExit(tokenLocal, argumentLocals, resultLocal, throwableLocal = -1)
+        loadLocal(resultLocal)
+        goTo(done)
+        visitLabel(handler)
+        val throwableLocal = newLocal(Type.getType(Throwable::class.java))
+        storeLocal(throwableLocal)
+        emitBinderClientExit(tokenLocal, argumentLocals, resultLocal = -1, throwableLocal = throwableLocal)
+        loadLocal(throwableLocal)
+        visitInsn(Opcodes.ATHROW)
+        visitLabel(done)
+    }
+
+    private fun emitBinderClientExit(
+        tokenLocal: Int,
+        argumentLocals: IntArray,
+        resultLocal: Int,
+        throwableLocal: Int,
+    ) {
+        loadLocal(tokenLocal)
+        pushNullableString(binderDescriptor)
+        pushNullableString(AndroidBinderInstrumentationPolicy.runtimeMethod(className, methodName))
+        loadLocal(argumentLocals[BINDER_CODE_ARGUMENT])
+        loadLocal(argumentLocals[BINDER_FLAGS_ARGUMENT])
+        if (resultLocal >= 0) loadLocal(resultLocal) else push(false)
+        if (throwableLocal >= 0) loadLocal(throwableLocal) else visitInsn(Opcodes.ACONST_NULL)
+        visitMethodInsn(
+            Opcodes.INVOKESTATIC,
+            JANK_HUNTER_ANDROID_HOOKS,
+            "exitBinderClient",
+            "(JLjava/lang/String;Ljava/lang/String;IIZLjava/lang/Throwable;)V",
+            false,
         )
     }
 
 }
 
-internal data class ClassGraphEdgeKey(
-    val caller: String,
-    val calleeClass: String,
-    val calleeMethod: String,
-)
-
-internal object ClassGraphWriter {
-    fun write(directoryPath: String, className: String, edges: Map<ClassGraphEdgeKey, Int>) {
-        if (directoryPath.isBlank() || edges.isEmpty()) return
-        InstrumentationArtifactFiles.writeClassShard(directoryPath, className, record(className.replace('/', '.'), edges))
+private fun annotationOperationKindWireValue(value: String): Int {
+    return when (value) {
+        "SCREEN" -> 2
+        "BACKGROUND" -> 3
+        "SYSTEM" -> 4
+        "STAGE" -> 5
+        else -> 1
     }
-
-    fun isApplicationLike(owner: String): Boolean {
-        return !InstrumentationPackages.isBuiltinExcluded(owner)
-    }
-
-    private fun record(className: String, edges: Map<ClassGraphEdgeKey, Int>): String {
-        return buildString {
-            append("{\"format\":")
-            append(ArtifactSchemas.CLASS_GRAPH_FORMAT)
-            append(",\"class\":\"")
-            append(escapeJsonString(className))
-            append("\",\"edges\":[")
-            edges.entries.forEachIndexed { index, entry ->
-                if (index > 0) append(',')
-                append("{\"caller\":\"")
-                append(escapeJsonString(entry.key.caller))
-                append("\",\"calleeClass\":\"")
-                append(escapeJsonString(entry.key.calleeClass))
-                append("\",\"calleeMethod\":\"")
-                append(escapeJsonString(entry.key.calleeMethod))
-                append("\",\"count\":")
-                append(entry.value)
-                append('}')
-            }
-            append("]}\n")
-        }
-    }
-
 }
 
 internal enum class HandlerRunnableKind {
@@ -1168,33 +1471,4 @@ internal enum class CoroutineBlockKind {
     TOP_FUNCTION2,
     FUNCTION2_BEFORE_CONTINUATION,
     FUNCTION2_BEFORE_INT_OBJECT,
-}
-
-internal object OwnerIds {
-    const val STABLE_ID_ALGORITHM =
-        "fnv1a64-utf8(internal-class,NUL,method,NUL,descriptor);" +
-            "offset=0xcbf29ce484222325;prime=0x100000001b3;v=1"
-    const val STABLE_ID_ENCODING = "stable:0x%016x"
-
-    fun readableOwner(className: String, methodName: String): String {
-        return "${className.replace('/', '.')}.$methodName"
-    }
-
-    fun methodId(className: String, methodName: String, descriptor: String): Long {
-        val internalClassName = className.replace('.', '/')
-        return fnv1a64("$internalClassName\u0000$methodName\u0000$descriptor").toLong()
-    }
-
-    fun canonical(methodId: Long): String {
-        return "stable:0x${methodId.toULong().toString(16).padStart(16, '0')}"
-    }
-
-    private fun fnv1a64(value: String): ULong {
-        var hash = 0xcbf29ce484222325UL
-        for (byte in value.encodeToByteArray()) {
-            hash = hash xor byte.toUByte().toULong()
-            hash *= 0x100000001b3UL
-        }
-        return hash
-    }
 }

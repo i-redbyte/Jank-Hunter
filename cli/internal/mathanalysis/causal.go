@@ -71,7 +71,7 @@ func (b *causalGraphBuilder) addTimeline(timeline []TimelineBucket, markov Marko
 		}
 		if bucket.OwnerSample != "" {
 			ownerID := causalNodeID("owner", bucket.OwnerSample)
-			b.addNode(ownerID, "источник: "+bucket.OwnerSample, "owner")
+			b.addNode(ownerID, "место запуска: "+analysisOwnerLabel(bucket.OwnerSample), "owner")
 			b.addUndirectedEdge(ownerID, stateID, "owner-state", strength, "источник активен рядом с состоянием")
 			if bucket.ScreenSample != "" {
 				b.addUndirectedEdge(causalNodeID("screen", bucket.ScreenSample), ownerID, "screen-owner", strength*0.8, "экран и источник совпали во временном интервале")
@@ -124,7 +124,7 @@ func (b *causalGraphBuilder) addNetworkLoops(loops []NetworkLoopFinding) {
 		b.addNode(symptomID, "симптом: сетевой цикл", "symptom")
 		if loop.Owner != "" {
 			ownerID := causalNodeID("owner", loop.Owner)
-			b.addNode(ownerID, "источник: "+loop.Owner, "owner")
+			b.addNode(ownerID, "место запуска: "+analysisOwnerLabel(loop.Owner), "owner")
 			b.addUndirectedEdge(symptomID, ownerID, "loop-owner", strength, "сетевой цикл связан с источником")
 		}
 		if loop.Route != "" {
@@ -137,10 +137,10 @@ func (b *causalGraphBuilder) addNetworkLoops(loops []NetworkLoopFinding) {
 		}
 		for _, token := range loop.Motif {
 			if token == "dns_high" {
-				b.addUndirectedEdge(symptomID, causalNodeID("phase", "DNS"), "loop-phase", strength, "паттерн цикла содержит DNS")
+				b.addUndirectedEdge(symptomID, causalNodeID("phase", "DNS"), "loop-phase", strength, "повторяемая последовательность содержит DNS")
 			}
 			if token == "connect_high" || token == "reconnect_high" || token == "websocket_reconnect" {
-				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "паттерн цикла содержит повторное соединение или соединение")
+				b.addUndirectedEdge(symptomID, causalNodeID("phase", "connect"), "loop-phase", strength, "повторяемая последовательность содержит соединение или переподключение")
 			}
 		}
 	}
@@ -795,7 +795,7 @@ func causalFallbackLabel(kind, value string) string {
 	case "state":
 		return MarkovStateLabel(value)
 	case "owner":
-		return "источник: " + value
+		return "место запуска: " + analysisOwnerLabel(value)
 	case "route":
 		return "маршрут: " + value
 	case "screen":

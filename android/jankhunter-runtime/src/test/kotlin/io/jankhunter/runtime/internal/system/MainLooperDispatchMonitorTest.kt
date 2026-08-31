@@ -2,13 +2,24 @@ package io.jankhunter.runtime.internal.system
 
 import android.util.Printer
 import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeLongSource
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MainLooperDispatchMonitorTest {
+    @Test
+    fun dispatchRecorderAndClockUsePrimitivePorts() {
+        val recorder = MainLooperDispatchMonitor::class.java.getDeclaredField("recordDispatch")
+        val constructors = MainLooperDispatchMonitor::class.java.declaredConstructors
+
+        assertFalse(recorder.type == Function3::class.java)
+        assertTrue(constructors.any { it.parameterTypes.contains(RuntimeLongSource::class.java) })
+    }
+
     @Test
     fun startInstallsPrinterOnlyOnce() {
         val installed = mutableListOf<Printer?>()

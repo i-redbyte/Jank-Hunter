@@ -242,7 +242,7 @@ func TestBuildLogGrowthSummaryExposesStaleActiveCheckpoint(t *testing.T) {
 	summary := buildLogGrowthSummary([]jhlog.StreamResult{result})
 	if summary.FreshnessStatus != "stale" || summary.SnapshotLagMS != 83_000 ||
 		summary.SnapshotLagBytes != 20_609 || summary.LatestDataEventMS != 93_000 ||
-		!strings.Contains(summary.FreshnessReason, "committed events") {
+		!strings.Contains(summary.FreshnessReason, "зафиксированные события") {
 		t.Fatalf("stale growth summary = %+v", summary)
 	}
 }
@@ -264,7 +264,7 @@ func TestBuildLogGrowthSummaryDoesNotClaimFreshnessWhenAProcessHasNoCheckpoint(t
 	}
 
 	summary := buildLogGrowthSummary(results)
-	if summary.FreshnessStatus != "unknown" || !strings.Contains(summary.FreshnessReason, "отсутствует live checkpoint") {
+	if summary.FreshnessStatus != "unknown" || !strings.Contains(summary.FreshnessReason, "отсутствует текущая контрольная точка") {
 		t.Fatalf("multi-process freshness without remote checkpoint = %+v", summary)
 	}
 }

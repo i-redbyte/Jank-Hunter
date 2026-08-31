@@ -133,10 +133,8 @@ dependencies {
 """
 
         manual_dsl = """jankHunter {
-    verboseLogs = true
-    retainedHeapDump {
-        privacyApproved = true
-    }
+    growthAnalytics = false
+    deleteObsoleteLogs = true
 }
 """
         if not existing_integration:
@@ -264,7 +262,6 @@ android {{
             "--okhttp",
             "--websockets",
             "--analyze-di",
-            "--asm-progress-log",
             "--max-session-log-size-mib",
             "12",
         )
@@ -300,8 +297,8 @@ android {{
         second_build = build_file.read_text(encoding="utf-8")
         second_settings = settings_file.read_text(encoding="utf-8")
 
-        self.assertIn("verboseLogs = true", second_build)
-        self.assertIn("privacyApproved = true", second_build)
+        self.assertIn("growthAnalytics = false", second_build)
+        self.assertIn("deleteObsoleteLogs = true", second_build)
         self.assertIn("jankhunter-runtime:manual-version", second_build)
         self.assertIn("jankhunter-okhttp3:manual-version", second_build)
         self.assertIn("com.example:user-owned:1", second_build)
@@ -309,11 +306,11 @@ android {{
         self.assertEqual(1, second_build.count("optional helper dependencies - BEGIN"))
         self.assertIn(f"jankhunter-android-sdk:{VERSION}", second_build)
         self.assertNotIn(f"jankhunter-okhttp3:{VERSION}", second_build)
-        self.assertIn("dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.DISABLED", second_build)
-        self.assertIn("sessionLogSizeLimitEnabled = false", second_build)
-        self.assertIn("runtimeCallGraph = false", second_build)
-        self.assertIn("okhttp = false", second_build)
-        self.assertIn("webSockets = false", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.DI_ANALYSIS)", second_build)
+        self.assertIn("unlimitedStorage()", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.HTTP)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)", second_build)
         self.assertIn("com.example.updated", second_build)
         self.assertNotIn("com.example.first", second_build)
         self.assertEqual(1, second_build.count("managed configuration - BEGIN"))
@@ -924,12 +921,10 @@ android {{
                 build = project / "app" / f"build.gradle{suffix}"
                 current = build.read_text(encoding="utf-8")
                 current = current.replace(
-                    "    retainedHeapDump {",
-                    "    instrument {\n"
-                    "        okhttp = true\n"
-                    "        runtimeCallGraph = true\n"
-                    "    }\n"
-                    "    retainedHeapDump {",
+                    "    deleteObsoleteLogs = true",
+                    "    enable(io.jankhunter.gradle.JankHunterFeature.HTTP)\n"
+                    "    enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)\n"
+                    "    deleteObsoleteLogs = true",
                 )
                 build.write_text(current, encoding="utf-8")
                 self.create_artifacts(project, "repo/maven", "repo/bin")
@@ -937,8 +932,8 @@ android {{
 
                 self.run_script(project, *arguments)
                 first = build.read_text(encoding="utf-8")
-                self.assertIn("okhttp = true", first)
-                self.assertIn("runtimeCallGraph = true", first)
+                self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.HTTP)", first)
+                self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", first)
                 self.assertNotIn("managed configuration - BEGIN", first)
                 self.assertIn("optional helper dependencies - BEGIN", first)
                 self.assertIn(f"jankhunter-android-sdk:{VERSION}", first)
@@ -970,9 +965,9 @@ android {{
         self.assertEqual(configured, build.read_bytes())
         result = configured.decode()
         self.assertIn('enabledBuildTypes.set(setOf("qa"))', result)
-        self.assertIn("runtimeCallGraph = true", result)
-        self.assertIn("okhttp = true", result)
-        self.assertIn("maxSessionLogSizeMiB = 12", result)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", result)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.HTTP)", result)
+        self.assertIn("storageLimitMiB(12)", result)
         self.assertIn(f'implementation("{GROUP}:jankhunter-android-sdk:{VERSION}")', result)
 
 
@@ -1319,11 +1314,13 @@ printf "package: name='%s' versionCode='1'\n" "$package_id"
         test_apk.write_bytes(b"test-apk")
         generated_artifacts = android / "sample-app/build/generated/jankhunter/debug"
         generated_artifacts.mkdir(parents=True)
-        (generated_artifacts / "owner-map.json").write_text(
+        (generated_artifacts / "artifact-metadata.json").write_text(
             json.dumps(
                 {
-                    "classGraph": True,
-                    "runtimeCallGraph": True,
+                    "format": 1,
+                    "kind": "artifact-metadata",
+                    "symbolNamespace": "00000000000000000000000000000000",
+                    "hooks": {"classGraph": True, "runtimeCallGraph": True},
                     "includePackages": ["io.jankhunter.sample.graph"],
                 },
                 separators=(",", ":"),
@@ -1486,17 +1483,18 @@ printf '%s\\n' "$FAKE_INSPECT_JSON"
         self.assertIn("expected screen context is missing", completed.stderr)
         self.assertIn("expected owner is missing", completed.stderr)
 
-    def test_runtime_quality_gate_accepts_screen_context_from_short_flow(self) -> None:
+    def test_runtime_quality_gate_accepts_screen_context_from_operation(self) -> None:
         script, _, environment = self.create_full_fixture()
         summary = self.complete_summary()
         summary["Screens"] = []
-        summary["Flows"] = [
-            {"Screen": "sample.compose.result"}
-        ]
+        summary["OperationAnalysis"] = {
+            "Completed": 1,
+            "Operations": [{"Screen": "sample.compose.result"}],
+        }
         environment["FAKE_INSPECT_JSON"] = json.dumps(summary, ensure_ascii=False)
 
         completed = subprocess.run(
-            [str(script), "--out-dir", str(self.root / "flow-screen-context")],
+            [str(script), "--out-dir", str(self.root / "operation-screen-context")],
             check=False,
             capture_output=True,
             text=True,

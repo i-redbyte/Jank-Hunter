@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.jankhunter.runtime.internal.concurrent.SpscSlotSequencer
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -92,7 +93,7 @@ class RuntimeGraphArtTest {
     private fun runGraphScenario(iteration: Int, producerCount: Int) {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val directory = context.cacheDir.resolve("jankhunter-art-$iteration-$producerCount-${System.nanoTime()}")
-        val writer = AsyncLogWriter.open(
+        val writer = AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000).build(),
             "instrumentation",
@@ -100,8 +101,7 @@ class RuntimeGraphArtTest {
         val graph = RuntimeCallGraph(
             nowMs = RuntimeLongSource { System.nanoTime() / 1_000_000L },
             captureScreen = { "ArtScreen" },
-            captureFlow = { "art.soak" },
-            captureStep = { "producer-$producerCount" },
+            captureOperationId = { producerCount.toLong() + 1L },
             maxKeys = { 4_096 },
             consumerDelayNanos = 50_000L,
         )
@@ -148,8 +148,8 @@ class RuntimeGraphArtTest {
     }
 
     private fun recordEdge(graph: RuntimeCallGraph, parentId: Long, childId: Long) {
-        val parent = graph.enter(parentId, enabled = true)
-        val child = graph.enter(childId, enabled = true)
+        val parent = graph.enter(parentId, "parent-$parentId", enabled = true)
+        val child = graph.enter(childId, "child-$childId", enabled = true)
         graph.exit(child, childId)
         graph.exit(parent, parentId)
     }

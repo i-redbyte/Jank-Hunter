@@ -2,15 +2,19 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.Process
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterHttpEvent
 import io.jankhunter.runtime.JankHunterBinaryWriter
+import io.jankhunter.runtime.JankHunterOperationAttributes
+import io.jankhunter.runtime.JankHunterWebSocketEvent
 import io.jankhunter.runtime.internal.saturatingAdd
-import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
-import java.util.zip.GZIPOutputStream
+import java.util.TimeZone
+
+private typealias Payload = BinaryPayload
 
 internal class LogSizeLimitReachedException(message: String) : IOException(message)
 
@@ -21,7 +25,7 @@ internal class BinaryLogWriter private constructor(
     private val fileHeader: BinaryLogFileHeader,
     private val quality: LogQualityCounters,
     private val logGrowth: LogGrowthSessionBinding?,
-) : Closeable {
+) : Closeable, BinaryEncodingSink {
     internal val file: File?
         get() = container.file
     internal val path: String
@@ -96,16 +100,23 @@ internal class BinaryLogWriter private constructor(
         maxDictionaryEntries,
         minOf(maxDictionaryValueBytes, MAX_ENCODED_DICTIONARY_VALUE_BYTES),
     )
-    private val stableSymbolDefinitions = HashMap<Long, String>()
-    private val chunkDictionaryUsage = ChunkDictionaryUsage(container.usesChunkLocalDictionary)
-    private val rawChunk = ByteArrayOutputStream(Jhlog.TARGET_RAW_CHUNK_BYTES)
-    private val chunkTypeCounts = LongArray(Jhlog.TYPE_IO + 1)
+    private val dictionaryLookupResult = DictionaryLookupResult()
+    private val stableSymbolDefinitions = StableSymbolRegistry()
+    private val rawChunk = ReusableByteArrayOutput(Jhlog.TARGET_RAW_CHUNK_BYTES)
+    private val gzipEncoder = ReusableGzipEncoder()
+    private val eventPayload = BinaryPayload(256)
+    private val dictionaryPayload = BinaryPayload(128)
+    private val controlPayload = BinaryPayload(256)
+    private val recordEncoder = BinaryRecordEncoder(fileHeader.segmentStartElapsedUs)
+    private val recordContext = BinaryRecordContext()
+    private val chunkTypeCounts = LongArray(Jhlog.TYPE_BINDER_TRANSACTION + 1)
     private var chunkRecordCount = 0
     private var chunkSequence = 0L
-    private var lastTimedRecordUs = fileHeader.segmentStartElapsedUs
-    private var lastContext: ContextIds? = null
     private val producerOverride = ProducerMetadataBuffer()
     private val directProducer = ProducerMetadataBuffer()
+    private val databaseRecords = DatabaseBinaryRecordEncoder(this)
+    private val networkRecords = NetworkBinaryRecordEncoder(this)
+    private val androidComponentRecords = AndroidComponentBinaryRecordEncoder(this)
     private var producerOverrideActive = false
     private var segmentEventRecords = 0L
     private var segmentDictionaryRecords = 0L
@@ -123,6 +134,7 @@ internal class BinaryLogWriter private constructor(
             writeFileHeader()
             beginLogGrowth()
         } catch (error: Throwable) {
+            runCatching { gzipEncoder.close() }
             runCatching { container.close() }
             throw error
         }
@@ -204,7 +216,7 @@ internal class BinaryLogWriter private constructor(
         appForeground: Boolean = true,
     ) {
         require(collectorFlags and Jhlog.COLLECTOR_KNOWN_MASK.inv() == 0L)
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(optionalIdFor(DICT_APP_VERSION, appVersion))
             .symbolRef(optionalIdFor(DICT_BUILD, build))
             .symbolRef(optionalIdFor(DICT_DEVICE, device))
@@ -252,7 +264,7 @@ internal class BinaryLogWriter private constructor(
         if (networkMetered) attributes = attributes or FLAG_NETWORK_METERED
         if (networkValidated) attributes = attributes or FLAG_NETWORK_VALIDATED
         if (networkVpn) attributes = attributes or FLAG_NETWORK_VPN
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .uvarint(networkKind.coerceIn(0, 5).toLong())
             .uvarint(batteryPct.coerceIn(0, 100).toLong())
             .uvarint(nonNegative(availMemoryKb))
@@ -267,52 +279,179 @@ internal class BinaryLogWriter private constructor(
     }
 
     @Synchronized
-    fun http(
-        owner: String?,
-        route: String?,
-        durationMs: Long,
-        dnsMs: Long,
-        connectMs: Long,
-        ttfbMs: Long,
-        statusClass: Int,
-        rxBytes: Long,
-        txBytes: Long,
-        flags: Long,
+    fun http(owner: String?, route: String?, event: JankHunterHttpEvent, flags: Long) {
+        networkRecords.http(owner, route, event, flags)
+    }
+
+    @Synchronized
+    fun webSocket(owner: String?, event: JankHunterWebSocketEvent) {
+        networkRecords.webSocket(owner, event)
+    }
+
+    @Synchronized
+    fun database(
+        sourceId: Long,
+        sourceName: String?,
+        query: String?,
+        framework: Long,
+        operation: Long,
+        outcome: Long,
+        durationUs: Long,
+        mainThread: Boolean,
+        failureKind: Long = if (outcome == Jhlog.DATABASE_OUTCOME_FAILURE) Jhlog.DATABASE_FAILURE_OTHER else Jhlog.DATABASE_FAILURE_NONE,
+        boundary: Long = Jhlog.DATABASE_BOUNDARY_EXECUTE,
+        statementFingerprint: Long = 0L,
+        resultKnown: Boolean = false,
+        resultKind: Long = Jhlog.DATABASE_RESULT_UNKNOWN,
+        resultCountBucket: Long = Jhlog.DATABASE_COUNT_UNKNOWN,
+        transactionId: Long = 0L,
+        statementToken: Long = 0L,
+        phaseMask: Long = 0L,
+        poolWaitUs: Long = 0L,
+        lockWaitUs: Long = 0L,
+        executeUs: Long = 0L,
+        materializeUs: Long = 0L,
     ) {
-        val safeDurationMs = nonNegative(durationMs)
-        val payload = Payload()
-            .symbolRef(idFor(DICT_ROUTE, route))
-            .uvarint(safeDurationMs)
-            .uvarint(clampDuration(dnsMs, safeDurationMs))
-            .uvarint(clampDuration(connectMs, safeDurationMs))
-            .uvarint(clampDuration(ttfbMs, safeDurationMs))
-            .uvarint(statusClass.coerceIn(0, 5).toLong())
-            .uvarint(nonNegative(rxBytes))
-            .uvarint(nonNegative(txBytes))
-        val context = currentProducerContext().withOwner(owner)
-        record(Jhlog.TYPE_HTTP, flags and FLAG_KNOWN_MASK, payload, context)
+        databaseRecords.database(
+            sourceId,
+            sourceName,
+            query,
+            framework,
+            operation,
+            outcome,
+            durationUs,
+            mainThread,
+            failureKind,
+            boundary,
+            statementFingerprint,
+            resultKnown,
+            resultKind,
+            resultCountBucket,
+            transactionId,
+            statementToken,
+            phaseMask,
+            poolWaitUs,
+            lockWaitUs,
+            executeUs,
+            materializeUs,
+        )
+    }
+
+    @Synchronized
+    fun databaseTransaction(
+        sourceId: Long,
+        sourceName: String?,
+        transactionId: Long,
+        parentId: Long,
+        stage: Long,
+        mode: Long,
+        outcome: Long,
+        failureKind: Long,
+        durationUs: Long,
+        statementCount: Long,
+        readCount: Long,
+        writeCount: Long,
+        mainThread: Boolean,
+    ) {
+        databaseRecords.databaseTransaction(
+            sourceId,
+            sourceName,
+            transactionId,
+            parentId,
+            stage,
+            mode,
+            outcome,
+            failureKind,
+            durationUs,
+            statementCount,
+            readCount,
+            writeCount,
+            mainThread,
+        )
+    }
+
+    @Synchronized
+    fun processState(
+        uiVisibility: Long,
+        processImportance: Long,
+        androidImportance: Long,
+        reason: Long,
+    ) {
+        androidComponentRecords.processState(uiVisibility, processImportance, androidImportance, reason)
+    }
+
+    @Synchronized
+    fun androidComponent(
+        componentId: Long,
+        componentName: String?,
+        action: String?,
+        instanceId: Long,
+        flowId: Long,
+        kind: Long,
+        stage: Long,
+        outcome: Long,
+        durationUs: Long,
+        componentFlags: Long,
+    ) {
+        androidComponentRecords.androidComponent(
+            componentId,
+            componentName,
+            action,
+            instanceId,
+            flowId,
+            kind,
+            stage,
+            outcome,
+            durationUs,
+            componentFlags,
+        )
+    }
+
+    @Synchronized
+    fun binderTransaction(
+        descriptor: String?,
+        method: String?,
+        callId: Long,
+        direction: Long,
+        transactionCode: Long,
+        outcome: Long,
+        failureKind: Long,
+        durationUs: Long,
+        binderFlags: Long,
+        mainThread: Boolean,
+    ) {
+        androidComponentRecords.binderTransaction(
+            descriptor,
+            method,
+            callId,
+            direction,
+            transactionCode,
+            outcome,
+            failureKind,
+            durationUs,
+            binderFlags,
+            mainThread,
+        )
     }
 
     @Synchronized
     fun stall(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         stackHint: String?,
         durationMs: Long,
         foreground: Boolean = true,
     ) {
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(idFor(DICT_STACK, stackHint))
             .uvarint(nonNegative(durationMs))
-        val context = contextIds(screen, owner, flow, step)
+        val context = contextIds(screen, owner)
         record(Jhlog.TYPE_STALL, FLAG_THREAD_MAIN or foregroundFlag(foreground), payload, context)
     }
 
     @Synchronized
     fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean = true) {
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .uvarint(nonNegative(pssKb))
             .uvarint(nonNegative(javaHeapKb))
             .uvarint(nonNegative(nativeHeapKb))
@@ -323,8 +462,6 @@ internal class BinaryLogWriter private constructor(
     fun retained(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         className: String?,
         holder: String?,
         ageMs: Long,
@@ -332,7 +469,7 @@ internal class BinaryLogWriter private constructor(
         foreground: Boolean = true,
         evidence: Long,
     ) {
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(idFor(DICT_CLASS, className))
             .symbolRef(idFor(DICT_OWNER, holder))
             .uvarint(nonNegative(ageMs))
@@ -342,7 +479,7 @@ internal class BinaryLogWriter private constructor(
             Jhlog.TYPE_RETAINED,
             foregroundFlag(foreground),
             payload,
-            contextIds(screen, owner, flow, step),
+            contextIds(screen, owner),
         )
     }
 
@@ -366,7 +503,7 @@ internal class BinaryLogWriter private constructor(
         require(frameDurationBuckets.size == Jhlog.UI_FRAME_HISTOGRAM_BUCKET_COUNT)
         require(frameDurationBuckets.all { it >= 0L })
         require(saturatingSum(frameDurationBuckets) == safeFrameCount)
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .uvarint(safeWindowMs)
             .uvarint(safeFrameCount)
             .uvarint(safeJankCount)
@@ -389,7 +526,7 @@ internal class BinaryLogWriter private constructor(
         processName: String?,
     ) {
         require(timestampUnixMs > 0L)
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .uvarint(nonNegative(reason))
             .uvarint(timestampUnixMs)
             .uvarint(nonNegative(importance))
@@ -400,13 +537,117 @@ internal class BinaryLogWriter private constructor(
     }
 
     @Synchronized
-    fun io(operation: Long, durationUs: Long, bytes: Long, mainThread: Boolean) {
-        require(operation in Jhlog.IO_FILE_READ..Jhlog.IO_CONTENT_WRITE)
-        val payload = Payload()
+    fun io(
+        operation: Long,
+        durationUs: Long,
+        bytes: Long,
+        mainThread: Boolean,
+        sourceId: Long,
+        sourceName: String?,
+        outcome: Long,
+        bytesKnown: Boolean,
+    ) {
+        require(
+            operation in Jhlog.IO_FILE_READ..Jhlog.IO_FILE_SYNC ||
+                operation in Jhlog.IO_CONTENT_READ..Jhlog.IO_CONTENT_WRITE,
+        )
+        require(outcome in Jhlog.IO_OUTCOME_SUCCESS..Jhlog.IO_OUTCOME_FAILURE)
+        require(bytesKnown || bytes == 0L)
+        if (sourceId != 0L) ensureStableSymbolDefinition(sourceId, sourceName)
+        val payload = eventPayload.clear()
+        if (sourceId != 0L) payload.stableSymbolRef(sourceId) else payload.symbolRef(0L)
+        payload
             .uvarint(operation)
+            .uvarint(outcome)
             .uvarint(nonNegative(durationUs))
             .uvarint(nonNegative(bytes))
-        record(Jhlog.TYPE_IO, if (mainThread) FLAG_THREAD_MAIN else 0L, payload, currentProducerContext())
+        var flags = if (mainThread) FLAG_THREAD_MAIN else 0L
+        if (bytesKnown) flags = flags or Jhlog.FLAG_IO_BYTES_KNOWN
+        record(Jhlog.TYPE_IO, flags, payload, currentProducerContext())
+    }
+
+    @Synchronized
+    fun worker(
+        workerId: Long,
+        workerName: String?,
+        instanceId: Long,
+        stage: Long,
+        outcome: Long,
+        durationMs: Long,
+        runAttempt: Long,
+        generation: Long,
+        stopReason: Long,
+        flags: Long,
+    ) {
+        require(instanceId != 0L)
+        require(stage in Jhlog.WORKER_STAGE_ENQUEUED..Jhlog.WORKER_STAGE_FINISHED)
+        require(stage == Jhlog.WORKER_STAGE_ENQUEUED || workerId != 0L)
+        require(outcome in Jhlog.WORKER_OUTCOME_UNKNOWN..Jhlog.WORKER_OUTCOME_CANCELLED)
+        val finished = stage == Jhlog.WORKER_STAGE_FINISHED
+        require(finished || outcome == Jhlog.WORKER_OUTCOME_UNKNOWN)
+        require(finished || durationMs == 0L)
+        require(!finished || outcome != Jhlog.WORKER_OUTCOME_UNKNOWN)
+        require(runAttempt in 0L..MAX_UINT32)
+        require(generation in 0L..MAX_UINT32)
+        require(stopReason in 0L..MAX_UINT32)
+        val stopReasonKnown = flags and Jhlog.FLAG_WORKER_STOP_REASON_KNOWN != 0L
+        require(finished || !stopReasonKnown)
+        require(stopReasonKnown || stopReason == 0L)
+        if (workerId != 0L) ensureStableSymbolDefinition(workerId, workerName)
+        val payload = eventPayload.clear()
+        if (workerId != 0L) payload.stableSymbolRef(workerId) else payload.symbolRef(0L)
+        payload
+            .uvarint(instanceId)
+            .uvarint(stage)
+            .uvarint(outcome)
+            .uvarint(nonNegative(durationMs))
+            .uvarint(runAttempt)
+            .uvarint(generation)
+            .uvarint(stopReason)
+        record(Jhlog.TYPE_WORKER, flags and FLAG_KNOWN_MASK, payload, currentProducerContext())
+    }
+
+    @Synchronized
+    fun operation(
+        name: String,
+        operationId: Long,
+        parentId: Long,
+        phase: Long,
+        kind: Long,
+        outcome: Long,
+        durationUs: Long,
+        budgetUs: Long,
+        attributes: JankHunterOperationAttributes,
+    ) {
+        require(operationId > 0L) { "Operation ID must be positive" }
+        require(parentId >= 0L && parentId != operationId) { "Operation parent must be different" }
+        require(kind in 1L..5L) { "Unsupported operation kind $kind" }
+        when (phase) {
+            Jhlog.OPERATION_PHASE_STARTED -> require(outcome == 0L && durationUs == 0L) {
+                "Started operation cannot have outcome or duration"
+            }
+            Jhlog.OPERATION_PHASE_FINISHED -> require(outcome in 1L..4L) {
+                "Finished operation requires a supported outcome"
+            }
+            else -> error("Unsupported operation phase $phase")
+        }
+        require(attributes.size <= Jhlog.OPERATION_MAX_ATTRIBUTES)
+        val payload = eventPayload.clear()
+            .symbolRef(idFor(DICT_OPERATION, name))
+            .uvarint(operationId)
+            .uvarint(parentId)
+            .uvarint(phase)
+            .uvarint(kind)
+            .uvarint(outcome)
+            .uvarint(nonNegative(durationUs))
+            .uvarint(nonNegative(budgetUs))
+            .uvarint(attributes.size.toLong())
+        for (index in 0 until attributes.size) {
+            payload
+                .symbolRef(idFor(DICT_ATTRIBUTE_KEY, attributes.key(index)))
+                .symbolRef(idFor(DICT_ATTRIBUTE_VALUE, attributes.value(index)))
+        }
+        record(Jhlog.TYPE_OPERATION, 0L, payload, currentProducerContext())
     }
 
     @Synchronized
@@ -419,18 +660,13 @@ internal class BinaryLogWriter private constructor(
     }
 
     @Synchronized
-    fun stableCounter(metricId: Long, value: Long) {
-        stableCounter(metricId, null, value)
-    }
-
-    @Synchronized
-    fun stableCounter(metricId: Long, metricName: String?, value: Long) {
+    fun stableCounter(metricId: Long, metricName: String, value: Long) {
         if (value < 0L) {
             quality.add(QualityCounterId.INVALID_METRIC)
             return
         }
         ensureStableSymbolDefinition(metricId, metricName)
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .stableSymbolRef(metricId)
             .uvarint(value)
             .uvarint(1L)
@@ -467,32 +703,34 @@ internal class BinaryLogWriter private constructor(
     fun logSpam(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
         source: String?,
         level: Int,
         count: Long,
     ) {
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(idFor(DICT_LOG_SOURCE, source))
             .uvarint(nonNegative(level.toLong()))
             .uvarint(nonNegative(count))
-        record(Jhlog.TYPE_LOG_SPAM, 0L, payload, contextIds(screen, owner, flow, step))
+        record(
+            Jhlog.TYPE_LOG_SPAM,
+            0L,
+            payload,
+            contextIds(screen, owner).also { context -> context.operationId = nonNegative(operationId) },
+        )
     }
 
     @Synchronized
     fun problemWindow(
         screen: String?,
         owner: String?,
-        flow: String?,
-        step: String?,
         kind: String?,
         windowMs: Long,
         count: Long,
         maxMs: Long,
         foreground: Boolean = true,
     ) {
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(idFor(DICT_METRIC, kind))
             .uvarint(nonNegative(windowMs).coerceAtLeast(1L))
             .uvarint(nonNegative(count))
@@ -501,50 +739,8 @@ internal class BinaryLogWriter private constructor(
             Jhlog.TYPE_PROBLEM,
             foregroundFlag(foreground),
             payload,
-            contextIds(screen, owner, flow, step),
+            contextIds(screen, owner),
         )
-    }
-
-    @Synchronized
-    fun runtimeCall(
-        screen: String?,
-        callerId: Long,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) {
-        runtimeCall(screen, callerId, null, flow, step, calleeId, null, count, totalMs, maxMs)
-    }
-
-    @Synchronized
-    fun runtimeCall(
-        screen: String?,
-        callerId: Long,
-        callerName: String?,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        calleeName: String?,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) {
-        ensureStableSymbolDefinition(callerId, callerName)
-        ensureStableSymbolDefinition(calleeId, calleeName)
-        val payload = Payload()
-            .uvarint(1L)
-            .symbolRef(optionalIdFor(DICT_SCREEN, screen))
-            .stableSymbolRef(callerId)
-            .symbolRef(optionalIdFor(DICT_FLOW, flow))
-            .symbolRef(optionalIdFor(DICT_STEP, step))
-            .stableSymbolRef(calleeId)
-            .uvarint(nonNegative(count))
-            .uvarint(nonNegative(totalMs))
-            .uvarint(nonNegative(maxMs))
-        record(Jhlog.TYPE_RUNTIME_CALL, 0L, payload, null)
     }
 
     /** Writes one bounded structure-of-arrays runtime-call record to the wire. */
@@ -558,11 +754,10 @@ internal class BinaryLogWriter private constructor(
             ensureStableSymbolDefinition(batch.callerId(index), batch.callerName(index))
             ensureStableSymbolDefinition(batch.calleeId(index), batch.calleeName(index))
         }
-        val payload = Payload().uvarint(batch.size.toLong())
+        val payload = eventPayload.clear().uvarint(batch.size.toLong())
         for (index in 0 until batch.size) payload.symbolRef(optionalIdFor(DICT_SCREEN, batch.screen(index)))
         for (index in 0 until batch.size) payload.stableSymbolRef(batch.callerId(index))
-        for (index in 0 until batch.size) payload.symbolRef(optionalIdFor(DICT_FLOW, batch.flow(index)))
-        for (index in 0 until batch.size) payload.symbolRef(optionalIdFor(DICT_STEP, batch.step(index)))
+        for (index in 0 until batch.size) payload.uvarint(nonNegative(batch.operationId(index)))
         for (index in 0 until batch.size) payload.stableSymbolRef(batch.calleeId(index))
         for (index in 0 until batch.size) payload.uvarint(nonNegative(batch.count(index)))
         for (index in 0 until batch.size) payload.uvarint(nonNegative(batch.totalMs(index)))
@@ -588,7 +783,7 @@ internal class BinaryLogWriter private constructor(
         val normalizedCount = count.coerceAtLeast(1L)
         val normalizedSum = if (sum == 0L) value else sum
         val normalizedMax = if (max == 0L) value else max
-        val payload = Payload()
+        val payload = eventPayload.clear()
             .symbolRef(idFor(DICT_METRIC, name))
             .uvarint(value)
             .uvarint(normalizedCount)
@@ -600,26 +795,18 @@ internal class BinaryLogWriter private constructor(
 
     private fun idFor(kind: Int, rawValue: String?): Long {
         ensureWritable()
-        val result = dictionary.idFor(kind, rawValue)
+        dictionary.resolve(kind, rawValue, dictionaryLookupResult)
+        val result = dictionaryLookupResult
         if (result.overflowed) quality.add(QualityCounterId.DICTIONARY_OVERFLOW_TOTAL)
         if (result.truncated) quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
-        if (container.usesChunkLocalDictionary) {
-            val definition = dictionary.definition(result.id)
-                ?: throw IOException("Missing dictionary definition ${result.id}")
-            chunkDictionaryUsage.markLocal(
-                result.id,
-                dictionaryDefinitionRecordSize(definition.kind, definition.id, definition.value),
-            )
-        }
-        result.definition?.let { definition ->
-            if (!container.usesChunkLocalDictionary) writeDictionaryDefinition(definition)
-        }
+        val definition = result.definition
+        if (definition != null) writeDictionaryDefinition(definition)
         return result.id
     }
 
     private fun writeDictionaryDefinition(definition: DictionaryIds.Definition) {
         val bytes = definition.value.toByteArray(StandardCharsets.UTF_8)
-        val payload = Payload()
+        val payload = dictionaryPayload.clear()
             .uvarint(definition.kind.toLong())
             .uvarint(definition.id)
             .uvarint(DICTIONARY_ENCODING_UTF8)
@@ -639,15 +826,16 @@ internal class BinaryLogWriter private constructor(
      * assigned by ASM and must not consume the bounded regular dictionary used by runtime data.
      */
     private fun ensureStableSymbolDefinition(stableId: Long, rawName: String?) {
-        val existing = stableSymbolDefinitions[stableId]
+        val existing = stableSymbolDefinitions.get(stableId)
         if (existing != null) {
-            chunkDictionaryUsage.markStable(
-                stableId,
-                dictionaryDefinitionRecordSize(DICT_STABLE_SYMBOL, stableId, existing),
-            )
+            require(existing == rawName) {
+                "stable symbol $stableId changed from '$existing' to '$rawName'"
+            }
             return
         }
-        val name = rawName?.takeIf(String::isNotBlank) ?: return
+        val name = requireNotNull(rawName?.takeIf(String::isNotBlank)) {
+            "stable symbol $stableId requires a readable embedded name"
+        }
 
         val encoded = name.toByteArray(StandardCharsets.UTF_8)
         val bytes = if (encoded.size <= MAX_ENCODED_DICTIONARY_VALUE_BYTES) {
@@ -656,13 +844,8 @@ internal class BinaryLogWriter private constructor(
             quality.add(QualityCounterId.DICTIONARY_VALUE_TRUNCATED_TOTAL)
             validUtf8Prefix(name, MAX_ENCODED_DICTIONARY_VALUE_BYTES)
         }
-        stableSymbolDefinitions[stableId] = name
-        chunkDictionaryUsage.markStable(
-            stableId,
-            dictionaryDefinitionRecordSize(DICT_STABLE_SYMBOL, stableId, name),
-        )
-        if (container.usesChunkLocalDictionary) return
-        val payload = Payload()
+        stableSymbolDefinitions.put(stableId, name)
+        val payload = dictionaryPayload.clear()
             .uvarint(DICT_STABLE_SYMBOL.toLong())
             .uvarint(stableId)
             .uvarint(DICTIONARY_ENCODING_UTF8)
@@ -682,89 +865,94 @@ internal class BinaryLogWriter private constructor(
         return idFor(kind, value)
     }
 
-    private fun contextIds(screen: String?, owner: String?, flow: String?, step: String?): ContextIds {
-        return ContextIds(
+    override fun payload(): BinaryPayload = eventPayload.clear()
+
+    override fun optionalSymbolId(kind: Int, value: String?): Long = optionalIdFor(kind, value)
+
+    override fun defineStableSymbol(id: Long, name: String?) = ensureStableSymbolDefinition(id, name)
+
+    override fun producerContext(owner: String?): BinaryRecordContext? = currentProducerContext().withOwner(owner)
+
+    override fun emit(
+        recordType: Int,
+        attributes: Long,
+        payload: BinaryPayload,
+        context: BinaryRecordContext?,
+        semanticEventCount: Long,
+    ) = record(recordType, attributes, payload, context, semanticEventCount = semanticEventCount)
+
+    private fun contextIds(screen: String?, owner: String?): BinaryRecordContext {
+        return recordContext.set(
             screenId = optionalIdFor(DICT_SCREEN, screen),
             ownerId = optionalIdFor(DICT_OWNER, owner),
-            flowId = optionalIdFor(DICT_FLOW, flow),
-            stepId = optionalIdFor(DICT_STEP, step),
         )
     }
 
-    private fun currentProducerContext(): ContextIds? {
+    private fun currentProducerContext(): BinaryRecordContext? {
         if (!producerOverrideActive) return null
         val context = producerOverride.context ?: return null
-        return contextIds(context.screen, context.owner, context.flow, context.step)
+        return contextIds(context.screen, context.owner).also { resolved ->
+            resolved.operationId = context.operationId
+        }
     }
 
-    private fun ContextIds?.withOwner(owner: String?): ContextIds? {
+    private fun BinaryRecordContext?.withOwner(owner: String?): BinaryRecordContext? {
         val ownerId = optionalIdFor(DICT_OWNER, owner)
         if (ownerId == 0L) return this
-        return ContextIds(
-            screenId = this?.screenId ?: 0L,
-            ownerId = ownerId,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = 0L,
-        )
+        val context = this ?: recordContext.clear()
+        context.ownerId = ownerId
+        context.stableOwnerId = 0L
+        context.hasStableOwner = false
+        return context
     }
 
-    private fun ContextIds?.withStableOwner(ownerId: Long): ContextIds {
-        return ContextIds(
-            screenId = this?.screenId ?: 0L,
-            ownerId = 0L,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = ownerId,
-            hasStableOwner = true,
-        )
+    private fun BinaryRecordContext?.withStableOwner(ownerId: Long): BinaryRecordContext {
+        val context = this ?: recordContext.clear()
+        context.ownerId = 0L
+        context.stableOwnerId = ownerId
+        context.hasStableOwner = true
+        return context
     }
 
-    private fun ContextIds?.withScreen(screen: String?): ContextIds? {
+    private fun BinaryRecordContext?.withScreen(screen: String?): BinaryRecordContext? {
         val screenId = optionalIdFor(DICT_SCREEN, screen)
         if (screenId == 0L) return this
-        return ContextIds(
-            screenId = screenId,
-            ownerId = this?.ownerId ?: 0L,
-            flowId = this?.flowId ?: 0L,
-            stepId = this?.stepId ?: 0L,
-            stableOwnerId = this?.stableOwnerId ?: 0L,
-            hasStableOwner = this?.hasStableOwner ?: false,
-        )
+        val context = this ?: recordContext.clear()
+        context.screenId = screenId
+        return context
     }
 
     private fun record(
         recordType: Int,
         attributes: Long,
         payload: Payload,
-        context: ContextIds?,
+        context: BinaryRecordContext?,
         producer: ProducerMetadataBuffer? = currentProducer(),
         semanticEventCount: Long = 1L,
     ) {
         ensureWritable()
-        var encoded = encodeRecord(recordType, attributes, payload, context, producer)
+        val safeAttributes = attributes and FLAG_KNOWN_MASK
+        var encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
         val chunkTarget = if (terminalChunkBuilding) {
             Jhlog.MAX_RAW_CHUNK_BYTES
         } else {
             Jhlog.TARGET_RAW_CHUNK_BYTES
         }
-        val projectedRawBytes = rawChunk.size().toLong() + encoded.size.toLong() +
-            chunkDictionaryUsage.projectedDefinitionBytes().toLong()
+        val projectedRawBytes = rawChunk.size().toLong() + encoded.size.toLong()
         if (
             rawChunk.size() > 0 &&
             (rawChunk.size() + encoded.size > chunkTarget || projectedRawBytes > chunkTarget)
         ) {
             commitChunk(final = false)
-            encoded = encodeRecord(recordType, attributes, payload, context, producer)
+            encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
         }
-        var rawBytes = rawChunk.size().toLong() + encoded.size.toLong() +
-            chunkDictionaryUsage.projectedDefinitionBytes().toLong()
+        var rawBytes = rawChunk.size().toLong() + encoded.size.toLong()
         val reservedBytes = if (terminalChunkBuilding) 0L else TERMINAL_RESERVE_BYTES
         if (!container.canCommitRaw(rawBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), reservedBytes)) {
             if (rawChunk.size() > 0) {
                 commitChunk(final = false)
-                encoded = encodeRecord(recordType, attributes, payload, context, producer)
-                rawBytes = encoded.size.toLong() + chunkDictionaryUsage.projectedDefinitionBytes().toLong()
+                encoded = recordEncoder.encode(recordType, safeAttributes, payload, context, producer)
+                rawBytes = encoded.size.toLong()
             }
             if (!container.canCommitRaw(rawBytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), reservedBytes)) {
                 throw LogSizeLimitReachedException(
@@ -772,7 +960,6 @@ internal class BinaryLogWriter private constructor(
                 )
             }
         }
-        chunkDictionaryUsage.commitPending()
         if (encoded.size > Jhlog.MAX_RAW_CHUNK_BYTES) {
             if (recordType == Jhlog.TYPE_DICTIONARY) {
                 throw IOException("JHLOG ${Jhlog.FORMAT_VERSION} dictionary definition exceeds raw chunk limit")
@@ -780,71 +967,23 @@ internal class BinaryLogWriter private constructor(
             quality.addRejected(recordType, QualityCounterId.REASON_OVERSIZED, semanticEventCount)
             return
         }
-        rawChunk.write(encoded)
+        encoded.writeTo(rawChunk)
         chunkRecordCount++
         if (recordType in chunkTypeCounts.indices) {
             chunkTypeCounts[recordType] = saturatingAdd(chunkTypeCounts[recordType], semanticEventCount)
         }
-        if (producer != null) lastTimedRecordUs = producer.elapsedUs
-        if (context != null) lastContext = context
+        recordEncoder.commit(producer, context)
     }
 
     private fun currentProducer(): ProducerMetadataBuffer {
         return if (producerOverrideActive) producerOverride else directProducer.capture(null)
     }
 
-    private fun encodeRecord(
-        recordType: Int,
-        attributes: Long,
-        payload: Payload,
-        context: ContextIds?,
-        producer: ProducerMetadataBuffer?,
-    ): ByteArray {
-        var envelopeFlags = 0L
-        if (producer != null) envelopeFlags = envelopeFlags or Jhlog.ENVELOPE_HAS_TIME or Jhlog.ENVELOPE_HAS_THREAD
-        if (context != null) envelopeFlags = envelopeFlags or Jhlog.ENVELOPE_HAS_CONTEXT
-        val sameContext = context != null && lastContext == context
-        if (sameContext) envelopeFlags = envelopeFlags or Jhlog.ENVELOPE_SAME_CONTEXT
-        val safeAttributes = attributes and FLAG_KNOWN_MASK
-        if (safeAttributes != 0L) envelopeFlags = envelopeFlags or Jhlog.ENVELOPE_HAS_ATTRIBUTES
-
-        val body = Payload()
-            .uvarint(recordType.toLong())
-            .uvarint(envelopeFlags)
-        if (producer != null) {
-            body.svarint(producer.elapsedUs - lastTimedRecordUs)
-            body.uvarint(producer.threadId)
-        }
-        if (context != null && !sameContext) {
-            var presence = 0L
-            if (context.screenId != 0L) presence = presence or Jhlog.CONTEXT_SCREEN
-            if (context.ownerId != 0L || context.hasStableOwner) {
-                presence = presence or Jhlog.CONTEXT_OWNER
-            }
-            if (context.flowId != 0L) presence = presence or Jhlog.CONTEXT_FLOW
-            if (context.stepId != 0L) presence = presence or Jhlog.CONTEXT_STEP
-            body.uvarint(presence)
-            if (presence and Jhlog.CONTEXT_SCREEN != 0L) body.symbolRef(context.screenId)
-            if (presence and Jhlog.CONTEXT_OWNER != 0L) {
-                if (context.hasStableOwner) {
-                    body.stableSymbolRef(context.stableOwnerId)
-                } else {
-                    body.symbolRef(context.ownerId)
-                }
-            }
-            if (presence and Jhlog.CONTEXT_FLOW != 0L) body.symbolRef(context.flowId)
-            if (presence and Jhlog.CONTEXT_STEP != 0L) body.symbolRef(context.stepId)
-        }
-        if (safeAttributes != 0L) body.uvarint(safeAttributes)
-        body.bytes(payload.copyBytes())
-        return Payload().uvarint(body.size.toLong()).bytes(body.copyBytes()).copyBytes()
-    }
-
     private fun writeQualitySnapshot() {
         val generation = quality.generation()
         val sequence = quality.nextSnapshotSequence()
         val entries = quality.snapshot()
-        val payload = Payload()
+        val payload = controlPayload.clear()
             .uvarint(sequence)
             .uvarint(nowElapsedUs())
             .uvarint(entries.size.toLong())
@@ -886,7 +1025,7 @@ internal class BinaryLogWriter private constructor(
     }
 
     private fun writeSegmentEnd(reason: Long) {
-        val payload = Payload()
+        val payload = controlPayload.clear()
             .uvarint(reason)
             .uvarint(segmentEventRecords)
             .uvarint(segmentDictionaryRecords)
@@ -902,19 +1041,18 @@ internal class BinaryLogWriter private constructor(
 
     private fun commitChunk(final: Boolean, countCommit: Boolean = true) {
         if (rawChunk.size() == 0) return
-        val encodedChunk = encodedChunk()
-        val raw = encodedChunk.raw
-        val stored = gzip(raw)
-        val rawCrc = crc32(raw)
+        val rawSize = rawChunk.length
+        gzipEncoder.encode(rawChunk.buffer, rawSize)
         val flags = Jhlog.CHUNK_FLAG_GZIP or if (final) Jhlog.CHUNK_FLAG_FINAL else 0
         try {
             container.commitChunk(
                 flags = flags,
                 sequence = chunkSequence,
-                stored = stored,
-                rawSize = raw.size,
-                recordCount = chunkRecordCount + encodedChunk.dictionaryRecords,
-                rawCrc = rawCrc,
+                stored = gzipEncoder.buffer,
+                storedSize = gzipEncoder.size,
+                rawSize = rawSize,
+                recordCount = chunkRecordCount,
+                rawCrc = gzipEncoder.rawCrc,
                 terminalReserveBytes = if (final) 0L else TERMINAL_RESERVE_BYTES,
             )
         } catch (error: StorageBudgetExhaustedException) {
@@ -940,8 +1078,7 @@ internal class BinaryLogWriter private constructor(
             quality.add(QualityCounterId.WRITTEN_EVENT_TOTAL, eventCount)
             segmentEventRecords = saturatingAdd(segmentEventRecords, eventCount)
         }
-        val dictionaryCount = chunkTypeCounts[Jhlog.TYPE_DICTIONARY] +
-            encodedChunk.dictionaryRecords.toLong()
+        val dictionaryCount = chunkTypeCounts[Jhlog.TYPE_DICTIONARY]
         segmentDictionaryRecords = saturatingAdd(segmentDictionaryRecords, dictionaryCount)
         if (!final && (eventCount > 0L || dictionaryCount > 0L)) commitQualityPending = true
         chunkSequence++
@@ -950,101 +1087,14 @@ internal class BinaryLogWriter private constructor(
 
     private fun resetChunkState() {
         rawChunk.reset()
-        chunkDictionaryUsage.clearChunk()
         chunkTypeCounts.fill(0)
         chunkRecordCount = 0
-        lastTimedRecordUs = fileHeader.segmentStartElapsedUs
-        lastContext = null
-    }
-
-    private fun encodedChunk(): EncodedChunk {
-        val body = rawChunk.toByteArray()
-        if (!container.usesChunkLocalDictionary) return EncodedChunk(body, 0)
-        val dictionaryRecords = chunkDictionaryUsage.chunkLocalCount() + chunkDictionaryUsage.chunkStableCount()
-        if (dictionaryRecords == 0) return EncodedChunk(body, 0)
-
-        val output = ByteArrayOutputStream(body.size + dictionaryRecords * 32)
-        chunkDictionaryUsage.forEachChunkLocal { id ->
-            val definition = dictionary.definition(id)
-                ?: throw IOException("Missing chunk-local dictionary definition $id")
-            output.write(encodedDictionaryDefinition(definition.kind, definition.id, definition.value))
-        }
-        chunkDictionaryUsage.forEachChunkStable { id ->
-            val value = stableSymbolDefinitions[id]
-                ?: throw IOException("Missing stable symbol definition $id")
-            output.write(encodedDictionaryDefinition(DICT_STABLE_SYMBOL, id, value))
-        }
-        output.write(body)
-        if (output.size() > Jhlog.MAX_RAW_CHUNK_BYTES) {
-            throw IOException(
-                "JHLOG ${Jhlog.FORMAT_VERSION} self-contained chunk exceeds ${Jhlog.MAX_RAW_CHUNK_BYTES} raw bytes",
-            )
-        }
-        return EncodedChunk(output.toByteArray(), dictionaryRecords)
-    }
-
-    private fun encodedDictionaryDefinition(kind: Int, id: Long, value: String): ByteArray {
-        val bytes = value.toByteArray(StandardCharsets.UTF_8)
-        val payload = Payload()
-            .uvarint(kind.toLong())
-            .uvarint(id)
-            .uvarint(DICTIONARY_ENCODING_UTF8)
-            .uvarint(bytes.size.toLong())
-            .bytes(bytes)
-        return encodeRecord(
-            recordType = Jhlog.TYPE_DICTIONARY,
-            attributes = 0L,
-            payload = payload,
-            context = null,
-            producer = null,
-        )
-    }
-
-    private fun dictionaryDefinitionRecordSize(kind: Int, id: Long, value: String): Int {
-        val valueBytes = utf8Length(value)
-        val payloadBytes = uvarintSize(kind.toLong()) + uvarintSize(id) +
-            uvarintSize(DICTIONARY_ENCODING_UTF8) + uvarintSize(valueBytes.toLong()) + valueBytes
-        val bodyBytes = uvarintSize(Jhlog.TYPE_DICTIONARY.toLong()) + uvarintSize(0L) + payloadBytes
-        return uvarintSize(bodyBytes.toLong()) + bodyBytes
-    }
-
-    private fun utf8Length(value: String): Int {
-        var bytes = 0
-        var offset = 0
-        while (offset < value.length) {
-            val first = value[offset]
-            if (
-                Character.isHighSurrogate(first) &&
-                offset + 1 < value.length &&
-                Character.isLowSurrogate(value[offset + 1])
-            ) {
-                bytes += 4
-                offset += 2
-            } else {
-                bytes += when {
-                    Character.isSurrogate(first) || first.code <= 0x7f -> 1
-                    first.code <= 0x7ff -> 2
-                    else -> 3
-                }
-                offset++
-            }
-        }
-        return bytes
-    }
-
-    private fun uvarintSize(rawValue: Long): Int {
-        var value = rawValue
-        var bytes = 1
-        while (value and 0x7fL.inv() != 0L) {
-            bytes++
-            value = value ushr 7
-        }
-        return bytes
+        recordEncoder.reset()
     }
 
     private fun writeFileHeader() {
         validateProcessScope()
-        val payload = Payload()
+        val payload = controlPayload.clear()
             .uvarint(Jhlog.HEADER_SCHEMA)
             .uvarint(fileHeader.requiredFeatures)
             .uvarint(Jhlog.OPTIONAL_FEATURES)
@@ -1057,6 +1107,7 @@ internal class BinaryLogWriter private constructor(
             .uvarint(nonNegative(fileHeader.segmentStartElapsedUs))
             .uvarint(nonNegative(fileHeader.segmentStartUnixMs))
             .uvarint(nonNegative(fileHeader.identitySource))
+            .svarint(fileHeader.timezoneOffsetMinutes.coerceIn(-MAX_TIMEZONE_OFFSET_MINUTES, MAX_TIMEZONE_OFFSET_MINUTES))
             .boundedString(fileHeader.processName, MAX_HEADER_STRING_BYTES)
             .boundedBytes(fileHeader.symbolNamespace, MAX_HEADER_STRING_BYTES)
             .uvarint(nonNegative(fileHeader.processScope))
@@ -1076,7 +1127,7 @@ internal class BinaryLogWriter private constructor(
             fileHeader.requiredFeatures != Jhlog.BEST_EFFORT_FEATURES
         ) {
             throw IOException(
-                "Unsupported JHLOG 2.0.0 required feature contract " +
+                "Unsupported JHLOG ${Jhlog.FORMAT_VERSION} required feature contract " +
                     "0x${fileHeader.requiredFeatures.toString(16)}",
             )
         }
@@ -1146,7 +1197,7 @@ internal class BinaryLogWriter private constructor(
     }
 
     private fun writeLogGrowth(kind: Long, raw: ByteArray) {
-        val payload = Payload()
+        val payload = controlPayload.clear()
             .uvarint(kind)
             .uvarint(raw.size.toLong())
             .bytes(raw)
@@ -1184,6 +1235,7 @@ internal class BinaryLogWriter private constructor(
         if (closed) return
         closed = true
         poisoned = true
+        gzipEncoder.close()
         runCatching { container.close() }
     }
 
@@ -1283,6 +1335,7 @@ internal class BinaryLogWriter private constructor(
                 commitQualityPending = true
             }
             closed = true
+            gzipEncoder.close()
             container.close()
             if (finalCommitted) sealedSegmentDigest = container.finishDigest()
         }
@@ -1301,195 +1354,6 @@ internal class BinaryLogWriter private constructor(
         close(Jhlog.SEGMENT_END_NORMAL)
     }
 
-    private data class ContextIds(
-        val screenId: Long,
-        val ownerId: Long,
-        val flowId: Long,
-        val stepId: Long,
-        val stableOwnerId: Long = 0L,
-        val hasStableOwner: Boolean = false,
-    )
-
-    private data class EncodedChunk(
-        val raw: ByteArray,
-        val dictionaryRecords: Int,
-    )
-
-    private class ChunkDictionaryUsage(
-        private val enabled: Boolean,
-    ) {
-        private val pendingLocal = LongSetBuffer(16)
-        private val chunkLocal = LongSetBuffer(128)
-        private val pendingStable = LongSetBuffer(8)
-        private val chunkStable = LongSetBuffer(64)
-
-        private var pendingDefinitionBytes = 0
-        private var chunkDefinitionBytes = 0
-
-        fun markLocal(id: Long, encodedBytes: Int) {
-            if (enabled && id > 0L && pendingLocal.add(id, encodedBytes)) {
-                pendingDefinitionBytes += encodedBytes
-            }
-        }
-
-        fun markStable(id: Long, encodedBytes: Int) {
-            if (enabled && pendingStable.add(id, encodedBytes)) {
-                pendingDefinitionBytes += encodedBytes
-            }
-        }
-
-        fun commitPending() {
-            if (!enabled) return
-            pendingLocal.forEach { value, encodedBytes ->
-                if (chunkLocal.add(value, encodedBytes)) chunkDefinitionBytes += encodedBytes
-            }
-            pendingStable.forEach { value, encodedBytes ->
-                if (chunkStable.add(value, encodedBytes)) chunkDefinitionBytes += encodedBytes
-            }
-            pendingLocal.clear()
-            pendingStable.clear()
-            pendingDefinitionBytes = 0
-        }
-
-        fun projectedDefinitionBytes(): Int = if (enabled) chunkDefinitionBytes + pendingDefinitionBytes else 0
-
-        fun chunkLocalCount(): Int = if (enabled) chunkLocal.size else 0
-
-        fun chunkStableCount(): Int = if (enabled) chunkStable.size else 0
-
-        inline fun forEachChunkLocal(action: (Long) -> Unit) {
-            chunkLocal.forEach { value, _ -> action(value) }
-        }
-
-        inline fun forEachChunkStable(action: (Long) -> Unit) {
-            chunkStable.forEach { value, _ -> action(value) }
-        }
-
-        fun clearChunk() {
-            if (!enabled) return
-            chunkLocal.clear()
-            chunkStable.clear()
-            chunkDefinitionBytes = 0
-        }
-    }
-
-    private class LongSetBuffer(initialCapacity: Int) {
-        private var keys = LongArray(tableCapacity(initialCapacity))
-        private var generations = IntArray(keys.size)
-        private var values = LongArray(initialCapacity.coerceAtLeast(1))
-        private var encodedSizes = IntArray(values.size)
-        private var generation = 1
-        var size = 0
-            private set
-
-        fun add(value: Long, encodedBytes: Int): Boolean {
-            if (size * 2 >= keys.size) growTable()
-            var index = hash(value) and (keys.size - 1)
-            while (generations[index] == generation) {
-                if (keys[index] == value) return false
-                index = (index + 1) and (keys.size - 1)
-            }
-            generations[index] = generation
-            keys[index] = value
-            if (size == values.size) {
-                values = values.copyOf(values.size * 2)
-                encodedSizes = encodedSizes.copyOf(values.size)
-            }
-            values[size] = value
-            encodedSizes[size] = encodedBytes
-            size++
-            return true
-        }
-
-        inline fun forEach(action: (Long, Int) -> Unit) {
-            for (index in 0 until size) action(values[index], encodedSizes[index])
-        }
-
-        fun clear() {
-            size = 0
-            if (generation == Int.MAX_VALUE) {
-                generations.fill(0)
-                generation = 1
-            } else {
-                generation++
-            }
-        }
-
-        private fun growTable() {
-            keys = LongArray(keys.size * 2)
-            generations = IntArray(keys.size)
-            generation = 1
-            for (index in 0 until size) insertExisting(values[index])
-        }
-
-        private fun insertExisting(value: Long) {
-            var index = hash(value) and (keys.size - 1)
-            while (generations[index] == generation) index = (index + 1) and (keys.size - 1)
-            generations[index] = generation
-            keys[index] = value
-        }
-
-        private fun hash(value: Long): Int {
-            var mixed = value
-            mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
-            mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
-            return (mixed xor (mixed ushr 33)).toInt()
-        }
-
-        private companion object {
-            fun tableCapacity(requested: Int): Int {
-                var capacity = 2
-                val minimum = requested.coerceAtLeast(1) * 2
-                while (capacity < minimum) capacity = capacity shl 1
-                return capacity
-            }
-        }
-    }
-
-    private class Payload {
-        private val out = ByteArrayOutputStream(64)
-
-        val size: Int
-            get() = out.size()
-
-        fun uvarint(rawValue: Long): Payload {
-            writeUvarint(out, rawValue)
-            return this
-        }
-
-        fun svarint(value: Long): Payload = uvarint((value shl 1) xor (value shr 63))
-
-        fun symbolRef(localId: Long): Payload = uvarint(if (localId <= 0L) 0L else localId shl 1)
-
-        fun stableSymbolRef(stableId: Long): Payload {
-            uvarint(1L)
-            repeat(Long.SIZE_BYTES) { byteIndex ->
-                out.write((stableId ushr (byteIndex * Byte.SIZE_BITS)).toInt() and 0xff)
-            }
-            return this
-        }
-
-        fun bytes(value: ByteArray): Payload {
-            out.write(value)
-            return this
-        }
-
-        fun fixedBytes(value: ByteArray): Payload = bytes(value)
-
-        fun boundedString(value: String, maxBytes: Int): Payload {
-            return boundedBytes(validUtf8Prefix(value, maxBytes), maxBytes)
-        }
-
-        fun boundedBytes(value: ByteArray, maxBytes: Int): Payload {
-            val safe = if (value.size <= maxBytes) value else value.copyOf(maxBytes)
-            uvarint(safe.size.toLong())
-            bytes(safe)
-            return this
-        }
-
-        fun copyBytes(): ByteArray = out.toByteArray()
-    }
-
     companion object {
         const val FLAG_THREAD_MAIN: Long = 1L shl 3
         const val FLAG_APP_FOREGROUND: Long = 1L shl 4
@@ -1502,13 +1366,13 @@ internal class BinaryLogWriter private constructor(
         const val FLAG_UI_PROBLEM: Long = 1L shl 16
         const val FLAG_HTTP_CLASSIFIED: Long = 1L shl 17
         const val FLAG_UI_CLASSIFIED: Long = 1L shl 18
-
         private const val RETAINED_EVIDENCE_TIME_ONLY = 1L
         private const val RETAINED_EVIDENCE_AFTER_EXPLICIT_GC = 2L
 
         private const val FLAG_KNOWN_MASK: Long =
-            ((1L shl 10) - 1L) or FLAG_HTTP_SLOW or FLAG_UI_PROBLEM or FLAG_HTTP_CLASSIFIED or
-                FLAG_UI_CLASSIFIED
+            ((1L shl 14) - 1L) or FLAG_HTTP_SLOW or FLAG_UI_PROBLEM or FLAG_HTTP_CLASSIFIED or
+                FLAG_UI_CLASSIFIED or Jhlog.FLAG_WORKER_PERIODIC or Jhlog.FLAG_WORKER_STOP_REASON_KNOWN or
+                Jhlog.FLAG_IO_BYTES_KNOWN
         private const val TERMINAL_RESERVE_BYTES = 8L * 1024L
         private const val DEFAULT_LOCAL_FILE_LIMIT_BYTES = 16L * 1024L * 1024L
         private const val MAX_HEADER_STRING_BYTES = 1024
@@ -1518,9 +1382,9 @@ internal class BinaryLogWriter private constructor(
         private const val MAX_ENCODED_DICTIONARY_VALUE_BYTES = Jhlog.MAX_RAW_CHUNK_BYTES - 1024
         private const val DICTIONARY_ENCODING_UTF8 = 0L
 
-        private const val DICT_GENERIC = 0
+        internal const val DICT_GENERIC = 0
         private const val DICT_OWNER = 1
-        private const val DICT_ROUTE = 2
+        internal const val DICT_ROUTE = 2
         private const val DICT_SCREEN = 3
         private const val DICT_CLASS = 4
         private const val DICT_STACK = 5
@@ -1529,20 +1393,34 @@ internal class BinaryLogWriter private constructor(
         private const val DICT_APP_VERSION = 8
         private const val DICT_BUILD = 9
         private const val DICT_PROCESS = 10
-        private const val DICT_FLOW = 11
-        private const val DICT_STEP = 12
-        private const val DICT_LOG_SOURCE = 13
-        private const val DICT_STABLE_SYMBOL = 14
+        private const val DICT_LOG_SOURCE = 11
+        private const val DICT_STABLE_SYMBOL = 12
+        private const val DICT_OPERATION = 13
+        private const val DICT_ATTRIBUTE_KEY = 14
+        private const val DICT_ATTRIBUTE_VALUE = 15
+
+        private const val MAX_TIMEZONE_OFFSET_MINUTES = 14L * 60L
+
+        private const val MAX_UINT32 = 0xffff_ffffL
 
         private val EVENT_RECORD_TYPES = intArrayOf(
             *IntArray(Jhlog.TYPE_GAUGE - Jhlog.TYPE_SESSION + 1) { Jhlog.TYPE_SESSION + it },
+            Jhlog.TYPE_OPERATION,
             *IntArray(Jhlog.TYPE_RUNTIME_CALL - Jhlog.TYPE_LOG_SPAM + 1) { Jhlog.TYPE_LOG_SPAM + it },
             Jhlog.TYPE_PROCESS_EXIT,
             Jhlog.TYPE_IO,
+            Jhlog.TYPE_WORKER,
+            Jhlog.TYPE_WEBSOCKET,
+            Jhlog.TYPE_DATABASE,
+            Jhlog.TYPE_DATABASE_TRANSACTION,
+            Jhlog.TYPE_PROCESS_STATE,
+            Jhlog.TYPE_ANDROID_COMPONENT,
+            Jhlog.TYPE_BINDER_TRANSACTION,
         )
 
         private fun defaultFileHeader(): BinaryLogFileHeader {
             val elapsedUs = nowElapsedUs()
+            val unixMs = System.currentTimeMillis().coerceAtLeast(0L)
             return BinaryLogFileHeader(
                 runId = BinaryLogFileHeader.randomId(),
                 processInstanceId = BinaryLogFileHeader.randomId(),
@@ -1551,7 +1429,8 @@ internal class BinaryLogWriter private constructor(
                 osPid = Process.myPid().toLong().coerceAtLeast(0L),
                 collectorStartElapsedUs = elapsedUs,
                 segmentStartElapsedUs = elapsedUs,
-                segmentStartUnixMs = System.currentTimeMillis().coerceAtLeast(0L),
+                segmentStartUnixMs = unixMs,
+                timezoneOffsetMinutes = TimeZone.getDefault().getOffset(unixMs) / 60_000L,
                 identitySource = 0L,
                 processName = "unknown",
                 symbolNamespace = ByteArray(0),
@@ -1574,7 +1453,7 @@ internal class BinaryLogWriter private constructor(
             return digest.digest()
         }
 
-        private fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)
+        internal fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)
 
         private fun saturatingSum(values: LongArray): Long {
             var total = 0L
@@ -1587,7 +1466,6 @@ internal class BinaryLogWriter private constructor(
 
         private fun foregroundFlag(foreground: Boolean): Long = if (foreground) FLAG_APP_FOREGROUND else 0L
 
-        private fun clampDuration(value: Long, durationMs: Long): Long = nonNegative(value).coerceAtMost(durationMs)
 
         private fun exactId(value: ByteArray): ByteArray {
             return if (value.size == 16) value else value.copyOf(16)
@@ -1617,23 +1495,6 @@ internal class BinaryLogWriter private constructor(
         }
 
         private fun nowElapsedUs(): Long = SystemClock.elapsedRealtimeNanos().coerceAtLeast(0L) / 1_000L
-
-        private fun gzip(raw: ByteArray): ByteArray {
-            val compressed = ByteArrayOutputStream(raw.size.coerceAtLeast(64))
-            GZIPOutputStream(compressed).use { gzip -> gzip.write(raw) }
-            return compressed.toByteArray()
-        }
-
-        private fun writeUvarint(out: ByteArrayOutputStream, rawValue: Long) {
-            // Long carries unsigned varint bits here. Semantic unsigned fields are sanitized by
-            // their callers; keeping the sign bit is required for zig-zag encoded Long.MIN_VALUE.
-            var value = rawValue
-            while (value and 0x7fL.inv() != 0L) {
-                out.write(((value and 0x7fL) or 0x80L).toInt())
-                value = value ushr 7
-            }
-            out.write(value.toInt())
-        }
 
     }
 }

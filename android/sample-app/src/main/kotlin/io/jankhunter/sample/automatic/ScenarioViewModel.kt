@@ -1,5 +1,7 @@
 package io.jankhunter.sample.automatic
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -86,11 +88,11 @@ internal class ScenarioViewModel(
     private fun showManualMode() {
         runJob?.cancel()
         mutableState.value = ScenarioUiState(SampleRoute.Manual)
-        JankHunter.setScreen(SampleRoute.Manual.screenName)
+        JankHunterTelemetry.setScreen(SampleRoute.Manual.screenName)
     }
 
     private fun showStage(step: ScenarioStep) {
-        JankHunter.setScreen(step.screenName)
+        JankHunterTelemetry.setScreen(step.screenName)
         mutableState.value = ScenarioUiState(SampleRoute.Automatic(step))
     }
 

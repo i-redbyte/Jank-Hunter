@@ -205,11 +205,11 @@ func growthFreshnessReason(processes map[string]*processGrowthFreshness) string 
 	lagBytes := growthSnapshotLagBytes(processes)
 	switch status {
 	case "fresh":
-		return fmt.Sprintf("growth checkpoint согласован с последними committed events; lag=%d мс, физический хвост=%d байт", lagMS, lagBytes)
+		return fmt.Sprintf("контрольная точка роста журнала согласована с последними зафиксированными событиями; отставание %d мс, физический хвост %d байт", lagMS, lagBytes)
 	case "stale":
-		return fmt.Sprintf("после growth checkpoint есть committed events или существенный физический хвост; lag=%d мс, хвост=%d байт", lagMS, lagBytes)
+		return fmt.Sprintf("после контрольной точки роста журнала есть зафиксированные события или существенный физический хвост; отставание %d мс, хвост %d байт", lagMS, lagBytes)
 	default:
-		return "freshness нельзя доказать: отсутствует live checkpoint или вход содержит несколько session одного процесса"
+		return "актуальность нельзя доказать: отсутствует текущая контрольная точка или вход содержит несколько сессий одного процесса"
 	}
 }
 

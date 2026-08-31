@@ -10,9 +10,6 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val autoInit: Property<Boolean>
 
     @get:Input
-    val embeddedSymbols: Property<Boolean>
-
-    @get:Input
     val dependencyInjectionAnalysis: Property<Boolean>
 
     @get:Input
@@ -40,7 +37,7 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val coroutines: Property<Boolean>
 
     @get:Input
-    val flowInteractions: Property<Boolean>
+    val interactionOperations: Property<Boolean>
 
     @get:Input
     val lifecycleLeaks: Property<Boolean>
@@ -61,7 +58,19 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val roomTracing: Property<Boolean>
 
     @get:Input
+    val databaseTracing: Property<Boolean>
+
+    @get:Input
     val workerTracing: Property<Boolean>
+
+    @get:Input
+    val androidComponents: Property<Boolean>
+
+    @get:Input
+    val binderIPC: Property<Boolean>
+
+    @get:Input
+    val ioTracing: Property<Boolean>
 
     @get:Input
     val classGraphDirectory: Property<String>
@@ -70,19 +79,19 @@ interface JankHunterInstrumentationParameters : InstrumentationParameters {
     val instrumentationDiagnosticsDirectory: Property<String>
 
     @get:Input
-    val ownerMapEntriesDirectory: Property<String>
+    val androidComponentCatalogDirectory: Property<String>
 
     @get:Input
     val dependencyInjectionCatalogDirectory: Property<String>
 
     @get:Input
-    val asmProgressLog: Property<Boolean>
-
-    @get:Input
-    val progressLabel: Property<String>
-
-    @get:Input
     val includeWholeApplication: Property<Boolean>
+
+    @get:Input
+    val networkWholeApplication: Property<Boolean>
+
+    @get:Input
+    val databaseWholeApplication: Property<Boolean>
 
     @get:Input
     val includePackages: SetProperty<String>

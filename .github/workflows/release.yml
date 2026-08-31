@@ -96,6 +96,7 @@ jobs:
           - io.jankhunter:jankhunter-annotations:$version
           - io.jankhunter:jankhunter-runtime:$version
           - io.jankhunter:jankhunter-okhttp3:$version
+          - io.jankhunter:jankhunter-workmanager:$version
           - io.jankhunter:jankhunter-gradle-plugin:$version
           - io.jankhunter.android:io.jankhunter.android.gradle.plugin:$version
 

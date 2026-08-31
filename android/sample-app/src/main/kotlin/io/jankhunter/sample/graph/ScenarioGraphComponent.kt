@@ -14,6 +14,9 @@ internal class ScenarioGraphComponent(application: SampleApplication) {
     val network = NetworkScenarioUseCase(
         CheckoutNetworkRepository(CheckoutApi()),
     )
+    val database = DatabaseScenarioUseCase(
+        RoomDatabaseScenarioStore(SampleRoomDatabase.create(application)),
+    )
     val memory = MemoryScenarioUseCase(
         CheckoutMemoryAllocator(application),
         CheckoutRetentionRepository(application),

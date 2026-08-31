@@ -1,10 +1,10 @@
 package io.jankhunter.runtime.internal.system
 
 import android.os.SystemClock
-import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterContext
 import io.jankhunter.runtime.RuntimeHookGuard
-import io.jankhunter.runtime.internal.io.QualityCounterId
+import io.jankhunter.runtime.RuntimeLongConsumer
+import io.jankhunter.runtime.RuntimeLongSource
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -32,20 +32,15 @@ internal typealias HeapDumpReporter = (
 internal class ObjectRetentionWatcher(
     retainedDelayMs: Long,
     private val forceGcBeforeReport: Boolean = false,
-    private val clock: () -> Long = { SystemClock.elapsedRealtime() },
+    private val clock: RuntimeLongSource = RuntimeLongSource { SystemClock.elapsedRealtime() },
     private val requestGc: () -> Unit = {
         Runtime.getRuntime().gc()
         System.runFinalization()
     },
-    private val reporter: RetentionReporter =
-        { className, ownerHint, context, ageMs, count, evidence ->
-            JankHunter.recordWatchedRetained(className, ownerHint, context, ageMs, count, evidence)
-        },
+    private val reporter: RetentionReporter = NO_OP_REPORTER,
     maxWatchedReferences: Int = DEFAULT_MAX_WATCHED_REFERENCES,
     private val exactAdmission: Boolean = false,
-    private val onCardinalityLoss: (Long) -> Unit = { count ->
-        JankHunter.recordQuality(QualityCounterId.OBJECT_WATCHER_LIMIT, count)
-    },
+    private val onCardinalityLoss: RuntimeLongConsumer = NO_OP_CARDINALITY_LOSS,
     heapDumpMinRetainedAgeMs: Long = 0L,
     private val heapDumpReporter: HeapDumpReporter? = null,
 ) {
@@ -106,7 +101,7 @@ internal class ObjectRetentionWatcher(
                         safeClassName(instance, description),
                         ownerHint?.takeIf { it.isNotBlank() },
                         context,
-                        clock(),
+                        clock.getAsLong(),
                     ),
                 )
                 watchedCount++
@@ -141,7 +136,7 @@ internal class ObjectRetentionWatcher(
 
     private fun checkRetainedLocked() {
         if (!running.get()) return
-        val now = clock()
+        val now = clock.getAsLong()
         val retainedGroups = linkedMapOf<String, RetainedGroup>()
         val heapDumpGroups = linkedMapOf<String, RetainedGroup>()
         var shouldRequestGc = false
@@ -225,7 +220,7 @@ internal class ObjectRetentionWatcher(
     }
 
     private fun recordCardinalityLoss() {
-        RuntimeHookGuard.run { onCardinalityLoss(1L) }
+        RuntimeHookGuard.run { onCardinalityLoss.accept(1L) }
     }
 
     private fun safeClassName(instance: Any, description: String?): String {
@@ -285,5 +280,7 @@ internal class ObjectRetentionWatcher(
 
     private companion object {
         const val DEFAULT_MAX_WATCHED_REFERENCES = 2_048
+        val NO_OP_REPORTER: RetentionReporter = { _, _, _, _, _, _ -> }
+        val NO_OP_CARDINALITY_LOSS = RuntimeLongConsumer { }
     }
 }

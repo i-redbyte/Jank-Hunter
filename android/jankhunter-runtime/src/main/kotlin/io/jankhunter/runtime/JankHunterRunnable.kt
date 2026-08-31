@@ -5,18 +5,19 @@ import android.os.SystemClock
 internal class JankHunterRunnable internal constructor(
     private val delegate: Runnable,
     private val ownerName: String?,
+    private val callbacks: RuntimeAsyncCallbacks,
 ) : Runnable {
-    private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
+    private val capturedContext = callbacks.captureContext(ownerName)
 
     override fun run() {
-        if (!JankHunter.isRuntimeActiveForCallbacks()) {
+        if (!callbacks.isActive()) {
             delegate.run()
             return
         }
         val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
-            JankHunter.callWithContext(capturedContext, ownerName) {
+            callbacks.callWithContext(capturedContext, ownerName) {
                 delegate.run()
             }
         } catch (throwable: Throwable) {
@@ -24,7 +25,7 @@ internal class JankHunterRunnable internal constructor(
             throw throwable
         } finally {
             RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
-                JankHunter.recordWrappedWork(
+                callbacks.recordWrappedWork(
                     ownerName,
                     "runnable",
                     elapsedRealtimeSince(start),

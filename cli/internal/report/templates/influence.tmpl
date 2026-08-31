@@ -20,7 +20,7 @@
         <strong class="env-device">{{if .Influence.HasClassGraph}}сигналы выполнения + статический граф{{else}}только сигналы выполнения{{end}}</strong>
         <div class="env-subtitle">{{.Influence.StandaloneReason}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{ruCount .Influence.RuntimeEdges "runtime-связь" "runtime-связи" "runtime-связей"}}</div></div>
+          <div class="env-item"><div class="env-label">Узлы выполнения</div><div class="env-value">{{.Influence.RuntimeNodes}}</div><div class="env-detail">{{ruCount .Influence.RuntimeEdges "записанная связь" "записанные связи" "записанных связей"}}</div></div>
           <div class="env-item"><div class="env-label">Статика</div><div class="env-value">{{.Influence.StaticNodes}}</div><div class="env-detail">{{ruCount .Influence.StaticEdges "статическая связь" "статические связи" "статических связей"}}</div></div>
         </div>
       </div>
@@ -107,7 +107,7 @@
       <summary><span>Показать классы для проверки</span><span class="method-kind">{{ruCount (len .Influence.TopNodes) "класс" "класса" "классов"}}</span></summary>
       <div class="fold-body">
         <table class="influence-table influence-node-table">
-          <tr><th>{{tip "Класс" "Класс из runtime-атрибуции или статического ASM-графа. Наличие строки не означает, что в классе есть ошибка."}}</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>{{tip "Основа" "Runtime означает, что класс или соседний вызов встречался в этом прогоне. Статическая связь означает только возможность вызова по байткоду."}}</th><th>{{tip "Наблюдаемые сигналы" "Сводка событий, связанных с классом через owner, runtime-call или контекст. Значения не являются профилем собственного CPU-времени класса."}}</th><th>{{tip "Основания ранжирования" "Какие сигналы увеличили приоритет строки. Это список гипотез для проверки, а не готовая первопричина."}}</th><th>{{tip "Сценарии / экраны" "Контекст, в котором класс был атрибутирован. Пустое значение означает, что контекст не был записан."}}</th></tr>
+          <tr><th>{{tip "Класс" "Класс из данных выполнения или статического ASM-графа. Наличие строки не означает, что в классе есть ошибка."}}</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>{{tip "Основа" "Данные выполнения означают, что класс или соседний вызов встречался в этом прогоне. Статическая связь означает только возможность вызова по байткоду."}}</th><th>{{tip "Наблюдаемые сигналы" "Сводка событий, связанных с классом через место вызова, записанный переход или контекст. Значения не являются профилем собственного CPU-времени класса."}}</th><th>{{tip "Основания ранжирования" "Какие сигналы увеличили приоритет строки. Это список гипотез для проверки, а не готовая первопричина."}}</th><th>{{tip "Сценарии / экраны" "Контекст, в котором класс был связан с событием. Пустое значение означает, что контекст не был записан."}}</th></tr>
           {{range .Influence.TopNodes}}
           <tr>
             <td><code>{{.ClassName}}</code></td>
@@ -125,7 +125,7 @@
               </div>
             </td>
             <td>{{join .Reasons ", "}}</td>
-            <td>{{join .Flows ", "}} {{join .Screens ", "}}</td>
+            <td>{{join .Operations ", "}} {{join .Screens ", "}}</td>
           </tr>
           {{else}}<tr><td colspan="6" class="muted">Нет узлов влияния.</td></tr>{{end}}
         </table>
@@ -135,7 +135,7 @@
 
   <section id="edges" class="panel">
     <div class="panel-head">
-      <div><h2>Связи между классами</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и runtime-вызовов. Вес нужен только для сортировки; он не измеряет силу причинного влияния.</div></div>
+      <div><h2>Связи между классами</h2><div class="panel-kicker">Связи строятся из статического ASM-графа и вызовов, записанных при выполнении. Вес нужен только для сортировки; он не измеряет силу причинного влияния.</div></div>
     </div>
     <details class="fold influence-table-fold">
       <summary><span>Показать связи</span><span class="method-kind">{{ruCount (len .Influence.TopEdges) "связь" "связи" "связей"}}</span></summary>
@@ -152,7 +152,7 @@
 
   <section id="paths" class="panel">
     <div class="panel-head">
-      <div><h2>Пути для расследования</h2><div class="panel-kicker">Цепочки обхода статического графа, ранжированные рядом с runtime-сигналами. Это возможные маршруты поиска кода, а не записанный стек и не доказанная цепочка причины.</div></div>
+      <div><h2>Пути для расследования</h2><div class="panel-kicker">Цепочки обхода статического графа, ранжированные рядом с сигналами выполнения. Это возможные маршруты поиска кода, а не записанный стек и не доказанная цепочка причины.</div></div>
     </div>
     <details class="fold influence-table-fold" open>
       <summary><span>Показать пути для расследования</span><span class="method-kind">{{ruCount (len .Influence.HotPaths) "путь" "пути" "путей"}}</span></summary>
@@ -161,7 +161,7 @@
           <tr><th>{{tip "Путь" "Последовательность классов из статического графа. Она может не выполняться целиком в записанном сценарии."}}</th><th>{{tip "Вес" "Условный приоритет пути по весам узлов и связей; сравним только внутри этого отчёта."}}</th><th>{{tip "Цель наблюдалась" "Да — путь заканчивается в узле с данными выполнения. Промежуточные связи могут оставаться статическими."}}</th><th>Пояснение</th></tr>
           {{range .Influence.HotPaths}}
           <tr><td><code>{{join .Nodes " → "}}</code></td><td>{{printf "%.1f" .Weight}}</td><td>{{if .RuntimeTarget}}да{{else}}нет{{end}}</td><td>{{.Reason}}</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Пути для расследования не построены. Нужен <code>--class-graph</code> и хотя бы один связанный runtime-сигнал.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Пути для расследования не построены. Нужен <code>--class-graph</code> и хотя бы один связанный сигнал выполнения.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -311,14 +311,14 @@
   const statusLabel = (node) => {
     if (node.Aggregate) return 'package · max score';
     if (node.Connector) return 'connector · не участник контекста';
-    if (node.HeapEvidence) return 'runtime · HPROF evidence';
-    if (node.RuntimeEvidence) return 'runtime evidence';
+    if (node.HeapEvidence) return 'выполнение · данные HPROF';
+    if (node.RuntimeEvidence) return 'данные выполнения';
     return 'static-only';
   };
 
   const edgeLabel = (edge) => {
-    if (edge.Evidence === 'mixed') return 'runtime + static';
-    if (edge.Evidence === 'runtime') return 'runtime';
+    if (edge.Evidence === 'mixed') return 'выполнение + статический граф';
+    if (edge.Evidence === 'runtime') return 'выполнение';
     return 'static-only';
   };
 
@@ -353,12 +353,12 @@
 
   const populateContexts = () => {
     if (!context) return;
-    const labels = { screen: 'Экран', flow: 'Flow', route: 'Route' };
+    const labels = { screen: 'Экран', operation: 'Операция', route: 'Маршрут' };
     const fragment = document.createDocumentFragment();
     asArray(workspace.Contexts).forEach((item) => {
       const option = document.createElement('option');
       option.value = item.ID;
-      option.textContent = (labels[item.Kind] || item.Kind) + ': ' + item.Value + ' · runtime ' + number(item.RuntimeNodes) + ' · problem ' + number(item.ProblemNodes);
+      option.textContent = (labels[item.Kind] || item.Kind) + ': ' + item.Value + ' · при выполнении ' + number(item.RuntimeNodes) + ' · проблемных ' + number(item.ProblemNodes);
       fragment.appendChild(option);
     });
     context.replaceChildren(fragment);
@@ -522,7 +522,7 @@
         'marker-end': 'url(#influence-arrow-' + kind + ')',
       });
       const tip = createSVG('title');
-      tip.textContent = edge.From + ' → ' + edge.To + ' · ' + edgeLabel(edge) + ' · runtime ' + number(edge.RuntimeCount) + ' · static ' + number(edge.StaticCount);
+      tip.textContent = edge.From + ' → ' + edge.To + ' · ' + edgeLabel(edge) + ' · при выполнении ' + number(edge.RuntimeCount) + ' · статически ' + number(edge.StaticCount);
       path.appendChild(tip);
       stage.appendChild(path);
     });
@@ -550,7 +550,7 @@
       addText(group, 'node-score-text', 30, 39, node.Aggregate ? String(number(node.ChildCount)) : number(node.Score).toFixed(1));
       const labelText = addText(group, 'node-label', 61, 25, displayLabel(node));
       const kindText = addText(group, 'node-kind', 61, 47, statusLabel(node));
-      const reason = node.Aggregate ? 'классы ' + number(node.ChildCount) + ' · problem ' + number(node.ProblemClassCount) : asArray(node.Reasons).join(', ');
+      const reason = node.Aggregate ? 'классы ' + number(node.ChildCount) + ' · проблемных ' + number(node.ProblemClassCount) : asArray(node.Reasons).join(', ');
       const reasonText = addText(group, 'node-reason', 61, 68, reason || 'нет проблемных сигналов');
       bindNode(group, node);
       stage.appendChild(group);
@@ -622,14 +622,14 @@
     if (!node.RuntimeEvidence) return 'Класс известен только из статического графа. Его выполнение в этом прогоне не подтверждено; score используется только для приоритизации проверки.';
     const signals = [];
     if (number(node.Problems)) signals.push(number(node.Problems) + ' проблемных сигналов');
-    if (number(node.RuntimeWallMS)) signals.push(number(node.RuntimeWallMS) + ' мс runtime-времени');
+    if (number(node.RuntimeWallMS)) signals.push(number(node.RuntimeWallMS) + ' мс времени выполнения');
     if (number(node.MainThreadMS)) signals.push(number(node.MainThreadMS) + ' мс на главном потоке');
     if (number(node.NetworkMS)) signals.push(number(node.NetworkMS) + ' мс сетевой нагрузки');
     if (number(node.Retained)) signals.push(number(node.Retained) + ' сигналов удержания');
     if (number(node.LogSpam)) signals.push(number(node.LogSpam) + ' вызовов шумных логов');
     let result = 'Класс записан во время этого прогона' + (signals.length ? ' и получил оценку ' + number(node.Score).toFixed(1) + ' из-за данных: ' + signals.join(', ') : '') + '. Чем выше оценка, тем раньше стоит проверить этот класс.';
     const confirmed = asArray(paths).find((item) => item.RuntimeTarget && asArray(item.Nodes).length > 1);
-    if (confirmed) result += ' Подтвержденный runtime-путь: ' + asArray(confirmed.Nodes).join(' → ') + '.';
+    if (confirmed) result += ' Подтверждённый путь выполнения: ' + asArray(confirmed.Nodes).join(' → ') + '.';
     return result;
   };
 
@@ -647,7 +647,7 @@
     const paths = asArray(data.HotPaths).filter((item) => asArray(item.Nodes).includes(className)).slice(0, 4);
     const contexts = []
       .concat(asArray(node.Screens).map((value) => 'экран: ' + value))
-      .concat(asArray(node.Flows).map((value) => 'flow: ' + value))
+      .concat(asArray(node.Operations).map((value) => 'operation: ' + value))
       .concat(asArray(node.Routes).map((value) => 'route: ' + value));
     const breadcrumbs = asArray(node.Breadcrumbs).length ? asArray(node.Breadcrumbs) : className.split('.');
     const metrics = [
@@ -656,14 +656,14 @@
       ['Runtime wall', number(node.RuntimeWallMS) + ' мс'],
       ['Главный поток', number(node.MainThreadMS) + ' мс'],
       ['Сеть', number(node.NetworkMS) + ' мс'],
-      ['Memory pressure', number(node.MemoryPressure) + ' КБ'],
+      ['Дефицит памяти', number(node.MemoryPressure) + ' КБ'],
       ['Удержания', number(node.Retained) + (node.HeapEvidence ? ' · HPROF' : '')],
       ['Log spam', number(node.LogSpam)],
       ['Входящие / исходящие', currentIncoming.length + ' / ' + currentOutgoing.length],
     ];
     let packageBlock = '';
     if (node.Aggregate) {
-      packageBlock = '<div class="influence-detail-section"><strong>Состав группы</strong><p>Классов: ' + number(node.ChildCount) + ' · runtime: ' + number(node.RuntimeClassCount) + ' · static-only: ' + number(node.StaticOnlyClassCount) + ' · problem: ' + number(node.ProblemClassCount) + '</p><div class="influence-detail-list">' + asArray(node.Children).map((item) => '<code>' + escapeHTML(item) + '</code>').join('') + '</div><button type="button" data-influence-expand-package>Раскрыть до классов</button></div>';
+      packageBlock = '<div class="influence-detail-section"><strong>Состав группы</strong><p>Классов: ' + number(node.ChildCount) + ' · записано при выполнении: ' + number(node.RuntimeClassCount) + ' · только статически: ' + number(node.StaticOnlyClassCount) + ' · проблемных: ' + number(node.ProblemClassCount) + '</p><div class="influence-detail-list">' + asArray(node.Children).map((item) => '<code>' + escapeHTML(item) + '</code>').join('') + '</div><button type="button" data-influence-expand-package>Раскрыть до классов</button></div>';
     }
     const methodBlock = methods.length ? '<div class="influence-detail-section"><strong>Горячие методы</strong><div class="influence-detail-list">' + methods.map((item) => '<code>' + escapeHTML(item.Method) + ' · ' + escapeHTML(item.Role) + ' · вес ' + number(item.Weight).toFixed(1) + '</code>').join('') + '</div></div>' : '';
     const pathBlock = paths.length ? '<div class="influence-detail-section"><strong>Пути для проверки</strong><div class="influence-detail-list">' + paths.map((item) => '<code>' + escapeHTML(asArray(item.Nodes).join(' → ')) + '</code>').join('') + '</div></div>' : '';
@@ -672,7 +672,7 @@
       '<p class="influence-explanation data-ticket" data-ticket-label="Как получена оценка">' + escapeHTML(node.Explanation || factualExplanation(node, paths)) + '</p>' +
       '<div class="influence-detail-metrics">' + metrics.map((item) => renderMetric(item[0], item[1])).join('') + '</div>' +
       '<div class="influence-detail-section"><strong>Основания</strong><p>' + escapeHTML(asArray(node.Reasons).join(', ') || 'нет проблемных сигналов') + '</p></div>' +
-      '<div class="influence-detail-section"><strong>Screen / Flow / Route</strong><p>' + escapeHTML(contexts.join(' · ') || 'контекст не записан') + '</p></div>' +
+      '<div class="influence-detail-section"><strong>Экран / операция / маршрут</strong><p>' + escapeHTML(contexts.join(' · ') || 'контекст не записан') + '</p></div>' +
       packageBlock + methodBlock + pathBlock;
     const expand = detail.querySelector('[data-influence-expand-package]');
     if (expand) expand.addEventListener('click', () => expandPackage(node));
@@ -863,7 +863,7 @@
     }
     if (mode === 'context') {
       const id = context && context.value;
-      setView(viewByID.get(id) || firstByMode.get('context') || dynamicView('context', 'context', 'Экран / Flow', 'В отчете нет runtime-контекста.', [], [], {}), 'context');
+      setView(viewByID.get(id) || firstByMode.get('context') || dynamicView('context', 'context', 'Экран / операция', 'В отчёте нет контекста выполнения.', [], [], {}), 'context');
       return;
     }
     if (mode === 'neighborhood') {

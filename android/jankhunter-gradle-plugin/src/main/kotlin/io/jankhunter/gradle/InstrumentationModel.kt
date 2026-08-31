@@ -1,5 +1,7 @@
 package io.jankhunter.gradle
 
+import org.objectweb.asm.Type
+
 internal data class CallerMethod(
     val className: String,
     val methodName: String,
@@ -13,6 +15,8 @@ internal data class MethodCall(
     val caller: CallerMethod? = null,
     val line: Int? = null,
     val ownerHierarchy: Set<String> = setOf(owner),
+    val databaseQuery: String? = null,
+    val databaseQueryArgument: Int? = null,
 )
 
 internal fun MethodCall.matchesOwner(owners: Set<String>): Boolean {
@@ -33,6 +37,62 @@ internal enum class ArgumentRole {
     Delay,
     Period,
     TimeUnit,
+}
+
+internal enum class CriticalIOCallKind {
+    FILE_READ_BYTES,
+    FILE_WRITE_BYTES,
+    FILE_APPEND_BYTES,
+    FILE_DESCRIPTOR_SYNC,
+    FILE_CHANNEL_FORCE,
+}
+
+internal enum class DatabaseFrameworkKind(val wireValue: Int) {
+    SQLITE(1),
+    SUPPORT_SQLITE(2),
+    ROOM(3),
+}
+
+internal enum class DatabaseOperationKind(val wireValue: Int) {
+    QUERY(1),
+    INSERT(2),
+    UPDATE(3),
+    DELETE(4),
+    EXECUTE(5),
+    STATEMENT(6),
+}
+
+internal enum class DatabaseBoundaryKind(val wireValue: Int) {
+    DISPATCH(1),
+    EXECUTE(2),
+    MATERIALIZE(3),
+    MANUAL(4),
+}
+
+internal enum class DatabaseResultCapture(val wireValue: Int, val resultKindWireValue: Int) {
+    NONE(0, 0),
+    INSERT_ROW_ID(1, 2),
+    AFFECTED_ROWS(2, 2),
+}
+
+internal enum class DatabaseStatementAction {
+    NONE,
+    REGISTER,
+    EXECUTE,
+}
+
+internal enum class DatabaseTransactionAction {
+    BEGIN,
+    MARK_SUCCESSFUL,
+    END,
+}
+
+internal enum class DatabaseTransactionModeKind(val wireValue: Int) {
+    UNKNOWN(0),
+    DEFERRED(1),
+    IMMEDIATE(2),
+    EXCLUSIVE(3),
+    READ_ONLY(4),
 }
 
 internal data class SignatureSpec(
@@ -72,7 +132,9 @@ internal sealed class HookIntent(
     val id: String,
 ) {
     data object WrapOkHttpEventListenerFactory : HookIntent("okhttp.wrap_event_listener_factory")
+    data object InstallOkHttpEventListener : HookIntent("okhttp.install_event_listener")
     data object InstallOkHttpEventListenerFactory : HookIntent("okhttp.install_event_listener_factory")
+    data object GuardOkHttpNewCall : HookIntent("okhttp.guard_new_call")
     data object WrapWebSocketListener : HookIntent("okhttp.wrap_websocket_listener")
     data class HandlerRunnable(val kind: HandlerRunnableKind) : HookIntent("handler.wrap_runnable.${kind.name.lowercase()}")
     data class HandlerRemoveCallbacks(
@@ -84,8 +146,23 @@ internal sealed class HookIntent(
     data class ExecutorRunnable(val kind: ExecutorRunnableKind) : HookIntent("executor.wrap_runnable.${kind.name.lowercase()}")
     data class ExecutorCallable(val kind: ExecutorCallableKind) : HookIntent("executor.wrap_callable.${kind.name.lowercase()}")
     data class CoroutineBlock(val kind: CoroutineBlockKind) : HookIntent("coroutine.wrap_block.${kind.name.lowercase()}")
-    data object WrapClickListener : HookIntent("flow.wrap_click_listener")
+    data object WrapClickListener : HookIntent("interaction_operation.wrap_click_listener")
     data class LogSpam(val source: String, val level: Int) : HookIntent("logspam.$source")
+    data class CriticalIO(val kind: CriticalIOCallKind) : HookIntent("io.${kind.name.lowercase()}")
+    data class DatabaseCall(
+        val framework: DatabaseFrameworkKind,
+        val operation: DatabaseOperationKind,
+        val query: String? = null,
+        val queryArgument: Int? = null,
+        val boundary: DatabaseBoundaryKind = DatabaseBoundaryKind.EXECUTE,
+        val resultCapture: DatabaseResultCapture = DatabaseResultCapture.NONE,
+        val statementAction: DatabaseStatementAction = DatabaseStatementAction.NONE,
+    ) : HookIntent("database.${framework.name.lowercase()}.${operation.name.lowercase()}")
+    data class DatabaseTransaction(
+        val framework: DatabaseFrameworkKind,
+        val action: DatabaseTransactionAction,
+        val mode: DatabaseTransactionModeKind,
+    ) : HookIntent("database.transaction.${framework.name.lowercase()}.${action.name.lowercase()}")
 }
 
 internal interface InstrumentationModule {
@@ -154,11 +231,26 @@ internal object HookSignatureCatalog {
         roles = mapOf(ArgumentRole.Listener to 0),
     )
 
+    val okHttpEventListener = SignatureSpec(
+        id = "okhttp3.builder.event_listener.v3",
+        owner = "okhttp3/OkHttpClient\$Builder",
+        name = "eventListener",
+        descriptor = "(Lokhttp3/EventListener;)Lokhttp3/OkHttpClient\$Builder;",
+        roles = mapOf(ArgumentRole.Listener to 0),
+    )
+
     val okHttpBuild = SignatureSpec(
         id = "okhttp3.builder.build.v3",
         owner = "okhttp3/OkHttpClient\$Builder",
         name = "build",
         descriptor = "()Lokhttp3/OkHttpClient;",
+    )
+
+    val okHttpNewCall = SignatureSpec(
+        id = "okhttp3.client.new_call.v3",
+        owner = "okhttp3/OkHttpClient",
+        name = "newCall",
+        descriptor = "(Lokhttp3/Request;)Lokhttp3/Call;",
     )
 
     val okHttpNewWebSocket = SignatureSpec(
@@ -420,8 +512,10 @@ internal object HookIntentResolver {
             HandlerInstrumentationModule,
             ExecutorInstrumentationModule,
             CoroutineInstrumentationModule,
-            FlowInstrumentationModule,
+            InteractionOperationInstrumentationModule,
             LogSpamInstrumentationModule,
+            CriticalIOInstrumentationModule,
+            DatabaseInstrumentationModule,
         ),
     )
 
@@ -473,7 +567,7 @@ internal object HookNearMissDiagnostics {
         "withTimeout",
         "withTimeoutOrNull",
     )
-    private val okHttpBuilderNames = setOf("eventListenerFactory", "build")
+    private val okHttpBuilderNames = setOf("eventListener", "eventListenerFactory", "build", "newCall")
 }
 
 private object OkHttpInstrumentationModule : InstrumentationModule {
@@ -483,7 +577,9 @@ private object OkHttpInstrumentationModule : InstrumentationModule {
     override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.okHttp
     private val intents = setOf(
         HookIntent.WrapOkHttpEventListenerFactory.id,
+        HookIntent.InstallOkHttpEventListener.id,
         HookIntent.InstallOkHttpEventListenerFactory.id,
+        HookIntent.GuardOkHttpNewCall.id,
     )
 
     override fun enabled(config: HookConfig): Boolean = config.okhttp
@@ -560,13 +656,13 @@ private object CoroutineInstrumentationModule : InstrumentationModule {
     override fun enabled(config: HookConfig): Boolean = config.coroutines
 }
 
-private object FlowInstrumentationModule : InstrumentationModule {
-    override val id: String = "flow"
-    override val family: String = "flow"
+private object InteractionOperationInstrumentationModule : InstrumentationModule {
+    override val id: String = "interaction-operation"
+    override val family: String = "interaction-operation"
     override val priority: Int = 500
-    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.flows
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.interactionOperations
 
-    override fun enabled(config: HookConfig): Boolean = config.flowInteractions
+    override fun enabled(config: HookConfig): Boolean = config.interactionOperations
 }
 
 private object LogSpamInstrumentationModule : InstrumentationModule {
@@ -577,3 +673,209 @@ private object LogSpamInstrumentationModule : InstrumentationModule {
 
     override fun enabled(config: HookConfig): Boolean = config.logSpam
 }
+
+private object CriticalIOInstrumentationModule : InstrumentationModule {
+    override val id: String = "critical_io"
+    override val family: String = "io"
+    override val priority: Int = 700
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.io
+
+    override fun enabled(config: HookConfig): Boolean = config.ioTracing
+}
+
+private object DatabaseInstrumentationModule : InstrumentationModule {
+    override val id: String = "database"
+    override val family: String = "database"
+    override val priority: Int = 710
+    override val bridges: List<VersionedInstrumentationBridge> = VersionedBridgeCatalog.database
+    override val needsControlFlow: Boolean = true
+
+    override fun enabled(config: HookConfig): Boolean = config.databaseTracing
+
+    override fun relevant(call: MethodCall): Boolean {
+        return databaseIntent(call) != null || bridges.any { it.relevant(call) }
+    }
+
+    override fun match(call: MethodCall, config: HookConfig): HookDecision {
+        val intent = databaseIntent(call) ?: return HookDecision.NotMatched
+        if (!enabled(config)) return HookDecision.Disabled(id, family, "disabled_by_gate")
+        val matched = bridges.firstNotNullOfOrNull { it.match(call) }
+            ?: return HookDecision.Unsupported(id, family, "unsupported_signature")
+        return HookDecision.Matched(intent, matched.signature.id, matched.bridgeId)
+    }
+}
+
+private fun databaseIntent(call: MethodCall): HookIntent? {
+    if (call.caller?.className?.let(::isDatabaseImplementationClass) == true) return null
+    val framework = databaseFramework(call) ?: return null
+    return databaseTransactionIntent(call, framework) ?: databaseCallIntent(call, framework)
+}
+
+private fun databaseCallIntent(
+    call: MethodCall,
+    framework: DatabaseFrameworkKind,
+): HookIntent.DatabaseCall? {
+    val operation = when {
+        call.name.startsWith("rawQuery") || call.name == "query" || call.name.startsWith("simpleQueryFor") ->
+            DatabaseOperationKind.QUERY
+        call.name.startsWith("insert") -> DatabaseOperationKind.INSERT
+        call.name.startsWith("update") -> DatabaseOperationKind.UPDATE
+        call.name.startsWith("delete") -> DatabaseOperationKind.DELETE
+        call.name in setOf("execSQL", "execute", "executeInsert", "executeUpdateDelete") ->
+            DatabaseOperationKind.EXECUTE
+        call.name == "compileStatement" -> DatabaseOperationKind.STATEMENT
+        call.matchesOwner(DATABASE_ROOM_INSERT_OWNERS) && call.name.startsWith("insert") ->
+            DatabaseOperationKind.INSERT
+        call.matchesOwner(DATABASE_ROOM_UPSERT_OWNERS) && call.name.startsWith("upsert") ->
+            DatabaseOperationKind.INSERT
+        call.matchesOwner(DATABASE_ROOM_MUTATION_OWNERS) && call.name.startsWith("handle") ->
+            DatabaseOperationKind.EXECUTE
+        else -> return null
+    }
+    val statementAction = when {
+        call.name == "compileStatement" -> DatabaseStatementAction.REGISTER
+        call.matchesOwner(DATABASE_STATEMENT_OWNERS) -> DatabaseStatementAction.EXECUTE
+        else -> DatabaseStatementAction.NONE
+    }
+    val resultCapture = when {
+        call.name == "executeInsert" ||
+            (call.name.startsWith("insert") || call.name.startsWith("upsert")) &&
+            Type.getReturnType(call.descriptor) == Type.LONG_TYPE ->
+            DatabaseResultCapture.INSERT_ROW_ID
+        call.name == "executeUpdateDelete" ||
+            (call.name.startsWith("update") || call.name.startsWith("delete") || call.name.startsWith("handle")) &&
+            Type.getReturnType(call.descriptor) == Type.INT_TYPE -> DatabaseResultCapture.AFFECTED_ROWS
+        else -> DatabaseResultCapture.NONE
+    }
+    return HookIntent.DatabaseCall(
+        framework,
+        operation,
+        call.databaseQuery,
+        call.databaseQueryArgument ?: databaseQueryArgumentIndex(call, framework),
+        if (operation == DatabaseOperationKind.QUERY) DatabaseBoundaryKind.DISPATCH else DatabaseBoundaryKind.EXECUTE,
+        resultCapture,
+        statementAction,
+    )
+}
+
+private fun databaseTransactionIntent(
+    call: MethodCall,
+    framework: DatabaseFrameworkKind,
+): HookIntent.DatabaseTransaction? {
+    if (!call.matchesOwner(DATABASE_TRANSACTION_OWNERS) || Type.getReturnType(call.descriptor) != Type.VOID_TYPE) {
+        return null
+    }
+    val action: DatabaseTransactionAction
+    val mode: DatabaseTransactionModeKind
+    when (call.name) {
+        "beginTransaction", "beginTransactionWithListener" -> {
+            action = DatabaseTransactionAction.BEGIN
+            mode = DatabaseTransactionModeKind.EXCLUSIVE
+        }
+        "beginTransactionNonExclusive", "beginTransactionWithListenerNonExclusive" -> {
+            action = DatabaseTransactionAction.BEGIN
+            mode = DatabaseTransactionModeKind.IMMEDIATE
+        }
+        "setTransactionSuccessful" -> {
+            action = DatabaseTransactionAction.MARK_SUCCESSFUL
+            mode = DatabaseTransactionModeKind.UNKNOWN
+        }
+        "endTransaction" -> {
+            action = DatabaseTransactionAction.END
+            mode = DatabaseTransactionModeKind.UNKNOWN
+        }
+        else -> return null
+    }
+    return HookIntent.DatabaseTransaction(framework, action, mode)
+}
+
+private fun databaseFramework(call: MethodCall): DatabaseFrameworkKind? {
+    return when {
+        call.matchesOwner(DATABASE_ROOM_OWNERS) -> DatabaseFrameworkKind.ROOM
+        call.matchesOwner(DATABASE_SUPPORT_SQLITE_OWNERS) -> DatabaseFrameworkKind.SUPPORT_SQLITE
+        call.matchesOwner(DATABASE_PLATFORM_SQLITE_OWNERS) -> DatabaseFrameworkKind.SQLITE
+        else -> null
+    }
+}
+
+private fun databaseQueryArgumentIndex(
+    call: MethodCall,
+    framework: DatabaseFrameworkKind,
+): Int? {
+    val owner = when (framework) {
+        DatabaseFrameworkKind.SQLITE -> "android/database/sqlite/SQLiteDatabase"
+        DatabaseFrameworkKind.SUPPORT_SQLITE -> "androidx/sqlite/db/SupportSQLiteDatabase"
+        DatabaseFrameworkKind.ROOM -> "androidx/room/RoomDatabase"
+    }
+    return databaseQueryArgumentIndex(owner, call.name, call.descriptor)
+}
+
+internal fun databaseQueryArgumentIndex(owner: String, name: String, descriptor: String): Int? {
+    val candidate = when (owner) {
+        "android/database/sqlite/SQLiteDatabase" -> when (name) {
+            "rawQuery", "execSQL", "compileStatement" -> 0
+            "rawQueryWithFactory" -> 1
+            else -> return null
+        }
+        "androidx/sqlite/db/SupportSQLiteDatabase",
+        "androidx/room/RoomDatabase",
+        -> when (name) {
+            "query", "execSQL", "compileStatement" -> 0
+            else -> return null
+        }
+        else -> return null
+    }
+    val arguments = Type.getArgumentTypes(descriptor)
+    return candidate.takeIf { index ->
+        index < arguments.size && arguments[index].sort == Type.OBJECT &&
+            arguments[index].internalName == "java/lang/String"
+    }
+}
+
+internal fun isDatabaseImplementationClass(className: String): Boolean {
+    val normalized = className.replace('/', '.')
+    return DATABASE_IMPLEMENTATION_PACKAGES.any { packageName ->
+        normalized == packageName ||
+            normalized.length > packageName.length && normalized.startsWith(packageName) &&
+            normalized[packageName.length] == '.'
+    }
+}
+
+private val DATABASE_IMPLEMENTATION_PACKAGES = arrayOf(
+    // Generated DAO implementations live in the application's package and remain observable.
+    // These packages contain delegated infrastructure where the same physical query is repeated.
+    "androidx.room",
+    "androidx.sqlite",
+)
+
+private val DATABASE_PLATFORM_SQLITE_OWNERS = setOf(
+    "android/database/sqlite/SQLiteDatabase",
+    "android/database/sqlite/SQLiteStatement",
+)
+
+private val DATABASE_SUPPORT_SQLITE_OWNERS = setOf(
+    "androidx/sqlite/db/SupportSQLiteDatabase",
+    "androidx/sqlite/db/SupportSQLiteStatement",
+)
+
+private val DATABASE_ROOM_OWNERS = setOf(
+    "androidx/room/RoomDatabase",
+    "androidx/room/EntityInsertAdapter",
+    "androidx/room/EntityUpsertAdapter",
+    "androidx/room/EntityDeleteOrUpdateAdapter",
+)
+
+private val DATABASE_ROOM_INSERT_OWNERS = setOf("androidx/room/EntityInsertAdapter")
+private val DATABASE_ROOM_UPSERT_OWNERS = setOf("androidx/room/EntityUpsertAdapter")
+private val DATABASE_ROOM_MUTATION_OWNERS = setOf("androidx/room/EntityDeleteOrUpdateAdapter")
+
+private val DATABASE_STATEMENT_OWNERS = setOf(
+    "android/database/sqlite/SQLiteStatement",
+    "androidx/sqlite/db/SupportSQLiteStatement",
+)
+
+private val DATABASE_TRANSACTION_OWNERS = setOf(
+    "android/database/sqlite/SQLiteDatabase",
+    "androidx/sqlite/db/SupportSQLiteDatabase",
+    "androidx/room/RoomDatabase",
+)

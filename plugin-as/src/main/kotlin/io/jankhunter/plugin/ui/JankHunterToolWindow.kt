@@ -335,7 +335,7 @@ class JankHunterToolWindow(
             candidate = paths(candidateLogs),
             candidateLogScope = JankHunterLogScope.ALL_SELECTED,
             output = output.path,
-            ownerMap = advanced.ownerMap,
+            artifactsDir = advanced.artifactsDir,
             mapping = advanced.mapping,
             classGraph = advanced.classGraph,
             diagnostics = advanced.diagnostics,

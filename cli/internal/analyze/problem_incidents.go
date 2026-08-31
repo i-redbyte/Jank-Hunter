@@ -33,8 +33,8 @@ func buildProblemIncidents(findings []ProblemFinding) []ProblemFinding {
 		if problemSeverityRank(incidents[i].Severity) != problemSeverityRank(incidents[j].Severity) {
 			return problemSeverityRank(incidents[i].Severity) > problemSeverityRank(incidents[j].Severity)
 		}
-		if incidents[i].RiskScore != incidents[j].RiskScore {
-			return incidents[i].RiskScore > incidents[j].RiskScore
+		if incidents[i].InvestigationPriority != incidents[j].InvestigationPriority {
+			return incidents[i].InvestigationPriority > incidents[j].InvestigationPriority
 		}
 		if problemConfidenceRank(incidents[i].Confidence) != problemConfidenceRank(incidents[j].Confidence) {
 			return problemConfidenceRank(incidents[i].Confidence) > problemConfidenceRank(incidents[j].Confidence)
@@ -57,7 +57,9 @@ func isUIIncidentSignal(finding ProblemFinding) bool {
 	return finding.Category == ProblemCategoryUI ||
 		finding.DetectorID == "stability.main_thread_stall" ||
 		finding.DetectorID == "io.main_thread" ||
-		finding.DetectorID == "io.room_main_thread"
+		finding.DetectorID == "io.room_main_thread" ||
+		(finding.DetectorID == "io.database_calls" &&
+			finding.Subcategory == "database_main_thread_ui_linked")
 }
 
 func incidentScreen(locations []ProblemLocation) string {
@@ -74,7 +76,8 @@ func mergeProblemIncident(key string, findings []ProblemFinding) ProblemFinding 
 	if len(findings) == 1 {
 		result := findings[0]
 		result.RelatedFindings = []string{result.ID}
-		result.RelatedCategories = []string{result.Category}
+		result.RelatedCategories = uniqueStrings(append(result.RelatedCategories, result.Category))
+		sort.Strings(result.RelatedCategories)
 		if strings.HasPrefix(key, "ui-screen\x00") {
 			result.Fingerprint = incidentFingerprint(key)
 			result.ID = "incident-" + result.Fingerprint[:16]
@@ -82,19 +85,19 @@ func mergeProblemIncident(key string, findings []ProblemFinding) ProblemFinding 
 		return result
 	}
 	primary := findings[0]
-	highestRisk := findings[0]
+	highestPriority := findings[0]
 	for _, finding := range findings[1:] {
 		if preferIncidentPrimary(finding, primary) {
 			primary = finding
 		}
-		if preferProblemFinding(finding, highestRisk) {
-			highestRisk = finding
+		if preferProblemFinding(finding, highestPriority) {
+			highestPriority = finding
 		}
 	}
 	result := primary
-	result.RiskScore = highestRisk.RiskScore
-	result.Severity = highestRisk.Severity
-	result.RankBreakdown = append([]ProblemRiskComponent(nil), highestRisk.RankBreakdown...)
+	result.InvestigationPriority = highestPriority.InvestigationPriority
+	result.Severity = highestPriority.Severity
+	result.PriorityBreakdown = append([]ProblemPriorityComponent(nil), highestPriority.PriorityBreakdown...)
 	result.Confidence = bestIncidentConfidence(findings)
 	result.ConfidenceReasons = nil
 	result.Where = nil
@@ -110,6 +113,7 @@ func mergeProblemIncident(key string, findings []ProblemFinding) ProblemFinding 
 	for _, finding := range findings {
 		ids = append(ids, finding.ID)
 		result.RelatedCategories = append(result.RelatedCategories, finding.Category)
+		result.RelatedCategories = append(result.RelatedCategories, finding.RelatedCategories...)
 		if finding.Confidence == result.Confidence {
 			result.ConfidenceReasons = append(result.ConfidenceReasons, finding.ConfidenceReasons...)
 		}
@@ -132,25 +136,37 @@ func mergeProblemIncident(key string, findings []ProblemFinding) ProblemFinding 
 	sort.Strings(result.RelatedCategories)
 	result.ConfidenceReasons = uniqueStrings(result.ConfidenceReasons)
 	result.Impact = uniqueStrings(result.Impact)
-	result.Limitations = uniqueStrings(result.Limitations)
-	if applicationLocations := applicationProblemLocations(result.Where); len(applicationLocations) > 0 {
-		result.Where = applicationLocations
-	}
+	result.Limitations = uniqueStrings(append(
+		result.Limitations,
+		"Сигналы объединены по экрану; это не доказывает совпадение по времени или причинную связь между отдельными сигналами.",
+	))
+	sort.SliceStable(result.Where, func(i, j int) bool {
+		return locationHasApplicationSymbol(result.Where[i]) && !locationHasApplicationSymbol(result.Where[j])
+	})
 	result.Fingerprint = incidentFingerprint(key)
 	result.ID = "incident-" + result.Fingerprint[:16]
 	screen := incidentScreen(result.Where)
 	result.Title = incidentTitle(screen, findings)
 	result.WhatHappened = fmt.Sprintf(
-		"На экране %s объединено %s. Ниже сохранены измерения и места в коде каждого сигнала.",
+		"На экране %s объединено %s. Группировка сохраняет все измерения и места в коде, но сама по себе не означает, что события совпали по времени.",
 		displayUnknown(screen, "без атрибуции"),
 		russianCountUint64(uint64(len(findings)), "связанный сигнал", "связанных сигнала", "связанных сигналов"),
 	)
 	result.Why = ProblemWhy{
 		ClaimLevel: "correlated",
-		Summary:    "Сигналы относятся к одному экрану и расследуются вместе. Начните с классов приложения; системные классы оставлены только как контекст стека.",
+		Summary:    incidentWhySummary(findings),
 		Factors:    factors,
 	}
 	return result
+}
+
+func incidentWhySummary(findings []ProblemFinding) string {
+	for _, finding := range findings {
+		if finding.DetectorID == "stability.main_thread_stall" {
+			return "Остановки главного потока подтверждены прямыми измерениями, а снимки стека показывают, где поток находился во время каждой паузы. Остальные сигналы относятся к тому же экрану, но это не доказывает совпадение по времени и не устанавливает единую первопричину подтормаживаний."
+		}
+	}
+	return "Сигналы измерены на одном экране и собраны в общий маршрут расследования. Без общего интервала или идентификатора события это не доказывает совпадение по времени и не устанавливает единую первопричину."
 }
 
 func preferIncidentPrimary(candidate, current ProblemFinding) bool {
@@ -166,7 +182,16 @@ func preferIncidentPrimary(candidate, current ProblemFinding) bool {
 }
 
 func problemClaimRank(value string) int {
-	return map[string]int{"unknown": 0, "hypothesis": 1, "correlated": 2, "linked": 3}[value]
+	switch value {
+	case "hypothesis":
+		return 1
+	case "correlated":
+		return 2
+	case "linked":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func findingHasApplicationLocation(finding ProblemFinding) bool {
@@ -180,14 +205,8 @@ func findingHasApplicationLocation(finding ProblemFinding) bool {
 	return false
 }
 
-func applicationProblemLocations(locations []ProblemLocation) []ProblemLocation {
-	result := make([]ProblemLocation, 0, len(locations))
-	for _, location := range locations {
-		if isApplicationSymbol(location.Class) || isApplicationSymbol(location.Method) || isApplicationSymbol(location.Owner) {
-			result = append(result, location)
-		}
-	}
-	return result
+func locationHasApplicationSymbol(location ProblemLocation) bool {
+	return isApplicationSymbol(location.Class) || isApplicationSymbol(location.Method) || isApplicationSymbol(location.Owner)
 }
 
 func isApplicationSymbol(value string) bool {
@@ -241,11 +260,11 @@ func incidentTitle(screen string, findings []ProblemFinding) string {
 	screen = displayUnknown(screen, "без атрибуции")
 	switch {
 	case hasJank && hasStall:
-		return fmt.Sprintf("Экран %s: подтормаживания совпали с остановками главного потока", screen)
+		return fmt.Sprintf("Экран %s: зафиксированы подтормаживания и остановки главного потока", screen)
 	case hasJank && hasCompose:
-		return fmt.Sprintf("Экран %s: подтормаживания совпали с тяжёлой Compose-работой", screen)
+		return fmt.Sprintf("Экран %s: зафиксированы подтормаживания и тяжёлая Compose-работа", screen)
 	case hasCompose && hasStall:
-		return fmt.Sprintf("Экран %s: тяжёлая UI-работа совпала с остановками главного потока", screen)
+		return fmt.Sprintf("Экран %s: зафиксированы тяжёлая UI-работа и остановки главного потока", screen)
 	case hasJank:
 		return fmt.Sprintf("Экран %s: несколько связанных причин подтормаживаний", screen)
 	case hasStall:

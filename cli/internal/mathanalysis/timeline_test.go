@@ -274,8 +274,8 @@ func writeTimelineFixture(t *testing.T) string {
 		{Kind: jhlog.DictBuild, ID: 5, Value: "100"},
 		{Kind: jhlog.DictDevice, ID: 6, Value: "Pixel"},
 		{Kind: jhlog.DictOwner, ID: 8, Value: "jankhunter.heap_dump"},
-		{Kind: jhlog.DictFlow, ID: 9, Value: "jankhunter.diagnostics"},
-		{Kind: jhlog.DictStep, ID: 10, Value: "heap_dump"},
+		{Kind: jhlog.DictGeneric, ID: 9, Value: "jankhunter.diagnostics"},
+		{Kind: jhlog.DictGeneric, ID: 10, Value: "heap_dump"},
 	}
 	for _, entry := range entries {
 		if err := writer.WriteEvent(jhlog.Event{Type: jhlog.EventDictionary, Dictionary: &entry}); err != nil {
@@ -291,7 +291,7 @@ func writeTimelineFixture(t *testing.T) string {
 		{Type: jhlog.EventUIWindow, TimeMS: 1600, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(3)}, UIWindow: typedUIWindow(1000, 60, 6, 22)},
 		{Type: jhlog.EventMemory, TimeMS: 2400, Memory: &jhlog.MemoryEvent{PSSKB: 123000, JavaHeapKB: 32000, NativeHeapKB: 18000}},
 		{Type: jhlog.EventContext, TimeMS: 2500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 90, AvailMemoryKB: 1000, RxBytes: 1000, TxBytes: 200}},
-		{Type: jhlog.EventStall, TimeMS: 2700, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(8), Flow: jhlog.LocalSymbol(9), Step: jhlog.LocalSymbol(10)}, Stall: &jhlog.StallEvent{DurationMS: 2_500}},
+		{Type: jhlog.EventStall, TimeMS: 2700, Attribution: jhlog.AttributionContext{Present: true, Owner: jhlog.LocalSymbol(8)}, Stall: &jhlog.StallEvent{DurationMS: 2_500}},
 		{Type: jhlog.EventUIWindow, TimeMS: 3200, Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(3)}, UIWindow: typedUIWindow(500, 30, 3, 28)},
 		{Type: jhlog.EventContext, TimeMS: 3500, Context: &jhlog.ContextEvent{Network: jhlog.NetworkWiFi, BatteryPct: 89, AvailMemoryKB: 900, RxBytes: 1600, TxBytes: 260}},
 	}

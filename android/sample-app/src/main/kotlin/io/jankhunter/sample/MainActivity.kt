@@ -1,5 +1,7 @@
 package io.jankhunter.sample
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -104,7 +106,7 @@ internal class MainActivity : ComponentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         window.decorView.post {
-            JankHunter.setScreen(scenarioViewModel.currentScreenName())
+            JankHunterTelemetry.setScreen(scenarioViewModel.currentScreenName())
         }
     }
 

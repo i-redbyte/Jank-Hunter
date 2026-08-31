@@ -14,14 +14,14 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.LockSupport
 
 internal class RuntimeHookEventTransport(
-    private val maxCounterKeys: () -> Int,
-    private val maxLogSpamKeys: () -> Int,
-    private val exactAdmission: () -> Boolean = { true },
+    private val maxCounterKeys: RuntimeIntSource,
+    private val maxLogSpamKeys: RuntimeIntSource,
+    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
     private val consumerDelayNanos: Long = 0L,
     private val publisherAdmissionObserver: (() -> Unit)? = null,
     private val consumerLoopObserver: (() -> Unit)? = null,
 ) {
-    private val threadState = ThreadLocal<ProducerState>()
+    private val threadBuffer = ThreadLocal<WeakReference<EventBuffer>>()
     private val buffers = ConcurrentLinkedQueue<EventBuffer>()
     private val epoch = AtomicLong(1L)
     private val running = AtomicBoolean(false)
@@ -57,7 +57,7 @@ internal class RuntimeHookEventTransport(
         }
     }
 
-    fun recordMethod(methodId: Long, methodName: String?): Boolean {
+    fun recordMethod(methodId: Long, methodName: String): Boolean {
         return publish { buffer, slot ->
             buffer.types[slot] = TYPE_METHOD
             buffer.ids[slot] = methodId
@@ -66,16 +66,15 @@ internal class RuntimeHookEventTransport(
     }
 
     fun recordLogSpam(
-        screen: String?, owner: String?, flow: String?, step: String?, source: String?, level: Int,
+        screen: String?, owner: String?, source: String?, level: Int, operationId: Long = 0L,
     ): Boolean {
         return publish { buffer, slot ->
             buffer.types[slot] = TYPE_LOG_SPAM
             buffer.screens[slot] = screen
             buffer.owners[slot] = owner
-            buffer.flows[slot] = flow
-            buffer.steps[slot] = step
             buffer.names[slot] = source
             buffer.levels[slot] = level
+            buffer.ids[slot] = operationId.coerceAtLeast(0L)
         }
     }
 
@@ -101,7 +100,7 @@ internal class RuntimeHookEventTransport(
         closePublisherGate()
         running.set(false)
         LockSupport.unpark(active)
-        val exact = exactAdmission()
+        val exact = exactAdmission.getAsBoolean()
         val deadline = if (exact) Long.MAX_VALUE else {
             System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
         }
@@ -130,7 +129,7 @@ internal class RuntimeHookEventTransport(
         running.set(false)
         consumer?.let(LockSupport::unpark)
         clearRegistry()
-        threadState.remove()
+        threadBuffer.remove()
         writer = null
         consumer = null
         clearCounters()
@@ -157,9 +156,8 @@ internal class RuntimeHookEventTransport(
                 recordPreAdmissionLoss(bufferLoss)
                 return false
             }
-            val state = producerState()
-            val buffer = state.buffer
-            val exact = exactAdmission()
+            val buffer = producerBuffer()
+            val exact = exactAdmission.getAsBoolean()
             var position = buffer.sequencer.tryClaimProducer()
             if (position == SpscSlotSequencer.NO_POSITION && !exact) {
                 recordPreAdmissionLoss(bufferLoss)
@@ -186,7 +184,7 @@ internal class RuntimeHookEventTransport(
                 backpressureNanos.addAndGet((System.nanoTime() - blockedAtNs).coerceAtLeast(1L))
             }
             val slot = buffer.sequencer.slotIndex(position)
-            buffer.epochs[slot] = state.epoch
+            buffer.epochs[slot] = buffer.epoch
             write(buffer, slot)
             buffer.sequencer.publish(position)
             buffer.recordAccepted()
@@ -220,17 +218,18 @@ internal class RuntimeHookEventTransport(
 
     private fun activePublisherCount(): Long = publisherState.get() and PUBLISHER_COUNT_MASK
 
-    private fun producerState(): ProducerState {
+    private fun producerBuffer(): EventBuffer {
         val currentEpoch = epoch.get()
-        threadState.get()?.takeIf { it.epoch == currentEpoch }?.let { return it }
-        val buffer = EventBuffer(Thread.currentThread())
+        threadBuffer.get()?.get()?.takeIf { it.epoch == currentEpoch }?.let { return it }
+        val buffer = EventBuffer(Thread.currentThread(), currentEpoch)
         buffers.add(buffer)
-        return ProducerState(currentEpoch, buffer).also(threadState::set)
+        threadBuffer.set(WeakReference(buffer))
+        return buffer
     }
 
     private fun runConsumerFailOpen() {
-        val methods = HashMap<Long, MethodCounter>()
-        val logs = HashMap<LogSpamKey, Long>()
+        val methods = MethodCounterAccumulator(maxCounterKeys.getAsInt().coerceAtLeast(1))
+        val logs = LogSpamAccumulator(maxLogSpamKeys.getAsInt().coerceAtLeast(1))
         try {
             try {
                 Process.setThreadPriority(EVENT_CONSUMER_PRIORITY)
@@ -277,7 +276,7 @@ internal class RuntimeHookEventTransport(
         }
     }
 
-    private fun drain(methods: MutableMap<Long, MethodCounter>, logs: MutableMap<LogSpamKey, Long>): Int {
+    private fun drain(methods: MethodCounterAccumulator, logs: LogSpamAccumulator): Int {
         var drained = 0
         for (buffer in buffers) {
             var fromBuffer = 0
@@ -317,66 +316,76 @@ internal class RuntimeHookEventTransport(
         }
     }
 
-    private fun drainAll(methods: MutableMap<Long, MethodCounter>, logs: MutableMap<LogSpamKey, Long>) {
+    private fun drainAll(methods: MethodCounterAccumulator, logs: LogSpamAccumulator) {
         while (drain(methods, logs) > 0) Unit
     }
 
-    private fun aggregateMethod(buffer: EventBuffer, slot: Int, target: MutableMap<Long, MethodCounter>) {
+    private fun aggregateMethod(buffer: EventBuffer, slot: Int, target: MethodCounterAccumulator) {
         val id = buffer.ids[slot]
-        target[id]?.let {
-            if (it.name == null && buffer.names[slot] != null) it.name = buffer.names[slot]
-            it.count = saturatingAdd(it.count, 1L)
-            return
-        }
-        if (target.size >= maxCounterKeys().coerceAtLeast(1)) emitMethods(target)
-        target[id] = MethodCounter(buffer.names[slot], 1L)
+        val name = checkNotNull(buffer.names[slot])
+        if (target.add(id, name)) return
+        emitMethods(target)
+        if (!target.add(id, name)) recordAcceptedLoss(writerLoss)
     }
 
-    private fun aggregateLog(buffer: EventBuffer, slot: Int, target: MutableMap<LogSpamKey, Long>) {
-        val key = LogSpamKey(
-            buffer.screens[slot], buffer.owners[slot], buffer.flows[slot], buffer.steps[slot],
-            buffer.names[slot], buffer.levels[slot],
-        )
-        target[key]?.let {
-            target[key] = saturatingAdd(it, 1L)
+    private fun aggregateLog(buffer: EventBuffer, slot: Int, target: LogSpamAccumulator) {
+        if (target.add(
+                buffer.screens[slot], buffer.owners[slot], buffer.names[slot],
+                buffer.levels[slot], buffer.ids[slot],
+            )
+        ) {
             return
         }
-        if (target.size >= maxLogSpamKeys().coerceAtLeast(1)) emitLogs(target)
-        target[key] = 1L
+        emitLogs(target)
+        if (!target.add(
+                buffer.screens[slot], buffer.owners[slot], buffer.names[slot],
+                buffer.levels[slot], buffer.ids[slot],
+            )
+        ) {
+            recordAcceptedLoss(writerLoss)
+        }
     }
 
-    private fun emit(methods: MutableMap<Long, MethodCounter>, logs: MutableMap<LogSpamKey, Long>) {
+    private fun emit(methods: MethodCounterAccumulator, logs: LogSpamAccumulator) {
         emitMethods(methods)
         emitLogs(logs)
     }
 
-    private fun emitMethods(methods: MutableMap<Long, MethodCounter>) {
-        val activeWriter = writer
-        val iterator = methods.iterator()
-        while (iterator.hasNext()) {
-            val batch = StableCounterBatch(MAX_BATCH_SIZE)
-            while (iterator.hasNext() && batch.size < MAX_BATCH_SIZE) {
-                val entry = iterator.next()
-                batch.add(entry.key, entry.value.name, entry.value.count)
-                iterator.remove()
+    private fun emitMethods(methods: MethodCounterAccumulator) {
+        var batch = StableCounterBatch(MAX_BATCH_SIZE)
+        methods.drain { id, name, count ->
+            if (batch.size == MAX_BATCH_SIZE) {
+                emitMethodBatch(batch)
+                batch = StableCounterBatch(MAX_BATCH_SIZE)
             }
-            val logicalCount = batch.logicalEventCount()
-            val admitted = try { activeWriter?.stableCounters(batch) == true } catch (_: Throwable) { false }
-            if (admitted) emitted.addAndGet(logicalCount) else recordAcceptedLoss(writerLoss, logicalCount)
+            batch.add(id, name, count)
         }
+        if (batch.size > 0) emitMethodBatch(batch)
     }
 
-    private fun emitLogs(logs: MutableMap<LogSpamKey, Long>) {
+    private fun emitMethodBatch(batch: StableCounterBatch) {
+        val logicalCount = batch.logicalEventCount()
+        val admitted = try { writer?.stableCounters(batch) == true } catch (_: Throwable) { false }
+        if (admitted) emitted.addAndGet(logicalCount) else recordAcceptedLoss(writerLoss, logicalCount)
+    }
+
+    private fun emitLogs(logs: LogSpamAccumulator) {
         val activeWriter = writer
-        logs.forEach { (key, count) ->
+        logs.drain { screen, owner, source, level, operationId, count ->
             val admitted = try {
-                activeWriter?.logSpam(key.screen, key.owner, key.flow, key.step, key.source, key.level, count) == true
+                activeWriter?.logSpam(
+                    screen,
+                    owner,
+                    operationId,
+                    source,
+                    level,
+                    count,
+                ) == true
             } catch (_: Throwable) {
                 false
             }
             if (admitted) emitted.addAndGet(count) else recordAcceptedLoss(writerLoss, count)
         }
-        logs.clear()
     }
 
     private fun flushQuality() {
@@ -409,11 +418,8 @@ internal class RuntimeHookEventTransport(
         return result
     }
 
-    private fun aggregateCount(methods: Map<Long, MethodCounter>, logs: Map<LogSpamKey, Long>): Long {
-        var result = 0L
-        methods.values.forEach { result = saturatingAdd(result, it.count) }
-        logs.values.forEach { result = saturatingAdd(result, it) }
-        return result
+    private fun aggregateCount(methods: MethodCounterAccumulator, logs: LogSpamAccumulator): Long {
+        return saturatingAdd(methods.logicalEventCount(), logs.logicalEventCount())
     }
 
     private fun reclaimDeadBuffers() {
@@ -448,9 +454,7 @@ internal class RuntimeHookEventTransport(
         producerWakePending.set(false)
     }
 
-    private class ProducerState(val epoch: Long, val buffer: EventBuffer)
-
-    private class EventBuffer(thread: Thread) {
+    private class EventBuffer(thread: Thread, val epoch: Long) {
         val owner = WeakReference(thread)
         val sequencer = SpscSlotSequencer(BUFFER_CAPACITY)
         val types = ByteArray(BUFFER_CAPACITY)
@@ -460,8 +464,6 @@ internal class RuntimeHookEventTransport(
         val names = arrayOfNulls<String>(BUFFER_CAPACITY)
         val screens = arrayOfNulls<String>(BUFFER_CAPACITY)
         val owners = arrayOfNulls<String>(BUFFER_CAPACITY)
-        val flows = arrayOfNulls<String>(BUFFER_CAPACITY)
-        val steps = arrayOfNulls<String>(BUFFER_CAPACITY)
 
         @Volatile var producerWaiting = false
         @Volatile private var producerAccepted = 0L
@@ -476,25 +478,15 @@ internal class RuntimeHookEventTransport(
             names[index] = null
             screens[index] = null
             owners[index] = null
-            flows[index] = null
-            steps[index] = null
         }
 
         fun clearAll() {
             names.fill(null)
             screens.fill(null)
             owners.fill(null)
-            flows.fill(null)
-            steps.fill(null)
             producerAccepted = 0L
         }
     }
-
-    private class MethodCounter(var name: String?, var count: Long)
-    private data class LogSpamKey(
-        val screen: String?, val owner: String?, val flow: String?, val step: String?,
-        val source: String?, val level: Int,
-    )
 
     private companion object {
         const val CONSUMER_NAME = "JankHunterEvents"

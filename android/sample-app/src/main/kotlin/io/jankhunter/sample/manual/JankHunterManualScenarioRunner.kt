@@ -1,5 +1,7 @@
 package io.jankhunter.sample.manual
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.LeakCanaryBridge
 import io.jankhunter.sample.R
 import io.jankhunter.sample.SampleApplication
@@ -49,8 +51,7 @@ internal class JankHunterManualScenarioRunner(
 
     private fun runCleanBaseline() {
         application.resetScenario()
-        JankHunter.withFlow("sample.guided.baseline") {
-            JankHunter.markFlowStep("clean_probe")
+        JankHunterTelemetry.traceOperation("sample.guided.baseline.clean_probe") {
             performance.recordCustomMetrics()
             retention.recordCleanObject()
         }
@@ -59,8 +60,7 @@ internal class JankHunterManualScenarioRunner(
     }
 
     private fun runNoisyCandidate(activityReference: Any) {
-        JankHunter.withFlow("sample.guided.candidate") {
-            JankHunter.markFlowStep("regression_pack")
+        JankHunterTelemetry.traceOperation("sample.guided.candidate.regression_pack") {
             performance.recordUiStall()
             performance.recordMemoryPressure()
             retention.recordCacheEntries()

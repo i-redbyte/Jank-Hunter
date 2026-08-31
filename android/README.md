@@ -9,6 +9,7 @@ Android-часть Jank Hunter отвечает за сбор сигналов �
 - `jankhunter-annotations`: лёгкие аннотации для атрибуции и управления ASM-внедрением.
 - `jankhunter-runtime`: Android-библиотека сбора сигналов и записи `.jhlog`.
 - `jankhunter-okhttp3`: слушатель OkHttp и помощники для WebSocket.
+- `jankhunter-workmanager`: опциональные enqueue/lifecycle API и базовые Worker/CoroutineWorker.
 - `jankhunter-android-sdk`: единая публичная зависимость, которая транзитивно подключает runtime, annotations и OkHttp/WebSocket support.
 - `jankhunter-gradle-plugin`: Gradle-плагин, который добавляет настройки манифеста, создаёт карту владельцев, граф классов, диагностику ASM и внедряет перехватчики в байткод.
 - `sample-app`: пример приложения для ручной проверки, утечек, сравнения прогонов и демонстрации отчётов.
@@ -19,15 +20,16 @@ Android-часть Jank Hunter отвечает за сбор сигналов �
 
 ```kotlin
 plugins {
-    id("io.jankhunter.android") version "1.0.0"
+    id("io.jankhunter.android") version "1.0.7"
 }
 dependencies {
-    implementation("io.jankhunter:jankhunter-android-sdk:1.0.0")
+    implementation("io.jankhunter:jankhunter-android-sdk:1.0.7")
 }
 ```
 
-Это единственная пользовательская dependency: SDK экспортирует runtime, annotations и
-OkHttp/WebSocket support. Плагин проверяет её наличие до ASM и останавливает небезопасное
+Это единственная обязательная пользовательская dependency: SDK экспортирует runtime, annotations и
+OkHttp/WebSocket support. WorkManager-интеграция подключается отдельно и не добавляет WorkManager
+транзитивно. Плагин проверяет runtime до ASM и останавливает небезопасное
 внедрение, если dependency resolution был вручную изменён.
 
 Для каждого включённого application-варианта плагин создаёт manifest metadata с `io.jankhunter.enabled=true` и runtime-настройками. `io.jankhunter.runtime.JankHunterAutoInitProvider` добавляется в этот манифест только при `autoInit = true`; при `autoInit = false` настройки сохраняются для ручного `JankHunter.init(...)`, но provider не генерируется. Library-модули и выключенные варианты не получают ни runtime manifest, ни provider.
@@ -35,14 +37,14 @@ OkHttp/WebSocket support. Плагин проверяет её наличие д
 При фактической сборке любого включённого application-варианта Gradle один раз выводит заметный баннер с версией Jank Hunter. Он не зависит от `verboseLogs`; выключенные варианты его не выводят:
 
 ```text
-================JANK HUNTER 1.0.0 ENABLED================
+================JANK HUNTER 1.0.7 ENABLED================
 ```
 
 Без Gradle-плагина можно подключить runtime вручную и вызвать `JankHunter.init(...)`:
 
 ```kotlin
 dependencies {
-    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.0")
+    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.7")
 }
 ```
 
@@ -173,7 +175,7 @@ scripts/integrate-android-project.sh ~/work/MyApp --verify
 scripts/integrate-android-project.sh ~/work/MyApp --dry-run
 ```
 
-## Атрибуция Кода И Сценариев
+## Атрибуция Кода И Операций
 
 Явный владелец работы:
 
@@ -183,26 +185,39 @@ JankHunter.withOwner("FeedRepository.refresh") {
 }
 ```
 
-Сценарий и шаг:
+Синхронная операция и вложенные этапы:
 
 ```kotlin
-JankHunter.withFlow("checkout.open") {
-    JankHunter.markFlowStep("network")
-    repository.loadCheckout()
-
-    JankHunter.markFlowStep("render_list")
-    adapter.submitList(items)
+JankHunter.traceOperation(
+    name = "checkout.open",
+    kind = JankHunterOperationKind.SCREEN,
+    budgetMs = 800,
+    attributes = JankHunterOperationAttributes.of("source", "cart"),
+) {
+    JankHunter.traceOperation("checkout.network", JankHunterOperationKind.STAGE, 300) {
+        repository.loadCheckout()
+    }
+    JankHunter.traceOperation("checkout.render", JankHunterOperationKind.STAGE, 200) {
+        adapter.submitList(items)
+    }
 }
 ```
+
+Для асинхронной работы сохраните результат `startOperation(...)` и завершите его ровно один раз
+через `success()`, `failure()`, `cancel()` или `timeout()`. Завершённый объект освобождает ссылки
+на контроллер, признаки и родительскую операцию.
 
 Аннотации нужны только на пути компиляции:
 
 ```kotlin
 import io.jankhunter.annotations.JankHunterIgnore
+import io.jankhunter.annotations.JankHunterOperation
+import io.jankhunter.annotations.JankHunterOperationKind
 import io.jankhunter.annotations.JankHunterOwner
 
 @JankHunterOwner("FeedRepository")
 class FeedRepository {
+    @JankHunterOperation("feed.refresh", JankHunterOperationKind.BACKGROUND, budgetMs = 500)
     fun refresh() {
         // Перехватчики внутри метода получат владельца FeedRepository.
     }
@@ -214,7 +229,9 @@ class FeedRepository {
 }
 ```
 
-`@JankHunterTrace`, `@JankHunterFlow` и `@JankHunterScreen` раскрываются Gradle-плагином в контекст выполнения. В отчётах они видны как экран, сценарий, шаг и трасса.
+`@JankHunterOperation` создаёт измеряемую операцию вокруг метода, а `@JankHunterScreen` задаёт
+экран для связанных сигналов. В отчёте операции группируются по названию, виду и экрану; отдельно
+показываются временные интервалы, признаки, этапы, превышения бюджета и неуспешные завершения.
 
 ## Gradle-Плагин И ASM
 
@@ -222,7 +239,6 @@ class FeedRepository {
 
 ```kotlin
 import io.jankhunter.gradle.JankHunterFeatureMode
-import io.jankhunter.gradle.JankHunterSymbolMode
 
 plugins {
     id("io.jankhunter.android")
@@ -233,14 +249,14 @@ plugins {
 
 ```kotlin
 jankHunter {
-    // Самодостаточный .jhlog: системному CLI не нужны файлы Gradle-сборки.
-    symbolMode = JankHunterSymbolMode.EMBEDDED
     enabled = true
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("qa")
     autoInit = true
     sessionLogSizeLimitEnabled = true
     maxSessionLogSizeMiB = 16
+    // По явному согласию удаляет накопленные файлы форматов до JHLOG 2.0.
+    deleteObsoleteJhlogFormats = true
     verboseLogs = false
     dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
 
@@ -266,11 +282,12 @@ jankHunter {
         handlers = true
         executors = true
         coroutines = false
-        flowInteractions = true
+        interactionOperations = true
         lifecycleLeaks = true
         logSpam = true
         classGraph = true
         runtimeCallGraph = false
+        workerTracing = true
         methodCounters = false
         includeWholeApplication = false
         asmProgressLog = false
@@ -281,6 +298,10 @@ jankHunter {
 }
 ```
 
+`deleteObsoleteJhlogFormats` по умолчанию выключен. При включении очистка выполняется до создания
+нового журнала, удаляет только файлы со старой схемой имени и не затрагивает текущие журналы
+JHLOG 2.0, активные файлы других процессов и произвольные пользовательские `.jhlog`.
+
 `instrument.okhttp` и `instrument.webSockets` используют support из единой
 `jankhunter-android-sdk`; отдельная `jankhunter-okhttp3` dependency не нужна.
 
@@ -288,6 +309,72 @@ jankHunter {
 Для проверки приватности используйте `releaseSafety.privacyReviewed`, `processNameRedactor`
 и redactor сетевых маршрутов; сами `.jhlog` файлы остаются локальными, пока приложение
 явно их не выгрузит.
+
+HTTP integration пишет одно типизированное событие на завершённый OkHttp `Call`: total и
+queue-to-first-I/O, DNS/connect/TLS/request/TTFB/response, точный status/protocol, попытки,
+неудачные connect/TLS попытки, redirects, cache/reuse/cancellation и byte counts с признаком
+известности. Host, query, IP и текст исключения в `.jhlog` не попадают. Для нескольких backend-ов
+задайте безопасный низкокардинальный alias на factory (он нормализуется и ограничивается):
+
+```kotlin
+builder.eventListenerFactory(
+    JankHunterEventListenerFactory(existingFactory, "mail-api"),
+)
+```
+
+При включённом runtime call graph событие также получает стабильный ASM ID верхнего app-метода
+в момент `callStart`; stacktrace для этого не строится.
+
+Синхронный `androidx.work.Worker.doWork()` инструментируется автоматически при
+`instrument.workerTracing = true`: `.jhlog` получает отдельные STARTED/FINISHED-события,
+результат, длительность и `runAttemptCount`. UUID WorkManager не сохраняется — runtime преобразует
+его в процессный приватный 64-битный ID и не удерживает объект Worker. Для enqueue и ручных
+интеграций доступны примитивные lifecycle API:
+
+```kotlin
+val instanceId = JankHunter.workerInstanceId(request.id.mostSignificantBits, request.id.leastSignificantBits)
+JankHunter.workerEnqueued(instanceId, periodic = false)
+
+val token = JankHunter.workerStarted(instanceId, "SyncContactsWorker", runAttemptCount)
+try {
+    // work
+    JankHunter.workerFinished(token, instanceId, "SyncContactsWorker", JankHunterWorkerOutcome.SUCCESS)
+} catch (error: Throwable) {
+    JankHunter.workerFinished(token, instanceId, "SyncContactsWorker", JankHunterWorkerOutcome.FAILURE)
+    throw error
+}
+```
+
+`recordWorker`, `traceWorker` и `traceSuspendingWorker` остаются компактными API для кода вне
+WorkManager; suspending-вариант измеряет выполнение до реального завершения корутины.
+
+Для точного enqueue, generation и stop reason подключите опциональный модуль вместе с уже
+используемой приложением версией WorkManager:
+
+```kotlin
+dependencies {
+    implementation("io.jankhunter:jankhunter-workmanager:1.0.7")
+    implementation("androidx.work:work-runtime:<ваша-версия-2.9.0+>")
+}
+
+workManager.enqueueWithJankHunter(request)
+
+class SyncContactsWorker(
+    context: Context,
+    parameters: WorkerParameters,
+) : JankHunterCoroutineWorker(context, parameters) {
+    override suspend fun doJankHunterWork(): Result {
+        contacts.sync()
+        return Result.success()
+    }
+}
+```
+
+`JankHunterWorker` делает то же для синхронного Worker. Оба базовых класса оставляют `doWork()`
+финальной lifecycle-границей; disabled path — одна проверка и прямой вызов пользовательской работы.
+Enqueue-listener не удерживает `WorkRequest`, input/output `Data` или tags: только приватные
+64-битные ID и periodic-биты до завершения `Operation`. Минимальная совместимая версия
+WorkManager — 2.9.0; модуль компилируется и тестируется с 2.11.2.
 
 Временное выключение всего Gradle-вклада:
 
@@ -320,11 +407,12 @@ OkHttp и сам Jank Hunter при этом остаются исключённ
 - `handlers`: оборачивает `Handler.post*`, сохраняя работу `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks`.
 - `executors`: оборачивает `Runnable` и `Callable` в `Executor` и `ExecutorService`.
 - `coroutines`: оборачивает основные создатели корутин без зависимости Android-библиотеки от `kotlinx.coroutines`; по умолчанию выключено из-за цены ASM и wrapper-объектов.
-- `flowInteractions`: создаёт сценарий клика при `View.setOnClickListener`, если явный сценарий ещё не задан.
+- `interactionOperations`: создаёт операцию действия пользователя при `View.setOnClickListener`, если явная операция ещё не задана.
 - `lifecycleLeaks`: помогает связать удержанные объекты с жизненным циклом.
 - `logSpam`: считает вызовы `android.util.Log.*` и Timber, не записывая текст логов.
 - `classGraph`: пишет статический граф классов во время сборки.
 - `runtimeCallGraph`: пишет агрегированные связи `caller -> callee` по реально выполненным методам.
+- `workerTracing`: автоматически измеряет синхронные Worker и включает ручные Worker lifecycle API.
 - `methodCounters`: пишет счётчики входов в методы, по умолчанию выключено.
 
 Отдельный build-time анализ DI включается явно:
@@ -343,44 +431,34 @@ runtime-события. Произвольный Koin runtime DSL намерен
 `runtimeCallGraph`, `methodCounters`, OkHttp и WebSocket hooks по умолчанию выключены. В `<init>`
 call-site hooks добавляются только после обязательного вызова `super`/`this`, а `<clinit>` не меняется.
 Повторный ASM-проход распознаётся по marker-аннотации, runtime-вызовы идут через fail-open
-`JankHunterHooks`. По умолчанию `.jhlog` сам хранит определения реально встретившихся методов
+`JankHunterHooks`. `.jhlog` всегда сам хранит определения реально встретившихся методов
 `stable ID -> class.method`. Системный CLI поэтому раскрывает имена и runtime-связи, имея только
-лог; определения пишутся один раз на метод и не расходуют лимит обычного runtime-словаря.
-
-Developer-only режим с минимальным размером лога включается явно:
-
-```kotlin
-jankHunter {
-    symbolMode = JankHunterSymbolMode.STABLE_EXTERNAL
-}
-```
-
-В нём `.jhlog` хранит только стабильные 64-битные ID вида `stable:0x0123abcd...`, поэтому для
-анализа обязательны matching Gradle artifacts и ключ CLI `--external-symbols`. Не используйте
-этот режим для логов, которые будут разбирать люди без доступа к сборке проекта.
+лог; в словарь попадают только реально встретившиеся методы, и они не расходуют лимит обычного
+runtime-словаря.
+Отключить определения нельзя: это гарантирует переносимость логов между компьютерами без
+доступа к исходному проекту и `build/` исходной сборки.
 
 Плагин вычисляет глобальный 16-байтный `symbolNamespace` из точной версии алгоритма
-stable ID и owner-map schema. Он намеренно одинаков для application и library модулей: один
+stable ID и формата встроенных символов. Он намеренно одинаков для application и library модулей: один
 процесс может исполнять инструментированный код из нескольких модулей, а в `.jhlog`
-есть один header. Fingerprint попадает в manifest и `owner-map.json`; CLI отклоняет карты с
-несовместимым контрактом.
+есть один header. Fingerprint попадает в manifest и компактный `artifact-metadata.json`; CLI
+использует его только для проверки принадлежности дополнительных build-time артефактов логу.
 
 Для каждого варианта сборки создаются:
 
 ```text
-build/generated/jankhunter/<variant>/owner-map.json
+build/generated/jankhunter/<variant>/artifact-metadata.json
 build/generated/jankhunter/<variant>/class-graph.jsonl
 build/generated/jankhunter/<variant>/instrumentation-diagnostics.jsonl
 build/generated/jankhunter/<variant>/di-catalog.jsonl  # только при ENABLED
 ```
 
-В стандартном `EMBEDDED`-режиме эти файлы необязательны. Их можно передать разработчику для
+Эти файлы необязательны. Их можно передать разработчику для
 дополнительного статического графа, ASM-диагностики, DI-каталога и deobfuscation:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
-  --owner-map app/build/generated/jankhunter/debug/owner-map.json \
-  --owner-map feature/feed/build/generated/jankhunter/debug/owner-map.json \
+  --artifacts-dir app/build/generated/jankhunter/debug \
   --mapping app/build/outputs/mapping/debug/mapping.txt \
   --class-graph app/build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
@@ -389,19 +467,8 @@ jankhunter inspect logs/*.jhlog \
 ```
 
 Так в едином `report.html` появляются вкладки «Граф влияния», «ASM диагностика» и «DI-каталог».
-Повторяйте `--owner-map` для `app` и каждого инструментированного feature/library-модуля.
-Все карты должны иметь один `symbolNamespace`: это общий контракт stable-ID algorithm и
-owner-map schema, а не revision исходников. CLI останавливает анализ, если namespace карт
-различается или один stable ID указывает на разные методы. Эти требования к owner-map относятся
-к `STABLE_EXTERNAL`; в `EMBEDDED` имена уже находятся в `.jhlog`. Для внешнего режима добавьте
-обязательный ключ `--external-symbols`:
-
-```bash
-jankhunter inspect logs/*.jhlog \
-  --external-symbols \
-  --artifacts-dir app/build/generated/jankhunter/debug \
-  --out report.html
-```
+`--artifacts-dir` принимает каталог одного варианта и сверяет его `symbolNamespace` с `.jhlog`.
+Имена runtime-символов всегда находятся в самом логе; build-time артефакты их не дополняют.
 
 Вкладка «DI-каталог» всегда отделяет build-time wiring от телеметрии. DI edges не передаются в
 leak/runtime score, severity, evidence или граф влияния.
@@ -438,7 +505,7 @@ jankHunter {
 
 ## Утечки Памяти И HPROF
 
-Лёгкий режим включён всегда: библиотека записывает удержанные объекты, владельца, экран, сценарий, шаг, возраст и число удержаний.
+Лёгкий режим включён всегда: библиотека записывает удержанные объекты, владельца, экран, операцию, возраст и число удержаний.
 
 Дампы памяти выключены по умолчанию. Для короткой диагностической сессии:
 
@@ -529,7 +596,7 @@ fail-open отклоняет событие и публикует точные r
 64 МиБ, не затрагивая текущий или другой активный файл. Пользовательский `JankHunterBinaryStorage`
 самостоятельно управляет архивным бюджетом и очисткой через `cleanup`.
 
-`.jhlog 2.0.0` хранит independently compressed chunks с CRC и commit trailer. FINAL seal содержит
+`.jhlog 2.0.0` хранит независимо сжатые блоки с CRC и завершающей записью. Финальная печать содержит
 точные event/dictionary/chunk counters и digest; следующий сегмент ссылается на digest предыдущего.
 CLI читает committed prefix активного файла, отличает `open_clean` от corruption и не поддерживает
 предыдущие wire-форматы.
@@ -631,7 +698,7 @@ jankhunter compare \
 Проверки Android-части:
 
 ```bash
-./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-workmanager:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
 Проверка Gradle-плагина как внешнего потребителя:

@@ -61,7 +61,7 @@ func normalizedHeader(header SegmentHeader) SegmentHeader {
 
 func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 	header = normalizedHeader(header)
-	if header.Schema != HeaderSchemaV1 {
+	if header.Schema != HeaderSchemaV2 {
 		return nil, SegmentHeader{}, fmt.Errorf("unsupported header schema %d", header.Schema)
 	}
 	if err := validateFeatureContract(header.RequiredFeatures, header.OptionalFeatures); err != nil {
@@ -100,6 +100,12 @@ func encodeFileHeader(header SegmentHeader) ([]byte, SegmentHeader, error) {
 		if err := writeUvarint(&payload, value); err != nil {
 			return nil, SegmentHeader{}, err
 		}
+	}
+	if header.TimezoneOffsetMinutes < -maxTimezoneOffsetMinutes || header.TimezoneOffsetMinutes > maxTimezoneOffsetMinutes {
+		return nil, SegmentHeader{}, fmt.Errorf("timezone offset %d is outside -%d..%d minutes", header.TimezoneOffsetMinutes, maxTimezoneOffsetMinutes, maxTimezoneOffsetMinutes)
+	}
+	if err := writeUvarint(&payload, encodeSVarint(header.TimezoneOffsetMinutes)); err != nil {
+		return nil, SegmentHeader{}, err
 	}
 	if err := writeLengthDelimited(&payload, []byte(header.ProcessName)); err != nil {
 		return nil, SegmentHeader{}, err
@@ -168,7 +174,7 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	if header.Schema, err = read("schema"); err != nil {
 		return SegmentHeader{}, err
 	}
-	if header.Schema != HeaderSchemaV1 {
+	if header.Schema != HeaderSchemaV2 {
 		return SegmentHeader{}, fmt.Errorf("unsupported header schema %d", header.Schema)
 	}
 	if header.RequiredFeatures, err = read("required features"); err != nil {
@@ -205,6 +211,14 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 		if *values[i], err = read(names[i]); err != nil {
 			return SegmentHeader{}, err
 		}
+	}
+	timezoneOffset, readErr := read("timezone offset minutes")
+	if readErr != nil {
+		return SegmentHeader{}, readErr
+	}
+	header.TimezoneOffsetMinutes = decodeSVarint(timezoneOffset)
+	if header.TimezoneOffsetMinutes < -maxTimezoneOffsetMinutes || header.TimezoneOffsetMinutes > maxTimezoneOffsetMinutes {
+		return SegmentHeader{}, fmt.Errorf("timezone offset %d is outside -%d..%d minutes", header.TimezoneOffsetMinutes, maxTimezoneOffsetMinutes, maxTimezoneOffsetMinutes)
 	}
 	processName, err := readBoundedBytes(reader, "process name", maxHeaderPayloadSize)
 	if err != nil {
@@ -263,6 +277,8 @@ func decodeHeaderPayload(payload []byte) (SegmentHeader, error) {
 	}
 	return header, nil
 }
+
+const maxTimezoneOffsetMinutes int64 = 14 * 60
 
 func validateFeatureContract(required, optional uint64) error {
 	if required != RequiredFeatures && required != BestEffortFeatures {

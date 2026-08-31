@@ -2,21 +2,27 @@ package io.jankhunter.runtime
 
 import android.os.SystemClock
 
+internal fun interface HandlerRunnableOwner {
+    fun unregister(delegate: Runnable, wrapper: Runnable)
+}
+
 internal class JankHunterHandlerRunnable internal constructor(
     private val delegate: Runnable,
     private val ownerName: String?,
+    private val callbacks: RuntimeAsyncCallbacks,
+    private val owner: HandlerRunnableOwner,
 ) : Runnable {
-    private val capturedContext = JankHunter.captureContext(ownerOverride = ownerName)
+    private val capturedContext = callbacks.captureContext(ownerName)
 
     override fun run() {
         try {
-            if (!JankHunter.isRuntimeActiveForCallbacks()) {
+            if (!callbacks.isActive()) {
                 delegate.run()
                 return
             }
             runWithTelemetry()
         } finally {
-            JankHunter.unregisterHandlerRunnable(delegate, this)
+            owner.unregister(delegate, this)
         }
     }
 
@@ -24,7 +30,7 @@ internal class JankHunterHandlerRunnable internal constructor(
         val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var failed = false
         try {
-            JankHunter.callWithContext(capturedContext, ownerName) {
+            callbacks.callWithContext(capturedContext, ownerName) {
                 delegate.run()
             }
         } catch (throwable: Throwable) {
@@ -37,7 +43,7 @@ internal class JankHunterHandlerRunnable internal constructor(
                 } else {
                     0L
                 }
-                JankHunter.recordWrappedWork(ownerName, "handler_runnable", durationMs, failed)
+                callbacks.recordWrappedWork(ownerName, "handler_runnable", durationMs, failed)
             }
         }
     }

@@ -222,7 +222,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	}
 	assertFileContains(t, inspectPath, `data-jankhunter-single-html`)
 	assertBundlePageContains(t, inspectPath, "overview", "Подробный анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Удержания и возможные утечки памяти")
-	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Что измеряет")
+	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Устойчивая статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Что измеряет")
 	assertBundlePageContains(t, inspectPath, "leaks", "Удержания и возможные утечки памяти", "Проводник утечек", "Сигналы достижимости", "легкий режим", "Контекст обнаружения удержанного объекта")
 	assertNoCompanionReports(t, inspectPath)
 
@@ -256,8 +256,8 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 		inspectWithDIPath,
 		"dependency-injection",
 		"DI-каталог",
-		"DI · BUILD TIME",
-		"Build-time DI-связь. Это не ссылка удержания, не runtime-вызов и не доказательство утечки. DI-данные не влияют на score, severity или evidence.",
+		"DI · ПРИ СБОРКЕ",
+		analyze.DependencyInjectionDisclaimer,
 		"com.app.FeedViewModel",
 		"com.app.FeedRepository",
 	)
@@ -268,7 +268,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 		t.Fatalf("runCompare() error = %v", err)
 	}
 	assertBundlePageContains(t, comparePath, "overview", "λ Анализ", `href="compare-math.html"`, "Утечки памяти", `href="compare-leaks.html"`, "Сравнение сигналов удержания памяти")
-	assertBundlePageContains(t, comparePath, "math", "Математический анализ сравнения", "Качество сравнения", "Сравнение сигналов удержания памяти", "Робастная статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Поля в compare")
+	assertBundlePageContains(t, comparePath, "math", "Математический анализ сравнения", "Качество сравнения", "Сравнение сигналов удержания памяти", "Устойчивая статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Поля при сравнении")
 	assertBundlePageContains(t, comparePath, "leaks", "Сравнение сигналов удержания памяти", "Проводник изменений удержания", "количество сигналов удержания не изменилось")
 	assertNoCompanionReports(t, comparePath)
 
@@ -356,11 +356,11 @@ func TestVersionOutputIsHumanReadable(t *testing.T) {
 
 func TestSelectLatestSessionLogsKeepsOnlyLatestRunCohortAcrossProcesses(t *testing.T) {
 	dir := t.TempDir()
-	oldMain := sessionSelectionPath(dir, "2026-07-13", 1, 8)
-	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 9)
-	newMainEarlierSegment := sessionSelectionPath(dir, "2026-07-13", 2, 10)
-	newRemote := sessionSelectionPath(dir, "2026-07-13", 2, 11)
-	newMainLatestSegment := sessionSelectionPath(dir, "2026-07-13", 2, 12)
+	oldMain := sessionSelectionPath(dir, "2026-07-13", 1, 8, 0)
+	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 8, 1)
+	newMainEarlierSegment := sessionSelectionPath(dir, "2026-07-13", 2, 9, 0)
+	newRemote := sessionSelectionPath(dir, "2026-07-13", 2, 9, 1)
+	newMainLatestSegment := sessionSelectionPath(dir, "2026-07-13", 2, 9, 2)
 	nonCanonical := filepath.Join(dir, "sample.jhlog")
 
 	writeSessionSelectionLog(t, oldMain, "com.example", 1, 1, 0)
@@ -396,8 +396,8 @@ func TestSelectLatestSessionLogsKeepsOnlyLatestRunCohortAcrossProcesses(t *testi
 
 func TestSelectLatestSessionLogsDoesNotMixStaleRemoteProcessIntoNewRun(t *testing.T) {
 	dir := t.TempDir()
-	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 40)
-	newMain := sessionSelectionPath(dir, "2026-07-13", 2, 41)
+	oldRemote := sessionSelectionPath(dir, "2026-07-13", 1, 40, 0)
+	newMain := sessionSelectionPath(dir, "2026-07-13", 2, 41, 0)
 	writeSessionSelectionLog(t, oldRemote, "com.example:remote", 1, 1, 0)
 	writeSessionSelectionLog(t, newMain, "com.example", 2, 2, 0)
 
@@ -413,16 +413,14 @@ func TestSelectLatestSessionLogsDoesNotMixStaleRemoteProcessIntoNewRun(t *testin
 func TestSelectLatestSessionLogsKeepsAllRunIDsTiedAcrossDirectories(t *testing.T) {
 	firstDir := t.TempDir()
 	secondDir := t.TempDir()
-	firstEarlier := sessionSelectionPath(firstDir, "2026-07-13", 1, 8)
-	firstLatest := sessionSelectionPath(firstDir, "2026-07-13", 1, 9)
-	secondEarlier := sessionSelectionPath(secondDir, "2026-07-13", 2, 7)
-	secondLatest := sessionSelectionPath(secondDir, "2026-07-13", 2, 9)
+	firstEarlier := sessionSelectionPath(firstDir, "2026-07-13", 1, 9, 0)
+	firstLatest := sessionSelectionPath(firstDir, "2026-07-13", 1, 9, 1)
+	secondEarlier := sessionSelectionPath(secondDir, "2026-07-13", 2, 9, 0)
 	writeSessionSelectionLog(t, firstEarlier, "com.first", 1, 1, 0)
 	writeSessionSelectionLog(t, firstLatest, "com.first", 1, 1, 1)
 	writeSessionSelectionLog(t, secondEarlier, "com.second", 2, 2, 0)
-	writeSessionSelectionLog(t, secondLatest, "com.second", 2, 2, 1)
 
-	paths := []string{firstEarlier, secondLatest, secondEarlier, firstLatest}
+	paths := []string{firstEarlier, secondEarlier, firstLatest}
 	selected, warnings := selectLatestSessionLogs(paths, false)
 	if !sameStrings(selected, paths) || len(warnings) != 0 {
 		t.Fatalf("selected=%#v warnings=%#v, want both tied run cohorts", selected, warnings)
@@ -568,15 +566,19 @@ func writeSessionSelectionLog(
 	}
 }
 
-func sessionSelectionPath(directory string, date string, runByte byte, index uint64) string {
+func sessionSelectionPath(directory string, date string, runByte byte, dailyIndex uint64, segmentIndex uint64) string {
 	var runID jhlog.ID128
 	runID[0] = runByte
-	return filepath.Join(directory, "jh-session-log."+date+"."+hex.EncodeToString(runID[:])+"."+strconv.FormatUint(index, 10)+".jhlog")
+	index := strconv.FormatUint(dailyIndex, 10)
+	if segmentIndex > 0 {
+		index += "-" + strconv.FormatUint(segmentIndex, 10)
+	}
+	return filepath.Join(directory, "jh-session-log."+date+"."+hex.EncodeToString(runID[:])+"."+index+".jhlog")
 }
 
 func TestDiscoverHeapDumpsNearLogs(t *testing.T) {
 	dir := t.TempDir()
-	logPath := sessionSelectionPath(dir, "2026-07-14", 1, 0)
+	logPath := sessionSelectionPath(dir, "2026-07-14", 1, 0, 0)
 	if err := os.WriteFile(logPath, []byte("jhlog"), 0o600); err != nil {
 		t.Fatalf("WriteFile(log) error = %v", err)
 	}
@@ -654,25 +656,25 @@ func TestProblemsExportsCSVAndJSON(t *testing.T) {
 	if err := runProblems([]string{samplePath, "--out", csvPath}); err != nil {
 		t.Fatalf("runProblems(csv) error = %v", err)
 	}
-	assertFileContains(t, csvPath, "fingerprint,detector_id,detector_version,category,subcategory,severity,status,risk_score,confidence,title,what_happened,where,claim_level,why,impact,evidence,recommendation,limitations")
+	assertFileContains(t, csvPath, "fingerprint,detector_id,detector_version,category,subcategory,severity,status,investigation_priority,confidence,title,what_happened,where,claim_level,why,impact,evidence,recommendation,limitations")
 
 	jsonPath := filepath.Join(dir, "problems.json")
 	if err := runProblems([]string{samplePath, "--format", "json", "--out", jsonPath}); err != nil {
 		t.Fatalf("runProblems(json) error = %v", err)
 	}
-	assertFileContains(t, jsonPath, `"schema_version"`, `"problem_summary"`, `"problems"`, `"incidents"`, `"category_coverage"`, `"detectors"`)
+	assertFileContains(t, jsonPath, `"schema_version"`, `"problem_summary"`, `"problems"`, `"incidents"`, `"category_coverage"`, `"detectors"`, `"investigation_priority"`, `"priority_breakdown"`)
 
 	codeProblemsPath := filepath.Join(dir, "code-problems.csv")
 	if err := runProblems([]string{samplePath, "--dataset", "code-problems", "--out", codeProblemsPath}); err != nil {
 		t.Fatalf("runProblems(code-problems csv) error = %v", err)
 	}
-	assertFileContains(t, codeProblemsPath, "class,method,severity,score,categories,problems,screen,flow,step,route,evidence,recommendation")
+	assertFileContains(t, codeProblemsPath, "class,method,severity,score,categories,problems,screen,operation,route,evidence,recommendation")
 
 	leaksPath := filepath.Join(dir, "leaks.csv")
 	if err := runProblems([]string{samplePath, "--dataset", "leaks", "--out", leaksPath}); err != nil {
 		t.Fatalf("runProblems(leaks csv) error = %v", err)
 	}
-	assertFileContains(t, leaksPath, "class,holder,screen,flow,step,severity,score,count,max_age_ms,estimated_retained_kb,heap_evidence")
+	assertFileContains(t, leaksPath, "class,holder,screen,operation,severity,score,count,max_age_ms,estimated_retained_kb,heap_evidence")
 
 	influencePath := filepath.Join(dir, "influence.csv")
 	if err := runProblems([]string{samplePath, "--dataset", "influence", "--out", influencePath}); err != nil {
@@ -889,17 +891,25 @@ func TestSizeProfilesSampleLog(t *testing.T) {
 }
 
 func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
+	databaseEvidencePath := filepath.Join(t.TempDir(), "database-evidence.json")
+	if err := os.WriteFile(databaseEvidencePath, []byte(`{
+		"format":1,
+		"kind":"jankhunter-database-evidence",
+		"sanitized":true,
+		"statements":[]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
 		"--route", "feed",
 		"--screen=Home",
 		"--owner", "FeedRepository",
 		"--class", "CheckoutActivity",
-		"--external-symbols",
 		"--artifacts-dir", "app/build/generated/jankhunter/debug",
-		"--owner-map", "app-owners.json",
-		"--owner-map=feature-owners.json",
 		"--class-graph=graph.jsonl",
 		"--instrumentation-diagnostics", "diagnostics.jsonl",
+		"--android-components-catalog", "components.jsonl",
+		"--database-evidence", databaseEvidencePath,
 		"sample.jhlog",
 	})
 	if err != nil {
@@ -914,19 +924,23 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 		builder.filter.ClassContains != "CheckoutActivity" {
 		t.Fatalf("filter = %+v", builder.filter)
 	}
-	if !builder.externalSymbols {
-		t.Fatal("--external-symbols was not retained by the shared analysis options builder")
-	}
-	if strings.Join(builder.ownerMapPaths, ",") != "app-owners.json,feature-owners.json" ||
-		builder.artifactsDir != "app/build/generated/jankhunter/debug" ||
+	if builder.artifactsDir != "app/build/generated/jankhunter/debug" ||
 		builder.classGraphPath != "graph.jsonl" ||
-		builder.diagnosticsPath != "diagnostics.jsonl" {
+		builder.diagnosticsPath != "diagnostics.jsonl" ||
+		builder.componentCatalogPath != "components.jsonl" ||
+		builder.databaseEvidencePath != databaseEvidencePath {
 		t.Fatalf(
-			"paths = owner maps %q class graph %q diagnostics %q",
-			builder.ownerMapPaths,
+			"paths = class graph %q diagnostics %q",
 			builder.classGraphPath,
 			builder.diagnosticsPath,
 		)
+	}
+	options, err := (analysisOptionsBuilder{databaseEvidencePath: databaseEvidencePath}).build()
+	if err != nil {
+		t.Fatalf("build() error = %v", err)
+	}
+	if options.DatabaseEvidence == nil || !options.DatabaseEvidence.Sanitized {
+		t.Fatalf("database evidence = %+v", options.DatabaseEvidence)
 	}
 
 	heap, remaining, err := takeHeapInputFlags([]string{
@@ -945,17 +959,22 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 	}
 }
 
-func TestExternalSymbolsRequireArtifactsOrOwnerMap(t *testing.T) {
-	changeWorkingDirectory(t, t.TempDir())
-	builder, remaining, err := takeAnalysisOptionsBuilder([]string{"--external-symbols", "sample.jhlog"})
+func TestAnalysisOptionsBuilderLeavesRemovedSymbolFlagsUnsupported(t *testing.T) {
+	args := []string{
+		"--external-symbols",
+		"--owner-map", "owners.json",
+		"sample.jhlog",
+	}
+
+	_, remaining, err := takeAnalysisOptionsBuilder(args)
 	if err != nil {
 		t.Fatalf("takeAnalysisOptionsBuilder() error = %v", err)
 	}
-	if got := strings.Join(remaining, ","); got != "sample.jhlog" {
-		t.Fatalf("remaining = %q", got)
+	if got, want := strings.Join(remaining, ","), strings.Join(args, ","); got != want {
+		t.Fatalf("remaining = %q, want removed flags to stay unsupported: %q", got, want)
 	}
-	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "--artifacts-dir") {
-		t.Fatalf("build() error = %v, want explicit external artifact guidance", err)
+	if _, err := resolveLogArgs(remaining); err == nil || !strings.Contains(err.Error(), "unknown option --external-symbols") {
+		t.Fatalf("resolveLogArgs() error = %v, want explicit unknown-option error", err)
 	}
 }
 
@@ -964,7 +983,6 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	writeAndroidArtifactBundle(t, directory, true)
 
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
-		"--external-symbols",
 		"--artifacts-dir", directory,
 		"sample.jhlog",
 	})
@@ -978,9 +996,6 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build() error = %v", err)
 	}
-	if options.OwnerMap == nil || len(options.OwnerMap.Entries) != 1 {
-		t.Fatalf("owner map = %+v", options.OwnerMap)
-	}
 	if options.ClassGraph == nil || len(options.ClassGraph.Edges) != 1 {
 		t.Fatalf("class graph = %+v", options.ClassGraph)
 	}
@@ -989,6 +1004,9 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	}
 	if options.DependencyInjectionCatalog == nil || !options.DependencyInjectionCatalog.Available {
 		t.Fatalf("DI catalog = %+v", options.DependencyInjectionCatalog)
+	}
+	if options.AndroidComponentCatalog == nil || !options.AndroidComponentCatalog.Available {
+		t.Fatalf("Android component catalog = %+v", options.AndroidComponentCatalog)
 	}
 }
 
@@ -1001,8 +1019,9 @@ func TestAnalysisOptionsBuilderDoesNotAttachUnrequestedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build() error = %v", err)
 	}
-	if options.OwnerMap != nil || options.ClassGraph != nil || options.InstrumentationDiagnostics != nil ||
-		options.DependencyInjectionCatalog != nil || options.ArtifactDirectory != "" ||
+	if options.ClassGraph != nil || options.InstrumentationDiagnostics != nil ||
+		options.DependencyInjectionCatalog != nil || options.AndroidComponentCatalog != nil ||
+		options.ArtifactDirectory != "" ||
 		options.ArtifactsAutoDiscovered {
 		t.Fatalf("unrequested artifact inputs = %+v", options)
 	}
@@ -1010,7 +1029,7 @@ func TestAnalysisOptionsBuilderDoesNotAttachUnrequestedArtifacts(t *testing.T) {
 
 func TestAnalysisOptionsBuilderRejectsIncompleteArtifactBundle(t *testing.T) {
 	directory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(directory, "owner-map.json"), []byte("{}\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "artifact-metadata.json"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	builder := analysisOptionsBuilder{artifactsDir: directory}
@@ -1030,49 +1049,6 @@ func TestAnalysisOptionsBuilderRejectsExplicitMismatchedBundleBeforeLogScan(t *t
 	_, err := (analysisOptionsBuilder{artifactsDir: directory}).buildForLogs([]string{logPath})
 	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact artifact directory") {
 		t.Fatalf("explicit mismatch error = %v", err)
-	}
-}
-
-func TestAnalysisOptionsBuilderMergesRepeatedOwnerMaps(t *testing.T) {
-	dir := t.TempDir()
-	appPath := filepath.Join(dir, "app-owner-map.json")
-	featurePath := filepath.Join(dir, "feature-owner-map.json")
-	const metadata = `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n"
-	if err := os.WriteFile(appPath, []byte(metadata+`{"format":4,"kind":"entry","id":"stable:0x0000000000000001","owner":"com.app.Main.call"}`+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(app) error = %v", err)
-	}
-	if err := os.WriteFile(featurePath, []byte(metadata+`{"format":4,"kind":"entry","id":"stable:0x0000000000000002","owner":"com.app.feature.Feature.call"}`+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(feature) error = %v", err)
-	}
-
-	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
-		"--owner-map", appPath,
-		"--owner-map=" + featurePath,
-		"sample.jhlog",
-	})
-	if err != nil {
-		t.Fatalf("takeAnalysisOptionsBuilder() error = %v", err)
-	}
-	if got := strings.Join(remaining, ","); got != "sample.jhlog" {
-		t.Fatalf("remaining = %q", got)
-	}
-	options, err := builder.build()
-	if err != nil {
-		t.Fatalf("build() error = %v", err)
-	}
-	if options.OwnerMap == nil || len(options.OwnerMap.Entries) != 2 {
-		t.Fatalf("merged owner map = %+v", options.OwnerMap)
-	}
-	if got := options.OwnerMap.Entries["stable:0x0000000000000002"]; got != "com.app.feature.Feature.call" {
-		t.Fatalf("feature owner = %q", got)
-	}
-}
-
-func TestAnalysisOptionsBuilderRejectsEmptyOwnerMapFlag(t *testing.T) {
-	for _, args := range [][]string{{"--owner-map"}, {"--owner-map="}, {"--owner-map", ""}} {
-		if _, _, err := takeAnalysisOptionsBuilder(args); err == nil || !strings.Contains(err.Error(), "--owner-map") {
-			t.Fatalf("takeAnalysisOptionsBuilder(%q) error = %v, want owner-map value error", args, err)
-		}
 	}
 }
 
@@ -1207,7 +1183,7 @@ func assertNoCompanionReports(t *testing.T, mainPath string) {
 
 func writeDiagnosticsFixture(t *testing.T, path string) {
 	t.Helper()
-	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","method":"load()V","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","flow":"feed.open","trace":"refresh","count":1}]}`
+	data := `{"format":1,"class":"com.app.FeedRepository","methods":3,"ignoredMethods":0,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","count":2}],"decisions":[{"kind":"disabled","module":"handler","family":"handler","reason":"disabled_by_gate","method":"load()V","count":1}],"annotations":[{"owner":"FeedOwner","screen":"Feed","operation":"feed.open","operationKind":"navigation","operationBudgetMs":800,"count":1}]}`
 	if err := os.WriteFile(path, []byte(data+"\n"), 0o644); err != nil {
 		t.Fatalf("write diagnostics fixture: %v", err)
 	}
@@ -1230,11 +1206,8 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ownerMap := strings.Join([]string{
-		`{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`,
-		`{"format":4,"kind":"entry","id":"stable:0x0000000000000001","owner":"com.app.Feed.call"}`,
-	}, "\n") + "\n"
-	if err := os.WriteFile(filepath.Join(directory, "owner-map.json"), []byte(ownerMap), 0o600); err != nil {
+	metadata := `{"format":1,"kind":"artifact-metadata","variant":"debug","idAlgorithm":"xxh64","idEncoding":"stable","symbolNamespace":"aabb0000000000000000000000000000","includeWholeApplication":false,"hooks":{},"androidNamespace":"com.app","includePackages":["com.app"],"excludePackages":[]}` + "\n"
+	if err := os.WriteFile(filepath.Join(directory, "artifact-metadata.json"), []byte(metadata), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	classGraph := `{"format":1,"class":"com.app.Feed","edges":[{"caller":"load()V","calleeClass":"com.app.Repository","calleeMethod":"get()V","count":1}]}` + "\n"
@@ -1242,6 +1215,10 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 		t.Fatal(err)
 	}
 	writeDiagnosticsFixture(t, filepath.Join(directory, "instrumentation-diagnostics.jsonl"))
+	componentCatalog := `{"format":1,"class":"com.app.SyncService","componentId":"stable:0x0000000000000011","kind":"service","abstract":false,"coverage":"none","entryPoints":[],"instrumentedEntryPoints":[],"uncoveredEntryPoints":[],"transactions":[]}` + "\n"
+	if err := os.WriteFile(filepath.Join(directory, "android-components-catalog.jsonl"), []byte(componentCatalog), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if includeDI {
 		writeDependencyInjectionFixture(t, filepath.Join(directory, "di-catalog.jsonl"))
 	}
@@ -1249,7 +1226,7 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 
 func rewriteArtifactNamespace(t *testing.T, directory, namespace string) []byte {
 	t.Helper()
-	path := filepath.Join(directory, "owner-map.json")
+	path := filepath.Join(directory, "artifact-metadata.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

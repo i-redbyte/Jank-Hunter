@@ -4,7 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
-import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeCollectorCallbacks
 import io.jankhunter.runtime.RuntimeHookGuard
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
@@ -21,6 +21,7 @@ import kotlin.math.max
 internal class FpsMonitor(
     windowMs: Long,
     jankFrameThresholdMs: Long,
+    private val callbacks: RuntimeCollectorCallbacks,
     choreographerFallbackEnabled: Boolean = true,
     private val exactAdmission: Boolean = false,
 ) : Choreographer.FrameCallback {
@@ -70,6 +71,15 @@ internal class FpsMonitor(
         }
     }
 
+    fun setWindowActive(active: Boolean) {
+        runOnMain {
+            if (!runState.isRunning() || !sourceSelector.updateWindowActive(active)) return@runOnMain
+            if (exactAdmission) finishWindow(SystemClock.elapsedRealtimeNanos())
+            resetWindow()
+            updateFallbackRegistration()
+        }
+    }
+
     fun onJankStatsFrame(screen: String?, durationNanos: Long, isJank: Boolean) {
         runOnMain {
             if (!runState.isRunning() || !sourceSelector.useJankStats()) return@runOnMain
@@ -92,7 +102,7 @@ internal class FpsMonitor(
             if (previousFrameNanos != 0L) {
                 val durationMs = ((frameTimeNanos - previousFrameNanos).coerceAtLeast(0L)) / NANOS_PER_MS
                 recordFrame(
-                    screen = JankHunter.currentScreen(),
+                    screen = callbacks.currentScreen(),
                     frameTimeNanos = frameTimeNanos,
                     durationMs = durationMs,
                     isJank = durationMs >= jankFrameThresholdMs,
@@ -119,7 +129,7 @@ internal class FpsMonitor(
         } else {
             Jhlog.UI_SOURCE_CHOREOGRAPHER
         }
-        JankHunter.recordUiWindow(
+        callbacks.recordUiWindow(
             snapshot.screen,
             snapshot.elapsedMs,
             snapshot.frameCount,

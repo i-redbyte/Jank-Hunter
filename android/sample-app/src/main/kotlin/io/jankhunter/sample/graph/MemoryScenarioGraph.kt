@@ -1,5 +1,7 @@
 package io.jankhunter.sample.graph
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.util.Log
 import io.jankhunter.sample.ReleasedCheckoutProbe
 import io.jankhunter.sample.RetainedCheckoutCache
@@ -73,7 +75,7 @@ internal class CheckoutRetentionRepository(
 ) {
     fun watchReleased() {
         val released = ReleasedCheckoutProbe()
-        JankHunter.watchObject(
+        JankHunterTelemetry.watch(
             released,
             ReleasedCheckoutProbe::class.java.name,
             "sample.auto.retention.released",
@@ -83,7 +85,7 @@ internal class CheckoutRetentionRepository(
     fun retainScreen(activityReference: Any) {
         val retained = RetainedCheckoutScreen(activityReference, ByteArray(RETAINED_SCREEN_BYTES))
         application.retainedObjects += retained
-        JankHunter.watchObject(
+        JankHunterTelemetry.watch(
             retained,
             RetainedCheckoutScreen::class.java.name,
             "sample.auto.retention.activity_registry",
@@ -94,7 +96,7 @@ internal class CheckoutRetentionRepository(
         repeat(RETAINED_CACHE_COUNT) { index ->
             val retained = RetainedCheckoutCache(index, ByteArray(RETAINED_CACHE_BYTES))
             application.retainedObjects += retained
-            JankHunter.watchObject(
+            JankHunterTelemetry.watch(
                 retained,
                 RetainedCheckoutCache::class.java.name,
                 "sample.auto.retention.checkout_cache",

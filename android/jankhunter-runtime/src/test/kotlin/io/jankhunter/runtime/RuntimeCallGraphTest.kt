@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -13,6 +14,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeCallGraphTest {
+    @Test
+    fun currentCallSiteTracksTopFrameWithoutMutatingStack() = withGraph { graph ->
+        assertEquals(0L, graph.currentMethodId())
+        assertEquals(null, graph.currentMethodName())
+        assertFalse(graph.hasCurrentMethod())
+
+        val parent = graph.enter(11L, "FeedPresenter.refresh", enabled = true)
+        assertEquals(11L, graph.currentMethodId())
+        assertEquals("FeedPresenter.refresh", graph.currentMethodName())
+        assertTrue(graph.hasCurrentMethod())
+
+        val child = graph.enter(-22L, "FeedRepository.load", enabled = true)
+        assertEquals(-22L, graph.currentMethodId())
+        assertEquals("FeedRepository.load", graph.currentMethodName())
+        assertEquals(2, graph.currentThreadDepthForTest())
+
+        graph.exit(child, -22L)
+        assertEquals(11L, graph.currentMethodId())
+        assertEquals("FeedPresenter.refresh", graph.currentMethodName())
+        graph.exit(parent, 11L)
+        assertEquals(0L, graph.currentMethodId())
+        assertEquals(null, graph.currentMethodName())
+    }
+
     @Test
     fun exitPopsPrimitiveStack() = withGraph { graph ->
         val parent = graph.enter(0L, enabled = true)
@@ -169,8 +194,7 @@ class RuntimeCallGraphTest {
         val graph = RuntimeCallGraph(
             nowMs = now::get,
             captureScreen = { "screen" },
-            captureFlow = { "flow" },
-            captureStep = { "step" },
+            captureOperationId = { 41L },
             maxKeys = { 128 },
             periodicFlushIntervalMs = 30_000L,
             batchObserver = { emitted.countDown() },
@@ -347,8 +371,7 @@ class RuntimeCallGraphTest {
         return RuntimeCallGraph(
             nowMs = { now.getAndIncrement() },
             captureScreen = screen::get,
-            captureFlow = { "flow" },
-            captureStep = { "step" },
+            captureOperationId = { 41L },
             maxKeys = { maxKeys },
             publisherAdmissionObserver = publisherAdmissionObserver,
             consumerLoopObserver = consumerLoopObserver,
@@ -372,7 +395,7 @@ class RuntimeCallGraphTest {
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {
-        return AsyncLogWriter.open(
+        return AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder()
                 .autoStartCollectors(false)

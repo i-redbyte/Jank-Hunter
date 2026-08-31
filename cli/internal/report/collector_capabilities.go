@@ -61,12 +61,12 @@ var collectorCapabilityDefinitions = [...]collectorCapabilityDefinition{
 	{
 		flag:  jhlog.CollectorIOTracing,
 		label: "Типизированные I/O операции",
-		description: "Принимает операции, переданные приложением через recordIO/traceIO; " +
-			"автоматически все обращения к диску и БД не перехватывает.",
+		description: "Принимает recordIO/traceIO и opt-in allow-list целостных файловых операций; " +
+			"низкоуровневые буферные обращения автоматически не перехватывает.",
 		observation: func(summary analyze.Summary) string {
 			return fmt.Sprintf(
 				"Записано %s.",
-				russianCount(len(summary.IOOperations), "операция", "операции", "операций"),
+				russianCount(totalTypedIOOperations(summary), "операция", "операции", "операций"),
 			)
 		},
 	},
@@ -116,7 +116,7 @@ var collectorCapabilityDefinitions = [...]collectorCapabilityDefinition{
 	},
 	{
 		flag:  jhlog.CollectorRoom,
-		label: "Room и база данных",
+		label: "Границы Room DAO",
 		description: "Измеряет границы сгенерированных Room DAO; точную асинхронную операцию можно " +
 			"дополнить traceIO.",
 		observation: func(summary analyze.Summary) string {
@@ -124,9 +124,25 @@ var collectorCapabilityDefinitions = [...]collectorCapabilityDefinition{
 		},
 	},
 	{
+		flag:        jhlog.CollectorDatabase,
+		label:       "SQL-вызовы SQLite и Room",
+		description: "Измеряет фактические обращения к SQLite, SupportSQLite и Room: SQL-шаблон, место вызова, длительность, поток и исход.",
+		observation: func(summary analyze.Summary) string {
+			if summary.DatabaseAnalysis == nil {
+				return "Записано 0 вызовов базы данных."
+			}
+			return fmt.Sprintf(
+				"Записано %s; SQL распознан для %d из %d вызовов.",
+				russianCount(summary.DatabaseAnalysis.Overall.Calls, "вызов", "вызова", "вызовов"),
+				summary.DatabaseAnalysis.KnownSQLCalls,
+				summary.DatabaseAnalysis.Overall.Calls,
+			)
+		},
+	},
+	{
 		flag:  jhlog.CollectorWorker,
-		label: "Фоновые Worker-задачи",
-		description: "Измеряет синхронный Worker автоматически и полную CoroutineWorker-работу через " +
+		label: "Фоновые задачи WorkManager",
+		description: "Автоматически измеряет синхронные Worker-задачи и полное выполнение CoroutineWorker через " +
 			"traceSuspendingWorker.",
 		observation: func(summary analyze.Summary) string {
 			return semanticCollectorObservation(summary, "jankhunter.semantic.v1.worker.")

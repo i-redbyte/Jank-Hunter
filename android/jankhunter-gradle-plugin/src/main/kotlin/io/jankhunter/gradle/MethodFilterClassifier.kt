@@ -19,7 +19,7 @@ internal object MethodFilterClassifier {
         methodDescriptor: String,
         kotlinOrigin: KotlinMethodOrigin,
     ): MethodFilterDecision {
-        if (mode == JankHunterMethodFilterMode.DISABLED) return NONE
+        if (mode == JankHunterMethodFilterMode.NONE) return NONE
         var categories: MutableList<String>? = null
         if (classAccess and Opcodes.ACC_SYNTHETIC != 0) categories = add(categories, ACC_SYNTHETIC_CLASS)
         if (isGeneratedHelperClass(className)) categories = add(categories, GENERATED_HELPER)

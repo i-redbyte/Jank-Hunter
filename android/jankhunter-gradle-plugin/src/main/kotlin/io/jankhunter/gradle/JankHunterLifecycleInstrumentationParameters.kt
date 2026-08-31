@@ -13,12 +13,6 @@ interface JankHunterLifecycleInstrumentationParameters : InstrumentationParamete
     val instrumentationDiagnosticsDirectory: Property<String>
 
     @get:Input
-    val asmProgressLog: Property<Boolean>
-
-    @get:Input
-    val progressLabel: Property<String>
-
-    @get:Input
     val includeWholeApplication: Property<Boolean>
 
     @get:Input

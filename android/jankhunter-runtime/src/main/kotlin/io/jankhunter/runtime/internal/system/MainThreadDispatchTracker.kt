@@ -1,7 +1,9 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.RuntimeLongSource
+
 internal class MainThreadDispatchTracker(
-    private val clockMs: () -> Long,
+    private val clockMs: RuntimeLongSource,
     private val minDurationMs: Long = 0L,
 ) {
     private var current: DispatchStart? = null
@@ -9,13 +11,13 @@ internal class MainThreadDispatchTracker(
     fun onMessage(line: String): DispatchSample? {
         return when {
             line.startsWith(DISPATCH_START) -> {
-                current = DispatchStart(clockMs(), line)
+                current = DispatchStart(clockMs.getAsLong(), line)
                 null
             }
             line.startsWith(DISPATCH_END) -> {
                 val start = current ?: return null
                 current = null
-                val durationMs = (clockMs() - start.atMs).coerceAtLeast(0L)
+                val durationMs = (clockMs.getAsLong() - start.atMs).coerceAtLeast(0L)
                 if (durationMs < minDurationMs) return null
                 DispatchSample(
                     durationMs = durationMs,

@@ -657,7 +657,7 @@ func markovContextStickyStates(states []MarkovBucketState) []MarkovContextSticky
 func markovContextLabel(state MarkovBucketState) string {
 	var parts []string
 	if state.Owner != "" {
-		parts = append(parts, "источник "+state.Owner)
+		parts = append(parts, "место запуска "+analysisOwnerLabel(state.Owner))
 	}
 	if state.Route != "" {
 		parts = append(parts, "маршрут "+state.Route)
@@ -785,7 +785,7 @@ func markovDeltaTransitionMatrixDivergence(baseline, candidate MarkovModel) Mark
 	severity := markovMatrixDivergenceSeverity(divergence, baseline, candidate)
 	summary := fmt.Sprintf("Матрица переходов изменилась на %.3f по расхождению Йенсена-Шеннона; показатель близкий к 1 означает сильное изменение сценария.", divergence)
 	if severity == "ok" && divergence > 0 {
-		summary += " Изменение не выглядит регрессией по экспозиции и восстановлению."
+		summary += " Изменение не выглядит ухудшением по доле плохих состояний и восстановлению."
 	}
 	return MarkovDelta{
 		Metric:             "Расхождение матрицы переходов",
@@ -974,7 +974,7 @@ func markovConfidence(states []MarkovBucketState, transitions []MarkovTransition
 	case badEpisodes == 0:
 		return "medium", fmt.Sprintf("окон=%d, плохих эпизодов нет: для спокойного сценария данных достаточно, для метрик восстановления нет", sampleCount)
 	case sampleCount < 10 || badEpisodes < 2:
-		return "medium", fmt.Sprintf("окон=%d, плохих эпизодов=%d: восстановление и липкость лучше подтвердить повтором", sampleCount, badEpisodes)
+		return "medium", fmt.Sprintf("интервалов=%d, плохих эпизодов=%d: восстановление и повторение плохих состояний лучше подтвердить повтором", sampleCount, badEpisodes)
 	default:
 		return "high", fmt.Sprintf("окон=%d, плохих эпизодов=%d, переходов=%d: выборка достаточна для марковских выводов", sampleCount, badEpisodes, transitionCount)
 	}
@@ -1082,7 +1082,7 @@ func markovFindings(model MarkovModel) []Finding {
 				Severity:       markovStatus(model),
 				Title:          "Найдено липкое плохое состояние",
 				Detail:         fmt.Sprintf("%s повторяется само в себя с вероятностью %.1f%%.", MarkovStateLabel(sticky.State), sticky.Probability*100),
-				Recommendation: "Посмотрите соседние временные интервалы и контекст источника/маршрута: липкость обычно означает повторяющуюся работу или отсутствие задержки повторов.",
+				Recommendation: "Посмотрите соседние временные интервалы, место запуска и маршрут: повторение плохого состояния обычно означает повторяющуюся работу или отсутствие задержки повторов.",
 			}}
 		}
 	}
@@ -1092,7 +1092,7 @@ func markovFindings(model MarkovModel) []Finding {
 				Severity:       markovStatus(model),
 				Title:          "Липкое плохое состояние привязано к контексту",
 				Detail:         fmt.Sprintf("%s повторяется в контексте %s с вероятностью %.1f%%.", MarkovStateLabel(sticky.State), sticky.Context, sticky.Probability*100),
-				Recommendation: "Проверьте источник, маршрут и экран рядом с этим контекстом: такая липкость часто указывает на повторяющуюся работу без задержки повторов или очистки.",
+				Recommendation: "Проверьте место запуска, маршрут и экран рядом с этим контекстом: повторение плохого состояния часто указывает на повторяющуюся работу без задержки повторов или очистки.",
 			}}
 		}
 	}
@@ -1122,9 +1122,9 @@ func compareMarkovSummary(deltas []MarkovDelta) string {
 		return fmt.Sprintf("Сопоставимо %d из %d марковских метрик; для %d метрик нет одинаковой наблюдаемой основы. Среди сопоставимых ухудшено %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
 	}
 	if worse == 0 {
-		return "Кандидат не ухудшил переходы между состояниями."
+		return "Проверяемый прогон не ухудшил переходы между состояниями."
 	}
-	return fmt.Sprintf("Кандидат ухудшил %d марковских метрик из %d.", worse, len(deltas))
+	return fmt.Sprintf("Проверяемый прогон ухудшил %d марковских метрик из %d.", worse, len(deltas))
 }
 
 func compareMarkovFindings(deltas []MarkovDelta) []Finding {
@@ -1162,7 +1162,7 @@ func compareMarkovFindings(deltas []MarkovDelta) []Finding {
 			Severity:       worst.Severity,
 			Title:          "Изменились переходы состояний",
 			Detail:         worst.Summary,
-			Recommendation: "Сравните последовательность состояний кандидата с таймлайном, сетевыми циклами и интегральной нагрузкой.",
+			Recommendation: "Сравните последовательность состояний проверяемого прогона с временной шкалой, сетевыми циклами и накопленной нагрузкой.",
 		})
 	}
 	if len(findings) > 0 {

@@ -41,12 +41,12 @@ func BuildEvidenceQualityVector(summary Summary) EvidenceQualityVector {
 			overall = EvidenceQualityDegraded
 		}
 	}
-	headline := "Evidence достаточно для проверенных фактов; ограничения перечислены по измерениям."
+	headline := "Диагностических данных достаточно для проверенных фактов; ограничения перечислены по измерениям."
 	switch overall {
 	case EvidenceQualityInsufficient:
-		headline = "Evidence недостаточно для общего clean-вывода; смотрите непроверенные категории и причины."
+		headline = "Диагностических данных недостаточно для общего вывода; смотрите непроверенные категории и причины."
 	case EvidenceQualityDegraded:
-		headline = "Evidence пригодно с ограничениями; отдельные claims требуют повторного измерения или калибровки."
+		headline = "Диагностические данные пригодны с ограничениями; отдельные выводы требуют повторного измерения или проверки правил."
 	}
 	return EvidenceQualityVector{
 		SchemaVersion: EvidenceQualitySchemaVersion,
@@ -61,24 +61,24 @@ func transportEvidenceQuality(quality CollectionQuality) EvidenceQualityDimensio
 	switch {
 	case !quality.ExactAdmission:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "BEST_EFFORT admission не позволяет доказать полноту событий до очереди."
+		result.Explanation = "Выбранный режим доставки не позволяет подтвердить полноту событий до очереди."
 	case !quality.ChainValid || !quality.CounterInvariantsValid || !quality.QualityProgressionValid || quality.DamagedSegments > 0:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "Digest chain, committed chunks или инварианты quality не подтверждены."
+		result.Explanation = "Цепочка сегментов, зафиксированные блоки или согласованность счётчиков не подтверждены."
 	case quality.KnownLostEvents > 0 || quality.ControlFailures > 0 || quality.BoundedEvidenceLoss > 0:
 		result.Status = EvidenceQualityDegraded
-		result.Explanation = "Сбор явно зарегистрировал потери payload или control/evidence."
+		result.Explanation = "Часть диагностических данных недоступна; количественные оценки могут быть занижены."
 	default:
-		result.Explanation = "Committed prefix, chain и счётчики согласованы; известных потерь событий нет."
+		result.Explanation = "Зафиксированная часть журнала, цепочка сегментов и счётчики согласованы; известных пропусков событий нет."
 	}
 	return result
 }
 
 func acquisitionEvidenceQuality(coverage []CategoryCoverage) EvidenceQualityDimension {
-	result := EvidenceQualityDimension{ID: "acquisition", Label: "Покрытие collectors", Status: EvidenceQualityComplete}
+	result := EvidenceQualityDimension{ID: "acquisition", Label: "Покрытие категорий", Status: EvidenceQualityComplete}
 	if len(coverage) == 0 {
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "Detector coverage не рассчитан."
+		result.Explanation = "Покрытие категорий анализа не рассчитано."
 		return result
 	}
 	missing, degraded := 0, 0
@@ -98,7 +98,7 @@ func acquisitionEvidenceQuality(coverage []CategoryCoverage) EvidenceQualityDime
 		result.Status = EvidenceQualityDegraded
 		result.Explanation = evidenceCategoryCount(degraded, "категорий ограничены качеством сбора")
 	default:
-		result.Explanation = "Все категории имеют first-class источник и достаточную для detector выборку."
+		result.Explanation = "Все категории имеют прямой источник данных и достаточную выборку."
 	}
 	return result
 }
@@ -112,13 +112,13 @@ func processEvidenceQuality(quality CollectionQuality) EvidenceQualityDimension 
 	switch {
 	case quality.ProcessRosterComplete:
 		result.Status = EvidenceQualityComplete
-		result.Explanation = "Все объявленные процессы configured scope представлены в run."
+		result.Explanation = "Все объявленные процессы представлены в прогоне."
 	case quality.ObservedProcessCount > 0:
 		result.Status = EvidenceQualityDegraded
 		result.Explanation = formatInt64(quality.ObservedProcessCount) + " из " + formatInt64(quality.ExpectedProcessCount) + " объявленных процессов наблюдаются; отсутствие остальных не считается нулём."
 	default:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "Process roster не подтверждён."
+		result.Explanation = "Список процессов не подтверждён."
 	}
 	return result
 }
@@ -131,27 +131,27 @@ func temporalEvidenceQuality(quality CollectionQuality, logCount int) EvidenceQu
 		result.Explanation = "Нет входных сегментов."
 	case quality.UnsealedSegments > 0:
 		result.Status = EvidenceQualityDegraded
-		result.Explanation = formatInt(quality.UnsealedSegments) + " сегментов не sealed; доступен только committed prefix без доказательства terminal completeness."
+		result.Explanation = formatInt(quality.UnsealedSegments) + " сегментов не завершены; доступна только зафиксированная часть без подтверждения конца интервала."
 	case quality.SealedSegments > 0:
 		result.Status = EvidenceQualityComplete
-		result.Explanation = "Все анализируемые сегменты sealed и имеют terminal evidence."
+		result.Explanation = "Все анализируемые сегменты завершены и содержат запись о конце интервала."
 	default:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "Terminal state сегментов не подтверждён."
+		result.Explanation = "Завершённость сегментов не подтверждена."
 	}
 	return result
 }
 
 func semanticEvidenceQuality(summary Summary) EvidenceQualityDimension {
-	result := EvidenceQualityDimension{ID: "sensor_semantics", Label: "Семантика UI sensor"}
+	result := EvidenceQualityDimension{ID: "sensor_semantics", Label: "Качество данных UI"}
 	if summary.UIFrames == 0 {
 		result.Status = EvidenceQualityNotMeasured
-		result.Explanation = "UI frames не записаны; вывод о плавности невозможен."
+		result.Explanation = "UI-кадры не записаны; вывод о плавности невозможен."
 		return result
 	}
 	if len(summary.Screens) == 0 {
 		result.Status = EvidenceQualityDegraded
-		result.Explanation = "UI frame totals есть, но screen-level source/deadline/distribution отсутствуют."
+		result.Explanation = "Общее число UI-кадров известно, но нет разбивки по экранам, целевого времени кадра или распределения длительности."
 		return result
 	}
 	allJankStats := true
@@ -164,11 +164,11 @@ func semanticEvidenceQuality(summary Summary) EvidenceQualityDimension {
 	}
 	if allJankStats && allMergeable && allDeadlines {
 		result.Status = EvidenceQualityComplete
-		result.Explanation = "JankStats source, frame deadline и mergeable frame-duration histogram явно записаны для всех UI-экранов."
+		result.Explanation = "Источник JankStats, целевое время кадра и распределение длительности записаны для всех UI-экранов."
 		return result
 	}
 	result.Status = EvidenceQualityDegraded
-	result.Explanation = "Часть UI evidence использует Choreographer/mixed source, смешанный deadline или неполную frame distribution; выводы помечены ограничениями."
+	result.Explanation = "Для части UI-кадров используется Choreographer, смешаны источники или неполно распределение длительности; выводы помечены ограничениями."
 	return result
 }
 
@@ -177,16 +177,16 @@ func analysisEvidenceQuality(inputs AnalysisInputCompleteness) EvidenceQualityDi
 	switch {
 	case inputs.Complete:
 		result.Status = EvidenceQualityComplete
-		result.Explanation = "Runtime evidence и обязательные build-time артефакты доступны и согласованы."
+		result.Explanation = "Данные выполнения и обязательные артефакты сборки доступны и согласованы."
 	case inputs.Status == "":
 		result.Status = EvidenceQualityNotMeasured
 		result.Explanation = "Полнота аналитических входов не рассчитана."
 	case inputs.RuntimeEvidence:
 		result.Status = EvidenceQualityDegraded
-		result.Explanation = inputs.Explanation
+		result.Explanation = "Данные выполнения доступны, но отсутствует часть артефактов сборки; статические пути и диагностика инструментирования могут быть неполными."
 	default:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = inputs.Explanation
+		result.Explanation = "Нет обязательных данных выполнения или артефактов сборки; часть причин нельзя локализовать до кода."
 	}
 	return result
 }

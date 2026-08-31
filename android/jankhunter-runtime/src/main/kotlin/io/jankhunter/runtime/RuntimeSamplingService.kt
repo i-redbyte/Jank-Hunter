@@ -74,7 +74,7 @@ internal class AdaptiveRuntimeSamplingStrategy(
 }
 
 internal class RuntimeSamplingService(
-    private val nowMs: () -> Long,
+    private val nowMs: RuntimeLongSource,
 ) {
     @Volatile
     private var strategy: RuntimeSamplingStrategy = AlwaysRecordRuntimeSamplingStrategy
@@ -95,7 +95,7 @@ internal class RuntimeSamplingService(
     }
 
     fun shouldRecordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long): Boolean {
-        return strategy.shouldRecordMemory(nowMs(), pssKb, javaHeapKb, nativeHeapKb)
+        return strategy.shouldRecordMemory(nowMs.getAsLong(), pssKb, javaHeapKb, nativeHeapKb)
     }
 
     fun shouldRecordContext(
@@ -110,7 +110,7 @@ internal class RuntimeSamplingService(
         networkVpn: Boolean,
     ): Boolean {
         return strategy.shouldRecordContext(
-            nowMs(),
+            nowMs.getAsLong(),
             networkKind,
             batteryPct,
             availMemoryKb,

@@ -4,7 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
+import androidx.core.content.ContextCompat
 import io.jankhunter.runtime.JankHunterLogSnapshot
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -72,17 +72,14 @@ internal class ProcessLogSnapshotCoordinator private constructor(
 
     init {
         val filter = IntentFilter(action)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(
-                receiver,
-                filter,
-                broadcastPermission,
-                null,
-                Context.RECEIVER_NOT_EXPORTED,
-            )
-        } else {
-            context.registerReceiver(receiver, filter, broadcastPermission, null)
-        }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            filter,
+            broadcastPermission,
+            null,
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
     }
 
     fun capture(): JankHunterLogSnapshot? = requesterLock.withLock {

@@ -88,7 +88,7 @@ func TestBuildCausalGraphConnectsSymptomToOwner(t *testing.T) {
 
 	graph := buildCausalGraph(timeline, nil, markov)
 	for _, path := range graph.Paths {
-		if path.From == "симптом: медленная сеть" && path.To == "источник: ConfigRepository.refresh" {
+		if path.From == "симптом: медленная сеть" && path.To == "место запуска: ConfigRepository.refresh" {
 			return
 		}
 	}

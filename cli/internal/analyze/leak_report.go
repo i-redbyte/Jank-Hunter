@@ -230,7 +230,7 @@ func BuildLeakReport(summary Summary) LeakReport {
 		report.ModeHint = "Для части объектов HPROF подтвердил путь от распознанного корня GC. Это доказательство удержания в момент дампа, но окончательный диагноз утечки требует проверки ожидаемого жизненного цикла."
 	} else {
 		report.ModeTitle = "Сигналы достижимости"
-		report.ModeHint = "Подтвержденного пути HPROF нет. time_only означает только жизнь после задержки; after_explicit_gc — жизнь после запрошенного GC. Оба уровня являются сигналами для проверки, а не доказательством утечки."
+		report.ModeHint = "Подтверждённого пути HPROF нет. Жизнь после задержки и после запрошенного GC является сигналом для проверки, а не доказательством утечки."
 	}
 	return report
 }
@@ -363,8 +363,7 @@ func LeakFingerprint(suspect MemoryLeakSuspect) string {
 		strings.ToLower(strings.TrimSpace(suspect.ClassName)),
 		strings.ToLower(strings.TrimSpace(suspect.Holder)),
 		strings.ToLower(strings.TrimSpace(suspect.Screen)),
-		strings.ToLower(strings.TrimSpace(suspect.Flow)),
-		strings.ToLower(strings.TrimSpace(suspect.Step)),
+		strings.ToLower(strings.TrimSpace(suspect.Operation)),
 	}
 	return strings.Join(parts, "\x00")
 }
@@ -619,10 +618,8 @@ func runtimeLeakNodeKind(label string) string {
 	switch {
 	case strings.HasPrefix(label, "экран:"):
 		return "screen"
-	case strings.HasPrefix(label, "сценарий:"), strings.HasPrefix(label, "флоу:"):
-		return "flow"
-	case strings.HasPrefix(label, "шаг:"):
-		return "step"
+	case strings.HasPrefix(label, "операция:"):
+		return "operation"
 	case strings.HasPrefix(label, "держатель:"):
 		return "holder"
 	case strings.HasPrefix(label, "метод:"):
@@ -638,10 +635,8 @@ func runtimeLeakNodeDetail(kind string) string {
 	switch kind {
 	case "screen":
 		return "экран во время наблюдения"
-	case "flow":
-		return "пользовательский сценарий"
-	case "step":
-		return "шаг пользовательского сценария"
+	case "operation":
+		return "измеряемая операция"
 	case "holder":
 		return "вероятный владелец ссылки"
 	case "method":
@@ -655,11 +650,9 @@ func runtimeLeakNodeDetail(kind string) string {
 
 func runtimeLeakRelation(fromKind, toKind string) string {
 	switch {
-	case fromKind == "screen" && toKind == "flow":
-		return "сценарий на экране"
-	case (fromKind == "flow" || fromKind == "screen" || fromKind == "context") && toKind == "step":
-		return "шаг сценария"
-	case (fromKind == "step" || fromKind == "flow" || fromKind == "screen" || fromKind == "context") && toKind == "holder":
+	case fromKind == "screen" && toKind == "operation":
+		return "операция на экране"
+	case (fromKind == "operation" || fromKind == "screen" || fromKind == "context") && toKind == "holder":
 		return "атрибутировано вероятному владельцу"
 	case fromKind == "holder" && toKind == "method":
 		return "место наблюдения"
@@ -692,7 +685,7 @@ func leakReportVerdict(stats LeakReportStats) string {
 	case stats.High > 0:
 		return fmt.Sprintf("Найдено %s; с высоким риском — %d. Сначала проверьте строки с подтвержденным HPROF-путем; runtime-сигналы без пути не являются доказательством утечки.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"), stats.High)
 	case stats.Medium > 0:
-		return fmt.Sprintf("Найдено %s. Проверьте повторяемость и уровень evidence; для точной цепочки нужен HPROF-путь от корня GC.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
+		return fmt.Sprintf("Найдено %s. Проверьте повторяемость и силу данных; для точной цепочки нужен HPROF-путь от корня GC.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	default:
 		return fmt.Sprintf("Найдено %s с низким приоритетом. Это стоит мониторить, но без роста возраста или количества риск низкий.", russianCount(stats.TotalSuspects, "сигнал удержания", "сигнала удержания", "сигналов удержания"))
 	}
@@ -853,8 +846,7 @@ func leakPlainText(suspect MemoryLeakSuspect) string {
 		suspect.ClassName,
 		suspect.Holder,
 		suspect.Screen,
-		suspect.Flow,
-		suspect.Step,
+		suspect.Operation,
 		suspect.GCRoot,
 		suspect.GCRootCategory,
 		suspect.HolderField,

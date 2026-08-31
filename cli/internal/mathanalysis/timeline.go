@@ -24,10 +24,9 @@ type timelineScale struct {
 }
 
 type timelineCollector struct {
-	filter   analyze.Filter
-	ownerMap *analyze.OwnerMap
-	scale    timelineScale
-	buckets  map[uint64]*timelineBucketAgg
+	filter  analyze.Filter
+	scale   timelineScale
+	buckets map[uint64]*timelineBucketAgg
 }
 
 type timelineBucketAgg struct {
@@ -427,14 +426,14 @@ func timelineFindings(timeline []TimelineBucket) []Finding {
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("В таймлайне %d временных интервалов, но хотя бы одно наблюдение есть только в %d. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline), observed),
+			Detail:         fmt.Sprintf("На временной шкале %d интервалов, но хотя бы одно наблюдение есть только в %d. Этого мало для устойчивых выводов по скользящим окнам, точкам изменения и спектру.", len(timeline), observed),
 			Recommendation: "Соберите более длинный прогон или несколько повторов сценария.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Таймлайн сигналов построен",
-		Detail:   fmt.Sprintf("Временные интервалы по %d мс готовы для следующих этапов анализа: робастной статистики, точек изменения, автокорреляции и спектрального анализа.", timelineBucketMS(timeline, nil)),
+		Title:    "Временная шкала сигналов построена",
+		Detail:   fmt.Sprintf("Временные интервалы по %d мс готовы для следующих этапов анализа: устойчивой статистики, точек изменения, автокорреляции и спектрального анализа.", timelineBucketMS(timeline, nil)),
 	}}
 }
 
@@ -449,9 +448,9 @@ func compareTimelineSummary(baselineTimeline, candidateTimeline []TimelineBucket
 	baselineObserved := timelineObservedBucketCount(baselineTimeline)
 	candidateObserved := timelineObservedBucketCount(candidateTimeline)
 	if baselineObserved < 3 || candidateObserved < 3 {
-		return "Недостаточно данных для надежного анализа: базе и кандидату нужны несколько временных интервалов."
+		return "Недостаточно данных для надёжного анализа: базовому и проверяемому прогонам нужны несколько временных интервалов."
 	}
-	return fmt.Sprintf("База: измерено %d из %d интервалов по %d мс; кандидат: %d из %d интервалов по %d мс. Пропуски не считаются нулевой нагрузкой или нормальной работой.", baselineObserved, len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), candidateObserved, len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
+	return fmt.Sprintf("Базовый прогон: измерено %d из %d интервалов по %d мс; проверяемый прогон: %d из %d интервалов по %d мс. Пропуски не считаются нулевой нагрузкой или нормальной работой.", baselineObserved, len(baselineTimeline), timelineBucketMS(baselineTimeline, nil), candidateObserved, len(candidateTimeline), timelineBucketMS(candidateTimeline, nil))
 }
 
 func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucket) []Finding {
@@ -461,13 +460,13 @@ func compareTimelineFindings(baselineTimeline, candidateTimeline []TimelineBucke
 		return []Finding{{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("База содержит %d измеренных интервалов из %d, кандидат — %d из %d. Этого мало для надежного сравнения формы таймлайна.", baselineObserved, len(baselineTimeline), candidateObserved, len(candidateTimeline)),
-			Recommendation: "Соберите более длинные прогоны базы и кандидата или несколько повторов каждого сценария.",
+			Detail:         fmt.Sprintf("Базовый прогон содержит %d измеренных интервалов из %d, проверяемый — %d из %d. Этого мало для надёжного сравнения формы временной шкалы.", baselineObserved, len(baselineTimeline), candidateObserved, len(candidateTimeline)),
+			Recommendation: "Соберите более длинные базовый и проверяемый прогоны или несколько повторов каждого сценария.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Таймлайны базы и кандидата построены",
+		Title:    "Временные шкалы обоих прогонов построены",
 		Detail:   "Равномерные временные интервалы готовы для сравнения точек изменения, периодичности, сетевых циклов и интегральных оценок.",
 	}}
 }

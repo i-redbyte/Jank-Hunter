@@ -10,7 +10,7 @@ class RuntimeHookGuardTest {
     @Test
     fun everySuppressedFailureIsCounted() {
         val before = RuntimeHookFailureTracker.total()
-        val reasonBefore = RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.COLLECTOR.ordinal]
+        val reasonBefore = RuntimeHookFailureTracker.count(RuntimeHookFailureReason.COLLECTOR)
 
         RuntimeHookGuard.run(RuntimeHookFailureReason.COLLECTOR) { error("run") }
         assertEquals(
@@ -22,7 +22,7 @@ class RuntimeHookGuardTest {
         assertEquals(before + 3L, RuntimeHookFailureTracker.total())
         assertEquals(
             reasonBefore + 3L,
-            RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.COLLECTOR.ordinal],
+            RuntimeHookFailureTracker.count(RuntimeHookFailureReason.COLLECTOR),
         )
     }
 

@@ -10,18 +10,18 @@ import java.util.concurrent.atomic.AtomicLongArray
 
 internal object Jhlog {
     const val FORMAT_MARKER = 0x81
-    const val FORMAT_MAJOR = 2
+    const val FORMAT_MAJOR = 3
     const val FORMAT_MINOR = 0
     const val FORMAT_PATCH = 0
-    const val FORMAT_VERSION = "2.0.0"
-    const val HEADER_SCHEMA = 1L
+    const val FORMAT_VERSION = "3.0.0"
+    const val HEADER_SCHEMA = 2L
     const val MAX_FILE_HEADER_BYTES = 4 * 1024
     const val TARGET_RAW_CHUNK_BYTES = 64 * 1024
     const val MAX_RAW_CHUNK_BYTES = 256 * 1024
     const val CHUNK_HEADER_BYTES = 32
     const val COMMIT_TRAILER_BYTES = 20
 
-    const val REQUIRED_FEATURES = 0x1fffL
+    const val REQUIRED_FEATURES = 0x3ffffL
     const val OPTIONAL_FEATURES = 0x01L
 
     const val FEATURE_CHUNK_CRC_COMMIT = 1L shl 0
@@ -37,6 +37,11 @@ internal object Jhlog {
     const val FEATURE_COLUMNAR_RUNTIME_CALLS = 1L shl 10
     const val FEATURE_SEGMENT_DIGEST_CHAIN = 1L shl 11
     const val FEATURE_PROCESS_ROSTER = 1L shl 12
+    const val FEATURE_OPERATION_LIFECYCLE = 1L shl 13
+    const val FEATURE_DATABASE_LIFECYCLE = 1L shl 14
+    const val FEATURE_PROCESS_STATE = 1L shl 15
+    const val FEATURE_ANDROID_COMPONENT_LIFECYCLE = 1L shl 16
+    const val FEATURE_BINDER_IPC = 1L shl 17
     const val OPTIONAL_FEATURE_GZIP_CHUNKS = 1L shl 0
     const val BEST_EFFORT_FEATURES = REQUIRED_FEATURES and FEATURE_EXACT_EVENT_ADMISSION.inv()
 
@@ -55,8 +60,7 @@ internal object Jhlog {
 
     const val CONTEXT_SCREEN = 1L shl 0
     const val CONTEXT_OWNER = 1L shl 1
-    const val CONTEXT_FLOW = 1L shl 2
-    const val CONTEXT_STEP = 1L shl 3
+    const val CONTEXT_OPERATION = 1L shl 2
 
     const val TYPE_DICTIONARY = 1
     const val TYPE_SESSION = 2
@@ -68,8 +72,7 @@ internal object Jhlog {
     const val TYPE_RETAINED = 8
     const val TYPE_COUNTER = 9
     const val TYPE_GAUGE = 10
-    // Type 11 (continuous FLOW_TRANSITION) is retired. Useful events carry
-    // screen/owner/flow/step attribution atomically in their envelope.
+    const val TYPE_OPERATION = 11
     const val TYPE_LOG_SPAM = 12
     const val TYPE_PROBLEM = 13
     const val TYPE_RUNTIME_CALL = 14
@@ -78,6 +81,172 @@ internal object Jhlog {
     const val TYPE_LOG_GROWTH = 17
     const val TYPE_PROCESS_EXIT = 18
     const val TYPE_IO = 19
+    const val TYPE_WORKER = 20
+    const val TYPE_WEBSOCKET = 21
+    const val TYPE_DATABASE = 22
+    const val TYPE_DATABASE_TRANSACTION = 23
+    const val TYPE_PROCESS_STATE = 24
+    const val TYPE_ANDROID_COMPONENT = 25
+    const val TYPE_BINDER_TRANSACTION = 26
+
+    const val PROCESS_UI_UNKNOWN = 0L
+    const val PROCESS_UI_HIDDEN = 1L
+    const val PROCESS_UI_VISIBLE = 2L
+    const val PROCESS_IMPORTANCE_UNKNOWN = 0L
+    const val PROCESS_IMPORTANCE_FOREGROUND = 1L
+    const val PROCESS_IMPORTANCE_FOREGROUND_SERVICE = 2L
+    const val PROCESS_IMPORTANCE_VISIBLE = 3L
+    const val PROCESS_IMPORTANCE_PERCEPTIBLE = 4L
+    const val PROCESS_IMPORTANCE_SERVICE = 5L
+    const val PROCESS_IMPORTANCE_CACHED = 6L
+    const val PROCESS_STATE_PERIODIC_SAMPLE = 1L
+    const val PROCESS_STATE_UI_LIFECYCLE = 2L
+    const val PROCESS_STATE_COMPONENT_LIFECYCLE = 3L
+
+    const val COMPONENT_KIND_SERVICE = 1L
+    const val COMPONENT_KIND_RECEIVER = 2L
+    const val COMPONENT_SERVICE_CREATED = 1L
+    const val COMPONENT_SERVICE_START_COMMAND = 2L
+    const val COMPONENT_SERVICE_BIND = 3L
+    const val COMPONENT_SERVICE_UNBIND = 4L
+    const val COMPONENT_SERVICE_REBIND = 5L
+    const val COMPONENT_SERVICE_TASK_REMOVED = 6L
+    const val COMPONENT_SERVICE_FOREGROUND_ENTERED = 7L
+    const val COMPONENT_SERVICE_FOREGROUND_EXITED = 8L
+    const val COMPONENT_SERVICE_DESTROYED = 9L
+    const val COMPONENT_SERVICE_TIMEOUT = 10L
+    const val COMPONENT_RECEIVER_STARTED = 20L
+    const val COMPONENT_RECEIVER_ASYNC_STARTED = 21L
+    const val COMPONENT_RECEIVER_FINISHED = 22L
+    const val COMPONENT_OUTCOME_UNKNOWN = 0L
+    const val COMPONENT_OUTCOME_SUCCESS = 1L
+    const val COMPONENT_OUTCOME_FAILURE = 2L
+    const val COMPONENT_OUTCOME_TIMEOUT = 3L
+    const val COMPONENT_OUTCOME_CANCELLED = 4L
+    const val COMPONENT_FLAG_FOREGROUND = 1L shl 0
+    const val COMPONENT_FLAG_ASYNC = 1L shl 1
+    const val COMPONENT_FLAG_ORDERED = 1L shl 2
+    const val COMPONENT_FLAG_STICKY = 1L shl 3
+    const val COMPONENT_FLAG_BOUND = 1L shl 4
+    const val COMPONENT_FLAG_KNOWN_MASK = COMPONENT_FLAG_FOREGROUND or COMPONENT_FLAG_ASYNC or
+        COMPONENT_FLAG_ORDERED or COMPONENT_FLAG_STICKY or COMPONENT_FLAG_BOUND
+
+    const val BINDER_DIRECTION_CLIENT = 1L
+    const val BINDER_DIRECTION_SERVER = 2L
+    const val BINDER_OUTCOME_SUCCESS = 1L
+    const val BINDER_OUTCOME_FAILURE = 2L
+    const val BINDER_OUTCOME_UNHANDLED = 3L
+    const val BINDER_FAILURE_NONE = 0L
+    const val BINDER_FAILURE_REMOTE = 1L
+    const val BINDER_FAILURE_DEAD_OBJECT = 2L
+    const val BINDER_FAILURE_SECURITY = 3L
+    const val BINDER_FAILURE_TIMEOUT = 4L
+    const val BINDER_FAILURE_OTHER = 5L
+    const val BINDER_FLAG_ONEWAY = 1L shl 0
+    const val BINDER_FLAG_KNOWN_MASK = BINDER_FLAG_ONEWAY
+
+    const val OPERATION_PHASE_STARTED = 1L
+    const val OPERATION_PHASE_FINISHED = 2L
+    const val OPERATION_MAX_ATTRIBUTES = 8
+
+    const val FLAG_HTTP_REUSED_CONNECTION = 1L shl 0
+    const val FLAG_HTTP_FAILED = 1L shl 1
+    const val FLAG_HTTP_TLS = 1L shl 2
+    const val FLAG_HTTP_CANCELLED = 1L shl 10
+    const val FLAG_HTTP_CACHE_HIT = 1L shl 11
+    const val FLAG_HTTP_REQUEST_BYTES_KNOWN = 1L shl 12
+    const val FLAG_HTTP_RESPONSE_BYTES_KNOWN = 1L shl 13
+    const val FLAG_WORKER_PERIODIC = 1L shl 20
+    const val FLAG_WORKER_STOP_REASON_KNOWN = 1L shl 21
+
+    const val WEBSOCKET_STAGE_OPENED = 1L
+    const val WEBSOCKET_STAGE_CLOSED = 2L
+    const val WEBSOCKET_STAGE_FAILED = 3L
+
+    const val WEBSOCKET_FAILURE_UNKNOWN = 0L
+    const val WEBSOCKET_FAILURE_TIMEOUT = 1L
+    const val WEBSOCKET_FAILURE_CONNECTION = 2L
+    const val WEBSOCKET_FAILURE_TLS = 3L
+    const val WEBSOCKET_FAILURE_PROTOCOL = 4L
+    const val WEBSOCKET_FAILURE_IO = 5L
+    const val WEBSOCKET_FAILURE_OTHER = 6L
+
+    const val DATABASE_FRAMEWORK_SQLITE = 1L
+    const val DATABASE_FRAMEWORK_SUPPORT_SQLITE = 2L
+    const val DATABASE_FRAMEWORK_ROOM = 3L
+    const val DATABASE_FRAMEWORK_CUSTOM = 4L
+    const val DATABASE_OPERATION_QUERY = 1L
+    const val DATABASE_OPERATION_INSERT = 2L
+    const val DATABASE_OPERATION_UPDATE = 3L
+    const val DATABASE_OPERATION_DELETE = 4L
+    const val DATABASE_OPERATION_EXECUTE = 5L
+    const val DATABASE_OPERATION_STATEMENT = 6L
+    const val DATABASE_OUTCOME_SUCCESS = 1L
+    const val DATABASE_OUTCOME_FAILURE = 2L
+    const val DATABASE_FAILURE_NONE = 0L
+    const val DATABASE_FAILURE_CANCELLED = 1L
+    const val DATABASE_FAILURE_BUSY_LOCKED = 2L
+    const val DATABASE_FAILURE_CONSTRAINT = 3L
+    const val DATABASE_FAILURE_DISK_FULL = 4L
+    const val DATABASE_FAILURE_CORRUPTION = 5L
+    const val DATABASE_FAILURE_TIMEOUT = 6L
+    const val DATABASE_FAILURE_OTHER = 7L
+    const val DATABASE_BOUNDARY_DISPATCH = 1L
+    const val DATABASE_BOUNDARY_EXECUTE = 2L
+    const val DATABASE_BOUNDARY_MATERIALIZE = 3L
+    const val DATABASE_BOUNDARY_MANUAL = 4L
+    const val DATABASE_RESULT_UNKNOWN = 0L
+    const val DATABASE_RESULT_ROWS = 1L
+    const val DATABASE_RESULT_AFFECTED_ROWS = 2L
+    const val DATABASE_COUNT_UNKNOWN = 0L
+    const val DATABASE_COUNT_ZERO = 1L
+    const val DATABASE_COUNT_ONE = 2L
+    const val DATABASE_COUNT_TWO_TO_TEN = 3L
+    const val DATABASE_COUNT_ELEVEN_TO_HUNDRED = 4L
+    const val DATABASE_COUNT_OVER_HUNDRED = 5L
+    const val DATABASE_PHASE_POOL_WAIT = 1L shl 0
+    const val DATABASE_PHASE_LOCK_WAIT = 1L shl 1
+    const val DATABASE_PHASE_EXECUTE = 1L shl 2
+    const val DATABASE_PHASE_MATERIALIZE = 1L shl 3
+    const val DATABASE_PHASE_KNOWN_MASK = DATABASE_PHASE_POOL_WAIT or DATABASE_PHASE_LOCK_WAIT or
+        DATABASE_PHASE_EXECUTE or DATABASE_PHASE_MATERIALIZE
+    const val DATABASE_TRANSACTION_BEGIN = 1L
+    const val DATABASE_TRANSACTION_TERMINAL = 2L
+    const val DATABASE_TRANSACTION_MODE_UNKNOWN = 0L
+    const val DATABASE_TRANSACTION_DEFERRED = 1L
+    const val DATABASE_TRANSACTION_IMMEDIATE = 2L
+    const val DATABASE_TRANSACTION_EXCLUSIVE = 3L
+    const val DATABASE_TRANSACTION_READ_ONLY = 4L
+    const val DATABASE_TRANSACTION_OUTCOME_UNKNOWN = 0L
+    const val DATABASE_TRANSACTION_SUCCESS = 1L
+    const val DATABASE_TRANSACTION_ROLLBACK = 2L
+    const val DATABASE_TRANSACTION_FAILURE = 3L
+
+    const val HTTP_FAILURE_PHASE_UNKNOWN = 0L
+    const val HTTP_FAILURE_PHASE_CALL = 1L
+    const val HTTP_FAILURE_PHASE_QUEUE = 2L
+    const val HTTP_FAILURE_PHASE_DNS = 3L
+    const val HTTP_FAILURE_PHASE_CONNECT = 4L
+    const val HTTP_FAILURE_PHASE_TLS = 5L
+    const val HTTP_FAILURE_PHASE_REQUEST = 6L
+    const val HTTP_FAILURE_PHASE_RESPONSE = 7L
+    const val HTTP_FAILURE_PHASE_CANCELLED = 8L
+
+    const val HTTP_FAILURE_KIND_UNKNOWN = 0L
+    const val HTTP_FAILURE_KIND_DNS = 1L
+    const val HTTP_FAILURE_KIND_TIMEOUT = 2L
+    const val HTTP_FAILURE_KIND_CONNECTION = 3L
+    const val HTTP_FAILURE_KIND_TLS = 4L
+    const val HTTP_FAILURE_KIND_PROTOCOL = 5L
+    const val HTTP_FAILURE_KIND_CANCELLED = 6L
+    const val HTTP_FAILURE_KIND_IO = 7L
+    const val HTTP_FAILURE_KIND_OTHER = 8L
+
+    const val HTTP_PROTOCOL_UNKNOWN = 0L
+    const val HTTP_PROTOCOL_1_0 = 1L
+    const val HTTP_PROTOCOL_1_1 = 2L
+    const val HTTP_PROTOCOL_2 = 3L
+    const val HTTP_PROTOCOL_3 = 4L
 
     const val COLLECTOR_FPS = 1L shl 0
     const val COLLECTOR_JANKSTATS = 1L shl 1
@@ -89,10 +258,11 @@ internal object Jhlog {
     const val COLLECTOR_COMPOSE = 1L shl 7
     const val COLLECTOR_ROOM = 1L shl 8
     const val COLLECTOR_WORKER = 1L shl 9
+    const val COLLECTOR_DATABASE = 1L shl 10
     const val COLLECTOR_KNOWN_MASK = COLLECTOR_FPS or COLLECTOR_JANKSTATS or
         COLLECTOR_PROCESS_EXIT or COLLECTOR_IO_TRACING or COLLECTOR_SYSTEM_SAMPLER or
         COLLECTOR_MAIN_THREAD_STALLS or COLLECTOR_RETAINED_OBJECTS or COLLECTOR_COMPOSE or
-        COLLECTOR_ROOM or COLLECTOR_WORKER
+        COLLECTOR_ROOM or COLLECTOR_WORKER or COLLECTOR_DATABASE
 
     const val UI_SOURCE_JANKSTATS = 1L
     const val UI_SOURCE_CHOREOGRAPHER = 2L
@@ -115,10 +285,23 @@ internal object Jhlog {
     const val IO_FILE_READ = 1L
     const val IO_FILE_WRITE = 2L
     const val IO_FILE_SYNC = 3L
-    const val IO_DATABASE_READ = 4L
-    const val IO_DATABASE_WRITE = 5L
     const val IO_CONTENT_READ = 6L
     const val IO_CONTENT_WRITE = 7L
+
+    const val IO_OUTCOME_SUCCESS = 1L
+    const val IO_OUTCOME_FAILURE = 2L
+
+    const val FLAG_IO_BYTES_KNOWN = 1L shl 22
+
+    const val WORKER_STAGE_ENQUEUED = 1L
+    const val WORKER_STAGE_STARTED = 2L
+    const val WORKER_STAGE_FINISHED = 3L
+
+    const val WORKER_OUTCOME_UNKNOWN = 0L
+    const val WORKER_OUTCOME_SUCCESS = 1L
+    const val WORKER_OUTCOME_FAILURE = 2L
+    const val WORKER_OUTCOME_RETRY = 3L
+    const val WORKER_OUTCOME_CANCELLED = 4L
 
     const val MAX_RUNTIME_CALL_BLOCK_ROWS = 128
 
@@ -145,6 +328,21 @@ internal object Jhlog {
         FORMAT_MINOR.toByte(),
         FORMAT_PATCH.toByte(),
     )
+
+    fun isKnownObsoleteFileMagic(magic: ByteArray): Boolean {
+        if (magic.size < FILE_MAGIC.size) return false
+        val versionStart = FILE_MAGIC.size - 3
+        for (index in 0 until versionStart) {
+            if (magic[index] != FILE_MAGIC[index]) return false
+        }
+        val major = magic[versionStart].toInt() and 0xff
+        val minor = magic[versionStart + 1].toInt() and 0xff
+        val patch = magic[versionStart + 2].toInt() and 0xff
+        return major < FORMAT_MAJOR ||
+            major == FORMAT_MAJOR && minor < FORMAT_MINOR ||
+            major == FORMAT_MAJOR && minor == FORMAT_MINOR && patch < FORMAT_PATCH
+    }
+
     val CHUNK_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'C'.code.toByte(), '1'.code.toByte())
     val COMMIT_MAGIC = byteArrayOf('J'.code.toByte(), 'H'.code.toByte(), 'C'.code.toByte(), 'M'.code.toByte())
 }
@@ -210,6 +408,10 @@ internal object QualityCounterId {
     const val JANKSTATS_FRAME_FAILURE = 0x2032
     const val JANKSTATS_CONTROL_FAILURE = 0x2033
     const val RUNTIME_HOOK_UNCLASSIFIED_FAILURE = 0x2034
+    const val PREPARED_STATEMENT_REGISTRY_EVICTION = 0x2035
+    const val PREPARED_STATEMENT_RESOLUTION_MISS_AFTER_EVICTION = 0x2036
+    const val RECEIVER_ASYNC_REGISTRY_EVICTION = 0x2037
+    const val RECEIVER_ASYNC_RESOLUTION_MISS_AFTER_EVICTION = 0x2038
 
     const val REASON_QUEUE_FULL = 1
     const val REASON_NOT_ACCEPTING = 2
@@ -347,21 +549,27 @@ internal class LogQualityCounters {
 internal data class LogEventContext(
     val screen: String?,
     val owner: String?,
-    val flow: String?,
-    val step: String?,
+    val operationId: Long = 0L,
 ) {
-    fun matches(screen: String?, owner: String?, flow: String?, step: String?): Boolean {
+    fun matches(screen: String?, owner: String?, operationId: Long = 0L): Boolean {
         return this.screen == normalized(screen) &&
             this.owner == normalized(owner) &&
-            this.flow == normalized(flow) &&
-            this.step == normalized(step)
+            this.operationId == operationId.coerceAtLeast(0L)
     }
 
     companion object {
-        val EMPTY = LogEventContext(null, null, null, null)
+        val EMPTY = LogEventContext(null, null, 0L)
 
-        fun of(screen: String?, owner: String?, flow: String?, step: String?): LogEventContext {
-            return LogEventContext(normalized(screen), normalized(owner), normalized(flow), normalized(step))
+        fun of(
+            screen: String?,
+            owner: String?,
+            operationId: Long = 0L,
+        ): LogEventContext {
+            return LogEventContext(
+                normalized(screen),
+                normalized(owner),
+                operationId.coerceAtLeast(0L),
+            )
         }
 
         private fun normalized(value: String?): String? = value?.takeIf { it.isNotBlank() && it != "unknown" }
@@ -401,6 +609,7 @@ internal data class BinaryLogFileHeader(
     val collectorStartElapsedUs: Long,
     val segmentStartElapsedUs: Long,
     val segmentStartUnixMs: Long,
+    val timezoneOffsetMinutes: Long = 0L,
     val identitySource: Long,
     val processName: String,
     val symbolNamespace: ByteArray,

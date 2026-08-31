@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.Jhlog
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -35,8 +36,8 @@ class RuntimeHookEventTransportTest {
     ) { transport ->
         assertTrue(transport.recordMethod(1L, "one"))
         assertTrue(transport.recordMethod(2L, "two"))
-        assertTrue(transport.recordLogSpam("screen", "owner", "flow", "step", "source-a", 3))
-        assertTrue(transport.recordLogSpam("screen", "owner", "flow", "step", "source-b", 3))
+        assertTrue(transport.recordLogSpam("screen", "owner", "source-a", 3))
+        assertTrue(transport.recordLogSpam("screen", "owner", "source-b", 3))
 
         assertTrue(transport.flushBlocking(2_000L))
         assertEquals(4L, transport.acceptedForTest())
@@ -45,23 +46,22 @@ class RuntimeHookEventTransportTest {
     }
 
     @Test
-    fun methodNameArrivingAfterTheFirstEventIsEmbeddedInTheLog() {
-        val directory = Files.createTempDirectory("jankhunter-runtime-hook-late-symbol").toFile()
+    fun methodNameIsEmbeddedWithTheFirstEvent() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-hook-symbol").toFile()
         val writer = writer(directory)
         val transport = RuntimeHookEventTransport({ 16 }, { 16 })
         transport.start(writer)
         try {
-            assertTrue(transport.recordMethod(42L, null))
-            assertTrue(transport.recordMethod(42L, "example.LateSymbol.call"))
+            assertTrue(transport.recordMethod(42L, "example.Symbol.call"))
             assertTrue(transport.stopAndFlush(5_000L))
             assertTrue(writer.close())
 
-            assertEquals(2L, transport.acceptedForTest())
-            assertEquals(2L, transport.emittedForTest())
+            assertEquals(1L, transport.acceptedForTest())
+            assertEquals(1L, transport.emittedForTest())
             val file = directory.listFiles { candidate -> candidate.extension == "jhlog" }.orEmpty().single()
             assertTrue(
-                "late stable symbol definition was not embedded",
-                decodedChunks(file.readBytes()).containsSubsequence("example.LateSymbol.call".toByteArray()),
+                "stable symbol definition was not embedded",
+                decodedChunks(file.readBytes()).containsSubsequence("example.Symbol.call".toByteArray()),
             )
         } finally {
             transport.stopAndFlush(5_000L)
@@ -264,7 +264,7 @@ class RuntimeHookEventTransportTest {
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {
-        return AsyncLogWriter.open(
+        return AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder()
                 .autoStartCollectors(false)

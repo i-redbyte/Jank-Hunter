@@ -5,6 +5,25 @@
 </div>
 {{- end -}}
 
+{{- define "problem-diagnosis" -}}
+{{$finding := .Finding}}{{$diagnosis := .Diagnosis}}
+<div class="problem-diagnosis-preview"><strong>Диагноз:</strong><span>{{$diagnosis.Verdict}}</span></div>
+<details class="problem-explanation">
+  <summary>Диагноз и план расследования · {{problemClaimLabel $finding.Why.ClaimLevel}}</summary>
+  <div class="problem-explanation-grid problem-diagnosis-grid">
+    <div class="problem-diagnosis-verdict span-all"><h4>Главный вывод</h4><p>{{$diagnosis.Verdict}}</p></div>
+    <div><h4>Что доказано данными</h4>{{range $diagnosis.Proven}}<p>{{.}}</p>{{else}}<p class="muted">Прямых доказательств для локализации причины пока недостаточно.</p>{{end}}</div>
+    <div><h4>К чему это может привести</h4>{{range $finding.Impact}}<p>{{.}}</p>{{else}}<p class="muted">Влияние оценивается по тяжести и величине сигнала.</p>{{end}}</div>
+    {{if $diagnosis.CausalChain}}<div class="problem-causal-chain span-all"><h4>Цепочка влияния</h4>{{range $diagnosis.CausalChain}}<div class="problem-chain-step state-{{.State}}"><strong>{{.Label}}</strong><span>{{.Text}}</span></div>{{end}}</div>{{end}}
+    <div class="problem-root-causes span-all"><h4>Кандидаты на первопричину</h4>{{if $diagnosis.Causes}}<div class="problem-cause-grid">{{range $diagnosis.Causes}}<article class="problem-cause-card relation-{{.RelationClass}}"><div class="problem-cause-head"><strong>{{.Title}}</strong><span>{{.Relation}}</span></div><p class="problem-cause-evidence">{{.Evidence}}</p><p>{{.Explanation}}</p><dl><div><dt>Где искать</dt><dd>{{.Where}}</dd></div><div><dt>Что проверить</dt><dd>{{.Action}}</dd></div></dl></article>{{end}}</div>{{else}}<p class="muted">Отдельный кандидат на первопричину не локализован: начните с мест и факторов ниже.</p>{{range $finding.Why.Factors}}<p>{{.}}</p>{{end}}{{end}}</div>
+    <div><h4>Где искать в коде</h4>{{range $diagnosis.Locations}}<p class="problem-location-row"><strong>{{.Scope}}</strong><span>{{.Text}}</span></p>{{else}}<p class="muted">Точное место в коде не попало в журнал.</p>{{end}}</div>
+    <div><h4>Что пока не доказано</h4>{{range $diagnosis.MissingProof}}<p class="warning">{{.}}</p>{{end}}</div>
+    <div class="problem-validation-plan span-all"><h4>Пошаговый план проверки</h4>{{range $diagnosis.Plan}}<p><strong>{{.Number}}</strong><span>{{.Action}}</span></p>{{else}}<p class="muted">Повторите сценарий под профилировщиком и сравните исходную метрику до и после изменения.</p>{{end}}</div>
+    <details class="problem-technical-details span-all"><summary>Как рассчитан приоритет и какие есть ограничения</summary><div class="problem-technical-grid"><div><h4>Состав приоритета</h4>{{range $finding.PriorityBreakdown}}<div class="problem-priority-row"><span>{{problemPriorityComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range $diagnosis.TechnicalLimitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой находки нет.</p>{{end}}</div></div></details>
+  </div>
+</details>
+{{- end -}}
+
 {{- define "collector-capability-grid" -}}
 <div class="collector-capability-grid">
   {{- range .}}

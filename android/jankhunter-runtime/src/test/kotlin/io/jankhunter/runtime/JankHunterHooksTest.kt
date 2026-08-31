@@ -4,6 +4,7 @@ import android.os.Handler
 import android.view.View
 import java.lang.reflect.Modifier
 import java.util.concurrent.Callable
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -17,11 +18,26 @@ class JankHunterHooksTest {
 
         assertEquals(listOf("INSTANCE"), facade.declaredFields.map { it.name }.sorted())
         val signatures = listOf(
-            "enterMethod" to arrayOf(java.lang.Long.TYPE),
+            "enterMethod" to arrayOf(java.lang.Long.TYPE, String::class.java),
             "exitMethod" to arrayOf(java.lang.Long.TYPE, java.lang.Long.TYPE),
-            "recordMethodCall" to arrayOf(java.lang.Long.TYPE),
+            "recordMethodCall" to arrayOf(java.lang.Long.TYPE, String::class.java),
             "recordCounter" to arrayOf(String::class.java, java.lang.Long.TYPE),
             "recordLogSpam" to arrayOf(String::class.java, String::class.java, Integer.TYPE),
+            "workerInstanceId" to arrayOf(Any::class.java),
+            "enterWorker" to arrayOf(
+                java.lang.Long.TYPE,
+                java.lang.Long.TYPE,
+                String::class.java,
+                Integer.TYPE,
+            ),
+            "exitWorker" to arrayOf(
+                java.lang.Long.TYPE,
+                java.lang.Long.TYPE,
+                java.lang.Long.TYPE,
+                String::class.java,
+                Integer.TYPE,
+                Integer.TYPE,
+            ),
             "wrapRunnable" to arrayOf(Runnable::class.java, String::class.java),
             "wrapCallable" to arrayOf(Callable::class.java, String::class.java),
             "wrapCoroutineBlock" to arrayOf(Function2::class.java, String::class.java),
@@ -43,10 +59,10 @@ class JankHunterHooksTest {
             "enterAnnotatedContext" to arrayOf(
                 String::class.java,
                 String::class.java,
-                String::class.java,
-                String::class.java,
             ),
             "exitAnnotatedContext" to arrayOf(Any::class.java),
+            "startAnnotatedOperation" to arrayOf(String::class.java, Integer.TYPE, java.lang.Long.TYPE),
+            "finishAnnotatedOperation" to arrayOf(Any::class.java, java.lang.Boolean.TYPE),
             "watchLifecycleObject" to arrayOf(Any::class.java, String::class.java, String::class.java),
         )
         signatures.forEach { (name, parameterTypes) ->
@@ -70,8 +86,9 @@ class JankHunterHooksTest {
         assertSame(runnable, wrappedRunnable)
         assertSame(callable, wrappedCallable)
         assertEquals(0, calls.get())
-        assertEquals(0L, JankHunterHooks.enterMethod(0L))
-        JankHunterHooks.recordMethodCall(0L)
+        assertEquals(0L, JankHunterHooks.enterMethod(0L, "test.Owner.call"))
+        assertEquals(0L, JankHunterHooks.workerInstanceId(UUID(1L, 2L)))
+        JankHunterHooks.recordMethodCall(0L, "test.Owner.call")
         JankHunterHooks.exitMethod(0L, 0L)
         assertEquals(0, calls.get())
     }

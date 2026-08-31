@@ -1,16 +1,16 @@
 package io.jankhunter.runtime.integration
 
 import android.view.Window
+import io.jankhunter.runtime.BoundedWeakIdentityCache
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
-import java.util.concurrent.ConcurrentHashMap
 
 /** Reflection-only bridge into the optional AndroidX JankStats dependency. */
 internal object JankHunterJankStats {
-    private val frameAccessors = ConcurrentHashMap<Class<*>, FrameAccessors>()
+    private val frameAccessors = BoundedWeakIdentityCache<Class<*>, FrameAccessors>(MAX_FRAME_TYPES)
     private val reflectionBridge by lazy(LazyThreadSafetyMode.PUBLICATION, ::loadReflectionBridge)
 
     fun install(
@@ -80,12 +80,11 @@ internal object JankHunterJankStats {
 
     private fun readFrameData(frameData: Any): FrameData {
         val type = frameData.javaClass
-        val accessors = frameAccessors[type] ?: run {
-            val created = FrameAccessors(
+        val accessors = frameAccessors.getOrPut(type) {
+            FrameAccessors(
                 isJank = type.methodOrNull("isJank"),
                 durationNanos = type.methodOrNull("getFrameDurationUiNanos"),
             )
-            frameAccessors.putIfAbsent(type, created) ?: created
         }
         return FrameData(
             isJank = (accessors.isJank.safeInvoke(frameData) as? Boolean) == true,
@@ -161,4 +160,6 @@ internal object JankHunterJankStats {
         if (fatal != null) throw fatal
         RuntimeHookFailureTracker.record(reason)
     }
+
+    private const val MAX_FRAME_TYPES = 4
 }

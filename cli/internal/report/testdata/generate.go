@@ -91,9 +91,9 @@ func writeLog(path string, incomplete bool) (result error) {
 		{Kind: jhlog.DictScreen, ID: 11, Value: "Checkout"},
 		{Kind: jhlog.DictOwner, ID: 20, Value: "Caller.run"},
 		{Kind: jhlog.DictOwner, ID: 21, Value: "Callee.load"},
-		{Kind: jhlog.DictFlow, ID: 30, Value: "open"},
-		{Kind: jhlog.DictStep, ID: 31, Value: "network"},
-		{Kind: jhlog.DictStep, ID: 32, Value: "render"},
+		{Kind: jhlog.DictGeneric, ID: 30, Value: "open"},
+		{Kind: jhlog.DictGeneric, ID: 31, Value: "network"},
+		{Kind: jhlog.DictGeneric, ID: 32, Value: "render"},
 	}
 	for index := range entries {
 		entry := entries[index]
@@ -108,8 +108,8 @@ func writeLog(path string, incomplete bool) (result error) {
 		return err
 	}
 	for _, event := range []jhlog.Event{
-		runtimeCall(10, 10, 31, 1, 10, 10),
-		runtimeCall(20, 11, 32, 1, 20, 20),
+		runtimeCall(10, 10, 1, 10, 10),
+		runtimeCall(20, 11, 1, 20, 20),
 	} {
 		if err := writer.WriteEvent(event); err != nil {
 			return err
@@ -127,13 +127,12 @@ func writeLog(path string, incomplete bool) (result error) {
 	return nil
 }
 
-func runtimeCall(timeMS, screen, step, count, total, max uint64) jhlog.Event {
+func runtimeCall(timeMS, screen, count, total, max uint64) jhlog.Event {
 	return jhlog.Event{
 		Type:   jhlog.EventRuntimeCall,
 		TimeMS: timeMS,
 		Attribution: jhlog.AttributionContext{
 			Present: true, Screen: jhlog.LocalSymbol(screen), Owner: jhlog.LocalSymbol(20),
-			Flow: jhlog.LocalSymbol(30), Step: jhlog.LocalSymbol(step),
 		},
 		RuntimeCall: &jhlog.RuntimeCallEvent{
 			CalleeRef: jhlog.LocalSymbol(21), Count: count, TotalMS: total, MaxMS: max,

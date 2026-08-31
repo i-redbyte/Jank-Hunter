@@ -12,6 +12,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterExecutorTest {
+    private val callbacks: RuntimeAsyncCallbacks
+        get() = JankHunter.asyncTelemetry()
+
     @Test
     fun wrapExecutorRunsDelegateTask() {
         val latch = CountDownLatch(1)
@@ -24,10 +27,11 @@ class JankHunterExecutorTest {
             name = "image decode pool",
             ownerName = "image decode pool",
             clock = { now++ },
+            callbacks = callbacks,
         )
 
         executor.execute {
-            assertEquals("image decode pool", JankHunter.currentOwner())
+            assertEquals("image decode pool", JankHunterTelemetry.currentOwner())
             latch.countDown()
         }
 
@@ -44,9 +48,10 @@ class JankHunterExecutorTest {
                 name = "api-pool",
                 ownerName = "api-pool",
                 clock = { now++ },
+                callbacks = callbacks,
             )
             val result = wrapped.submit<String> {
-                JankHunter.currentOwner()
+                JankHunterTelemetry.currentOwner()
             }
 
             assertEquals("api-pool", result.get(1, TimeUnit.SECONDS))
@@ -64,6 +69,7 @@ class JankHunterExecutorTest {
                 name = "api-pool",
                 ownerName = "api-pool",
                 clock = { 1L },
+                callbacks = callbacks,
             )
             val started = CountDownLatch(1)
             val release = CountDownLatch(1)
@@ -100,10 +106,11 @@ class JankHunterExecutorTest {
                 name = "scheduler",
                 ownerName = "scheduler",
                 clock = { now++ },
+                callbacks = callbacks,
             )
 
             val result = wrapped.schedule(
-                Callable { JankHunter.currentOwner() },
+                Callable { JankHunterTelemetry.currentOwner() },
                 0L,
                 TimeUnit.MILLISECONDS,
             )
@@ -124,13 +131,14 @@ class JankHunterExecutorTest {
                 name = "ticker",
                 ownerName = "ticker",
                 clock = { now++ },
+                callbacks = callbacks,
             )
             val latch = CountDownLatch(2)
             val owners = mutableListOf<String>()
 
             val future = wrapped.scheduleAtFixedRate(
                 {
-                    owners += JankHunter.currentOwner()
+                    owners += JankHunterTelemetry.currentOwner()
                     latch.countDown()
                 },
                 0L,
@@ -156,6 +164,7 @@ class JankHunterExecutorTest {
                 name = "ticker",
                 ownerName = "ticker",
                 clock = { now++ },
+                callbacks = callbacks,
             )
             val ran = CountDownLatch(1)
 
@@ -182,24 +191,24 @@ class JankHunterExecutorTest {
         JankHunter.shutdown()
 
         val delegate = Executor { command -> command.run() }
-        assertSame(delegate, JankHunter.wrapExecutor(delegate, "db"))
+        assertSame(delegate, JankHunterTelemetry.wrapExecutor(delegate, "db"))
         val scheduled = Executors.newSingleThreadScheduledExecutor()
         try {
-            assertSame(scheduled, JankHunter.wrapExecutor(scheduled, "scheduled"))
-            assertSame(scheduled, JankHunter.wrapExecutorService(scheduled, "scheduled"))
-            assertSame(scheduled, JankHunter.wrapScheduledExecutorService(scheduled, "scheduled"))
+            assertSame(scheduled, JankHunterTelemetry.wrapExecutor(scheduled, "scheduled"))
+            assertSame(scheduled, JankHunterTelemetry.wrapExecutorService(scheduled, "scheduled"))
+            assertSame(scheduled, JankHunterTelemetry.wrapScheduledExecutorService(scheduled, "scheduled"))
         } finally {
             scheduled.shutdownNow()
         }
 
         val runnable = Runnable {}
-        assertSame(runnable, JankHunter.wrapRunnable(runnable, "plain"))
+        assertSame(runnable, JankHunterHooks.wrapRunnable(runnable, "plain"))
         val callable = Callable { "ok" }
-        assertSame(callable, JankHunter.wrapCallable(callable, "plain"))
+        assertSame(callable, JankHunterHooks.wrapCallable(callable, "plain"))
         val coroutineBlock: Function2<Any?, Any?, Any?> = { _, _ -> "ok" }
-        assertSame(coroutineBlock, JankHunter.wrapCoroutineBlock(coroutineBlock, "plain"))
+        assertSame(coroutineBlock, JankHunterHooks.wrapCoroutineBlock(coroutineBlock, "plain"))
         val listener = View.OnClickListener {}
-        assertSame(listener, JankHunter.wrapClickListener(listener, "plain"))
+        assertSame(listener, JankHunterHooks.wrapClickListener(listener, "plain"))
     }
 
     @Test
@@ -211,7 +220,7 @@ class JankHunterExecutorTest {
             }
         }
 
-        val wrapped = JankHunter.wrapRunnable(priorityRunnable, "priority")
+        val wrapped = JankHunterHooks.wrapRunnable(priorityRunnable, "priority")
 
         assertSame(priorityRunnable, wrapped)
         PriorityRunnableQueue().offer(wrapped!!)
@@ -223,7 +232,7 @@ class JankHunterExecutorTest {
         JankHunter.shutdown()
         val runnable = Runnable {}
 
-        val wrapped = JankHunter.wrapRunnable(runnable, "plain")
+        val wrapped = JankHunterHooks.wrapRunnable(runnable, "plain")
 
         assertSame(runnable, wrapped)
     }
@@ -234,7 +243,7 @@ class JankHunterExecutorTest {
             override fun call(): String = "ok"
         }
 
-        val wrapped = JankHunter.wrapCallable(priorityCallable, "priority")
+        val wrapped = JankHunterHooks.wrapCallable(priorityCallable, "priority")
 
         assertSame(priorityCallable, wrapped)
     }
@@ -244,7 +253,7 @@ class JankHunterExecutorTest {
         JankHunter.shutdown()
 
         repeat(3) {
-            JankHunter.recordLogSpam("BenchmarkOwner", "android.util.Log.d", 3)
+            JankHunterTelemetry.recordLog("BenchmarkOwner", "android.util.Log.d", 3)
         }
     }
 

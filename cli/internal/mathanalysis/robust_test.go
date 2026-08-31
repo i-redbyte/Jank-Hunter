@@ -13,6 +13,22 @@ import (
 
 var benchmarkRobustStat RobustStat
 
+func TestRobustCollectorSkipsSignalsWithoutARecordedName(t *testing.T) {
+	collector := robustCollector{samples: robustSampleMap{}}
+	collector.addValue("Источник", "unknown", "HTTP задержка", "мс", 120)
+	collector.addValue("Маршрут", "", "HTTP задержка", "мс", 120)
+	collector.addValue("Маршрут", "GET /messages", "HTTP задержка", "мс", 120)
+
+	if len(collector.samples) != 1 {
+		t.Fatalf("anonymous robust signals were retained: %+v", collector.samples)
+	}
+	for key := range collector.samples {
+		if key.Name != "GET /messages" {
+			t.Fatalf("unexpected robust signal: %+v", key)
+		}
+	}
+}
+
 func BenchmarkSummarizeRobustSetRepeatedMillion(b *testing.B) {
 	key := robustKey{Dimension: "Маршрут", Name: "GET /repeated", Metric: "HTTP задержка", Unit: "мс"}
 	for range b.N {
@@ -69,7 +85,7 @@ func TestSummarizeRobustSetKeepsEverySampleBeyondFormerReservoirBoundary(t *test
 		set,
 	)
 
-	if stat.Count != total || stat.P95 != 19_024 || stat.SampleDetail != "сэмплов=20025" {
+	if stat.Count != total || stat.P95 != 19_024 || stat.SampleDetail != "наблюдений=20025" {
 		t.Fatalf("robust distribution is not exact: %+v", stat)
 	}
 	if set.compacted() || len(set.values) != total {
@@ -320,7 +336,7 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 		t.Fatalf("unexpected owner stat: %+v", *owner)
 	}
 
-	gauge := findRobustStat(report.RobustStats, "Gauge-метрика", "executor.queue.depth", "Значение")
+	gauge := findRobustStat(report.RobustStats, "Пользовательская метрика", "executor.queue.depth", "Значение")
 	if gauge == nil {
 		t.Fatalf("gauge robust stat not found: %#v", report.RobustStats)
 	}
@@ -330,7 +346,7 @@ func TestAnalyzeInspectBuildsRobustStats(t *testing.T) {
 }
 
 func TestCompareRobustSamplesDoesNotGuessGaugeDirection(t *testing.T) {
-	key := robustKey{Dimension: "Gauge-метрика", Name: "cache.hit.ratio", Metric: "Значение", Unit: "знач."}
+	key := robustKey{Dimension: "Пользовательская метрика", Name: "cache.hit.ratio", Metric: "Значение", Unit: "знач."}
 	baselineValues := make([]float64, 80)
 	candidateValues := make([]float64, 80)
 	for index := range baselineValues {

@@ -1,5 +1,7 @@
 package io.jankhunter.sample.graph
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.runtime.JankHunter
 import java.io.Closeable
 import java.net.Proxy
@@ -14,7 +16,7 @@ internal class NetworkScenarioUseCase(
 ) : Closeable {
     fun executeHttp(port: Int, path: String): Result<Int> {
         var result: Result<Int>? = null
-        JankHunter.withOwner(CheckoutApi::class.java.name) {
+        JankHunterTelemetry.withOwner(CheckoutApi::class.java.name) {
             result = runCatching { repository.executeHttp(port, path) }
         }
         return requireNotNull(result)
@@ -22,7 +24,7 @@ internal class NetworkScenarioUseCase(
 
     fun openWebSocket(port: Int, path: String, listener: WebSocketListener): WebSocket {
         var webSocket: WebSocket? = null
-        JankHunter.withOwner(CheckoutApi::class.java.name) {
+        JankHunterTelemetry.withOwner(CheckoutApi::class.java.name) {
             webSocket = repository.openWebSocket(port, path, listener)
         }
         return requireNotNull(webSocket)

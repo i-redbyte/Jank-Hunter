@@ -16,11 +16,12 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.JankHunterTelemetry
 import kotlin.math.cos
 import kotlin.math.sin
 
 private const val CUSTOM_VIEW_SCREEN_NAME = "sample.custom_view_jank"
-private const val CUSTOM_VIEW_FLOW_NAME = "sample.custom_view_jank"
+private const val CUSTOM_VIEW_OPERATION_NAME = "sample.custom_view_jank"
 
 internal class CustomViewJankActivity : ComponentActivity() {
     private lateinit var jankView: CustomJankView
@@ -33,7 +34,7 @@ internal class CustomViewJankActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        JankHunter.setScreen(CUSTOM_VIEW_SCREEN_NAME)
+        JankHunterTelemetry.setScreen(CUSTOM_VIEW_SCREEN_NAME)
     }
 
     override fun onDestroy() {
@@ -167,7 +168,7 @@ private class CustomJankView(
         scenario = nextScenario
         remainingFrames = nextScenario.frameCount
         withScenarioContext(nextScenario) {
-            JankHunter.recordCounter("sample.custom_view.${nextScenario.stepName}.started", 1)
+            JankHunterTelemetry.counter("sample.custom_view.${nextScenario.stepName}.started", 1)
         }
         postInvalidateOnAnimation()
     }
@@ -181,7 +182,7 @@ private class CustomJankView(
         val activeScenario = scenario
         if (activeScenario == CustomViewLagScenario.LAYOUT_STORM) {
             withScenarioContext(activeScenario) {
-                JankHunter.withOwner(activeScenario.ownerName, Runnable { burnCpu(LAYOUT_WORK_MS) })
+                JankHunterTelemetry.withOwner(activeScenario.ownerName, Runnable { burnCpu(LAYOUT_WORK_MS) })
             }
         }
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
@@ -192,7 +193,7 @@ private class CustomJankView(
         drawReferenceGrid(canvas)
         val activeScenario = scenario ?: return
         withScenarioContext(activeScenario) {
-            JankHunter.withOwner(activeScenario.ownerName, Runnable {
+            JankHunterTelemetry.withOwner(activeScenario.ownerName, Runnable {
                 when (activeScenario) {
                     CustomViewLagScenario.HEAVY_DRAW -> drawHeavyFrame(canvas)
                     CustomViewLagScenario.ALLOCATION_CHURN -> drawAllocationHeavyFrame(canvas)
@@ -215,7 +216,7 @@ private class CustomJankView(
 
     private fun finishScenario(finishedScenario: CustomViewLagScenario) {
         withScenarioContext(finishedScenario) {
-            JankHunter.recordCounter("sample.custom_view.${finishedScenario.stepName}.completed", 1)
+            JankHunterTelemetry.counter("sample.custom_view.${finishedScenario.stepName}.completed", 1)
         }
         scenario = null
         JankHunter.flush()
@@ -223,16 +224,11 @@ private class CustomJankView(
     }
 
     private inline fun withScenarioContext(activeScenario: CustomViewLagScenario, block: () -> Unit) {
-        val token = JankHunter.enterAnnotatedContext(
+        JankHunterTelemetry.withContext(
             CUSTOM_VIEW_SCREEN_NAME,
             activeScenario.ownerName,
-            CUSTOM_VIEW_FLOW_NAME,
-            activeScenario.stepName,
-        )
-        try {
-            block()
-        } finally {
-            JankHunter.exitAnnotatedContext(token)
+        ) {
+            JankHunterTelemetry.traceOperation("$CUSTOM_VIEW_OPERATION_NAME.${activeScenario.stepName}", block = block)
         }
     }
 

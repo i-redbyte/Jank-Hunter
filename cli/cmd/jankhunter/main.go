@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
 	"github.com/i-redbyte/jank-hunter/cli/internal/atomicfile"
@@ -64,12 +63,12 @@ func usage() {
 
 Usage:
   jankhunter sample --out sample.jhlog
-  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json] [--presentation] [--animated-background] [--thresholds thresholds.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter inspect <logs...> --out report.html [--json] [--presentation] [--animated-background] [--all-sessions] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter compare --baseline <logs...> --candidate <logs...> --out compare.html [--json|--csv] [--presentation] [--animated-background] [--thresholds thresholds.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics instrumentation-diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--candidate-heap-dump heap.hprof] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter export <logs...> --out events.jsonl
   jankhunter size <logs...> [--json]
-  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
-  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--external-symbols --artifacts-dir build/generated/jankhunter/<variant>] [--owner-map owner-map.json]... [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter problems <logs...> --out problems.csv [--format csv|json] [--dataset problems|code-problems|leaks|influence|math-findings] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--di-catalog di-catalog.jsonl] [--database-evidence database-evidence.json] [--heap-dump heap.hprof] [--heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
+  jankhunter scorecard --baseline <logs...> --candidate <logs...> [--out scorecard.json] [--artifacts-dir build/generated/jankhunter/<variant>] [--mapping mapping.txt] [--class-graph class-graph.jsonl] [--instrumentation-diagnostics diagnostics.jsonl] [--di-catalog di-catalog.jsonl] [--android-components-catalog android-components-catalog.jsonl] [--database-evidence database-evidence.json] [--baseline-heap-dump heap.hprof] [--baseline-heap-evidence heap.json] [--candidate-heap-dump heap.hprof] [--candidate-heap-evidence heap.json] [--route text] [--screen text] [--owner text] [--class text]
   jankhunter version
 `)
 }
@@ -180,13 +179,13 @@ func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []stri
 		nameByPath[path] = name
 
 		switch {
-		case !hasLatest || name.Compare(latest.name) > 0:
+		case !hasLatest || name.CompareSession(latest.name) > 0:
 			latest = latestRunCohort{
 				name:   name,
 				runIDs: map[jhlog.ID128]struct{}{name.RunID: {}},
 			}
 			hasLatest = true
-		case name.Compare(latest.name) == 0:
+		case name.CompareSession(latest.name) == 0:
 			// Equal canonical keys can occur when files from multiple devices or
 			// directories are passed together. Retaining every tied run avoids
 			// an input-order-dependent data loss decision.
@@ -215,7 +214,7 @@ func selectLatestSessionLogs(paths []string, allSessions bool) ([]string, []stri
 	}
 	return selected, []string{
 		fmt.Sprintf(
-			"Inspect обнаружил несколько Jank Hunter run cohort и по дате и числовому индексу canonical-имени оставил только последнюю целиком; файлы других запусков исключены из отчета: %s. Чтобы анализировать все запуски вместе, передайте --all-sessions.",
+			"Inspect обнаружил несколько Jank Hunter run cohort и по дате и дневному индексу canonical-имени оставил только последнюю целиком; файлы других запусков исключены из отчета: %s. Чтобы анализировать все запуски вместе, передайте --all-sessions.",
 			strings.Join(skipped, ", "),
 		),
 	}
@@ -246,6 +245,13 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
+	csvOut, remaining, err := takeBoolFlag(remaining, "csv")
+	if err != nil {
+		return err
+	}
+	if jsonOut && csvOut {
+		return fmt.Errorf("compare accepts only one machine-readable stdout format: --json or --csv")
+	}
 	presentation, remaining, err := takeBoolFlag(remaining, "presentation")
 	if err != nil {
 		return err
@@ -258,8 +264,11 @@ func runCompare(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, _, err := takeStringFlag(remaining, "out", "")
+	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
+		return err
+	}
+	if err := rejectUnexpectedArgs(remaining); err != nil {
 		return err
 	}
 	baselinePaths, err := resolveLogComma(baselineRaw)
@@ -299,6 +308,10 @@ func runCompare(args []string) error {
 	comparison := analyze.Compare(baseline, candidate)
 	if jsonOut {
 		if err := printJSON(comparison); err != nil {
+			return err
+		}
+	} else if csvOut {
+		if err := writeComparisonCSV(os.Stdout, comparison); err != nil {
 			return err
 		}
 	} else {
@@ -346,7 +359,9 @@ func runCompare(args []string) error {
 		if err := writeCompareReportSet(out, comparison, baselineReports, candidateReports, baselinePaths, candidatePaths, baselineOptions, candidateOptions, options, reportOptions); err != nil {
 			return err
 		}
-		printReportPath(jsonOut, out)
+		if !csvOut {
+			printReportPath(jsonOut, out)
+		}
 	}
 	if thresholdsPath != "" {
 		config, err := analyze.LoadThresholdConfig(thresholdsPath)
@@ -382,8 +397,11 @@ func runScorecard(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, _, err := takeStringFlag(remaining, "out", "")
+	out, remaining, err := takeStringFlag(remaining, "out", "")
 	if err != nil {
+		return err
+	}
+	if err := rejectUnexpectedArgs(remaining); err != nil {
 		return err
 	}
 	baselinePaths, err := resolveLogComma(baselineRaw)
@@ -435,270 +453,6 @@ func runScorecard(args []string) error {
 	})
 }
 
-func writeInspectReportSet(out string, summary analyze.Summary, paths []string, options analyze.Options, reportOptions report.ReportOptions) error {
-	reportOptions.TransientOutput = true
-	return writeSingleHTMLReport(out, func(renderPath string) error {
-		return writeInspectReportSetUsing(renderPath, summary, paths, options, reportOptions, inspectReportSetWriters{
-			primary: report.WriteInspectWithOptions,
-			math:    report.WriteMathInspectWithOptions,
-		})
-	})
-}
-
-type inspectPrimaryWriter func(string, analyze.Summary, report.ReportOptions) error
-
-type inspectMathWriter func(string, mathanalysis.MathReport, report.ReportOptions) error
-
-type inspectReportSetWriters struct {
-	primary inspectPrimaryWriter
-	math    inspectMathWriter
-}
-
-func writeInspectReportSetUsing(
-	out string,
-	summary analyze.Summary,
-	paths []string,
-	options analyze.Options,
-	reportOptions report.ReportOptions,
-	writers inspectReportSetWriters,
-) error {
-	if writers.primary == nil || writers.math == nil {
-		return fmt.Errorf("inspect report writers are not configured")
-	}
-	reportPaths := report.PathsFor(out)
-	if reportOptions.GeneratedAt == "" {
-		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
-	}
-	companionOptions := reportOptions
-	companionOptions.Links = reportPaths.MainLink()
-	links := report.ReportLinks{}
-	var generationWarnings []string
-
-	if err := report.WriteLeakInspectWithOptions(reportPaths.Leaks, analyze.BuildLeakReport(summary), companionOptions); err != nil {
-		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек inspect не записан", err))
-	} else {
-		links.Leaks = filepath.Base(reportPaths.Leaks)
-	}
-	if summary.Influence.Available {
-		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, summary.Influence, "Граф влияния кода", companionOptions); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("граф влияния inspect не записан", err))
-		} else {
-			links.Influence = filepath.Base(reportPaths.Influence)
-		}
-	}
-	if diagnosticsAvailable(options) {
-		if err := report.WriteInstrumentationDiagnosticsWithOptions(
-			reportPaths.Diagnostics,
-			*options.InstrumentationDiagnostics,
-			companionOptions,
-		); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("ASM-диагностика inspect не записана", err))
-		} else {
-			links.Diagnostics = filepath.Base(reportPaths.Diagnostics)
-		}
-	}
-	if dependencyInjectionAvailable(options) {
-		if err := report.WriteDependencyInjectionWithOptions(
-			reportPaths.DependencyInjection,
-			analyze.BuildDependencyInjectionReport(options.DependencyInjectionCatalog, summary),
-			companionOptions,
-		); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("DI-каталог inspect не записан", err))
-		} else {
-			links.DependencyInjection = filepath.Base(reportPaths.DependencyInjection)
-		}
-	}
-	mathReport, err := mathanalysis.AnalyzeInspectWithSummary(paths, options, summary)
-	if err != nil {
-		generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет inspect не создан", err))
-	} else {
-		mathOptions := companionOptions
-		mathOptions.Links.Influence = links.Influence
-		if err := writers.math(reportPaths.Math, mathReport, mathOptions); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет inspect не записан", err))
-		} else {
-			links.Math = filepath.Base(reportPaths.Math)
-		}
-	}
-	summary.Warnings = append(append([]string(nil), summary.Warnings...), generationWarnings...)
-	reportOptions.Links = links
-	return writers.primary(reportPaths.Main, summary, reportOptions)
-}
-
-func writeCompareReportSet(
-	out string,
-	comparison analyze.Comparison,
-	baselineReports []report.LogReport,
-	candidateReports []report.LogReport,
-	baselinePaths []string,
-	candidatePaths []string,
-	baselineOptions analyze.Options,
-	candidateOptions analyze.Options,
-	options analyze.Options,
-	reportOptions report.ReportOptions,
-) error {
-	reportOptions.TransientOutput = true
-	return writeSingleHTMLReport(out, func(renderPath string) error {
-		return writeCompareReportSetFiles(
-			renderPath,
-			comparison,
-			baselineReports,
-			candidateReports,
-			baselinePaths,
-			candidatePaths,
-			baselineOptions,
-			candidateOptions,
-			options,
-			reportOptions,
-		)
-	})
-}
-
-func writeCompareReportSetFiles(
-	out string,
-	comparison analyze.Comparison,
-	baselineReports []report.LogReport,
-	candidateReports []report.LogReport,
-	baselinePaths []string,
-	candidatePaths []string,
-	baselineOptions analyze.Options,
-	candidateOptions analyze.Options,
-	options analyze.Options,
-	reportOptions report.ReportOptions,
-) error {
-	reportPaths := report.PathsFor(out)
-	if reportOptions.GeneratedAt == "" {
-		reportOptions.GeneratedAt = time.Now().Format(time.RFC3339)
-	}
-	companionOptions := reportOptions
-	companionOptions.Links = reportPaths.MainLink()
-	links := report.ReportLinks{}
-	var generationWarnings []string
-
-	if err := report.WriteLeakCompareWithOptions(reportPaths.Leaks, analyze.BuildLeakCompareReport(comparison), companionOptions); err != nil {
-		generationWarnings = append(generationWarnings, warnReportGeneration("отчет утечек compare не записан", err))
-	} else {
-		links.Leaks = filepath.Base(reportPaths.Leaks)
-	}
-	if comparison.Candidate.Influence.Available {
-		if err := report.WriteInfluenceWithOptions(reportPaths.Influence, comparison.Candidate.Influence, "Граф влияния кода: кандидат", companionOptions); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("граф влияния compare не записан", err))
-		} else {
-			links.Influence = filepath.Base(reportPaths.Influence)
-		}
-	}
-	if diagnosticsAvailable(options) {
-		if err := report.WriteInstrumentationDiagnosticsWithOptions(
-			reportPaths.Diagnostics,
-			*options.InstrumentationDiagnostics,
-			companionOptions,
-		); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("ASM-диагностика compare не записана", err))
-		} else {
-			links.Diagnostics = filepath.Base(reportPaths.Diagnostics)
-		}
-	}
-	if dependencyInjectionAvailable(options) {
-		if err := report.WriteDependencyInjectionWithOptions(
-			reportPaths.DependencyInjection,
-			analyze.BuildDependencyInjectionReport(options.DependencyInjectionCatalog, comparison.Candidate),
-			companionOptions,
-		); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("DI-каталог compare не записан", err))
-		} else {
-			links.DependencyInjection = filepath.Base(reportPaths.DependencyInjection)
-		}
-	}
-	mathOptions := options
-	mathOptions.BaselineHeapEvidence = baselineOptions.HeapEvidence
-	mathOptions.CandidateHeapEvidence = candidateOptions.HeapEvidence
-	mathReport, err := mathanalysis.AnalyzeCompareWithSummaries(
-		baselinePaths,
-		candidatePaths,
-		mathOptions,
-		comparison.Baseline,
-		comparison.Candidate,
-	)
-	if err != nil {
-		generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет compare не создан", err))
-	} else {
-		mathReportOptions := companionOptions
-		mathReportOptions.Links.Influence = links.Influence
-		if err := report.WriteMathCompareWithOptions(reportPaths.Math, mathReport, mathReportOptions); err != nil {
-			generationWarnings = append(generationWarnings, warnReportGeneration("математический отчет compare не записан", err))
-		} else {
-			links.Math = filepath.Base(reportPaths.Math)
-		}
-	}
-	comparison.Warnings = append(append([]string(nil), comparison.Warnings...), generationWarnings...)
-	reportOptions.Links = links
-	return report.WriteCompareReportWithOptions(reportPaths.Main, comparison, baselineReports, candidateReports, reportOptions)
-}
-
-func writeSingleHTMLReport(out string, writePages func(string) error) error {
-	temporaryDirectory, err := os.MkdirTemp("", "jankhunter-report-")
-	if err != nil {
-		return fmt.Errorf("create temporary report directory: %w", err)
-	}
-	defer os.RemoveAll(temporaryDirectory)
-
-	renderPath := filepath.Join(temporaryDirectory, filepath.Base(out))
-	if err := writePages(renderPath); err != nil {
-		return err
-	}
-	pages, err := readReportBundlePages(renderPath)
-	if err != nil {
-		return err
-	}
-	if err := report.WriteBundle(out, pages); err != nil {
-		return fmt.Errorf("write single HTML report: %w", err)
-	}
-	return nil
-}
-
-func readReportBundlePages(mainPath string) ([]report.BundlePage, error) {
-	paths := report.PathsFor(mainPath)
-	candidates := []struct {
-		id       string
-		title    string
-		path     string
-		required bool
-	}{
-		{id: "overview", title: "Обзор", path: paths.Main, required: true},
-		{id: "math", title: "Математический анализ", path: paths.Math},
-		{id: "leaks", title: "Утечки памяти", path: paths.Leaks},
-		{id: "influence", title: "Граф влияния", path: paths.Influence},
-		{id: "diagnostics", title: "ASM диагностика", path: paths.Diagnostics},
-		{id: "dependency-injection", title: "DI-каталог", path: paths.DependencyInjection},
-	}
-	pages := make([]report.BundlePage, 0, len(candidates))
-	for _, candidate := range candidates {
-		info, err := os.Stat(candidate.path)
-		if err != nil {
-			if !candidate.required && os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read generated report page %s: %w", candidate.path, err)
-		}
-		if !info.Mode().IsRegular() || info.Size() <= 0 {
-			return nil, fmt.Errorf("generated report page %s is not a non-empty regular file", candidate.path)
-		}
-		pages = append(pages, report.BundlePage{
-			ID:    candidate.id,
-			Title: candidate.title,
-			Href:  filepath.Base(candidate.path),
-			Path:  candidate.path,
-		})
-	}
-	return pages, nil
-}
-
-func warnReportGeneration(message string, err error) string {
-	warning := fmt.Sprintf("Генерация отчета: %s: %v", message, err)
-	fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
-	return warning
-}
-
 func compareCLILabel(name string) string {
 	switch name {
 	case "HTTP p95":
@@ -743,15 +497,15 @@ func compareCLILabel(name string) string {
 }
 
 type analysisOptionsBuilder struct {
-	filter          analyze.Filter
-	externalSymbols bool
-	artifactsDir    string
-	ownerMapPaths   []string
-	mappingPath     string
-	classGraphPath  string
-	diagnosticsPath string
-	diCatalogPath   string
-	artifactNS      []byte
+	filter               analyze.Filter
+	artifactsDir         string
+	mappingPath          string
+	classGraphPath       string
+	diagnosticsPath      string
+	diCatalogPath        string
+	componentCatalogPath string
+	databaseEvidencePath string
+	artifactNS           []byte
 }
 
 func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string, error) {
@@ -759,15 +513,7 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
-	externalSymbols, remaining, err := takeBoolFlag(remaining, "external-symbols")
-	if err != nil {
-		return analysisOptionsBuilder{}, nil, err
-	}
 	artifactsDir, remaining, err := takeStringFlag(remaining, "artifacts-dir", "")
-	if err != nil {
-		return analysisOptionsBuilder{}, nil, err
-	}
-	ownerMapPaths, remaining, err := takeStringFlags(remaining, "owner-map")
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
@@ -787,15 +533,23 @@ func takeAnalysisOptionsBuilder(args []string) (analysisOptionsBuilder, []string
 	if err != nil {
 		return analysisOptionsBuilder{}, nil, err
 	}
+	componentCatalogPath, remaining, err := takeStringFlag(remaining, "android-components-catalog", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
+	databaseEvidencePath, remaining, err := takeStringFlag(remaining, "database-evidence", "")
+	if err != nil {
+		return analysisOptionsBuilder{}, nil, err
+	}
 	return analysisOptionsBuilder{
-		filter:          filter,
-		externalSymbols: externalSymbols,
-		artifactsDir:    artifactsDir,
-		ownerMapPaths:   ownerMapPaths,
-		mappingPath:     mappingPath,
-		classGraphPath:  classGraphPath,
-		diagnosticsPath: diagnosticsPath,
-		diCatalogPath:   diCatalogPath,
+		filter:               filter,
+		artifactsDir:         artifactsDir,
+		mappingPath:          mappingPath,
+		classGraphPath:       classGraphPath,
+		diagnosticsPath:      diagnosticsPath,
+		diCatalogPath:        diCatalogPath,
+		componentCatalogPath: componentCatalogPath,
+		databaseEvidencePath: databaseEvidencePath,
 	}, remaining, nil
 }
 
@@ -816,13 +570,6 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 	if err != nil {
 		return analyze.Options{}, err
 	}
-	if b.externalSymbols && len(b.ownerMapPaths) == 0 {
-		return analyze.Options{}, fmt.Errorf("--external-symbols requires --artifacts-dir or at least one --owner-map")
-	}
-	ownerMap, err := analyze.LoadOwnerMaps(b.ownerMapPaths)
-	if err != nil {
-		return analyze.Options{}, err
-	}
 	nameMapping, err := analyze.LoadNameMapping(b.mappingPath)
 	if err != nil {
 		return analyze.Options{}, err
@@ -839,27 +586,35 @@ func (b analysisOptionsBuilder) buildWithArtifactNamespaces(namespaces map[strin
 	if err != nil {
 		return analyze.Options{}, err
 	}
+	componentCatalog, err := analyze.LoadAndroidComponentCatalog(b.componentCatalogPath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	databaseEvidence, err := analyze.LoadDatabaseEvidence(b.databaseEvidencePath)
+	if err != nil {
+		return analyze.Options{}, err
+	}
 	return analyze.Options{
-		Filter:                         b.filter,
-		OwnerMap:                       ownerMap,
-		ObfuscationMap:                 nameMapping,
-		ClassGraph:                     classGraph,
-		InstrumentationDiagnostics:     diagnostics,
-		DependencyInjectionCatalog:     diCatalog,
-		ArtifactDirectory:              b.artifactsDir,
-		ArtifactSymbolNamespace:        append([]byte(nil), b.artifactNS...),
-		ExternalSymbols:                b.externalSymbols,
-		RequireExplicitExternalSymbols: true,
+		Filter:                     b.filter,
+		ObfuscationMap:             nameMapping,
+		ClassGraph:                 classGraph,
+		InstrumentationDiagnostics: diagnostics,
+		DependencyInjectionCatalog: diCatalog,
+		AndroidComponentCatalog:    componentCatalog,
+		DatabaseEvidence:           databaseEvidence,
+		ArtifactDirectory:          b.artifactsDir,
+		ArtifactSymbolNamespace:    append([]byte(nil), b.artifactNS...),
 	}, nil
 }
 
 type androidArtifactBundle struct {
-	directory       string
-	ownerMap        string
-	classGraph      string
-	diagnostics     string
-	diCatalog       string
-	symbolNamespace []byte
+	directory        string
+	metadata         string
+	classGraph       string
+	diagnostics      string
+	diCatalog        string
+	componentCatalog string
+	symbolNamespace  []byte
 }
 
 func (b analysisOptionsBuilder) withExplicitArtifactsForNamespaces(
@@ -882,9 +637,6 @@ func (b analysisOptionsBuilder) withExplicitArtifactsForNamespaces(
 	b.artifactsDir = bundle.directory
 	classGraphFromBundle := b.classGraphPath == ""
 	diagnosticsFromBundle := b.diagnosticsPath == ""
-	if b.externalSymbols && len(b.ownerMapPaths) == 0 {
-		b.ownerMapPaths = []string{bundle.ownerMap}
-	}
 	if b.classGraphPath == "" {
 		b.classGraphPath = bundle.classGraph
 	}
@@ -896,6 +648,9 @@ func (b analysisOptionsBuilder) withExplicitArtifactsForNamespaces(
 	}
 	if b.diCatalogPath == "" && bundle.diCatalog != "" {
 		b.diCatalogPath = bundle.diCatalog
+	}
+	if b.componentCatalogPath == "" && bundle.componentCatalog != "" {
+		b.componentCatalogPath = bundle.componentCatalog
 	}
 	return b, nil
 }
@@ -918,7 +673,7 @@ func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) 
 	}
 	bundle := androidArtifactBundle{
 		directory:  absolute,
-		ownerMap:   filepath.Join(absolute, "owner-map.json"),
+		metadata:   filepath.Join(absolute, "artifact-metadata.json"),
 		classGraph: filepath.Join(absolute, "class-graph.jsonl"),
 		diagnostics: filepath.Join(
 			absolute,
@@ -929,7 +684,7 @@ func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) 
 		label string
 		path  string
 	}{
-		{label: "owner-map.json", path: bundle.ownerMap},
+		{label: "artifact-metadata.json", path: bundle.metadata},
 		{label: "class-graph.jsonl", path: bundle.classGraph},
 		{label: "instrumentation-diagnostics.jsonl", path: bundle.diagnostics},
 	} {
@@ -944,14 +699,18 @@ func loadAndroidArtifactBundle(directory string) (androidArtifactBundle, error) 
 			)
 		}
 	}
-	namespace, err := analyze.ReadOwnerMapNamespace(bundle.ownerMap)
+	namespace, err := analyze.ReadArtifactMetadataNamespace(bundle.metadata)
 	if err != nil {
-		return androidArtifactBundle{}, fmt.Errorf("invalid Jank Hunter --artifacts-dir %q: owner-map.json identity cannot be read", directory)
+		return androidArtifactBundle{}, fmt.Errorf("invalid Jank Hunter --artifacts-dir %q: artifact-metadata.json identity cannot be read", directory)
 	}
 	bundle.symbolNamespace = append([]byte(nil), namespace...)
 	diCatalog := filepath.Join(absolute, "di-catalog.jsonl")
 	if info, statErr := os.Stat(diCatalog); statErr == nil && !info.IsDir() && info.Size() > 0 {
 		bundle.diCatalog = diCatalog
+	}
+	componentCatalog := filepath.Join(absolute, "android-components-catalog.jsonl")
+	if info, statErr := os.Stat(componentCatalog); statErr == nil && !info.IsDir() && info.Size() > 0 {
+		bundle.componentCatalog = componentCatalog
 	}
 	return bundle, nil
 }
@@ -1462,7 +1221,29 @@ type canonicalLogInput struct {
 }
 
 func resolveLogArgs(args []string) ([]string, error) {
+	if err := rejectUnknownOptions(args); err != nil {
+		return nil, err
+	}
 	return canonicalizeLogInputs(expandArgs(args))
+}
+
+func rejectUnexpectedArgs(args []string) error {
+	if err := rejectUnknownOptions(args); err != nil {
+		return err
+	}
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected argument %s", args[0])
+	}
+	return nil
+}
+
+func rejectUnknownOptions(args []string) error {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return fmt.Errorf("unknown option %s", arg)
+		}
+	}
+	return nil
 }
 
 func resolveLogComma(raw string) ([]string, error) {
@@ -1584,12 +1365,10 @@ func printSummary(summary analyze.Summary) {
 	fmt.Printf("memory: max_pss=%dKB retained=%d\n", summary.MemoryMaxKB, summary.Retained)
 	inputs := summary.AnalysisInputs
 	fmt.Printf(
-		"analysis_inputs: status=%s complete=%t runtime=%t symbols=%t(%s) class_graph=%t asm_diagnostics=%t heap=%t artifact_identity=%t auto_discovered=%t artifacts=%q missing=%s\n",
+		"analysis_inputs: status=%s complete=%t runtime=%t class_graph=%t asm_diagnostics=%t heap=%t artifact_identity=%t auto_discovered=%t artifacts=%q missing=%s\n",
 		inputs.Status,
 		inputs.Complete,
 		inputs.RuntimeEvidence,
-		inputs.SymbolsResolved,
-		inputs.SymbolMode,
 		inputs.ClassGraph,
 		inputs.InstrumentationDiagnostics,
 		inputs.HeapEvidence,

@@ -12,8 +12,6 @@ internal data class RetainedLifecycleTarget(
     val instance: Any,
     val description: String,
     val ownerHint: String,
-    val flow: String,
-    val step: String,
 )
 
 internal object RetainedLifecycleClassifier {
@@ -116,12 +114,8 @@ internal object RetainedLifecycleClassifier {
             instance = instance,
             description = description,
             ownerHint = ownerHint ?: "lifecycle.$event.$cleanSource",
-            flow = lifecycleFlow(kind),
-            step = event,
         )
     }
-
-    private fun lifecycleFlow(kind: String): String = "lifecycle.autowatch.$kind"
 
     private fun currentFragmentView(fragment: Any): View? {
         return runCatching {

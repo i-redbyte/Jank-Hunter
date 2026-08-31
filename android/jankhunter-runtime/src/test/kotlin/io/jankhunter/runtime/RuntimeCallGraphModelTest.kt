@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.RuntimeCallBatch
 import java.nio.file.Files
 import java.util.Random
@@ -17,21 +18,19 @@ class RuntimeCallGraphModelTest {
 
     private fun verifySeed(seed: Long) {
         val directory = Files.createTempDirectory("jankhunter-graph-model").toFile()
-        val writer = AsyncLogWriter.open(
+        val writer = AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000).build(),
             "main",
         )
         val clock = AtomicLong()
         var screen = "screen-0"
-        var flow = "flow-0"
-        var step = "step-0"
+        var operationId = 1L
         val actual = linkedMapOf<EdgeKey, Aggregate>()
         val graph = RuntimeCallGraph(
             nowMs = clock::get,
             captureScreen = { screen },
-            captureFlow = { flow },
-            captureStep = { step },
+            captureOperationId = { operationId },
             maxKeys = { 4_096 },
             batchObserver = { batch -> aggregateBatch(actual, batch) },
         )
@@ -46,7 +45,7 @@ class RuntimeCallGraphModelTest {
                         clock.addAndGet(1L + random.nextInt(3))
                         val id = random.nextInt(16).toLong()
                         val token = graph.enter(id, "method-$id", enabled = true)
-                        stack += Frame(id, token, clock.get(), screen, flow, step)
+                        stack += Frame(id, token, clock.get(), screen, operationId)
                     }
                     random.nextInt(100) < 82 -> {
                         clock.addAndGet(random.nextInt(8).toLong())
@@ -55,8 +54,7 @@ class RuntimeCallGraphModelTest {
                     else -> {
                         val generation = random.nextInt(5)
                         screen = "screen-$generation"
-                        flow = "flow-${random.nextInt(4)}"
-                        step = "step-${random.nextInt(3)}"
+                        operationId = random.nextInt(12).toLong() + 1L
                     }
                 }
                 if (operation % 100 == 99) {
@@ -87,7 +85,7 @@ class RuntimeCallGraphModelTest {
         graph.exit(frame.token, frame.id)
         val parent = stack.lastOrNull() ?: return
         expected.getOrPut(
-            EdgeKey(frame.screen, parent.id, frame.id, frame.flow, frame.step),
+            EdgeKey(frame.screen, parent.id, frame.id, frame.operationId),
             ::Aggregate,
         ).add((now - frame.startedAt).coerceAtLeast(0L))
     }
@@ -97,7 +95,7 @@ class RuntimeCallGraphModelTest {
             val aggregate = target.getOrPut(
                 EdgeKey(
                     batch.screen(index), batch.callerId(index), batch.calleeId(index),
-                    batch.flow(index), batch.step(index),
+                    batch.operationId(index),
                 ),
                 ::Aggregate,
             )
@@ -112,16 +110,14 @@ class RuntimeCallGraphModelTest {
         val token: Long,
         val startedAt: Long,
         val screen: String,
-        val flow: String,
-        val step: String,
+        val operationId: Long,
     )
 
     private data class EdgeKey(
         val screen: String?,
         val caller: Long,
         val callee: Long,
-        val flow: String?,
-        val step: String?,
+        val operationId: Long,
     )
 
     private data class Aggregate(var count: Long = 0L, var totalMs: Long = 0L, var maxMs: Long = 0L) {

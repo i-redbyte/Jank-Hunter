@@ -20,8 +20,9 @@ internal data class DecisionDiagnosticKey(
 internal data class AnnotationDiagnosticKey(
     val owner: String?,
     val screen: String?,
-    val flow: String?,
-    val trace: String?,
+    val operation: String?,
+    val operationKind: String?,
+    val operationBudgetMs: Long,
 )
 
 internal data class InstrumentationDiagnosticsRecord(
@@ -273,8 +274,14 @@ internal object InstrumentationDiagnosticsWriter {
                 var fieldCount = 0
                 fieldCount = appendOptionalString(fieldCount, "owner", entry.key.owner)
                 fieldCount = appendOptionalString(fieldCount, "screen", entry.key.screen)
-                fieldCount = appendOptionalString(fieldCount, "flow", entry.key.flow)
-                fieldCount = appendOptionalString(fieldCount, "trace", entry.key.trace)
+                fieldCount = appendOptionalString(fieldCount, "operation", entry.key.operation)
+                fieldCount = appendOptionalString(fieldCount, "operationKind", entry.key.operationKind)
+                if (entry.key.operationBudgetMs > 0L) {
+                    if (fieldCount > 0) append(',')
+                    append("\"operationBudgetMs\":")
+                    append(entry.key.operationBudgetMs)
+                    fieldCount++
+                }
                 if (fieldCount > 0) append(',')
                 append("\"count\":")
                 append(entry.value)

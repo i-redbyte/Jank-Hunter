@@ -1,6 +1,7 @@
 package io.jankhunter.runtime.internal.system
 
 import io.jankhunter.runtime.RuntimeHookGuard
+import io.jankhunter.runtime.RuntimeLongSource
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
@@ -31,7 +32,7 @@ internal class RuntimeMaintenanceScheduler(
 
     fun schedule(
         initialDelayMs: Long = 0L,
-        delayMs: () -> Long,
+        delayMs: RuntimeLongSource,
         task: () -> Unit,
     ): MaintenanceHandle {
         if (closed.get()) return MaintenanceHandle.NONE
@@ -105,7 +106,7 @@ internal class RuntimeMaintenanceScheduler(
     }
 
     private inner class RecurringTask(
-        private val delayMs: () -> Long,
+        private val delayMs: RuntimeLongSource,
         private val task: () -> Unit,
     ) : Runnable, MaintenanceHandle {
         private val cancelled = AtomicBoolean(false)
@@ -138,7 +139,7 @@ internal class RuntimeMaintenanceScheduler(
 
         private fun safeDelay(): Long {
             return RuntimeHookGuard.value(DEFAULT_RETRY_DELAY_MS) {
-                delayMs().coerceAtLeast(MIN_DELAY_MS)
+                delayMs.getAsLong().coerceAtLeast(MIN_DELAY_MS)
             }
         }
     }

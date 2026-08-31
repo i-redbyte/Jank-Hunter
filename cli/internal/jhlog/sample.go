@@ -52,11 +52,6 @@ func writeSample(file *os.File) error {
 		{Kind: DictMetric, ID: 61, Value: "ui.fps_x100"},
 		{Kind: DictMetric, ID: 62, Value: "ui_jank"},
 		{Kind: DictLogSource, ID: 64, Value: "android.util.Log.w"},
-		{Kind: DictFlow, ID: 65, Value: "checkout.open"},
-		{Kind: DictStep, ID: 66, Value: "render_list"},
-		{Kind: DictStep, ID: 67, Value: "network"},
-		{Kind: DictStep, ID: 68, Value: "listener_callback"},
-		{Kind: DictStep, ID: 69, Value: "cache_entries"},
 		{Kind: DictGeneric, ID: 70, Value: "15"},
 		{Kind: DictGeneric, ID: 71, Value: "2025-05-05"},
 		{Kind: DictGeneric, ID: 72, Value: "arm64-v8a"},
@@ -80,13 +75,11 @@ func writeSample(file *os.File) error {
 		}
 	}
 
-	context := func(screen, owner, flow, step uint64) AttributionContext {
+	context := func(screen, owner uint64) AttributionContext {
 		return AttributionContext{
 			Present: true,
 			Screen:  LocalSymbol(screen),
 			Owner:   LocalSymbol(owner),
-			Flow:    LocalSymbol(flow),
-			Step:    LocalSymbol(step),
 		}
 	}
 	events := []Event{
@@ -99,26 +92,26 @@ func writeSample(file *os.File) error {
 		}},
 		{Type: EventProcessExit, TimeMS: 100, ProcessExit: &ProcessExitEvent{Reason: 6, TimestampUnixMS: 1_754_000_000_000, Importance: 100, PSSKB: 196_000, RSSKB: 244_000, ProcessRef: LocalSymbol(79)}},
 		{Type: EventContext, TimeMS: 500, Flags: uint64(FlagAppForeground), Context: &ContextEvent{Network: NetworkWiFi, BatteryPct: 82, AvailMemoryKB: 2_018_304, TotalMemoryKB: 8_032_000, BatteryState: 2, BatteryTempDeciC: 320, NetworkValidated: true, RxBytes: 1_204_000, TxBytes: 93_000, FreeStorageKB: 48_000_000, TotalStorageKB: 118_000_000}},
-		{Type: EventHTTP, TimeMS: 1_200, Attribution: context(0, 10, 0, 0), Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(20), DurationMS: 184, DNSMS: 7, TTFBMS: 91, Status: Status2xx, RxBytes: 42_120, TxBytes: 740}},
-		{Type: EventHTTP, TimeMS: 2_400, Attribution: context(0, 10, 0, 0), Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(20), DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38_900, TxBytes: 730}},
-		{Type: EventUIWindow, TimeMS: 10_000, Attribution: context(30, 0, 0, 0), Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: sampleUIWindow(10_000, 580, 28)},
+		{Type: EventHTTP, TimeMS: 1_200, Attribution: context(0, 10), Flags: uint64(FlagHTTPReusedConnection | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(20), DurationMS: 184, DNSMS: 7, TTFBMS: 91, Status: Status2xx, RxBytes: 42_120, TxBytes: 740}},
+		{Type: EventHTTP, TimeMS: 2_400, Attribution: context(0, 10), Flags: uint64(FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(20), DurationMS: 612, DNSMS: 10, ConnectMS: 90, TTFBMS: 430, Status: Status2xx, RxBytes: 38_900, TxBytes: 730}},
+		{Type: EventUIWindow, TimeMS: 10_000, Attribution: context(30, 0), Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: sampleUIWindow(10_000, 580, 28)},
 		{Type: EventGauge, TimeMS: 10_100, Metric: &MetricEvent{MetricRef: LocalSymbol(61), Value: 5_800}},
-		{Type: EventRuntimeCall, TimeMS: 12_040, Attribution: AttributionContext{Present: true, Screen: LocalSymbol(31), Owner: StableSymbol(0x2001), Flow: LocalSymbol(65), Step: LocalSymbol(67)}, RuntimeCall: &RuntimeCallEvent{CalleeRef: StableSymbol(0x2002), Count: 8, TotalMS: 640, MaxMS: 240}},
-		{Type: EventLogSpam, TimeMS: 12_100, Attribution: context(31, 12, 65, 67), LogSpam: &LogSpamEvent{SourceRef: LocalSymbol(64), Level: 5, Count: 12}},
-		{Type: EventStall, TimeMS: 13_200, Attribution: context(31, 11, 65, 66), Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{StackRef: LocalSymbol(50), DurationMS: 1_240}},
-		{Type: EventIO, TimeMS: 13_250, Attribution: context(31, 13, 65, 67), Flags: uint64(FlagThreadMain | FlagAppForeground), IO: &IOEvent{Operation: IOOperationDatabaseRead, DurationUS: 275_000, Bytes: 32_768}},
+		{Type: EventRuntimeCall, TimeMS: 12_040, Attribution: AttributionContext{Present: true, Screen: LocalSymbol(31), Owner: StableSymbol(0x2001)}, RuntimeCall: &RuntimeCallEvent{CalleeRef: StableSymbol(0x2002), Count: 8, TotalMS: 640, MaxMS: 240}},
+		{Type: EventLogSpam, TimeMS: 12_100, Attribution: context(31, 12), LogSpam: &LogSpamEvent{SourceRef: LocalSymbol(64), Level: 5, Count: 12}},
+		{Type: EventStall, TimeMS: 13_200, Attribution: context(31, 11), Flags: uint64(FlagThreadMain | FlagAppForeground), Stall: &StallEvent{StackRef: LocalSymbol(50), DurationMS: 1_240}},
+		{Type: EventIO, TimeMS: 13_250, Attribution: context(31, 13), Flags: uint64(FlagThreadMain | FlagAppForeground | FlagIOBytesKnown), IO: &IOEvent{Operation: IOOperationContentRead, Outcome: IOOutcomeSuccess, DurationUS: 275_000, Bytes: 32_768}},
 		{Type: EventMemory, TimeMS: 15_000, Flags: uint64(FlagAppForeground), Memory: &MemoryEvent{PSSKB: 188_240, JavaHeapKB: 90_412, NativeHeapKB: 38_112}},
-		{Type: EventRetained, TimeMS: 21_000, Attribution: context(31, 41, 65, 66), Retained: &RetainedEvent{ClassRef: LocalSymbol(40), HolderRef: LocalSymbol(41), AgeMS: 15_000, Count: 2}},
-		{Type: EventRetained, TimeMS: 21_400, Attribution: context(31, 45, 65, 66), Retained: &RetainedEvent{ClassRef: LocalSymbol(42), HolderRef: LocalSymbol(45), AgeMS: 45_000, Count: 1}},
-		{Type: EventRetained, TimeMS: 21_800, Attribution: context(31, 46, 65, 68), Retained: &RetainedEvent{ClassRef: LocalSymbol(43), HolderRef: LocalSymbol(46), AgeMS: 30_000, Count: 1}},
-		{Type: EventRetained, TimeMS: 21_900, Attribution: context(31, 47, 65, 69), Retained: &RetainedEvent{ClassRef: LocalSymbol(44), HolderRef: LocalSymbol(47), AgeMS: 20_000, Count: 3}},
+		{Type: EventRetained, TimeMS: 21_000, Attribution: context(31, 41), Retained: &RetainedEvent{ClassRef: LocalSymbol(40), HolderRef: LocalSymbol(41), AgeMS: 15_000, Count: 2}},
+		{Type: EventRetained, TimeMS: 21_400, Attribution: context(31, 45), Retained: &RetainedEvent{ClassRef: LocalSymbol(42), HolderRef: LocalSymbol(45), AgeMS: 45_000, Count: 1}},
+		{Type: EventRetained, TimeMS: 21_800, Attribution: context(31, 46), Retained: &RetainedEvent{ClassRef: LocalSymbol(43), HolderRef: LocalSymbol(46), AgeMS: 30_000, Count: 1}},
+		{Type: EventRetained, TimeMS: 21_900, Attribution: context(31, 47), Retained: &RetainedEvent{ClassRef: LocalSymbol(44), HolderRef: LocalSymbol(47), AgeMS: 20_000, Count: 3}},
 		{Type: EventCounter, TimeMS: 22_000, Metric: &MetricEvent{MetricRef: LocalSymbol(60), Value: 17}},
 		{Type: EventCounter, TimeMS: 22_100, Metric: &MetricEvent{MetricRef: StableSymbolInNamespace(0x1001, header.SymbolNamespace), Value: 1}},
 		{Type: EventCounter, TimeMS: 22_200, Metric: &MetricEvent{MetricRef: StableSymbolInNamespace(0x1002, header.SymbolNamespace), Value: 1}},
 		{Type: EventCounter, TimeMS: 22_300, Metric: &MetricEvent{MetricRef: StableSymbolInNamespace(0x1003, header.SymbolNamespace), Value: 1}},
-		{Type: EventHTTP, TimeMS: 23_000, Attribution: context(0, 11, 0, 0), Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(21), DurationMS: 1_320, DNSMS: 9, TTFBMS: 1_140, Status: Status5xx, RxBytes: 1_024, TxBytes: 1_240}},
-		{Type: EventUIWindow, TimeMS: 30_000, Attribution: context(31, 0, 0, 0), Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: sampleUIWindow(10_000, 542, 62)},
-		{Type: EventProblem, TimeMS: 30_001, Attribution: context(31, 11, 65, 66), Problem: &ProblemEvent{KindRef: LocalSymbol(62), WindowMS: 10_000, Count: 62, MaxMS: 48}},
+		{Type: EventHTTP, TimeMS: 23_000, Attribution: context(0, 11), Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagAppForeground), HTTP: &HTTPEvent{RouteRef: LocalSymbol(21), DurationMS: 1_320, DNSMS: 9, TTFBMS: 1_140, Status: Status5xx, RxBytes: 1_024, TxBytes: 1_240}},
+		{Type: EventUIWindow, TimeMS: 30_000, Attribution: context(31, 0), Flags: uint64(FlagThreadMain | FlagAppForeground), UIWindow: sampleUIWindow(10_000, 542, 62)},
+		{Type: EventProblem, TimeMS: 30_001, Attribution: context(31, 11), Problem: &ProblemEvent{KindRef: LocalSymbol(62), WindowMS: 10_000, Count: 62, MaxMS: 48}},
 		{Type: EventGauge, TimeMS: 30_100, Metric: &MetricEvent{MetricRef: LocalSymbol(61), Value: 5_420}},
 	}
 	for _, event := range events {

@@ -116,10 +116,10 @@ func TestInfluenceNeighborhoodDirectionDepthAndCycles(t *testing.T) {
 func TestInfluenceContextViewMarksConnectorWithoutChangingScore(t *testing.T) {
 	left := influenceViewTestNode("com.app.checkout.ScreenPresenter", 11, true)
 	left.Screens = []string{"Checkout"}
-	left.Flows = []string{"checkout.pay"}
+	left.Operations = []string{"checkout.pay"}
 	right := influenceViewTestNode("com.app.checkout.Repository", 9, true)
 	right.Screens = []string{"Checkout"}
-	right.Flows = []string{"checkout.pay"}
+	right.Operations = []string{"checkout.pay"}
 	connector := influenceViewTestNode("com.app.shared.Dispatcher", 3, false)
 	builder := newInfluenceViewBuilder(
 		[]InfluenceNode{left, right, connector},
@@ -128,7 +128,7 @@ func TestInfluenceContextViewMarksConnectorWithoutChangingScore(t *testing.T) {
 			influenceViewTestEdge(connector.ClassName, right.ClassName, 0, 2),
 		},
 	)
-	view := builder.contextView(InfluenceGraphContext{ID: "context:flow:checkout.pay", Kind: "flow", Value: "checkout.pay"})
+	view := builder.contextView(InfluenceGraphContext{ID: "context:operation:checkout.pay", Kind: "operation", Value: "checkout.pay"})
 	connectorNode := influenceGraphNodeByID(t, view.Nodes, connector.ClassName)
 	if !connectorNode.Connector || connectorNode.Kind != "connector" {
 		t.Fatalf("connector node is not explicit: %+v", connectorNode)
@@ -179,9 +179,9 @@ func TestInfluenceViewTotalsAndOmissionsAreCalculatedBeforeLimits(t *testing.T) 
 
 func TestInfluenceViewsPreserveSourceScoresAcrossModes(t *testing.T) {
 	node := influenceViewTestNode("com.app.checkout.Repository", 13.7, true)
-	node.Flows = []string{"checkout.pay"}
+	node.Operations = []string{"checkout.pay"}
 	other := influenceViewTestNode("com.app.checkout.Api", 4.2, true)
-	other.Flows = []string{"checkout.pay"}
+	other.Operations = []string{"checkout.pay"}
 	builder := newInfluenceViewBuilder(
 		[]InfluenceNode{node, other},
 		[]InfluenceEdge{influenceViewTestEdge(node.ClassName, other.ClassName, 2, 1)},
@@ -190,7 +190,7 @@ func TestInfluenceViewsPreserveSourceScoresAcrossModes(t *testing.T) {
 		builder.problemsView(),
 		builder.runtimeView(),
 		builder.neighborhoodView(node.ClassName, "both", 3, false),
-		builder.contextView(InfluenceGraphContext{ID: "context:flow:checkout.pay", Kind: "flow", Value: "checkout.pay"}),
+		builder.contextView(InfluenceGraphContext{ID: "context:operation:checkout.pay", Kind: "operation", Value: "checkout.pay"}),
 	}
 	for _, view := range views {
 		got := influenceGraphNodeByID(t, view.Nodes, node.ClassName)

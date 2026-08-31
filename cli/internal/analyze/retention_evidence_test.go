@@ -86,7 +86,7 @@ func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
 		t.Fatalf("heap dump stall windows = %+v", summary.ProblemWindows)
 	}
 	window := summary.ProblemWindows[0]
-	if window.Owner != "jankhunter.heap_dump" || window.Flow != "jankhunter.diagnostics" || window.Step != "heap_dump" {
+	if window.Owner != "jankhunter.heap_dump" {
 		t.Fatalf("heap dump stall attribution = %+v", window)
 	}
 }

@@ -8,6 +8,11 @@ import org.junit.Test
 
 class JankHunterConfigTest {
     @Test
+    fun runtimeConfigDoesNotOwnAndroidManifestSchema() {
+        assertFalse(JankHunterConfig::class.java.declaredFields.any { it.name.startsWith("META_") })
+    }
+
+    @Test
     fun builderKeepsExplicitRuntimePolicy() {
         val config = JankHunterConfig.builder()
             .enabled(false)
@@ -30,7 +35,6 @@ class JankHunterConfigTest {
             .retainedObjectDelayMs(321)
             .retainedObjectForceGcEnabled(true)
             .retainedHeapDumpEnabled(true)
-            .retainedHeapDumpPrivacyApproved(true)
             .retainedHeapDumpMinIntervalMs(987)
             .retainedHeapDumpMaxCount(3)
             .retainedHeapDumpMinRetainedAgeMs(654)
@@ -46,6 +50,7 @@ class JankHunterConfigTest {
             .sessionLogSizeLimitEnabled(false)
             .maxSessionLogSizeMiB(8)
             .logGrowthAnalyticsEnabled(false)
+            .deleteObsoleteJhlogFormats(true)
             .maxDictionaryEntries(1234)
             .maxDictionaryValueBytes(64)
             .flushIntervalMs(12)
@@ -84,7 +89,6 @@ class JankHunterConfigTest {
         assertEquals(321, config.retainedObjectDelayMs())
         assertTrue(config.retainedObjectForceGcEnabled())
         assertTrue(config.retainedHeapDumpEnabled())
-        assertTrue(config.retainedHeapDumpPrivacyApproved())
         assertEquals(987, config.retainedHeapDumpMinIntervalMs())
         assertEquals(3, config.retainedHeapDumpMaxCount())
         assertEquals(654, config.retainedHeapDumpMinRetainedAgeMs())
@@ -100,6 +104,7 @@ class JankHunterConfigTest {
         assertFalse(config.sessionLogSizeLimitEnabled())
         assertEquals(8, config.maxSessionLogSizeMiB())
         assertFalse(config.logGrowthAnalyticsEnabled())
+        assertTrue(config.deleteObsoleteJhlogFormats())
         assertEquals(0L, config.sessionLogSizeLimitBytes())
         assertEquals(1234, config.maxDictionaryEntries())
         assertEquals(64, config.maxDictionaryValueBytes())
@@ -140,7 +145,6 @@ class JankHunterConfigTest {
         assertTrue(config.objectWatcherEnabled())
         assertFalse(config.retainedObjectForceGcEnabled())
         assertFalse(config.retainedHeapDumpEnabled())
-        assertFalse(config.retainedHeapDumpPrivacyApproved())
         assertEquals(10 * 60_000L, config.retainedHeapDumpMinIntervalMs())
         assertEquals(1, config.retainedHeapDumpMaxCount())
         assertEquals(30_000L, config.retainedHeapDumpMinRetainedAgeMs())
@@ -157,6 +161,7 @@ class JankHunterConfigTest {
         assertTrue(config.sessionLogSizeLimitEnabled())
         assertEquals(50, config.maxSessionLogSizeMiB())
         assertTrue(config.logGrowthAnalyticsEnabled())
+        assertFalse(config.deleteObsoleteJhlogFormats())
         assertEquals(50L * 1024L * 1024L, config.sessionLogSizeLimitBytes())
         assertEquals(8192, config.maxDictionaryEntries())
         assertEquals(1024, config.maxDictionaryValueBytes())
@@ -176,18 +181,22 @@ class JankHunterConfigTest {
     fun sessionLimitManifestKeysUseTheCanonicalApiNames() {
         assertEquals(
             "io.jankhunter.session_log_size_limit_enabled",
-            JankHunterConfig.META_SESSION_LOG_SIZE_LIMIT_ENABLED,
+            JankHunterManifestConfig.META_SESSION_LOG_SIZE_LIMIT_ENABLED,
         )
-        assertEquals("io.jankhunter.max_session_log_size_mib", JankHunterConfig.META_MAX_SESSION_LOG_SIZE_MIB)
+        assertEquals("io.jankhunter.max_session_log_size_mib", JankHunterManifestConfig.META_MAX_SESSION_LOG_SIZE_MIB)
         assertEquals(
             "io.jankhunter.exact_event_collection_enabled",
-            JankHunterConfig.META_EXACT_EVENT_COLLECTION_ENABLED,
+            JankHunterManifestConfig.META_EXACT_EVENT_COLLECTION_ENABLED,
         )
         assertEquals(
             "io.jankhunter.log_growth_analytics_enabled",
-            JankHunterConfig.META_LOG_GROWTH_ANALYTICS_ENABLED,
+            JankHunterManifestConfig.META_LOG_GROWTH_ANALYTICS_ENABLED,
         )
-        assertEquals("io.jankhunter.symbol_namespace", JankHunterConfig.META_SYMBOL_NAMESPACE)
+        assertEquals(
+            "io.jankhunter.delete_obsolete_jhlog_formats",
+            JankHunterManifestConfig.META_DELETE_OBSOLETE_JHLOG_FORMATS,
+        )
+        assertEquals("io.jankhunter.symbol_namespace", JankHunterManifestConfig.META_SYMBOL_NAMESPACE)
 
         val configMethods = JankHunterConfig::class.java.methods.mapTo(mutableSetOf()) { it.name }
         val builderMethods = JankHunterConfig.Builder::class.java.methods.mapTo(mutableSetOf()) { it.name }
@@ -216,7 +225,7 @@ class JankHunterConfigTest {
             0x88.toByte(), 0x99.toByte(), 0xaa.toByte(), 0xbb.toByte(),
             0xcc.toByte(), 0xdd.toByte(), 0xee.toByte(), 0xff.toByte(),
         )
-        val source = JankHunterConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeff")
+        val source = JankHunterManifestConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeff")
         val config = JankHunterConfig.builder().symbolNamespace(source).build()
         source.fill(0)
 
@@ -224,11 +233,11 @@ class JankHunterConfigTest {
         val exposed = config.symbolNamespace()
         exposed.fill(0)
         assertArrayEquals(expected, config.toBuilder().build().symbolNamespace())
-        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("abc"))
-        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeGG"))
-        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("00112233445566778899AABBCCDDEEFF"))
-        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace("0011aaff"))
-        assertArrayEquals(ByteArray(0), JankHunterConfig.decodeSymbolNamespace(" 00112233445566778899aabbccddeeff"))
+        assertArrayEquals(ByteArray(0), JankHunterManifestConfig.decodeSymbolNamespace("abc"))
+        assertArrayEquals(ByteArray(0), JankHunterManifestConfig.decodeSymbolNamespace("00112233445566778899aabbccddeeGG"))
+        assertArrayEquals(ByteArray(0), JankHunterManifestConfig.decodeSymbolNamespace("00112233445566778899AABBCCDDEEFF"))
+        assertArrayEquals(ByteArray(0), JankHunterManifestConfig.decodeSymbolNamespace("0011aaff"))
+        assertArrayEquals(ByteArray(0), JankHunterManifestConfig.decodeSymbolNamespace(" 00112233445566778899aabbccddeeff"))
     }
 
     @Test
@@ -241,7 +250,7 @@ class JankHunterConfigTest {
             .symbolNamespace(forged)
             .build()
 
-        val effective = JankHunterConfig.withBuildSymbolNamespace(manual, buildNamespace)
+        val effective = manual.toBuilder().symbolNamespace(buildNamespace).build()
         buildNamespace.fill(0)
 
         assertFalse(effective.runtimeEnabled())
@@ -263,18 +272,12 @@ class JankHunterConfigTest {
     }
 
     @Test
-    fun retainedHeapDumpRequiresExplicitPrivacyApproval() {
-        val unapproved = JankHunterConfig.builder()
+    fun retainedHeapDumpEnablementIsOneExplicitDecision() {
+        val enabled = JankHunterConfig.builder()
             .retainedHeapDumpEnabled(true)
-            .retainedHeapDumpPrivacyApproved(false)
-            .build()
-        val approved = JankHunterConfig.builder()
-            .retainedHeapDumpEnabled(true)
-            .retainedHeapDumpPrivacyApproved(true)
             .build()
 
-        assertFalse(unapproved.retainedHeapDumpEnabled())
-        assertTrue(approved.retainedHeapDumpEnabled())
+        assertTrue(enabled.retainedHeapDumpEnabled())
     }
 
     @Test
@@ -332,19 +335,32 @@ class JankHunterConfigTest {
     }
 
     @Test
-    fun manifestMetadataAcceptsAndroidXmlValueTypes() {
-        assertEquals(600_000L, JankHunterConfig.coerceMetadataLong("600000", 1L))
-        assertEquals(123L, JankHunterConfig.coerceMetadataLong(123, 1L))
-        assertEquals(456L, JankHunterConfig.coerceMetadataLong(456L, 1L))
-        assertEquals(42, JankHunterConfig.coerceMetadataInt("42", 1))
-        assertEquals(7, JankHunterConfig.coerceMetadataInt(7L, 1))
-        assertTrue(JankHunterConfig.coerceMetadataBoolean("true", false))
-        assertFalse(JankHunterConfig.coerceMetadataBoolean("0", true))
-        assertTrue(JankHunterConfig.coerceMetadataBoolean(1, false))
-        assertFalse(JankHunterConfig.coerceMetadataBoolean(false, true))
-        assertEquals(9L, JankHunterConfig.coerceMetadataLong("not-a-number", 9L))
-        assertEquals(9, JankHunterConfig.coerceMetadataInt("not-a-number", 9))
-        assertTrue(JankHunterConfig.coerceMetadataBoolean("maybe", true))
+    fun manifestMetadataUsesTypedValuesWithoutCoercion() {
+        val metadata = TestManifestMetadata(
+            mapOf(
+                JankHunterManifestConfig.META_ENABLED to true,
+                JankHunterManifestConfig.META_MAIN_THREAD_STALL_THRESHOLD_MS to 123L,
+                JankHunterManifestConfig.META_MAX_QUEUE_SIZE to 99,
+                JankHunterManifestConfig.META_ALLOWED_PROCESSES to "com.example, com.example:sync",
+                JankHunterManifestConfig.META_SYMBOL_NAMESPACE to "00112233445566778899aabbccddeeff",
+            ),
+        )
+
+        val config = JankHunterManifestConfig.fromMetadata(metadata, defaultEnabled = false)
+
+        assertTrue(config.enabled())
+        assertEquals(123L, config.mainThreadStallThresholdMs())
+        assertEquals(99, config.maxQueueSize())
+        assertTrue(config.isProcessAllowed("com.example", "com.example"))
+        assertTrue(config.isProcessAllowed("com.example:sync", "com.example"))
+        assertArrayEquals(
+            byteArrayOf(
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+                0x88.toByte(), 0x99.toByte(), 0xaa.toByte(), 0xbb.toByte(),
+                0xcc.toByte(), 0xdd.toByte(), 0xee.toByte(), 0xff.toByte(),
+            ),
+            config.symbolNamespace(),
+        )
     }
 
     @Test
@@ -372,5 +388,20 @@ class JankHunterConfigTest {
             "GET /users/{id}/orders/{uuid}/email/{email}",
             config.redactRoute("GET /users/123/orders/550e8400-e29b-41d4-a716-446655440000/email/a@b.com"),
         )
+    }
+
+    private class TestManifestMetadata(
+        private val values: Map<String, Any>,
+    ) : ManifestMetadata {
+        override fun boolean(key: String, defaultValue: Boolean): Boolean =
+            values[key] as? Boolean ?: defaultValue
+
+        override fun long(key: String, defaultValue: Long): Long =
+            values[key] as? Long ?: defaultValue
+
+        override fun int(key: String, defaultValue: Int): Int =
+            values[key] as? Int ?: defaultValue
+
+        override fun string(key: String): String? = values[key] as? String
     }
 }

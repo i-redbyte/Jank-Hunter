@@ -4,7 +4,7 @@ import java.io.File
 
 internal class RuntimeCoordinator(
     private val state: RuntimeState,
-    private val nowMs: () -> Long,
+    private val nowMs: RuntimeLongSource,
 ) {
     fun isStopped(): Boolean = state.lifecycle == RuntimeLifecycle.STOPPED
 
@@ -50,7 +50,7 @@ internal class RuntimeCoordinator(
             status = status,
             processName = processName,
             logDirectory = logDirectory?.absolutePath,
-            atMs = nowMs(),
+            atMs = nowMs.getAsLong(),
             attempts = attempt,
             failures = state.initFailures.get(),
         )
@@ -70,7 +70,7 @@ internal class RuntimeCoordinator(
             failureMessage = throwable.message,
             processName = processName,
             logDirectory = logDirectory?.absolutePath,
-            atMs = nowMs(),
+            atMs = nowMs.getAsLong(),
             attempts = attempt,
             failures = failures,
         )

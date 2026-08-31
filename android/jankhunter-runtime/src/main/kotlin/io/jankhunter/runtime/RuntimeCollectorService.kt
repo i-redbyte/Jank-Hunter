@@ -4,12 +4,13 @@ import android.app.Application
 import android.content.Context
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
+import io.jankhunter.runtime.internal.system.HeapDumpReporter
 import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
-import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.ProcessExitReporter
+import io.jankhunter.runtime.internal.system.RetentionReporter
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler
 import io.jankhunter.runtime.internal.system.SystemContextSampler
@@ -17,6 +18,9 @@ import java.io.File
 
 internal class RuntimeCollectorService(
     private val state: RuntimeState,
+    private val callbacks: RuntimeCollectorCallbacks,
+    private val retentionReporter: RetentionReporter,
+    private val heapDumpReporter: HeapDumpReporter,
 ) {
     fun start(appContext: Context, config: JankHunterConfig, logDirectory: File) {
         val maintenanceScheduler = RuntimeMaintenanceScheduler(
@@ -29,6 +33,7 @@ internal class RuntimeCollectorService(
                 state.fpsMonitor = FpsMonitor(
                     config.fpsWindowMs(),
                     config.jankFrameThresholdMs(),
+                    callbacks,
                     choreographerFallbackEnabled = config.fpsMonitorEnabled(),
                     exactAdmission = config.exactEventCollectionEnabled(),
                 ).also { it.start() }
@@ -38,6 +43,7 @@ internal class RuntimeCollectorService(
             RuntimeHookGuard.run {
                 state.application = appContext
                 state.activityTracker = ActivityTracker(
+                    callbacks,
                     config.jankStatsEnabled(),
                     state.fpsMonitor,
                 ).also {
@@ -45,28 +51,26 @@ internal class RuntimeCollectorService(
                 }
             }
         } else {
-            JankHunter.recordCounter("jankhunter.activity_tracker.unavailable.count", 1)
+            callbacks.recordCounter("jankhunter.activity_tracker.unavailable.count", 1)
         }
         RuntimeHookGuard.run {
-            state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs()).also { it.start() }
+            state.watchdog = MainThreadWatchdog(config.mainThreadStallThresholdMs(), callbacks).also { it.start() }
         }
         if (config.mainLooperDispatchMonitorEnabled()) {
             RuntimeHookGuard.run {
-                state.dispatchMonitor = MainLooperDispatchMonitor(config.mainThreadStallThresholdMs()).also {
+                state.dispatchMonitor = MainLooperDispatchMonitor(
+                    config.mainThreadStallThresholdMs(),
+                    recordDispatch = callbacks::recordMainThreadDispatch,
+                ).also {
                     it.start()
                 }
             }
         }
         RuntimeHookGuard.run {
-            state.memoryTrimReporter = MemoryTrimReporter().also {
-                appContext.registerComponentCallbacks(it)
-                state.componentCallbackContext = appContext
-            }
-        }
-        RuntimeHookGuard.run {
             state.memorySampler = MemorySampler(
                 config.memorySampleIntervalMs(),
-                JankHunter::isAppForegroundForSampling,
+                callbacks,
+                callbacks::isUserRelevantForSampling,
             ).also { it.start(maintenanceScheduler) }
         }
         if (config.systemSamplerEnabled()) {
@@ -74,13 +78,14 @@ internal class RuntimeCollectorService(
                 state.systemContextSampler = SystemContextSampler(
                     appContext,
                     config.systemSampleIntervalMs(),
-                    JankHunter::isAppForegroundForSampling,
+                    callbacks,
+                    callbacks::isUserRelevantForSampling,
                 ).also { it.start(maintenanceScheduler) }
             }
         }
         if (config.processExitInfoEnabled()) {
             maintenanceScheduler.execute {
-                ProcessExitReporter.report(appContext)
+                ProcessExitReporter(callbacks).report(appContext)
             }
         }
         if (config.objectWatcherEnabled()) {
@@ -98,9 +103,16 @@ internal class RuntimeCollectorService(
                 state.objectRetentionWatcher = ObjectRetentionWatcher(
                     config.retainedObjectDelayMs(),
                     config.retainedObjectForceGcEnabled(),
+                    reporter = retentionReporter,
                     exactAdmission = config.exactEventCollectionEnabled(),
+                    onCardinalityLoss = { count ->
+                        callbacks.recordQuality(
+                            io.jankhunter.runtime.internal.io.QualityCounterId.OBJECT_WATCHER_LIMIT,
+                            count,
+                        )
+                    },
                     heapDumpMinRetainedAgeMs = config.retainedHeapDumpMinRetainedAgeMs(),
-                    heapDumpReporter = if (heapDumpEnabled) JankHunter::dumpWatchedRetainedHeap else null,
+                    heapDumpReporter = if (heapDumpEnabled) heapDumpReporter else null,
                 ).also { it.start(maintenanceScheduler) }
             }
         }
@@ -115,11 +127,6 @@ internal class RuntimeCollectorService(
         }
         RuntimeHookGuard.swallow { state.watchdog?.stop() }
         RuntimeHookGuard.swallow { state.dispatchMonitor?.stop() }
-        RuntimeHookGuard.swallow {
-            state.memoryTrimReporter?.let { reporter ->
-                state.componentCallbackContext?.unregisterComponentCallbacks(reporter)
-            }
-        }
         RuntimeHookGuard.swallow { state.memorySampler?.stop() }
         RuntimeHookGuard.swallow { state.systemContextSampler?.stop() }
         RuntimeHookGuard.swallow { state.objectRetentionWatcher?.stop() }
@@ -127,14 +134,17 @@ internal class RuntimeCollectorService(
         RuntimeHookGuard.swallow { state.maintenanceScheduler?.shutdown() }
     }
 
+    fun switchBinaryStorage(storage: JankHunterBinaryStorage?) {
+        state.retainedHeapDumper?.switchBinaryStorage(storage)
+    }
+
     fun reset() {
+        state.uiVisibility.set(RuntimeUiVisibility.UNKNOWN.wireValue)
         state.activityTracker = null
         state.mainThreadContext = null
         state.application = null
         state.watchdog = null
         state.dispatchMonitor = null
-        state.memoryTrimReporter = null
-        state.componentCallbackContext = null
         state.memorySampler = null
         state.systemContextSampler = null
         state.maintenanceScheduler = null

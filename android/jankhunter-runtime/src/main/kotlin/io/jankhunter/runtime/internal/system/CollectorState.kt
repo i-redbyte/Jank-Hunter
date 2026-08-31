@@ -245,8 +245,17 @@ internal class LastResumedRegistry<T : Any> {
 internal class FrameSourceSelector(
     private val fallbackEnabled: Boolean,
 ) {
+    var windowActive: Boolean = false
+        private set
+
     var jankStatsActive: Boolean = false
         private set
+
+    fun updateWindowActive(active: Boolean): Boolean {
+        if (windowActive == active) return false
+        windowActive = active
+        return true
+    }
 
     fun updateJankStats(active: Boolean): Boolean {
         if (jankStatsActive == active) return false
@@ -254,7 +263,7 @@ internal class FrameSourceSelector(
         return true
     }
 
-    fun useJankStats(): Boolean = jankStatsActive
+    fun useJankStats(): Boolean = windowActive && jankStatsActive
 
-    fun useFallback(): Boolean = fallbackEnabled && !jankStatsActive
+    fun useFallback(): Boolean = fallbackEnabled && windowActive && !jankStatsActive
 }

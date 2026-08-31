@@ -8,7 +8,6 @@ import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
-import java.nio.file.Files
 
 class RuntimeCallGraphInstrumentationTest {
     @Test
@@ -23,32 +22,20 @@ class RuntimeCallGraphInstrumentationTest {
     }
 
     @Test
-    fun runtimeCallGraphWritesOwnerMapEntries() {
-        val ownerMapEntries = Files.createTempDirectory("jankhunter-owner-map").toFile()
+    fun runtimeCallGraphEmbedsReadableSymbols() {
+        val instrumented = instrumentRuntimeCallGraph(throwingFixture())
 
-        instrumentRuntimeCallGraph(throwingFixture(), ownerMapEntries.absolutePath)
-
-        val text = InstrumentationArtifactFiles.readJsonlLines(ownerMapEntries).joinToString("\n")
-        assertTrue(text.contains("\"kind\":\"entry\""))
-        assertTrue(text.contains("\"id\":\"stable:0x"))
-        assertTrue(text.contains("\"owner\":\"example.Throwing.parent\""))
-        assertTrue(text.contains("\"owner\":\"example.Throwing.child\""))
+        val classBytes = instrumented.toString(Charsets.ISO_8859_1)
+        assertTrue(classBytes.contains("example.Throwing.parent"))
+        assertTrue(classBytes.contains("example.Throwing.child"))
     }
 
     @Test
-    fun embeddedSymbolsAreTheDefaultInjectedAbi() {
+    fun stableHooksAlwaysInjectTheirReadableSymbols() {
         val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture()))
 
         assertTrue(stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
         assertTrue(!stats.enterDescriptors.contains("(J)J"))
-    }
-
-    @Test
-    fun externalSymbolsKeepTheCompactInjectedAbi() {
-        val stats = collectMethodStats(instrumentRuntimeCallGraph(throwingFixture(), embeddedSymbols = false))
-
-        assertTrue(stats.enterDescriptors.contains("(J)J"))
-        assertTrue(!stats.enterDescriptors.contains("(JLjava/lang/String;)J"))
     }
 
     @Test
@@ -60,8 +47,6 @@ class RuntimeCallGraphInstrumentationTest {
 
     private fun instrumentRuntimeCallGraph(
         bytes: ByteArray,
-        ownerMapEntriesDirectory: String = "",
-        embeddedSymbols: Boolean = true,
     ): ByteArray {
         val reader = ClassReader(bytes)
         val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
@@ -70,20 +55,18 @@ class RuntimeCallGraphInstrumentationTest {
                 writer,
                 reader.className,
                 HookConfig(
-                    embeddedSymbols = embeddedSymbols,
                     methodCounters = false,
                     okhttp = false,
                     webSockets = false,
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = false,
                     classGraph = false,
                     runtimeCallGraph = true,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = "",
-                    ownerMapEntriesDirectory = ownerMapEntriesDirectory,
                 ),
             ),
             ClassReader.EXPAND_FRAMES,

@@ -4,8 +4,15 @@ import io.jankhunter.runtime.JankHunterBinaryArtifact
 import io.jankhunter.runtime.JankHunterBinaryStorage
 import io.jankhunter.runtime.JankHunterBinaryWriter
 import io.jankhunter.runtime.JankHunterConfig
+import io.jankhunter.runtime.JankHunterContextSnapshot
+import io.jankhunter.runtime.JankHunterHttpEvent
+import io.jankhunter.runtime.JankHunterOperationAttributes
+import io.jankhunter.runtime.JankHunterOperationKind
+import io.jankhunter.runtime.JankHunterOperationOutcome
+import io.jankhunter.runtime.JankHunterStorageSwitchResult
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
+import io.jankhunter.runtime.RuntimeHookEventTransport
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -27,6 +34,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,7 +43,7 @@ class AsyncLogWriterTest {
     fun failOpenHookFailuresAreSealedIntoQualityEvidence() {
         val directory = Files.createTempDirectory("jankhunter-hook-failure-quality").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
 
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.COLLECTOR)
             writer.counter("hook.failure.probe", 1L)
@@ -57,7 +65,7 @@ class AsyncLogWriterTest {
         val directory = Files.createTempDirectory("jankhunter-hook-failure-session-scope").toFile()
         try {
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.CONTEXT)
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
 
             writer.counter("clean.session.probe", 1L)
             assertTrue(writer.close())
@@ -70,7 +78,7 @@ class AsyncLogWriterTest {
     }
 
     @Test
-    fun writerEmitsOnlyJhlogVersionTwoDotZeroDotZero() {
+    fun writerEmitsOnlyJhlogVersionThreeDotZeroDotZero() {
         val directory = Files.createTempDirectory("jankhunter-format-version").toFile()
         try {
             val file = File(directory, "format.jhlog")
@@ -82,15 +90,136 @@ class AsyncLogWriterTest {
             assertEquals(Jhlog.FORMAT_MAJOR, prefix[8].toInt() and 0xff)
             assertEquals(Jhlog.FORMAT_MINOR, prefix[9].toInt() and 0xff)
             assertEquals(Jhlog.FORMAT_PATCH, prefix[10].toInt() and 0xff)
-            assertEquals("2.0.0", Jhlog.FORMAT_VERSION)
+            assertEquals("3.0.0", Jhlog.FORMAT_VERSION)
         } finally {
             directory.deleteRecursively()
         }
     }
 
     @Test
-    fun versionTwoWritesTypedCollectorUiExitAndIoEvidence() {
-        val directory = Files.createTempDirectory("jankhunter-v2-typed-evidence").toFile()
+    fun versionThreeWritesBoundedOperationLifecycle() {
+        val directory = Files.createTempDirectory("jankhunter-v3-operation").toFile()
+        try {
+            val file = File(directory, "operation.jhlog")
+            val attributes = JankHunterOperationAttributes.of(
+                "source",
+                "notification",
+                "cache_state",
+                "empty",
+            )
+            BinaryLogWriter(file).use { writer ->
+                writer.operation(
+                    name = "document.open",
+                    operationId = 42L,
+                    parentId = 41L,
+                    phase = Jhlog.OPERATION_PHASE_FINISHED,
+                    kind = JankHunterOperationKind.USER.wireValue,
+                    outcome = JankHunterOperationOutcome.SUCCESS.wireValue,
+                    durationUs = 1_250_000L,
+                    budgetUs = 2_000_000L,
+                    attributes = attributes,
+                )
+            }
+
+            val operation = recordPayloads(file, Jhlog.TYPE_OPERATION).single()
+            val name = requireNotNull(readSymbolRef(operation.bytes, operation.offset))
+            assertFalse(name.stable)
+            val values = readUvarintValues(operation.copy(offset = name.nextOffset), 8)
+            assertEquals(
+                listOf(42L, 41L, Jhlog.OPERATION_PHASE_FINISHED, 1L, 1L, 1_250_000L, 2_000_000L, 2L),
+                values,
+            )
+            assertTrue(logFileText(file).contains("document.open"))
+            assertTrue(logFileText(file).contains("notification"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun asyncOperationKeepsStartContextWhenProducerContextChanges() {
+        val directory = Files.createTempDirectory("jankhunter-operation-start-context").toFile()
+        try {
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
+            writer.updateProducerContext("StartScreen", "StartOwner")
+            assertTrue(
+                writer.operation(
+                    name = "document.open",
+                    operationId = 42L,
+                    parentId = 0L,
+                    phase = Jhlog.OPERATION_PHASE_STARTED,
+                    kind = JankHunterOperationKind.SCREEN.wireValue,
+                    outcome = 0L,
+                    durationUs = 0L,
+                    budgetUs = 1_000_000L,
+                    screen = "StartScreen",
+                    owner = "StartOwner",
+                    attributes = JankHunterOperationAttributes.EMPTY,
+                ),
+            )
+            writer.updateProducerContext("FinishScreen", "FinishOwner")
+            assertTrue(
+                writer.operation(
+                    name = "document.open",
+                    operationId = 42L,
+                    parentId = 0L,
+                    phase = Jhlog.OPERATION_PHASE_FINISHED,
+                    kind = JankHunterOperationKind.SCREEN.wireValue,
+                    outcome = JankHunterOperationOutcome.SUCCESS.wireValue,
+                    durationUs = 500_000L,
+                    budgetUs = 1_000_000L,
+                    screen = "StartScreen",
+                    owner = "StartOwner",
+                    attributes = JankHunterOperationAttributes.EMPTY,
+                ),
+            )
+            assertTrue(writer.close())
+
+            val operations = recordPayloads(sessionLogFiles(directory).single(), Jhlog.TYPE_OPERATION)
+            assertEquals(2, operations.size)
+            assertNotNull(operations[0].contextScreen)
+            assertNotNull(operations[0].contextOwner)
+            assertEquals(operations[0].contextScreen?.id, operations[1].contextScreen?.id)
+            assertEquals(operations[0].contextOwner?.id, operations[1].contextOwner?.id)
+            assertEquals(42L, operations[0].contextOperationId)
+            assertEquals(42L, operations[1].contextOperationId)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aggregatedLogSpamKeepsProducerOperationId() {
+        val directory = Files.createTempDirectory("jankhunter-log-spam-operation").toFile()
+        val writer = AsyncLogWriterFactory().open(directory, config(), "main")
+        val transport = RuntimeHookEventTransport({ 16 }, { 16 })
+        transport.start(writer)
+        try {
+            assertTrue(
+                transport.recordLogSpam(
+                    screen = "Catalog",
+                    owner = "CatalogPresenter",
+                    source = "android.util.Log.d",
+                    level = 3,
+                    operationId = 42L,
+                ),
+            )
+            assertTrue(transport.stopAndFlush(5_000L))
+            assertTrue(writer.close())
+
+            val record = recordPayloads(sessionLogFiles(directory).single(), Jhlog.TYPE_LOG_SPAM).single()
+            assertEquals(42L, record.contextOperationId)
+        } finally {
+            transport.stopAndFlush(5_000L)
+            transport.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesTypedCollectorUiExitAndIoEvidence() {
+        val directory = Files.createTempDirectory("jankhunter-v3-typed-evidence").toFile()
         try {
             val file = File(directory, "typed-evidence.jhlog")
             val buckets = LongArray(Jhlog.UI_FRAME_HISTOGRAM_BUCKET_COUNT).also {
@@ -127,7 +256,16 @@ class AsyncLogWriterTest {
                     frameDurationBuckets = buckets,
                 )
                 writer.processExit(6L, 1_750_000_000_000L, 100L, 256_000L, 320_000L, null)
-                writer.io(Jhlog.IO_DATABASE_READ, 275_000L, 4_096L, mainThread = true)
+                writer.io(
+                    operation = Jhlog.IO_FILE_READ,
+                    durationUs = 275_000L,
+                    bytes = 4_096L,
+                    mainThread = true,
+                    sourceId = 0x32621L,
+                    sourceName = "com.app.Storage.read",
+                    outcome = Jhlog.IO_OUTCOME_FAILURE,
+                    bytesKnown = true,
+                )
             }
 
             val session = recordPayloads(file, Jhlog.TYPE_SESSION).single()
@@ -149,9 +287,409 @@ class AsyncLogWriterTest {
                 listOf(6L, 1_750_000_000_000L, 100L, 256_000L, 320_000L),
                 readUvarintValues(recordPayloads(file, Jhlog.TYPE_PROCESS_EXIT).single(), 5),
             )
+            val io = recordPayloads(file, Jhlog.TYPE_IO).single()
+            val source = requireNotNull(readSymbolRef(io.bytes, io.offset))
+            assertEquals(0x32621L, source.id)
+            assertEquals(true, source.stable)
             assertEquals(
-                listOf(Jhlog.IO_DATABASE_READ, 275_000L, 4_096L),
-                readUvarintValues(recordPayloads(file, Jhlog.TYPE_IO).single(), 3),
+                listOf(Jhlog.IO_FILE_READ, Jhlog.IO_OUTCOME_FAILURE, 275_000L, 4_096L),
+                readUvarintValues(io.copy(offset = source.nextOffset), 4),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesTypedWorkerLifecycleWithStableIdentity() {
+        val directory = Files.createTempDirectory("jankhunter-v3-worker-lifecycle").toFile()
+        try {
+            val file = File(directory, "worker-lifecycle.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.worker(
+                    workerId = 0L,
+                    workerName = null,
+                    instanceId = 0x32621L,
+                    stage = Jhlog.WORKER_STAGE_ENQUEUED,
+                    outcome = Jhlog.WORKER_OUTCOME_UNKNOWN,
+                    durationMs = 0L,
+                    runAttempt = 0L,
+                    generation = 0L,
+                    stopReason = 0L,
+                    flags = Jhlog.FLAG_WORKER_PERIODIC,
+                )
+                writer.worker(
+                    workerId = 0x1234L,
+                    workerName = "com.app.SyncWorker.doWork",
+                    instanceId = 0x32621L,
+                    stage = Jhlog.WORKER_STAGE_STARTED,
+                    outcome = Jhlog.WORKER_OUTCOME_UNKNOWN,
+                    durationMs = 0L,
+                    runAttempt = 2L,
+                    generation = 3L,
+                    stopReason = 0L,
+                    flags = 0L,
+                )
+                writer.worker(
+                    workerId = 0x1234L,
+                    workerName = "com.app.SyncWorker.doWork",
+                    instanceId = 0x32621L,
+                    stage = Jhlog.WORKER_STAGE_FINISHED,
+                    outcome = Jhlog.WORKER_OUTCOME_CANCELLED,
+                    durationMs = 500L,
+                    runAttempt = 2L,
+                    generation = 3L,
+                    stopReason = 4L,
+                    flags = Jhlog.FLAG_WORKER_STOP_REASON_KNOWN,
+                )
+            }
+
+            val payloads = recordPayloads(file, Jhlog.TYPE_WORKER)
+            assertEquals(3, payloads.size)
+            val enqueuedRef = requireNotNull(readSymbolRef(payloads[0].bytes, payloads[0].offset))
+            assertFalse(enqueuedRef.stable)
+            assertEquals(0L, enqueuedRef.id)
+            assertEquals(
+                listOf(0x32621L, Jhlog.WORKER_STAGE_ENQUEUED, 0L, 0L, 0L, 0L, 0L),
+                readUvarintValues(RecordPayload(payloads[0].bytes, enqueuedRef.nextOffset, null), 7),
+            )
+            val startedRef = requireNotNull(readSymbolRef(payloads[1].bytes, payloads[1].offset))
+            assertTrue(startedRef.stable)
+            assertEquals(0x1234L, startedRef.id)
+            assertEquals(
+                listOf(0x32621L, Jhlog.WORKER_STAGE_STARTED, 0L, 0L, 2L, 3L, 0L),
+                readUvarintValues(RecordPayload(payloads[1].bytes, startedRef.nextOffset, null), 7),
+            )
+            val finishedRef = requireNotNull(readSymbolRef(payloads[2].bytes, payloads[2].offset))
+            assertEquals(
+                listOf(0x32621L, Jhlog.WORKER_STAGE_FINISHED, Jhlog.WORKER_OUTCOME_CANCELLED, 500L, 2L, 3L, 4L),
+                readUvarintValues(RecordPayload(payloads[2].bytes, finishedRef.nextOffset, null), 7),
+            )
+            assertTrue(logFileText(file).contains("com.app.SyncWorker.doWork"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesAdvancedHttpEvidenceWithoutRawEndpointData() {
+        val directory = Files.createTempDirectory("jankhunter-v3-advanced-http").toFile()
+        try {
+            val file = File(directory, "advanced-http.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.http(
+                    owner = "FeedRepository",
+                    route = "GET /messages/{id}",
+                    event = JankHunterHttpEvent(
+                        JankHunterContextSnapshot(
+                            screen = null,
+                            owner = "FeedRepository",
+                            initiatorPresent = true,
+                            initiatorId = 0L,
+                            initiatorName = "FeedRepository.loadMessages",
+                        ),
+                        "GET /messages/{id}",
+                        "mail-api",
+                        850L,
+                        30L,
+                        12L,
+                        45L,
+                        20L,
+                        8L,
+                        510L,
+                        220L,
+                        503,
+                        Jhlog.HTTP_FAILURE_PHASE_RESPONSE.toInt(),
+                        Jhlog.HTTP_FAILURE_KIND_PROTOCOL.toInt(),
+                        Jhlog.HTTP_PROTOCOL_2.toInt(),
+                        42_120L,
+                        740L,
+                        2,
+                        1,
+                        2,
+                        1,
+                        1,
+                        0,
+                        1,
+                        0L,
+                    ),
+                    flags = Jhlog.FLAG_HTTP_FAILED or Jhlog.FLAG_HTTP_REQUEST_BYTES_KNOWN or
+                        Jhlog.FLAG_HTTP_RESPONSE_BYTES_KNOWN,
+                )
+            }
+
+            val payload = recordPayloads(file, Jhlog.TYPE_HTTP).single()
+            val route = requireNotNull(readSymbolRef(payload.bytes, payload.offset))
+            val service = requireNotNull(readSymbolRef(payload.bytes, route.nextOffset))
+            val initiator = requireNotNull(readSymbolRef(payload.bytes, service.nextOffset))
+            assertFalse(route.stable)
+            assertFalse(service.stable)
+            assertTrue(initiator.stable)
+            assertEquals(0L, initiator.id)
+            assertEquals(
+                listOf(
+                    850L, 30L, 12L, 45L, 20L, 8L, 510L, 220L,
+                    503L, Jhlog.HTTP_FAILURE_PHASE_RESPONSE, Jhlog.HTTP_FAILURE_KIND_PROTOCOL,
+                    Jhlog.HTTP_PROTOCOL_2, 42_120L, 740L, 2L, 1L, 2L, 1L, 1L, 0L, 1L,
+                ),
+                readUvarintValues(RecordPayload(payload.bytes, initiator.nextOffset, null), 21),
+            )
+            val dictionaryText = logFileText(file)
+            assertTrue(dictionaryText.contains("GET /messages/{id}"))
+            assertTrue(dictionaryText.contains("mail-api"))
+            assertTrue(dictionaryText.contains("FeedRepository.loadMessages"))
+            assertFalse(dictionaryText.contains("https://"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesBoundedWebSocketLifecycleEvidence() {
+        val directory = Files.createTempDirectory("jankhunter-v3-websocket").toFile()
+        try {
+            val file = File(directory, "websocket.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.webSocket(
+                    owner = "RealtimeRepository",
+                    event = io.jankhunter.runtime.JankHunterWebSocketEvent(
+                        null,
+                        "GET /socket/{channel}",
+                        "RealtimeRepository",
+                        0x32621L,
+                        io.jankhunter.runtime.JankHunterWebSocketEvent.STAGE_CLOSED,
+                        12_000L,
+                        101,
+                        1000,
+                        io.jankhunter.runtime.JankHunterWebSocketEvent.FAILURE_UNKNOWN,
+                        7L,
+                        3L,
+                        4_096L,
+                        1,
+                    ),
+                )
+            }
+
+            val payload = recordPayloads(file, Jhlog.TYPE_WEBSOCKET).single()
+            val route = requireNotNull(readSymbolRef(payload.bytes, payload.offset))
+            assertFalse(route.stable)
+            assertEquals(
+                listOf(
+                    0x32621L,
+                    Jhlog.WEBSOCKET_STAGE_CLOSED,
+                    12_000L,
+                    101L,
+                    1000L,
+                    Jhlog.WEBSOCKET_FAILURE_UNKNOWN,
+                    7L,
+                    3L,
+                    4_096L,
+                    1L,
+                ),
+                readUvarintValues(RecordPayload(payload.bytes, route.nextOffset, null), 10),
+            )
+            val text = logFileText(file)
+            assertTrue(text.contains("GET /socket/{channel}"))
+            assertFalse(text.contains("wss://"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesTypedDatabaseCallWithoutBoundValues() {
+        val directory = Files.createTempDirectory("jankhunter-v3-database").toFile()
+        try {
+            val file = File(directory, "database.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.database(
+                    sourceId = 0x32621L,
+                    sourceName = "com.app.MessagesDao.load",
+                    query = "SELECT * FROM messages WHERE id = ?",
+                    framework = Jhlog.DATABASE_FRAMEWORK_ROOM,
+                    operation = Jhlog.DATABASE_OPERATION_QUERY,
+                    outcome = Jhlog.DATABASE_OUTCOME_SUCCESS,
+                    failureKind = Jhlog.DATABASE_FAILURE_NONE,
+                    boundary = Jhlog.DATABASE_BOUNDARY_EXECUTE,
+                    statementFingerprint = 0x7123L,
+                    resultKnown = true,
+                    resultKind = Jhlog.DATABASE_RESULT_AFFECTED_ROWS,
+                    resultCountBucket = Jhlog.DATABASE_COUNT_TWO_TO_TEN,
+                    transactionId = 17L,
+                    statementToken = 29L,
+                    phaseMask = Jhlog.DATABASE_PHASE_LOCK_WAIT or Jhlog.DATABASE_PHASE_EXECUTE,
+                    poolWaitUs = 0L,
+                    lockWaitUs = 10_000L,
+                    executeUs = 200_000L,
+                    materializeUs = 0L,
+                    durationUs = 250_000L,
+                    mainThread = true,
+                )
+            }
+
+            val payload = recordPayloads(file, Jhlog.TYPE_DATABASE).single()
+            val query = requireNotNull(readSymbolRef(payload.bytes, payload.offset))
+            val source = requireNotNull(readSymbolRef(payload.bytes, query.nextOffset))
+            assertFalse(query.stable)
+            assertTrue(source.stable)
+            assertEquals(
+                listOf(
+                    0x7123L,
+                    Jhlog.DATABASE_FRAMEWORK_ROOM,
+                    Jhlog.DATABASE_OPERATION_QUERY,
+                    Jhlog.DATABASE_OUTCOME_SUCCESS,
+                    Jhlog.DATABASE_FAILURE_NONE,
+                    Jhlog.DATABASE_BOUNDARY_EXECUTE,
+                    1L,
+                    Jhlog.DATABASE_RESULT_AFFECTED_ROWS,
+                    Jhlog.DATABASE_COUNT_TWO_TO_TEN,
+                    17L,
+                    29L,
+                    Jhlog.DATABASE_PHASE_LOCK_WAIT or Jhlog.DATABASE_PHASE_EXECUTE,
+                    0L,
+                    10_000L,
+                    200_000L,
+                    0L,
+                    250_000L,
+                ),
+                readUvarintValues(RecordPayload(payload.bytes, source.nextOffset, null), 17),
+            )
+            val text = logFileText(file)
+            assertTrue(text.contains("SELECT * FROM messages WHERE id = ?"))
+            assertFalse(text.contains("secret-value"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesDatabaseTransactionLifecycle() {
+        val directory = Files.createTempDirectory("jankhunter-v3-database-transaction").toFile()
+        try {
+            val file = File(directory, "database-transaction.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.databaseTransaction(
+                    sourceId = 0x32621L,
+                    sourceName = "com.app.MessagesDao.save",
+                    transactionId = 7L,
+                    parentId = 3L,
+                    stage = Jhlog.DATABASE_TRANSACTION_TERMINAL,
+                    mode = Jhlog.DATABASE_TRANSACTION_IMMEDIATE,
+                    outcome = Jhlog.DATABASE_TRANSACTION_SUCCESS,
+                    failureKind = Jhlog.DATABASE_FAILURE_NONE,
+                    durationUs = 100_000L,
+                    statementCount = 4L,
+                    readCount = 3L,
+                    writeCount = 1L,
+                    mainThread = true,
+                )
+            }
+
+            val payload = recordPayloads(file, Jhlog.TYPE_DATABASE_TRANSACTION).single()
+            val source = requireNotNull(readSymbolRef(payload.bytes, payload.offset))
+            assertTrue(source.stable)
+            assertEquals(
+                listOf(
+                    7L,
+                    3L,
+                    Jhlog.DATABASE_TRANSACTION_TERMINAL,
+                    Jhlog.DATABASE_TRANSACTION_IMMEDIATE,
+                    Jhlog.DATABASE_TRANSACTION_SUCCESS,
+                    Jhlog.DATABASE_FAILURE_NONE,
+                    100_000L,
+                    4L,
+                    3L,
+                    1L,
+                ),
+                readUvarintValues(RecordPayload(payload.bytes, source.nextOffset, null), 10),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun versionThreeWritesTypedAndroidComponentAndIpcRecords() {
+        val directory = Files.createTempDirectory("jankhunter-v3-android-components").toFile()
+        try {
+            val file = File(directory, "android-components.jhlog")
+            BinaryLogWriter(file).use { writer ->
+                writer.processState(
+                    uiVisibility = Jhlog.PROCESS_UI_VISIBLE,
+                    processImportance = Jhlog.PROCESS_IMPORTANCE_FOREGROUND_SERVICE,
+                    androidImportance = 125L,
+                    reason = Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE,
+                )
+                writer.androidComponent(
+                    componentId = 0x419L,
+                    componentName = "com.app.SyncService",
+                    action = "com.app.action.SYNC",
+                    instanceId = 11L,
+                    flowId = 12L,
+                    kind = Jhlog.COMPONENT_KIND_SERVICE,
+                    stage = Jhlog.COMPONENT_SERVICE_START_COMMAND,
+                    outcome = Jhlog.COMPONENT_OUTCOME_SUCCESS,
+                    durationUs = 9_000L,
+                    componentFlags = Jhlog.COMPONENT_FLAG_FOREGROUND,
+                )
+                writer.binderTransaction(
+                    descriptor = "com.app.sync.ISyncService",
+                    method = "syncNow",
+                    callId = 31L,
+                    direction = Jhlog.BINDER_DIRECTION_CLIENT,
+                    transactionCode = 7L,
+                    outcome = Jhlog.BINDER_OUTCOME_SUCCESS,
+                    failureKind = Jhlog.BINDER_FAILURE_NONE,
+                    durationUs = 4_000L,
+                    binderFlags = Jhlog.BINDER_FLAG_ONEWAY,
+                    mainThread = true,
+                )
+            }
+
+            assertEquals(
+                listOf(
+                    Jhlog.PROCESS_UI_VISIBLE,
+                    Jhlog.PROCESS_IMPORTANCE_FOREGROUND_SERVICE,
+                    125L,
+                    Jhlog.PROCESS_STATE_COMPONENT_LIFECYCLE,
+                ),
+                readUvarintValues(recordPayloads(file, Jhlog.TYPE_PROCESS_STATE).single(), 4),
+            )
+
+            val componentPayload = recordPayloads(file, Jhlog.TYPE_ANDROID_COMPONENT).single()
+            val component = requireNotNull(readSymbolRef(componentPayload.bytes, componentPayload.offset))
+            val action = requireNotNull(readSymbolRef(componentPayload.bytes, component.nextOffset))
+            assertTrue(component.stable)
+            assertFalse(action.stable)
+            assertEquals(
+                listOf(
+                    11L,
+                    12L,
+                    Jhlog.COMPONENT_KIND_SERVICE,
+                    Jhlog.COMPONENT_SERVICE_START_COMMAND,
+                    Jhlog.COMPONENT_OUTCOME_SUCCESS,
+                    9_000L,
+                    Jhlog.COMPONENT_FLAG_FOREGROUND,
+                ),
+                readUvarintValues(RecordPayload(componentPayload.bytes, action.nextOffset, null), 7),
+            )
+
+            val binderPayload = recordPayloads(file, Jhlog.TYPE_BINDER_TRANSACTION).single()
+            val descriptor = requireNotNull(readSymbolRef(binderPayload.bytes, binderPayload.offset))
+            val method = requireNotNull(readSymbolRef(binderPayload.bytes, descriptor.nextOffset))
+            assertFalse(descriptor.stable)
+            assertFalse(method.stable)
+            assertEquals(
+                listOf(
+                    31L,
+                    Jhlog.BINDER_DIRECTION_CLIENT,
+                    7L,
+                    Jhlog.BINDER_OUTCOME_SUCCESS,
+                    Jhlog.BINDER_FAILURE_NONE,
+                    4_000L,
+                    Jhlog.BINDER_FLAG_ONEWAY,
+                ),
+                readUvarintValues(RecordPayload(binderPayload.bytes, method.nextOffset, null), 7),
             )
         } finally {
             directory.deleteRecursively()
@@ -162,7 +700,7 @@ class AsyncLogWriterTest {
     fun fileHeaderDeclaresExactExpectedProcessRoster() {
         val directory = Files.createTempDirectory("jankhunter-process-roster").toFile()
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "main",
@@ -187,7 +725,7 @@ class AsyncLogWriterTest {
         val directory = Files.createTempDirectory("jankhunter-process-cohort").toFile()
         try {
             val expectedProcesses = setOf("main", "remote")
-            val main = AsyncLogWriter.open(
+            val main = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "main",
@@ -195,7 +733,7 @@ class AsyncLogWriterTest {
                 rosterDeclarationComplete = true,
                 onTerminalStop = { _, _, _ -> },
             )
-            val remote = AsyncLogWriter.open(
+            val remote = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "remote",
@@ -227,7 +765,7 @@ class AsyncLogWriterTest {
         val directory = Files.createTempDirectory("jankhunter-symbol-namespace").toFile()
         try {
             val namespace = ByteArray(16) { index -> index.toByte() }
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .symbolNamespace(namespace)
@@ -274,7 +812,7 @@ class AsyncLogWriterTest {
             )
             cases.forEach { (name, builder, expected) ->
                 val directory = File(root, name)
-                val writer = AsyncLogWriter.open(
+                val writer = AsyncLogWriterFactory().open(
                     directory,
                     builder.flushIntervalMs(60_000L).build(),
                     "com.example",
@@ -296,7 +834,7 @@ class AsyncLogWriterTest {
 
     @Test
     fun criticalMetricPolicyCoversLifecycleSessionCrashAndHeapEvidence() {
-        assertTrue(AsyncLogWriter.isCriticalMetricName("app.lifecycle.foreground.count"))
+        assertTrue(AsyncLogWriter.isCriticalMetricName("app.lifecycle.ui_visible.count"))
         assertTrue(AsyncLogWriter.isCriticalMetricName("screen.checkout.lifecycle.resumed.count"))
         assertTrue(AsyncLogWriter.isCriticalMetricName("jankhunter.runtime.session.start.count"))
         assertTrue(AsyncLogWriter.isCriticalMetricName("jankhunter.runtime.crash.count"))
@@ -309,7 +847,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-lazy-writer").toFile()
         val directory = File(root, "not-created")
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
 
             writer.recordQuality(QualityCounterId.RUNTIME_STACK_MISMATCH)
             assertTrue(writer.flushBlocking())
@@ -326,7 +864,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-empty-growth-write").toFile()
         val directory = File(root, "created-on-demand")
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
 
             assertTrue(writer.writeLogGrowthSummaryBlocking())
 
@@ -368,7 +906,7 @@ class AsyncLogWriterTest {
         try {
             val nowMs = 1_800_000_000_000L
             val expectedDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMs))
-            val writer = AsyncLogWriter.open(directory, config(), "private:process") { nowMs }
+            val writer = AsyncLogWriterFactory { nowMs }.open(directory, config(), "private:process")
 
             writer.counter("first.session.counter", 1L)
             assertTrue(writer.close())
@@ -377,7 +915,8 @@ class AsyncLogWriterTest {
             val parsed = requireNotNull(SessionLogName.parse(file.name))
             assertEquals(expectedDate, parsed.localDate)
             assertEquals(32, requireNotNull(parsed.runId).length)
-            assertEquals(0L, parsed.index)
+            assertEquals(0L, parsed.dailySessionIndex)
+            assertEquals(0L, parsed.segmentIndex)
             assertEquals(Jhlog.SEGMENT_END_SHUTDOWN, segmentEndReason(file))
             assertTrue(logFileText(file).contains("first.session.counter"))
         } finally {
@@ -389,20 +928,52 @@ class AsyncLogWriterTest {
     fun sequentialSessionsUseSequentialIndices() {
         val directory = Files.createTempDirectory("jankhunter-session-sequence").toFile()
         try {
-            val nowMs = 1_800_000_000_000L
-            AsyncLogWriter.open(directory, config(), "main") { nowMs }.run {
+            var nowMs = 1_800_000_000_000L
+            val firstDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMs))
+            AsyncLogWriterFactory { nowMs }.open(directory, config(), "main").run {
                 counter("first.session", 1L)
                 close()
             }
-            AsyncLogWriter.open(directory, config(), "main") { nowMs }.run {
+            AsyncLogWriterFactory { nowMs }.open(directory, config(), "main").run {
                 counter("second.session", 1L)
                 close()
             }
+            nowMs += 24L * 60L * 60L * 1_000L
+            val secondDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMs))
+            AsyncLogWriterFactory { nowMs }.open(directory, config(), "main").run {
+                counter("next.day.session", 1L)
+                close()
+            }
 
-            val indices = sessionLogFiles(directory)
-                .mapNotNull { file -> SessionLogName.parse(file.name)?.index }
-                .sorted()
-            assertEquals(listOf(0L, 1L), indices)
+            val parsed = sessionLogFiles(directory).mapNotNull { file -> SessionLogName.parse(file.name) }
+            assertEquals(listOf(0L, 1L), parsed.filter { it.localDate == firstDate }.map { it.dailySessionIndex }.sorted())
+            assertEquals(listOf(0L), parsed.filter { it.localDate == secondDate }.map { it.dailySessionIndex })
+            assertTrue(parsed.all { it.segmentIndex == 0L })
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun concurrentProcessesShareDailySessionAndUseDistinctSegments() {
+        val directory = Files.createTempDirectory("jankhunter-session-multiprocess-name").toFile()
+        try {
+            val nowMs = 1_800_000_000_000L
+            val main = AsyncLogWriterFactory { nowMs }.open(directory, config(), "main")
+            val remote = AsyncLogWriterFactory { nowMs }.open(directory, config(), "remote")
+
+            main.counter("main.session", 1L)
+            remote.counter("remote.session", 1L)
+            assertTrue(main.flushBlocking())
+            assertTrue(remote.flushBlocking())
+            assertTrue(main.close())
+            assertTrue(remote.close())
+
+            val parsed = sessionLogFiles(directory).map { file -> requireNotNull(SessionLogName.parse(file.name)) }
+            assertEquals(2, parsed.size)
+            assertEquals(1, parsed.map { it.runId }.distinct().size)
+            assertTrue(parsed.all { it.dailySessionIndex == 0L })
+            assertEquals(listOf(0L, 1L), parsed.map { it.segmentIndex }.sorted())
         } finally {
             directory.deleteRecursively()
         }
@@ -414,7 +985,7 @@ class AsyncLogWriterTest {
         try {
             var nowMs = 1_800_000_000_000L
             val expectedDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMs))
-            val writer = AsyncLogWriter.open(directory, config(), "main") { nowMs }
+            val writer = AsyncLogWriterFactory { nowMs }.open(directory, config(), "main")
             nowMs += 3L * 24L * 60L * 60L * 1_000L
 
             repeat(32) { index -> writer.counter("after.midnight.$index", index.toLong()) }
@@ -422,7 +993,8 @@ class AsyncLogWriterTest {
 
             val parsed = requireNotNull(SessionLogName.parse(sessionLogFiles(directory).single().name))
             assertEquals(expectedDate, parsed.localDate)
-            assertEquals(0L, parsed.index)
+            assertEquals(0L, parsed.dailySessionIndex)
+            assertEquals(0L, parsed.segmentIndex)
         } finally {
             directory.deleteRecursively()
         }
@@ -432,7 +1004,7 @@ class AsyncLogWriterTest {
     fun closeDrainsAcceptedQueueBeforeReturning() {
         val directory = Files.createTempDirectory("jankhunter-close-drain").toFile()
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder().maxQueueSize(512).flushIntervalMs(60_000L).build(),
                 "main",
@@ -453,7 +1025,7 @@ class AsyncLogWriterTest {
     fun exactAdmissionHonorsDictionaryHardLimitsAndReportsOverflow() {
         val directory = Files.createTempDirectory("jankhunter-exact-dictionary").toFile()
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .exactEventCollectionEnabled(true)
@@ -487,7 +1059,7 @@ class AsyncLogWriterTest {
         val directory = Files.createTempDirectory("jankhunter-size-limit").toFile()
         val limit = 1024L * 1024L
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .sessionLogSizeLimitEnabled(true)
@@ -524,7 +1096,7 @@ class AsyncLogWriterTest {
     fun explicitGrowthWritePersistsCurrentSnapshotIntoTheServiceHistory() {
         val directory = Files.createTempDirectory("jankhunter-growth-write").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             writer.counter("growth.snapshot.probe", 1L)
 
             assertTrue(writer.writeLogGrowthSummaryBlocking())
@@ -544,7 +1116,7 @@ class AsyncLogWriterTest {
     fun ordinaryFlushRefreshesEmbeddedGrowthCheckpoint() {
         val directory = Files.createTempDirectory("jankhunter-growth-periodic").toFile()
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder().flushIntervalMs(1L).build(),
                 "main",
@@ -568,7 +1140,7 @@ class AsyncLogWriterTest {
     fun captureSnapshotSealsExactFrontierAndContinuesInNextSegment() {
         val directory = Files.createTempDirectory("jankhunter-export-snapshot").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             writer.counter("snapshot.before", 1L)
 
             val snapshot = requireNotNull(writer.captureSnapshotBlocking())
@@ -595,11 +1167,272 @@ class AsyncLogWriterTest {
     }
 
     @Test
+    fun storageSwitchConsolidatesBootstrapAndContinuesTheSameSession() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            val target = TestBinaryStorage(File(root, "target"))
+            val writer = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            writer.counter("storage.switch.before", 1L)
+
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                writer.switchBinaryStorageBlocking(target, timeoutMs = 5_000L),
+            )
+
+            writer.counter("storage.switch.after", 1L)
+            assertTrue(writer.close())
+
+            assertTrue(sessionLogFiles(bootstrap).isEmpty())
+            val files = sortedSessionLogFiles(target.directory)
+            assertEquals(2, files.size)
+            assertLosslessSegmentChain(files, Long.MAX_VALUE)
+            assertEquals(2, files.sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+            val first = fileSegmentHeader(files[0])
+            val second = fileSegmentHeader(files[1])
+            assertArrayEquals(first.runId, second.runId)
+            assertArrayEquals(first.sessionId, second.sessionId)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun repeatedStorageSwitchConsolidatesTheWholeSessionIntoTheLatestTarget() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-repeated").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            val firstTarget = TestBinaryStorage(File(root, "first"))
+            val secondTarget = TestBinaryStorage(File(root, "second"))
+            val writer = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            writer.counter("storage.switch.bootstrap", 1L)
+
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                writer.switchBinaryStorageBlocking(firstTarget, timeoutMs = 5_000L),
+            )
+            writer.counter("storage.switch.first", 1L)
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                writer.switchBinaryStorageBlocking(secondTarget, timeoutMs = 5_000L),
+            )
+            writer.counter("storage.switch.second", 1L)
+            assertTrue(writer.close())
+
+            assertTrue(sessionLogFiles(bootstrap).isEmpty())
+            assertTrue(firstTarget.logFiles().isEmpty())
+            val files = sortedSessionLogFiles(secondTarget.directory)
+            assertEquals(3, files.size)
+            assertLosslessSegmentChain(files, Long.MAX_VALUE)
+            assertEquals(3, files.sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun switchingToTheActiveStorageIsANoOpWithoutSegmentRotation() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-noop").toFile()
+        try {
+            val target = TestBinaryStorage(File(root, "target"))
+            val writer = AsyncLogWriterFactory().open(
+                File(root, "leases"),
+                JankHunterConfig.builder().binaryStorage(target).build(),
+                "main",
+            )
+            writer.counter("storage.switch.before.noop", 1L)
+
+            assertEquals(
+                JankHunterStorageSwitchResult.ALREADY_ACTIVE,
+                writer.switchBinaryStorageBlocking(target),
+            )
+
+            writer.counter("storage.switch.after.noop", 1L)
+            assertTrue(writer.close())
+            val file = target.logFiles().single()
+            assertEquals(2, recordPayloads(file, Jhlog.TYPE_COUNTER).size)
+            assertEquals(0L, fileSegmentHeader(file).segmentIndex)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun storageSwitchAfterWriterCloseReportsClosedAdmission() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-closed").toFile()
+        try {
+            val writer = AsyncLogWriterFactory().open(File(root, "bootstrap"), config(), "main")
+            writer.counter("storage.switch.before.close", 1L)
+            assertTrue(writer.close())
+
+            assertEquals(
+                JankHunterStorageSwitchResult.NOT_ACCEPTING,
+                writer.switchBinaryStorageBlocking(TestBinaryStorage(File(root, "target"))),
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun failedStorageSwitchKeepsCollectingInThePreviousStorage() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-failure").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            val writer = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            writer.counter("storage.switch.before.failure", 1L)
+
+            assertEquals(
+                JankHunterStorageSwitchResult.FAILED,
+                writer.switchBinaryStorageBlocking(
+                    ThrowingOpenBinaryStorage(File(root, "failing-target")),
+                    timeoutMs = 5_000L,
+                ),
+            )
+
+            writer.counter("storage.switch.after.failure", 1L)
+            assertTrue(writer.close())
+            val files = sortedSessionLogFiles(bootstrap)
+            assertEquals(2, files.size)
+            assertLosslessSegmentChain(files, Long.MAX_VALUE)
+            assertEquals(2, files.sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun storageSwitchDoesNotCloseEventAdmissionWhileTargetIsOpening() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-live-admission").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            val target = BlockingOpenBinaryStorage(File(root, "target"))
+            val writer = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            writer.counter("storage.switch.before.blocked.open", 1L)
+            val result = AtomicReference<JankHunterStorageSwitchResult>()
+            val switchThread = Thread {
+                result.set(writer.switchBinaryStorageBlocking(target, timeoutMs = 5_000L))
+            }.apply { start() }
+
+            assertTrue(target.awaitOpen())
+            writer.counter("storage.switch.while.blocked.open", 1L)
+            target.releaseOpen()
+            switchThread.join(5_000L)
+
+            assertFalse(switchThread.isAlive)
+            assertEquals(JankHunterStorageSwitchResult.SWITCHED, result.get())
+            writer.counter("storage.switch.after.blocked.open", 1L)
+            assertTrue(writer.close())
+            assertTrue(sessionLogFiles(bootstrap).isEmpty())
+            val files = sortedSessionLogFiles(File(root, "target"))
+            assertLosslessSegmentChain(files, Long.MAX_VALUE)
+            assertEquals(3, files.sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun storageSwitchRecoversClosedBootstrapLogsFromPreviousWriterInstance() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-bootstrap-recovery").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            AsyncLogWriterFactory().open(bootstrap, config(), "main").also { previous ->
+                previous.counter("storage.switch.previous.bootstrap", 1L)
+                assertTrue(previous.close())
+            }
+            val target = TestBinaryStorage(File(root, "target"))
+            val current = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            current.counter("storage.switch.current.bootstrap", 1L)
+
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                current.switchBinaryStorageBlocking(target, timeoutMs = 5_000L),
+            )
+            current.counter("storage.switch.current.target", 1L)
+            assertTrue(current.close())
+
+            assertTrue(sessionLogFiles(bootstrap).isEmpty())
+            assertEquals(3, target.logFiles().sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun nextWriterRecoversExternalSegmentsRegisteredBeforeFailedHandoff() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-external-recovery").toFile()
+        try {
+            val metadata = File(root, "metadata")
+            val firstStorage = TestBinaryStorage(File(root, "first"))
+            val first = AsyncLogWriterFactory().open(
+                metadata,
+                JankHunterConfig.builder().binaryStorage(firstStorage).build(),
+                "main",
+            )
+            first.counter("storage.switch.external.before.failure", 1L)
+            assertEquals(
+                JankHunterStorageSwitchResult.FAILED,
+                first.switchBinaryStorageBlocking(
+                    ThrowingOpenBinaryStorage(File(root, "failing")),
+                    timeoutMs = 5_000L,
+                ),
+            )
+            first.counter("storage.switch.external.after.failure", 1L)
+            assertTrue(first.close())
+
+            val latestStorage = TestBinaryStorage(File(root, "latest"))
+            val next = AsyncLogWriterFactory().open(metadata, config(), "main")
+            next.counter("storage.switch.recovery.bootstrap", 1L)
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                next.switchBinaryStorageBlocking(latestStorage, timeoutMs = 5_000L),
+            )
+            assertTrue(next.close())
+
+            assertTrue(firstStorage.logFiles().isEmpty())
+            assertEquals(3, latestStorage.logFiles().sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun storageSwitchNeverMigratesAnotherLiveProcessSegment() {
+        val root = Files.createTempDirectory("jankhunter-storage-switch-live-process").toFile()
+        try {
+            val bootstrap = File(root, "bootstrap")
+            val remote = AsyncLogWriterFactory().open(bootstrap, config(), "remote")
+            remote.counter("storage.switch.remote.before", 1L)
+            assertTrue(remote.flushBlocking(5_000L))
+            val main = AsyncLogWriterFactory().open(bootstrap, config(), "main")
+            main.counter("storage.switch.main", 1L)
+            val target = TestBinaryStorage(File(root, "target"))
+
+            assertEquals(
+                JankHunterStorageSwitchResult.SWITCHED,
+                main.switchBinaryStorageBlocking(target, timeoutMs = 5_000L),
+            )
+
+            assertTrue(sessionLogFiles(bootstrap).isNotEmpty())
+            remote.counter("storage.switch.remote.after", 1L)
+            assertTrue(remote.close())
+            assertTrue(main.close())
+            assertEquals(2, sessionLogFiles(bootstrap).sumOf { file ->
+                recordPayloads(file, Jhlog.TYPE_COUNTER).size
+            })
+            assertEquals(1, target.logFiles().sumOf { file -> recordPayloads(file, Jhlog.TYPE_COUNTER).size })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun scopedGrowthHistoryRemovesThePreReleaseUnscopedStore() {
         val directory = Files.createTempDirectory("jankhunter-growth-schema-cleanup").toFile()
         try {
             val obsolete = File(directory, "jh-log-growth.bin").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             writer.counter("growth.schema.cleanup", 1L)
 
             assertTrue(writer.close())
@@ -621,7 +1454,7 @@ class AsyncLogWriterTest {
             val similarlyNamed = File(directory, "jh-log-growth.manual.bin")
                 .apply { writeBytes(byteArrayOf(3)) }
 
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "main",
@@ -648,7 +1481,7 @@ class AsyncLogWriterTest {
             val obsolete = File(directory, LogGrowthHistoryStore.fileName("renamed-remote"))
                 .apply { writeBytes(byteArrayOf(1)) }
 
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "main",
@@ -671,7 +1504,7 @@ class AsyncLogWriterTest {
             val obsolete = File(directory, LogGrowthHistoryStore.fileName("renamed-remote"))
                 .apply { writeBytes(byteArrayOf(1)) }
 
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory = directory,
                 config = config(),
                 processName = "main",
@@ -691,7 +1524,7 @@ class AsyncLogWriterTest {
     fun disabledGrowthAnalyticsCreatesNoServiceFile() {
         val directory = Files.createTempDirectory("jankhunter-growth-disabled").toFile()
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .logGrowthAnalyticsEnabled(false)
@@ -716,7 +1549,7 @@ class AsyncLogWriterTest {
         val directory = Files.createTempDirectory("jankhunter-size-limit-disabled").toFile()
         val disabledLimit = 1024L * 1024L
         try {
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .sessionLogSizeLimitEnabled(false)
@@ -748,7 +1581,7 @@ class AsyncLogWriterTest {
         val storageLimit = 12L * 1024L
         try {
             val storage = TestBinaryStorage(File(root, "storage"), fileSizeLimitBytes = storageLimit)
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -791,7 +1624,7 @@ class AsyncLogWriterTest {
         val storageLimit = 12L * 1024L
         try {
             val storage = TestBinaryStorage(File(root, "storage"), fileSizeLimitBytes = storageLimit)
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -829,7 +1662,7 @@ class AsyncLogWriterTest {
         val storageLimit = 10L * 1024L
         try {
             val storage = TestBinaryStorage(File(root, "storage"), fileSizeLimitBytes = storageLimit)
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -870,7 +1703,7 @@ class AsyncLogWriterTest {
             )
             val terminal = CountDownLatch(1)
             val terminalReason = AtomicInteger()
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 directory = File(root, "leases"),
                 config = JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -915,16 +1748,16 @@ class AsyncLogWriterTest {
         try {
             val storageDirectory = File(root, "storage").apply { mkdirs() }
             val oldRun = ByteArray(16) { 3 }
-            val oldFirst = File(storageDirectory, SessionLogName.create("2027-01-01", oldRun, 0L))
+            val oldFirst = File(storageDirectory, SessionLogName.create("2027-01-01", oldRun, 0L, 0L))
                 .apply { writeBytes(ByteArray(8_000)) }
-            val oldSecond = File(storageDirectory, SessionLogName.create("2027-01-01", oldRun, 1L))
+            val oldSecond = File(storageDirectory, SessionLogName.create("2027-01-01", oldRun, 0L, 1L))
                 .apply { writeBytes(ByteArray(8_300)) }
             val heap = File(storageDirectory, "retained-large.hprof").apply { writeBytes(ByteArray(128 * 1024)) }
             val storage = TestBinaryStorage(
                 directory = storageDirectory,
                 archivesSizeLimitBytes = archiveLimit,
             )
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -958,7 +1791,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-io-failure").toFile()
         try {
             val storage = FailingBinaryStorage(File(root, "storage"), failAfterBytes = 1_024L)
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -990,7 +1823,7 @@ class AsyncLogWriterTest {
             val terminalCallbackCount = AtomicInteger()
             val terminalReason = AtomicInteger()
             val terminalFailure = AtomicReference<Throwable?>()
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder().binaryStorage(storage).build(),
                 "main",
@@ -1035,16 +1868,17 @@ class AsyncLogWriterTest {
             val nowMs = 1_800_000_000_000L
             val storage = TestBinaryStorage(storageDirectory, collideFirstOpen = true)
 
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory { nowMs }.open(
                 File(root, "leases"),
                 JankHunterConfig.builder().binaryStorage(storage).build(),
                 "main",
-            ) { nowMs }
+            )
             writer.counter("after.collision", 1L)
             assertTrue(writer.close())
 
-            assertEquals(listOf(0L, 1L), storage.openedNames.map { requireNotNull(SessionLogName.parse(it)).index })
-            val written = storage.logFiles().single { file -> SessionLogName.parse(file.name)?.index == 1L }
+            assertEquals(listOf(0L, 1L), storage.openedNames.map { requireNotNull(SessionLogName.parse(it)).segmentIndex })
+            assertTrue(storage.openedNames.all { requireNotNull(SessionLogName.parse(it)).dailySessionIndex == 0L })
+            val written = storage.logFiles().single { file -> SessionLogName.parse(file.name)?.segmentIndex == 1L }
             assertTrue(logFileText(written).contains("after.collision"))
         } finally {
             root.deleteRecursively()
@@ -1059,18 +1893,23 @@ class AsyncLogWriterTest {
             val storage = TestBinaryStorage(File(root, "storage"))
             val nowMs = 1_800_000_000_000L
             val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(nowMs))
-            SessionLogAllocator.reserve(leaseDirectory, date, ByteArray(16) { 1 }).close()
+            SessionLogAllocator.reserve(
+                leaseDirectory,
+                date,
+                ByteArray(16) { 1 },
+                dailySessionIndex = 0L,
+            ).close()
 
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory { nowMs }.open(
                 leaseDirectory,
                 JankHunterConfig.builder().binaryStorage(storage).build(),
                 "main",
-            ) { nowMs }
+            )
             writer.counter("external.zero", 1L)
             assertTrue(writer.close())
 
-            assertEquals(listOf(0L), storage.openedNames.map { requireNotNull(SessionLogName.parse(it)).index })
-            assertEquals(0L, requireNotNull(SessionLogName.parse(storage.logFiles().single().name)).index)
+            assertEquals(listOf(0L), storage.openedNames.map { requireNotNull(SessionLogName.parse(it)).segmentIndex })
+            assertEquals(0L, requireNotNull(SessionLogName.parse(storage.logFiles().single().name)).dailySessionIndex)
         } finally {
             root.deleteRecursively()
         }
@@ -1080,7 +1919,7 @@ class AsyncLogWriterTest {
     fun invalidMetricsStayOutOfTheDataStreamAndReachQualitySnapshot() {
         val directory = Files.createTempDirectory("jankhunter-invalid-metric").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             writer.counter("invalid.counter", -1L)
             writer.gauge("invalid.gauge", -1L)
             writer.counter("valid.counter", 1L)
@@ -1100,7 +1939,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-critical-lane").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1117,8 +1956,6 @@ class AsyncLogWriterTest {
             writer.stall(
                 screen = "Checkout",
                 owner = "CheckoutOwner",
-                flow = "checkout",
-                step = "pay",
                 stackHint = "critical.stall",
                 durationMs = 900L,
                 foreground = true,
@@ -1146,7 +1983,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-context-update-burst").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1159,7 +1996,7 @@ class AsyncLogWriterTest {
             writer.counter("bulk.first", 1L)
             assertTrue(storage.awaitOpen())
             repeat(199) { index ->
-                writer.updateProducerContext("Startup", "App", "launch", (index + 1).toString())
+                writer.updateProducerContext("Startup", "App", (index + 1).toLong())
             }
             storage.releaseOpen()
             assertTrue(storage.awaitWriterCreated())
@@ -1179,7 +2016,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-exact-backpressure").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1228,7 +2065,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-main-admission").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1273,7 +2110,7 @@ class AsyncLogWriterTest {
         val expectedEvents = producerCount.toLong() * eventsPerProducer
         try {
             val storage = TestBinaryStorage(File(root, "storage"), fileSizeLimitBytes = physicalLimit)
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1331,7 +2168,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-exact-flush-frontier").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1364,7 +2201,7 @@ class AsyncLogWriterTest {
         val root = Files.createTempDirectory("jankhunter-exact-close-frontier").toFile()
         try {
             val storage = BlockingOpenBinaryStorage(File(root, "storage"))
-            val writer = AsyncLogWriter.open(
+            val writer = AsyncLogWriterFactory().open(
                 File(root, "leases"),
                 JankHunterConfig.builder()
                     .binaryStorage(storage)
@@ -1397,9 +2234,9 @@ class AsyncLogWriterTest {
     fun runtimeCallUsesStableZeroAndNegativeIdsWithoutOwnerDictionaryEntries() {
         val directory = Files.createTempDirectory("jankhunter-stable-runtime-call").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             val batch = RuntimeCallBatch(1).apply {
-                add("screen", 0L, "example.Caller.call", "flow", "step", -1L, "example.Callee.call", 3L, 12L, 7L)
+                add("screen", 0L, "example.Caller.call", 41L, -1L, "example.Callee.call", 3L, 12L, 7L)
             }
             writer.runtimeCalls(batch)
             assertTrue(writer.close())
@@ -1410,9 +2247,9 @@ class AsyncLogWriterTest {
             assertEquals(1L, rowCount?.value)
             val screen = readSymbolRef(call.bytes, rowCount!!.nextOffset)
             val caller = readSymbolRef(call.bytes, screen!!.nextOffset)
-            val flow = readSymbolRef(call.bytes, caller!!.nextOffset)
-            val step = readSymbolRef(call.bytes, flow!!.nextOffset)
-            val callee = readSymbolRef(call.bytes, step!!.nextOffset)
+            val operationId = readUvarint(call.bytes, caller!!.nextOffset)
+            val callee = readSymbolRef(call.bytes, operationId!!.nextOffset)
+            assertEquals(41L, operationId.value)
             assertNotNull(caller)
             assertTrue(caller.stable)
             assertEquals(0L, caller.id)
@@ -1424,7 +2261,7 @@ class AsyncLogWriterTest {
                 readUvarint(payload.bytes, payload.offset)?.value
             }
             assertFalse("runtime caller/callee created DICT_OWNER", dictionaryKinds.contains(1L))
-            assertTrue("runtime caller/callee did not create embedded stable definitions", dictionaryKinds.contains(14L))
+            assertTrue("runtime caller/callee did not create embedded stable definitions", dictionaryKinds.contains(12L))
         } finally {
             directory.deleteRecursively()
         }
@@ -1434,18 +2271,18 @@ class AsyncLogWriterTest {
     fun batchedQueueAccountingCountsLogicalWireRecords() {
         val directory = Files.createTempDirectory("jankhunter-batch-accounting").toFile()
         try {
-            val writer = AsyncLogWriter.open(directory, config(), "main")
+            val writer = AsyncLogWriterFactory().open(directory, config(), "main")
             writer.runtimeCalls(
                 RuntimeCallBatch(2).apply {
-                    add(null, 0L, null, null, 1L, 1L, 1L, 1L)
-                    add(null, 1L, null, null, 2L, 1L, 1L, 1L)
+                    add(null, 0L, "zero", 0L, 1L, "one", 1L, 1L, 1L)
+                    add(null, 1L, "one", 0L, 2L, "two", 1L, 1L, 1L)
                 },
             )
             writer.stableCounters(
                 StableCounterBatch(3).apply {
-                    add(0L, 2L)
-                    add(-1L, 3L)
-                    add(2L, 4L)
+                    add(0L, "zero", 2L)
+                    add(-1L, "negative", 3L)
+                    add(2L, "two", 4L)
                 },
             )
             assertTrue(writer.close())
@@ -1457,6 +2294,71 @@ class AsyncLogWriterTest {
             val quality = qualityCounters(file)
             assertEquals(5L, quality[QualityCounterId.ACCEPTED_EVENT_TOTAL] ?: 0L)
             assertEquals(5L, quality[QualityCounterId.WRITTEN_EVENT_TOTAL] ?: 0L)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun binaryWriterRejectsReservedDatabaseIOValues() {
+        val directory = Files.createTempDirectory("jankhunter-reserved-io-values").toFile()
+        try {
+            BinaryLogWriter(File(directory, "strict.jhlog")).use { writer ->
+                for (operation in 4L..5L) {
+                    assertThrows(IllegalArgumentException::class.java) {
+                        writer.io(
+                            operation = operation,
+                            durationUs = 1L,
+                            bytes = 0L,
+                            mainThread = false,
+                            sourceId = 0L,
+                            sourceName = null,
+                            outcome = Jhlog.IO_OUTCOME_SUCCESS,
+                            bytesKnown = false,
+                        )
+                    }
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun binaryWriterRejectsStableReferencesWithoutReadableNames() {
+        val directory = Files.createTempDirectory("jankhunter-stable-symbol-contract").toFile()
+        try {
+            BinaryLogWriter(File(directory, "strict.jhlog")).use { writer ->
+                assertThrows(IllegalArgumentException::class.java) {
+                    writer.worker(
+                        workerId = 0x103L,
+                        workerName = null,
+                        instanceId = 1L,
+                        stage = Jhlog.WORKER_STAGE_STARTED,
+                        outcome = Jhlog.WORKER_OUTCOME_UNKNOWN,
+                        durationMs = 0L,
+                        runAttempt = 0L,
+                        generation = 0L,
+                        stopReason = 0L,
+                        flags = 0L,
+                    )
+                }
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun binaryWriterRejectsConflictingNamesForOneStableId() {
+        val directory = Files.createTempDirectory("jankhunter-stable-symbol-collision").toFile()
+        try {
+            BinaryLogWriter(File(directory, "collision.jhlog")).use { writer ->
+                writer.stableCounter(0x103L, "example.First.call", 1L)
+                assertThrows(IllegalArgumentException::class.java) {
+                    writer.stableCounter(0x103L, "example.Second.call", 1L)
+                }
+            }
         } finally {
             directory.deleteRecursively()
         }
@@ -1548,6 +2450,9 @@ class AsyncLogWriterTest {
         val payloads = ArrayList<RecordPayload>()
         committedRawChunks(file.readBytes()).forEach { raw ->
             var offset = 0
+            var lastContextScreen: SymbolWire? = null
+            var lastContextOwner: SymbolWire? = null
+            var lastContextOperationId = 0L
             while (offset < raw.size) {
                 val length = readUvarint(raw, offset) ?: break
                 val bodyStart = length.nextOffset
@@ -1564,26 +2469,40 @@ class AsyncLogWriterTest {
                 if (flags.value and Jhlog.ENVELOPE_HAS_THREAD != 0L) {
                     cursor = readUvarint(raw, cursor)?.nextOffset ?: break
                 }
+                var contextScreen: SymbolWire? = null
                 var contextOwner: SymbolWire? = null
-                if (
-                    flags.value and Jhlog.ENVELOPE_HAS_CONTEXT != 0L &&
-                    flags.value and Jhlog.ENVELOPE_SAME_CONTEXT == 0L
-                ) {
-                    val presence = readUvarint(raw, cursor) ?: break
-                    cursor = presence.nextOffset
-                    repeat(4) { bit ->
-                        if (presence.value and (1L shl bit) != 0L) {
-                            val ref = readSymbolRef(raw, cursor) ?: return@forEach
-                            if (bit == 1) contextOwner = ref
-                            cursor = ref.nextOffset
+                var contextOperationId = 0L
+                if (flags.value and Jhlog.ENVELOPE_HAS_CONTEXT != 0L) {
+                    if (flags.value and Jhlog.ENVELOPE_SAME_CONTEXT != 0L) {
+                        contextScreen = lastContextScreen
+                        contextOwner = lastContextOwner
+                        contextOperationId = lastContextOperationId
+                    } else {
+                        val presence = readUvarint(raw, cursor) ?: break
+                        cursor = presence.nextOffset
+                        if (presence.value and Jhlog.CONTEXT_SCREEN != 0L) {
+                            contextScreen = readSymbolRef(raw, cursor) ?: return@forEach
+                            cursor = contextScreen.nextOffset
                         }
+                        if (presence.value and Jhlog.CONTEXT_OWNER != 0L) {
+                            contextOwner = readSymbolRef(raw, cursor) ?: return@forEach
+                            cursor = contextOwner.nextOffset
+                        }
+                        if (presence.value and Jhlog.CONTEXT_OPERATION != 0L) {
+                            val operationId = readUvarint(raw, cursor) ?: return@forEach
+                            contextOperationId = operationId.value
+                            cursor = operationId.nextOffset
+                        }
+                        lastContextScreen = contextScreen
+                        lastContextOwner = contextOwner
+                        lastContextOperationId = contextOperationId
                     }
                 }
                 if (flags.value and Jhlog.ENVELOPE_HAS_ATTRIBUTES != 0L) {
                     cursor = readUvarint(raw, cursor)?.nextOffset ?: break
                 }
                 if (type.value == expectedType.toLong()) {
-                    payloads += RecordPayload(raw, cursor, contextOwner)
+                    payloads += RecordPayload(raw, cursor, contextOwner, contextScreen, contextOperationId)
                 }
                 offset = bodyEnd
             }
@@ -1632,7 +2551,7 @@ class AsyncLogWriterTest {
         var cursor = payloadStart
         repeat(3) { cursor = readUvarint(bytes, cursor)?.nextOffset ?: return ByteArray(0) }
         cursor += 16 * 3
-        repeat(6) { cursor = readUvarint(bytes, cursor)?.nextOffset ?: return ByteArray(0) }
+        repeat(7) { cursor = readUvarint(bytes, cursor)?.nextOffset ?: return ByteArray(0) }
         val processNameLength = readUvarint(bytes, cursor) ?: return ByteArray(0)
         cursor = processNameLength.nextOffset + processNameLength.value.toInt()
         val namespaceLength = readUvarint(bytes, cursor) ?: return ByteArray(0)
@@ -1650,7 +2569,7 @@ class AsyncLogWriterTest {
         var cursor = payloadStart
         repeat(3) { cursor = requireNotNull(readUvarint(bytes, cursor)).nextOffset }
         cursor += 16 * 3
-        repeat(6) { cursor = requireNotNull(readUvarint(bytes, cursor)).nextOffset }
+        repeat(7) { cursor = requireNotNull(readUvarint(bytes, cursor)).nextOffset }
         repeat(2) {
             val length = requireNotNull(readUvarint(bytes, cursor))
             cursor = length.nextOffset + length.value.toInt()
@@ -1682,7 +2601,7 @@ class AsyncLogWriterTest {
         val processInstanceId = readId()
         val sessionId = readId()
         val segmentIndexWire = requireNotNull(readUvarint(bytes, cursor)).also { cursor = it.nextOffset }
-        repeat(5) { cursor = requireNotNull(readUvarint(bytes, cursor)).nextOffset }
+        repeat(6) { cursor = requireNotNull(readUvarint(bytes, cursor)).nextOffset }
         repeat(2) {
             val length = requireNotNull(readUvarint(bytes, cursor))
             cursor = length.nextOffset + length.value.toInt()
@@ -1816,7 +2735,7 @@ class AsyncLogWriterTest {
         }
 
         override fun createArtifact(fileName: String): JankHunterBinaryArtifact =
-            noOpArtifact(fileName)
+            fileArtifact(File(directory, fileName))
 
         override fun cleanup(protectedPaths: Set<String>) = Unit
 
@@ -1843,7 +2762,7 @@ class AsyncLogWriterTest {
         }
 
         override fun createArtifact(fileName: String): JankHunterBinaryArtifact =
-            noOpArtifact(fileName)
+            fileArtifact(File(directory, fileName))
 
         override fun cleanup(protectedPaths: Set<String>) = Unit
 
@@ -1914,6 +2833,24 @@ class AsyncLogWriterTest {
         }
     }
 
+    private class ThrowingOpenBinaryStorage(
+        private val directory: File,
+    ) : JankHunterBinaryStorage {
+        override val fileSizeLimitBytes: Long = Long.MAX_VALUE
+        override val archivesSizeLimitBytes: Long = Long.MAX_VALUE
+
+        override fun openWriter(fileName: String): JankHunterBinaryWriter {
+            throw IOException("injected storage switch failure")
+        }
+
+        override fun createArtifact(fileName: String): JankHunterBinaryArtifact =
+            fileArtifact(File(directory, fileName))
+
+        override fun cleanup(protectedPaths: Set<String>) = Unit
+
+        override fun listFiles(): List<String> = emptyList()
+    }
+
     private open class FileBinaryWriter(private val file: File) : JankHunterBinaryWriter {
         private val output = FileOutputStream(file, true)
         protected var written = file.length()
@@ -1972,6 +2909,8 @@ class AsyncLogWriterTest {
         val bytes: ByteArray,
         val offset: Int,
         val contextOwner: SymbolWire?,
+        val contextScreen: SymbolWire? = null,
+        val contextOperationId: Long = 0L,
     )
 
     private data class SymbolWire(
@@ -2041,9 +2980,11 @@ class AsyncLogWriterTest {
         }
 
         fun sortedSessionLogFiles(directory: File): List<File> {
-            return sessionLogFiles(directory).sortedBy { file ->
-                SessionLogName.parse(file.name)?.index ?: Long.MAX_VALUE
-            }
+            return sessionLogFiles(directory).sortedWith(
+                compareBy<File> { file -> SessionLogName.parse(file.name)?.localDate.orEmpty() }
+                    .thenBy { file -> SessionLogName.parse(file.name)?.dailySessionIndex ?: Long.MAX_VALUE }
+                    .thenBy { file -> SessionLogName.parse(file.name)?.segmentIndex ?: Long.MAX_VALUE },
+            )
         }
 
         fun noOpArtifact(path: String): JankHunterBinaryArtifact = object : JankHunterBinaryArtifact {
@@ -2052,6 +2993,16 @@ class AsyncLogWriterTest {
             override fun commit() = Unit
 
             override fun abort() = Unit
+        }
+
+        fun fileArtifact(file: File): JankHunterBinaryArtifact = object : JankHunterBinaryArtifact {
+            override val path: String = file.absolutePath
+
+            override fun commit() = Unit
+
+            override fun abort() {
+                file.delete()
+            }
         }
     }
 }

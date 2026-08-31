@@ -8,6 +8,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeDecoratorFactoryTest {
+    private val callbacks: RuntimeAsyncCallbacks
+        get() = JankHunter.asyncTelemetry()
+    private val handlerOwner = HandlerRunnableOwner { _, _ -> }
+
     @Test
     fun publicDecoratorsAreNoopsWhenRuntimeInactive() {
         val runnable = Runnable {}
@@ -15,24 +19,24 @@ class RuntimeDecoratorFactoryTest {
         val block: Function2<Any?, Any?, Any?> = { _, _ -> "ok" }
         val listener = View.OnClickListener {}
 
-        assertSame(runnable, RuntimeDecoratorFactory.wrapRunnable(runnable, "owner", runtimeActive = false))
-        assertSame(callable, RuntimeDecoratorFactory.wrapCallable(callable, "owner", runtimeActive = false))
-        assertSame(block, RuntimeDecoratorFactory.wrapCoroutineBlock(block, "owner", runtimeActive = false))
-        assertSame(listener, RuntimeDecoratorFactory.wrapClickListener(listener, "owner", runtimeActive = false))
+        assertSame(runnable, wrapRunnableDecorator(runnable, "owner", false, callbacks))
+        assertSame(callable, wrapCallableDecorator(callable, "owner", false, callbacks))
+        assertSame(block, wrapCoroutineBlockDecorator(block, "owner", false, callbacks))
+        assertSame(listener, wrapClickListenerDecorator(listener, "owner", false, callbacks))
     }
 
     @Test
     fun publicDecoratorsAreIdempotent() {
-        val runnable = RuntimeDecoratorFactory.wrapRunnable(Runnable {}, "owner", runtimeActive = true)
-        val callable = RuntimeDecoratorFactory.wrapCallable(Callable { "ok" }, "owner", runtimeActive = true)
+        val runnable = wrapRunnableDecorator(Runnable {}, "owner", true, callbacks)
+        val callable = wrapCallableDecorator(Callable { "ok" }, "owner", true, callbacks)
         val blockDelegate: Function2<Any?, Any?, Any?> = { _, _ -> "ok" }
-        val block = RuntimeDecoratorFactory.wrapCoroutineBlock(blockDelegate, "owner", runtimeActive = true)
-        val listener = RuntimeDecoratorFactory.wrapClickListener(View.OnClickListener {}, "owner", runtimeActive = true)
+        val block = wrapCoroutineBlockDecorator(blockDelegate, "owner", true, callbacks)
+        val listener = wrapClickListenerDecorator(View.OnClickListener {}, "owner", true, callbacks)
 
-        assertSame(runnable, RuntimeDecoratorFactory.wrapRunnable(runnable, "owner", runtimeActive = true))
-        assertSame(callable, RuntimeDecoratorFactory.wrapCallable(callable, "owner", runtimeActive = true))
-        assertSame(block, RuntimeDecoratorFactory.wrapCoroutineBlock(block, "owner", runtimeActive = true))
-        assertSame(listener, RuntimeDecoratorFactory.wrapClickListener(listener, "owner", runtimeActive = true))
+        assertSame(runnable, wrapRunnableDecorator(runnable, "owner", true, callbacks))
+        assertSame(callable, wrapCallableDecorator(callable, "owner", true, callbacks))
+        assertSame(block, wrapCoroutineBlockDecorator(block, "owner", true, callbacks))
+        assertSame(listener, wrapClickListenerDecorator(listener, "owner", true, callbacks))
     }
 
     @Test
@@ -44,18 +48,18 @@ class RuntimeDecoratorFactoryTest {
             override fun call(): String = "ok"
         }
 
-        assertSame(priorityRunnable, RuntimeDecoratorFactory.wrapRunnable(priorityRunnable, "owner", runtimeActive = true))
-        assertSame(priorityCallable, RuntimeDecoratorFactory.wrapCallable(priorityCallable, "owner", runtimeActive = true))
+        assertSame(priorityRunnable, wrapRunnableDecorator(priorityRunnable, "owner", true, callbacks))
+        assertSame(priorityCallable, wrapCallableDecorator(priorityCallable, "owner", true, callbacks))
     }
 
     @Test
     fun handlerRunnableWrapperUsesReplacementDecorator() {
         val runnable = Runnable {}
-        val wrapped = RuntimeDecoratorFactory.wrapHandlerRunnable(runnable, "owner", runtimeActive = true)
+        val wrapped = wrapHandlerRunnableDecorator(runnable, "owner", true, callbacks, handlerOwner)
 
         assertNotSame(runnable, wrapped)
         assertTrue(wrapped is JankHunterHandlerRunnable)
-        assertSame(wrapped, RuntimeDecoratorFactory.wrapHandlerRunnable(wrapped, "owner", runtimeActive = true))
+        assertSame(wrapped, wrapHandlerRunnableDecorator(wrapped, "owner", true, callbacks, handlerOwner))
     }
 
     private interface PriorityRunnable : Runnable

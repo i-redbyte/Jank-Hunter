@@ -2,6 +2,10 @@ plugins {
     `kotlin-dsl`
 }
 
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    compilerOptions.allWarningsAsErrors.set(true)
+}
+
 repositories {
     google()
     mavenCentral()
@@ -13,6 +17,7 @@ dependencies {
     implementation(libs.detekt.gradle.plugin)
     implementation(libs.kotlin.compose.gradle.plugin)
     implementation(libs.kotlin.gradle.plugin)
+    testImplementation(libs.junit)
 }
 
 gradlePlugin {
@@ -36,6 +41,10 @@ gradlePlugin {
         register("kotlinGradlePlugin") {
             id = "io.jankhunter.kotlin-gradle-plugin"
             implementationClass = "io.jankhunter.buildlogic.JankHunterKotlinGradlePlugin"
+        }
+        register("sqlNormalizerSources") {
+            id = "io.jankhunter.sql-normalizer-sources"
+            implementationClass = "io.jankhunter.buildlogic.JankHunterSqlNormalizerSourcesPlugin"
         }
     }
 }

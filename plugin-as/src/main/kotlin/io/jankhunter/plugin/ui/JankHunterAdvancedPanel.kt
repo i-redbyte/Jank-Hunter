@@ -35,7 +35,7 @@ import javax.swing.Scrollable
 import javax.swing.SwingConstants
 
 internal data class JankHunterAdvancedOptions(
-    val ownerMap: String,
+    val artifactsDir: String,
     val mapping: String,
     val classGraph: String,
     val diagnostics: String,
@@ -48,7 +48,7 @@ internal data class JankHunterAdvancedOptions(
 ) {
     companion object {
         val SIMPLE = JankHunterAdvancedOptions(
-            ownerMap = "",
+            artifactsDir = "",
             mapping = "",
             classGraph = "",
             diagnostics = "",
@@ -80,7 +80,7 @@ internal class JankHunterAdvancedPanel(
     private val artifactCombo = JComboBox<String>()
     private val scanArtifactsButton = JButton("Найти")
     private val manualArtifactsCheckBox = JBCheckBox("Настроить отдельные файлы вручную")
-    private val ownerMapField = fileField()
+    private val artifactsDirField = fileField()
     private val mappingField = fileField()
     private val classGraphField = fileField()
     private val diagnosticsField = fileField()
@@ -139,12 +139,12 @@ internal class JankHunterAdvancedPanel(
             add(scanArtifactsButton, BorderLayout.EAST)
         })
         addWideRow(artifactsForm, artifactsRow++, manualArtifactsCheckBox)
-        addRow(artifactsForm, artifactsRow++, "Owner map", ownerMapField)
+        addRow(artifactsForm, artifactsRow++, "Artifacts directory", artifactsDirField)
         addRow(artifactsForm, artifactsRow++, "R8 mapping", mappingField)
         addRow(artifactsForm, artifactsRow++, "Class graph", classGraphField)
         addRow(artifactsForm, artifactsRow++, "Diagnostics", diagnosticsField)
         addRow(artifactsForm, artifactsRow, "DI catalog", diCatalogField)
-        manualFields = listOf(ownerMapField, mappingField, classGraphField, diagnosticsField, diCatalogField)
+        manualFields = listOf(artifactsDirField, mappingField, classGraphField, diagnosticsField, diCatalogField)
 
         manualArtifactsCheckBox.addActionListener { updateManualFields() }
         artifactCombo.addActionListener { applySelectedArtifactSet() }
@@ -209,7 +209,7 @@ internal class JankHunterAdvancedPanel(
     }
 
     fun options(): JankHunterAdvancedOptions = JankHunterAdvancedOptions(
-        ownerMap = ownerMapField.text.trim(),
+        artifactsDir = artifactsDirField.text.trim(),
         mapping = mappingField.text.trim(),
         classGraph = classGraphField.text.trim(),
         diagnostics = diagnosticsField.text.trim(),
@@ -314,7 +314,7 @@ internal class JankHunterAdvancedPanel(
     private fun applySelectedArtifactSet() {
         if (manualArtifactsCheckBox.isSelected) return
         val set = artifactSets.getOrNull(artifactCombo.selectedIndex) ?: return
-        ownerMapField.text = set.ownerMap
+        artifactsDirField.text = set.artifactsDir
         mappingField.text = set.mapping
         classGraphField.text = set.classGraph
         diagnosticsField.text = set.diagnostics

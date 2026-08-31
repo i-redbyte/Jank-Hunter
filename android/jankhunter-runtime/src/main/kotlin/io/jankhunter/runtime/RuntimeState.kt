@@ -3,27 +3,27 @@ package io.jankhunter.runtime
 import android.app.Application
 import android.content.Context
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
-import io.jankhunter.runtime.internal.io.LogGrowthManager
 import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
 import io.jankhunter.runtime.internal.system.ActivityTracker
 import io.jankhunter.runtime.internal.system.FpsMonitor
 import io.jankhunter.runtime.internal.system.MainLooperDispatchMonitor
 import io.jankhunter.runtime.internal.system.MainThreadWatchdog
 import io.jankhunter.runtime.internal.system.MemorySampler
-import io.jankhunter.runtime.internal.system.MemoryTrimReporter
 import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetainedHeapDumper
 import io.jankhunter.runtime.internal.system.RuntimeMaintenanceScheduler
 import io.jankhunter.runtime.internal.system.SystemContextSampler
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 internal class RuntimeState {
     val lifecycleLock = Any()
+    val storageValveLock = Any()
     val started = AtomicBoolean(false)
     val initAttempts = AtomicLong()
     val initFailures = AtomicLong()
-    val appForeground = AtomicBoolean(false)
+    val uiVisibility = AtomicInteger(RuntimeUiVisibility.UNKNOWN.wireValue)
     val runtimeEnabled = AtomicBoolean(true)
     val collectionInactiveSinceElapsedMs = AtomicLong()
     val heapDumpInProgress = AtomicBoolean(false)
@@ -34,9 +34,6 @@ internal class RuntimeState {
 
     @Volatile
     var writer: AsyncLogWriter? = null
-
-    @Volatile
-    var logGrowthManager: LogGrowthManager? = null
 
     @Volatile
     var logSnapshotCoordinator: ProcessLogSnapshotCoordinator? = null
@@ -61,12 +58,6 @@ internal class RuntimeState {
 
     @Volatile
     var memorySampler: MemorySampler? = null
-
-    @Volatile
-    var memoryTrimReporter: MemoryTrimReporter? = null
-
-    @Volatile
-    var componentCallbackContext: Context? = null
 
     @Volatile
     var systemContextSampler: SystemContextSampler? = null

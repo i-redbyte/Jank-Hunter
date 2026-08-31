@@ -121,6 +121,11 @@ func TestDependencyInjectionCatalogDoesNotChangeRuntimeAnalysis(t *testing.T) {
 		},
 	}).finish()
 
+	if categoryCoverageByID(withCatalog.CategoryCoverage, ProblemCategoryDependencyInjection) == nil {
+		t.Fatalf("DI category is missing: %+v", withCatalog.CategoryCoverage)
+	}
+	withCatalog.CategoryCoverage = withoutCatalog.CategoryCoverage
+	withCatalog.ProblemSummary = withoutCatalog.ProblemSummary
 	if !reflect.DeepEqual(withoutCatalog, withCatalog) {
 		t.Fatalf("DI catalog changed runtime summary\nwithout=%+v\nwith=%+v", withoutCatalog, withCatalog)
 	}

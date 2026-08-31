@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/analyze"
+	"github.com/i-redbyte/jank-hunter/cli/internal/datavalue"
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
 
@@ -36,9 +37,8 @@ type robustFrequency struct {
 type robustSampleMap map[robustKey]*robustSampleSet
 
 type robustCollector struct {
-	filter   analyze.Filter
-	ownerMap *analyze.OwnerMap
-	samples  robustSampleMap
+	filter  analyze.Filter
+	samples robustSampleMap
 }
 
 func (c *robustCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
@@ -104,11 +104,11 @@ func (c *robustCollector) addMetricValue(name string, metric *jhlog.MetricEvent)
 	if metric == nil {
 		return
 	}
-	c.addValue("Gauge-метрика", name, "Значение", "знач.", float64(metric.Value))
+	c.addValue("Пользовательская метрика", name, "Значение", "знач.", float64(metric.Value))
 }
 
 func (c *robustCollector) addValue(dimension, name, metric, unit string, value float64) {
-	if name == "" || math.IsNaN(value) || math.IsInf(value, 0) {
+	if datavalue.IsUnknown(name) || math.IsNaN(value) || math.IsInf(value, 0) {
 		return
 	}
 	key := robustKey{Dimension: dimension, Name: name, Metric: metric, Unit: unit}
@@ -353,7 +353,7 @@ func compareRobustSet(key robustKey, baseline, candidate *robustSampleSet) Robus
 	severity := robustDeltaSeverity(key, deltaPct, deltaPctAvailable, cliff, baseCount, candidateCount)
 	recommendation := robustDeltaRecommendation(severity)
 	if !comparable {
-		recommendation = "Проверьте, что база и кандидат проходили одинаковый сценарий и собирали одинаковые типы событий. Распределение есть только с одной стороны, поэтому вывод о регрессии невозможен."
+		recommendation = "Проверьте, что базовый и проверяемый прогоны проходили одинаковый сценарий и собирали одинаковые типы событий. Распределение есть только с одной стороны, поэтому вывод об ухудшении невозможен."
 	}
 	return RobustDelta{
 		Dimension:         key.Dimension,
@@ -391,7 +391,7 @@ func robustStatus(stats []RobustStat) string {
 
 func robustSummary(stats []RobustStat) string {
 	if len(stats) == 0 {
-		return "Недостаточно данных для робастной статистики: нет распределений по маршрутам, экранам, источникам или пользовательским gauge-метрикам."
+		return "Недостаточно данных для устойчивой статистики: нет распределений по маршрутам, экранам, местам запуска или пользовательским метрикам."
 	}
 	withCI := 0
 	for _, stat := range stats {
@@ -399,21 +399,21 @@ func robustSummary(stats []RobustStat) string {
 			withCI++
 		}
 	}
-	return fmt.Sprintf("Посчитано %d распределений: медиана, p90/p95/p99, MAD, 10%% усеченное среднее; bootstrap-интервал для p95 есть у %d сигналов.", len(stats), withCI)
+	return fmt.Sprintf("Посчитано %d распределений: медиана, p90/p95/p99, MAD, 10%% усечённое среднее; интервал p95 методом повторной выборки есть у %d сигналов.", len(stats), withCI)
 }
 
 func robustFindings(stats []RobustStat) []Finding {
 	if len(stats) == 0 {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Недостаточно данных для робастной статистики",
-			Detail:         "В логах нет достаточных распределений по маршрутам, экранам, источникам или пользовательским gauge-метрикам.",
-			Recommendation: "Соберите прогон с HTTP/UI событиями или включенными Android gauge-метриками.",
+			Title:          "Недостаточно данных для устойчивой статистики",
+			Detail:         "В журналах нет достаточных распределений по маршрутам, экранам, местам запуска или пользовательским метрикам.",
+			Recommendation: "Соберите прогон с событиями HTTP/UI или включёнными пользовательскими метриками Android.",
 		}}
 	}
 	findings := []Finding{{
 		Severity: "ok",
-		Title:    "Робастная статистика посчитана",
+		Title:    "Устойчивая статистика посчитана",
 		Detail:   robustSummary(stats),
 	}}
 	lowSample := 0
@@ -427,7 +427,7 @@ func robustFindings(stats []RobustStat) []Finding {
 			Severity:       "medium",
 			Title:          "Есть распределения с малым размером выборки",
 			Detail:         fmt.Sprintf("%d сигналов имеют ограниченную выборку. Для них p95/p99 и дельта Клиффа менее устойчивы.", lowSample),
-			Recommendation: "Соберите несколько повторов сценария или более длинный тестовый прогон перед выводом о регрессии.",
+			Recommendation: "Соберите несколько повторов сценария или более длинный тестовый прогон перед выводом об ухудшении.",
 		})
 	}
 	return findings
@@ -435,7 +435,7 @@ func robustFindings(stats []RobustStat) []Finding {
 
 func compareRobustSummary(deltas []RobustDelta) string {
 	if len(deltas) == 0 {
-		return "Недостаточно пересекающихся распределений для робастного сравнения."
+		return "Недостаточно пересекающихся распределений для устойчивого сравнения."
 	}
 	comparable := 0
 	for _, delta := range deltas {
@@ -450,20 +450,20 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 	if len(deltas) == 0 {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Нет распределений для робастного сравнения",
-			Detail:         "База и кандидат не имеют сопоставимых выборок по маршрутам, экранам, источникам или пользовательским gauge-метрикам.",
-			Recommendation: "Проверьте, что сценарии базы и кандидата проходят одни и те же экраны, маршруты и источники.",
+			Title:          "Нет распределений для устойчивого сравнения",
+			Detail:         "Базовый и проверяемый прогоны не имеют сопоставимых выборок по маршрутам, экранам, местам запуска или пользовательским метрикам.",
+			Recommendation: "Проверьте, что базовый и проверяемый прогоны проходят одни и те же экраны, маршруты и места запуска.",
 		}}
 	}
 	for _, delta := range deltas {
 		if delta.Severity == "high" || delta.Severity == "medium" {
-			title := "Найдена робастная регрессия"
+			title := "Найдено устойчивое ухудшение"
 			evidence := []string{fmt.Sprintf("%s · %s · %s", delta.Dimension, delta.Name, delta.Metric)}
 			if delta.Comparable {
 				evidence = append(evidence, fmt.Sprintf("дельта Клиффа %.3f, эффект: %s, доверие: %s", delta.CliffDelta, delta.EffectSize, delta.Confidence))
 			} else {
 				title = "Распределение есть только в одном прогоне"
-				evidence = append(evidence, fmt.Sprintf("наблюдений: база=%d, кандидат=%d; размер эффекта и относительное изменение не рассчитываются", delta.BaselineCount, delta.CandidateCount))
+				evidence = append(evidence, fmt.Sprintf("наблюдений: базовый прогон=%d, проверяемый прогон=%d; размер эффекта и относительное изменение не рассчитываются", delta.BaselineCount, delta.CandidateCount))
 			}
 			return []Finding{{
 				Severity:       delta.Severity,
@@ -476,7 +476,7 @@ func compareRobustFindings(deltas []RobustDelta) []Finding {
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Явных робастных регрессий не найдено",
+		Title:    "Явных устойчивых ухудшений не найдено",
 		Detail:   compareRobustSummary(deltas),
 	}}
 }
@@ -494,7 +494,7 @@ func sampleQuality(total int) (string, string, string) {
 	case total < 50:
 		quality = "достаточная"
 	}
-	return quality, severity, fmt.Sprintf("сэмплов=%d", total)
+	return quality, severity, fmt.Sprintf("наблюдений=%d", total)
 }
 
 func compareConfidence(baseCount, candidateCount int, deltaPct, cliff float64) string {
@@ -522,7 +522,7 @@ func compareConfidence(baseCount, candidateCount int, deltaPct, cliff float64) s
 }
 
 func robustDeltaSeverity(key robustKey, deltaPct float64, deltaPctAvailable bool, cliff float64, baseCount, candidateCount int) string {
-	if key.Dimension == "Gauge-метрика" {
+	if key.Dimension == "Пользовательская метрика" {
 		return "ok"
 	}
 	if baseCount == 0 && candidateCount > 0 {
@@ -569,16 +569,16 @@ func robustConfidenceTier(baseCount, candidateCount int, deltaPct, cliff float64
 
 func robustDeltaSummary(key robustKey, baseCount, candidateCount int, baseP95, candidateP95, deltaPct, cliff float64) string {
 	if baseCount == 0 {
-		return fmt.Sprintf("Сигнал %s/%s появился только у кандидата: p95 %.1f %s, сэмплов=%d.", key.Name, key.Metric, candidateP95, key.Unit, candidateCount)
+		return fmt.Sprintf("Сигнал %s/%s появился только в проверяемом прогоне: p95 %.1f %s, наблюдений=%d.", key.Name, key.Metric, candidateP95, key.Unit, candidateCount)
 	}
 	if candidateCount == 0 {
-		return fmt.Sprintf("Сигнал %s/%s исчез у кандидата: p95 базы %.1f %s, сэмплов=%d.", key.Name, key.Metric, baseP95, key.Unit, baseCount)
+		return fmt.Sprintf("Сигнал %s/%s исчез в проверяемом прогоне: p95 базового прогона %.1f %s, наблюдений=%d.", key.Name, key.Metric, baseP95, key.Unit, baseCount)
 	}
 	if baseP95 == 0 {
 		return fmt.Sprintf("%s/%s: p95 изменился с нуля до %.1f %s. Процент не рассчитывается, потому что делить на нулевую базу нельзя.", key.Name, key.Metric, candidateP95, key.Unit)
 	}
-	if key.Dimension == "Gauge-метрика" {
-		return fmt.Sprintf("%s/%s: p95 изменился с %.1f до %.1f %s (%+.1f%%), дельта Клиффа %.3f. Направление пользовательской gauge-метрики неизвестно, поэтому это изменение не помечается как регрессия автоматически.", key.Name, key.Metric, baseP95, candidateP95, key.Unit, deltaPct, cliff)
+	if key.Dimension == "Пользовательская метрика" {
+		return fmt.Sprintf("%s/%s: p95 изменился с %.1f до %.1f %s (%+.1f%%), дельта Клиффа %.3f. Для пользовательской метрики неизвестно, какое направление лучше, поэтому изменение не помечается как ухудшение автоматически.", key.Name, key.Metric, baseP95, candidateP95, key.Unit, deltaPct, cliff)
 	}
 	return fmt.Sprintf("%s/%s: p95 изменился с %.1f до %.1f %s (%+.1f%%), дельта Клиффа %.3f.", key.Name, key.Metric, baseP95, candidateP95, key.Unit, deltaPct, cliff)
 }
@@ -586,7 +586,7 @@ func robustDeltaSummary(key robustKey, baseCount, candidateCount int, baseP95, c
 func robustDeltaRecommendation(severity string) string {
 	switch severity {
 	case "high":
-		return "Проверьте источник и маршрут вокруг этого сигнала в основном отчете и в таймлайне; эффект крупный и похож на реальную регрессию."
+		return "Проверьте место запуска и маршрут вокруг этого сигнала в основном отчёте и на временной шкале; эффект крупный и похож на реальное ухудшение."
 	case "medium":
 		return "Проверьте повторяемость на еще одном прогоне; эффект заметный, но зависит от размера выборки и шума сценария."
 	default:
@@ -957,7 +957,7 @@ func dimensionRank(value string) int {
 		return 1
 	case "Источник":
 		return 2
-	case "Gauge-метрика":
+	case "Пользовательская метрика":
 		return 3
 	case "Память":
 		return 4

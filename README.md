@@ -20,7 +20,17 @@ Jank Hunter помогает поймать то, что обычно ускол
 
 ### Один Прогон
 
-Верх отчёта сразу показывает итог, critical/high проблемы и состояние покрытия по категориям. Каждая карточка объясняет, что произошло, где это наблюдалось, какой уровень связи доказан, как рассчитан риск, что проверить и как подтвердить исправление.
+Верх отчёта сразу показывает итог, проблемы с критичным/высоким приоритетом и состояние покрытия
+по категориям. Каждая карточка объясняет, что произошло, где это наблюдалось, какой уровень связи
+доказан, как рассчитан индекс приоритета расследования, что проверить и как подтвердить исправление.
+
+Индекс приоритета расследования лежит в диапазоне 0–100 и задаёт только порядок разбора. Это сумма
+пяти компонентов: влияние на пользователя 0–40, величина отклонения 0–25,
+повторяемость/охват запусков 0–20, широта локализации 0–10 и сочетание сигналов 0–5. Это не
+вероятность дефекта, не ожидаемый ущерб и не SLA. Достоверность evidence и уровень связи
+`linked/correlated/hypothesis/unknown` выводятся отдельно и не умножают индекс. В JSON/CSV
+канонические поля называются `investigation_priority` и `priority_breakdown`; problem schema —
+`jankhunter.problems/v2`.
 
 ![Верх inspect-отчёта](assets/readme/inspect-hero.jpg)
 
@@ -89,7 +99,7 @@ make build
 ./bin/jankhunter compare --baseline /tmp/baseline.jhlog --candidate /tmp/candidate.jhlog --out /tmp/jankhunter-compare.html
 ```
 
-`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Единственный поддерживаемый wire-контракт — `.jhlog 2.0.0`; предыдущие форматы намеренно отклоняются без fallback.
+`make build` использует установленный Go. Если Go не найден, Makefile скачает Go `1.22.12` в `cli/.tools/go` и не тронет системные каталоги. Единственный поддерживаемый двоичный контракт — `.jhlog 2.0.0`; предыдущие форматы намеренно отклоняются.
 
 Установка команды:
 
@@ -130,16 +140,18 @@ quit
 import io.jankhunter.gradle.JankHunterFeatureMode
 
 plugins {
-    id("io.jankhunter.android") version "1.0.3"
+    id("io.jankhunter.android") version "1.0.7"
 }
 
 dependencies {
-    implementation("io.jankhunter:jankhunter-android-sdk:1.0.3")
+    implementation("io.jankhunter:jankhunter-android-sdk:1.0.7")
 }
 ```
 
-`jankhunter-android-sdk` — единственная пользовательская dependency; runtime, annotations и
-OkHttp/WebSocket support приходят транзитивно. По умолчанию ASM ограничен Android `namespace` и
+`jankhunter-android-sdk` — единственная обязательная пользовательская dependency; runtime,
+annotations и OkHttp/WebSocket support приходят транзитивно. Опциональный
+`jankhunter-workmanager` подключается явно и не добавляет WorkManager в приложение транзитивно.
+По умолчанию ASM ограничен Android `namespace` и
 явными include-пакетами. В application-модуле `includeWholeApplication = true` разрешает обработку
 классов всех модулей и зависимостей итогового приложения:
 
@@ -150,6 +162,8 @@ jankHunter {
     sessionLogSizeLimitEnabled = true
     maxSessionLogSizeMiB = 16
     logGrowthAnalyticsEnabled = true
+    // Однократно удалить накопленные журналы устаревших форматов при запуске.
+    deleteObsoleteJhlogFormats = true
     // Отдельный build-time каталог Dagger/Hilt/Koin; по умолчанию DISABLED.
     dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
 
@@ -161,11 +175,13 @@ jankHunter {
         executors = true
         // Opt-in: добавляет wrapper-объекты на coroutine builders.
         coroutines = false
-        flowInteractions = true
+        interactionOperations = true
         logSpam = true
         classGraph = true
         // Глубокий runtime-граф — только для короткой целевой диагностики.
         runtimeCallGraph = false
+        // Opt-in allow-list целостных файловых операций; буферный I/O не перехватывается.
+        ioTracing = false
     }
 }
 ```
@@ -173,6 +189,14 @@ jankHunter {
 MainLooper `Printer` и coroutine ASM по умолчанию выключены. Для UI-кадров JankStats имеет
 приоритет, а Choreographer работает только как fallback, поэтому один кадр не попадает в отчёт
 дважды.
+
+Автоматический I/O tracing включается отдельно через `instrument.ioTracing = true`. Он заменяет
+только вызовы `File.readBytes`, `File.writeBytes`, `File.appendBytes`, `FileDescriptor.sync` и
+`FileChannel.force`, сохраняя исходный результат или исключение. Низкоуровневые `read`/`write`
+не перехватываются: это исключает событие на каждый буфер и непрогнозируемую нагрузку на
+приложение. Runtime-переключатель `runtime.ioTracing` остаётся общим gate для автоматического и
+ручного `recordIO`/`traceIO`; при выключенном gate замена сразу вызывает оригинальную операцию без
+чтения часов и записи события.
 
 Один запуск может создавать несколько последовательных сегментов
 `jh-session-log.YYYY-MM-DD.<run-id>.<index>.jhlog`. Когда сегмент достигает
@@ -188,6 +212,17 @@ MainLooper `Printer` и coroutine ASM по умолчанию выключены
 или выбранных дат рассчитываются только по команде пользователя в самом HTML.
 
 OkHttp/WebSocket hooks используют support из `jankhunter-android-sdk`; дополнительных зависимостей для них нет.
+
+Для enqueue/start/finish, generation, retry и stop reason WorkManager подключите отдельный модуль:
+
+```kotlin
+implementation("io.jankhunter:jankhunter-workmanager:1.0.7")
+implementation("androidx.work:work-runtime:<ваша-версия-2.9.0+>")
+```
+
+Он предоставляет `enqueueWithJankHunter(...)`, `JankHunterWorker` и
+`JankHunterCoroutineWorker`; core runtime от WorkManager не зависит. Минимум 2.9.0 нужен для
+generation и stop reason API; модуль проверяется на WorkManager 2.11.2.
 
 Без Gradle-плагина можно вручную подключить `jankhunter-runtime` и вызвать `JankHunter.init(...)`, но ASM-внедрения и автоматически сгенерированного `JankHunterAutoInitProvider` в таком режиме не будет.
 
@@ -213,16 +248,29 @@ scripts/integrate-android-project.sh \
 
 ## Что Собирается
 
-- HTTP: длительность, DNS, соединение, время до первого байта, ошибки, байты, маршрут и владелец работы.
+- HTTP: число запросов и попыток, очередь до первого I/O, DNS/connect/TLS/request/TTFB/response,
+  точный status/protocol, redirects/cache/reuse/cancellation, известность byte counts, безопасный
+  service alias, нормализованный маршрут, owner и стабильный ASM-инициатор.
 - WebSocket: события через обёртку слушателя.
 - Интерфейс: окна кадров, частота кадров, доля медленных кадров, экраны.
 - Главный поток: длинные паузы, источники работ и подозрительные окна.
+- Async: для обёрнутых Executor — число запусков/ошибок, queue wait, service time, queue depth,
+  active/pool size и high-watermark завершённых задач; для Handler/coroutine — owner и только
+  долгие либо неуспешные lifecycle без сырых per-task событий.
+- Worker: enqueue/start/finish, экземпляр, attempt/generation, результат, periodic и stop reason;
+  синхронный `Worker` размечается ASM, полный lifecycle `CoroutineWorker` — опциональным модулем WorkManager.
 - Стабильность: типизированные исторические process-exit причины с PSS/RSS и безопасной привязкой к процессу.
-- I/O: тип операции, длительность, байты, main/background thread и атомарная атрибуция к экрану/flow/owner.
-- Память: PSS, Java heap, native heap, свободная память, удержанные объекты и, при явном разрешении, HPROF.
+- I/O: тип операции, длительность, явно известные байты, success/failure, main/background thread,
+  стабильный источник и атомарная атрибуция к экрану, операции и владельцу. У `recordIO`/`traceIO` значение
+  bytes по умолчанию означает «не измерено», а не нулевой объём.
+- Память и GC: PSS, Java heap, native heap, свободная память, положительные дельты ART GC,
+  blocking GC, allocated/freed bytes, allocation rate, удержанные объекты и, при явном разрешении, HPROF.
+- Startup: first Activity resume процесса отдельно от create→resume последующих экранов,
+  foreground/background и нормализованные переходы между экранами.
 - Устройство: Android, API, патч безопасности, ABI, сеть, VPN, батарея, хранилище, признак root-доступа.
 - Пользовательские счётчики и числовые метрики.
-- Атрибуция: `JankHunter.withOwner(...)`, `@JankHunterOwner`, `@JankHunterIgnore`, `@JankHunterScreen`, `@JankHunterFlow`, `@JankHunterTrace`.
+- Операции: единое измерение открытия экранов, действий пользователя, фоновой и системной работы с бюджетом, итогом, признаками и вложенными этапами.
+- Атрибуция: `JankHunter.startOperation(...)`, `JankHunter.traceOperation(...)`, `JankHunter.withOwner(...)`, `@JankHunterOperation`, `@JankHunterScreen`, `@JankHunterOwner`, `@JankHunterIgnore`.
 - Граф влияния: классы, сценарии, проблемные окна, спам логами, связи времени выполнения и статический граф ASM.
 - Диагностика внедрения: совпавшие перехватчики, пропуски, неподдержанные сигнатуры и области аннотаций.
 - DI-каталог по явному opt-in: build-time связи Dagger/Hilt/Koin без runtime tracing generated-кода.
@@ -248,6 +296,47 @@ compare.html
 severity, evidence, граф влияния или анализ утечек. Файл можно передавать отдельно: внешние ресурсы
 и соседние HTML ему не нужны.
 
+Problem-first карточки сети используют число запросов, ошибки, хвост задержки и частоту, а также
+показывают доминирующую HTTP-фазу, повторы и точное место вызова, когда эти данные доступны.
+Отдельный блок «Подробный сетевой анализ» группирует запросы по route, service alias,
+ASM-инициатору и контексту экрана, операции и владельца; в нём также есть точные HTTP-коды,
+failure phase/kind, protocol, cache/reuse, byte coverage, retries без redirects и максимальная
+одновременность. Одновременность восстанавливается из интервала завершённого вызова; несколько
+connect attempts без ошибки не называются retry автоматически, потому что это может быть
+параллельный выбор адреса.
+
+Отдельный блок Worker соединяет lifecycle только внутри одной process/session identity, поэтому
+ротация файла не разрывает попытку, а одинаковый идентификатор из другого запуска не склеивается.
+Он показывает время ожидания и выполнения, незавершённые переходы, результаты и точный пик
+одновременно ожидающих/работающих задач. CPU, аллокации, GC, PSS, HTTP и небазовый I/O рядом с
+Worker выводятся как временная корреляция, а не как доказанная причина; незакрытая попытка не
+растягивается до конца сессии и не участвует в расчёте стоимости.
+
+Отдельный блок «Подробный анализ критичного I/O» не смешивается с будущей аналитикой БД. Для
+file/content/sync он показывает точное место вызова и контекст, success/failure, p50/p95/max,
+суммарную длительность, byte coverage, объём и throughput только по операциям с известным размером,
+точный пик в скользящем секундном окне и максимальное пересечение завершённых интервалов.
+Problem-first поднимает только измеримо важные случаи: медленный, крупный или sync I/O на главном
+потоке, повторяющиеся ошибки, крупную фоновую операцию и шторм мелких обращений с полным byte
+coverage. Остальные операции остаются в подробной таблице и не создают шумных карточек проблем.
+
+Блок Async строится из ограниченных `count/sum/max` metric windows: максимум сохраняется точно,
+среднее взвешивается по числу samples, а поток событий на каждую задачу в `.jhlog` не создаётся.
+Executor wrapper измеряет все принятые задачи. Handler/coroutine строки имеют явно неполное
+покрытие: короткие успешные callback ниже runtime-порога не записываются, а coroutine duration
+включает suspension и не выдаётся за CPU/service time. Problem-first поднимает только повторяемое
+существенное ожидание в очереди Executor.
+
+Блок GC показывает process-level дельты ART RuntimeStats и скорость аллокаций. Пересечение
+положительной GC-дельты с UI-окном называется временной корреляцией, а не причиной jank: при
+включённой агрегации timestamp может соответствовать окончанию metric window. Отдельная проблема
+появляется только при заметном суммарном времени blocking GC.
+
+Блок Startup не смешивает первый resume нового процесса с последующей навигацией. Он показывает
+`app.lifecycle.first_resume_ms`, create→resume по классу экрана и счётчики переходов. Эти значения
+не называются Android cold-start benchmark, first draw или time-to-fully-drawn; пороги problem-first
+служат маршрутом расследования lifecycle critical path.
+
 Отдельные команды:
 
 - `inspect`: один лог или группа логов.
@@ -272,7 +361,7 @@ Android:
 
 ```bash
 cd android
-./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
+./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-workmanager:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
 ```
 
 Проверка Gradle-плагина как внешнего потребителя:
@@ -294,8 +383,8 @@ scripts/gradle-plugin-smoke.sh
 GitHub Actions собирает релиз по тегу `v*` или вручную из действия `Release`:
 
 ```bash
-git tag v1.0.3
-git push origin v1.0.3
+git tag v1.0.7
+git push origin v1.0.7
 ```
 
 В выпуск попадают:

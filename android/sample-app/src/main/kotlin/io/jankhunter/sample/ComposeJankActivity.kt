@@ -1,5 +1,7 @@
 package io.jankhunter.sample
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.os.Bundle
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
@@ -57,7 +59,7 @@ internal class ComposeJankActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        JankHunter.setScreen(SCREEN_NAME)
+        JankHunterTelemetry.setScreen(SCREEN_NAME)
     }
 
     private companion object {
@@ -82,28 +84,27 @@ private fun ComposeJankLabScreen() {
 
     LaunchedEffect(activeRun?.id) {
         val run = activeRun ?: return@LaunchedEffect
-        val token = JankHunter.startFlow(FLOW_NAME)
-        JankHunter.markFlowStep(run.scenario.stepName)
-        JankHunter.recordCounter("sample.compose.${run.scenario.stepName}.started", 1)
+        JankHunterTelemetry.counter("sample.compose.${run.scenario.stepName}.started", 1)
         try {
-            repeat(run.scenario.iterations) { iteration ->
-                sharedTick = iteration + 1
-                when (run.scenario) {
-                    ComposeLagScenario.COMPLEX_LIST -> {
-                        if (iteration % LIST_SCROLL_EVERY_TICKS == 0) {
-                            listState.scrollToItem(LIST_PREVIEW_COUNT + iteration % LIST_SCROLL_RANGE)
+            JankHunterTelemetry.traceOperation("$OPERATION_NAME.${run.scenario.stepName}") {
+                repeat(run.scenario.iterations) { iteration ->
+                    sharedTick = iteration + 1
+                    when (run.scenario) {
+                        ComposeLagScenario.COMPLEX_LIST -> {
+                            if (iteration % LIST_SCROLL_EVERY_TICKS == 0) {
+                                listState.scrollToItem(LIST_PREVIEW_COUNT + iteration % LIST_SCROLL_RANGE)
+                            }
                         }
+                        ComposeLagScenario.HEAVY_DRAW,
+                        ComposeLagScenario.HEAVY_MEASURE,
+                        -> listState.scrollToItem(0)
                     }
-                    ComposeLagScenario.HEAVY_DRAW,
-                    ComposeLagScenario.HEAVY_MEASURE,
-                    -> listState.scrollToItem(0)
+                    delay(FRAME_DELAY_MS)
                 }
-                delay(FRAME_DELAY_MS)
+                JankHunterTelemetry.counter("sample.compose.${run.scenario.stepName}.completed", 1)
+                lastFinished = run.scenario
             }
-            JankHunter.recordCounter("sample.compose.${run.scenario.stepName}.completed", 1)
-            lastFinished = run.scenario
         } finally {
-            JankHunter.endFlow(token)
             JankHunter.flush()
             if (activeRun?.id == run.id) activeRun = null
         }
@@ -226,7 +227,7 @@ private fun HeavyDrawPreview(enabled: Boolean, tick: Int) {
     ) {
         Canvas(Modifier.fillMaxSize()) {
             if (enabled) {
-                JankHunter.traceComposeWork(
+                JankHunterTelemetry.traceCompose(
                     JankHunterComposePhase.DRAW,
                     "sample.compose.expensive_canvas",
                 ) {
@@ -276,7 +277,7 @@ private fun HeavyMeasurePreview(enabled: Boolean, tick: Int) {
         // Keep the changing state in the measure policy. Otherwise Compose can reuse the previous
         // measurement when the child's size is stable and the lab records only its first pass.
         if (enabled && measurementIteration >= 0) {
-            JankHunter.traceComposeWork(
+            JankHunterTelemetry.traceCompose(
                 JankHunterComposePhase.MEASURE,
                 "sample.compose.expensive_measure_policy",
             ) {
@@ -361,7 +362,7 @@ private enum class ComposeLagScenario(
     HEAVY_MEASURE("expensive_compose_measure", R.string.compose_action_heavy_measure, 20),
 }
 
-private const val FLOW_NAME = "sample.compose_jank"
+private const val OPERATION_NAME = "sample.compose_jank"
 private const val FRAME_DELAY_MS = 16L
 private const val LIST_SCROLL_EVERY_TICKS = 3
 private const val LIST_SCROLL_RANGE = 30

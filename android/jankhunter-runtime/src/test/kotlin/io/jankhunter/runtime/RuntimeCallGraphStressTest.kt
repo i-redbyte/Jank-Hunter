@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -22,7 +23,7 @@ class RuntimeCallGraphStressTest {
 
     private fun runScenario(seed: Long, producerCount: Int, eventsPerProducer: Int) {
         val directory = Files.createTempDirectory("jankhunter-graph-stress").toFile()
-        val writer = AsyncLogWriter.open(
+        val writer = AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000).build(),
             "main",
@@ -31,8 +32,7 @@ class RuntimeCallGraphStressTest {
         val graph = RuntimeCallGraph(
             nowMs = clock::incrementAndGet,
             captureScreen = { "screen" },
-            captureFlow = { "flow" },
-            captureStep = { "step" },
+            captureOperationId = { 41L },
             maxKeys = { 4_096 },
             admissionWaitNanos = { TimeUnit.SECONDS.toNanos(30L) },
             consumerDelayNanos = 50_000L,

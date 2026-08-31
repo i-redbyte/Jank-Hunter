@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.nio.file.Files
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,7 +20,7 @@ class RuntimeCoordinatorTest {
             state.started.set(true)
             assertFalse(coordinator.isActiveForHooks())
 
-            state.writer = AsyncLogWriter.open(
+            state.writer = AsyncLogWriterFactory().open(
                 directory,
                 JankHunterConfig.builder()
                     .autoStartCollectors(false)

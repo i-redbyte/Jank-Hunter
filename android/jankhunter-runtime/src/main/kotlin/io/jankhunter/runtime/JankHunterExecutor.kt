@@ -17,9 +17,10 @@ internal class JankHunterExecutor internal constructor(
     private val delegate: Executor,
     name: String?,
     ownerName: String?,
-    clock: () -> Long = SystemClock::elapsedRealtime,
+    clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
+    callbacks: RuntimeAsyncCallbacks,
 ) : Executor {
-    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
+    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock, callbacks)
 
     override fun execute(command: Runnable) {
         tracker.execute(command)
@@ -30,9 +31,10 @@ internal class JankHunterExecutorService internal constructor(
     private val delegate: ExecutorService,
     name: String?,
     ownerName: String?,
-    clock: () -> Long = SystemClock::elapsedRealtime,
+    clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
+    callbacks: RuntimeAsyncCallbacks,
 ) : AbstractExecutorService() {
-    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
+    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock, callbacks)
 
     override fun execute(command: Runnable) {
         tracker.execute(command)
@@ -58,9 +60,10 @@ internal class JankHunterScheduledExecutorService internal constructor(
     private val delegate: ScheduledExecutorService,
     name: String?,
     ownerName: String?,
-    clock: () -> Long = SystemClock::elapsedRealtime,
+    clock: RuntimeLongSource = RuntimeLongSource(SystemClock::elapsedRealtime),
+    callbacks: RuntimeAsyncCallbacks,
 ) : AbstractExecutorService(), ScheduledExecutorService {
-    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock)
+    private val tracker = ExecutorTaskTracker(delegate, name, ownerName, clock, callbacks)
 
     override fun execute(command: Runnable) {
         tracker.execute(command)
@@ -119,7 +122,8 @@ private class ExecutorTaskTracker(
     private val delegate: Executor,
     private val name: String?,
     private val ownerName: String?,
-    private val clock: () -> Long,
+    private val clock: RuntimeLongSource,
+    private val callbacks: RuntimeAsyncCallbacks,
 ) {
     private val queued = AtomicInteger()
     private val metricName = metricExecutorName(name)
@@ -165,7 +169,7 @@ private class ExecutorTaskTracker(
     ) : QueuedTask(), Runnable {
         override fun run() {
             markStarted(this)
-            JankHunter.runExecutorTask(metricName, ownerName, original, clock)
+            callbacks.runExecutorTask(metricName, ownerName, original, clock)
         }
 
         fun belongsTo(tracker: ExecutorTaskTracker): Boolean = this@ExecutorTaskTracker === tracker
@@ -176,7 +180,7 @@ private class ExecutorTaskTracker(
     ) : QueuedTask(), Callable<T> {
         override fun call(): T {
             markStarted(this)
-            return JankHunter.callExecutorTask(metricName, ownerName, original, clock)
+            return callbacks.callExecutorTask(metricName, ownerName, original, clock)
         }
     }
 
@@ -196,16 +200,16 @@ private class ExecutorTaskTracker(
     private fun markStarted(state: QueuedTask) {
         val waitMs = if (state.markDequeued()) {
             queued.decrementAndGet()
-            clock() - state.enqueuedAtMs
+            clock.getAsLong() - state.enqueuedAtMs
         } else {
             0L
         }
-        JankHunter.recordExecutorWait(metricName, ownerName, waitMs)
+        callbacks.recordExecutorWait(metricName, ownerName, waitMs)
         recordSnapshot()
     }
 
     private fun recordSnapshot() {
-        JankHunter.recordExecutorSnapshot(metricName, delegate, queued.get())
+        callbacks.recordExecutorSnapshot(metricName, delegate, queued.get())
     }
 
     private fun <T> trackScheduled(
@@ -221,7 +225,7 @@ private class ExecutorTaskTracker(
     }
 
     abstract inner class QueuedTask {
-        val enqueuedAtMs: Long = clock()
+        val enqueuedAtMs: Long = clock.getAsLong()
         private val queuedState = AtomicBoolean(true)
 
         fun markDequeued(): Boolean = queuedState.compareAndSet(true, false)

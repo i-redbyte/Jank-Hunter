@@ -3,8 +3,8 @@ package io.jankhunter.runtime.internal.system
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterContextSnapshot
+import io.jankhunter.runtime.RuntimeCollectorCallbacks
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
 import io.jankhunter.runtime.RuntimeHookGuard
@@ -13,6 +13,7 @@ import kotlin.math.max
 
 internal class MainThreadWatchdog(
     thresholdMs: Long,
+    private val callbacks: RuntimeCollectorCallbacks,
 ) {
     private val thresholdMs = max(MIN_THRESHOLD_MS, thresholdMs)
     private val pollIntervalMs = max(MIN_POLL_INTERVAL_MS, this.thresholdMs / 2L)
@@ -86,7 +87,7 @@ internal class MainThreadWatchdog(
                         pendingStall = null
                         activeStallBeatMs.set(NO_ACTIVE_STALL)
                         if (captured != null && isCurrent(expectedGeneration)) {
-                            JankHunter.recordMainThreadStall(
+                            callbacks.recordMainThreadStall(
                                 captured.context,
                                 captured.stackHint,
                                 episodeTracker.completedDurationMs,
@@ -110,7 +111,7 @@ internal class MainThreadWatchdog(
         val owner = frame?.className
         val stackHint = frame?.let(::stackHint) ?: "unknown"
         return StallCapture(
-            context = JankHunter.captureMainThreadStallContext(owner),
+            context = callbacks.captureMainThreadStallContext(owner),
             stackHint = stackHint,
         )
     }

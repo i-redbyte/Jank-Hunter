@@ -29,24 +29,22 @@ func TestLoadClassGraphJSONLAndBuildInfluence(t *testing.T) {
 			MaxMS:   900,
 			Kind:    "http",
 		}},
-		Flows: []FlowStats{{
+		SignalContexts: []SignalContextStats{{
 			Screen:       "Checkout",
-			Flow:         "checkout.open",
-			Step:         "network",
+			Operation:    "checkout.open.network",
 			Owner:        "com.app.data.CheckoutRepository.load#abc",
 			RouteSample:  "GET /checkout",
 			HTTPP95MS:    900,
 			ProblemCount: 2,
 		}},
 		RuntimeCalls: []RuntimeCallStats{{
-			Screen:  "Checkout",
-			Flow:    "checkout.open",
-			Step:    "network",
-			Caller:  "com.app.feature.CheckoutPresenter.open#def",
-			Callee:  "com.app.data.CheckoutRepository.load#abc",
-			Count:   3,
-			TotalMS: 600,
-			MaxMS:   240,
+			Screen:    "Checkout",
+			Operation: "checkout.open.network",
+			Caller:    "com.app.feature.CheckoutPresenter.open#def",
+			Callee:    "com.app.data.CheckoutRepository.load#abc",
+			Count:     3,
+			TotalMS:   600,
+			MaxMS:     240,
 		}},
 	}
 	influence := BuildInfluence(summary, graph)
@@ -97,6 +95,46 @@ func TestBuildInfluenceWorksWithoutClassGraph(t *testing.T) {
 	if len(influence.Heuristic) == 0 {
 		t.Fatalf("expected heuristic")
 	}
+}
+
+func TestBuildInfluenceIncludesTypedDatabaseSourcesAndScenarioContext(t *testing.T) {
+	influence := BuildInfluence(Summary{DatabaseAnalysis: &DatabaseAnalysis{
+		Statements: []DatabaseStatementStats{{
+			Query: "SELECT item FROM feed", Operation: "query",
+			Overall: DatabaseExecutionStats{Calls: 10, Failures: 1, TotalDurationUS: 500_000},
+			Main:    DatabaseExecutionStats{Calls: 4, TotalDurationUS: 200_000},
+			Contexts: []DatabaseStatementContextStats{{
+				Source: "com.app.data.FeedDao.load", Screen: "Feed",
+				ContextOperation: "feed.open",
+				Overall:          DatabaseExecutionStats{Calls: 10, Failures: 1, TotalDurationUS: 500_000},
+				Main:             DatabaseExecutionStats{Calls: 4, TotalDurationUS: 200_000},
+			}},
+		}},
+		Scenarios: DatabaseScenarioAnalysis{Candidates: []DatabaseScenarioStats{{
+			Kind: "possible_n_plus_one_or_duplicate", Source: "com.app.data.FeedDao.load",
+			Screen: "Feed", ContextOperation: "feed.open", EstimatedCalls: 8,
+		}}},
+	}}, nil)
+
+	if !influence.Available || len(influence.TopNodes) == 0 {
+		t.Fatalf("database influence missing: %+v", influence)
+	}
+	node := influence.TopNodes[0]
+	if node.ClassName != "com.app.data.FeedDao" || node.RuntimeWallMS != 500 ||
+		node.MainThreadMS != 200 || !influenceContains(node.Operations, "feed.open") ||
+		!influenceContains(node.Reasons, "SQL-вызовы базы данных") ||
+		!influenceContains(node.Reasons, "гипотеза о повторных SQL-вызовах в одном сценарии") {
+		t.Fatalf("database influence node = %+v", node)
+	}
+}
+
+func influenceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildInfluenceSeparatesRuntimeWallTimeAndRetainedMemory(t *testing.T) {
@@ -153,7 +191,7 @@ func TestInfluenceSeverityUsesPublishedBandsAndCapsStaticNodes(t *testing.T) {
 	if influenceSeverity(4.9) != "ok" || influenceSeverity(5) != "medium" || influenceSeverity(15) != "high" {
 		t.Fatalf("influence score bands do not match the report guide")
 	}
-	node := (&influenceAccumulator{className: "com.app.StaticOnly", score: 30, static: true, flows: map[string]struct{}{}, screens: map[string]struct{}{}, routes: map[string]struct{}{}, reasons: map[string]struct{}{}}).toNode()
+	node := (&influenceAccumulator{className: "com.app.StaticOnly", score: 30, static: true, operations: map[string]struct{}{}, screens: map[string]struct{}{}, routes: map[string]struct{}{}, reasons: map[string]struct{}{}}).toNode()
 	if node.Severity != "medium" || node.RuntimeEvidence {
 		t.Fatalf("static-only node was presented as runtime critical: %+v", node)
 	}
@@ -161,22 +199,22 @@ func TestInfluenceSeverityUsesPublishedBandsAndCapsStaticNodes(t *testing.T) {
 
 func TestInfluenceNodeKeepsEveryContextAndReason(t *testing.T) {
 	node := &influenceAccumulator{
-		className: "com.app.CompleteEvidence",
-		runtime:   true,
-		flows:     map[string]struct{}{},
-		screens:   map[string]struct{}{},
-		routes:    map[string]struct{}{},
-		reasons:   map[string]struct{}{},
+		className:  "com.app.CompleteEvidence",
+		runtime:    true,
+		operations: map[string]struct{}{},
+		screens:    map[string]struct{}{},
+		routes:     map[string]struct{}{},
+		reasons:    map[string]struct{}{},
 	}
 	for index := range 12 {
-		node.addFlow(fmt.Sprintf("flow-%02d", index))
+		node.addOperation(fmt.Sprintf("operation-%02d", index))
 		node.addScreen(fmt.Sprintf("screen-%02d", index))
 		node.addRoute(fmt.Sprintf("route-%02d", index))
 		node.addReason(fmt.Sprintf("reason-%02d", index))
 	}
 
 	got := node.toNode()
-	if len(got.Flows) != 12 || len(got.Screens) != 12 || len(got.Routes) != 12 || len(got.Reasons) != 12 {
+	if len(got.Operations) != 12 || len(got.Screens) != 12 || len(got.Routes) != 12 || len(got.Reasons) != 12 {
 		t.Fatalf("influence evidence was silently truncated: %+v", got)
 	}
 }
@@ -211,18 +249,18 @@ func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
 	cases := map[string]string{
 		"http_slow_or_failed":      "медленный или ошибочный HTTP",
 		"main_thread_stall":        "паузы главного потока",
-		"main_thread_dispatch":     "медленный dispatch главного потока",
-		"main_thread_io":           "IO на главном потоке",
-		"ui_jank":                  "UI-подтормаживания",
+		"main_thread_dispatch":     "медленная обработка сообщения главного потока",
+		"main_thread_io":           "файловая операция на главном потоке",
+		"ui_jank":                  "Подтормаживания интерфейса",
 		"log_spam":                 "спам логами",
 		"retained_object":          "удержанные объекты",
-		"wrapped_runnable":         "долгая Runnable-задача",
-		"wrapped_handler_runnable": "долгая Handler-задача",
-		"wrapped_callable":         "долгая Callable-задача",
-		"wrapped_coroutine":        "долгая coroutine-задача",
-		"wrapped_executor":         "долгая executor-задача",
-		"wrapped_click":            "долгий click-handler",
-		"gc_pressure":              "давление GC",
+		"wrapped_runnable":         "долгая задача Runnable",
+		"wrapped_handler_runnable": "долгая задача обработчика Handler",
+		"wrapped_callable":         "долгая вычислительная задача Callable",
+		"wrapped_coroutine":        "долгая задача корутины",
+		"wrapped_executor":         "долгая задача исполнителя",
+		"wrapped_click":            "долгий обработчик нажатия",
+		"gc_pressure":              "давление сборки мусора",
 		"":                         "проблемные окна",
 	}
 

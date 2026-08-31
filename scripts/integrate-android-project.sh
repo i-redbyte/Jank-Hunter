@@ -23,7 +23,6 @@ SKIP_LOCAL_PROPERTIES=0
 VERIFY=0
 ADD_GITIGNORE=1
 RUNTIME_CALL_GRAPH=-1
-ASM_PROGRESS_LOG=-1
 OKHTTP_HOOKS=-1
 WEBSOCKET_HOOKS=-1
 DI_ANALYSIS=-1
@@ -96,7 +95,6 @@ Advanced:
   --skip-cli-build              Do not build/copy the jankhunter CLI binary.
   --skip-local-properties       Do not create or update target local.properties. Gradle still gets
                                 the resolved SDK path through ANDROID_HOME during publishing.
-  --asm-progress-log            Enable the one-line ASM build progress indicator.
   --no-gitignore                Do not update target .gitignore.
 
 Overlay ownership:
@@ -284,14 +282,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-local-properties)
       SKIP_LOCAL_PROPERTIES=1
-      shift
-      ;;
-    --asm-progress-log)
-      ASM_PROGRESS_LOG=1
-      shift
-      ;;
-    --no-asm-progress-log)
-      ASM_PROGRESS_LOG=0
       shift
       ;;
     --no-gitignore)
@@ -1812,14 +1802,6 @@ patch_module_build_file() {
   local configuration_end="// Jank Hunter integration managed configuration - END"
   local dependencies_begin="// Jank Hunter optional helper dependencies - BEGIN"
   local dependencies_end="// Jank Hunter optional helper dependencies - END"
-  local okhttp_value="false"
-  local websocket_value="false"
-  local runtime_call_graph_value="false"
-  local asm_progress_value="false"
-  [[ "$OKHTTP_HOOKS" -eq 1 ]] && okhttp_value="true"
-  [[ "$WEBSOCKET_HOOKS" -eq 1 ]] && websocket_value="true"
-  [[ "$RUNTIME_CALL_GRAPH" -eq 1 ]] && runtime_call_graph_value="true"
-  [[ "$ASM_PROGRESS_LOG" -eq 1 ]] && asm_progress_value="true"
   if [[ "$dsl" == "kts" ]]; then
     plugin_line="    id(\"io.jankhunter.android\") version \"$VERSION\""
   else
@@ -1831,7 +1813,7 @@ patch_module_build_file() {
   [[ "$BUILD_TYPES_EXPLICIT" -eq 1 || "$DI_ANALYSIS" -ge 0 || "$SESSION_LOG_SIZE_LIMIT" -ge 0 ]] &&
     has_top_level_configuration=1
   [[ "$OKHTTP_HOOKS" -ge 0 || "$WEBSOCKET_HOOKS" -ge 0 || "$RUNTIME_CALL_GRAPH" -ge 0 ||
-    "$ASM_PROGRESS_LOG" -ge 0 || "${#INCLUDE_PACKAGES[@]}" -gt 0 || "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]] &&
+    "${#INCLUDE_PACKAGES[@]}" -gt 0 || "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]] &&
     has_instrument_configuration=1
 
   jh_block=""
@@ -1849,43 +1831,49 @@ patch_module_build_file() {
     fi
     if [[ "$DI_ANALYSIS" -ge 0 ]]; then
       if [[ "$DI_ANALYSIS" -eq 1 ]]; then
-        jh_block+=$'    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.ENABLED\n'
+        jh_block+=$'    enable(io.jankhunter.gradle.JankHunterFeature.DI_ANALYSIS)\n'
       else
-        jh_block+=$'    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.DISABLED\n'
+        jh_block+=$'    disable(io.jankhunter.gradle.JankHunterFeature.DI_ANALYSIS)\n'
       fi
     fi
     if [[ "$SESSION_LOG_SIZE_LIMIT" -ge 0 ]]; then
       if [[ "$SESSION_LOG_SIZE_LIMIT" -eq 1 ]]; then
-        jh_block+=$'    sessionLogSizeLimitEnabled = true\n'
-        jh_block+="    maxSessionLogSizeMiB = $MAX_SESSION_LOG_SIZE_MIB"$'\n'
+        jh_block+="    storageLimitMiB($MAX_SESSION_LOG_SIZE_MIB)"$'\n'
       else
-        jh_block+=$'    sessionLogSizeLimitEnabled = false\n'
+        jh_block+=$'    unlimitedStorage()\n'
       fi
     fi
     if [[ "$has_instrument_configuration" -eq 1 ]]; then
       [[ "$has_top_level_configuration" -eq 0 ]] || jh_block+=$'\n'
-      jh_block+=$'    instrument {\n'
-      [[ "$OKHTTP_HOOKS" -lt 0 ]] || jh_block+="        okhttp = $okhttp_value"$'\n'
-      [[ "$WEBSOCKET_HOOKS" -lt 0 ]] || jh_block+="        webSockets = $websocket_value"$'\n'
-      [[ "$RUNTIME_CALL_GRAPH" -lt 0 ]] || jh_block+="        runtimeCallGraph = $runtime_call_graph_value"$'\n'
-      [[ "$ASM_PROGRESS_LOG" -lt 0 ]] || jh_block+="        asmProgressLog = $asm_progress_value"$'\n'
+      if [[ "$OKHTTP_HOOKS" -ge 0 ]]; then
+        if [[ "$OKHTTP_HOOKS" -eq 1 ]]; then
+          jh_block+=$'    enable(io.jankhunter.gradle.JankHunterFeature.HTTP)\n'
+        else
+          jh_block+=$'    disable(io.jankhunter.gradle.JankHunterFeature.HTTP)\n'
+        fi
+      fi
+      if [[ "$WEBSOCKET_HOOKS" -ge 0 ]]; then
+        if [[ "$WEBSOCKET_HOOKS" -eq 1 ]]; then
+          jh_block+=$'    enable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)\n'
+        else
+          jh_block+=$'    disable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)\n'
+        fi
+      fi
+      if [[ "$RUNTIME_CALL_GRAPH" -ge 0 ]]; then
+        if [[ "$RUNTIME_CALL_GRAPH" -eq 1 ]]; then
+          jh_block+=$'    enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)\n'
+        else
+          jh_block+=$'    disable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)\n'
+        fi
+      fi
       if [[ "${#INCLUDE_PACKAGES[@]}" -gt 0 ]]; then
         includes="$(gradle_string_args "${INCLUDE_PACKAGES[@]}")"
-        if [[ "$dsl" == "kts" ]]; then
-          jh_block+="        includePackages.set(setOf($includes))"$'\n'
-        else
-          jh_block+="        includePackages.set([$includes])"$'\n'
-        fi
+        jh_block+="    packages($includes)"$'\n'
       fi
       if [[ "${#EXCLUDE_PACKAGES[@]}" -gt 0 ]]; then
         excludes="$(gradle_string_args "${EXCLUDE_PACKAGES[@]}")"
-        if [[ "$dsl" == "kts" ]]; then
-          jh_block+="        excludePackages.set(setOf($excludes))"$'\n'
-        else
-          jh_block+="        excludePackages.set([$excludes])"$'\n'
-        fi
+        jh_block+="    excludePackages($excludes)"$'\n'
       fi
-      jh_block+=$'    }\n'
     fi
     jh_block+=$'}\n'
     jh_block+="$configuration_end"$'\n'

@@ -21,7 +21,7 @@ internal class MetricAggregator(
     private val exactAdmission: Boolean = false,
 ) {
     private val capacity = maxKeys.coerceIn(0, MAX_KEYS_HARD_LIMIT)
-    private val lruEvictionEnabled = !exactAdmission && capacity in 1..BitLruCache.MAX_CAPACITY
+    private val lruEvictionEnabled = !exactAdmission && capacity in 1..LRU_EVICTION_MAX_KEYS
     private val initialMapCapacity = min(capacity, DEFAULT_INITIAL_MAP_CAPACITY)
     private val lifecycleLocks = Array(producerStripeCount(capacity)) { ReentrantReadWriteLock() }
     private val producerLocks = Array(lifecycleLocks.size) { lifecycleLocks[it].readLock() }
@@ -48,13 +48,12 @@ internal class MetricAggregator(
                 saturatedAddAndGet(batch.dropped, 1L)
                 return
             }
-            val key = MetricKey(MetricKind.COUNTER, normalizedName)
             while (true) {
-                val existing = batch.metrics[key] as? CounterValue
+                val existing = batch.counters[normalizedName]
                 if (existing != null && existing.add(value)) return
 
                 synchronized(batch.admissionLock) {
-                    val raced = batch.metrics[key] as? CounterValue
+                    val raced = batch.counters[normalizedName]
                     if (raced != null) {
                         if (raced.add(value)) return
                     } else {
@@ -64,7 +63,7 @@ internal class MetricAggregator(
                             saturatedAddAndGet(batch.dropped, 1L)
                             return
                         }
-                        batch.metrics[key] = created
+                        batch.counters[normalizedName] = created
                         return
                     }
                 }
@@ -89,13 +88,12 @@ internal class MetricAggregator(
                 saturatedAddAndGet(batch.dropped, 1L)
                 return
             }
-            val key = MetricKey(MetricKind.GAUGE, normalizedName)
             while (true) {
-                val existing = batch.metrics[key] as? GaugeValue
+                val existing = batch.gauges[normalizedName]
                 if (existing != null && existing.add(value, mode)) return
 
                 synchronized(batch.admissionLock) {
-                    val raced = batch.metrics[key] as? GaugeValue
+                    val raced = batch.gauges[normalizedName]
                     if (raced != null) {
                         if (raced.add(value, mode)) return
                     } else {
@@ -105,7 +103,7 @@ internal class MetricAggregator(
                             saturatedAddAndGet(batch.dropped, 1L)
                             return
                         }
-                        batch.metrics[key] = created
+                        batch.gauges[normalizedName] = created
                         return
                     }
                 }
@@ -118,11 +116,11 @@ internal class MetricAggregator(
     fun flush(sink: Sink) {
         val drained = swapActiveBatch()
 
-        for ((key, value) in drained.metrics) {
-            when (value) {
-                is CounterValue -> sink.counter(key.name, value.total())
-                is GaugeValue -> emitGauge(sink, key.name, value.snapshot())
-            }
+        for ((name, value) in drained.counters) {
+            sink.counter(name, value.total())
+        }
+        for ((name, value) in drained.gauges) {
+            emitGauge(sink, name, value.snapshot())
         }
         drained.dropped.get().takeIf { it > 0L }?.let {
             sink.counter(DROPPED_METRIC_NAME, it)
@@ -181,7 +179,7 @@ internal class MetricAggregator(
             saturatedAddAndGet(batch.dropped, 1L)
             return false
         }
-        if (batch.metrics.size < capacity) return true
+        if (batch.size() < capacity) return true
         if (exactAdmission) {
             saturatedAddAndGet(batch.dropped, 1L)
             return false
@@ -189,17 +187,27 @@ internal class MetricAggregator(
 
         // Small bounded sets retain the previous LRU behavior. For large sets, scanning thousands
         // of keys would cost more than dropping a new high-cardinality metric.
-        if (capacity > BitLruCache.MAX_CAPACITY) {
+        if (capacity > LRU_EVICTION_MAX_KEYS) {
             saturatedAddAndGet(batch.dropped, 1L)
             return false
         }
 
-        val candidates = batch.metrics.entries
-            .map { EvictionCandidate(it.key, it.value, it.value.lastAccess()) }
-            .sortedBy(EvictionCandidate::lastAccess)
+        val candidates = ArrayList<EvictionCandidate>(batch.size())
+        batch.counters.forEach { (name, value) ->
+            candidates += EvictionCandidate(name, value, counter = true, value.lastAccess())
+        }
+        batch.gauges.forEach { (name, value) ->
+            candidates += EvictionCandidate(name, value, counter = false, value.lastAccess())
+        }
+        candidates.sortBy(EvictionCandidate::lastAccess)
         for (candidate in candidates) {
             val lostSamples = candidate.value.tryRetire() ?: continue
-            if (batch.metrics.remove(candidate.key, candidate.value)) {
+            val removed = if (candidate.counter) {
+                removeRetired(batch.counters, candidate)
+            } else {
+                removeRetired(batch.gauges, candidate)
+            }
+            if (removed) {
                 saturatedAddAndGet(batch.dropped, lostSamples.coerceAtLeast(1L))
                 return true
             }
@@ -210,16 +218,29 @@ internal class MetricAggregator(
         return false
     }
 
+    /** Called with [Batch.admissionLock] held; producers cannot replace a value concurrently. */
+    private fun <T : MetricValue> removeRetired(
+        metrics: ConcurrentHashMap<String, T>,
+        candidate: EvictionCandidate,
+    ): Boolean {
+        if (metrics[candidate.name] !== candidate.value) return false
+        metrics.remove(candidate.name)
+        return true
+    }
+
     interface Sink {
         fun counter(name: String, value: Long)
         fun gauge(name: String, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode)
     }
 
     private class Batch(initialMapCapacity: Int) {
-        val metrics = ConcurrentHashMap<MetricKey, MetricValue>(initialMapCapacity.coerceAtLeast(1))
+        val counters = ConcurrentHashMap<String, CounterValue>(initialMapCapacity.coerceAtLeast(1))
+        val gauges = ConcurrentHashMap<String, GaugeValue>(initialMapCapacity.coerceIn(1, INITIAL_GAUGE_CAPACITY))
         val dropped = AtomicLong()
         val invalidNegative = AtomicLong()
         val admissionLock = Any()
+
+        fun size(): Int = counters.size + gauges.size
     }
 
     private sealed class MetricValue(
@@ -318,25 +339,18 @@ internal class MetricAggregator(
     )
 
     private data class EvictionCandidate(
-        val key: MetricKey,
+        val name: String,
         val value: MetricValue,
+        val counter: Boolean,
         val lastAccess: Long,
     )
-
-    private data class MetricKey(
-        val kind: MetricKind,
-        val name: String,
-    )
-
-    private enum class MetricKind {
-        COUNTER,
-        GAUGE,
-    }
 
     companion object {
         const val DROPPED_METRIC_NAME = "jankhunter.metric_aggregation.dropped.count"
         const val INVALID_METRIC_NAME = "jankhunter.metric.invalid_negative.count"
         private const val DEFAULT_INITIAL_MAP_CAPACITY = 16
+        private const val INITIAL_GAUGE_CAPACITY = 4
+        private const val LRU_EVICTION_MAX_KEYS = 64
         private const val MAX_KEYS_HARD_LIMIT = 65_536
         private const val MAX_METRIC_NAME_CHARS = 1_024
         private const val MAX_PRODUCER_STRIPES = 8

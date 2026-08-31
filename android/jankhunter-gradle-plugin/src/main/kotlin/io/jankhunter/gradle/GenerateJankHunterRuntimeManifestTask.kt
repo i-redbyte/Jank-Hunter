@@ -4,9 +4,11 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 
+@CacheableTask
 abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     @get:Input
     abstract val autoInit: Property<Boolean>
@@ -25,9 +27,6 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
 
     @get:Input
     abstract val retainedHeapDumpEnabled: Property<Boolean>
-
-    @get:Input
-    abstract val retainedHeapDumpPrivacyApproved: Property<Boolean>
 
     @get:Input
     abstract val retainedHeapDumpMinIntervalMs: Property<Long>
@@ -72,6 +71,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val roomTracingEnabled: Property<Boolean>
 
     @get:Input
+    abstract val databaseTracingEnabled: Property<Boolean>
+
+    @get:Input
     abstract val workerTracingEnabled: Property<Boolean>
 
     @get:Input
@@ -85,6 +87,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
 
     @get:Input
     abstract val logGrowthAnalyticsEnabled: Property<Boolean>
+
+    @get:Input
+    abstract val deleteObsoleteJhlogFormats: Property<Boolean>
 
     @get:Input
     abstract val symbolNamespace: Property<String>
@@ -103,8 +108,10 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
         runtimeCallGraphEnabled.convention(false)
         composeTracingEnabled.convention(true)
         roomTracingEnabled.convention(true)
+        databaseTracingEnabled.convention(false)
         workerTracingEnabled.convention(true)
         logGrowthAnalyticsEnabled.convention(true)
+        deleteObsoleteJhlogFormats.convention(false)
     }
 
     @TaskAction
@@ -144,9 +151,6 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.retained_heap_dump_enabled"
                         android:value="${retainedHeapDumpEnabled.get()}" />
-                    <meta-data
-                        android:name="io.jankhunter.retained_heap_dump_privacy_approved"
-                        android:value="${retainedHeapDumpPrivacyApproved.get()}" />
                     <meta-data
                         android:name="io.jankhunter.retained_heap_dump_min_interval_ms"
                         android:value="${retainedHeapDumpMinIntervalMs.get()}" />
@@ -190,6 +194,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                         android:name="io.jankhunter.room_tracing_enabled"
                         android:value="${roomTracingEnabled.get()}" />
                     <meta-data
+                        android:name="io.jankhunter.database_tracing_enabled"
+                        android:value="${databaseTracingEnabled.get()}" />
+                    <meta-data
                         android:name="io.jankhunter.worker_tracing_enabled"
                         android:value="${workerTracingEnabled.get()}" />
                     <meta-data
@@ -204,6 +211,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.log_growth_analytics_enabled"
                         android:value="${logGrowthAnalyticsEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.delete_obsolete_jhlog_formats"
+                        android:value="${deleteObsoleteJhlogFormats.get()}" />
                     <meta-data
                         android:name="io.jankhunter.symbol_namespace"
                         android:value="${symbolNamespace.get()}" />

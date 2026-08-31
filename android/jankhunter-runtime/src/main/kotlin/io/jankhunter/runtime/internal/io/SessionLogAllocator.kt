@@ -5,27 +5,40 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 internal object SessionLogName {
-    const val PREFIX = "jh-session-log."
+    const val BASE_PREFIX = "jh-session-log."
+    const val PREFIX = BASE_PREFIX
     const val SUFFIX = ".jhlog"
+    private const val SEQUENCE_PREFIX = ".jh-session-index."
+    private const val SEQUENCE_SUFFIX = ".seq"
     private const val LOCAL_DATE_LENGTH = 10
     private const val RUN_ID_BYTES = 16
     private const val RUN_ID_HEX_LENGTH = RUN_ID_BYTES * 2
 
-    fun create(localDate: String, runId: ByteArray, index: Long): String {
+    fun create(
+        localDate: String,
+        runId: ByteArray,
+        dailySessionIndex: Long,
+        segmentIndex: Long,
+    ): String {
         require(isLocalDate(localDate)) { "session log date must use yyyy-MM-dd" }
         require(runId.size == RUN_ID_BYTES) { "session log run ID must have $RUN_ID_BYTES bytes" }
         require(runId.any { value -> value != 0.toByte() }) { "session log run ID must not be zero" }
-        require(index >= 0L) { "session log index must be non-negative" }
-        return "$PREFIX$localDate.${runIdHex(runId)}.$index$SUFFIX"
+        require(dailySessionIndex >= 0L) { "daily session index must be non-negative" }
+        require(segmentIndex >= 0L) { "session log segment index must be non-negative" }
+        val segmentSuffix = if (segmentIndex == 0L) "" else "-$segmentIndex"
+        return "$PREFIX$localDate.${runIdHex(runId)}.$dailySessionIndex$segmentSuffix$SUFFIX"
+    }
+
+    fun sequenceFileName(localDate: String): String {
+        require(isLocalDate(localDate)) { "session log date must use yyyy-MM-dd" }
+        return "$SEQUENCE_PREFIX$localDate$SEQUENCE_SUFFIX"
     }
 
     fun runIdHex(runId: ByteArray): String {
@@ -36,7 +49,6 @@ internal object SessionLogName {
     fun parse(fileName: String): Parsed? {
         if (!fileName.startsWith(PREFIX) || !fileName.endsWith(SUFFIX)) return null
         val body = fileName.removePrefix(PREFIX).removeSuffix(SUFFIX)
-        parseLegacy(body)?.let { return it }
         val runSeparator = LOCAL_DATE_LENGTH
         val indexSeparator = runSeparator + 1 + RUN_ID_HEX_LENGTH
         if (body.length <= indexSeparator + 1 || body[runSeparator] != '.' || body[indexSeparator] != '.') {
@@ -46,29 +58,30 @@ internal object SessionLogName {
         if (!isLocalDate(localDate)) return null
         val runId = body.substring(runSeparator + 1, indexSeparator)
         if (!runId.all(::isLowerHex) || runId.all { value -> value == '0' }) return null
-        val indexText = body.substring(indexSeparator + 1)
-        if (indexText.length > 1 && indexText[0] == '0') return null
-        val index = indexText.toLongOrNull()?.takeIf { it >= 0L } ?: return null
-        return Parsed(localDate, runId, index)
+        val dailyIndexStart = indexSeparator + 1
+        val segmentSeparator = body.indexOf('-', dailyIndexStart)
+        val dailyIndexEnd = if (segmentSeparator < 0) body.length else segmentSeparator
+        val dailySessionIndex = body.canonicalIndex(dailyIndexStart, dailyIndexEnd) ?: return null
+        val segmentIndex = if (segmentSeparator < 0) {
+            0L
+        } else {
+            body.canonicalIndex(segmentSeparator + 1, body.length)?.takeIf { it > 0L } ?: return null
+        }
+        return Parsed(localDate, runId, dailySessionIndex, segmentIndex)
+    }
+
+    fun isJhlogArtifact(fileName: String): Boolean {
+        return fileName.startsWith(BASE_PREFIX) && fileName.endsWith(SUFFIX)
     }
 
     data class Parsed(
         val localDate: String,
-        val runId: String?,
-        val index: Long,
+        val runId: String,
+        val dailySessionIndex: Long,
+        val segmentIndex: Long,
     ) {
         val retentionUnitId: String
-            get() = runId ?: "legacy:$localDate:$index"
-    }
-
-    private fun parseLegacy(body: String): Parsed? {
-        if (body.length <= LOCAL_DATE_LENGTH + 1 || body[LOCAL_DATE_LENGTH] != '.') return null
-        val localDate = body.substring(0, LOCAL_DATE_LENGTH)
-        if (!isLocalDate(localDate)) return null
-        val indexText = body.substring(LOCAL_DATE_LENGTH + 1)
-        if (indexText.length > 1 && indexText[0] == '0') return null
-        val index = indexText.toLongOrNull()?.takeIf { it >= 0L } ?: return null
-        return Parsed(localDate, runId = null, index)
+            get() = runId
     }
 
     private fun isLocalDate(value: String): Boolean {
@@ -92,6 +105,18 @@ internal object SessionLogName {
         return value
     }
 
+    private fun String.canonicalIndex(start: Int, end: Int): Long? {
+        if (start >= end || end - start > MAX_LONG_DECIMAL_DIGITS) return null
+        if (this[start] == '0' && end - start > 1) return null
+        var result = 0L
+        for (index in start until end) {
+            val digit = this[index] - '0'
+            if (digit !in 0..9 || result > (Long.MAX_VALUE - digit) / 10L) return null
+            result = result * 10L + digit
+        }
+        return result
+    }
+
     private fun isLowerHex(value: Char): Boolean = value in '0'..'9' || value in 'a'..'f'
 
     private fun ByteArray.toHex(): String {
@@ -105,28 +130,34 @@ internal object SessionLogName {
     }
 
     private val HEX = "0123456789abcdef".toCharArray()
+    private const val MAX_LONG_DECIMAL_DIGITS = 19
 }
 
 internal object SessionLogAllocator {
-    private const val SEQUENCE_RECORD_BYTES = Long.SIZE_BYTES * 2
+    private const val SEGMENT_LOCK_FILE_NAME = ".jh-session-segment.lock"
     private const val MAX_LEASE_PATH_BYTES = 64 * 1024
-    private val directoryLocks = ConcurrentHashMap<String, Any>()
     private val temporaryLeaseId = AtomicLong()
 
     fun reserve(
         directory: File,
         localDate: String,
         runId: ByteArray,
+        dailySessionIndex: Long,
         authoritativeStoragePaths: Collection<String>? = null,
-        minimumIndex: Long = 0L,
+        minimumSegmentIndex: Long = 0L,
     ): Allocation {
-        SessionLogName.create(localDate, runId, 0L)
-        require(minimumIndex >= 0L) { "minimum session log index must be non-negative" }
+        SessionLogName.create(localDate, runId, dailySessionIndex, minimumSegmentIndex)
+        require(minimumSegmentIndex >= 0L) { "minimum session log segment index must be non-negative" }
         ensureDirectory(directory)
-        val directoryKey = runCatching { directory.canonicalPath }.getOrElse { directory.absolutePath }
-        val processLock = directoryLocks.getOrPut(directoryKey) { Any() }
-        return synchronized(processLock) {
-            reserveLocked(directory, localDate, runId, authoritativeStoragePaths, minimumIndex)
+        return CrossProcessFileLocks.withDirectoryLock(directory, SEGMENT_LOCK_FILE_NAME) {
+            reserveLocked(
+                directory,
+                localDate,
+                runId,
+                dailySessionIndex,
+                authoritativeStoragePaths,
+                minimumSegmentIndex,
+            )
         }
     }
 
@@ -156,115 +187,49 @@ internal object SessionLogAllocator {
         directory: File,
         localDate: String,
         runId: ByteArray,
+        dailySessionIndex: Long,
         authoritativeStoragePaths: Collection<String>?,
-        minimumIndex: Long,
+        minimumSegmentIndex: Long,
     ): Allocation {
-        val sequenceFile = File(directory, ".${SessionLogName.PREFIX}$localDate.seq")
-        RandomAccessFile(sequenceFile, "rw").use { randomAccess ->
-            val channel = randomAccess.channel
-            val fileLock = channel.lock()
-            try {
-                val persistedNext = readPersistedNext(channel)
-                val candidate = if (authoritativeStoragePaths == null) {
-                    maxOf(minimumIndex, persistedNext ?: scanNextIndex(directory, localDate))
-                } else {
-                    val occupied = scanAuthoritativeIndices(directory, localDate, authoritativeStoragePaths)
-                    if (!occupied.present) {
-                        resetSequence(channel)
-                        minimumIndex
-                    } else {
-                        maxOf(minimumIndex, persistedNext ?: 0L, occupied.nextIndex)
-                    }
-                }
-                if (candidate == Long.MAX_VALUE) {
-                    throw IOException("Jank Hunter session index exhausted for $localDate")
-                }
-                appendNext(channel, candidate + 1L)
-                val fileName = SessionLogName.create(localDate, runId, candidate)
-                val lease = createLease(directory, fileName)
-                return Allocation(fileName, localDate, candidate, lease)
-            } finally {
-                fileLock.release()
-            }
+        val highest = scanHighestSegmentIndex(
+            directory,
+            localDate,
+            SessionLogName.runIdHex(runId),
+            dailySessionIndex,
+            authoritativeStoragePaths,
+        )
+        val next = when (highest) {
+            null -> 0L
+            Long.MAX_VALUE -> throw IOException("Jank Hunter segment index exhausted for run ${SessionLogName.runIdHex(runId)}")
+            else -> highest + 1L
         }
+        val segmentIndex = maxOf(minimumSegmentIndex, next)
+        val fileName = SessionLogName.create(localDate, runId, dailySessionIndex, segmentIndex)
+        val lease = createLease(directory, fileName)
+        return Allocation(fileName, localDate, dailySessionIndex, segmentIndex, lease)
     }
 
-    private fun scanAuthoritativeIndices(
+    private fun scanHighestSegmentIndex(
         directory: File,
         localDate: String,
-        storagePaths: Collection<String>,
-    ): IndexScan {
+        runId: String,
+        dailySessionIndex: Long,
+        storagePaths: Collection<String>?,
+    ): Long? {
         val localNames = directory.listFiles { file -> file.isFile }
             .orEmpty()
             .asSequence()
             .map(File::getName)
-        val storageNames = storagePaths.asSequence().map { path -> File(path).name }
+        val storageNames = storagePaths.orEmpty().asSequence().map { path -> File(path).name }
         val activeLeaseNames = activeLeases(directory).localLogPaths.asSequence().map { path -> File(path).name }
-        val highest = (localNames + storageNames + activeLeaseNames)
+        return (localNames + storageNames + activeLeaseNames)
             .mapNotNull(SessionLogName::parse)
-            .filter { parsed -> parsed.localDate == localDate }
-            .maxOfOrNull(SessionLogName.Parsed::index)
-            ?: return IndexScan(present = false, nextIndex = 0L)
-        return IndexScan(
-            present = true,
-            nextIndex = if (highest == Long.MAX_VALUE) Long.MAX_VALUE else highest + 1L,
-        )
-    }
-
-    private fun readPersistedNext(channel: FileChannel): Long? {
-        val size = channel.size()
-        if (size == 0L) return null
-        val completeSize = size - size % SEQUENCE_RECORD_BYTES
-
-        val record = ByteBuffer.allocate(SEQUENCE_RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        var position = 0L
-        var previous = -1L
-        while (position < completeSize) {
-            record.clear()
-            readFully(channel, record, position)
-            record.flip()
-            val next = record.long
-            val inverted = record.long
-            if (next <= 0L || inverted != next.inv() || next <= previous) {
-                throw IOException("Corrupt Jank Hunter sequence: invalid monotonic record")
+            .filter { parsed ->
+                parsed.localDate == localDate &&
+                    parsed.runId == runId &&
+                    parsed.dailySessionIndex == dailySessionIndex
             }
-            previous = next
-            position += SEQUENCE_RECORD_BYTES
-        }
-        if (completeSize != size) {
-            // reserve() persists the sequence before publishing a name, so an incomplete tail
-            // can only belong to a reservation that was never handed to a writer.
-            channel.truncate(completeSize)
-            channel.force(true)
-        }
-        return previous.takeIf { it >= 0L }
-    }
-
-    private fun scanNextIndex(directory: File, localDate: String): Long {
-        val highest = directory.listFiles { file -> file.isFile }
-            .orEmpty()
-            .mapNotNull { file -> SessionLogName.parse(file.name) }
-            .filter { parsed -> parsed.localDate == localDate }
-            .maxOfOrNull(SessionLogName.Parsed::index)
-            ?: return 0L
-        if (highest == Long.MAX_VALUE) return Long.MAX_VALUE
-        return highest + 1L
-    }
-
-    private fun appendNext(channel: FileChannel, next: Long) {
-        val record = ByteBuffer.allocate(SEQUENCE_RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-            .putLong(next)
-            .putLong(next.inv())
-        record.flip()
-        channel.position(channel.size())
-        while (record.hasRemaining()) channel.write(record)
-        channel.force(true)
-    }
-
-    private fun resetSequence(channel: FileChannel) {
-        channel.truncate(0L)
-        channel.position(0L)
-        channel.force(true)
+            .maxOfOrNull(SessionLogName.Parsed::segmentIndex)
     }
 
     private fun createLease(directory: File, fileName: String): SessionLease {
@@ -334,16 +299,6 @@ internal object SessionLogAllocator {
         channel.force(true)
     }
 
-    private fun readFully(channel: FileChannel, target: ByteBuffer, position: Long) {
-        var offset = position
-        while (target.hasRemaining()) {
-            val read = channel.read(target, offset)
-            if (read < 0) throw IOException("Unexpected EOF in Jank Hunter sequence")
-            if (read == 0) throw IOException("Cannot make progress reading Jank Hunter sequence")
-            offset += read
-        }
-    }
-
     private fun ensureDirectory(directory: File) {
         if (directory.isDirectory) return
         if (!directory.exists() && directory.mkdirs()) return
@@ -351,19 +306,20 @@ internal object SessionLogAllocator {
     }
 
     private fun isLeaseName(name: String): Boolean {
-        return name.startsWith(".${SessionLogName.PREFIX}") && name.endsWith(".lease")
+        return name.startsWith(".${SessionLogName.BASE_PREFIX}") && name.endsWith(".lease")
     }
 
     private fun logNameForLease(name: String): String? {
         if (!isLeaseName(name)) return null
         val stem = name.removePrefix(".").removeSuffix(".lease")
-        return "$stem${SessionLogName.SUFFIX}".takeIf { SessionLogName.parse(it) != null }
+        return "$stem${SessionLogName.SUFFIX}".takeIf { it.startsWith(SessionLogName.BASE_PREFIX) }
     }
 
     class Allocation internal constructor(
         val fileName: String,
         val localDate: String,
-        val index: Long,
+        val dailySessionIndex: Long,
+        val segmentIndex: Long,
         private val lease: SessionLease,
     ) : Closeable {
         fun updateProtectedPath(path: String) = lease.updateProtectedPath(path)
@@ -374,11 +330,6 @@ internal object SessionLogAllocator {
     data class ActiveLeases(
         val protectedPaths: Set<String>,
         val localLogPaths: Set<String>,
-    )
-
-    private data class IndexScan(
-        val present: Boolean,
-        val nextIndex: Long,
     )
 
     private enum class LeaseState {
@@ -403,6 +354,77 @@ internal object SessionLogAllocator {
             file.delete()
         }
     }
+}
+
+internal object ObsoleteSessionLogCleaner {
+    fun clean(
+        directory: File,
+        storage: io.jankhunter.runtime.JankHunterBinaryStorage?,
+    ): Result {
+        val protectedPaths = SessionLogAllocator.activeLeases(directory).protectedPaths
+        val processedPaths = HashSet<String>()
+        var deleted = 0L
+        var failed = 0L
+        var protected = 0L
+        val fileMagic = ByteArray(Jhlog.FILE_MAGIC.size)
+
+        fun isProtected(path: String, fileName: String): Boolean {
+            return path in protectedPaths || File(path).absolutePath in protectedPaths || fileName in protectedPaths
+        }
+
+        directory.listFiles { file -> file.isFile }
+            .orEmpty()
+            .forEach { file ->
+                val path = file.absolutePath
+                processedPaths += path
+                if (!isObsoleteJhlog(file, fileMagic) && !isObsoleteSequence(file.name)) return@forEach
+                if (isProtected(path, file.name)) {
+                    protected++
+                } else if (file.delete()) {
+                    deleted++
+                } else {
+                    failed++
+                }
+            }
+
+        storage?.listFiles()?.forEach { path ->
+            val file = File(path)
+            val absolutePath = file.absolutePath
+            if (!processedPaths.add(absolutePath) || !isObsoleteJhlog(file, fileMagic)) return@forEach
+            if (isProtected(path, file.name)) {
+                protected++
+                return@forEach
+            }
+            val removed = runCatching {
+                storage.delete(file.name)
+                !file.exists()
+            }.getOrDefault(false)
+            if (removed) deleted++ else failed++
+        }
+        return Result(deleted, failed, protected)
+    }
+
+    private fun isObsoleteJhlog(file: File, fileMagic: ByteArray): Boolean {
+        if (!SessionLogName.isJhlogArtifact(file.name)) return false
+        return runCatching {
+            if (!file.isFile || file.length() < fileMagic.size) return@runCatching false
+            RandomAccessFile(file, "r").use { randomAccess -> randomAccess.readFully(fileMagic) }
+            Jhlog.isKnownObsoleteFileMagic(fileMagic)
+        }.getOrDefault(false)
+    }
+
+    private fun isObsoleteSequence(fileName: String): Boolean {
+        if (!fileName.endsWith(".seq")) return false
+        val legacyPrefix = ".${SessionLogName.BASE_PREFIX}"
+        return fileName.startsWith("${legacyPrefix}v2.") ||
+            fileName.startsWith(legacyPrefix) && !fileName.startsWith("${legacyPrefix}v")
+    }
+
+    data class Result(
+        val deleted: Long,
+        val failed: Long,
+        val protected: Long,
+    )
 }
 
 internal object SessionLogRetention {

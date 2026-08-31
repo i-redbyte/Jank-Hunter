@@ -299,7 +299,7 @@ func TestWriteLargeBundlePerformanceFixture(t *testing.T) {
 			}},
 			DrillDown: []analyze.CodeProblemDrillDown{{
 				ClassName:      fmt.Sprintf("com.performance.DeferredProblem%03d", index),
-				Flow:           fmt.Sprintf("deferred.flow.%03d", index),
+				Operation:      fmt.Sprintf("deferred.operation.%03d", index),
 				Evidence:       fmt.Sprintf("Complete drill evidence %03d", index),
 				Recommendation: "Проверить этот сценарий.",
 			}},

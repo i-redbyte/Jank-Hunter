@@ -21,20 +21,100 @@ class JankHunterRuntimeBenchmarkTest {
     }
 
     @Test
-    fun flowApiContextHotPath() {
+    fun logSpamAggregationHasNoSteadyStateAllocation() {
+        RuntimeBenchmarkHarness.assumeEnabled()
+        val accumulator = LogSpamAccumulator(16)
+        val result = RuntimeBenchmarkHarness.measure(
+            iterations = RuntimeBenchmarkHarness.iterations(100_000, 1_000_000),
+            warmupIterations = 50_000,
+        ) {
+            accumulator.add("screen", "owner", "source", 3, 7L)
+            accumulator.logicalEventCount()
+        }
+        RuntimeBenchmarkHarness.report("log spam aggregation", result)
+        RuntimeBenchmarkHarness.assertBudget(
+            name = "log spam aggregation",
+            result = result,
+            latencyBudgetNs = 500.0,
+            allocationBudgetBytes = 1.0,
+        )
+    }
+
+    @Test
+    fun methodCounterAggregationHasNoSteadyStateAllocation() {
+        RuntimeBenchmarkHarness.assumeEnabled()
+        val accumulator = MethodCounterAccumulator(16)
+        val result = RuntimeBenchmarkHarness.measure(
+            iterations = RuntimeBenchmarkHarness.iterations(100_000, 1_000_000),
+            warmupIterations = 50_000,
+        ) {
+            accumulator.add(7L, "owner.method")
+            accumulator.logicalEventCount()
+        }
+        RuntimeBenchmarkHarness.report("method counter aggregation", result)
+        RuntimeBenchmarkHarness.assertBudget(
+            name = "method counter aggregation",
+            result = result,
+            latencyBudgetNs = 300.0,
+            allocationBudgetBytes = 1.0,
+        )
+    }
+
+    @Test
+    fun operationApiDisabledHotPath() {
+        assumeBenchmarksEnabled()
+        val count = iterations(FAST_PATH_MIN_ITERATIONS)
+        val elapsedNs = medianElapsedNs {
+            var checksum = 0L
+            repeat(count) {
+                val operation = JankHunterTelemetry.startOperation("benchmark.operation")
+                operation.success()
+                checksum = checksum xor operation.id
+            }
+            benchmarkLongSink = checksum
+        }
+        printBenchmark("operation API disabled", count, elapsedNs)
+    }
+
+    @Test
+    fun operationStartFinishHotPath() {
         assumeBenchmarksEnabled()
         val count = iterations()
-        val elapsedNs = medianElapsedNs {
-            var lastToken: JankHunterFlow? = null
-            repeat(count) {
-                val token = JankHunter.startFlow("benchmark.open")
-                JankHunter.markFlowStep("render_list")
-                JankHunter.endFlow(token)
-                lastToken = token
+        val acceptedRecords = longArrayOf(0L)
+        val sink = object : OperationEventSink {
+            override fun operation(
+                name: String,
+                operationId: Long,
+                parentId: Long,
+                phase: Long,
+                kind: Long,
+                outcome: Long,
+                durationUs: Long,
+                budgetUs: Long,
+                screen: String?,
+                owner: String?,
+                attributes: JankHunterOperationAttributes,
+            ): Boolean {
+                acceptedRecords[0]++
+                return true
             }
-            benchmarkObjectSink = lastToken
         }
-        printBenchmark("flow start/step/end", count, elapsedNs)
+        val telemetry = RuntimeOperationTelemetry(ContextTracker(), { sink }, { 1L }, {})
+        val elapsedNs = medianElapsedNs {
+            var checksum = 0L
+            repeat(count) {
+                val operation = telemetry.start(
+                    "benchmark.operation",
+                    JankHunterOperationKind.USER,
+                    500L,
+                    JankHunterOperationAttributes.EMPTY,
+                )
+                operation.success()
+                checksum = checksum xor operation.id
+            }
+            benchmarkLongSink = checksum xor acceptedRecords[0]
+        }
+        printBenchmark("operation start/finish", count, elapsedNs)
     }
 
     @Test
@@ -44,7 +124,7 @@ class JankHunterRuntimeBenchmarkTest {
         val elapsedNs = medianElapsedNs {
             var checksum = 0L
             repeat(count) {
-                JankHunter.recordLogSpam("BenchmarkOwner", "android.util.Log.d", 3)
+                JankHunterTelemetry.recordLog("BenchmarkOwner", "android.util.Log.d", 3)
                 checksum += it.toLong()
             }
             benchmarkLongSink = checksum
@@ -61,7 +141,7 @@ class JankHunterRuntimeBenchmarkTest {
         val elapsedNs = medianElapsedNs {
             repeat(count) {
                 wrappedResults[it and BENCHMARK_BLACKHOLE_MASK] =
-                    JankHunter.wrapRunnable(runnable, "BenchmarkOwner")
+                    JankHunterHooks.wrapRunnable(runnable, "BenchmarkOwner")
             }
             benchmarkObjectSink = wrappedResults
         }
@@ -73,7 +153,7 @@ class JankHunterRuntimeBenchmarkTest {
         assumeBenchmarksEnabled()
         val count = iterations(FAST_PATH_MIN_ITERATIONS)
         val executionState = longArrayOf(1L)
-        val wrapped = JankHunter.wrapRunnable(
+        val wrapped = JankHunterHooks.wrapRunnable(
             Runnable {
                 executionState[0] = nextBenchmarkState(executionState[0])
             },
@@ -98,7 +178,7 @@ class JankHunterRuntimeBenchmarkTest {
             Unit
         }
         @Suppress("UNCHECKED_CAST")
-        val wrapped = JankHunter.wrapCoroutineBlock(block, "BenchmarkOwner") as Function2<Any?, Any?, Any?>
+        val wrapped = JankHunterHooks.wrapCoroutineBlock(block, "BenchmarkOwner") as Function2<Any?, Any?, Any?>
         val wrappedResults = arrayOfNulls<Any>(BENCHMARK_BLACKHOLE_SIZE)
         val continuation = object : Continuation<Any?> {
             override val context: CoroutineContext = EmptyCoroutineContext
@@ -124,6 +204,7 @@ class JankHunterRuntimeBenchmarkTest {
             delegate = Executor { command -> command.run() },
             name = "benchmark executor",
             ownerName = "BenchmarkOwner",
+            callbacks = JankHunter.asyncTelemetry(),
         )
         val command = Runnable {
             executionState[0] = nextBenchmarkState(executionState[0])
@@ -144,15 +225,44 @@ class JankHunterRuntimeBenchmarkTest {
         val elapsedNs = medianElapsedNs {
             var tokenChecksum = 0L
             repeat(count) {
-                val parentToken = JankHunter.enterMethod(1L)
-                val childToken = JankHunter.enterMethod(2L)
-                JankHunter.exitMethod(childToken, 2L)
-                JankHunter.exitMethod(parentToken, 1L)
+                val parentToken = JankHunterHooks.enterMethod(1L, "benchmark.Parent.call")
+                val childToken = JankHunterHooks.enterMethod(2L, "benchmark.Child.call")
+                JankHunterHooks.exitMethod(childToken, 2L)
+                JankHunterHooks.exitMethod(parentToken, 1L)
                 tokenChecksum = tokenChecksum xor parentToken xor childToken
             }
             benchmarkLongSink = tokenChecksum
         }
         printBenchmark("ASM method hook no-writer guard", count * 4, elapsedNs)
+    }
+
+    @Test
+    fun advancedTelemetryDisabledGuardsHotPath() {
+        assumeBenchmarksEnabled()
+        val count = iterations(FAST_PATH_MIN_ITERATIONS)
+        val elapsedNs = medianElapsedNs {
+            var checksum = 0L
+            repeat(count) {
+                JankHunterTelemetry.recordIO(JankHunterIOOperation.FILE_READ, 1L, -1L, null, JankHunterIOOutcome.SUCCESS)
+                checksum = checksum xor JankHunterWorkerRuntime.started(1L, "BenchmarkWorker", 0, 0)
+                if (JankHunterWorkerRuntime.isActive()) checksum++
+            }
+            benchmarkLongSink = checksum
+        }
+        printBenchmark("advanced telemetry disabled guards", count * 3, elapsedNs)
+    }
+
+    @Test
+    fun httpHandoffWithoutWriterHotPath() {
+        assumeBenchmarksEnabled()
+        val count = iterations(METHOD_GUARD_MIN_ITERATIONS)
+        val elapsedNs = medianElapsedNs {
+            repeat(count) {
+                JankHunterNetworkRuntime.recordHttp(BENCHMARK_HTTP_EVENT)
+            }
+            benchmarkObjectSink = BENCHMARK_HTTP_EVENT
+        }
+        printBenchmark("HTTP handoff no-writer guard", count, elapsedNs)
     }
 
     @Test
@@ -274,6 +384,34 @@ class JankHunterRuntimeBenchmarkTest {
         const val BENCHMARK_BLACKHOLE_MASK = BENCHMARK_BLACKHOLE_SIZE - 1
         const val BENCHMARK_STATE_MULTIPLIER = 6_364_136_223_846_793_005L
         const val BENCHMARK_STATE_INCREMENT = 1_442_695_040_888_963_407L
+
+        val BENCHMARK_HTTP_EVENT = JankHunterHttpEvent(
+            JankHunterContextSnapshot("BenchmarkScreen", "BenchmarkOwner"),
+            "GET /benchmark",
+            null,
+            1L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            1L,
+            0L,
+            200,
+            JankHunterHttpEvent.FAILURE_PHASE_UNKNOWN,
+            JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
+            JankHunterHttpEvent.PROTOCOL_HTTP_2,
+            0L,
+            0L,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0L,
+        )
 
         @Volatile
         var benchmarkObjectSink: Any? = null

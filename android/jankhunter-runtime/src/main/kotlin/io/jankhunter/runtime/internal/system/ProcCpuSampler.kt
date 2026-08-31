@@ -1,11 +1,12 @@
 package io.jankhunter.runtime.internal.system
 
+import io.jankhunter.runtime.RuntimeIntSource
 import kotlin.math.max
 
 internal class ProcCpuSampler(
     private val readProcessStat: () -> String?,
     private val readSystemStat: () -> String?,
-    private val coreCount: () -> Int = { Runtime.getRuntime().availableProcessors() },
+    private val coreCount: RuntimeIntSource = RuntimeIntSource { Runtime.getRuntime().availableProcessors() },
 ) {
     private var previous: Snapshot? = null
 
@@ -20,7 +21,7 @@ internal class ProcCpuSampler(
         val idleDelta = current.idleTicks - last.idleTicks
         if (processDelta < 0 || totalDelta <= 0 || idleDelta < 0) return null
 
-        val cores = max(1, coreCount())
+        val cores = max(1, coreCount.getAsInt())
         val processDevicePercentX100 = (processDelta * PERCENT_X100) / totalDelta
         val processCorePercentX100 = (processDelta * PERCENT_X100 * cores) / totalDelta
         val deviceBusyPercentX100 = ((totalDelta - idleDelta).coerceAtLeast(0L) * PERCENT_X100) / totalDelta

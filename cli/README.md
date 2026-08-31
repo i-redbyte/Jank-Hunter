@@ -40,10 +40,10 @@ jankhunter version
 Формат текущего исходного дерева:
 
 ```text
-.jhlog format 2.0.0
+.jhlog format 1.0.0
 ```
 
-Версию бинарника задаёт release-сборка. CLI читает только JHLOG 2.0.0 и fail-closed отклоняет
+Версию бинарника задаёт release-сборка. CLI читает только JHLOG 1.0.0 и fail-closed отклоняет
 устаревший или семантически несовместимый wire-контракт.
 
 Сборка под другую систему:
@@ -171,9 +171,16 @@ jankhunter inspect logs/*.jhlog --all-sessions --out report.html
 ```
 
 Если файл выгружен во время продолжающегося сбора после `JankHunter.flush()`, его статус
-`open_clean` нормален: CLI читает снимок до последнего целого чанка, не снижает уровень доверия
+`open_clean` нормален: CLI читает снимок до последнего целого чанка, не снижает диагностическую полноту
 и сообщает, что FINAL seal появится при завершении runtime. Служебные notices и реальные
 предупреждения качества находятся в закрытом разделе в самом конце HTML и в конце text output.
+
+Диагностический индекс полноты в техническом разделе показывает доступность телеметрии, а не
+вероятность проблемы и не риск приложения. Он складывается из доставки событий (40 баллов),
+runtime-графа (20), охвата процессов (20) и целостности доказательств (20). Отключённый сборщик
+исключается из знаменателя, поэтому итог нормализуется по активным компонентам. Рядом с итогом
+отчёт показывает полученные и недостающие баллы каждого компонента: например, 38 из 100 — это
+сумма фактически подтверждённых долей, а не «38% уверенности» в выводе.
 
 ## Данные Gradle-Плагина
 
@@ -190,31 +197,16 @@ jankhunter inspect logs/*.jhlog \
   --out report.html
 ```
 
-Автопоиск Gradle artifacts выключен в стандартном режиме. Он включается только явным
-developer-ключом `--external-symbols`; CLI из `<project>/.jankhunter/bin` тогда ищет полный набор
-`*/build/generated/jankhunter/<variant>/` внутри проекта и выбирает самый свежий. Для системного
-CLI или нескольких вариантов передавайте `--artifacts-dir` явно.
-
-Компактный внешний режим должен быть включён ещё при сборке приложения через
-`JankHunterSymbolMode.STABLE_EXTERNAL`. Анализ такого лога запускается только явно:
-
-```bash
-jankhunter inspect logs/*.jhlog \
-  --external-symbols \
-  --artifacts-dir ../android/sample-app/build/generated/jankhunter/debug \
-  --out report.html
-```
-
-Без `--external-symbols` CLI остановится с понятной ошибкой вместо отчёта с именами
-`stable:...`. Без `--artifacts-dir`/`--owner-map` внешний режим также не запускается.
+Автопоиск Gradle artifacts выключен: для системного CLI или нескольких вариантов передавайте
+`--artifacts-dir` явно. Каждый `.jhlog` обязан содержать имена всех использованных stable-символов.
+Если ссылка на символ не раскрывается из самого лога, CLI считает файл повреждённым или созданным
+несовместимым SDK и завершает анализ ошибкой.
 
 Отдельные файлы по-прежнему можно передать вручную; явные file-флаги имеют приоритет над
 значениями из каталога:
 
 ```bash
 jankhunter inspect logs/*.jhlog \
-  --owner-map ../android/sample-app/build/generated/jankhunter/debug/owner-map.json \
-  --owner-map ../feature-feed/build/generated/jankhunter/debug/owner-map.json \
   --mapping ../android/sample-app/build/outputs/mapping/debug/mapping.txt \
   --class-graph ../android/sample-app/build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics ../android/sample-app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
@@ -224,16 +216,7 @@ jankhunter inspect logs/*.jhlog \
 
 Что дают флаги:
 
-- `--artifacts-dir`: одним каталогом подключает owner-map, class graph, ASM diagnostics и доступный DI catalog.
-- `--external-symbols`: разрешает developer-only логи, где имена методов вынесены в owner-map;
-  требует matching `--artifacts-dir` или хотя бы один `--owner-map`.
-- `--owner-map`: раскрывает сгенерированные владельцы в `class.method`. Флаг повторяется для
-  каждого инструментированного Android-модуля, например отдельно для `app` и `feature-feed`.
-  Все карты обязаны иметь один 16-байтный `symbolNamespace`, совпадающий с каждым входным
-  `.jhlog`; CLI также отклоняет один stable ID, связанный с разными владельцами в разных картах.
-  Обе проверки fail-closed: отчёт при несовместимом или неоднозначном наборе не создаётся.
-  Namespace описывает stable-ID algorithm и owner-map schema, а не revision исходников, поэтому
-  для полного раскрытия имён передавайте карты всех модулей именно от анализируемой версии.
+- `--artifacts-dir`: одним каталогом подключает class graph, ASM diagnostics и доступный DI catalog.
 - `--mapping`: раскрывает сокращённые имена после R8 или ProGuard.
 - `--class-graph`: добавляет статические связи, горячие пути и узлы графа влияния.
 - `--instrumentation-diagnostics`: добавляет отчёт о совпавших и пропущенных ASM-перехватчиках.
@@ -336,7 +319,6 @@ jankhunter compare \
 jankhunter compare \
   --baseline "old/*.jhlog" \
   --candidate "new/*.jhlog" \
-  --owner-map owner-map.json \
   --mapping mapping.txt \
   --class-graph class-graph.jsonl \
   --instrumentation-diagnostics instrumentation-diagnostics.jsonl \
@@ -526,7 +508,6 @@ cli/scripts/collect-android-leak-report.sh \
 
 ```bash
 jankhunter inspect logs/*.jhlog \
-  --owner-map build/generated/jankhunter/debug/owner-map.json \
   --mapping app/build/outputs/mapping/debug/mapping.txt \
   --class-graph build/generated/jankhunter/debug/class-graph.jsonl \
   --instrumentation-diagnostics build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
@@ -564,10 +545,12 @@ jankhunter inspect logs/*.jhlog \
 - каждый chunk имеет CRC, независимый gzip payload и commit trailer;
 - незакоммиченный хвост активного файла отделяется от реального повреждения;
 - loss/overflow/truncation публикуются накопительными quality snapshots;
-- основной и единственный формат записи/чтения: `2.0.0`;
+- основной и единственный формат записи/чтения: `1.0.0`;
 - header фиксирует run/process/session identity, process scope и ожидаемый process roster;
 - independently committed gzip-chunks связаны SHA-256 digest-chain между сегментами;
 - typed UI frame histogram, process-exit и attributed I/O не кодируются динамическими gauge names;
+- typed HTTP хранит route/service/initiator и фазы, status/protocol, attempts/failures/redirects,
+  cache/reuse/cancellation и известность byte counts вместо динамических network gauge names;
 - runtime call blocks хранят physical rows отдельно от представленного logical call count;
 - continuous Flow records удалены: screen/owner/flow/step передаются только atomic attribution;
 - старые форматы не читаются и не имеют fallback-ветки.

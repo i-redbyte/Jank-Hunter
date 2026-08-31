@@ -52,7 +52,7 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 			id:          "main_thread_stall_burden",
 			title:       "Накопленное превышение пауз главного потока",
 			formula:     "Σ max(0, max_пауза_в_интервале - 100ms)",
-			explanation: "Суммирует превышение максимальной паузы над 100 мс в каждом временном интервале. Это не полная длительность всех пауз: в таймлайне хранится максимум интервала.",
+			explanation: "Суммирует превышение максимальной паузы над 100 мс в каждом временном интервале. Это не полная длительность всех пауз: на временной шкале хранится максимум интервала.",
 			unit:        "мс",
 			value:       mainThreadStallBurden,
 		},
@@ -411,7 +411,7 @@ func integralFindings(scores []IntegralScore) []Finding {
 		Severity:       worst.Severity,
 		Title:          "Накопленная нагрузка заметна",
 		Detail:         worst.Summary,
-		Recommendation: "Посмотрите соседние разделы: таймлайн показывает, где накопилась нагрузка, а распределения, точки изменения и сетевые циклы помогают сузить контекст проверки, но сами не доказывают причину.",
+		Recommendation: "Посмотрите соседние разделы: временная шкала показывает, где накопилась нагрузка, а распределения, точки изменения и сетевые циклы помогают сузить контекст проверки, но сами не доказывают причину.",
 	}}
 }
 
@@ -434,9 +434,9 @@ func compareIntegralSummary(deltas []IntegralDelta) string {
 		return fmt.Sprintf("Сопоставимо %d из %d накопленных оценок; для %d оценок длительность различается больше чем на 20%% или число независимых прогонов не совпадает. Среди сопоставимых выросло %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
 	}
 	if worse == 0 {
-		return "Кандидат не увеличил интегральную нагрузку относительно базы."
+		return "Проверяемый прогон не увеличил накопленную нагрузку относительно базового."
 	}
-	return fmt.Sprintf("Кандидат увеличил %d из %d интегральных оценок нагрузки.", worse, len(deltas))
+	return fmt.Sprintf("Проверяемый прогон увеличил %d из %d накопленных оценок нагрузки.", worse, len(deltas))
 }
 
 func compareIntegralFindings(deltas []IntegralDelta) []Finding {
@@ -454,7 +454,7 @@ func compareIntegralFindings(deltas []IntegralDelta) []Finding {
 				Severity:       "medium",
 				Title:          "Часть накопленных оценок несопоставима",
 				Detail:         delta.Summary,
-				Recommendation: "Повторите одинаковый сценарий с тем же числом повторов и сопоставимой длительностью или сравнивайте робастные распределения, которые не суммируют нагрузку по всему времени прогона.",
+				Recommendation: "Повторите одинаковый сценарий с тем же числом повторов и сопоставимой длительностью или сравнивайте устойчивые распределения, которые не суммируют нагрузку по всему времени прогона.",
 			})
 			break
 		}
@@ -474,7 +474,7 @@ func compareIntegralFindings(deltas []IntegralDelta) []Finding {
 			Severity:       worst.Severity,
 			Title:          "Интегральная нагрузка выросла",
 			Detail:         worst.Summary,
-			Recommendation: "Сравните эту оценку с таймлайном, точками изменения и сетевыми циклами: накопленная оценка показывает масштаб эффекта, а соседние разделы помогают выбрать следующую проверку.",
+			Recommendation: "Сравните эту оценку с временной шкалой, точками изменения и сетевыми циклами: накопленная оценка показывает масштаб эффекта, а соседние разделы помогают выбрать следующую проверку.",
 		})
 	}
 	if len(findings) > 0 {
@@ -503,13 +503,13 @@ func worstIntegralScore(scores []IntegralScore) IntegralScore {
 
 func integralDeltaSummary(title string, baseline, candidate, delta, deltaPct float64, unit string, comparable bool, baselineDurationMS, candidateDurationMS uint64, baselineRunCount, candidateRunCount int) string {
 	if !comparable {
-		return fmt.Sprintf("%s: база %.1f %s за %.1f с (независимых прогонов: %d), кандидат %.1f %s за %.1f с (независимых прогонов: %d). Длительность различается больше чем на 20%% или число прогонов не совпадает, поэтому изменение не считается регрессией автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
+		return fmt.Sprintf("%s: базовый прогон %.1f %s за %.1f с (независимых запусков: %d), проверяемый прогон %.1f %s за %.1f с (независимых запусков: %d). Длительность различается больше чем на 20%% или число запусков не совпадает, поэтому изменение не считается ухудшением автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
 	}
 	if delta <= 0 {
 		return fmt.Sprintf("%s улучшилась или не выросла: %.1f -> %.1f %s.", title, baseline, candidate, unit)
 	}
 	if baseline == 0 {
-		return fmt.Sprintf("%s появилась у кандидата: в базе 0, у кандидата %.1f %s. Процент не рассчитывается, потому что база равна нулю.", title, candidate, unit)
+		return fmt.Sprintf("%s появилась в проверяемом прогоне: в базовом 0, в проверяемом %.1f %s. Процент не рассчитывается, потому что базовое значение равно нулю.", title, candidate, unit)
 	}
 	return fmt.Sprintf("%s выросла: %.1f -> %.1f %s, Δ %.1f %s (%+.1f%%).", title, baseline, candidate, unit, delta, unit, deltaPct)
 }

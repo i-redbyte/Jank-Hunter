@@ -52,9 +52,8 @@ type runTimelineNormalizer struct {
 func detectScaleAndCollectRobust(paths []string, options analyze.Options) (timelineScale, runTimelineNormalizer, robustSampleMap, error) {
 	filter := normalizeTimelineFilter(options.Filter)
 	robust := &robustCollector{
-		filter:   filter,
-		ownerMap: options.OwnerMap,
-		samples:  robustSampleMap{},
+		filter:  filter,
+		samples: robustSampleMap{},
 	}
 	normalizer := newRunTimelineNormalizer(paths)
 	ranges := make(map[string]runTimelineRange, len(paths))
@@ -98,10 +97,9 @@ func detectScaleAndCollectRobust(paths []string, options analyze.Options) (timel
 
 func collectBucketedMathInputs(paths []string, options analyze.Options, scale timelineScale, normalizer runTimelineNormalizer) ([]TimelineBucket, []Series, []periodicDefinition, []NetworkLoopFinding, error) {
 	timelineCollector := &timelineCollector{
-		filter:   normalizeTimelineFilter(options.Filter),
-		ownerMap: options.OwnerMap,
-		scale:    scale,
-		buckets:  map[uint64]*timelineBucketAgg{},
+		filter:  normalizeTimelineFilter(options.Filter),
+		scale:   scale,
+		buckets: map[uint64]*timelineBucketAgg{},
 	}
 	routeCollector := newRouteSeriesCollector(options, scale)
 	networkCollector := newNetworkLoopCollector(options, scale)

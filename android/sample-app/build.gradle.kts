@@ -1,4 +1,5 @@
 plugins {
+    alias(libs.plugins.ksp)
     id("io.jankhunter.android-application")
     id("io.jankhunter.android")
 }
@@ -15,55 +16,32 @@ android {
 jankHunter {
     enabled.set(true)
     enabledBuildTypes.set(setOf("debug"))
+    profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)
+    packages("io.jankhunter.sample.graph")
+    storageLimitMiB(50)
+    debug {
+        enable(
+            io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS,
+            io.jankhunter.gradle.JankHunterFeature.MAIN_LOOPER,
+            io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+        )
+        privacyReviewed()
+    }
+
     autoInit.set(true)
-    verboseLogs.set(true)
-    sessionLogSizeLimitEnabled.set(true)
-    maxSessionLogSizeMiB.set(50)
-    logGrowthAnalyticsEnabled.set(true)
-
-    runtime {
-        mainThreadStallThresholdMs.set(150)
-        ownerBlockThresholdMs.set(100)
-        httpSlowThresholdMs.set(500)
-        jankFrameThresholdMs.set(32)
-        uiWindowP95ThresholdMs.set(32)
-        exactEventCollection.set(true)
-        maxQueueSize.set(65_536)
-        mainLooperDispatchMonitor.set(true)
-        jankStats.set(true)
-        mainProcessOnly.set(false)
-    }
-
-    instrument {
-        classGraph.set(true)
-        runtimeCallGraph.set(true)
-        methodCounters.set(true)
-        okhttp.set(true)
-        webSockets.set(true)
-        handlers.set(true)
-        executors.set(true)
-        coroutines.set(true)
-        flowInteractions.set(true)
-        lifecycleLeaks.set(true)
-        logSpam.set(true)
-        includeAndroidNamespace.set(true)
-        includeWholeApplication.set(false)
-        includePackages("io.jankhunter.sample.graph")
-    }
-
-    retainedHeapDump {
-        enabled.set(true)
-        privacyApproved.set(true)
-        minIntervalMs.set(1_000)
-        maxCount.set(1)
-        minRetainedAgeMs.set(1_000)
-    }
+    tuning.thresholds.mainThreadStallMs.set(150)
+    tuning.thresholds.ownerBlockMs.set(100)
+    tuning.thresholds.slowHttpMs.set(500)
+    tuning.heapDumps.minIntervalMs.set(1_000)
+    tuning.heapDumps.minRetainedAgeMs.set(1_000)
 }
 
 dependencies {
     implementation(project(":jankhunter-runtime"))
     implementation(project(":jankhunter-okhttp3"))
     implementation(libs.okhttp)
+    implementation(libs.androidx.room.runtime)
+    ksp("androidx.room:room-compiler:${libs.versions.room.get()}")
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.bundles.androidx.lifecycle)

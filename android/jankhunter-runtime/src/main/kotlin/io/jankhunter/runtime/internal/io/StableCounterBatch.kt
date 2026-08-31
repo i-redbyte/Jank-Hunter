@@ -10,9 +10,7 @@ internal class StableCounterBatch(capacity: Int) {
     var size: Int = 0
         private set
 
-    fun add(id: Long, value: Long) = add(id, null, value)
-
-    fun add(id: Long, name: String?, value: Long) {
+    fun add(id: Long, name: String, value: Long) {
         check(size < ids.size) { "Stable counter batch capacity exceeded" }
         ids[size] = id
         names[size] = name
@@ -22,7 +20,7 @@ internal class StableCounterBatch(capacity: Int) {
 
     fun id(index: Int): Long = ids[index]
 
-    fun name(index: Int): String? = names[index]
+    fun name(index: Int): String = checkNotNull(names[index])
 
     fun value(index: Int): Long = values[index]
 

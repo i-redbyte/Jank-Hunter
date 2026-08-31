@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -115,7 +116,7 @@ func TestLogGrowthRejectsPreBudgetSemanticsSchema(t *testing.T) {
 	}
 }
 
-func TestWriteSampleStreamsCommittedVersionTwo(t *testing.T) {
+func TestWriteSampleStreamsCommittedVersionThree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -129,7 +130,7 @@ func TestWriteSampleStreamsCommittedVersionTwo(t *testing.T) {
 		t.Fatalf("status = %q, want %q", log.Result.Status, SegmentStatusClosedClean)
 	}
 	if !log.Result.Sealed {
-		t.Fatal("sample 2.0.0 log is closed but not FINAL-sealed")
+		t.Fatal("sample 3.0.0 log is closed but not FINAL-sealed")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -177,18 +178,28 @@ func TestWriteSampleStreamsCommittedVersionTwo(t *testing.T) {
 }
 
 func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
-	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 0x81, 2, 0, 0}
+	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 0x81, 3, 0, 0}
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeatures != 0x1fff || OptionalFeatures != 0x01 {
+	if RequiredFeatures != 0x3ffff || OptionalFeatures != 0x01 {
 		t.Fatalf("features = required 0x%x optional 0x%x", RequiredFeatures, OptionalFeatures)
+	}
+}
+
+func TestDatabaseStatementFingerprintMatchesWireContract(t *testing.T) {
+	if got := DatabaseStatementFingerprint("hello"); got != 0xa430d84680aabd0b {
+		t.Fatalf("fingerprint = 0x%x", got)
+	}
+	if got := DatabaseStatementFingerprint(""); got != 0 {
+		t.Fatalf("empty fingerprint = 0x%x", got)
 	}
 }
 
 func TestDeclaredProcessRosterRoundTripsInHeader(t *testing.T) {
 	header := DefaultSegmentHeader()
 	header.ProcessName = "main"
+	header.TimezoneOffsetMinutes = 180
 	header.ExpectedProcessCount = 2
 	header.ExpectedProcessFingerprint = ProcessRosterFingerprint([]string{"main", "remote"})
 	header.ProcessRosterDeclarationComplete = true
@@ -200,13 +211,83 @@ func TestDeclaredProcessRosterRoundTripsInHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.ExpectedProcessCount != 2 || !decoded.ProcessRosterDeclarationComplete ||
+	if decoded.ExpectedProcessCount != 2 || decoded.TimezoneOffsetMinutes != 180 || !decoded.ProcessRosterDeclarationComplete ||
 		!bytes.Equal(decoded.ExpectedProcessFingerprint, normalized.ExpectedProcessFingerprint) {
 		t.Fatalf("process roster did not round-trip: decoded=%+v normalized=%+v", decoded, normalized)
 	}
 }
 
-func TestVersionTwoHeaderRejectsUnparsedTrailingBytes(t *testing.T) {
+func TestOperationLifecycleRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operation-lifecycle.jhlog")
+	attributes := []OperationAttribute{
+		{KeyRef: LocalSymbol(2), ValueRef: LocalSymbol(3)},
+		{KeyRef: LocalSymbol(4), ValueRef: LocalSymbol(5)},
+	}
+	context := AttributionContext{Present: true, Screen: LocalSymbol(6), OperationID: 41}
+	events := []Event{
+		{
+			Type: EventOperation, TimeUS: 1_000_000, Attribution: context,
+			Operation: &OperationEvent{
+				NameRef: LocalSymbol(1), ID: 42, ParentID: 41, Phase: OperationPhaseStarted,
+				Kind: OperationKindUser, BudgetUS: 2_000_000, Attributes: attributes,
+			},
+		},
+		{
+			Type: EventOperation, TimeUS: 2_250_000, Attribution: context,
+			Operation: &OperationEvent{
+				NameRef: LocalSymbol(1), ID: 42, ParentID: 41, Phase: OperationPhaseFinished,
+				Kind: OperationKindUser, Outcome: OperationOutcomeSuccess, DurationUS: 1_250_000,
+				BudgetUS: 2_000_000, Attributes: attributes,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) {
+		t.Fatalf("operation event count = %d, want %d", len(log.Events), len(events))
+	}
+	for index := range events {
+		if log.Events[index].Attribution != context || !reflect.DeepEqual(log.Events[index].Operation, events[index].Operation) {
+			t.Fatalf("operation event %d = %+v, want %+v", index, log.Events[index], events[index])
+		}
+	}
+}
+
+func TestOperationLifecycleValidation(t *testing.T) {
+	valid := OperationEvent{
+		NameRef: LocalSymbol(1), ID: 1, Phase: OperationPhaseStarted, Kind: OperationKindUser,
+	}
+	tests := []struct {
+		name  string
+		event OperationEvent
+		want  string
+	}{
+		{name: "missing ID", event: OperationEvent{NameRef: LocalSymbol(1), Phase: OperationPhaseStarted, Kind: OperationKindUser}, want: "operation ID must be non-zero"},
+		{name: "self parent", event: OperationEvent{NameRef: LocalSymbol(1), ID: 1, ParentID: 1, Phase: OperationPhaseStarted, Kind: OperationKindUser}, want: "own parent"},
+		{name: "missing name", event: OperationEvent{ID: 1, Phase: OperationPhaseStarted, Kind: OperationKindUser}, want: "name reference"},
+		{name: "unknown kind", event: OperationEvent{NameRef: LocalSymbol(1), ID: 1, Phase: OperationPhaseStarted}, want: "operation kind"},
+		{name: "start with outcome", event: OperationEvent{NameRef: LocalSymbol(1), ID: 1, Phase: OperationPhaseStarted, Kind: OperationKindUser, Outcome: OperationOutcomeSuccess}, want: "cannot have outcome"},
+		{name: "finish without outcome", event: OperationEvent{NameRef: LocalSymbol(1), ID: 1, Phase: OperationPhaseFinished, Kind: OperationKindUser}, want: "requires a supported outcome"},
+		{name: "duplicate key", event: OperationEvent{NameRef: LocalSymbol(1), ID: 1, Phase: OperationPhaseStarted, Kind: OperationKindUser, Attributes: []OperationAttribute{{KeyRef: LocalSymbol(2), ValueRef: LocalSymbol(3)}, {KeyRef: LocalSymbol(2), ValueRef: LocalSymbol(4)}}}, want: "duplicates a key"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := encodeRecord(Event{Type: EventOperation, Operation: &test.event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	_, _, _, err := encodeRecord(Event{Type: EventOperation, Operation: &valid}, recordEncodeState{})
+	if err != nil {
+		t.Fatalf("valid operation rejected: %v", err)
+	}
+}
+
+func TestVersionThreeHeaderRejectsUnparsedTrailingBytes(t *testing.T) {
 	raw, _, err := encodeFileHeader(DefaultSegmentHeader())
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +308,7 @@ func TestDeclaredProcessRosterRejectsMissingFingerprint(t *testing.T) {
 	}
 }
 
-func TestVersionTwoRejectsMissingMandatoryWireFeatures(t *testing.T) {
+func TestVersionThreeRejectsMissingMandatoryWireFeatures(t *testing.T) {
 	header := DefaultSegmentHeader()
 	header.RequiredFeatures &^= FeatureSegmentDigestChain
 	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "required feature contract") {
@@ -235,7 +316,7 @@ func TestVersionTwoRejectsMissingMandatoryWireFeatures(t *testing.T) {
 	}
 }
 
-func TestVersionTwoAcceptsOnlyCanonicalFeatureContracts(t *testing.T) {
+func TestVersionThreeAcceptsOnlyCanonicalFeatureContracts(t *testing.T) {
 	tests := []struct {
 		name     string
 		required uint64
@@ -310,12 +391,12 @@ func TestRuntimeCallColumnarBlockRoundTripsAsSemanticRows(t *testing.T) {
 	}
 	events := []Event{
 		{Type: EventRuntimeCall, TimeUS: 10_000, Producer: ProducerMetadata{HasThread: true, ThreadID: 7}, Attribution: AttributionContext{
-			Present: true, Screen: LocalSymbol(11), Owner: StableSymbol(0x101), Flow: LocalSymbol(21), Step: LocalSymbol(31),
+			Present: true, Screen: LocalSymbol(11), Owner: StableSymbol(0x101), OperationID: 41,
 		}, RuntimeCall: &RuntimeCallEvent{
 			CalleeRef: StableSymbol(0x201), Count: 3, TotalMS: 12, MaxMS: 7,
 		}},
 		{Type: EventRuntimeCall, TimeUS: 10_000, Producer: ProducerMetadata{HasThread: true, ThreadID: 7}, Attribution: AttributionContext{
-			Present: true, Screen: LocalSymbol(12), Owner: StableSymbol(0x102), Flow: LocalSymbol(22), Step: LocalSymbol(32),
+			Present: true, Screen: LocalSymbol(12), Owner: StableSymbol(0x102), OperationID: 42,
 		}, RuntimeCall: &RuntimeCallEvent{
 			CalleeRef: StableSymbol(0x202), Count: 4, TotalMS: 19, MaxMS: 9,
 		}},
@@ -350,7 +431,7 @@ func TestRuntimeCallColumnarBlockRoundTripsAsSemanticRows(t *testing.T) {
 	}
 	first, second := log.Events[0], log.Events[1]
 	if first.Attribution.Owner.ID != 0x101 || second.RuntimeCall.CalleeRef.ID != 0x202 ||
-		first.Attribution.Screen.ID != 11 || second.Attribution.Flow.ID != 22 || second.RuntimeCall.Count != 4 ||
+		first.Attribution.Screen.ID != 11 || second.Attribution.OperationID != 42 || second.RuntimeCall.Count != 4 ||
 		first.TimeUS != second.TimeUS || second.DeltaUS != 0 {
 		t.Fatalf("decoded runtime rows = first:%+v second:%+v", first, second)
 	}
@@ -441,7 +522,7 @@ func TestRuntimeCallColumnarBlockRejectsInvalidLogicalAggregates(t *testing.T) {
 	}
 }
 
-func TestProcessScopeRoundTripsInVersionTwoHeader(t *testing.T) {
+func TestProcessScopeRoundTripsInVersionThreeHeader(t *testing.T) {
 	header := DefaultSegmentHeader()
 	header.ProcessScope = ProcessScopeAllowlist
 	header.AllowedProcessCount = 3
@@ -495,7 +576,7 @@ func TestQualityProgressionRejectsRegressedCounter(t *testing.T) {
 	}
 }
 
-func TestKnownQualityCounterSetIsClosedForVersionTwo(t *testing.T) {
+func TestKnownQualityCounterSetIsClosedForVersionThree(t *testing.T) {
 	known := []uint64{
 		QualityAcceptedEventTotal,
 		QualityRuntimeEventBackpressureNanos,
@@ -503,6 +584,10 @@ func TestKnownQualityCounterSetIsClosedForVersionTwo(t *testing.T) {
 		QualityRuntimeHookFailureTotal,
 		QualityJankStatsDependencyMissing,
 		QualityRuntimeHookUnclassifiedFailure,
+		QualityPreparedStatementRegistryEviction,
+		QualityPreparedStatementResolutionMiss,
+		QualityReceiverAsyncRegistryEviction,
+		QualityReceiverAsyncResolutionMiss,
 		EventQualityCounterID(EventRuntimeCall, QualityLossAdmissionContention),
 	}
 	for _, id := range known {
@@ -624,7 +709,7 @@ func TestRetainedPayloadRequiresKnownEvidence(t *testing.T) {
 				}
 			}
 			event := Event{Type: EventRetained}
-			err := decodeEventPayload(bytes.NewReader(payload.Bytes()), &event, DefaultSegmentHeader(), "", nil)
+			err := decodeEventPayload(&recordReader{data: payload.Bytes()}, &event, DefaultSegmentHeader(), "", nil)
 			if err == nil || !strings.Contains(err.Error(), test.message) {
 				t.Fatalf("invalid retained evidence: err=%v event=%+v", err, event.Retained)
 			}
@@ -689,12 +774,14 @@ func TestSizeLimitQualityCountersKeepWireNames(t *testing.T) {
 
 func TestBufferedRuntimeGraphQualityCountersKeepWireNames(t *testing.T) {
 	cases := map[uint64]string{
-		QualityRuntimeGraphShutdownLoss:        "runtime_graph_shutdown_loss_total",
-		QualityRuntimeGraphWriterRejectionLoss: "runtime_graph_writer_rejection_loss_total",
-		QualityRuntimeGraphDisabled:            "runtime_graph_disabled_total",
-		QualityRuntimeHookFailureTotal:         "runtime_hook_failure_total",
-		QualityJankStatsDependencyMissing:      "jankstats_dependency_missing_total",
-		QualityRuntimeHookUnclassifiedFailure:  "runtime_hook_unclassified_failure_total",
+		QualityRuntimeGraphShutdownLoss:          "runtime_graph_shutdown_loss_total",
+		QualityRuntimeGraphWriterRejectionLoss:   "runtime_graph_writer_rejection_loss_total",
+		QualityRuntimeGraphDisabled:              "runtime_graph_disabled_total",
+		QualityRuntimeHookFailureTotal:           "runtime_hook_failure_total",
+		QualityJankStatsDependencyMissing:        "jankstats_dependency_missing_total",
+		QualityRuntimeHookUnclassifiedFailure:    "runtime_hook_unclassified_failure_total",
+		QualityPreparedStatementRegistryEviction: "prepared_statement_registry_eviction_total",
+		QualityPreparedStatementResolutionMiss:   "prepared_statement_resolution_miss_after_eviction_total",
 	}
 	for id, want := range cases {
 		if got := QualityCounterName(id); got != want {
@@ -734,7 +821,7 @@ func TestProfileFilesReportsJH100ControlAndEventSizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-2.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
+	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-3.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
 		t.Fatalf("file profile = %+v", profile.Files)
 	}
 	rows := map[EventType]SizeProfileType{}
@@ -776,7 +863,7 @@ func TestSessionContextAndMetricRoundTrip(t *testing.T) {
 	}
 }
 
-func TestVersionTwoTypedEvidenceRoundTrip(t *testing.T) {
+func TestVersionThreeTypedEvidenceRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "typed-evidence.jhlog")
 	buckets := make([]uint64, UIFrameHistogramBucketCount)
 	buckets[1] = 50
@@ -802,8 +889,11 @@ func TestVersionTwoTypedEvidenceRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			Type: EventIO, TimeMS: 10_200, Flags: uint64(FlagThreadMain),
-			IO: &IOEvent{Operation: IOOperationDatabaseRead, DurationUS: 275_000, Bytes: 4_096},
+			Type: EventIO, TimeMS: 10_200, Flags: uint64(FlagThreadMain | FlagIOBytesKnown),
+			IO: &IOEvent{
+				SourceRef: StableSymbol(0x32621), Operation: IOOperationContentRead,
+				Outcome: IOOutcomeSuccess, DurationUS: 275_000, Bytes: 4_096,
+			},
 		},
 	}
 	writeClosedEvents(t, path, events)
@@ -827,15 +917,391 @@ func TestVersionTwoTypedEvidenceRoundTrip(t *testing.T) {
 		t.Fatalf("process exit = %+v", exit)
 	}
 	ioEvent := log.Events[3]
-	if ioEvent.IO == nil || ioEvent.IO.Operation != IOOperationDatabaseRead || ioEvent.IO.DurationUS != 275_000 ||
-		ioEvent.IO.Bytes != 4_096 || ioEvent.Flags&uint64(FlagThreadMain) == 0 {
+	if ioEvent.IO == nil || ioEvent.IO.Operation != IOOperationContentRead || ioEvent.IO.DurationUS != 275_000 ||
+		ioEvent.IO.Bytes != 4_096 || ioEvent.IO.Outcome != IOOutcomeSuccess ||
+		ioEvent.IO.SourceRef != StableSymbol(0x32621) || ioEvent.Flags&uint64(FlagThreadMain|FlagIOBytesKnown) == 0 {
 		t.Fatalf("I/O event = %+v", ioEvent)
+	}
+}
+
+func TestAdvancedIOValidation(t *testing.T) {
+	valid := IOEvent{Operation: IOOperationFileRead, Outcome: IOOutcomeSuccess}
+	tests := []struct {
+		name  string
+		event IOEvent
+		flags uint64
+		want  string
+	}{
+		{name: "unknown outcome", event: IOEvent{Operation: IOOperationFileRead}, want: "I/O outcome must be success or failure"},
+		{name: "invalid outcome", event: IOEvent{Operation: IOOperationFileRead, Outcome: IOOutcome(9)}, want: "unsupported I/O outcome 9"},
+		{name: "removed database read", event: IOEvent{Operation: IOOperationKind(4), Outcome: IOOutcomeSuccess}, want: "unsupported I/O operation 4"},
+		{name: "removed database write", event: IOEvent{Operation: IOOperationKind(5), Outcome: IOOutcomeSuccess}, want: "unsupported I/O operation 5"},
+		{name: "bytes without coverage", event: IOEvent{Operation: IOOperationFileRead, Outcome: IOOutcomeSuccess, Bytes: 1}, want: "I/O bytes require bytes-known flag"},
+		{name: "unsupported flag", event: valid, flags: uint64(FlagWorkerPeriodic), want: "unsupported semantic flag"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := encodeRecord(Event{Type: EventIO, Flags: test.flags, IO: &test.event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAdvancedHTTPEventRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "advanced-http.jhlog")
+	want := &HTTPEvent{
+		RouteRef:        LocalSymbol(1),
+		ServiceRef:      LocalSymbol(2),
+		InitiatorRef:    StableSymbol(0x1234),
+		DurationMS:      850,
+		QueueMS:         30,
+		DNSMS:           12,
+		ConnectMS:       45,
+		TLSMS:           20,
+		RequestMS:       8,
+		TTFBMS:          510,
+		ResponseMS:      220,
+		StatusCode:      503,
+		Status:          Status5xx,
+		FailurePhase:    HTTPFailurePhaseResponse,
+		FailureKind:     HTTPFailureKindProtocol,
+		Protocol:        HTTPProtocol2,
+		RxBytes:         42_120,
+		TxBytes:         740,
+		Attempts:        2,
+		DNSAttempts:     1,
+		ConnectAttempts: 2,
+		TLSAttempts:     1,
+		ConnectFailures: 1,
+		TLSFailures:     0,
+		Redirects:       1,
+	}
+	writeClosedEvents(t, path, []Event{{
+		Type:  EventHTTP,
+		Flags: uint64(FlagHTTPFailed | FlagHTTPTLS | FlagHTTPResponseBytesKnown | FlagHTTPRequestBytesKnown),
+		HTTP:  want,
+	}})
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != 1 || log.Events[0].HTTP == nil {
+		t.Fatalf("HTTP events = %+v", log.Events)
+	}
+	if got := log.Events[0].HTTP; !reflect.DeepEqual(got, want) {
+		t.Fatalf("HTTP event = %+v, want %+v", got, want)
+	}
+	wantFlags := uint64(FlagHTTPFailed | FlagHTTPTLS | FlagHTTPResponseBytesKnown | FlagHTTPRequestBytesKnown)
+	if got := log.Events[0].Flags; got != wantFlags {
+		t.Fatalf("HTTP flags = 0x%x, want 0x%x", got, wantFlags)
+	}
+}
+
+func TestAdvancedHTTPEventValidation(t *testing.T) {
+	valid := HTTPEvent{DurationMS: 100, StatusCode: 200, Attempts: 1}
+	tests := []struct {
+		name string
+		edit func(*HTTPEvent)
+		want string
+	}{
+		{name: "invalid status code", edit: func(event *HTTPEvent) { event.StatusCode = 99 }, want: "HTTP status code 99"},
+		{name: "phase exceeds total", edit: func(event *HTTPEvent) { event.TLSMS = 101 }, want: "HTTP TLS duration 101 exceeds request duration 100"},
+		{name: "invalid failure phase", edit: func(event *HTTPEvent) { event.FailurePhase = HTTPFailurePhase(99) }, want: "unsupported HTTP failure phase 99"},
+		{name: "invalid failure kind", edit: func(event *HTTPEvent) { event.FailureKind = HTTPFailureKind(99) }, want: "unsupported HTTP failure kind 99"},
+		{name: "invalid protocol", edit: func(event *HTTPEvent) { event.Protocol = HTTPProtocol(99) }, want: "unsupported HTTP protocol 99"},
+		{name: "connect failures exceed attempts", edit: func(event *HTTPEvent) { event.ConnectFailures = 1 }, want: "HTTP connect failure count 1 exceeds connect attempt count 0"},
+		{name: "TLS failures exceed attempts", edit: func(event *HTTPEvent) { event.TLSFailures = 1 }, want: "HTTP TLS failure count 1 exceeds TLS attempt count 0"},
+		{name: "redirects exceed attempts", edit: func(event *HTTPEvent) { event.Redirects = 2 }, want: "HTTP redirect count 2 exceeds attempt count 1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := valid
+			test.edit(&event)
+			_, _, _, err := encodeRecord(Event{Type: EventHTTP, HTTP: &event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestWorkerLifecycleRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker-lifecycle.jhlog")
+	events := []Event{
+		{
+			Type: EventWorker, TimeMS: 100, Flags: uint64(FlagWorkerPeriodic),
+			Worker: &WorkerEvent{InstanceID: 0x32621, Stage: WorkerStageEnqueued},
+		},
+		{
+			Type: EventWorker, TimeMS: 350,
+			Worker: &WorkerEvent{
+				WorkerRef: StableSymbol(0x1234), InstanceID: 0x32621,
+				Stage: WorkerStageStarted, RunAttempt: 2, Generation: 3,
+			},
+		},
+		{
+			Type: EventWorker, TimeMS: 850, Flags: uint64(FlagWorkerStopReasonKnown),
+			Worker: &WorkerEvent{
+				WorkerRef: StableSymbol(0x1234), InstanceID: 0x32621,
+				Stage: WorkerStageFinished, Outcome: WorkerOutcomeCancelled,
+				DurationMS: 500, RunAttempt: 2, Generation: 3, StopReason: 4,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) {
+		t.Fatalf("worker event count = %d, want %d", len(log.Events), len(events))
+	}
+	for index := range events {
+		if log.Events[index].TimeMS != events[index].TimeMS || log.Events[index].Flags != events[index].Flags ||
+			!reflect.DeepEqual(log.Events[index].Worker, events[index].Worker) {
+			t.Fatalf("worker event %d = %+v, want %+v", index, log.Events[index], events[index])
+		}
+	}
+}
+
+func TestWorkerLifecycleValidation(t *testing.T) {
+	valid := WorkerEvent{InstanceID: 1, Stage: WorkerStageStarted}
+	tests := []struct {
+		name  string
+		event WorkerEvent
+		flags uint64
+		want  string
+	}{
+		{name: "missing instance", event: WorkerEvent{Stage: WorkerStageStarted}, want: "worker instance ID must be non-zero"},
+		{name: "missing worker", event: valid, want: "started or finished worker requires a worker reference"},
+		{name: "invalid stage", event: WorkerEvent{InstanceID: 1, Stage: WorkerStage(99)}, want: "unsupported worker stage 99"},
+		{name: "outcome before finish", event: WorkerEvent{InstanceID: 1, Stage: WorkerStageStarted, Outcome: WorkerOutcomeSuccess}, want: "worker outcome is only valid for finished stage"},
+		{name: "duration before finish", event: WorkerEvent{InstanceID: 1, Stage: WorkerStageStarted, DurationMS: 1}, want: "worker duration is only valid for finished stage"},
+		{name: "missing terminal outcome", event: WorkerEvent{InstanceID: 1, Stage: WorkerStageFinished}, want: "finished worker requires an outcome"},
+		{name: "invalid outcome", event: WorkerEvent{InstanceID: 1, Stage: WorkerStageFinished, Outcome: WorkerOutcome(99)}, want: "unsupported worker outcome 99"},
+		{name: "stop reason before finish", event: valid, flags: uint64(FlagWorkerStopReasonKnown), want: "worker stop reason is only valid for finished stage"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := encodeRecord(Event{Type: EventWorker, Flags: test.flags, Worker: &test.event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestWebSocketLifecycleRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "websocket-lifecycle.jhlog")
+	events := []Event{
+		{
+			Type: EventWebSocket, TimeMS: 100,
+			WebSocket: &WebSocketEvent{
+				RouteRef: StableSymbol(0x91), ConnectionID: 0x32621,
+				Stage: WebSocketStageOpened, DurationMS: 75, StatusCode: 101,
+			},
+		},
+		{
+			Type: EventWebSocket, TimeMS: 12_100,
+			WebSocket: &WebSocketEvent{
+				RouteRef: StableSymbol(0x91), ConnectionID: 0x32621,
+				Stage: WebSocketStageClosed, DurationMS: 12_000, StatusCode: 101,
+				CloseCode: 1000, TextMessages: 7, BinaryMessages: 3, ReceivedBytes: 4_096,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) {
+		t.Fatalf("WebSocket event count = %d, want %d", len(log.Events), len(events))
+	}
+	for index := range events {
+		if log.Events[index].TimeMS != events[index].TimeMS ||
+			!reflect.DeepEqual(log.Events[index].WebSocket, events[index].WebSocket) {
+			t.Fatalf("WebSocket event %d = %+v, want %+v", index, log.Events[index], events[index])
+		}
+	}
+}
+
+func TestWebSocketLifecycleValidation(t *testing.T) {
+	valid := WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageOpened, StatusCode: 101}
+	tests := []struct {
+		name  string
+		event WebSocketEvent
+		want  string
+	}{
+		{name: "missing connection", event: WebSocketEvent{Stage: WebSocketStageOpened}, want: "WebSocket connection ID must be non-zero"},
+		{name: "invalid stage", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStage(99)}, want: "unsupported WebSocket stage 99"},
+		{name: "invalid status", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageOpened, StatusCode: 99}, want: "WebSocket status code 99"},
+		{name: "close code on open", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageOpened, CloseCode: 1000}, want: "WebSocket close code is only valid for closed stage"},
+		{name: "failure on open", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageOpened, FailureKind: WebSocketFailureTimeout}, want: "WebSocket failure kind is only valid for failed stage"},
+		{name: "messages on open", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageOpened, TextMessages: 1}, want: "WebSocket traffic is only valid for terminal stages"},
+		{name: "missing failure", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageFailed}, want: "failed WebSocket requires a failure kind"},
+		{name: "invalid failure", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageFailed, FailureKind: WebSocketFailureKind(99)}, want: "unsupported WebSocket failure kind 99"},
+		{name: "invalid close code", event: WebSocketEvent{ConnectionID: 1, Stage: WebSocketStageClosed, CloseCode: 999}, want: "WebSocket close code 999"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := test.event
+			if test.name == "invalid status" {
+				event = valid
+				event.StatusCode = 99
+			}
+			_, _, _, err := encodeRecord(Event{Type: EventWebSocket, WebSocket: &event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestDatabaseQueryRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "database.jhlog")
+	event := Event{
+		Type: EventDatabase, TimeMS: 400, Flags: uint64(FlagThreadMain),
+		Database: &DatabaseEvent{
+			QueryRef: LocalSymbol(1), SourceRef: StableSymbol(0x32621),
+			Framework: DatabaseFrameworkRoom, Operation: DatabaseOperationQuery,
+			Outcome: DatabaseOutcomeSuccess, FailureKind: DatabaseFailureNone,
+			Boundary: DatabaseBoundaryExecute, StatementFingerprint: 0x7123,
+			ResultKnown: true, ResultKind: DatabaseResultAffectedRows,
+			ResultCountBucket: DatabaseCountTwoToTen,
+			TransactionID:     17, StatementToken: 29,
+			PhaseMask:  DatabasePhaseLockWait | DatabasePhaseExecute,
+			LockWaitUS: 10_000, ExecuteUS: 200_000, DurationUS: 250_000,
+		},
+	}
+	writeClosedEvents(t, path, []Event{event})
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != 1 || !reflect.DeepEqual(log.Events[0].Database, event.Database) ||
+		log.Events[0].Flags != event.Flags {
+		t.Fatalf("database event = %+v, want %+v", log.Events, event)
+	}
+}
+
+func TestDatabaseTransactionRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "database-transaction.jhlog")
+	events := []Event{
+		{
+			Type: EventDatabaseTransaction, TimeMS: 100, Flags: uint64(FlagThreadMain),
+			DatabaseTransaction: &DatabaseTransactionEvent{
+				SourceRef: StableSymbol(0x51), TransactionID: 7, ParentID: 3,
+				Stage: DatabaseTransactionBegin, Mode: DatabaseTransactionImmediate,
+			},
+		},
+		{
+			Type: EventDatabaseTransaction, TimeMS: 200, Flags: uint64(FlagThreadMain),
+			DatabaseTransaction: &DatabaseTransactionEvent{
+				SourceRef: StableSymbol(0x51), TransactionID: 7, ParentID: 3,
+				Stage: DatabaseTransactionTerminal, Mode: DatabaseTransactionImmediate,
+				Outcome: DatabaseTransactionSuccess, DurationUS: 100_000,
+				StatementCount: 4, ReadCount: 3, WriteCount: 1,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) ||
+		!reflect.DeepEqual(log.Events[0].DatabaseTransaction, events[0].DatabaseTransaction) ||
+		!reflect.DeepEqual(log.Events[1].DatabaseTransaction, events[1].DatabaseTransaction) {
+		t.Fatalf("database transaction events = %+v, want %+v", log.Events, events)
+	}
+}
+
+func TestAndroidComponentsAndBinderRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "android-components.jhlog")
+	events := []Event{
+		{
+			Type: EventProcessState, TimeMS: 100,
+			ProcessState: &ProcessStateEvent{
+				UIVisibility: ProcessUIVisible, Importance: ProcessImportanceForegroundService,
+				AndroidImportance: 125, Reason: ProcessStateReasonComponentLifecycle,
+			},
+		},
+		{
+			Type: EventAndroidComponent, TimeMS: 200,
+			AndroidComponent: &AndroidComponentEvent{
+				ComponentRef: StableSymbol(0x419), ActionRef: LocalSymbol(1),
+				InstanceID: 11, FlowID: 12, Kind: ComponentKindService,
+				Stage: ComponentServiceStartCommand, Outcome: ComponentOutcomeSuccess,
+				DurationUS: 9_000, Flags: ComponentFlagForeground,
+			},
+		},
+		{
+			Type: EventBinderTransaction, TimeMS: 300, Flags: uint64(FlagThreadMain),
+			BinderTransaction: &BinderTransactionEvent{
+				DescriptorRef: LocalSymbol(2), MethodRef: LocalSymbol(3), CallID: 31,
+				Direction: BinderDirectionClient, TransactionCode: 7,
+				Outcome: BinderOutcomeSuccess, FailureKind: BinderFailureNone,
+				DurationUS: 4_000, Flags: BinderFlagOneway,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) ||
+		!reflect.DeepEqual(log.Events[0].ProcessState, events[0].ProcessState) ||
+		!reflect.DeepEqual(log.Events[1].AndroidComponent, events[1].AndroidComponent) ||
+		!reflect.DeepEqual(log.Events[2].BinderTransaction, events[2].BinderTransaction) {
+		t.Fatalf("Android component events = %+v, want %+v", log.Events, events)
+	}
+}
+
+func TestDatabaseQueryValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		event DatabaseEvent
+		want  string
+	}{
+		{name: "missing source", event: DatabaseEvent{Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess}, want: "database source is required"},
+		{name: "invalid framework", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFramework(99), Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess}, want: "unsupported database framework 99"},
+		{name: "invalid operation", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperation(99), Outcome: DatabaseOutcomeSuccess}, want: "unsupported database operation 99"},
+		{name: "invalid outcome", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcome(99)}, want: "unsupported database outcome 99"},
+		{name: "missing boundary", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess}, want: "database boundary is required"},
+		{name: "success with failure", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess, Boundary: DatabaseBoundaryExecute, FailureKind: DatabaseFailureOther}, want: "successful database call cannot have failure kind"},
+		{name: "unknown failed kind", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeFailure, Boundary: DatabaseBoundaryExecute}, want: "failed database call requires failure kind"},
+		{name: "result flag mismatch", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess, Boundary: DatabaseBoundaryExecute, ResultKind: DatabaseResultRows}, want: "database result fields require known flag"},
+		{name: "phase exceeds total", event: DatabaseEvent{SourceRef: StableSymbol(1), Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery, Outcome: DatabaseOutcomeSuccess, Boundary: DatabaseBoundaryExecute, PhaseMask: DatabasePhaseExecute, ExecuteUS: 11, DurationUS: 10}, want: "database phases exceed total duration"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, err := encodeRecord(Event{Type: EventDatabase, Database: &test.event}, recordEncodeState{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("encodeRecord() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestVersionTwoLogIsRejectedAfterCleanBreak(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-v2.jhlog")
+	legacyMagic := append([]byte(nil), Magic...)
+	legacyMagic[8] = 2
+	if err := os.WriteFile(path, legacyMagic, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readLog(path); err == nil || !strings.Contains(err.Error(), "unsupported JHLOG version") {
+		t.Fatalf("legacy v2 error = %v", err)
 	}
 }
 
 func TestAtomicContextAndSameContextRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "context.jhlog")
-	context := AttributionContext{Present: true, Screen: LocalSymbol(1), Owner: LocalSymbol(2), Flow: LocalSymbol(3)}
+	context := AttributionContext{Present: true, Screen: LocalSymbol(1), Owner: LocalSymbol(2), OperationID: 3}
 	events := []Event{
 		{Type: EventProblem, TimeMS: 10, Attribution: context, Problem: &ProblemEvent{KindRef: LocalSymbol(5), WindowMS: 1000, Count: 1, MaxMS: 10}},
 		{Type: EventLogSpam, TimeMS: 20, Attribution: context, LogSpam: &LogSpamEvent{SourceRef: LocalSymbol(4), Level: 5, Count: 9}},
@@ -1057,41 +1523,29 @@ func TestCommittedPayloadCorruptionIsRejected(t *testing.T) {
 }
 
 func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
-	for _, version := range []byte{0x80, 8, 9, 0x82} {
-		path := filepath.Join(t.TempDir(), "version.jhlog")
-		raw := append([]byte(nil), Magic...)
-		raw[7] = version
-		if err := os.WriteFile(path, raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		result, err := StreamFileWithResult(path, nil)
-		if err == nil || result.Status != SegmentStatusCorrupt || !strings.Contains(err.Error(), "unsupported .jhlog format") {
-			t.Fatalf("version=%d result=%+v err=%v", version, result, err)
-		}
-	}
-}
-
-func TestReaderRejectsLegacyVersionOneWithMigrationMessage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-v1.jhlog")
-	raw := append(append([]byte(nil), legacyV1Magic...), 0)
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := StreamFileWithResult(path, nil)
-	if err == nil || result.Status != SegmentStatusCorrupt {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	assertLegacyV1MigrationError(t, err)
-	_, err = ReadSessionHeader(path)
-	assertLegacyV1MigrationError(t, err)
-}
-
-func assertLegacyV1MigrationError(t *testing.T, err error) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "legacy JHLOG 1.0") ||
-		!strings.Contains(err.Error(), "capture a new log") {
-		t.Fatalf("legacy format error = %v", err)
+	for _, version := range []struct {
+		name   string
+		marker byte
+		major  byte
+		want   string
+	}{
+		{name: "unknown marker 0x80", marker: 0x80, major: 2, want: "unsupported .jhlog format"},
+		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.0.0; expected 3.0.0"},
+		{name: "unknown marker", marker: 0x82, major: 2, want: "unsupported .jhlog format"},
+	} {
+		t.Run(version.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "version.jhlog")
+			raw := append([]byte(nil), Magic...)
+			raw[7] = version.marker
+			raw[8] = version.major
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := StreamFileWithResult(path, nil)
+			if err == nil || result.Status != SegmentStatusCorrupt || !strings.Contains(err.Error(), version.want) {
+				t.Fatalf("marker=%d major=%d result=%+v err=%v", version.marker, version.major, result, err)
+			}
+		})
 	}
 }
 
@@ -1109,17 +1563,12 @@ func TestWriterRejectsUnsupportedDictionaryEncoding(t *testing.T) {
 	}
 }
 
-func TestVersionTwoRejectsUnsupportedRecordContracts(t *testing.T) {
+func TestVersionThreeRejectsUnsupportedRecordContracts(t *testing.T) {
 	tests := []struct {
 		name  string
 		event Event
 		want  string
 	}{
-		{
-			name:  "retired flow event type",
-			event: Event{Type: EventType(11)},
-			want:  "unsupported event type 11",
-		},
 		{
 			name:  "event type",
 			event: Event{Type: EventType(99)},
@@ -1155,7 +1604,7 @@ func TestVersionTwoRejectsUnsupportedRecordContracts(t *testing.T) {
 	}
 }
 
-func TestVersionTwoWriterRejectsUnknownSegmentEndReason(t *testing.T) {
+func TestVersionThreeWriterRejectsUnknownSegmentEndReason(t *testing.T) {
 	var output bytes.Buffer
 	writer, err := NewWriter(&output)
 	if err != nil {
@@ -1167,10 +1616,10 @@ func TestVersionTwoWriterRejectsUnknownSegmentEndReason(t *testing.T) {
 	}
 }
 
-func TestVersionTwoDecoderRejectsUnsupportedEventTypes(t *testing.T) {
-	for _, eventType := range []EventType{11, 99} {
+func TestVersionThreeDecoderRejectsUnsupportedEventTypes(t *testing.T) {
+	for _, eventType := range []EventType{99} {
 		event := Event{Type: eventType}
-		err := decodeEventPayload(bytes.NewReader(nil), &event, DefaultSegmentHeader(), "test", nil)
+		err := decodeEventPayload(&recordReader{}, &event, DefaultSegmentHeader(), "test", nil)
 		want := fmt.Sprintf("unsupported event type %d", eventType)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("event type %d: decodeEventPayload() error = %v", eventType, err)

@@ -61,7 +61,7 @@
     <string name="compose_lab_description">Экран содержит намеренно неэффективный список и отдельные примеры дорогой отрисовки и измерения. Каждый запуск ограничен и размечен для Jank Hunter.</string>
     <string name="compose_lab_idle">Выберите один сценарий.</string>
     <string name="compose_lab_running">Выполняется: %1$s</string>
-    <string name="compose_lab_finished">Завершено: %1$s. Журнал содержит экран, сценарий, шаг и Compose-фазу.</string>
+    <string name="compose_lab_finished">Завершено: %1$s. Журнал содержит операцию открытия экрана и Compose-фазу.</string>
     <string name="compose_action_complex_list">Тяжёлый LazyColumn и частые рекомпозиции</string>
     <string name="compose_action_heavy_draw">Дорогая отрисовка Canvas</string>
     <string name="compose_action_heavy_measure">Дорогое измерение Layout</string>
@@ -134,7 +134,7 @@
     <string name="auto_stage_ui_cpu">UI и CPU</string>
     <string name="auto_ui_cpu_title">Фризы, CPU и очередь задач</string>
     <string name="auto_ui_cpu_description">Два уровня блокировки main looper отделены от длительной CPU-задачи и очереди executor.</string>
-    <string name="auto_ui_cpu_fact_stall">Main looper блокируется на 180 и 520 мс в разных flows.</string>
+    <string name="auto_ui_cpu_fact_stall">Main looper блокируется на 180 и 520 мс в разных операциях.</string>
     <string name="auto_ui_cpu_fact_cpu">Фоновый поток непрерывно считает 1200 мс, создавая измеримую CPU-нагрузку.</string>
     <string name="auto_ui_cpu_fact_queue">Три задачи ждут однопоточный executor после CPU-работы.</string>
 
@@ -145,12 +145,19 @@
     <string name="auto_network_fact_failure">Отдельный запрос получает реальный connection refused на закрытом порту.</string>
     <string name="auto_network_fact_websocket">WebSocket действительно открывается, принимает сообщение и отключается.</string>
 
+    <string name="auto_stage_database">база данных</string>
+    <string name="auto_database_title">SQLite, Room и custom adapter</string>
+    <string name="auto_database_description">Сценарий создаёт реальные main/background SQL, повторные чтения, prepared updates, транзакцию, ожидаемую constraint-ошибку и ручные phase boundaries.</string>
+    <string name="auto_database_fact_threads">Main и background измеряются раздельно; один общий p95 не используется как причина UI-проблемы.</string>
+    <string name="auto_database_fact_transactions">Транзакция поверх Room-backed SQLite, prepared statements и шесть чтений внутри одной operation дают проверяемый lifecycle и fan-out.</string>
+    <string name="auto_database_fact_privacy">Bind values и exception messages не сохраняются; custom materialize не вызывает Cursor.getCount().</string>
+
     <string name="auto_stage_memory">память и логи</string>
     <string name="auto_memory_title">Память, retention и log spam</string>
     <string name="auto_memory_description">Освобождаемые allocation отделены от удержанного heap pressure, clean watch — от реальных retained chains.</string>
     <string name="auto_memory_fact_allocations">Временные массивы создают allocation/GC, четыре массива по 2 МиБ остаются удержанными.</string>
     <string name="auto_memory_fact_retention">Один объект освобождается, Activity reference и три cache entry удерживаются приложением.</string>
-    <string name="auto_memory_fact_logs">Тихий flow пишет 3 разных сообщения, шумный — 60 сообщений одного источника.</string>
+    <string name="auto_memory_fact_logs">Тихая операция пишет 3 разных сообщения, шумная — 60 сообщений одного источника.</string>
 
     <string name="auto_stage_result">готово</string>
     <string name="auto_result_title">Автоматический сценарий завершен</string>

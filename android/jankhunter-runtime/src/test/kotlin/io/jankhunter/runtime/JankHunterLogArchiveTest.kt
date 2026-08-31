@@ -15,7 +15,7 @@ class JankHunterLogArchiveTest {
         val directory = Files.createTempDirectory("jankhunter-log-archive").toFile()
         try {
             val first = directory.resolve("jh-session-log.2026-08-17.00112233445566778899aabbccddeeff.0.jhlog")
-            val second = directory.resolve("jh-session-log.2026-08-17.00112233445566778899aabbccddeeff.1.jhlog")
+            val second = directory.resolve("jh-session-log.2026-08-17.00112233445566778899aabbccddeeff.0-1.jhlog")
             first.writeBytes(byteArrayOf(1, 2, 3))
             second.writeBytes(byteArrayOf(4, 5, 6, 7))
             val destination = directory.resolve("snapshot.zip")
