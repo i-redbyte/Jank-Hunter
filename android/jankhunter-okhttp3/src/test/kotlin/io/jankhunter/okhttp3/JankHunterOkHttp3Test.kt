@@ -1,15 +1,19 @@
 package io.jankhunter.okhttp3
 
-import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterContextSnapshot
+import io.jankhunter.runtime.JankHunterHttpEvent
+import io.jankhunter.runtime.JankHunterTelemetry
+import io.jankhunter.runtime.JankHunterWebSocketEvent
 import io.jankhunter.runtime.JankHunterNetworkEventFlags
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
 import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
+import java.net.UnknownHostException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -25,6 +29,7 @@ import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.Route
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -46,18 +51,37 @@ class JankHunterOkHttp3Test {
             "installEventListenerFactory",
             OkHttpClient.Builder::class.java,
         )
+        val installEventListener = facade.getDeclaredMethod(
+            "installEventListener",
+            OkHttpClient.Builder::class.java,
+            EventListener::class.java,
+        )
+        val newCall = facade.getDeclaredMethod(
+            "newCall",
+            OkHttpClient::class.java,
+            Request::class.java,
+        )
         val wrapWebSocketListener = facade.getDeclaredMethod(
             "wrapWebSocketListener",
+            Request::class.java,
             okhttp3.WebSocketListener::class.java,
             String::class.java,
         )
 
-        listOf(wrapEventListenerFactory, installEventListenerFactory, wrapWebSocketListener).forEach { method ->
+        listOf(
+            wrapEventListenerFactory,
+            installEventListenerFactory,
+            installEventListener,
+            newCall,
+            wrapWebSocketListener,
+        ).forEach { method ->
             assertTrue("${method.name} must remain public", Modifier.isPublic(method.modifiers))
             assertTrue("${method.name} must remain static", Modifier.isStatic(method.modifiers))
         }
         assertEquals(EventListener.Factory::class.java, wrapEventListenerFactory.returnType)
         assertEquals(OkHttpClient.Builder::class.java, installEventListenerFactory.returnType)
+        assertEquals(OkHttpClient.Builder::class.java, installEventListener.returnType)
+        assertEquals(Call::class.java, newCall.returnType)
         assertEquals(okhttp3.WebSocketListener::class.java, wrapWebSocketListener.returnType)
     }
 
@@ -69,6 +93,11 @@ class JankHunterOkHttp3Test {
         assertTrue(
             Modifier.isPublic(
                 factory.getDeclaredConstructor(EventListener.Factory::class.java).modifiers,
+            ),
+        )
+        assertTrue(
+            Modifier.isPublic(
+                factory.getDeclaredConstructor(EventListener.Factory::class.java, String::class.java).modifiers,
             ),
         )
         val testSeam = factory.declaredConstructors.single { constructor ->
@@ -86,6 +115,180 @@ class JankHunterOkHttp3Test {
         assertFalse(
             Modifier.isPublic(Class.forName("io.jankhunter.okhttp3.RuntimeNetworkTelemetry").modifiers),
         )
+        val event = JankHunterHttpEvent::class.java
+        assertTrue(Modifier.isFinal(event.modifiers))
+        assertTrue(
+            event.declaredFields
+                .filterNot { Modifier.isStatic(it.modifiers) }
+                .all { Modifier.isPrivate(it.modifiers) && Modifier.isFinal(it.modifiers) },
+        )
+    }
+
+    @Test
+    fun eventListenerClockUsesPrimitivePort() {
+        val testSeam = JankHunterEventListenerFactory::class.java.declaredConstructors.single {
+            it.parameterTypes.contains(NetworkTelemetry::class.java)
+        }
+
+        assertTrue(testSeam.parameterTypes.contains(NetworkLongSource::class.java))
+        assertFalse(testSeam.parameterTypes.contains(Function0::class.java))
+    }
+
+    @Test
+    fun recordsTypedHttpLifecycleWithExactStatusProtocolAndPhases() {
+        var now = 0L
+        val telemetry = RecordingTelemetry()
+        val request = Request.Builder().url("https://private.example/messages/42?token=secret").build()
+        val call = call(request = request)
+        val listener = testFactory(
+            delegate = null,
+            telemetry = telemetry,
+            clock = { now },
+            serviceAlias = " Mail API / Primary ",
+        ).create(call)
+        val socketAddress = InetSocketAddress("127.0.0.1", 443)
+
+        listener.callStart(call)
+        now = 10L
+        listener.dnsStart(call, "private.example")
+        now = 20L
+        listener.dnsEnd(call, "private.example", emptyList())
+        now = 25L
+        listener.connectStart(call, socketAddress, java.net.Proxy.NO_PROXY)
+        now = 30L
+        listener.secureConnectStart(call)
+        now = 40L
+        listener.secureConnectEnd(call, null)
+        now = 50L
+        listener.connectEnd(call, socketAddress, java.net.Proxy.NO_PROXY, Protocol.HTTP_2)
+        now = 60L
+        listener.requestHeadersStart(call)
+        now = 65L
+        listener.requestHeadersEnd(call, request)
+        listener.requestBodyStart(call)
+        now = 80L
+        listener.requestBodyEnd(call, 740L)
+        now = 100L
+        listener.responseHeadersStart(call)
+        listener.responseHeadersEnd(call, response(request, 503, Protocol.HTTP_2))
+        now = 110L
+        listener.responseBodyStart(call)
+        now = 150L
+        listener.responseBodyEnd(call, 42_120L)
+        now = 160L
+        listener.callEnd(call)
+
+        val event = telemetry.singleHttpEvent()
+        assertEquals("GET /messages/{id}", event.requestLabel)
+        assertEquals("mail_api_primary", event.serviceAlias)
+        assertEquals(160L, event.durationMs)
+        assertEquals(10L, event.queueMs)
+        assertEquals(10L, event.dnsMs)
+        assertEquals(25L, event.connectMs)
+        assertEquals(10L, event.tlsMs)
+        assertEquals(20L, event.requestMs)
+        assertEquals(20L, event.ttfbMs)
+        assertEquals(50L, event.responseMs)
+        assertEquals(503, event.statusCode)
+        assertEquals(JankHunterHttpEvent.PROTOCOL_HTTP_2, event.protocol)
+        assertEquals(1, event.attempts)
+        assertEquals(1, event.dnsAttempts)
+        assertEquals(1, event.connectAttempts)
+        assertEquals(1, event.tlsAttempts)
+        assertEquals(0, event.redirects)
+        assertEquals(740L, event.requestBodyBytes)
+        assertEquals(42_120L, event.responseBodyBytes)
+        assertEquals(
+            JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN,
+            event.flags and JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN,
+        )
+        assertEquals(
+            JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN,
+            event.flags and JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN,
+        )
+    }
+
+    @Test
+    fun cancelledCallHasTypedFailureWithoutThrowableRetention() {
+        var now = 100L
+        val telemetry = RecordingTelemetry()
+        val call = call(cancelled = true)
+        val listener = testFactory(null, telemetry, { now }).create(call)
+
+        listener.callStart(call)
+        now = 125L
+        listener.callFailed(call, IOException("cancelled with sensitive message"))
+
+        val event = telemetry.singleHttpEvent()
+        assertEquals(JankHunterHttpEvent.FAILURE_PHASE_CANCELLED, event.failurePhase)
+        assertEquals(JankHunterHttpEvent.FAILURE_KIND_CANCELLED, event.failureKind)
+        assertEquals(
+            JankHunterNetworkEventFlags.HTTP_CANCELLED,
+            event.flags and JankHunterNetworkEventFlags.HTTP_CANCELLED,
+        )
+        assertFalse(event.javaClass.declaredFields.any { it.type == Throwable::class.java })
+    }
+
+    @Test
+    fun redirectsAndCacheAreRecordedWithoutStoringHostOrQuery() {
+        var now = 0L
+        val telemetry = RecordingTelemetry()
+        val request = Request.Builder().url("https://private.example/path?secret=value").build()
+        val call = call(request = request)
+        val listener = testFactory(null, telemetry, { now }).create(call)
+
+        listener.callStart(call)
+        now = 5L
+        listener.requestHeadersStart(call)
+        now = 6L
+        listener.requestHeadersEnd(call, request)
+        now = 10L
+        listener.responseHeadersStart(call)
+        listener.responseHeadersEnd(call, response(request, 302, Protocol.HTTP_1_1, location = "/next"))
+        now = 15L
+        listener.requestHeadersStart(call)
+        now = 16L
+        listener.requestHeadersEnd(call, request)
+        now = 20L
+        listener.responseHeadersStart(call)
+        val cached = response(request, 200, Protocol.HTTP_2)
+        listener.responseHeadersEnd(call, response(request, 200, Protocol.HTTP_2, cacheResponse = cached))
+        now = 30L
+        listener.responseBodyEnd(call, 0L)
+        now = 35L
+        listener.callEnd(call)
+
+        val event = telemetry.singleHttpEvent()
+        assertEquals("GET /path", event.requestLabel)
+        assertFalse(event.requestLabel.contains("private.example"))
+        assertFalse(event.requestLabel.contains("secret"))
+        assertEquals(2, event.attempts)
+        assertEquals(1, event.redirects)
+        assertEquals(200, event.statusCode)
+        assertEquals(JankHunterHttpEvent.PROTOCOL_HTTP_2, event.protocol)
+        assertEquals(
+            JankHunterNetworkEventFlags.HTTP_CACHE_HIT,
+            event.flags and JankHunterNetworkEventFlags.HTTP_CACHE_HIT,
+        )
+    }
+
+    @Test
+    fun dnsFailureUsesBoundedTypedClassification() {
+        var now = 0L
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { now }).create(call)
+
+        listener.callStart(call)
+        now = 5L
+        listener.dnsStart(call, "private.example")
+        now = 10L
+        listener.callFailed(call, UnknownHostException("private.example and sensitive details"))
+
+        val event = telemetry.singleHttpEvent()
+        assertEquals(JankHunterHttpEvent.FAILURE_PHASE_DNS, event.failurePhase)
+        assertEquals(JankHunterHttpEvent.FAILURE_KIND_DNS, event.failureKind)
+        assertTrue(event.javaClass.declaredFields.none { it.name.contains("throwable", ignoreCase = true) })
     }
 
     @Test
@@ -124,6 +327,88 @@ class JankHunterOkHttp3Test {
         JankHunterOkHttp3.installEventListenerFactory(builder)
 
         assertSame(first, eventListenerFactory(builder))
+    }
+
+    @Test
+    fun explicitEventListenerCannotReplaceJankHunterFactory() {
+        val original = EventListener.NONE
+        val builder = OkHttpClient.Builder()
+
+        val returned = JankHunterOkHttp3.installEventListener(builder, original)
+
+        assertSame(builder, returned)
+        val factory = eventListenerFactory(builder)
+        assertTrue(factory is JankHunterEventListenerFactory)
+        assertSame(original, delegate(factory as JankHunterEventListenerFactory)?.create(call()))
+    }
+
+    @Test
+    fun newCallUsesOriginalClientWhenFactoryIsAlreadyProtected() {
+        val client = OkHttpClient.Builder()
+            .eventListenerFactory(JankHunterEventListenerFactory())
+            .build()
+
+        val call = JankHunterOkHttp3.newCall(client, Request.Builder().url("https://example.com").build())
+
+        assertSame(client, clientFrom(call))
+    }
+
+    @Test
+    fun newCallUpgradesUnprotectedClientOnceAndReusesIt() {
+        val originalFactory = EventListener.Factory { EventListener.NONE }
+        val client = OkHttpClient.Builder().eventListenerFactory(originalFactory).build()
+        val request = Request.Builder().url("https://example.com").build()
+
+        val firstClient = clientFrom(JankHunterOkHttp3.newCall(client, request))
+        val secondClient = clientFrom(JankHunterOkHttp3.newCall(client, request))
+
+        assertTrue(firstClient.eventListenerFactory() is JankHunterEventListenerFactory)
+        assertSame(originalFactory, delegate(firstClient.eventListenerFactory() as JankHunterEventListenerFactory))
+        assertSame(firstClient, secondClient)
+    }
+
+    @Test
+    fun fallbackClientCacheUsesBoundedWeakIdentityEntries() {
+        val request = Request.Builder().url("https://example.com").build()
+        repeat(40) {
+            JankHunterOkHttp3.newCall(OkHttpClient(), request)
+        }
+        val field = JankHunterOkHttp3::class.java.getDeclaredField("fallbackClients")
+        field.isAccessible = true
+        val cache = field.get(JankHunterOkHttp3) as BoundedWeakIdentityCache<*, *>
+        val entriesField = cache.javaClass.getDeclaredField("entries")
+        entriesField.isAccessible = true
+        val entries = entriesField.get(cache) as Array<*>
+
+        assertEquals(32, entries.size)
+        val entry = entries.first { it != null } ?: error("expected cached client")
+        val referenceFields = entry.javaClass.declaredFields.filterNot { it.type.isPrimitive }
+        assertTrue(referenceFields.isNotEmpty())
+        assertTrue(referenceFields.all { WeakReference::class.java.isAssignableFrom(it.type) })
+    }
+
+    @Test
+    fun fallbackClientCacheDoesNotRetainKeysOrValues() {
+        val cache = BoundedWeakIdentityCache<Any, Any>(4)
+        val references = cacheWeakPair(cache)
+
+        repeat(40) {
+            if (references.all { reference -> reference.get() == null }) return@repeat
+            gcPressureSink = Array(4) { ByteArray(256 * 1_024) }
+            System.gc()
+            System.runFinalization()
+            Thread.yield()
+        }
+
+        assertTrue("fallback cache retained key/value", references.all { it.get() == null })
+    }
+
+    @Test
+    fun supportedOkHttpBaselineExposesEventListenerFactoryGetter() {
+        val getter = OkHttpClient::class.java.getDeclaredMethod("eventListenerFactory")
+
+        assertTrue(Modifier.isPublic(getter.modifiers))
+        assertEquals(EventListener.Factory::class.java, getter.returnType)
     }
 
     @Test
@@ -210,9 +495,9 @@ class JankHunterOkHttp3Test {
     }
 
     @Test
-    fun counterFailureDoesNotStopTimingsAttemptsOrByteAccounting() {
+    fun typedEventKeepsTimingsAttemptsAndByteAccounting() {
         var now = 100L
-        val telemetry = RecordingTelemetry(counterFailuresRemaining = 1)
+        val telemetry = RecordingTelemetry()
         val call = call()
         val listener = testFactory(
             delegate = null,
@@ -253,8 +538,8 @@ class JankHunterOkHttp3Test {
         assertEquals(20L, event.ttfbMs)
         assertEquals(21L, event.requestBodyBytes)
         assertEquals(55L, event.responseBodyBytes)
-        assertEquals(1L, telemetry.gauges["network.request.dns_attempts"])
-        assertEquals(1L, telemetry.gauges["network.request.connect_attempts"])
+        assertEquals(1, event.dnsAttempts)
+        assertEquals(1, event.connectAttempts)
     }
 
     @Test
@@ -274,7 +559,6 @@ class JankHunterOkHttp3Test {
         now = 80L
         listener.callEnd(call)
 
-        assertEquals(1L, telemetry.counters["network.route.get_path.dns.lookup.count"])
         val event = telemetry.singleHttpEvent()
         assertEquals("GET /path", event.requestLabel)
         assertEquals(40L, event.durationMs)
@@ -363,8 +647,7 @@ class JankHunterOkHttp3Test {
         listener.callEnd(call)
 
         assertEquals(160L, telemetry.singleHttpEvent().dnsMs)
-        assertEquals(4L, telemetry.gauges["network.request.dns_attempts"])
-        assertEquals(1L, telemetry.counters["network.request.retry_or_reconnect.count"])
+        assertEquals(4, telemetry.singleHttpEvent().dnsAttempts)
     }
 
     @Test
@@ -423,10 +706,10 @@ class JankHunterOkHttp3Test {
 
         val event = telemetry.singleHttpEvent()
         assertEquals(120L, event.connectMs)
-        assertEquals(2L, telemetry.gauges["network.request.connect_attempts"])
-        assertEquals(1L, telemetry.gauges["network.request.tls_attempts"])
-        assertEquals(1L, telemetry.counters["network.phase.connect.failure.count"])
-        assertNull(telemetry.counters["network.phase.tls.failure.count"])
+        assertEquals(2, event.connectAttempts)
+        assertEquals(1, event.tlsAttempts)
+        assertEquals(1, event.connectFailures)
+        assertEquals(0, event.tlsFailures)
         assertEquals(
             JankHunterNetworkEventFlags.HTTP_TLS,
             event.flags and JankHunterNetworkEventFlags.HTTP_TLS,
@@ -457,8 +740,6 @@ class JankHunterOkHttp3Test {
         now = 50L
         listener.callEnd(call)
 
-        assertEquals(1L, telemetry.counters["network.request.new_connection.count"])
-        assertEquals(1L, telemetry.counters["network.request.reused_connection.count"])
         assertEquals(
             JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION,
             telemetry.singleHttpEvent().flags and JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION,
@@ -493,8 +774,10 @@ class JankHunterOkHttp3Test {
         now = 50L
         listener.callEnd(call)
 
-        assertEquals(1L, telemetry.counters["network.request.new_connection.count"])
-        assertEquals(1L, telemetry.counters["network.request.reused_connection.count"])
+        assertEquals(
+            JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION,
+            telemetry.singleHttpEvent().flags and JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION,
+        )
     }
 
     @Test
@@ -527,8 +810,9 @@ class JankHunterOkHttp3Test {
         now = 50L
         listener.callFailed(call, expected)
 
-        assertEquals(1L, telemetry.counters["network.phase.connect.failure.count"])
-        assertNull(telemetry.counters["network.phase.tls.failure.count"])
+        val event = telemetry.singleHttpEvent()
+        assertEquals(JankHunterHttpEvent.FAILURE_PHASE_CONNECT, event.failurePhase)
+        assertEquals(JankHunterHttpEvent.FAILURE_KIND_IO, event.failureKind)
     }
 
     @Test
@@ -548,9 +832,32 @@ class JankHunterOkHttp3Test {
         listener.callFailed(call, IOException("late duplicate"))
 
         assertEquals(1, telemetry.httpEvents.size)
-        assertEquals(1L, telemetry.counters["network.request.finished.count"])
-        assertNull(telemetry.counters["network.request.failed.count"])
-        assertTrue(telemetry.counters.keys.none { it.startsWith("network.phase.") })
+        assertEquals(0L, telemetry.singleHttpEvent().flags and JankHunterNetworkEventFlags.HTTP_FAILED)
+        assertEquals(JankHunterHttpEvent.FAILURE_PHASE_UNKNOWN, telemetry.singleHttpEvent().failurePhase)
+    }
+
+    @Test
+    fun terminalCallbackReleasesPerCallAttemptState() {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, NetworkLongSource { 10L }).create(call)
+        val address = InetSocketAddress("127.0.0.1", 443)
+
+        listener.callStart(call)
+        listener.dnsStart(call, "example.com")
+        listener.connectStart(call, address, java.net.Proxy.NO_PROXY)
+        listener.callEnd(call)
+
+        listOf(
+            "dnsStartsByDomain",
+            "connectAttemptsByRoute",
+            "connectedRoutesAwaitingAcquisition",
+            "contextSnapshot",
+        ).forEach { fieldName ->
+            val field = listener.javaClass.getDeclaredField(fieldName)
+            field.isAccessible = true
+            assertNull("terminal listener retained $fieldName", field.get(listener))
+        }
     }
 
     @Test
@@ -584,12 +891,13 @@ class JankHunterOkHttp3Test {
             assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
         }
 
-        val finishedCount = telemetry.counters["network.request.finished.count"] ?: 0L
-        val failedCount = telemetry.counters["network.request.failed.count"] ?: 0L
-        val phaseFailureCount = telemetry.counters["network.phase.call.failure.count"] ?: 0L
         assertEquals(1, telemetry.httpEvents.size)
-        assertEquals(1L, finishedCount + failedCount)
-        assertEquals(failedCount, phaseFailureCount)
+        val event = telemetry.singleHttpEvent()
+        val failed = event.flags and JankHunterNetworkEventFlags.HTTP_FAILED != 0L
+        assertEquals(
+            if (failed) JankHunterHttpEvent.FAILURE_PHASE_QUEUE else JankHunterHttpEvent.FAILURE_PHASE_UNKNOWN,
+            event.failurePhase,
+        )
     }
 
     @Test
@@ -650,14 +958,14 @@ class JankHunterOkHttp3Test {
         val call = call()
         val listener = JankHunterEventListenerFactory().create(call)
         try {
-            JankHunter.setScreen("CheckoutScreen")
+            JankHunterTelemetry.setScreen("CheckoutScreen")
 
             listener.callStart(call)
-            JankHunter.setScreen("ConfirmationScreen")
+            JankHunterTelemetry.setScreen("ConfirmationScreen")
 
             assertEquals("CheckoutScreen", contextSnapshot(listener)?.screen)
         } finally {
-            JankHunter.setScreen(null)
+            JankHunterTelemetry.setScreen(null)
         }
     }
 
@@ -693,10 +1001,25 @@ class JankHunterOkHttp3Test {
         return field.get(builder) as EventListener.Factory
     }
 
+    private fun cacheWeakPair(cache: BoundedWeakIdentityCache<Any, Any>): List<WeakReference<Any>> {
+        val key = Any()
+        val value = Any()
+        cache.getOrPut(key) { value }
+        return listOf(WeakReference(key), WeakReference(value))
+    }
+
     private fun delegate(factory: JankHunterEventListenerFactory): EventListener.Factory? {
         val field = JankHunterEventListenerFactory::class.java.getDeclaredField("delegate")
         field.isAccessible = true
         return field.get(factory) as? EventListener.Factory
+    }
+
+    private fun clientFrom(call: Call): OkHttpClient {
+        val field = generateSequence<Class<*>>(call.javaClass) { it.superclass }
+            .flatMap { it.declaredFields.asSequence() }
+            .first { OkHttpClient::class.java.isAssignableFrom(it.type) }
+        field.isAccessible = true
+        return field.get(call) as OkHttpClient
     }
 
     private fun contextSnapshot(listener: EventListener): JankHunterContextSnapshot? {
@@ -705,8 +1028,11 @@ class JankHunterOkHttp3Test {
         return field.get(listener) as? JankHunterContextSnapshot
     }
 
-    private fun call(requestFailure: Throwable? = null): Call {
-        val request = Request.Builder().url("https://example.com/path").build()
+    private fun call(
+        requestFailure: Throwable? = null,
+        request: Request = Request.Builder().url("https://example.com/path").build(),
+        cancelled: Boolean = false,
+    ): Call {
         return Proxy.newProxyInstance(
             Call::class.java.classLoader,
             arrayOf(Call::class.java),
@@ -714,10 +1040,28 @@ class JankHunterOkHttp3Test {
             when (method.name) {
                 "request" -> requestFailure?.let { throw it } ?: request
                 "clone" -> proxy
-                "isExecuted", "isCanceled" -> false
+                "isExecuted" -> false
+                "isCanceled" -> cancelled
                 else -> null
             }
         } as Call
+    }
+
+    private fun response(
+        request: Request,
+        code: Int,
+        protocol: Protocol,
+        location: String? = null,
+        cacheResponse: Response? = null,
+    ): Response {
+        val builder = Response.Builder()
+            .request(request)
+            .protocol(protocol)
+            .code(code)
+            .message("test")
+        if (location != null) builder.header("Location", location)
+        if (cacheResponse != null) builder.cacheResponse(cacheResponse)
+        return builder.build()
     }
 
     private fun connection(
@@ -756,22 +1100,20 @@ class JankHunterOkHttp3Test {
     private fun testFactory(
         delegate: EventListener.Factory?,
         telemetry: RecordingTelemetry,
-        clock: () -> Long,
+        clock: NetworkLongSource,
+        serviceAlias: String? = null,
     ): JankHunterEventListenerFactory {
         val constructor = JankHunterEventListenerFactory::class.java.declaredConstructors.single {
             it.parameterTypes.contains(NetworkTelemetry::class.java)
         }
         constructor.isAccessible = true
-        return constructor.newInstance(delegate, telemetry, clock) as JankHunterEventListenerFactory
+        return constructor.newInstance(delegate, telemetry, clock, serviceAlias) as JankHunterEventListenerFactory
     }
 
     private class RecordingTelemetry(
         private val captureFailure: Throwable? = null,
-        private var counterFailuresRemaining: Int = 0,
     ) : NetworkTelemetry {
-        val counters = linkedMapOf<String, Long>()
-        val gauges = linkedMapOf<String, Long>()
-        val httpEvents = mutableListOf<RecordedHttpEvent>()
+        val httpEvents = mutableListOf<JankHunterHttpEvent>()
 
         @Synchronized
         override fun captureContextSnapshot(): JankHunterContextSnapshot? {
@@ -780,64 +1122,21 @@ class JankHunterOkHttp3Test {
         }
 
         @Synchronized
-        override fun recordCounter(name: String, delta: Long) {
-            if (counterFailuresRemaining > 0) {
-                counterFailuresRemaining--
-                throw IllegalStateException("counter")
-            }
-            counters[name] = counters.getOrDefault(name, 0L) + delta
+        override fun recordHttp(event: JankHunterHttpEvent) {
+            httpEvents += event
         }
 
-        @Synchronized
-        override fun recordGauge(name: String, value: Long) {
-            gauges[name] = value
-        }
+        override fun recordWebSocket(event: JankHunterWebSocketEvent) = Unit
 
         @Synchronized
-        override fun recordHttp(
-            contextSnapshot: JankHunterContextSnapshot?,
-            requestLabel: String,
-            durationMs: Long,
-            dnsMs: Long,
-            connectMs: Long,
-            ttfbMs: Long,
-            statusClass: Int,
-            responseBodyBytes: Long,
-            requestBodyBytes: Long,
-            flags: Long,
-        ) {
-            httpEvents += RecordedHttpEvent(
-                requestLabel = requestLabel,
-                durationMs = durationMs,
-                dnsMs = dnsMs,
-                connectMs = connectMs,
-                ttfbMs = ttfbMs,
-                statusClass = statusClass,
-                responseBodyBytes = responseBodyBytes,
-                requestBodyBytes = requestBodyBytes,
-                flags = flags,
-            )
-        }
-
-        @Synchronized
-        fun singleHttpEvent(): RecordedHttpEvent {
+        fun singleHttpEvent(): JankHunterHttpEvent {
             assertEquals(1, httpEvents.size)
             return httpEvents.single()
         }
     }
 
-    @Suppress("LongParameterList")
-    private data class RecordedHttpEvent(
-        val requestLabel: String,
-        val durationMs: Long,
-        val dnsMs: Long,
-        val connectMs: Long,
-        val ttfbMs: Long,
-        val statusClass: Int,
-        val responseBodyBytes: Long,
-        val requestBodyBytes: Long,
-        val flags: Long,
-    )
+    @Volatile
+    private var gcPressureSink: Any? = null
 
     private object TestProxySelector : ProxySelector() {
         override fun select(uri: URI?): MutableList<java.net.Proxy> {

@@ -3,9 +3,11 @@ package io.jankhunter.runtime.internal.system
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
-import io.jankhunter.runtime.JankHunter
+import io.jankhunter.runtime.RuntimeCollectorCallbacks
 
-internal object ProcessExitReporter {
+internal class ProcessExitReporter(
+    private val callbacks: RuntimeCollectorCallbacks,
+) {
     fun report(context: Context) {
         if (Build.VERSION.SDK_INT < 30) return
 
@@ -15,7 +17,7 @@ internal object ProcessExitReporter {
             if (exits.isNullOrEmpty()) return
 
             for (exit in exits) {
-                JankHunter.recordProcessExit(
+                callbacks.recordProcessExit(
                     reason = exit.reason.toLong(),
                     timestampUnixMs = exit.timestamp,
                     importance = exit.importance.toLong(),
@@ -25,7 +27,7 @@ internal object ProcessExitReporter {
                 )
             }
         } catch (_: Exception) {
-            JankHunter.recordCounter("process.exit.read_failed.count", 1)
+            callbacks.recordCounter("process.exit.read_failed.count", 1)
         }
     }
 }

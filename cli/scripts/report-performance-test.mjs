@@ -104,7 +104,7 @@ try {
   };
   assert(deferredInitial.rows === 50, `первоначально создано ${deferredInitial.rows} строк, ожидалось 50`);
   assert(deferredInitial.payloads === 239, `порций таблицы = ${deferredInitial.payloads}, ожидалось 239`);
-  await deferredPage.getByText("Детали метрик", { exact: true }).click();
+  await deferredPage.getByText("Исходные значения дополнительных показателей", { exact: true }).click();
   await counterBody.getByRole("button", { name: "Показать ещё 50" }).click();
   await deferredPage.waitForFunction(() => {
     const loader = document.querySelector('tr[data-deferred-total="12000"]');
@@ -155,7 +155,7 @@ try {
   await registryPage.waitForFunction(() => document.querySelector(".code-problem-details")?.dataset.evidenceLoaded === "true");
   const expandedEvidence = await filteredDetails.textContent();
   assert(expandedEvidence.includes("Deferred signal 299"), "хвостовой сигнал не раскрылся из evidence archive");
-  assert(expandedEvidence.includes("deferred.flow.299"), "хвостовой сценарий не раскрылся из evidence archive");
+  assert(expandedEvidence.includes("deferred.operation.299"), "хвостовая операция не раскрылась из архива доказательств");
   await registryPage.close();
 
   process.stdout.write(`${JSON.stringify({

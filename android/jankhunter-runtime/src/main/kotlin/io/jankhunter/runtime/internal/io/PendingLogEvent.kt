@@ -2,6 +2,9 @@ package io.jankhunter.runtime.internal.io
 
 import android.os.Process
 import android.os.SystemClock
+import io.jankhunter.runtime.JankHunterHttpEvent
+import io.jankhunter.runtime.JankHunterOperationAttributes
+import io.jankhunter.runtime.JankHunterWebSocketEvent
 
 /**
  * Immutable data accepted by the asynchronous writer.
@@ -118,17 +121,11 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val owner: String?,
         private val route: String?,
-        private val durationMs: Long,
-        private val dnsMs: Long,
-        private val connectMs: Long,
-        private val ttfbMs: Long,
-        private val statusClass: Int,
-        private val rxBytes: Long,
-        private val txBytes: Long,
+        private val event: JankHunterHttpEvent,
         private val flags: Long,
     ) : PendingLogEvent(Jhlog.TYPE_HTTP, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.http(owner, route, durationMs, dnsMs, connectMs, ttfbMs, statusClass, rxBytes, txBytes, flags)
+            writer.http(owner, route, event, flags)
         }
     }
 
@@ -179,9 +176,206 @@ internal sealed class PendingLogEvent(
         private val durationUs: Long,
         private val bytes: Long,
         private val mainThread: Boolean,
+        private val sourceId: Long,
+        private val sourceName: String?,
+        private val outcome: Long,
+        private val bytesKnown: Boolean,
     ) : PendingLogEvent(Jhlog.TYPE_IO, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.io(operation, durationUs, bytes, mainThread)
+            writer.io(operation, durationUs, bytes, mainThread, sourceId, sourceName, outcome, bytesKnown)
+        }
+    }
+
+    class Worker(
+        producerContext: LogEventContext?,
+        private val workerId: Long,
+        private val workerName: String?,
+        private val instanceId: Long,
+        private val stage: Long,
+        private val outcome: Long,
+        private val durationMs: Long,
+        private val runAttempt: Long,
+        private val generation: Long,
+        private val stopReason: Long,
+        private val flags: Long,
+    ) : PendingLogEvent(Jhlog.TYPE_WORKER, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.worker(
+                workerId,
+                workerName,
+                instanceId,
+                stage,
+                outcome,
+                durationMs,
+                runAttempt,
+                generation,
+                stopReason,
+                flags,
+            )
+        }
+    }
+
+    class WebSocket(
+        producerContext: LogEventContext?,
+        private val owner: String?,
+        private val event: JankHunterWebSocketEvent,
+    ) : PendingLogEvent(Jhlog.TYPE_WEBSOCKET, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.webSocket(owner, event)
+        }
+    }
+
+    class Database(
+        producerContext: LogEventContext?,
+        private val sourceId: Long,
+        private val sourceName: String?,
+        private val query: String?,
+        private val framework: Long,
+        private val operation: Long,
+        private val outcome: Long,
+        private val durationUs: Long,
+        private val mainThread: Boolean,
+        private val failureKind: Long,
+        private val boundary: Long,
+        private val statementFingerprint: Long,
+        private val resultKnown: Boolean,
+        private val resultKind: Long,
+        private val resultCountBucket: Long,
+        private val transactionId: Long,
+        private val statementToken: Long,
+        private val phaseMask: Long,
+        private val poolWaitUs: Long,
+        private val lockWaitUs: Long,
+        private val executeUs: Long,
+        private val materializeUs: Long,
+    ) : PendingLogEvent(Jhlog.TYPE_DATABASE, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.database(
+                sourceId, sourceName, query, framework, operation, outcome, durationUs, mainThread,
+                failureKind, boundary, statementFingerprint, resultKnown, resultKind, resultCountBucket,
+                transactionId, statementToken, phaseMask, poolWaitUs, lockWaitUs, executeUs, materializeUs,
+            )
+        }
+    }
+
+    class DatabaseTransaction(
+        producerContext: LogEventContext?,
+        private val sourceId: Long,
+        private val sourceName: String?,
+        private val transactionId: Long,
+        private val parentId: Long,
+        private val stage: Long,
+        private val mode: Long,
+        private val outcome: Long,
+        private val failureKind: Long,
+        private val durationUs: Long,
+        private val statementCount: Long,
+        private val readCount: Long,
+        private val writeCount: Long,
+        private val mainThread: Boolean,
+    ) : PendingLogEvent(Jhlog.TYPE_DATABASE_TRANSACTION, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.databaseTransaction(
+                sourceId, sourceName, transactionId, parentId, stage, mode, outcome, failureKind,
+                durationUs, statementCount, readCount, writeCount, mainThread,
+            )
+        }
+    }
+
+    class ProcessState(
+        producerContext: LogEventContext?,
+        private val uiVisibility: Long,
+        private val processImportance: Long,
+        private val androidImportance: Long,
+        private val reason: Long,
+    ) : PendingLogEvent(Jhlog.TYPE_PROCESS_STATE, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.processState(uiVisibility, processImportance, androidImportance, reason)
+        }
+    }
+
+    class AndroidComponent(
+        producerContext: LogEventContext?,
+        private val componentId: Long,
+        private val componentName: String?,
+        private val action: String?,
+        private val instanceId: Long,
+        private val flowId: Long,
+        private val kind: Long,
+        private val stage: Long,
+        private val outcome: Long,
+        private val durationUs: Long,
+        private val componentFlags: Long,
+    ) : PendingLogEvent(Jhlog.TYPE_ANDROID_COMPONENT, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.androidComponent(
+                componentId,
+                componentName,
+                action,
+                instanceId,
+                flowId,
+                kind,
+                stage,
+                outcome,
+                durationUs,
+                componentFlags,
+            )
+        }
+    }
+
+    class BinderTransaction(
+        producerContext: LogEventContext?,
+        private val descriptor: String?,
+        private val method: String?,
+        private val callId: Long,
+        private val direction: Long,
+        private val transactionCode: Long,
+        private val outcome: Long,
+        private val failureKind: Long,
+        private val durationUs: Long,
+        private val binderFlags: Long,
+        private val mainThread: Boolean,
+    ) : PendingLogEvent(Jhlog.TYPE_BINDER_TRANSACTION, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.binderTransaction(
+                descriptor,
+                method,
+                callId,
+                direction,
+                transactionCode,
+                outcome,
+                failureKind,
+                durationUs,
+                binderFlags,
+                mainThread,
+            )
+        }
+    }
+
+    class Operation(
+        producerContext: LogEventContext?,
+        private val name: String,
+        private val operationId: Long,
+        private val parentId: Long,
+        private val phase: Long,
+        private val kind: Long,
+        private val outcome: Long,
+        private val durationUs: Long,
+        private val budgetUs: Long,
+        private val attributes: JankHunterOperationAttributes,
+    ) : PendingLogEvent(Jhlog.TYPE_OPERATION, producerContext) {
+        override fun writePayload(writer: BinaryLogWriter) {
+            writer.operation(
+                name,
+                operationId,
+                parentId,
+                phase,
+                kind,
+                outcome,
+                durationUs,
+                budgetUs,
+                attributes,
+            )
         }
     }
 
@@ -189,14 +383,12 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val screen: String?,
         private val owner: String?,
-        private val flow: String?,
-        private val step: String?,
         private val stackHint: String?,
         private val durationMs: Long,
         private val foreground: Boolean,
     ) : PendingLogEvent(Jhlog.TYPE_STALL, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.stall(screen, owner, flow, step, stackHint, durationMs, foreground)
+            writer.stall(screen, owner, stackHint, durationMs, foreground)
         }
     }
 
@@ -216,8 +408,6 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val screen: String?,
         private val owner: String?,
-        private val flow: String?,
-        private val step: String?,
         private val className: String?,
         private val holder: String?,
         private val ageMs: Long,
@@ -226,7 +416,7 @@ internal sealed class PendingLogEvent(
         private val evidence: Long,
     ) : PendingLogEvent(Jhlog.TYPE_RETAINED, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.retained(screen, owner, flow, step, className, holder, ageMs, count, foreground, evidence)
+            writer.retained(screen, owner, className, holder, ageMs, count, foreground, evidence)
         }
     }
 
@@ -275,14 +465,13 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val screen: String?,
         private val owner: String?,
-        private val flow: String?,
-        private val step: String?,
+        private val operationId: Long,
         private val source: String?,
         private val level: Int,
         private val count: Long,
     ) : PendingLogEvent(Jhlog.TYPE_LOG_SPAM, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.logSpam(screen, owner, flow, step, source, level, count)
+            writer.logSpam(screen, owner, operationId, source, level, count)
         }
     }
 
@@ -290,8 +479,6 @@ internal sealed class PendingLogEvent(
         producerContext: LogEventContext?,
         private val screen: String?,
         private val owner: String?,
-        private val flow: String?,
-        private val step: String?,
         private val kind: String?,
         private val windowMs: Long,
         private val count: Long,
@@ -299,7 +486,7 @@ internal sealed class PendingLogEvent(
         private val foreground: Boolean,
     ) : PendingLogEvent(Jhlog.TYPE_PROBLEM, producerContext) {
         override fun writePayload(writer: BinaryLogWriter) {
-            writer.problemWindow(screen, owner, flow, step, kind, windowMs, count, maxMs, foreground)
+            writer.problemWindow(screen, owner, kind, windowMs, count, maxMs, foreground)
         }
     }
 

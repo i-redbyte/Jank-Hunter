@@ -1,11 +1,8 @@
-build:
-  maxIssues: 0
-
 config:
   validation: true
   warningsAsErrors: false
 
-formatting:
+ktlint:
   active: true
   android: false
 

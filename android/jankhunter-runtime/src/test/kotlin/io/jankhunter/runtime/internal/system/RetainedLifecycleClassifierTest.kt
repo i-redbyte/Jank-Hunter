@@ -16,8 +16,6 @@ class RetainedLifecycleClassifierTest {
         assertTrue(target.instance is CheckoutBinding)
         assertEquals(CheckoutBinding::class.java.name, target.description)
         assertEquals("CheckoutOwner", target.ownerHint)
-        assertEquals("lifecycle.autowatch.fragment_binding", target.flow)
-        assertEquals("onDestroyView", target.step)
     }
 
     @Test
@@ -31,7 +29,6 @@ class RetainedLifecycleClassifierTest {
         assertTrue(target.instance === viewModel)
         assertEquals(CheckoutViewModel::class.java.name, target.description)
         assertTrue(target.ownerHint.startsWith("lifecycle.onCleared."))
-        assertEquals("lifecycle.autowatch.viewmodel", target.flow)
     }
 
     @Test

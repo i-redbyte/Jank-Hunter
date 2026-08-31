@@ -5,6 +5,7 @@ import io.jankhunter.runtime.internal.saturatingAdd
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import io.jankhunter.runtime.internal.io.RuntimeCallBatch
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,19 +22,18 @@ import java.util.concurrent.locks.LockSupport
 internal class RuntimeCallGraph(
     private val nowMs: RuntimeLongSource,
     private val captureScreen: () -> String?,
-    private val captureFlow: () -> String?,
-    private val captureStep: () -> String?,
-    private val maxKeys: () -> Int,
-    private val exactAdmission: () -> Boolean = { true },
-    private val admissionWaitNanos: () -> Long = { DEFAULT_ADMISSION_WAIT_NS },
+    private val captureOperationId: RuntimeLongSource,
+    private val maxKeys: RuntimeIntSource,
+    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { true },
+    private val admissionWaitNanos: RuntimeLongSource = RuntimeLongSource { DEFAULT_ADMISSION_WAIT_NS },
     private val periodicFlushIntervalMs: Long = DEFAULT_PERIODIC_FLUSH_INTERVAL_MS,
     private val consumerDelayNanos: Long = 0L,
     private val batchObserver: ((RuntimeCallBatch) -> Unit)? = null,
     private val publisherAdmissionObserver: (() -> Unit)? = null,
     private val consumerLoopObserver: (() -> Unit)? = null,
 ) {
-    private val threadState = ThreadLocal<ProducerState>()
-    private val buffers = ConcurrentLinkedQueue<RuntimeGraphAggregateBuffer>()
+    private val threadState = ThreadLocal<WeakReference<ProducerState>>()
+    private val producers = ConcurrentLinkedQueue<ProducerState>()
     private val epoch = AtomicLong(1L)
     private val running = AtomicBoolean(false)
     private val consumerFailed = AtomicBoolean(false)
@@ -93,30 +93,33 @@ internal class RuntimeCallGraph(
         clearQuality()
     }
 
-    fun enter(methodId: Long, enabled: Boolean): Long = enter(methodId, null, enabled)
-
-    fun enter(methodId: Long, methodName: String?, enabled: Boolean): Long {
+    fun enter(methodId: Long, methodName: String, enabled: Boolean): Long {
         if (!enabled || !acceptingPublishers) return DISABLED_TOKEN
         val currentEpoch = epoch.get()
-        var state = threadState.get()
+        var state = threadState.get()?.get()
         if (state == null || state.epoch != currentEpoch) {
             state = createProducerState(currentEpoch)
-            threadState.set(state)
+            threadState.set(WeakReference(state))
         }
         state.stack.push(
                 methodId = methodId,
                 methodName = methodName,
                 startedAtMs = nowMs.getAsLong(),
                 screen = captureScreen(),
-                flow = captureFlow(),
-                step = captureStep(),
+                operationId = captureOperationId.getAsLong(),
             )
         return currentEpoch
     }
 
+    fun hasCurrentMethod(): Boolean = threadState.get()?.get()?.stack?.hasCurrentMethod() == true
+
+    fun currentMethodId(): Long = threadState.get()?.get()?.stack?.currentMethodId() ?: 0L
+
+    fun currentMethodName(): String? = threadState.get()?.get()?.stack?.currentMethodName()
+
     fun exit(token: Long, methodId: Long) {
         if (token == DISABLED_TOKEN) return
-        val state = threadState.get()
+        val state = threadState.get()?.get()
         if (state == null) {
             if (token == epoch.get() && acceptingPublishers) stackMismatch.incrementAndGet()
             return
@@ -143,16 +146,16 @@ internal class RuntimeCallGraph(
         callerId: Long,
         callerName: String,
         calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         durationMs: Long,
         enabled: Boolean,
     ) {
         if (!enabled || !acceptingPublishers) return
         val currentEpoch = epoch.get()
-        var state = threadState.get()
+        var state = threadState.get()?.get()
         if (state == null || state.epoch != currentEpoch) {
             state = createProducerState(currentEpoch)
-            threadState.set(state)
+            threadState.set(WeakReference(state))
         }
         if (!acquireProducer(state.buffer, allowClosedGate = false)) return
         state.buffer.producerAdmitted = true
@@ -167,8 +170,7 @@ internal class RuntimeCallGraph(
                 calleeId = calleeId,
                 calleeName = calleeName,
                 screen = captureScreen(),
-                flow = captureFlow(),
-                step = captureStep(),
+                operationId = captureOperationId.getAsLong(),
                 durationMs = durationMs.coerceAtLeast(0L),
             )
             if (published) buffer.recordAccepted()
@@ -197,12 +199,11 @@ internal class RuntimeCallGraph(
         val published = publishWithBackpressure(
             buffer = buffer,
             callerId = state.stack.poppedParentId,
-            callerName = state.stack.poppedParentName,
+            callerName = checkNotNull(state.stack.poppedParentName),
             calleeId = methodId,
-            calleeName = state.stack.poppedName,
+            calleeName = checkNotNull(state.stack.poppedName),
             screen = state.stack.poppedScreen,
-            flow = state.stack.poppedFlow,
-            step = state.stack.poppedStep,
+            operationId = state.stack.poppedOperationId,
             durationMs = durationMs,
         )
         if (!published) return
@@ -212,16 +213,15 @@ internal class RuntimeCallGraph(
     private fun publishWithBackpressure(
         buffer: RuntimeGraphAggregateBuffer,
         callerId: Long,
-        callerName: String?,
+        callerName: String,
         calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         screen: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
         durationMs: Long,
     ): Boolean {
-        val exact = exactAdmission()
-        val waitBudgetNs = if (exact) admissionWaitNanos().coerceAtLeast(0L) else 0L
+        val exact = exactAdmission.getAsBoolean()
+        val waitBudgetNs = if (exact) admissionWaitNanos.getAsLong().coerceAtLeast(0L) else 0L
         var blockedAtNs = 0L
         while (true) {
             val result = buffer.tryAdd(
@@ -230,8 +230,7 @@ internal class RuntimeCallGraph(
                 calleeId = calleeId,
                 calleeName = calleeName,
                 screen = screen,
-                flow = flow,
-                step = step,
+                operationId = operationId,
                 durationMs = durationMs,
             )
             if (result != RUNTIME_GRAPH_ADD_FULL) {
@@ -290,7 +289,7 @@ internal class RuntimeCallGraph(
         acceptingPublishers = false
         running.set(false)
         LockSupport.unpark(graphThread)
-        val exact = exactAdmission()
+        val exact = exactAdmission.getAsBoolean()
         val deadline = if (exact) Long.MAX_VALUE else {
             System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_TIMEOUT_MS)
         }
@@ -329,7 +328,7 @@ internal class RuntimeCallGraph(
 
     internal fun acceptedEventLossForTest(): Long = acceptedEventLoss.get()
 
-    internal fun currentThreadDepthForTest(): Int = threadState.get()?.stack?.depth ?: 0
+    internal fun currentThreadDepthForTest(): Int = threadState.get()?.get()?.stack?.depth ?: 0
 
     internal fun consumerForTest(): Thread? = consumer
 
@@ -337,18 +336,15 @@ internal class RuntimeCallGraph(
 
     internal fun acceptingPublishersForTest(): Boolean = acceptingPublishers
 
-    internal fun fullyAccountedEventsForTest(): Long = emitted.get() + acceptedEventLoss.get()
-
     internal fun registeredProducerCountForTest(): Int {
         var result = 0
-        buffers.forEach { result++ }
+        producers.forEach { result++ }
         return result
     }
 
     private fun createProducerState(currentEpoch: Long): ProducerState {
         val buffer = RuntimeGraphAggregateBuffer(Thread.currentThread())
-        buffers.add(buffer)
-        return ProducerState(currentEpoch, RuntimeCallStack(), buffer)
+        return ProducerState(currentEpoch, RuntimeCallStack(), buffer).also(producers::add)
     }
 
     private fun runConsumerFailOpen() {
@@ -390,21 +386,22 @@ internal class RuntimeCallGraph(
             acceptingPublishers = false
             consumerFailed.set(true)
             running.set(false)
-            buffers.forEach { buffer -> buffer.owner.get()?.let(LockSupport::unpark) }
+            producers.forEach { producer -> producer.buffer.owner.get()?.let(LockSupport::unpark) }
             while (hasAdmittedProducers()) LockSupport.parkNanos(FLUSH_WAIT_POLL_NS)
             val lost = saturatingAdd(bufferedEventCount(), table.logicalEventCount())
             shutdownLoss.addAndGet(lost.coerceAtLeast(1L))
             acceptedEventLoss.addAndGet(lost.coerceAtLeast(1L))
             flushQuality(activeWriter)
         } finally {
-            buffers.forEach { buffer -> buffer.owner.get()?.let(LockSupport::unpark) }
+            producers.forEach { producer -> producer.buffer.owner.get()?.let(LockSupport::unpark) }
             consumer = null
         }
     }
 
     private fun drainBuffers(table: RuntimeGraphEdgeTable): Int {
         var total = 0
-        for (buffer in buffers) {
+        for (producer in producers) {
+            val buffer = producer.buffer
             var drainedFromBuffer = 0
             while (drainedFromBuffer < MAX_DRAIN_PAGES_PER_BUFFER) {
                 val position = buffer.tryClaimConsumer()
@@ -453,7 +450,8 @@ internal class RuntimeCallGraph(
     }
 
     private fun rotateProducerPages() {
-        for (buffer in buffers) {
+        for (producer in producers) {
+            val buffer = producer.buffer
             buffer.rotationRequested = true
             while (buffer.producerActive) LockSupport.parkNanos(ROTATION_PARK_NS)
             buffer.publishActivePage()
@@ -466,7 +464,7 @@ internal class RuntimeCallGraph(
         if (producerWakePending.compareAndSet(false, true)) consumer?.let(LockSupport::unpark)
     }
 
-    private fun effectiveMaxKeys(): Int = maxKeys().coerceAtLeast(1)
+    private fun effectiveMaxKeys(): Int = maxKeys.getAsInt().coerceAtLeast(1)
 
     private fun drainAllBuffers(table: RuntimeGraphEdgeTable) {
         while (drainBuffers(table) > 0) Unit
@@ -516,25 +514,26 @@ internal class RuntimeCallGraph(
 
     private fun producerAttemptedTotal(): Long {
         var total = retiredProducerAttempted.get()
-        buffers.forEach { buffer -> total = saturatingAdd(total, buffer.attemptedCount()) }
+        producers.forEach { producer -> total = saturatingAdd(total, producer.buffer.attemptedCount()) }
         return total
     }
 
     private fun producerAcceptedTotal(): Long {
         var total = retiredProducerAccepted.get()
-        buffers.forEach { buffer -> total = saturatingAdd(total, buffer.acceptedCount()) }
+        producers.forEach { producer -> total = saturatingAdd(total, producer.buffer.acceptedCount()) }
         return total
     }
 
     private fun hasBufferedEvents(): Boolean {
-        for (buffer in buffers) {
-            if (buffer.hasPublishedPages()) return true
+        for (producer in producers) {
+            if (producer.buffer.hasPublishedPages()) return true
         }
         return false
     }
 
     private fun hasAdmittedProducers(): Boolean {
-        for (buffer in buffers) {
+        for (producer in producers) {
+            val buffer = producer.buffer
             if (buffer.producerActive || buffer.producerAdmitted) return true
         }
         return false
@@ -542,16 +541,17 @@ internal class RuntimeCallGraph(
 
     private fun bufferedEventCount(): Long {
         var count = 0L
-        for (buffer in buffers) {
-            count = saturatingAdd(count, buffer.bufferedLogicalEventCount())
+        for (producer in producers) {
+            count = saturatingAdd(count, producer.buffer.bufferedLogicalEventCount())
         }
         return count
     }
 
     private fun reclaimDeadBuffers() {
-        for (buffer in buffers) {
+        for (producer in producers) {
+            val buffer = producer.buffer
             if (buffer.owner.get() == null && !buffer.hasPublishedPages() && !buffer.hasActiveData()) {
-                if (buffers.remove(buffer)) {
+                if (producers.remove(producer)) {
                     addSaturating(retiredProducerAttempted, buffer.attemptedCount())
                     addSaturating(retiredProducerAccepted, buffer.acceptedCount())
                 }
@@ -560,7 +560,7 @@ internal class RuntimeCallGraph(
     }
 
     private fun clearRegistry() {
-        while (true) buffers.poll()?.clear() ?: break
+        while (true) producers.poll()?.buffer?.clear() ?: break
     }
 
     private fun clearQuality() {

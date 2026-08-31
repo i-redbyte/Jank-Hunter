@@ -87,18 +87,16 @@ func timelinePeriodicDefinitions(timeline []TimelineBucket) []periodicDefinition
 
 func newRouteSeriesCollector(options analyze.Options, scale timelineScale) *routeSeriesCollector {
 	return &routeSeriesCollector{
-		filter:   normalizeTimelineFilter(options.Filter),
-		ownerMap: options.OwnerMap,
-		scale:    scale,
-		routes:   map[string][]float64{},
+		filter: normalizeTimelineFilter(options.Filter),
+		scale:  scale,
+		routes: map[string][]float64{},
 	}
 }
 
 type routeSeriesCollector struct {
-	filter   analyze.Filter
-	ownerMap *analyze.OwnerMap
-	scale    timelineScale
-	routes   map[string][]float64
+	filter analyze.Filter
+	scale  timelineScale
+	routes map[string][]float64
 }
 
 func (c *routeSeriesCollector) add(event jhlog.Event, dict map[uint64]string, symbols *mathSymbolResolver) {
@@ -386,13 +384,13 @@ func periodicSignalSummary(signal PeriodicSignal) string {
 	}
 	parts := []string{}
 	if signal.FirstSignificantLagMS > 0 {
-		parts = append(parts, fmt.Sprintf("первый значимый лаг %.1fs", seconds(signal.FirstSignificantLagMS)))
+		parts = append(parts, fmt.Sprintf("первый значимый сдвиг %.1f сек", seconds(signal.FirstSignificantLagMS)))
 	}
 	if len(signal.Peaks) > 0 {
-		parts = append(parts, fmt.Sprintf("главный спектральный период %.1fs", seconds(signal.Peaks[0].PeriodMS)))
+		parts = append(parts, fmt.Sprintf("главный спектральный период %.1f сек", seconds(signal.Peaks[0].PeriodMS)))
 	}
 	if signal.Approximated {
-		parts = append(parts, fmt.Sprintf("ряд сокращен до %d точек с шагом около %.1fs без изменения масштаба времени", signal.AnalyzedSampleCount, seconds(signal.AnalysisBucketMS)))
+		parts = append(parts, fmt.Sprintf("ряд сокращён до %d точек с шагом около %.1f сек без изменения масштаба времени", signal.AnalyzedSampleCount, seconds(signal.AnalysisBucketMS)))
 	}
 	return strings.Join(parts, "; ") + coverage
 }
@@ -430,7 +428,7 @@ func periodicSummary(signals []PeriodicSignal) string {
 			patterns++
 		}
 	}
-	return fmt.Sprintf("Получено %d сигналов; непрерывного участка хватает для анализа у %d, повторяемый паттерн с достаточной поддержкой найден у %d. Слабые спектральные пики, похожие на шум, скрыты.", len(signals), analyzed, patterns)
+	return fmt.Sprintf("Получено %d сигналов; непрерывного участка хватает для анализа у %d, повторяющаяся последовательность с достаточной поддержкой найдена у %d. Слабые спектральные пики, похожие на шум, скрыты.", len(signals), analyzed, patterns)
 }
 
 func periodicFindings(signals []PeriodicSignal) []Finding {
@@ -450,9 +448,9 @@ func periodicFindings(signals []PeriodicSignal) []Finding {
 		}
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Найден повторяемый паттерн для проверки",
-			Detail:         fmt.Sprintf("%s: предполагаемый период %.1fs. Это статистическая повторяемость, а не доказанная проблема приложения.", best.Signal, seconds(period)),
-			Recommendation: "Сопоставьте период с таймлайном, запросами конкретного маршрута, GC, диспетчером, исполнителем задач, gauge-метриками и сетевыми повторами.",
+			Title:          "Найдена повторяющаяся последовательность для проверки",
+			Detail:         fmt.Sprintf("%s: предполагаемый период %.1f сек. Это статистическая повторяемость, а не доказанная проблема приложения.", best.Signal, seconds(period)),
+			Recommendation: "Сопоставьте период с временной шкалой, запросами конкретного маршрута, GC, диспетчером, исполнителем задач, пользовательскими метриками и сетевыми повторами.",
 		}}
 	}
 	return []Finding{{
@@ -476,7 +474,7 @@ func comparePeriodicSummary(baseline, candidate []PeriodicSignal) string {
 	if !periodicAnalysisAvailable(baseline) || !periodicAnalysisAvailable(candidate) {
 		return "Недостаточно периодических сигналов для честного сравнения."
 	}
-	return fmt.Sprintf("База: %d подтвержденных паттернов из %d сигналов; кандидат: %d из %d. Наличие периода само по себе не доказывает деградацию.", periodicPatternCount(baseline), len(baseline), periodicPatternCount(candidate), len(candidate))
+	return fmt.Sprintf("Базовый прогон: %d подтверждённых последовательностей из %d сигналов; проверяемый прогон: %d из %d. Наличие периода само по себе не доказывает ухудшение.", periodicPatternCount(baseline), len(baseline), periodicPatternCount(candidate), len(candidate))
 }
 
 func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
@@ -485,20 +483,20 @@ func comparePeriodicFindings(baseline, candidate []PeriodicSignal) []Finding {
 			Severity:       "medium",
 			Title:          "Недостаточно периодических сигналов для сравнения",
 			Detail:         comparePeriodicSummary(baseline, candidate),
-			Recommendation: "Соберите более длинные прогоны базы и кандидата.",
+			Recommendation: "Соберите более длинные базовый и проверяемый прогоны.",
 		}}
 	}
 	if periodicPatternCount(candidate) > periodicPatternCount(baseline) {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "У кандидата больше повторяемых паттернов",
+			Title:          "В проверяемом прогоне больше повторяющихся последовательностей",
 			Detail:         comparePeriodicSummary(baseline, candidate),
-			Recommendation: "Проверьте, совпадает ли новый период с таймером, polling, retry, GC или пользовательским действием. Если совпадения нет, не считайте период регрессией.",
+			Recommendation: "Проверьте, совпадает ли новый период с таймером, периодическим опросом, повторами, GC или пользовательским действием. Если совпадения нет, не считайте период регрессией.",
 		}}
 	}
 	return []Finding{{
 		Severity: "ok",
-		Title:    "Периодический анализ построен для базы и кандидата",
+		Title:    "Периодический анализ построен для обоих прогонов",
 		Detail:   comparePeriodicSummary(baseline, candidate),
 	}}
 }

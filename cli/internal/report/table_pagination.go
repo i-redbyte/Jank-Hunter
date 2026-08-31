@@ -10,6 +10,8 @@ import (
 
 const reportTablePageSize = 50
 
+var deferredScriptClosingTag = []byte("</script>")
+
 // paginateReportTables transforms every table while the report template is streaming. Short tables
 // are copied byte-for-byte. Once a row group crosses reportTablePageSize, only its first page stays
 // in the live HTML tree; later pages become script-safe JSON payloads consumed by report.js.
@@ -26,10 +28,22 @@ func paginateReportTables(source io.Reader, target io.Writer) error {
 		}
 		return writeAll(target, []byte(data))
 	}
+	writeBytes := func(data []byte) error {
+		if table != nil {
+			return table.writeRawBytes(data)
+		}
+		return writeAll(target, data)
+	}
 
 	for {
 		if rawElement != "" {
-			if err := copyRawHTMLElement(reader, rawElement, write); err != nil {
+			var err error
+			if rawElement == "deferred-script" {
+				err = copyDeferredTableChunk(reader, writeBytes)
+			} else {
+				err = copyRawHTMLElement(reader, rawElement, write)
+			}
+			if err != nil {
 				return err
 			}
 			rawElement = ""
@@ -97,7 +111,11 @@ func paginateReportTables(source io.Reader, target io.Writer) error {
 			}
 		}
 		if isOpeningHTMLTag(tag, "script") {
-			rawElement = "script"
+			if containsFold(tag, "data-table-chunk") {
+				rawElement = "deferred-script"
+			} else {
+				rawElement = "script"
+			}
 		} else if isOpeningHTMLTag(tag, "style") {
 			rawElement = "style"
 		}
@@ -111,6 +129,38 @@ func paginateReportTables(source io.Reader, target io.Writer) error {
 		return fmt.Errorf("paginate report tables: unterminated table")
 	}
 	return nil
+}
+
+// copyDeferredTableChunk uses the invariant established by renderDeferredRowPages: every closing
+// tag inside the JSON string has an escaped slash, so the first literal </script> is the container
+// boundary. Searching whole buffered blocks avoids allocating one string per HTML tag embedded in
+// a large deferred page.
+func copyDeferredTableChunk(reader *bufio.Reader, write func([]byte) error) error {
+	for {
+		buffer, peekErr := reader.Peek(reader.Size())
+		if offset := bytes.Index(buffer, deferredScriptClosingTag); offset >= 0 {
+			length := offset + len(deferredScriptClosingTag)
+			if err := write(buffer[:length]); err != nil {
+				return err
+			}
+			_, _ = reader.Discard(length)
+			return nil
+		}
+
+		length := len(buffer) - len(deferredScriptClosingTag) + 1
+		if length > 0 {
+			if err := write(buffer[:length]); err != nil {
+				return err
+			}
+			_, _ = reader.Discard(length)
+		}
+		if peekErr != nil && peekErr != bufio.ErrBufferFull {
+			if peekErr == io.EOF {
+				return fmt.Errorf("paginate report tables: unterminated deferred script element")
+			}
+			return peekErr
+		}
+	}
 }
 
 // copyRawHTMLElement treats script and style contents as raw text, as required by HTML parsing
@@ -233,6 +283,17 @@ func (p *reportTablePager) writeRaw(data string) error {
 		return p.group.writeRaw(data)
 	}
 	return writeAll(p.target, []byte(data))
+}
+
+func (p *reportTablePager) writeRawBytes(data []byte) error {
+	if p.inRow {
+		_, _ = p.row.Write(data)
+		return nil
+	}
+	if p.group != nil {
+		return p.group.writeRawBytes(data)
+	}
+	return writeAll(p.target, data)
 }
 
 func (p *reportTablePager) writeTag(tag string) (bool, error) {
@@ -368,6 +429,18 @@ func (g *reportTableRowGroup) writeRaw(data string) error {
 		_, _ = g.chunk.WriteString(data)
 	default:
 		_, _ = g.prefix.WriteString(data)
+	}
+	return nil
+}
+
+func (g *reportTableRowGroup) writeRawBytes(data []byte) error {
+	switch {
+	case g.passThrough:
+		return writeAll(g.target, data)
+	case g.active:
+		_, _ = g.chunk.Write(data)
+	default:
+		_, _ = g.prefix.Write(data)
 	}
 	return nil
 }

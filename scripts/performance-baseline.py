@@ -28,8 +28,8 @@ ANDROID = ROOT / "android"
 DEFAULT_ACCEPTANCE = ROOT / "benchmarks" / "acceptance.json"
 DIAGNOSTICS = ROOT / "benchmarks" / "fixtures" / "instrumentation-diagnostics.jsonl"
 TIME_TOOL = Path("/usr/bin/time")
-CAPTURE_SCHEMA = 9
-ACCEPTANCE_SCHEMA = 3
+CAPTURE_SCHEMA = 12
+ACCEPTANCE_SCHEMA = 4
 FIXTURE_SCHEMA = 4
 ARTIFACT_DIRECTORY_MARKER = ".jankhunter-performance-artifacts-v1"
 ARTIFACT_DIRECTORY_MARKER_CONTENT = "owned by scripts/performance-baseline.py\n"
@@ -54,6 +54,7 @@ ANDROID_ARTIFACTS = (
     "runtime_aar",
     "annotations_jar",
     "okhttp_aar",
+    "workmanager_aar",
     "gradle_plugin_jar",
     "sample_debug_apk",
 )
@@ -61,18 +62,54 @@ GO_BENCHMARKS = (
     "jhlog/BenchmarkStreamFileRepresentative",
     "jhlog/BenchmarkProfileFileRepresentative",
     "analyze/BenchmarkInspectRepresentative",
+    "analyze/BenchmarkBuildProblemReportRepresentativeHighCardinalityNetwork",
+    "analyze/BenchmarkFinalizeWorkerAnalysisRepresentativeTwentyThousandExecutions",
+    "analyze/BenchmarkOperationAnalysisHighVolume",
+    "analyze/BenchmarkInspectDatabaseMillionEvents",
+    "analyze/BenchmarkDatabaseHeavyStoreHighCardinality",
+    "analyze/BenchmarkDatabaseCorrelationBoundedJoin",
     "report/BenchmarkWriteInspectRepresentative",
+    "report/BenchmarkWriteOperationTablesHighCardinality",
+    "report/BenchmarkWriteDatabaseHighCardinality",
+)
+GO_BENCHMARK_PATTERN = (
+    "^(Benchmark.*Representative.*|BenchmarkOperationAnalysisHighVolume|"
+    "BenchmarkInspectDatabaseMillionEvents|BenchmarkDatabaseHeavyStoreHighCardinality|"
+    "BenchmarkDatabaseCorrelationBoundedJoin|BenchmarkWriteOperationTablesHighCardinality|"
+    "BenchmarkWriteDatabaseHighCardinality)$"
 )
 ANDROID_RUNTIME_BENCHMARKS = (
-    "flow start/step/end",
+    "operation API disabled",
+    "operation start/finish",
     "log spam counter",
     "runnable wrapper creation",
     "runnable wrapper execution",
     "coroutine propagation wrapper",
     "executor task tracking",
     "ASM method hook no-writer guard",
+    "advanced telemetry disabled guards",
+    "HTTP handoff no-writer guard",
     "metric aggregation counter/gauge",
     "binary log writer counter/gauge",
+    "SQL normalize",
+    "SQL CTE operation",
+    "database hook disabled",
+    "database hook active",
+    "database prepared lookup active",
+    "database writer active",
+)
+ANDROID_ALLOCATION_BENCHMARKS = (
+    "SQL normalize",
+    "SQL CTE operation",
+    "database hook disabled",
+    "database hook active",
+    "database prepared lookup active",
+    "database writer active",
+)
+ANDROID_RUNTIME_BENCHMARK_TESTS = (
+    "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
+    "io.jankhunter.runtime.RuntimeSqlNormalizerBenchmarkTest",
+    "io.jankhunter.runtime.RuntimeDatabaseBenchmarkTest",
 )
 CAPTURE_CONFIG_KEYS = (
     "profile",
@@ -82,6 +119,7 @@ CAPTURE_CONFIG_KEYS = (
 )
 ACCEPTANCE_RELATIVE_LIMITS = (
     "android_runtime_ns_per_op",
+    "android_runtime_bytes_per_op",
     "android_artifact_bytes",
     "go_ns_per_op",
     "go_bytes_per_op",
@@ -360,7 +398,7 @@ def capture_baseline_to_output(args: argparse.Namespace, output: Path) -> None:
         run_command(
             "go_benchmarks",
             [
-                "go", "test", "-run", "^$", "-bench", "Representative",
+                "go", "test", "-run", "^$", "-bench", GO_BENCHMARK_PATTERN,
                 "-benchmem", "-count", str(args.benchmark_count),
                 "./internal/jhlog", "./internal/analyze", "./internal/report",
             ],
@@ -393,6 +431,7 @@ def capture_baseline_to_output(args: argparse.Namespace, output: Path) -> None:
                 ":jankhunter-runtime:assembleRelease",
                 ":jankhunter-annotations:jar",
                 ":jankhunter-okhttp3:assembleRelease",
+                ":jankhunter-workmanager:assembleRelease",
                 ":jankhunter-gradle-plugin:jar",
                 ":sample-app:assembleDebug",
                 f"-PjankHunterBuildToolsVersion={build_tools_version}",
@@ -551,6 +590,11 @@ def android_runtime_benchmark_command(
         if build_tools_version
         else []
     )
+    benchmark_filters = [
+        argument
+        for test_class in ANDROID_RUNTIME_BENCHMARK_TESTS
+        for argument in ("--tests", test_class)
+    ]
     return [
         "./gradlew",
         ":jankhunter-runtime:testDebugUnitTest",
@@ -558,8 +602,7 @@ def android_runtime_benchmark_command(
         "-Djankhunter.benchmark=true",
         f"-Djankhunter.benchmark.iterations={iterations}",
         *build_tools_argument,
-        "--tests",
-        "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
+        *benchmark_filters,
         "--no-daemon",
         "--console=plain",
     ]
@@ -804,6 +847,7 @@ def parse_android_benchmarks(
     pattern = re.compile(
         r"JankHunter benchmark: (?P<name>.*?), iterations=(?P<iterations>\d+), "
         r"total_ns=(?P<total>\d+), ns_per_op=(?P<per_op>[0-9.]+)"
+        r"(?:, bytes_per_op=(?P<bytes_per_op>[0-9.]+))?"
     )
     result: dict[str, Any] = {}
     for match in pattern.finditer(text):
@@ -821,11 +865,18 @@ def parse_android_benchmarks(
             raise RuntimeError(
                 f"Android benchmark {name} has inconsistent total_ns/iterations/ns_per_op"
             )
-        result[name] = {
+        row = {
             "iterations": iterations,
             "total_ns": total_ns,
             "ns_per_op": ns_per_op,
         }
+        bytes_per_op = match.group("bytes_per_op")
+        if bytes_per_op is not None:
+            parsed_bytes = float(bytes_per_op)
+            if not is_nonnegative_number(parsed_bytes):
+                raise RuntimeError(f"Android benchmark {name} has invalid bytes_per_op")
+            row["bytes_per_op"] = parsed_bytes
+        result[name] = row
     if not result:
         raise RuntimeError("Android benchmark output contained no parsable measurements")
     missing_benchmarks = sorted(set(ANDROID_RUNTIME_BENCHMARKS) - result.keys())
@@ -838,6 +889,16 @@ def parse_android_benchmarks(
             details.append("unexpected " + ", ".join(unexpected_benchmarks))
         raise RuntimeError(
             "Android benchmark set differs from the contract: " + "; ".join(details)
+        )
+    missing_allocations = sorted(
+        name
+        for name in ANDROID_ALLOCATION_BENCHMARKS
+        if not is_nonnegative_number(result[name].get("bytes_per_op"))
+    )
+    if missing_allocations:
+        raise RuntimeError(
+            "Android allocation benchmark omitted bytes_per_op: "
+            + ", ".join(missing_allocations)
         )
     if expected_iterations is not None:
         expected_counts = android_runtime_expected_iterations(expected_iterations)
@@ -867,15 +928,24 @@ def android_rate_is_consistent(
 
 def android_runtime_expected_iterations(requested: int) -> dict[str, int]:
     return {
-        "flow start/step/end": requested,
+        "operation API disabled": max(requested, 2_000_000),
+        "operation start/finish": requested,
         "log spam counter": max(requested, 2_000_000),
         "runnable wrapper creation": max(requested, 2_000_000),
         "runnable wrapper execution": max(requested, 2_000_000),
         "coroutine propagation wrapper": max(requested, 2_000_000),
         "executor task tracking": requested,
         "ASM method hook no-writer guard": max(requested, 1_000_000) * 4,
+        "advanced telemetry disabled guards": max(requested, 2_000_000) * 3,
+        "HTTP handoff no-writer guard": max(requested, 1_000_000),
         "metric aggregation counter/gauge": max(requested, 500_000) * 2,
         "binary log writer counter/gauge": requested * 2,
+        "SQL normalize": max(requested, 100_000),
+        "SQL CTE operation": max(requested, 100_000),
+        "database hook disabled": max(requested, 2_000_000),
+        "database hook active": max(requested, 10_000),
+        "database prepared lookup active": max(requested, 100_000),
+        "database writer active": max(requested, 10_000),
     }
 
 
@@ -892,6 +962,8 @@ def android_artifact_paths() -> dict[str, Path]:
         / f"jankhunter-annotations/build/libs/jankhunter-annotations-{version}.jar",
         "okhttp_aar": ANDROID
         / "jankhunter-okhttp3/build/outputs/aar/jankhunter-okhttp3-release.aar",
+        "workmanager_aar": ANDROID
+        / "jankhunter-workmanager/build/outputs/aar/jankhunter-workmanager-release.aar",
         "gradle_plugin_jar": ANDROID
         / f"jankhunter-gradle-plugin/build/libs/jankhunter-gradle-plugin-{version}.jar",
         "sample_debug_apk": ANDROID
@@ -1273,6 +1345,12 @@ def check_candidate(reference_path: Path, candidate_path: Path, acceptance_path:
         benchmark_metric_map(reference, "android_runtime", "ns_per_op"),
         benchmark_metric_map(candidate, "android_runtime", "ns_per_op"),
         limits["android_runtime_ns_per_op"],
+    )
+    compare_metric_maps(
+        failures, "Android runtime B/op",
+        benchmark_metric_map(reference, "android_runtime", "bytes_per_op"),
+        benchmark_metric_map(candidate, "android_runtime", "bytes_per_op"),
+        limits["android_runtime_bytes_per_op"],
     )
     compare_metric_maps(
         failures, "Android artifact bytes",
@@ -1959,6 +2037,14 @@ def validate_measurement_rows(
             failures,
             ANDROID_RUNTIME_BENCHMARKS,
         )
+        validate_row_metrics(
+            android_runtime,
+            label,
+            "android_runtime",
+            ("bytes_per_op",),
+            failures,
+            ANDROID_ALLOCATION_BENCHMARKS,
+        )
         requested_iterations = capture_config.get("android_runtime_iterations")
         expected_iterations = (
             android_runtime_expected_iterations(requested_iterations)
@@ -1969,9 +2055,12 @@ def validate_measurement_rows(
             row = android_runtime.get(name)
             if not isinstance(row, dict):
                 continue
+            required_keys = {"iterations", "total_ns", "ns_per_op"}
+            if name in ANDROID_ALLOCATION_BENCHMARKS:
+                required_keys.add("bytes_per_op")
             validate_exact_keys(
                 row,
-                {"iterations", "total_ns", "ns_per_op"},
+                required_keys,
                 f"{label} android_runtime/{name}",
                 failures,
             )

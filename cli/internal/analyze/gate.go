@@ -28,7 +28,8 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 		!config.RequireCleanCohorts &&
 		len(config.Metrics) == 0 &&
 		!hasLeakThreshold(config.Leaks) &&
-		!hasProblemThreshold(config.Problems) {
+		!hasProblemThreshold(config.Problems) &&
+		!config.AndroidComponents.Enabled {
 		return GateResult{}
 	}
 	var failures []string
@@ -71,7 +72,99 @@ func EvaluateGate(comparison Comparison, config ThresholdConfig) GateResult {
 	}
 	failures = append(failures, evaluateLeakGate(comparison, config.Leaks)...)
 	failures = append(failures, evaluateProblemGate(comparison, config.Problems)...)
+	failures = append(failures, evaluateAndroidComponentGate(comparison.AndroidComponents, config.AndroidComponents)...)
 	return GateResult{Failed: len(failures) > 0, Failures: failures}
+}
+
+func evaluateAndroidComponentGate(comparison AndroidComponentComparison, config AndroidComponentGateThreshold) []string {
+	if !config.Enabled {
+		return nil
+	}
+	thresholds := androidComponentGateMetrics(config)
+	if len(thresholds) == 0 {
+		return []string{"android_components gate is enabled but no thresholds are configured"}
+	}
+	if failures := validateAndroidComponentGateMetrics(thresholds); len(failures) > 0 {
+		return failures
+	}
+	if !comparison.Comparable {
+		return []string{"android_components gate cannot evaluate incomparable process scopes or missing typed events: " + comparison.Note}
+	}
+	if comparison.Partial && !config.AllowPartial {
+		return []string{"android_components gate rejects partial analysis; set allow_partial=true only for local lifecycle metrics: " + comparison.Note}
+	}
+	metrics := make(map[string]Delta, len(comparison.Metrics))
+	for _, metric := range comparison.Metrics {
+		metrics[metric.Name] = metric
+	}
+	failures := make([]string, 0, len(thresholds))
+	for _, threshold := range thresholds {
+		metric, ok := metrics[threshold.name]
+		if !ok || !metric.Comparable {
+			failures = append(failures, fmt.Sprintf("android_components %s cannot be evaluated from this comparison", threshold.name))
+			continue
+		}
+		value := metric.RegressionAbs
+		if threshold.relative {
+			value = metric.RegressionPct
+		}
+		if threshold.minimum {
+			value = metric.CandidateValue
+			if value < threshold.limit {
+				failures = append(failures, fmt.Sprintf("android_components %s candidate=%.2f below %.2f", threshold.name, value, threshold.limit))
+			}
+			continue
+		}
+		if value > threshold.limit {
+			unit := "п.п."
+			if threshold.relative {
+				unit = "%"
+			}
+			failures = append(failures, fmt.Sprintf("android_components %s increase=%.2f %s exceeds %.2f", threshold.name, value, unit, threshold.limit))
+		}
+	}
+	return failures
+}
+
+type androidComponentGateMetric struct {
+	name     string
+	limit    float64
+	relative bool
+	minimum  bool
+}
+
+func androidComponentGateMetrics(config AndroidComponentGateThreshold) []androidComponentGateMetric {
+	metrics := make([]androidComponentGateMetric, 0, 11)
+	appendLimit := func(name string, limit *float64, relative, minimum bool) {
+		if limit != nil {
+			metrics = append(metrics, androidComponentGateMetric{name: name, limit: *limit, relative: relative, minimum: minimum})
+		}
+	}
+	appendLimit(androidMetricServiceFailureRate, config.MaxServiceFailureRateIncreasePP, false, false)
+	appendLimit(androidMetricServiceTimeoutRate, config.MaxServiceTimeoutRateIncreasePP, false, false)
+	appendLimit(androidMetricServiceSlowCallbackRate, config.MaxServiceSlowRateIncreasePP, false, false)
+	appendLimit(androidMetricReceiverFailureRate, config.MaxReceiverFailureRateIncreasePP, false, false)
+	appendLimit(androidMetricReceiverAsyncDeadlineRiskRate, config.MaxReceiverAsyncDeadlineRiskRateIncreasePP, false, false)
+	appendLimit(androidMetricReceiverSyncSlowRate, config.MaxReceiverSyncSlowRateIncreasePP, false, false)
+	appendLimit(androidMetricBinderClientP95, config.MaxBinderClientP95IncreasePct, true, false)
+	appendLimit(androidMetricBinderSlowMainThreadRate, config.MaxBinderSlowMainThreadRateIncreasePP, false, false)
+	appendLimit(androidMetricBinderFailureRate, config.MaxBinderFailureRateIncreasePP, false, false)
+	appendLimit(androidMetricBinderUnhandledRate, config.MaxBinderUnhandledRateIncreasePP, false, false)
+	appendLimit(androidMetricBinderCorrelationCoverage, config.MinBinderCorrelationCoveragePct, false, true)
+	return metrics
+}
+
+func validateAndroidComponentGateMetrics(thresholds []androidComponentGateMetric) []string {
+	var failures []string
+	for _, threshold := range thresholds {
+		if threshold.limit < 0 {
+			failures = append(failures, fmt.Sprintf("android_components threshold for %s must not be negative", threshold.name))
+		}
+		if threshold.minimum && threshold.limit > 100 {
+			failures = append(failures, fmt.Sprintf("android_components threshold for %s must be within 0..100", threshold.name))
+		}
+	}
+	return failures
 }
 
 func evaluateProblemGate(comparison Comparison, config ProblemGateThreshold) []string {

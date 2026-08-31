@@ -50,10 +50,9 @@ type codeProblemAccumulator struct {
 }
 
 type codeProblemContext struct {
-	screen string
-	flow   string
-	step   string
-	route  string
+	screen    string
+	operation string
+	route     string
 }
 
 type codeProblemContextAccumulator struct {
@@ -88,7 +87,7 @@ func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 		item.runtimeEvidence = true
 		item.addCategory(codeCategoryLogSpam)
 		item.logSpam += spam.Count
-		item.addContextSignal(spam.Screen, spam.Flow, spam.Step, "", CodeProblemSignal{
+		item.addContextSignal(spam.Screen, spam.Operation, "", CodeProblemSignal{
 			Name:     "Спам логами",
 			Category: codeCategoryLogs,
 			Severity: severityFromCount(spam.Count, 100, 1_000),
@@ -117,7 +116,7 @@ func (b *codeProblemBuilder) addProblemWindows(windows []ProblemWindowStats) {
 		for _, category := range extraCategoriesForProblemKind(window.Kind) {
 			item.addCategory(category)
 		}
-		item.addContextSignal(window.Screen, window.Flow, window.Step, "", CodeProblemSignal{
+		item.addContextSignal(window.Screen, window.Operation, "", CodeProblemSignal{
 			Name:     problemKindForCodeProblem(window.Kind),
 			Category: category,
 			Severity: severityFromProblemWindow(window),
@@ -180,7 +179,7 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 		if leak.HeapEvidence {
 			signalName = "Подтвержденный путь удержания HPROF"
 		}
-		item.addContextSignal(leak.Screen, leak.Flow, leak.Step, "", CodeProblemSignal{
+		item.addContextSignal(leak.Screen, leak.Operation, "", CodeProblemSignal{
 			Name:     signalName,
 			Category: codeCategoryMemory,
 			Severity: leak.Severity,
@@ -213,7 +212,7 @@ func (b *codeProblemBuilder) addRuntimeCallEndpoint(owner string, call RuntimeCa
 	if call.MaxMS >= 700 && likelyMainThreadOwner(owner) {
 		item.addCategory(codeCategoryANR)
 	}
-	item.addContextSignal(call.Screen, call.Flow, call.Step, "", CodeProblemSignal{
+	item.addContextSignal(call.Screen, call.Operation, "", CodeProblemSignal{
 		Name:     name,
 		Category: codeCategoryRuntime,
 		Severity: severityFromDuration(call.MaxMS, 500, 2_000),
@@ -221,7 +220,7 @@ func (b *codeProblemBuilder) addRuntimeCallEndpoint(owner string, call RuntimeCa
 		Count:    call.Count,
 		TotalMS:  call.TotalMS,
 		MaxMS:    call.MaxMS,
-		Detail:   "Метрики объединяют все runtime-связки метода; точные caller → callee строки сохранены в реестре runtime-вызовов.",
+		Detail:   "Метрики объединяют все связи метода, записанные при выполнении; точные переходы вызывающий → вызываемый сохранены в реестре вызовов.",
 	})
 }
 
@@ -269,12 +268,11 @@ func (b *codeProblemBuilder) item(className, method, owner string) *codeProblemA
 	return item
 }
 
-func (a *codeProblemAccumulator) addContextSignal(screen, flow, step, route string, signal CodeProblemSignal) {
+func (a *codeProblemAccumulator) addContextSignal(screen, operation, route string, signal CodeProblemSignal) {
 	context := codeProblemContext{
-		screen: normalizeCodeProblemContextValue(screen),
-		flow:   normalizeCodeProblemContextValue(flow),
-		step:   normalizeCodeProblemContextValue(step),
-		route:  normalizeCodeProblemContextValue(route),
+		screen:    normalizeCodeProblemContextValue(screen),
+		operation: normalizeCodeProblemContextValue(operation),
+		route:     normalizeCodeProblemContextValue(route),
 	}
 	a.addSignal(signal)
 	if signal.Name == "" {
@@ -366,7 +364,7 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 	categories := sortedCodeProblemValues(a.categories)
 	problems := sortedCodeProblemValues(a.problemNames)
 	recommendation := codeProblemRecommendation(categories)
-	drillDown, screens, flows, steps, routes := codeProblemDrillDown(a, recommendation)
+	drillDown, screens, operations, routes := codeProblemDrillDown(a, recommendation)
 	return CodeProblemStats{
 		ClassName:       a.className,
 		Method:          a.method,
@@ -378,8 +376,7 @@ func (a *codeProblemAccumulator) toStats() CodeProblemStats {
 		Problems:        problems,
 		Signals:         signals,
 		Screens:         screens,
-		Flows:           flows,
-		Steps:           steps,
+		Operations:      operations,
 		Routes:          routes,
 		DrillDown:       drillDown,
 		Impact:          codeProblemImpact(categories, a.runtimeEvidence),
@@ -397,7 +394,6 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 	[]string,
 	[]string,
 	[]string,
-	[]string,
 ) {
 	contexts := append([]codeProblemContextAccumulator(nil), a.contexts...)
 	sort.Slice(contexts, func(i, j int) bool {
@@ -406,32 +402,26 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 		if left.screen != right.screen {
 			return left.screen < right.screen
 		}
-		if left.flow != right.flow {
-			return left.flow < right.flow
-		}
-		if left.step != right.step {
-			return left.step < right.step
+		if left.operation != right.operation {
+			return left.operation < right.operation
 		}
 		return left.route < right.route
 	})
 	out := make([]CodeProblemDrillDown, 0, len(contexts))
 	var screens []string
-	var flows []string
-	var steps []string
+	var operations []string
 	var routes []string
 	for index := range contexts {
 		observation := &contexts[index]
 		context := observation.context
 		screens = appendUniqueCodeProblemValue(screens, context.screen)
-		flows = appendUniqueCodeProblemValue(flows, context.flow)
-		steps = appendUniqueCodeProblemValue(steps, context.step)
+		operations = appendUniqueCodeProblemValue(operations, context.operation)
 		routes = appendUniqueCodeProblemValue(routes, context.route)
 		out = append(out, CodeProblemDrillDown{
 			ClassName:      a.className,
 			Method:         a.method,
 			Screen:         context.screen,
-			Flow:           context.flow,
-			Step:           context.step,
+			Operation:      context.operation,
 			Route:          context.route,
 			Evidence:       codeProblemContextEvidence(observation),
 			Recommendation: recommendation,
@@ -439,10 +429,9 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 		})
 	}
 	sort.Strings(screens)
-	sort.Strings(flows)
-	sort.Strings(steps)
+	sort.Strings(operations)
 	sort.Strings(routes)
-	return out, screens, flows, steps, routes
+	return out, screens, operations, routes
 }
 
 func appendUniqueCodeProblemValue(values []string, value string) []string {
@@ -606,35 +595,35 @@ func codeProblemRecommendation(categories []string) string {
 		case codeCategoryNetwork:
 			recommendations = append(recommendations, "проверьте дедупликацию запросов, кеширование, таймауты и повторные фоновые циклы")
 		case codeCategoryUI:
-			recommendations = append(recommendations, "проверьте отрисовку, привязку данных, тяжелые layout-операции и работу при скролле")
+			recommendations = append(recommendations, "проверьте отрисовку, привязку данных, сложную компоновку и работу при прокрутке")
 		case codeCategoryMainThread:
-			recommendations = append(recommendations, "перенесите тяжелую работу с главного потока и проверьте цепочку dispatch, click и слушателей")
+			recommendations = append(recommendations, "перенесите тяжёлую работу с главного потока и проверьте цепочку диспетчеризации, обработки нажатий и слушателей")
 		case codeCategoryMemory:
 			recommendations = append(recommendations, "проверьте владельцев ссылок, жизненный цикл, кеши и рост PSS рядом с GC")
 		case codeCategoryLogs:
-			recommendations = append(recommendations, "уменьшите частоту логирования или вынесите шумные debug-логи из горячего пути")
+			recommendations = append(recommendations, "уменьшите частоту логирования или вынесите шумные отладочные логи из часто выполняемого пути")
 		case codeCategoryRuntime:
 			recommendations = append(recommendations, "проверьте цепочку вызовов и стоимость вызываемого метода")
 		case codeCategoryInfluence:
-			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с доказательствами выполнения; приоритет выше, если рядом есть паузы, сеть, память или runtime-вызовы")
+			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с подтверждёнными вызовами; приоритет выше, если рядом есть паузы, сеть, память или вызовы при выполнении")
 		case codeCategoryANR:
-			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode/trace и уберите блокировки с главного потока")
+			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode и трассу выполнения и уберите блокировки с главного потока")
 		case codeCategoryOOM:
-			recommendations = append(recommendations, "проверьте рост heap/PSS, лимиты кешей, bitmap/buffer allocations и жизненный цикл владельцев")
+			recommendations = append(recommendations, "проверьте рост кучи и PSS, лимиты кэшей, создание изображений и буферов и жизненный цикл владельцев")
 		case codeCategoryGCPressure:
 			recommendations = append(recommendations, "уменьшите текучесть аллокаций в горячем пути и проверьте повторные сборки/создание временных объектов")
 		case codeCategoryDuplicate:
 			recommendations = append(recommendations, "добавьте дедупликацию запросов в работе, кеширование ответа или задержку повторного запуска сценария")
 		case codeCategoryLifecycle:
-			recommendations = append(recommendations, "проверьте очистку слушателей, обратных вызовов и binding, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла")
+			recommendations = append(recommendations, "проверьте очистку слушателей, обратных вызовов и привязок представления, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла")
 		case codeCategoryLogSpam:
-			recommendations = append(recommendations, "ограничьте частоту логов, уберите debug-логи из горячего пути или агрегируйте события")
+			recommendations = append(recommendations, "ограничьте частоту логов, уберите отладочные логи из часто выполняемого пути или агрегируйте события")
 		case codeCategoryMainIO:
 			recommendations = append(recommendations, "вынесите дисковый и сетевой ввод-вывод с главного потока и проверьте нарушения StrictMode")
 		}
 	}
 	if len(recommendations) == 0 {
-		return "Проверьте источник вручную и сопоставьте его с таймлайном."
+		return "Проверьте источник вручную и сопоставьте его с временной шкалой."
 	}
 	return strings.Join(uniqueStrings(recommendations), "; ") + "."
 }

@@ -18,8 +18,7 @@ internal class RuntimeCallStack {
     private var startedAtMs = LongArray(INITIAL_DEPTH)
     private var names = arrayOfNulls<String>(INITIAL_DEPTH)
     private var screens = arrayOfNulls<String>(INITIAL_DEPTH)
-    private var flows = arrayOfNulls<String>(INITIAL_DEPTH)
-    private var steps = arrayOfNulls<String>(INITIAL_DEPTH)
+    private var operationIds = LongArray(INITIAL_DEPTH)
 
     var depth: Int = 0
         private set
@@ -33,30 +32,32 @@ internal class RuntimeCallStack {
         private set
     var poppedScreen: String? = null
         private set
-    var poppedFlow: String? = null
-        private set
-    var poppedStep: String? = null
+    var poppedOperationId: Long = 0L
         private set
     var hasPoppedParent = false
         private set
 
     fun push(
         methodId: Long,
-        methodName: String?,
+        methodName: String,
         startedAtMs: Long,
         screen: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
     ) {
         ensureCapacity(depth + 1)
         ids[depth] = methodId
         this.startedAtMs[depth] = startedAtMs
         names[depth] = methodName
         screens[depth] = screen
-        flows[depth] = flow
-        steps[depth] = step
+        operationIds[depth] = operationId
         depth++
     }
+
+    fun hasCurrentMethod(): Boolean = depth > 0
+
+    fun currentMethodId(): Long = if (depth > 0) ids[depth - 1] else 0L
+
+    fun currentMethodName(): String? = if (depth > 0) names[depth - 1] else null
 
     private fun ensureCapacity(required: Int) {
         if (required <= ids.size) return
@@ -65,8 +66,7 @@ internal class RuntimeCallStack {
         startedAtMs = startedAtMs.copyOf(capacity)
         names = names.copyOf(capacity)
         screens = screens.copyOf(capacity)
-        flows = flows.copyOf(capacity)
-        steps = steps.copyOf(capacity)
+        operationIds = operationIds.copyOf(capacity)
     }
 
     /** Returns false and discards unmatched inner frames when exits arrive out of LIFO order. */
@@ -106,8 +106,7 @@ internal class RuntimeCallStack {
         poppedStartedAtMs = startedAtMs[index]
         poppedName = names[index]
         poppedScreen = screens[index]
-        poppedFlow = flows[index]
-        poppedStep = steps[index]
+        poppedOperationId = operationIds[index]
     }
 
     private fun clearRange(from: Int, until: Int) {
@@ -117,8 +116,7 @@ internal class RuntimeCallStack {
     private fun clearFrame(index: Int) {
         names[index] = null
         screens[index] = null
-        flows[index] = null
-        steps[index] = null
+        operationIds[index] = 0L
     }
 
     private fun clearPopped() {
@@ -127,8 +125,7 @@ internal class RuntimeCallStack {
         poppedName = null
         poppedParentName = null
         poppedScreen = null
-        poppedFlow = null
-        poppedStep = null
+        poppedOperationId = 0L
         hasPoppedParent = false
     }
 
@@ -168,23 +165,22 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
 
     fun tryAdd(
         callerId: Long,
-        callerName: String?,
+        callerName: String,
         calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         screen: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
         durationMs: Long,
     ): Int {
         if (!ensureActivePage()) return RUNTIME_GRAPH_ADD_FULL
         var page = activePage()
-        if (page.add(callerId, callerName, calleeId, calleeName, screen, flow, step, durationMs)) {
+        if (page.add(callerId, callerName, calleeId, calleeName, screen, operationId, durationMs)) {
             return RUNTIME_GRAPH_ADD_AGGREGATED
         }
         publishActivePage()
         if (!ensureActivePage()) return RUNTIME_GRAPH_ADD_FULL
         page = activePage()
-        check(page.add(callerId, callerName, calleeId, calleeName, screen, flow, step, durationMs)) {
+        check(page.add(callerId, callerName, calleeId, calleeName, screen, operationId, durationMs)) {
             "Runtime graph edge did not fit an empty producer page"
         }
         return RUNTIME_GRAPH_ADD_PAGE_PUBLISHED
@@ -257,8 +253,7 @@ internal class RuntimeGraphAggregatePage {
     val callees = LongArray(TABLE_CAPACITY)
     val calleeNames = arrayOfNulls<String>(TABLE_CAPACITY)
     val screens = arrayOfNulls<String>(TABLE_CAPACITY)
-    val flows = arrayOfNulls<String>(TABLE_CAPACITY)
-    val steps = arrayOfNulls<String>(TABLE_CAPACITY)
+    val operationIds = LongArray(TABLE_CAPACITY)
     val counts = LongArray(TABLE_CAPACITY)
     val totalsMs = LongArray(TABLE_CAPACITY)
     val maximaMs = LongArray(TABLE_CAPACITY)
@@ -270,22 +265,21 @@ internal class RuntimeGraphAggregatePage {
 
     fun add(
         callerId: Long,
-        callerName: String?,
+        callerName: String,
         calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         screen: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
         durationMs: Long,
     ): Boolean {
         val cached = lastIndex
-        if (cached >= 0 && matches(cached, callerId, calleeId, screen, flow, step)) {
+        if (cached >= 0 && matches(cached, callerId, calleeId, screen, operationId)) {
             updateNames(cached, callerName, calleeName)
             merge(cached, 1L, durationMs, durationMs)
             logicalEvents = saturatingAdd(logicalEvents, 1L)
             return true
         }
-        val hash = runtimeGraphEdgeHash(callerId, calleeId, screen, flow, step)
+        val hash = runtimeGraphEdgeHash(callerId, calleeId, screen, operationId)
         var index = hash and TABLE_MASK
         repeat(TABLE_CAPACITY) {
             if (states[index] == EMPTY) {
@@ -297,8 +291,7 @@ internal class RuntimeGraphAggregatePage {
                 callees[index] = calleeId
                 calleeNames[index] = calleeName
                 screens[index] = screen
-                flows[index] = flow
-                steps[index] = step
+                operationIds[index] = operationId
                 counts[index] = 1L
                 totalsMs[index] = durationMs
                 maximaMs[index] = durationMs
@@ -307,7 +300,7 @@ internal class RuntimeGraphAggregatePage {
                 logicalEvents = saturatingAdd(logicalEvents, 1L)
                 return true
             }
-            if (hashes[index] == hash && matches(index, callerId, calleeId, screen, flow, step)) {
+            if (hashes[index] == hash && matches(index, callerId, calleeId, screen, operationId)) {
                 updateNames(index, callerName, calleeName)
                 merge(index, 1L, durationMs, durationMs)
                 lastIndex = index
@@ -335,8 +328,7 @@ internal class RuntimeGraphAggregatePage {
             callerNames[index] = null
             calleeNames[index] = null
             screens[index] = null
-            flows[index] = null
-            steps[index] = null
+            operationIds[index] = 0L
             counts[index] = 0L
             totalsMs[index] = 0L
             maximaMs[index] = 0L
@@ -352,14 +344,12 @@ internal class RuntimeGraphAggregatePage {
         callerId: Long,
         calleeId: Long,
         screen: String?,
-        flow: String?,
-        step: String?,
+        operationId: Long,
     ): Boolean {
         return callers[index] == callerId &&
             callees[index] == calleeId &&
             screens[index] == screen &&
-            flows[index] == flow &&
-            steps[index] == step
+            operationIds[index] == operationId
     }
 
     private fun merge(index: Int, count: Long, totalMs: Long, maxMs: Long) {
@@ -368,9 +358,9 @@ internal class RuntimeGraphAggregatePage {
         if (maxMs > maximaMs[index]) maximaMs[index] = maxMs
     }
 
-    private fun updateNames(index: Int, callerName: String?, calleeName: String?) {
-        if (callerNames[index] == null && callerName != null) callerNames[index] = callerName
-        if (calleeNames[index] == null && calleeName != null) calleeNames[index] = calleeName
+    private fun updateNames(index: Int, callerName: String, calleeName: String) {
+        if (callerNames[index] == null) callerNames[index] = callerName
+        if (calleeNames[index] == null) calleeNames[index] = calleeName
     }
 
     private companion object {
@@ -392,8 +382,7 @@ internal class RuntimeGraphEdgeTable {
     private var totalsMs = LongArray(INITIAL_CAPACITY)
     private var maximaMs = LongArray(INITIAL_CAPACITY)
     private var screens = arrayOfNulls<String>(INITIAL_CAPACITY)
-    private var flows = arrayOfNulls<String>(INITIAL_CAPACITY)
-    private var steps = arrayOfNulls<String>(INITIAL_CAPACITY)
+    private var operationIds = LongArray(INITIAL_CAPACITY)
     var size = 0
         private set
     private var used = 0
@@ -404,8 +393,7 @@ internal class RuntimeGraphEdgeTable {
             page.callers[source],
             page.callees[source],
             page.screens[source],
-            page.flows[source],
-            page.steps[source],
+            page.operationIds[source],
         )
         val existing = find(page, source, hash)
         if (existing >= 0) {
@@ -431,8 +419,7 @@ internal class RuntimeGraphEdgeTable {
         callees[index] = page.callees[source]
         calleeNames[index] = page.calleeNames[source]
         screens[index] = page.screens[source]
-        flows[index] = page.flows[source]
-        steps[index] = page.steps[source]
+        operationIds[index] = page.operationIds[source]
         counts[index] = page.counts[source]
         totalsMs[index] = page.totalsMs[source]
         maximaMs[index] = page.maximaMs[source]
@@ -446,8 +433,8 @@ internal class RuntimeGraphEdgeTable {
         while (visited < states.size && batch.size < RUNTIME_GRAPH_MAX_FLUSH_RECORDS) {
             if (states[index] == OCCUPIED) {
                 batch.add(
-                    screens[index], callers[index], callerNames[index], flows[index], steps[index],
-                    callees[index], calleeNames[index], counts[index], totalsMs[index], maximaMs[index],
+                    screens[index], callers[index], checkNotNull(callerNames[index]), operationIds[index],
+                    callees[index], checkNotNull(calleeNames[index]), counts[index], totalsMs[index], maximaMs[index],
                 )
                 delete(index)
             }
@@ -485,8 +472,7 @@ internal class RuntimeGraphEdgeTable {
             callers[index] == page.callers[source] &&
             callees[index] == page.callees[source] &&
             screens[index] == page.screens[source] &&
-            flows[index] == page.flows[source] &&
-            steps[index] == page.steps[source]
+            operationIds[index] == page.operationIds[source]
     }
 
     private fun findInsertIndex(hash: Int): Int {
@@ -506,8 +492,7 @@ internal class RuntimeGraphEdgeTable {
         callerNames[index] = null
         calleeNames[index] = null
         screens[index] = null
-        flows[index] = null
-        steps[index] = null
+        operationIds[index] = 0L
         counts[index] = 0L
         totalsMs[index] = 0L
         maximaMs[index] = 0L
@@ -533,7 +518,7 @@ internal class RuntimeGraphEdgeTable {
     private fun rehash(capacity: Int) {
         val old = StorageSnapshot(
             states, hashes, callers, callerNames, callees, calleeNames, counts, totalsMs, maximaMs,
-            screens, flows, steps,
+            screens, operationIds,
         )
         allocate(capacity)
         for (oldIndex in old.states.indices) {
@@ -556,8 +541,7 @@ internal class RuntimeGraphEdgeTable {
         totalsMs = LongArray(capacity)
         maximaMs = LongArray(capacity)
         screens = arrayOfNulls(capacity)
-        flows = arrayOfNulls(capacity)
-        steps = arrayOfNulls(capacity)
+        operationIds = LongArray(capacity)
         size = 0
         used = 0
         drainCursor = 0
@@ -574,8 +558,7 @@ internal class RuntimeGraphEdgeTable {
         totalsMs[to] = old.totalsMs[from]
         maximaMs[to] = old.maximaMs[from]
         screens[to] = old.screens[from]
-        flows[to] = old.flows[from]
-        steps[to] = old.steps[from]
+        operationIds[to] = old.operationIds[from]
     }
 
     private class StorageSnapshot(
@@ -589,8 +572,7 @@ internal class RuntimeGraphEdgeTable {
         val totalsMs: LongArray,
         val maximaMs: LongArray,
         val screens: Array<String?>,
-        val flows: Array<String?>,
-        val steps: Array<String?>,
+        val operationIds: LongArray,
     )
 
     private companion object {
@@ -604,11 +586,10 @@ internal class RuntimeGraphEdgeTable {
     }
 }
 
-private fun runtimeGraphEdgeHash(caller: Long, callee: Long, screen: String?, flow: String?, step: String?): Int {
+private fun runtimeGraphEdgeHash(caller: Long, callee: Long, screen: String?, operationId: Long): Int {
     var mixed = caller xor java.lang.Long.rotateLeft(callee, 29)
     mixed = mixed xor ((screen?.hashCode() ?: 0).toLong() shl 32)
-    mixed = mixed xor (flow?.hashCode() ?: 0).toLong()
-    mixed = mixed xor java.lang.Long.rotateLeft((step?.hashCode() ?: 0).toLong(), 17)
+    mixed = mixed xor java.lang.Long.rotateLeft(operationId, 17)
     mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
     mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
     return (mixed xor (mixed ushr 32)).toInt()

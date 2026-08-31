@@ -40,6 +40,24 @@ class InstrumentationModelTest {
             config,
         )
         assertIntent(
+            HookIntent.InstallOkHttpEventListener,
+            methodCall(
+                owner = "okhttp3/OkHttpClient\$Builder",
+                name = "eventListener",
+                descriptor = "(Lokhttp3/EventListener;)Lokhttp3/OkHttpClient\$Builder;",
+            ),
+            config,
+        )
+        assertIntent(
+            HookIntent.GuardOkHttpNewCall,
+            methodCall(
+                owner = "okhttp3/OkHttpClient",
+                name = "newCall",
+                descriptor = "(Lokhttp3/Request;)Lokhttp3/Call;",
+            ),
+            config,
+        )
+        assertIntent(
             HookIntent.WrapWebSocketListener,
             methodCall(
                 owner = "okhttp3/OkHttpClient",
@@ -85,6 +103,252 @@ class InstrumentationModelTest {
             ),
             config,
         )
+    }
+
+    @Test
+    fun criticalIoMatchesOnlyReviewedWholeOperationAndSyncCalls() {
+        val enabled = testHookConfig(ioTracing = true)
+        assertIntent(
+            HookIntent.CriticalIO(CriticalIOCallKind.FILE_READ_BYTES),
+            methodCall("kotlin/io/FilesKt", "readBytes", "(Ljava/io/File;)[B"),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.CriticalIO(CriticalIOCallKind.FILE_DESCRIPTOR_SYNC),
+            methodCall("java/io/FileDescriptor", "sync", "()V"),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.CriticalIO(CriticalIOCallKind.FILE_CHANNEL_FORCE),
+            methodCall("java/nio/channels/FileChannel", "force", "(Z)V"),
+            enabled,
+        )
+        assertTrue(
+            HookIntentResolver.resolve(
+                methodCall("java/io/InputStream", "read", "([B)I"),
+                enabled,
+            ) is HookDecision.NotMatched,
+        )
+        assertTrue(
+            HookIntentResolver.resolve(
+                methodCall("kotlin/io/FilesKt", "readBytes", "(Ljava/io/File;)[B"),
+                testHookConfig(ioTracing = false),
+            ) is HookDecision.Disabled,
+        )
+    }
+
+    @Test
+    fun databaseMatchesSQLiteRoomAndSupportSQLiteCallsOnlyWhenEnabled() {
+        val enabled = testHookConfig(databaseTracing = true)
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.SQLITE,
+                DatabaseOperationKind.QUERY,
+                "SELECT * FROM messages WHERE id = ?",
+                0,
+                DatabaseBoundaryKind.DISPATCH,
+            ),
+            methodCall(
+                "android/database/sqlite/SQLiteDatabase",
+                "rawQuery",
+                "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;",
+                databaseQuery = "SELECT * FROM messages WHERE id = ?",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.SUPPORT_SQLITE,
+                DatabaseOperationKind.EXECUTE,
+                resultCapture = DatabaseResultCapture.AFFECTED_ROWS,
+                statementAction = DatabaseStatementAction.EXECUTE,
+            ),
+            methodCall("androidx/sqlite/db/SupportSQLiteStatement", "executeUpdateDelete", "()I"),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.STATEMENT,
+                queryArgument = 0,
+                statementAction = DatabaseStatementAction.REGISTER,
+            ),
+            methodCall("androidx/room/RoomDatabase", "compileStatement", "(Ljava/lang/String;)Landroidx/sqlite/db/SupportSQLiteStatement;"),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.INSERT,
+                resultCapture = DatabaseResultCapture.INSERT_ROW_ID,
+            ),
+            methodCall(
+                "androidx/room/EntityUpsertAdapter",
+                "upsertAndReturnId",
+                "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Object;)J",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.INSERT,
+            ),
+            methodCall(
+                "androidx/room/EntityInsertAdapter",
+                "insert",
+                "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Iterable;)V",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.INSERT,
+            ),
+            methodCall(
+                "androidx/room/EntityUpsertAdapter",
+                "upsertAndReturnIdsList",
+                "(Landroidx/sqlite/SQLiteConnection;Ljava/util/Collection;)Ljava/util/List;",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.EXECUTE,
+                resultCapture = DatabaseResultCapture.AFFECTED_ROWS,
+            ),
+            methodCall(
+                "androidx/room/EntityDeleteOrUpdateAdapter",
+                "handle",
+                "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Object;)I",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.ROOM,
+                DatabaseOperationKind.EXECUTE,
+                resultCapture = DatabaseResultCapture.AFFECTED_ROWS,
+            ),
+            methodCall(
+                "androidx/room/EntityDeleteOrUpdateAdapter",
+                "handleMultiple",
+                "(Landroidx/sqlite/SQLiteConnection;[Ljava/lang/Object;)I",
+            ),
+            enabled,
+        )
+        assertTrue(
+            HookIntentResolver.resolve(
+                methodCall("android/database/sqlite/SQLiteDatabase", "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;"),
+                testHookConfig(databaseTracing = false),
+            ) is HookDecision.Disabled,
+        )
+        assertTrue(
+            HookIntentResolver.resolve(
+                methodCall(
+                    owner = "androidx/sqlite/db/SupportSQLiteDatabase",
+                    name = "query",
+                    descriptor = "(Ljava/lang/String;)Landroid/database/Cursor;",
+                    caller = CallerMethod("androidx/room/RoomDatabase", "query", "()V"),
+                ),
+                enabled,
+            ) is HookDecision.NotMatched,
+        )
+    }
+
+    @Test
+    fun databaseUsesHierarchyForPreparedResultsAndTransactions() {
+        val enabled = testHookConfig(databaseTracing = true)
+        val customStatement = setOf(
+            "com/example/FastStatement",
+            "androidx/sqlite/db/SupportSQLiteStatement",
+        )
+        assertIntent(
+            HookIntent.DatabaseCall(
+                DatabaseFrameworkKind.SUPPORT_SQLITE,
+                DatabaseOperationKind.EXECUTE,
+                resultCapture = DatabaseResultCapture.AFFECTED_ROWS,
+                statementAction = DatabaseStatementAction.EXECUTE,
+            ),
+            methodCall(
+                "com/example/FastStatement",
+                "executeUpdateDelete",
+                "()I",
+                ownerHierarchy = customStatement,
+            ),
+            enabled,
+        )
+
+        val customDatabase = setOf(
+            "com/example/FastDatabase",
+            "androidx/sqlite/db/SupportSQLiteDatabase",
+        )
+        assertIntent(
+            HookIntent.DatabaseTransaction(
+                DatabaseFrameworkKind.SUPPORT_SQLITE,
+                DatabaseTransactionAction.BEGIN,
+                DatabaseTransactionModeKind.IMMEDIATE,
+            ),
+            methodCall(
+                "com/example/FastDatabase",
+                "beginTransactionNonExclusive",
+                "()V",
+                ownerHierarchy = customDatabase,
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseTransaction(
+                DatabaseFrameworkKind.SQLITE,
+                DatabaseTransactionAction.BEGIN,
+                DatabaseTransactionModeKind.IMMEDIATE,
+            ),
+            methodCall(
+                "android/database/sqlite/SQLiteDatabase",
+                "beginTransactionWithListenerNonExclusive",
+                "(Landroid/database/sqlite/SQLiteTransactionListener;)V",
+            ),
+            enabled,
+        )
+        assertIntent(
+            HookIntent.DatabaseTransaction(
+                DatabaseFrameworkKind.SUPPORT_SQLITE,
+                DatabaseTransactionAction.END,
+                DatabaseTransactionModeKind.UNKNOWN,
+            ),
+            methodCall(
+                "com/example/FastDatabase",
+                "endTransaction",
+                "()V",
+                ownerHierarchy = customDatabase,
+            ),
+            enabled,
+        )
+        assertTrue(
+            HookIntentResolver.resolve(
+                methodCall(
+                    "androidx/sqlite/db/SupportSQLiteStatement",
+                    "executeUpdateDelete",
+                    "()J",
+                ),
+                enabled,
+            ) is HookDecision.Unsupported,
+        )
+    }
+
+    @Test
+    fun roomMutationOwnersMatchPublishedRoomRuntimeClasses() {
+        val adapter = Class.forName("androidx.room.EntityDeleteOrUpdateAdapter")
+        val connection = Class.forName("androidx.sqlite.SQLiteConnection")
+        adapter.getDeclaredMethod("handle", connection, Any::class.java)
+        val owner = adapter.name.replace('.', '/')
+        val decision = HookIntentResolver.resolve(
+            methodCall(owner, "handle", "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Object;)I"),
+            testHookConfig(databaseTracing = true),
+        )
+        assertTrue("Published Room mutation adapter is not instrumented", decision is HookDecision.Matched)
     }
 
     @Test
@@ -159,16 +423,16 @@ class InstrumentationModelTest {
         assertEquals("kotlinx.coroutines.bridge.v1", coroutineDecision.bridgeId)
         assertEquals("kotlinx.coroutines.builders.default_function2.v1", coroutineDecision.signatureId)
 
-        val flowDecision = HookIntentResolver.resolve(
+        val interactionDecision = HookIntentResolver.resolve(
             methodCall(
                 owner = "android/view/View",
                 name = "setOnClickListener",
                 descriptor = "(Landroid/view/View\$OnClickListener;)V",
             ),
-            testHookConfig(flowInteractions = true),
+            testHookConfig(interactionOperations = true),
         )
-        require(flowDecision is HookDecision.Matched)
-        assertEquals("android.view.flow.bridge.v1", flowDecision.bridgeId)
+        require(interactionDecision is HookDecision.Matched)
+        assertEquals("android.view.interaction-operation.bridge.v1", interactionDecision.bridgeId)
 
         val logSpamDecision = HookIntentResolver.resolve(
             methodCall(
@@ -193,17 +457,29 @@ class InstrumentationModelTest {
         assertTrue("android.handler.bridge.v1" in bridgeIds)
         assertTrue("jdk.executor.bridge.v2" in bridgeIds)
         assertTrue("kotlinx.coroutines.bridge.v1" in bridgeIds)
-        assertTrue("android.view.flow.bridge.v1" in bridgeIds)
+        assertTrue("android.view.interaction-operation.bridge.v1" in bridgeIds)
         assertTrue("android.log.bridge.v1" in bridgeIds)
+        assertTrue("critical.io.bridge.v1" in bridgeIds)
         assertEquals(providerBridgeIds, bridgeIds)
         assertTrue("okhttp" in families)
         assertTrue("handler" in families)
         assertTrue("executor" in families)
         assertTrue("coroutines" in families)
-        assertTrue("flow" in families)
+        assertTrue("interaction-operation" in families)
         assertTrue("logspam" in families)
+        assertTrue("io" in families)
         assertEquals(
-            setOf("okhttp", "websocket", "handler", "executor", "coroutine", "flow", "logspam"),
+            setOf(
+                "okhttp",
+                "websocket",
+                "handler",
+                "executor",
+                "coroutine",
+                "interaction-operation",
+                "logspam",
+                "critical_io",
+                "database",
+            ),
             moduleIds,
         )
         assertTrue(
@@ -214,10 +490,11 @@ class InstrumentationModelTest {
     }
 
     @Test
-    fun currentInstrumentationModulesStayLinearByDefault() {
-        assertFalse(HookIntentResolver.needsControlFlow())
+    fun onlyDatabaseInstrumentationRequiresControlFlow() {
+        assertTrue(HookIntentResolver.needsControlFlow())
         assertFalse(HookIntentResolver.needsControlFlow(testHookConfig(okhttp = true, coroutines = true)))
-        assertTrue(HookIntentResolver.modules().none { it.needsControlFlow })
+        assertTrue(HookIntentResolver.needsControlFlow(testHookConfig(databaseTracing = true)))
+        assertEquals(setOf("database"), HookIntentResolver.modules().filter { it.needsControlFlow }.map { it.id }.toSet())
     }
 
     @Test
@@ -329,8 +606,17 @@ class InstrumentationModelTest {
         name: String,
         descriptor: String,
         ownerHierarchy: Set<String> = setOf(owner),
+        caller: CallerMethod? = null,
+        databaseQuery: String? = null,
     ): MethodCall {
-        return MethodCall(owner = owner, name = name, descriptor = descriptor, ownerHierarchy = ownerHierarchy)
+        return MethodCall(
+            owner = owner,
+            name = name,
+            descriptor = descriptor,
+            caller = caller,
+            ownerHierarchy = ownerHierarchy,
+            databaseQuery = databaseQuery,
+        )
     }
 
     private fun testHookConfig(
@@ -340,10 +626,12 @@ class InstrumentationModelTest {
         handlers: Boolean = false,
         executors: Boolean = false,
         coroutines: Boolean = false,
-        flowInteractions: Boolean = false,
+        interactionOperations: Boolean = false,
         logSpam: Boolean = false,
         classGraph: Boolean = false,
         runtimeCallGraph: Boolean = false,
+        ioTracing: Boolean = false,
+        databaseTracing: Boolean = false,
     ): HookConfig {
         return HookConfig(
             methodCounters = methodCounters,
@@ -352,13 +640,14 @@ class InstrumentationModelTest {
             handlers = handlers,
             executors = executors,
             coroutines = coroutines,
-            flowInteractions = flowInteractions,
+            interactionOperations = interactionOperations,
             logSpam = logSpam,
             classGraph = classGraph,
             runtimeCallGraph = runtimeCallGraph,
+            ioTracing = ioTracing,
+            databaseTracing = databaseTracing,
             classGraphDirectory = "",
             instrumentationDiagnosticsDirectory = "",
-            ownerMapEntriesDirectory = "",
         )
     }
 }

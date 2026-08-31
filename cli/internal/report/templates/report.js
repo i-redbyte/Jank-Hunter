@@ -145,7 +145,6 @@
 
   const enhanceLongCell = (cell) => {
     if (cell.dataset.cellEnhanced === 'true') return;
-    if (cell.closest('.leak-card-table')) return;
     if (cell.querySelector('table, canvas, svg, input, select, textarea, details, .cell-toggle')) return;
     const text = cell.textContent.trim().replace(/\s+/g, ' ');
     const overflows = cell.scrollWidth > cell.clientWidth + 4 || cell.scrollHeight > 180;
@@ -477,8 +476,7 @@
     if (drill.method) location += '.' + drill.method;
     const context = [];
     if (drill.screen) context.push('экран ' + drill.screen);
-    if (drill.flow) context.push('сценарий ' + drill.flow);
-    if (drill.step) context.push('шаг ' + drill.step);
+    if (drill.operation) context.push('операция ' + drill.operation);
     if (drill.route) context.push('маршрут ' + drill.route);
     return context.length ? location + ' -> ' + context.join(' -> ') : location;
   };
@@ -561,8 +559,7 @@
       context.appendChild(row);
     });
     appendContext('экран', problem.screens);
-    appendContext('сценарий', problem.flows);
-    appendContext('шаг', problem.steps);
+    appendContext('операция', problem.operations);
     appendContext('маршрут', problem.routes);
     if (!context.childNodes.length) context.textContent = 'контекст не записан';
     contextBlock.appendChild(context);

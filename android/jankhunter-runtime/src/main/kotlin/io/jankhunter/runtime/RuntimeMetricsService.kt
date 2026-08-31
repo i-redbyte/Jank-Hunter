@@ -10,13 +10,13 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal class RuntimeMetricsService(
     defaultMaxKeys: Int,
-    private val nowMs: () -> Long,
+    private val nowMs: RuntimeLongSource,
     private val writer: () -> AsyncLogWriter?,
     private val config: () -> JankHunterConfig?,
     private val ensureContextRecorded: () -> Unit,
-    private val executeMaintenance: (task: () -> Unit) -> Boolean,
-    private val executeDelayedMaintenance: (delayMs: Long, task: () -> Unit) -> Boolean,
-    private val executeMaintenanceAndWait: (timeoutMs: Long, task: () -> Unit) -> Boolean,
+    private val executeMaintenance: RuntimeTaskExecutor,
+    private val executeDelayedMaintenance: RuntimeDelayedTaskExecutor,
+    private val executeMaintenanceAndWait: RuntimeBlockingTaskExecutor,
 ) {
     private val lastFlushAtMs = AtomicLong(0L)
     private val metricGeneration = AtomicLong(0L)
@@ -30,7 +30,7 @@ internal class RuntimeMetricsService(
     fun configure(maxKeys: Int, exactAdmission: Boolean) {
         synchronized(flushLock) {
             aggregator = MetricAggregator(maxKeys, exactAdmission)
-            lastFlushAtMs.set(nowMs())
+            lastFlushAtMs.set(nowMs.getAsLong())
             metricGeneration.set(0L)
             windowFlushQueued.set(false)
             immediateFlushQueued.set(false)
@@ -88,7 +88,7 @@ internal class RuntimeMetricsService(
             flushNow()
             return true
         }
-        return executeMaintenanceAndWait(timeoutMs.coerceAtLeast(1L)) {
+        return executeMaintenanceAndWait.execute(timeoutMs.coerceAtLeast(1L)) {
             flushNow()
         }
     }
@@ -98,7 +98,7 @@ internal class RuntimeMetricsService(
         if (!shouldAggregate() || writer() == null) return false
         if (!immediateFlushQueued.compareAndSet(false, true)) return true
 
-        val accepted = executeMaintenance {
+        val accepted = executeMaintenance.execute {
             val generationBeforeFlush = metricGeneration.get()
             try {
                 flushNow()?.flush()
@@ -114,13 +114,13 @@ internal class RuntimeMetricsService(
     private fun scheduleWindowFlush() {
         val localConfig = config() ?: return
         if (!localConfig.metricAggregationEnabled()) return
-        val now = nowMs()
+        val now = nowMs.getAsLong()
         val last = lastFlushAtMs.get()
         val elapsed = (now - last).coerceAtLeast(0L)
         val delayMs = (localConfig.metricAggregationWindowMs() - elapsed).coerceAtLeast(0L)
         if (!windowFlushQueued.compareAndSet(false, true)) return
 
-        val accepted = executeDelayedMaintenance(delayMs) {
+        val accepted = executeDelayedMaintenance.execute(delayMs) {
             val generationBeforeFlush = metricGeneration.get()
             try {
                 flushNow()
@@ -159,7 +159,7 @@ internal class RuntimeMetricsService(
                     asyncWriter.gauge(name, value, count, sum, max, mode)
                 }
             })
-            lastFlushAtMs.set(nowMs())
+            lastFlushAtMs.set(nowMs.getAsLong())
             return asyncWriter
         }
     }

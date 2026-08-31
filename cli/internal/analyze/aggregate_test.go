@@ -151,8 +151,8 @@ func TestInspectSampleIncludesFPSAndGauges(t *testing.T) {
 	if summary.HTTPCount != 3 {
 		t.Fatalf("HTTPCount = %d, want 3", summary.HTTPCount)
 	}
-	if len(summary.Flows) == 0 {
-		t.Fatalf("expected flow attribution")
+	if len(summary.SignalContexts) == 0 {
+		t.Fatalf("expected operation attribution")
 	}
 	if len(summary.LogSpam) == 0 {
 		t.Fatalf("expected log spam attribution")
@@ -225,338 +225,27 @@ func TestFPSRequiresContinuousFrameEvidence(t *testing.T) {
 	}
 }
 
-func TestLoadOwnerMapResolvesNamespacedStableOwner(t *testing.T) {
-	dir := t.TempDir()
-	mapPath := filepath.Join(dir, "owner-map.json")
-	data := `{"format":4,"kind":"metadata","variant":"debug","idAlgorithm":"fnv1a64-canonical-stable-v1","generatedOwners":true,"symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0000000000001234","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	ownerMap, err := LoadOwnerMap(mapPath)
-	if err != nil {
-		t.Fatalf("LoadOwnerMap() error = %v", err)
-	}
-
-	collector := collector{ownerMap: ownerMap}
-	got := collector.resolveOwnerRef(nil, jhlog.StableSymbolInNamespace(0x1234, ownerMap.SymbolNamespace))
-	if got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("resolveOwnerRef() = %q", got)
-	}
-}
-
-func TestReadOwnerMapNamespaceReadsOnlyBoundedMetadataRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "owner-map.json")
+func TestReadArtifactMetadataNamespaceReadsCompactIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact-metadata.json")
 	const namespaceHex = "00112233445566778899aabbccddeeff"
-	data := strings.Join([]string{
-		`{"format":4,"kind":"metadata","symbolNamespace":"` + namespaceHex + `"}`,
-		`this intentionally invalid trailing entry must not be read`,
-	}, "\n")
+	data := `{"format":1,"kind":"artifact-metadata","symbolNamespace":"` + namespaceHex + `","networkWholeApplication":true}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	namespace, err := ReadOwnerMapNamespace(path)
+	namespace, err := ReadArtifactMetadataNamespace(path)
 	if err != nil {
-		t.Fatalf("ReadOwnerMapNamespace() error = %v", err)
+		t.Fatalf("ReadArtifactMetadataNamespace() error = %v", err)
 	}
 	if got := hex.EncodeToString(namespace); got != namespaceHex {
 		t.Fatalf("namespace = %q, want %q", got, namespaceHex)
 	}
-}
 
-func TestLoadOwnerMapRequiresSupportedFormat(t *testing.T) {
-	validNamespace := "aabb0000000000000000000000000000"
-	tests := map[string]string{
-		"missing format":       `{"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
-		"unsupported format":   `{"format":3,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}`,
-		"missing namespace":    `{"format":4,"kind":"metadata"}`,
-		"short namespace":      `{"format":4,"kind":"metadata","symbolNamespace":"aabb"}`,
-		"uppercase namespace":  `{"format":4,"kind":"metadata","symbolNamespace":"AABB0000000000000000000000000000"}`,
-		"whitespace namespace": `{"format":4,"kind":"metadata","symbolNamespace":" ` + validNamespace + `"}`,
-		"namespace on entry": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
-			`{"format":4,"kind":"entry","symbolNamespace":"` + validNamespace + `","id":"stable:0x0123456789abcdef","owner":"com.app.Owner.call"}`,
-		"conflicting namespace": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
-			`{"format":4,"kind":"metadata","symbolNamespace":"ccdd0000000000000000000000000000"}`,
-		"object entries": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace +
-			`","entries":[{"id":"stable:0x0123456789abcdef","owner":"com.app.Owner.call"}]}`,
-		"entry aliases": `{"format":4,"kind":"metadata","symbolNamespace":"` + validNamespace + `"}` + "\n" +
-			`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","name":"com.app.Owner.call"}`,
-		"unknown record kind": `{"format":4,"kind":"owners","symbolNamespace":"` + validNamespace + `"}`,
+	if err := os.WriteFile(path, []byte(data+"\n{}"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	for name, data := range tests {
-		t.Run(name, func(t *testing.T) {
-			mapPath := filepath.Join(t.TempDir(), "owner-map.json")
-			if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-				t.Fatalf("WriteFile() error = %v", err)
-			}
-
-			if _, err := LoadOwnerMap(mapPath); err == nil {
-				t.Fatalf("LoadOwnerMap() accepted %s owner map", name)
-			}
-		})
-	}
-}
-
-func TestLoadOwnerMapReadsJSONLEntries(t *testing.T) {
-	dir := t.TempDir()
-	mapPath := filepath.Join(dir, "owner-map.json")
-	data := `{"format":4,"kind":"metadata","variant":"debug","generatedOwners":true,"symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh","class":"com.app.FeedRepository","method":"refresh","descriptor":"()V"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	ownerMap, err := LoadOwnerMap(mapPath)
-	if err != nil {
-		t.Fatalf("LoadOwnerMap() error = %v", err)
-	}
-	if got := ownerMap.Entries["stable:0x0123456789abcdef"]; got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("ownerMap[stable ID] = %q", got)
-	}
-	if len(ownerMap.Entries) != 1 {
-		t.Fatalf("ownerMap contains unexpected aliases: %+v", ownerMap)
-	}
-}
-
-func TestLoadOwnerMapsMergesModuleEntriesWithSharedNamespace(t *testing.T) {
-	dir := t.TempDir()
-	appPath := filepath.Join(dir, "app-owner-map.json")
-	featurePath := filepath.Join(dir, "feature-owner-map.json")
-	const namespace = "aabb0000000000000000000000000000"
-	appData := `{"format":4,"kind":"metadata","symbolNamespace":"` + namespace + `"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0000000000000001","owner":"com.app.MainActivity.render"}` + "\n"
-	featureData := `{"format":4,"kind":"metadata","symbolNamespace":"` + namespace + `"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0000000000000002","owner":"com.app.feed.FeedPresenter.load"}` + "\n"
-	if err := os.WriteFile(appPath, []byte(appData), 0o600); err != nil {
-		t.Fatalf("WriteFile(app) error = %v", err)
-	}
-	if err := os.WriteFile(featurePath, []byte(featureData), 0o600); err != nil {
-		t.Fatalf("WriteFile(feature) error = %v", err)
-	}
-
-	ownerMap, err := LoadOwnerMaps([]string{appPath, featurePath})
-	if err != nil {
-		t.Fatalf("LoadOwnerMaps() error = %v", err)
-	}
-	if got := hexOrEmpty(ownerMap.SymbolNamespace); got != namespace {
-		t.Fatalf("symbolNamespace = %q, want %q", got, namespace)
-	}
-	if got := ownerMap.Entries["stable:0x0000000000000001"]; got != "com.app.MainActivity.render" {
-		t.Fatalf("app owner = %q", got)
-	}
-	if got := ownerMap.Entries["stable:0x0000000000000002"]; got != "com.app.feed.FeedPresenter.load" {
-		t.Fatalf("feature owner = %q", got)
-	}
-	if len(ownerMap.Entries) != 2 {
-		t.Fatalf("merged entries = %+v", ownerMap.Entries)
-	}
-}
-
-func TestLoadOwnerMapsAllowsIdenticalCrossModuleEntries(t *testing.T) {
-	dir := t.TempDir()
-	firstPath := filepath.Join(dir, "app-owner-map.json")
-	secondPath := filepath.Join(dir, "feature-owner-map.json")
-	const data = `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.shared.Dispatcher.run"}` + "\n"
-	for _, path := range []string{firstPath, secondPath} {
-		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-			t.Fatalf("WriteFile(%q) error = %v", path, err)
-		}
-	}
-
-	ownerMap, err := LoadOwnerMaps([]string{firstPath, secondPath})
-	if err != nil {
-		t.Fatalf("LoadOwnerMaps() error = %v", err)
-	}
-	if len(ownerMap.Entries) != 1 || ownerMap.Entries["stable:0x0123456789abcdef"] != "com.shared.Dispatcher.run" {
-		t.Fatalf("ownerMap = %+v", ownerMap)
-	}
-}
-
-func TestLoadOwnerMapsRejectsDifferentNamespaces(t *testing.T) {
-	dir := t.TempDir()
-	appPath := filepath.Join(dir, "app-owner-map.json")
-	featurePath := filepath.Join(dir, "feature-owner-map.json")
-	if err := os.WriteFile(appPath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(app) error = %v", err)
-	}
-	if err := os.WriteFile(featurePath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"ccdd0000000000000000000000000000"}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(feature) error = %v", err)
-	}
-
-	_, err := LoadOwnerMaps([]string{appPath, featurePath})
-	if err == nil ||
-		!strings.Contains(err.Error(), appPath) ||
-		!strings.Contains(err.Error(), featurePath) ||
-		!strings.Contains(err.Error(), "aabb") ||
-		!strings.Contains(err.Error(), "ccdd") {
-		t.Fatalf("LoadOwnerMaps() error = %v, want source-aware namespace mismatch", err)
-	}
-}
-
-func TestLoadOwnerMapsRejectsConflictingStableIDs(t *testing.T) {
-	dir := t.TempDir()
-	appPath := filepath.Join(dir, "app-owner-map.json")
-	featurePath := filepath.Join(dir, "feature-owner-map.json")
-	const metadata = `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n"
-	appData := metadata + `{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.First.call"}` + "\n"
-	featureData := metadata + `{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.Second.call"}` + "\n"
-	if err := os.WriteFile(appPath, []byte(appData), 0o600); err != nil {
-		t.Fatalf("WriteFile(app) error = %v", err)
-	}
-	if err := os.WriteFile(featurePath, []byte(featureData), 0o600); err != nil {
-		t.Fatalf("WriteFile(feature) error = %v", err)
-	}
-
-	_, err := LoadOwnerMaps([]string{appPath, featurePath})
-	if err == nil ||
-		!strings.Contains(err.Error(), appPath) ||
-		!strings.Contains(err.Error(), featurePath) ||
-		!strings.Contains(err.Error(), "stable:0x0123456789abcdef") ||
-		!strings.Contains(err.Error(), "com.app.First.call") ||
-		!strings.Contains(err.Error(), "com.app.Second.call") {
-		t.Fatalf("LoadOwnerMaps() error = %v, want source-aware stable ID conflict", err)
-	}
-}
-
-func TestLoadOwnerMapsRejectsInvalidMapWithoutPartialResult(t *testing.T) {
-	dir := t.TempDir()
-	validPath := filepath.Join(dir, "valid-owner-map.json")
-	invalidPath := filepath.Join(dir, "invalid-owner-map.json")
-	if err := os.WriteFile(validPath, []byte(`{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(valid) error = %v", err)
-	}
-	if err := os.WriteFile(invalidPath, []byte(`{"format":3,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(invalid) error = %v", err)
-	}
-
-	ownerMap, err := LoadOwnerMaps([]string{validPath, invalidPath})
-	if err == nil || ownerMap != nil || !strings.Contains(err.Error(), invalidPath) || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("LoadOwnerMaps() = (%+v, %v), want fail-closed invalid-map error", ownerMap, err)
-	}
-}
-
-func TestLoadOwnerMapRejectsNonCanonicalEntryID(t *testing.T) {
-	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
-	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789ABCDEF","owner":"com.app.FeedRepository.refresh"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	_, err := LoadOwnerMap(mapPath)
-	if err == nil || !strings.Contains(err.Error(), "not canonical") {
-		t.Fatalf("LoadOwnerMap() error = %v, want non-canonical ID error", err)
-	}
-}
-
-func TestLoadOwnerMapRejectsConflictingStableIDs(t *testing.T) {
-	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
-	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.First.call"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.Second.call"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	_, err := LoadOwnerMap(mapPath)
-	if err == nil || !strings.Contains(err.Error(), "line 3") || !strings.Contains(err.Error(), "conflicting owner map entry") {
-		t.Fatalf("LoadOwnerMap() error = %v, want line-aware conflict", err)
-	}
-}
-
-func TestLoadOwnerMapAllowsIdenticalDuplicateStableIDs(t *testing.T) {
-	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
-	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	ownerMap, err := LoadOwnerMap(mapPath)
-	if err != nil {
-		t.Fatalf("LoadOwnerMap() error = %v", err)
-	}
-	if len(ownerMap.Entries) != 1 || ownerMap.Entries["stable:0x0123456789abcdef"] != "com.app.FeedRepository.refresh" {
-		t.Fatalf("ownerMap = %+v", ownerMap)
-	}
-}
-
-func TestResolveOwnerAliasRequiresMatchingStableNamespace(t *testing.T) {
-	ownerMap := &OwnerMap{
-		Entries: map[string]string{
-			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
-			"manual":                    "manual owner",
-		},
-		SymbolNamespace: append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
-	}
-
-	if got := ResolveOwnerAlias(ownerMap, "manual"); got != "manual owner" {
-		t.Fatalf("manual alias = %q", got)
-	}
-	if got := ResolveOwnerAlias(ownerMap, "stable:aabb0000000000000000000000000000:0x0123456789abcdef"); got != "com.app.FeedRepository.refresh" {
-		t.Fatalf("namespaced stable alias = %q", got)
-	}
-	if got := ResolveOwnerAlias(ownerMap, "stable:ccdd0000000000000000000000000000:0x0123456789abcdef"); got != "stable:ccdd0000000000000000000000000000:0x0123456789abcdef" {
-		t.Fatalf("mismatched namespaced alias = %q", got)
-	}
-	if got := ResolveOwnerAlias(ownerMap, "unknown"); got != "unknown" {
-		t.Fatalf("unknown alias = %q", got)
-	}
-}
-
-func TestInspectAppliesManualAliasToEnvelopeOwner(t *testing.T) {
-	log := jhlog.Log{
-		Dict: map[uint64]string{1: "manual", 2: "GET /feed"},
-		Events: []jhlog.Event{{
-			Type:        jhlog.EventHTTP,
-			Attribution: attributionForTest(0, 1, 0, 0),
-			HTTP:        &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(2), DurationMS: 42, Status: jhlog.Status2xx},
-		}},
-	}
-	collector := newCollector("manual alias", 1, Options{OwnerMap: &OwnerMap{
-		Entries:         map[string]string{"manual": "com.app.Repository.load"},
-		SymbolNamespace: make([]byte, ownerMapNamespaceBytes),
-	}})
-	collector.startLog()
-	for _, event := range log.Events {
-		collector.add(log.Dict, event)
-	}
-	collector.finishLog()
-	summary := collector.finish()
-	if len(summary.Owners) != 1 || summary.Owners[0].Owner != "com.app.Repository.load" {
-		t.Fatalf("manual envelope owner alias was not applied: %+v", summary.Owners)
-	}
-}
-
-func TestInspectFilesRejectsOwnerMapFromAnotherSymbolNamespace(t *testing.T) {
-	mapPath := filepath.Join(t.TempDir(), "owner-map.json")
-	data := `{"format":4,"kind":"metadata","symbolNamespace":"aabb0000000000000000000000000000"}` + "\n" +
-		`{"format":4,"kind":"entry","id":"stable:0x0123456789abcdef","owner":"com.app.FeedRepository.refresh"}` + "\n"
-	if err := os.WriteFile(mapPath, []byte(data), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	ownerMap, err := LoadOwnerMap(mapPath)
-	if err != nil {
-		t.Fatalf("LoadOwnerMap() error = %v", err)
-	}
-
-	logPath := filepath.Join(t.TempDir(), "different-build.jhlog")
-	header := jhlog.DefaultSegmentHeader()
-	header.SymbolNamespace = append([]byte{0xcc, 0xdd}, make([]byte, 14)...)
-	file, _, err := jhlog.CreateWithHeader(logPath, header)
-	if err != nil {
-		t.Fatalf("CreateWithHeader() error = %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	_, err = InspectFilesWithOptions("mismatch", []string{logPath}, Options{OwnerMap: ownerMap})
-	if err == nil || !strings.Contains(err.Error(), "aabb") || !strings.Contains(err.Error(), "ccdd") {
-		t.Fatalf("InspectFilesWithOptions() error = %v, want explicit namespace mismatch", err)
+	if _, err := ReadArtifactMetadataNamespace(path); err == nil {
+		t.Fatal("ReadArtifactMetadataNamespace() succeeded with a trailing record")
 	}
 }
 
@@ -580,7 +269,7 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 		"com.app.checkout.CheckoutRepository.load",
 	} {
 		if counters[name].Value != 1 {
-			t.Fatalf("embedded stable counter %q was not resolved without owner-map: %+v", name, summary.Counters)
+			t.Fatalf("embedded stable counter %q was not resolved: %+v", name, summary.Counters)
 		}
 	}
 	for _, counter := range summary.Counters {
@@ -591,7 +280,7 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if len(summary.RuntimeCalls) != 1 ||
 		summary.RuntimeCalls[0].Caller != "com.app.checkout.CheckoutButton.onClick" ||
 		summary.RuntimeCalls[0].Callee != "com.app.checkout.CheckoutRepository.load" {
-		t.Fatalf("embedded runtime edge was not resolved without owner-map: %+v", summary.RuntimeCalls)
+		t.Fatalf("embedded runtime edge was not resolved: %+v", summary.RuntimeCalls)
 	}
 	var firstEventMS uint64
 	var lastEventMS uint64
@@ -646,7 +335,7 @@ func TestInspectFilesStreamsSample(t *testing.T) {
 	if leak.ClassName != "com.app.checkout.CheckoutActivity" || leak.Holder != "CheckoutPresenter.render" {
 		t.Fatalf("unexpected memory leak attribution: %+v", leak)
 	}
-	if leak.Screen != "CheckoutScreen" || leak.Flow != "checkout.open" || leak.Step != "render_list" {
+	if leak.Screen != "CheckoutScreen" || leak.Operation != "" {
 		t.Fatalf("unexpected memory leak context: %+v", leak)
 	}
 	if leak.EstimatedRetainedKB == 0 || leak.RetainedSizeConfidence == "" {
@@ -897,7 +586,7 @@ func TestCollectionQualityExplainsJankStatsFallbackWithoutClaimingEvidenceCorrup
 	collector.finalizeCollectionQuality()
 
 	got := collector.summary.CollectionQuality
-	if got.Level != "high" || got.Complete || got.TrustScorePercent != 100 ||
+	if got.Level != "high" || got.Complete || got.DiagnosticCompletenessPercent != 100 ||
 		got.CriticalRuntimeHookFailures != 0 || len(got.RuntimeHookFailureDetails) != 1 ||
 		!warningsContain(got.Notices, "Choreographer fallback") {
 		t.Fatalf("jankstats fallback quality = %+v", got)
@@ -912,6 +601,26 @@ func TestQualityWarningsDescribeExactAdmissionContentionAsLosslessBackpressure(t
 	warnings := qualityCounterWarnings(counters, false)
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "BEST_EFFORT") {
 		t.Fatalf("BEST_EFFORT contention warnings = %+v", warnings)
+	}
+}
+
+func TestQualityWarningsExplainPreparedStatementEvidenceLoss(t *testing.T) {
+	warnings := qualityCounterWarnings(map[uint64]uint64{
+		jhlog.QualityPreparedStatementRegistryEviction: 3,
+		jhlog.QualityPreparedStatementResolutionMiss:   2,
+	}, true)
+	if len(warnings) != 2 || !warningsContain(warnings, "SQL-шаблон") {
+		t.Fatalf("prepared statement warnings = %+v", warnings)
+	}
+}
+
+func TestQualityWarningsExplainReceiverAsyncEvidenceLoss(t *testing.T) {
+	warnings := qualityCounterWarnings(map[uint64]uint64{
+		jhlog.QualityReceiverAsyncRegistryEviction: 2,
+		jhlog.QualityReceiverAsyncResolutionMiss:   1,
+	}, true)
+	if len(warnings) != 2 || !warningsContain(warnings, "PendingResult.finish") {
+		t.Fatalf("receiver async warnings = %+v", warnings)
 	}
 }
 
@@ -935,7 +644,7 @@ func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvide
 		},
 		artifactDirectory: "/project/app/build/generated/jankhunter/debug",
 		artifactAuto:      true,
-		artifactNamespace: make([]byte, ownerMapNamespaceBytes),
+		artifactNamespace: make([]byte, symbolNamespaceBytes),
 	}
 	complete := completeCollector.analysisInputCompleteness(Summary{
 		LogCount:        1,
@@ -949,8 +658,8 @@ func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvide
 }
 
 func TestArtifactNamespaceRejectsAnotherBuildVariant(t *testing.T) {
-	header := jhlog.SegmentHeader{SymbolNamespace: bytes.Repeat([]byte{0x01}, ownerMapNamespaceBytes)}
-	wrongNamespace := bytes.Repeat([]byte{0xff}, ownerMapNamespaceBytes)
+	header := jhlog.SegmentHeader{SymbolNamespace: bytes.Repeat([]byte{0x01}, symbolNamespaceBytes)}
+	wrongNamespace := bytes.Repeat([]byte{0xff}, symbolNamespaceBytes)
 
 	err := validateArtifactNamespace(wrongNamespace, header, "session.jhlog", "/project/wrong-variant")
 	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact --artifacts-dir") {
@@ -1294,7 +1003,7 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		})
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
-		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" || got.TrustScorePercent != 99.6 ||
+		if got.RuntimeGraphCompletenessRatio != 0.98 || got.Level != "low" || got.DiagnosticCompletenessPercent != 99.6 ||
 			got.BoundedEvidenceLoss != 20 || got.OtherEvidenceLoss != 0 ||
 			!warningsContain(got.Reasons, "полнота runtime-графа 98.00%") {
 			t.Fatalf("runtime graph completeness = %+v", got)
@@ -1314,7 +1023,7 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
 		if got.RuntimeGraphCompletenessRatio != 1 || got.OtherEvidenceLoss != 1 ||
-			got.TrustScorePercent != 80 || got.TrustComponents[3].MissingPoints != 20 {
+			got.DiagnosticCompletenessPercent != 80 || got.DiagnosticCompletenessComponents[3].MissingPoints != 20 {
 			t.Fatalf("other evidence loss quality = %+v", got)
 		}
 	})
@@ -1331,19 +1040,19 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 		})
 		collector.finalizeCollectionQuality()
 		got := collector.summary.CollectionQuality
-		if got.RuntimeGraphEnabled || got.RuntimeGraphCompletenessRatio != 0 || got.TrustScorePercent != 100 ||
+		if got.RuntimeGraphEnabled || got.RuntimeGraphCompletenessRatio != 0 || got.DiagnosticCompletenessPercent != 100 ||
 			got.Level != "high" || !got.Complete || warningsContain(got.Reasons, "runtime-граф отключён") ||
 			!warningsContain(got.Notices, "полностью исключён") {
 			t.Fatalf("disabled runtime graph quality = %+v", got)
 		}
-		if len(got.TrustComponents) != 4 || got.TrustComponents[1].ID != "runtime_graph" ||
-			!got.TrustComponents[1].Excluded || got.TrustComponents[1].MissingPoints != 0 {
-			t.Fatalf("disabled runtime graph trust breakdown = %+v", got.TrustComponents)
+		if len(got.DiagnosticCompletenessComponents) != 4 || got.DiagnosticCompletenessComponents[1].ID != "runtime_graph" ||
+			!got.DiagnosticCompletenessComponents[1].Excluded || got.DiagnosticCompletenessComponents[1].MissingPoints != 0 {
+			t.Fatalf("disabled runtime graph diagnostic completeness = %+v", got.DiagnosticCompletenessComponents)
 		}
 	})
 }
 
-func TestCollectionTrustUsesFiveExplicitTiers(t *testing.T) {
+func TestDiagnosticCompletenessUsesFiveExplicitTiers(t *testing.T) {
 	cases := []struct {
 		score float64
 		want  string
@@ -1359,14 +1068,14 @@ func TestCollectionTrustUsesFiveExplicitTiers(t *testing.T) {
 		{score: 39.99, want: "low"},
 	}
 	for _, test := range cases {
-		got, explanation := describeCollectionTrust(test.score, nil)
+		got, explanation := describeDiagnosticCompleteness(test.score, nil)
 		if got != test.want || explanation == "" {
 			t.Fatalf("score %.2f = %q (%q), want %q", test.score, got, explanation, test.want)
 		}
 	}
 }
 
-func TestCollectionTrustScoreExplainsWeightedKnownLoss(t *testing.T) {
+func TestDiagnosticCompletenessExplainsKnownLossWithoutInternalCounters(t *testing.T) {
 	quality := CollectionQuality{
 		ExactAdmission:                   true,
 		WrittenEvents:                    800,
@@ -1383,19 +1092,20 @@ func TestCollectionTrustScoreExplainsWeightedKnownLoss(t *testing.T) {
 		RunCohortConsistent:              true,
 		ProcessScopeConsistent:           true,
 	}
-	score, components := collectionTrustScore(quality)
+	score, components := collectionDiagnosticCompleteness(quality)
 	if score != 92 || len(components) != 4 {
-		t.Fatalf("trust score = %.2f components=%+v", score, components)
+		t.Fatalf("diagnostic completeness = %.2f components=%+v", score, components)
 	}
 	transport := components[0]
 	if transport.ID != "transport" || transport.CoveragePercent != 80 ||
 		transport.EarnedPoints != 32 || transport.MissingPoints != 8 ||
-		!strings.Contains(transport.Explanation, "потеряно 200") {
-		t.Fatalf("transport trust component = %+v", transport)
+		!strings.Contains(strings.ToLower(transport.Explanation), "часть событий журнала недоступна") ||
+		strings.Contains(transport.Explanation, "200") {
+		t.Fatalf("transport completeness component = %+v", transport)
 	}
 }
 
-func TestCollectionTrustScoreDoesNotDoubleCountRuntimeGraphLoss(t *testing.T) {
+func TestDiagnosticCompletenessDoesNotDoubleCountRuntimeGraphLoss(t *testing.T) {
 	quality := CollectionQuality{
 		ExactAdmission:                true,
 		WrittenEvents:                 3,
@@ -1412,7 +1122,7 @@ func TestCollectionTrustScoreDoesNotDoubleCountRuntimeGraphLoss(t *testing.T) {
 		BoundedEvidenceLoss:           8,
 	}
 
-	score, components := collectionTrustScore(quality)
+	score, components := collectionDiagnosticCompleteness(quality)
 	if score != 84 || components[1].EarnedPoints != 4 || components[3].EarnedPoints != 20 {
 		t.Fatalf("runtime graph loss must affect only graph component: score=%v components=%+v", score, components)
 	}
@@ -1572,8 +1282,8 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictRoute, ID: 1, Value: "GET /feed"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 2, Value: "FeedScreen"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 3, Value: "FeedRepository.refresh"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 4, Value: "feed.refresh"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 5, Value: "network"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 4, Value: "feed.refresh"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 5, Value: "network"}},
 		{Type: jhlog.EventHTTP, TimeMS: 2, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(1), DurationMS: 100, Status: jhlog.Status2xx}},
 		{Type: jhlog.EventHTTP, TimeMS: 3, Attribution: attributionForTest(2, 3, 4, 5), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(1), DurationMS: 1000, Status: jhlog.Status2xx}},
 	}
@@ -1596,9 +1306,446 @@ func TestInspectHTTPP95UsesNearestRankForSmallSamples(t *testing.T) {
 	if len(summary.Routes) != 1 || summary.Routes[0].P95MS != 1000 {
 		t.Fatalf("route p95 = %+v, want 1000", summary.Routes)
 	}
-	if len(summary.Flows) != 1 || summary.Flows[0].HTTPP95MS != 1000 {
-		t.Fatalf("flow p95 = %+v, want 1000", summary.Flows)
+	if len(summary.SignalContexts) != 1 || summary.SignalContexts[0].HTTPP95MS != 1000 {
+		t.Fatalf("context p95 = %+v, want 1000", summary.SignalContexts)
 	}
+}
+
+func TestInspectBuildsAdvancedNetworkAnalysisByCallsiteAndContext(t *testing.T) {
+	dict := map[uint64]string{
+		1: "POST /checkout",
+		2: "payments",
+		3: "CheckoutScreen",
+		4: "CheckoutViewModel.submit",
+		5: "checkout.pay",
+		6: "authorize",
+	}
+	const initiatorID = 0x32621
+	baseHTTP := jhlog.HTTPEvent{
+		RouteRef:     jhlog.LocalSymbol(1),
+		ServiceRef:   jhlog.LocalSymbol(2),
+		InitiatorRef: jhlog.StableSymbol(initiatorID),
+		Attempts:     1,
+		DNSAttempts:  1,
+		Protocol:     jhlog.HTTPProtocol2,
+	}
+	first := baseHTTP
+	first.DurationMS = 500
+	first.QueueMS = 100
+	first.DNSMS = 20
+	first.ConnectMS = 50
+	first.TLSMS = 30
+	first.RequestMS = 10
+	first.TTFBMS = 250
+	first.ResponseMS = 40
+	first.RxBytes = 4_096
+	first.TxBytes = 512
+	first.StatusCode = 503
+	first.Attempts = 3
+	first.ConnectAttempts = 2
+	first.TLSAttempts = 1
+	first.ConnectFailures = 1
+	first.Redirects = 1
+
+	second := baseHTTP
+	second.DurationMS = 400
+	second.QueueMS = 50
+	second.RequestMS = 10
+	second.TTFBMS = 300
+	second.ResponseMS = 40
+	second.RxBytes = 1_024
+	second.StatusCode = 200
+
+	failed := baseHTTP
+	failed.InitiatorRef = jhlog.StableSymbol(initiatorID + 1)
+	failed.DurationMS = 50
+	failed.QueueMS = 50
+	failed.StatusCode = 0
+	failed.FailurePhase = jhlog.HTTPFailurePhaseCancelled
+	failed.FailureKind = jhlog.HTTPFailureKindCancelled
+	failed.DNSAttempts = 0
+
+	summary := inspectLogsForTest("advanced network", []jhlog.Log{{Dict: dict, Events: []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStableSymbol, ID: initiatorID, Value: "CheckoutRepository.authorize"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStableSymbol, ID: initiatorID + 1, Value: "CheckoutRepository.cancel"}},
+		{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
+		{Type: jhlog.EventHTTP, TimeMS: 800, Flags: uint64(jhlog.FlagHTTPFailed | jhlog.FlagHTTPCancelled), Attribution: attributionForTest(3, 4, 5, 6), HTTP: &failed},
+		{Type: jhlog.EventHTTP, TimeMS: 1_000, Flags: uint64(jhlog.FlagHTTPRequestBytesKnown | jhlog.FlagHTTPResponseBytesKnown), Attribution: attributionForTest(3, 4, 5, 6), HTTP: &first},
+		{Type: jhlog.EventHTTP, TimeMS: 1_100, Flags: uint64(jhlog.FlagHTTPCacheHit | jhlog.FlagHTTPReusedConnection | jhlog.FlagHTTPResponseBytesKnown), Attribution: attributionForTest(3, 4, 5, 6), HTTP: &second},
+	}}})
+
+	if got := summary.NetworkAnalysis.MaxConcurrency; got != 3 {
+		t.Fatalf("max concurrency = %d, want 3", got)
+	}
+	if summary.NetworkAnalysis.PeakConcurrencyAtMS != 750 ||
+		summary.NetworkAnalysis.TransportFailures != 1 ||
+		summary.NetworkAnalysis.HTTP5xx != 1 ||
+		summary.NetworkAnalysis.Canceled != 1 ||
+		summary.NetworkAnalysis.CacheHits != 1 ||
+		summary.NetworkAnalysis.ReusedConnections != 1 ||
+		summary.NetworkAnalysis.Retries != 1 ||
+		summary.NetworkAnalysis.Redirects != 1 ||
+		summary.NetworkAnalysis.ConnectFailures != 1 {
+		t.Fatalf("network summary = %+v", summary.NetworkAnalysis)
+	}
+	if len(summary.NetworkAnalysis.Calls) != 2 {
+		t.Fatalf("network calls = %+v", summary.NetworkAnalysis.Calls)
+	}
+	call := summary.NetworkAnalysis.Calls[0]
+	if call.Route != "POST /checkout" || call.Service != "payments" ||
+		call.Initiator != "CheckoutRepository.authorize" || call.Screen != "CheckoutScreen" ||
+		call.Operation != "unknown" ||
+		call.Owner != "CheckoutViewModel.submit" || call.Count != 2 || call.P95MS != 500 ||
+		call.Failures != 1 || call.HTTP5xx != 1 || call.CacheHits != 1 ||
+		call.Retries != 1 || call.Redirects != 1 {
+		t.Fatalf("primary call group = %+v", call)
+	}
+	assertNamedValue(t, summary.NetworkAnalysis.StatusCodes, "200", 1)
+	assertNamedValue(t, summary.NetworkAnalysis.StatusCodes, "503", 1)
+	assertNamedValue(t, summary.NetworkAnalysis.FailurePhases, "cancelled", 1)
+	assertNamedValue(t, summary.NetworkAnalysis.FailureKinds, "cancelled", 1)
+	assertNamedValue(t, summary.NetworkAnalysis.Protocols, "http/2", 3)
+	if len(summary.Routes) != 1 {
+		t.Fatalf("routes = %+v", summary.Routes)
+	}
+	route := summary.Routes[0]
+	if route.ContextCount != 2 || route.MaxConcurrency != 3 || route.HTTP5xx != 1 ||
+		route.TransportFailures != 1 || route.Retries != 1 || route.ConnectFailures != 1 ||
+		len(route.Phases) != 7 || route.Phases[0].Name != "queue" || route.Phases[0].P95MS != 100 {
+		t.Fatalf("advanced route = %+v", route)
+	}
+}
+
+func TestInspectBuildsTypedWebSocketAnalysisByRouteAndContext(t *testing.T) {
+	dict := map[uint64]string{1: "GET /socket", 2: "ChatScreen", 3: "RealtimeRepository", 4: "chat.open"}
+	summary := inspectLogsForTest("websocket", []jhlog.Log{{Dict: dict, Events: []jhlog.Event{
+		{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
+		{Type: jhlog.EventWebSocket, TimeMS: 75, Attribution: attributionForTest(2, 3, 4, 0), WebSocket: &jhlog.WebSocketEvent{
+			RouteRef: jhlog.LocalSymbol(1), ConnectionID: 10, Stage: jhlog.WebSocketStageOpened,
+			DurationMS: 75, StatusCode: 101,
+		}},
+		{Type: jhlog.EventWebSocket, TimeMS: 12_075, Attribution: attributionForTest(2, 3, 4, 0), WebSocket: &jhlog.WebSocketEvent{
+			RouteRef: jhlog.LocalSymbol(1), ConnectionID: 10, Stage: jhlog.WebSocketStageFailed,
+			DurationMS: 12_000, StatusCode: 101, FailureKind: jhlog.WebSocketFailureTimeout,
+			TextMessages: 7, BinaryMessages: 3, ReceivedBytes: 4_096,
+		}},
+		{Type: jhlog.EventWebSocket, TimeMS: 12_150, Attribution: attributionForTest(2, 3, 4, 0), WebSocket: &jhlog.WebSocketEvent{
+			RouteRef: jhlog.LocalSymbol(1), ConnectionID: 11, Stage: jhlog.WebSocketStageOpened,
+			DurationMS: 75, StatusCode: 101, ReconnectOrdinal: 1,
+		}},
+	}}})
+
+	analysis := summary.WebSocketAnalysis
+	if analysis == nil || analysis.Opened != 2 || analysis.Failures != 1 || analysis.ActiveAtEnd != 1 ||
+		analysis.Reconnects != 1 || analysis.ConnectP95MS != 75 || analysis.LifetimeP95MS != 12_000 ||
+		analysis.TextMessages != 7 || analysis.BinaryMessages != 3 || analysis.ReceivedBytes != 4_096 {
+		t.Fatalf("WebSocket analysis = %+v", analysis)
+	}
+	if len(analysis.Connections) != 1 {
+		t.Fatalf("WebSocket rows = %+v", analysis.Connections)
+	}
+	row := analysis.Connections[0]
+	if row.Route != "GET /socket" || row.Screen != "ChatScreen" || row.Owner != "RealtimeRepository" ||
+		row.Opened != 2 || row.Failures != 1 || row.ActiveAtEnd != 1 {
+		t.Fatalf("WebSocket row = %+v", row)
+	}
+	assertNamedValue(t, analysis.FailureKinds, "timeout", 1)
+}
+
+func TestInspectBuildsTypedDatabaseAnalysis(t *testing.T) {
+	dict := map[uint64]string{
+		1: "SELECT * FROM messages WHERE id = ?", 2: "MessagesScreen", 3: "MessagesRepository",
+	}
+	const sourceID = 0x32621
+	events := []jhlog.Event{
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStableSymbol, ID: sourceID, Value: "MessagesDao.load"}},
+		{Type: jhlog.EventSession, TimeMS: 0, Session: &jhlog.SessionEvent{}},
+	}
+	for index := 0; index < 25; index++ {
+		events = append(events, jhlog.Event{
+			Type: jhlog.EventDatabase, TimeMS: 100 + uint64(index*20), Flags: uint64(jhlog.FlagThreadMain),
+			Attribution: attributionForTest(2, 3, 0, 0),
+			Database: &jhlog.DatabaseEvent{
+				QueryRef: jhlog.LocalSymbol(1), SourceRef: jhlog.StableSymbol(sourceID),
+				Framework: jhlog.DatabaseFrameworkRoom, Operation: jhlog.DatabaseOperationQuery,
+				Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 25_000,
+				StatementFingerprint: 0x1234,
+			},
+		})
+	}
+	summary := inspectLogsForTest("database", []jhlog.Log{{Dict: dict, Events: events}})
+
+	analysis := summary.DatabaseAnalysis
+	if analysis == nil || analysis.Overall.Calls != 25 || analysis.Main.Calls != 25 || analysis.Background.Calls != 0 ||
+		analysis.Overall.P95DurationUS != 25_000 || analysis.Main.P95DurationUS != 25_000 ||
+		analysis.PeakCallsPerSecond != 25 || analysis.RapidRepeats != 24 ||
+		analysis.KnownSQLCalls != 25 {
+		t.Fatalf("database analysis = %+v", analysis)
+	}
+	if len(analysis.Statements) != 1 {
+		t.Fatalf("database statements = %+v", analysis.Statements)
+	}
+	row := analysis.Statements[0]
+	if row.Query != "SELECT * FROM messages WHERE id = ?" || row.Operation != "чтение" ||
+		row.OperationCode != "query" || row.StatementFingerprint != 0x1234 ||
+		row.Overall.Calls != 25 || row.Main.Calls != 25 || row.Background.Calls != 0 ||
+		row.RapidRepeats != 24 || len(row.Contexts) != 1 || row.Contexts[0].Source != "MessagesDao.load" ||
+		row.Contexts[0].Framework != "Room" {
+		t.Fatalf("database row = %+v", row)
+	}
+}
+
+func TestDatabaseAnalysisGroupsCanonicalStatementAndKeepsExecutionContexts(t *testing.T) {
+	dict := map[uint64]string{
+		1: "SELECT * FROM messages WHERE id = ?", 2: "Chat", 3: "ChatRepository",
+		4: "MessagesDao.load", 5: "chat.open", 6: "Search", 7: "SearchRepository",
+		8: "SearchDao.load", 9: "search.run",
+	}
+	var processID jhlog.ID128
+	processID[0] = 0x11
+	var sessionID jhlog.ID128
+	sessionID[0] = 0x22
+	header := jhlog.SegmentHeader{ProcessInstanceID: processID, SessionID: sessionID, ProcessName: "app"}
+	events := []jhlog.Event{
+		{Type: jhlog.EventSession, Session: &jhlog.SessionEvent{ProcessName: "app"}},
+		{Type: jhlog.EventOperation, TimeMS: 1, Attribution: attributionForTest(2, 3, 0, 0), Operation: &jhlog.OperationEvent{
+			NameRef: jhlog.LocalSymbol(5), ID: 10, Phase: jhlog.OperationPhaseStarted, Kind: jhlog.OperationKindUser,
+		}},
+		{Type: jhlog.EventDatabase, TimeMS: 2, Attribution: jhlog.AttributionContext{
+			Present: true, Screen: jhlog.LocalSymbol(2), Owner: jhlog.LocalSymbol(3), OperationID: 10,
+		}, Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(1), SourceRef: jhlog.LocalSymbol(4),
+			Framework: jhlog.DatabaseFrameworkRoom, Operation: jhlog.DatabaseOperationQuery,
+			Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 2_000,
+		}},
+		{Type: jhlog.EventOperation, TimeMS: 3, Attribution: attributionForTest(6, 7, 0, 0), Operation: &jhlog.OperationEvent{
+			NameRef: jhlog.LocalSymbol(9), ID: 11, Phase: jhlog.OperationPhaseStarted, Kind: jhlog.OperationKindUser,
+		}},
+		{Type: jhlog.EventDatabase, TimeMS: 4, Attribution: jhlog.AttributionContext{
+			Present: true, Screen: jhlog.LocalSymbol(6), Owner: jhlog.LocalSymbol(7), OperationID: 11,
+		}, Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(1), SourceRef: jhlog.LocalSymbol(8),
+			Framework: jhlog.DatabaseFrameworkRoom, Operation: jhlog.DatabaseOperationQuery,
+			Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 3_000,
+		}},
+	}
+
+	analysis := inspectLogsForTest("database-contexts", []jhlog.Log{{
+		Dict: dict, Events: events, Result: jhlog.StreamResult{Header: header},
+	}}).DatabaseAnalysis
+	if analysis == nil || len(analysis.Statements) != 1 || analysis.Statements[0].Overall.Calls != 2 {
+		t.Fatalf("canonical statements = %+v", analysis)
+	}
+	contexts := analysis.Statements[0].Contexts
+	if len(contexts) != 2 {
+		t.Fatalf("database contexts = %+v", contexts)
+	}
+	byOperation := make(map[string]DatabaseStatementContextStats, len(contexts))
+	for _, context := range contexts {
+		byOperation[context.ContextOperation] = context
+	}
+	chat := byOperation["chat.open"]
+	search := byOperation["search.run"]
+	if chat.Source != "MessagesDao.load" || chat.Screen != "Chat" || chat.OperationID != 10 ||
+		chat.Process != "app" || chat.ProcessInstanceID != fmt.Sprintf("%x", processID[:]) ||
+		chat.SessionID != fmt.Sprintf("%x", sessionID[:]) || search.Source != "SearchDao.load" ||
+		search.Screen != "Search" || search.OperationID != 11 {
+		t.Fatalf("database contexts = %+v", contexts)
+	}
+}
+
+func TestDatabaseAnalysisKeepsSessionsSeparateBeforeCanonicalMerge(t *testing.T) {
+	dict := map[uint64]string{1: "SELECT value FROM samples", 2: "Samples", 3: "SamplesDao.load"}
+	logs := make([]jhlog.Log, 0, 2)
+	for index := byte(1); index <= 2; index++ {
+		var processID jhlog.ID128
+		processID[0] = index
+		var sessionID jhlog.ID128
+		sessionID[0] = index + 10
+		logs = append(logs, jhlog.Log{
+			Dict: dict,
+			Result: jhlog.StreamResult{Header: jhlog.SegmentHeader{
+				ProcessInstanceID: processID, SessionID: sessionID, ProcessName: "app",
+			}},
+			Events: []jhlog.Event{{
+				Type: jhlog.EventDatabase, TimeMS: 1,
+				Attribution: jhlog.AttributionContext{Present: true, Screen: jhlog.LocalSymbol(2)},
+				Database: &jhlog.DatabaseEvent{
+					QueryRef: jhlog.LocalSymbol(1), SourceRef: jhlog.LocalSymbol(3),
+					Framework: jhlog.DatabaseFrameworkSQLite, Operation: jhlog.DatabaseOperationQuery,
+					Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 1_000,
+				},
+			}},
+		})
+	}
+
+	analysis := inspectLogsForTest("database-sessions", logs).DatabaseAnalysis
+	if analysis == nil || len(analysis.Statements) != 1 || analysis.Statements[0].Overall.Calls != 2 ||
+		len(analysis.Statements[0].Contexts) != 2 {
+		t.Fatalf("session-aware database analysis = %+v", analysis)
+	}
+	left, right := analysis.Statements[0].Contexts[0], analysis.Statements[0].Contexts[1]
+	if left.SessionID == right.SessionID || left.ProcessInstanceID == right.ProcessInstanceID {
+		t.Fatalf("database sessions were merged: %+v", analysis.Statements[0].Contexts)
+	}
+}
+
+func TestDatabaseAnalysisKeepsMainAndBackgroundLatencyIndependent(t *testing.T) {
+	dict := map[uint64]string{1: "SELECT value FROM samples"}
+	events := []jhlog.Event{{Type: jhlog.EventSession, Session: &jhlog.SessionEvent{}}}
+	events = append(events, jhlog.Event{
+		Type: jhlog.EventDatabase, TimeMS: 1, Flags: uint64(jhlog.FlagThreadMain),
+		Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(1), Framework: jhlog.DatabaseFrameworkSQLite,
+			Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess,
+			DurationUS: 1_000,
+		},
+	})
+	for index := 0; index < 25; index++ {
+		events = append(events, jhlog.Event{
+			Type: jhlog.EventDatabase, TimeMS: uint64(index + 2),
+			Database: &jhlog.DatabaseEvent{
+				QueryRef: jhlog.LocalSymbol(1), Framework: jhlog.DatabaseFrameworkSQLite,
+				Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess,
+				DurationUS: 200_000,
+			},
+		})
+	}
+
+	analysis := inspectLogsForTest("database-threads", []jhlog.Log{{Dict: dict, Events: events}}).DatabaseAnalysis
+	if analysis == nil || analysis.Overall.Calls != 26 || analysis.Main.Calls != 1 || analysis.Background.Calls != 25 ||
+		analysis.Main.P95DurationUS != 1_000 || analysis.Main.MaxDurationUS != 1_000 ||
+		analysis.Background.P95DurationUS != 200_000 || analysis.Background.MaxDurationUS != 200_000 {
+		t.Fatalf("thread-specific database analysis = %+v", analysis)
+	}
+	if len(analysis.Statements) != 1 || analysis.Statements[0].Main.P95DurationUS != 1_000 ||
+		analysis.Statements[0].Background.P95DurationUS != 200_000 {
+		t.Fatalf("thread-specific statement = %+v", analysis.Statements)
+	}
+}
+
+func TestDatabaseQuantilesSwitchToBoundedDeterministicStorage(t *testing.T) {
+	dict := map[uint64]string{1: "SELECT value FROM samples WHERE id = ?"}
+	events := []jhlog.Event{{Type: jhlog.EventSession, Session: &jhlog.SessionEvent{}}}
+	for index := uint64(1); index <= 256; index++ {
+		events = append(events, jhlog.Event{
+			Type: jhlog.EventDatabase, TimeMS: index,
+			Database: &jhlog.DatabaseEvent{
+				QueryRef: jhlog.LocalSymbol(1), Framework: jhlog.DatabaseFrameworkSQLite,
+				Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess,
+				DurationUS: index * 1_000,
+			},
+		})
+	}
+
+	analysis := inspectLogsForTest("database-quantiles", []jhlog.Log{{Dict: dict, Events: events}}).DatabaseAnalysis
+	if analysis == nil || !analysis.Overall.QuantilesApproximated || analysis.Overall.Calls != 256 ||
+		analysis.Overall.MaxDurationUS != 256_000 {
+		t.Fatalf("bounded database analysis = %+v", analysis)
+	}
+	if analysis.Overall.P50DurationUS > analysis.Overall.P95DurationUS ||
+		analysis.Overall.P95DurationUS > analysis.Overall.MaxDurationUS || len(analysis.Statements) != 1 ||
+		!analysis.Statements[0].Overall.QuantilesApproximated {
+		t.Fatalf("invalid bounded database quantiles = %+v", analysis)
+	}
+}
+
+func TestDatabaseDetailCardinalityIsBoundedWithoutLosingTotals(t *testing.T) {
+	dict := make(map[uint64]string, databaseStatementGroupLimit+1)
+	events := make([]jhlog.Event, 1, databaseStatementGroupLimit+2)
+	events[0] = jhlog.Event{Type: jhlog.EventSession, Session: &jhlog.SessionEvent{}}
+	for index := 1; index <= databaseStatementGroupLimit+1; index++ {
+		id := uint64(index)
+		dict[id] = fmt.Sprintf("SELECT value_%d FROM samples", index)
+		events = append(events, jhlog.Event{
+			Type: jhlog.EventDatabase, TimeMS: id,
+			Database: &jhlog.DatabaseEvent{
+				QueryRef: jhlog.LocalSymbol(id), Framework: jhlog.DatabaseFrameworkSQLite,
+				Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess,
+				DurationUS: 1_000,
+			},
+		})
+	}
+
+	analysis := inspectLogsForTest("database-cardinality", []jhlog.Log{{Dict: dict, Events: events}}).DatabaseAnalysis
+	if analysis == nil || analysis.Overall.Calls != databaseStatementGroupLimit+1 ||
+		len(analysis.Statements) != databaseStatementGroupLimit || analysis.DroppedStatementEvents != 1 ||
+		analysis.EvictedStatementGroups > 1 || analysis.FrequencyEstimateError == 0 {
+		t.Fatalf("bounded database groups: calls=%d groups=%d dropped=%d evicted=%d error=%d",
+			analysis.Overall.Calls, len(analysis.Statements), analysis.DroppedStatementEvents,
+			analysis.EvictedStatementGroups, analysis.FrequencyEstimateError)
+	}
+}
+
+func TestDatabaseHeavyHittersRetainLateCriticalStatement(t *testing.T) {
+	dict := make(map[uint64]string, databaseStatementGroupLimit+1)
+	events := make([]jhlog.Event, 0, databaseStatementGroupLimit+1)
+	for index := 1; index <= databaseStatementGroupLimit; index++ {
+		id := uint64(index)
+		dict[id] = fmt.Sprintf("SELECT ordinary_%d FROM samples", index)
+		events = append(events, jhlog.Event{Type: jhlog.EventDatabase, TimeMS: id, Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(id), Framework: jhlog.DatabaseFrameworkSQLite,
+			Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 1_000,
+		}})
+	}
+	criticalID := uint64(databaseStatementGroupLimit + 1)
+	dict[criticalID] = "SELECT critical FROM samples"
+	events = append(events, jhlog.Event{
+		Type: jhlog.EventDatabase, TimeMS: criticalID, Flags: uint64(jhlog.FlagThreadMain),
+		Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(criticalID), Framework: jhlog.DatabaseFrameworkSQLite,
+			Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeFailure,
+			DurationUS: 500_000,
+		},
+	})
+
+	analysis := inspectLogsForTest("database-critical-retention", []jhlog.Log{{Dict: dict, Events: events}}).DatabaseAnalysis
+	if analysis == nil || len(analysis.Statements) != databaseStatementGroupLimit ||
+		analysis.EvictedStatementGroups != 1 || analysis.DroppedStatementEvents != 1 {
+		t.Fatalf("heavy hitter analysis = %+v", analysis)
+	}
+	for _, statement := range analysis.Statements {
+		if statement.Query == "SELECT critical FROM samples" {
+			if statement.Main.Calls != 1 || statement.Overall.Failures != 1 || statement.EstimatedCalls == 0 {
+				t.Fatalf("critical statement = %+v", statement)
+			}
+			return
+		}
+	}
+	t.Fatal("late critical statement was not retained")
+}
+
+func TestDatabaseHeavyHittersAdmitRepeatedStatementAfterCapacity(t *testing.T) {
+	dict := make(map[uint64]string, databaseStatementGroupLimit+1)
+	events := make([]jhlog.Event, 0, databaseStatementGroupLimit+2)
+	for index := 1; index <= databaseStatementGroupLimit; index++ {
+		id := uint64(index)
+		dict[id] = fmt.Sprintf("SELECT ordinary_%d FROM samples", index)
+		events = append(events, jhlog.Event{Type: jhlog.EventDatabase, TimeMS: id, Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(id), Framework: jhlog.DatabaseFrameworkSQLite,
+			Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 1_000,
+		}})
+	}
+	hotID := uint64(databaseStatementGroupLimit + 1)
+	dict[hotID] = "SELECT repeated FROM samples"
+	for offset := uint64(0); offset < 2; offset++ {
+		events = append(events, jhlog.Event{Type: jhlog.EventDatabase, TimeMS: hotID + offset, Database: &jhlog.DatabaseEvent{
+			QueryRef: jhlog.LocalSymbol(hotID), Framework: jhlog.DatabaseFrameworkSQLite,
+			Operation: jhlog.DatabaseOperationQuery, Outcome: jhlog.DatabaseOutcomeSuccess, DurationUS: 1_000,
+		}})
+	}
+
+	analysis := inspectLogsForTest("database-frequency-retention", []jhlog.Log{{Dict: dict, Events: events}}).DatabaseAnalysis
+	for _, statement := range analysis.Statements {
+		if statement.Query == "SELECT repeated FROM samples" {
+			if statement.EstimatedCalls < 2 || statement.Overall.Calls == 0 ||
+				statement.EstimatedCalls-statement.Overall.Calls > statement.FrequencyEstimateError {
+				t.Fatalf("repeated statement = %+v", statement)
+			}
+			return
+		}
+	}
+	t.Fatal("repeated statement was not admitted by heavy-hitter estimator")
 }
 
 func TestInspectKeepsOwnerKindsSeparate(t *testing.T) {
@@ -1750,19 +1897,19 @@ func TestInspectFilesKeepsExactPercentilesBeyondFormerReservoirBoundary(t *testi
 	if summary.HTTPP95MS != expectedP95 {
 		t.Fatalf("global HTTP p95 is not exact: %d", summary.HTTPP95MS)
 	}
-	if len(summary.Flows) != 1 || summary.Flows[0].HTTPP95MS != expectedP95 {
-		t.Fatalf("flow HTTP p95 is not exact: %+v", summary.Flows)
+	if len(summary.SignalContexts) != 1 || summary.SignalContexts[0].HTTPP95MS != expectedP95 {
+		t.Fatalf("context HTTP p95 is not exact: %+v", summary.SignalContexts)
 	}
 	if len(summary.Gauges) != 1 {
 		t.Fatalf("Gauges = %+v, want one gauge", summary.Gauges)
 	}
-	expectedExtra := fmt.Sprintf("avg=%d max=%d samples=%d", uint64(total+1)/2, uint64(total), uint64(total))
+	expectedExtra := fmt.Sprintf("среднее=%d максимум=%d наблюдений=%d", uint64(total+1)/2, uint64(total), uint64(total))
 	if summary.Gauges[0].Extra != expectedExtra {
 		t.Fatalf("gauge Extra = %q, want %q", summary.Gauges[0].Extra, expectedExtra)
 	}
 }
 
-func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
+func TestInspectFilesDoesNotCarryOperationContextAcrossEventsOrLogs(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.jhlog")
 	firstFile, firstWriter, err := jhlog.Create(first)
@@ -1772,8 +1919,8 @@ func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 	firstEvents := []jhlog.Event{
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictScreen, ID: 1, Value: "CheckoutScreen"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 2, Value: "CheckoutPresenter.render"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 3, Value: "checkout.open"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 4, Value: "render_list"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 3, Value: "checkout.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 4, Value: "render_list"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 5, Value: "test"}},
 		{Type: jhlog.EventLogSpam, TimeMS: 1, Attribution: attributionForTest(1, 2, 3, 4), LogSpam: &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(5), Level: 2, Count: 1}},
 	}
@@ -1808,21 +1955,21 @@ func TestInspectFilesDoesNotCarryFlowContextAcrossEventsOrLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspectFilesForTest() error = %v", err)
 	}
-	if len(summary.Flows) != 2 {
-		t.Fatalf("Flows = %+v, want an attributed log event and an unattributed HTTP flow", summary.Flows)
+	if len(summary.SignalContexts) != 2 {
+		t.Fatalf("SignalContexts = %+v, want an attributed log event and an unattributed HTTP context", summary.SignalContexts)
 	}
-	var httpFlow *FlowStats
-	for index := range summary.Flows {
-		if summary.Flows[index].HTTPCount > 0 {
-			httpFlow = &summary.Flows[index]
+	var httpContext *SignalContextStats
+	for index := range summary.SignalContexts {
+		if summary.SignalContexts[index].HTTPCount > 0 {
+			httpContext = &summary.SignalContexts[index]
 			break
 		}
 	}
-	if httpFlow == nil {
-		t.Fatalf("HTTP flow missing: %+v", summary.Flows)
+	if httpContext == nil {
+		t.Fatalf("HTTP context missing: %+v", summary.SignalContexts)
 	}
-	if httpFlow.Screen != "unknown" || httpFlow.Flow != "unknown" || httpFlow.Step != "unknown" || httpFlow.Owner != "unknown" {
-		t.Fatalf("HTTP inherited stale flow context: %+v", httpFlow)
+	if httpContext.Screen != "unknown" || httpContext.Operation != "unknown" || httpContext.Owner != "unknown" {
+		t.Fatalf("HTTP inherited stale operation context: %+v", httpContext)
 	}
 }
 
@@ -2028,9 +2175,9 @@ func TestInspectFilesAppliesContextFiltersToProblemSignals(t *testing.T) {
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 4, Value: "CheckoutOwner"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 5, Value: "FeedCallee"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictOwner, ID: 6, Value: "CheckoutCallee"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 7, Value: "feed.open"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictFlow, ID: 8, Value: "checkout.open"}},
-		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictStep, ID: 9, Value: "render"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 7, Value: "feed.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 8, Value: "checkout.open"}},
+		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 9, Value: "render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 10, Value: "FeedLogger.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictLogSource, ID: 11, Value: "CheckoutLogger.render"}},
 		{Type: jhlog.EventDictionary, Dictionary: &jhlog.DictionaryEntry{Kind: jhlog.DictGeneric, ID: 12, Value: "main_thread_stall"}},
@@ -2112,60 +2259,12 @@ func TestInspectGroupsJankStatsMetrics(t *testing.T) {
 	}
 }
 
-func TestInspectResolvesStableCounterMetricThroughOwnerMap(t *testing.T) {
-	const stableID = 0x0123456789abcdef
-	log := jhlog.Log{
-		Dict: map[uint64]string{
-			1: "custom.metric",
-		},
-		Events: []jhlog.Event{
-			{
-				Type: jhlog.EventCounter,
-				Metric: &jhlog.MetricEvent{
-					MetricRef: jhlog.StableSymbolInNamespace(
-						stableID,
-						append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
-					),
-					Value: 2,
-				},
-			},
-			{
-				Type: jhlog.EventCounter,
-				Metric: &jhlog.MetricEvent{
-					MetricRef: jhlog.LocalSymbol(1),
-					Value:     3,
-				},
-			},
-		},
-	}
-	collector := newCollector("stable counter", 1, Options{OwnerMap: &OwnerMap{
-		Entries: map[string]string{
-			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
-		},
-		SymbolNamespace: append([]byte{0xaa, 0xbb}, make([]byte, 14)...),
-	}})
-	collector.startLog()
-	for _, event := range log.Events {
-		collector.add(log.Dict, event)
-	}
-	collector.finishLog()
-	summary := collector.finish()
-
-	counters := namedValuesByName(summary.Counters)
-	if got := counters["com.app.FeedRepository.refresh"].Value; got != 2 {
-		t.Fatalf("stable method counter = %d, want 2; counters = %+v", got, summary.Counters)
-	}
-	if got := counters["custom.metric"].Value; got != 3 {
-		t.Fatalf("local counter = %d, want 3; counters = %+v", got, summary.Counters)
-	}
-}
-
-func TestExternalStableLogRequiresExplicitCLIOptIn(t *testing.T) {
+func TestMissingEmbeddedStableSymbolViolatesSelfContainedContract(t *testing.T) {
 	const stableID = 0x0123456789abcdef
 	namespace := append([]byte{0xaa, 0xbb}, make([]byte, 14)...)
 	header := jhlog.DefaultSegmentHeader()
 	header.SymbolNamespace = namespace
-	path := filepath.Join(t.TempDir(), "external-symbols.jhlog")
+	path := filepath.Join(t.TempDir(), "missing-embedded-symbol.jhlog")
 	closer, writer, err := jhlog.CreateWithHeader(path, header)
 	if err != nil {
 		t.Fatal(err)
@@ -2180,32 +2279,9 @@ func TestExternalStableLogRequiresExplicitCLIOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := InspectFilesWithOptions("external", []string{path}, Options{}); err == nil ||
-		!strings.Contains(err.Error(), "--external-symbols") {
-		t.Fatalf("missing owner-map error = %v", err)
-	}
-	ownerMap := &OwnerMap{
-		Entries: map[string]string{
-			"stable:0x0123456789abcdef": "com.app.FeedRepository.refresh",
-		},
-		SymbolNamespace: namespace,
-	}
-	if _, err := InspectFilesWithOptions("external", []string{path}, Options{
-		OwnerMap:                       ownerMap,
-		RequireExplicitExternalSymbols: true,
-	}); err == nil || !strings.Contains(err.Error(), "--external-symbols") {
-		t.Fatalf("implicit external mode error = %v", err)
-	}
-	summary, err := InspectFilesWithOptions("external", []string{path}, Options{
-		OwnerMap:                       ownerMap,
-		ExternalSymbols:                true,
-		RequireExplicitExternalSymbols: true,
-	})
-	if err != nil {
-		t.Fatalf("explicit external mode error = %v", err)
-	}
-	if got := namedValuesByName(summary.Counters)["com.app.FeedRepository.refresh"].Value; got != 2 {
-		t.Fatalf("resolved external counter = %d, want 2", got)
+	_, err = InspectFilesWithOptions("invalid", []string{path}, Options{})
+	if err == nil || !strings.Contains(err.Error(), "self-contained") {
+		t.Fatalf("missing embedded symbol error = %v, want self-contained contract failure", err)
 	}
 }
 
@@ -2269,13 +2345,13 @@ func TestInspectMergesAggregatedGaugesBySamplesAndMode(t *testing.T) {
 
 	summary := inspectLogsForTest("metrics", []jhlog.Log{log})
 	gauges := namedValuesByName(summary.Gauges)
-	if got := gauges["memory.pss"]; got.Value != 166 || got.Extra != "avg=166 max=260 samples=6" {
+	if got := gauges["memory.pss"]; got.Value != 166 || got.Extra != "среднее=166 максимум=260 наблюдений=6" {
 		t.Fatalf("memory.pss = %+v", got)
 	}
-	if got := gauges["battery.status"]; got.Value != 5 || got.Extra != "state=5 samples=2" {
+	if got := gauges["battery.status"]; got.Value != 5 || got.Extra != "состояние=5 наблюдений=2" {
 		t.Fatalf("battery.status = %+v", got)
 	}
-	if got := gauges["battery.charging"]; got.Value != 50 || got.Extra != "true_pct=50 true=1 samples=2" {
+	if got := gauges["battery.charging"]; got.Value != 50 || got.Extra != "доля включённого состояния=50 включено=1 наблюдений=2" {
 		t.Fatalf("battery.charging = %+v", got)
 	}
 }
@@ -2491,6 +2567,81 @@ func TestEvaluateGateFailsOnMetricRegression(t *testing.T) {
 	if !result.Failed {
 		t.Fatalf("expected metric gate failure")
 	}
+}
+
+func TestAndroidComponentGateIsOptInAndFailsOnConfiguredRegression(t *testing.T) {
+	comparison := Comparison{
+		AndroidComponents: AndroidComponentComparison{
+			Comparable: true,
+			Metrics: []Delta{
+				{Name: "Binder client p95", Comparable: true, RegressionPct: 25},
+			},
+		},
+	}
+
+	if result := EvaluateGate(comparison, ThresholdConfig{}); result.Failed {
+		t.Fatalf("Android component gate must be disabled by default: %+v", result)
+	}
+	result := EvaluateGate(comparison, ThresholdConfig{
+		AndroidComponents: AndroidComponentGateThreshold{
+			Enabled:                       true,
+			MaxBinderClientP95IncreasePct: floatPointer(10),
+		},
+	})
+	if !result.Failed || !strings.Contains(strings.Join(result.Failures, "\n"), "Binder client p95") {
+		t.Fatalf("expected Binder p95 gate failure, got %+v", result)
+	}
+}
+
+func TestAndroidComponentGateFailsClosedOnPartialAnalysisUnlessExplicitlyAllowed(t *testing.T) {
+	comparison := Comparison{
+		AndroidComponents: AndroidComponentComparison{
+			Comparable: true,
+			Partial:    true,
+			Note:       "Разрешён частичный анализ: secondary process отсутствует.",
+			Metrics: []Delta{
+				{Name: "Service failure rate", Comparable: true, RegressionAbs: 2},
+			},
+		},
+	}
+	threshold := AndroidComponentGateThreshold{
+		Enabled:                         true,
+		MaxServiceFailureRateIncreasePP: floatPointer(1),
+	}
+
+	result := EvaluateGate(comparison, ThresholdConfig{AndroidComponents: threshold})
+	if !result.Failed || !strings.Contains(strings.Join(result.Failures, "\n"), "partial") {
+		t.Fatalf("expected partial analysis failure, got %+v", result)
+	}
+	threshold.AllowPartial = true
+	result = EvaluateGate(comparison, ThresholdConfig{AndroidComponents: threshold})
+	if !result.Failed || !strings.Contains(strings.Join(result.Failures, "\n"), "Service failure rate") {
+		t.Fatalf("expected configured local metric failure, got %+v", result)
+	}
+}
+
+func TestAndroidComponentGateRejectsMissingAndInvalidThresholds(t *testing.T) {
+	comparison := Comparison{AndroidComponents: AndroidComponentComparison{Comparable: true}}
+	result := EvaluateGate(comparison, ThresholdConfig{
+		AndroidComponents: AndroidComponentGateThreshold{Enabled: true},
+	})
+	if !result.Failed || !strings.Contains(strings.Join(result.Failures, "\n"), "no thresholds") {
+		t.Fatalf("expected missing threshold failure, got %+v", result)
+	}
+
+	result = EvaluateGate(comparison, ThresholdConfig{
+		AndroidComponents: AndroidComponentGateThreshold{
+			Enabled:                         true,
+			MinBinderCorrelationCoveragePct: floatPointer(101),
+		},
+	})
+	if !result.Failed || !strings.Contains(strings.Join(result.Failures, "\n"), "0..100") {
+		t.Fatalf("expected invalid threshold failure, got %+v", result)
+	}
+}
+
+func floatPointer(value float64) *float64 {
+	return &value
 }
 
 func TestEvaluateGateFailsOnMinConfidenceOnly(t *testing.T) {
@@ -2834,6 +2985,20 @@ func TestRouteBurstAccumulatorKeepsPeakInBoundedState(t *testing.T) {
 	}
 }
 
+func TestMaxHTTPConcurrencyKeepsLogsIndependentAndIntervalsEndExclusive(t *testing.T) {
+	intervals := []httpInterval{
+		{logIndex: 2, startMS: 0, endMS: 100},
+		{logIndex: 1, startMS: 100, endMS: 200},
+		{logIndex: 1, startMS: 0, endMS: 100},
+		{logIndex: 2, startMS: 25, endMS: 75},
+		{logIndex: 2, startMS: 50, endMS: 125},
+	}
+	peak, peakAtMS := maxHTTPConcurrency(intervals)
+	if peak != 3 || peakAtMS != 50 {
+		t.Fatalf("concurrency = %d at %d ms, want 3 at 50 ms", peak, peakAtMS)
+	}
+}
+
 func warningsContain(warnings []string, fragment string) bool {
 	for _, warning := range warnings {
 		if strings.Contains(warning, fragment) {
@@ -2843,10 +3008,24 @@ func warningsContain(warnings []string, fragment string) bool {
 	return false
 }
 
+func assertNamedValue(t *testing.T, values []NamedValue, name string, want uint64) {
+	t.Helper()
+	for _, value := range values {
+		if value.Name == name {
+			if value.Value != want {
+				t.Fatalf("named value %q = %d, want %d", name, value.Value, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("named value %q is absent in %+v", name, values)
+}
+
 func inspectLogsForTest(title string, logs []jhlog.Log) Summary {
 	collector := newCollector(title, len(logs), Options{})
 	for _, log := range logs {
-		collector.startLog()
+		collector.startLog(log.Result.Header)
+		collector.operationAnalysis.startLog(log.Result.Header)
 		collector.summary.Dictionary += len(log.Dict)
 		for _, event := range log.Events {
 			collector.add(log.Dict, event)
@@ -2893,12 +3072,10 @@ func readJhlogForTest(t *testing.T, path string) jhlog.Log {
 	return log
 }
 
-func attributionForTest(screenID, ownerID, flowID, stepID uint64) jhlog.AttributionContext {
+func attributionForTest(screenID, ownerID, _, _ uint64) jhlog.AttributionContext {
 	return jhlog.AttributionContext{
 		Present: true,
 		Screen:  jhlog.LocalSymbol(screenID),
 		Owner:   jhlog.LocalSymbol(ownerID),
-		Flow:    jhlog.LocalSymbol(flowID),
-		Step:    jhlog.LocalSymbol(stepID),
 	}
 }

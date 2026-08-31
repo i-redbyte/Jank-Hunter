@@ -411,8 +411,23 @@ def string_fields(collection_names, field_names):
     return result
 
 
+def nested_string_fields(parent_names, collection_names, field_names):
+    parent = value(summary, *parent_names)
+    if not isinstance(parent, dict):
+        return set()
+    rows = value(parent, *collection_names)
+    result = set()
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        actual = value(row, *field_names)
+        if isinstance(actual, str):
+            result.add(actual)
+    return result
+
+
 screens = string_fields(("Screens", "screens"), ("Screen", "screen"))
-screens.update(string_fields(("Flows", "flows"), ("Screen", "screen")))
+screens.update(nested_string_fields(("OperationAnalysis", "operation_analysis"), ("Operations", "operations"), ("Screen", "screen")))
 screens.update(string_fields(("ProblemWindows", "problem_windows"), ("Screen", "screen")))
 if "sample.compose.result" not in screens:
     failures.append("expected screen context is missing: sample.compose.result")
@@ -536,15 +551,15 @@ shopt -u nullglob
 
 log "building HTML report and JSON summary"
 generated_artifacts="$ROOT_DIR/android/sample-app/build/generated/jankhunter/debug"
-owner_map="$generated_artifacts/owner-map.json"
+artifact_metadata="$generated_artifacts/artifact-metadata.json"
 class_graph="$generated_artifacts/class-graph.jsonl"
 instrumentation_artifact="$generated_artifacts/instrumentation-diagnostics.jsonl"
-[[ -s "$owner_map" ]] || fail "Gradle plugin owner map is missing or empty: $owner_map"
+[[ -s "$artifact_metadata" ]] || fail "Gradle plugin artifact metadata is missing or empty: $artifact_metadata"
 [[ -s "$class_graph" ]] || fail "Gradle plugin class graph is missing or empty: $class_graph"
 [[ -s "$instrumentation_artifact" ]] ||
   fail "Gradle plugin diagnostics are missing or empty: $instrumentation_artifact"
-grep -q '"classGraph":true' "$owner_map" || fail "owner map does not enable classGraph"
-grep -q '"runtimeCallGraph":true' "$owner_map" || fail "owner map does not enable runtimeCallGraph"
+grep -q '"classGraph":true' "$artifact_metadata" || fail "artifact metadata does not enable classGraph"
+grep -q '"runtimeCallGraph":true' "$artifact_metadata" || fail "artifact metadata does not enable runtimeCallGraph"
 grep -q 'io.jankhunter.sample.graph' "$class_graph" ||
   fail "class graph does not contain the configured sample graph package"
 (

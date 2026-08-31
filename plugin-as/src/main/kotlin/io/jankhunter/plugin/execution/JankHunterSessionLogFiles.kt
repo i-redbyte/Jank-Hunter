@@ -5,13 +5,9 @@ import java.io.File
 internal object JankHunterSessionLogFiles {
     fun latestRun(files: Iterable<File>): List<File> {
         val candidates = ArrayList<Candidate>()
-        var fallback: File? = null
         var latest: JankHunterSessionLogName? = null
         val latestRunIds = LinkedHashSet<String>()
         files.forEach { file ->
-            if (fallback == null || compareValuesBy(file, fallback, File::lastModified, File::getPath) > 0) {
-                fallback = file
-            }
             val key = JankHunterSessionLogName.parse(file) ?: return@forEach
             candidates += Candidate(file, key)
             val order = latest?.let { current -> compareKeys(key, current) } ?: 1
@@ -24,7 +20,7 @@ internal object JankHunterSessionLogFiles {
                 order == 0 -> latestRunIds += key.runId
             }
         }
-        if (latest == null) return fallback?.let(::listOf).orEmpty()
+        if (latest == null) return emptyList()
         return candidates.asSequence()
             .filter { candidate -> candidate.key.runId in latestRunIds }
             .sortedWith(compareBy<Candidate> { it.key.date }.thenBy { it.key.index }.thenBy { it.file.path })

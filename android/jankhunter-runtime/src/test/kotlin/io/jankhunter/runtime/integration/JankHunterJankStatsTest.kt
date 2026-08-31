@@ -2,6 +2,7 @@ package io.jankhunter.runtime.integration
 
 import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
+import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -13,6 +14,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JankHunterJankStatsTest {
+    @Test
+    fun frameAccessorCacheIsBoundedAndWeakOnBothSides() {
+        val readFrame = JankHunterJankStats::class.java.getDeclaredMethod("readFrameData", Any::class.java)
+        readFrame.isAccessible = true
+        readFrame.invoke(JankHunterJankStats, FakeFrameData())
+        val cacheField = JankHunterJankStats::class.java.getDeclaredField("frameAccessors")
+        cacheField.isAccessible = true
+        val cache = cacheField.get(JankHunterJankStats)
+        val entriesField = cache.javaClass.getDeclaredField("entries")
+        entriesField.isAccessible = true
+        val entries = entriesField.get(cache) as Array<*>
+        val entry = entries.first { it != null } ?: error("expected reflected accessor entry")
+
+        assertTrue(entries.size <= 8)
+        assertTrue(
+            entry.javaClass.declaredFields
+                .filterNot { it.type.isPrimitive }
+                .all { WeakReference::class.java.isAssignableFrom(it.type) },
+        )
+    }
+
     @Test
     fun uninstallDisablesTrackingOnlyOnce() {
         val fake = FakeJankStats()
@@ -76,7 +98,7 @@ class JankHunterJankStatsTest {
     @Test
     fun suppressedReflectionFailureIsCountedAsTrustEvidence() {
         val before = RuntimeHookFailureTracker.total()
-        val reasonBefore = RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.JANKSTATS_CONTROL.ordinal]
+        val reasonBefore = RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_CONTROL)
         val handle = JankHunterJankStats.Handle(ThrowingFakeJankStats())
 
         handle.setTrackingEnabled(true)
@@ -84,7 +106,7 @@ class JankHunterJankStatsTest {
         assertEquals(before + 1L, RuntimeHookFailureTracker.total())
         assertEquals(
             reasonBefore + 1L,
-            RuntimeHookFailureTracker.snapshot()[RuntimeHookFailureReason.JANKSTATS_CONTROL.ordinal],
+            RuntimeHookFailureTracker.count(RuntimeHookFailureReason.JANKSTATS_CONTROL),
         )
     }
 
@@ -126,6 +148,12 @@ class JankHunterJankStatsTest {
         fun setTrackingEnabled(enabled: Boolean) {
             error("setTrackingEnabled($enabled) failed")
         }
+    }
+
+    class FakeFrameData {
+        fun isJank(): Boolean = true
+
+        fun getFrameDurationUiNanos(): Long = 16_000_000L
     }
 
     class FatalTestError : VirtualMachineError()

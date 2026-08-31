@@ -1,5 +1,7 @@
 package io.jankhunter.sample.manual
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.LeakCanaryBridge
 import io.jankhunter.sample.R
 import io.jankhunter.sample.ReleasedCheckoutProbe
@@ -24,17 +26,16 @@ internal class ManualRetentionScenarios(
     )
 
     fun recordCleanObject() {
-        JankHunter.withFlow("sample.memory_leak.demo") {
-            JankHunter.markFlowStep("clean_object")
+        JankHunterTelemetry.traceOperation("sample.memory_leak.clean_object") {
             val probe = ReleasedCheckoutProbe()
-            JankHunter.watchObject(
+            JankHunterTelemetry.watch(
                 probe,
                 ReleasedCheckoutProbe::class.java.name,
                 "sample.memory_leak.cleaned_scope",
             )
             LeakCanaryBridge.watch(probe, text(R.string.leakcanary_desc_clean_object))
         }
-        JankHunter.recordCounter("sample.memory_leak.clean.watch.count", 1)
+        JankHunterTelemetry.counter("sample.memory_leak.clean.watch.count", 1)
         status(text(R.string.status_clean_object_watched))
     }
 
@@ -75,58 +76,57 @@ internal class ManualRetentionScenarios(
     }
 
     fun recordCacheEntries() {
-        JankHunter.withFlow("sample.memory_leak.demo") {
-            JankHunter.markFlowStep("cache_entries")
+        JankHunterTelemetry.traceOperation("sample.memory_leak.cache_entries") {
             repeat(3) { index ->
                 val entry = RetainedCheckoutCache(index, ByteArray(128 * 1024))
                 application.retainedObjects += entry
-                JankHunter.watchObject(entry, entry.javaClass.name, "sample.memory_leak.checkout_cache")
+                JankHunterTelemetry.watch(entry, entry.javaClass.name, "sample.memory_leak.checkout_cache")
                 LeakCanaryBridge.watch(entry, text(R.string.leakcanary_desc_cache_entry, index))
             }
         }
-        JankHunter.recordCounter("sample.memory_leak.cache.watch.count", 3)
+        JankHunterTelemetry.counter("sample.memory_leak.cache.watch.count", 3)
         JankHunter.flush()
         status(text(R.string.status_cache_entries_watched))
     }
 
     fun clearRetainedObjects() {
         application.retainedObjects.clear()
-        JankHunter.recordCounter("sample.memory_leak.retained_list.clear.count", 1)
+        JankHunterTelemetry.counter("sample.memory_leak.retained_list.clear.count", 1)
         status(text(R.string.status_retained_list_cleared))
     }
 
     fun recordLeakRegressionBurst(activityReference: Any) {
-        JankHunter.withFlow("sample.memory_leak.compare_candidate") {
+        JankHunterTelemetry.traceOperation("sample.memory_leak.compare_candidate") {
             repeat(2) { index ->
-                JankHunter.markFlowStep("activity_and_binding_burst_$index")
-                val activity = RetainedCheckoutScreen(activityReference, ByteArray(160 * 1024))
-                val cache = RetainedCheckoutCache(index, ByteArray(160 * 1024))
-                application.retainedObjects += activity
-                application.retainedObjects += cache
-                JankHunter.watchObject(activity, activity.javaClass.name, "sample.memory_leak.regression_burst")
-                JankHunter.watchObject(cache, cache.javaClass.name, "sample.memory_leak.regression_burst")
-                LeakCanaryBridge.watch(activity, text(R.string.leakcanary_desc_regression_activity, index))
-                LeakCanaryBridge.watch(cache, text(R.string.leakcanary_desc_regression_binding, index))
+                JankHunterTelemetry.traceOperation("sample.memory_leak.activity_and_binding_burst_$index") {
+                    val activity = RetainedCheckoutScreen(activityReference, ByteArray(160 * 1024))
+                    val cache = RetainedCheckoutCache(index, ByteArray(160 * 1024))
+                    application.retainedObjects += activity
+                    application.retainedObjects += cache
+                    JankHunterTelemetry.watch(activity, activity.javaClass.name, "sample.memory_leak.regression_burst")
+                    JankHunterTelemetry.watch(cache, cache.javaClass.name, "sample.memory_leak.regression_burst")
+                    LeakCanaryBridge.watch(activity, text(R.string.leakcanary_desc_regression_activity, index))
+                    LeakCanaryBridge.watch(cache, text(R.string.leakcanary_desc_regression_binding, index))
+                }
             }
         }
-        JankHunter.recordCounter("sample.memory_leak.regression_burst.watch.count", 4)
+        JankHunterTelemetry.counter("sample.memory_leak.regression_burst.watch.count", 4)
         JankHunter.flush()
         status(text(R.string.status_candidate_leak_burst_watched))
     }
 
     private fun recordRetained(step: String, displayName: String, owner: String, sample: Any) {
-        JankHunter.withFlow("sample.memory_leak.demo") {
-            JankHunter.markFlowStep(step)
-            JankHunter.withOwner(owner) {
+        JankHunterTelemetry.traceOperation("sample.memory_leak.$step") {
+            JankHunterTelemetry.withOwner(owner) {
                 application.retainedObjects += sample
-                JankHunter.watchObject(sample, sample.javaClass.name, owner)
+                JankHunterTelemetry.watch(sample, sample.javaClass.name, owner)
                 LeakCanaryBridge.watch(
                     sample,
                     text(R.string.leakcanary_desc_retained_by_owner, displayName, owner),
                 )
             }
         }
-        JankHunter.recordCounter("sample.memory_leak.watch.count", 1)
+        JankHunterTelemetry.counter("sample.memory_leak.watch.count", 1)
         JankHunter.flush()
         status(text(R.string.status_leak_scenario_recorded, displayName))
     }

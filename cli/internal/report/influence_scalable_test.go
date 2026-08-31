@@ -110,21 +110,21 @@ func TestLargeInfluenceReportUsesBoundedStandalonePayload(t *testing.T) {
 func buildReportInfluenceFixture() analyze.InfluenceSummary {
 	summary := analyze.Summary{
 		ProblemWindows: []analyze.ProblemWindowStats{
-			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Flow: "checkout.pay", Kind: "ui_jank", Count: 2, MaxMS: 70},
-			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Flow: "checkout.pay", Kind: "http_slow_or_failed", Count: 2, MaxMS: 900},
+			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Operation: "checkout.pay", Kind: "ui_jank", Count: 2, MaxMS: 70},
+			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Operation: "checkout.pay", Kind: "http_slow_or_failed", Count: 2, MaxMS: 900},
 		},
 		RuntimeCalls: []analyze.RuntimeCallStats{{
-			Caller:  "com.app.checkout.Presenter.submit",
-			Callee:  "com.app.checkout.Repository.load",
-			Screen:  "Checkout",
-			Flow:    "checkout.pay",
-			Count:   3,
-			TotalMS: 720,
-			MaxMS:   280,
+			Caller:    "com.app.checkout.Presenter.submit",
+			Callee:    "com.app.checkout.Repository.load",
+			Screen:    "Checkout",
+			Operation: "checkout.pay",
+			Count:     3,
+			TotalMS:   720,
+			MaxMS:     280,
 		}},
-		Flows: []analyze.FlowStats{
-			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Flow: "checkout.pay", RouteSample: "POST /checkout", UIJank: 2},
-			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Flow: "checkout.pay", RouteSample: "POST /checkout", HTTPP95MS: 900},
+		SignalContexts: []analyze.SignalContextStats{
+			{Owner: "com.app.checkout.Presenter.render", Screen: "Checkout", Operation: "checkout.pay", RouteSample: "POST /checkout", UIJank: 2},
+			{Owner: "com.app.checkout.Repository.load", Screen: "Checkout", Operation: "checkout.pay", RouteSample: "POST /checkout", HTTPP95MS: 900},
 		},
 	}
 	graph := &analyze.ClassGraph{

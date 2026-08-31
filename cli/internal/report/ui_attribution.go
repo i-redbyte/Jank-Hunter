@@ -11,7 +11,6 @@ import (
 const (
 	defaultFrameDeadlineUS      = uint64(16_667)
 	defaultFrameTailThresholdMS = uint64(32)
-	maxUICauseInsights          = 4
 )
 
 type uiScreenInsight struct {
@@ -43,10 +42,11 @@ type uiCauseInsight struct {
 
 func uiScreenInsights(summary analyze.Summary) []uiScreenInsight {
 	insights := make([]uiScreenInsight, 0, len(summary.Screens))
+	semanticWork := analyze.ActionableSemanticWork(summary)
 	for _, screen := range summary.Screens {
 		severity, status, headline := uiScreenVerdict(screen)
 		observation := uiScreenObservation(screen)
-		causes := uiCauseInsights(summary, screen)
+		causes := uiCauseInsights(summary, semanticWork, screen)
 		nearby, where, action := uiRelatedSignals(summary, screen.Screen)
 		if len(causes) > 0 {
 			where = causes[0].Where
@@ -63,10 +63,27 @@ func uiScreenInsights(summary analyze.Summary) []uiScreenInsight {
 			Where:       where,
 			Action:      action,
 			Causes:      causes,
-			Tooltip:     "Карточка объединяет плавность экрана, работу главного потока, I/O, вызовы кода, сеть, память и логирование. Уровень связи показывает, что зафиксировано напрямую, а что ещё нужно проверить.",
+			Tooltip:     "Карточка объединяет плавность экрана, работу главного потока, файловые операции, вызовы кода, сеть, память и журналирование. Уровень связи показывает, что зафиксировано напрямую, а что ещё нужно проверить.",
 		})
 	}
+	sort.SliceStable(insights, func(i, j int) bool {
+		left, right := severityRank(insights[i].Severity), severityRank(insights[j].Severity)
+		if left != right {
+			return left > right
+		}
+		return insights[i].Screen < insights[j].Screen
+	})
 	return insights
+}
+
+func uiProblemCount(insights []uiScreenInsight) int {
+	count := 0
+	for _, insight := range insights {
+		if severityRank(insight.Severity) >= severityRank("medium") {
+			count++
+		}
+	}
+	return count
 }
 
 func uiScreenObservation(screen analyze.ScreenStats) string {
@@ -129,7 +146,11 @@ func uiScreenVerdict(screen analyze.ScreenStats) (string, string, string) {
 	return "ok", "норма", "Зафиксированных подтормаживаний нет"
 }
 
-func uiCauseInsights(summary analyze.Summary, screen analyze.ScreenStats) []uiCauseInsight {
+func uiCauseInsights(
+	summary analyze.Summary,
+	semanticWork []analyze.SemanticWorkStats,
+	screen analyze.ScreenStats,
+) []uiCauseInsight {
 	if !uiHasMeasuredSlowFrames(screen) {
 		return nil
 	}
@@ -139,11 +160,10 @@ func uiCauseInsights(summary analyze.Summary, screen analyze.ScreenStats) []uiCa
 	}
 	deadlineMS := max(uint64(1), deadlineUS/1_000)
 	candidates := make([]uiCauseInsight, 0, 12)
-	candidates = append(candidates, semanticUICauses(summary, screen.Screen, deadlineMS)...)
+	candidates = append(candidates, databaseUICauses(summary.DatabaseAnalysis, screen.Screen)...)
+	candidates = append(candidates, semanticUICauses(semanticWork, screen.Screen, deadlineMS)...)
 	candidates = append(candidates, mainThreadIOCauses(summary, screen.Screen, deadlineUS)...)
-	if cause, ok := mainThreadStallCause(summary, screen.Screen); ok {
-		candidates = append(candidates, cause)
-	}
+	candidates = append(candidates, mainThreadStallCauses(summary, screen.Screen)...)
 	candidates = append(candidates, longTaskCauses(summary, screen.Screen)...)
 	candidates = append(candidates, runtimeCallCauses(summary, screen.Screen, deadlineMS)...)
 	candidates = append(candidates, networkCauses(summary, screen.Screen)...)
@@ -153,23 +173,116 @@ func uiCauseInsights(summary analyze.Summary, screen analyze.ScreenStats) []uiCa
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].rank != candidates[j].rank {
-			return candidates[i].rank > candidates[j].rank
-		}
-		if candidates[i].magnitude != candidates[j].magnitude {
-			return candidates[i].magnitude > candidates[j].magnitude
-		}
-		return candidates[i].stableKey < candidates[j].stableKey
+		return uiCauseBetter(candidates[i], candidates[j])
 	})
-	if len(candidates) > maxUICauseInsights {
-		candidates = candidates[:maxUICauseInsights]
-	}
 	return candidates
 }
 
-func semanticUICauses(summary analyze.Summary, screenName string, deadlineMS uint64) []uiCauseInsight {
+const databaseUICauseLimit = 8
+
+func databaseUICauses(
+	analysis *analyze.DatabaseAnalysis,
+	screenName string,
+) []uiCauseInsight {
+	if analysis == nil {
+		return nil
+	}
+	causes := make([]uiCauseInsight, 0, databaseUICauseLimit)
+	cfg := analyze.DefaultProblemDetectorConfig()
+	for _, statement := range analysis.Statements {
+		for _, context := range statement.Contexts {
+			if !sameKnownReportValue(context.Screen, screenName) {
+				continue
+			}
+			owner := reportValue(firstNonEmpty(context.Source, context.ContextOwner), "место SQL-вызова не определено")
+			switch {
+			case context.MainCorrelation.UIWindowOverlaps > 0 &&
+				context.MainCorrelation.UIOverlapMaxDurationUS >= cfg.DatabaseMainThreadMS*1_000:
+				durationUS := context.MainCorrelation.UIOverlapMaxDurationUS
+				cause := uiCauseInsight{
+					Relation:      "пересечение интервалов подтверждено",
+					RelationClass: "strong",
+					Title:         "SQL-вызов выполнялся на главном потоке: " + owner,
+					Evidence: fmt.Sprintf(
+						"%s; максимум — %d мс; %s с проблемными UI-окнами (%d медленных кадров из %d в пересечённых окнах).",
+						russianCount(context.Main.Calls, "вызов", "вызова", "вызовов"),
+						microsecondsToMillisecondsCeilReport(durationUS),
+						russianCount(context.MainCorrelation.UIWindowOverlaps, "пересечение", "пересечения", "пересечений"),
+						context.MainCorrelation.UIJankyFrames,
+						context.MainCorrelation.UIFrames,
+					),
+					Explanation: "Jank Hunter восстановил интервал SQL-вызова и подтвердил его пересечение с проблемным UI-окном того же процесса, запуска, операции и экрана. Для главного потока это прямая связь с занятым временем интерфейса, хотя вклад конкретного SQL-вызова в длительность отдельного кадра всё ещё следует проверить трассой.",
+					Where:       uiLocation(context.ContextOperation, owner, statement.Query),
+					Action:      "Перенесите этот SQL с главного потока, затем повторите ту же операцию и сравните число пересечений, максимум SQL и медленные кадры.",
+					rank:        780,
+					magnitude:   durationUS,
+					stableKey:   "database-main\x00" + statement.Query + "\x00" + owner + "\x00" + context.SessionID,
+				}
+				retainDatabaseUICause(&causes, cause)
+			case context.BackgroundCorrelation.UIWindowOverlaps > 0 &&
+				context.BackgroundCorrelation.UIOverlapMaxDurationUS >= cfg.DatabaseBackgroundMS*1_000:
+				durationUS := context.BackgroundCorrelation.UIOverlapMaxDurationUS
+				cause := uiCauseInsight{
+					Relation:      "совпало по времени",
+					RelationClass: "related",
+					Title:         "Фоновый SQL совпал с проблемным UI-окном: " + owner,
+					Evidence: fmt.Sprintf(
+						"%s; максимум — %d мс; %s с проблемными UI-окнами.",
+						russianCount(context.Background.Calls, "фоновый вызов", "фоновых вызова", "фоновых вызовов"),
+						microsecondsToMillisecondsCeilReport(durationUS),
+						russianCount(context.BackgroundCorrelation.UIWindowOverlaps, "пересечение", "пересечения", "пересечений"),
+					),
+					Explanation: "Интервалы относятся к одному процессу, запуску, операции и экрану, но SQL выполнялся в фоне. Совпадение может указывать на конкуренцию за БД, CPU или I/O, однако само по себе не доказывает причину подтормаживания.",
+					Where:       uiLocation(context.ContextOperation, owner, statement.Query),
+					Action:      "Проверьте блокировки, план запроса и конкуренцию ресурсов в этом интервале; подтвердите влияние сравнением того же сценария после адресной оптимизации.",
+					rank:        330,
+					magnitude:   durationUS,
+					stableKey:   "database-background\x00" + statement.Query + "\x00" + owner + "\x00" + context.SessionID,
+				}
+				retainDatabaseUICause(&causes, cause)
+			}
+		}
+	}
+	return causes
+}
+
+func retainDatabaseUICause(causes *[]uiCauseInsight, candidate uiCauseInsight) {
+	if len(*causes) < databaseUICauseLimit {
+		*causes = append(*causes, candidate)
+		return
+	}
+	worst := 0
+	for index := 1; index < len(*causes); index++ {
+		if uiCauseBetter((*causes)[worst], (*causes)[index]) {
+			worst = index
+		}
+	}
+	if uiCauseBetter(candidate, (*causes)[worst]) {
+		(*causes)[worst] = candidate
+	}
+}
+
+func uiCauseBetter(left, right uiCauseInsight) bool {
+	if left.rank != right.rank {
+		return left.rank > right.rank
+	}
+	if left.magnitude != right.magnitude {
+		return left.magnitude > right.magnitude
+	}
+	return left.stableKey < right.stableKey
+}
+
+func microsecondsToMillisecondsCeilReport(value uint64) uint64 {
+	result := value / 1_000
+	if value%1_000 != 0 {
+		result++
+	}
+	return result
+}
+
+func semanticUICauses(work []analyze.SemanticWorkStats, screenName string, deadlineMS uint64) []uiCauseInsight {
 	causes := make([]uiCauseInsight, 0, 3)
-	for _, item := range analyze.ActionableSemanticWork(summary) {
+	for _, item := range work {
 		if !item.MainThread || !sameKnownReportValue(item.Screen, screenName) || item.MaxMS < deadlineMS {
 			continue
 		}
@@ -188,7 +301,7 @@ func semanticUICauses(summary analyze.Summary, screenName string, deadlineMS uin
 					deadlineMS,
 				),
 				Explanation: explanation + " Работа и медленные кадры относятся к одному экрану, но журнал пока не хранит идентификатор конкретного кадра, поэтому это сильный кандидат, а не доказанная первопричина.",
-				Where:       uiLocation(item.Flow, item.Step, item.Owner, ""),
+				Where:       uiLocation(item.ContextOperation, item.Owner, ""),
 				Action:      action,
 				rank:        720,
 				magnitude:   item.MaxMS * 1_000,
@@ -198,16 +311,16 @@ func semanticUICauses(summary analyze.Summary, screenName string, deadlineMS uin
 			causes = append(causes, uiCauseInsight{
 				Relation:      "главный поток измерен",
 				RelationClass: "strong",
-				Title:         "Room DAO выполнялся на главном потоке: " + reportValue(item.Owner, "метод не определён"),
+				Title:         "Метод доступа к данным Room выполнялся на главном потоке: " + reportValue(item.Owner, "метод не определён"),
 				Evidence: fmt.Sprintf(
 					"%s; максимум — %d мс при бюджете кадра %d мс.",
 					russianCount(item.Count, "вызов", "вызова", "вызовов"),
 					item.MaxMS,
 					deadlineMS,
 				),
-				Explanation: "SDK напрямую измерил границу DAO на главном потоке. Такой вызов способен заблокировать построение кадра; совпадение с конкретным медленным кадром следует подтвердить трассой.",
-				Where:       uiLocation(item.Flow, item.Step, item.Owner, ""),
-				Action:      "Перенесите запрос в асинхронное или фоновое выполнение, затем повторите экран и сравните максимальную длительность DAO и медленные кадры.",
+				Explanation: "Jank Hunter напрямую измерил границу метода доступа к данным на главном потоке. Такой вызов способен заблокировать построение кадра; совпадение с конкретным медленным кадром следует подтвердить трассой.",
+				Where:       uiLocation(item.ContextOperation, item.Owner, ""),
+				Action:      "Перенесите запрос в асинхронное или фоновое выполнение, затем повторите экран и сравните максимальную длительность метода и число медленных кадров.",
 				rank:        710,
 				magnitude:   item.MaxMS * 1_000,
 				stableKey:   "room\x00" + item.Owner,
@@ -220,27 +333,27 @@ func semanticUICauses(summary analyze.Summary, screenName string, deadlineMS uin
 func composeUICauseText(operation string) (phase, title, explanation, action string) {
 	switch operation {
 	case "measure":
-		return "Измерение интерфейса Compose", "Измерение Compose превысило бюджет кадра", "Долгое измерение бывает связано с повторными проходами, внутренними размерами или сложным пользовательским Layout.", "Проверьте число проходов измерения, внутренние размеры и сложность пользовательского Layout; уменьшите повторные измерения."
+		return "Измерение интерфейса Compose", "Измерение Compose превысило бюджет кадра", "Долгое измерение бывает связано с повторными проходами, внутренними размерами или сложным пользовательским расположением элементов.", "Проверьте число проходов измерения, внутренние размеры и сложность расположения элементов; уменьшите повторные измерения."
 	case "layout":
 		return "Размещение интерфейса Compose", "Размещение Compose превысило бюджет кадра", "Долгое размещение указывает на тяжёлую работу во время размещения или сложное дерево.", "Упростите дерево и уберите вычисления из фазы размещения, затем сравните длительность и медленные кадры."
 	case "draw":
 		return "Отрисовка Compose", "Отрисовка Compose превысила бюджет кадра", "Долгая отрисовка бывает связана со сложной геометрией, эффектами, выделением памяти или частыми запросами перерисовки.", "Проверьте Canvas/Path/Shader, создание объектов и причины повторной отрисовки; кэшируйте неизменяемые данные."
 	default:
-		return "Композиция", "Функция с @Composable превысила бюджет кадра", "Долгое выполнение композиции бывает связано с тяжёлыми вычислениями, нестабильными параметрами или слишком широкой областью чтения состояния.", "Вынесите вычисления из композиции, проверьте стабильность параметров и области чтения состояния в Compose Layout Inspector."
+		return "Построение интерфейса", "Функция с @Composable превысила бюджет кадра", "Долгое построение интерфейса бывает связано с тяжёлыми вычислениями, нестабильными параметрами или слишком широкой областью чтения состояния.", "Вынесите вычисления из построения интерфейса, проверьте стабильность параметров и области чтения состояния в инспекторе компоновки Compose."
 	}
 }
 
 func mainThreadIOCauses(summary analyze.Summary, screenName string, deadlineUS uint64) []uiCauseInsight {
 	causes := make([]uiCauseInsight, 0, 2)
-	for _, operation := range summary.IOOperations {
+	appendCause := func(operation analyze.IOStats) {
 		if !operation.MainThread || !sameKnownReportValue(operation.Screen, screenName) {
-			continue
+			return
 		}
 		if operation.MaxDurationUS < deadlineUS && operation.TotalDurationUS < deadlineUS*2 {
-			continue
+			return
 		}
 		label := reportIOOperationLabel(operation.Operation)
-		where := uiLocation(operation.Flow, operation.Step, operation.Owner, "")
+		where := uiLocation(operation.ContextOperation, operation.Owner, "")
 		causes = append(causes, uiCauseInsight{
 			Relation:      "главный поток подтверждён",
 			RelationClass: "strong",
@@ -251,7 +364,7 @@ func mainThreadIOCauses(summary analyze.Summary, screenName string, deadlineUS u
 				humanMicroseconds(operation.MaxDurationUS),
 				humanMicroseconds(operation.TotalDurationUS),
 			),
-			Explanation: "Журнал прямо пометил эту I/O-работу как выполненную на главном потоке. Она способна занять бюджет кадра; точное пересечение с конкретным медленным кадром ещё нужно подтвердить трассой.",
+			Explanation: "Журнал прямо пометил эту файловую операцию как выполненную на главном потоке. Она способна занять бюджет кадра; точное пересечение с конкретным медленным кадром ещё нужно подтвердить трассой.",
 			Where:       where,
 			Action:      "Перенесите операцию с главного потока или подготовьте данные заранее, затем повторите тот же экран и сравните медленные кадры.",
 			rank:        700,
@@ -259,63 +372,84 @@ func mainThreadIOCauses(summary analyze.Summary, screenName string, deadlineUS u
 			stableKey:   "io\x00" + operation.Operation + "\x00" + operation.Owner,
 		})
 	}
+	if summary.IOAnalysis != nil {
+		for _, operation := range summary.IOAnalysis.Calls {
+			appendCause(operation)
+		}
+	}
 	return causes
 }
 
-func mainThreadStallCause(summary analyze.Summary, screenName string) (uiCauseInsight, bool) {
-	var count int
-	var maxMS uint64
-	var owner, flow, step string
-	for _, item := range summary.Flows {
+const mainThreadStallCauseLimit = 4
+
+func mainThreadStallCauses(summary analyze.Summary, screenName string) []uiCauseInsight {
+	type stallAggregate struct {
+		count     int
+		maxMS     uint64
+		owner     string
+		operation string
+	}
+	aggregates := make([]stallAggregate, 0, mainThreadStallCauseLimit)
+	for _, item := range summary.SignalContexts {
 		if !sameKnownReportValue(item.Screen, screenName) || item.StallCount == 0 {
 			continue
 		}
-		count += item.StallCount
-		if item.StallMaxMS >= maxMS {
-			maxMS = item.StallMaxMS
-			owner, flow, step = item.Owner, item.Flow, item.Step
+		index := -1
+		for candidateIndex := range aggregates {
+			if aggregates[candidateIndex].owner == item.Owner && aggregates[candidateIndex].operation == item.Operation {
+				index = candidateIndex
+				break
+			}
+		}
+		if index < 0 && len(aggregates) < mainThreadStallCauseLimit {
+			aggregates = append(aggregates, stallAggregate{owner: item.Owner, operation: item.Operation})
+			index = len(aggregates) - 1
+		}
+		if index < 0 {
+			minimumIndex := 0
+			for candidateIndex := 1; candidateIndex < len(aggregates); candidateIndex++ {
+				if aggregates[candidateIndex].maxMS < aggregates[minimumIndex].maxMS {
+					minimumIndex = candidateIndex
+				}
+			}
+			if item.StallMaxMS <= aggregates[minimumIndex].maxMS {
+				continue
+			}
+			aggregates[minimumIndex] = stallAggregate{owner: item.Owner, operation: item.Operation}
+			index = minimumIndex
+		}
+		aggregate := &aggregates[index]
+		aggregate.count += item.StallCount
+		if item.StallMaxMS > aggregate.maxMS {
+			aggregate.maxMS = item.StallMaxMS
 		}
 	}
-	if count == 0 {
-		return uiCauseInsight{}, false
+	causes := make([]uiCauseInsight, 0, min(len(aggregates), mainThreadStallCauseLimit))
+	for _, aggregate := range aggregates {
+		stack := analyze.BestMainThreadStallStack(summary.Owners, aggregate.owner)
+		where := uiLocation(aggregate.operation, aggregate.owner, stack)
+		evidence := fmt.Sprintf("Главный поток останавливался %s; самая длинная пауза — %d мс.", russianCount(aggregate.count, "раз", "раза", "раз"), aggregate.maxMS)
+		if stack != "" {
+			evidence += " Во время паузы стек указывал на " + stack + "."
+		}
+		diagnosis := analyze.DiagnoseMainThreadStall(aggregate.owner, stack)
+		causes = append(causes, uiCauseInsight{
+			Relation:      "пауза подтверждена",
+			RelationClass: "direct",
+			Title:         diagnosis.Title,
+			Evidence:      evidence,
+			Explanation:   diagnosis.Explanation,
+			Where:         where,
+			Action:        diagnosis.Action,
+			rank:          650,
+			magnitude:     aggregate.maxMS * 1_000,
+			stableKey:     "stall\x00" + aggregate.owner + "\x00" + stack,
+		})
 	}
-	stack := bestStallStack(summary.Owners, owner)
-	where := uiLocation(flow, step, owner, stack)
-	evidence := fmt.Sprintf("Главный поток останавливался %s; самая длинная пауза — %d мс.", russianCount(count, "раз", "раза", "раз"), maxMS)
-	if stack != "" {
-		evidence += " Во время паузы стек указывал на " + stack + "."
-	}
-	title, explanation, action := mainThreadStallNarrative(owner, stack)
-	return uiCauseInsight{
-		Relation:      "пауза подтверждена",
-		RelationClass: "direct",
-		Title:         title,
-		Evidence:      evidence,
-		Explanation:   explanation,
-		Where:         where,
-		Action:        action,
-		rank:          650,
-		magnitude:     maxMS * 1_000,
-		stableKey:     "stall\x00" + owner + "\x00" + stack,
-	}, true
-}
-
-func mainThreadStallNarrative(owner, stack string) (title, explanation, action string) {
-	location := strings.ToLower(owner + " " + stack)
-	switch {
-	case strings.Contains(location, ".ondraw"), strings.Contains(location, ".dispatchdraw"):
-		return "Пользовательский View блокировал отрисовку в onDraw",
-			"Пауза главного потока и участок onDraw/dispatchDraw связаны напрямую. Тяжёлые вычисления, создание объектов или сложная геометрия в этом методе задерживают построение кадра.",
-			"Откройте указанный onDraw/dispatchDraw: вынесите вычисления, не создавайте объекты на каждом кадре, кэшируйте Path/Bitmap/Shader и проверьте частоту invalidate."
-	case strings.Contains(location, ".onmeasure"), strings.Contains(location, ".onlayout"):
-		return "Измерение или размещение View блокировало главный поток",
-			"Пауза главного потока напрямую связана с onMeasure/onLayout. Обычно это означает повторные requestLayout, тяжёлое измерение или слишком сложную иерархию View.",
-			"Проверьте число onMeasure/onLayout за кадр, сократите вложенность и не вызывайте requestLayout без изменения размеров."
-	default:
-		return "Главный поток не обрабатывал кадры",
-			"Это прямое подтверждение подвисания главного потока. Строка стека показывает место, где поток находился при снимке, но не заменяет полную трассу вызовов.",
-			"Откройте указанный метод и его вызывающую цепочку: ищите синхронный I/O, ожидание блокировки, тяжёлое вычисление или большую работу измерения, размещения и отрисовки."
-	}
+	sort.SliceStable(causes, func(i, j int) bool {
+		return uiCauseBetter(causes[i], causes[j])
+	})
+	return causes
 }
 
 func longTaskCauses(summary analyze.Summary, screenName string) []uiCauseInsight {
@@ -334,7 +468,7 @@ func longTaskCauses(summary analyze.Summary, screenName string) []uiCauseInsight
 			Title:         title,
 			Evidence:      fmt.Sprintf("Зафиксировано %s; максимум — %d мс.", russianCount(window.Count, "срабатывание", "срабатывания", "срабатываний"), window.MaxMS),
 			Explanation:   explanation,
-			Where:         uiLocation(window.Flow, window.Step, window.Owner, ""),
+			Where:         uiLocation(window.Operation, window.Owner, ""),
 			Action:        action,
 			rank:          rank,
 			magnitude:     window.MaxMS * 1_000,
@@ -351,7 +485,7 @@ func runtimeCallCauses(summary analyze.Summary, screenName string, deadlineMS ui
 			continue
 		}
 		signature := runtimeCallSignature{
-			Flow: call.Flow, Step: call.Step, Count: call.Count, TotalMS: call.TotalMS, MaxMS: call.MaxMS,
+			Operation: call.Operation, Count: call.Count, TotalMS: call.TotalMS, MaxMS: call.MaxMS,
 		}
 		groups[signature] = append(groups[signature], call)
 	}
@@ -375,11 +509,10 @@ func runtimeCallCauses(summary analyze.Summary, screenName string, deadlineMS ui
 }
 
 type runtimeCallSignature struct {
-	Flow    string
-	Step    string
-	Count   uint64
-	TotalMS uint64
-	MaxMS   uint64
+	Operation string
+	Count     uint64
+	TotalMS   uint64
+	MaxMS     uint64
 }
 
 func connectedRuntimeCallComponents(calls []analyze.RuntimeCallStats) [][]analyze.RuntimeCallStats {
@@ -531,26 +664,26 @@ func runtimeCallNarrative(path []string) (title, explanation, action string) {
 
 func networkCauses(summary analyze.Summary, screenName string) []uiCauseInsight {
 	causes := make([]uiCauseInsight, 0, 2)
-	for _, flow := range summary.Flows {
-		if !sameKnownReportValue(flow.Screen, screenName) || (flow.HTTPFailed == 0 && flow.HTTPP95MS < 700) {
+	for _, context := range summary.SignalContexts {
+		if !sameKnownReportValue(context.Screen, screenName) || (context.HTTPFailed == 0 && context.HTTPP95MS < 700) {
 			continue
 		}
-		route := reportValue(flow.RouteSample, "сетевой маршрут")
+		route := reportValue(context.RouteSample, "сетевой маршрут")
 		title := route + " отвечал медленно"
-		if flow.HTTPFailed > 0 {
+		if context.HTTPFailed > 0 {
 			title = route + " завершался с ошибкой или медленно"
 		}
 		causes = append(causes, uiCauseInsight{
-			Relation:      "совпало в сценарии",
+			Relation:      "совпало в операции",
 			RelationClass: "context",
 			Title:         title,
-			Evidence:      scenarioHTTPText(flow),
-			Explanation:   "Сетевой вызов записан в том же экранном и сценарном контексте. Журнал не показывает, ожидал ли его главный поток и пересёкся ли он с медленным кадром, поэтому сам по себе запрос не доказывает причину подтормаживаний.",
-			Where:         uiLocation(flow.Flow, flow.Step, flow.Owner, flow.RouteSample),
+			Evidence:      operationContextHTTPText(context),
+			Explanation:   "Сетевой вызов записан в контексте той же операции и экрана. Журнал не показывает, ожидал ли его главный поток и пересёкся ли он с медленным кадром, поэтому сам по себе запрос не доказывает причину подтормаживаний.",
+			Where:         uiLocation(context.Operation, context.Owner, context.RouteSample),
 			Action:        "Проверьте, что запрос выполняется асинхронно, главный поток не ждёт результат, а разбор ответа и обновление UI не создают большую работу одним блоком.",
 			rank:          350,
-			magnitude:     flow.HTTPP95MS * 1_000,
-			stableKey:     "network\x00" + flow.RouteSample + "\x00" + flow.Owner,
+			magnitude:     context.HTTPP95MS * 1_000,
+			stableKey:     "network\x00" + context.RouteSample + "\x00" + context.Owner,
 		})
 	}
 	return causes
@@ -568,7 +701,7 @@ func logSpamCauses(summary analyze.Summary, screenName string) []uiCauseInsight 
 			Title:         "Частое логирование добавляло работу в этом экране",
 			Evidence:      russianCount(item.Count, "запись", "записи", "записей") + " из " + reportValue(item.Source, "источника без названия") + ".",
 			Explanation:   "Частое форматирование и вывод логов расходуют CPU и могут добавлять I/O. Совпадение экрана не доказывает, что именно логирование сорвало кадр.",
-			Where:         uiLocation(item.Flow, item.Step, item.Owner, item.Source),
+			Where:         uiLocation(item.Operation, item.Owner, item.Source),
 			Action:        "Уберите повторяющиеся записи из горячего пути, затем повторите сценарий и сравните долю медленных кадров.",
 			rank:          250,
 			magnitude:     item.Count,
@@ -580,14 +713,14 @@ func logSpamCauses(summary analyze.Summary, screenName string) []uiCauseInsight 
 
 func memoryPressureCause(summary analyze.Summary, screenName string) (uiCauseInsight, bool) {
 	var maxKB uint64
-	var owner, flow, step string
-	for _, item := range summary.Flows {
+	var owner, operation string
+	for _, item := range summary.SignalContexts {
 		if !sameKnownReportValue(item.Screen, screenName) || item.MemoryMaxKB < 256*1024 {
 			continue
 		}
 		if item.MemoryMaxKB >= maxKB {
 			maxKB = item.MemoryMaxKB
-			owner, flow, step = item.Owner, item.Flow, item.Step
+			owner, operation = item.Owner, item.Operation
 		}
 	}
 	if maxKB == 0 {
@@ -596,11 +729,11 @@ func memoryPressureCause(summary analyze.Summary, screenName string) (uiCauseIns
 	return uiCauseInsight{
 		Relation:      "может усиливать",
 		RelationClass: "factor",
-		Title:         "Высокое потребление памяти могло усилить паузы GC",
+		Title:         "Высокое потребление памяти могло усилить паузы сборки мусора",
 		Evidence:      "PSS в этом контексте доходил до " + humanDataSizeKB(maxKB) + ".",
-		Explanation:   "Большой объём памяти повышает риск частых или долгих сборок мусора, но один максимум PSS не доказывает GC-паузу внутри медленного кадра.",
-		Where:         uiLocation(flow, step, owner, ""),
-		Action:        "Сопоставьте временную шкалу GC и выделений с медленными кадрами; ищите массовое создание объектов при построении или обновлении UI.",
+		Explanation:   "Большой объём памяти повышает риск частых или долгих сборок мусора, но один максимум занятой процессом памяти не доказывает такую паузу внутри медленного кадра.",
+		Where:         uiLocation(operation, owner, ""),
+		Action:        "Сопоставьте временную шкалу сборки мусора и выделений памяти с медленными кадрами; ищите массовое создание объектов при построении или обновлении интерфейса.",
 		rank:          150,
 		magnitude:     maxKB,
 		stableKey:     "memory\x00" + owner,
@@ -610,11 +743,11 @@ func memoryPressureCause(summary analyze.Summary, screenName string) (uiCauseIns
 func uiProblemWindowDescription(kind string) (title, relation, explanation, action string, rank int) {
 	switch kind {
 	case "main_thread_dispatch":
-		return "Обработка сообщения главного потока заняла слишком долго", "главный поток подтверждён", "Длительный dispatch измерен непосредственно на главном потоке в этом контексте.", "Разбейте обработчик сообщения на короткие части и вынесите вычисления или I/O из главного потока.", 620
+		return "Обработка сообщения главного потока заняла слишком долго", "главный поток подтверждён", "Длительная обработка сообщения измерена непосредственно на главном потоке в этом контексте.", "Разбейте обработчик сообщения на короткие части и вынесите вычисления или файловые операции из главного потока.", 620
 	case "wrapped_click":
-		return "Обработчик нажатия выполнялся слишком долго", "долгая работа подтверждена", "Длительность обработчика пользовательского нажатия измерена напрямую; такой обработчик выполняется в UI-пути.", "Откройте обработчик нажатия и оставьте в нём только быстрое изменение состояния; I/O и тяжёлые вычисления перенесите из UI-пути.", 600
+		return "Обработчик нажатия выполнялся слишком долго", "долгая работа подтверждена", "Длительность обработчика пользовательского нажатия измерена напрямую; такой обработчик выполняется при построении интерфейса.", "Откройте обработчик нажатия и оставьте в нём только быстрое изменение состояния; файловые операции и тяжёлые вычисления перенесите из главного потока.", 600
 	case "main_thread_io", "main_thread_disk_io", "disk_io_main_thread":
-		return "I/O блокировал главный поток", "главный поток подтверждён", "Тип проблемного окна прямо указывает на I/O в главном потоке.", "Перенесите I/O с главного потока и повторите сценарий с теми же входными данными.", 690
+		return "Файловая операция блокировала главный поток", "главный поток подтверждён", "Тип проблемного окна прямо указывает на файловую операцию в главном потоке.", "Перенесите файловую операцию с главного потока и повторите сценарий с теми же входными данными.", 690
 	case "wrapped_runnable", "wrapped_callable", "wrapped_coroutine", "wrapped_executor":
 		return "Долгая задача совпала с проблемным экраном", "совпало в сценарии", "Обёртка измерила длительную задачу в том же контексте, но тип события не доказывает её выполнение внутри конкретного UI-кадра.", "Проверьте поток выполнения задачи и отделите подготовку данных от короткого применения результата в UI.", 420
 	default:
@@ -658,18 +791,18 @@ func uiRelatedSignals(summary analyze.Summary, screenName string) (string, strin
 	var detailedLogSpam, problemWindowSignals uint64
 	contexts := make([]string, 0, 3)
 	seenContexts := map[string]struct{}{}
-	for _, flow := range summary.Flows {
-		if !sameKnownReportValue(flow.Screen, screenName) {
+	for _, contextStats := range summary.SignalContexts {
+		if !sameKnownReportValue(contextStats.Screen, screenName) {
 			continue
 		}
-		httpCount += flow.HTTPCount
-		httpFailed += flow.HTTPFailed
-		stalls += flow.StallCount
-		maxHTTP = max(maxHTTP, flow.HTTPP95MS)
-		maxStall = max(maxStall, flow.StallMaxMS)
-		logSpam = saturatingAddUint64(logSpam, flow.LogSpam)
-		problems = saturatingAddUint64(problems, flow.ProblemCount)
-		context := labelledFlowContext(flow.Flow, flow.Step, flow.Owner, flow.RouteSample)
+		httpCount += contextStats.HTTPCount
+		httpFailed += contextStats.HTTPFailed
+		stalls += contextStats.StallCount
+		maxHTTP = max(maxHTTP, contextStats.HTTPP95MS)
+		maxStall = max(maxStall, contextStats.StallMaxMS)
+		logSpam = saturatingAddUint64(logSpam, contextStats.LogSpam)
+		problems = saturatingAddUint64(problems, contextStats.ProblemCount)
+		context := labelledOperationContext(contextStats.Operation, contextStats.Owner, contextStats.RouteSample)
 		if context != "" {
 			if _, exists := seenContexts[context]; !exists && len(contexts) < 3 {
 				seenContexts[context] = struct{}{}
@@ -712,14 +845,14 @@ func uiRelatedSignals(summary analyze.Summary, screenName string) (string, strin
 	if len(signals) > 0 {
 		nearby = "В том же экранном контексте записаны: " + strings.Join(signals, "; ") + "."
 	}
-	where := "Точный сценарий или источник работ для этого экрана не записан."
+	where := "Точная операция или источник работ для этого экрана не записаны."
 	if len(contexts) > 0 {
 		where = "Начните проверку здесь: " + strings.Join(contexts, "; ") + "."
 	}
-	action := "Повторите экран с размеченным сценарием и профилированием главного потока, затем найдите самый длинный кадр."
+	action := "Повторите экран с размеченной операцией и профилированием главного потока, затем найдите самый длинный кадр."
 	switch {
 	case stalls > 0:
-		action = "Откройте трассу главного потока в указанном сценарии и уберите длинную синхронную работу из кадра."
+		action = "Откройте трассу главного потока в указанной операции и уберите длинную синхронную работу из кадра."
 	case httpCount > 0:
 		action = "Проверьте, не ждёт ли экран сеть на главном потоке и нет ли повторных запросов при перерисовке."
 	case logSpam > 0:
@@ -728,38 +861,21 @@ func uiRelatedSignals(summary analyze.Summary, screenName string) (string, strin
 	return nearby, where, action
 }
 
-func bestStallStack(owners []analyze.OwnerStats, owner string) string {
-	var stack string
-	var maxMS uint64
-	for _, item := range owners {
-		if item.Kind != "main_thread_stall" || !sameKnownReportValue(item.Owner, owner) || item.StackHint == "" {
-			continue
-		}
-		if item.MaxMS >= maxMS {
-			maxMS = item.MaxMS
-			stack = item.StackHint
-		}
-	}
-	return stack
-}
-
-func uiLocation(flow, step, owner, detail string) string {
-	context := labelledFlowContext(flow, step, owner, detail)
+func uiLocation(operation, owner, detail string) string {
+	context := labelledOperationContext(operation, owner, detail)
 	if context == "" {
-		return "Точное место не размечено; повторите сценарий с owner/flow/step."
+		return "Точное место не размечено; повторите действие с именем операции и источника."
 	}
 	return "Проверьте: " + context + "."
 }
 
 func reportIOOperationLabel(operation string) string {
 	labels := map[string]string{
-		"file_read":      "Чтение файла",
-		"file_write":     "Запись файла",
-		"file_sync":      "Синхронизация файла",
-		"database_read":  "Чтение базы данных",
-		"database_write": "Запись в базу данных",
-		"content_read":   "Чтение ContentProvider",
-		"content_write":  "Запись в ContentProvider",
+		"file_read":     "Чтение файла",
+		"file_write":    "Запись файла",
+		"file_sync":     "Синхронизация файла",
+		"content_read":  "Чтение ContentProvider",
+		"content_write": "Запись в ContentProvider",
 	}
 	if label := labels[operation]; label != "" {
 		return label
@@ -775,13 +891,10 @@ func sameReportValue(left, right string) bool {
 	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
 }
 
-func labelledFlowContext(flow, step, owner, detail string) string {
-	parts := make([]string, 0, 4)
-	if !isUnknownReportValue(flow) {
-		parts = append(parts, "сценарий "+flow)
-	}
-	if !isUnknownReportValue(step) {
-		parts = append(parts, "шаг "+step)
+func labelledOperationContext(operation, owner, detail string) string {
+	parts := make([]string, 0, 3)
+	if !isUnknownReportValue(operation) {
+		parts = append(parts, "операция "+operation)
 	}
 	if !isUnknownReportValue(owner) {
 		parts = append(parts, "источник "+owner)

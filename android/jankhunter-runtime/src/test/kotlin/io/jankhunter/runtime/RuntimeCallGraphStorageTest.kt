@@ -11,9 +11,9 @@ class RuntimeCallGraphStorageTest {
     fun producerPageAggregatesRepeatedEdgeExactly() {
         val page = RuntimeGraphAggregatePage()
 
-        assertTrue(page.add(1L, null, 2L, null, "screen", "flow", "step", 3L))
-        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", "flow", "step", 7L))
-        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", "flow", "step", 5L))
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 3L))
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 7L))
+        assertTrue(page.add(1L, "caller", 2L, "callee", "screen", 41L, 5L))
 
         val index = page.nextOccupiedIndex(0)
         assertEquals(1, page.size)
@@ -29,11 +29,11 @@ class RuntimeCallGraphStorageTest {
     fun producerPageStopsAtKeyLimitWithoutCorruptingExistingAggregates() {
         val page = RuntimeGraphAggregatePage()
         repeat(RUNTIME_GRAPH_PAGE_MAX_KEYS) { index ->
-            assertTrue(page.add(index.toLong(), null, index + 1L, null, null, null, null, 1L))
+            assertTrue(page.add(index.toLong(), "caller-$index", index + 1L, "callee-$index", null, 0L, 1L))
         }
 
-        assertFalse(page.add(10_000L, null, 10_001L, null, null, null, null, 1L))
-        assertTrue(page.add(0L, null, 1L, null, null, null, null, 4L))
+        assertFalse(page.add(10_000L, "caller-full", 10_001L, "callee-full", null, 0L, 1L))
+        assertTrue(page.add(0L, "caller-0", 1L, "callee-0", null, 0L, 4L))
         assertEquals(RUNTIME_GRAPH_PAGE_MAX_KEYS, page.size)
         assertEquals(RUNTIME_GRAPH_PAGE_MAX_KEYS.toLong() + 1L, page.logicalEventCount())
     }
@@ -50,7 +50,7 @@ class RuntimeCallGraphStorageTest {
 
         val nearlyFullBatch = RuntimeCallBatch(RUNTIME_GRAPH_MAX_FLUSH_RECORDS)
         repeat(RUNTIME_GRAPH_MAX_FLUSH_RECORDS - 1) {
-            nearlyFullBatch.add(null, 0L, null, null, 0L, 0L, 0L, 0L)
+            nearlyFullBatch.add(null, 0L, "caller", 0L, 0L, "callee", 0L, 0L, 0L)
         }
         table.drainInto(nearlyFullBatch)
         assertEquals(10, table.size)
@@ -62,15 +62,15 @@ class RuntimeCallGraphStorageTest {
     }
 
     @Test
-    fun edgeTablePreservesNamesThatArriveAfterTheFirstPage() {
+    fun edgeTablePreservesNamesAcrossMergedPages() {
         val table = RuntimeGraphEdgeTable()
-        val unnamed = RuntimeGraphAggregatePage()
-        val named = RuntimeGraphAggregatePage()
-        assertTrue(unnamed.add(1L, null, 2L, null, "screen", "flow", "step", 3L))
-        assertTrue(named.add(1L, "caller", 2L, "callee", "screen", "flow", "step", 7L))
+        val first = RuntimeGraphAggregatePage()
+        val second = RuntimeGraphAggregatePage()
+        assertTrue(first.add(1L, "caller", 2L, "callee", "screen", 41L, 3L))
+        assertTrue(second.add(1L, "caller", 2L, "callee", "screen", 41L, 7L))
 
-        assertTrue(table.add(unnamed, unnamed.nextOccupiedIndex(0), 1_000))
-        assertTrue(table.add(named, named.nextOccupiedIndex(0), 1_000))
+        assertTrue(table.add(first, first.nextOccupiedIndex(0), 1_000))
+        assertTrue(table.add(second, second.nextOccupiedIndex(0), 1_000))
         val batch = RuntimeCallBatch(RUNTIME_GRAPH_MAX_FLUSH_RECORDS)
         table.drainInto(batch)
 
@@ -85,8 +85,8 @@ class RuntimeCallGraphStorageTest {
     @Test
     fun nonLifoPopDiscardsInnerFramesWithoutPublishingAnEdge() {
         val stack = RuntimeCallStack()
-        stack.push(1L, "outer", 1L, null, null, null)
-        stack.push(2L, "inner", 2L, null, null, null)
+        stack.push(1L, "outer", 1L, null, 0L)
+        stack.push(2L, "inner", 2L, null, 0L)
 
         assertFalse(stack.pop(1L))
         assertEquals(0, stack.depth)
@@ -96,7 +96,7 @@ class RuntimeCallGraphStorageTest {
     fun stackGrowsWithoutDroppingDeepApplicationCalls() {
         val stack = RuntimeCallStack()
         repeat(1_024) { depth ->
-            stack.push(depth.toLong(), "method-$depth", depth.toLong(), null, null, null)
+            stack.push(depth.toLong(), "method-$depth", depth.toLong(), null, 0L)
         }
         assertEquals(1_024, stack.depth)
         repeat(1_024) { offset ->
@@ -106,7 +106,7 @@ class RuntimeCallGraphStorageTest {
     }
 
     private fun setEdge(page: RuntimeGraphAggregatePage, id: Long): Int {
-        assertTrue(page.add(id, null, id + 1L, null, "screen", "flow", "step", 1L))
+        assertTrue(page.add(id, "caller-$id", id + 1L, "callee-${id + 1L}", "screen", 41L, 1L))
         return page.nextOccupiedIndex(0)
     }
 }

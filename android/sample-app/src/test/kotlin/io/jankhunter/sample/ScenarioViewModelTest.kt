@@ -43,6 +43,7 @@ class ScenarioViewModelTest {
         assertTrue(ScenarioStep.BASELINE.actions.isEmpty())
         assertTrue(ScenarioStep.UI_CPU.actions.isEmpty())
         assertTrue(ScenarioStep.NETWORK.actions.isEmpty())
+        assertTrue(ScenarioStep.DATABASE.actions.isEmpty())
         assertTrue(ScenarioStep.MEMORY.actions.isEmpty())
         assertEquals(
             listOf(ScenarioAction.SHARE_DIAGNOSTICS, ScenarioAction.OPEN_MANUAL_MODE),

@@ -23,15 +23,15 @@
         <div class="env-grid">
           <div class="env-item"><div class="env-label">База</div><div class="env-value">{{reportHint .Comparison.Baseline.Environment.Title "неизвестно" "device"}}</div><div class="env-detail">{{reportHint .Comparison.Baseline.Environment.Subtitle "контекст недоступен" "session"}}</div></div>
           <div class="env-item"><div class="env-label">Кандидат</div><div class="env-value">{{reportHint .Comparison.Candidate.Environment.Title "неизвестно" "device"}}</div><div class="env-detail">{{reportHint .Comparison.Candidate.Environment.Subtitle "контекст недоступен" "session"}}</div></div>
-          <div class="env-item"><div class="env-label">HTTP p95</div><div class="env-value">{{if gt .Comparison.Baseline.HTTPCount 0}}{{.Comparison.Baseline.HTTPP95MS}} мс{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.HTTPCount 0}}{{.Comparison.Candidate.HTTPP95MS}} мс{{else}}нет данных{{end}}</div><div class="env-detail">запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
-          <div class="env-item"><div class="env-label">UI</div><div class="env-value">{{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</div><div class="env-detail">FPS {{if ne .Comparison.Baseline.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}не оценён{{end}} → {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}не оценён{{end}}</div></div>
+          <div class="env-item"><div class="env-label">Задержка верхних 5% HTTP-запросов</div><div class="env-value">{{if gt .Comparison.Baseline.HTTPCount 0}}{{.Comparison.Baseline.HTTPP95MS}} мс{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.HTTPCount 0}}{{.Comparison.Candidate.HTTPP95MS}} мс{{else}}нет данных{{end}}</div><div class="env-detail">запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div></div>
+          <div class="env-item"><div class="env-label">Подтормаживания интерфейса</div><div class="env-value">{{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%{{else}}нет данных{{end}} → {{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</div><div class="env-detail">кадров/с {{if ne .Comparison.Baseline.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}не оценено{{end}} → {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}не оценено{{end}}</div></div>
         </div>
       </div>
       </div>
       <div class="report-hero-control">
       <div class="hero-meta">
         <div class="chip">Проблемы кандидата <strong>{{.Comparison.ProblemComparison.Summary.Total}}</strong></div>
-        <div class="chip">Критичные / высокий риск <strong>{{.Comparison.ProblemComparison.Summary.Critical}} / {{.Comparison.ProblemComparison.Summary.High}}</strong></div>
+        <div class="chip">Критичный / высокий приоритет <strong>{{.Comparison.ProblemComparison.Summary.Critical}} / {{.Comparison.ProblemComparison.Summary.High}}</strong></div>
         <div class="chip">Изменения проблем <strong>{{len .Comparison.ProblemComparison.Deltas}}</strong></div>
       </div>
       {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">λ Анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">ASM диагностика</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">DI-каталог</a>{{end}}</div>{{end}}
@@ -46,7 +46,10 @@
   <a href="#memory-leaks">Утечки</a>
   <a href="#regressions">Регрессии</a>
   <a href="#changes">Где изменилось</a>
-  <a href="#flows">Сценарии</a>
+  {{if or .Comparison.Database.Metrics .Comparison.Database.Statements}}<a href="#database-compare">База данных</a>{{end}}
+  {{if .Comparison.AndroidComponents.Metrics}}<a href="#android-components-compare">Компоненты Android / IPC</a>{{end}}
+  {{if .Comparison.OperationDeltas}}<a href="#operations">Операции</a>{{end}}
+  <a href="#signal-contexts">Связанные сигналы</a>
   <a href="#drilldown">Детали логов</a>
   <a href="#cohorts">Когорты</a>
   <a href="#analysis">Итог</a>
@@ -54,9 +57,10 @@
 <main>
   <section id="problem-changes" class="panel problem-first-panel" data-problem-inbox>
     <div class="problem-verdict verdict-{{.Comparison.ProblemComparison.Summary.Verdict}}">
-      <div><div class="eyebrow">Главный вывод кандидата</div><h2>{{.Comparison.ProblemComparison.Summary.Headline}}</h2><p>Одинаковые проблемы сопоставлены между прогонами и отсортированы по изменению риска.</p><p class="problem-analysis-boundary">Прямая причина указывается только при наличии подтверждающей связи в журнале. Иначе отчёт показывает наиболее полезное место для проверки.</p></div>
-      <div class="problem-verdict-counts"><span class="sev-critical">{{.Comparison.ProblemComparison.Summary.Critical}}<small>критичных</small></span><span class="sev-high">{{.Comparison.ProblemComparison.Summary.High}}<small>высокий риск</small></span><span class="sev-medium">{{.Comparison.ProblemComparison.Summary.Medium}}<small>средний риск</small></span><span class="sev-low">{{.Comparison.ProblemComparison.Summary.Low}}<small>низкий риск</small></span></div>
+      <div><div class="eyebrow">Главный вывод кандидата</div><h2>{{.Comparison.ProblemComparison.Summary.Headline}}</h2><p>Одинаковые проблемы сопоставлены между прогонами и отсортированы по изменению приоритета расследования.</p><p class="problem-analysis-boundary">Прямая причина указывается только при наличии подтверждающей связи в журнале. Иначе отчёт показывает наиболее полезное место для проверки.</p></div>
+      <div class="problem-verdict-counts"><span class="sev-critical">{{.Comparison.ProblemComparison.Summary.Critical}}<small>критичный приоритет</small></span><span class="sev-high">{{.Comparison.ProblemComparison.Summary.High}}<small>высокий приоритет</small></span><span class="sev-medium">{{.Comparison.ProblemComparison.Summary.Medium}}<small>средний приоритет</small></span><span class="sev-low">{{.Comparison.ProblemComparison.Summary.Low}}<small>низкий приоритет</small></span></div>
     </div>
+    <div class="analysis-intro problem-priority-method"><strong>Индекс приоритета расследования (0–100).</strong> Это сумма пяти независимых компонентов: влияние на пользователя 0–40, величина отклонения 0–25, повторяемость и охват запусков 0–20, широта локализации 0–10 и сочетание сигналов 0–5. Это <strong>не вероятность</strong> дефекта, <strong>не ожидаемый ущерб</strong> и не целевой норматив. Достоверность и уровень связи учитываются отдельно и не умножают индекс. Точные баллы и причины раскрываются в каждой карточке.</div>
     {{range .Comparison.CohortWarnings}}<p class="warning"><strong>Сопоставимость ограничена.</strong> {{.}}</p>{{end}}
     {{$primaryCoverage := primaryCategoryCoverage .Comparison.Candidate.CategoryCoverage}}
     {{if $primaryCoverage}}<div class="problem-coverage-grid">{{range $primaryCoverage}}<button type="button" class="problem-coverage-card coverage-{{.Status}} coverage-severity-{{.WorstSeverity}}" data-problem-category-button="{{.Category}}" data-tip="{{problemCategoryLabel .Category}}. {{.Explanation}}" aria-pressed="false"><span>{{problemCategoryLabel .Category}}</span><strong>{{problemCoverageStatusLabel .Status}}</strong><small>{{ruCount .FindingCount "проблема" "проблемы" "проблем"}}</small><em>{{.Explanation}}</em></button>{{end}}</div>{{end}}
@@ -64,7 +68,7 @@
     {{template "problem-search-scope"}}
     <div class="problem-toolbar" role="search">
       <label class="problem-search-label">Поиск по всем данным страницы <span class="problem-search-field"><input type="search" data-problem-search placeholder="Класс, экран, сценарий, маршрут или проблема"><button type="button" data-problem-search-clear hidden>Очистить</button></span></label>
-      <label>Опасность <select data-problem-severity><option value="">все</option><option value="critical">критично</option><option value="high">высокий риск</option><option value="medium">средний риск</option><option value="low">низкий риск</option></select></label>
+      <label>Приоритет <select data-problem-severity><option value="">все</option><option value="critical">критичный</option><option value="high">высокий</option><option value="medium">средний</option><option value="low">низкий</option></select></label>
       <label>Категория <select data-problem-category><option value="">все</option>{{range findingCategoryCoverage .Comparison.Candidate.CategoryCoverage}}<option value="{{.Category}}">{{problemCategoryLabel .Category}}</option>{{end}}</select></label>
       <label>Достоверность <select data-problem-confidence><option value="">все</option><option value="high">высокая</option><option value="medium">средняя</option><option value="low">низкая</option></select></label>
       <label>Статус <select data-problem-status><option value="">все</option><option value="new">новая</option><option value="regressed">ухудшилась</option><option value="persistent">сохранилась</option><option value="improved">улучшилась</option><option value="resolved">исправлена</option></select></label>
@@ -73,14 +77,14 @@
     <p class="problem-search-feedback" data-problem-search-feedback aria-live="polite">Поиск проверяет карточки и все строки подробных разделов этой страницы. Фильтры справа изменяют только карточки проблем.</p>
     <div class="problem-search-results" data-problem-search-results hidden aria-live="polite"></div>
     <div class="problem-inbox">
-      {{range .Comparison.ProblemComparison.Deltas}}{{$delta := .}}{{with problemDeltaFinding .}}
-      <article id="compare-{{.ID}}" class="problem-card {{severityClass .Severity}} status-{{$delta.Status}}" data-problem-card data-category="{{.Category}}" data-severity="{{.Severity}}" data-confidence="{{.Confidence}}" data-status="{{$delta.Status}}">
-        <div class="problem-card-rank" data-tip="Приоритет от 0 до 100 определяет порядок разбора. Чем выше число, тем сильнее возможный вред, отклонение и повторяемость проблемы."><span class="problem-severity">{{severityLabel .Severity}}</span><strong>{{.RiskScore}}</strong><small>приоритет из 100</small><div class="problem-risk-track"><i style="{{riskWidth .RiskScore}}"></i></div></div>
+      {{$comparison := .Comparison}}{{range .Comparison.ProblemComparison.Deltas}}{{$delta := .}}{{$diagnosisData := problemDeltaDiagnosisData $comparison $delta}}{{with problemDeltaFinding .}}
+      <article id="compare-{{.ID}}" class="problem-card {{severityClass .Severity}} status-{{$delta.Status}}" data-problem-card data-category="{{join .RelatedCategories " "}}" data-severity="{{.Severity}}" data-confidence="{{.Confidence}}" data-status="{{$delta.Status}}">
+        <div class="problem-card-rank" data-tip="Индекс — сумма влияния 0–40, величины 0–25, повторяемости 0–20, широты 0–10 и сочетания сигналов 0–5. Это не вероятность."><span class="problem-severity">{{problemPriorityBandLabel .Severity}}</span><strong>{{.InvestigationPriority}}</strong><small>индекс из 100</small><div class="problem-priority-track"><i style="{{priorityWidth .InvestigationPriority}}"></i></div></div>
         <div class="problem-card-main"><div class="problem-card-meta"><span>{{problemCategoryLabel .Category}}</span><span>доверие к выводу: {{confidenceLabel .Confidence}}</span><span class="problem-delta-status">{{problemStatusLabel $delta.Status}}</span></div><h3>{{.Title}}</h3><p class="problem-what">{{.WhatHappened}}</p><p class="problem-where"><strong>Где:</strong> {{problemLocationText .Where}}</p>
           {{if $delta.Note}}<p class="warning">{{$delta.Note}}</p>{{end}}
           <div class="problem-evidence-list">{{range limitRows .Evidence 5}}<span><strong>{{tip (problemEvidenceLabel .) (problemEvidenceHelp .)}}</strong>{{problemEvidenceDisplay .}}{{if .ExpectedOrThreshold}}<small>{{problemEvidenceThreshold .ExpectedOrThreshold}}</small>{{end}}</span>{{end}}</div>
           {{with problemPrimaryRecommendation .}}<div class="problem-action"><strong>Что делать:</strong> {{.Action}}<small>{{.Verification}}</small></div>{{end}}
-          <details class="problem-explanation"><summary>Почему это важно и где искать · {{problemClaimLabel .Why.ClaimLevel}}</summary><div class="problem-explanation-grid"><div><h4>Что указывает на причину</h4><p>{{.Why.Summary}}</p></div><div><h4>К чему это может привести</h4>{{range .Impact}}<p>{{.}}</p>{{end}}</div><details class="problem-technical-details span-all"><summary>Как рассчитан приоритет и какие есть ограничения</summary><div class="problem-technical-grid"><div><h4>Состав приоритета</h4>{{range .RankBreakdown}}<div class="problem-risk-row"><span>{{problemRiskComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range .Limitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой находки нет.</p>{{end}}</div></div></details></div></details>
+          {{template "problem-diagnosis" $diagnosisData}}
         </div>
       </article>
       {{end}}{{else}}<div class="problem-empty-state"><strong>Изменений проблем не найдено.</strong><p>Проверьте карточки категорий выше и сводное сравнение ниже.</p></div>{{end}}
@@ -101,14 +105,14 @@
     {{range .Comparison.ExposureWarnings}}<p class="warning">{{.}}</p>{{end}}
     <div class="compare-pair-grid">
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "HTTP p95" "95-й процентиль HTTP-задержки. Рост показывает ухудшение хвоста сетевых запросов."}}</div>
+        <div class="compare-pair-title">{{tip "Задержка верхних 5% HTTP-запросов" "95% запросов завершились не дольше этого значения. Рост показывает ухудшение самых медленных сетевых запросов."}}</div>
         <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.HTTPCount 0}}{{.Comparison.Baseline.HTTPP95MS}} мс{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.HTTPCount 0}}{{.Comparison.Candidate.HTTPP95MS}} мс{{else}}нет данных{{end}}</strong></div></div>
         <div class="compare-delta">Запросы {{.Comparison.Baseline.HTTPCount}} → {{.Comparison.Candidate.HTTPCount}}, ошибки {{.Comparison.Baseline.HTTPFailed}} → {{.Comparison.Candidate.HTTPFailed}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше значение у кандидата, тем заметнее просадка интерфейса."}}</div>
+        <div class="compare-pair-title">{{tip "Подтормаживания интерфейса" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше значение у кандидата, тем заметнее просадка интерфейса."}}</div>
         <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.UIFrames 0}}{{printf "%.2f" .Comparison.Baseline.UIJankPct}}%{{else}}нет данных{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.2f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</strong></div></div>
-        <div class="compare-delta">Средний FPS {{if ne .Comparison.Baseline.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}не оценён{{end}} → {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}не оценён{{end}}</div>
+        <div class="compare-delta">Средняя частота кадров {{if ne .Comparison.Baseline.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Baseline.UIAvgFPS}}{{else}}не оценена{{end}} → {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}{{else}}не оценена{{end}}</div>
       </div>
       <div class="compare-pair">
         <div class="compare-pair-title">{{tip "Память" "PSS показывает вклад процесса в RAM, удержанные объекты помогают увидеть возможные утечки."}}</div>
@@ -116,27 +120,27 @@
         <div class="compare-delta">Удержанные объекты {{.Comparison.Baseline.Retained}} → {{.Comparison.Candidate.Retained}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная зафиксированная пауза главного потока. Один пик полезно проверять рядом с экраном, сценарием и источником работы; отсутствие события означает, что Jank Hunter не зафиксировал паузу, а не гарантирует ее полное отсутствие."}}</div>
+        <div class="compare-pair-title">{{tip "Главный поток" "Самая длинная зафиксированная пауза главного потока. Один пик полезно проверять рядом с экраном, операцией и источником работы; отсутствие события означает, что Jank Hunter не зафиксировал паузу, а не гарантирует ее полное отсутствие."}}</div>
         <div class="compare-values"><div class="compare-value"><span>База</span><strong>{{if gt .Comparison.Baseline.StallCount 0}}{{.Comparison.Baseline.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</strong></div><div class="compare-value"><span>Кандидат</span><strong>{{if gt .Comparison.Candidate.StallCount 0}}{{.Comparison.Candidate.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</strong></div></div>
         <div class="compare-delta">События пауз {{.Comparison.Baseline.StallCount}} → {{.Comparison.Candidate.StallCount}}</div>
       </div>
       <div class="compare-pair">
-        <div class="compare-pair-title">{{tip "Сценарии и причины" "Частота проблемных окон и вызовов логов за минуту. Нормализация по длительности не позволяет длинному прогону выглядеть хуже только из-за большего времени наблюдения."}}</div>
+        <div class="compare-pair-title">{{tip "Связанные сигналы" "Частота проблемных окон и вызовов логов за минуту. Нормализация по длительности не позволяет длинному прогону выглядеть хуже только из-за большего времени наблюдения."}}</div>
         <div class="compare-values"><div class="compare-value"><span>Проблемные окна, шт/мин</span><strong>{{printf "%.2f" (perMinute (summaryProblemWindows .Comparison.Baseline) .Comparison.Baseline.DurationMS)}} → {{printf "%.2f" (perMinute (summaryProblemWindows .Comparison.Candidate) .Comparison.Candidate.DurationMS)}}</strong></div><div class="compare-value"><span>Спам логами, выз./мин</span><strong>{{printf "%.2f" (perMinute (summaryLogSpam .Comparison.Baseline) .Comparison.Baseline.DurationMS)}} → {{printf "%.2f" (perMinute (summaryLogSpam .Comparison.Candidate) .Comparison.Candidate.DurationMS)}}</strong></div></div>
-        <div class="compare-delta">Исходные значения: окна {{summaryProblemWindows .Comparison.Baseline}} → {{summaryProblemWindows .Comparison.Candidate}} · вызовы логов {{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}} · строки сценариев {{len .Comparison.Baseline.Flows}} → {{len .Comparison.Candidate.Flows}}</div>
+        <div class="compare-delta">Исходные значения: окна {{summaryProblemWindows .Comparison.Baseline}} → {{summaryProblemWindows .Comparison.Candidate}} · вызовы логов {{summaryLogSpam .Comparison.Baseline}} → {{summaryLogSpam .Comparison.Candidate}} · контексты операций {{len .Comparison.Baseline.SignalContexts}} → {{len .Comparison.Candidate.SignalContexts}}</div>
       </div>
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать сравнение</strong>Рост задержек, ошибок, памяти, подтормаживаний и спама логами обычно означает ухудшение кандидата. Доверие и выборка показывают, насколько этому можно верить.</div>
-      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте “Где изменилось” и “Сценарии”: там видно конкретный маршрут, экран или источник, который изменился.</div>
+      <div class="guide-card"><strong>Где искать причину</strong>После матрицы регрессий открывайте «Где изменилось» и «Связанные сигналы»: там видно конкретный маршрут, экран, операцию или источник, который изменился.</div>
       <div class="guide-card"><strong>Когда эскалировать</strong>Критичные регрессии с повторяемостью, сетевые циклы или рост интегральной нагрузки лучше сразу превращать в задачу на исправление.</div>
     </div>
     {{scoreGuide "compare"}}
     <h3>Кольцевые индикаторы</h3>
     <div class="ring-row">
-      <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.UIFrames 0}}{{ringStyle .Comparison.Candidate.UIJankPct}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</strong><span>UI</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
+      <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.UIFrames 0}}{{ringStyle .Comparison.Candidate.UIJankPct}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.UIFrames 0}}{{printf "%.1f" .Comparison.Candidate.UIJankPct}}%{{else}}нет данных{{end}}</strong><span>кадры</span></div></div></div><div class="gauge-label">Подтормаживания кандидата</div></div>
       <div class="gauge-card"><div class="gauge" style="{{if gt .Comparison.Candidate.HTTPCount 0}}{{ringStyle (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}{{else}}{{ringStyle 0.0}}{{end}}; --color: var(--bad)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{if gt .Comparison.Candidate.HTTPCount 0}}{{printf "%.1f" (rate .Comparison.Candidate.HTTPFailed .Comparison.Candidate.HTTPCount)}}%{{else}}нет данных{{end}}</strong><span>HTTP</span></div></div></div><div class="gauge-label">Ошибки кандидата</div></div>
-      {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">FPS кандидата</div></div>{{end}}
+      {{if ne .Comparison.Candidate.UIAvgFPS 0.0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Comparison.Candidate.UIAvgFPS)}}; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" .Comparison.Candidate.UIAvgFPS}}</strong><span>кадр/с</span></div></div></div><div class="gauge-label">Частота кадров кандидата</div></div>{{end}}
     </div>
     {{if .Comparison.Candidate.Influence.Available}}
     <h3>Узлы графа для проверки в кандидате</h3>
@@ -150,6 +154,22 @@
     {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кандидата</a></p>{{end}}
     {{end}}
   </section>
+
+  {{if or .Comparison.Database.Metrics .Comparison.Database.Statements}}<section id="database-compare" class="panel">
+    <div class="panel-head"><div><h2>Сравнение базы данных</h2><div class="panel-kicker">Кандидат против базы по задержкам SQL, нормированной нагрузке, завершённости транзакций, ошибкам, повторам и суммарному времени БД.</div></div><span class="pill">только в отчёте</span></div>
+    <div class="analysis-intro"><strong>Как интерпретировать.</strong> Задержки главного и фонового потоков не смешиваются; граница верхних 5% рассчитывается только по завершённым транзакциям. Частота нормирована по длительности и числу завершённых операций приложения. Новые метрики БД пока не проверяются в CI автоматически: сначала подтвердите стабильность одинакового сценария, затем задайте отдельное правило.</div>
+    {{if .Comparison.Database.Note}}<p class="warning">{{.Comparison.Database.Note}}</p>{{end}}
+    <div class="database-compare-metrics">{{range .Comparison.Database.Metrics}}<article class="database-compare-metric {{severityClass .Severity}}"><span>{{tip (deltaLabel .Name) (deltaHelp .Name)}}</span><div><strong>{{deltaValue .Baseline}}</strong><b>→</b><strong>{{deltaValue .Candidate}}</strong></div><em>{{if .Comparable}}{{deltaChange .Change}} · {{severityLabel .Severity}}{{else}}не сравнивается{{end}}</em><small>{{.ComparisonNote}} · {{deltaInterval .Interval}}</small></article>{{end}}</div>
+    {{if .Comparison.Database.Statements}}<h3>Где изменился конкретный SQL</h3><div class="database-compare-statements">{{range limitRows .Comparison.Database.Statements 256}}<article class="database-statement-card {{severityClass .Severity}}"><header><span class="status-note {{severityClass .Severity}}">{{databaseCompareStatusLabel .Status}}</span><span>{{.Operation}}</span><span>доверие {{confidenceLabel .Confidence}}</span></header><pre class="database-sql-template"><code>{{.Query}}</code></pre><div class="database-statement-metrics"><span>вызовы<strong>{{.BaselineCalls}} → {{.CandidateCalls}}</strong></span><span>выз./мин<strong>{{printf "%.2f" .BaselineCallsPerMinute}} → {{printf "%.2f" .CandidateCallsPerMinute}}</strong></span><span>главный поток, верхние 5%<strong>{{humanMicros .BaselineMainP95US}} → {{humanMicros .CandidateMainP95US}}</strong></span><span>фон, верхние 5%<strong>{{humanMicros .BaselineBackgroundP95US}} → {{humanMicros .CandidateBackgroundP95US}}</strong></span><span>ошибки<strong>{{printf "%.2f" .BaselineFailureRatePct}}% → {{printf "%.2f" .CandidateFailureRatePct}}%</strong></span><span>время БД / операция<strong>{{printf "%.2f" .BaselineWallMSPerOperation}} → {{printf "%.2f" .CandidateWallMSPerOperation}} мс</strong></span></div><p class="help-text">{{.Note}}</p></article>{{end}}</div>{{end}}
+  </section>{{end}}
+
+  {{if .Comparison.AndroidComponents.Metrics}}<section id="android-components-compare" class="panel">
+    <div class="panel-head"><div><h2>Сравнение компонентов Android и IPC</h2><div class="panel-kicker">Кандидат против базы по надёжности жизненного цикла, системным ограничениям времени, задержкам Binder на главном потоке и полноте межпроцессной связи.</div></div><span class="pill">отчёт · CI по запросу</span></div>
+    <div class="analysis-intro"><strong>Как интерпретировать.</strong> Ошибки и медленные методы сравниваются как доли внутри соответствующего типа событий, поэтому длинный прогон не выглядит хуже только из-за длительности. Доля службы переднего плана при скрытом интерфейсе описывает сценарий и не является регрессией. Полнота связи сравнима только при одинаковом полном охвате процессов.</div>
+    {{if .Comparison.AndroidComponents.Note}}<p class="warning">{{.Comparison.AndroidComponents.Note}}</p>{{end}}
+    <div class="database-compare-metrics">{{range .Comparison.AndroidComponents.Metrics}}<article class="database-compare-metric {{severityClass .Severity}}"><span>{{tip (deltaLabel .Name) (deltaHelp .Name)}}</span><div><strong>{{deltaValue .Baseline}}</strong><b>→</b><strong>{{deltaValue .Candidate}}</strong></div><em>{{if .Comparable}}{{deltaChange .Change}} · {{severityLabel .Severity}}{{else}}не сравнивается{{end}}</em><small>{{.ComparisonNote}} · {{deltaInterval .Interval}} · доверие {{confidenceLabel .Confidence}}</small></article>{{end}}</div>
+    <div class="report-limit-note"><strong>Граница вывода:</strong> эти метрики пока не включены в CI gate по умолчанию. После стабилизации одинакового сценария их можно включить отдельной opt-in политикой; partial analysis остаётся видимым и не превращается в ложный pass/fail.</div>
+  </section>{{end}}
 
   <section id="code-problems" class="panel code-registry-panel">
     {{if .MathReportHref}}
@@ -227,7 +247,7 @@
     <div class="panel-head">
       <div>
         <h2>Сравнение сигналов удержания памяти</h2>
-        <div class="panel-kicker">Сравнивайте только одинаковые уровни evidence: time_only, after_explicit_gc и confirmed_hprof/path имеют разную силу.</div>
+        <div class="panel-kicker">Сравнивайте только одинаковую силу данных: наблюдение после задержки, наблюдение после явного GC и подтверждённый путь HPROF имеют разную надёжность.</div>
       </div>
       <span class="pill">дельта удержаний</span>
     </div>
@@ -274,7 +294,7 @@
             <td><code>{{.Candidate.Holder}}</code><div class="leak-holder-quality">{{.Candidate.HolderQuality}}</div></td>
             <td><div>база {{if .HasBaseline}}{{printf "%.1f" .BaselineScore}}{{else}}нет сопоставимого сигнала{{end}}</div><div>кандидат {{printf "%.1f" .Candidate.Score}}</div>{{if .HasBaseline}}<div class="muted">дельта {{printf "%+.1f" .DeltaScore}}</div>{{end}}</td>
             <td><div>кол-во {{if .HasBaseline}}{{.BaselineCount}}{{else}}нет данных{{end}} → {{.Candidate.Count}}{{if .HasBaseline}} ({{printf "%+d" .DeltaCount}}){{end}}</div><div>возраст {{if .HasBaseline}}{{humanDuration .BaselineAgeMS}}{{else}}нет данных{{end}} → {{humanDuration .Candidate.MaxAgeMS}}{{if .HasBaseline}} ({{signedDuration .DeltaAgeMS}}){{end}}</div><div class="muted">уверенность сопоставления: {{.MatchConfidence}}</div></td>
-            <td><div class="problem-context">{{with reportValue .Candidate.Screen ""}}<div>экран <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Flow ""}}<div>сценарий <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Step ""}}<div>шаг <code>{{.}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{with reportValue .Candidate.Screen ""}}<div>экран <code>{{.}}</code></div>{{end}}{{with reportValue .Candidate.Operation ""}}<div>операция <code>{{.}}</code></div>{{end}}</div></td>
             <td><div>{{dataSize .Candidate.EstimatedRetainedKB}}</div><div class="muted">{{.Candidate.RetainedSizeConfidence}}</div><div class="muted">{{.Candidate.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .Candidate.DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.Candidate.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.Candidate.LeakChainSummary}}</div></td>
             <td>{{.Candidate.Recommendation}}<div class="leak-chain-actions"><strong>Быстрые проверки цепочки</strong>{{range .Candidate.LeakChainActions}}<span>{{.}}</span>{{end}}</div></td>
@@ -331,7 +351,7 @@
         {{$routeRows := routeCompareRows .Comparison.Baseline .Comparison.Candidate}}
         <h3>Маршруты</h3>
         <table>
-          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>{{tip "p95 базы" "95-й процентиль длительности запросов базы. На выборке меньше трёх запросов статус не поднимается выше предупреждения."}}</th><th>{{tip "p95 кандидата" "95-й процентиль длительности запросов кандидата."}}</th><th>{{tip "Дельта p95" "Вычисляется только если маршрут есть и содержит запросы в обоих наборах."}}</th><th>{{tip "Статус" "Новая или исчезнувшая строка не называется регрессией: для неё показывается причина отказа от сравнения."}}</th><th>Источник</th></tr>
+          <tr><th>Маршрут</th><th>Запросы базы</th><th>Запросы кандидата</th><th>Ошибки базы</th><th>Ошибки кандидата</th><th>{{tip "Верхние 5% базы" "95% запросов базы завершились не дольше этого значения. На выборке меньше трёх запросов статус не поднимается выше предупреждения."}}</th><th>{{tip "Верхние 5% кандидата" "95% запросов кандидата завершились не дольше этого значения."}}</th><th>{{tip "Изменение верхних 5%" "Вычисляется только если маршрут есть и содержит запросы в обоих наборах."}}</th><th>{{tip "Статус" "Новая или исчезнувшая строка не называется регрессией: для неё показывается причина отказа от сравнения."}}</th><th>Источник</th></tr>
           {{range $routeRows}}
           <tr>
             <td><code>{{.Route}}</code></td>
@@ -347,7 +367,7 @@
         {{$screenRows := screenCompareRows .Comparison.Baseline .Comparison.Candidate}}
         <h3>Экраны</h3>
         <table>
-          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>{{tip "Дельта jank" "Разница доли медленных кадров в процентных пунктах. Вычисляется только для экрана с кадрами в обоих наборах."}}</th><th>FPS базы</th><th>FPS кандидата</th><th>{{tip "Дельта FPS" "Разница среднего FPS; отрицательное значение означает падение."}}</th><th>{{tip "Frame p95 базы" "p95 по объединяемой гистограмме всех кадров экрана в базе."}}</th><th>{{tip "Frame p95 кандидата" "p95 по объединяемой гистограмме всех кадров экрана в кандидате."}}</th><th>{{tip "Статус" "На выборке меньше 120 кадров сильный сигнал понижается до предупреждения."}}</th></tr>
+          <tr><th>Экран</th><th>Кадры базы</th><th>Кадры кандидата</th><th>Подтормаживания базы</th><th>Подтормаживания кандидата</th><th>{{tip "Изменение подтормаживаний" "Разница доли медленных кадров в процентных пунктах. Вычисляется только для экрана с кадрами в обоих наборах."}}</th><th>Кадров/с базы</th><th>Кадров/с кандидата</th><th>{{tip "Изменение частоты кадров" "Разница средней частоты кадров; отрицательное значение означает падение."}}</th><th>{{tip "Верхние 5% кадров базы" "95% кадров базы были не дольше этого значения."}}</th><th>{{tip "Верхние 5% кадров кандидата" "95% кадров кандидата были не дольше этого значения."}}</th><th>{{tip "Статус" "На выборке меньше 120 кадров сильный сигнал понижается до предупреждения."}}</th></tr>
           {{range $screenRows}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td>
@@ -359,7 +379,7 @@
             <td>{{if .FrameTailComparisonAvailable}}{{.BaselineFrameP95MS}} мс{{else}}нет данных{{end}}</td><td>{{if .FrameTailComparisonAvailable}}{{.CandidateFrameP95MS}} мс{{else}}нет данных{{end}}</td>
             <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{else}}{{.ComparisonNote}}{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="12" class="muted">Нет UI-окон для сравнения.</td></tr>{{end}}
+          {{else}}<tr><td colspan="12" class="muted">Нет интервалов наблюдения за интерфейсом для сравнения.</td></tr>{{end}}
         </table>
         {{$ownerRows := ownerCompareRows .Comparison.Baseline .Comparison.Candidate}}
         <h3>Источники</h3>
@@ -380,14 +400,26 @@
     </details>
   </section>
 
-  <section id="flows" class="panel">
+  {{if .Comparison.OperationDeltas}}<section id="operations" class="panel">
     <div class="panel-head">
-      <div><h2>Сравнение сценариев и причин</h2><div class="panel-kicker">Сначала показано, что происходит в кандидате и где начинать проверку; ниже доступны исходные различия с базой.</div></div>
+      <div><h2>Изменение операций приложения</h2><div class="panel-kicker">Одинаковые открытия экранов, действия пользователя, фоновые и системные работы сопоставлены по названию, виду и экрану.</div></div>
+      <span class="pill">{{ruCount (len .Comparison.OperationDeltas) "строка" "строки" "строк"}}</span>
     </div>
-    {{$scenarioInsights := scenarioInsights .Comparison.Candidate}}
-    {{if $scenarioInsights}}<div class="analysis-insight-grid scenario-insight-grid">
-      {{range $scenarioInsights}}
-      <article class="analysis-insight-card scenario-insight-card {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
+    <div class="analysis-intro"><strong>Граница вывода.</strong> Операция считается сопоставимой только при наличии не менее 20 завершений в каждом наборе. Изменение нарушений бюджета учитывается отдельно — только при наличии не менее 20 операций с заданным бюджетом с каждой стороны. Новая или исчезнувшая операция не объявляется ухудшением. Указанное доверие дополнительно ограничивается качеством исходных журналов. Знак ≈ означает потоковую оценку границы с постоянным расходом памяти.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Операция</th><th>Вид</th><th>Экран</th><th>Количество базы</th><th>Количество кандидата</th><th>Граница 95% базы</th><th>Граница 95% кандидата</th><th>Изменение времени</th><th>Нарушение бюджета базы</th><th>Нарушение бюджета кандидата</th><th>Изменение ошибок</th><th>{{tip "База данных" "DB-вызовы, main/failure rates и wall time нормированы внутри сопоставленной операции приложения."}}</th><th>Статус</th><th>Доверие</th><th>Основание</th></tr></thead>
+      <tbody>{{deferredOperationRows .Comparison.OperationDeltas 50 50 15 "сравнение операций"}}</tbody>
+    </table></div>
+  </section>{{end}}
+
+  <section id="signal-contexts" class="panel">
+    <div class="panel-head">
+      <div><h2>Сравнение связанных сигналов</h2><div class="panel-kicker">Сначала показано, что происходит в операциях кандидата и где начинать проверку; ниже доступны исходные различия с базой.</div></div>
+    </div>
+    {{$operationInsights := operationContextInsights .Comparison.Candidate}}
+    {{if $operationInsights}}<div class="analysis-insight-grid operation-context-insight-grid">
+      {{range $operationInsights}}
+      <article class="analysis-insight-card operation-context-insight-card {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
         <div class="analysis-insight-head"><span>{{.Status}}</span><small>{{ruCount .SignalCount "вид сигнала" "вида сигнала" "видов сигналов"}}</small></div>
         <h3>{{.Title}}</h3><p class="analysis-insight-context">{{.Context}}</p>
         <p><strong>В кандидате:</strong> {{.Summary}}</p><p><strong>Что это значит:</strong> {{.Impact}}</p>
@@ -396,22 +428,22 @@
       {{end}}
     </div>{{end}}
     <details class="fold">
-      <summary>Исходное сравнение сценариев</summary>
+      <summary>Исходное сравнение контекстов операций</summary>
       <div class="fold-body">
-        {{$flowRows := flowCompareRows .Comparison.Baseline .Comparison.Candidate}}
+        {{$contextRows := signalContextCompareRows .Comparison.Baseline .Comparison.Candidate}}
         <table>
-          <tr><th>{{tip "Контекст" "Комбинация screen, flow, step и owner. Строки сопоставляются только при полном совпадении этой комбинации."}}</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>{{tip "Δ проблем" "Сырое количество сравнивается только при длительности прогонов с разницей не больше 20%."}}</th><th>Спам базы</th><th>Спам кандидата</th><th>{{tip "Δ спама" "Сырое количество сравнивается только для сопоставимой длительности. В общей матрице используется частота в минуту."}}</th><th>HTTP p95 база</th><th>HTTP p95 кандидат</th><th>Макс. пауза база</th><th>Макс. пауза кандидат</th><th>UI база</th><th>UI кандидат</th><th>{{tip "Статус" "Рассчитывается только по метрикам, которые присутствуют в обоих наборах. Отсутствующий замер не подменяется нулём."}}</th></tr>
-          {{range $flowRows}}
+          <tr><th>{{tip "Контекст" "Комбинация экрана, операции и источника. Строки сопоставляются только при полном совпадении этой комбинации."}}</th><th>Проблемы базы</th><th>Проблемы кандидата</th><th>{{tip "Изменение проблем" "Сырое количество сравнивается только при длительности прогонов с разницей не больше 20%."}}</th><th>Лишние сообщения базы</th><th>Лишние сообщения кандидата</th><th>{{tip "Изменение сообщений" "Сырое количество сравнивается только для сопоставимой длительности. В общей матрице используется частота в минуту."}}</th><th>Верхние 5% HTTP базы</th><th>Верхние 5% HTTP кандидата</th><th>Макс. пауза базы</th><th>Макс. пауза кандидата</th><th>Интерфейс базы</th><th>Интерфейс кандидата</th><th>{{tip "Статус" "Рассчитывается только по показателям, которые присутствуют в обоих наборах. Отсутствующий замер не подменяется нулём."}}</th></tr>
+          {{range $contextRows}}
           <tr>
-            <td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td>
+            <td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td>
             <td>{{if .BaselinePresent}}{{.BaselineProblems}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateProblems}}{{else}}нет данных{{end}}</td><td>{{if .CountsComparable}}{{.DeltaProblems}}{{else}}—{{end}}</td>
             <td>{{if .BaselinePresent}}{{.BaselineLogSpam}}{{else}}нет данных{{end}}</td><td>{{if .CandidatePresent}}{{.CandidateLogSpam}}{{else}}нет данных{{end}}</td><td>{{if .CountsComparable}}{{.DeltaLogSpam}}{{else}}—{{end}}</td>
             <td>{{if .BaselineHTTPPresent}}{{.BaselineHTTPP95MS}} мс{{else}}нет HTTP-замера{{end}}</td><td>{{if .CandidateHTTPPresent}}{{.CandidateHTTPP95MS}} мс{{else}}нет HTTP-замера{{end}}</td>
             <td>{{if .BaselineStallPresent}}{{.BaselineStallMaxMS}} мс{{else}}пауза не зафиксирована{{end}}</td><td>{{if .CandidateStallPresent}}{{.CandidateStallMaxMS}} мс{{else}}пауза не зафиксирована{{end}}</td>
-            <td>{{if .BaselineUIPresent}}{{printf "%.2f" .BaselineJankPct}}%{{else}}нет UI-замера{{end}}</td><td>{{if .CandidateUIPresent}}{{printf "%.2f" .CandidateJankPct}}%{{else}}нет UI-замера{{end}}</td>
+            <td>{{if .BaselineUIPresent}}{{printf "%.2f" .BaselineJankPct}}%{{else}}нет замера интерфейса{{end}}</td><td>{{if .CandidateUIPresent}}{{printf "%.2f" .CandidateJankPct}}%{{else}}нет замера интерфейса{{end}}</td>
             <td class="{{severityClass .Severity}}">{{if .Comparable}}{{severityLabel .Severity}}{{if .ComparisonNote}}<div class="muted">{{.ComparisonNote}}</div>{{end}}{{else}}{{.ComparisonNote}}{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="14" class="muted">Нет событий контекста сценария для сравнения.</td></tr>{{end}}
+          {{else}}<tr><td colspan="14" class="muted">Нет контекстов операций для сравнения.</td></tr>{{end}}
         </table>
       </div>
     </details>
@@ -419,7 +451,7 @@
 
   <section id="drilldown" class="panel">
     <div class="panel-head">
-      <div><h2>Детали по каждому логу</h2><div class="panel-kicker">Откройте любой исходный лог, чтобы увидеть его сеть, UI, память, метрики и профиль влияния.</div></div>
+      <div><h2>Детали по каждому журналу</h2><div class="panel-kicker">Откройте любой исходный журнал, чтобы увидеть его сеть, интерфейс, память, показатели и профиль влияния.</div></div>
     </div>
     {{range .LogGroups}}
     <h3>{{.Title}}</h3>
@@ -428,16 +460,16 @@
     <details class="log-card" id="{{.Anchor}}">
       <summary>
         <div><strong class="mono-block">{{.Name}}</strong><div class="muted">{{ruCount .Summary.EventCount "событие данных" "события данных" "событий данных"}} · {{ruCount .Summary.DictionaryRecords "словарная запись" "словарные записи" "словарных записей"}} · {{.Summary.ControlRecords}} control · {{humanDuration .Summary.DurationMS}} · {{ruCount .Summary.LogCount "лог" "лога" "логов"}}</div></div>
-        <div class="summary-metrics"><span class="pill">HTTP p95 {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span>{{if ne .Summary.UIAvgFPS 0.0}}<span class="pill">FPS {{printf "%.1f" .Summary.UIAvgFPS}}</span>{{end}}</div>
+        <div class="summary-metrics"><span class="pill">Верхние 5% HTTP {{.Summary.HTTPP95MS}} мс</span><span class="pill">Подтормаживания {{printf "%.2f" .Summary.UIJankPct}}%</span>{{if ne .Summary.UIAvgFPS 0.0}}<span class="pill">Кадров/с {{printf "%.1f" .Summary.UIAvgFPS}}</span>{{end}}</div>
       </summary>
       <div class="log-body">
         <div class="detail-grid">
-          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>p95</th><th>Макс.</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
-          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>FPS</th><th>Общий frame p95</th></tr>{{range .Summary.Screens}}<tr><td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{if ne .AvgFPS 0.0}}{{printf "%.1f" .AvgFPS}}{{else}}не оценён{{end}}</td><td>{{.FrameP95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий UI-окон.</td></tr>{{end}}</table></div>
+          <div><h3>Маршруты</h3><table><tr><th>Маршрут</th><th>Количество</th><th>Ошибки</th><th>Верхние 5%</th><th>Максимум</th></tr>{{range .Summary.Routes}}<tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.Failures}}</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет HTTP-событий.</td></tr>{{end}}</table></div>
+          <div><h3>Экраны</h3><table><tr><th>Экран</th><th>Кадры</th><th>Подтормаживания</th><th>Кадров/с</th><th>Верхние 5% кадров</th></tr>{{range .Summary.Screens}}<tr><td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.Frames}}</td><td>{{printf "%.2f" .JankRatePct}}%</td><td>{{if ne .AvgFPS 0.0}}{{printf "%.1f" .AvgFPS}}{{else}}не оценено{{end}}</td><td>{{.FrameP95MS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет событий наблюдения за интерфейсом.</td></tr>{{end}}</table></div>
           <div><h3>Источники</h3><table><tr><th>Источник</th><th>Тип</th><th>Количество</th><th>Макс.</th></tr>{{range .Summary.Owners}}<tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{ownerKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td></tr>{{else}}<tr><td colspan="4" class="muted">Нет источников.</td></tr>{{end}}</table></div>
           <div><h3>Память и метрики</h3><table><tr><th>Сигнал</th><th>Значение</th><th>Детали</th></tr><tr><td>max_pss_kb</td><td>{{if gt .Summary.MemoryCount 0}}{{.Summary.MemoryMaxKB}}{{else}}нет замера{{end}}</td><td>события удержания={{.Summary.Retained}}</td></tr>{{range .Summary.Gauges}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td><td>{{.Extra}}</td></tr>{{end}}</table></div>
-          <div><h3>Сценарии и причины</h3><table><tr><th>Экран / сценарий / шаг / источник</th><th>Проблемы</th><th>Спам логами</th><th>HTTP p95</th><th>Макс. пауза</th></tr>{{range .Summary.Flows}}<tr><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет сценариев.</td></tr>{{end}}</table></div>
-          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
+          <div><h3>Связанные сигналы</h3><table><tr><th>Экран / операция / источник</th><th>Проблемы</th><th>Лишние сообщения журнала</th><th>Верхние 5% HTTP</th><th>Макс. пауза</th></tr>{{range .Summary.SignalContexts}}<tr><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td><td>{{.ProblemCount}}</td><td>{{.LogSpam}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.StallMaxMS}} мс</td></tr>{{else}}<tr><td colspan="5" class="muted">Нет контекстов операций.</td></tr>{{end}}</table></div>
+          <div><h3>Проблемные окна</h3><table><tr><th>Причина</th><th>Количество</th><th>Макс.</th><th>Контекст</th></tr>{{range .Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Count}}</td><td>{{.MaxMS}} мс</td><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет проблемных окон.</td></tr>{{end}}</table></div>
         </div>
       </div>
     </details>
@@ -510,7 +542,7 @@
 
   <section id="collection-quality" class="panel technical-quality-panel">
     <details class="fold">
-      <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">{{if .Comparison.Baseline.CollectionQuality.TrustScoreModel}}{{printf "%.2f" .Comparison.Baseline.CollectionQuality.TrustScorePercent}}% → {{printf "%.2f" .Comparison.Candidate.CollectionQuality.TrustScorePercent}}% · {{end}}база и кандидат</span></summary>
+      <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">{{if .Comparison.Baseline.CollectionQuality.DiagnosticCompletenessModel}}{{printf "%.2f" .Comparison.Baseline.CollectionQuality.DiagnosticCompletenessPercent}}% → {{printf "%.2f" .Comparison.Candidate.CollectionQuality.DiagnosticCompletenessPercent}}% · {{end}}база и кандидат</span></summary>
       <div class="fold-body technical-quality-body">
         <p class="help-text">Этот раздел нужен владельцам Jank Hunter и разработчикам системы сбора. Для обычного разбора регрессий его открывать не требуется.</p>
         {{with collectorCapabilities .Comparison.Baseline}}<h3>Сборщики базы</h3>{{template "collector-capability-grid" .}}{{end}}
@@ -518,17 +550,17 @@
         {{if .Comparison.Candidate.EvidenceQuality.SchemaVersion}}<h3>Достаточность данных кандидата</h3><div class="evidence-quality-vector" aria-label="Техническая достаточность данных кандидата">{{range .Comparison.Candidate.EvidenceQuality.Dimensions}}<div class="evidence-quality-dimension quality-{{.Status}}" data-tip="{{.Explanation}}"><span>{{.Label}}</span><strong>{{evidenceQualityStatusLabel .Status}}</strong><small>{{.Explanation}}</small></div>{{end}}</div>{{end}}
         {{if and .Comparison.Baseline.AnalysisInputs.Status (not .Comparison.Baseline.AnalysisInputs.Complete)}}<p class="warning"><strong>Часть углублённого анализа базы недоступна:</strong> отсутствуют {{join .Comparison.Baseline.AnalysisInputs.Missing ", "}}.</p>{{end}}
         {{if and .Comparison.Candidate.AnalysisInputs.Status (not .Comparison.Candidate.AnalysisInputs.Complete)}}<p class="warning"><strong>Часть углублённого анализа кандидата недоступна:</strong> отсутствуют {{join .Comparison.Candidate.AnalysisInputs.Missing ", "}}.</p>{{end}}
-        {{if .Comparison.Baseline.CollectionQuality.TrustScoreModel}}
-        <p class="quality-notice"><strong>Индекс доверия: база {{printf "%.2f" .Comparison.Baseline.CollectionQuality.TrustScorePercent}}%, Доверие кандидата {{printf "%.2f" .Comparison.Candidate.CollectionQuality.TrustScorePercent}}%.</strong> Это legacy-агрегат только для подробной диагностики; главным индикатором служит независимый quality vector выше, а не статистическая вероятность.</p>
+        {{if .Comparison.Baseline.CollectionQuality.DiagnosticCompletenessModel}}
+        <p class="quality-notice"><strong>Диагностический индекс полноты: база {{printf "%.2f" .Comparison.Baseline.CollectionQuality.DiagnosticCompletenessPercent}}%, кандидат {{printf "%.2f" .Comparison.Candidate.CollectionQuality.DiagnosticCompletenessPercent}}%.</strong> Это взвешенный агрегат доступности телеметрии для подробной диагностики; главным индикатором служит независимый quality vector выше, а не статистическая вероятность или оценка риска.</p>
         <h3>База</h3>
-        <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Comparison.Baseline.CollectionQuality.TrustComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Comparison.Baseline.CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
         <h3>Кандидат</h3>
-        <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Comparison.Candidate.CollectionQuality.TrustComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Компонент</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead><tbody>{{range .Comparison.Candidate.CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{printf "%.2f" .EarnedPoints}} / {{printf "%.0f" .Weight}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
         {{end}}
         <p class="quality-notice">Scope процессов: база {{processScopeLabel .Comparison.Baseline.CollectionQuality.ProcessScope}}, кандидат {{processScopeLabel .Comparison.Candidate.CollectionQuality.ProcessScope}} · инварианты счётчиков {{if .Comparison.Baseline.CollectionQuality.CounterInvariantsValid}}OK{{else}}НАРУШЕНЫ{{end}} / {{if .Comparison.Candidate.CollectionQuality.CounterInvariantsValid}}OK{{else}}НАРУШЕНЫ{{end}}.</p>
         <p class="quality-notice">Process roster: база {{.Comparison.Baseline.CollectionQuality.ObservedProcessCount}}/{{.Comparison.Baseline.CollectionQuality.ExpectedProcessCount}} ({{if .Comparison.Baseline.CollectionQuality.ProcessRosterComplete}}ПОЛНОЕ{{else}}НЕПОЛНОЕ{{end}}, cohorts {{.Comparison.Baseline.CollectionQuality.RunCohortCount}}/{{if .Comparison.Baseline.CollectionQuality.RunCohortConsistent}}OK{{else}}СМЕШАНЫ{{end}}), кандидат {{.Comparison.Candidate.CollectionQuality.ObservedProcessCount}}/{{.Comparison.Candidate.CollectionQuality.ExpectedProcessCount}} ({{if .Comparison.Candidate.CollectionQuality.ProcessRosterComplete}}ПОЛНОЕ{{else}}НЕПОЛНОЕ{{end}}, cohorts {{.Comparison.Candidate.CollectionQuality.RunCohortCount}}/{{if .Comparison.Candidate.CollectionQuality.RunCohortConsistent}}OK{{else}}СМЕШАНЫ{{end}}) · manifest declaration {{if .Comparison.Baseline.CollectionQuality.ProcessRosterDeclarationComplete}}OK{{else}}НЕ ДОКАЗАНА{{end}} / {{if .Comparison.Candidate.CollectionQuality.ProcessRosterDeclarationComplete}}OK{{else}}НЕ ДОКАЗАНА{{end}}.</p>
-        <p class="quality-notice">Admission: база {{if .Comparison.Baseline.CollectionQuality.ExactAdmission}}EXACT{{else}}BEST_EFFORT{{end}}, кандидат {{if .Comparison.Candidate.CollectionQuality.ExactAdmission}}EXACT{{else}}BEST_EFFORT{{end}} · известных потерь {{.Comparison.Baseline.CollectionQuality.KnownLostEvents}} / {{.Comparison.Candidate.CollectionQuality.KnownLostEvents}} · подавлений hook {{.Comparison.Baseline.CollectionQuality.RuntimeHookFailures}} / {{.Comparison.Candidate.CollectionQuality.RuntimeHookFailures}}.</p>
-        <p class="quality-notice">Runtime-граф: база {{if .Comparison.Baseline.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}} / кандидат {{if .Comparison.Candidate.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}} · полнота {{printf "%.2f" (percent01 .Comparison.Baseline.CollectionQuality.RuntimeGraphCompletenessRatio)}}% / {{printf "%.2f" (percent01 .Comparison.Candidate.CollectionQuality.RuntimeGraphCompletenessRatio)}}% (decoded/emitted/input {{.Comparison.Baseline.CollectionQuality.DecodedRuntimeGraphCalls}}/{{.Comparison.Baseline.CollectionQuality.RuntimeGraphEmittedEvents}}/{{.Comparison.Baseline.CollectionQuality.RuntimeGraphInputEvents}} → {{.Comparison.Candidate.CollectionQuality.DecodedRuntimeGraphCalls}}/{{.Comparison.Candidate.CollectionQuality.RuntimeGraphEmittedEvents}}/{{.Comparison.Candidate.CollectionQuality.RuntimeGraphInputEvents}}).</p>
+        <p class="quality-notice">Режим приёма событий: база {{if .Comparison.Baseline.CollectionQuality.ExactAdmission}}ТОЧНЫЙ{{else}}ПО ВОЗМОЖНОСТИ{{end}}, кандидат {{if .Comparison.Candidate.CollectionQuality.ExactAdmission}}ТОЧНЫЙ{{else}}ПО ВОЗМОЖНОСТИ{{end}} · известных потерь {{.Comparison.Baseline.CollectionQuality.KnownLostEvents}} / {{.Comparison.Candidate.CollectionQuality.KnownLostEvents}} · сбоев перехватчиков {{.Comparison.Baseline.CollectionQuality.RuntimeHookFailures}} / {{.Comparison.Candidate.CollectionQuality.RuntimeHookFailures}}.</p>
+        <p class="quality-notice">Граф вызовов во время выполнения: базовый прогон {{if .Comparison.Baseline.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}} / проверяемый прогон {{if .Comparison.Candidate.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}}. Граф используется для выбора места проверки; отсутствие отдельной связи не доказывает, что вызов не выполнялся.</p>
         {{range .Comparison.Baseline.CollectionQuality.Notices}}<p class="quality-notice">База: {{.}}.</p>{{end}}
         {{range .Comparison.Candidate.CollectionQuality.Notices}}<p class="quality-notice">Кандидат: {{.}}.</p>{{end}}
         {{range .Comparison.QualityWarnings}}<p class="warning">{{.}}</p>{{end}}

@@ -13,8 +13,7 @@ internal class RuntimeCallBatch(capacity: Int) {
     private val screens = arrayOfNulls<String>(capacity)
     private val callers = LongArray(capacity)
     private val callerNames = arrayOfNulls<String>(capacity)
-    private val flows = arrayOfNulls<String>(capacity)
-    private val steps = arrayOfNulls<String>(capacity)
+    private val operationIds = LongArray(capacity)
     private val callees = LongArray(capacity)
     private val calleeNames = arrayOfNulls<String>(capacity)
     private val counts = LongArray(capacity)
@@ -27,22 +26,10 @@ internal class RuntimeCallBatch(capacity: Int) {
     fun add(
         screen: String?,
         callerId: Long,
-        flow: String?,
-        step: String?,
+        callerName: String,
+        operationId: Long,
         calleeId: Long,
-        count: Long,
-        totalMs: Long,
-        maxMs: Long,
-    ) = add(screen, callerId, null, flow, step, calleeId, null, count, totalMs, maxMs)
-
-    fun add(
-        screen: String?,
-        callerId: Long,
-        callerName: String?,
-        flow: String?,
-        step: String?,
-        calleeId: Long,
-        calleeName: String?,
+        calleeName: String,
         count: Long,
         totalMs: Long,
         maxMs: Long,
@@ -52,8 +39,7 @@ internal class RuntimeCallBatch(capacity: Int) {
         screens[index] = screen
         callers[index] = callerId
         callerNames[index] = callerName
-        flows[index] = flow
-        steps[index] = step
+        operationIds[index] = operationId
         callees[index] = calleeId
         calleeNames[index] = calleeName
         counts[index] = count
@@ -65,15 +51,13 @@ internal class RuntimeCallBatch(capacity: Int) {
 
     fun callerId(index: Int): Long = callers[index]
 
-    fun callerName(index: Int): String? = callerNames[index]
+    fun callerName(index: Int): String = checkNotNull(callerNames[index])
 
-    fun flow(index: Int): String? = flows[index]
-
-    fun step(index: Int): String? = steps[index]
+    fun operationId(index: Int): Long = operationIds[index]
 
     fun calleeId(index: Int): Long = callees[index]
 
-    fun calleeName(index: Int): String? = calleeNames[index]
+    fun calleeName(index: Int): String = checkNotNull(calleeNames[index])
 
     fun count(index: Int): Long = counts[index]
 

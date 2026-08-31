@@ -20,7 +20,102 @@ func (b *problemBuilder) detectSemanticWork() {
 	work := ActionableSemanticWork(b.summary)
 	b.detectComposeWork(work)
 	b.detectRoomWork(work)
-	b.detectWorkerWork(work)
+	if hasTypedWorkerLifecycle(b.summary) {
+		b.detectWorkerLifecycle()
+	} else {
+		b.detectWorkerWork(work)
+	}
+}
+
+func (b *problemBuilder) detectWorkerLifecycle() {
+	for _, item := range b.summary.WorkerAnalysis.Workers {
+		badOutcomes := item.Failures + item.Retries + item.Cancelled
+		long := item.RunMaxMS >= workerLongExecutionMS
+		repeated := item.Executions >= workerRepeatedMinCount && item.TotalRunMS >= workerRepeatedTotalMS
+		mainThread := item.MainThreadStarts > 0
+		if badOutcomes == 0 && !long && !repeated && !mainThread {
+			continue
+		}
+		where := []ProblemLocation{{
+			Screen: item.Screen, Operation: item.Operation,
+			Owner: firstKnown(item.Worker, item.Owner), Method: item.Worker,
+		}}
+		title := displayUnknown(item.Worker, "Worker") + " выполняется слишком долго"
+		subcategory := "worker_long"
+		if badOutcomes > 0 {
+			title = displayUnknown(item.Worker, "Worker") + " имеет неуспешные завершения"
+			subcategory = "worker_unsuccessful"
+		} else if mainThread {
+			title = displayUnknown(item.Worker, "Worker") + " запускает работу на главном потоке"
+			subcategory = "worker_main_thread"
+		} else if repeated {
+			title = displayUnknown(item.Worker, "Worker") + " часто повторяет долгую работу"
+			subcategory = "worker_repeated"
+		}
+		confidence, reasons, limits := problemConfidence(b.summary, item.Executions, 1, true)
+		if item.MissingStart+item.MissingFinish > 0 {
+			limits = append(limits, fmt.Sprintf(
+				"Lifecycle неполон: без start — %d, без finish — %d; незакрытые интервалы не включены в длительность и корреляции.",
+				item.MissingStart, item.MissingFinish,
+			))
+		}
+		if workerHasCorrelations(item) {
+			limits = append(limits, "CPU, аллокации, GC, память, сеть и I/O сопоставлены только по пересечению времени; это корреляция, а не доказанная причина нагрузки.")
+		}
+		evidence := []ProblemEvidence{
+			{Name: "Число попыток Worker", Observed: fmt.Sprint(item.Executions), Unit: "events", Sample: u64ptr(item.Executions), Source: "worker_lifecycle"},
+			{Name: "Самое долгое завершённое выполнение", Observed: fmt.Sprint(item.RunMaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", workerLongExecutionMS), Source: "worker_lifecycle"},
+			{Name: "Неуспешные завершения", Observed: fmt.Sprint(badOutcomes), Unit: "events", Sample: u64ptr(badOutcomes), Source: "worker_lifecycle"},
+		}
+		if item.WaitSamples > 0 {
+			evidence = append(evidence, ProblemEvidence{Name: "Ожидание запуска p95", Observed: fmt.Sprint(item.WaitP95MS), Unit: "ms", Source: "worker_lifecycle"})
+		}
+		if item.CorrelatedHTTPCalls > 0 {
+			evidence = append(evidence, ProblemEvidence{Name: "HTTP в окнах выполнения", Observed: fmt.Sprint(item.CorrelatedHTTPCalls), Unit: "events", Source: "worker_time_correlation"})
+		}
+		if item.CPUSamples > 0 {
+			evidence = append(evidence, ProblemEvidence{Name: "Максимальная загрузка CPU устройства в окнах выполнения", Observed: fmt.Sprintf("%.2f", float64(item.MaxDeviceCPUPercentX100)/100), Unit: "%", Source: "worker_time_correlation"})
+		}
+		b.add(ProblemFinding{
+			DetectorID: "cpu.worker_execution", DetectorVersion: b.cfg.Version,
+			Category: ProblemCategoryCPU, Subcategory: subcategory, Status: "observed",
+			Confidence: confidence, ConfidenceReasons: reasons, Title: title,
+			WhatHappened: fmt.Sprintf(
+				"Зафиксировано %s в %s; завершено — %d, неуспешно — %d, самое долгое — %d мс, ожидание запуска p95 — %d мс, пик параллельного выполнения — %d.",
+				russianCountUint64(item.Executions, "попытка", "попытки", "попыток"),
+				russianCountUint64(item.Instances, "экземпляре", "экземплярах", "экземплярах"),
+				item.Finished, badOutcomes, item.RunMaxMS, item.WaitP95MS, item.MaxConcurrency,
+			),
+			Where: where,
+			Why: ProblemWhy{
+				ClaimLevel: "linked",
+				Summary:    "Типизированный lifecycle напрямую связал enqueue, start, finish, попытку, длительность и результат одного экземпляра Worker.",
+			},
+			Impact:    []string{"Задержка фоновой синхронизации, повторная нагрузка на CPU, сеть и хранилище, расход батареи"},
+			Evidence:  evidence,
+			Frequency: &ProblemFrequency{Count: item.Executions, RatePerSec: ratePerSecond(item.Executions, b.summary.DurationMS)},
+			Cost:      &ProblemCost{WallTimeMS: nonZeroU64Ptr(item.TotalRunMS)},
+			PriorityBreakdown: priority(
+				workerProblemImpact(badOutcomes > 0 || mainThread),
+				min(25, 7+int(item.RunMaxMS/workerLongExecutionMS)*4),
+				min(20, 4+int(math.Log2(float64(item.Executions)+1))*3),
+				locationBreadth(where), boolScore(badOutcomes > 0 && repeated, 5),
+				"срыв фоновой работы", "длительность", "повторы", "контекст", "ошибка и повторы",
+			),
+			Recommendations: []ProblemRecommendation{{
+				Action:       "Проверить ограничения запуска и retry policy; затем разбить doWork на измеримые CPU, сетевые и файловые этапы и устранить главный поток",
+				Rationale:    "Полный lifecycle показывает очередь, фактическое выполнение и итог, а временные корреляции помогают выбрать первый дорогой этап для профилирования.",
+				Verification: "Повторить условия запуска и сравнить число попыток, результаты, ожидание, длительность, параллелизм и коррелирующие сигналы.",
+			}},
+			Limitations: uniqueStrings(limits),
+			Drilldowns:  []ProblemDrilldown{{Label: "Worker", Anchor: "workers", Filter: item.Worker}},
+		})
+	}
+}
+
+func workerHasCorrelations(item WorkerStats) bool {
+	return item.CorrelatedHTTPCalls+item.CorrelatedIOOperations+item.CPUSamples+
+		item.CoreCPUSamples+item.AllocationSamples+item.GCCount+item.MemoryPairs > 0
 }
 
 func (b *problemBuilder) detectComposeWork(work []SemanticWorkStats) {
@@ -66,7 +161,7 @@ func (b *problemBuilder) detectComposeWork(work []SemanticWorkStats) {
 	}
 	for _, candidate := range candidates {
 		item := candidate.work
-		where := []ProblemLocation{{Screen: item.Screen, Flow: item.Flow, Step: item.Step, Owner: item.Owner, Method: item.Owner}}
+		where := []ProblemLocation{{Screen: item.Screen, Operation: item.ContextOperation, Owner: item.Owner, Method: item.Owner}}
 		phase := composePhaseLabel(item.Operation)
 		title := fmt.Sprintf("%s занимает бюджет кадра", displayUnknown(item.Owner, "Compose-код"))
 		if candidate.frequent && !candidate.slow {
@@ -98,10 +193,10 @@ func (b *problemBuilder) detectComposeWork(work []SemanticWorkStats) {
 				{Name: "Число выполнений", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "compose_boundary"},
 				{Name: "Самое долгое выполнение", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", candidate.budgetMS), Source: "compose_boundary"},
 			},
-			Frequency:       &ProblemFrequency{Count: item.Count, RatePerSec: ratePerSecond(item.Count, b.summary.DurationMS)},
-			RankBreakdown:   risk(28, min(25, 7+int(item.MaxMS/maxUint64(candidate.budgetMS, 1))*4), min(20, 5+int(math.Log2(float64(item.Count)+1))*2), locationBreadth(where), compound, "риск задержки кадра", "длительность Compose-работы", "число выполнений", "контекст экрана", "совпадение с jank экрана"),
-			Recommendations: []ProblemRecommendation{{Action: composeRecommendation(item.Operation, candidate.frequent), Rationale: "Проверка параметров и состояния рядом с указанной функцией локализует источник повторной или тяжёлой работы.", Verification: "Повторить тот же экран и сравнить число выполнений, максимум длительности и долю медленных кадров."}},
-			Limitations:     uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "UI и причины", Anchor: "stability-ui", Filter: item.Owner}},
+			Frequency:         &ProblemFrequency{Count: item.Count, RatePerSec: ratePerSecond(item.Count, b.summary.DurationMS)},
+			PriorityBreakdown: priority(28, min(25, 7+int(item.MaxMS/maxUint64(candidate.budgetMS, 1))*4), min(20, 5+int(math.Log2(float64(item.Count)+1))*2), locationBreadth(where), compound, "риск задержки кадра", "длительность Compose-работы", "число выполнений", "контекст экрана", "совпадение с jank экрана"),
+			Recommendations:   []ProblemRecommendation{{Action: composeRecommendation(item.Operation, candidate.frequent), Rationale: "Проверка параметров и состояния рядом с указанной функцией локализует источник повторной или тяжёлой работы.", Verification: "Повторить тот же экран и сравнить число выполнений, максимум длительности и долю медленных кадров."}},
+			Limitations:       uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "UI и причины", Anchor: "stability-ui", Filter: item.Owner}},
 		})
 	}
 }
@@ -117,7 +212,7 @@ func (b *problemBuilder) detectRoomWork(work []SemanticWorkStats) {
 		if !slow && !storm {
 			continue
 		}
-		where := []ProblemLocation{{Screen: item.Screen, Flow: item.Flow, Step: item.Step, Owner: item.Owner, Method: item.Owner}}
+		where := []ProblemLocation{{Screen: item.Screen, Operation: item.ContextOperation, Owner: item.Owner, Method: item.Owner}}
 		detector, subcategory, title, impact, action := "io.room_pressure", "room_background", "Room DAO выполняется слишком долго", 18, "Проверить план запроса, индексы, размер результата и число обращений к DAO"
 		if item.MainThread {
 			detector, subcategory, title, impact = "io.room_main_thread", "room_main_thread", "Room DAO блокирует главный поток", 34
@@ -128,21 +223,26 @@ func (b *problemBuilder) detectRoomWork(work []SemanticWorkStats) {
 		confidence, reasons, limits := problemConfidence(b.summary, item.Count, 3, true)
 		limits = append(limits, "Автоматическая граница DAO точно измеряет синхронный вызов; полную длительность асинхронного DAO следует дополнить traceIO.")
 		threshold := b.cfg.IOBackgroundMS
+		whySummary := "SDK напрямую связал DAO, длительность и фоновый поток."
+		impactSummary := "Задержка данных, конкуренция за БД и лишняя фоновая нагрузка"
 		if item.MainThread {
 			threshold = b.cfg.IOMainThreadMS
+			whySummary = "SDK напрямую связал DAO, длительность и выполнение на главном потоке."
+			impactSummary = "Блокировка кадра и ввода, рост риска ANR при длинном запросе"
 		}
 		b.add(ProblemFinding{
 			DetectorID: detector, DetectorVersion: b.cfg.Version, Category: ProblemCategoryIO, Subcategory: subcategory,
 			Status: "observed", Confidence: confidence, ConfidenceReasons: reasons,
-			Title:        title + ": " + displayUnknown(item.Owner, "метод не определён"),
-			WhatHappened: fmt.Sprintf("DAO вызван %d раз; самое долгое выполнение — %d мс, суммарное время границ — %d мс.", item.Count, item.MaxMS, item.TotalMS),
-			Where:        where, Why: ProblemWhy{ClaimLevel: "linked", Summary: map[bool]string{true: "SDK напрямую связал DAO, длительность и выполнение на главном потоке.", false: "SDK напрямую связал DAO, длительность и фоновый поток."}[item.MainThread]},
-			Impact:          []string{map[bool]string{true: "Блокировка кадра и ввода, рост риска ANR при длинном запросе", false: "Задержка данных, конкуренция за БД и лишняя фоновая нагрузка"}[item.MainThread]},
-			Evidence:        []ProblemEvidence{{Name: "Число вызовов DAO", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "room_dao_boundary"}, {Name: "Самый долгий вызов", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", threshold), Source: "room_dao_boundary"}},
-			Frequency:       &ProblemFrequency{Count: item.Count, RatePerSec: rate},
-			RankBreakdown:   risk(impact, min(25, 7+int(item.MaxMS/maxUint64(threshold, 1))*4), min(20, 4+int(math.Log2(float64(item.Count)+1))*2), locationBreadth(where), boolScore(storm && slow, 4), "влияние БД", "длительность DAO", "частота", "контекст", "частота и задержка"),
-			Recommendations: []ProblemRecommendation{{Action: action, Rationale: "Измерена конкретная граница DAO, поэтому проверку можно начать с указанного метода.", Verification: "Повторить сценарий и сравнить число вызовов, максимальную длительность и медленные кадры на том же экране."}},
-			Limitations:     uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "Сценарии", Anchor: "flows", Filter: item.Owner}},
+			Title:             title + ": " + displayUnknown(item.Owner, "метод не определён"),
+			WhatHappened:      fmt.Sprintf("DAO вызван %d раз; самое долгое выполнение — %d мс, суммарное время границ — %d мс.", item.Count, item.MaxMS, item.TotalMS),
+			Where:             where,
+			Why:               ProblemWhy{ClaimLevel: "linked", Summary: whySummary},
+			Impact:            []string{impactSummary},
+			Evidence:          []ProblemEvidence{{Name: "Число вызовов DAO", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "room_dao_boundary"}, {Name: "Самый долгий вызов", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", threshold), Source: "room_dao_boundary"}},
+			Frequency:         &ProblemFrequency{Count: item.Count, RatePerSec: rate},
+			PriorityBreakdown: priority(impact, min(25, 7+int(item.MaxMS/maxUint64(threshold, 1))*4), min(20, 4+int(math.Log2(float64(item.Count)+1))*2), locationBreadth(where), boolScore(storm && slow, 4), "влияние БД", "длительность DAO", "частота", "контекст", "частота и задержка"),
+			Recommendations:   []ProblemRecommendation{{Action: action, Rationale: "Измерена конкретная граница DAO, поэтому проверку можно начать с указанного метода.", Verification: "Повторить сценарий и сравнить число вызовов, максимальную длительность и медленные кадры на том же экране."}},
+			Limitations:       uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "Связанные сигналы", Anchor: "signal-contexts", Filter: item.Owner}},
 		})
 	}
 }
@@ -158,7 +258,7 @@ func (b *problemBuilder) detectWorkerWork(work []SemanticWorkStats) {
 		if !badOutcome && !long && !repeated {
 			continue
 		}
-		where := []ProblemLocation{{Screen: item.Screen, Flow: item.Flow, Step: item.Step, Owner: item.Owner, Method: item.Owner}}
+		where := []ProblemLocation{{Screen: item.Screen, Operation: item.ContextOperation, Owner: item.Owner, Method: item.Owner}}
 		title := displayUnknown(item.Owner, "Worker") + " выполняется слишком долго"
 		if badOutcome {
 			title = displayUnknown(item.Owner, "Worker") + " завершился: " + workerOutcomeLabel(item.Outcome)
@@ -177,11 +277,18 @@ func (b *problemBuilder) detectWorkerWork(work []SemanticWorkStats) {
 			Impact:    []string{"Задержка фоновой синхронизации, повторная нагрузка на CPU/сеть/БД и расход батареи"},
 			Evidence:  []ProblemEvidence{{Name: "Число выполнений", Observed: fmt.Sprint(item.Count), Unit: "events", Sample: u64ptr(item.Count), Source: "worker_boundary"}, {Name: "Самое долгое выполнение", Observed: fmt.Sprint(item.MaxMS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms", workerLongExecutionMS), Source: "worker_boundary"}},
 			Frequency: &ProblemFrequency{Count: item.Count, RatePerSec: ratePerSecond(item.Count, b.summary.DurationMS)}, Cost: &ProblemCost{WallTimeMS: nonZeroU64Ptr(item.TotalMS)},
-			RankBreakdown:   risk(map[bool]int{true: 28, false: 18}[badOutcome], min(25, 7+int(item.MaxMS/workerLongExecutionMS)*4), min(20, 4+int(math.Log2(float64(item.Count)+1))*3), locationBreadth(where), boolScore(badOutcome && repeated, 5), "срыв фоновой работы", "длительность", "повторы", "контекст", "ошибка и повторы"),
-			Recommendations: []ProblemRecommendation{{Action: "Проверить ограничения запуска, задержку между повторами, идемпотентность и содержимое doWork; тяжёлые этапы разбить и измерить отдельно", Rationale: "Так устраняются бесконтрольные повторы и локализуется дорогой этап.", Verification: "Повторить условия запуска и сравнить число выполнений, итог, максимальную и суммарную длительность."}},
-			Limitations:     uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "Сценарии", Anchor: "flows", Filter: item.Owner}},
+			PriorityBreakdown: priority(workerProblemImpact(badOutcome), min(25, 7+int(item.MaxMS/workerLongExecutionMS)*4), min(20, 4+int(math.Log2(float64(item.Count)+1))*3), locationBreadth(where), boolScore(badOutcome && repeated, 5), "срыв фоновой работы", "длительность", "повторы", "контекст", "ошибка и повторы"),
+			Recommendations:   []ProblemRecommendation{{Action: "Проверить ограничения запуска, задержку между повторами, идемпотентность и содержимое doWork; тяжёлые этапы разбить и измерить отдельно", Rationale: "Так устраняются бесконтрольные повторы и локализуется дорогой этап.", Verification: "Повторить условия запуска и сравнить число выполнений, итог, максимальную и суммарную длительность."}},
+			Limitations:       uniqueStrings(limits), Drilldowns: []ProblemDrilldown{{Label: "Связанные сигналы", Anchor: "signal-contexts", Filter: item.Owner}},
 		})
 	}
+}
+
+func workerProblemImpact(high bool) int {
+	if high {
+		return 28
+	}
+	return 18
 }
 
 func (b *problemBuilder) composeScreenContext(screen string) (uint64, uint64) {
@@ -219,7 +326,18 @@ func (b *problemBuilder) screenHasJank(screen string) bool {
 }
 
 func composePhaseLabel(value string) string {
-	return map[string]string{"composition": "Композиция", "measure": "Измерение", "layout": "Размещение", "draw": "Отрисовка"}[value]
+	switch value {
+	case "composition":
+		return "Композиция"
+	case "measure":
+		return "Измерение"
+	case "layout":
+		return "Размещение"
+	case "draw":
+		return "Отрисовка"
+	default:
+		return ""
+	}
 }
 
 func composeFactors(slow, frequent bool) []string {
@@ -248,7 +366,20 @@ func composeRecommendation(operation string, frequent bool) string {
 }
 
 func workerOutcomeLabel(value string) string {
-	return map[string]string{"success": "успешно", "failure": "ошибка", "retry": "повтор", "cancelled": "отменено", "unknown": "неизвестен"}[value]
+	switch value {
+	case "success":
+		return "успешно"
+	case "failure":
+		return "ошибка"
+	case "retry":
+		return "повтор"
+	case "cancelled":
+		return "отменено"
+	case "unknown":
+		return "неизвестен"
+	default:
+		return ""
+	}
 }
 
 func russianCountUint64(value uint64, singular, paucal, plural string) string {

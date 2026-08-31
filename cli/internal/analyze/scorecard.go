@@ -397,7 +397,7 @@ func dataQualityActions(comparison Comparison) []string {
 func retainedSignalActions(report LeakReport) []string {
 	var actions []string
 	if report.Stats.UnknownHolder > 0 {
-		actions = append(actions, "Add ownerHint/withOwner around leak-prone flows to reduce unknown holders.")
+		actions = append(actions, "Add ownerHint/withOwner around leak-prone operations to reduce unknown holders.")
 	}
 	if report.Stats.UserOwned < report.Stats.TotalSuspects {
 		actions = append(actions, "Improve lifecycle/ASM attribution so retained rows point to app-owned holders.")

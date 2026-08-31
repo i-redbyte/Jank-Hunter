@@ -27,7 +27,7 @@ class MethodFilterClassifierTest {
 
         cases.forEach { case ->
             val decision = MethodFilterClassifier.classify(
-                JankHunterMethodFilterMode.DIAGNOSTICS,
+                JankHunterMethodFilterMode.REPORT_ONLY,
                 case.classAccess,
                 case.access,
                 case.className,
@@ -43,7 +43,7 @@ class MethodFilterClassifierTest {
     @Test
     fun disabledModeDoesNotClassifyOrExclude() {
         val decision = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.DISABLED,
+            JankHunterMethodFilterMode.NONE,
             0,
             Opcodes.ACC_SYNTHETIC,
             "example/Foo",
@@ -72,7 +72,7 @@ class MethodFilterClassifierTest {
 
         cases.forEach { name ->
             val decision = MethodFilterClassifier.classify(
-                JankHunterMethodFilterMode.ENABLED,
+                JankHunterMethodFilterMode.FILTER,
                 0,
                 0,
                 "example/Foo",
@@ -88,7 +88,7 @@ class MethodFilterClassifierTest {
     @Test
     fun metadataProofCanExcludeGeneratedMethodWithoutNameHeuristics() {
         val decision = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.ENABLED,
+            JankHunterMethodFilterMode.FILTER,
             0,
             0,
             "example/Foo",
@@ -104,7 +104,7 @@ class MethodFilterClassifierTest {
     @Test
     fun kotlinDeclarationWinsOverSyntheticFlagAndGeneratedLookingName() {
         val decision = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.ENABLED,
+            JankHunterMethodFilterMode.FILTER,
             0,
             Opcodes.ACC_SYNTHETIC,
             "example/Foo",
@@ -120,7 +120,7 @@ class MethodFilterClassifierTest {
     @Test
     fun enumNamesAreExcludedOnlyWithTheJvmMandatedClassAndDescriptor() {
         val ordinary = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.ENABLED,
+            JankHunterMethodFilterMode.FILTER,
             0,
             0,
             "example/State",
@@ -129,7 +129,7 @@ class MethodFilterClassifierTest {
             KotlinMethodOrigin.UNKNOWN,
         )
         val customEnumMethod = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.ENABLED,
+            JankHunterMethodFilterMode.FILTER,
             Opcodes.ACC_ENUM,
             0,
             "example/State",
@@ -145,7 +145,7 @@ class MethodFilterClassifierTest {
     @Test
     fun exclusionReasonUsesStablePriorityWithoutASecondLookup() {
         val decision = MethodFilterClassifier.classify(
-            JankHunterMethodFilterMode.DIAGNOSTICS,
+            JankHunterMethodFilterMode.REPORT_ONLY,
             0,
             Opcodes.ACC_BRIDGE or Opcodes.ACC_SYNTHETIC,
             "example/Foo",

@@ -49,7 +49,7 @@
       <div class="metric"><div class="label">{{tip "Классы" "Число классов, просмотренных ASM-сопоставителем в выбранном варианте сборки. Это не число классов, выполненных на устройстве."}}</div><div class="value">{{.Diagnostics.ClassCount}}</div><div class="hint">попали в сопоставитель инструментирования</div></div>
       <div class="metric"><div class="label">{{tip "Методы" "Общее число просмотренных методов: подходящие, пропущенные и явно игнорированные. Значение характеризует область build-time анализа."}}</div><div class="value">{{.Diagnostics.MethodCount}}</div><div class="hint">подходящие, пропущенные и игнорированные вместе</div></div>
       <div class="metric"><div class="label">{{tip "Перехватчики" "Сумма мест в байткоде, где Jank Hunter добавил поддерживаемый hook. Это не число runtime-вызовов."}}</div><div class="value">{{.Diagnostics.HookCount}}</div><div class="hint">мест инструментирования в байткоде</div></div>
-      <div class="metric"><div class="label">{{tip "Аннотации" "Число методов с распознанным контекстом Jank Hunter. Контекст появится в основном отчёте только если метод выполнится и событие будет записано."}}</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankHunterFlow / @JankHunterScreen / @JankHunterTrace / @JankHunterOwner</div></div>
+      <div class="metric"><div class="label">{{tip "Аннотации" "Число методов с распознанным контекстом Jank Hunter. Контекст появится в основном отчёте только если метод выполнится и событие будет записано."}}</div><div class="value">{{.Diagnostics.AnnotatedMethodCount}}</div><div class="hint">@JankHunterOperation / @JankHunterScreen / @JankHunterOwner</div></div>
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Зачем смотреть</strong>Если ожидаемый перехватчик не попал в таблицу, сначала проверьте DSL-флаг и область include/exclude. Затем возможны новая сигнатура библиотеки или другая перегрузка.</div>
@@ -64,7 +64,7 @@
     </div>
     <div class="table-scroll">
       <table>
-        <tr><th>{{tip "Назначение" "Какой тип сигнала добавляет hook: HTTP, coroutine, owner, flow и т. п."}}</th><th>{{tip "Сигнатура" "Стабильный идентификатор распознанного варианта метода. Нужен для поддержки разных версий библиотек."}}</th><th>{{tip "Мост" "Версионированное правило адаптации конкретной сигнатуры библиотеки. «Без моста» означает прямое встроенное правило."}}</th><th>{{tip "Метод" "Метод и место вызова, где добавлен hook, если диагностика сохранила имя."}}</th><th>{{tip "Строка" "Номер строки из debug metadata байткода. «Нет» допустимо для сборки без line information."}}</th><th>{{tip "Места" "Сколько мест в байткоде получили это правило. Это build-time количество, не runtime-частота."}}</th></tr>
+        <tr><th>{{tip "Назначение" "Какой тип сигнала добавляет перехват: HTTP, корутина, источник, операция и т. п."}}</th><th>{{tip "Сигнатура" "Стабильный идентификатор распознанного варианта метода. Нужен для поддержки разных версий библиотек."}}</th><th>{{tip "Мост" "Версионированное правило адаптации конкретной сигнатуры библиотеки. «Без моста» означает прямое встроенное правило."}}</th><th>{{tip "Метод" "Метод и место вызова, где добавлен перехват, если диагностика сохранила имя."}}</th><th>{{tip "Строка" "Номер строки из отладочных данных байткода. «Нет» допустимо для сборки без номеров строк."}}</th><th>{{tip "Места" "Сколько мест в байткоде получили это правило. Это количество при сборке, а не частота выполнения."}}</th></tr>
         {{range .Diagnostics.Hooks}}
         <tr><td><code>{{.Intent}}</code></td><td><code>{{.Signature}}</code></td><td>{{if .Bridge}}<code>{{.Bridge}}</code>{{else}}<span class="muted">без моста</span>{{end}}</td><td>{{if .Method}}<code>{{.Method}}</code>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{if .Line}}{{.Line}}{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="6" class="muted">Hooks не добавлены. Это нормально, если функции выключены или выбранные пакеты не содержат целевых вызовов; иначе проверьте DSL, includePackages/excludePackages и поддерживаемые сигнатуры.</td></tr>{{end}}
@@ -92,9 +92,9 @@
     </div>
     <div class="table-scroll">
       <table>
-        <tr><th>{{tip "Источник" "Owner помогает связать событие с классом или компонентом, который инициировал работу."}}</th><th>{{tip "Экран" "Screen — имя пользовательского экрана для группировки UI и связанных событий."}}</th><th>{{tip "Сценарий" "Flow — пользовательский или тестовый сценарий, например открытие ленты."}}</th><th>{{tip "Трасса" "Trace — дополнительная метка участка кода внутри сценария; это не системный Perfetto trace."}}</th><th>{{tip "Методы" "Число методов с одинаковым набором аннотаций."}}</th></tr>
+        <tr><th>{{tip "Источник" "Owner помогает связать событие с классом или компонентом, который инициировал работу."}}</th><th>{{tip "Экран" "Screen — имя пользовательского экрана для группировки UI и связанных событий."}}</th><th>{{tip "Операция" "Универсальная измеряемая работа: действие пользователя, открытие экрана, фоновая или системная задача."}}</th><th>{{tip "Вид и бюджет" "Вид операции и заданный предел длительности."}}</th><th>{{tip "Методы" "Число методов с одинаковым набором аннотаций."}}</th></tr>
         {{range .Diagnostics.Annotations}}
-        <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{contextHint .Screen "screen"}}</td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Trace "trace"}}</code></td><td>{{.Count}}</td></tr>
+        <tr><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{contextHint .Screen "screen"}}</td><td><code>{{contextHint .Operation "operation"}}</code></td><td>{{.OperationKind}} · {{.OperationBudgetMS}} мс</td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="5" class="muted">Области аннотаций не найдены.</td></tr>{{end}}
       </table>
     </div>

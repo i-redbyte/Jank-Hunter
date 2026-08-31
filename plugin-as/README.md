@@ -32,9 +32,9 @@
 
 Расширенный режим наследует текущий выбор простого экрана и предоставляет:
 
-- автоматический поиск Gradle-артефактов и ручной выбор `owner-map`, `mapping`, `class-graph`, instrumentation diagnostics и DI catalog;
+- автоматический поиск каталога Gradle-артефактов и ручной выбор `artifacts-dir`, `mapping`, `class-graph`, instrumentation diagnostics и DI catalog;
 - фильтры route, screen, owner и class;
-- modern/legacy стиль, presentation mode и animated background;
+- presentation mode и animated background;
 - скрытый из текущего UI экспорт Problems CSV как задел для будущего вторичного действия;
 - оценку качества сравнения baseline/candidate;
 - путь к CLI, preview команды и диагностическую консоль.

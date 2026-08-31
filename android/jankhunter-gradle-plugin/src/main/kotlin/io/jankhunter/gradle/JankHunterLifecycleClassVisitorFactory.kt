@@ -36,41 +36,37 @@ abstract class JankHunterLifecycleClassVisitorFactory :
         if (!params.enabled.getOrElse(false)) return false
         if (LifecycleInstrumentationMarker.isPresent(classData.classAnnotations)) return false
         if (DependencyInjectionClassMatcher.isGeneratedDiClass(classData)) return false
-        val matched = InstrumentationMatcher(
+        return InstrumentationMatcher(
             params.includePackages.getOrElse(emptySet()),
             params.excludePackages.getOrElse(emptySet()),
             params.includeWholeApplication.getOrElse(false),
         ).matches(classData.className)
-        if (params.asmProgressLog.getOrElse(false)) {
-            AsmProgressReporter.recordScanned(
-                params.progressLabel.getOrElse("unknown:lifecycle"),
-                classData.className,
-                matched,
-            )
-        }
-        return matched
     }
 
-    private fun lifecycleHookConfig(diagnosticsDirectory: String): HookConfig {
-        return HookConfig(
-            embeddedSymbols = false,
-            methodCounters = false,
-            okhttp = false,
-            webSockets = false,
-            okHttpHelperAvailable = false,
-            handlers = false,
-            executors = false,
-            coroutines = false,
-            flowInteractions = false,
-            lifecycleLeaks = true,
-            logSpam = false,
-            classGraph = false,
-            runtimeCallGraph = false,
-            classGraphDirectory = "",
-            instrumentationDiagnosticsDirectory = diagnosticsDirectory,
-            ownerMapEntriesDirectory = "",
-        )
-    }
+}
+
+internal fun lifecycleHookConfig(diagnosticsDirectory: String): HookConfig {
+    return HookConfig(
+        methodCounters = false,
+        okhttp = false,
+        webSockets = false,
+        okHttpHelperAvailable = false,
+        handlers = false,
+        executors = false,
+        coroutines = false,
+        interactionOperations = false,
+        lifecycleLeaks = true,
+        logSpam = false,
+        classGraph = false,
+        runtimeCallGraph = false,
+        composeTracing = false,
+        roomTracing = false,
+        databaseTracing = false,
+        workerTracing = false,
+        ioTracing = false,
+        classGraphDirectory = "",
+        instrumentationDiagnosticsDirectory = diagnosticsDirectory,
+    )
 }
 
 private class LifecycleClassHierarchyResolver(

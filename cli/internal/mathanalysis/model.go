@@ -482,7 +482,7 @@ func AnalyzeCompareWithSummaries(
 
 	findings := compareFindings(comparison)
 	return CompareMathReport{
-		Title:             "база против кандидата",
+		Title:             "базовый прогон против проверяемого",
 		BaselinePaths:     append([]string(nil), baselinePaths...),
 		CandidatePaths:    append([]string(nil), candidatePaths...),
 		Baseline:          baseline,
@@ -539,7 +539,7 @@ func dataQualityFindingsForRuns(summary analyze.Summary, independentRunCount int
 		findings = append(findings, Finding{
 			Severity:       "medium",
 			Title:          "Объединены независимые прогоны",
-			Detail:         fmt.Sprintf("Количество независимых прогонов: %d. Они совмещены по относительному времени от начала каждого прогона, поэтому таймлайн описывает общий профиль сценария, а не одну непрерывную историю. Робастные распределения используют все реальные наблюдения. Марковский прогноз отключен, потому что переходы между агрегированными интервалами нельзя честно считать будущей траекторией одного запуска.", normalizedRunCount(independentRunCount)),
+			Detail:         fmt.Sprintf("Количество независимых прогонов: %d. Они совмещены по относительному времени от начала каждого прогона, поэтому временная шкала описывает общий профиль сценария, а не одну непрерывную историю. Устойчивые распределения используют все реальные наблюдения. Марковский прогноз отключён, потому что переходы между объединёнными интервалами нельзя честно считать будущей траекторией одного запуска.", normalizedRunCount(independentRunCount)),
 			Recommendation: "Для анализа последовательности состояний и прогноза откройте каждый прогон отдельно. Для сравнения агрегатов используйте одинаковое число повторов одного и того же сценария.",
 		})
 	}
@@ -555,7 +555,7 @@ func dataQualityFindingsForRuns(summary analyze.Summary, independentRunCount int
 		findings = append(findings, Finding{
 			Severity:       "medium",
 			Title:          "Недостаточно данных для надежного анализа",
-			Detail:         fmt.Sprintf("Собрано %d событий, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d. Этого мало для устойчивых выводов.", summary.EventCount, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
+			Detail:         fmt.Sprintf("Собрано %d событий, HTTP=%d, UI-кадры=%d, замеры контекста=%d. Этого мало для устойчивых выводов.", summary.EventCount, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
 			Recommendation: "Соберите более длинный прогон или несколько повторов того же сценария.",
 		})
 	default:
@@ -575,15 +575,15 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 			Severity:       "medium",
 			Title:          "Предупреждение о честности сравнения",
 			Detail:         warning,
-			Recommendation: "Проверьте, что база и кандидат собраны на сопоставимых устройствах, версиях и сетях.",
+			Recommendation: "Проверьте, что базовый и проверяемый прогоны собраны на сопоставимых устройствах, версиях и сетях.",
 		})
 	}
-	findings = append(findings, warningFindings("База", comparison.Baseline.Warnings, "Проверьте целостность логов базы перед выводом о регрессии.")...)
-	findings = append(findings, warningFindings("Кандидат", comparison.Candidate.Warnings, "Проверьте целостность логов кандидата перед выводом о регрессии.")...)
+	findings = append(findings, warningFindings("Базовый прогон", comparison.Baseline.Warnings, "Проверьте целостность журналов базового прогона перед выводом об ухудшении.")...)
+	findings = append(findings, warningFindings("Проверяемый прогон", comparison.Candidate.Warnings, "Проверьте целостность журналов проверяемого прогона перед выводом об ухудшении.")...)
 	if len(findings) == 0 {
 		findings = append(findings, Finding{
 			Severity: "ok",
-			Title:    "База и кандидат пригодны для первичного сравнения",
+			Title:    "Оба прогона пригодны для первичного сравнения",
 			Detail:   "Расчеты выполнены по переданным прогонам. Отсутствие предупреждений о составе данных не доказывает, что сценарии полностью одинаковы.",
 		})
 	}
@@ -597,7 +597,7 @@ func warningFindings(prefix string, warnings []string, recommendation string) []
 	findings := make([]Finding, 0, len(warnings))
 	for _, warning := range warnings {
 		warning = strings.TrimSpace(warning)
-		if warning == "" {
+		if warning == "" || isInternalCollectionWarning(warning) {
 			continue
 		}
 		title := "Предупреждение о качестве данных"
@@ -614,6 +614,23 @@ func warningFindings(prefix string, warnings []string, recommendation string) []
 		})
 	}
 	return findings
+}
+
+func isInternalCollectionWarning(warning string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(warning))
+	for _, marker := range [...]string{
+		"качество сбора:",
+		"ограниченные runtime-реестры",
+		"writer отклонил",
+		"admission lock",
+		"реестр prepared statement вытеснил",
+		"элементов evidence",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func warningRecommendation(warning string, fallback string) string {
@@ -635,19 +652,19 @@ func inspectSections(summary analyze.Summary, findings []Finding, timeline []Tim
 			ID:       "quality",
 			Title:    "Качество данных",
 			Status:   sectionStatus(findings),
-			Summary:  fmt.Sprintf("Логи=%d, события=%d, длительность=%d мс, HTTP=%d, UI-кадры=%d, сэмплы контекста=%d.", summary.LogCount, summary.EventCount, summary.DurationMS, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
+			Summary:  fmt.Sprintf("Журналы=%d, события=%d, длительность=%d мс, HTTP=%d, UI-кадры=%d, замеры контекста=%d.", summary.LogCount, summary.EventCount, summary.DurationMS, summary.HTTPCount, summary.UIFrames, summary.ContextCount),
 			Findings: findings,
 		},
 		{
 			ID:       "timeline",
-			Title:    "Таймлайн сигналов",
+			Title:    "Временная шкала сигналов",
 			Status:   timelineStatus(timeline),
 			Summary:  timelineSummary(timeline, series),
 			Findings: timelineFindings(timeline),
 		},
 		{
 			ID:       "robust",
-			Title:    "Робастная статистика",
+			Title:    "Устойчивая статистика",
 			Status:   robustStatus(robustStats),
 			Summary:  robustSummary(robustStats),
 			Findings: robustFindings(robustStats),
@@ -703,19 +720,19 @@ func compareSections(comparison analyze.Comparison, findings []Finding, baseline
 			ID:       "quality",
 			Title:    "Качество сравнения",
 			Status:   sectionStatus(findings),
-			Summary:  fmt.Sprintf("Логи базы=%d, логи кандидата=%d, сравнительных метрик=%d.", comparison.Baseline.LogCount, comparison.Candidate.LogCount, len(comparison.Deltas)),
+			Summary:  fmt.Sprintf("Журналы базового прогона=%d, журналы проверяемого прогона=%d, сравнительных метрик=%d.", comparison.Baseline.LogCount, comparison.Candidate.LogCount, len(comparison.Deltas)),
 			Findings: findings,
 		},
 		{
 			ID:       "timeline",
-			Title:    "Таймлайн сигналов",
+			Title:    "Временная шкала сигналов",
 			Status:   compareTimelineStatus(baselineTimeline, candidateTimeline),
 			Summary:  compareTimelineSummary(baselineTimeline, candidateTimeline),
 			Findings: compareTimelineFindings(baselineTimeline, candidateTimeline),
 		},
 		{
 			ID:       "robust",
-			Title:    "Робастная статистика",
+			Title:    "Устойчивая статистика",
 			Status:   comparisonStatus(robustDeltas, "medium"),
 			Summary:  compareRobustSummary(robustDeltas),
 			Findings: compareRobustFindings(robustDeltas),

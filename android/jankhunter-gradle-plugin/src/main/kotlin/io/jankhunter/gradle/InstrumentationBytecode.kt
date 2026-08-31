@@ -1,5 +1,7 @@
 package io.jankhunter.gradle
 
+import java.util.function.LongSupplier
+import io.jankhunter.sql.SqlNormalizer
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
@@ -27,15 +29,25 @@ internal object BytecodeCommandFactory {
                 replacesOriginalCall = false,
                 action = { emitter, _ -> emitter.wrapOkHttpEventListenerFactory() },
             )
+            HookIntent.InstallOkHttpEventListener -> SimpleCommand(
+                id = intent.id,
+                replacesOriginalCall = true,
+                action = { emitter, _ -> emitter.installOkHttpEventListener() },
+            )
             HookIntent.InstallOkHttpEventListenerFactory -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = false,
                 action = { emitter, _ -> emitter.installOkHttpEventListenerFactory() },
             )
+            HookIntent.GuardOkHttpNewCall -> SimpleCommand(
+                id = intent.id,
+                replacesOriginalCall = true,
+                action = { emitter, _ -> emitter.guardOkHttpNewCall() },
+            )
             HookIntent.WrapWebSocketListener -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = false,
-                action = { emitter, _ -> emitter.wrapWebSocketListener() },
+                action = { emitter, invocation -> emitter.wrapWebSocketListener(invocation) },
             )
             is HookIntent.HandlerRunnable -> SimpleCommand(
                 id = intent.id,
@@ -87,6 +99,21 @@ internal object BytecodeCommandFactory {
                 replacesOriginalCall = false,
                 action = { emitter, _ -> emitter.recordLogSpam(intent.source, intent.level) },
             )
+            is HookIntent.CriticalIO -> SimpleCommand(
+                id = intent.id,
+                replacesOriginalCall = true,
+                action = { emitter, _ -> emitter.criticalIO(intent.kind) },
+            )
+            is HookIntent.DatabaseCall -> SimpleCommand(
+                id = intent.id,
+                replacesOriginalCall = true,
+                action = { emitter, invocation -> emitter.databaseCall(intent, invocation) },
+            )
+            is HookIntent.DatabaseTransaction -> SimpleCommand(
+                id = intent.id,
+                replacesOriginalCall = true,
+                action = { emitter, invocation -> emitter.databaseTransaction(intent, invocation) },
+            )
         }
     }
 }
@@ -104,13 +131,269 @@ private data class SimpleCommand(
 internal class HookBytecodeEmitter(
     private val visitor: AdviceAdapter,
     private val ownerLabel: () -> String,
+    private val ownerId: LongSupplier,
     private val emitOriginal: (MethodInvocation) -> Unit,
     private val emitTryCatchBlock: (org.objectweb.asm.Label, org.objectweb.asm.Label, org.objectweb.asm.Label, String?) -> Unit,
 ) {
+    fun databaseTransaction(intent: HookIntent.DatabaseTransaction, invocation: MethodInvocation) {
+        val saved = saveInstanceInvocation(invocation)
+        if (intent.action != DatabaseTransactionAction.END) {
+            loadInvocation(saved)
+            emitOriginal(invocation)
+            emitDatabaseTransactionHook(intent, saved.receiverLocal, throwableLocal = -1)
+            return
+        }
+
+        val throwableLocal = visitor.newLocal(THROWABLE_TYPE)
+        val tryStart = org.objectweb.asm.Label()
+        val tryEnd = org.objectweb.asm.Label()
+        val catchHandler = org.objectweb.asm.Label()
+        val done = org.objectweb.asm.Label()
+        emitTryCatchBlock(tryStart, tryEnd, catchHandler, null)
+        visitor.visitLabel(tryStart)
+        loadInvocation(saved)
+        emitOriginal(invocation)
+        visitor.visitLabel(tryEnd)
+        emitDatabaseTransactionHook(intent, saved.receiverLocal, throwableLocal = -1)
+        visitor.goTo(done)
+        visitor.visitLabel(catchHandler)
+        visitor.storeLocal(throwableLocal)
+        emitDatabaseTransactionHook(intent, saved.receiverLocal, throwableLocal)
+        visitor.loadLocal(throwableLocal)
+        visitor.throwException()
+        visitor.visitLabel(done)
+    }
+
+    private fun emitDatabaseTransactionHook(
+        intent: HookIntent.DatabaseTransaction,
+        receiverLocal: Int,
+        throwableLocal: Int,
+    ) {
+        visitor.loadLocal(receiverLocal)
+        when (intent.action) {
+            DatabaseTransactionAction.BEGIN -> {
+                visitor.visitLdcInsn(ownerId.asLong)
+                visitor.visitLdcInsn(ownerLabel())
+                visitor.push(intent.mode.wireValue)
+                invokeHook("beginDatabaseTransaction", "(Ljava/lang/Object;JLjava/lang/String;I)V")
+            }
+            DatabaseTransactionAction.MARK_SUCCESSFUL -> {
+                invokeHook("markDatabaseTransactionSuccessful", "(Ljava/lang/Object;)V")
+            }
+            DatabaseTransactionAction.END -> {
+                if (throwableLocal >= 0) {
+                    visitor.loadLocal(throwableLocal)
+                } else {
+                    visitor.visitInsn(Opcodes.ACONST_NULL)
+                }
+                invokeHook("endDatabaseTransaction", "(Ljava/lang/Object;Ljava/lang/Throwable;)V")
+            }
+        }
+    }
+
+    fun databaseCall(intent: HookIntent.DatabaseCall, invocation: MethodInvocation) {
+        val saved = saveInstanceInvocation(invocation)
+        val preparedLocal = emitPreparedStatementResolution(intent, saved)
+        val queryLocal = emitRuntimeDatabaseQuery(intent, saved, preparedLocal)
+        val fingerprintLocal = emitRuntimeDatabaseFingerprint(queryLocal, preparedLocal)
+        if (intent.statementAction == DatabaseStatementAction.REGISTER) {
+            loadInvocation(saved)
+            emitOriginal(invocation)
+            emitPreparedStatementRegistration(
+                intent,
+                queryLocal,
+                fingerprintLocal,
+                SqlNormalizer.fingerprint(intent.query),
+            )
+            return
+        }
+        val statementTokenLocal = emitPreparedStatementToken(preparedLocal)
+        val operationLocal = emitRuntimeDatabaseOperation(intent, queryLocal)
+        val staticFingerprint = SqlNormalizer.fingerprint(intent.query)
+        val staticOperation = SqlNormalizer.operation(intent.query, intent.operation.wireValue)
+        invokeHook("enterDatabase", "()J")
+        val tokenLocal = visitor.newLocal(Type.LONG_TYPE)
+        visitor.storeLocal(tokenLocal)
+
+        val throwableLocal = visitor.newLocal(THROWABLE_TYPE)
+        val tryStart = org.objectweb.asm.Label()
+        val tryEnd = org.objectweb.asm.Label()
+        val catchHandler = org.objectweb.asm.Label()
+        val done = org.objectweb.asm.Label()
+        emitTryCatchBlock(tryStart, tryEnd, catchHandler, null)
+
+        visitor.visitLabel(tryStart)
+        loadInvocation(saved)
+        emitOriginal(invocation)
+        emitPreparedStatementRegistration(intent, queryLocal, fingerprintLocal, staticFingerprint)
+        val resultBucketLocal = emitDatabaseResultBucket(intent, invocation)
+        visitor.visitLabel(tryEnd)
+        emitDatabaseExit(
+            tokenLocal, queryLocal, fingerprintLocal, operationLocal,
+            statementTokenLocal, resultBucketLocal, staticFingerprint, staticOperation,
+            intent, succeeded = true, throwableLocal = -1,
+        )
+        visitor.goTo(done)
+
+        visitor.visitLabel(catchHandler)
+        visitor.storeLocal(throwableLocal)
+        emitDatabaseExit(
+            tokenLocal, queryLocal, fingerprintLocal, operationLocal,
+            statementTokenLocal, resultBucketLocal = -1, staticFingerprint, staticOperation,
+            intent, succeeded = false, throwableLocal = throwableLocal,
+        )
+        visitor.loadLocal(throwableLocal)
+        visitor.throwException()
+        visitor.visitLabel(done)
+    }
+
+    private fun emitPreparedStatementResolution(intent: HookIntent.DatabaseCall, saved: SavedInvocation): Int {
+        if (intent.statementAction != DatabaseStatementAction.EXECUTE) return -1
+        visitor.loadLocal(saved.receiverLocal)
+        invokeHook("resolvePreparedStatement", "(Ljava/lang/Object;)Ljava/lang/Object;")
+        return visitor.newLocal(OBJECT_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitRuntimeDatabaseQuery(
+        intent: HookIntent.DatabaseCall,
+        saved: SavedInvocation,
+        preparedLocal: Int,
+    ): Int {
+        if (intent.query != null) return -1
+        if (preparedLocal >= 0) {
+            visitor.loadLocal(preparedLocal)
+            invokeHook("preparedStatementQuery", "(Ljava/lang/Object;)Ljava/lang/String;")
+            return visitor.newLocal(STRING_TYPE).also(visitor::storeLocal)
+        }
+        val argument = intent.queryArgument ?: return -1
+        if (argument !in saved.argumentLocals.indices) return -1
+        visitor.loadLocal(saved.argumentLocals[argument], saved.argumentTypes[argument])
+        invokeHook("normalizeDatabaseQuery", "(Ljava/lang/String;)Ljava/lang/String;")
+        return visitor.newLocal(STRING_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitRuntimeDatabaseOperation(intent: HookIntent.DatabaseCall, queryLocal: Int): Int {
+        if (queryLocal < 0) return -1
+        visitor.loadLocal(queryLocal)
+        visitor.push(intent.operation.wireValue)
+        invokeHook("databaseQueryOperation", "(Ljava/lang/String;I)I")
+        return visitor.newLocal(Type.INT_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitRuntimeDatabaseFingerprint(queryLocal: Int, preparedLocal: Int): Int {
+        if (preparedLocal >= 0) {
+            visitor.loadLocal(preparedLocal)
+            invokeHook("preparedStatementFingerprint", "(Ljava/lang/Object;)J")
+            return visitor.newLocal(Type.LONG_TYPE).also(visitor::storeLocal)
+        }
+        if (queryLocal < 0) return -1
+        visitor.loadLocal(queryLocal)
+        invokeHook("databaseStatementFingerprint", "(Ljava/lang/String;)J")
+        return visitor.newLocal(Type.LONG_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitPreparedStatementToken(preparedLocal: Int): Int {
+        if (preparedLocal < 0) return -1
+        visitor.loadLocal(preparedLocal)
+        invokeHook("preparedStatementToken", "(Ljava/lang/Object;)J")
+        return visitor.newLocal(Type.LONG_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitPreparedStatementRegistration(
+        intent: HookIntent.DatabaseCall,
+        queryLocal: Int,
+        fingerprintLocal: Int,
+        staticFingerprint: Long,
+    ) {
+        if (intent.statementAction != DatabaseStatementAction.REGISTER) return
+        visitor.dup()
+        when {
+            intent.query != null -> visitor.visitLdcInsn(intent.query)
+            queryLocal >= 0 -> visitor.loadLocal(queryLocal)
+            else -> visitor.visitInsn(Opcodes.ACONST_NULL)
+        }
+        if (fingerprintLocal >= 0) visitor.loadLocal(fingerprintLocal) else visitor.visitLdcInsn(staticFingerprint)
+        invokeHook("registerPreparedStatement", "(Ljava/lang/Object;Ljava/lang/String;J)V")
+    }
+
+    private fun emitDatabaseResultBucket(intent: HookIntent.DatabaseCall, invocation: MethodInvocation): Int {
+        if (intent.resultCapture == DatabaseResultCapture.NONE) return -1
+        when (Type.getReturnType(invocation.descriptor)) {
+            Type.INT_TYPE -> {
+                visitor.dup()
+                visitor.visitInsn(Opcodes.I2L)
+            }
+            Type.LONG_TYPE -> visitor.dup2()
+            else -> return -1
+        }
+        visitor.push(intent.resultCapture.wireValue)
+        invokeHook("databaseResultCountBucket", "(JI)I")
+        return visitor.newLocal(Type.INT_TYPE).also(visitor::storeLocal)
+    }
+
+    private fun emitDatabaseExit(
+        tokenLocal: Int,
+        queryLocal: Int,
+        fingerprintLocal: Int,
+        operationLocal: Int,
+        statementTokenLocal: Int,
+        resultBucketLocal: Int,
+        staticFingerprint: Long,
+        staticOperation: Int,
+        intent: HookIntent.DatabaseCall,
+        succeeded: Boolean,
+        throwableLocal: Int,
+    ) {
+        visitor.loadLocal(tokenLocal)
+        visitor.visitLdcInsn(ownerId.asLong)
+        visitor.visitLdcInsn(ownerLabel())
+        when {
+            intent.query != null -> visitor.visitLdcInsn(intent.query)
+            queryLocal >= 0 -> visitor.loadLocal(queryLocal)
+            else -> visitor.visitInsn(Opcodes.ACONST_NULL)
+        }
+        if (fingerprintLocal >= 0) visitor.loadLocal(fingerprintLocal) else visitor.visitLdcInsn(staticFingerprint)
+        visitor.push(intent.framework.wireValue)
+        if (operationLocal >= 0) visitor.loadLocal(operationLocal) else visitor.push(staticOperation)
+        visitor.push(intent.boundary.wireValue)
+        visitor.push(succeeded && resultBucketLocal >= 0)
+        visitor.push(if (succeeded && resultBucketLocal >= 0) intent.resultCapture.resultKindWireValue else 0)
+        if (succeeded && resultBucketLocal >= 0) visitor.loadLocal(resultBucketLocal) else visitor.push(0)
+        if (statementTokenLocal >= 0) visitor.loadLocal(statementTokenLocal) else visitor.visitLdcInsn(0L)
+        visitor.push(succeeded)
+        if (throwableLocal >= 0) visitor.loadLocal(throwableLocal) else visitor.visitInsn(Opcodes.ACONST_NULL)
+        invokeHook("exitDatabase", "(JJLjava/lang/String;Ljava/lang/String;JIIIZIIJZLjava/lang/Throwable;)V")
+    }
+
+    fun criticalIO(kind: CriticalIOCallKind) {
+        visitor.visitLdcInsn(ownerId.asLong)
+        visitor.visitLdcInsn(ownerLabel())
+        val (name, descriptor) = when (kind) {
+            CriticalIOCallKind.FILE_READ_BYTES ->
+                "readFileBytes" to "(Ljava/io/File;JLjava/lang/String;)[B"
+            CriticalIOCallKind.FILE_WRITE_BYTES ->
+                "writeFileBytes" to "(Ljava/io/File;[BJLjava/lang/String;)V"
+            CriticalIOCallKind.FILE_APPEND_BYTES ->
+                "appendFileBytes" to "(Ljava/io/File;[BJLjava/lang/String;)V"
+            CriticalIOCallKind.FILE_DESCRIPTOR_SYNC ->
+                "syncFileDescriptor" to "(Ljava/io/FileDescriptor;JLjava/lang/String;)V"
+            CriticalIOCallKind.FILE_CHANNEL_FORCE ->
+                "forceFileChannel" to "(Ljava/nio/channels/FileChannel;ZJLjava/lang/String;)V"
+        }
+        visitor.visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_IO_HOOKS, name, descriptor, false)
+    }
+
     fun wrapOkHttpEventListenerFactory() {
         invokeOkHttpHelper(
             "wrapEventListenerFactory",
             "(Lokhttp3/EventListener\$Factory;)Lokhttp3/EventListener\$Factory;",
+        )
+    }
+
+    fun installOkHttpEventListener() {
+        invokeOkHttpHelper(
+            "installEventListener",
+            "(Lokhttp3/OkHttpClient\$Builder;Lokhttp3/EventListener;)Lokhttp3/OkHttpClient\$Builder;",
         )
     }
 
@@ -121,13 +404,25 @@ internal class HookBytecodeEmitter(
         )
     }
 
-    fun wrapWebSocketListener() {
+    fun guardOkHttpNewCall() {
+        invokeOkHttpHelper(
+            "newCall",
+            "(Lokhttp3/OkHttpClient;Lokhttp3/Request;)Lokhttp3/Call;",
+        )
+    }
+
+    fun wrapWebSocketListener(invocation: MethodInvocation) {
+        val saved = saveInstanceInvocation(invocation)
+        visitor.loadLocal(saved.receiverLocal)
+        visitor.loadLocal(saved.argumentLocals[0], saved.argumentTypes[0])
+        visitor.loadLocal(saved.argumentLocals[0], saved.argumentTypes[0])
+        visitor.loadLocal(saved.argumentLocals[1], saved.argumentTypes[1])
         visitor.visitLdcInsn(ownerLabel())
         visitor.visitMethodInsn(
             Opcodes.INVOKESTATIC,
             OKHTTP_HELPERS,
             "wrapWebSocketListener",
-            "(Lokhttp3/WebSocketListener;Ljava/lang/String;)Lokhttp3/WebSocketListener;",
+            "(Lokhttp3/Request;Lokhttp3/WebSocketListener;Ljava/lang/String;)Lokhttp3/WebSocketListener;",
             false,
         )
     }
@@ -524,7 +819,9 @@ internal class HookBytecodeEmitter(
     private companion object {
         private const val JANK_HUNTER_HOOKS = "io/jankhunter/runtime/JankHunterHooks"
         private const val OKHTTP_HELPERS = "io/jankhunter/okhttp3/JankHunterOkHttp3"
+        private const val JANK_HUNTER_IO_HOOKS = "io/jankhunter/runtime/JankHunterIOHooks"
         private val OBJECT_TYPE: Type = Type.getType("Ljava/lang/Object;")
+        private val STRING_TYPE: Type = Type.getType("Ljava/lang/String;")
         private val RUNNABLE_TYPE: Type = Type.getType("Ljava/lang/Runnable;")
         private val RUNNABLE_ARRAY_TYPE: Type = Type.getType("[Ljava/lang/Runnable;")
         private val THROWABLE_TYPE: Type = Type.getType("Ljava/lang/Throwable;")

@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "fixture": {
     "profile": "representative",
     "minimum_events": 51000,
@@ -30,6 +30,7 @@
   ],
   "relative_regression_limits": {
     "android_runtime_ns_per_op": 0.15,
+    "android_runtime_bytes_per_op": 0.10,
     "android_artifact_bytes": 0.03,
     "go_ns_per_op": 0.15,
     "go_bytes_per_op": 0.10,

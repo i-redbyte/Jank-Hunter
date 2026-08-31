@@ -12,34 +12,42 @@ func TestParseSessionLogFilenameIsCanonicalAndNumeric(t *testing.T) {
 	const firstRun = "01000000000000000000000000000000"
 	const secondRun = "02000000000000000000000000000000"
 	zero, ok := ParseSessionLogFilename("jh-session-log.2026-07-14." + firstRun + ".0.jhlog")
-	if !ok || zero.Index != 0 {
+	if !ok || zero.DailySessionIndex != 0 || zero.SegmentIndex != 0 {
 		t.Fatalf("canonical zero index = %+v, parsed=%t", zero, ok)
 	}
 	if zero.RunID[0] != 1 {
 		t.Fatalf("run ID = %x, want first byte 01", zero.RunID)
 	}
-	two, ok := ParseSessionLogFilename(filepath.Join("logs", "jh-session-log.2026-07-14."+firstRun+".2.jhlog"))
+	two, ok := ParseSessionLogFilename(filepath.Join("logs", "jh-session-log.2026-07-14."+firstRun+".0-2.jhlog"))
 	if !ok {
 		t.Fatal("canonical filename was rejected")
 	}
-	ten, ok := ParseSessionLogFilename("jh-session-log.2026-07-14." + firstRun + ".10.jhlog")
+	ten, ok := ParseSessionLogFilename("jh-session-log.2026-07-14." + firstRun + ".0-10.jhlog")
 	if !ok {
 		t.Fatal("canonical filename with two-digit index was rejected")
 	}
-	nextDay, ok := ParseSessionLogFilename("jh-session-log.2026-07-15." + secondRun + ".1.jhlog")
+	nextSession, ok := ParseSessionLogFilename("jh-session-log.2026-07-14." + secondRun + ".1.jhlog")
+	if !ok {
+		t.Fatal("canonical filename for the next daily session was rejected")
+	}
+	nextDay, ok := ParseSessionLogFilename("jh-session-log.2026-07-15." + secondRun + ".0.jhlog")
 	if !ok {
 		t.Fatal("canonical filename on next day was rejected")
 	}
-	if two.Compare(ten) >= 0 || ten.Compare(nextDay) >= 0 {
-		t.Fatalf("unexpected ordering: two=%+v ten=%+v nextDay=%+v", two, ten, nextDay)
+	if two.Compare(ten) >= 0 || ten.Compare(nextSession) >= 0 || nextSession.Compare(nextDay) >= 0 {
+		t.Fatalf("unexpected ordering: two=%+v ten=%+v nextSession=%+v nextDay=%+v", two, ten, nextSession, nextDay)
 	}
 
 	for _, path := range []string{
 		"session-main-1000-1.jhlog",
+		"jh-session-log.v2.2026-07-14." + firstRun + ".0.jhlog",
 		"jh-session-log.20260714.1.jhlog",
 		"jh-session-log.2026-7-14.1.jhlog",
 		"jh-session-log.2026-02-30." + firstRun + ".1.jhlog",
 		"jh-session-log.2026-07-14." + firstRun + ".01.jhlog",
+		"jh-session-log.2026-07-14." + firstRun + ".0-0.jhlog",
+		"jh-session-log.2026-07-14." + firstRun + ".0-01.jhlog",
+		"jh-session-log.2026-07-14." + firstRun + ".0-1-2.jhlog",
 		"jh-session-log.2026-07-14." + firstRun + ".one.jhlog",
 		"jh-session-log.2026-07-14.0100000000000000000000000000000.1.jhlog",
 		"jh-session-log.2026-07-14.0100000000000000000000000000000G.1.jhlog",

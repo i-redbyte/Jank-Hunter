@@ -1,5 +1,7 @@
 package io.jankhunter.sample.automatic
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.os.SystemClock
 import io.jankhunter.sample.ReleasedCheckoutProbe
 import io.jankhunter.sample.graph.BaselineScenarioUseCase
@@ -15,7 +17,7 @@ internal class AutomaticBaselineScenario(
         Thread(runnable, "SampleBaselineWorker")
     }
     private val executor by lazy {
-        JankHunter.wrapExecutorService(
+        JankHunterTelemetry.wrapExecutorService(
             executorDelegate,
             "sample_baseline",
             "sample.auto.baseline.executor",
@@ -23,27 +25,24 @@ internal class AutomaticBaselineScenario(
     }
 
     override suspend fun execute(context: AutomaticStageContext) {
-        JankHunter.withFlow("sample.auto.baseline.custom_metrics") {
-            JankHunter.markFlowStep("record_expected_values")
-            JankHunter.recordCounter("sample.auto.baseline.operation.count", 3)
-            JankHunter.recordGauge("sample.auto.baseline.item_count", 24)
-            JankHunter.recordGauge("sample.auto.baseline.duration_budget_ms", 50)
+        JankHunterTelemetry.traceOperation("sample.auto.baseline.record_expected_values") {
+            JankHunterTelemetry.counter("sample.auto.baseline.operation.count", 3)
+            JankHunterTelemetry.gauge("sample.auto.baseline.item_count", 24)
+            JankHunterTelemetry.gauge("sample.auto.baseline.duration_budget_ms", 50)
         }
-        JankHunter.withFlow("sample.auto.baseline.released_object") {
-            JankHunter.markFlowStep("watch_without_retention")
+        JankHunterTelemetry.traceOperation("sample.auto.baseline.watch_without_retention") {
             val released = ReleasedCheckoutProbe()
-            JankHunter.watchObject(
+            JankHunterTelemetry.watch(
                 released,
                 ReleasedCheckoutProbe::class.java.name,
                 "sample.auto.baseline.released_object",
             )
         }
         executor.execute {
-            JankHunter.withFlow("sample.auto.baseline.executor") {
-                JankHunter.markFlowStep("quick_task")
+            JankHunterTelemetry.traceOperation("sample.auto.baseline.executor.quick_task") {
                 SystemClock.sleep(20)
                 val itemCount = graphScenario.execute()
-                JankHunter.recordGauge("sample.auto.baseline.graph_item_count", itemCount)
+                JankHunterTelemetry.gauge("sample.auto.baseline.graph_item_count", itemCount)
             }
         }
         delay(STAGE_DURATION_MS - FLUSH_ADVANCE_MS)

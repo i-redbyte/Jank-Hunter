@@ -14,15 +14,6 @@ class JankHunterLogGrowthSummary internal constructor(
     val days: List<JankHunterLogGrowthDaySummary> =
         Collections.unmodifiableList(ArrayList(days))
 
-    companion object {
-        internal fun disabled(capturedAtMs: Long): JankHunterLogGrowthSummary = JankHunterLogGrowthSummary(
-            enabled = false,
-            capturedAtMs = capturedAtMs,
-            currentSession = null,
-            recentSessions = emptyList(),
-            days = emptyList(),
-        )
-    }
 }
 
 class JankHunterLogGrowthSessionSummary internal constructor(

@@ -43,12 +43,12 @@
 <main>
   <section id="summary" class="panel">
     <div class="panel-head">
-      <div><h2>Краткий вердикт</h2><div class="panel-kicker">time_only — объект доступен после заданной задержки; after_explicit_gc — доступен после запрошенного GC; confirmed_hprof/path — в дампе найден путь ссылок от корня GC. Только последний уровень показывает реальную цепочку ссылок.</div></div>
+      <div><h2>Краткий вердикт</h2><div class="panel-kicker">Наблюдение после задержки показывает только долгую жизнь объекта; наблюдение после явного GC усиливает сигнал; подтверждение HPROF означает, что в дампе найден путь ссылок от корня GC. Только последний уровень показывает реальную цепочку ссылок.</div></div>
       <span class="pill">{{leakModeLabel .LeakReport.Mode}}</span>
     </div>
     <div class="grid">
       <div class="metric"><div class="label">{{tip "Сигналы удержания" "Уникальные подозрения после агрегации по объекту и контексту. Это не подтверждённое количество утечек."}}</div><div class="value">{{.LeakReport.Stats.TotalSuspects}}</div><div class="hint">событий удержания {{.LeakReport.Stats.TotalRetained}}</div></div>
-      <div class="metric"><div class="label">{{tip "Высокий приоритет" "Строки, которые следует проверить раньше по score и evidence. Высокий приоритет не заменяет проверку ожидаемого жизненного цикла объекта."}}</div><div class="value">{{.LeakReport.Stats.High}}</div><div class="hint">проверить {{.LeakReport.Stats.Medium}}, наблюдать {{.LeakReport.Stats.OK}}</div></div>
+      <div class="metric"><div class="label">{{tip "Высокий приоритет" "Строки, которые следует проверить раньше по индексу и силе данных. Высокий приоритет не заменяет проверку ожидаемого жизненного цикла объекта."}}</div><div class="value">{{.LeakReport.Stats.High}}</div><div class="hint">проверить {{.LeakReport.Stats.Medium}}, наблюдать {{.LeakReport.Stats.OK}}</div></div>
       <div class="metric"><div class="label">{{tip "HPROF-пути" "Число подозрений, для которых дамп показал путь ссылок от корня GC. Путь подтверждает достижимость в момент дампа, но ожидаемость ссылки определяет разработчик."}}</div><div class="value">{{.LeakReport.Stats.HeapConfirmed}}</div><div class="hint">после GC {{.LeakReport.Stats.AfterExplicitGC}} · только время {{.LeakReport.Stats.TimeOnly}}</div></div>
       <div class="metric"><div class="label">{{tip "Оценка удержанного размера" "При HPROF используется доступная оценка по дампу; без дампа — осторожная эвристика. Нулевое значение показывается как отсутствие оценки."}}</div><div class="value">{{if gt .LeakReport.Stats.EstimatedRetainedKB 0}}{{dataSize .LeakReport.Stats.EstimatedRetainedKB}}{{else}}нет оценки{{end}}</div><div class="hint">макс. возраст {{humanDuration .LeakReport.Stats.MaxAgeMS}}</div></div>
       <div class="metric"><div class="label">{{tip "Классы" "Число уникальных имён удержанных классов после агрегации."}}</div><div class="value">{{.LeakReport.Stats.UniqueClasses}}</div><div class="hint">вероятных держателей {{.LeakReport.Stats.UniqueHolders}}</div></div>
@@ -100,7 +100,7 @@
           {{if .Suspect.AlternativePathSummaries}}
           <div class="leak-alt-paths"><strong>Альтернативные цепочки</strong>{{range .Suspect.AlternativePathSummaries}}<span>{{.}}</span>{{end}}</div>
           {{end}}
-          <div class="leak-chain-actions"><strong>{{if .Suspect.HeapEvidence}}Быстрые проверки HPROF-цепочки{{else}}Проверки runtime-контекста{{end}}</strong>{{range .Suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
+          <div class="leak-chain-actions"><strong>{{if .Suspect.HeapEvidence}}Быстрые проверки HPROF-цепочки{{else}}Проверки контекста выполнения{{end}}</strong>{{range .Suspect.LeakChainActions}}<span>{{.}}</span>{{end}}</div>
         </article>
         {{end}}
       </div>
@@ -114,7 +114,7 @@
   <details id="registry" class="fold leak-report-fold" open>
     <summary><span>Реестр сигналов удержания</span><span class="fold-summary-meta">{{ruCount (len .LeakReport.Items) "строка" "строки" "строк"}} · сортировка и фильтры</span></summary>
     <div class="fold-body">
-    <p class="help-text">Таблица для сортировки и фильтрации: объект, вероятный держатель, runtime-контекст, размер, HPROF-цепочка и доказательства.</p>
+    <p class="help-text">Таблица для сортировки и фильтрации: объект, вероятный держатель, контекст выполнения, размер, HPROF-цепочка и доказательства.</p>
     {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
       <div class="registry-toolbar">
@@ -133,7 +133,7 @@
       </div>
       <div class="problem-empty">По текущим фильтрам утечек не найдено.</div>
       <table class="code-problem-table leak-table">
-        <thead><tr><th>{{tip "Риск" "Приоритет проверки по score и evidence; не вероятность утечки."}}</th><th>{{tip "Объект" "Класс объекта, который оставался достижимым дольше ожидаемой задержки наблюдателя."}}</th><th>{{tip "Тип" "Предполагаемая категория объекта: Activity, Fragment, View, произвольный объект и т. п."}}</th><th>{{tip "Вероятный держатель" "Owner из runtime-контекста либо держатель из HPROF-пути. Без HPROF это подсказка, а не доказанная ссылка."}}</th><th>{{tip "Контекст" "Экран, сценарий и шаг, активные при записи события удержания."}}</th><th>{{tip "Оценка" (scoreHelp "default")}}</th><th>{{tip "Удержанный размер" "Оценка памяти, которая может оставаться достижимой вместе с объектом. Без HPROF точность ограничена."}}</th><th>{{tip "Цепочка" "С HPROF — сокращённый путь ссылок от корня GC. Без HPROF цепочки нет."}}</th><th>Что проверить</th><th>{{tip "Доказательства" "Уровень evidence, его уверенность и ограничения качества данных. Начинайте с HPROF-пути и повторяемых after-GC сигналов."}}</th></tr></thead>
+        <thead><tr><th>{{tip "Риск" "Приоритет проверки по индексу и силе данных; не вероятность утечки."}}</th><th>{{tip "Объект" "Класс объекта, который оставался достижимым дольше ожидаемой задержки наблюдателя."}}</th><th>{{tip "Тип" "Предполагаемая категория объекта: Activity, Fragment, View, произвольный объект и т. п."}}</th><th>{{tip "Вероятный держатель" "Держатель из контекста выполнения либо из HPROF-пути. Без HPROF это подсказка, а не доказанная ссылка."}}</th><th>{{tip "Контекст" "Экран, сценарий и шаг, активные при записи события удержания."}}</th><th>{{tip "Оценка" (scoreHelp "default")}}</th><th>{{tip "Удержанный размер" "Оценка памяти, которая может оставаться достижимой вместе с объектом. Без HPROF точность ограничена."}}</th><th>{{tip "Цепочка" "С HPROF — сокращённый путь ссылок от корня GC. Без HPROF цепочки нет."}}</th><th>Что проверить</th><th>{{tip "Доказательства" "Сила данных, уверенность и ограничения качества. Начинайте с HPROF-пути и повторяемых сигналов после GC."}}</th></tr></thead>
         <tbody>
           {{if .LeakReport.Items}}{{deferredRows "leak-inspect-row" .LeakReport.Items 50 50 10 "реестр сигналов удержания"}}{{else}}<tr><td colspan="10" class="muted">Сигналы удержания не зафиксированы в доступных данных.</td></tr>{{end}}
         </tbody>
@@ -145,7 +145,7 @@
   <section id="warnings" class="panel">
     <div class="panel-head"><div><h2>Ограничения анализа</h2><div class="panel-kicker">Отчет явно показывает, где данные точные, а где это подсказка из выполнения.</div></div></div>
     {{range .LeakReport.Warnings}}<p class="warning">{{.}}</p>{{else}}<p class="help-text">Дополнительных предупреждений от анализа дампа и выполнения нет.</p>{{end}}
-    <div class="leak-limitations">time_only и after_explicit_gc не читают поля объектов и не знают корень GC. Даже confirmed_hprof/path доказывает достижимость лишь в момент дампа; ожидаемость этой ссылки нужно проверить по жизненному циклу.</div>
+    <div class="leak-limitations">Наблюдения после задержки и после явного GC не читают поля объектов и не знают корень GC. Даже подтверждённый путь HPROF доказывает достижимость лишь в момент дампа; ожидаемость этой ссылки нужно проверить по жизненному циклу.</div>
   </section>
 </main>
 <script>{{reportJS}}</script>
@@ -157,10 +157,10 @@
   <td><code>{{$item.Suspect.ClassName}}</code></td>
   <td>{{leakObjectKindLabel $item.Suspect.ObjectKind}}</td>
   <td><code>{{$item.Suspect.Holder}}</code><div class="muted">{{$item.Suspect.HolderQuality}}</div></td>
-  <td>{{if $item.Suspect.Screen}}экран <code>{{$item.Suspect.Screen}}</code><br>{{end}}{{if $item.Suspect.Flow}}сценарий <code>{{$item.Suspect.Flow}}</code><br>{{end}}{{if $item.Suspect.Step}}шаг <code>{{$item.Suspect.Step}}</code>{{end}}</td>
+  <td>{{if $item.Suspect.Screen}}экран <code>{{$item.Suspect.Screen}}</code><br>{{end}}{{if $item.Suspect.Operation}}операция <code>{{$item.Suspect.Operation}}</code>{{end}}</td>
   <td>{{printf "%.1f" $item.Suspect.Score}}<div class="muted">{{$item.Suspect.Count}} шт · {{humanDuration $item.Suspect.MaxAgeMS}}</div></td>
   <td>{{if gt $item.Suspect.EstimatedRetainedKB 0}}{{dataSize $item.Suspect.EstimatedRetainedKB}}{{else}}нет оценки{{end}}<div class="muted">{{$item.Suspect.RetainedSizeConfidence}}</div></td>
   <td><div class="leak-dominator">{{range $item.Suspect.DominatorPath}}<span>{{.}}</span>{{end}}</div></td>
   <td>{{$item.Suspect.Recommendation}}</td>
-  <td><strong>{{$item.Suspect.EvidenceLabel}}</strong><div class="muted">{{$item.Suspect.EvidenceConfidence}}</div>{{$item.Suspect.Evidence}}{{range $item.Suspect.QualityWarnings}}<div class="warning">{{.}}</div>{{end}}{{if $item.Suspect.LeakPattern}}<div class="muted">паттерн: {{$item.Suspect.LeakPattern}}</div>{{end}}{{if $item.Suspect.GCRootCategory}}<div class="muted">категория корня: {{$item.Suspect.GCRootCategory}}</div>{{end}}</td>
+  <td><strong>{{$item.Suspect.EvidenceLabel}}</strong><div class="muted">{{$item.Suspect.EvidenceConfidence}}</div>{{$item.Suspect.Evidence}}{{range $item.Suspect.QualityWarnings}}<div class="warning">{{.}}</div>{{end}}{{if $item.Suspect.LeakPattern}}<div class="muted">признак: {{$item.Suspect.LeakPattern}}</div>{{end}}{{if $item.Suspect.GCRootCategory}}<div class="muted">категория корня: {{$item.Suspect.GCRootCategory}}</div>{{end}}</td>
 </tr>{{end -}}

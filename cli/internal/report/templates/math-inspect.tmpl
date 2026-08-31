@@ -20,8 +20,8 @@
         <strong class="env-device">{{ruCount .Math.Summary.EventCount "событие данных" "события данных" "событий данных"}}</strong>
         <div class="env-subtitle">{{ruCount .Math.Summary.TotalRecordCount "запись" "записи" "записей"}}, из них словарь/control {{.Math.Summary.DictionaryRecords}}/{{.Math.Summary.ControlRecords}} · {{ruCount .Math.Summary.LogCount "лог" "лога" "логов"}}{{if gt .Math.IndependentRunCount 1}} · независимых прогонов: {{.Math.IndependentRunCount}}{{end}} · {{humanDuration .Math.Summary.DurationMS}}</div>
         <div class="env-grid">
-          <div class="env-item"><div class="env-label">UI-кадры</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">медленных {{.Math.Summary.UIJank}}</div></div>
-          <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">сэмплы памяти/сети</div></div>
+          <div class="env-item"><div class="env-label">Кадры интерфейса</div><div class="env-value">{{.Math.Summary.UIFrames}}</div><div class="env-detail">медленных {{.Math.Summary.UIJank}}</div></div>
+          <div class="env-item"><div class="env-label">Контекст</div><div class="env-value">{{.Math.Summary.ContextCount}}</div><div class="env-detail">замеры памяти и сети</div></div>
         </div>
       </div>
       {{if or .MainReportHref .InfluenceReportHref}}<div class="hero-actions">{{if .MainReportHref}}<a class="math-link" href="{{.MainReportHref}}">← Обзор</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Граф влияния</a>{{end}}</div>{{end}}
@@ -47,9 +47,9 @@
       <div class="grid">
         <div class="metric"><div class="label">События данных</div><div class="value">{{.Math.Summary.EventCount}}</div><div class="hint">всего записей {{.Math.Summary.TotalRecordCount}}</div></div>
         <div class="metric"><div class="label">HTTP</div><div class="value">{{.Math.Summary.HTTPCount}}</div><div class="hint">{{.Math.Summary.HTTPFailed}} ошибок</div></div>
-        <div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
+        <div class="metric"><div class="label">{{tip "Подтормаживания интерфейса" "Доля кадров, которые были медленнее целевого времени кадра. Это основной пользовательский симптом визуальной просадки."}}</div><div class="value">{{printf "%.2f" .Math.Summary.UIJankPct}}%</div><div class="hint">{{.Math.Summary.UIJank}} / {{.Math.Summary.UIFrames}} кадров</div></div>
         <div class="metric"><div class="label">{{tip "Память" "Максимальный PSS: пропорциональный размер памяти процесса с учетом разделяемых страниц."}}</div><div class="value">{{.Math.Summary.MemoryMaxKB}} КБ</div><div class="hint">макс. PSS</div></div>
-        <div class="metric"><div class="label">{{tip "Сценарии" "Количество кортежей контекста сценария: экран, сценарий, шаг и источник работ. Это связывает математические сигналы с пользовательским сценарием."}}</div><div class="value">{{len .Math.Summary.Flows}}</div><div class="hint">окон {{summaryProblemWindows .Math.Summary}}, вызовов логов {{summaryLogSpam .Math.Summary}}</div></div>
+        <div class="metric"><div class="label">{{tip "Контексты операций" "Количество сочетаний экрана, операции и источника работ. Это связывает математические сигналы с измеряемым действием пользователя или системы."}}</div><div class="value">{{len .Math.Summary.SignalContexts}}</div><div class="hint">окон {{summaryProblemWindows .Math.Summary}}, вызовов логов {{summaryLogSpam .Math.Summary}}</div></div>
       </div>
       <div>
         <h3>Исходные логи</h3>
@@ -58,14 +58,14 @@
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать оценки</strong>Это приоритет проверки внутри текущего сценария, а не общая оценка качества приложения. Сравнивайте числа только при одинаковых условиях и длительности прогона.</div>
-      <div class="guide-card"><strong>С чего начинать</strong>Сначала проверьте качество данных. Затем откройте предупреждения, найдите тот же момент на таймлайне и подтвердите вывод по сырым событиям.</div>
+      <div class="guide-card"><strong>С чего начинать</strong>Сначала проверьте качество данных. Затем откройте предупреждения, найдите тот же момент на временной шкале и подтвердите вывод по исходным событиям.</div>
       <div class="guide-card"><strong>Что является доказательством</strong>Математический сигнал показывает, где искать. Причину подтверждают воспроизводимый сценарий, трассировка, исходные события и проверка кода.</div>
     </div>
     {{scoreGuide "math"}}
     <details id="code-problems" class="fold code-registry-fold" open>
       <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{ruCount (len .Math.Summary.CodeProblems) "строка" "строки" "строк"}}</span></summary>
       <div class="fold-body">
-        <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, UI, сеть, память, логи, сценарии и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
+        <p class="help-text">Реестр собирает классы и методы, где совпали математические сигналы: главный поток, интерфейс, сеть, память, журналы, сценарии и граф влияния. Используйте его как ранжированный список мест для расследования.</p>
         {{scoreGuide "code"}}
         {{with codeProblemCategories .Math.Summary.CodeProblems}}
         <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -102,7 +102,7 @@
               {{$codeProblems := .Math.Summary.CodeProblems}}
               {{range limitRows $codeProblems 50}}
               <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}">
-                <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть runtime-сигналы</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
+                <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{severityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть сигналы во время выполнения</div>{{else}}<div class="muted">статический след</div>{{end}}</td>
                 <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
                 <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
                 <td>
@@ -112,7 +112,7 @@
                   </details>
                 </td>
               </tr>
-              {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+              {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте настройки owners, interactionOperations, runtimeCallGraph и logSpam.</td></tr>{{end}}
               {{if gt (len $codeProblems) 50}}<tr class="deferred-table-loader" data-code-problem-loader data-deferred-total="{{len $codeProblems}}" data-deferred-loaded="50"><th colspan="4"><button type="button" class="deferred-table-button" data-load-more-code-problems>Показать ещё 50</button><span data-deferred-remaining>Осталось строк: {{sub (len $codeProblems) 50}}</span><span class="sr-only"> в математическом реестре проблем кода</span></th></tr>{{end}}
             </tbody>
           </table>
@@ -150,7 +150,7 @@
               <td><code>{{.ClassName}}</code></td>
               <td><div class="leak-object-kind">{{leakObjectKindLabel .ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
               <td><code>{{.Holder}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
-              <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{.Flow}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{.Step}}</code></div>{{end}}</div></td>
+              <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{.Screen}}</code></div>{{end}}{{if .Operation}}<div>операция <code>{{.Operation}}</code></div>{{end}}</div></td>
               <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
               <td><div>{{dataSize .EstimatedRetainedKB}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
               <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
@@ -164,29 +164,29 @@
       </div>
     </details>
     <details class="fold overview-attribution-fold">
-      <summary><span>Атрибуция сценариев и источников</span></summary>
+      <summary><span>Атрибуция операций и источников</span></summary>
       <div class="fold-body">
-        <p class="help-text">Здесь собраны длинные таблицы связки “экран → сценарий → шаг → источник → маршрут/пауза/память/спам”. Блок свернут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
+        <p class="help-text">Здесь собраны длинные таблицы связки «экран → операция → источник → маршрут/пауза/память/спам». Блок свёрнут по умолчанию, чтобы обзор качества данных не превращался в простыню.</p>
         <div class="explain-note">
           <strong>Как читать этот блок</strong>
-          <p>Одна строка — это место, где отчет смог связать симптомы с контекстом: экраном, сценарием, шагом и источником работ. Если в колонке написано “нет данных” или “контекст не задан”, лог не передал имя сценария, шага или owner: это не ошибка само по себе, но такая строка хуже помогает локализовать проблему.</p>
-          <p>Чтобы заполнить контекст, добавьте в сбор имена сценариев/шагов через API Jank Hunter или включите ASM-опцию <code>flowInteractions</code>, а для источников проверьте <code>owner-map</code> и <code>withOwner/ownerHint</code>.</p>
+          <p>Одна строка — это место, где отчёт смог связать симптомы с экраном, операцией и источником работ. Если в колонке написано «нет данных» или «контекст не задан», журнал не передал имя операции или источника: такая строка хуже помогает локализовать проблему.</p>
+          <p>Чтобы заполнить контекст, размечайте действия через <code>traceOperation</code> или <code>@JankHunterOperation</code>, включите автоматические операции взаимодействия, а для источников проверьте охват преобразования байткода и <code>withOwner/ownerHint</code>.</p>
         </div>
-        <h3>Сценарии и источники</h3>
+        <h3>Операции и источники</h3>
         <table class="timeline-table">
-          <tr><th>Экран / сценарий / шаг / источник</th><th>Маршрут</th><th>HTTP</th><th>HTTP p95</th><th>UI подтормаживания</th><th>Паузы</th><th>Спам логами</th><th>Проблемы</th><th>Макс. PSS</th></tr>
-          {{range .Math.Summary.Flows}}
-          <tr><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
-          {{else}}<tr><td colspan="9" class="muted">Нет событий контекста сценария. Чтобы связать сигналы со сценарием, включите API сценариев или ASM-опцию flowInteractions.</td></tr>{{end}}
+          <tr><th>Экран / операция / источник</th><th>Маршрут</th><th>HTTP</th><th>Верхние 5% HTTP</th><th>Подтормаживания интерфейса</th><th>Паузы</th><th>Лишние сообщения журнала</th><th>Проблемы</th><th>Макс. память процесса</th></tr>
+          {{range .Math.Summary.SignalContexts}}
+          <tr><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td><td><code>{{contextHint .RouteSample "route"}}</code></td><td>{{.HTTPCount}}</td><td>{{.HTTPP95MS}} мс</td><td>{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%</td><td>{{.StallCount}} · макс. {{.StallMaxMS}} мс</td><td>{{.LogSpam}}</td><td>{{.ProblemCount}}</td><td>{{.MemoryMaxKB}} КБ</td></tr>
+          {{else}}<tr><td colspan="9" class="muted">Нет контекстов операций. Чтобы связать сигналы с действиями, добавьте измеряемые операции.</td></tr>{{end}}
         </table>
         <div class="split">
           <div>
             <h3>Спам логами</h3>
-            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Контекст</th></tr>{{range .Math.Summary.LogSpam}}<tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td></tr>{{else}}<tr><td colspan="4" class="muted">Нет событий спама логами.</td></tr>{{end}}</table>
           </div>
           <div>
             <h3>Проблемные окна</h3>
-            <table class="timeline-table"><tr><th>Тип сигнала</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{flowKeyHint .Screen .Flow .Step .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
+            <table class="timeline-table"><tr><th>Тип сигнала</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Контекст</th></tr>{{range .Math.Summary.ProblemWindows}}<tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{signalContextHint .Screen .Operation .Owner}}</code></td></tr>{{else}}<tr><td colspan="6" class="muted">Нет агрегированных проблемных окон.</td></tr>{{end}}</table>
           </div>
         </div>
         <h3>Вызовы выполнения</h3>
@@ -195,22 +195,22 @@
           <p>Это не список “все плохо”. Таблица показывает измеренные ребра цепочки выполнения, которые попали в горячий сценарий: кто вызвал, кого вызвал, сколько раз и сколько времени это заняло. Приоритетны строки с большим “Итого” или “Макс.”, особенно если тот же класс есть в реестре проблем кода.</p>
         </div>
         {{if .MainReportHref}}
-        <p class="help-text"><a href="{{.MainReportHref}}#runtime-calls">Открыть полную таблицу runtime-вызовов в обзоре</a>. Она используется математическим анализом целиком, но не дублируется второй раз внутри автономного HTML.</p>
+        <p class="help-text"><a href="{{.MainReportHref}}#runtime-calls">Открыть полную таблицу вызовов во время выполнения в обзоре</a>. Она используется математическим анализом целиком, но не дублируется второй раз внутри автономного HTML.</p>
         {{else}}
         <table class="timeline-table">
-          <tr><th>Экран / сценарий / шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          <tr><th>Экран / операция</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range .Math.Summary.RuntimeCalls}}
-          <tr><td><code>{{flowKeyHint .Screen .Flow .Step ""}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
-          {{else}}<tr><td colspan="6" class="muted">Нет графа runtime-вызовов. Включите ASM-опцию runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
+          <tr><td><code>{{signalContextHint .Screen .Operation ""}}</code></td><td><code>{{contextHint .Caller "caller"}}</code></td><td><code>{{contextHint .Callee "callee"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          {{else}}<tr><td colspan="6" class="muted">Нет графа вызовов во время выполнения. Включите настройку runtimeCallGraph для целевых пакетов.</td></tr>{{end}}
         </table>
         {{end}}
         {{if .Math.Summary.Influence.Available}}
         <h3>Граф влияния кода</h3>
-        <p class="help-text">Этот блок связывает математические симптомы с классами. “Узел графа влияния” означает, что класс оказался рядом с симптомами или связан с ними через статический/измеренный граф. Это подсказка для расследования, а не доказательство бага без соседних runtime-сигналов. Статические связи между классами доступны при передаче <code>--class-graph</code>.</p>
+        <p class="help-text">Этот блок связывает математические симптомы с классами. «Узел графа влияния» означает, что класс оказался рядом с симптомами или связан с ними через статический или измеренный граф. Это подсказка для расследования, а не доказательство ошибки без соседних сигналов во время выполнения. Статические связи между классами доступны при передаче <code>--class-graph</code>.</p>
         <table class="timeline-table">
-          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Сценарии</th></tr>
+          <tr><th>Класс</th><th>{{tip "Оценка" (scoreHelp "influence")}}</th><th>Риск</th><th>Статус</th><th>Причины</th><th>Операции</th></tr>
           {{range topInfluenceNodes .Math.Summary.Influence 8}}
-          <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Flows ", "}}</td></tr>
+          <tr><td><code>{{.ClassName}}</code></td><td>{{printf "%.1f" .Score}}</td><td>{{influenceSeverity .Severity}}</td><td>{{influenceStatus .Status}}</td><td>{{join .Reasons ", "}}</td><td>{{join .Operations ", "}}</td></tr>
           {{end}}
         </table>
         {{if .InfluenceReportHref}}<p class="help-text"><a href="{{.InfluenceReportHref}}">Открыть подробный граф влияния кода</a>. {{.Math.Summary.Influence.StandaloneReason}}</p>{{end}}
@@ -245,7 +245,7 @@
     {{with $math.Markov.Forecast}}
     <article class="markov-forecast {{severityClass .Severity}}" data-markov-forecast="{{.Direction}}">
       <div class="markov-forecast-copy">
-        <div class="markov-forecast-heading"><span>In-sample проекция траектории</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
+        <div class="markov-forecast-heading"><span>Проекция внутри записанного прогона</span><span class="section-status {{severityClass .Severity}}">{{statusLabel .Severity}}</span></div>
         <strong class="markov-forecast-title">{{.Label}}</strong>
         <p>{{.Summary}}</p>
         <div class="markov-forecast-confidence">Поддержка модели: <strong>{{markovConfidence .Confidence}}</strong> · {{.ConfidenceReason}} · модель не калибрована как прогноз будущего запуска</div>
@@ -282,20 +282,20 @@
         <p class="help-text">Разрыв линии означает, что в этом интервале не было замера. Ноль рисуется только там, где он действительно измерен или означает отсутствие событий для счетчика.</p>
         <h3>{{tip "Временные интервалы" "Внутренний термин: бакет. Это фиксированное окно времени, например 1 секунда, куда складываются события для анализа временного ряда."}}</h3>
         <div class="zero-bucket-scope" data-zero-scope>
-          <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label><span class="zero-toggle-note">Пустые интервалы скрыты, чтобы таймлайн показывал только полезные участки.</span>
+          <label class="zero-toggle"><input type="checkbox" data-zero-toggle>Показать нулевые интервалы</label><span class="zero-toggle-note">Пустые интервалы скрыты, чтобы временная шкала показывала только полезные участки.</span>
           <div class="category-block">
             <h4>Сеть</h4>
             <table class="timeline-table">
-              <tr><th>Время</th><th>{{tip "HTTP" "Количество завершенных HTTP-запросов в этом временном интервале."}}</th><th>{{tip "Ошибки" "HTTP-запросы с признаком ошибки или статусом 5xx."}}</th><th>{{tip "HTTP средн." "Средняя длительность только запросов этого интервала. Если запросов нет, показано «нет замеров»."}}</th><th>{{tip "HTTP p95" "95% запросов этого интервала завершились не медленнее этого значения. На одном запросе p95 равен его длительности и не является устойчивым хвостом."}}</th><th>{{tip "DNS кол-во" "Количество запросов, для которых записано ненулевое время DNS. Это не обязательно число уникальных доменов."}}</th><th>{{tip "DNS средн." "Среднее записанное время DNS в интервале. При отсутствии DNS-замеров показано «нет замеров», а не ноль."}}</th><th>{{tip "Соед. кол-во" "Количество запросов с записанным временем установки соединения."}}</th><th>{{tip "Соед. средн." "Среднее время установки соединения только по доступным замерам."}}</th><th>{{tip "TTFB средн." "Среднее время до первого байта только для запросов, где TTFB был записан."}}</th></tr>
+              <tr><th>Время</th><th>{{tip "HTTP" "Количество завершённых HTTP-запросов в этом временном интервале."}}</th><th>{{tip "Ошибки" "HTTP-запросы с признаком ошибки или статусом 5xx."}}</th><th>{{tip "Среднее HTTP" "Средняя длительность только запросов этого интервала. Если запросов нет, показано «нет замеров»."}}</th><th>{{tip "Верхние 5% HTTP" "95% запросов этого интервала завершились не дольше этого значения. На одном запросе значение равно его длительности и не является устойчивой оценкой."}}</th><th>{{tip "Запросы адреса" "Количество запросов, для которых записано ненулевое время поиска адреса DNS. Это не обязательно число уникальных доменов."}}</th><th>{{tip "Среднее поиска адреса" "Среднее записанное время поиска адреса DNS в интервале. При отсутствии замеров показано «нет замеров», а не ноль."}}</th><th>{{tip "Соединения" "Количество запросов с записанным временем установки соединения."}}</th><th>{{tip "Среднее соединения" "Среднее время установки соединения только по доступным замерам."}}</th><th>{{tip "Среднее до первого байта" "Среднее время до первого байта только для запросов, где оно было записано."}}</th></tr>
               {{range $math.Timeline}}
               <tr class="{{networkBucketClass .}}"><td>{{bucketRange .}}</td><td>{{.HTTPCount}}</td><td>{{.HTTPFailed}}</td><td>{{if gt .HTTPCount 0}}{{.HTTPAvgDurationMS}} мс{{else}}<span class="muted">нет замеров</span>{{end}}</td><td>{{if gt .HTTPCount 0}}{{.HTTPP95DurationMS}} мс{{else}}<span class="muted">нет замеров</span>{{end}}</td><td>{{.DNSCount}}</td><td>{{if gt .DNSCount 0}}{{.DNSDurationMS}} мс{{else}}<span class="muted">нет замеров</span>{{end}}</td><td>{{.ConnectCount}}</td><td>{{if gt .ConnectCount 0}}{{.ConnectDurationMS}} мс{{else}}<span class="muted">нет замеров</span>{{end}}</td><td>{{if .HasTTFB}}{{.TTFBMS}} мс{{else}}<span class="muted">нет замеров</span>{{end}}</td></tr>
               {{else}}<tr><td colspan="10" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
             </table>
           </div>
           <div class="category-block">
-            <h4>UI и главный поток</h4>
+            <h4>Интерфейс и главный поток</h4>
             <table class="timeline-table">
-            <tr><th>Время</th><th>{{tip "UI кадры" "Количество кадров в записанных UI-окнах этого интервала. Отсутствие кадров означает отсутствие UI-замера, а не гарантированно неподвижный экран."}}</th><th>{{tip "Медленные кадры" "Кадры, которые превысили целевое время отрисовки для текущей частоты экрана."}}</th><th>{{tip "Доля подтормаживаний" "Медленные кадры / все измеренные кадры × 100%. Если кадров нет, процент не рассчитывается."}}</th><th>{{tip "Паузы главного потока" "Количество записанных пауз главного потока. Паузы, атрибутированные встроенному heap dump Jank Hunter, исключены из математических проблем приложения."}}</th><th>{{tip "Макс. пауза" "Самая длинная записанная пауза в интервале. Это не сумма длительностей всех пауз."}}</th></tr>
+            <tr><th>Время</th><th>{{tip "Кадры интерфейса" "Количество кадров в записанных интервалах наблюдения. Отсутствие кадров означает отсутствие замера интерфейса, а не гарантированно неподвижный экран."}}</th><th>{{tip "Медленные кадры" "Кадры, которые превысили целевое время отрисовки для текущей частоты экрана."}}</th><th>{{tip "Доля подтормаживаний" "Медленные кадры / все измеренные кадры × 100%. Если кадров нет, процент не рассчитывается."}}</th><th>{{tip "Паузы главного потока" "Количество записанных пауз главного потока. Паузы, связанные со встроенным снимком кучи Jank Hunter, исключены из математических проблем приложения."}}</th><th>{{tip "Макс. пауза" "Самая длинная записанная пауза в интервале. Это не сумма длительностей всех пауз."}}</th></tr>
               {{range $math.Timeline}}
               <tr class="{{uiBucketClass .}}"><td>{{bucketRange .}}</td><td>{{.UIFrames}}</td><td>{{.UIJankyFrames}}</td><td>{{if gt .UIFrames 0}}{{printf "%.2f" (jankPct .UIJankyFrames .UIFrames)}}%{{else}}<span class="muted">нет кадров</span>{{end}}</td><td>{{.StallCount}}</td><td>{{if gt .StallCount 0}}{{.StallMaxMS}} мс{{else}}<span class="muted">нет пауз</span>{{end}}</td></tr>
               {{else}}<tr><td colspan="6" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
@@ -304,7 +304,7 @@
           <div class="category-block">
             <h4>Память и трафик</h4>
             <table class="timeline-table">
-              <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учетом разделяемых страниц. Пропуск означает отсутствие memory-сэмпла, а не нулевое потребление."}}</th><th>{{tip "Свободная RAM" "Доступная память системы в момент context-сэмпла. Пропуск означает отсутствие замера."}}</th><th>{{tip "RX дельта" "Сколько байт получил UID приложения с предыдущего context-сэмпла. Ноль может быть реальным отсутствием трафика."}}</th><th>{{tip "TX дельта" "Сколько байт отправил UID приложения с предыдущего context-сэмпла."}}</th></tr>
+              <tr><th>Время</th><th>{{tip "PSS" "Пропорциональный размер памяти процесса с учётом разделяемых страниц. Пропуск означает отсутствие замера памяти, а не нулевое потребление."}}</th><th>{{tip "Свободная RAM" "Доступная память системы в момент замера контекста. Пропуск означает отсутствие замера."}}</th><th>{{tip "Получено с прошлого замера" "Сколько байт получил UID приложения с предыдущего замера контекста. Ноль может быть реальным отсутствием трафика."}}</th><th>{{tip "Отправлено с прошлого замера" "Сколько байт отправил UID приложения с предыдущего замера контекста."}}</th></tr>
               {{range $math.Timeline}}
               <tr class="{{memoryBucketClass .}}"><td>{{bucketRange .}}</td><td>{{if .HasMemoryPSS}}{{.MemoryPSSKB}} КБ{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasAvailableMemory}}{{.AvailableMemoryKB}} КБ{{else}}<span class="muted">нет замера</span>{{end}}</td><td>{{if .HasTrafficSample}}{{.TrafficRxBytes}} байт{{else}}<span class="muted">нет пары замеров</span>{{end}}</td><td>{{if .HasTrafficSample}}{{.TrafficTxBytes}} байт{{else}}<span class="muted">нет пары замеров</span>{{end}}</td></tr>
               {{else}}<tr><td colspan="5" class="muted">Недостаточно данных для надежного анализа.</td></tr>{{end}}
@@ -318,7 +318,7 @@
         <div class="category-block">
           <h4>{{.Title}}</h4>
           <table class="timeline-table">
-            <tr><th>{{tip "Имя" "Маршрут, экран, источник работ или имя пользовательской gauge-метрики, для которых собрана отдельная выборка."}}</th><th>{{tip "Метрика" "Что именно измерялось: длительность, задержка кадра, память, число удержаний или значение gauge."}}</th><th>{{tip "N" "Количество реально доступных наблюдений. Агрегированная gauge-запись считается одним наблюдением: исходные значения из среднего восстановить нельзя."}}</th><th>{{tip "Медиана" "Середина отсортированной выборки: половина значений ниже, половина выше. Обычно лучше описывает типичный случай, чем среднее."}}</th><th>{{tip "p90" "90% наблюдений не превышают это значение. Показывает верхнюю часть распределения, но устойчивее p99 на небольшой выборке."}}</th><th>{{tip "p95" "95% наблюдений не превышают это значение. На малой выборке p95 нестабилен — смотрите N и интервал."}}</th><th>{{tip "p99" "99% наблюдений не превышают это значение. Это почти край выборки, поэтому на малом N легко отражает единичный выброс."}}</th><th>{{tip "MAD" "Медиана абсолютных отклонений от медианы. Чем больше MAD, тем сильнее значения разбросаны."}}</th><th>{{tip "Усеченное среднее" "Среднее после удаления 10% самых маленьких и 10% самых больших значений. Оно меньше зависит от единичных выбросов."}}</th><th>{{tip "Мин." "Самое маленькое реально наблюдавшееся значение. Это не инженерная граница и не гарантированный лучший результат."}}</th><th>{{tip "Макс." "Самое большое реально наблюдавшееся значение. Смотрите вместе с N, p95/p99 и качеством выборки."}}</th><th>{{tip "Интервал p95" "Диапазон неопределенности p95, рассчитанный bootstrap-методом. Узкий интервал обычно означает более устойчивую оценку."}}</th><th>{{tip "Качество" "Надёжность строки по размеру выборки и ширине интервала p95. Предупреждение не означает регрессию, а просит больше данных."}}</th></tr>
+            <tr><th>{{tip "Имя" "Маршрут, экран, место запуска работ или имя пользовательской метрики, для которых собрана отдельная выборка."}}</th><th>{{tip "Метрика" "Что именно измерялось: длительность, задержка кадра, память, число удержаний или значение пользовательской метрики."}}</th><th>{{tip "N" "Количество реально доступных наблюдений. Агрегированная запись метрики считается одним наблюдением: исходные значения из среднего восстановить нельзя."}}</th><th>{{tip "Медиана" "Середина отсортированной выборки: половина значений ниже, половина выше. Обычно лучше описывает типичный случай, чем среднее."}}</th><th>{{tip "p90" "90% наблюдений не превышают это значение. Показывает верхнюю часть распределения, но устойчивее p99 на небольшой выборке."}}</th><th>{{tip "p95" "95% наблюдений не превышают это значение. На малой выборке p95 нестабилен — смотрите N и интервал."}}</th><th>{{tip "p99" "99% наблюдений не превышают это значение. Это почти край выборки, поэтому на малом N легко отражает единичный выброс."}}</th><th>{{tip "MAD" "Медиана абсолютных отклонений от медианы. Чем больше MAD, тем сильнее значения разбросаны."}}</th><th>{{tip "Усечённое среднее" "Среднее после удаления 10% самых маленьких и 10% самых больших значений. Оно меньше зависит от единичных выбросов."}}</th><th>{{tip "Мин." "Самое маленькое реально наблюдавшееся значение. Это не инженерная граница и не гарантированный лучший результат."}}</th><th>{{tip "Макс." "Самое большое реально наблюдавшееся значение. Смотрите вместе с N, p95/p99 и качеством выборки."}}</th><th>{{tip "Интервал p95" "Диапазон неопределённости p95, рассчитанный методом повторной выборки. Узкий интервал обычно означает более устойчивую оценку."}}</th><th>{{tip "Качество" "Надёжность строки по размеру выборки и ширине интервала p95. Предупреждение не означает регрессию, а просит больше данных."}}</th></tr>
             {{range .Items}}
             <tr>
               <td><code>{{.Name}}</code></td><td>{{.Metric}}</td><td>{{.Count}}</td>
@@ -330,8 +330,8 @@
             {{end}}
           </table>
         </div>
-        {{else}}<div class="muted">Недостаточно данных для робастной статистики.</div>{{end}}
-        <p class="muted">Для агрегированных gauge-событий отчет не создает искусственные исходные значения: одна запись остается одним наблюдением. Пользовательская gauge-метрика показывается без автоматического вывода «выше хуже», потому что Jank Hunter не знает ее бизнес-смысл.</p>
+        {{else}}<div class="muted">Недостаточно данных для устойчивой статистики.</div>{{end}}
+        <p class="muted">Для агрегированных событий метрик отчёт не создаёт искусственные исходные значения: одна запись остаётся одним наблюдением. Пользовательская метрика показывается без автоматического вывода «выше хуже», потому что Jank Hunter не знает её прикладной смысл.</p>
         {{end}}
         {{if eq .ID "change-points"}}
         <h3>Сдвиги сигналов</h3>
@@ -343,7 +343,7 @@
             <td>{{printf "%.1f" .BeforeMedian}} {{.Unit}}</td><td>{{printf "%.1f" .AfterMedian}} {{.Unit}}</td><td>{{printf "%+.1f" .Delta}} {{.Unit}}</td><td>{{if .DeltaPctAvailable}}{{printf "%+.1f" .DeltaPct}}%{{else}}<span class="muted">не применимо</span>{{end}}</td>
             <td>{{printf "%.1f" .BeforeMAD}} / {{printf "%.1f" .AfterMAD}}</td>
             <td><div>{{printf "%.2f" .Score}}</div><div class="bar"><i style="{{scoreWidth .Score}}"></i></div></td>
-            <td>{{if .NearbyScreen}}экран <code>{{.NearbyScreen}}</code><br>{{end}}{{if .NearbyRoute}}маршрут <code>{{.NearbyRoute}}</code><br>{{end}}{{if .NearbyOwner}}источник <code>{{.NearbyOwner}}</code><br>{{end}}{{if .NearbyNetwork}}сеть <code>{{.NearbyNetwork}}</code>{{end}}</td>
+            <td>{{if .NearbyScreen}}экран <code>{{contextHint .NearbyScreen "screen"}}</code><br>{{end}}{{if .NearbyRoute}}маршрут <code>{{contextHint .NearbyRoute "route"}}</code><br>{{end}}{{if .NearbyOwner}}место запуска <code>{{contextHint .NearbyOwner "owner"}}</code><br>{{end}}{{if .NearbyNetwork}}сеть <code>{{.NearbyNetwork}}</code>{{end}}</td>
             <td>{{.Recommendation}}</td>
           </tr>
           {{else}}<tr><td colspan="11" class="muted">Сильных точек изменения не найдено.</td></tr>{{end}}
@@ -351,7 +351,7 @@
         {{end}}
         {{if eq .ID "periodic"}}
         <h3>Автокорреляция и спектр</h3>
-        <table class="timeline-table">
+        <table class="timeline-table periodic-analysis-table wide-analysis-table">
           <tr><th>{{tip "Сигнал" "Равномерный ряд количества HTTP/DNS/соединений, ошибок, запросов маршрута или доли медленных UI-кадров."}}</th><th>{{tip "N" "Длина самого длинного непрерывного участка с измерениями. Ниже указано, сколько интервалов измерено во всем ряду. Для анализа нужно N не менее 12; пропуски не заменяются нулями."}}</th><th>{{tip "Первый значимый лаг" "Минимальный сдвиг во времени, при котором сходство ряда с самим собой достигло порога 0.60. Лаг поддерживает гипотезу о повторе, но не доказывает проблему."}}</th><th>{{tip "Полураспад" "Время, за которое начальная автокорреляция падает до 0.5. Если начальной сильной корреляции нет, поле не рассчитывается."}}</th><th>{{tip "Энтропия" "Насколько энергия распределена по частотам: ближе к 0 — один выраженный ритм, ближе к 1 — широкий шум. Это не уровень проблемы."}}</th><th>{{tip "Главные лаги" "Показаны только положительные корреляции от 0.30. r — коэффициент сходства от −1 до 1."}}</th><th>{{tip "Спектральные пики" "Показываются только локальные пики, которые минимум в 3 раза выше фона и прошли порог уверенности."}}</th><th>{{tip "Вывод" "Краткое описание того, хватило ли данных и подтверждён ли повторяемый ритм. Даже подтверждённый период может быть штатным таймером."}}</th></tr>
           {{range $math.Periodic}}
           <tr>
@@ -365,13 +365,13 @@
           </tr>
           {{else}}<tr><td colspan="8" class="muted">Недостаточно данных для периодического анализа.</td></tr>{{end}}
         </table>
-        <p class="help-text">Найденный период может быть штатным таймером, polling или повторяемым пользовательским действием. Считайте его проблемой только после совпадения с плохой метрикой и подтверждения по таймлайну.</p>
+        <p class="help-text">Найденный период может быть штатным таймером, периодическим опросом или повторяемым пользовательским действием. Считайте его проблемой только после совпадения с плохой метрикой и подтверждения по временной шкале.</p>
         {{end}}
         {{if eq .ID "network-loops"}}
-        <h3>Кандидаты сетевых циклов</h3>
-        <p class="help-text">Кандидат появляется только после трех и более всплесков и проверки повторяемости. Даже высокая уверенность не называет причину: она показывает, насколько данные поддерживают существование повторяющегося паттерна.</p>
+        <h3>Признаки сетевых циклов</h3>
+        <p class="help-text">Признак появляется только после трёх и более всплесков и проверки повторяемости. Даже высокая уверенность не называет причину: она показывает, насколько данные подтверждают существование повторяющейся последовательности.</p>
         <table class="timeline-table">
-          <tr><th>Маршрут</th><th>Источник</th><th>{{tip "Предполагаемый период" "Типичное расстояние между повторяющимися всплесками. Это оценка с точностью временного интервала."}}</th><th>{{tip "Уверенность" "Комбинация числа всплесков, регулярности, автокорреляции, спектра и повторяемого паттерна. Не является вероятностью ошибки в коде."}}</th><th>{{tip "Условная нагрузка" (scoreHelp "network_burn")}}</th><th>{{tip "Окно наблюдения" "Время от первого до последнего всплеска кандидата. Оно не означает, что сеть была плохой непрерывно весь этот период."}}</th><th>{{tip "Паттерн" "Повторявшиеся признаки вокруг всплесков: DNS, соединение, ошибка, route или owner. Это наблюдения, а не готовая причина."}}</th><th>{{tip "Гипотеза для проверки" "Наиболее конкретная проверка, которую можно предложить по доступной разметке. Формулировка намеренно не ставит диагноз."}}</th><th>{{tip "Цепочка свидетельств" "Короткий путь между сетевым симптомом и размеченным контекстом. Условная стоимость не является временем или вероятностью."}}</th></tr>
+          <tr><th>Маршрут</th><th>Место запуска</th><th>{{tip "Предполагаемый период" "Типичное расстояние между повторяющимися всплесками. Это оценка с точностью временного интервала."}}</th><th>{{tip "Уверенность" "Комбинация числа всплесков, регулярности, автокорреляции, спектра и повторяемой последовательности. Не является вероятностью ошибки в коде."}}</th><th>{{tip "Условная нагрузка" (scoreHelp "network_burn")}}</th><th>{{tip "Интервал наблюдения" "Время от первого до последнего всплеска. Оно не означает, что сеть была плохой непрерывно весь этот период."}}</th><th>{{tip "Повторяемые признаки" "Признаки вокруг всплесков: DNS, соединение, ошибка, маршрут или место запуска. Это наблюдения, а не готовая причина."}}</th><th>{{tip "Гипотеза для проверки" "Наиболее конкретная проверка, которую можно предложить по доступной разметке. Формулировка намеренно не ставит диагноз."}}</th><th>{{tip "Цепочка наблюдений" "Короткий путь между сетевым симптомом и размеченным контекстом. Условная стоимость не является временем или вероятностью."}}</th></tr>
           {{range $math.NetworkLoops}}
           <tr>
             <td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="muted">нет</span>{{end}}</td>
@@ -384,13 +384,13 @@
             <td>{{.ProbableCause}}</td>
             <td>{{if .Path.Nodes}}{{pathText .Path}}<div class="muted">условная стоимость {{printf "%.2f" .Path.Cost}}</div>{{else}}<span class="muted">нет</span>{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="9" class="muted">Кандидаты сетевых циклов с достаточной поддержкой данных не найдены.</td></tr>{{end}}
+          {{else}}<tr><td colspan="9" class="muted">Признаки сетевых циклов с достаточной поддержкой данных не найдены.</td></tr>{{end}}
         </table>
         {{end}}
         {{if eq .ID "integral"}}
         <h3>Накопленные оценки</h3>
         <p class="help-text">Эти числа зависят от длительности сценария. Сравнивайте только одинаковые пользовательские пути сопоставимой продолжительности; пороги ниже являются стартовыми инженерными ориентирами, а не универсальным SLA.</p>
-        <table class="timeline-table">
+        <table class="timeline-table integral-score-table wide-analysis-table">
           <tr><th>{{tip "Оценка" (scoreHelp "integral")}}</th><th>{{tip "Значение" "Накопленный результат по записанной длительности сценария. Единица указана рядом и различается между строками."}}</th><th>{{tip "Критерии" "Стартовые инженерные диапазоны Jank Hunter для статуса. Это не универсальный SLA продукта."}}</th><th>{{tip "Формула" "Точное правило расчёта строки. Δt — длительность временного интервала; Σ — сумма по интервалам."}}</th><th>{{tip "Что измеряет" "Простое объяснение физического смысла и ограничений оценки."}}</th><th>{{tip "Как читать" "Практическая интерпретация: какое поведение увеличивает число и чего из него нельзя заключать."}}</th></tr>
           {{range $math.IntegralScores}}
           <tr>
@@ -409,11 +409,11 @@
         <div class="explain-note">
           <strong>Как читать состояния</strong>
           <p><code>Здоровое</code> — интервал без заметных симптомов по текущим порогам. <code>Восстановление</code> — первый спокойный интервал после плохого состояния: это хороший знак, но если плохие состояния часто возвращаются, причину все равно надо искать выше по таблицам.</p>
-          {{if $math.Markov.SequenceComparable}}<p>Матрица переходов отвечает на вопрос “куда обычно попадает следующий временной интервал”. Например, переход <code>Давление памяти → Восстановление</code> показывает, что после всплеска памяти сигнал вернулся ниже порога.</p>{{else}}<p>В отчёте объединены независимые прогоны, поэтому переходы, восстановление и липкость не рассчитываются. Таблица состояний ниже показывает только общий профиль сценария по относительному времени.</p>{{end}}
+          {{if $math.Markov.SequenceComparable}}<p>Матрица переходов отвечает на вопрос «куда обычно попадает следующий временной интервал». Например, переход <code>Давление памяти → Восстановление</code> показывает, что после всплеска памяти сигнал вернулся ниже порога.</p>{{else}}<p>В отчёте объединены независимые прогоны, поэтому переходы, восстановление и повторение состояний не рассчитываются. Таблица состояний ниже показывает только общий профиль сценария по относительному времени.</p>{{end}}
         </div>
         <h3>Сводка состояний</h3>
         <table class="timeline-table">
-          <tr><th>{{tip "Уверенность" "Качество самой модели по длине истории, числу переходов и плохих эпизодов. Это не вероятность бага."}}</th><th>{{tip "Плохая экспозиция" "Доля записанного времени в состояниях медленной сети, сетевого цикла, UI-подтормаживания, паузы или давления памяти."}}</th><th>{{tip "Здоровые → плохие" "Сколько раз следующий интервал после здорового был классифицирован как плохой. Частые переходы означают нестабильный сценарий."}}</th><th>{{tip "Восстановление" "Доля выходов из плохого состояния в здоровое или восстановительное. Выше обычно лучше."}}</th><th>{{tip "Ожидаемое восстановление" "Средняя длина наблюдавшейся плохой серии до первого спокойного интервала. Это оценка по текущему прогону, не SLA."}}</th><th>{{tip "Липкие состояния" "Плохие состояния, которые часто остаются такими же в следующем интервале. Процент рассчитан по переходам из этого состояния."}}</th></tr>
+          <tr><th>{{tip "Уверенность" "Качество самой модели по длине истории, числу переходов и плохих эпизодов. Это не вероятность ошибки."}}</th><th>{{tip "Доля плохих состояний" "Доля записанного времени в состояниях медленной сети, сетевого цикла, UI-подтормаживания, паузы или давления памяти."}}</th><th>{{tip "Здоровые → плохие" "Сколько раз следующий интервал после здорового был классифицирован как плохой. Частые переходы означают нестабильный сценарий."}}</th><th>{{tip "Восстановление" "Доля выходов из плохого состояния в здоровое или восстановительное. Выше обычно лучше."}}</th><th>{{tip "Ожидаемое восстановление" "Средняя длина наблюдавшейся плохой серии до первого спокойного интервала. Это оценка по текущему прогону, а не гарантированный предел."}}</th><th>{{tip "Повторяющиеся плохие состояния" "Плохие состояния, которые часто остаются такими же в следующем интервале. Процент рассчитан по переходам из этого состояния."}}</th></tr>
           <tr>
             <td>{{confidenceLabel $math.Markov.Confidence}}<div class="muted">{{$math.Markov.ConfidenceReason}}</div>{{if $math.Markov.TimelineBucketCount}}<div class="muted">измерено {{$math.Markov.SampleCount}} из {{$math.Markov.TimelineBucketCount}} интервалов</div>{{end}}</td>
             <td>{{printf "%.1f" (percent01 $math.Markov.BadStateExposure)}}%<div class="muted">{{humanDuration $math.Markov.BadStateDurationMS}} из {{humanDuration $math.Markov.TotalDurationMS}}</div></td>
@@ -423,19 +423,19 @@
             <td>{{if $math.Markov.SequenceComparable}}{{range $math.Markov.StickyStates}}<div>{{markovState .State}} · {{printf "%.1f" (percent01 .Probability)}}% · {{.Count}} переходов</div>{{else}}<span class="muted">нет</span>{{end}}{{else}}<span class="muted">не применимо</span>{{end}}</td>
           </tr>
         </table>
-        <h3>Экспозиция плохих состояний</h3>
+        <h3>Доля плохих состояний</h3>
         <table class="timeline-table">
-          <tr><th>{{tip "Состояние" "Доминирующий симптом временного интервала. Если симптомов несколько, остальные сохраняются в таблице последовательности как вклады."}}</th><th>{{tip "Доля времени" "Длительность этого плохого состояния / общая длительность записанного таймлайна."}}</th><th>{{tip "Длительность" "Сумма длительностей интервалов, классифицированных этим состоянием."}}</th><th>{{tip "Интервалы" "Количество временных интервалов с этим доминирующим состоянием."}}</th></tr>
+          <tr><th>{{tip "Состояние" "Доминирующий симптом временного интервала. Если симптомов несколько, остальные сохраняются в таблице последовательности как вклады."}}</th><th>{{tip "Доля времени" "Длительность этого плохого состояния / общая длительность записанной временной шкалы."}}</th><th>{{tip "Длительность" "Сумма длительностей интервалов, классифицированных этим состоянием."}}</th><th>{{tip "Интервалы" "Количество временных интервалов с этим доминирующим состоянием."}}</th></tr>
           {{range $math.Markov.StateExposures}}
           <tr><td>{{markovState .State}}</td><td>{{printf "%.1f" (percent01 .Exposure)}}%</td><td>{{humanDuration .DurationMS}}</td><td>{{.Windows}}</td></tr>
           {{else}}<tr><td colspan="4" class="muted">Плохих состояний не найдено.</td></tr>{{end}}
         </table>
-        <h3>Контекстная липкость</h3>
+        <h3>Повторение проблемных состояний в одном контексте</h3>
         <table class="timeline-table">
           <tr><th>Состояние</th><th>Контекст</th><th>{{tip "Количество" "Число переходов, где состояние осталось плохим рядом с этим контекстом."}}</th><th>{{tip "Вероятность" "Доля самопереходов для данного плохого состояния и контекста. На малом количестве наблюдений нестабильна."}}</th></tr>
           {{if $math.Markov.SequenceComparable}}{{range $math.Markov.ContextStickyStates}}
           <tr><td>{{markovState .State}}</td><td>{{.Context}}</td><td>{{.Count}}</td><td>{{printf "%.1f" (percent01 .Probability)}}%</td></tr>
-          {{else}}<tr><td colspan="4" class="muted">Липких контекстов не найдено.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="muted">Не рассчитывается для объединённых независимых прогонов.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Повторяющихся проблемных состояний в одном контексте не найдено.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="muted">Не рассчитывается для объединённых независимых прогонов.</td></tr>{{end}}
         </table>
         <h3>{{if $math.Markov.SequenceComparable}}Последовательность временных интервалов{{else}}Профиль состояний по относительному времени{{end}}</h3>
         <table class="timeline-table">
@@ -474,7 +474,7 @@
         </table>
         <h3>Связь источников с плохими состояниями</h3>
         <table class="timeline-table">
-          <tr><th>Ранг</th><th>Источник</th><th>{{tip "Оценка связи" "Сумма уверенности связей источника только с плохими состояниями и кандидатами сетевых циклов. Обычная активность в здоровых интервалах не учитывается. Это приоритет проверки, а не вина кода."}}</th></tr>
+          <tr><th>Ранг</th><th>Место запуска</th><th>{{tip "Оценка связи" "Сумма уверенности связей места запуска только с плохими состояниями и признаками сетевых циклов. Обычная активность в здоровых интервалах не учитывается. Это приоритет проверки, а не вина кода."}}</th></tr>
           {{range $math.CausalGraph.OwnerScores}}
           <tr><td>{{.Rank}}</td><td><code>{{contextHint .Owner "owner"}}</code></td><td>{{printf "%.2f" .Score}}</td></tr>
           {{else}}<tr><td colspan="3" class="muted">Источники не выделены.</td></tr>{{end}}
@@ -518,7 +518,7 @@
           <div class="reference-block"><strong>Как читать</strong>{{.Interpretation}}</div>
           <div class="reference-block"><strong>Ограничения</strong>{{.Limitations}}</div>
           <div class="reference-block"><strong>Поля в inspect</strong><div class="reference-list">{{range .InspectFields}}<code>{{.}}</code>{{end}}</div></div>
-          <div class="reference-block"><strong>Поля в compare</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
+          <div class="reference-block"><strong>Поля при сравнении</strong><div class="reference-list">{{range .CompareFields}}<code>{{.}}</code>{{end}}</div></div>
         </div>
       </details>
       {{end}}

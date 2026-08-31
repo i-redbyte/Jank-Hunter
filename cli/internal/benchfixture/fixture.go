@@ -277,11 +277,6 @@ func coreDictionaryEntries() []jhlog.DictionaryEntry {
 		{Kind: jhlog.DictMetric, ID: 61, Value: "benchmark.gauge"},
 		{Kind: jhlog.DictMetric, ID: 62, Value: "ui_jank"},
 		{Kind: jhlog.DictMetric, ID: 63, Value: "main_thread_stall"},
-		{Kind: jhlog.DictFlow, ID: 70, Value: "benchmark.feed.refresh"},
-		{Kind: jhlog.DictFlow, ID: 71, Value: "benchmark.checkout.open"},
-		{Kind: jhlog.DictStep, ID: 72, Value: "network"},
-		{Kind: jhlog.DictStep, ID: 73, Value: "render"},
-		{Kind: jhlog.DictStep, ID: 74, Value: "callback"},
 		{Kind: jhlog.DictLogSource, ID: 80, Value: "android.util.Log.d"},
 		{Kind: jhlog.DictGeneric, ID: 90, Value: "15"},
 		{Kind: jhlog.DictGeneric, ID: 91, Value: "2026-01-01"},
@@ -314,12 +309,10 @@ func attributedEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 	tuple := index % profile.AttributionTuples
 	screenID := 30 + uint64(tuple%2)
 	ownerID := ownerIDBase + uint64(tuple%profile.OwnerDictionaryEntries)
-	flowID := 70 + uint64(tuple%2)
-	stepID := 72 + uint64(tuple%3)
 	return jhlog.Event{
 		Type:        jhlog.EventLogSpam,
 		TimeMS:      timeMS,
-		Attribution: attribution(screenID, ownerID, flowID, stepID),
+		Attribution: attribution(screenID, ownerID, 0),
 		LogSpam:     &jhlog.LogSpamEvent{SourceRef: jhlog.LocalSymbol(80), Level: 2, Count: 1},
 	}
 }
@@ -330,13 +323,11 @@ func runtimeCallEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 	callee := (edge*31 + edge/profile.OwnerDictionaryEntries + 17) % profile.OwnerDictionaryEntries
 	screenID := 30 + uint64(edge%2)
 	callerID := ownerIDBase + uint64(caller)
-	flowID := 70 + uint64(edge%2)
-	stepID := 72 + uint64(edge%3)
 	return jhlog.Event{
 		Type:        jhlog.EventRuntimeCall,
 		TimeMS:      timeMS,
 		Flags:       uint64(jhlog.FlagAppForeground),
-		Attribution: attribution(screenID, callerID, flowID, stepID),
+		Attribution: attribution(screenID, callerID, 0),
 		RuntimeCall: &jhlog.RuntimeCallEvent{
 			CalleeRef: jhlog.LocalSymbol(ownerIDBase + uint64(callee)),
 			Count:     uint64(1 + index%500),
@@ -350,14 +341,10 @@ func signalEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 	ownerID := ownerIDBase + uint64((index*13)%profile.OwnerDictionaryEntries)
 	context := struct {
 		screen uint64
-		flow   uint64
-		step   uint64
 	}{
 		screen: 30 + uint64(index%2),
-		flow:   70 + uint64(index%2),
-		step:   72 + uint64(index%3),
 	}
-	attr := attribution(context.screen, ownerID, context.flow, context.step)
+	attr := attribution(context.screen, ownerID, 0)
 	switch index % 9 {
 	case 0:
 		return jhlog.Event{Type: jhlog.EventHTTP, TimeMS: timeMS, Attribution: attr, Flags: uint64(jhlog.FlagHTTPTLS | jhlog.FlagAppForeground), HTTP: &jhlog.HTTPEvent{RouteRef: jhlog.LocalSymbol(20 + uint64(index%2)), DurationMS: uint64(40 + index%1_500), DNSMS: 5, ConnectMS: 12, TTFBMS: uint64(20 + index%500), Status: jhlog.Status2xx, RxBytes: uint64(4_096 + index), TxBytes: 512}}
@@ -380,13 +367,12 @@ func signalEvent(index int, profile Profile, timeMS uint64) jhlog.Event {
 	}
 }
 
-func attribution(screenID, ownerID, flowID, stepID uint64) jhlog.AttributionContext {
+func attribution(screenID, ownerID, operationID uint64) jhlog.AttributionContext {
 	return jhlog.AttributionContext{
-		Present: true,
-		Screen:  jhlog.LocalSymbol(screenID),
-		Owner:   jhlog.LocalSymbol(ownerID),
-		Flow:    jhlog.LocalSymbol(flowID),
-		Step:    jhlog.LocalSymbol(stepID),
+		Present:     true,
+		Screen:      jhlog.LocalSymbol(screenID),
+		Owner:       jhlog.LocalSymbol(ownerID),
+		OperationID: operationID,
 	}
 }
 

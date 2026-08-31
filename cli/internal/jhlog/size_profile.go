@@ -138,6 +138,8 @@ func EventTypeName(eventType EventType) string {
 		return "counter"
 	case EventGauge:
 		return "gauge"
+	case EventOperation:
+		return "operation"
 	case EventLogSpam:
 		return "log_spam"
 	case EventProblem:
@@ -154,6 +156,20 @@ func EventTypeName(eventType EventType) string {
 		return "process_exit"
 	case EventIO:
 		return "io"
+	case EventWorker:
+		return "worker"
+	case EventWebSocket:
+		return "websocket"
+	case EventDatabase:
+		return "database"
+	case EventDatabaseTransaction:
+		return "database_transaction"
+	case EventProcessState:
+		return "process_state"
+	case EventAndroidComponent:
+		return "android_component"
+	case EventBinderTransaction:
+		return "binder_transaction"
 	default:
 		return fmt.Sprintf("event_%d", eventType)
 	}

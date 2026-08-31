@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const DependencyInjectionDisclaimer = "Build-time DI-связь. Это не ссылка удержания, не runtime-вызов и не доказательство утечки. DI-данные не влияют на score, severity или evidence."
+const DependencyInjectionDisclaimer = "Связь DI найдена при сборке. Это не ссылка удержания, не вызов во время работы и не доказательство утечки. Данные DI не влияют на приоритет и тяжесть проблем."
 
 type DependencyInjectionCatalog struct {
 	Available  bool
@@ -209,7 +209,7 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 	if dependencyInjectionFrameworkPresent(catalog.Frameworks, "koin") {
 		catalog.Warnings = append(
 			catalog.Warnings,
-			"Koin: каталог покрывает аннотации и KSP-generated bindings; произвольный runtime DSL намеренно не интерпретируется.",
+			"Koin: каталог покрывает аннотации и связи, созданные KSP; произвольные объявления времени выполнения намеренно не интерпретируются.",
 		)
 	}
 	return catalog, nil
@@ -357,20 +357,20 @@ func dependencyInjectionObservedClasses(summary Summary) map[string]map[string]s
 		}
 	}
 	for _, problem := range summary.CodeProblems {
-		add(problem.ClassName, "есть отдельный runtime-сигнал")
+		add(problem.ClassName, "есть отдельный сигнал во время работы")
 	}
 	for _, leak := range summary.MemoryLeaks {
-		add(leak.ClassName, "класс отдельно присутствует в memory-анализе")
+		add(leak.ClassName, "класс отдельно присутствует в анализе памяти")
 	}
 	for _, node := range summary.Influence.TopNodes {
 		add(node.ClassName, "класс отдельно присутствует в графе влияния")
 	}
 	for _, call := range summary.RuntimeCalls {
-		add(classFromOwner(call.Caller), "есть отдельный runtime-вызов")
-		add(classFromOwner(call.Callee), "есть отдельный runtime-вызов")
+		add(classFromOwner(call.Caller), "есть отдельный вызов во время работы")
+		add(classFromOwner(call.Callee), "есть отдельный вызов во время работы")
 	}
 	for _, owner := range summary.Owners {
-		add(classFromOwner(owner.Owner), "есть отдельная runtime-атрибуция")
+		add(classFromOwner(owner.Owner), "есть отдельная привязка во время работы")
 	}
 	return observed
 }
@@ -402,6 +402,81 @@ func dependencyInjectionClassAndAncestors(className string) []string {
 		values = append(values, className)
 	}
 	return values
+}
+
+func (b *problemBuilder) classifyDependencyInjectionFindings() {
+	catalog := b.dependencyInjection
+	if len(b.findings) == 0 {
+		return
+	}
+	classCapacity := 0
+	if catalog != nil && catalog.Available {
+		classCapacity = len(catalog.Classes) + len(catalog.Edges)*2
+	}
+	classes := make(map[string]struct{}, classCapacity)
+	addClass := func(className string) {
+		for _, candidate := range dependencyInjectionClassAndAncestors(className) {
+			classes[candidate] = struct{}{}
+		}
+	}
+	if catalog != nil && catalog.Available {
+		for _, classRecord := range catalog.Classes {
+			addClass(classRecord.Name)
+		}
+		for _, edge := range catalog.Edges {
+			addClass(edge.Consumer)
+			addClass(edge.Dependency)
+		}
+	}
+	for index := range b.findings {
+		if problemFindingHasRecognizedDependencyInjectionSignal(b.findings[index]) ||
+			problemLocationsContainDependencyInjectionClass(b.findings[index].Where, classes) {
+			b.findings[index].RelatedCategories = append(
+				b.findings[index].RelatedCategories,
+				ProblemCategoryDependencyInjection,
+			)
+		}
+	}
+}
+
+func problemFindingHasRecognizedDependencyInjectionSignal(finding ProblemFinding) bool {
+	text := strings.ToLower(finding.Title + " " + finding.WhatHappened + " " + finding.Why.Summary)
+	for _, location := range finding.Where {
+		text += " " + strings.ToLower(location.Class+" "+location.Owner+" "+location.Method)
+	}
+	for _, marker := range [...]string{
+		"di-компонент",
+		"dagger",
+		"hilt_aggregated_deps",
+		"dagger.hilt",
+		"org.koin",
+		"componentfactoryimpl",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func problemLocationsContainDependencyInjectionClass(
+	locations []ProblemLocation,
+	classes map[string]struct{},
+) bool {
+	for _, location := range locations {
+		for _, symbol := range []string{location.Class, location.Owner, location.Method} {
+			className := classFromOwner(symbol)
+			if className == "" {
+				className = normalizeClassName(symbol)
+			}
+			for _, candidate := range dependencyInjectionClassAndAncestors(className) {
+				if _, ok := classes[candidate]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func dependencyInjectionFrameworkSummaries(

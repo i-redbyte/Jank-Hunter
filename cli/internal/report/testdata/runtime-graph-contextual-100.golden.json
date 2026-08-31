@@ -152,11 +152,11 @@
   ],
   "CollectionQuality": {
     "level": "high",
-    "trust_score_percent": 100,
-    "trust_score_model": "evidence-v2:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20",
-    "trust_level": "excellent",
-    "trust_level_explanation": "Максимальное доверие: индекс 95–100%; все активные источники evidence практически полностью подтверждены. Недостающих баллов нет.",
-    "trust_components": [
+    "diagnostic_completeness_percent": 100,
+    "diagnostic_completeness_model": "diagnostic-completeness-v1:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20",
+    "diagnostic_completeness_level": "excellent",
+    "diagnostic_completeness_explanation": "Максимальная полнота: индекс 95–100%; все активные источники диагностических данных практически полностью подтверждены. Недостающих баллов нет.",
+    "diagnostic_completeness_components": [
       {
         "id": "transport",
         "label": "Доставка событий",
@@ -165,17 +165,17 @@
         "coverage_percent": 100,
         "earned_points": 40,
         "missing_points": 0,
-        "explanation": "EXACT admission; записано 3 событий, известных потерь нет"
+        "explanation": "Все принятые события записаны; известных пропусков журнала нет"
       },
       {
         "id": "runtime_graph",
-        "label": "Runtime-граф",
+        "label": "Граф вызовов во время выполнения",
         "weight": 20,
         "excluded": false,
         "coverage_percent": 100,
         "earned_points": 20,
         "missing_points": 0,
-        "explanation": "декодировано 2 из 2 входных runtime-вызовов"
+        "explanation": "Все записанные связи вызовов доступны"
       },
       {
         "id": "process_roster",
@@ -185,7 +185,7 @@
         "coverage_percent": 100,
         "earned_points": 20,
         "missing_points": 0,
-        "explanation": "подтверждены все 1 процессов configured scope all_processes"
+        "explanation": "подтверждены все 1 ожидаемых процессов"
       },
       {
         "id": "integrity",
@@ -195,7 +195,7 @@
         "coverage_percent": 100,
         "earned_points": 20,
         "missing_points": 0,
-        "explanation": "digest chain, quality progression, schema и счётчики согласованы"
+        "explanation": "цепочка сегментов, схема и счётчики согласованы"
       }
     ],
     "complete": true,
@@ -241,8 +241,6 @@
     "status": "runtime_only",
     "complete": false,
     "runtime_evidence": true,
-    "symbols_resolved": true,
-    "symbol_mode": "embedded",
     "class_graph": false,
     "instrumentation_diagnostics": false,
     "heap_evidence": false,
@@ -252,7 +250,7 @@
       "class-graph.jsonl",
       "instrumentation-diagnostics.jsonl"
     ],
-    "explanation": "доступны runtime evidence, но статический граф, hot paths, cycles и ASM diagnostics неполны"
+    "explanation": "доступны данные выполнения, но статический граф, горячие пути, циклы и диагностика ASM неполны"
   },
   "LogGrowth": {
     "available": false,
@@ -263,43 +261,43 @@
   "evidence_quality": {
     "schema_version": "jankhunter.evidence-quality/v1",
     "overall": "insufficient",
-    "headline": "Evidence недостаточно для общего clean-вывода; смотрите непроверенные категории и причины.",
+    "headline": "Диагностических данных недостаточно для общего вывода; смотрите непроверенные категории и причины.",
     "dimensions": [
       {
         "id": "transport",
         "label": "Транспорт и целостность",
         "status": "complete",
-        "explanation": "Committed prefix, chain и счётчики согласованы; известных потерь событий нет."
+        "explanation": "Зафиксированная часть журнала, цепочка сегментов и счётчики согласованы; известных пропусков событий нет."
       },
       {
         "id": "acquisition",
-        "label": "Покрытие collectors",
+        "label": "Покрытие категорий",
         "status": "insufficient",
-        "explanation": "8 категорий не измерены или имеют недостаточную выборку."
+        "explanation": "10 категорий не измерены или имеют недостаточную выборку."
       },
       {
         "id": "process_coverage",
         "label": "Охват процессов",
         "status": "complete",
-        "explanation": "Все объявленные процессы configured scope представлены в run."
+        "explanation": "Все объявленные процессы представлены в прогоне."
       },
       {
         "id": "temporal_coverage",
         "label": "Завершённость интервала",
         "status": "complete",
-        "explanation": "Все анализируемые сегменты sealed и имеют terminal evidence."
+        "explanation": "Все анализируемые сегменты завершены и содержат запись о конце интервала."
       },
       {
         "id": "sensor_semantics",
-        "label": "Семантика UI sensor",
+        "label": "Качество данных UI",
         "status": "not_measured",
-        "explanation": "UI frames не записаны; вывод о плавности невозможен."
+        "explanation": "UI-кадры не записаны; вывод о плавности невозможен."
       },
       {
         "id": "analysis_inputs",
         "label": "Аналитические входы",
         "status": "degraded",
-        "explanation": "доступны runtime evidence, но статический граф, hot paths, cycles и ASM diagnostics неполны"
+        "explanation": "Данные выполнения доступны, но отсутствует часть артефактов сборки; статические пути и диагностика инструментирования могут быть неполными."
       },
       {
         "id": "estimator_calibration",
@@ -312,19 +310,40 @@
   "CollectorSessions": 1,
   "CollectorFlagsAny": 0,
   "CollectorFlagsAll": 0,
+  "database_coverage": {
+    "status": "disabled",
+    "status_label": "сборщик выключен",
+    "explanation": "Во всех переданных сессиях сбор данных БД выключен; отсутствие SQL ожидаемо.",
+    "action": "Включите instrument.databaseTracing.set(true), пересоберите приложение и повторите целевой сценарий.",
+    "collector_sessions": 1,
+    "runtime_enabled_sessions": 0,
+    "diagnostics_available": false,
+    "instrumented_hooks": 0,
+    "disabled_candidates": 0,
+    "unsupported_candidates": 0,
+    "observed_calls": 0,
+    "observed_transaction_events": 0,
+    "completed_transactions": 0,
+    "incomplete_transactions": 0,
+    "known_sql_calls": 0,
+    "dropped_statement_events": 0,
+    "dropped_context_events": 0,
+    "dropped_correlation_events": 0,
+    "dropped_transaction_details": 0,
+    "dropped_scenario_events": 0,
+    "dropped_scenario_candidates": 0
+  },
   "Routes": null,
   "Screens": null,
   "ProcessExits": null,
-  "IOOperations": null,
   "Owners": null,
-  "Flows": null,
+  "SignalContexts": null,
   "LogSpam": null,
   "ProblemWindows": null,
   "RuntimeCalls": [
     {
       "Screen": "Checkout",
-      "Flow": "open",
-      "Step": "render",
+      "Operation": "unknown",
       "Caller": "Caller.run",
       "Callee": "Callee.load",
       "Count": 1,
@@ -333,8 +352,7 @@
     },
     {
       "Screen": "Feed",
-      "Flow": "open",
-      "Step": "network",
+      "Operation": "unknown",
       "Caller": "Caller.run",
       "Callee": "Callee.load",
       "Count": 1,
@@ -365,27 +383,18 @@
           "count": 2,
           "total_ms": 30,
           "max_ms": 20,
-          "detail": "Метрики объединяют все runtime-связки метода; точные caller → callee строки сохранены в реестре runtime-вызовов."
+          "detail": "Метрики объединяют все связи метода, записанные при выполнении; точные переходы вызывающий → вызываемый сохранены в реестре вызовов."
         }
       ],
       "screens": [
         "Checkout",
         "Feed"
       ],
-      "flows": [
-        "open"
-      ],
-      "steps": [
-        "network",
-        "render"
-      ],
       "drill_down": [
         {
           "class_name": "Callee",
           "method": "load",
           "screen": "Checkout",
-          "flow": "open",
-          "step": "render",
           "evidence": "Сигналы: Выполняемый метод; наблюдений=1; суммарно=20 мс; максимум=20 мс.",
           "recommendation": "проверьте цепочку вызовов и стоимость вызываемого метода.",
           "signals": [
@@ -396,8 +405,6 @@
           "class_name": "Callee",
           "method": "load",
           "screen": "Feed",
-          "flow": "open",
-          "step": "network",
           "evidence": "Сигналы: Выполняемый метод; наблюдений=1; суммарно=10 мс; максимум=10 мс.",
           "recommendation": "проверьте цепочку вызовов и стоимость вызываемого метода.",
           "signals": [
@@ -431,27 +438,18 @@
           "count": 2,
           "total_ms": 30,
           "max_ms": 20,
-          "detail": "Метрики объединяют все runtime-связки метода; точные caller → callee строки сохранены в реестре runtime-вызовов."
+          "detail": "Метрики объединяют все связи метода, записанные при выполнении; точные переходы вызывающий → вызываемый сохранены в реестре вызовов."
         }
       ],
       "screens": [
         "Checkout",
         "Feed"
       ],
-      "flows": [
-        "open"
-      ],
-      "steps": [
-        "network",
-        "render"
-      ],
       "drill_down": [
         {
           "class_name": "Caller",
           "method": "run",
           "screen": "Checkout",
-          "flow": "open",
-          "step": "render",
           "evidence": "Сигналы: Инициатор вызова; наблюдений=1; суммарно=20 мс; максимум=20 мс.",
           "recommendation": "проверьте цепочку вызовов и стоимость вызываемого метода.",
           "signals": [
@@ -462,8 +460,6 @@
           "class_name": "Caller",
           "method": "run",
           "screen": "Feed",
-          "flow": "open",
-          "step": "network",
           "evidence": "Сигналы: Инициатор вызова; наблюдений=1; суммарно=10 мс; максимум=10 мс.",
           "recommendation": "проверьте цепочку вызовов и стоимость вызываемого метода.",
           "signals": [
@@ -548,7 +544,7 @@
       {
         "ClassName": "Callee",
         "Label": "Callee",
-        "Score": 6.6,
+        "Score": 6.3,
         "Severity": "medium",
         "Status": "runtime",
         "RuntimeEvidence": true,
@@ -561,22 +557,20 @@
         "UIJank": 0,
         "Retained": 0,
         "HeapEvidence": false,
-        "Flows": [
-          "open"
-        ],
+        "Operations": [],
         "Screens": [
           "Checkout",
           "Feed"
         ],
         "Routes": [],
         "Reasons": [
-          "runtime-вызов"
+          "вызов при выполнении"
         ]
       },
       {
         "ClassName": "Caller",
         "Label": "Caller",
-        "Score": 1.4,
+        "Score": 1,
         "Severity": "ok",
         "Status": "runtime",
         "RuntimeEvidence": true,
@@ -589,16 +583,14 @@
         "UIJank": 0,
         "Retained": 0,
         "HeapEvidence": false,
-        "Flows": [
-          "open"
-        ],
+        "Operations": [],
         "Screens": [
           "Checkout",
           "Feed"
         ],
         "Routes": [],
         "Reasons": [
-          "runtime-вызов"
+          "вызов при выполнении"
         ]
       }
     ],
@@ -635,7 +627,7 @@
           {
             "ClassName": "Callee",
             "Label": "Callee",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -648,16 +640,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Callee",
             "Kind": "class",
@@ -672,12 +662,12 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+            "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
           },
           {
             "ClassName": "Caller",
             "Label": "Caller",
-            "Score": 1.4,
+            "Score": 1,
             "Severity": "ok",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -690,16 +680,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Caller",
             "Kind": "class",
@@ -714,7 +702,7 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+            "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
           }
         ],
         "Edges": [
@@ -795,7 +783,7 @@
           {
             "ClassName": "Callee",
             "Label": "Callee",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -808,16 +796,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Callee",
             "Kind": "class",
@@ -832,12 +818,12 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+            "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
           },
           {
             "ClassName": "Caller",
             "Label": "Caller",
-            "Score": 1.4,
+            "Score": 1,
             "Severity": "ok",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -850,16 +836,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Caller",
             "Kind": "class",
@@ -874,7 +858,7 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+            "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
           }
         ],
         "Edges": [
@@ -955,7 +939,7 @@
           {
             "ClassName": "без пакета",
             "Label": "без пакета",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "aggregate",
             "RuntimeEvidence": true,
@@ -968,7 +952,7 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": null,
+            "Operations": null,
             "Screens": null,
             "Routes": null,
             "Reasons": null,
@@ -988,7 +972,7 @@
               "Callee",
               "Caller"
             ],
-            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.6 равна максимальной оценке дочернего класса Callee, а не сумме."
+            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.3 равна максимальной оценке дочернего класса Callee, а не сумме."
           }
         ],
         "Edges": [],
@@ -1055,7 +1039,7 @@
           {
             "ClassName": "без пакета",
             "Label": "без пакета",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "aggregate",
             "RuntimeEvidence": true,
@@ -1068,7 +1052,7 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": null,
+            "Operations": null,
             "Screens": null,
             "Routes": null,
             "Reasons": null,
@@ -1088,7 +1072,7 @@
               "Callee",
               "Caller"
             ],
-            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.6 равна максимальной оценке дочернего класса Callee, а не сумме."
+            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.3 равна максимальной оценке дочернего класса Callee, а не сумме."
           }
         ],
         "Edges": [],
@@ -1155,7 +1139,7 @@
           {
             "ClassName": "без пакета",
             "Label": "без пакета",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "aggregate",
             "RuntimeEvidence": true,
@@ -1168,7 +1152,7 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": null,
+            "Operations": null,
             "Screens": null,
             "Routes": null,
             "Reasons": null,
@@ -1188,7 +1172,7 @@
               "Callee",
               "Caller"
             ],
-            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.6 равна максимальной оценке дочернего класса Callee, а не сумме."
+            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.3 равна максимальной оценке дочернего класса Callee, а не сумме."
           }
         ],
         "Edges": [],
@@ -1255,7 +1239,7 @@
           {
             "ClassName": "без пакета",
             "Label": "без пакета",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "aggregate",
             "RuntimeEvidence": true,
@@ -1268,7 +1252,7 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": null,
+            "Operations": null,
             "Screens": null,
             "Routes": null,
             "Reasons": null,
@@ -1288,7 +1272,7 @@
               "Callee",
               "Caller"
             ],
-            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.6 равна максимальной оценке дочернего класса Callee, а не сумме."
+            "Explanation": "Пакет без пакета объединяет 2 классов. Оценка 6.3 равна максимальной оценке дочернего класса Callee, а не сумме."
           }
         ],
         "Edges": [],
@@ -1355,7 +1339,7 @@
           {
             "ClassName": "Callee",
             "Label": "Callee",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1368,16 +1352,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Callee",
             "Kind": "class",
@@ -1392,12 +1374,12 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+            "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
           },
           {
             "ClassName": "Caller",
             "Label": "Caller",
-            "Score": 1.4,
+            "Score": 1,
             "Severity": "ok",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1410,16 +1392,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Caller",
             "Kind": "class",
@@ -1434,7 +1414,7 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+            "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
           }
         ],
         "Edges": [
@@ -1497,170 +1477,10 @@
         ]
       },
       {
-        "ID": "context:flow:open",
-        "Mode": "context",
-        "Title": "Экран / Flow",
-        "Explanation": "Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух шагов. Связующий класс не считается непосредственным участником экрана, сценария или маршрута.",
-        "Filters": {
-          "Query": "",
-          "PackageDepth": 0,
-          "SelectedNode": "",
-          "Direction": "",
-          "Depth": 0,
-          "RuntimeOnly": false,
-          "ContextKind": "flow",
-          "ContextValue": "open"
-        },
-        "Nodes": [
-          {
-            "ClassName": "Callee",
-            "Label": "Callee",
-            "Score": 6.6,
-            "Severity": "medium",
-            "Status": "runtime",
-            "RuntimeEvidence": true,
-            "Problems": 0,
-            "LogSpam": 0,
-            "MainThreadMS": 0,
-            "RuntimeWallMS": 30,
-            "NetworkMS": 0,
-            "MemoryPressure": 0,
-            "UIJank": 0,
-            "Retained": 0,
-            "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
-            "Screens": [
-              "Checkout",
-              "Feed"
-            ],
-            "Routes": [],
-            "Reasons": [
-              "runtime-вызов"
-            ],
-            "ID": "Callee",
-            "Kind": "class",
-            "Package": "без пакета",
-            "Breadcrumbs": [
-              "Callee"
-            ],
-            "Aggregate": false,
-            "Connector": false,
-            "ChildCount": 0,
-            "RuntimeClassCount": 0,
-            "StaticOnlyClassCount": 0,
-            "ProblemClassCount": 0,
-            "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
-          },
-          {
-            "ClassName": "Caller",
-            "Label": "Caller",
-            "Score": 1.4,
-            "Severity": "ok",
-            "Status": "runtime",
-            "RuntimeEvidence": true,
-            "Problems": 0,
-            "LogSpam": 0,
-            "MainThreadMS": 0,
-            "RuntimeWallMS": 7,
-            "NetworkMS": 0,
-            "MemoryPressure": 0,
-            "UIJank": 0,
-            "Retained": 0,
-            "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
-            "Screens": [
-              "Checkout",
-              "Feed"
-            ],
-            "Routes": [],
-            "Reasons": [
-              "runtime-вызов"
-            ],
-            "ID": "Caller",
-            "Kind": "class",
-            "Package": "без пакета",
-            "Breadcrumbs": [
-              "Caller"
-            ],
-            "Aggregate": false,
-            "Connector": false,
-            "ChildCount": 0,
-            "RuntimeClassCount": 0,
-            "StaticOnlyClassCount": 0,
-            "ProblemClassCount": 0,
-            "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
-          }
-        ],
-        "Edges": [
-          {
-            "From": "Caller",
-            "To": "Callee",
-            "Count": 2,
-            "RuntimeCount": 2,
-            "StaticCount": 0,
-            "Influence": 9.2,
-            "RuntimeConfirmed": true,
-            "Evidence": "runtime",
-            "Reason": "вызов записан во время этого прогона",
-            "ID": "Caller→Callee",
-            "Aggregate": false
-          }
-        ],
-        "TotalNodes": 2,
-        "TotalEdges": 1,
-        "ShownNodes": 2,
-        "ShownEdges": 1,
-        "OmittedNodes": 0,
-        "OmittedEdges": 0,
-        "OmissionReasons": [],
-        "Limits": {
-          "MaxNodes": 16,
-          "MaxEdges": 48
-        },
-        "Legend": [
-          {
-            "Kind": "runtime",
-            "Label": "Выполнение",
-            "Help": "Вызов записан во время анализируемого прогона."
-          },
-          {
-            "Kind": "static",
-            "Label": "Только статика",
-            "Help": "Связь возможна по байткоду, но её выполнение не записано."
-          },
-          {
-            "Kind": "mixed",
-            "Label": "Выполнение + статика",
-            "Help": "Выполнение подтверждает часть агрегированных или совпавших связей; счётчики показаны отдельно."
-          },
-          {
-            "Kind": "connector",
-            "Label": "Связующий класс",
-            "Help": "Класс соединяет контекстные узлы, но не считается прямым участником экрана или сценария."
-          },
-          {
-            "Kind": "aggregate",
-            "Label": "Пакет",
-            "Help": "Группа классов; оценка равна максимуму дочернего класса."
-          },
-          {
-            "Kind": "hprof",
-            "Label": "HPROF-дамп",
-            "Help": "Есть отдельное подтверждение пути удержания из дампа памяти."
-          }
-        ]
-      },
-      {
         "ID": "context:screen:Checkout",
         "Mode": "context",
-        "Title": "Экран / Flow",
-        "Explanation": "Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух шагов. Связующий класс не считается непосредственным участником экрана, сценария или маршрута.",
+        "Title": "Экран / операция",
+        "Explanation": "Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух связей. Связующий класс не считается непосредственным участником экрана, операции или маршрута.",
         "Filters": {
           "Query": "",
           "PackageDepth": 0,
@@ -1675,7 +1495,7 @@
           {
             "ClassName": "Callee",
             "Label": "Callee",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1688,16 +1508,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Callee",
             "Kind": "class",
@@ -1712,12 +1530,12 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+            "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
           },
           {
             "ClassName": "Caller",
             "Label": "Caller",
-            "Score": 1.4,
+            "Score": 1,
             "Severity": "ok",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1730,16 +1548,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Caller",
             "Kind": "class",
@@ -1754,7 +1570,7 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+            "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
           }
         ],
         "Edges": [
@@ -1819,8 +1635,8 @@
       {
         "ID": "context:screen:Feed",
         "Mode": "context",
-        "Title": "Экран / Flow",
-        "Explanation": "Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух шагов. Связующий класс не считается непосредственным участником экрана, сценария или маршрута.",
+        "Title": "Экран / операция",
+        "Explanation": "Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух связей. Связующий класс не считается непосредственным участником экрана, операции или маршрута.",
         "Filters": {
           "Query": "",
           "PackageDepth": 0,
@@ -1835,7 +1651,7 @@
           {
             "ClassName": "Callee",
             "Label": "Callee",
-            "Score": 6.6,
+            "Score": 6.3,
             "Severity": "medium",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1848,16 +1664,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Callee",
             "Kind": "class",
@@ -1872,12 +1686,12 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+            "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
           },
           {
             "ClassName": "Caller",
             "Label": "Caller",
-            "Score": 1.4,
+            "Score": 1,
             "Severity": "ok",
             "Status": "runtime",
             "RuntimeEvidence": true,
@@ -1890,16 +1704,14 @@
             "UIJank": 0,
             "Retained": 0,
             "HeapEvidence": false,
-            "Flows": [
-              "open"
-            ],
+            "Operations": [],
             "Screens": [
               "Checkout",
               "Feed"
             ],
             "Routes": [],
             "Reasons": [
-              "runtime-вызов"
+              "вызов при выполнении"
             ],
             "ID": "Caller",
             "Kind": "class",
@@ -1914,7 +1726,7 @@
             "StaticOnlyClassCount": 0,
             "ProblemClassCount": 0,
             "Children": null,
-            "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+            "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
           }
         ],
         "Edges": [
@@ -1982,7 +1794,7 @@
         {
           "ClassName": "Callee",
           "Label": "Callee",
-          "Score": 6.6,
+          "Score": 6.3,
           "Severity": "medium",
           "Status": "runtime",
           "RuntimeEvidence": true,
@@ -1995,16 +1807,14 @@
           "UIJank": 0,
           "Retained": 0,
           "HeapEvidence": false,
-          "Flows": [
-            "open"
-          ],
+          "Operations": [],
           "Screens": [
             "Checkout",
             "Feed"
           ],
           "Routes": [],
           "Reasons": [
-            "runtime-вызов"
+            "вызов при выполнении"
           ],
           "ID": "Callee",
           "Kind": "class",
@@ -2019,12 +1829,12 @@
           "StaticOnlyClassCount": 0,
           "ProblemClassCount": 0,
           "Children": null,
-          "Explanation": "Callee получил оценку риска 6.6 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
+          "Explanation": "Callee получил оценку риска 6.3 из-за фактических данных: 30 мс времени выполнения. Оценка является эвристикой приоритизации. Подтверждённый путь выполнения: Caller → Callee."
         },
         {
           "ClassName": "Caller",
           "Label": "Caller",
-          "Score": 1.4,
+          "Score": 1,
           "Severity": "ok",
           "Status": "runtime",
           "RuntimeEvidence": true,
@@ -2037,16 +1847,14 @@
           "UIJank": 0,
           "Retained": 0,
           "HeapEvidence": false,
-          "Flows": [
-            "open"
-          ],
+          "Operations": [],
           "Screens": [
             "Checkout",
             "Feed"
           ],
           "Routes": [],
           "Reasons": [
-            "runtime-вызов"
+            "вызов при выполнении"
           ],
           "ID": "Caller",
           "Kind": "class",
@@ -2061,7 +1869,7 @@
           "StaticOnlyClassCount": 0,
           "ProblemClassCount": 0,
           "Children": null,
-          "Explanation": "Caller получил оценку риска 1.4 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
+          "Explanation": "Caller получил оценку риска 1.0 из-за фактических данных: 7 мс времени выполнения. Оценка является эвристикой приоритизации."
         }
       ],
       "Edges": [
@@ -2087,13 +1895,6 @@
       "OmittedEdges": 0,
       "Contexts": [
         {
-          "ID": "context:flow:open",
-          "Kind": "flow",
-          "Value": "open",
-          "RuntimeNodes": 2,
-          "ProblemNodes": 2
-        },
-        {
           "ID": "context:screen:Checkout",
           "Kind": "screen",
           "Value": "Checkout",
@@ -2108,8 +1909,8 @@
           "ProblemNodes": 2
         }
       ],
-      "TotalContexts": 3,
-      "ShownContexts": 3,
+      "TotalContexts": 2,
+      "ShownContexts": 2,
       "OmissionReasons": []
     },
     "HotPaths": null,
@@ -2119,7 +1920,7 @@
       {
         "Severity": "medium",
         "Title": "Первый узел для проверки",
-        "Detail": "Callee: оценка приоритета 6.6, основания: runtime-вызов."
+        "Detail": "Callee: оценка приоритета 6.3, основания: вызов при выполнении."
       },
       {
         "Severity": "ok",
@@ -2132,13 +1933,13 @@
         "Detail": "Показаны только наблюдения выполнения. Параметр --class-graph добавит структуру связей между классами, но сам по себе не подтвердит их выполнение."
       }
     ],
-    "StandaloneReason": "Все связи участвуют в анализе; HTML получает ограниченные представления с явными totals и причинами исключения."
+    "StandaloneReason": "В первую очередь показаны связи, которые ведут к проблемам; дополнительные представления помогают проверить полный контекст."
   },
-  "problem_schema_version": "jankhunter.problems/v1",
+  "problem_schema_version": "jankhunter.problems/v2",
   "problem_summary": {
-    "schema_version": "jankhunter.problems/v1",
+    "schema_version": "jankhunter.problems/v2",
     "verdict": "incomplete",
-    "headline": "Проблем не найдено, но 8 категорий не проверены полностью.",
+    "headline": "Проблем не найдено, но 10 категорий не проверены полностью.",
     "total": 0,
     "signal_total": 0,
     "critical": 0,
@@ -2149,6 +1950,10 @@
     "by_category": [
       {
         "category": "stability",
+        "count": 0
+      },
+      {
+        "category": "operations",
         "count": 0
       },
       {
@@ -2178,9 +1983,13 @@
       {
         "category": "logs",
         "count": 0
+      },
+      {
+        "category": "android_components_ipc",
+        "count": 0
       }
     ],
-    "unchecked_categories": 8
+    "unchecked_categories": 10
   },
   "problems": null,
   "problem_incidents": null,
@@ -2202,22 +2011,36 @@
       "next_action": "Включить сбор пауз и завершений процессов, затем записать активный пользовательский сценарий длительностью не менее 30 секунд."
     },
     {
-      "category": "ui_main_thread",
-      "label": "UI и главный поток",
+      "category": "operations",
+      "label": "Операции приложения",
       "status": "not_measured",
       "finding_count": 0,
       "required_evidence": [
-        "интервалы наблюдения UI",
-        "целевое время и источник кадров",
-        "Compose-работа"
+        "начало, завершение, бюджет и итог операций"
       ],
       "missing_evidence": [
-        "интервалы наблюдения UI",
-        "целевое время и источник кадров",
-        "Compose-работа"
+        "начало, завершение, бюджет и итог операций"
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
-      "next_action": "Включить сбор JankStats/FPS и записать не менее 120 кадров."
+      "next_action": "Добавить измеряемые операции вокруг важных действий, экранов и фоновых работ, затем собрать не менее 20 завершений."
+    },
+    {
+      "category": "ui_main_thread",
+      "label": "Интерфейс и главный поток",
+      "status": "not_measured",
+      "finding_count": 0,
+      "required_evidence": [
+        "интервалы наблюдения за интерфейсом",
+        "целевое время и источник кадров",
+        "работа Compose или жизненный цикл экранов"
+      ],
+      "missing_evidence": [
+        "интервалы наблюдения за интерфейсом",
+        "целевое время и источник кадров",
+        "работа Compose или жизненный цикл экранов"
+      ],
+      "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
+      "next_action": "Включить сбор JankStats и частоты кадров, затем записать не менее 120 кадров."
     },
     {
       "category": "network",
@@ -2225,59 +2048,63 @@
       "status": "not_measured",
       "finding_count": 0,
       "required_evidence": [
-        "жизненный цикл HTTP-вызовов"
+        "жизненный цикл HTTP и WebSocket"
       ],
       "missing_evidence": [
-        "жизненный цикл HTTP-вызовов"
+        "жизненный цикл HTTP и WebSocket"
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
       "next_action": "Подключить jankhunter-okhttp3 и повторить сетевой сценарий."
     },
     {
       "category": "memory_gc",
-      "label": "Память и GC",
+      "label": "Память и сборка мусора",
       "status": "not_measured",
       "finding_count": 0,
       "required_evidence": [
         "снимки памяти",
-        "удержания объектов или HPROF"
+        "счётчики сборки мусора и выделения памяти ART",
+        "удержания объектов или снимок кучи HPROF"
       ],
       "missing_evidence": [
         "снимки памяти",
-        "удержания объектов или HPROF"
+        "счётчики сборки мусора и выделения памяти ART",
+        "удержания объектов или снимок кучи HPROF"
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
-      "next_action": "Включить сбор памяти; подозрение на утечку проверить с помощью HPROF."
+      "next_action": "Включить сбор памяти; подозрение на утечку проверить с помощью снимка кучи HPROF."
     },
     {
       "category": "io_storage",
-      "label": "I/O и хранилище",
+      "label": "Файлы и база данных",
       "status": "not_measured",
       "finding_count": 0,
       "required_evidence": [
-        "I/O-операции и Room DAO с привязкой к коду"
+        "файловые операции, SQL-вызовы SQLite/Room и вызовы DAO с привязкой к коду"
       ],
       "missing_evidence": [
-        "I/O-операции и Room DAO с привязкой к коду"
+        "файловые операции, SQL-вызовы SQLite/Room и вызовы DAO с привязкой к коду"
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
-      "next_action": "Включить ioTracingEnabled/roomTracingEnabled и выполнить сценарий с БД или хранилищем."
+      "next_action": "Включить сбор файловых операций, базы данных и Room, затем выполнить сценарий с БД или хранилищем."
     },
     {
       "category": "cpu_tasks",
-      "label": "CPU и задачи",
+      "label": "Процессор и фоновые задачи",
       "status": "not_measured",
       "finding_count": 0,
       "required_evidence": [
-        "нагрузка CPU процесса",
-        "выполнения Worker с привязкой к коду"
+        "нагрузка процессора",
+        "очереди исполнителей",
+        "выполнения фоновых задач с привязкой к коду"
       ],
       "missing_evidence": [
-        "нагрузка CPU процесса",
-        "выполнения Worker с привязкой к коду"
+        "нагрузка процессора",
+        "очереди исполнителей",
+        "выполнения фоновых задач с привязкой к коду"
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
-      "next_action": "Включить системный сборщик и workerTracingEnabled, затем выполнить фоновую задачу."
+      "next_action": "Обернуть критичные исполнители и включить системный сбор и сбор фоновых задач, затем выполнить фоновый сценарий."
     },
     {
       "category": "power_thermal",
@@ -2308,6 +2135,24 @@
       ],
       "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
       "next_action": "Включить запись частого логирования и выполнить соответствующий сценарий."
+    },
+    {
+      "category": "android_components_ipc",
+      "label": "Компоненты Android и IPC",
+      "status": "not_measured",
+      "finding_count": 0,
+      "required_evidence": [
+        "жизненный цикл Service и BroadcastReceiver",
+        "данные клиента и сервера Binder",
+        "видимость и важность процесса"
+      ],
+      "missing_evidence": [
+        "жизненный цикл Service и BroadcastReceiver",
+        "данные клиента и сервера Binder",
+        "видимость и важность процесса"
+      ],
+      "explanation": "Обязательный источник данных не подключён, поэтому состояние категории неизвестно.",
+      "next_action": "Включить сбор компонентов Android для всех процессов сценария и передать полный набор .jhlog одного запуска приложения."
     }
   ],
   "detectors": [
@@ -2321,6 +2166,28 @@
         "ApplicationExitInfo"
       ],
       "thresholds": null
+    },
+    {
+      "id": "operations.health",
+      "version": "2.0.0",
+      "category": "operations",
+      "title": "Нарушение бюджета или неуспешный итог операции",
+      "minimum_sample": 20,
+      "required_signals": [
+        "operation lifecycle"
+      ],
+      "thresholds": [
+        {
+          "name": "budget_breach_rate",
+          "value": 10,
+          "unit": "%"
+        },
+        {
+          "name": "failure_rate",
+          "value": 5,
+          "unit": "%"
+        }
+      ]
     },
     {
       "id": "stability.main_thread_stall",
@@ -2389,6 +2256,40 @@
       ]
     },
     {
+      "id": "ui.startup_cold",
+      "version": "2.0.0",
+      "category": "ui_main_thread",
+      "title": "Медленный первый resume процесса",
+      "minimum_sample": 1,
+      "required_signals": [
+        "first Activity resume"
+      ],
+      "thresholds": [
+        {
+          "name": "first_resume",
+          "value": 2000,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
+      "id": "ui.screen_resume",
+      "version": "2.0.0",
+      "category": "ui_main_thread",
+      "title": "Медленный create-to-resume экрана",
+      "minimum_sample": 1,
+      "required_signals": [
+        "Activity create/resume"
+      ],
+      "thresholds": [
+        {
+          "name": "screen_resume",
+          "value": 1000,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
       "id": "network.route_health",
       "version": "2.0.0",
       "category": "network",
@@ -2416,6 +2317,38 @@
       ]
     },
     {
+      "id": "network.websocket_health",
+      "version": "2.0.0",
+      "category": "network",
+      "title": "Нестабильный WebSocket",
+      "minimum_sample": 3,
+      "required_signals": [
+        "typed WebSocket lifecycle"
+      ],
+      "thresholds": [
+        {
+          "name": "failure_rate",
+          "value": 25,
+          "unit": "%"
+        },
+        {
+          "name": "reconnects",
+          "value": 3,
+          "unit": "events"
+        },
+        {
+          "name": "slow_connect_p95",
+          "value": 1500,
+          "unit": "ms"
+        },
+        {
+          "name": "rapid_churn_lifetime_p95",
+          "value": 5000,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
       "id": "memory.retention",
       "version": "2.0.0",
       "category": "memory_gc",
@@ -2438,19 +2371,41 @@
       "thresholds": null
     },
     {
+      "id": "memory.gc_blocking",
+      "version": "2.0.0",
+      "category": "memory_gc",
+      "title": "Блокирующий GC",
+      "minimum_sample": 1,
+      "required_signals": [
+        "ART GC counters"
+      ],
+      "thresholds": [
+        {
+          "name": "blocking_time",
+          "value": 50,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
       "id": "io.main_thread",
       "version": "2.0.0",
       "category": "io_storage",
       "title": "I/O на главном потоке",
       "minimum_sample": 1,
       "required_signals": [
-        "attributed I/O"
+        "attributed I/O with source"
       ],
       "thresholds": [
         {
           "name": "main_thread_slow",
           "value": 16,
           "unit": "ms"
+        },
+        {
+          "name": "large_operation",
+          "value": 1048576,
+          "unit": "bytes"
         }
       ]
     },
@@ -2458,10 +2413,10 @@
       "id": "io.operation_pressure",
       "version": "2.0.0",
       "category": "io_storage",
-      "title": "Медленный или частый I/O",
+      "title": "Медленный, ошибочный или частый I/O",
       "minimum_sample": 1,
       "required_signals": [
-        "attributed I/O"
+        "attributed I/O with source"
       ],
       "thresholds": [
         {
@@ -2473,6 +2428,110 @@
           "name": "storm_rate",
           "value": 5,
           "unit": "events/s"
+        },
+        {
+          "name": "failure_rate",
+          "value": 25,
+          "unit": "%"
+        },
+        {
+          "name": "large_operation",
+          "value": 16777216,
+          "unit": "bytes"
+        }
+      ]
+    },
+    {
+      "id": "io.database_repeated_in_scope",
+      "version": "2.0.0",
+      "category": "io_storage",
+      "title": "Повтор SQL внутри одной границы сценария",
+      "minimum_sample": 2,
+      "required_signals": [
+        "нормализованный SQL-шаблон",
+        "идентификатор операции или транзакции"
+      ],
+      "thresholds": [
+        {
+          "name": "repeated_calls_per_scope",
+          "value": 4,
+          "unit": "events"
+        }
+      ]
+    },
+    {
+      "id": "io.database_plan_evidence",
+      "version": "2.0.0",
+      "category": "io_storage",
+      "title": "Подтверждённый шаг плана SQL-запроса",
+      "minimum_sample": 1,
+      "required_signals": [
+        "предоставленный разработчиком очищенный план SQL-запроса",
+        "совпадающий нормализованный SQL-шаблон"
+      ],
+      "thresholds": null
+    },
+    {
+      "id": "io.database_calls",
+      "version": "2.0.0",
+      "category": "io_storage",
+      "title": "Медленный, частый или ошибочный SQL-вызов",
+      "minimum_sample": 5,
+      "required_signals": [
+        "typed SQLite/Room invocation"
+      ],
+      "thresholds": [
+        {
+          "name": "main_thread_slow",
+          "value": 16,
+          "unit": "ms"
+        },
+        {
+          "name": "background_slow",
+          "value": 100,
+          "unit": "ms"
+        },
+        {
+          "name": "storm_rate",
+          "value": 10,
+          "unit": "events/s"
+        },
+        {
+          "name": "rapid_repeats",
+          "value": 5,
+          "unit": "events"
+        },
+        {
+          "name": "failure_rate",
+          "value": 10,
+          "unit": "%"
+        }
+      ]
+    },
+    {
+      "id": "io.database_transaction",
+      "version": "2.0.0",
+      "category": "io_storage",
+      "title": "Длинная, неуспешная или незавершённая транзакция БД",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed database transaction lifecycle"
+      ],
+      "thresholds": [
+        {
+          "name": "main_thread_slow",
+          "value": 16,
+          "unit": "ms"
+        },
+        {
+          "name": "background_slow",
+          "value": 100,
+          "unit": "ms"
+        },
+        {
+          "name": "many_statements",
+          "value": 20,
+          "unit": "events"
         }
       ]
     },
@@ -2555,6 +2614,23 @@
       ]
     },
     {
+      "id": "cpu.async_queue",
+      "version": "2.0.0",
+      "category": "cpu_tasks",
+      "title": "Ожидание в очереди Executor",
+      "minimum_sample": 3,
+      "required_signals": [
+        "wrapped Executor metrics"
+      ],
+      "thresholds": [
+        {
+          "name": "queue_wait",
+          "value": 200,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
       "id": "power.thermal_pressure",
       "version": "2.0.0",
       "category": "power_thermal",
@@ -2592,6 +2668,129 @@
           "unit": "logs/s"
         }
       ]
+    },
+    {
+      "id": "android.service.callback_failure",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Ошибка callback службы",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Service callback"
+      ],
+      "thresholds": null
+    },
+    {
+      "id": "android.service.timeout",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Таймаут службы",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Service onTimeout"
+      ],
+      "thresholds": null
+    },
+    {
+      "id": "android.service.callback_slow",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Долгий callback службы",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Service callback"
+      ],
+      "thresholds": [
+        {
+          "name": "slow_callback",
+          "value": 100,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
+      "id": "android.receiver.async_deadline_risk",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "BroadcastReceiver близок к системному дедлайну",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed BroadcastReceiver async lifecycle"
+      ],
+      "thresholds": [
+        {
+          "name": "deadline_risk",
+          "value": 9000,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
+      "id": "android.receiver.sync_slow",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Синхронная работа в BroadcastReceiver",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed BroadcastReceiver lifecycle"
+      ],
+      "thresholds": [
+        {
+          "name": "sync_work",
+          "value": 10,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
+      "id": "android.receiver.failure",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Ошибка BroadcastReceiver",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed BroadcastReceiver lifecycle"
+      ],
+      "thresholds": null
+    },
+    {
+      "id": "android.binder.main_thread_slow",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Медленный Binder-вызов на главном потоке",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Binder client transaction"
+      ],
+      "thresholds": [
+        {
+          "name": "main_thread_slow",
+          "value": 16,
+          "unit": "ms"
+        }
+      ]
+    },
+    {
+      "id": "android.binder.failure",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Ошибка Binder-транзакции",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Binder transaction outcome"
+      ],
+      "thresholds": null
+    },
+    {
+      "id": "android.binder.unhandled",
+      "version": "2.0.0",
+      "category": "android_components_ipc",
+      "title": "Необработанный transaction code",
+      "minimum_sample": 1,
+      "required_signals": [
+        "typed Binder transaction outcome"
+      ],
+      "thresholds": null
     }
   ]
 }

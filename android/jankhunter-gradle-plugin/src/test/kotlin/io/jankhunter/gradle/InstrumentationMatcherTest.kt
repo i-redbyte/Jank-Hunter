@@ -14,12 +14,13 @@ class InstrumentationMatcherTest {
 
     @Test
     fun excludesPlatformAndSdkClasses() {
-        val matcher = InstrumentationMatcher(emptyList(), emptyList())
+        val matcher = InstrumentationMatcher(emptyList(), emptyList(), includeWholeApplication = true)
 
         assertFalse(matcher.matches("kotlin.collections.CollectionsKt"))
         assertFalse(matcher.matches("androidx.fragment.app.Fragment"))
         assertFalse(matcher.matches("io.jankhunter.runtime.JankHunter"))
         assertFalse(matcher.matches("io.jankhunter.okhttp3.JankHunterEventListener"))
+        assertFalse(matcher.matches("io.jankhunter.workmanager.JankHunterCoroutineWorker"))
     }
 
     @Test

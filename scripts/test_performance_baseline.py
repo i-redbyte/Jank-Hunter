@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -136,11 +137,14 @@ def complete_result() -> dict:
                 for name in baseline.GO_BENCHMARKS
             },
             "android_runtime": {
-                name: {
-                    "iterations": iterations,
-                    "total_ns": iterations * 100,
-                    "ns_per_op": 100.0,
-                }
+                name: dict(
+                    {
+                        "iterations": iterations,
+                        "total_ns": iterations * 100,
+                        "ns_per_op": 100.0,
+                    },
+                    **({"bytes_per_op": 64.0} if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else {}),
+                )
                 for name, iterations in baseline.android_runtime_expected_iterations(
                     100_000
                 ).items()
@@ -173,6 +177,7 @@ def acceptance_contract() -> dict:
         "required_report_suffixes": list(REQUIRED_PAGES),
         "relative_regression_limits": {
             "android_runtime_ns_per_op": 0.15,
+            "android_runtime_bytes_per_op": 0.10,
             "android_artifact_bytes": 0.03,
             "go_ns_per_op": 0.15,
             "go_bytes_per_op": 0.10,
@@ -938,8 +943,12 @@ class AndroidRuntimeBenchmarkCommandTest(unittest.TestCase):
         self.assertIn("-Djankhunter.benchmark=true", command)
         self.assertIn("-Djankhunter.benchmark.iterations=12345", command)
         self.assertEqual(
-            "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
-            command[command.index("--tests") + 1],
+            [
+                "io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest",
+                "io.jankhunter.runtime.RuntimeSqlNormalizerBenchmarkTest",
+                "io.jankhunter.runtime.RuntimeDatabaseBenchmarkTest",
+            ],
+            [command[index + 1] for index, value in enumerate(command) if value == "--tests"],
         )
 
     def test_passes_selected_build_tools_as_gradle_property(self) -> None:
@@ -1018,11 +1027,50 @@ class BuildToolsResolutionTest(unittest.TestCase):
 
 
 class BenchmarkParserTest(unittest.TestCase):
+    def test_performance_contract_covers_database_hot_paths(self) -> None:
+        self.assertIn("analyze/BenchmarkInspectDatabaseMillionEvents", baseline.GO_BENCHMARKS)
+        self.assertIn("analyze/BenchmarkDatabaseHeavyStoreHighCardinality", baseline.GO_BENCHMARKS)
+        self.assertIn("analyze/BenchmarkDatabaseCorrelationBoundedJoin", baseline.GO_BENCHMARKS)
+        self.assertIn("report/BenchmarkWriteDatabaseHighCardinality", baseline.GO_BENCHMARKS)
+        self.assertIn("SQL normalize", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("SQL CTE operation", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("SQL CTE operation", baseline.ANDROID_ALLOCATION_BENCHMARKS)
+        self.assertIn("database hook disabled", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database hook active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database prepared lookup active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+        self.assertIn("database writer active", baseline.ANDROID_RUNTIME_BENCHMARKS)
+
+    def test_android_parser_captures_database_allocation_metric(self) -> None:
+        requested = 100_000
+        lines = [
+            "JankHunter benchmark: "
+            f"{name}, iterations={iterations}, total_ns={iterations * 10}, ns_per_op=10.0"
+            + (", bytes_per_op=64.0" if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else "")
+            for name, iterations in baseline.android_runtime_expected_iterations(
+                requested
+            ).items()
+        ]
+
+        result = baseline.parse_android_benchmarks(
+            "\n".join(lines), expected_iterations=requested
+        )
+
+        self.assertEqual(64.0, result["database writer active"]["bytes_per_op"])
+
+    def test_go_benchmark_filter_selects_every_contract_row(self) -> None:
+        for benchmark in baseline.GO_BENCHMARKS:
+            short_name = benchmark.split("/", 1)[1]
+            self.assertIsNotNone(re.fullmatch(baseline.GO_BENCHMARK_PATTERN, short_name))
+        self.assertIsNone(re.fullmatch(baseline.GO_BENCHMARK_PATTERN, "BenchmarkOperationUnbounded"))
+
     def test_go_parser_requires_every_benchmark_and_requested_samples(self) -> None:
         packages = {
-            "jhlog": baseline.GO_BENCHMARKS[:2],
-            "analyze": baseline.GO_BENCHMARKS[2:3],
-            "report": baseline.GO_BENCHMARKS[3:],
+            package: tuple(
+                benchmark
+                for benchmark in baseline.GO_BENCHMARKS
+                if benchmark.startswith(f"{package}/")
+            )
+            for package in ("jhlog", "analyze", "report")
         }
         lines: list[str] = []
         for package, benchmarks in packages.items():
@@ -1058,6 +1106,7 @@ class BenchmarkParserTest(unittest.TestCase):
         lines = [
             "JankHunter benchmark: "
             f"{name}, iterations={iterations}, total_ns={iterations * 10}, ns_per_op=10.0"
+            + (", bytes_per_op=64.0" if name in baseline.ANDROID_ALLOCATION_BENCHMARKS else "")
             for name, iterations in baseline.android_runtime_expected_iterations(
                 requested
             ).items()
@@ -1115,6 +1164,8 @@ class AndroidArtifactSelectionTest(unittest.TestCase):
                 / "jankhunter-annotations/build/libs/jankhunter-annotations-1.0.0.jar",
                 "okhttp_aar": android
                 / "jankhunter-okhttp3/build/outputs/aar/jankhunter-okhttp3-release.aar",
+                "workmanager_aar": android
+                / "jankhunter-workmanager/build/outputs/aar/jankhunter-workmanager-release.aar",
                 "gradle_plugin_jar": android
                 / "jankhunter-gradle-plugin/build/libs/jankhunter-gradle-plugin-1.0.0.jar",
                 "sample_debug_apk": android

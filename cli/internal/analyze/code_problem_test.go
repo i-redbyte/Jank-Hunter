@@ -19,14 +19,13 @@ func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 			OwnerSample: "com.app.FeedRepository.load",
 		}},
 		ProblemWindows: []ProblemWindowStats{{
-			Screen:  "Feed",
-			Flow:    "feed.open",
-			Step:    "load",
-			Owner:   "com.app.FeedPresenter.render",
-			Kind:    "main_thread_io",
-			Windows: 1,
-			Count:   2,
-			MaxMS:   2_500,
+			Screen:    "Feed",
+			Operation: "feed.open.load",
+			Owner:     "com.app.FeedPresenter.render",
+			Kind:      "main_thread_io",
+			Windows:   1,
+			Count:     2,
+			MaxMS:     2_500,
 		}, {
 			Owner:   "com.app.FeedRepository.load",
 			Kind:    "http_slow_or_failed",
@@ -38,8 +37,7 @@ func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 			ClassName:           "com.app.FeedActivity",
 			Holder:              "com.app.FeedPresenter",
 			Screen:              "Feed",
-			Flow:                "feed.open",
-			Step:                "render",
+			Operation:           "feed.open.render",
 			Count:               1,
 			MaxAgeMS:            30_000,
 			EstimatedRetainedKB: 8 * 1024,
@@ -48,13 +46,12 @@ func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 			Score:               9,
 		}},
 		LogSpam: []LogSpamStats{{
-			Screen: "Feed",
-			Flow:   "feed.open",
-			Step:   "render",
-			Owner:  "com.app.FeedPresenter.render",
-			Source: "android.util.Log.d",
-			Level:  "debug",
-			Count:  250,
+			Screen:    "Feed",
+			Operation: "feed.open.render",
+			Owner:     "com.app.FeedPresenter.render",
+			Source:    "android.util.Log.d",
+			Level:     "debug",
+			Count:     250,
 		}},
 	}
 
@@ -156,8 +153,7 @@ func TestCodeProblemDrillDownKeepsOnlyObservedContextTuples(t *testing.T) {
 	for index := range 15 {
 		item.addContextSignal(
 			fmt.Sprintf("screen-%02d", index),
-			fmt.Sprintf("flow-%02d", index),
-			fmt.Sprintf("step-%02d", index),
+			fmt.Sprintf("operation-%02d", index),
 			"",
 			CodeProblemSignal{
 				Name:     fmt.Sprintf("signal-%02d", index),
@@ -174,12 +170,12 @@ func TestCodeProblemDrillDownKeepsOnlyObservedContextTuples(t *testing.T) {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
 	row := rows[0]
-	if len(row.Screens) != 15 || len(row.Flows) != 15 || len(row.Steps) != 15 || len(row.DrillDown) != 15 {
+	if len(row.Screens) != 15 || len(row.Operations) != 15 || len(row.DrillDown) != 15 {
 		t.Fatalf("context evidence was truncated: %+v", row)
 	}
 	for index, detail := range row.DrillDown {
 		wantSuffix := fmt.Sprintf("%02d", index)
-		if detail.Screen != "screen-"+wantSuffix || detail.Flow != "flow-"+wantSuffix || detail.Step != "step-"+wantSuffix {
+		if detail.Screen != "screen-"+wantSuffix || detail.Operation != "operation-"+wantSuffix {
 			t.Fatalf("drill-down %d fabricated a context tuple: %+v", index, detail)
 		}
 		wantSignal := "signal-" + wantSuffix
@@ -215,8 +211,7 @@ func codeProblemSelectionFixture() codeProblemBuilder {
 		item := builder.item(className, method, className+"."+method)
 		item.addContextSignal(
 			fmt.Sprintf("screen-%d", index%4),
-			fmt.Sprintf("flow-%d", index%7),
-			fmt.Sprintf("step-%d", index%3),
+			fmt.Sprintf("operation-%d-%d", index%7, index%3),
 			fmt.Sprintf("route-%d", index%5),
 			CodeProblemSignal{
 				Name:     fmt.Sprintf("signal-%d", index%3),

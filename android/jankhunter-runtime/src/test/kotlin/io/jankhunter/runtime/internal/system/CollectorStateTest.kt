@@ -36,9 +36,13 @@ class CollectorStateTest {
     }
 
     @Test
-    fun jankStatsAndChoreographerFallbackAreMutuallyExclusive() {
+    fun frameSourcesRequireActiveWindowAndRemainMutuallyExclusive() {
         val selector = FrameSourceSelector(fallbackEnabled = true)
 
+        assertFalse(selector.useFallback())
+        assertFalse(selector.useJankStats())
+
+        assertTrue(selector.updateWindowActive(true))
         assertTrue(selector.useFallback())
         assertFalse(selector.useJankStats())
 
@@ -46,8 +50,15 @@ class CollectorStateTest {
         assertTrue(selector.useJankStats())
         assertFalse(selector.useFallback())
 
+        assertTrue(selector.updateWindowActive(false))
+        assertFalse(selector.useJankStats())
+        assertFalse(selector.useFallback())
+
         assertTrue(selector.updateJankStats(false))
         assertFalse(selector.useJankStats())
+        assertFalse(selector.useFallback())
+
+        assertTrue(selector.updateWindowActive(true))
         assertTrue(selector.useFallback())
     }
 

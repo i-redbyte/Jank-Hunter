@@ -27,7 +27,7 @@ class JankHunterRunConfiguration(
     var candidate: String = ""
     var candidateLogScope: JankHunterLogScope = JankHunterLogScope.ALL_SELECTED
     var output: String = ""
-    var ownerMap: String = ""
+    var artifactsDir: String = ""
     var mapping: String = ""
     var classGraph: String = ""
     var diagnostics: String = ""
@@ -63,7 +63,7 @@ class JankHunterRunConfiguration(
             candidate = candidate,
             candidateLogScope = candidateLogScope,
             output = output,
-            ownerMap = ownerMap,
+            artifactsDir = artifactsDir,
             mapping = mapping,
             classGraph = classGraph,
             diagnostics = diagnostics,
@@ -94,7 +94,7 @@ class JankHunterRunConfiguration(
         candidate = request.candidate
         candidateLogScope = request.candidateLogScope
         output = request.output
-        ownerMap = request.ownerMap
+        artifactsDir = request.artifactsDir
         mapping = request.mapping
         classGraph = request.classGraph
         diagnostics = request.diagnostics
@@ -128,7 +128,7 @@ class JankHunterRunConfiguration(
         data.setAttribute("candidate", candidate)
         data.setAttribute("candidateLogScope", candidateLogScope.name)
         data.setAttribute("output", output)
-        data.setAttribute("ownerMap", ownerMap)
+        data.setAttribute("artifactsDir", artifactsDir)
         data.setAttribute("mapping", mapping)
         data.setAttribute("classGraph", classGraph)
         data.setAttribute("diagnostics", diagnostics)
@@ -164,7 +164,7 @@ class JankHunterRunConfiguration(
         candidate = data.getAttributeValue("candidate", "")
         candidateLogScope = parseLogScope(data.getAttributeValue("candidateLogScope"), JankHunterLogScope.ALL_SELECTED)
         output = data.getAttributeValue("output", "")
-        ownerMap = data.getAttributeValue("ownerMap", "")
+        artifactsDir = data.getAttributeValue("artifactsDir", "")
         mapping = data.getAttributeValue("mapping", "")
         classGraph = data.getAttributeValue("classGraph", "")
         diagnostics = data.getAttributeValue("diagnostics", "")

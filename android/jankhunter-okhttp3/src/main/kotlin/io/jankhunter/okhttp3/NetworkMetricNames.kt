@@ -1,16 +1,19 @@
 package io.jankhunter.okhttp3
 
 internal object NetworkMetricNames {
-    fun owner(owner: String?): String = segment(owner, "unknown")
+    fun serviceAlias(value: String?): String? {
+        return value?.takeIf { it.isNotBlank() }?.let { segment(it, "service") }
+    }
 
     fun route(method: String?, encodedPath: String?): String {
         val path = encodedPath?.takeIf { it.isNotBlank() } ?: "/"
-        val route = StringBuilder(MAX_METRIC_SEGMENT_LENGTH)
-        appendSegment(route, method, 0, method?.length ?: 0, "request")
+        val route = StringBuilder(minOf(MAX_ROUTE_LENGTH, path.length + 16))
+        appendMethod(route, method)
+        route.appendBounded(' ', MAX_ROUTE_LENGTH)
 
         var pathSegments = 0
         var cursor = 0
-        while (cursor < path.length && pathSegments < MAX_ROUTE_SEGMENTS && route.length < MAX_METRIC_SEGMENT_LENGTH) {
+        while (cursor < path.length && pathSegments < MAX_ROUTE_SEGMENTS && route.length < MAX_ROUTE_LENGTH) {
             while (cursor < path.length && path[cursor] == '/') cursor++
             if (cursor >= path.length || path[cursor] == '?' || path[cursor] == '#') break
 
@@ -21,46 +24,67 @@ internal object NetworkMetricNames {
             while (trimmedStart < trimmedEnd && path[trimmedStart].isWhitespace()) trimmedStart++
             while (trimmedEnd > trimmedStart && path[trimmedEnd - 1].isWhitespace()) trimmedEnd--
             if (trimmedStart < trimmedEnd) {
-                route.appendBounded('_')
-                appendNormalizedPathSegment(route, path, trimmedStart, trimmedEnd)
+                route.appendBounded('/', MAX_ROUTE_LENGTH)
+                appendNormalizedPathSegment(route, path, trimmedStart, trimmedEnd, MAX_ROUTE_LENGTH)
                 pathSegments++
             }
             if (cursor < path.length && (path[cursor] == '?' || path[cursor] == '#')) break
         }
         if (pathSegments == 0) {
-            route.appendBounded('_')
-            route.appendBounded("root")
+            route.appendBounded('/', MAX_ROUTE_LENGTH)
         }
         return route.toString()
     }
 
-    fun webSocket(owner: String?, route: String?): String {
-        val prefix = owner?.takeIf { it.isNotBlank() } ?: route
-        return segment(prefix, "unknown")
+    private fun appendMethod(target: StringBuilder, value: String?) {
+        if (value.isNullOrBlank()) {
+            target.append("REQUEST")
+            return
+        }
+        value.forEach { character ->
+            if (target.length >= MAX_METHOD_LENGTH) return
+            when (character) {
+                in 'a'..'z' -> target.append(character.uppercaseChar())
+                in 'A'..'Z', in '0'..'9', '-', '_' -> target.append(character)
+            }
+        }
+        if (target.isEmpty()) target.append("REQUEST")
     }
 
-    fun throwable(throwable: Throwable?): String {
-        return segment(throwable?.javaClass?.simpleName, "throwable")
-    }
-
-    fun statusCode(code: Int): String {
-        return if (code in 100..599) code.toString() else "unknown"
-    }
-
-    fun closeCode(code: Int): String {
-        return if (code in 1000..4999) code.toString() else "unknown"
-    }
-
-    private fun appendNormalizedPathSegment(target: StringBuilder, value: String, start: Int, end: Int) {
+    private fun appendNormalizedPathSegment(
+        target: StringBuilder,
+        value: String,
+        start: Int,
+        end: Int,
+        limit: Int,
+    ) {
         when {
             isNumeric(value, start, end) || isUuid(value, start, end) || isLongHex(value, start, end) -> {
-                target.appendBounded("id")
+                target.appendBounded("{id}", limit)
             }
             end - start > MAX_PATH_VALUE_LENGTH && containsDigit(value, start, end) -> {
-                target.appendBounded("value")
+                target.appendBounded("{value}", limit)
             }
-            else -> appendSegment(target, value, start, end, "value")
+            else -> appendRouteSegment(target, value, start, end, limit)
         }
+    }
+
+    private fun appendRouteSegment(target: StringBuilder, value: String, start: Int, end: Int, limit: Int) {
+        var index = start
+        var pendingSeparator = false
+        val initialLength = target.length
+        while (index < end && target.length < limit) {
+            val character = value[index]
+            if (character.isLetterOrDigit() || character == '.' || character == '-' || character == '_') {
+                if (pendingSeparator && target.length > initialLength) target.appendBounded('-', limit)
+                target.appendBounded(character, limit)
+                pendingSeparator = false
+            } else {
+                pendingSeparator = target.length > initialLength
+            }
+            index++
+        }
+        if (target.length == initialLength) target.appendBounded("value", limit)
     }
 
     private fun segment(value: String?, fallback: String): String {
@@ -141,17 +165,19 @@ internal object NetworkMetricNames {
         return this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
     }
 
-    private fun StringBuilder.appendBounded(value: Char) {
-        if (length < MAX_METRIC_SEGMENT_LENGTH) append(value)
+    private fun StringBuilder.appendBounded(value: Char, limit: Int = MAX_METRIC_SEGMENT_LENGTH) {
+        if (length < limit) append(value)
     }
 
-    private fun StringBuilder.appendBounded(value: String) {
-        val available = MAX_METRIC_SEGMENT_LENGTH - length
+    private fun StringBuilder.appendBounded(value: String, limit: Int = MAX_METRIC_SEGMENT_LENGTH) {
+        val available = limit - length
         if (available <= 0) return
         append(value, 0, minOf(value.length, available))
     }
 
     private const val MAX_ROUTE_SEGMENTS = 8
+    private const val MAX_ROUTE_LENGTH = 160
+    private const val MAX_METHOD_LENGTH = 16
     private const val MAX_PATH_VALUE_LENGTH = 24
     private const val MAX_METRIC_SEGMENT_LENGTH = 96
     private const val UUID_LENGTH = 36

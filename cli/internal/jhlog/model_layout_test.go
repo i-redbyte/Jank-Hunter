@@ -12,14 +12,15 @@ func TestCanonicalModelLayoutStaysCompact(t *testing.T) {
 		limit uintptr
 	}{
 		{name: "symbol", size: unsafe.Sizeof(SymbolRef{}), limit: 32},
-		{name: "attribution", size: unsafe.Sizeof(AttributionContext{}), limit: 136},
-		{name: "event", size: unsafe.Sizeof(Event{}), limit: 408},
+		{name: "attribution", size: unsafe.Sizeof(AttributionContext{}), limit: 144},
+		{name: "event", size: unsafe.Sizeof(Event{}), limit: 416},
 		{name: "session", size: unsafe.Sizeof(SessionEvent{}), limit: 424},
-		{name: "http", size: unsafe.Sizeof(HTTPEvent{}), limit: 88},
+		{name: "http", size: unsafe.Sizeof(HTTPEvent{}), limit: 208},
 		{name: "ui", size: unsafe.Sizeof(UIWindowEvent{}), limit: 88},
 		{name: "stall", size: unsafe.Sizeof(StallEvent{}), limit: 40},
 		{name: "retained", size: unsafe.Sizeof(RetainedEvent{}), limit: 88},
 		{name: "metric", size: unsafe.Sizeof(MetricEvent{}), limit: 72},
+		{name: "operation", size: unsafe.Sizeof(OperationEvent{}), limit: 152},
 		{name: "log spam", size: unsafe.Sizeof(LogSpamEvent{}), limit: 48},
 		{name: "problem", size: unsafe.Sizeof(ProblemEvent{}), limit: 56},
 		{name: "runtime call", size: unsafe.Sizeof(RuntimeCallEvent{}), limit: 56},

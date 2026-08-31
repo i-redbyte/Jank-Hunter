@@ -31,7 +31,7 @@
       <div class="report-hero-control">
       <div class="hero-meta">
         <div class="chip">Инциденты <strong>{{len (problemCards .Summary)}}</strong></div>
-        <div class="chip">Критичные / высокий риск <strong>{{.Summary.ProblemSummary.Critical}} / {{.Summary.ProblemSummary.High}}</strong></div>
+        <div class="chip">Критичный / высокий приоритет <strong>{{.Summary.ProblemSummary.Critical}} / {{.Summary.ProblemSummary.High}}</strong></div>
         <div class="chip">Длительность <strong>{{humanDuration .Summary.DurationMS}}</strong></div>
       </div>
       {{if or .MathReportHref .LeakReportHref .InfluenceReportHref .DiagnosticsReportHref .DependencyInjectionReportHref}}<div class="hero-actions">{{if .MathReportHref}}<a class="math-link" href="{{.MathReportHref}}">Подробный анализ</a>{{end}}{{if .LeakReportHref}}<a class="math-link" href="{{.LeakReportHref}}">Утечки памяти</a>{{end}}{{if .InfluenceReportHref}}<a class="math-link" href="{{.InfluenceReportHref}}">Связи с кодом</a>{{end}}{{if .DiagnosticsReportHref}}<a class="math-link" href="{{.DiagnosticsReportHref}}">Технические данные ASM</a>{{end}}{{if .DependencyInjectionReportHref}}<a class="math-link di-report-link" href="{{.DependencyInjectionReportHref}}">Каталог DI</a>{{end}}</div>{{end}}
@@ -42,10 +42,18 @@
 <nav class="nav">
   <a href="#problems">Проблемы</a>
   <a href="#overview">Показатели</a>
-  {{if .Summary.Routes}}<a href="#network">Сеть</a>{{end}}
-  {{if .Summary.Screens}}<a href="#ui">UI</a>{{end}}
-  {{if semanticWorkRows .Summary}}<a href="#specialized-work">Compose · Room · Worker</a>{{end}}
-  {{if or .Summary.Flows .Summary.LogSpam .Summary.ProblemWindows .Summary.ProcessExits .Summary.IOOperations .Summary.RuntimeCalls}}<a href="#flows">Сценарии</a>{{end}}
+  {{if .Summary.OperationAnalysis}}<a href="#operations">Операции</a>{{end}}
+  {{if .Summary.AndroidComponents}}<a href="#android-components">Компоненты Android / IPC</a>{{end}}
+  {{if or .Summary.Routes .Summary.WebSocketAnalysis}}<a href="#network">Сеть</a>{{end}}
+  {{if .Summary.IOAnalysis}}<a href="#io-analysis">Файлы</a>{{end}}
+  {{if .Summary.AsyncAnalysis}}<a href="#async-analysis">Очереди задач</a>{{end -}}
+  {{if .Summary.GCAnalysis}}<a href="#gc-analysis">Сборка мусора</a>{{end -}}
+  {{if .Summary.StartupAnalysis}}<a href="#startup-analysis">Запуск</a>{{end -}}
+  {{if .Summary.WorkerAnalysis}}<a href="#workers">Фоновые задачи</a>{{end -}}
+  {{if .Summary.Screens}}<a href="#ui">Плавность</a>{{end}}
+  {{if hasComposeWork .Summary}}<a href="#compose-analysis">Compose</a>{{end}}
+  {{if or .Summary.DatabaseCoverage.Status .Summary.DatabaseAnalysis (hasRoomWork .Summary)}}<a href="#database-analysis">База данных</a>{{end}}
+  {{if or .Summary.SignalContexts .Summary.LogSpam .Summary.ProblemWindows .Summary.ProcessExits .Summary.RuntimeCalls}}<a href="#signal-contexts">Связанные сигналы</a>{{end}}
   {{if .Summary.CodeProblems}}<a href="#code-problems">Реестр кода</a>{{end}}
   {{if .Summary.Owners}}<a href="#owners">Источники</a>{{end}}
   {{if .Summary.MemoryLeaks}}<a href="#memory-leaks">Утечки</a>{{end}}
@@ -61,17 +69,19 @@
     <div class="problem-verdict verdict-{{.Summary.ProblemSummary.Verdict}}">
       <div>
         <div class="eyebrow">Главный вывод</div>
-        <h2>{{if .Summary.ProblemSchemaVersion}}{{.Summary.ProblemSummary.Headline}}{{else}}Problem engine не рассчитан{{end}}</h2>
+        <h2>{{if .Summary.ProblemSchemaVersion}}{{.Summary.ProblemSummary.Headline}}{{else}}Модуль поиска проблем не запускался{{end}}</h2>
         <p>{{if eq .Summary.ProblemSummary.Verdict "clean"}}В категориях с достаточным количеством данных опасные отклонения не найдены.{{else if eq .Summary.ProblemSummary.Verdict "incomplete"}}Для уверенного вывода данных мало. Повторите сценарий дольше или включите нужный сборщик.{{else}}Ниже — проблемы в порядке приоритета: сначала наиболее вредные для пользователя и приложения.{{end}}</p>
         <p class="problem-analysis-boundary">Jank Hunter связывает причину с проблемой только когда в журнале есть прямое подтверждение. В остальных случаях отчёт показывает наиболее полезное место для проверки.</p>
       </div>
-      <div class="problem-verdict-counts" aria-label="Количество проблем по опасности">
-        <span class="sev-critical">{{.Summary.ProblemSummary.Critical}}<small>критичных</small></span>
-        <span class="sev-high">{{.Summary.ProblemSummary.High}}<small>высокий риск</small></span>
-        <span class="sev-medium">{{.Summary.ProblemSummary.Medium}}<small>средний риск</small></span>
-        <span class="sev-low">{{.Summary.ProblemSummary.Low}}<small>низкий риск</small></span>
+      <div class="problem-verdict-counts" aria-label="Количество проблем по приоритету расследования">
+        <span class="sev-critical">{{.Summary.ProblemSummary.Critical}}<small>критичный приоритет</small></span>
+        <span class="sev-high">{{.Summary.ProblemSummary.High}}<small>высокий приоритет</small></span>
+        <span class="sev-medium">{{.Summary.ProblemSummary.Medium}}<small>средний приоритет</small></span>
+        <span class="sev-low">{{.Summary.ProblemSummary.Low}}<small>низкий приоритет</small></span>
       </div>
     </div>
+
+    <div class="analysis-intro problem-priority-method"><strong>Индекс приоритета расследования (0–100).</strong> Это сумма пяти независимых компонентов: влияние на пользователя 0–40, величина отклонения 0–25, повторяемость и охват запусков 0–20, широта локализации 0–10 и сочетание сигналов 0–5. Это <strong>не вероятность</strong> дефекта, <strong>не ожидаемый ущерб</strong> и не целевой норматив. Достоверность и уровень связи учитываются отдельно и не умножают индекс. Точные баллы и причины раскрываются в каждой карточке.</div>
 
     {{$primaryCoverage := primaryCategoryCoverage .Summary.CategoryCoverage}}
     {{if $primaryCoverage}}<div class="problem-coverage-grid" aria-label="Проверенные категории и категории с проблемами">
@@ -79,7 +89,7 @@
       <button type="button" class="problem-coverage-card coverage-{{.Status}} coverage-severity-{{.WorstSeverity}}" data-problem-category-button="{{.Category}}" data-tip="{{problemCategoryLabel .Category}}. {{.Explanation}}" aria-pressed="false">
         <span>{{problemCategoryLabel .Category}}</span>
         <strong>{{problemCoverageStatusLabel .Status}}</strong>
-        <small>{{ruCount .FindingCount "сигнал" "сигнала" "сигналов"}}{{if .WorstSeverity}} · максимум {{severityLabel .WorstSeverity}}{{end}}</small>
+        <small>{{ruCount .FindingCount "сигнал" "сигнала" "сигналов"}}{{if .WorstSeverity}} · {{problemPriorityBandLabel .WorstSeverity}}{{end}}</small>
         <em>{{.Explanation}}</em>
       </button>
       {{end}}
@@ -89,7 +99,7 @@
     {{template "problem-search-scope"}}
     <div class="problem-toolbar" role="search">
       <label class="problem-search-label">Поиск по всем данным страницы <span class="problem-search-field"><input type="search" data-problem-search placeholder="Класс, экран, сценарий, маршрут или проблема"><button type="button" data-problem-search-clear hidden>Очистить</button></span></label>
-      <label>Опасность <select data-problem-severity><option value="">все</option><option value="critical">критично</option><option value="high">высокий риск</option><option value="medium">средний риск</option><option value="low">низкий риск</option></select></label>
+      <label>Приоритет <select data-problem-severity><option value="">все</option><option value="critical">критичный</option><option value="high">высокий</option><option value="medium">средний</option><option value="low">низкий</option></select></label>
       <label>Категория <select data-problem-category><option value="">все</option>{{range findingCategoryCoverage .Summary.CategoryCoverage}}<option value="{{.Category}}">{{problemCategoryLabel .Category}}</option>{{end}}</select></label>
       <label>Достоверность <select data-problem-confidence><option value="">все</option><option value="high">высокая</option><option value="medium">средняя</option><option value="low">низкая</option></select></label>
       <label>Статус <select data-problem-status><option value="">все</option><option value="observed">зафиксирована</option><option value="new">новая</option><option value="regressed">ухудшилась</option><option value="persistent">сохранилась</option><option value="improved">улучшилась</option></select></label>
@@ -99,9 +109,9 @@
     <div class="problem-search-results" data-problem-search-results hidden aria-live="polite"></div>
 
     <div class="problem-inbox">
-      {{range problemCards .Summary}}
+      {{$summary := .Summary}}{{range problemCards .Summary}}
       <article id="{{.ID}}" class="problem-card {{severityClass .Severity}}" data-problem-card data-category="{{join .RelatedCategories " "}}" data-severity="{{.Severity}}" data-confidence="{{.Confidence}}" data-status="{{.Status}}">
-        <div class="problem-card-rank" data-tip="Приоритет от 0 до 100 определяет порядок разбора. Чем выше число, тем сильнее возможный вред, отклонение и повторяемость проблемы."><span class="problem-severity">{{severityLabel .Severity}}</span><strong>{{.RiskScore}}</strong><small>приоритет из 100</small><div class="problem-risk-track"><i style="{{riskWidth .RiskScore}}"></i></div></div>
+        <div class="problem-card-rank" data-tip="Индекс — сумма влияния 0–40, величины 0–25, повторяемости 0–20, широты 0–10 и сочетания сигналов 0–5. Это не вероятность."><span class="problem-severity">{{problemPriorityBandLabel .Severity}}</span><strong>{{.InvestigationPriority}}</strong><small>индекс из 100</small><div class="problem-priority-track"><i style="{{priorityWidth .InvestigationPriority}}"></i></div></div>
         <div class="problem-card-main">
           <div class="problem-card-meta">{{range .RelatedCategories}}<span>{{problemCategoryLabel .}}</span>{{end}}<span>доверие к выводу: {{confidenceLabel .Confidence}}</span><span>{{problemStatusLabel .Status}}</span></div>
           <h3>{{.Title}}</h3>
@@ -111,15 +121,7 @@
             {{range limitRows .Evidence 5}}<span><strong>{{tip (problemEvidenceLabel .) (problemEvidenceHelp .)}}</strong>{{problemEvidenceDisplay .}}{{if .ExpectedOrThreshold}}<small>{{problemEvidenceThreshold .ExpectedOrThreshold}}</small>{{end}}{{if .Denominator}}<small>всего наблюдений: {{.Denominator}}</small>{{end}}</span>{{end}}
           </div>
           {{with problemPrimaryRecommendation .}}<div class="problem-action"><strong>Что делать:</strong> {{.Action}}<small>{{.Verification}}</small></div>{{end}}
-          <details class="problem-explanation">
-            <summary>Почему это важно и где искать · {{problemClaimLabel .Why.ClaimLevel}}</summary>
-            <div class="problem-explanation-grid">
-              <div><h4>Что указывает на причину</h4><p>{{.Why.Summary}}</p>{{range .Why.Factors}}<p class="muted">{{.}}</p>{{end}}</div>
-              <div><h4>К чему это может привести</h4>{{range .Impact}}<p>{{.}}</p>{{end}}</div>
-              <div class="span-all"><h4>Как проверить исправление</h4>{{range .Recommendations}}<p><strong>{{.Action}}</strong> — {{.Rationale}}<br><small>{{.Verification}}</small></p>{{end}}</div>
-              <details class="problem-technical-details span-all"><summary>Как рассчитан приоритет и какие есть ограничения</summary><div class="problem-technical-grid"><div><h4>Состав приоритета</h4>{{range .RankBreakdown}}<div class="problem-risk-row"><span>{{problemRiskComponentLabel .Component}}</span><strong>{{.Score}} / {{.Maximum}}</strong><small>{{.Explanation}}</small></div>{{end}}</div><div><h4>Ограничения данных</h4>{{range .Limitations}}<p class="warning">{{.}}</p>{{else}}<p>Дополнительных ограничений для этой находки нет.</p>{{end}}</div></div></details>
-            </div>
-          </details>
+          {{template "problem-diagnosis" (problemDiagnosisData $summary .)}}
         </div>
       </article>
       {{else}}
@@ -139,7 +141,7 @@
     </div>
     <div class="grid">
       {{if gt .Summary.HTTPCount 0}}<div class="metric"><div class="label">{{tip "Задержка верхних 5% HTTP-запросов" "95-й процентиль: 95% запросов завершились не дольше этого времени, а оставшиеся 5% были медленнее."}}</div><div class="value">{{.Summary.HTTPP95MS}} мс</div><div class="hint">{{ruCount .Summary.HTTPCount "запрос" "запроса" "запросов"}}, {{ruCount .Summary.HTTPFailed "ошибка" "ошибки" "ошибок"}}</div></div>{{end}}
-      {{if gt .Summary.UIFrames 0}}<div class="metric"><div class="label">{{tip "Подтормаживания UI" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div><div class="hint">{{.Summary.UIJank}} из {{.Summary.UIFrames}} кадров</div></div>{{end}}
+      {{if gt .Summary.UIFrames 0}}<div class="metric"><div class="label">{{tip "Подтормаживания интерфейса" "Доля кадров, которые были медленнее целевого времени кадра. Чем выше процент, тем заметнее рывки интерфейса."}}</div><div class="value">{{printf "%.2f" .Summary.UIJankPct}}%</div><div class="hint">{{.Summary.UIJank}} из {{.Summary.UIFrames}} кадров</div></div>{{end}}
       {{if ne .Summary.UIAvgFPS 0.0}}
       <div class="metric"><div class="label">{{tip "Средний FPS" "Среднее число кадров интерфейса в секунду. Для экрана 60 Гц нормальной целью обычно являются 60 FPS без длинных кадров."}}</div><div class="value">{{printf "%.1f" .Summary.UIAvgFPS}}</div><div class="hint">минимум {{printf "%.1f" .Summary.UIMinFPS}}</div></div>{{end}}
       {{if gt .Summary.StallCount 0}}<div class="metric"><div class="label">{{tip "Максимальная пауза" "Самая длинная задержка работы на главном потоке. Длинные паузы блокируют обработку ввода и отрисовку."}}</div><div class="value">{{.Summary.StallMaxMS}} мс</div><div class="hint">{{ruCount .Summary.StallCount "пауза" "паузы" "пауз"}}</div></div>{{end}}
@@ -148,12 +150,12 @@
     </div>
     <div class="report-guide">
       <div class="guide-card"><strong>Как читать отчет</strong>Сначала смотрите общий статус и красные/желтые находки, затем открывайте разделы сценариев, источников и граф влияния. Так проще перейти от симптома к коду.</div>
-      <div class="guide-card"><strong>Что важно</strong>Один показатель редко объясняет проблему. Ищите совпадение во времени: UI-подтормаживания, паузы главного потока, сетевые хвосты, память и спам логами.</div>
+      <div class="guide-card"><strong>Что важно</strong>Один показатель редко объясняет проблему. Ищите совпадение во времени: подтормаживания интерфейса, паузы главного потока, сетевые задержки, память и избыток сообщений журнала.</div>
       <div class="guide-card"><strong>Что исправлять</strong>Начинайте с источников с высоким вкладом и понятным контекстом: экран, сценарий, шаг, маршрут или класс. Неочевидные пики лучше подтвердить профилировщиком.</div>
     </div>
     {{if or (gt .Summary.UIFrames 0) (gt .Summary.HTTPCount 0)}}<h3>Индикаторы здоровья</h3>
     <div class="ring-row">
-      {{if gt .Summary.UIFrames 0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>UI</span></div></div></div><div class="gauge-label">UI&#8209;подтормаживания</div></div>{{end}}
+      {{if gt .Summary.UIFrames 0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle .Summary.UIJankPct}}; --color: var(--warn)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIJankPct}}%</strong><span>кадры</span></div></div></div><div class="gauge-label">Подтормаживания интерфейса</div></div>{{end}}
       {{if gt .Summary.HTTPCount 0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle (rate .Summary.HTTPFailed .Summary.HTTPCount)}}; --color: var(--bad)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" (rate .Summary.HTTPFailed .Summary.HTTPCount)}}%</strong><span>HTTP</span></div></div></div><div class="gauge-label">HTTP-ошибки</div></div>{{end}}
       {{if ne .Summary.UIAvgFPS 0.0}}<div class="gauge-card"><div class="gauge" style="{{ringStyle (fpsScore .Summary.UIAvgFPS)}}; --color: var(--ok)"><svg class="gauge-ring" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><circle class="gauge-track" cx="60" cy="60" r="48" pathLength="100"></circle><circle class="gauge-value" cx="60" cy="60" r="48" pathLength="100"></circle></svg><div class="gauge-core"><div><strong>{{printf "%.1f" .Summary.UIAvgFPS}}</strong><span>FPS</span></div></div></div><div class="gauge-label">Средний FPS</div></div>{{end}}
     </div>
@@ -189,7 +191,7 @@
     <details class="fold code-registry-fold" open>
       <summary><span>Реестр проблем кода</span><span class="fold-summary-meta">{{ruCount (len .Summary.CodeProblems) "строка" "строки" "строк"}} · сортировка и фильтры</span></summary>
       <div class="fold-body">
-    <p class="help-text">Ранжированный список классов и методов, где сошлись риск АНР, сеть, память, UI, спам логами, удержания и граф влияния. Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода: чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
+    <p class="help-text">Ранжированный список классов и методов, где сошлись риск зависания приложения, сеть, память, интерфейс, избыток сообщений журнала, удержания объектов и граф влияния. Оценка — это приоритет расследования внутри текущего прогона, а не абсолютная оценка качества кода: чем выше число, тем раньше стоит открыть строку и проверить доказательства, контекст и рекомендацию.</p>
     {{scoreGuide "code"}}
     {{with codeProblemCategories .Summary.CodeProblems}}
     <div class="registry-insights"><span class="registry-insights-label">Категории</span>{{range .}}<button type="button" class="registry-chip {{severityClass .Severity}}" data-registry-category="{{.Name}}">{{.Name}} <strong>{{.Count}}</strong></button>{{end}}</div>
@@ -226,7 +228,7 @@
           {{$codeProblems := .Summary.CodeProblems}}
           {{range limitRows $codeProblems 50}}
           <tr data-code-problem-row data-score="{{printf "%.1f" .Score}}" data-severity="{{.Severity}}" data-class="{{codeProblemLocation .}}" data-categories="{{join .Categories "|"}}">
-            <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{codeSeverityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть runtime-сигналы</div>{{else}}<div class="muted">только статическая связь</div>{{end}}</td>
+            <td><span class="problem-score {{severityClass .Severity}}">{{printf "%.1f" .Score}}</span><div class="muted">{{codeSeverityLabel .Severity}}</div>{{if .RuntimeEvidence}}<div class="muted">есть сигналы во время выполнения</div>{{else}}<div class="muted">только статическая связь</div>{{end}}</td>
             <td><div class="problem-location"><code>{{.ClassName}}</code>{{if .Method}}<div class="method"><code>{{.Method}}</code></div>{{end}}</div></td>
             <td><div class="problem-tags">{{range .Categories}}<span class="problem-chip">{{.}}</span>{{end}}</div><div class="muted">{{join .Problems ", "}}</div></td>
             <td>
@@ -236,7 +238,7 @@
               </details>
             </td>
           </tr>
-          {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте ASM-опции owners, flowInteractions, runtimeCallGraph и logSpam.</td></tr>{{end}}
+          {{else}}<tr><td colspan="4" class="muted">Реестр проблем кода пуст: текущий прогон не дал привязанных к классу сигналов. Проверьте настройки owners, interactionOperations, runtimeCallGraph и logSpam.</td></tr>{{end}}
           {{if gt (len $codeProblems) 50}}<tr class="deferred-table-loader" data-code-problem-loader data-deferred-total="{{len $codeProblems}}" data-deferred-loaded="50"><th colspan="4"><button type="button" class="deferred-table-button" data-load-more-code-problems>Показать ещё 50</button><span data-deferred-remaining>Осталось строк: {{sub (len $codeProblems) 50}}</span><span class="sr-only"> в реестре проблем кода</span></th></tr>{{end}}
         </tbody>
       </table>
@@ -247,12 +249,26 @@
     {{end}}
   </section>{{end}}
 
-  {{if .Summary.Routes}}<section id="network" class="panel">
+  {{if or .Summary.Routes .Summary.WebSocketAnalysis}}<section id="network" class="panel">
     <div class="panel-head">
-      <div><h2>Все записанные сетевые маршруты</h2><div class="panel-kicker">В журнале {{ruCount .Summary.HTTPCount "завершённый HTTP-запрос" "завершённых HTTP-запроса" "завершённых HTTP-запросов"}} и {{ruCount (len .Summary.Routes) "маршрут" "маршрута" "маршрутов"}}. Ниже показаны все маршруты, а не только худшие.</div></div>
+      <div><h2>Подробный сетевой анализ</h2><div class="panel-kicker">HTTP и WebSocket разбираются отдельно: маршруты, места вызова, транспортные фазы, ошибки и объём данных. Ниже показаны все маршруты, а не только худшие.</div></div>
     </div>
-    <details class="fold">
-      <summary>Показать все маршруты и исходные измерения</summary>
+    {{if .Summary.NetworkAnalysis}}<div class="analysis-intro"><strong>Граница интерпретации:</strong> фазы и место вызова записаны инструментированием напрямую. Одновременность восстановлена из времени завершения и общей длительности. Повторы запросов не включают перенаправления; дополнительные попытки соединения показаны отдельно, потому что они могут быть параллельным выбором адреса, а не повтором запроса.</div>
+    <div class="grid">
+      <div class="metric"><div class="label">{{tip "Максимальная одновременность" "Максимальное число HTTP-вызовов, интервалы которых пересекались в одном журнале."}}</div><div class="value">{{.Summary.NetworkAnalysis.MaxConcurrency}}</div><div class="hint">пик на {{.Summary.NetworkAnalysis.PeakConcurrencyAtMS}} мс</div></div>
+      <div class="metric"><div class="label">{{tip "Повторы без перенаправлений" "Дополнительные попытки сверх первого вызова и явно записанных перенаправлений."}}</div><div class="value">{{.Summary.NetworkAnalysis.Retries}}</div><div class="hint">перенаправления {{.Summary.NetworkAnalysis.Redirects}} · всего попыток {{.Summary.NetworkAnalysis.Attempts}}</div></div>
+      <div class="metric"><div class="label">{{tip "Соединения" "Попытки подключения и ошибки соединения. Несколько попыток без ошибки могут быть параллельным выбором IPv4/IPv6."}}</div><div class="value">{{.Summary.NetworkAnalysis.ConnectAttempts}}</div><div class="hint">ошибок {{.Summary.NetworkAnalysis.ConnectFailures}} · TLS-ошибок {{.Summary.NetworkAnalysis.TLSFailures}}</div></div>
+      <div class="metric"><div class="label">Ответы из кэша / повторные соединения</div><div class="value">{{.Summary.NetworkAnalysis.CacheHits}} / {{.Summary.NetworkAnalysis.ReusedConnections}}</div><div class="hint">ответы без сети / повторно использованные соединения</div></div>
+      <div class="metric"><div class="label">Ошибки по типу</div><div class="value">{{.Summary.NetworkAnalysis.TransportFailures}} / {{.Summary.NetworkAnalysis.HTTP5xx}}</div><div class="hint">транспорт / HTTP 5xx · отменено {{.Summary.NetworkAnalysis.Canceled}}</div></div>
+      <div class="metric"><div class="label">HTTP-трафик с известным размером</div><div class="value">{{.Summary.NetworkAnalysis.BytesRx}} / {{.Summary.NetworkAnalysis.BytesTx}}</div><div class="hint">получено / отправлено байт · известны {{.Summary.NetworkAnalysis.KnownResponseBytes}} / {{.Summary.NetworkAnalysis.KnownRequestBytes}} размеров</div></div>
+    </div>
+    <div class="split">
+      <div><h3>Фазы маршрутов</h3><table><thead><tr><th>Фаза</th><th>Замеры</th><th>Среднее</th><th>{{tip "Медиана" "Половина замеров не превышала это значение. Техническое обозначение — p50."}}</th><th>{{tip "Верхние 5%" "95% замеров не превышали это значение. Техническое обозначение — p95."}}</th><th>Максимум</th></tr></thead><tbody>{{range .Summary.NetworkAnalysis.Phases}}<tr><td>{{httpPhaseLabel .Name}}</td><td>{{.SampleCount}}</td><td>{{.AvgMS}} мс</td><td>{{.P50MS}} мс</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td></tr>{{end}}</tbody></table></div>
+      <div><h3>Точные HTTP-коды</h3><table><thead><tr><th>Код</th><th>Запросы</th></tr></thead><tbody>{{range .Summary.NetworkAnalysis.StatusCodes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Ответ с HTTP-кодом не зафиксирован.</td></tr>{{end}}</tbody></table><h3>Протоколы</h3><table><tbody>{{range .Summary.NetworkAnalysis.Protocols}}<tr><td><code>{{reportHint .Name "не записан" "protocol"}}</code></td><td>{{.Value}}</td></tr>{{end}}</tbody></table></div>
+      <div><h3>Транспортные сбои</h3><table><thead><tr><th>Стадия</th><th>События</th></tr></thead><tbody>{{range .Summary.NetworkAnalysis.FailurePhases}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Стадия сбоя не зафиксирована.</td></tr>{{end}}</tbody></table><h3>Причины</h3><table><tbody>{{range .Summary.NetworkAnalysis.FailureKinds}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Причина сбоя не зафиксирована.</td></tr>{{end}}</tbody></table></div>
+    </div>{{end}}
+    {{if .Summary.Routes}}<details class="fold">
+      <summary>Все записанные сетевые маршруты</summary>
       <div class="fold-body">
         {{rowLimitNote "График сетевых маршрутов" (len .Summary.Routes) 64}}
         <div class="chart-list">
@@ -261,22 +277,153 @@
           {{else}}<div class="muted">Нет HTTP-событий.</div>{{end}}
         </div>
         <h3>Таблица маршрутов</h3>
-        <table>
-          <tr><th>{{tip "Маршрут" "Нормализованное имя HTTP-маршрута. Параметры и чувствительные значения не должны использоваться как имя маршрута."}}</th><th>{{tip "Запросы" "Число HTTP-событий маршрута в доступных логах."}}</th><th>{{tip "Пик/с" "Максимальное число завершений route в одной секундной корзине."}}</th><th>{{tip "Ошибки" "Транспортные ошибки и ответы 5xx. Клиентские 4xx не считаются ошибкой автоматически."}}</th><th>{{tip "p50" "Медиана длительности: половина запросов была не медленнее этого значения."}}</th><th>{{tip "p95" "95-й процентиль длительности. При малой выборке это одна из худших задержек, поэтому смотрите также число запросов."}}</th><th>{{tip "Максимум" "Самая длинная записанная длительность запроса. Один пик не показывает типичное поведение."}}</th><th>{{tip "Средний TTFB" "Среднее время до первого байта. Ноль может означать, что разбиение фаз не было записано."}}</th><th>{{tip "RX" "Сумма известных принятых байтов HTTP-событий. Ноль может означать пустой ответ или отсутствие размера в instrumentation."}}</th><th>{{tip "TX" "Сумма известных отправленных байтов HTTP-событий. Ноль может означать пустое тело или отсутствие размера в instrumentation."}}</th><th>{{tip "Источник" "Пример owner, связанного с маршрутом. Это контекст вызова, а не доказанная причина задержки."}}</th></tr>
+        <table class="network-route-table wide-analysis-table">
+          <tr><th>{{tip "Маршрут / сервис" "Нормализованный HTTP-маршрут и безопасное имя сервиса без узла, строки запроса и содержимого."}}</th><th>{{tip "Запросы / контексты" "Число запросов и уникальных сочетаний места вызова, экрана, операции и источника."}}</th><th>{{tip "Пик/с · одновременно" "Пик завершений в секундном интервале и точный максимум пересекающихся запросов."}}</th><th>{{tip "Ошибки" "Транспортные ошибки и ответы 5xx. Клиентские 4xx показаны отдельно."}}</th><th>Медиана / верхние 5% / максимум</th><th>{{tip "Кэш / повтор соединения" "Ответы из кэша и запросы через повторно использованное соединение."}}</th><th>{{tip "Попытки" "Попытки запроса, повторы без перенаправлений, перенаправления и ошибки соединения."}}</th><th>{{tip "Фазы: верхние 5%" "Верхняя граница для 95% ненулевых замеров каждой фазы."}}</th><th>{{tip "Приём / передача" "Сумма записанных размеров тела. Рядом в сводке указано, для скольких запросов размер был известен."}}</th><th>{{tip "Источник" "Пример точного инициатора из преобразования байткода; источник контекста используется как запасной вариант."}}</th></tr>
           {{range .Summary.Routes}}
-          <tr><td><code>{{.Route}}</code></td><td>{{.Count}}</td><td>{{.PeakRequestsPerSecond}}</td><td>{{.Failures}}</td><td>{{.P50MS}} мс</td><td>{{.P95MS}} мс</td><td>{{.MaxMS}} мс</td><td>{{if gt .AvgTTFBMS 0}}{{.AvgTTFBMS}} мс{{else}}нет данных{{end}}</td><td>{{.BytesRx}}</td><td>{{.BytesTx}}</td><td><code>{{contextHint .OwnerSample "owner"}}</code></td></tr>
-          {{else}}<tr><td colspan="11" class="muted">Нет HTTP-событий.</td></tr>{{end}}
+          <tr><td><code>{{.Route}}</code><br><span class="muted">{{contextHint .ServiceSample "service"}}</span></td><td>{{.Count}} / {{.ContextCount}}</td><td>{{.PeakRequestsPerSecond}}/с · {{.MaxConcurrency}}</td><td>{{.Failures}}<br><span class="muted">транспортных {{.TransportFailures}} · 4xx {{.HTTP4xx}} · 5xx {{.HTTP5xx}}</span></td><td>{{.P50MS}} / {{.P95MS}} / {{.MaxMS}} мс</td><td>{{.CacheHits}} / {{.ReusedConnections}}</td><td>{{.Attempts}}<br><span class="muted">повторов {{.Retries}} · перенаправлений {{.Redirects}} · ошибок соединения {{.ConnectFailures}}</span></td><td>{{range .Phases}}{{if gt .SampleCount 0}}<span>{{httpPhaseLabel .Name}} {{.P95MS}} мс</span><br>{{end}}{{end}}</td><td>{{.BytesRx}} / {{.BytesTx}}</td><td><code>{{contextHint .InitiatorSample "owner"}}</code></td></tr>
+          {{else}}<tr><td colspan="10" class="muted">Нет HTTP-событий.</td></tr>{{end}}
         </table>
+      </div>
+    </details>{{end}}
+    {{if .Summary.NetworkAnalysis}}{{if .Summary.NetworkAnalysis.Calls}}<details class="fold"><summary>Запросы по месту вызова и контексту</summary><div class="fold-body"><p class="help-text">Каждая строка — отдельное сочетание маршрута, сервиса, инициатора и контекста экрана, операции и источника. Это отвечает на вопрос, какой запрос, сколько раз и откуда выполнялся в выбранной сессии.</p><table class="network-call-table wide-analysis-table"><thead><tr><th>Маршрут / сервис</th><th>Инициатор</th><th>Контекст</th><th>Запросы / ошибки</th><th>Медиана / верхние 5% / максимум</th><th>Кэш / повтор соединения</th><th>Попытки</th><th>Трафик: приём / передача</th><th>Фазы: верхние 5%</th></tr></thead><tbody>{{deferredRows "inspect-network-call-row" .Summary.NetworkAnalysis.Calls 50 50 9 "сетевые места вызова"}}</tbody></table></div></details>{{end}}{{end}}
+    {{with .Summary.WebSocketAnalysis}}<details class="fold" open><summary>WebSocket: соединения, сообщения и обрывы</summary><div class="fold-body">
+      <div class="analysis-intro"><strong>Что измеряется:</strong> открытие и завершение соединения, время подключения и жизни, код закрытия, ограниченная причина сбоя, число входящих сообщений и их суммарный размер. Содержимое сообщений, полный адрес, параметры и текст исключения не записываются.</div>
+      <div class="grid">
+        <div class="metric"><div class="label">Открыто / завершено</div><div class="value">{{.Opened}} / {{.Closed}}</div><div class="hint">активно в конце {{.ActiveAtEnd}}</div></div>
+        <div class="metric"><div class="label">Сбои / переподключения</div><div class="value">{{.Failures}} / {{.Reconnects}}</div><div class="hint">разрывы и повторные открытия</div></div>
+        <div class="metric"><div class="label">Подключение: медиана / верхние 5%</div><div class="value">{{.ConnectP50MS}} / {{.ConnectP95MS}} мс</div><div class="hint">максимум {{.ConnectMaxMS}} мс</div></div>
+        <div class="metric"><div class="label">Время жизни: медиана / верхние 5%</div><div class="value">{{.LifetimeP50MS}} / {{.LifetimeP95MS}} мс</div><div class="hint">максимум {{.LifetimeMaxMS}} мс</div></div>
+        <div class="metric"><div class="label">Текстовые / двоичные сообщения</div><div class="value">{{.TextMessages}} / {{.BinaryMessages}}</div><div class="hint">входящие сообщения</div></div>
+        <div class="metric"><div class="label">Получено данных</div><div class="value">{{.ReceivedBytes}} Б</div><div class="hint">без содержимого сообщений</div></div>
+      </div>
+      <div class="split">
+        <div><h3>Причины сбоев</h3><table><thead><tr><th>Причина</th><th>События</th></tr></thead><tbody>{{range .FailureKinds}}<tr><td>{{webSocketFailureLabel .Name}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Сбоев не зафиксировано.</td></tr>{{end}}</tbody></table></div>
+        <div><h3>Коды закрытия</h3><table><thead><tr><th>Код</th><th>События</th></tr></thead><tbody>{{range .CloseCodes}}<tr><td><code>{{.Name}}</code></td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Завершённые закрытия не зафиксированы.</td></tr>{{end}}</tbody></table></div>
+      </div>
+      <h3>Соединения по маршруту и контексту</h3>
+      <table class="websocket-connection-table wide-analysis-table"><thead><tr><th>Маршрут</th><th>Контекст</th><th>Открыто / закрыто / сбоев</th><th>Активно в конце</th><th>Переподключения</th><th>Подключение: медиана / верхние 5% / максимум</th><th>Время жизни: медиана / верхние 5% / максимум</th><th>Сообщения: текстовые / двоичные</th><th>Получено</th></tr></thead><tbody>{{range .Connections}}<tr><td><code>{{contextHint .Route "route"}}</code></td><td>экран <code>{{contextHint .Screen "screen"}}</code><br>операция <code>{{contextHint .Operation "operation"}}</code><br>место запуска <code>{{contextHint .Owner "owner"}}</code></td><td>{{.Opened}} / {{.Closed}} / {{.Failures}}</td><td>{{.ActiveAtEnd}}</td><td>{{.Reconnects}}</td><td>{{.ConnectP50MS}} / {{.ConnectP95MS}} / {{.ConnectMaxMS}} мс</td><td>{{.LifetimeP50MS}} / {{.LifetimeP95MS}} / {{.LifetimeMaxMS}} мс</td><td>{{.TextMessages}} / {{.BinaryMessages}}</td><td>{{.ReceivedBytes}} Б</td></tr>{{end}}</tbody></table>
+    </div></details>{{end}}
+  </section>{{end}}
+
+  {{with .Summary.IOAnalysis}}<section id="io-analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Подробный анализ файловых операций</h2><div class="panel-kicker">Место вызова, контекст, длительность, результат, известный объём, скорость, всплески и пересечение во времени.</div></div>
+    </div>
+    <div class="analysis-intro"><strong>Граница анализа:</strong> база данных исключена из этого раздела и разбирается отдельно в разделе «База данных: SQLite и Room». Покрытие размера показывает, для какой доли операций средство сбора действительно знало объём; сумма байт и скорость не распространяются на неизвестную часть. Пик частоты рассчитан по точному скользящему окну в одну секунду, одновременность — по пересечению завершённых интервалов.</div>
+    <div class="grid">
+      <div class="metric"><div class="label">Операции / ошибки</div><div class="value">{{.Operations}} / {{.Failures}}</div><div class="hint">источников {{.SourceCount}} · синхронных {{.SyncOperations}}</div></div>
+      <div class="metric"><div class="label">Главный поток</div><div class="value">{{.MainThreadOperations}}</div><div class="hint">суммарно {{humanMicros .MainThreadDurationUS}}</div></div>
+      <div class="metric"><div class="label">Длительность: медиана / верхние 5%</div><div class="value">{{humanMicros .P50DurationUS}} / {{humanMicros .P95DurationUS}}</div><div class="hint">максимум {{humanMicros .MaxDurationUS}}</div></div>
+      <div class="metric"><div class="label">Известный объём</div><div class="value">{{.Bytes}} Б</div><div class="hint">размер известен {{.KnownByteOperations}} из {{.Operations}} операций · {{if gt .KnownByteDurationUS 0}}{{.BytesPerSecond}} Б/с по покрытой части{{else}}скорость не вычисляется без положительной длительности{{end}}</div></div>
+      <div class="metric"><div class="label">Пик за скользящую секунду</div><div class="value">{{.PeakOperationsPerSecond}}/с</div><div class="hint">окно начинается около {{.PeakWindowStartMS}} мс</div></div>
+      <div class="metric"><div class="label">Одновременность</div><div class="value">{{.MaxConcurrency}}</div><div class="hint">пик около {{.PeakConcurrencyAtMS}} мс</div></div>
+    </div>
+    {{$ioRows := criticalIORows $.Summary}}
+    <details class="fold" open>
+      <summary>Файловые операции по месту вызова и контексту</summary>
+      <div class="fold-body">
+        <div class="table-wrap"><table>
+          <thead><tr><th>Операция / поток</th><th>Статус</th><th>Стабильное место вызова</th><th>{{tip "Контекст" "Экран, пользовательская операция и владелец участка кода. Если контекст не указан, наведите на значение для пояснения."}}</th><th>Количество / ошибки</th><th>Медиана / верхние 5% / максимум</th><th>Суммарно</th><th>Известные размеры</th><th>Байты / максимум</th><th>Скорость</th><th>Пик/с</th></tr></thead>
+          <tbody>{{deferredRows "inspect-critical-io-row" $ioRows 50 50 11 "места файловых операций"}}</tbody>
+        </table></div>
       </div>
     </details>
   </section>{{end}}
 
+  {{- with .Summary.AsyncAnalysis}}<section id="async-analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Очереди и выполнение асинхронных задач</h2><div class="panel-kicker">Ожидание в очередях исполнителей, время выполнения и ограниченные наблюдения обработчиков и корутин.</div></div>
+    </div>
+    <div class="analysis-intro"><strong>Методика:</strong> средство сбора накапливает количество, сумму и максимум в ограниченных временных окнах. Среднее взвешено по числу замеров, максимум сохраняется точно. Обёртка исполнителя измеряет каждую принятую задачу. Для обработчиков и корутин длительность записывается только у долгих или неуспешных вызовов; время корутины включает ожидание после приостановки и <strong>не равно чистому времени процессора</strong>.</div>
+    {{if .Executors}}<details class="fold" open>
+      <summary>Исполнители: очередь, выполнение и загрузка пула</summary>
+      <div class="fold-body"><div class="table-wrap"><table>
+        <thead><tr><th>Исполнитель</th><th>Запущено / ошибок</th><th>Ожидание: среднее / максимум</th><th>Выполнение: среднее / максимум</th><th>Очередь: среднее / максимум</th><th>Активно: среднее / максимум</th><th>Размер пула</th><th>Наибольшее число завершённых</th></tr></thead>
+        <tbody>{{deferredRows "inspect-async-executor-row" .Executors 50 50 8 "пулы исполнителей"}}</tbody>
+      </table></div></div>
+    </details>{{end}}
+    {{if .Tasks}}<details class="fold">
+      <summary>Обработчики и корутины: долгие или неуспешные выполнения</summary>
+      <div class="fold-body"><p class="help-text">Строка не является полным счётчиком задач: короткие успешные вызовы ниже порога не записываются. Она нужна для локализации заметных задержек и ошибок по месту в коде.</p><div class="table-wrap"><table>
+        <thead><tr><th>Тип</th><th>Место в коде</th><th>Записанные замеры длительности</th><th>Среднее / максимум</th><th>Ошибки</th></tr></thead>
+        <tbody>{{deferredRows "inspect-async-task-row" .Tasks 50 50 5 "места запуска асинхронных задач"}}</tbody>
+      </table></div></div>
+    </details>{{end}}
+  </section>{{end -}}
+
+  {{- with .Summary.GCAnalysis}}<section id="gc-analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Сборка мусора и скорость выделения памяти</h2><div class="panel-kicker">Изменения счётчиков среды Android, скорость выделения памяти и временное соседство с окнами подтормаживаний.</div></div>
+    </div>
+    <div class="analysis-intro"><strong>Временная связь, а не доказанная причина:</strong> счётчики сборки мусора и выделения памяти относятся ко всему процессу. Событие считается соседним с окном интерфейса, если его время попало внутрь окна; при накоплении показателей это может быть конец интервала. Такое совпадение ещё не доказывает, что сборка мусора вызвала подтормаживание.</div>
+    <div class="grid">
+      <div class="metric"><div class="label">Сборки мусора: количество / время</div><div class="value">{{.CollectionCount}} / {{humanDuration .TotalTimeMS}}</div><div class="hint">интервалов с ростом счётчика: {{.CollectionWindows}}</div></div>
+      <div class="metric"><div class="label">Блокирующие сборки: количество / время</div><div class="value">{{.BlockingCount}} / {{humanDuration .BlockingTimeMS}}</div><div class="hint">счётчики всего процесса</div></div>
+      <div class="metric"><div class="label">Выделено / освобождено</div><div class="value">{{.BytesAllocated}} / {{.BytesFreed}} Б</div><div class="hint">положительные изменения счётчиков среды Android</div></div>
+      <div class="metric"><div class="label">Скорость выделения: средняя / максимальная</div><div class="value">{{humanBytesPerSecond .AvgAllocationRateBytesPerSec}} / {{humanBytesPerSecond .MaxAllocationRateBytesPerSec}}</div><div class="hint">{{ruCount .AllocationRateSamples "замер" "замера" "замеров"}}</div></div>
+      <div class="metric"><div class="label">Окна подтормаживаний рядом со сборкой мусора</div><div class="value">{{.JankyUIWindowsNearGC}}</div><div class="hint">временное пересечение, не доказанная причина</div></div>
+    </div>
+  </section>{{end -}}
+
+  {{- with .Summary.StartupAnalysis}}<section id="startup-analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Запуск приложения и переходы между экранами</h2><div class="panel-kicker">Первое открытие экрана после запуска процесса отделено от последующих открытий.</div></div>
+    </div>
+    <div class="analysis-intro"><strong>Методика:</strong> первое открытие после запуска — время от запуска наблюдения до первого события готовности экрана <code>onActivityResumed</code>. Последующие строки измеряют путь от создания экземпляра экрана до его готовности. Это <strong>не время до полной отрисовки</strong> и не показатель запуска из Android Macrobenchmark.</div>
+    <div class="grid">
+      <div class="metric"><div class="label">Первое открытие: среднее / максимум</div><div class="value">{{humanDuration .AvgColdResumeMS}} / {{humanDuration .MaxColdResumeMS}}</div><div class="hint">{{ruCount .ColdResumeSamples "запуск процесса" "запуска процесса" "запусков процесса"}}</div></div>
+      <div class="metric"><div class="label">Переходы UI в видимое / скрытое состояние</div><div class="value">{{.UIVisibleCount}} / {{.UIHiddenCount}}</div><div class="hint">события жизненного цикла Activity, а не состояние службы</div></div>
+    </div>
+    {{if .Screens}}<details class="fold" open><summary>Создание → готовность по экранам</summary><div class="fold-body"><div class="table-wrap"><table>
+      <thead><tr><th>Экран</th><th>Замеры</th><th>Среднее</th><th>Максимум</th></tr></thead>
+      <tbody>{{deferredRows "inspect-startup-screen-row" .Screens 50 50 4 "экраны запуска"}}</tbody>
+    </table></div></div></details>{{end}}
+    {{if .Transitions}}<details class="fold"><summary>Записанные переходы между экранами</summary><div class="fold-body"><div class="table-wrap"><table>
+      <thead><tr><th>Переход</th><th>Количество</th></tr></thead>
+      <tbody>{{deferredRows "inspect-startup-transition-row" .Transitions 50 50 2 "переходы между экранами"}}</tbody>
+    </table></div></div></details>{{end}}
+  </section>{{end -}}
+
+  {{with .Summary.AndroidComponents}}<section id="android-components" class="panel">
+    <div class="panel-head">
+      <div><h2>Компоненты Android и IPC</h2><div class="panel-kicker">Service, BroadcastReceiver и Binder/AIDL рассматриваются как единая межпроцессная цепочка; состояние службы переднего плана не подменяет видимость UI.</div></div>
+      <span class="pill">{{if .Partial}}частичный анализ{{else}}все процессы{{end}}</span>
+    </div>
+    <div class="analysis-intro"><strong>Как интерпретировать.</strong> Методы жизненного цикла и границы Binder — наблюдаемые события. Связь клиента и сервера строится только для единственного кандидата с тем же запуском приложения, дескриптором и кодом транзакции в одном временном окне: это <strong>вероятная, а не точная связь</strong>. Работа, оставшаяся открытой в конце записи, не считается зависшей без события завершения.</div>
+    {{if not .Available}}<p class="warning"><strong>Нет данных выполнения.</strong> Ни одного структурированного события состояния процесса, Service, BroadcastReceiver или Binder не записано; ниже доступно только статическое покрытие сборки.</p>{{end}}
+    {{if .Partial}}{{range .PartialReasons}}<p class="warning"><strong>Неполные данные:</strong> {{.}}</p>{{end}}{{end}}
+    {{with .Coverage}}
+      {{if .CatalogAvailable}}<article class="database-coverage-card coverage-{{if .UncoveredEntryPoints}}partial{{else}}full{{end}}">
+        <div class="database-coverage-head"><div><span class="status-note">артефакт сборки</span><h3>Статическое покрытие Android-компонентов</h3></div><strong>{{.InstrumentedEntryPoints}} / {{.EntryPoints}} точек входа</strong></div>
+        <p>Каталог связывает стабильный идентификатор компонента и код транзакции AIDL с кодом приложения. Он не доказывает выполнение метода, но показывает, какие границы вообще могли попасть в журнал.</p>
+        <div class="database-coverage-grid"><span>компоненты <strong>{{.Components}}</strong></span><span>Service / BroadcastReceiver <strong>{{.Services}} / {{.Receivers}}</strong></span><span>полностью / частично / нет <strong>{{.Full}} / {{.Partial}} / {{.None}}</strong></span><span>точки входа без перехвата <strong>{{.UncoveredEntryPoints}}</strong></span><span>интерфейсы / методы AIDL <strong>{{.AIDLInterfaces}} / {{.AIDLTransactions}}</strong></span></div>
+      </article>{{else}}<p class="warning"><strong>Статическое покрытие неизвестно.</strong> Передайте <code>android-components-catalog.jsonl</code> из артефактов варианта: события выполнения остаются полезными, но отчёт не может показать пропущенные точки входа.</p>{{end}}
+    {{end}}
+    <div class="grid">
+      <div class="metric"><div class="label">Видимый UI / скрытый UI</div><div class="value">{{.ProcessState.VisibleUISamples}} / {{.ProcessState.HiddenUISamples}}</div><div class="hint">из {{.ProcessState.Samples}} замеров состояния процесса</div></div>
+      <div class="metric"><div class="label">Служба переднего плана без активного окна</div><div class="value">{{.ProcessState.HiddenForegroundServiceSamples}}</div><div class="hint">процесс важен из-за службы, но UI скрыт; это не передний план UI</div></div>
+      <div class="metric"><div class="label">Методы Service / ошибки / превышения времени</div><div class="value">{{.Services.Callbacks}} / {{.Services.Failures}} / {{.Services.Timeouts}}</div><div class="hint">медленных ≥100 мс: {{.Services.SlowCallbacks}} · активных в конце: {{.Services.ActiveInstancesAtEnd}}</div></div>
+      <div class="metric"><div class="label">Переходы службы в передний план / из него</div><div class="value">{{.Services.ForegroundEntries}} / {{.Services.ForegroundExits}}</div><div class="hint">активных служб переднего плана в конце записи: {{.Services.ActiveForegroundAtEnd}}</div></div>
+      <div class="metric"><div class="label">BroadcastReceiver: завершения / ошибки</div><div class="value">{{.Receivers.Completed}} / {{.Receivers.Failures}}</div><div class="hint">асинхронных: {{.Receivers.AsyncCompleted}} · медленных синхронных: {{.Receivers.SyncSlowCallbacks}} · близко к системному пределу: {{.Receivers.AsyncDeadlineRisks}}</div></div>
+      <div class="metric"><div class="label">Binder: клиент / сервер</div><div class="value">{{.Binder.ClientCalls}} / {{.Binder.ServerCalls}}</div><div class="hint">клиент, верхние 5% {{humanMicros .Binder.P95ClientDurationUS}} · медленных на главном потоке {{.Binder.SlowMainThreadCalls}} · ошибок {{.Binder.Failures}}</div></div>
+      <div class="metric"><div class="label">Охват цепочек IPC</div><div class="value">{{.Binder.CorrelatedPairs}} пар</div><div class="hint">между процессами {{.Binder.CrossProcessPairs}} · неоднозначных {{.Binder.AmbiguousClients}} · без пары {{.Binder.UnmatchedClients}} / {{.Binder.UnmatchedServers}}</div></div>
+      <div class="metric"><div class="label">Качество данных Binder</div><div class="value">{{.Binder.UncorrelatableEvents}} / {{.Binder.CorrelationDroppedEvents}}</div><div class="hint">без данных для связи / часть цепочек не сохранена</div></div>
+    </div>
+    {{if .Services.Components}}<details class="fold" open><summary>Жизненный цикл Service по компонентам · {{len .Services.Components}}</summary><div class="fold-body">{{rowLimitNote "Компоненты Service" (len .Services.Components) 512}}<div class="table-wrap"><table><thead><tr><th>Service / процесс</th><th>Вызовы методов</th><th>Ошибки / превышения времени / медленные</th><th>Вход в передний план / выход</th><th>Активен в конце</th><th>Верхние 5% / максимум</th></tr></thead><tbody>{{range limitRows .Services.Components 512}}<tr><td><code>{{.Component}}</code><div class="muted">{{.Process}}</div></td><td>{{.Callbacks}}</td><td>{{.Failures}} / {{.Timeouts}} / {{.SlowCallbacks}}</td><td>{{.ForegroundEntries}} / {{.ForegroundExits}}</td><td>{{.ActiveInstancesAtEnd}} (на переднем плане {{.ActiveForegroundAtEnd}})</td><td>{{humanMicros .P95DurationUS}} / {{humanMicros .MaxDurationUS}}</td></tr>{{end}}</tbody></table></div></div></details>{{end}}
+    {{if .Receivers.Components}}<details class="fold" open><summary>Цепочки BroadcastReceiver по компонентам · {{len .Receivers.Components}}</summary><div class="fold-body">{{rowLimitNote "Компоненты BroadcastReceiver" (len .Receivers.Components) 512}}<div class="table-wrap"><table><thead><tr><th>BroadcastReceiver / действие / процесс</th><th>Завершения / ошибки</th><th>Асинхронные / близко к пределу</th><th>Медленные синхронные</th><th>Открыт в конце</th><th>Верхние 5% / максимум</th></tr></thead><tbody>{{range limitRows .Receivers.Components 512}}<tr><td><code>{{.Component}}</code><div class="muted">{{.Action}} · {{.Process}}</div></td><td>{{.Completed}} / {{.Failures}}</td><td>{{.AsyncCompleted}} / {{.AsyncDeadlineRisks}}</td><td>{{.SyncSlowCallbacks}}</td><td>{{.ActiveAtEnd}}</td><td>{{humanMicros .P95DurationUS}} / {{humanMicros .MaxDurationUS}}</td></tr>{{end}}</tbody></table></div></div></details>{{end}}
+    {{if .Binder.Interfaces}}<details class="fold" open><summary>Интерфейсы Binder/AIDL · {{len .Binder.Interfaces}}</summary><div class="fold-body">{{rowLimitNote "Интерфейсы Binder" (len .Binder.Interfaces) 512}}<div class="table-wrap"><table><thead><tr><th>Дескриптор / метод / код</th><th>Клиент / сервер</th><th>На главном потоке / медленные</th><th>Ошибки / не обработано</th><th>Клиент: верхние 5% / максимум</th></tr></thead><tbody>{{range limitRows .Binder.Interfaces 512}}<tr><td><code>{{.Descriptor}}</code><div class="muted">{{.Method}} · транзакция {{.TransactionCode}}</div></td><td>{{.ClientCalls}} / {{.ServerCalls}}</td><td>{{.MainThreadCalls}} / {{.SlowMainThreadCalls}}</td><td>{{.Failures}} / {{.Unhandled}}</td><td>{{humanMicros .P95ClientDurationUS}} / {{humanMicros .MaxClientDurationUS}}</td></tr>{{end}}</tbody></table></div></div></details>{{end}}
+    {{if .Binder.Flows}}<details class="fold" open><summary>Восстановленные цепочки IPC · {{len .Binder.Flows}}</summary><div class="fold-body"><p class="help-text">Строка показывает наиболее сильную допустимую связь без чтения Parcel. При нескольких кандидатах цепочка не создаётся.</p>{{rowLimitNote "Цепочки IPC" (len .Binder.Flows) 512}}<div class="table-wrap"><table><thead><tr><th>Интерфейс</th><th>Клиент → сервер</th><th>Длительность клиента / сервера</th><th>Связь</th><th>Основание</th></tr></thead><tbody>{{range limitRows .Binder.Flows 512}}<tr><td><code>{{.Descriptor}}</code><div class="muted">{{.Method}} · {{.TransactionCode}}</div></td><td>{{.ClientProcess}} → {{.ServerProcess}}{{if .CrossProcess}}<div class="muted">между процессами</div>{{end}}</td><td>{{humanMicros .ClientDurationUS}} / {{humanMicros .ServerDurationUS}}</td><td>{{problemClaimLabel .ClaimLevel}} · {{confidenceLabel .Confidence}}{{if .OneWay}} · односторонняя{{end}}</td><td>{{.Evidence}}</td></tr>{{end}}</tbody></table></div></div></details>{{end}}
+    <div class="report-limit-note"><strong>Privacy boundary:</strong> Parcel payload, Intent extras, raw UID/PID и сообщения исключений не читаются и не сохраняются. Descriptor, method, transaction code, component и action — единственная разрешённая metadata; архитектура каталога допускает добавление новых безопасных полей отдельной версией формата.</div>
+  </section>{{end}}
+
   {{if .Summary.Screens}}<section id="ui" class="panel">
     <div class="panel-head">
-      <div><h2>Плавность UI и возможные причины</h2><div class="panel-kicker">Для каждого экрана отчёт собирает единый маршрут расследования: симптом → кандидаты причины → подтверждения → код → проверка.</div></div>
+      <div><h2>Плавность интерфейса и возможные причины</h2><div class="panel-kicker">Для каждого экрана отчёт собирает единый маршрут расследования: симптом → кандидаты причины → подтверждения → код → проверка.</div></div>
     </div>
     <div class="analysis-intro ui-attribution-intro"><strong>Как читать:</strong> сначала показаны события, для которых подтверждён главный поток или долгая пауза. Длинные вызовы кода и сеть ниже означают совпадение в том же сценарии — их связь с конкретным медленным кадром нужно проверить.</div>
     {{$uiInsights := uiScreenInsights .Summary}}
+    {{$uiProblemCount := uiProblemCount $uiInsights}}
+    {{if gt $uiProblemCount 0}}<div class="ui-problem-summary warning"><strong>Экраны, требующие внимания: {{$uiProblemCount}}.</strong> Они показаны первыми. Внутри каждого экрана перечислены все найденные проблемные элементы и факторы, без ограничения первыми четырьмя.</div>{{else}}<div class="ui-problem-summary quality-notice"><strong>Экранов с подтверждёнными проблемами плавности не найдено.</strong> Ниже остаются все измеренные экраны и ограничения данных.</div>{{end}}
     <div class="analysis-insight-grid ui-insight-grid">
       {{range $uiInsights}}
       <article class="analysis-insight-card ui-screen-insight {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
@@ -286,7 +433,7 @@
         <p class="ui-diagnosis"><strong>Итог анализа:</strong> {{.Diagnosis}}</p>
         {{if .Causes}}
         <section class="ui-cause-analysis" aria-label="Кандидаты причины подвисаний">
-          <h4>Что могло замедлить интерфейс</h4>
+          <h4>Все найденные проблемные элементы и факторы</h4>
           <div class="ui-cause-grid">
             {{range .Causes}}
             <article class="ui-cause-card relation-{{.RelationClass}}">
@@ -319,31 +466,93 @@
         <div class="chart-list">
           {{range limitRows .Summary.Screens 64}}
           <div class="chart-row"><code>{{contextHint .Screen "screen"}}</code><div class="chart-track warn"><i style="{{pctWidth .JankRatePct}}"></i></div><strong>{{printf "%.2f" .JankRatePct}}%</strong></div>
-          {{else}}<div class="muted">Нет событий UI-окон.</div>{{end}}
+          {{else}}<div class="muted">Нет событий окон интерфейса.</div>{{end}}
         </div>
         <h3>Подробная таблица экранов</h3>
         <table>
-          <tr><th>{{tip "Экран" "Имя экрана из контекста выполнения или ASM-аннотации."}}</th><th>{{tip "Окна" "Число интервалов наблюдения за UI на этом экране."}}</th><th>{{tip "Кадры" "Общее число кадров в записанных интервалах."}}</th><th>{{tip "Медленные кадры" "Кадры, превысившие целевое время текущей частоты экрана."}}</th><th>{{tip "Доля подтормаживаний" "Процент медленных кадров. На коротком интервале учитывайте также общее число кадров."}}</th><th>{{tip "Средний FPS" "Средняя частота кадров. Сравнивайте на устройствах с одинаковой частотой дисплея."}}</th><th>{{tip "Мин. FPS" "Самая низкая частота кадров среди интервалов наблюдения."}}</th><th>{{tip "Задержка верхних 5% кадров" "Техническое обозначение — p95: у 95% кадров длительность была не больше этого значения."}}</th><th>{{tip "Задержка верхнего 1% кадров" "Техническое обозначение — p99: у 99% кадров длительность была не больше этого значения."}}</th><th>Источник данных о кадрах</th><th>Целевое время кадра</th></tr>
+          <tr><th>{{tip "Экран" "Имя экрана из контекста выполнения или автоматической разметки кода."}}</th><th>{{tip "Окна" "Число интервалов наблюдения за интерфейсом на этом экране."}}</th><th>{{tip "Кадры" "Общее число кадров в записанных интервалах."}}</th><th>{{tip "Медленные кадры" "Кадры, превысившие целевое время текущей частоты экрана."}}</th><th>{{tip "Доля подтормаживаний" "Процент медленных кадров. На коротком интервале учитывайте также общее число кадров."}}</th><th>{{tip "Средняя частота кадров" "Среднее число кадров в секунду. Сравнивайте на устройствах с одинаковой частотой дисплея."}}</th><th>{{tip "Минимальная частота кадров" "Самое низкое число кадров в секунду среди интервалов наблюдения."}}</th><th>{{tip "Задержка верхних 5% кадров" "Техническое обозначение — p95: у 95% кадров длительность была не больше этого значения."}}</th><th>{{tip "Задержка верхнего 1% кадров" "Техническое обозначение — p99: у 99% кадров длительность была не больше этого значения."}}</th><th>Источник данных о кадрах</th><th>Целевое время кадра</th></tr>
           {{range .Summary.Screens}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td><td>{{.WindowCount}}</td><td>{{.Frames}}</td><td>{{.JankyFrames}}</td>
             <td><div>{{printf "%.2f" .JankRatePct}}%</div><div class="bar"><i style="{{pctWidth .JankRatePct}}"></i></div></td>
-            <td>{{if ne .AvgFPS 0.0}}{{printf "%.1f" .AvgFPS}}{{else if eq .FPSStatus "sparse_rendering"}}не оценивается: редкая отрисовка{{else}}недостаточно кадров{{end}}</td><td>{{if ne .MinFPS 0.0}}{{printf "%.1f" .MinFPS}}{{else}}—{{end}}</td><td>{{.FrameP95MS}} мс</td><td>{{.FrameP99MS}} мс</td><td>{{.FrameSource}}</td><td>{{if gt .FrameDeadlineUS 0}}{{humanMicros .FrameDeadlineUS}}{{else}}{{.FrameDeadlineStatus}}{{end}}</td>
+            <td>{{if ne .AvgFPS 0.0}}{{printf "%.1f" .AvgFPS}}{{else if eq .FPSStatus "sparse_rendering"}}не оценивается: редкая отрисовка{{else}}недостаточно кадров{{end}}</td><td>{{if ne .MinFPS 0.0}}{{printf "%.1f" .MinFPS}}{{else}}—{{end}}</td><td>{{.FrameP95MS}} мс</td><td>{{.FrameP99MS}} мс</td><td>{{frameSourceLabel .FrameSource}}</td><td>{{if gt .FrameDeadlineUS 0}}{{humanMicros .FrameDeadlineUS}}{{else}}{{.FrameDeadlineStatus}}{{end}}</td>
           </tr>
-          {{else}}<tr><td colspan="11" class="muted">Нет событий UI-окон.</td></tr>{{end}}
+          {{else}}<tr><td colspan="11" class="muted">Нет событий окон интерфейса.</td></tr>{{end}}
         </table>
       </div>
     </details>
   </section>{{end}}
 
-  {{$semanticRows := semanticWorkRows .Summary}}
-  {{if $semanticRows}}<section id="specialized-work" class="panel">
+  {{with .Summary.WorkerAnalysis}}<section id="workers" class="panel">
     <div class="panel-head">
-      <div><h2>Compose, Room и фоновые задачи</h2><div class="panel-kicker">Отдельный анализ фаз интерфейса, обращений к базе данных и Worker — с потоком, местом в коде и понятным статусом.</div></div>
+      <div><h2>Жизненный цикл фоновых задач</h2><div class="panel-kicker">Постановка в очередь, фактическое выполнение, результат, параллелизм и нагрузка в тех же временных интервалах.</div></div>
     </div>
-    <div class="analysis-intro"><strong>Как читать:</strong> карточки показывают итог по каждому источнику. «Есть кандидаты для проверки» означает превышение прикладного порога, а не автоматически доказанную первопричину.</div>
+    <div class="analysis-intro"><strong>Граница вывода:</strong> постановка в очередь, запуск и завершение одного экземпляра связываются только внутри одного процесса и сеанса записи. Незавершённые интервалы не продлеваются до конца журнала. <strong>Временная связь, а не доказанная причина:</strong> загрузка процессора, выделение памяти, сборка мусора, сеть и файловые операции могли совпасть с выполнением фоновой задачи, но для доказательства причины нужен профиль соответствующего этапа.</div>
     <div class="analysis-insight-grid specialized-work-grid">
-      {{range semanticWorkOverviews .Summary}}
+      <article class="analysis-insight-card">
+        <div class="analysis-insight-head"><span>жизненный цикл</span><small>{{ruCount .Instances "экземпляр" "экземпляра" "экземпляров"}}</small></div>
+        <h3>Переходы и результаты</h3>
+        <p><strong>Записано:</strong> поставлено в очередь {{.Enqueued}} · запущено {{.Started}} · завершено {{.Finished}}.</p>
+        <p><strong>Итоги:</strong> успешно {{.Success}} · ошибок {{.Failures}} · повторов {{.Retries}} · отмен {{.Cancelled}}.</p>
+        <p><strong>Неполные цепочки:</strong> без постановки в очередь {{.MissingEnqueue}} · без запуска {{.MissingStart}} · без завершения {{.MissingFinish}}.</p>
+      </article>
+      <article class="analysis-insight-card">
+        <div class="analysis-insight-head"><span>задержка</span><small>{{ruCount .RunSamples "завершённая попытка" "завершённые попытки" "завершённых попыток"}}</small></div>
+        <h3>Ожидание запуска и работа</h3>
+        <p><strong>Ожидание запуска:</strong> медиана {{humanDuration .WaitP50MS}} · верхние 5% {{humanDuration .WaitP95MS}} · максимум {{humanDuration .WaitMaxMS}}.</p>
+        <p><strong>Выполнение:</strong> медиана {{humanDuration .RunP50MS}} · верхние 5% {{humanDuration .RunP95MS}} · максимум {{humanDuration .RunMaxMS}}.</p>
+      </article>
+      <article class="analysis-insight-card">
+        <div class="analysis-insight-head"><span>нагрузка</span><small>{{ruCount .Executions "попытка" "попытки" "попыток"}}</small></div>
+        <h3>Параллелизм</h3>
+        <p><strong>Параллельно ожидало:</strong> до {{.MaxQueued}}.</p>
+        <p><strong>Параллельно работало:</strong> до {{.MaxRunning}}.</p>
+        <p><strong>Периодические экземпляры:</strong> {{.PeriodicInstances}} · запусков на главном потоке: {{.MainThreadStarts}}.</p>
+      </article>
+    </div>
+    {{$workerRows := workerRows $.Summary}}
+    <details class="fold" open>
+      <summary>Фоновые задачи по классам: жизненный цикл и стоимость</summary>
+      <div class="fold-body">
+        {{rowLimitNote "Фоновые задачи" (len $workerRows) 256}}
+        <div class="table-wrap"><table>
+          <tr><th>Класс фоновой задачи</th><th>Статус</th><th>{{tip "Контекст" "Экран, пользовательская операция и владелец участка кода, активные во время события. Если контекст не указан, наведите на значение для пояснения."}}</th><th>Переходы состояния</th><th>Результаты</th><th>Ожидание запуска: верхние 5%</th><th>Выполнение: верхние 5% / максимум</th><th>Параллелизм</th></tr>
+          {{range limitRows $workerRows 256}}
+          <tr><td><code>{{.Worker}}</code></td><td><span class="status-note {{severityClass .Severity}}">{{.Status}}</span></td><td>{{if .ContextHelp}}{{tip .Context .ContextHelp}}{{else}}{{.Context}}{{end}}</td><td>{{.Lifecycle}}</td><td>{{.Outcomes}}</td><td>{{if gt .WaitSamples 0}}{{humanDuration .WaitP95MS}}{{else}}нет полной цепочки «очередь → запуск»{{end}}</td><td>{{if gt .RunSamples 0}}{{humanDuration .RunP95MS}} / {{humanDuration .RunMaxMS}}{{else}}нет завершённых попыток{{end}}</td><td>до {{.MaxConcurrency}}</td></tr>
+          {{else}}<tr><td colspan="8" class="muted">В журнале фоновых задач нет распознанных классов.</td></tr>{{end}}
+        </table></div>
+      </div>
+    </details>
+    <details class="fold">
+      <summary>Нагрузка во время выполнения фоновых задач</summary>
+      <div class="fold-body">
+        <div class="analysis-intro"><strong>Временная связь, а не доказанная причина.</strong> Сетевые и файловые операции считаются по пересечению интервалов; загрузка процессора, выделение памяти, сборка мусора и память процесса — по замерам внутри завершённого выполнения. Одна операция может пересекаться с несколькими одновременно работающими фоновыми задачами.</div>
+        <div class="table-wrap"><table>
+          <tr><th>Класс фоновой задачи</th><th>Сетевые запросы</th><th>Файловые операции</th><th>Средняя загрузка процессора</th><th>Выделение памяти</th><th>Сборка мусора</th><th>Изменение памяти процесса</th></tr>
+          {{range limitRows $workerRows 256}}
+          <tr>
+            <td><code>{{.Worker}}</code></td>
+            <td>{{.CorrelatedHTTPCalls}} · ошибок {{.CorrelatedHTTPFailures}} · полная длительность вызовов {{humanDuration .CorrelatedHTTPDurationMS}}</td>
+            <td>{{.CorrelatedIOOperations}} · {{humanMicros .CorrelatedIODurationUS}} · {{.CorrelatedIOBytes}} Б</td>
+            <td>{{.CPU}}</td>
+            <td>{{.Allocation}}</td>
+            <td>сборок {{.GCCount}} · {{.GCTimeMS}} мс; блокирующих {{.GCBlockingCount}} / {{.GCBlockingTimeMS}} мс</td>
+            <td>{{.Memory}}</td>
+          </tr>
+          {{else}}<tr><td colspan="7" class="muted">Нет фоновых задач для сопоставления нагрузки.</td></tr>{{end}}
+        </table></div>
+      </div>
+    </details>
+  </section>{{end -}}
+
+  {{$composeReport := composeWorkReport .Summary}}
+  {{with $composeReport}}<section id="compose-analysis" class="panel">
+    <div class="panel-head">
+      <div><h2>Интерфейс на Jetpack Compose</h2><div class="panel-kicker">Сначала показаны все элементы, способные занять кадр или выполнявшиеся подозрительно часто. Обычные наблюдения убраны ниже.</div></div>
+    </div>
+    <div class="analysis-intro"><strong>Как читать:</strong> «превышен бюджет кадра» означает, что одно выполнение само заняло не меньше 16 мс. «Подозрительно частые выполнения» означает большую повторяемость с заметным суммарным временем. Вложенные функции могут пересекаться, поэтому их суммарное время нельзя складывать как чистое время процессора.</div>
+    <div class="analysis-insight-grid specialized-work-grid">
+      {{with .Overview}}
       <article class="analysis-insight-card {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
         <div class="analysis-insight-head"><span>{{.Status}}</span><small>{{ruCount .Boundaries "место в коде" "места в коде" "мест в коде"}}</small></div>
         <h3>{{.Title}}</h3>
@@ -353,29 +562,252 @@
       </article>
       {{end}}
     </div>
-    <details class="fold">
-      <summary>Все измеренные границы Compose, Room и Worker</summary>
+    {{if .Problems}}<details class="fold compose-problem-registry" open>
+      <summary>Проблемные элементы Compose · {{ruCount (len .Problems) "место" "места" "мест"}}</summary>
       <div class="fold-body">
-        {{rowLimitNote "Специализированные измерения" (len $semanticRows) 256}}
-        <div class="table-wrap"><table class="semantic-work-table">
-          <tr><th>Источник</th><th>{{tip "Фаза или операция" "Compose-фаза, вызов Room DAO или итог выполнения Worker."}}</th><th>{{tip "Поток" "Главный поток строит UI: долгая работа на нём особенно опасна для кадров и ввода."}}</th><th>Класс или метод</th><th>Контекст</th><th>Количество</th><th>{{tip "Суммарно" "Сумма длительностей границы. Вложенные Compose-функции могут пересекаться, поэтому это не чистое время CPU."}}</th><th>Самое долгое</th><th>{{tip "Статус" "Краткая интерпретация относительно безопасных прикладных порогов. Наведите на статус для пояснения."}}</th></tr>
-          {{range limitRows $semanticRows 256}}
-          <tr><td>{{.Domain}}</td><td>{{.Kind}}</td><td>{{.Thread}}</td><td class="semantic-owner" data-tip="Полное место в коде: {{.Owner}}"><code>{{.Owner}}</code></td><td data-tip="Полный контекст: {{.Context}}">{{.Context}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><span class="status-note" data-tip="{{.StatusHelp}}">{{.Status}}</span></td></tr>
+        <p class="help-text">Это полный список найденных в данном журнале проблемных мест Compose, а не только первые несколько строк. Начинайте с верхних: они отсортированы по тяжести и худшей длительности.</p>
+        <div class="table-wrap"><table class="semantic-work-table compose-problem-table">
+          <tr><th>Почему подозрительно</th><th>Что выполнялось</th><th>Функция или метод</th><th>{{tip "Где проявилось" "Экран и пользовательская операция, активные во время выполнения. Если контекст не указан, наведите на значение для пояснения."}}</th><th>Количество</th><th>{{tip "Суммарно" "Сумма длительностей границы. Вложенные функции Compose могут пересекаться, поэтому это не чистое время процессора."}}</th><th>Худший случай</th><th>Что исправить</th></tr>
+          {{range .Problems}}
+          <tr class="{{severityClass .Severity}}"><td><span class="status-note {{severityClass .Severity}}" data-tip="{{.StatusHelp}}">{{.Status}}</span></td><td>{{.Kind}} · {{.Thread}} поток</td><td class="semantic-owner" data-tip="Полное место в коде: {{.Owner}}"><code>{{.Owner}}</code></td><td>{{if .ContextHelp}}{{tip .Context .ContextHelp}}{{else}}{{.Context}}{{end}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td><strong>{{.MaxMS}} мс</strong></td><td class="compose-action">{{.Action}}</td></tr>
           {{end}}
         </table></div>
       </div>
-    </details>
+    </details>{{else}}<div class="quality-notice compose-no-problems"><strong>Явных проблем Compose в записанном сценарии не найдено.</strong> Ни одно измеренное место не заняло стандартный бюджет кадра и не превысило порог частых выполнений.</div>{{end}}
+    {{if .Observations}}<details class="fold">
+      <summary>Остальные измеренные функции и фазы Compose · {{len .Observations}}</summary>
+      <div class="fold-body">
+        <p class="help-text">Эти строки измерены, но пороги явной проблемы не превышены. Откройте их, если расследуете конкретный элемент или хотите проверить полноту покрытия.</p>
+        <div class="table-wrap"><table class="semantic-work-table">
+          <tr><th>Что выполнялось</th><th>Поток</th><th>Функция или метод</th><th>{{tip "Где проявилось" "Экран и пользовательская операция, активные во время выполнения. Если контекст не указан, наведите на значение для пояснения."}}</th><th>Количество</th><th>Суммарно</th><th>Худший случай</th><th>Оценка</th></tr>
+          {{range .Observations}}
+          <tr><td>{{.Kind}}</td><td>{{.Thread}}</td><td class="semantic-owner" data-tip="Полное место в коде: {{.Owner}}"><code>{{.Owner}}</code></td><td>{{if .ContextHelp}}{{tip .Context .ContextHelp}}{{else}}{{.Context}}{{end}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><span class="status-note" data-tip="{{.StatusHelp}}">{{.Status}}</span></td></tr>
+          {{end}}
+        </table></div>
+      </div>
+    </details>{{end}}
   </section>{{end}}
 
-  {{if or .Summary.Flows .Summary.LogSpam .Summary.ProblemWindows .Summary.ProcessExits .Summary.IOOperations .Summary.RuntimeCalls}}<section id="flows" class="panel">
+  {{$roomRows := roomWorkRows .Summary}}
+  {{$databaseRows := databaseStatementRows .Summary}}
+  {{$databaseTransactionRows := databaseTransactionRows .Summary}}
+  {{$databaseScenarioRows := databaseScenarioRows .Summary}}
+  {{if or .Summary.DatabaseCoverage.Status .Summary.DatabaseAnalysis $roomRows}}<section id="database-analysis" class="panel">
     <div class="panel-head">
-      <div><h2>Сценарии и причины</h2><div class="panel-kicker">Объединённый анализ показывает, что увидит пользователь, какие сигналы совпали в одном контексте и с какого кода начать проверку.</div></div>
+      <div><h2>База данных: SQLite и Room</h2><div class="panel-kicker">Фактические SQL-вызовы, длительность, частота, повторы, ошибки и место обращения к базе.</div></div>
+      {{with .Summary.DatabaseAnalysis}}<span class="pill">{{ruCount .Overall.Calls "вызов" "вызова" "вызовов"}}</span>{{end}}
     </div>
-    {{$scenarioInsights := scenarioInsights .Summary}}
-    {{if $scenarioInsights}}<div class="analysis-intro">Каждая карточка объединяет события одного экрана, сценария, шага и источника. Чем больше разных сигналов совпало, тем выше карточка в списке.</div>
-    <div class="analysis-insight-grid scenario-insight-grid">
-      {{range $scenarioInsights}}
-      <article class="analysis-insight-card scenario-insight-card {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
+    <div class="analysis-intro"><strong>Два независимых уровня наблюдения:</strong> таблица SQL показывает реальные вызовы SQLite/SupportSQLite/Room, а таблица DAO ниже — границы сгенерированного кода Room. Они не объединяются и не подменяют друг друга.</div>
+    {{with .Summary.DatabaseCoverage}}{{if .Status}}<article class="database-coverage-card coverage-{{.Status}}">
+      <div class="database-coverage-head"><div><span class="status-note">{{.StatusLabel}}</span><h3>Полнота данных БД</h3></div><strong>{{.ObservedCalls}} наблюдений</strong></div>
+      <p>{{.Explanation}}</p><p class="database-next-action"><strong>Следующий шаг:</strong> {{.Action}}</p>
+      <div class="database-coverage-grid"><span>запуски со сбором <strong>{{.RuntimeEnabledSessions}} / {{.CollectorSessions}}</strong></span><span>перехваты БД через ASM <strong>{{.InstrumentedHooks}}</strong></span><span>неподдерживаемые вызовы <strong>{{.UnsupportedCandidates}}</strong></span><span>известен SQL <strong>{{.KnownSQLCalls}} / {{.ObservedCalls}}</strong></span><span>события транзакций <strong>{{.ObservedTransactionEvents}}</strong></span><span>завершены / не завершены <strong>{{.CompletedTransactions}} / {{.IncompleteTransactions}}</strong></span></div>
+      <details><summary>Как включить и проверить сбор</summary><pre class="database-config-snippet"><code>jankHunter {
+  instrument {
+    databaseTracing.set(true)
+  }
+}</code></pre><p class="help-text">Автоматически поддерживаются проверенные вызовы SQLiteDatabase/SQLiteStatement, SupportSQLite и Room. Значения параметров SQL не записываются. Для пользовательской ORM и SQLCipher охват пока подтверждается только фактическими событиями или отдельным API адаптера.</p></details>
+    </article>{{end}}{{end}}
+    {{if not .Summary.DatabaseAnalysis}}<div class="report-limit-note"><strong>SQL-метрики недоступны.</strong> {{if .Summary.DatabaseCoverage.Status}}Причина и следующий проверяемый шаг указаны в карточке охвата выше.{{else}}Диагностика охвата не сформирована для этой программно созданной сводки.{{end}} Ноль событий не доказывает отсутствие работы с БД.</div>{{end}}
+    {{with .Summary.DatabaseAnalysis}}
+    {{$problemDatabaseRows := databaseProblemRows $databaseRows}}
+    {{$observedDatabaseRows := databaseObservationRows $databaseRows}}
+    <div class="database-statement-registry">
+      <p class="help-text">Значения параметров не записываются: числа и строки заменяются знаком «?». Проблемная карточка сначала объясняет влияние и действие, затем показывает полный SQL-шаблон, метрики и сохранённые контексты. Количество, сумма и максимум остаются точными; знак ≈ отмечает приблизительную частоту или границу распределения.</p>
+      {{rowLimitNote "SQL-шаблоны" (len $databaseRows) 512}}
+      {{if $problemDatabaseRows}}<div class="database-problem-list"><h3>Сначала проверьте проблемные SQL-вызовы</h3>{{range limitRows $problemDatabaseRows 512}}{{template "inspect-database-statement-card" .}}{{end}}</div>{{else}}<div class="quality-notice"><strong>Явных отклонений БД в записанном сценарии не найдено.</strong> Ни один сохранённый SQL-шаблон не превысил пороги задержки, ошибок, частоты или быстрых повторов.</div>{{end}}
+    </div>
+    {{with .Evidence}}<div class="database-plan-evidence-registry">
+      <h3>Отдельно переданные данные схемы и плана SQL-запроса</h3>
+      <p class="help-text">Анализатор читает только явно переданный заранее очищенный JSON, сопоставляет его по отпечатку и операции и не выполняет SQL, EXPLAIN или PRAGMA. Совпало {{.MatchedStatements}} из {{.LoadedStatements}} SQL-шаблонов; план приложен для {{.PlanStatements}}, схема — для {{.SchemaStatements}}{{if .UnmatchedStatements}}; не совпало — {{.UnmatchedStatements}}{{end}}{{if .AmbiguousStatements}}; неоднозначных отпечатков — {{.AmbiguousStatements}}{{end}}.</p>
+      {{if .Findings}}<div class="database-problem-list">{{range limitRows .Findings 256}}<article class="database-statement-card sev-medium">
+        <div class="database-statement-head"><div><strong>{{.Summary}}</strong><div class="mono muted">{{.Operation}}{{if .Table}} · {{.Table}}{{end}}{{if .Index}} · {{.Index}}{{end}}</div></div><span class="status-note">зафиксировано · {{databasePlanKindLabel .Kind}}</span></div>
+        <pre class="database-sql-template"><code>{{if .Query}}{{.Query}}{{else}}SQL-текст не определён{{end}}</code></pre>
+        <div class="database-statement-explanation"><p><strong>Что это доказывает:</strong> указанный шаг присутствовал в импортированном плане совпавшего SQL-шаблона.</p><p><strong>Что сделать и как проверить:</strong> {{.Action}}</p></div>
+      </article>{{end}}</div>{{else}}<div class="quality-notice"><strong>Диагностических шагов плана для совпавших SQL-шаблонов нет.</strong> Схема может помогать ручной проверке, но без данных плана отчёт не объявляет SCAN или временное B-дерево.</div>{{end}}
+      <p class="report-limit-note"><strong>Граница интерпретации:</strong> даже наблюдаемый SCAN не доказывает, что индекс нужен: полный проход может быть оптимальным. Свежесть артефакта и репрезентативность данных подтверждает разработчик повторным планом и измерением сценария.</p>
+    </div>{{end}}
+    {{if $databaseScenarioRows}}<div class="database-scenario-registry">
+      <div class="database-problem-list"><h3>Сценарные гипотезы</h3>
+      <p class="help-text">Одна граница сценария — это одна операция приложения или одна транзакция внутри конкретного процесса и запуска приложения. Длинный прогон нормализуется на число таких границ; значения параметров SQL не собираются.</p>
+      {{range limitRows $databaseScenarioRows 256}}<article class="database-statement-card sev-{{.Severity}}">
+        <div class="database-statement-head"><div><strong>{{.Title}}</strong><div class="mono muted">{{databaseScenarioScopeLabel .Stats.ScopeKind}} · {{reportHint .Stats.ContextOperation "операция не определена" "operation"}} · {{reportHint .Stats.Source "место вызова не определено" "owner"}}</div></div><span class="status-note">гипотеза</span></div>
+        <pre class="database-sql-template"><code>{{reportHint .Stats.Query "SQL-шаблон не записан" "database-query"}}</code></pre>
+        <div class="database-statement-metrics">
+          <span>примерное число вызовов / затронутых границ<strong>≈ {{.Stats.EstimatedCalls}} / {{.Stats.AffectedScopes}}</strong></span>
+          <span>максимум вызовов в одной границе<strong>{{.Stats.MaxCallsPerScope}}</strong></span>
+          <span>вызовов на наблюдаемую границу<strong>≈ {{printf "%.2f" .Stats.CallsPerObservedScope}}</strong></span>
+          <span>общая длительность БД<strong>{{humanMicros .Stats.TotalDurationUS}}</strong></span>
+          <span>главный поток / ошибки<strong>{{.Stats.MainThreadCalls}} / {{.Stats.Failures}}</strong></span>
+          <span>максимальная длина серии<strong>{{humanMicros .Stats.MaxSequenceSpanUS}}</strong></span>
+        </div>
+        <div class="database-statement-explanation"><p><strong>Почему это важно:</strong> {{.Why}}</p><p><strong>Что сделать и как проверить:</strong> {{.Action}}</p></div>
+      </article>{{end}}</div>
+      {{with .Scenarios}}{{if or .DroppedEvents .DroppedCandidates}}<p class="report-limit-note"><strong>Часть серий повторов не сохранена.</strong> Показанные места и серии реальны, но их полное число и общая длительность могут быть выше.</p>{{end}}{{end}}
+    </div>{{end}}
+    {{with .Transactions}}
+      {{$problemTransactions := databaseProblemTransactionRows $databaseTransactionRows}}
+      {{$observedTransactions := databaseObservedTransactionRows $databaseTransactionRows}}
+      <div class="database-transaction-registry">
+        <div class="analysis-intro"><strong>Как читать жизненный цикл транзакции.</strong> Событие завершения даёт фактический результат, длительность и число операций чтения и записи. Незавершённые транзакции не получают искусственную длительность до конца сессии. Общая длительность не означает ожидание блокировки: оно показывается только при явном измерении соответствующей фазы.</div>
+        {{if $problemTransactions}}<div class="database-problem-list"><h3>Проблемные транзакции</h3>{{range limitRows $problemTransactions 256}}{{template "inspect-database-transaction-card" .}}{{end}}</div>{{else}}<div class="quality-notice"><strong>Явных проблем жизненного цикла транзакций не найдено.</strong> Сохранённые транзакции завершены, не превышают отдельные пороги для главного и фонового потоков и не содержат избыточного числа SQL-вызовов.</div>{{end}}
+        {{if $observedTransactions}}<details class="fold database-observation-list"><summary>Остальные измеренные транзакции · {{len $observedTransactions}}</summary><div class="fold-body">{{range limitRows $observedTransactions 256}}{{template "inspect-database-transaction-card" .}}{{end}}</div></details>{{end}}
+        <div class="grid">
+          <div class="metric"><div class="label">Начаты / завершены / не завершены</div><div class="value">{{.Begun}} / {{.Completed}} / {{.Incomplete}}</div><div class="hint">завершение без начала: {{.MissingStart}} · повторное начало: {{.DuplicateStart}}</div></div>
+          <div class="metric"><div class="label">Успех / откат / ошибка</div><div class="value">{{.Success}} / {{.Rollbacks}} / {{.Failures}}</div><div class="hint">результаты завершённых транзакций</div></div>
+          <div class="metric"><div class="label">Главный поток / фон / вложенные</div><div class="value">{{.MainThread}} / {{.Background}} / {{.Nested}}</div><div class="hint">поток и наличие родительской транзакции</div></div>
+          <div class="metric"><div class="label">Длительность: медиана / верхние 5% / максимум</div><div class="value">{{if .QuantilesApproximated}}≈ {{end}}{{humanMicros .P50DurationUS}} / {{humanMicros .P95DurationUS}} / {{humanMicros .MaxDurationUS}}</div><div class="hint">только завершённые · всего SQL-вызовов, чтений и записей {{.TotalStatementCount}} / {{.TotalReadCount}} / {{.TotalWriteCount}} · максимум SQL-вызовов {{.MaxStatementCount}}</div></div>
+        </div>
+        {{if or .DroppedActiveStarts .DroppedTransactionDetails}}<p class="report-limit-note"><strong>Часть подробностей транзакций не сохранена.</strong> Итоговые числа завершений остаются точными, но список отдельных транзакций может быть неполным.</p>{{end}}
+      </div>
+    {{end}}
+    <div class="grid">
+      <div class="metric"><div class="label">Всего вызовов БД</div><div class="value">{{.Overall.Calls}}</div><div class="hint">ошибок: {{.Overall.Failures}}</div></div>
+      <div class="metric"><div class="label">На главном потоке</div><div class="value">{{.Main.Calls}}</div><div class="hint">верхние 5% {{humanMicros .Main.P95DurationUS}} · максимум {{humanMicros .Main.MaxDurationUS}}</div></div>
+      <div class="metric"><div class="label">SQL распознан</div><div class="value">{{databaseCoverage .KnownSQLCalls .Overall.Calls}}</div><div class="hint">{{.KnownSQLCalls}} из {{.Overall.Calls}} вызовов</div></div>
+      <div class="metric"><div class="label">Длительность: медиана / верхние 5%</div><div class="value">{{if .Overall.QuantilesApproximated}}≈ {{end}}{{humanMicros .Overall.P50DurationUS}} / {{humanMicros .Overall.P95DurationUS}}</div><div class="hint">фон, верхние 5% {{humanMicros .Background.P95DurationUS}} · общий максимум {{humanMicros .Overall.MaxDurationUS}}</div></div>
+      <div class="metric"><div class="label">Пик частоты</div><div class="value">{{.PeakCallsPerSecond}}/с</div><div class="hint">примерно через {{humanDuration .PeakWindowStartMS}} после начала записи</div></div>
+      <div class="metric"><div class="label">Быстрые повторы</div><div class="value">{{.RapidRepeats}}</div><div class="hint">одинаковый SQL-вызов повторён не позднее чем через 100 мс</div></div>
+      <div class="metric"><div class="label">Полнота SQL-деталей</div><div class="value">{{len .Statements}} групп</div><div class="hint">оценка максимальной погрешности частоты {{.FrequencyEstimateError}}</div></div>
+      <div class="metric"><div class="label">SQL ↔ проблемный UI</div><div class="value">{{.MainCorrelation.UIWindowOverlaps}} / {{.BackgroundCorrelation.UIWindowOverlaps}}</div><div class="hint">главный поток — прямая связь с занятым UI; фон — только совпадение по времени</div></div>
+      <div class="metric"><div class="label">HTTP / фоновые задачи / файлы / GC</div><div class="value">{{.MainCorrelation.HTTPOverlaps}} / {{.MainCorrelation.WorkerOverlaps}} / {{.MainCorrelation.FileIOOverlaps}} / {{.MainCorrelation.GCOverlaps}}</div><div class="hint">главный поток; фон {{.BackgroundCorrelation.HTTPOverlaps}} / {{.BackgroundCorrelation.WorkerOverlaps}} / {{.BackgroundCorrelation.FileIOOverlaps}} / {{.BackgroundCorrelation.GCOverlaps}} · точные совпадения интервалов, но не автоматическая причина</div></div>
+    </div>
+    <div class="database-telemetry-evidence">
+      <h3>Результаты, границы и измеренные фазы</h3>
+      <div class="grid">
+        <div class="metric"><div class="label">Результат известен</div><div class="value">{{databaseCoverage .Telemetry.ResultKnownCalls .Overall.Calls}}</div><div class="hint">{{.Telemetry.ResultKnownCalls}} из {{.Overall.Calls}} без принудительного чтения всех строк результата</div></div>
+        <div class="metric"><div class="label">Связано с транзакцией</div><div class="value">{{databaseCoverage .Telemetry.TransactionLinkedCalls .Overall.Calls}}</div><div class="hint">{{.Telemetry.TransactionLinkedCalls}} вызовов БД имеют идентификатор транзакции</div></div>
+        <div class="metric"><div class="label">Выполнения подготовленных запросов</div><div class="value">{{.Telemetry.PreparedExecutionCalls}}</div><div class="hint">учитывается фактическое выполнение; компиляция запроса не считается выполнением</div></div>
+        <div class="metric"><div class="label">Измерены отдельные фазы</div><div class="value">{{databaseCoverage .Telemetry.PhaseMeasuredCalls .Overall.Calls}}</div><div class="hint">{{.Telemetry.PhaseMeasuredCalls}} вызовов; фазы показываются только при явном измерении</div></div>
+      </div>
+      {{if .Telemetry.FailureKinds}}<p class="help-text"><strong>Классы ошибок:</strong> {{range .Telemetry.FailureKinds}}{{databaseTaxonomyLabel .Name}} — {{.Value}}; {{end}}текст исключения и значения параметров SQL не сохраняются.</p>{{end}}
+      {{if .Telemetry.ResultCountBuckets}}<p class="help-text"><strong>Размеры результата:</strong> {{range .Telemetry.ResultCountBuckets}}{{databaseTaxonomyLabel .Name}} — {{.Value}}; {{end}}точные идентификаторы и количества строк не записываются.</p>{{end}}
+      {{if .Telemetry.Boundaries}}<p class="help-text"><strong>Измеренные границы:</strong> {{range .Telemetry.Boundaries}}{{databaseTaxonomyLabel .Name}} — {{.Value}}; {{end}}</p>{{end}}
+      {{if gt .Telemetry.PhaseMeasuredCalls 0}}<div class="database-statement-metrics">
+        {{with .Telemetry.PoolWait}}{{if .Samples}}<span>ожидание соединения<strong>{{.Samples}} · верхние 5% {{humanMicros .P95DurationUS}} · максимум {{humanMicros .MaxDurationUS}}</strong></span>{{end}}{{end}}
+        {{with .Telemetry.LockWait}}{{if .Samples}}<span>ожидание блокировки<strong>{{.Samples}} · верхние 5% {{humanMicros .P95DurationUS}} · максимум {{humanMicros .MaxDurationUS}}</strong></span>{{end}}{{end}}
+        {{with .Telemetry.Execute}}{{if .Samples}}<span>выполнение<strong>{{.Samples}} · верхние 5% {{humanMicros .P95DurationUS}} · максимум {{humanMicros .MaxDurationUS}}</strong></span>{{end}}{{end}}
+        {{with .Telemetry.Materialize}}{{if .Samples}}<span>чтение результата<strong>{{.Samples}} · верхние 5% {{humanMicros .P95DurationUS}} · максимум {{humanMicros .MaxDurationUS}}</strong></span>{{end}}{{end}}
+      </div>{{else}}<p class="report-limit-note"><strong>Разделение по фазам не измерено.</strong> Общую длительность нельзя разделить на ожидание соединения, ожидание блокировки, выполнение и чтение результата.</p>{{end}}
+      <p class="help-text"><strong>Ручная граница пользовательского адаптера:</strong> после <code>beginDatabaseCall</code> измеряйте только реально окружаемую фазу через <code>beginDatabasePhase</code> / <code>endDatabasePhase</code>. Для чтения результата окружайте обход Cursor или создание объектов ORM; не вызывайте <code>Cursor.getCount()</code> только ради измерения и не удерживайте Cursor в инструментировании. Фазы не должны пересекаться, а общая длительность не считается ожиданием блокировки без отдельного измерения <code>LOCK_WAIT</code>.</p>
+    </div>
+    {{if or .DroppedDBIntervals .DroppedTransactionIntervals .DroppedUIWindows .DroppedStallIntervals .DroppedRelatedIntervals}}<p class="report-limit-note"><strong>Часть интервалов для сопоставления не сохранена.</strong> Показанные совпадения точны, но их полное число может быть выше.</p>{{end}}
+    <div class="database-statement-registry database-observation-registry">
+      {{if $observedDatabaseRows}}<details class="fold database-observation-list"><summary>Остальные измеренные SQL-шаблоны · {{len $observedDatabaseRows}}</summary><div class="fold-body">{{range limitRows $observedDatabaseRows 512}}{{template "inspect-database-statement-card" .}}{{end}}</div></details>{{end}}
+      {{if not $databaseRows}}<div class="quality-notice">В журнале есть итог БД, но подробности отдельных SQL-вызовов отсутствуют. Используйте сводные показатели выше.</div>{{end}}
+    </div>
+    {{end}}
+    {{if $roomRows}}<details class="fold">
+      <summary>Границы сгенерированных Room DAO</summary>
+      <div class="fold-body">
+        <p class="help-text">DAO помогает найти вызывающий метод и оценить синхронную границу Room. Для ответа «какой именно SQL выполнялся» используйте таблицу SQL выше.</p>
+        {{rowLimitNote "Room DAO" (len $roomRows) 256}}
+        <div class="table-wrap"><table class="semantic-work-table">
+          <tr><th>Операция</th><th>Поток</th><th>DAO или метод</th><th>{{tip "Контекст" "Экран и пользовательская операция, активные во время вызова. Если контекст не указан, наведите на значение для пояснения."}}</th><th>Количество</th><th>Суммарно</th><th>Самое долгое</th><th>Статус</th></tr>
+          {{range limitRows $roomRows 256}}
+          <tr><td>{{.Kind}}</td><td>{{.Thread}}</td><td class="semantic-owner"><code>{{.Owner}}</code></td><td>{{if .ContextHelp}}{{tip .Context .ContextHelp}}{{else}}{{.Context}}{{end}}</td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td><td><span class="status-note" data-tip="{{.StatusHelp}}">{{.Status}}</span></td></tr>
+          {{end}}
+        </table></div>
+      </div>
+    </details>{{end}}
+    <div class="report-limit-note"><strong>Что пока нельзя утверждать:</strong> неиспользуемые строки, таблицы и избыточный объём хранилища нельзя надёжно определить только по журналу одного запуска. Для этого нужен отдельный долговременный сбор схемы, размеров таблиц и страниц, оценок количества строк и истории чтения/записи. Отчёт не называет данные «мёртвыми» без таких доказательств.</div>
+  </section>{{end}}
+
+  {{with .Summary.OperationAnalysis}}<section id="operations" class="panel">
+    <div class="panel-head">
+      <div><h2>Операции приложения</h2><div class="panel-kicker">Единый разбор открытий экранов, действий пользователя, фоновой и системной работы. Таблицы отвечают на вопросы «что замедлилось», «когда», «в каких условиях» и «на каком этапе».</div></div>
+      <span class="pill">{{ruCount .Completed "завершение" "завершения" "завершений"}}</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><div class="label">Начато / завершено</div><div class="value">{{.Started}} / {{.Completed}}</div><div class="hint">проверка целостности измерений</div></div>
+      <div class="metric"><div class="label">Без завершения</div><div class="value">{{.MissingFinish}}</div><div class="hint">операции, для которых не записан итог</div></div>
+      <div class="metric"><div class="label">Вне / после завершения</div><div class="value">{{.UnmatchedSignalEvents}} / {{.LateSignalEvents}}</div><div class="hint">не связаны / сопоставлены по идентификатору</div></div>
+      <div class="metric"><div class="label">Нарушения связности</div><div class="value">{{.MissingStart}} / {{.MissingParent}}</div><div class="hint">нет начала / нет родительской операции</div></div>
+    </div>
+    {{if or .MissingFinish .MissingStart .DuplicateStart .InconsistentLifecycle .MissingParent}}<p class="warning"><strong>Часть измерений неполна.</strong> Без завершения: {{.MissingFinish}}; без начала: {{.MissingStart}}; повторных начал: {{.DuplicateStart}}; противоречивых завершений: {{.InconsistentLifecycle}}; потерянных связей с родителем: {{.MissingParent}}. Завершения без начала восстановлены по самодостаточной итоговой записи и учтены с предупреждением; случаи без завершения не подменяются нулевой длительностью и не входят в процентили.</p>{{end}}
+    {{if or .DroppedActiveStarts .DroppedSignalEvents .DroppedSignalRollups .DroppedOperationSamples .DroppedTimeSlotSamples .DroppedDimensionSamples .DroppedStageSamples}}<p class="warning"><strong>Защитные пределы анализатора были достигнуты.</strong> Не удержано одновременных начал: {{.DroppedActiveStarts}}; связанных сигналов: {{.DroppedSignalEvents}}; связей с глубокими родителями: {{.DroppedSignalRollups}}; замеров общей таблицы: {{.DroppedOperationSamples}}; почасовой таблицы: {{.DroppedTimeSlotSamples}}; разрезов: {{.DroppedDimensionSamples}}; этапов: {{.DroppedStageSamples}}. Показанные строки корректны, но полный охват операций не доказан: уменьшите кардинальность названий и значений либо разделите набор журналов.</p>{{end}}
+    {{if .CompletedContextEvictions}}<p class="help-text"><strong>Ограниченная история завершённых операций.</strong> Старых контекстов вытеснено: {{.CompletedContextEvictions}}. Уже учтённые длительности и итоги не меняются; только сигнал, записанный после вытеснения своего контекста, попадёт в счётчик «вне операции».</p>{{end}}
+
+    {{if .Operations}}<h3>Общая картина</h3>
+    <p class="help-text">Строки объединяются только при полном совпадении названия операции, её вида и экрана. Связанные сигналы произошли внутри границ операции; это важная подсказка для поиска причины, но не доказательство причинности. Знак ≈ означает потоковую оценку: после 128 завершений медиана и границы верхних 10% и 5% считаются с постоянным расходом памяти; максимум остаётся точным.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Операция</th><th>Вид</th><th>Экран</th><th>Количество</th><th>Ошибки / отмены / ожидание</th><th>Медиана</th><th>Граница 90%</th><th>{{tip "Граница 95%" "95% завершений были не дольше этого значения. На малой выборке дополнительно смотрите количество и максимум."}}</th><th>Максимум</th><th>Нарушение бюджета</th><th>{{tip "Сеть / ошибки / время" "Число сетевых вызовов, число ошибок и их суммарная длительность внутри операций."}}</th><th>Паузы / максимум</th><th>{{tip "Ввод-вывод / время / объём" "Число операций ввода-вывода, их суммарная длительность и известный объём данных."}}</th><th>Проблемные сигналы</th><th>{{tip "Вызовы кода / журнал / время" "Число измеренных вызовов кода, число записей журнала и суммарное время вызовов."}}</th><th>{{tip "Удержания / память / свои метрики" "Число удержанных объектов, максимальная физическая память процесса и число пользовательских метрик."}}</th><th>Подтормаживания</th></tr></thead>
+      <tbody>{{deferredOperationRows .Operations 50 50 17 "операции приложения"}}</tbody>
+    </table></div>{{end}}
+
+    {{if .TimeSlots}}<h3>Изменение по времени</h3>
+    <p class="help-text">Один временной интервал равен одному местному часу устройства. Это позволяет увидеть резкую просадку в конкретный период, не смешивая её со всем прогоном.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Время</th><th>Операция</th><th>Вид</th><th>Экран</th><th>Количество</th><th>Ошибки</th><th>Медиана</th><th>Граница 90%</th><th>Граница 95%</th><th>Максимум</th><th>Нарушение бюджета</th><th>Сеть / ошибки / время</th><th>Паузы / максимум</th><th>Ввод-вывод / время / объём</th><th>Проблемные сигналы</th><th>Вызовы кода / журнал / время</th><th>Удержания / память / свои метрики</th><th>Подтормаживания</th></tr></thead>
+      <tbody>{{deferredOperationRows .TimeSlots 50 50 18 "почасовые замеры операций"}}</tbody>
+    </table></div>{{end}}
+
+    {{if .Dimensions}}<details class="fold"><summary>В каких условиях меняется результат</summary><div class="fold-body">
+      <p class="help-text">Каждый признак рассматривается отдельно: например, источник запуска, тип содержимого, режим сети или состояние кэша. Это защищает отчёт от взрывного числа сочетаний.</p>
+      <div class="table-wrap"><table><thead><tr><th>Операция</th><th>Вид</th><th>Экран</th><th>Признак</th><th>Значение</th><th>Количество</th><th>Ошибки</th><th>Граница 90%</th><th>Граница 95%</th><th>Максимум</th><th>Нарушение бюджета</th></tr></thead>
+        <tbody>{{deferredOperationRows .Dimensions 50 50 11 "разрезы операций"}}</tbody>
+      </table></div>
+    </div></details>{{end}}
+
+    {{if .Stages}}<details class="fold"><summary>Из каких этапов складывается время</summary><div class="fold-body">
+      <p class="help-text">Доля — отношение суммарного времени этапа к суммарному времени родительской операции. Параллельные и вложенные этапы могут пересекаться, поэтому сумма долей иногда превышает 100%.</p>
+      <div class="table-wrap"><table><thead><tr><th>Родительская операция</th><th>Вид</th><th>Экран</th><th>Этап</th><th>Количество</th><th>Медиана</th><th>Граница 90%</th><th>Граница 95%</th><th>Максимум</th><th>Суммарно</th><th>Доля</th></tr></thead>
+        <tbody>{{deferredOperationRows .Stages 50 50 11 "этапы операций"}}</tbody>
+      </table></div>
+    </div></details>{{end}}
+
+    {{if .WorstIncidents}}<details class="fold"><summary>Самые тяжёлые отдельные случаи</summary><div class="fold-body">
+      <p class="help-text">Хранится ограниченный список худших случаев, поэтому объём памяти анализатора не растёт пропорционально всему журналу.</p>
+      <div class="table-wrap"><table><thead><tr><th>Начало</th><th>Операция</th><th>Вид</th><th>Экран</th><th>Итог</th><th>Длительность</th><th>Бюджет / превышение</th><th>Сеть / ошибки / время</th><th>Паузы / максимум</th><th>Ввод-вывод / время / объём</th><th>Проблемные сигналы</th><th>Вызовы кода / журнал / время</th><th>Удержания / память / свои метрики</th><th>Подтормаживания</th></tr></thead>
+        <tbody>{{deferredOperationRows .WorstIncidents 50 50 14 "тяжёлые случаи операций"}}</tbody>
+      </table></div>
+    </div></details>{{end}}
+
+    {{if .Operations}}<h3>Взаимное влияние подсистем внутри сценария</h3>
+    <div class="analysis-intro"><strong>Единица анализа — границы операции.</strong> События ниже произошли между началом и завершением одного пользовательского, экранного, фонового или системного сценария. Это точная временная связь, но не автоматическое доказательство причины: например, сетевой вызов мог выполняться параллельно и не блокировать интерфейс.</div>
+    <div class="table-wrap"><table class="cross-domain-table">
+      <thead><tr><th>Сценарий</th><th>Длительность и бюджет</th><th>HTTP</th><th>WebSocket</th><th>База данных</th><th>Compose</th><th>Фоновые задачи</th><th>Файлы и ContentResolver</th><th>Главный поток и интерфейс</th></tr></thead>
+      <tbody>{{range limitRows .Operations 256}}<tr>
+        <td><code>{{.Operation}}</code><br>{{operationKindLabel .Kind}} · <code>{{.Screen}}</code><br><span class="muted">{{ruCount .Count "выполнение" "выполнения" "выполнений"}}</span></td>
+        <td>верхние 5% {{humanDuration .P95MS}} · максимум {{humanDuration .MaxMS}}<br><span class="muted">бюджет нарушен {{.BudgetBreaches}} из {{.Budgeted}}</span></td>
+        <td>{{.CorrelatedHTTP}} · ошибок {{.CorrelatedHTTPFailures}}<br><span class="muted">полная длительность вызовов {{humanDuration .CorrelatedHTTPDurationMS}}</span></td>
+        <td>{{.CorrelatedWebSocket}} событий · сбоев {{.CorrelatedWebSocketErrors}}</td>
+        <td>{{.CorrelatedDatabase}} · ошибок {{.CorrelatedDatabaseErrors}}<br><span class="muted">на главном потоке {{.CorrelatedDatabaseMain}} · {{humanMicros .CorrelatedDatabaseUS}}</span>{{if .WorstDatabaseStatements}}<details class="compact-details"><summary>Худшие SQL-шаблоны операции</summary>{{range .WorstDatabaseStatements}}<div class="muted">{{databaseSourceQueryHint .Source .Query}} · {{.Calls}} вызовов · ошибок {{.Failures}} · главный поток {{.MainThreadCalls}} · {{humanMicros .TotalDurationUS}}</div>{{end}}</details>{{end}}</td>
+        <td>{{.CorrelatedCompose}} выполнений<br><span class="muted">суммарно {{humanDuration .CorrelatedComposeMS}}</span></td>
+        <td>{{.CorrelatedWorkers}} завершений · неуспешных {{.CorrelatedWorkerFailures}}<br><span class="muted">суммарно {{humanDuration .CorrelatedWorkerMS}}</span></td>
+        <td>{{.CorrelatedIO}} · {{humanMicros .CorrelatedIODurationUS}} · {{.CorrelatedIOBytes}} Б</td>
+        <td>пауз {{.CorrelatedStalls}} · максимум {{humanDuration .CorrelatedStallMaxMS}}<br><span class="muted">медленных кадров {{.CorrelatedUIJank}} из {{.CorrelatedUIFrames}} ({{printf "%.1f" .CorrelatedUIJankRatePct}}%)</span></td>
+      </tr>{{end}}</tbody>
+    </table></div>{{end}}
+
+    {{if .TimeSlots}}<details class="fold"><summary>Как взаимное влияние менялось по времени</summary><div class="fold-body">
+      <p class="help-text">Почасовой разрез помогает найти момент, когда один и тот же сценарий начал выполнять больше сетевых, SQL-, Compose- или фоновых работ.</p>
+      <div class="table-wrap"><table class="cross-domain-table">
+        <thead><tr><th>Время и сценарий</th><th>Длительность и бюджет</th><th>HTTP</th><th>WebSocket</th><th>База данных</th><th>Compose</th><th>Фоновые задачи</th><th>Файлы и ContentResolver</th><th>Главный поток и интерфейс</th></tr></thead>
+        <tbody>{{range limitRows .TimeSlots 512}}<tr>
+          <td>{{.Label}}<br><code>{{.Operation}}</code> · <code>{{.Screen}}</code><br><span class="muted">{{ruCount .Count "выполнение" "выполнения" "выполнений"}}</span></td>
+          <td>верхние 5% {{humanDuration .P95MS}} · максимум {{humanDuration .MaxMS}}<br><span class="muted">бюджет нарушен {{.BudgetBreaches}} из {{.Budgeted}}</span></td>
+          <td>{{.CorrelatedHTTP}} · ошибок {{.CorrelatedHTTPFailures}}<br><span class="muted">{{humanDuration .CorrelatedHTTPDurationMS}}</span></td>
+          <td>{{.CorrelatedWebSocket}} событий · сбоев {{.CorrelatedWebSocketErrors}}</td>
+          <td>{{.CorrelatedDatabase}} · ошибок {{.CorrelatedDatabaseErrors}}<br><span class="muted">главный поток {{.CorrelatedDatabaseMain}} · {{humanMicros .CorrelatedDatabaseUS}}</span>{{if .WorstDatabaseStatements}}<details class="compact-details"><summary>Худшие SQL-шаблоны операции</summary>{{range .WorstDatabaseStatements}}<div class="muted">{{databaseSourceQueryHint .Source .Query}} · {{.Calls}} вызовов · ошибок {{.Failures}} · главный поток {{.MainThreadCalls}} · {{humanMicros .TotalDurationUS}}</div>{{end}}</details>{{end}}</td>
+          <td>{{.CorrelatedCompose}} · {{humanDuration .CorrelatedComposeMS}}</td>
+          <td>{{.CorrelatedWorkers}} · ошибок {{.CorrelatedWorkerFailures}} · {{humanDuration .CorrelatedWorkerMS}}</td>
+          <td>{{.CorrelatedIO}} · {{humanMicros .CorrelatedIODurationUS}} · {{.CorrelatedIOBytes}} Б</td>
+          <td>пауз {{.CorrelatedStalls}} · максимум {{humanDuration .CorrelatedStallMaxMS}}<br><span class="muted">медленных кадров {{.CorrelatedUIJank}} из {{.CorrelatedUIFrames}} ({{printf "%.1f" .CorrelatedUIJankRatePct}}%)</span></td>
+        </tr>{{end}}</tbody>
+      </table></div>
+    </div></details>{{end}}
+  </section>{{end}}
+
+  {{if or .Summary.SignalContexts .Summary.LogSpam .Summary.ProblemWindows .Summary.ProcessExits .Summary.RuntimeCalls}}<section id="signal-contexts" class="panel">
+    <div class="panel-head">
+      <div><h2>Связанные сигналы</h2><div class="panel-kicker">Объединённый анализ показывает, какие симптомы совпали во время одной операции на одном экране и с какого кода начать проверку.</div></div>
+    </div>
+    {{$operationInsights := operationContextInsights .Summary}}
+    {{if $operationInsights}}<div class="analysis-intro">Каждая карточка объединяет события одной операции, экрана и источника. Чем больше разных сигналов совпало, тем выше карточка в списке.</div>
+    <div class="analysis-insight-grid operation-context-insight-grid">
+      {{range $operationInsights}}
+      <article class="analysis-insight-card operation-context-insight-card {{severityClass .Severity}}" data-tip="{{.Tooltip}}">
         <div class="analysis-insight-head"><span>{{.Status}}</span><small>{{ruCount .SignalCount "вид сигнала" "вида сигнала" "видов сигналов"}}</small></div>
         <h3>{{.Title}}</h3>
         <p class="analysis-insight-context">{{.Context}}</p>
@@ -388,20 +820,19 @@
     <details class="fold">
       <summary>Исходные измерения и технические связи</summary>
       <div class="fold-body">
-        {{if .Summary.Flows}}
+        {{if .Summary.SignalContexts}}
         <table>
-          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>{{tip "Источник" "Класс или метод, активный при записи события. Это первое место для проверки кода."}}</th><th>Маршрут</th><th>{{tip "Сетевые вызовы" "Число сетевых событий именно в этом контексте."}}</th><th>Ошибки</th><th>{{tip "Задержка верхних 5% вызовов" "Техническое обозначение — p95. При малой выборке это одна из худших задержек, поэтому смотрите также число вызовов."}}</th><th>{{tip "UI-подтормаживания" "Медленные и все кадры в контексте."}}</th><th>Паузы</th><th>{{tip "Макс. пауза" "Самая длинная зафиксированная пауза главного потока в контексте."}}</th><th>Спам логами</th><th>{{tip "Проблемные интервалы" "Число интервалов, в которых рядом записаны проблемные сигналы."}}</th><th>{{tip "Макс. PSS" "Максимальный объём физической памяти процесса в контексте."}}</th></tr>
-          {{range .Summary.Flows}}
+          <tr><th>Экран</th><th>Операция</th><th>{{tip "Источник" "Класс или метод, активный при записи события. Это первое место для проверки кода."}}</th><th>Маршрут</th><th>{{tip "Сетевые вызовы" "Число сетевых событий именно в этом контексте."}}</th><th>Ошибки</th><th>{{tip "Задержка верхних 5% вызовов" "Техническое обозначение — p95. При малой выборке это одна из худших задержек, поэтому смотрите также число вызовов."}}</th><th>{{tip "Подтормаживания интерфейса" "Медленные и все кадры в контексте."}}</th><th>Паузы</th><th>{{tip "Макс. пауза" "Самая длинная зафиксированная пауза главного потока в контексте."}}</th><th>Избыток сообщений журнала</th><th>{{tip "Проблемные интервалы" "Число интервалов, в которых рядом записаны проблемные сигналы."}}</th><th>{{tip "Макс. PSS" "Максимальный объём физической памяти процесса в контексте."}}</th></tr>
+          {{range .Summary.SignalContexts}}
           <tr>
             <td><code>{{contextHint .Screen "screen"}}</code></td>
-            <td><code>{{contextHint .Flow "flow"}}</code></td>
-            <td><code>{{contextHint .Step "step"}}</code></td>
+            <td><code>{{contextHint .Operation "operation"}}</code></td>
             <td><code>{{contextHint .Owner "owner"}}</code></td>
             <td><code>{{contextHint .RouteSample "route"}}</code></td>
             <td>{{.HTTPCount}}</td>
             <td>{{.HTTPFailed}}</td>
             <td>{{if gt .HTTPCount 0}}{{.HTTPP95MS}} мс{{else}}нет HTTP-замера{{end}}</td>
-            <td>{{if gt .UIFrames 0}}{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%{{else}}нет UI-замера{{end}}</td>
+            <td>{{if gt .UIFrames 0}}{{.UIJank}} / {{.UIFrames}} · {{printf "%.2f" .UIJankPct}}%{{else}}нет замера интерфейса{{end}}</td>
             <td>{{.StallCount}}</td>
             <td>{{if gt .StallCount 0}}{{.StallMaxMS}} мс{{else}}не зафиксировано{{end}}</td>
             <td>{{.LogSpam}}</td>
@@ -416,24 +847,24 @@
           {{if .Summary.LogSpam}}<div>
             <h3>{{tip "Спам логами" "Счетчик частых вызовов android.util.Log.* и Timber.*. Текст логов не сохраняется: пишется только источник, уровень, контекст и количество вызовов."}}</h3>
             <table>
-              <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник работ</th></tr>
+              <tr><th>Источник</th><th>Уровень</th><th>Количество</th><th>Экран</th><th>Операция</th><th>Источник работ</th></tr>
               {{range .Summary.LogSpam}}
-              <tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
+              <tr><td><code>{{contextHint .Source "log-source"}}</code></td><td>{{.Level}}</td><td>{{.Count}}</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Operation "operation"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
               {{end}}
             </table>
           </div>{{end}}
           {{if .Summary.ProblemWindows}}<div>
-            <h3>{{tip "Проблемные окна" "Агрегированные окна, где Jank Hunter увидел один или несколько симптомов: медленный HTTP, паузу главного потока, UI-подтормаживания, удержание или спам логами. Название причины — классификация сигнала, а не доказанная первопричина."}}</h3>
+            <h3>{{tip "Проблемные окна" "Агрегированные окна, где Jank Hunter увидел один или несколько симптомов: медленный HTTP-запрос, паузу главного потока, подтормаживания интерфейса, удержание объекта или избыток сообщений журнала. Название причины — классификация сигнала, а не доказанная первопричина."}}</h3>
             <table>
-              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Источник</th></tr>
+              <tr><th>Причина</th><th>Окна</th><th>Счетчик</th><th>Итого окно</th><th>Макс.</th><th>Экран</th><th>Операция</th><th>Источник</th></tr>
               {{range .Summary.ProblemWindows}}
-              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Flow "flow"}}</code></td><td><code>{{contextHint .Step "step"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
+              <tr><td>{{problemKind .Kind}}</td><td>{{.Windows}}</td><td>{{.Count}}</td><td>{{humanDuration .TotalWindowMS}}</td><td>{{.MaxMS}} мс</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Operation "operation"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
               {{end}}
             </table>
           </div>{{end}}
         </div>{{end}}
-        {{if or .Summary.ProcessExits .Summary.IOOperations}}<div class="split">
-          {{if .Summary.ProcessExits}}<div>
+        {{if .Summary.ProcessExits}}<div class="split">
+          <div>
             <h3>{{tip "Исторические завершения процессов" "Системные сведения Android о завершениях предыдущих процессов приложения. Они показывают причину завершения, например ANR или нехватку памяти."}}</h3>
             <table>
               <tr><th>Причина</th><th>Процесс</th><th>Количество</th><th>Последнее событие UTC</th><th>{{tip "Важность процесса" "Системная важность процесса в момент завершения. Чем важнее был процесс для пользователя, тем заметнее могло быть завершение."}}</th><th>Макс. PSS</th><th>Макс. RSS</th></tr>
@@ -441,24 +872,15 @@
               <tr><td>{{.ReasonLabel}}</td><td><code>{{contextHint .Process "process"}}</code></td><td>{{.Count}}</td><td>{{unixMillisTime .LatestTimestampUnixMS}}</td><td>{{.Importance}}</td><td>{{.MaxPSSKB}} КБ</td><td>{{.MaxRSSKB}} КБ</td></tr>
               {{end}}
             </table>
-          </div>{{end}}
-          {{if .Summary.IOOperations}}<div>
-            <h3>{{tip "I/O операции" "Операции чтения и записи с длительностью, объёмом данных, потоком выполнения и контекстом приложения."}}</h3>
-            <table>
-              <tr><th>Операция</th><th>Поток</th><th>Количество</th><th>Итого</th><th>Максимум</th><th>Байты</th><th>Экран</th><th>Источник</th></tr>
-              {{range .Summary.IOOperations}}
-              <tr><td>{{.Operation}}</td><td>{{if .MainThread}}главный{{else}}фоновый{{end}}</td><td>{{.Count}}</td><td>{{humanMicros .TotalDurationUS}}</td><td>{{humanMicros .MaxDurationUS}}</td><td>{{.Bytes}}</td><td><code>{{contextHint .Screen "screen"}}</code></td><td><code>{{contextHint .Owner "owner"}}</code></td></tr>
-              {{end}}
-            </table>
-          </div>{{end}}
+          </div>
         </div>{{end}}
         {{$ordinaryCalls := ordinaryRuntimeCalls .Summary}}
         {{if $ordinaryCalls}}<h3 id="runtime-calls">{{tip "Связи вызовов" "Переходы между методами, записанные при выполнении приложения. Итоговая длительность включает обёрнутый вызов и не равна чистому времени процессора внутри метода."}}</h3>
-        <p class="help-text">Если экран, сценарий или шаг не указаны, приложение не передало этот контекст во время записи.</p>
+        <p class="help-text">Если экран или операция не указаны, приложение не передало этот контекст во время записи.</p>
         <table id="runtime-calls-table">
-          <tr><th>Экран</th><th>Сценарий</th><th>Шаг</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
+          <tr><th>Экран</th><th>Операция</th><th>Откуда</th><th>Куда</th><th>Количество</th><th>Итого</th><th>Макс.</th></tr>
           {{range $ordinaryCalls}}
-          <tr><td><code>{{reportValue .Screen "нет данных"}}</code></td><td><code>{{reportValue .Flow "нет данных"}}</code></td><td><code>{{reportValue .Step "нет данных"}}</code></td><td><code>{{reportValue .Caller "нет данных"}}</code></td><td><code>{{reportValue .Callee "нет данных"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
+          <tr><td><code>{{reportValue .Screen "нет данных"}}</code></td><td><code>{{reportValue .Operation "нет данных"}}</code></td><td><code>{{reportValue .Caller "нет данных"}}</code></td><td><code>{{reportValue .Callee "нет данных"}}</code></td><td>{{.Count}}</td><td>{{.TotalMS}} мс</td><td>{{.MaxMS}} мс</td></tr>
           {{end}}
         </table>
         {{end}}
@@ -487,11 +909,11 @@
     <div class="panel-head">
       <div>
         <h2>Удержания и возможные утечки памяти</h2>
-        <div class="panel-kicker">Сигналы разделены на предварительные наблюдения, проверку после явного GC и подтверждённый путь удержания из HPROF.</div>
+        <div class="panel-kicker">Сигналы разделены на предварительные наблюдения, проверку после принудительной сборки мусора и подтверждённый путь удержания из снимка памяти HPROF.</div>
       </div>
       <span class="pill">удержания</span>
     </div>
-    <p class="help-text">time_only означает, что объект был жив после задержки. after_explicit_gc означает, что он остался достижим после запрошенного GC. Только confirmed_hprof/path показывает реальную цепочку ссылок от распознанного корня GC; даже она требует проверки ожидаемого жизненного цикла.</p>
+    <p class="help-text">Наблюдение после задержки означает только долгую жизнь объекта. Наблюдение после явного GC означает, что объект остался достижим после принудительной сборки мусора. Только подтверждённый путь HPROF показывает реальную цепочку ссылок от распознанного корня памяти; даже она требует проверки ожидаемого жизненного цикла.</p>
     <div class="leak-limitations">Если в колонке “держатель” написано “не определен”, добавьте <code>ownerHint</code> в <code>JankHunter.watchObject(...)</code> или оберните подозрительный участок в <code>JankHunter.withOwner(...)</code>. Тогда следующий прогон покажет, какой пользовательский класс вероятнее всего удерживает объект.</div>
     {{scoreGuide "leak"}}
     <div class="code-registry" data-code-registry>
@@ -513,17 +935,17 @@
       <table class="code-problem-table leak-table">
         <thead>
           <tr>
-            <th>{{tip "Риск" "Приоритет проверки по score и evidence; не вероятность утечки."}}</th>
+            <th>{{tip "Риск" "Приоритет проверки по оценке и силе подтверждающих данных; это не вероятность утечки."}}</th>
             <th>{{tip "Удержанный объект" "Класс объекта, который оставался достижимым дольше задержки наблюдения."}}</th>
             <th>{{tip "Тип" "Предполагаемая категория объекта для подсказок жизненного цикла."}}</th>
-            <th>{{tip "Вероятный держатель" "Owner из runtime-контекста или держатель из HPROF. Без HPROF это гипотеза, а не доказанная ссылка."}}</th>
-            <th>{{tip "Контекст" "Экран, сценарий и шаг, активные при записи сигнала."}}</th>
+            <th>{{tip "Вероятный держатель" "Держатель из контекста выполнения или HPROF. Без HPROF это гипотеза, а не доказанная ссылка."}}</th>
+            <th>{{tip "Контекст" "Экран и операция, активные при записи сигнала."}}</th>
             <th>{{tip "Оценка" "Относительный приоритет внутри отчёта. Учитывает качество данных, возраст, повторяемость и контекст."}}</th>
             <th>{{tip "Оценка удержанного размера" "Ориентировочная оценка удержанного размера. Без дампа памяти это не точный размер удержанной кучи, а расчет по типу объекта, числу удержаний, возрасту и PSS процесса."}}</th>
-            <th>{{tip "Путь / контекст удержания" "С HPROF здесь показан путь ссылок от корня GC. Без HPROF — только контекст обнаружения: экран, сценарий, шаг, вероятный владелец и место наблюдения."}}</th>
+            <th>{{tip "Путь / контекст удержания" "С HPROF здесь показан путь ссылок от корня GC. Без HPROF — только контекст обнаружения: экран, операция, вероятный владелец и место наблюдения."}}</th>
             <th>{{tip "Возможное влияние" "Почему удержание может быть важно для памяти или жизненного цикла. Это гипотеза для проверки."}}</th>
             <th>Что проверить</th>
-            <th>{{tip "Доказательства" "Уровень evidence и ограничения качества. HPROF-путь сильнее runtime-наблюдения, но требует проверки ожидаемого жизненного цикла."}}</th>
+            <th>{{tip "Доказательства" "Уровень подтверждающих данных и ограничения качества. Путь из снимка памяти HPROF сильнее наблюдения во время выполнения, но требует проверки ожидаемого жизненного цикла."}}</th>
           </tr>
         </thead>
         <tbody>
@@ -533,7 +955,7 @@
             <td><div class="problem-location"><code>{{.ClassName}}</code></div></td>
             <td><div class="leak-object-kind">{{leakObjectKindLabel .ObjectKind}}</div>{{if .SystemRetained}}<div class="muted">системный объект</div>{{else if .UserOwned}}<div class="muted">пользовательский код</div>{{end}}</td>
             <td><code>{{contextHint .Holder "holder"}}</code><div class="leak-holder-quality">{{.HolderQuality}}</div></td>
-            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{contextHint .Screen "screen"}}</code></div>{{end}}{{if .Flow}}<div>сценарий <code>{{contextHint .Flow "flow"}}</code></div>{{end}}{{if .Step}}<div>шаг <code>{{contextHint .Step "step"}}</code></div>{{end}}</div></td>
+            <td><div class="problem-context">{{if .Screen}}<div>экран <code>{{contextHint .Screen "screen"}}</code></div>{{end}}{{if .Operation}}<div>операция <code>{{contextHint .Operation "operation"}}</code></div>{{end}}</div></td>
             <td><div>{{printf "%.1f" .Score}}</div><div class="muted">{{.Count}} шт · {{humanDuration .MaxAgeMS}}</div></td>
             <td><div>{{if gt .EstimatedRetainedKB 0}}{{dataSize .EstimatedRetainedKB}}{{else}}нет оценки{{end}}</div><div class="muted">{{.RetainedSizeConfidence}}</div><div class="muted">{{.RetainedSizeExplanation}}</div></td>
             <td><div class="leak-dominator">{{range .DominatorPath}}<span>{{.}}</span>{{end}}</div><div class="muted">{{.DominatorTreeExplanation}}</div><div class="leak-chain-summary">{{.LeakChainSummary}}</div></td>
@@ -660,7 +1082,7 @@
 
   <section id="collection-quality" class="panel technical-quality-panel">
     <details class="fold">
-      <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">{{if .Summary.CollectionQuality.TrustScoreModel}}{{printf "%.2f" .Summary.CollectionQuality.TrustScorePercent}}% · {{end}}служебные сведения</span></summary>
+      <summary><span>Техническое качество сбора</span><span class="fold-summary-meta">{{if .Summary.CollectionQuality.DiagnosticCompletenessModel}}{{printf "%.2f" .Summary.CollectionQuality.DiagnosticCompletenessPercent}}% · {{end}}служебные сведения</span></summary>
       <div class="fold-body technical-quality-body">
         <p class="help-text">Этот раздел нужен владельцам Jank Hunter и разработчикам системы сбора. Для обычного разбора проблем приложения его открывать не требуется.</p>
         {{with collectorCapabilities .Summary}}
@@ -673,29 +1095,27 @@
         {{if not .Summary.AnalysisInputs.Status}}<p class="quality-notice">Состав источников не рассчитан для этой программно сформированной сводки.</p>{{else if .Summary.AnalysisInputs.Complete}}<p class="quality-notice"><strong>Все обязательные источники подключены.</strong> {{.Summary.AnalysisInputs.Explanation}}.</p>{{else}}<p class="warning"><strong>Часть углублённого анализа недоступна.</strong> {{.Summary.AnalysisInputs.Explanation}}. Не хватает: {{join .Summary.AnalysisInputs.Missing ", "}}.</p>{{end}}
         <div class="grid technical-input-grid">
           <div class="metric"><div class="label">События запуска</div><div class="value">{{if .Summary.AnalysisInputs.RuntimeEvidence}}есть{{else}}нет{{end}}</div><div class="hint">данные выполнения приложения</div></div>
-          <div class="metric"><div class="label">Имена классов</div><div class="value">{{if .Summary.AnalysisInputs.SymbolsResolved}}распознаны{{else}}не распознаны{{end}}</div><div class="hint">режим {{.Summary.AnalysisInputs.SymbolMode}}</div></div>
           <div class="metric"><div class="label">Граф классов</div><div class="value">{{if .Summary.AnalysisInputs.ClassGraph}}есть{{else}}нет{{end}}</div><div class="hint">пути вызовов, циклы и статические связи</div></div>
           <div class="metric"><div class="label">Диагностика ASM</div><div class="value">{{if .Summary.AnalysisInputs.InstrumentationDiagnostics}}есть{{else}}нет{{end}}</div><div class="hint">охват инструментирования</div></div>
           <div class="metric"><div class="label">Дамп памяти</div><div class="value">{{if .Summary.AnalysisInputs.HeapEvidence}}есть{{else}}нет{{end}}</div><div class="hint">доступен только когда создан HPROF</div></div>
           <div class="metric"><div class="label">Артефакты сборки</div><div class="value">{{if .Summary.AnalysisInputs.ArtifactIdentityVerified}}{{if .Summary.AnalysisInputs.ArtifactsAutoDiscovered}}найдены автоматически{{else}}заданы явно{{end}}{{else}}не подтверждены{{end}}</div><div class="hint">{{if .Summary.AnalysisInputs.ArtifactDirectory}}<code>{{.Summary.AnalysisInputs.ArtifactDirectory}}</code>{{else}}каталог не передан{{end}}</div></div>
         </div>
-        {{if .Summary.CollectionQuality.TrustScoreModel}}
-        <p class="quality-notice"><strong>Индекс доверия: {{printf "%.2f" .Summary.CollectionQuality.TrustScorePercent}} из 100 · {{trustLevelLabel .Summary.CollectionQuality.TrustLevel}}.</strong> {{.Summary.CollectionQuality.TrustLevelExplanation}}</p>
+        {{if .Summary.CollectionQuality.DiagnosticCompletenessModel}}
+        <p class="quality-notice"><strong>Диагностический индекс полноты: {{printf "%.2f" .Summary.CollectionQuality.DiagnosticCompletenessPercent}} из 100 · {{diagnosticCompletenessLevelLabel .Summary.CollectionQuality.DiagnosticCompletenessLevel}}.</strong> {{.Summary.CollectionQuality.DiagnosticCompletenessExplanation}} Это взвешенный показатель доступности телеметрии, а не вероятность и не оценка риска приложения.</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Компонент</th><th>Вес</th><th>Покрытие</th><th>Получено</th><th>Не хватает</th><th>Объяснение</th></tr></thead>
-          <tbody>{{range .Summary.CollectionQuality.TrustComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{if .Excluded}}не входит{{else}}{{printf "%.0f" .Weight}}{{end}}</td><td>{{if .Excluded}}отключено{{else}}{{printf "%.2f" .CoveragePercent}}%{{end}}</td><td>{{printf "%.2f" .EarnedPoints}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody>
+          <tbody>{{range .Summary.CollectionQuality.DiagnosticCompletenessComponents}}<tr><td><strong>{{.Label}}</strong></td><td>{{if .Excluded}}не входит{{else}}{{printf "%.0f" .Weight}}{{end}}</td><td>{{if .Excluded}}отключено{{else}}{{printf "%.2f" .CoveragePercent}}%{{end}}</td><td>{{printf "%.2f" .EarnedPoints}}</td><td>{{printf "%.2f" .MissingPoints}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody>
         </table></div>
         {{end}}
-        <p class="quality-notice">Scope процессов: {{processScopeLabel .Summary.CollectionQuality.ProcessScope}} · согласованность scope {{if .Summary.CollectionQuality.ProcessScopeConsistent}}OK{{else}}НАРУШЕНА{{end}} · инварианты счётчиков {{if .Summary.CollectionQuality.CounterInvariantsValid}}OK{{else}}НАРУШЕНЫ{{end}} · монотонность quality {{if .Summary.CollectionQuality.QualityProgressionValid}}OK{{else}}НАРУШЕНА{{end}}.</p>
-        <p class="quality-notice">Process roster: обнаружено {{.Summary.CollectionQuality.ObservedProcessCount}} из {{.Summary.CollectionQuality.ExpectedProcessCount}} · manifest roster {{if .Summary.CollectionQuality.ProcessRosterDeclarationComplete}}ОБЪЯВЛЕН{{else}}НЕ ДОКАЗАН{{end}} · run cohorts {{.Summary.CollectionQuality.RunCohortCount}} ({{if .Summary.CollectionQuality.RunCohortConsistent}}ЕДИНЫЙ{{else}}СМЕШАНЫ{{end}}) · покрытие {{if .Summary.CollectionQuality.ProcessRosterComplete}}ПОЛНОЕ{{else}}НЕПОЛНОЕ{{end}}.</p>
-        <p class="quality-notice">Admission: {{if .Summary.CollectionQuality.ExactAdmission}}EXACT{{else}}BEST_EFFORT{{end}} · принято {{.Summary.CollectionQuality.AcceptedEvents}} · записано {{.Summary.CollectionQuality.WrittenEvents}} · committed chunks {{.Summary.CollectionQuality.ReportedCommittedChunks}} / {{.Summary.CollectionQuality.DecodedCommittedChunks}} · известных потерь {{.Summary.CollectionQuality.KnownLostEvents}} · подавлений hook {{.Summary.CollectionQuality.RuntimeHookFailures}} · backpressure {{.Summary.CollectionQuality.WriterBackpressureCount}} раз / {{formatDurationNs .Summary.CollectionQuality.WriterBackpressureNanos}}.</p>
+        <p class="quality-notice">Охват процессов: {{processScopeLabel .Summary.CollectionQuality.ProcessScope}} · согласованность охвата {{if .Summary.CollectionQuality.ProcessScopeConsistent}}ПОДТВЕРЖДЕНА{{else}}НАРУШЕНА{{end}} · инварианты счётчиков {{if .Summary.CollectionQuality.CounterInvariantsValid}}ПОДТВЕРЖДЕНЫ{{else}}НАРУШЕНЫ{{end}} · последовательность качества {{if .Summary.CollectionQuality.QualityProgressionValid}}ПОДТВЕРЖДЕНА{{else}}НАРУШЕНА{{end}}.</p>
+        <p class="quality-notice">Список процессов: обнаружено {{.Summary.CollectionQuality.ObservedProcessCount}} из {{.Summary.CollectionQuality.ExpectedProcessCount}} · объявление в манифесте {{if .Summary.CollectionQuality.ProcessRosterDeclarationComplete}}ЕСТЬ{{else}}НЕ ДОКАЗАНО{{end}} · групп запусков {{.Summary.CollectionQuality.RunCohortCount}} ({{if .Summary.CollectionQuality.RunCohortConsistent}}ОДНА СОГЛАСОВАННАЯ{{else}}СМЕШАНЫ{{end}}) · покрытие {{if .Summary.CollectionQuality.ProcessRosterComplete}}ПОЛНОЕ{{else}}НЕПОЛНОЕ{{end}}.</p>
+        <p class="quality-notice">Запись событий: {{if .Summary.CollectionQuality.ExactAdmission}}ТОЧНАЯ{{else}}ПО ВОЗМОЖНОСТИ{{end}} · принято {{.Summary.CollectionQuality.AcceptedEvents}} · записано {{.Summary.CollectionQuality.WrittenEvents}} · подтверждённых блоков {{.Summary.CollectionQuality.ReportedCommittedChunks}} / {{.Summary.CollectionQuality.DecodedCommittedChunks}}.</p>
         {{if .Summary.CollectionQuality.RuntimeHookFailureDetails}}
-        <h3>Причины fail-open</h3>
-        <div class="table-wrap"><table><thead><tr><th>Причина</th><th>Количество</th><th>Влияние</th><th>Объяснение</th></tr></thead><tbody>{{range .Summary.CollectionQuality.RuntimeHookFailureDetails}}<tr><td><code>{{.Reason}}</code></td><td>{{.Count}}</td><td>{{if eq .Impact "fallback"}}fallback без потери транспорта{{else}}возможная потеря evidence{{end}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
+        <h3>Причины безопасного отказа перехватчиков</h3>
+        <div class="table-wrap"><table><thead><tr><th>Причина</th><th>Количество</th><th>Влияние</th><th>Объяснение</th></tr></thead><tbody>{{range .Summary.CollectionQuality.RuntimeHookFailureDetails}}<tr><td><code>{{.Reason}}</code></td><td>{{.Count}}</td><td>{{if eq .Impact "fallback"}}резервный путь без потери записи{{else}}возможная потеря подтверждающих данных{{end}}</td><td>{{.Explanation}}</td></tr>{{end}}</tbody></table></div>
         {{end}}
-        <p class="quality-notice">Runtime-граф: {{if .Summary.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}} · полнота {{printf "%.2f" (percent01 .Summary.CollectionQuality.RuntimeGraphCompletenessRatio)}}% · декодировано {{.Summary.CollectionQuality.DecodedRuntimeGraphCalls}} · terminal emitted {{.Summary.CollectionQuality.RuntimeGraphEmittedEvents}} · input {{.Summary.CollectionQuality.RuntimeGraphInputEvents}} логических вызовов.</p>
-        {{range .Summary.CollectionQuality.Notices}}<p class="quality-notice">{{.}}.</p>{{end}}
-        {{range .Summary.Warnings}}<p class="warning">{{.}}</p>{{else}}{{if not .Summary.CollectionQuality.Notices}}<p class="quality-notice">Служебных замечаний к сбору нет.</p>{{end}}{{end}}
+        <p class="quality-notice">Граф вызовов во время выполнения: {{if .Summary.CollectionQuality.RuntimeGraphEnabled}}ВКЛЮЧЁН{{else}}ОТКЛЮЧЁН{{end}}. {{if lt .Summary.CollectionQuality.RuntimeGraphCompletenessRatio 1.0}}Отдельные связи могли не попасть в граф, поэтому он используется только для выбора места проверки.{{else}}Записанные связи доступны для выбора места проверки.{{end}}</p>
+        {{range problemOrientedCollectionWarnings .Summary}}<p class="warning">{{.}}</p>{{else}}<p class="quality-notice">Служебных замечаний к сбору нет.</p>{{end}}
       </div>
     </details>
   </section>
@@ -706,7 +1126,7 @@
       <div class="fold-body">
         {{if .Summary.LogGrowth.Available}}
         <p class="help-text">Раздел показывает только рост файлов <code>.jhlog</code>; <code>.hprof</code> не учитываются. Сегменты одного запуска суммируются, а красные точки отмечают остановку сбора при исчерпании общего бюджета архива. Итоги выбранного периода рассчитываются в этом отчёте только после нажатия кнопки.</p>
-        {{if eq .Summary.LogGrowth.FreshnessStatus "stale"}}<p class="warning"><strong>Growth snapshot устарел.</strong> {{.Summary.LogGrowth.FreshnessReason}}. Текущие значения роста нельзя считать финальными; создайте согласованный export snapshot.</p>{{else if eq .Summary.LogGrowth.FreshnessStatus "fresh"}}<p class="quality-notice"><strong>Growth snapshot согласован.</strong> {{.Summary.LogGrowth.FreshnessReason}}.</p>{{else}}<p class="quality-notice"><strong>Freshness growth не доказана.</strong> {{.Summary.LogGrowth.FreshnessReason}}.</p>{{end}}
+        {{if eq .Summary.LogGrowth.FreshnessStatus "stale"}}<p class="warning"><strong>Снимок роста устарел.</strong> {{growthFreshnessReason .Summary.LogGrowth.FreshnessReason}}. Текущие значения роста нельзя считать окончательными; создайте согласованный снимок выгрузки.</p>{{else if eq .Summary.LogGrowth.FreshnessStatus "fresh"}}<p class="quality-notice"><strong>Снимок роста согласован.</strong> {{growthFreshnessReason .Summary.LogGrowth.FreshnessReason}}.</p>{{else}}<p class="quality-notice"><strong>Актуальность снимка роста не доказана.</strong> {{growthFreshnessReason .Summary.LogGrowth.FreshnessReason}}.</p>{{end}}
         <script type="application/json" data-log-growth-json>{{.LogGrowthJSON}}</script>
 
         <div class="log-growth-range">
@@ -776,3 +1196,41 @@
 {{- define "inspect-process-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "process"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
 {{- define "inspect-network-row"}}{{$row := .Value}}<tr><td><code>{{reportHint $row.Name "неизвестно" "network"}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
 {{- define "inspect-cohort-row"}}{{$row := .Value}}<tr><td><code>{{cohortHint $row.Name}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-network-call-row"}}{{$row := .Value}}<tr><td><code>{{$row.Route}}</code><br><span class="muted">{{contextHint $row.Service "service"}}</span></td><td><code>{{contextHint $row.Initiator "owner"}}</code></td><td>экран <code>{{contextHint $row.Screen "screen"}}</code><br>операция <code>{{contextHint $row.Operation "operation"}}</code><br>источник <code>{{contextHint $row.Owner "owner"}}</code></td><td>{{$row.Count}} / {{$row.Failures}}<br><span class="muted">транспортных {{$row.TransportFailures}} · 4xx {{$row.HTTP4xx}} · 5xx {{$row.HTTP5xx}} · отмен {{$row.Canceled}}</span></td><td>{{$row.P50MS}} / {{$row.P95MS}} / {{$row.MaxMS}} мс</td><td>{{$row.CacheHits}} / {{$row.ReusedConnections}}</td><td>{{$row.Attempts}}<br><span class="muted">повторов {{$row.Retries}} · перенаправлений {{$row.Redirects}} · ошибок соединения {{$row.ConnectFailures}}</span></td><td>{{$row.BytesRx}} / {{$row.BytesTx}}</td><td>{{range $row.Phases}}{{if gt .SampleCount 0}}<span>{{httpPhaseLabel .Name}} {{.P95MS}} мс</span><br>{{end}}{{end}}</td></tr>{{end -}}
+{{- define "inspect-critical-io-row"}}{{$row := .Value}}<tr><td>{{$row.OperationLabel}}<br><span class="muted">{{$row.Thread}}</span></td><td><span class="status-note {{severityClass $row.Severity}}">{{$row.Status}}</span></td><td><code>{{contextHint $row.Source "owner"}}</code></td><td>{{if $row.ContextHelp}}{{tip $row.Context $row.ContextHelp}}{{else}}{{$row.Context}}{{end}}</td><td>{{$row.Count}} / {{$row.Failures}}</td><td>{{humanMicros $row.P50DurationUS}} / {{humanMicros $row.P95DurationUS}} / {{humanMicros $row.MaxDurationUS}}</td><td>{{humanMicros $row.TotalDurationUS}}</td><td>{{$row.ByteCoverage}}</td><td>{{$row.Bytes}} Б / {{$row.MaxBytes}} Б</td><td>{{$row.Throughput}}</td><td>{{$row.PeakOperationsPerSecond}}/с</td></tr>{{end -}}
+{{- define "inspect-async-executor-row"}}{{$row := .Value}}<tr><td><code>{{$row.Name}}</code></td><td>{{$row.Started}} / {{$row.Failures}}</td><td>{{if gt $row.WaitSamples 0}}{{humanDuration $row.AvgWaitMS}} / {{humanDuration $row.MaxWaitMS}}<br><span class="muted">{{$row.WaitSamples}} замеров</span>{{else}}—{{end}}</td><td>{{if gt $row.ServiceSamples 0}}{{humanDuration $row.AvgServiceMS}} / {{humanDuration $row.MaxServiceMS}}<br><span class="muted">{{$row.ServiceSamples}} замеров</span>{{else}}—{{end}}</td><td>{{printf "%.2f" (hundredths $row.AvgQueueDepthX100)}} / {{$row.MaxQueueDepth}}<br><span class="muted">{{$row.QueueSamples}} замеров</span></td><td>{{printf "%.2f" (hundredths $row.AvgActiveCountX100)}} / {{$row.MaxActiveCount}}<br><span class="muted">{{$row.ActiveSamples}} замеров</span></td><td>{{$row.MaxPoolSize}}</td><td>{{$row.CompletedHighWatermark}}</td></tr>{{end -}}
+{{- define "inspect-async-task-row"}}{{$row := .Value}}<tr><td>{{asyncKindLabel $row.Kind}}</td><td><code>{{$row.Owner}}</code></td><td>{{$row.DurationSamples}}</td><td>{{if gt $row.DurationSamples 0}}{{humanDuration $row.AvgDurationMS}} / {{humanDuration $row.MaxDurationMS}}{{else}}—{{end}}</td><td>{{$row.Failures}}</td></tr>{{end -}}
+{{- define "inspect-startup-screen-row"}}{{$row := .Value}}<tr><td><code>{{$row.Screen}}</code></td><td>{{$row.ResumeSamples}}</td><td>{{humanDuration $row.AvgResumeMS}}</td><td>{{humanDuration $row.MaxResumeMS}}</td></tr>{{end -}}
+{{- define "inspect-startup-transition-row"}}{{$row := .Value}}<tr><td><code>{{$row.Name}}</code></td><td>{{$row.Value}}</td></tr>{{end -}}
+{{- define "inspect-database-statement-card"}}<article class="database-statement-card {{severityClass .Severity}}">
+  <header><span class="status-note {{severityClass .Severity}}">{{.Status}}</span><span>{{.Framework}} · {{.Operation}}</span><span>{{.Screen}} · {{.Context}}</span></header>
+  <pre class="database-sql-template"><code>{{.Query}}</code></pre>
+  <div class="database-statement-metrics">
+    <span>вызовы / ошибки<strong>{{if gt .EstimatedCalls .Overall.Calls}}≈ {{.EstimatedCalls}} / {{.Overall.Failures}}{{else}}{{.Overall.Calls}} / {{.Overall.Failures}}{{end}}</strong></span>
+    <span>главный поток: вызовы / верхние 5%<strong>{{.Main.Calls}} / {{humanMicros .Main.P95DurationUS}}</strong></span>
+    <span>фон: вызовы / верхние 5%<strong>{{.Background.Calls}} / {{humanMicros .Background.P95DurationUS}}</strong></span>
+    <span>медиана / верхние 5% / максимум<strong>{{if .Overall.QuantilesApproximated}}≈ {{end}}{{humanMicros .Overall.P50DurationUS}} / {{humanMicros .Overall.P95DurationUS}} / {{humanMicros .Overall.MaxDurationUS}}</strong></span>
+    <span>общее время БД<strong>{{humanMicros .Overall.TotalDurationUS}}</strong></span>
+    <span>пик / быстрые повторы<strong>{{.PeakCallsPerSecond}}/с / {{.RapidRepeats}}</strong></span>
+    <span>известен результат / связаны с транзакцией<strong>{{.Telemetry.ResultKnownCalls}} / {{.Telemetry.TransactionLinkedCalls}}</strong></span>
+    <span>подготовленный запрос / измерены фазы<strong>{{.Telemetry.PreparedExecutionCalls}} / {{.Telemetry.PhaseMeasuredCalls}}</strong></span>
+    <span>совпадения по времени: HTTP / фоновая задача / файл / GC<strong>главный поток: {{.MainCorrelation.HTTPOverlaps}} / {{.MainCorrelation.WorkerOverlaps}} / {{.MainCorrelation.FileIOOverlaps}} / {{.MainCorrelation.GCOverlaps}}<br>фон: {{.BackgroundCorrelation.HTTPOverlaps}} / {{.BackgroundCorrelation.WorkerOverlaps}} / {{.BackgroundCorrelation.FileIOOverlaps}} / {{.BackgroundCorrelation.GCOverlaps}}</strong></span>
+  </div>
+  {{if .Telemetry.FailureKinds}}<p class="help-text"><strong>Виды ошибок:</strong> {{range .Telemetry.FailureKinds}}{{databaseTaxonomyLabel .Name}} — {{.Value}}; {{end}}</p>{{end}}
+  {{if .Telemetry.ResultCountBuckets}}<p class="help-text"><strong>Размеры результата:</strong> {{range .Telemetry.ResultCountBuckets}}{{databaseTaxonomyLabel .Name}} — {{.Value}}; {{end}}</p>{{end}}
+  <div class="database-statement-explanation"><p><strong>Почему это важно:</strong> {{.Why}}</p><p><strong>Что сделать и как проверить:</strong> {{.Action}}</p></div>
+  <details class="database-context-details"><summary>Контексты выполнения · {{.ContextCount}}</summary><div class="database-context-grid">{{range .Contexts}}<div><code>{{contextHint .Source "owner"}}</code><span>{{reportHint .Framework "не определено" "framework"}} · {{reportHint .Process "не записан" "process"}}</span><span>экран {{contextHint .Screen "screen"}} · операция {{contextHint .ContextOperation "operation"}}</span><span>главный поток {{.Main.Calls}} / фон {{.Background.Calls}} / ошибки {{.Overall.Failures}}</span></div>{{else}}<span class="muted">Контекст вызова не сохранён.</span>{{end}}</div></details>
+</article>{{end -}}
+{{- define "inspect-database-transaction-card"}}<article class="database-statement-card database-transaction-card {{severityClass .Severity}}">
+  <header><span class="status-note {{severityClass .Severity}}">{{.Status}}</span><span>{{.Thread}} · {{.Mode}}</span><span>{{reportHint .Stats.Process "процесс не записан" "process"}} · {{contextHint .Stats.Screen "screen"}} · {{contextHint .Stats.ContextOperation "operation"}}</span></header>
+  <div class="database-statement-metrics">
+    <span>источник<strong><code>{{.Stats.Source}}</code></strong></span>
+    <span>транзакция / родительская<strong>#{{.Stats.TransactionID}} / {{if .Stats.ParentID}}#{{.Stats.ParentID}}{{else}}—{{end}}</strong></span>
+    <span>результат<strong>{{databaseTaxonomyLabel .Outcome}}{{if eq .Stats.Outcome "failure"}} · {{databaseTaxonomyLabel .FailureKind}}{{end}}</strong></span>
+    <span>длительность<strong>{{if .Stats.Complete}}{{humanMicros .Stats.DurationUS}}{{else}}не вычисляется{{end}}</strong></span>
+    <span>SQL-вызовы<strong>{{.Stats.StatementCount}}</strong></span>
+    <span>чтение / запись<strong>{{.Stats.ReadCount}} / {{.Stats.WriteCount}}</strong></span>
+    <span>совпадения по времени: HTTP / фоновая задача / файл / GC<strong>{{.Stats.Correlation.HTTPOverlaps}} / {{.Stats.Correlation.WorkerOverlaps}} / {{.Stats.Correlation.FileIOOverlaps}} / {{.Stats.Correlation.GCOverlaps}}</strong></span>
+  </div>
+  <div class="database-statement-explanation"><p><strong>Почему это важно:</strong> {{.Why}}</p><p><strong>Что сделать и как проверить:</strong> {{.Action}}</p></div>
+</article>{{end -}}

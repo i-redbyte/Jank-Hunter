@@ -1,12 +1,13 @@
 package io.jankhunter.runtime.internal.io
 
 import io.jankhunter.runtime.JankHunterLogGrowthSummary
+import io.jankhunter.runtime.RuntimeLongSource
 import java.io.File
 
 internal class LogGrowthManager(
     directory: File,
     processScope: String? = null,
-    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val nowMs: RuntimeLongSource = RuntimeLongSource(System::currentTimeMillis),
 ) {
     private val store = LogGrowthHistoryStore(directory, processScope)
     private var state = store.load()
@@ -47,14 +48,14 @@ internal class LogGrowthManager(
     @Synchronized
     fun checkpoint(stats: LogContainerStats): ByteArray? {
         val current = state.active ?: return null
-        state = store.writeActive(state, updateActive(current, stats, nowMs()))
+        state = store.writeActive(state, updateActive(current, stats, nowMs.getAsLong()))
         return state.active?.let { LogGrowthWire.live(it, completed = false) }
     }
 
     @Synchronized
     fun complete(stats: LogContainerStats): ByteArray? {
         val current = state.active ?: return null
-        state = store.writeActive(state, updateActive(current, stats, nowMs()))
+        state = store.writeActive(state, updateActive(current, stats, nowMs.getAsLong()))
         val finalActive = state.active ?: return null
         val completed = finalActive.toSessionFact(
             sequence = state.nextSessionSequence,
@@ -67,7 +68,7 @@ internal class LogGrowthManager(
 
     @Synchronized
     fun summary(currentStats: LogContainerStats? = null): JankHunterLogGrowthSummary {
-        val capturedAt = nowMs().coerceAtLeast(0L)
+        val capturedAt = nowMs.getAsLong().coerceAtLeast(0L)
         val current = state.active?.let { active ->
             val currentFact = if (currentStats == null) active else updateActive(active, currentStats, capturedAt)
             currentFact.copy(updatedAtMs = maxOf(currentFact.updatedAtMs, capturedAt))

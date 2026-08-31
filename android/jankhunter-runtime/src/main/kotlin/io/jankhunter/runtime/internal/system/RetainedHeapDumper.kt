@@ -2,20 +2,23 @@ package io.jankhunter.runtime.internal.system
 
 import android.os.Debug
 import io.jankhunter.runtime.JankHunterBinaryStorage
+import io.jankhunter.runtime.RuntimeLongSource
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 internal class RetainedHeapDumper(
     private val directory: File,
-    private val binaryStorage: JankHunterBinaryStorage? = null,
+    binaryStorage: JankHunterBinaryStorage? = null,
     private val minIntervalMs: Long,
     maxDumpCount: Int,
     minRetainedAgeMs: Long = 0L,
-    private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() },
-    private val wallClock: () -> Long = { System.currentTimeMillis() },
+    private val clock: RuntimeLongSource = RuntimeLongSource { android.os.SystemClock.elapsedRealtime() },
+    private val wallClock: RuntimeLongSource = RuntimeLongSource { System.currentTimeMillis() },
     private val dumpHprof: (String) -> Unit = { path -> Debug.dumpHprofData(path) },
 ) {
+    @Volatile
+    private var binaryStorage = binaryStorage
     private val maxCount = maxDumpCount.coerceAtLeast(0)
     private val minAgeMs = minRetainedAgeMs.coerceAtLeast(0L)
     private val lastDumpAtMs = AtomicLong(Long.MIN_VALUE)
@@ -32,7 +35,7 @@ internal class RetainedHeapDumper(
         if (currentCount >= maxCount) {
             return Result.Skipped("max_count")
         }
-        val now = clock()
+        val now = clock.getAsLong()
         val last = lastDumpAtMs.get()
         if (last != Long.MIN_VALUE && now - last < minIntervalMs) {
             return Result.Skipped("min_interval")
@@ -47,7 +50,7 @@ internal class RetainedHeapDumper(
             return Result.Skipped("max_count")
         }
         return try {
-            val fileName = "retained-${wallClock()}-${safeName(className)}-${nextCount}.hprof"
+            val fileName = "retained-${wallClock.getAsLong()}-${safeName(className)}-${nextCount}.hprof"
             val file = dumpToFile(fileName)
             Result.Dumped(file, safeName(className), safeName(holder), ageMs, count)
         } catch (error: Throwable) {
@@ -79,6 +82,10 @@ internal class RetainedHeapDumper(
                 runCatching { artifact.abort() }
             }
         }
+    }
+
+    fun switchBinaryStorage(storage: JankHunterBinaryStorage?) {
+        binaryStorage = storage
     }
 
     sealed class Result {

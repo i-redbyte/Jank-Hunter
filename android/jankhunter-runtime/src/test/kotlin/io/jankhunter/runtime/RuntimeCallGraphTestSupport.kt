@@ -6,3 +6,6 @@ internal fun RuntimeCallGraph.recordEdge(parentId: Long, childId: Long) {
     exit(child, childId)
     exit(parent, parentId)
 }
+
+internal fun RuntimeCallGraph.enter(methodId: Long, enabled: Boolean): Long =
+    enter(methodId, "method-$methodId", enabled)

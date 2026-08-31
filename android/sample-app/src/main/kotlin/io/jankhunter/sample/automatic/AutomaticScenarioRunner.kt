@@ -1,5 +1,7 @@
 package io.jankhunter.sample.automatic
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.SampleApplication
 import io.jankhunter.runtime.JankHunter
 
@@ -13,7 +15,7 @@ internal interface AutomaticScenarioRunner {
 }
 
 internal fun completeAutomaticStage(step: ScenarioStep) {
-    JankHunter.recordCounter("sample.auto.stage.${step.screenName.substringAfterLast('.')}.completed.count", 1)
+    JankHunterTelemetry.counter("sample.auto.stage.${step.screenName.substringAfterLast('.')}.completed.count", 1)
     JankHunter.flush()
 }
 

@@ -30,7 +30,6 @@ type networkLoopSignal struct {
 
 type networkLoopCollector struct {
 	filter     analyze.Filter
-	ownerMap   *analyze.OwnerMap
 	bucketMS   uint64
 	bucketSize int
 	scale      timelineScale
@@ -48,7 +47,6 @@ type metricNetworkSignal struct {
 func newNetworkLoopCollector(options analyze.Options, scale timelineScale) *networkLoopCollector {
 	return &networkLoopCollector{
 		filter:     normalizeTimelineFilter(options.Filter),
-		ownerMap:   options.OwnerMap,
 		bucketMS:   scale.bucketMS,
 		bucketSize: scale.bucketCount,
 		scale:      scale,
@@ -550,7 +548,7 @@ func appearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:         loop.BurnScore,
 		ConfidenceDelta:   loop.Confidence,
 		Severity:          networkLoopFindingSeverity(loop),
-		Summary:           fmt.Sprintf("У кандидата появился кандидат сетевого цикла: период %.1fs, доверие %.2f, условная нагрузка %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
+		Summary:           fmt.Sprintf("В проверяемом прогоне появился признак сетевого цикла: период %.1f сек, доверие %.2f, условная нагрузка %.1f. %s", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore, loop.ProbableCause),
 	}
 }
 
@@ -564,7 +562,7 @@ func disappearedNetworkLoopDelta(loop NetworkLoopFinding) NetworkLoopDelta {
 		BurnDelta:        -loop.BurnScore,
 		ConfidenceDelta:  -loop.Confidence,
 		Severity:         "ok",
-		Summary:          fmt.Sprintf("У кандидата исчез кандидат сетевого цикла из базы: период %.1fs, доверие %.2f, условная нагрузка %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
+		Summary:          fmt.Sprintf("В проверяемом прогоне исчез признак сетевого цикла из базового: период %.1f сек, доверие %.2f, условная нагрузка %.1f.", seconds(loop.PeriodMS), loop.Confidence, loop.BurnScore),
 	}
 }
 
@@ -601,7 +599,7 @@ func changedNetworkLoopDelta(baseline, candidate NetworkLoopFinding) (NetworkLoo
 		BurnDelta:         burnDelta,
 		ConfidenceDelta:   confidenceDelta,
 		Severity:          severity,
-		Summary:           fmt.Sprintf("Кандидат сетевого цикла %s: период %.1fs -> %.1fs, условная нагрузка %.1f -> %.1f, доверие %.2f -> %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
+		Summary:           fmt.Sprintf("Признак сетевого цикла %s: период %.1f сек -> %.1f сек, условная нагрузка %.1f -> %.1f, доверие %.2f -> %.2f.", status, seconds(baseline.PeriodMS), seconds(candidate.PeriodMS), baseline.BurnScore, candidate.BurnScore, baseline.Confidence, candidate.Confidence),
 	}, true
 }
 
@@ -623,7 +621,7 @@ func networkLoopSummary(loops []NetworkLoopFinding) string {
 	if len(loops) == 0 {
 		return "Сетевых циклов по DNS, соединениям, переподключениям, WebSocket и всплескам маршрутов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d кандидатов сетевых циклов. Каждый прошел порог по повторяемости и комбинированной уверенности; отдельные методы могут давать разную силу подтверждения.", len(loops))
+	return fmt.Sprintf("Найдено %d признаков сетевых циклов. Каждый прошёл порог по повторяемости и совокупной уверенности; отдельные методы могут давать разную силу подтверждения.", len(loops))
 }
 
 func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
@@ -637,8 +635,8 @@ func networkLoopFindings(loops []NetworkLoopFinding) []Finding {
 	worst := loops[0]
 	return []Finding{{
 		Severity:       networkLoopFindingSeverity(worst),
-		Title:          "Найден кандидат сетевого цикла",
-		Detail:         fmt.Sprintf("Предполагаемый период %.1fs, доверие %.2f, условная нагрузка %.1f. Повторяющийся паттерн: %s. Это гипотеза, а не доказанная причина.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
+		Title:          "Найден признак сетевого цикла",
+		Detail:         fmt.Sprintf("Предполагаемый период %.1fs, доверие %.2f, условная нагрузка %.1f. Повторяющаяся последовательность: %s. Это гипотеза, а не доказанная причина.", seconds(worst.PeriodMS), worst.Confidence, worst.BurnScore, NetworkLoopMotifText(worst.Motif)),
 		Recommendation: worst.ProbableCause,
 		Evidence:       networkLoopEvidence(worst),
 	}}
@@ -648,7 +646,7 @@ func compareNetworkLoopSummary(deltas []NetworkLoopDelta) string {
 	if len(deltas) == 0 {
 		return "Новых, исчезнувших или заметно усилившихся сетевых циклов не найдено."
 	}
-	return fmt.Sprintf("Найдено %d изменений кандидатов сетевых циклов: появление или исчезновение, смена периода, условной нагрузки либо поддержки данными.", len(deltas))
+	return fmt.Sprintf("Найдено %d изменений признаков сетевых циклов: появление или исчезновение, смена периода, условной нагрузки либо поддержки данными.", len(deltas))
 }
 
 func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
@@ -656,7 +654,7 @@ func compareNetworkLoopFindings(deltas []NetworkLoopDelta) []Finding {
 		if delta.Severity == "high" || delta.Severity == "medium" {
 			return []Finding{{
 				Severity:       delta.Severity,
-				Title:          "Изменился кандидат сетевого цикла",
+				Title:          "Изменился признак сетевого цикла",
 				Detail:         delta.Summary,
 				Recommendation: "Проверьте маршрут, источник, DNS, соединения, повторы и WebSocket-события с тем же периодом; для Android смотрите OkHttp EventListener и владельца корутины или обновления.",
 			}}
@@ -685,9 +683,12 @@ func networkLoopEvidence(loop NetworkLoopFinding) []string {
 		evidence = append(evidence, "маршрут: "+loop.Route)
 	}
 	if loop.Owner != "" {
-		evidence = append(evidence, "источник: "+loop.Owner)
+		evidence = append(evidence, "место запуска: "+analysisOwnerLabel(loop.Owner))
+		if !analysisOwnerIsKnown(loop.Owner) {
+			evidence = append(evidence, missingOwnerAction())
+		}
 	}
-	evidence = append(evidence, fmt.Sprintf("окно: %.1fs..%.1fs", seconds(loop.FirstMS), seconds(loop.LastMS)))
+	evidence = append(evidence, fmt.Sprintf("интервал: %.1f сек..%.1f сек", seconds(loop.FirstMS), seconds(loop.LastMS)))
 	if len(loop.Path.Nodes) > 0 {
 		evidence = append(evidence, "путь: "+strings.Join(loop.Path.Nodes, " -> "))
 	}
@@ -840,23 +841,27 @@ func networkLoopKindToken(kind string) string {
 
 func networkLoopProbableCause(kind, route, owner string) string {
 	target := networkLoopTarget(route, owner)
+	ownerAction := ""
+	if !analysisOwnerIsKnown(owner) {
+		ownerAction = " " + missingOwnerAction()
+	}
 	switch kind {
 	case "dns":
-		return "Гипотеза для проверки: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL/кеш, OkHttp DNS и сетевой слой."
+		return "Гипотеза для проверки: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL, кеш, OkHttp DNS и сетевой слой." + ownerAction
 	case "connect":
-		return "Гипотеза для проверки: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети."
+		return "Гипотеза для проверки: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети." + ownerAction
 	case "retry":
-		return "Гипотеза для проверки: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления."
+		return "Гипотеза для проверки: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления." + ownerAction
 	case "websocket":
-		return "Гипотеза для проверки: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения."
+		return "Гипотеза для проверки: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения." + ownerAction
 	case "failure":
-		return "Гипотеза для проверки: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и политику повторов."
+		return "Гипотеза для проверки: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и правила повторов." + ownerAction
 	case "owner":
-		return "Гипотеза для проверки: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин/задач и подавление частых повторов."
+		return "Гипотеза для проверки: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин и задач и подавление частых повторов." + ownerAction
 	case "route":
-		return "Гипотеза для проверки: периодический polling или шквал запросов" + target + ". Проверьте таймеры, refresh и cache policy."
+		return "Гипотеза для проверки: периодический опрос или шквал запросов" + target + ". Проверьте таймеры, запуск обновления и правила кеширования." + ownerAction
 	default:
-		return "Гипотеза для проверки: повторяющийся сетевой паттерн" + target + "."
+		return "Гипотеза для проверки: повторяющаяся последовательность сетевых событий" + target + "." + ownerAction
 	}
 }
 
@@ -865,8 +870,8 @@ func networkLoopTarget(route, owner string) string {
 	if route != "" {
 		parts = append(parts, "маршрута "+route)
 	}
-	if owner != "" {
-		parts = append(parts, "источника "+owner)
+	if analysisOwnerIsKnown(owner) {
+		parts = append(parts, "места запуска "+owner)
 	}
 	if len(parts) == 0 {
 		return ""
@@ -877,7 +882,7 @@ func networkLoopTarget(route, owner string) string {
 func networkLoopPath(kind, route, owner string, motif []string, confidence float64) GraphPath {
 	nodes := []string{"симптом: сетевой цикл"}
 	if owner != "" {
-		nodes = append(nodes, "источник: "+owner)
+		nodes = append(nodes, "место запуска: "+analysisOwnerLabel(owner))
 	}
 	if route != "" {
 		nodes = append(nodes, "маршрут: "+route)
@@ -1001,7 +1006,7 @@ func stringSliceContains(values []string, needle string) bool {
 
 func NetworkLoopMotifText(tokens []string) string {
 	if len(tokens) == 0 {
-		return "повторяющийся паттерн не выделен"
+		return "повторяющаяся последовательность не выделена"
 	}
 	labels := make([]string, 0, len(tokens))
 	for _, token := range tokens {
@@ -1031,7 +1036,7 @@ func networkLoopTokenLabel(token string) string {
 		return "маршрут: " + strings.TrimPrefix(token, "route:")
 	}
 	if strings.HasPrefix(token, "owner:") {
-		return "источник: " + strings.TrimPrefix(token, "owner:")
+		return "место запуска: " + analysisOwnerLabel(strings.TrimPrefix(token, "owner:"))
 	}
 	return token
 }

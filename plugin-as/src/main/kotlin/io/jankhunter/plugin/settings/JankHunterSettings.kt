@@ -28,8 +28,6 @@ class JankHunterSettings : PersistentStateComponent<JankHunterSettings.State> {
         var openReportExternally: Boolean = true
         var presentationMode: Boolean = false
         var processedLogFingerprints: MutableList<String> = mutableListOf()
-        var lastRun: JankHunterRecentRun? = null
-        var recentRuns: MutableList<JankHunterRecentRun> = mutableListOf()
     }
 
     companion object {

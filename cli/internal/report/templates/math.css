@@ -151,6 +151,53 @@
   white-space: nowrap;
 }
 .timeline-table td:last-child code { white-space: nowrap; }
+.periodic-analysis-table {
+  width: 2560px !important;
+  min-width: 2560px;
+}
+.periodic-analysis-table th:first-child,
+.periodic-analysis-table td:first-child {
+  min-width: 360px;
+}
+.periodic-analysis-table th:nth-child(6),
+.periodic-analysis-table td:nth-child(6) {
+  min-width: 220px;
+}
+.periodic-analysis-table th:nth-child(7),
+.periodic-analysis-table td:nth-child(7),
+.periodic-analysis-table th:last-child,
+.periodic-analysis-table td:last-child {
+  min-width: 430px;
+  white-space: normal;
+}
+.integral-score-table {
+  width: 2240px !important;
+  min-width: 2240px;
+}
+.integral-score-table th:first-child,
+.integral-score-table td:first-child {
+  min-width: 310px;
+}
+.integral-score-table th:nth-child(2),
+.integral-score-table td:nth-child(2) {
+  min-width: 180px;
+}
+.integral-score-table th:nth-child(3),
+.integral-score-table td:nth-child(3) {
+  min-width: 350px;
+  white-space: normal;
+}
+.integral-score-table th:nth-child(4),
+.integral-score-table td:nth-child(4) {
+  min-width: 430px;
+}
+.integral-score-table th:nth-child(5),
+.integral-score-table td:nth-child(5),
+.integral-score-table th:last-child,
+.integral-score-table td:last-child {
+  min-width: 440px;
+  white-space: normal;
+}
 .method-reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

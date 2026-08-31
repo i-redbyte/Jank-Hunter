@@ -461,8 +461,8 @@ func (b *influenceViewBuilder) contextView(context InfluenceGraphContext) Influe
 	return boundedInfluenceViewWithTotals(
 		context.ID,
 		"context",
-		"Экран / Flow",
-		"Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух шагов. Связующий класс не считается непосредственным участником экрана, сценария или маршрута.",
+		"Экран / операция",
+		"Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух связей. Связующий класс не считается непосредственным участником экрана, операции или маршрута.",
 		InfluenceGraphFilters{ContextKind: context.Kind, ContextValue: context.Value},
 		b.boundedClassNodes(candidates, contextViewMaxNodes),
 		edges,
@@ -498,8 +498,8 @@ func (b *influenceViewBuilder) contexts() []InfluenceGraphContext {
 		for _, value := range node.Screens {
 			add("screen", value, problem)
 		}
-		for _, value := range node.Flows {
-			add("flow", value, problem)
+		for _, value := range node.Operations {
+			add("operation", value, problem)
 		}
 		for _, value := range node.Routes {
 			add("route", value, problem)
@@ -661,7 +661,7 @@ func (b *influenceViewBuilder) nodeExplanation(node InfluenceNode) string {
 	if node.Retained > 0 {
 		label := fmt.Sprintf("%d сигналов удержания", node.Retained)
 		if node.HeapEvidence {
-			label += " с HPROF evidence"
+			label += " с данными HPROF"
 		}
 		reasons = append(reasons, label)
 	}
@@ -830,7 +830,7 @@ func normalizeInfluenceEvidence(edge InfluenceEdge) InfluenceEdge {
 	switch {
 	case edge.RuntimeCount > 0 && edge.StaticCount > 0:
 		edge.Evidence = "mixed"
-		edge.Reason = "runtime-вызов подтвержден; статический граф также содержит эту связь"
+		edge.Reason = "вызов при выполнении подтверждён; статический граф также содержит эту связь"
 	case edge.RuntimeCount > 0:
 		edge.Evidence = "runtime"
 		edge.Reason = "вызов записан во время этого прогона"
@@ -926,8 +926,8 @@ func influenceNodeMatchesContext(node InfluenceNode, kind string, value string) 
 	switch kind {
 	case "screen":
 		return containsInfluenceValue(node.Screens, value)
-	case "flow":
-		return containsInfluenceValue(node.Flows, value)
+	case "operation":
+		return containsInfluenceValue(node.Operations, value)
 	case "route":
 		return containsInfluenceValue(node.Routes, value)
 	default:

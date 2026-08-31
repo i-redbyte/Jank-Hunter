@@ -147,8 +147,7 @@ func memoryLeakSuspectFromStats(
 		ClassName:                className,
 		Holder:                   holder,
 		Screen:                   emptyUnknown(item.screen),
-		Flow:                     emptyUnknown(item.flow),
-		Step:                     emptyUnknown(item.step),
+		Operation:                emptyUnknown(item.operation),
 		Count:                    item.count,
 		MaxAgeMS:                 item.maxAgeMs,
 		EvidenceKind:             evidenceKind,
@@ -349,8 +348,7 @@ func runtimeLeakFingerprint(className, holder string, item memoryLeakStats) stri
 		normalizeLeakToken(className),
 		normalizeLeakToken(holder),
 		normalizeLeakToken(item.screen),
-		normalizeLeakToken(item.flow),
-		normalizeLeakToken(item.step),
+		normalizeLeakToken(item.operation),
 	}, "|")
 }
 
@@ -480,7 +478,7 @@ func retainedImpact(
 
 func retainedRecommendation(className, holder, holderQuality string) string {
 	if holderQuality == "держатель не определен" || strings.HasPrefix(holderQuality, "автоматическая проверка") {
-		return "Проверьте владельцев ссылок на этот объект: одиночки, статические поля и кеши, корутинные задачи, слушатели, обратные вызовы, adapter, ViewModel и область DI. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
+		return "Проверьте владельцев ссылок на этот объект: одиночки, статические поля и кеши, корутинные задачи, слушатели, обратные вызовы, адаптеры, ViewModel и область DI. Для точного владельца добавьте ownerHint в watchObject или оберните участок в withOwner."
 	}
 	if isLikelySystemClass(className) {
 		return fmt.Sprintf("Проверьте пользовательский держатель %s: не хранит ли он Context/View/Activity дольше жизненного цикла.", holder)
@@ -534,11 +532,8 @@ func retainedEvidence(
 	if item.screen != "" && item.screen != "unknown" {
 		parts = append(parts, "экран="+item.screen)
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "сценарий="+item.flow)
-	}
-	if item.step != "" && item.step != "unknown" {
-		parts = append(parts, "шаг="+item.step)
+	if item.operation != "" && item.operation != "unknown" {
+		parts = append(parts, "операция="+item.operation)
 	}
 	if lowMemoryCount > 0 {
 		parts = append(parts, fmt.Sprintf("низкая память=%d", lowMemoryCount))
@@ -648,11 +643,8 @@ func retainedDominatorPath(item memoryLeakStats, holder, className string) []str
 	if item.screen != "" && item.screen != "unknown" {
 		path = append(path, "экран: "+item.screen)
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		path = append(path, "сценарий: "+item.flow)
-	}
-	if item.step != "" && item.step != "unknown" {
-		path = append(path, "шаг: "+item.step)
+	if item.operation != "" && item.operation != "unknown" {
+		path = append(path, "операция: "+item.operation)
 	}
 	if holder != "" && holder != "unknown" && holder != "не определен" {
 		holderClass, holderMethod := splitHolderReference(holder)
@@ -688,7 +680,7 @@ func retainedDominatorExplanation(confidence string, heap *HeapLeakEvidence) str
 		details = append(details, "Доверие: "+confidence+".")
 		return strings.Join(details, " ")
 	}
-	return "Схема показывает контекст, в котором объект оставался жив после lifecycle-события. Она помогает найти вероятного владельца и место наблюдения, но не является цепочкой ссылок; точный корень GC и удержанный размер доступны только из дампа памяти. Доверие: " + confidence + "."
+	return "Схема показывает контекст, в котором объект оставался жив после события жизненного цикла. Она помогает найти вероятного владельца и место наблюдения, но не является цепочкой ссылок; точный корень GC и удержанный размер доступны только из дампа памяти. Доверие: " + confidence + "."
 }
 
 func retainedAttributionConfidence(item memoryLeakStats, holderQuality string, userOwned bool) string {
@@ -729,13 +721,10 @@ func retainedLeakChainSummary(item memoryLeakStats, holder, className, objectKin
 	if item.screen != "" && item.screen != "unknown" {
 		parts = append(parts, "Экран: "+item.screen+".")
 	}
-	if item.flow != "" && item.flow != "unknown" {
-		parts = append(parts, "Сценарий: "+item.flow+".")
+	if item.operation != "" && item.operation != "unknown" {
+		parts = append(parts, "Операция: "+item.operation+".")
 	}
-	if item.step != "" && item.step != "unknown" {
-		parts = append(parts, "Шаг: "+item.step+".")
-	}
-	parts = append(parts, "Доверие runtime-атрибуции: "+confidence+".")
+	parts = append(parts, "Доверие к привязке по данным выполнения: "+confidence+".")
 	return strings.Join(parts, " ")
 }
 
@@ -1022,7 +1011,7 @@ func splitHolderReference(holder string) (string, string) {
 
 func knownContextCount(item memoryLeakStats) int {
 	count := 0
-	for _, value := range []string{item.screen, item.flow, item.step} {
+	for _, value := range []string{item.screen, item.operation} {
 		if value != "" && value != "unknown" {
 			count++
 		}

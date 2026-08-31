@@ -29,7 +29,7 @@ internal object RuntimeHookFailureTracker {
         }
     }
 
-    fun snapshot(): LongArray = LongArray(failures.length()) { index -> failures.get(index) }
+    fun count(reason: RuntimeHookFailureReason): Long = failures.get(reason.ordinal)
 
     fun total(): Long {
         var total = 0L

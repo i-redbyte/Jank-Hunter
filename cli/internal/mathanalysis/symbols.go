@@ -9,14 +9,12 @@ import (
 
 type mathSymbolResolver struct {
 	embedded map[uint64]string
-	ownerMap *analyze.OwnerMap
 	nameMap  *analyze.NameMapping
 }
 
 func newMathSymbolResolver(options analyze.Options) *mathSymbolResolver {
 	return &mathSymbolResolver{
 		embedded: map[uint64]string{},
-		ownerMap: options.OwnerMap,
 		nameMap:  options.ObfuscationMap,
 	}
 }
@@ -37,7 +35,6 @@ func (r *mathSymbolResolver) resolve(dict map[uint64]string, ref jhlog.SymbolRef
 	}
 	if value == "" {
 		value = jhlog.ResolveSymbol(dict, ref)
-		value = analyze.ResolveOwnerAlias(r.ownerMap, value)
 	}
 	return r.nameMap.Deobfuscate(value)
 }
@@ -47,9 +44,7 @@ func isMathDiagnosticStall(event jhlog.Event, dict map[uint64]string, symbols *m
 		return false
 	}
 	owner := symbols.resolve(dict, event.Attribution.Owner)
-	flow := symbols.resolve(dict, event.Attribution.Flow)
-	step := symbols.resolve(dict, event.Attribution.Step)
-	return isMathDiagnosticValue(owner) || strings.EqualFold(flow, "jankhunter.diagnostics") || strings.EqualFold(step, "heap_dump")
+	return isMathDiagnosticValue(owner)
 }
 
 func isMathDiagnosticValue(value string) bool {

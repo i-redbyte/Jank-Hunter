@@ -47,7 +47,7 @@ internal object JankHunterDependencyValidator {
             "Jank Hunter okhttp/webSockets ASM hooks are enabled for variant '$variantName', " +
                 "and OkHttp is present, but Jank Hunter Android SDK is missing. " +
                 "Add implementation(\"$jankHunterGroup:$JANK_HUNTER_ANDROID_SDK_ARTIFACT:<version>\") " +
-                "or disable jankHunter.instrument.okhttp/webSockets.",
+                "or disable JankHunterFeature.HTTP/JankHunterFeature.WEBSOCKETS.",
         )
     }
 

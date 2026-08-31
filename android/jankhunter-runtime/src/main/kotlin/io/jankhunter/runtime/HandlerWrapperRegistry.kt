@@ -1,6 +1,5 @@
 package io.jankhunter.runtime
 
-import android.os.Handler
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicInteger
@@ -9,13 +8,13 @@ import kotlin.concurrent.withLock
 
 internal class HandlerWrapperRegistry(
     private val droppedCounter: (HandlerWrapperLoss) -> Unit,
-    private val exactAdmission: () -> Boolean = { false },
+    private val exactAdmission: RuntimeBooleanSource = RuntimeBooleanSource { false },
 ) {
     private val shards = Array(SHARD_COUNT) { Shard() }
     private val entryCount = AtomicInteger()
 
     fun register(
-        handler: Handler,
+        handler: Any,
         runnable: Runnable,
         token: Any?,
         wrapper: Runnable,
@@ -23,12 +22,11 @@ internal class HandlerWrapperRegistry(
         maxWrappers: Int,
     ): Boolean {
         val shard = shardFor(handler)
-        val exact = exactAdmission()
+        val exact = exactAdmission.getAsBoolean()
         if (!acquire(shard, exact)) return false
         try {
             cleanLocked(shard)
-            val lookupKey = LookupKey(handler, runnable)
-            var entry = shard.entriesByKey[lookupKey]
+            var entry = findEntryLocked(shard, handler, runnable)
             if (entry != null) {
                 cleanEntryLocked(shard, entry)
                 if (!shard.entriesByKey.containsKey(entry.key)) {
@@ -71,21 +69,30 @@ internal class HandlerWrapperRegistry(
         }
     }
 
-    fun wrappers(handler: Handler, runnable: Runnable, token: Any?): List<Runnable> {
+    fun wrappers(handler: Any, runnable: Runnable, token: Any?): Array<Runnable> {
         val shard = shardFor(handler)
-        val result = ArrayList<Runnable>()
-        shard.snapshot.forEach { entry ->
-            if (entry.key.handler() !== handler || entry.key.original() !== runnable) return@forEach
-            entry.wrappers.forEach { wrapper ->
-                if (tokenMatches(wrapper.token, token)) wrapper.wrapper.get()?.let(result::add)
+        for (entry in shard.snapshot) {
+            if (entry.key.handler() !== handler || entry.key.original() !== runnable) continue
+            val candidates = entry.wrappers
+            val result = Array(candidates.size) { EMPTY_RUNNABLE }
+            var size = 0
+            for (candidate in candidates) {
+                if (!tokenMatches(candidate.token, token)) continue
+                val wrapper = candidate.wrapper.get() ?: continue
+                result[size++] = wrapper
+            }
+            return if (size == result.size) {
+                result
+            } else {
+                result.copyOfRange(0, size)
             }
         }
-        return result
+        return EMPTY_WRAPPERS
     }
 
     fun unregister(delegate: Runnable, wrapper: Runnable) {
         val originalHash = System.identityHashCode(delegate)
-        val exact = exactAdmission()
+        val exact = exactAdmission.getAsBoolean()
         shards.forEach { shard ->
             if (!acquire(shard, exact)) return@forEach
             try {
@@ -94,7 +101,7 @@ internal class HandlerWrapperRegistry(
                 keys.forEach { key ->
                     val entry = shard.entriesByKey[key] ?: return@forEach
                     if (key.original() === delegate) {
-                        if (entry.wrappers.removeAll {
+                        if (removeWrappers(entry.wrappers) {
                             val candidate = it.wrapper.get()
                             candidate == null || candidate === wrapper
                         }) shard.dirty = true
@@ -112,13 +119,14 @@ internal class HandlerWrapperRegistry(
         }
     }
 
-    fun unregister(handler: Handler, runnable: Runnable, token: Any?) {
+    fun unregister(handler: Any, runnable: Runnable, token: Any?) {
         val shard = shardFor(handler)
-        if (!acquire(shard, exactAdmission())) return
+        if (!containsEntry(shard.snapshot, handler, runnable)) return
+        if (!acquire(shard, exactAdmission.getAsBoolean())) return
         try {
             cleanLocked(shard)
-            val entry = shard.entriesByKey[LookupKey(handler, runnable)] ?: return
-            if (entry.wrappers.removeAll { it.wrapper.get() == null || tokenMatches(it.token, token) }) {
+            val entry = findEntryLocked(shard, handler, runnable) ?: return
+            if (removeWrappers(entry.wrappers) { it.wrapper.get() == null || tokenMatches(it.token, token) }) {
                 shard.dirty = true
             }
             if (entry.wrappers.isEmpty()) {
@@ -130,16 +138,16 @@ internal class HandlerWrapperRegistry(
         }
     }
 
-    fun unregister(handler: Handler, token: Any?) {
+    fun unregister(handler: Any, token: Any?) {
         val shard = shardFor(handler)
-        if (!acquire(shard, exactAdmission())) return
+        if (!acquire(shard, exactAdmission.getAsBoolean())) return
         try {
             cleanLocked(shard)
             val keys = shard.keysByHandlerHash[System.identityHashCode(handler)]?.toList() ?: return
             keys.forEach { key ->
                 val entry = shard.entriesByKey[key] ?: return@forEach
                 if (key.handler() === handler) {
-                    if (entry.wrappers.removeAll { it.wrapper.get() == null || tokenMatches(it.token, token) }) {
+                    if (removeWrappers(entry.wrappers) { it.wrapper.get() == null || tokenMatches(it.token, token) }) {
                         shard.dirty = true
                     }
                     if (entry.wrappers.isEmpty()) {
@@ -177,7 +185,7 @@ internal class HandlerWrapperRegistry(
     }
 
     private fun cleanEntryLocked(shard: Shard, entry: Entry) {
-        if (entry.wrappers.removeAll { it.wrapper.get() == null }) shard.dirty = true
+        if (removeWrappers(entry.wrappers) { it.wrapper.get() == null }) shard.dirty = true
         if (entry.wrappers.isEmpty()) {
             removeEntryLocked(shard, entry.key)
         }
@@ -194,7 +202,7 @@ internal class HandlerWrapperRegistry(
         shard.dirty = false
     }
 
-    private fun createEntryLocked(shard: Shard, handler: Handler, runnable: Runnable): Entry {
+    private fun createEntryLocked(shard: Shard, handler: Any, runnable: Runnable): Entry {
         val key = EntryKey(handler, runnable, shard.referenceQueue)
         val entry = Entry(key, mutableListOf())
         shard.entriesByKey[key] = entry
@@ -202,6 +210,39 @@ internal class HandlerWrapperRegistry(
         shard.keysByOriginalHash.getOrPut(key.originalHash) { mutableSetOf() }.add(key)
         shard.dirty = true
         return entry
+    }
+
+    private fun findEntryLocked(shard: Shard, handler: Any, runnable: Runnable): Entry? {
+        val handlerKeys = shard.keysByHandlerHash[System.identityHashCode(handler)] ?: return null
+        val originalKeys = shard.keysByOriginalHash[System.identityHashCode(runnable)] ?: return null
+        val candidates = if (handlerKeys.size <= originalKeys.size) handlerKeys else originalKeys
+        for (key in candidates) {
+            if (key.handler() === handler && key.original() === runnable) {
+                return shard.entriesByKey[key]
+            }
+        }
+        return null
+    }
+
+    private fun containsEntry(snapshot: Array<SnapshotEntry>, handler: Any, runnable: Runnable): Boolean {
+        for (entry in snapshot) {
+            if (entry.key.handler() === handler && entry.key.original() === runnable) return true
+        }
+        return false
+    }
+
+    private inline fun removeWrappers(
+        wrappers: MutableList<WrapperEntry>,
+        shouldRemove: (WrapperEntry) -> Boolean,
+    ): Boolean {
+        var changed = false
+        for (index in wrappers.lastIndex downTo 0) {
+            if (shouldRemove(wrappers[index])) {
+                wrappers.removeAt(index)
+                changed = true
+            }
+        }
+        return changed
     }
 
     private fun removeEntryLocked(shard: Shard, key: EntryKey) {
@@ -241,7 +282,7 @@ internal class HandlerWrapperRegistry(
         return false
     }
 
-    private fun shardFor(handler: Handler): Shard = shards[shardIndex(System.identityHashCode(handler))]
+    private fun shardFor(handler: Any): Shard = shards[shardIndex(System.identityHashCode(handler))]
 
     private fun shardIndex(hash: Int): Int {
         val mixed = hash xor (hash ushr 16)
@@ -255,7 +296,7 @@ internal class HandlerWrapperRegistry(
     private class Shard {
         val lock = ReentrantLock()
         val referenceQueue = ReferenceQueue<Any>()
-        val entriesByKey = HashMap<PairLookup, Entry>()
+        val entriesByKey = HashMap<EntryKey, Entry>()
         val keysByHandlerHash = HashMap<Int, MutableSet<EntryKey>>()
         val keysByOriginalHash = HashMap<Int, MutableSet<EntryKey>>()
         var dirty = false
@@ -264,55 +305,25 @@ internal class HandlerWrapperRegistry(
         var snapshot = emptyArray<SnapshotEntry>()
     }
 
-    private interface PairLookup {
-        val handlerHash: Int
-        val originalHash: Int
-        fun handler(): Handler?
-        fun original(): Runnable?
-    }
-
-    private class LookupKey(
-        private val handler: Handler,
-        private val original: Runnable,
-    ) : PairLookup {
-        override val handlerHash: Int = System.identityHashCode(handler)
-        override val originalHash: Int = System.identityHashCode(original)
-
-        override fun handler(): Handler = handler
-
-        override fun original(): Runnable = original
-
-        override fun equals(other: Any?): Boolean {
-            if (this === other) return true
-            if (other !is PairLookup) return false
-            return handlerHash == other.handlerHash &&
-                originalHash == other.originalHash &&
-                handler === other.handler() &&
-                original === other.original()
-        }
-
-        override fun hashCode(): Int = 31 * handlerHash + originalHash
-    }
-
     private class EntryKey(
-        handler: Handler,
+        handler: Any,
         original: Runnable,
         referenceQueue: ReferenceQueue<Any>,
-    ) : PairLookup {
-        override val handlerHash: Int = System.identityHashCode(handler)
-        override val originalHash: Int = System.identityHashCode(original)
+    ) {
+        val handlerHash: Int = System.identityHashCode(handler)
+        val originalHash: Int = System.identityHashCode(original)
         private val handlerRef = EntryReference(handler, referenceQueue, this)
         private val originalRef = EntryReference(original, referenceQueue, this)
 
-        override fun handler(): Handler? = handlerRef.get()
+        fun handler(): Any? = handlerRef.get()
 
-        override fun original(): Runnable? = originalRef.get()
+        fun original(): Runnable? = originalRef.get()
 
         fun isCleared(): Boolean = handler() == null || original() == null
 
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
-            if (other !is PairLookup) return false
+            if (other !is EntryKey) return false
             val currentHandler = handler() ?: return false
             val currentOriginal = original() ?: return false
             return handlerHash == other.handlerHash &&
@@ -347,6 +358,8 @@ internal class HandlerWrapperRegistry(
 
     private companion object {
         const val SHARD_COUNT = 16
+        val EMPTY_WRAPPERS = emptyArray<Runnable>()
+        val EMPTY_RUNNABLE = Runnable {}
     }
 }
 

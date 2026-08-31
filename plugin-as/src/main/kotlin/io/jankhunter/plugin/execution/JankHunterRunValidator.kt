@@ -23,7 +23,7 @@ object JankHunterRunValidator {
         validateCli(command.executable, errors)
         validateModeInputs(project, request, errors, warnings)
         if (request.mode in analysisModes) {
-            validateArtifact(project, "owner-map", request.ownerMap, errors)
+            validateArtifact(project, "artifacts-dir", request.artifactsDir, errors)
             validateArtifact(project, "mapping", request.mapping, errors)
             validateArtifact(project, "class-graph", request.classGraph, errors)
             validateArtifact(project, "instrumentation-diagnostics", request.diagnostics, errors)

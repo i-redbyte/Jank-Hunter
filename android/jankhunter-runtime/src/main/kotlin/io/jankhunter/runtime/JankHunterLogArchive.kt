@@ -1,5 +1,6 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.SessionLogName
 import java.io.File
 import java.io.IOException
 import java.util.zip.Deflater
@@ -63,7 +64,9 @@ internal object JankHunterLogArchiveWriter {
         return paths.asSequence()
             .map(::File)
             .distinctBy { source -> source.canonicalPath }
-            .sortedBy { source -> source.name }
+            .map { source -> ArchiveSource(source, SessionLogName.parse(source.name)) }
+            .sortedWith(::compareSources)
+            .map(ArchiveSource::file)
             .map { source ->
                 if (!source.isFile) throw IOException("Jank Hunter snapshot file is missing: $source")
                 if (source.canonicalPath == targetPath) {
@@ -76,6 +79,28 @@ internal object JankHunterLogArchiveWriter {
             }
             .toList()
     }
+
+    private fun compareSources(first: ArchiveSource, second: ArchiveSource): Int {
+        val firstName = first.canonicalName
+        val secondName = second.canonicalName
+        if (firstName == null || secondName == null) {
+            if (firstName == null && secondName != null) return 1
+            if (firstName != null) return -1
+            return first.file.name.compareTo(second.file.name)
+        }
+        var comparison = firstName.localDate.compareTo(secondName.localDate)
+        if (comparison != 0) return comparison
+        comparison = firstName.dailySessionIndex.compareTo(secondName.dailySessionIndex)
+        if (comparison != 0) return comparison
+        comparison = firstName.runId.compareTo(secondName.runId)
+        if (comparison != 0) return comparison
+        return firstName.segmentIndex.compareTo(secondName.segmentIndex)
+    }
+
+    private data class ArchiveSource(
+        val file: File,
+        val canonicalName: SessionLogName.Parsed?,
+    )
 
     private const val COPY_BUFFER_BYTES = 64 * 1024
 }

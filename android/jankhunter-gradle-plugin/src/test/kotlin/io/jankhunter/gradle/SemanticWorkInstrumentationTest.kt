@@ -1,6 +1,7 @@
 package io.jankhunter.gradle
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
@@ -39,9 +40,13 @@ class SemanticWorkInstrumentationTest {
             hierarchy = setOf("example/SyncWorker", "androidx/work/Worker"),
         )
 
-        assertEquals(1, calls["doWork"]?.enters)
-        assertEquals(2, calls["doWork"]?.exits)
+        assertEquals(0, calls["doWork"]?.enters)
+        assertEquals(0, calls["doWork"]?.exits)
+        assertEquals(1, calls["doWork"]?.workerInstanceIds)
+        assertEquals(1, calls["doWork"]?.workerEnters)
+        assertEquals(2, calls["doWork"]?.workerExits)
         assertEquals(1, calls["doWork"]?.workerOutcomeClassifications)
+        assertTrue(calls["doWork"]?.stringConstants?.contains("example.SyncWorker.doWork") == true)
         assertEquals(null, calls["helper"])
     }
 
@@ -72,6 +77,12 @@ class SemanticWorkInstrumentationTest {
                     exceptions: Array<out String>?,
                 ): MethodVisitor {
                     return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitLdcInsn(value: Any?) {
+                            if (value is String) {
+                                calls.getOrPut(name, ::SemanticCalls).stringConstants += value
+                            }
+                        }
+
                         override fun visitMethodInsn(
                             opcodeAndSource: Int,
                             owner: String,
@@ -83,6 +94,9 @@ class SemanticWorkInstrumentationTest {
                             val stats = calls.getOrPut(name, ::SemanticCalls)
                             if (methodName == "enterSemantic") stats.enters++
                             if (methodName == "exitSemantic") stats.exits++
+                            if (methodName == "workerInstanceId") stats.workerInstanceIds++
+                            if (methodName == "enterWorker") stats.workerEnters++
+                            if (methodName == "exitWorker") stats.workerExits++
                             if (methodName == "classifyWorkerOutcome") stats.workerOutcomeClassifications++
                         }
                     }
@@ -90,7 +104,10 @@ class SemanticWorkInstrumentationTest {
             },
             0,
         )
-        return calls.filterValues { it.enters > 0 || it.exits > 0 }
+        return calls.filterValues { calls ->
+            calls.enters > 0 || calls.exits > 0 || calls.workerInstanceIds > 0 ||
+                calls.workerEnters > 0 || calls.workerExits > 0
+        }
     }
 
     private fun config(compose: Boolean = false, room: Boolean = false, worker: Boolean = false): HookConfig {
@@ -101,13 +118,12 @@ class SemanticWorkInstrumentationTest {
             handlers = false,
             executors = false,
             coroutines = false,
-            flowInteractions = false,
+            interactionOperations = false,
             logSpam = false,
             classGraph = false,
             runtimeCallGraph = false,
             classGraphDirectory = "",
             instrumentationDiagnosticsDirectory = "",
-            ownerMapEntriesDirectory = "",
             composeTracing = compose,
             roomTracing = room,
             workerTracing = worker,
@@ -188,7 +204,11 @@ class SemanticWorkInstrumentationTest {
     private data class SemanticCalls(
         var enters: Int = 0,
         var exits: Int = 0,
+        var workerInstanceIds: Int = 0,
+        var workerEnters: Int = 0,
+        var workerExits: Int = 0,
         var workerOutcomeClassifications: Int = 0,
+        val stringConstants: MutableSet<String> = linkedSetOf(),
     )
 
     private companion object {

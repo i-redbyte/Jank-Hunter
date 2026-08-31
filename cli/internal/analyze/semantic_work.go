@@ -15,19 +15,18 @@ const (
 
 // SemanticWorkStats is a typed projection of a runtime-call root edge produced by the SDK.
 // Keeping it on the existing bounded runtime-call transport avoids emitting an event for every
-// recomposition while preserving screen/flow/step context and main-thread attribution.
+// recomposition while preserving screen/operation context and main-thread attribution.
 type SemanticWorkStats struct {
-	Domain     string
-	Operation  string
-	Outcome    string
-	MainThread bool
-	Screen     string
-	Flow       string
-	Step       string
-	Owner      string
-	Count      uint64
-	TotalMS    uint64
-	MaxMS      uint64
+	Domain           string
+	Operation        string
+	Outcome          string
+	MainThread       bool
+	Screen           string
+	ContextOperation string
+	Owner            string
+	Count            uint64
+	TotalMS          uint64
+	MaxMS            uint64
 }
 
 func SemanticWork(summary Summary) []SemanticWorkStats {
@@ -39,7 +38,7 @@ func SemanticWork(summary Summary) []SemanticWorkStats {
 		}
 		result = append(result, SemanticWorkStats{
 			Domain: domain, Operation: operation, Outcome: outcome, MainThread: mainThread,
-			Screen: call.Screen, Flow: call.Flow, Step: call.Step, Owner: call.Callee,
+			Screen: call.Screen, ContextOperation: call.Operation, Owner: call.Callee,
 			Count: call.Count, TotalMS: call.TotalMS, MaxMS: call.MaxMS,
 		})
 	}
@@ -65,10 +64,39 @@ func SemanticWork(summary Summary) []SemanticWorkStats {
 // composable with the same measurements. Raw RuntimeCalls remain untouched for drill-downs.
 func ActionableSemanticWork(summary Summary) []SemanticWorkStats {
 	items := SemanticWork(summary)
-	result := make([]SemanticWorkStats, 0, len(items))
+	if hasGeneratedComposeOwner(items) {
+		items = collapseGeneratedComposeMirrors(items)
+	}
+	return dropShadowedContextlessComposeWork(collapseActionableComposeOwners(items))
+}
+
+func hasGeneratedComposeOwner(items []SemanticWorkStats) bool {
 	for _, item := range items {
+		if item.Domain == SemanticDomainCompose && composeGeneratedOwner(item.Owner) {
+			return true
+		}
+	}
+	return false
+}
+
+func collapseGeneratedComposeMirrors(items []SemanticWorkStats) []SemanticWorkStats {
+	result := items[:0]
+	duplicateGroups := make(map[composeDuplicateGroupKey]semanticIndexChain)
+	nextDuplicate := make([]int, 0, len(items))
+	for _, item := range items {
+		if item.Domain != SemanticDomainCompose {
+			result = append(result, item)
+			nextDuplicate = append(nextDuplicate, 0)
+			continue
+		}
+		key := composeDuplicateGroupKey{
+			Operation: item.Operation, MainThread: item.MainThread,
+			Screen: item.Screen, ContextOperation: item.ContextOperation, Count: item.Count,
+		}
 		duplicate := -1
-		for index := range result {
+		chain := duplicateGroups[key]
+		for oneBasedIndex := chain.head; oneBasedIndex != 0; oneBasedIndex = nextDuplicate[oneBasedIndex-1] {
+			index := oneBasedIndex - 1
 			if composeSemanticDuplicate(result[index], item) {
 				duplicate = index
 				break
@@ -76,13 +104,22 @@ func ActionableSemanticWork(summary Summary) []SemanticWorkStats {
 		}
 		if duplicate < 0 {
 			result = append(result, item)
+			nextDuplicate = append(nextDuplicate, 0)
+			oneBasedIndex := len(result)
+			if chain.head == 0 {
+				chain.head = oneBasedIndex
+			} else {
+				nextDuplicate[chain.tail-1] = oneBasedIndex
+			}
+			chain.tail = oneBasedIndex
+			duplicateGroups[key] = chain
 			continue
 		}
 		if composeGeneratedOwner(result[duplicate].Owner) && !composeGeneratedOwner(item.Owner) {
 			result[duplicate] = item
 		}
 	}
-	return dropShadowedContextlessComposeWork(collapseActionableComposeOwners(result))
+	return result
 }
 
 // collapseActionableComposeOwners handles nested compiler lambdas that resolve to the same
@@ -90,7 +127,7 @@ func ActionableSemanticWork(summary Summary) []SemanticWorkStats {
 // so adding their values would double count work; retaining the largest observation preserves a
 // conservative diagnosis and guarantees one actionable target in the problem report.
 func collapseActionableComposeOwners(items []SemanticWorkStats) []SemanticWorkStats {
-	result := make([]SemanticWorkStats, 0, len(items))
+	result := items[:0]
 	positions := make(map[string]int, len(items))
 	for _, item := range items {
 		if item.Domain == SemanticDomainCompose {
@@ -114,14 +151,31 @@ func collapseActionableComposeOwners(items []SemanticWorkStats) []SemanticWorkSt
 // source-level operation was measured at least as strongly inside a named scenario. The raw row
 // remains available through SemanticWork and RuntimeCalls; only the primary diagnosis is reduced.
 func dropShadowedContextlessComposeWork(items []SemanticWorkStats) []SemanticWorkStats {
-	result := make([]SemanticWorkStats, 0, len(items))
+	contextless := false
+	for _, item := range items {
+		if item.Domain == SemanticDomainCompose && !hasSemanticContext(item) {
+			contextless = true
+			break
+		}
+	}
+	if !contextless {
+		return items
+	}
+	contextualHeads := make(map[semanticTargetKey]int)
+	nextContextual := make([]int, len(items))
 	for index, item := range items {
+		if item.Domain == SemanticDomainCompose && hasSemanticContext(item) {
+			key := semanticTargetKeyFor(item)
+			nextContextual[index] = contextualHeads[key]
+			contextualHeads[key] = index + 1
+		}
+	}
+	result := make([]SemanticWorkStats, 0, len(items))
+	for _, item := range items {
 		if item.Domain == SemanticDomainCompose && !hasSemanticContext(item) {
 			shadowed := false
-			for candidateIndex, candidate := range items {
-				if candidateIndex == index || !hasSemanticContext(candidate) || !sameSemanticTarget(item, candidate) {
-					continue
-				}
+			for oneBasedIndex := contextualHeads[semanticTargetKeyFor(item)]; oneBasedIndex != 0; oneBasedIndex = nextContextual[oneBasedIndex-1] {
+				candidate := items[oneBasedIndex-1]
 				if candidate.Count >= item.Count && candidate.TotalMS >= item.TotalMS && candidate.MaxMS >= item.MaxMS {
 					shadowed = true
 					break
@@ -136,18 +190,42 @@ func dropShadowedContextlessComposeWork(items []SemanticWorkStats) []SemanticWor
 	return result
 }
 
+type composeDuplicateGroupKey struct {
+	Operation        string
+	MainThread       bool
+	Screen           string
+	ContextOperation string
+	Count            uint64
+}
+
+type semanticIndexChain struct {
+	head int
+	tail int
+}
+
+type semanticTargetKey struct {
+	Domain     string
+	Operation  string
+	Outcome    string
+	MainThread bool
+	Screen     string
+	Owner      string
+}
+
+func semanticTargetKeyFor(item SemanticWorkStats) semanticTargetKey {
+	return semanticTargetKey{
+		Domain: item.Domain, Operation: item.Operation, Outcome: item.Outcome,
+		MainThread: item.MainThread, Screen: item.Screen, Owner: item.Owner,
+	}
+}
+
 func hasSemanticContext(item SemanticWorkStats) bool {
-	return !unknownSemanticContext(item.Flow) || !unknownSemanticContext(item.Step)
+	return !unknownSemanticContext(item.ContextOperation)
 }
 
 func unknownSemanticContext(value string) bool {
 	value = strings.TrimSpace(value)
 	return value == "" || strings.EqualFold(value, "unknown")
-}
-
-func sameSemanticTarget(left, right SemanticWorkStats) bool {
-	return left.Domain == right.Domain && left.Operation == right.Operation && left.Outcome == right.Outcome &&
-		left.MainThread == right.MainThread && left.Screen == right.Screen && left.Owner == right.Owner
 }
 
 func composeSemanticDuplicate(left, right SemanticWorkStats) bool {
@@ -158,7 +236,7 @@ func composeSemanticDuplicate(left, right SemanticWorkStats) bool {
 		return false
 	}
 	if left.Operation != right.Operation || left.MainThread != right.MainThread ||
-		left.Screen != right.Screen || left.Flow != right.Flow || left.Step != right.Step ||
+		left.Screen != right.Screen || left.ContextOperation != right.ContextOperation ||
 		left.Count != right.Count || absoluteDifference(left.MaxMS, right.MaxMS) > 1 {
 		return false
 	}
@@ -203,12 +281,20 @@ func IsSemanticRuntimeCall(caller string) bool {
 }
 
 func hasSemanticDomain(summary Summary, domain string) bool {
+	if domain == SemanticDomainWorker && hasTypedWorkerLifecycle(summary) {
+		return true
+	}
 	for _, item := range SemanticWork(summary) {
 		if item.Domain == domain {
 			return true
 		}
 	}
 	return false
+}
+
+func hasTypedWorkerLifecycle(summary Summary) bool {
+	return summary.WorkerAnalysis != nil &&
+		(summary.WorkerAnalysis.Enqueued+summary.WorkerAnalysis.Started+summary.WorkerAnalysis.Finished > 0)
 }
 
 func parseSemanticRuntimeCaller(caller string) (domain, operation, outcome string, mainThread, ok bool) {
@@ -247,7 +333,7 @@ func parseSemanticRuntimeCaller(caller string) (domain, operation, outcome strin
 }
 
 func semanticWorkKey(item SemanticWorkStats) string {
-	return strings.Join([]string{item.Domain, item.Operation, item.Outcome, item.Screen, item.Flow, item.Step, item.Owner}, "\x00")
+	return strings.Join([]string{item.Domain, item.Operation, item.Outcome, item.Screen, item.ContextOperation, item.Owner}, "\x00")
 }
 
 func oneOf(value string, candidates ...string) bool {

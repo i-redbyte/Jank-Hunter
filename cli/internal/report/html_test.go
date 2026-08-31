@@ -44,11 +44,11 @@ func TestUniqueCausalEdgesRemovesReverseDirection(t *testing.T) {
 func TestCompareRowsDoNotCallOneSidedDimensionsRegressions(t *testing.T) {
 	baseline := analyze.Summary{DurationMS: 60_000}
 	candidate := analyze.Summary{
-		DurationMS: 60_000,
-		Routes:     []analyze.RouteStats{{Route: "GET /new", Count: 4, P95MS: 900}},
-		Screens:    []analyze.ScreenStats{{Screen: "NewScreen", Frames: 240, JankRatePct: 12}},
-		Owners:     []analyze.OwnerStats{{Owner: "NewOwner", Count: 4, MaxMS: 900}},
-		Flows:      []analyze.FlowStats{{Flow: "new-flow", HTTPCount: 4, HTTPP95MS: 900}},
+		DurationMS:     60_000,
+		Routes:         []analyze.RouteStats{{Route: "GET /new", Count: 4, P95MS: 900}},
+		Screens:        []analyze.ScreenStats{{Screen: "NewScreen", Frames: 240, JankRatePct: 12}},
+		Owners:         []analyze.OwnerStats{{Owner: "NewOwner", Count: 4, MaxMS: 900}},
+		SignalContexts: []analyze.SignalContextStats{{Operation: "new-operation", HTTPCount: 4, HTTPP95MS: 900}},
 	}
 
 	if row := routeCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
@@ -60,8 +60,8 @@ func TestCompareRowsDoNotCallOneSidedDimensionsRegressions(t *testing.T) {
 	if row := ownerCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
 		t.Fatalf("candidate-only owner became a regression: %+v", row)
 	}
-	if row := flowCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
-		t.Fatalf("candidate-only flow became a regression: %+v", row)
+	if row := signalContextCompareRows(baseline, candidate)[0]; row.Comparable || row.Severity != "ok" {
+		t.Fatalf("candidate-only operation context became a regression: %+v", row)
 	}
 }
 
@@ -187,6 +187,83 @@ func TestInspectUsesGroupedIncidentsOnMainPage(t *testing.T) {
 	}
 }
 
+func TestInspectExplainsUICauseCandidatesWithoutInventingTemporalCausality(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actionable-ui-incident.html")
+	raw := []analyze.ProblemFinding{
+		{
+			ID: "stall-di", DetectorID: "stability.main_thread_stall", Title: "Главный поток остановился на 1364 мс",
+			Category: analyze.ProblemCategoryStability, Where: []analyze.ProblemLocation{{
+				Screen: "MainActivity", Owner: "ru.mail.im.app.di.components.ComponentFactoryImpl",
+				Method: "ru.mail.im.app.di.components.ComponentFactoryImpl.create(ComponentFactoryImpl.kt:483)",
+			}},
+		},
+		{
+			ID: "stall-layout", DetectorID: "stability.main_thread_stall", Title: "Главный поток остановился на 1119 мс",
+			Category: analyze.ProblemCategoryStability, Where: []analyze.ProblemLocation{{
+				Screen: "MainActivity", Owner: "androidx.constraintlayout.core.ArrayLinkedVariables",
+				Method: "androidx.constraintlayout.core.ArrayLinkedVariables.add(ArrayLinkedVariables.java:263)",
+			}},
+		},
+		{ID: "jank", DetectorID: "ui.jank_tail", Title: "Подтормаживания интерфейса", Category: analyze.ProblemCategoryUI},
+	}
+	incident := analyze.ProblemFinding{
+		ID: "incident-main", DetectorID: "ui.jank_tail", Title: "Экран MainActivity: зафиксированы подтормаживания и остановки главного потока",
+		Category: analyze.ProblemCategoryUI, Severity: "high", Confidence: "low", Status: "observed",
+		WhatHappened: "На одном экране собраны три сигнала; это само по себе не означает, что они совпали по времени.",
+		Where: []analyze.ProblemLocation{
+			{Screen: "MainActivity", Owner: "ru.mail.im.app.di.components.ComponentFactoryImpl", Method: "ru.mail.im.app.di.components.ComponentFactoryImpl.create(ComponentFactoryImpl.kt:483)"},
+			{Screen: "MainActivity", Owner: "androidx.constraintlayout.core.ArrayLinkedVariables", Method: "androidx.constraintlayout.core.ArrayLinkedVariables.add(ArrayLinkedVariables.java:263)"},
+		},
+		RelatedFindings:   []string{"stall-di", "stall-layout", "jank"},
+		RelatedCategories: []string{analyze.ProblemCategoryStability, analyze.ProblemCategoryUI},
+		Why: analyze.ProblemWhy{
+			ClaimLevel: "correlated",
+			Summary:    "Группировка по экрану не доказывает совпадение по времени и причинную связь с медленными кадрами.",
+		},
+		Limitations: []string{"Нет идентификатора кадра, связывающего каждую паузу с медленным кадром."},
+	}
+	summary := analyze.Summary{
+		ProblemSchemaVersion: analyze.ProblemSchemaVersion,
+		ProblemSummary:       analyze.ProblemSummary{Verdict: "problems_found", Headline: "UI-инцидент", Total: 1, SignalTotal: 3},
+		Problems:             raw,
+		ProblemIncidents:     []analyze.ProblemFinding{incident},
+		Screens: []analyze.ScreenStats{{
+			Screen: "MainActivity", Frames: 1_720, JankyFrames: 39, JankRatePct: 2.3, FrameP95MS: 40, FrameP99MS: 250,
+		}},
+		SignalContexts: []analyze.SignalContextStats{
+			{Screen: "MainActivity", Owner: "ru.mail.im.app.di.components.ComponentFactoryImpl", StallCount: 1, StallMaxMS: 1_364},
+			{Screen: "MainActivity", Owner: "androidx.constraintlayout.core.ArrayLinkedVariables", StallCount: 1, StallMaxMS: 1_119},
+		},
+		Owners: []analyze.OwnerStats{
+			{Owner: "ru.mail.im.app.di.components.ComponentFactoryImpl", Kind: "main_thread_stall", Count: 1, MaxMS: 1_364, StackHint: "ru.mail.im.app.di.components.ComponentFactoryImpl.create(ComponentFactoryImpl.kt:483)"},
+			{Owner: "androidx.constraintlayout.core.ArrayLinkedVariables", Kind: "main_thread_stall", Count: 1, MaxMS: 1_119, StackHint: "androidx.constraintlayout.core.ArrayLinkedVariables.add(ArrayLinkedVariables.java:263)"},
+		},
+	}
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{GeneratedAt: "2026-08-29T04:00:00+03:00"}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(payload)
+	for _, want := range []string{
+		"Диагноз и план расследования",
+		"Что доказано данными",
+		"Цепочка влияния",
+		"Кандидаты на первопричину",
+		"Что пока не доказано",
+		"ComponentFactoryImpl.create",
+		"ArrayLinkedVariables.add",
+		"не доказывает совпадение по времени",
+		"Пошаговый план проверки",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("actionable UI diagnosis misses %q", want)
+		}
+	}
+}
+
 func TestWriteReports(t *testing.T) {
 	summary := analyze.Summary{
 		Title:       "sample.jhlog",
@@ -202,6 +279,40 @@ func TestWriteReports(t *testing.T) {
 		StallCount:  1,
 		StallMaxMS:  1240,
 		MemoryMaxKB: 188240,
+		NetworkAnalysis: &analyze.NetworkAnalysis{
+			MaxConcurrency: 4, PeakConcurrencyAtMS: 750,
+			TransportFailures: 1, HTTP4xx: 1, HTTP5xx: 1, Canceled: 1,
+			CacheHits: 1, ReusedConnections: 2, KnownRequestBytes: 2, KnownResponseBytes: 3,
+			Attempts: 5, DNSAttempts: 2, ConnectAttempts: 3, TLSAttempts: 2,
+			Retries: 1, Redirects: 1, ConnectFailures: 1, BytesRx: 8192, BytesTx: 1024,
+			Phases:        []analyze.HTTPPhaseStats{{Name: "queue", SampleCount: 3, AvgMS: 80, P50MS: 50, P95MS: 150, MaxMS: 150}},
+			StatusCodes:   []analyze.NamedValue{{Name: "200", Value: 1}, {Name: "429", Value: 1}, {Name: "503", Value: 1}},
+			FailurePhases: []analyze.NamedValue{{Name: "response", Value: 1}, {Name: "cancelled", Value: 1}},
+			FailureKinds:  []analyze.NamedValue{{Name: "timeout", Value: 1}, {Name: "cancelled", Value: 1}},
+			Protocols:     []analyze.NamedValue{{Name: "http/2", Value: 3}},
+			Calls: []analyze.NetworkCallStats{{
+				Route: "GET /feed", Service: "feed-api", Initiator: "FeedRepository.refresh",
+				Screen: "Feed", Operation: "feed.open", Owner: "FeedViewModel.load",
+				Count: 3, Failures: 1, HTTP5xx: 1, CacheHits: 1, ReusedConnections: 2,
+				Attempts: 5, Retries: 1, Redirects: 1, P50MS: 300, P95MS: 612, MaxMS: 900,
+				Phases: []analyze.HTTPPhaseStats{{Name: "ttfb", SampleCount: 3, AvgMS: 400, P50MS: 380, P95MS: 550, MaxMS: 550}},
+			}},
+		},
+		WebSocketAnalysis: &analyze.WebSocketAnalysis{
+			Opened: 2, Closed: 1, Failures: 1, ActiveAtEnd: 0, Reconnects: 1,
+			ConnectP50MS: 75, ConnectP95MS: 90, ConnectMaxMS: 90,
+			LifetimeP50MS: 12_000, LifetimeP95MS: 20_000, LifetimeMaxMS: 20_000,
+			TextMessages: 7, BinaryMessages: 3, ReceivedBytes: 4096,
+			FailureKinds: []analyze.NamedValue{{Name: "timeout", Value: 1}},
+			CloseCodes:   []analyze.NamedValue{{Name: "1000", Value: 1}},
+			Connections: []analyze.WebSocketConnectionStats{{
+				Route: "GET /socket", Screen: "Feed", Operation: "feed.open", Owner: "RealtimeRepository",
+				Opened: 2, Closed: 1, Failures: 1, Reconnects: 1,
+				ConnectP50MS: 75, ConnectP95MS: 90, ConnectMaxMS: 90,
+				LifetimeP50MS: 12_000, LifetimeP95MS: 20_000, LifetimeMaxMS: 20_000,
+				TextMessages: 7, BinaryMessages: 3, ReceivedBytes: 4096,
+			}},
+		},
 		Environment: analyze.RunEnvironment{
 			Title:    "Pixel 8",
 			Subtitle: "Android 15 · 0.1.0-debug (100) · процесс main",
@@ -213,7 +324,7 @@ func TestWriteReports(t *testing.T) {
 		},
 		CollectionQuality: sampleCollectionQuality(),
 		Routes: []analyze.RouteStats{
-			{Route: "GET /feed", Count: 21_000, Failures: 0, P95MS: 612, MaxMS: 612, OwnerSample: "FeedRepository.refresh"},
+			{Route: "GET /feed", ServiceSample: "feed-api", InitiatorSample: "FeedRepository.refresh", Count: 21_000, ContextCount: 1, Failures: 0, HTTP4xx: 1, HTTP5xx: 1, CacheHits: 1, ReusedConnections: 2, Attempts: 5, Retries: 1, Redirects: 1, ConnectFailures: 1, P95MS: 612, MaxMS: 612, MaxConcurrency: 4, Phases: []analyze.HTTPPhaseStats{{Name: "ttfb", SampleCount: 3, AvgMS: 400, P50MS: 380, P95MS: 550, MaxMS: 550}}, OwnerSample: "FeedRepository.refresh"},
 		},
 		Screens: []analyze.ScreenStats{
 			{Screen: "Feed", Frames: 1122, JankyFrames: 90, JankRatePct: 8.02, AvgFPS: 56.1, WindowCount: 3, FrameP95MS: 24, FrameDistributionState: "mergeable_histogram_v2"},
@@ -221,25 +332,24 @@ func TestWriteReports(t *testing.T) {
 		Owners: []analyze.OwnerStats{
 			{Owner: "FeedRepository.refresh", Kind: "http", Count: 2, MaxMS: 612},
 		},
-		Flows: []analyze.FlowStats{
-			{Screen: "Feed", Flow: "feed.open", Step: "network", Owner: "FeedRepository.refresh", HTTPCount: 21_000, HTTPP95MS: 612, UIFrames: 1122, UIJank: 90, UIJankPct: 8.02},
+		SignalContexts: []analyze.SignalContextStats{
+			{Screen: "Feed", Operation: "feed.open", Owner: "FeedRepository.refresh", HTTPCount: 21_000, HTTPP95MS: 612, UIFrames: 1122, UIJank: 90, UIJankPct: 8.02},
 		},
 		LogSpam: []analyze.LogSpamStats{
-			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Source: "android.util.Log.w", Level: "warn", Count: 7},
+			{Screen: "Feed", Operation: "feed.open", Owner: "FeedPresenter.render", Source: "android.util.Log.w", Level: "warn", Count: 7},
 		},
 		ProblemWindows: []analyze.ProblemWindowStats{
-			{Screen: "Feed", Flow: "feed.open", Step: "render", Owner: "FeedPresenter.render", Kind: "ui_jank", Windows: 1, Count: 90, TotalWindowMS: 10000, MaxMS: 24},
+			{Screen: "Feed", Operation: "feed.open", Owner: "FeedPresenter.render", Kind: "ui_jank", Windows: 1, Count: 90, TotalWindowMS: 10000, MaxMS: 24},
 		},
 		RuntimeCalls: []analyze.RuntimeCallStats{
-			{Screen: "Feed", Flow: "feed.open", Step: "render", Caller: "FeedPresenter.render", Callee: "FeedAdapter.bind", Count: 12, TotalMS: 144, MaxMS: 24},
+			{Screen: "Feed", Operation: "feed.open", Caller: "FeedPresenter.render", Callee: "FeedAdapter.bind", Count: 12, TotalMS: 144, MaxMS: 24},
 		},
 		MemoryLeaks: []analyze.MemoryLeakSuspect{
 			{
 				ClassName:                "com.app.feed.FeedActivity",
 				Holder:                   "FeedPresenter",
 				Screen:                   "Feed",
-				Flow:                     "feed.open",
-				Step:                     "render",
+				Operation:                "feed.open",
 				Count:                    2,
 				MaxAgeMS:                 30_000,
 				EstimatedRetainedKB:      4096,
@@ -276,9 +386,10 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertCurrentReportStyle(t, inspectPath)
-	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск охватывает не только карточки проблем", "Поиск по всем данным страницы", "все классы и строки подробных разделов этой страницы, включая ещё не раскрытые", "Фильтры справа изменяют только карточки проблем", "Что делать", "Состав приоритета", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Сценарии и причины", "Спам логами", "Проблемные окна", "Связи вызовов", "Код и полные доказательства", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "data-registry-category", "data-registry-severity", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "UI&#8209;подтормаживания", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Индекс доверия: 80.00", "Runtime-граф отключён", "Не хватает", "Подробный анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск охватывает не только карточки проблем", "Поиск по всем данным страницы", "все классы и строки подробных разделов этой страницы, включая ещё не раскрытые", "Фильтры справа изменяют только карточки проблем", "Что делать", "Состав приоритета", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Связанные сигналы", "Спам логами", "Проблемные окна", "Связи вызовов", "Код и полные доказательства", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "data-registry-category", "data-registry-severity", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "Подтормаживания интерфейса", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Диагностический индекс полноты: 80.00", "не оценка риска приложения", "Граф вызовов во время выполнения отключён", "Не хватает", "Подробный анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Подробный сетевой анализ", "Максимальная одновременность", "Запросы по месту вызова и контексту", "feed-api", "FeedViewModel.load", "Фазы маршрутов", "TTFB", "Повторы без перенаправлений", "Точные HTTP-коды", "503", "network-route-table wide-analysis-table", "network-call-table wide-analysis-table", "min-width: 2440px", "word-break: keep-all", "WebSocket: соединения, сообщения и обрывы", "GET /socket", "RealtimeRepository", "websocket-connection-table wide-analysis-table", "тайм-аут")
 	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "descriptiveBlock", ".problem-card[hidden]", "minmax(min(100%, 340px), 1fr)", "indexDeferredScript", "report-search-deferred", "revealDeferredSearchEntry", "details.parentElement?.closest('details')")
-	assertHTMLContains(t, inspectPath, "Достаточность данных для выводов", "Проверка правил на эталонных данных", "нет эталонной проверки", "Задержка верхних 5% кадров", "Плавность UI и возможные причины", "Итог анализа", "Что могло замедлить интерфейс", "Уровень связи", "кандидат из кода", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
+	assertHTMLContains(t, inspectPath, "Достаточность данных для выводов", "Проверка правил на эталонных данных", "нет эталонной проверки", "Задержка верхних 5% кадров", "Плавность интерфейса и возможные причины", "Итог анализа", "Все найденные проблемные элементы и факторы", "Уровень связи", "кандидат из кода", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
 	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)", "reservoir", "approx-badge", `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр реестра проблем кода")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
@@ -289,7 +400,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
 	assertCurrentReportStyle(t, mathInspectPath)
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция сценариев и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Робастная статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Экспозиция плохих состояний", "Контекстная липкость", "Вклады симптомов", "In-sample проекция траектории", "Методика и наблюдения", "Пропуск означает отсутствие memory-сэмпла", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Поддержка модели: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, `href="inspect.html#runtime-calls"`, "не дублируется второй раз", "← Обзор")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция операций и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Устойчивая статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Доля плохих состояний", "Повторение проблемных состояний", "Вклады симптомов", "Проекция внутри записанного прогона", "Методика и наблюдения", "Пропуск означает отсутствие замера памяти", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Поддержка модели: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, `href="inspect.html#runtime-calls"`, "не дублируется второй раз", "← Обзор", "periodic-analysis-table wide-analysis-table", "integral-score-table wide-analysis-table", "min-width: 2240px")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -303,16 +414,16 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
 	assertCurrentReportStyle(t, comparePath)
-	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Код и подтверждающие данные кандидата", "Открыть сравнительный реестр кода и подтверждающие данные", "Сравнение сигналов удержания памяти", "Шкала сравнения", "data-registry-category", "data-registry-severity", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение сценариев и причин", "Как читать сравнение", "Контекст устройств", "Детали по каждому логу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Индекс доверия: база 80.00%", "Доверие кандидата", "Runtime-граф отключён", "λ Анализ", `href="compare-math.html"`)
+	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Код и подтверждающие данные кандидата", "Открыть сравнительный реестр кода и подтверждающие данные", "Сравнение сигналов удержания памяти", "Шкала сравнения", "data-registry-category", "data-registry-severity", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение связанных сигналов", "Как читать сравнение", "Контекст устройств", "Детали по каждому журналу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Диагностический индекс полноты: база 80.00%", "кандидат 80.00%", "не статистическая вероятность или оценка риска", "Граф вызовов во время выполнения отключён", "λ Анализ", `href="compare-math.html"`)
 	assertHTMLNotContains(t, comparePath, `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр сравнительного реестра проблем кода")
 
-	assertHTMLContains(t, comparePath, "Достаточность данных кандидата", "Проверка правил на эталонных данных", "Frame p95 кандидата")
+	assertHTMLContains(t, comparePath, "Достаточность данных кандидата", "Проверка правил на эталонных данных", "Верхние 5% кадров кандидата")
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
 	assertCurrentReportStyle(t, mathComparePath)
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение сценариев и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Экспозиция плохих состояний кандидата", "Граф связей и гипотез", "База · in-sample проекция", "Кандидат · in-sample проекция", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение операций и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Доля плохих состояний проверяемого прогона", "Граф связей и гипотез", "Базовый прогон · проекция внутри записи", "Проверяемый прогон · проекция внутри записи", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluenceWithOptions(influencePath, sampleInfluence(), "Граф влияния кода", ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
@@ -341,12 +452,12 @@ func TestWriteReports(t *testing.T) {
 		t,
 		dependencyInjectionPath,
 		"DI-каталог",
-		"DI · BUILD TIME",
-		"consumer → dependency",
+		"DI · ПРИ СБОРКЕ",
+		"потребитель → зависимость",
 		analyze.DependencyInjectionDisclaimer,
 		"com.app.FeedViewModel",
 		"com.app.FeedRepository",
-		"generated_confirmed",
+		"подтверждено созданным кодом",
 		"--di: #a78bfa",
 		`href="inspect.html"`,
 		"← Обзор",
@@ -408,9 +519,14 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 	html := string(data)
 	qualityIndex := strings.Index(html, `id="collection-quality"`)
 	analysisIndex := strings.Index(html, `id="analysis"`)
-	warningIndex := strings.Index(html, "тестовое техническое предупреждение")
-	if qualityIndex < 0 || analysisIndex < 0 || warningIndex < qualityIndex || qualityIndex < analysisIndex {
-		t.Fatalf("technical quality is not at report end: analysis=%d quality=%d warning=%d", analysisIndex, qualityIndex, warningIndex)
+	if qualityIndex < 0 || analysisIndex < 0 || qualityIndex < analysisIndex {
+		t.Fatalf("technical quality is not at report end: analysis=%d quality=%d", analysisIndex, qualityIndex)
+	}
+	if strings.Contains(html, "Часть событий не попала в журнал") {
+		t.Fatal("generic collection-loss warning leaked into the problem-oriented report")
+	}
+	if strings.Contains(html, "тестовое техническое предупреждение") {
+		t.Fatal("internal collection warning leaked into the user-facing report")
 	}
 	qualitySection := html[qualityIndex:]
 	if !strings.Contains(qualitySection, `<details class="fold">`) ||
@@ -518,7 +634,7 @@ func TestInspectMakesStaleGrowthProjectionProminent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"Growth snapshot устарел", "lag=82507 мс", "согласованный export snapshot"} {
+	for _, expected := range []string{"Снимок роста устарел", "отставание 82507 мс", "согласованный снимок выгрузки"} {
 		if !strings.Contains(string(html), expected) {
 			t.Fatalf("stale growth report misses %q", expected)
 		}
@@ -530,8 +646,6 @@ func TestInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
 	summary := analyze.Summary{AnalysisInputs: analyze.AnalysisInputCompleteness{
 		Status:          "runtime_only",
 		RuntimeEvidence: true,
-		SymbolsResolved: true,
-		SymbolMode:      "embedded",
 		Missing:         []string{"class-graph.jsonl", "instrumentation-diagnostics.jsonl"},
 		Explanation:     "доступны только runtime evidence",
 	}}
@@ -876,8 +990,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 			ClassName:           "com.app.checkout.SuperLongCheckoutActivityNameThatMustWrapInsideGraphNode",
 			Holder:              "CheckoutPresenter",
 			Screen:              "Checkout",
-			Flow:                "checkout.pay",
-			Step:                "destroyed",
+			Operation:           "checkout.pay",
 			Count:               1,
 			MaxAgeMS:            45_000,
 			EstimatedRetainedKB: 8192,
@@ -918,6 +1031,7 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 		`cell.dataset.leakField = leakFieldForHeader`,
 		`.leak-card-table .leak-card-row`,
 		`.table-scroll.leak-card-scroll`,
+		`.table-scroll.leak-card-scroll > table.leak-card-table`,
 		`.leak-graph-panel[hidden]`,
 		`class="node-title"`,
 		"Контекст обнаружения удержанного объекта",
@@ -1167,7 +1281,7 @@ func TestCodeProblemReportsPreserveEverySignalAndDrillDown(t *testing.T) {
 	for index := range 6 {
 		problem.DrillDown = append(problem.DrillDown, analyze.CodeProblemDrillDown{
 			ClassName:      problem.ClassName,
-			Flow:           fmt.Sprintf("complete-flow-%d", index),
+			Operation:      fmt.Sprintf("complete-operation-%d", index),
 			Evidence:       fmt.Sprintf("complete evidence %d", index),
 			Recommendation: "Inspect this flow.",
 		})
@@ -1211,7 +1325,7 @@ func TestCodeProblemReportsPreserveEverySignalAndDrillDown(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"complete-signal-6", "complete-flow-5", "complete evidence 5"} {
+			for _, want := range []string{"complete-signal-6", "complete-operation-5", "complete evidence 5"} {
 				if !strings.Contains(string(encodedEvidence), want) {
 					t.Fatalf("complete report does not contain tail evidence %q", want)
 				}
@@ -1350,21 +1464,21 @@ func TestLeakObjectKindOptions(t *testing.T) {
 	}
 }
 
-func TestFlowKeyLabelHidesUnknownParts(t *testing.T) {
-	if got, want := flowKeyLabel("unknown", "unknown", "unknown", "unknown"), "контекст не задан"; got != want {
-		t.Fatalf("flowKeyLabel(all unknown) = %q, want %q", got, want)
+func TestSignalContextLabelHidesUnknownParts(t *testing.T) {
+	if got, want := signalContextLabel("unknown", "unknown", "unknown"), "контекст не задан"; got != want {
+		t.Fatalf("signalContextLabel(all unknown) = %q, want %q", got, want)
 	}
-	if got, want := flowKeyLabel("Feed", "unknown", "Feed", "FeedOwner"), "Feed / FeedOwner"; got != want {
-		t.Fatalf("flowKeyLabel(deduplicated) = %q, want %q", got, want)
+	if got, want := signalContextLabel("Feed", "Feed", "FeedOwner"), "Feed / FeedOwner"; got != want {
+		t.Fatalf("signalContextLabel(deduplicated) = %q, want %q", got, want)
 	}
 	if got, want := reportValue("unknown unknown", "нет данных"), "нет данных"; got != want {
 		t.Fatalf("reportValue(unknown unknown) = %q, want %q", got, want)
 	}
-	if got := string(contextValueHint("unknown", "screen")); !strings.Contains(got, "Activity lifecycle callbacks") {
+	if got := string(contextValueHint("unknown", "screen")); !strings.Contains(got, "жизненного цикла Activity") {
 		t.Fatalf("contextValueHint(screen) = %q, want Activity lifecycle hint", got)
 	}
-	if got := string(flowKeyLabelHint("unknown", "unknown", "unknown", "unknown")); !strings.Contains(got, "owner-map") {
-		t.Fatalf("flowKeyLabelHint(all unknown) = %q, want attribution hint", got)
+	if got := string(signalContextLabelHint("unknown", "unknown", "unknown")); !strings.Contains(got, "@JankHunterOperation") {
+		t.Fatalf("signalContextLabelHint(all unknown) = %q, want attribution hint", got)
 	}
 }
 
@@ -1372,11 +1486,10 @@ func TestProblemLocationTextHidesUnknownAndMergesRepeatedContext(t *testing.T) {
 	locations := []analyze.ProblemLocation{
 		{Route: "POST /omicron", Owner: "unknown"},
 		{
-			Screen: "ru.mail.im.registration.ui.RegistrationActivity",
-			Flow:   "unknown",
-			Step:   "unknown",
-			Route:  "POST /omicron",
-			Owner:  "unknown",
+			Screen:    "ru.mail.im.registration.ui.RegistrationActivity",
+			Operation: "unknown",
+			Route:     "POST /omicron",
+			Owner:     "unknown",
 		},
 	}
 
@@ -1418,17 +1531,17 @@ func TestWriteReportsHideUnknownPlaceholders(t *testing.T) {
 				{Label: "Устройство", Value: "unknown", Detail: "unknown unknown"},
 			},
 		},
-		Flows: []analyze.FlowStats{
-			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", RouteSample: "unknown", ProblemCount: 1},
+		SignalContexts: []analyze.SignalContextStats{
+			{Screen: "unknown", Operation: "unknown", Owner: "unknown", RouteSample: "unknown", ProblemCount: 1},
 		},
 		LogSpam: []analyze.LogSpamStats{
-			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", Source: "unknown", Level: "warn", Count: 1},
+			{Screen: "unknown", Operation: "unknown", Owner: "unknown", Source: "unknown", Level: "warn", Count: 1},
 		},
 		ProblemWindows: []analyze.ProblemWindowStats{
-			{Screen: "unknown", Flow: "unknown", Step: "unknown", Owner: "unknown", Kind: "ui_jank", Windows: 1, Count: 1, TotalWindowMS: 16, MaxMS: 16},
+			{Screen: "unknown", Operation: "unknown", Owner: "unknown", Kind: "ui_jank", Windows: 1, Count: 1, TotalWindowMS: 16, MaxMS: 16},
 		},
 		RuntimeCalls: []analyze.RuntimeCallStats{
-			{Screen: "unknown", Flow: "unknown", Step: "unknown", Caller: "unknown", Callee: "unknown", Count: 1, TotalMS: 16, MaxMS: 16},
+			{Screen: "unknown", Operation: "unknown", Caller: "unknown", Callee: "unknown", Count: 1, TotalMS: 16, MaxMS: 16},
 		},
 		Owners: []analyze.OwnerStats{
 			{Owner: "unknown", Kind: "handler", Count: 1, MaxMS: 16, StackHint: "unknown unknown"},
@@ -1447,8 +1560,8 @@ func TestWriteReportsHideUnknownPlaceholders(t *testing.T) {
 	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{}); err != nil {
 		t.Fatalf("WriteInspectWithOptions() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, "неизвестное устройство", "контекст выполнения недоступен", "нет данных", "Activity lifecycle callbacks", "owner-map", "session-событием")
-	assertHTMLNotContains(t, inspectPath, "unknown unknown", "unknown build", ">unknown<", "<code>unknown</code>")
+	assertHTMLContains(t, inspectPath, "неизвестное устройство", "контекст выполнения недоступен", "нет данных", "обратным вызовам жизненного цикла Activity", "@JankHunterOperation", "начале запуска")
+	assertHTMLNotContains(t, inspectPath, "unknown unknown", "unknown build", ">unknown<", "<code>unknown</code>", `data-tip="unknown"`, "session-событием", "runtimeCallGraph instrumentation", "bytecode hook", "ограниченные runtime-реестры", "элементов evidence")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	if err := WriteCompareReportWithOptions(
@@ -1512,7 +1625,7 @@ func TestWriteReportsRussian(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Проблемы приложения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Все записанные сетевые маршруты", "Эвристический итог", "Подробный анализ")
-	assertHTMLNotContains(t, inspectPath, "Сценарии и причины")
+	assertHTMLNotContains(t, inspectPath, "Связанные сигналы")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
 	if err := WriteCompareReportWithOptions(
@@ -1524,7 +1637,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Изменения проблем", "Матрица регрессий", "Где изменилось", "Сравнение сценариев и причин", "Детали по каждому логу", "Эвристический итог", "Логи базы", "λ Анализ")
+	assertHTMLContains(t, comparePath, "Изменения проблем", "Матрица регрессий", "Где изменилось", "Сравнение связанных сигналов", "Детали по каждому журналу", "Эвристический итог", "Логи базы", "λ Анализ")
 }
 
 func attachProblemReport(t *testing.T, summary *analyze.Summary) {
@@ -1567,12 +1680,38 @@ func TestPrimaryCategoryCoverageHidesUnknownZeroes(t *testing.T) {
 		{Category: analyze.ProblemCategoryNetwork, Label: "Сеть", Status: "problems_found", FindingCount: 2},
 		{Category: analyze.ProblemCategoryUI, Label: "UI", Status: "healthy"},
 		{Category: analyze.ProblemCategoryIO, Label: "I/O", Status: "not_measured"},
+		{Category: analyze.ProblemCategoryDependencyInjection, Label: "DI", Status: "healthy"},
 	}
-	if got := primaryCategoryCoverage(items); len(got) != 2 {
-		t.Fatalf("primaryCategoryCoverage() = %+v, want problems and healthy only", got)
+	if got := primaryCategoryCoverage(items); len(got) != 3 {
+		t.Fatalf("primaryCategoryCoverage() = %+v, want problems and healthy categories", got)
+	}
+	if got := findingCategoryCoverage(items); len(got) != 2 || got[1].Category != analyze.ProblemCategoryDependencyInjection {
+		t.Fatalf("findingCategoryCoverage() = %+v, want DI whenever analysis is enabled", got)
 	}
 	if got := hiddenCoverageSummary(items); !strings.Contains(got, "I/O") || strings.Contains(got, "Сеть") {
 		t.Fatalf("hiddenCoverageSummary() = %q", got)
+	}
+}
+
+func TestInspectMathHeuristicExplainsMissingOwnerInsteadOfShowingUnknown(t *testing.T) {
+	summary := inspectMathHeuristic(mathanalysis.MathReport{
+		CausalGraph: mathanalysis.CausalGraph{OwnerScores: []mathanalysis.OwnerBlameScore{{
+			Owner: "unknown",
+			Score: 3.5,
+		}}},
+	})
+
+	if len(summary.Cards) == 0 {
+		t.Fatal("inspectMathHeuristic() returned no cards")
+	}
+	detail := strings.ToLower(summary.Cards[0].Detail)
+	if strings.Contains(detail, "unknown") {
+		t.Fatalf("missing owner leaked as unknown: %s", detail)
+	}
+	for _, expected := range []string{"место запуска не записано", "инструментирован", "пакет"} {
+		if !strings.Contains(detail, expected) {
+			t.Fatalf("missing owner explanation lacks %q: %s", expected, detail)
+		}
 	}
 }
 
@@ -1735,7 +1874,7 @@ func sampleInfluence() analyze.InfluenceSummary {
 			Problems:        2,
 			NetworkMS:       900,
 			Reasons:         []string{"сетевые задержки", "проблемные окна"},
-			Flows:           []string{"checkout.open"},
+			Operations:      []string{"checkout.open"},
 		}},
 		TopEdges: []analyze.InfluenceEdge{{
 			From:             "com.app.feature.CheckoutPresenter",
@@ -1787,7 +1926,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 			{Kind: "unsupported", Module: "okhttp", Family: "okhttp", Reason: "unsupported_signature", Method: "client()V", Count: 2},
 		},
 		Annotations: []analyze.InstrumentationAnnotationSummary{
-			{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
+			{Owner: "FeedOwner", Screen: "Feed", Operation: "feed.open", OperationKind: "navigation", OperationBudgetMS: 800, Count: 1},
 		},
 		Classes: []analyze.InstrumentationClassDiagnostic{
 			{
@@ -1799,7 +1938,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 					{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Method: "client()V", Count: 2},
 				},
 				Annotations: []analyze.InstrumentationAnnotationSummary{
-					{Owner: "FeedOwner", Screen: "Feed", Flow: "feed.open", Trace: "refresh", Count: 1},
+					{Owner: "FeedOwner", Screen: "Feed", Operation: "feed.open", OperationKind: "navigation", OperationBudgetMS: 800, Count: 1},
 				},
 			},
 		},
@@ -1901,15 +2040,15 @@ func sampleDependencyInjectionReport() analyze.DependencyInjectionReport {
 
 func sampleCollectionQuality() analyze.CollectionQuality {
 	return analyze.CollectionQuality{
-		Level:                 "medium",
-		TrustScorePercent:     80,
-		TrustScoreModel:       "evidence-v2:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20",
-		TrustLevel:            "sufficient",
-		TrustLevelExplanation: "Достаточное доверие: основные evidence подтверждены с ограничениями.",
-		RuntimeGraphEnabled:   false,
-		TrustComponents: []analyze.CollectionTrustComponent{
+		Level:                             "medium",
+		DiagnosticCompletenessPercent:     80,
+		DiagnosticCompletenessModel:       "diagnostic-completeness-v1:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20",
+		DiagnosticCompletenessLevel:       "sufficient",
+		DiagnosticCompletenessExplanation: "Достаточная полнота: основные evidence подтверждены с ограничениями.",
+		RuntimeGraphEnabled:               false,
+		DiagnosticCompletenessComponents: []analyze.DiagnosticCompletenessComponent{
 			{ID: "transport", Label: "Доставка событий", Weight: 40, CoveragePercent: 100, EarnedPoints: 40, Explanation: "известных потерь нет"},
-			{ID: "runtime_graph", Label: "Runtime-граф", Weight: 20, Excluded: true, Explanation: "Runtime-граф отключён и не входит в индекс"},
+			{ID: "runtime_graph", Label: "Граф вызовов во время выполнения", Weight: 20, Excluded: true, Explanation: "Граф вызовов во время выполнения отключён и не входит в индекс"},
 			{ID: "process_roster", Label: "Охват процессов", Weight: 20, CoveragePercent: 100, EarnedPoints: 20, Explanation: "configured scope подтверждён"},
 			{ID: "integrity", Label: "Целостность доказательств", Weight: 20, CoveragePercent: 100, EarnedPoints: 20, Explanation: "инварианты согласованы"},
 		},
@@ -2159,17 +2298,17 @@ func TestPerMinuteNormalizesByRunDuration(t *testing.T) {
 	}
 }
 
-func TestScenarioInsightsExplainSingleNetworkRequestWithoutRateOrPercentile(t *testing.T) {
-	insights := scenarioInsights(analyze.Summary{Flows: []analyze.FlowStats{{
+func TestOperationContextInsightsExplainSingleNetworkRequestWithoutRateOrPercentile(t *testing.T) {
+	insights := operationContextInsights(analyze.Summary{SignalContexts: []analyze.SignalContextStats{{
 		Screen:      "RegistrationActivity",
-		Flow:        "registration",
+		Operation:   "registration",
 		Owner:       "RegistrationController.loadConfig",
 		RouteSample: "GET /myteam-config.json",
 		HTTPCount:   1,
 		HTTPP95MS:   1662,
 	}}})
 	if len(insights) != 1 {
-		t.Fatalf("scenarioInsights() count = %d, want 1", len(insights))
+		t.Fatalf("operationContextInsights() count = %d, want 1", len(insights))
 	}
 	if !strings.Contains(insights[0].Summary, "Единственный сетевой вызов занял до 1662 мс") {
 		t.Fatalf("scenario summary = %q", insights[0].Summary)
@@ -2192,8 +2331,8 @@ func TestProblemEvidenceDisplayUsesRussianCountForm(t *testing.T) {
 
 func TestUIScreenInsightsConnectNearbyScenarioSignals(t *testing.T) {
 	insights := uiScreenInsights(analyze.Summary{
-		Screens: []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 100, JankyFrames: 18, JankRatePct: 18, AvgFPS: 42, MinFPS: 28}},
-		Flows:   []analyze.FlowStats{{Screen: "FeedActivity", Flow: "feed", Owner: "FeedPresenter.render", StallCount: 2, StallMaxMS: 820}},
+		Screens:        []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 100, JankyFrames: 18, JankRatePct: 18, AvgFPS: 42, MinFPS: 28}},
+		SignalContexts: []analyze.SignalContextStats{{Screen: "FeedActivity", Operation: "feed", Owner: "FeedPresenter.render", StallCount: 2, StallMaxMS: 820}},
 	})
 	if len(insights) != 1 {
 		t.Fatalf("uiScreenInsights() count = %d, want 1", len(insights))
@@ -2224,7 +2363,7 @@ func TestCustomMetricInsightsGroupMetricsAndRelateThemToMainSignals(t *testing.T
 	if len(insights) != 2 {
 		t.Fatalf("customMetricInsights() count = %d, want 2", len(insights))
 	}
-	if insights[0].Title != "Память и GC" || insights[1].Title != "Сеть" {
+	if insights[0].Title != "Память и сборка мусора" || insights[1].Title != "Сеть" {
 		t.Fatalf("custom metric groups = %+v", insights)
 	}
 	if !strings.Contains(insights[1].Relation, "3 сетевых вызова") {

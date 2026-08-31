@@ -102,8 +102,7 @@ func TestRuntimeLeakGraphUsesTypedContextRelations(t *testing.T) {
 		ClassName: "com.app.LeakedView",
 		DominatorPath: []string{
 			"экран: FeedActivity",
-			"сценарий: feed.open",
-			"шаг: render",
+			"операция: feed.open.render",
 			"держатель: FeedPresenter",
 			"метод: bind",
 			"удержанный объект: com.app.LeakedView",
@@ -114,8 +113,7 @@ func TestRuntimeLeakGraphUsesTypedContextRelations(t *testing.T) {
 		t.Fatalf("runtime graph title = %q", graph.Title)
 	}
 	want := []string{
-		"сценарий на экране",
-		"шаг сценария",
+		"операция на экране",
 		"атрибутировано вероятному владельцу",
 		"место наблюдения",
 		"объект оставался жив после lifecycle",
@@ -128,14 +126,14 @@ func TestRuntimeLeakGraphUsesTypedContextRelations(t *testing.T) {
 			t.Fatalf("edge %d label = %q, want %q", index, graph.Edges[index].Label, label)
 		}
 	}
-	if graph.Nodes[4].Kind != "method" {
-		t.Fatalf("method node kind = %q", graph.Nodes[4].Kind)
+	if graph.Nodes[3].Kind != "method" {
+		t.Fatalf("method node kind = %q", graph.Nodes[3].Kind)
 	}
 }
 
 func TestRuntimeRetentionSummaryDoesNotCallContextAReferenceChain(t *testing.T) {
 	summary := retainedLeakChainSummary(
-		memoryLeakStats{screen: "FeedActivity", flow: "feed.open", step: "render", count: 2},
+		memoryLeakStats{screen: "FeedActivity", operation: "feed.open.render", count: 2},
 		"com.app.FeedPresenter.bind",
 		"com.app.LeakedView",
 		"View",
@@ -145,7 +143,7 @@ func TestRuntimeRetentionSummaryDoesNotCallContextAReferenceChain(t *testing.T) 
 	if strings.Contains(summary, "Доверие цепочки") {
 		t.Fatalf("runtime summary mislabels context as a reference chain: %q", summary)
 	}
-	if !strings.Contains(summary, "Доверие runtime-атрибуции") {
+	if !strings.Contains(summary, "Доверие к привязке по данным выполнения") {
 		t.Fatalf("runtime summary has no attribution label: %q", summary)
 	}
 }

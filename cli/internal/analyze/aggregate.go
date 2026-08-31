@@ -1,11 +1,11 @@
 package analyze
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -19,7 +19,7 @@ const (
 	canonicalLogSpamWindowMS         = 5_000
 	canonicalLogSpamCount            = 50
 	heapDumpStallAttributionWindowMS = 2_000
-	collectionTrustScoreModel        = "evidence-v2:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20"
+	diagnosticCompletenessModel      = "diagnostic-completeness-v1:active-components-normalized;transport=40,runtime_graph=20,process_roster=20,integrity=20"
 )
 
 type qualityCounterWarning struct {
@@ -28,21 +28,26 @@ type qualityCounterWarning struct {
 }
 
 var runtimeQualityCounterWarnings = []qualityCounterWarning{
-	{"jankhunter.events_dropped.count", "очередь writer отбросила события"},
-	{"jankhunter.writer_io_error.count", "writer видел ошибки записи"},
-	{"jankhunter.writer_event_lost_on_io.count", "writer потерял события после ошибки записи"},
+	{"jankhunter.events_dropped.count", "очередь записи не приняла события"},
+	{"jankhunter.writer_io_error.count", "при записи возникли ошибки"},
+	{"jankhunter.writer_event_lost_on_io.count", "после ошибки записи события не сохранились"},
 	{"jankhunter.metric_aggregation.dropped.count", "агрегатор метрик отбросил ключи из-за лимита кардинальности"},
 	{"jankhunter.log_spam.dropped_keys.count", "агрегатор спама логами отбросил ключи из-за лимита кардинальности"},
-	{"jankhunter.runtime_call_graph.dropped.count", "runtime-граф вызовов отбросил ребра из-за лимита или рассинхронизации стека"},
+	{"jankhunter.runtime_call_graph.dropped.count", "граф вызовов во время выполнения не сохранил связи из-за лимита или рассинхронизации стека"},
 	{"jankhunter.handler_wrapper.dropped_entries.count", "реестр Handler-оберток отбросил записи из-за лимита"},
-	{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр Handler-оберток отбросил wrapper из-за лимита"},
-	{"jankhunter.activity_tracker.unavailable.count", "Activity lifecycle tracker не подключился, поэтому screen мог остаться неизвестным"},
+	{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр обёрток Handler не сохранил обёртку из-за лимита"},
+	{"jankhunter.activity_tracker.unavailable.count", "наблюдатель жизненного цикла Activity не подключился, поэтому экран мог остаться неизвестным"},
 }
 
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
 	collector := newCollector(title, len(paths), options)
 	for _, path := range paths {
-		collector.startLog()
+		header, err := jhlog.ReadSessionHeader(path)
+		if err != nil {
+			return Summary{}, err
+		}
+		collector.startLog(header)
+		collector.operationAnalysis.startLog(header)
 		lastDictSize := 0
 		result, err := jhlog.StreamFileWithResult(path, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
@@ -53,9 +58,6 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 			return nil
 		})
 		if err != nil {
-			return Summary{}, err
-		}
-		if err := validateOwnerMapNamespace(options.OwnerMap, result.Header, result.Source); err != nil {
 			return Summary{}, err
 		}
 		if err := validateArtifactNamespace(
@@ -78,240 +80,74 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 	return collector.finish(), nil
 }
 
-func LoadOwnerMap(path string) (*OwnerMap, error) {
-	if path == "" {
-		return nil, nil
+// ReadArtifactMetadataNamespace validates the compact build identity used to match optional
+// diagnostics and class-graph artifacts to their self-contained logs.
+func ReadArtifactMetadataNamespace(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() || info.Size() <= 0 || info.Size() > maxArtifactMetadataBytes {
+		return nil, fmt.Errorf("%s: artifact metadata size must be between 1 and %d bytes", path, maxArtifactMetadataBytes)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return loadOwnerMapJSONL(path, data)
-}
-
-// ReadOwnerMapNamespace validates and returns only the bounded first metadata record. Artifact
-// discovery uses it to avoid loading every symbol entry from every build variant into memory.
-func ReadOwnerMapNamespace(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	var metadata artifactMetadataRecord
+	if err := decodeArtifactMetadataRecord(data, &metadata); err != nil {
+		return nil, fmt.Errorf("%s: parse artifact metadata: %w", path, err)
+	}
+	if err := validateArtifactFormat(path, "artifact metadata", metadata.Format, ArtifactMetadataFormat); err != nil {
+		return nil, err
+	}
+	if metadata.Kind != "artifact-metadata" {
+		return nil, fmt.Errorf("%s: artifact metadata kind must be %q", path, "artifact-metadata")
+	}
+	namespace, err := decodeSymbolNamespace(metadata.SymbolNamespace)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: parse artifact metadata: %w", path, err)
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		lineData := []byte(line)
-		var envelope ownerMapEnvelope
-		if err := json.Unmarshal(lineData, &envelope); err != nil {
-			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
-		}
-		if err := validateOwnerMapFormat(path, envelope.Format); err != nil {
-			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
-		}
-		if envelope.Kind != "metadata" {
-			return nil, fmt.Errorf("%s: parse owner map line %d: metadata must be the first record", path, lineNumber)
-		}
-		var raw ownerMapMetadataRecord
-		if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
-			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-		}
-		namespace, err := decodeOwnerMapNamespace(raw.SymbolNamespace)
-		if err != nil {
-			return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-		}
-		return namespace, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("%s: owner map has no metadata record", path)
+	return namespace, nil
 }
 
-// LoadOwnerMaps loads and combines module-local owner maps into the single
-// process-wide stable-symbol namespace used by a .jhlog session. Every map is
-// validated independently before it participates in the merge.
-func LoadOwnerMaps(paths []string) (*OwnerMap, error) {
-	if len(paths) == 0 {
-		return nil, nil
-	}
-
-	merged := &OwnerMap{Entries: make(map[string]string)}
-	entrySources := make(map[string]string)
-	namespaceSource := ""
-	for _, path := range paths {
-		if path == "" {
-			return nil, fmt.Errorf("owner map path must not be empty")
-		}
-		ownerMap, err := LoadOwnerMap(path)
-		if err != nil {
-			return nil, fmt.Errorf("load owner map %q: %w", path, err)
-		}
-		if ownerMap == nil {
-			return nil, fmt.Errorf("load owner map %q: empty owner map", path)
-		}
-		if namespaceSource == "" {
-			merged.SymbolNamespace = append([]byte(nil), ownerMap.SymbolNamespace...)
-			namespaceSource = path
-		} else if !bytes.Equal(merged.SymbolNamespace, ownerMap.SymbolNamespace) {
-			return nil, fmt.Errorf(
-				"owner maps %q and %q use different symbolNamespace values: %s and %s",
-				namespaceSource,
-				path,
-				hexOrEmpty(merged.SymbolNamespace),
-				hexOrEmpty(ownerMap.SymbolNamespace),
-			)
-		}
-
-		ids := make([]string, 0, len(ownerMap.Entries))
-		for id := range ownerMap.Entries {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			owner := ownerMap.Entries[id]
-			if existing, ok := merged.Entries[id]; ok {
-				if existing != owner {
-					return nil, fmt.Errorf(
-						"owner maps %q and %q contain conflicting stable ID %q: %q and %q",
-						entrySources[id],
-						path,
-						id,
-						existing,
-						owner,
-					)
-				}
-				continue
-			}
-			merged.Entries[id] = owner
-			entrySources[id] = path
-		}
-	}
-	if err := validateLoadedOwnerMap(merged); err != nil {
-		return nil, fmt.Errorf("merge owner maps: %w", err)
-	}
-	return merged, nil
+type artifactMetadataRecord struct {
+	Format                   int             `json:"format"`
+	Kind                     string          `json:"kind"`
+	Variant                  string          `json:"variant"`
+	IDAlgorithm              string          `json:"idAlgorithm"`
+	IDEncoding               string          `json:"idEncoding"`
+	SymbolNamespace          string          `json:"symbolNamespace"`
+	IncludeWholeApplication  bool            `json:"includeWholeApplication"`
+	NetworkWholeApplication  bool            `json:"networkWholeApplication"`
+	DatabaseWholeApplication bool            `json:"databaseWholeApplication"`
+	Hooks                    map[string]bool `json:"hooks"`
+	AndroidNamespace         string          `json:"androidNamespace"`
+	IncludePackages          []string        `json:"includePackages"`
+	ExcludePackages          []string        `json:"excludePackages"`
 }
 
-type ownerMapEnvelope struct {
-	Format int    `json:"format"`
-	Kind   string `json:"kind"`
-}
-
-type ownerMapMetadataRecord struct {
-	Format                  int             `json:"format"`
-	Kind                    string          `json:"kind"`
-	Variant                 string          `json:"variant"`
-	IDAlgorithm             string          `json:"idAlgorithm"`
-	IDEncoding              string          `json:"idEncoding"`
-	GeneratedOwners         bool            `json:"generatedOwners"`
-	SymbolNamespace         string          `json:"symbolNamespace"`
-	IncludeWholeApplication bool            `json:"includeWholeApplication"`
-	Hooks                   map[string]bool `json:"hooks"`
-	AndroidNamespace        string          `json:"androidNamespace"`
-	IncludePackages         []string        `json:"includePackages"`
-	ExcludePackages         []string        `json:"excludePackages"`
-}
-
-type ownerMapEntryRecord struct {
-	Format     int    `json:"format"`
-	Kind       string `json:"kind"`
-	ID         string `json:"id"`
-	Owner      string `json:"owner"`
-	ClassName  string `json:"class"`
-	MethodName string `json:"method"`
-	Descriptor string `json:"descriptor"`
-}
-
-func loadOwnerMapJSONL(path string, data []byte) (*OwnerMap, error) {
-	out := &OwnerMap{Entries: map[string]string{}}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	lineNumber := 0
-	recordNumber := 0
-	metadataSeen := false
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		recordNumber++
-		lineData := []byte(line)
-		var envelope ownerMapEnvelope
-		if err := json.Unmarshal(lineData, &envelope); err != nil {
-			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
-		}
-		if err := validateOwnerMapFormat(path, envelope.Format); err != nil {
-			return nil, fmt.Errorf("parse owner map line %d: %w", lineNumber, err)
-		}
-		switch envelope.Kind {
-		case "metadata":
-			if metadataSeen || recordNumber != 1 {
-				return nil, fmt.Errorf("%s: parse owner map line %d: metadata must be the first and only metadata record", path, lineNumber)
-			}
-			var raw ownerMapMetadataRecord
-			if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
-				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-			}
-			if err := addOwnerMapMetadata(out, raw); err != nil {
-				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-			}
-			metadataSeen = true
-		case "entry":
-			if !metadataSeen {
-				return nil, fmt.Errorf("%s: parse owner map line %d: entry appears before metadata", path, lineNumber)
-			}
-			var raw ownerMapEntryRecord
-			if err := decodeOwnerMapRecord(lineData, &raw); err != nil {
-				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-			}
-			if err := addOwnerMapEntry(out.Entries, raw); err != nil {
-				return nil, fmt.Errorf("%s: parse owner map line %d: %w", path, lineNumber, err)
-			}
-		default:
-			return nil, fmt.Errorf("%s: parse owner map line %d: unsupported record kind %q", path, lineNumber, envelope.Kind)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if err := validateLoadedOwnerMap(out); err != nil {
-		return nil, fmt.Errorf("%s: parse owner map: %w", path, err)
-	}
-	return out, nil
-}
-
-func decodeOwnerMapRecord(data []byte, target any) error {
+func decodeArtifactMetadataRecord(data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(target)
-}
-
-func addOwnerMapMetadata(out *OwnerMap, raw ownerMapMetadataRecord) error {
-	decoded, err := decodeOwnerMapNamespace(raw.SymbolNamespace)
-	if err != nil {
+	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if len(out.SymbolNamespace) > 0 && !bytes.Equal(out.SymbolNamespace, decoded) {
-		return fmt.Errorf("conflicting symbolNamespace metadata")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return fmt.Errorf("trailing data: %w", err)
 	}
-	out.SymbolNamespace = decoded
 	return nil
 }
 
-func decodeOwnerMapNamespace(value string) ([]byte, error) {
+func decodeSymbolNamespace(value string) ([]byte, error) {
 	if value == "" {
 		return nil, fmt.Errorf("metadata record has no symbolNamespace")
 	}
-	if len(value) != ownerMapNamespaceBytes*2 {
-		return nil, fmt.Errorf("symbolNamespace must contain exactly %d lowercase hexadecimal bytes", ownerMapNamespaceBytes)
+	if len(value) != symbolNamespaceBytes*2 {
+		return nil, fmt.Errorf("symbolNamespace must contain exactly %d lowercase hexadecimal bytes", symbolNamespaceBytes)
 	}
 	decoded, err := hex.DecodeString(value)
 	if err != nil || hex.EncodeToString(decoded) != value {
@@ -320,45 +156,280 @@ func decodeOwnerMapNamespace(value string) ([]byte, error) {
 	return decoded, nil
 }
 
-func validateLoadedOwnerMap(ownerMap *OwnerMap) error {
-	if len(ownerMap.SymbolNamespace) != ownerMapNamespaceBytes {
-		return fmt.Errorf("owner map metadata symbolNamespace must contain exactly %d bytes", ownerMapNamespaceBytes)
-	}
-	return nil
+const (
+	symbolNamespaceBytes     = 16
+	maxArtifactMetadataBytes = 64 * 1024
+)
+
+const httpPhaseCount = 7
+
+type networkCallKey struct {
+	route     string
+	service   string
+	initiator string
+	screen    string
+	operation string
+	owner     string
 }
 
-const ownerMapNamespaceBytes = 16
+type httpInterval struct {
+	logIndex uint64
+	startMS  uint64
+	endMS    uint64
+}
 
-func addOwnerMapEntry(out map[string]string, entry ownerMapEntryRecord) error {
-	if !isCanonicalStableOwnerID(entry.ID) {
-		return fmt.Errorf("owner map id %q is not canonical; expected stable:0x followed by 16 lowercase hexadecimal digits", entry.ID)
+type httpAggregate struct {
+	durations          uint64SampleSet
+	durationTotal      uint64
+	phases             [httpPhaseCount]uint64SampleSet
+	phaseTotals        [httpPhaseCount]uint64
+	count              int
+	failures           int
+	transportFailures  int
+	http4xx            int
+	http5xx            int
+	canceled           int
+	cacheHits          int
+	reusedConnections  int
+	knownRequestBytes  int
+	knownResponseBytes int
+	attempts           uint64
+	dnsAttempts        uint64
+	connectAttempts    uint64
+	tlsAttempts        uint64
+	retries            uint64
+	redirects          uint64
+	connectFailures    uint64
+	tlsFailures        uint64
+	bytesRx            uint64
+	bytesTx            uint64
+	ownerSample        string
+	serviceSample      string
+	initiatorSample    string
+	intervals          []httpInterval
+	burst              routeBurstAccumulator
+}
+
+type webSocketKey struct {
+	route     string
+	screen    string
+	operation string
+	owner     string
+}
+
+type webSocketAggregate struct {
+	opened         uint64
+	closed         uint64
+	failures       uint64
+	reconnects     uint64
+	connect        uint64SampleSet
+	lifetime       uint64SampleSet
+	textMessages   uint64
+	binaryMessages uint64
+	receivedBytes  uint64
+	failureKinds   [7]uint64
+	closeCodes     map[uint16]uint64
+}
+
+type databaseStatementKey struct {
+	query             string
+	operation         string
+	fallbackSource    string
+	fallbackFramework string
+}
+
+type databaseContextKey struct {
+	statement         databaseStatementKey
+	source            string
+	framework         string
+	screen            string
+	contextOwner      string
+	contextOperation  string
+	operationID       uint64
+	process           string
+	processInstanceID jhlog.ID128
+	sessionID         jhlog.ID128
+}
+
+type databaseAggregate struct {
+	overall      databaseExecutionAggregate
+	main         databaseExecutionAggregate
+	background   databaseExecutionAggregate
+	knownSQL     uint64
+	rapidRepeats uint64
+	lastLogIndex uint64
+	lastTimeMS   uint64
+	hasLast      bool
+	burst        routeBurstAccumulator
+}
+
+type databaseExecutionAggregate struct {
+	durations     operationDurationSummary
+	calls         uint64
+	failures      uint64
+	totalDuration uint64
+}
+
+func (s *databaseExecutionAggregate) add(event *jhlog.DatabaseEvent) {
+	s.calls++
+	s.durations.add(event.DurationUS)
+	s.totalDuration = saturatingUint64Sum(s.totalDuration, event.DurationUS)
+	if event.Outcome == jhlog.DatabaseOutcomeFailure {
+		s.failures++
 	}
-	name := strings.TrimSpace(entry.Owner)
-	if name == "" {
-		return fmt.Errorf("owner map entry %q has no owner", entry.ID)
+}
+
+func (s *databaseAggregate) add(event *jhlog.DatabaseEvent, flags, logIndex, timeMS uint64) {
+	s.overall.add(event)
+	if flags&uint64(jhlog.FlagThreadMain) != 0 {
+		s.main.add(event)
+	} else {
+		s.background.add(event)
 	}
-	if existing, ok := out[entry.ID]; ok {
-		if existing != name {
-			return fmt.Errorf("conflicting owner map entry %q: %q and %q", entry.ID, existing, name)
+	if !event.QueryRef.IsUnknown() {
+		s.knownSQL++
+	}
+	if s.hasLast && s.lastLogIndex == logIndex && timeMS >= s.lastTimeMS && timeMS-s.lastTimeMS <= 100 {
+		s.rapidRepeats++
+	}
+	s.lastLogIndex = logIndex
+	s.lastTimeMS = timeMS
+	s.hasLast = true
+	s.burst.add(logIndex, timeMS)
+}
+
+func (s *webSocketAggregate) add(event *jhlog.WebSocketEvent) {
+	switch event.Stage {
+	case jhlog.WebSocketStageOpened:
+		s.opened++
+		s.connect.add(event.DurationMS)
+		if event.ReconnectOrdinal > 0 {
+			s.reconnects++
 		}
-		return nil
+	case jhlog.WebSocketStageClosed:
+		s.closed++
+		s.lifetime.add(event.DurationMS)
+		if event.CloseCode != 0 {
+			if s.closeCodes == nil {
+				s.closeCodes = make(map[uint16]uint64)
+			}
+			s.closeCodes[event.CloseCode]++
+		}
+	case jhlog.WebSocketStageFailed:
+		s.failures++
+		s.lifetime.add(event.DurationMS)
+		if int(event.FailureKind) < len(s.failureKinds) {
+			s.failureKinds[event.FailureKind]++
+		}
 	}
-	out[entry.ID] = name
-	return nil
+	if event.Stage != jhlog.WebSocketStageOpened {
+		s.textMessages = saturatingUint64Sum(s.textMessages, event.TextMessages)
+		s.binaryMessages = saturatingUint64Sum(s.binaryMessages, event.BinaryMessages)
+		s.receivedBytes = saturatingUint64Sum(s.receivedBytes, event.ReceivedBytes)
+	}
 }
 
-func validateOwnerMapFormat(path string, got int) error {
-	return validateArtifactFormat(path, "owner map", got, OwnerMapFormat)
+func (s *webSocketAggregate) activeAtEnd() uint64 {
+	terminal := saturatingUint64Sum(s.closed, s.failures)
+	if terminal >= s.opened {
+		return 0
+	}
+	return s.opened - terminal
+}
+
+func (s *httpAggregate) add(event *jhlog.HTTPEvent, flags uint64, logIndex, endMS uint64, retainInterval bool) {
+	s.count++
+	s.durations.add(event.DurationMS)
+	s.durationTotal = saturatingUint64Sum(s.durationTotal, event.DurationMS)
+	phaseValues := [...]uint64{
+		event.QueueMS,
+		event.DNSMS,
+		event.ConnectMS,
+		event.TLSMS,
+		event.RequestMS,
+		event.TTFBMS,
+		event.ResponseMS,
+	}
+	for index, value := range phaseValues {
+		if value == 0 {
+			continue
+		}
+		s.phases[index].add(value)
+		s.phaseTotals[index] = saturatingUint64Sum(s.phaseTotals[index], value)
+	}
+	status := httpStatusClass(event)
+	transportFailure := flags&uint64(jhlog.FlagHTTPFailed) != 0
+	if transportFailure {
+		s.transportFailures++
+	}
+	if status == jhlog.Status4xx {
+		s.http4xx++
+	}
+	if status == jhlog.Status5xx {
+		s.http5xx++
+	}
+	if transportFailure || status == jhlog.Status5xx {
+		s.failures++
+	}
+	if flags&uint64(jhlog.FlagHTTPCancelled) != 0 ||
+		event.FailurePhase == jhlog.HTTPFailurePhaseCancelled ||
+		event.FailureKind == jhlog.HTTPFailureKindCancelled {
+		s.canceled++
+	}
+	if flags&uint64(jhlog.FlagHTTPCacheHit) != 0 {
+		s.cacheHits++
+	}
+	if flags&uint64(jhlog.FlagHTTPReusedConnection) != 0 {
+		s.reusedConnections++
+	}
+	if flags&uint64(jhlog.FlagHTTPRequestBytesKnown) != 0 {
+		s.knownRequestBytes++
+	}
+	if flags&uint64(jhlog.FlagHTTPResponseBytesKnown) != 0 {
+		s.knownResponseBytes++
+	}
+	s.attempts = saturatingUint64Sum(s.attempts, uint64(event.Attempts))
+	s.dnsAttempts = saturatingUint64Sum(s.dnsAttempts, uint64(event.DNSAttempts))
+	s.connectAttempts = saturatingUint64Sum(s.connectAttempts, uint64(event.ConnectAttempts))
+	s.tlsAttempts = saturatingUint64Sum(s.tlsAttempts, uint64(event.TLSAttempts))
+	s.redirects = saturatingUint64Sum(s.redirects, uint64(event.Redirects))
+	s.connectFailures = saturatingUint64Sum(s.connectFailures, uint64(event.ConnectFailures))
+	s.tlsFailures = saturatingUint64Sum(s.tlsFailures, uint64(event.TLSFailures))
+	minimumAttempts := uint64(event.Redirects) + 1
+	if uint64(event.Attempts) > minimumAttempts {
+		s.retries = saturatingUint64Sum(s.retries, uint64(event.Attempts)-minimumAttempts)
+	}
+	s.bytesRx = saturatingUint64Sum(s.bytesRx, event.RxBytes)
+	s.bytesTx = saturatingUint64Sum(s.bytesTx, event.TxBytes)
+	if retainInterval {
+		startMS := uint64(0)
+		if endMS > event.DurationMS {
+			startMS = endMS - event.DurationMS
+		}
+		s.intervals = append(s.intervals, httpInterval{logIndex: logIndex, startMS: startMS, endMS: endMS})
+	}
+}
+
+func httpStatusClass(event *jhlog.HTTPEvent) jhlog.StatusClass {
+	if event.StatusCode != 0 {
+		return jhlog.StatusClassForHTTPCode(event.StatusCode)
+	}
+	return event.Status
+}
+
+func httpEventFailed(event *jhlog.HTTPEvent, flags uint64) bool {
+	return flags&uint64(jhlog.FlagHTTPFailed) != 0 || httpStatusClass(event) == jhlog.Status5xx
 }
 
 type collector struct {
 	summary             Summary
 	filter              Filter
-	ownerMap            *OwnerMap
 	nameMap             *NameMapping
 	classGraph          *ClassGraph
 	diagnostics         *InstrumentationDiagnostics
+	dependencyInjection *DependencyInjectionCatalog
 	heap                *HeapEvidence
+	databaseEvidence    *DatabaseEvidence
 	artifactDirectory   string
 	artifactAuto        bool
 	artifactNamespace   []byte
@@ -383,143 +454,159 @@ type collector struct {
 	chainIssues         []string
 	lastHeapDumpMS      uint64
 
-	httpDurations  uint64SampleSet
-	routeDurations map[string]*uint64SampleSet
-	routeFailures  map[string]int
-	routeRx        map[string]uint64
-	routeTx        map[string]uint64
-	routeTTFB      map[string]uint64
-	routeTTFBCount map[string]uint64
-	routeOwner     map[string]string
-	routeBursts    map[string]*routeBurstAccumulator
+	networkTotals        httpAggregate
+	networkRoutes        map[string]*httpAggregate
+	networkCalls         map[networkCallKey]*httpAggregate
+	networkStatusCodes   map[uint16]uint64
+	networkFailurePhases [9]uint64
+	networkFailureKinds  [9]uint64
+	networkProtocols     [5]uint64
+	webSocketTotals      webSocketAggregate
+	webSocketConnections map[webSocketKey]*webSocketAggregate
+	databaseTotals       databaseAggregate
+	databaseTelemetry    databaseTelemetryAggregate
+	databaseStatements   databaseStatementStore
+	databaseTransactions databaseTransactionAccumulator
+	databaseScenarios    databaseScenarioAccumulator
+	databaseCorrelation  databaseCorrelationAccumulator
+	workerCollectorState
+	runtimeAnalysis   runtimeAnalysisAccumulator
+	operationAnalysis operationAnalysisAccumulator
+	androidAnalysis   *androidComponentAnalysisAccumulator
 
-	screenStats        map[string]*ScreenStats
-	processExitStats   map[string]*ProcessExitStats
-	ioStats            map[string]*IOStats
-	ownerStats         map[ownerStatKey]*OwnerStats
-	flowStats          map[string]*FlowStats
-	flowHTTPDurations  map[string]*uint64SampleSet
-	logSpamStats       map[string]*LogSpamStats
-	problemStats       map[string]*ProblemWindowStats
-	runtimeCallStats   map[string]*RuntimeCallStats
-	counterValues      map[string]uint64
-	gaugeValues        map[string]*gaugeStats
-	appVersions        map[string]uint64
-	builds             map[string]uint64
-	devices            map[string]uint64
-	sdks               map[string]uint64
-	cohortSamples      map[string]uint64
-	networkSamples     map[string]uint64
-	processSamples     map[string]uint64
-	retainedClasses    map[string]*retainedClassStats
-	retainedAgeBuckets map[string]uint64
-	memoryLeakStats    map[string]*memoryLeakStats
+	screenStats                map[string]*ScreenStats
+	processExitStats           map[string]*ProcessExitStats
+	ioStats                    map[string]*ioAggregate
+	ioAnalysis                 ioAnalysisAccumulator
+	ownerStats                 map[ownerStatKey]*OwnerStats
+	signalContextStats         map[string]*SignalContextStats
+	signalContextHTTPDurations map[string]*uint64SampleSet
+	logSpamStats               map[string]*LogSpamStats
+	problemStats               map[string]*ProblemWindowStats
+	runtimeCallStats           map[string]*RuntimeCallStats
+	counterValues              map[string]uint64
+	gaugeValues                map[string]*gaugeStats
+	appVersions                map[string]uint64
+	builds                     map[string]uint64
+	devices                    map[string]uint64
+	sdks                       map[string]uint64
+	cohortSamples              map[string]uint64
+	networkSamples             map[string]uint64
+	processSamples             map[string]uint64
+	retainedClasses            map[string]*retainedClassStats
+	retainedAgeBuckets         map[string]uint64
+	memoryLeakStats            map[string]*memoryLeakStats
 
-	currentAppVersion string
-	currentBuild      string
-	currentDevice     string
-	currentSDK        string
-	currentProcess    string
-	currentNetwork    string
-	currentAndroid    string
-	currentPatch      string
-	currentPrimaryABI string
-	currentABIs       string
-	currentMaker      string
-	currentBrand      string
-	currentHardware   string
-	currentBoard      string
-	currentProduct    string
-	currentRootKnown  bool
-	currentRooted     bool
-	currentLogIndex   uint64
-	currentAttrScreen string
-	currentAttrOwner  string
-	currentAttrFlow   string
-	currentAttrStep   string
-	stableSymbols     stableSymbolResolver
+	currentAppVersion  string
+	currentBuild       string
+	currentDevice      string
+	currentSDK         string
+	currentProcess     string
+	currentProcessID   jhlog.ID128
+	currentSessionID   jhlog.ID128
+	currentNetwork     string
+	currentAndroid     string
+	currentPatch       string
+	currentPrimaryABI  string
+	currentABIs        string
+	currentMaker       string
+	currentBrand       string
+	currentHardware    string
+	currentBoard       string
+	currentProduct     string
+	currentRootKnown   bool
+	currentRooted      bool
+	currentLogIndex    uint64
+	currentAttrScreen  string
+	currentAttrOwner   string
+	currentOperationID uint64
+	currentCohortKey   string
+	currentCohortDirty bool
+	stableSymbols      stableSymbolResolver
 }
 
 type stableSymbolResolver struct {
-	embedded         map[uint64]string
-	unresolved       map[string]struct{}
-	externalResolved bool
-	external         bool
-	requireExplicit  bool
+	embedded   map[uint64]string
+	unresolved map[string]struct{}
 }
 
 func newCollector(title string, logCount int, options Options) *collector {
 	return &collector{
-		summary:            Summary{Title: title, LogCount: logCount},
-		filter:             normalizeFilter(options.Filter),
-		ownerMap:           options.OwnerMap,
-		nameMap:            options.ObfuscationMap,
-		classGraph:         DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
-		diagnostics:        options.InstrumentationDiagnostics,
-		heap:               DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
-		artifactDirectory:  options.ArtifactDirectory,
-		artifactAuto:       options.ArtifactsAutoDiscovered,
-		artifactNamespace:  append([]byte(nil), options.ArtifactSymbolNamespace...),
-		routeDurations:     map[string]*uint64SampleSet{},
-		routeFailures:      map[string]int{},
-		routeRx:            map[string]uint64{},
-		routeTx:            map[string]uint64{},
-		routeTTFB:          map[string]uint64{},
-		routeTTFBCount:     map[string]uint64{},
-		routeOwner:         map[string]string{},
-		routeBursts:        map[string]*routeBurstAccumulator{},
-		screenStats:        map[string]*ScreenStats{},
-		processExitStats:   map[string]*ProcessExitStats{},
-		ioStats:            map[string]*IOStats{},
-		ownerStats:         map[ownerStatKey]*OwnerStats{},
-		flowStats:          map[string]*FlowStats{},
-		flowHTTPDurations:  map[string]*uint64SampleSet{},
-		logSpamStats:       map[string]*LogSpamStats{},
-		problemStats:       map[string]*ProblemWindowStats{},
-		runtimeCallStats:   map[string]*RuntimeCallStats{},
-		counterValues:      map[string]uint64{},
-		qualitySnapshots:   map[string]segmentQualityState{},
-		gaugeValues:        map[string]*gaugeStats{},
-		appVersions:        map[string]uint64{},
-		builds:             map[string]uint64{},
-		devices:            map[string]uint64{},
-		sdks:               map[string]uint64{},
-		cohortSamples:      map[string]uint64{},
-		networkSamples:     map[string]uint64{},
-		processSamples:     map[string]uint64{},
-		retainedClasses:    map[string]*retainedClassStats{},
-		retainedAgeBuckets: map[string]uint64{},
-		memoryLeakStats:    map[string]*memoryLeakStats{},
-		currentAppVersion:  "unknown",
-		currentBuild:       "unknown",
-		currentDevice:      "unknown",
-		currentSDK:         "unknown",
-		currentProcess:     "unknown",
-		currentNetwork:     "unknown",
-		currentAndroid:     "unknown",
-		currentPatch:       "unknown",
-		currentPrimaryABI:  "unknown",
-		currentABIs:        "unknown",
-		currentMaker:       "unknown",
-		currentBrand:       "unknown",
-		currentHardware:    "unknown",
-		currentBoard:       "unknown",
-		currentProduct:     "unknown",
-		currentAttrScreen:  "unknown",
-		currentAttrOwner:   "unknown",
-		currentAttrFlow:    "unknown",
-		currentAttrStep:    "unknown",
+		summary:                    Summary{Title: title, LogCount: logCount},
+		filter:                     normalizeFilter(options.Filter),
+		nameMap:                    options.ObfuscationMap,
+		classGraph:                 DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
+		diagnostics:                options.InstrumentationDiagnostics,
+		dependencyInjection:        options.DependencyInjectionCatalog,
+		heap:                       DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
+		databaseEvidence:           options.DatabaseEvidence,
+		artifactDirectory:          options.ArtifactDirectory,
+		artifactAuto:               options.ArtifactsAutoDiscovered,
+		artifactNamespace:          append([]byte(nil), options.ArtifactSymbolNamespace...),
+		networkRoutes:              map[string]*httpAggregate{},
+		networkCalls:               map[networkCallKey]*httpAggregate{},
+		networkStatusCodes:         map[uint16]uint64{},
+		webSocketConnections:       map[webSocketKey]*webSocketAggregate{},
+		databaseStatements:         newDatabaseStatementStore(databaseStatementGroupLimit),
+		databaseScenarios:          newDatabaseScenarioAccumulator(databaseScenarioGroupLimit),
+		screenStats:                map[string]*ScreenStats{},
+		processExitStats:           map[string]*ProcessExitStats{},
+		ioStats:                    map[string]*ioAggregate{},
+		ownerStats:                 map[ownerStatKey]*OwnerStats{},
+		signalContextStats:         map[string]*SignalContextStats{},
+		signalContextHTTPDurations: map[string]*uint64SampleSet{},
+		logSpamStats:               map[string]*LogSpamStats{},
+		problemStats:               map[string]*ProblemWindowStats{},
+		runtimeCallStats:           map[string]*RuntimeCallStats{},
+		counterValues:              map[string]uint64{},
+		qualitySnapshots:           map[string]segmentQualityState{},
+		gaugeValues:                map[string]*gaugeStats{},
+		appVersions:                map[string]uint64{},
+		builds:                     map[string]uint64{},
+		devices:                    map[string]uint64{},
+		sdks:                       map[string]uint64{},
+		cohortSamples:              map[string]uint64{},
+		networkSamples:             map[string]uint64{},
+		processSamples:             map[string]uint64{},
+		retainedClasses:            map[string]*retainedClassStats{},
+		retainedAgeBuckets:         map[string]uint64{},
+		memoryLeakStats:            map[string]*memoryLeakStats{},
+		operationAnalysis:          newOperationAnalysisAccumulator(),
+		androidAnalysis:            newAndroidComponentAnalysisAccumulator(options.AndroidComponentCatalog),
+		currentAppVersion:          "unknown",
+		currentBuild:               "unknown",
+		currentDevice:              "unknown",
+		currentSDK:                 "unknown",
+		currentProcess:             "unknown",
+		currentNetwork:             "unknown",
+		currentAndroid:             "unknown",
+		currentPatch:               "unknown",
+		currentPrimaryABI:          "unknown",
+		currentABIs:                "unknown",
+		currentMaker:               "unknown",
+		currentBrand:               "unknown",
+		currentHardware:            "unknown",
+		currentBoard:               "unknown",
+		currentProduct:             "unknown",
+		currentAttrScreen:          "unknown",
+		currentAttrOwner:           "unknown",
+		currentCohortDirty:         true,
 		stableSymbols: stableSymbolResolver{
-			embedded:        map[uint64]string{},
-			unresolved:      map[string]struct{}{},
-			external:        options.ExternalSymbols,
-			requireExplicit: options.RequireExplicitExternalSymbols,
+			embedded:   map[uint64]string{},
+			unresolved: map[string]struct{}{},
 		},
 	}
 }
 
-func (c *collector) startLog() {
+func (c *collector) startLog(header jhlog.SegmentHeader) {
 	c.currentLogIndex++
+	c.currentProcess = firstNonEmpty(header.ProcessName, "unknown")
+	c.currentProcessID = header.ProcessInstanceID
+	c.currentSessionID = header.SessionID
+	c.currentCohortDirty = true
+	c.databaseCorrelation.startLog(header, c.currentLogIndex)
+	c.workerCollectorState.startLog()
+	c.androidAnalysis.startLog(header)
 	clear(c.stableSymbols.embedded)
 	c.resetAttribution()
 	c.logSeen = false
@@ -559,8 +646,7 @@ func (c *collector) recordTraffic(rxBytes, txBytes uint64) {
 func (c *collector) resetAttribution() {
 	c.currentAttrScreen = "unknown"
 	c.currentAttrOwner = "unknown"
-	c.currentAttrFlow = "unknown"
-	c.currentAttrStep = "unknown"
+	c.currentOperationID = 0
 }
 
 type segmentQualityState struct {
@@ -569,6 +655,7 @@ type segmentQualityState struct {
 }
 
 func (c *collector) addStreamResult(result jhlog.StreamResult) {
+	c.workerCollectorState.finishLog(c.currentLogIndex, result)
 	segment := CollectionSegment{
 		Source:                           result.Source,
 		Status:                           string(result.Status),
@@ -866,8 +953,7 @@ func (c *collector) applyAttribution(dict map[uint64]string, context jhlog.Attri
 	}
 	c.currentAttrScreen = attrValue(jhlog.ResolveSymbol(dict, context.Screen))
 	c.currentAttrOwner = attrValue(c.resolveOwnerRef(dict, context.Owner))
-	c.currentAttrFlow = attrValue(jhlog.ResolveSymbol(dict, context.Flow))
-	c.currentAttrStep = attrValue(jhlog.ResolveSymbol(dict, context.Step))
+	c.currentOperationID = context.OperationID
 }
 
 type retainedClassStats struct {
@@ -1075,6 +1161,444 @@ func routeBurstBucketBefore(left, right routeBurstBucket) bool {
 
 const routeBurstRetainedSeconds = 8
 
+var httpPhaseNames = [...]string{"queue", "dns", "connect", "tls", "request", "ttfb", "response"}
+
+func phaseAverage(stats *httpAggregate, index int) uint64 {
+	seen := stats.phases[index].seen
+	if seen == 0 {
+		return 0
+	}
+	return stats.phaseTotals[index] / uint64(seen)
+}
+
+func httpPhaseStats(stats *httpAggregate) []HTTPPhaseStats {
+	result := make([]HTTPPhaseStats, len(httpPhaseNames))
+	for index, name := range httpPhaseNames {
+		set := &stats.phases[index]
+		result[index] = HTTPPhaseStats{
+			Name:        name,
+			SampleCount: set.seen,
+			AvgMS:       phaseAverage(stats, index),
+			P50MS:       set.percentile(0.50),
+			P95MS:       set.percentile(0.95),
+			MaxMS:       set.max,
+		}
+	}
+	return result
+}
+
+func networkCallStats(key networkCallKey, stats *httpAggregate) NetworkCallStats {
+	return NetworkCallStats{
+		Route: key.route, Service: key.service, Initiator: key.initiator,
+		Screen: key.screen, Operation: key.operation, Owner: key.owner,
+		Count: stats.count, Failures: stats.failures,
+		TransportFailures: stats.transportFailures, HTTP4xx: stats.http4xx, HTTP5xx: stats.http5xx,
+		Canceled: stats.canceled, CacheHits: stats.cacheHits, ReusedConnections: stats.reusedConnections,
+		KnownRequestBytes: stats.knownRequestBytes, KnownResponseBytes: stats.knownResponseBytes,
+		Attempts: stats.attempts, DNSAttempts: stats.dnsAttempts,
+		ConnectAttempts: stats.connectAttempts, TLSAttempts: stats.tlsAttempts,
+		Retries: stats.retries, Redirects: stats.redirects,
+		ConnectFailures: stats.connectFailures, TLSFailures: stats.tlsFailures,
+		P50MS: stats.durations.percentile(0.50), P95MS: stats.durations.percentile(0.95),
+		MaxMS: stats.durations.max, BytesRx: stats.bytesRx, BytesTx: stats.bytesTx,
+		TotalDurationMS: stats.durationTotal,
+		Phases:          httpPhaseStats(stats),
+	}
+}
+
+func (c *collector) finalizeNetworkAnalysis(result NetworkAnalysis) NetworkAnalysis {
+	stats := &c.networkTotals
+	result.MaxConcurrency, result.PeakConcurrencyAtMS = maxHTTPConcurrency(stats.intervals)
+	result.TransportFailures = stats.transportFailures
+	result.HTTP4xx = stats.http4xx
+	result.HTTP5xx = stats.http5xx
+	result.Canceled = stats.canceled
+	result.CacheHits = stats.cacheHits
+	result.ReusedConnections = stats.reusedConnections
+	result.KnownRequestBytes = stats.knownRequestBytes
+	result.KnownResponseBytes = stats.knownResponseBytes
+	result.Attempts = stats.attempts
+	result.DNSAttempts = stats.dnsAttempts
+	result.ConnectAttempts = stats.connectAttempts
+	result.TLSAttempts = stats.tlsAttempts
+	result.Retries = stats.retries
+	result.Redirects = stats.redirects
+	result.ConnectFailures = stats.connectFailures
+	result.TLSFailures = stats.tlsFailures
+	result.BytesRx = stats.bytesRx
+	result.BytesTx = stats.bytesTx
+	result.TotalDurationMS = stats.durationTotal
+	result.Phases = httpPhaseStats(stats)
+	for code, count := range c.networkStatusCodes {
+		result.StatusCodes = append(result.StatusCodes, NamedValue{Name: fmt.Sprint(code), Value: count})
+	}
+	sort.Slice(result.StatusCodes, func(i, j int) bool { return result.StatusCodes[i].Name < result.StatusCodes[j].Name })
+	for phase, count := range c.networkFailurePhases {
+		if count > 0 {
+			result.FailurePhases = append(result.FailurePhases, NamedValue{Name: httpFailurePhaseName(jhlog.HTTPFailurePhase(phase)), Value: count})
+		}
+	}
+	for kind, count := range c.networkFailureKinds {
+		if count > 0 {
+			result.FailureKinds = append(result.FailureKinds, NamedValue{Name: httpFailureKindName(jhlog.HTTPFailureKind(kind)), Value: count})
+		}
+	}
+	for protocol, count := range c.networkProtocols {
+		if count > 0 {
+			result.Protocols = append(result.Protocols, NamedValue{Name: httpProtocolName(jhlog.HTTPProtocol(protocol)), Value: count})
+		}
+	}
+	return result
+}
+
+func (c *collector) finalizeWebSocketAnalysis() *WebSocketAnalysis {
+	totals := &c.webSocketTotals
+	result := &WebSocketAnalysis{
+		Opened: totals.opened, Closed: totals.closed, Failures: totals.failures,
+		ActiveAtEnd: totals.activeAtEnd(), Reconnects: totals.reconnects,
+		ConnectP50MS: totals.connect.percentile(0.50), ConnectP95MS: totals.connect.percentile(0.95),
+		ConnectMaxMS: totals.connect.max, LifetimeP50MS: totals.lifetime.percentile(0.50),
+		LifetimeP95MS: totals.lifetime.percentile(0.95), LifetimeMaxMS: totals.lifetime.max,
+		TextMessages: totals.textMessages, BinaryMessages: totals.binaryMessages, ReceivedBytes: totals.receivedBytes,
+	}
+	for kind, count := range totals.failureKinds {
+		if count > 0 {
+			result.FailureKinds = append(result.FailureKinds, NamedValue{
+				Name: webSocketFailureKindName(jhlog.WebSocketFailureKind(kind)), Value: count,
+			})
+		}
+	}
+	for code, count := range totals.closeCodes {
+		result.CloseCodes = append(result.CloseCodes, NamedValue{Name: fmt.Sprint(code), Value: count})
+	}
+	sortNamed(result.FailureKinds)
+	sortNamed(result.CloseCodes)
+	for key, stats := range c.webSocketConnections {
+		result.Connections = append(result.Connections, WebSocketConnectionStats{
+			Route: key.route, Screen: key.screen, Operation: key.operation, Owner: key.owner,
+			Opened: stats.opened, Closed: stats.closed, Failures: stats.failures,
+			ActiveAtEnd: stats.activeAtEnd(), Reconnects: stats.reconnects,
+			ConnectP50MS: stats.connect.percentile(0.50), ConnectP95MS: stats.connect.percentile(0.95),
+			ConnectMaxMS: stats.connect.max, LifetimeP50MS: stats.lifetime.percentile(0.50),
+			LifetimeP95MS: stats.lifetime.percentile(0.95), LifetimeMaxMS: stats.lifetime.max,
+			TextMessages: stats.textMessages, BinaryMessages: stats.binaryMessages, ReceivedBytes: stats.receivedBytes,
+		})
+	}
+	sort.Slice(result.Connections, func(i, j int) bool {
+		left, right := result.Connections[i], result.Connections[j]
+		if left.Failures != right.Failures {
+			return left.Failures > right.Failures
+		}
+		if left.Opened != right.Opened {
+			return left.Opened > right.Opened
+		}
+		if left.Route != right.Route {
+			return left.Route < right.Route
+		}
+		return left.Owner < right.Owner
+	})
+	return result
+}
+
+func webSocketFailureKindName(kind jhlog.WebSocketFailureKind) string {
+	switch kind {
+	case jhlog.WebSocketFailureTimeout:
+		return "timeout"
+	case jhlog.WebSocketFailureConnection:
+		return "connection"
+	case jhlog.WebSocketFailureTLS:
+		return "tls"
+	case jhlog.WebSocketFailureProtocol:
+		return "protocol"
+	case jhlog.WebSocketFailureIO:
+		return "io"
+	case jhlog.WebSocketFailureOther:
+		return "other"
+	default:
+		return "unknown"
+	}
+}
+
+func (c *collector) finalizeDatabaseAnalysis() *DatabaseAnalysis {
+	totals := &c.databaseTotals
+	store := &c.databaseStatements
+	correlations := c.databaseCorrelation.finalize()
+	result := &DatabaseAnalysis{
+		KnownSQLCalls: totals.knownSQL, Overall: databaseExecutionStats(&totals.overall),
+		Main: databaseExecutionStats(&totals.main), Background: databaseExecutionStats(&totals.background),
+		Telemetry:       databaseTelemetryStats(&c.databaseTelemetry),
+		Transactions:    c.databaseTransactions.finalizeWithCorrelations(correlations.transactions),
+		Scenarios:       c.databaseScenarios.finalize(),
+		MainCorrelation: correlations.total.Main, BackgroundCorrelation: correlations.total.Background,
+		PeakCallsPerSecond: totals.burst.peak,
+		PeakWindowStartMS:  totals.burst.peakWindowStartMS, RapidRepeats: totals.rapidRepeats,
+		DroppedStatementEvents:      store.droppedStatementEvents,
+		DroppedContextEvents:        store.droppedContextEvents,
+		EvictedStatementGroups:      store.evictedStatements,
+		EvictedContextGroups:        store.evictedContexts,
+		FrequencyEstimateError:      store.statementFrequency.estimatedError(),
+		DroppedDBIntervals:          c.databaseCorrelation.database.dropped,
+		EvictedDBIntervals:          c.databaseCorrelation.database.evicted,
+		DroppedTransactionIntervals: c.databaseCorrelation.transactions.dropped,
+		EvictedTransactionIntervals: c.databaseCorrelation.transactions.evicted,
+		DroppedUIWindows:            c.databaseCorrelation.ui.dropped,
+		EvictedUIWindows:            c.databaseCorrelation.ui.evicted,
+		DroppedStallIntervals:       c.databaseCorrelation.stalls.dropped,
+		EvictedStallIntervals:       c.databaseCorrelation.stalls.evicted,
+		DroppedRelatedIntervals: saturatingUint64Sum(
+			saturatingUint64Sum(c.databaseCorrelation.http.dropped, c.databaseCorrelation.workers.dropped),
+			saturatingUint64Sum(c.databaseCorrelation.fileIO.dropped, c.databaseCorrelation.gc.dropped),
+		),
+		EvictedRelatedIntervals: saturatingUint64Sum(
+			saturatingUint64Sum(c.databaseCorrelation.http.evicted, c.databaseCorrelation.workers.evicted),
+			saturatingUint64Sum(c.databaseCorrelation.fileIO.evicted, c.databaseCorrelation.gc.evicted),
+		),
+	}
+	for key, entry := range store.entries {
+		stats := &entry.stats
+		statementFingerprint := entry.statementFingerprint
+		if statementFingerprint == 0 {
+			statementFingerprint = databaseStatementFingerprint(key.query)
+		}
+		statement := DatabaseStatementStats{
+			Query: key.query, Operation: key.operation,
+			OperationCode:        databaseEvidenceOperationCode(key.operation),
+			StatementFingerprint: statementFingerprint,
+			Overall:              databaseExecutionStats(&stats.overall), Main: databaseExecutionStats(&stats.main),
+			Background:         databaseExecutionStats(&stats.background),
+			Telemetry:          databaseTelemetryStats(&entry.telemetry),
+			PeakCallsPerSecond: stats.burst.peak, PeakWindowStartMS: stats.burst.peakWindowStartMS,
+			RapidRepeats: stats.rapidRepeats, EstimatedCalls: entry.estimatedCalls,
+			FrequencyEstimateError: entry.frequencyEstimateError,
+		}
+		statement.Contexts = make([]DatabaseStatementContextStats, 0, len(entry.contexts))
+		for index := range entry.contexts {
+			contextEntry := &entry.contexts[index]
+			contextKey := contextEntry.key
+			contextStats := &contextEntry.stats
+			correlation := correlations.contexts[contextKey]
+			context := DatabaseStatementContextStats{
+				Source: contextKey.source, Framework: contextKey.framework, Screen: contextKey.screen,
+				ContextOwner: contextKey.contextOwner, ContextOperation: contextKey.contextOperation,
+				OperationID: contextKey.operationID, Process: contextKey.process,
+				ProcessInstanceID: databaseIdentity(contextKey.processInstanceID),
+				SessionID:         databaseIdentity(contextKey.sessionID),
+				Overall:           databaseExecutionStats(&contextStats.overall), Main: databaseExecutionStats(&contextStats.main),
+				Background:      databaseExecutionStats(&contextStats.background),
+				MainCorrelation: correlation.Main, BackgroundCorrelation: correlation.Background,
+				PeakCallsPerSecond: contextStats.burst.peak, PeakWindowStartMS: contextStats.burst.peakWindowStartMS,
+				RapidRepeats: contextStats.rapidRepeats, EstimatedCalls: contextEntry.estimatedCalls,
+				FrequencyEstimateError: contextEntry.frequencyEstimateError,
+			}
+			statement.Contexts = append(statement.Contexts, context)
+			mergeDatabaseCorrelation(&statement.MainCorrelation, correlation.Main)
+			mergeDatabaseCorrelation(&statement.BackgroundCorrelation, correlation.Background)
+		}
+		sortDatabaseContexts(statement.Contexts)
+		result.Statements = append(result.Statements, statement)
+	}
+	sort.Slice(result.Statements, func(i, j int) bool {
+		left, right := result.Statements[i], result.Statements[j]
+		if left.Main.Calls != right.Main.Calls {
+			return left.Main.Calls > right.Main.Calls
+		}
+		if left.Overall.P95DurationUS != right.Overall.P95DurationUS {
+			return left.Overall.P95DurationUS > right.Overall.P95DurationUS
+		}
+		if left.Overall.Calls != right.Overall.Calls {
+			return left.Overall.Calls > right.Overall.Calls
+		}
+		if left.Query != right.Query {
+			return left.Query < right.Query
+		}
+		return left.Operation < right.Operation
+	})
+	c.databaseTotals = databaseAggregate{}
+	c.databaseTelemetry = databaseTelemetryAggregate{}
+	c.databaseStatements = databaseStatementStore{}
+	c.databaseTransactions = databaseTransactionAccumulator{}
+	c.databaseScenarios = databaseScenarioAccumulator{}
+	c.databaseCorrelation = databaseCorrelationAccumulator{}
+	applyDatabaseEvidence(result, c.databaseEvidence)
+	return result
+}
+
+func sortDatabaseContexts(contexts []DatabaseStatementContextStats) {
+	sort.Slice(contexts, func(i, j int) bool {
+		left, right := contexts[i], contexts[j]
+		if left.Main.Calls != right.Main.Calls {
+			return left.Main.Calls > right.Main.Calls
+		}
+		if left.Overall.P95DurationUS != right.Overall.P95DurationUS {
+			return left.Overall.P95DurationUS > right.Overall.P95DurationUS
+		}
+		if left.Overall.Calls != right.Overall.Calls {
+			return left.Overall.Calls > right.Overall.Calls
+		}
+		if left.Source != right.Source {
+			return left.Source < right.Source
+		}
+		if left.ContextOperation != right.ContextOperation {
+			return left.ContextOperation < right.ContextOperation
+		}
+		if left.ProcessInstanceID != right.ProcessInstanceID {
+			return left.ProcessInstanceID < right.ProcessInstanceID
+		}
+		if left.SessionID != right.SessionID {
+			return left.SessionID < right.SessionID
+		}
+		return left.OperationID < right.OperationID
+	})
+}
+
+func databaseIdentity(id jhlog.ID128) string {
+	if id.IsZero() {
+		return "unknown"
+	}
+	return fmt.Sprintf("%x", id[:])
+}
+
+func databaseExecutionStats(stats *databaseExecutionAggregate) DatabaseExecutionStats {
+	return DatabaseExecutionStats{
+		Calls: stats.calls, Failures: stats.failures,
+		P50DurationUS: stats.durations.percentile(0.50),
+		P95DurationUS: stats.durations.percentile(0.95),
+		MaxDurationUS: stats.durations.max, TotalDurationUS: stats.totalDuration,
+		QuantilesApproximated: stats.durations.approximated(),
+	}
+}
+
+func canonicalDatabaseStatementKey(query, source, framework, operation string) databaseStatementKey {
+	key := databaseStatementKey{query: query, operation: operation}
+	if datavalue.IsUnknown(query) {
+		key.fallbackSource = source
+		key.fallbackFramework = framework
+	}
+	return key
+}
+
+func databaseFrameworkName(value jhlog.DatabaseFramework) string {
+	switch value {
+	case jhlog.DatabaseFrameworkSQLite:
+		return "SQLite"
+	case jhlog.DatabaseFrameworkSupportSQLite:
+		return "SupportSQLite"
+	case jhlog.DatabaseFrameworkRoom:
+		return "Room"
+	case jhlog.DatabaseFrameworkCustom:
+		return "Custom adapter"
+	default:
+		return "unknown"
+	}
+}
+
+func databaseOperationName(value jhlog.DatabaseOperation) string {
+	switch value {
+	case jhlog.DatabaseOperationQuery:
+		return "чтение"
+	case jhlog.DatabaseOperationInsert:
+		return "вставка"
+	case jhlog.DatabaseOperationUpdate:
+		return "обновление"
+	case jhlog.DatabaseOperationDelete:
+		return "удаление"
+	case jhlog.DatabaseOperationExecute:
+		return "выполнение"
+	case jhlog.DatabaseOperationStatement:
+		return "подготовка"
+	default:
+		return "неизвестно"
+	}
+}
+
+func maxHTTPConcurrency(intervals []httpInterval) (uint64, uint64) {
+	if len(intervals) == 0 {
+		return 0, 0
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if intervals[i].logIndex != intervals[j].logIndex {
+			return intervals[i].logIndex < intervals[j].logIndex
+		}
+		if intervals[i].startMS != intervals[j].startMS {
+			return intervals[i].startMS < intervals[j].startMS
+		}
+		return intervals[i].endMS < intervals[j].endMS
+	})
+	ends := make([]uint64, 0, min(len(intervals), 64))
+	currentLog := intervals[0].logIndex
+	var peak uint64
+	var peakAtMS uint64
+	for _, interval := range intervals {
+		if interval.logIndex != currentLog {
+			ends = ends[:0]
+			currentLog = interval.logIndex
+		}
+		for len(ends) > 0 && ends[0] <= interval.startMS {
+			ends = popUint64MinHeap(ends)
+		}
+		ends = pushUint64MinHeap(ends, interval.endMS)
+		if uint64(len(ends)) > peak {
+			peak = uint64(len(ends))
+			peakAtMS = interval.startMS
+		}
+	}
+	return peak, peakAtMS
+}
+
+func pushUint64MinHeap(values []uint64, value uint64) []uint64 {
+	values = append(values, value)
+	index := len(values) - 1
+	for index > 0 {
+		parent := (index - 1) / 2
+		if values[parent] <= value {
+			break
+		}
+		values[index] = values[parent]
+		index = parent
+	}
+	values[index] = value
+	return values
+}
+
+func popUint64MinHeap(values []uint64) []uint64 {
+	last := values[len(values)-1]
+	values = values[:len(values)-1]
+	if len(values) == 0 {
+		return values
+	}
+	index := 0
+	for {
+		left := index*2 + 1
+		if left >= len(values) {
+			break
+		}
+		right := left + 1
+		child := left
+		if right < len(values) && values[right] < values[left] {
+			child = right
+		}
+		if values[child] >= last {
+			break
+		}
+		values[index] = values[child]
+		index = child
+	}
+	values[index] = last
+	return values
+}
+
+func httpFailurePhaseName(phase jhlog.HTTPFailurePhase) string {
+	return [...]string{"unknown", "call", "queue", "dns", "connect", "tls", "request", "response", "cancelled"}[phase]
+}
+
+func httpFailureKindName(kind jhlog.HTTPFailureKind) string {
+	return [...]string{"unknown", "dns", "timeout", "connection", "tls", "protocol", "cancelled", "io", "other"}[kind]
+}
+
+func httpProtocolName(protocol jhlog.HTTPProtocol) string {
+	return [...]string{"unknown", "http/1.0", "http/1.1", "http/2", "http/3"}[protocol]
+}
+
 func mergeFrameWindow(stats *ScreenStats, window *jhlog.UIWindowEvent) {
 	if len(stats.FrameDurationBuckets) == 0 {
 		stats.FrameDurationBuckets = make([]uint64, jhlog.UIFrameHistogramBucketCount)
@@ -1115,10 +1639,6 @@ func ioOperationName(operation jhlog.IOOperationKind) string {
 		return "file_write"
 	case jhlog.IOOperationFileSync:
 		return "file_sync"
-	case jhlog.IOOperationDatabaseRead:
-		return "database_read"
-	case jhlog.IOOperationDatabaseWrite:
-		return "database_write"
 	case jhlog.IOOperationContentRead:
 		return "content_read"
 	case jhlog.IOOperationContentWrite:
@@ -1180,13 +1700,13 @@ func (s *gaugeStats) value() uint64 {
 func (s *gaugeStats) extra() string {
 	switch s.mode {
 	case jhlog.MetricModeLast:
-		return fmt.Sprintf("last=%d samples=%d", s.last, s.count)
+		return fmt.Sprintf("последнее=%d наблюдений=%d", s.last, s.count)
 	case jhlog.MetricModeState:
-		return fmt.Sprintf("state=%d samples=%d", s.last, s.count)
+		return fmt.Sprintf("состояние=%d наблюдений=%d", s.last, s.count)
 	case jhlog.MetricModeBooleanRate:
-		return fmt.Sprintf("true_pct=%d true=%d samples=%d", s.value(), s.total, s.count)
+		return fmt.Sprintf("доля включённого состояния=%d включено=%d наблюдений=%d", s.value(), s.total, s.count)
 	default:
-		return fmt.Sprintf("avg=%d max=%d samples=%d", s.value(), s.max, s.count)
+		return fmt.Sprintf("среднее=%d максимум=%d наблюдений=%d", s.value(), s.max, s.count)
 	}
 }
 
@@ -1220,8 +1740,7 @@ type memoryLeakStats struct {
 	className            string
 	holder               string
 	screen               string
-	flow                 string
-	step                 string
+	operation            string
 	count                uint64
 	maxAgeMs             uint64
 	timeOnlyCount        uint64
@@ -1273,11 +1792,15 @@ func containsAnyFilter(needle string, values ...string) bool {
 	return false
 }
 
-func (c *collector) eventContext(screenOverride, ownerOverride, flowOverride, stepOverride string) FlowStats {
-	return c.flowContextFromKey(c.contextKey(screenOverride, ownerOverride, flowOverride, stepOverride))
+func (c *collector) eventContext(screenOverride, ownerOverride string) SignalContextStats {
+	return SignalContextStats{
+		Screen:    attrValue(firstKnown(screenOverride, c.currentAttrScreen)),
+		Operation: attrValue(c.operationAnalysis.activeName(c.currentOperationID)),
+		Owner:     attrValue(firstKnown(ownerOverride, c.currentAttrOwner)),
+	}
 }
 
-func (c *collector) matchesFilters(route string, context FlowStats, classCandidates []string, ownerCandidates ...string) bool {
+func (c *collector) matchesFilters(route string, context SignalContextStats, classCandidates []string, ownerCandidates ...string) bool {
 	if !containsFilter(route, c.filter.RouteContains) {
 		return false
 	}
@@ -1337,10 +1860,21 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.logLast = event.TimeMS
 		}
 	}
+	if event.Operation != nil {
+		c.operationAnalysis.recordLifecycle(dict, event, c.currentAttrScreen, c.filter)
+	} else if event.Database == nil && event.DatabaseTransaction == nil {
+		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner)
+	}
 	switch {
 	case event.Session != nil:
 		c.summary.CollectorSessions++
 		c.summary.CollectorFlagsAny |= event.Session.CollectorFlags
+		if event.Session.CollectorFlags&uint64(jhlog.CollectorDatabase) != 0 {
+			c.summary.DatabaseCoverage.RuntimeEnabledSessions++
+		}
+		if event.Session.CollectorFlags&uint64(jhlog.CollectorWorker) != 0 {
+			c.enableWorkerCorrelation()
+		}
 		if c.summary.CollectorSessions == 1 {
 			c.summary.CollectorFlagsAll = event.Session.CollectorFlags
 		} else {
@@ -1362,6 +1896,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentProduct = jhlog.ResolveSymbol(dict, event.Session.ProductRef)
 		c.currentRootKnown = true
 		c.currentRooted = event.Session.DeviceRooted
+		c.currentCohortDirty = true
 		c.summary.DeviceRootKnown = true
 		c.summary.DeviceRooted = event.Session.DeviceRooted
 		c.appVersions[c.currentAppVersion]++
@@ -1370,48 +1905,194 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.sdks[c.currentSDK]++
 		c.processSamples[c.currentProcess]++
 	case event.HTTP != nil:
-		route := jhlog.ResolveSymbol(dict, event.HTTP.RouteRef)
+		route := attrValue(jhlog.ResolveSymbol(dict, event.HTTP.RouteRef))
+		service := attrValue(jhlog.ResolveSymbol(dict, event.HTTP.ServiceRef))
+		initiator := attrValue(c.resolveOwnerRef(dict, event.HTTP.InitiatorRef))
 		owner := c.currentAttrOwner
-		context := c.eventContext("", owner, "", "")
-		if !c.matchesFilters(route, context, nil, owner) {
+		context := c.eventContext("", owner)
+		if !c.matchesFilters(route, context, nil, owner, initiator) {
 			return
 		}
+		c.databaseCorrelation.addHTTP(databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event)
 		c.markCohort()
 		c.summary.HTTPCount++
-		c.httpDurations.add(event.HTTP.DurationMS)
-		c.sampleSet(c.routeDurations, route).add(event.HTTP.DurationMS)
-		c.routeBurst(route).add(c.currentLogIndex, event.TimeMS)
-		c.routeRx[route] += event.HTTP.RxBytes
-		c.routeTx[route] += event.HTTP.TxBytes
-		c.routeTTFB[route] += event.HTTP.TTFBMS
-		c.routeTTFBCount[route]++
-		if c.routeOwner[route] == "" {
-			c.routeOwner[route] = owner
+		if c.workerCorrelationOn {
+			c.recordWorkerHTTP(event)
 		}
-		if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
+		c.networkTotals.add(event.HTTP, event.Flags, c.currentLogIndex, event.TimeMS, true)
+		routeStats := c.networkRoutes[route]
+		if routeStats == nil {
+			routeStats = &httpAggregate{}
+			c.networkRoutes[route] = routeStats
+		}
+		routeStats.add(event.HTTP, event.Flags, c.currentLogIndex, event.TimeMS, true)
+		routeStats.burst.add(c.currentLogIndex, event.TimeMS)
+		if routeStats.ownerSample == "" || routeStats.ownerSample == "unknown" {
+			routeStats.ownerSample = firstKnown(initiator, owner)
+		}
+		if routeStats.serviceSample == "" || routeStats.serviceSample == "unknown" {
+			routeStats.serviceSample = service
+		}
+		if routeStats.initiatorSample == "" || routeStats.initiatorSample == "unknown" {
+			routeStats.initiatorSample = initiator
+		}
+		callKey := networkCallKey{
+			route: route, service: service, initiator: initiator,
+			screen: context.Screen, operation: context.Operation, owner: context.Owner,
+		}
+		callStats := c.networkCalls[callKey]
+		if callStats == nil {
+			callStats = &httpAggregate{}
+			c.networkCalls[callKey] = callStats
+		}
+		callStats.add(event.HTTP, event.Flags, c.currentLogIndex, event.TimeMS, false)
+		if event.HTTP.StatusCode != 0 {
+			c.networkStatusCodes[event.HTTP.StatusCode]++
+		}
+		if event.HTTP.FailurePhase > jhlog.HTTPFailurePhaseUnknown && int(event.HTTP.FailurePhase) < len(c.networkFailurePhases) {
+			c.networkFailurePhases[event.HTTP.FailurePhase]++
+		}
+		if event.HTTP.FailureKind > jhlog.HTTPFailureKindUnknown && int(event.HTTP.FailureKind) < len(c.networkFailureKinds) {
+			c.networkFailureKinds[event.HTTP.FailureKind]++
+		}
+		if int(event.HTTP.Protocol) < len(c.networkProtocols) {
+			c.networkProtocols[event.HTTP.Protocol]++
+		}
+		if httpEventFailed(event.HTTP, event.Flags) {
 			c.summary.HTTPFailed++
-			c.routeFailures[route]++
 		}
-		addOwner(c.ownerStats, owner, "http", event.HTTP.DurationMS, "")
-		flowKey := c.flowKey("", owner)
-		flow := c.ensureFlow(flowKey)
-		flow.HTTPCount++
-		flow.RouteSample = firstNonEmpty(flow.RouteSample, route)
-		c.sampleSet(c.flowHTTPDurations, flowKey).add(event.HTTP.DurationMS)
-		if event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx {
-			flow.HTTPFailed++
+		addOwner(c.ownerStats, firstKnown(initiator, owner), "http", event.HTTP.DurationMS, "")
+		contextKey := c.contextKey("", owner)
+		contextStats := c.ensureSignalContext(contextKey)
+		contextStats.HTTPCount++
+		contextStats.RouteSample = firstNonEmpty(contextStats.RouteSample, route)
+		c.sampleSet(c.signalContextHTTPDurations, contextKey).add(event.HTTP.DurationMS)
+		if httpEventFailed(event.HTTP, event.Flags) {
+			contextStats.HTTPFailed++
 		}
-		failed := event.Flags&uint64(jhlog.FlagHTTPFailed) != 0 || event.HTTP.Status == jhlog.Status5xx
+		failed := httpEventFailed(event.HTTP, event.Flags)
 		slow := event.Flags&uint64(jhlog.FlagHTTPSlow) != 0
 		if failed || slow {
 			c.addProblemWindow(context, "http_slow_or_failed", event.HTTP.DurationMS, 1, event.HTTP.DurationMS)
 		}
+	case event.WebSocket != nil:
+		route := attrValue(jhlog.ResolveSymbol(dict, event.WebSocket.RouteRef))
+		owner := c.currentAttrOwner
+		context := c.eventContext("", owner)
+		if !c.matchesFilters(route, context, nil, owner) {
+			return
+		}
+		c.markCohort()
+		c.webSocketTotals.add(event.WebSocket)
+		key := webSocketKey{route: route, screen: context.Screen, operation: context.Operation, owner: context.Owner}
+		stats := c.webSocketConnections[key]
+		if stats == nil {
+			stats = &webSocketAggregate{}
+			c.webSocketConnections[key] = stats
+		}
+		stats.add(event.WebSocket)
+		addOwner(c.ownerStats, owner, "websocket", event.WebSocket.DurationMS, "")
+		if event.WebSocket.Stage == jhlog.WebSocketStageFailed {
+			c.addProblemWindow(context, "websocket_failure", event.WebSocket.DurationMS, 1, event.WebSocket.DurationMS)
+		}
+	case event.Database != nil:
+		query := attrValue(jhlog.ResolveSymbol(dict, event.Database.QueryRef))
+		source := attrValue(c.resolveOwnerRef(dict, event.Database.SourceRef))
+		context := c.eventContext("", "")
+		if !c.matchesFilters("", context, []string{source}, source) {
+			return
+		}
+		c.markCohort()
+		c.databaseTotals.add(event.Database, event.Flags, c.currentLogIndex, event.TimeMS)
+		c.databaseTelemetry.add(event.Database)
+		framework := databaseFrameworkName(event.Database.Framework)
+		operation := databaseOperationName(event.Database.Operation)
+		statementKey := canonicalDatabaseStatementKey(query, source, framework, operation)
+		contextKey := databaseContextKey{
+			statement: statementKey, source: source, framework: framework,
+			screen: context.Screen, contextOwner: context.Owner,
+			contextOperation: context.Operation, operationID: c.currentOperationID,
+			process: c.currentProcess, processInstanceID: c.currentProcessID,
+			sessionID: c.currentSessionID,
+		}
+		estimatedCalls := c.databaseStatements.add(
+			statementKey, contextKey, event.Database, event.Flags, c.currentLogIndex, event.TimeMS,
+		)
+		c.databaseScenarios.add(
+			statementKey, contextKey, event.Database, event.Flags, c.currentLogIndex,
+			databaseEventTimeUS(event),
+		)
+		c.databaseCorrelation.addDatabase(contextKey, databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event, estimatedCalls)
+		c.operationAnalysis.recordDatabaseStatement(
+			c.currentOperationID, query, source, operation, event.Database, event.Flags,
+		)
+		addOwner(c.ownerStats, source, "database", event.Database.DurationUS/1_000, "")
+		if event.Database.Outcome == jhlog.DatabaseOutcomeFailure ||
+			(event.Flags&uint64(jhlog.FlagThreadMain) != 0 && event.Database.DurationUS >= 16_000) {
+			c.addProblemWindow(context, "database_slow_or_failed", event.Database.DurationUS/1_000, 1, event.Database.DurationUS/1_000)
+		}
+	case event.DatabaseTransaction != nil:
+		source := attrValue(c.resolveOwnerRef(dict, event.DatabaseTransaction.SourceRef))
+		context := c.eventContext("", "")
+		if !c.matchesFilters("", context, []string{source}, source) {
+			return
+		}
+		c.markCohort()
+		transactionKey := databaseTransactionScopeKey(
+			c.currentProcessID, c.currentLogIndex, event.DatabaseTransaction.TransactionID,
+		)
+		c.databaseCorrelation.addTransaction(transactionKey, databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event)
+		c.databaseTransactions.add(
+			event.DatabaseTransaction,
+			event.Flags,
+			c.currentLogIndex,
+			source,
+			context,
+			c.currentProcess,
+			c.currentProcessID,
+			c.currentSessionID,
+		)
+		if event.DatabaseTransaction.Stage == jhlog.DatabaseTransactionTerminal {
+			addOwner(c.ownerStats, source, "database_transaction", event.DatabaseTransaction.DurationUS/1_000, "")
+		}
+	case event.ProcessState != nil:
+		c.androidAnalysis.addProcessState(event)
+	case event.AndroidComponent != nil:
+		component := attrValue(c.resolveOwnerRef(dict, event.AndroidComponent.ComponentRef))
+		action := attrValue(jhlog.ResolveSymbol(dict, event.AndroidComponent.ActionRef))
+		context := c.eventContext("", component)
+		if c.matchesFilters("", context, []string{component}, component) {
+			c.androidAnalysis.addComponent(component, action, event)
+		}
+	case event.BinderTransaction != nil:
+		descriptor := ""
+		if !event.BinderTransaction.DescriptorRef.IsUnknown() {
+			descriptor = strings.TrimSpace(jhlog.ResolveSymbol(dict, event.BinderTransaction.DescriptorRef))
+		}
+		method := ""
+		if !event.BinderTransaction.MethodRef.IsUnknown() {
+			method = strings.TrimSpace(jhlog.ResolveSymbol(dict, event.BinderTransaction.MethodRef))
+		}
+		context := c.eventContext("", attrValue(descriptor))
+		if c.matchesFilters("", context, []string{descriptor}, descriptor, method) {
+			c.androidAnalysis.addBinder(descriptor, method, event)
+		}
 	case event.UIWindow != nil:
+		c.runtimeAnalysis.gc.addUIWindow(event, c.currentLogIndex)
 		screen := c.currentAttrScreen
-		context := c.eventContext(screen, "", "", "")
+		context := c.eventContext(screen, "")
 		if !c.matchesFilters("", context, nil) {
 			return
 		}
+		c.databaseCorrelation.addUIWindow(databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event)
 		c.markCohort()
 		stats := c.screenStats[screen]
 		if stats == nil {
@@ -1441,11 +2122,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.summary.UIFrames += event.UIWindow.FrameCount
 		c.summary.UIJank += event.UIWindow.JankCount
 		c.summary.UIWindowMS += event.UIWindow.WindowMS
-		flowKey := c.flowKey(screen, "")
-		flow := c.ensureFlow(flowKey)
-		flow.UIWindows++
-		flow.UIFrames += event.UIWindow.FrameCount
-		flow.UIJank += event.UIWindow.JankCount
+		contextStats := c.ensureSignalContext(c.contextKey(screen, ""))
+		contextStats.UIWindows++
+		contextStats.UIFrames += event.UIWindow.FrameCount
+		contextStats.UIJank += event.UIWindow.JankCount
 		problem := event.Flags&uint64(jhlog.FlagUIProblem) != 0
 		if problem {
 			c.addProblemWindow(
@@ -1459,33 +2139,32 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	case event.Stall != nil:
 		owner := c.currentAttrOwner
 		stack := jhlog.ResolveSymbol(dict, event.Stall.StackRef)
-		flowOverride := ""
-		stepOverride := ""
 		if c.isHeapDumpStall(event.TimeMS, owner) {
 			owner = "jankhunter.heap_dump"
-			flowOverride = "jankhunter.diagnostics"
-			stepOverride = "heap_dump"
 		}
-		context := c.eventContext("", owner, flowOverride, stepOverride)
+		context := c.eventContext("", owner)
 		if !c.matchesFilters("", context, nil, owner) {
 			return
 		}
+		c.databaseCorrelation.addStall(databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event)
 		c.markCohort()
 		c.summary.StallCount++
 		if event.Stall.DurationMS > c.summary.StallMaxMS {
 			c.summary.StallMaxMS = event.Stall.DurationMS
 		}
 		addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
-		flowKey := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step)
-		flow := c.ensureFlow(flowKey)
-		flow.StallCount++
-		if event.Stall.DurationMS > flow.StallMaxMS {
-			flow.StallMaxMS = event.Stall.DurationMS
+		contextStats := c.ensureSignalContext(strings.Join([]string{context.Screen, context.Operation, context.Owner}, "\x00"))
+		contextStats.StallCount++
+		if event.Stall.DurationMS > contextStats.StallMaxMS {
+			contextStats.StallMaxMS = event.Stall.DurationMS
 		}
 		c.addProblemWindow(context, "main_thread_stall", event.Stall.DurationMS, 1, event.Stall.DurationMS)
 	case event.Context != nil:
 		c.summary.ContextCount++
 		c.currentNetwork = jhlog.NetworkName(event.Context.Network)
+		c.currentCohortDirty = true
 		c.markCohort()
 		c.summary.BatteryLastPct = event.Context.BatteryPct
 		c.summary.BatteryStateLast = event.Context.BatteryState
@@ -1509,18 +2188,27 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.recordTraffic(event.Context.RxBytes, event.Context.TxBytes)
 		c.networkSamples[c.currentNetwork]++
 	case event.Memory != nil:
-		context := c.eventContext("", "", "", "")
+		context := c.eventContext("", "")
 		if !c.matchesFilters("", context, nil) {
 			return
 		}
 		c.markCohort()
+		point := workerPoint{
+			logIndex: c.currentLogIndex, timeMS: event.TimeMS, value: event.Memory.PSSKB, count: 1,
+		}
+		if c.workerCorrelationOn {
+			c.workerMemory = append(c.workerMemory, point)
+		} else {
+			c.workerPriorMemory = point
+			c.workerPriorMemorySet = true
+		}
 		c.summary.MemoryCount++
 		if event.Memory.PSSKB > c.summary.MemoryMaxKB {
 			c.summary.MemoryMaxKB = event.Memory.PSSKB
 		}
-		flow := c.ensureFlow(c.flowKey("", ""))
-		if event.Memory.PSSKB > flow.MemoryMaxKB {
-			flow.MemoryMaxKB = event.Memory.PSSKB
+		contextStats := c.ensureSignalContext(c.contextKey("", ""))
+		if event.Memory.PSSKB > contextStats.MemoryMaxKB {
+			contextStats.MemoryMaxKB = event.Memory.PSSKB
 		}
 	case event.ProcessExit != nil:
 		process := firstKnown(jhlog.ResolveSymbol(dict, event.ProcessExit.ProcessRef), c.currentProcess)
@@ -1539,30 +2227,41 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats.MaxPSSKB = maxUint64(stats.MaxPSSKB, event.ProcessExit.PSSKB)
 		stats.MaxRSSKB = maxUint64(stats.MaxRSSKB, event.ProcessExit.RSSKB)
 	case event.IO != nil:
-		context := c.eventContext("", "", "", "")
-		if !c.matchesFilters("", context, nil, context.Owner) {
+		context := c.eventContext("", "")
+		source := attrValue(c.resolveOwnerRef(dict, event.IO.SourceRef))
+		if !c.matchesFilters("", context, nil, source, context.Owner) {
 			return
 		}
+		c.databaseCorrelation.addIO(databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, event)
 		c.markCohort()
+		if c.workerCorrelationOn {
+			c.recordWorkerIO(event)
+		}
 		operation := ioOperationName(event.IO.Operation)
 		mainThread := event.Flags&uint64(jhlog.FlagThreadMain) != 0
-		key := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step) + fmt.Sprintf("\x00%s\x00%t", operation, mainThread)
+		key := strings.Join([]string{context.Screen, context.Operation, context.Owner}, "\x00") +
+			fmt.Sprintf("\x00%s\x00%s\x00%t", source, operation, mainThread)
 		stats := c.ioStats[key]
 		if stats == nil {
-			stats = &IOStats{
-				Operation: operation, MainThread: mainThread,
-				Screen: context.Screen, Flow: context.Flow, Step: context.Step, Owner: context.Owner,
-			}
+			stats = &ioAggregate{stats: IOStats{
+				Operation: operation, Source: source, MainThread: mainThread,
+				Screen: context.Screen, ContextOperation: context.Operation, Owner: context.Owner,
+			}}
 			c.ioStats[key] = stats
 		}
-		stats.Count++
-		stats.TotalDurationUS = saturatingUint64Sum(stats.TotalDurationUS, event.IO.DurationUS)
-		stats.MaxDurationUS = maxUint64(stats.MaxDurationUS, event.IO.DurationUS)
-		stats.Bytes = saturatingUint64Sum(stats.Bytes, event.IO.Bytes)
+		stats.add(event.IO, event.Flags, c.currentLogIndex, event.TimeMS)
+		c.ioAnalysis.add(
+			event.IO,
+			event.Flags,
+			c.currentLogIndex,
+			ioEventEndUS(event),
+		)
 	case event.Retained != nil:
 		className := c.deobfuscate(jhlog.ResolveSymbol(dict, event.Retained.ClassRef))
 		holder := c.resolveOwnerRef(dict, event.Retained.HolderRef)
-		context := c.eventContext("", "", "", "")
+		context := c.eventContext("", "")
 		owner := context.Owner
 		holder = firstKnown(holder, context.Owner)
 		if !c.matchesFilters("", context, []string{className}, holder, owner) {
@@ -1598,8 +2297,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			event.Retained.AgeMS,
 		)
 	case event.LogSpam != nil:
-		key := c.contextKey("", "", "", "")
-		context := c.flowContextFromKey(key)
+		key := c.contextKey("", "")
+		context := c.signalContextFromKey(key)
 		source := jhlog.ResolveSymbol(dict, event.LogSpam.SourceRef)
 		if !c.matchesFilters("", context, []string{source}, context.Owner) {
 			return
@@ -1610,18 +2309,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.logSpamStats[logKey]
 		if stats == nil {
 			stats = &LogSpamStats{
-				Screen: context.Screen,
-				Flow:   context.Flow,
-				Step:   context.Step,
-				Owner:  context.Owner,
-				Source: source,
-				Level:  level,
+				Screen: context.Screen, Operation: context.Operation, Owner: context.Owner,
+				Source: source, Level: level,
 			}
 			c.logSpamStats[logKey] = stats
 		}
 		stats.Count += event.LogSpam.Count
-		flow := c.ensureFlow(key)
-		flow.LogSpam += event.LogSpam.Count
+		contextStats := c.ensureSignalContext(key)
+		contextStats.LogSpam += event.LogSpam.Count
 		if event.LogSpam.Count >= canonicalLogSpamCount {
 			c.addProblemWindow(
 				context,
@@ -1632,19 +2327,21 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			)
 		}
 	case event.Problem != nil:
-		key := c.contextKey("", "", "", "")
-		context := c.flowContextFromKey(key)
+		key := c.contextKey("", "")
+		context := c.signalContextFromKey(key)
 		if !c.matchesFilters("", context, nil, context.Owner) {
 			return
 		}
 		c.markCohort()
 		kind := jhlog.ResolveSymbol(dict, event.Problem.KindRef)
 		c.addProblemWindow(context, kind, event.Problem.WindowMS, event.Problem.Count, event.Problem.MaxMS)
+	case event.Worker != nil:
+		c.recordWorker(dict, event)
 	case event.RuntimeCall != nil:
 		caller := c.currentAttrOwner
 		callee := c.resolveOwnerRef(dict, event.RuntimeCall.CalleeRef)
-		key := c.contextKey("", "", "", "")
-		context := c.flowContextFromKey(key)
+		key := c.contextKey("", "")
+		context := c.signalContextFromKey(key)
 		if !c.matchesFilters("", context, []string{caller, callee}, caller, callee) {
 			return
 		}
@@ -1653,11 +2350,8 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		stats := c.runtimeCallStats[callKey]
 		if stats == nil {
 			stats = &RuntimeCallStats{
-				Screen: context.Screen,
-				Flow:   context.Flow,
-				Step:   context.Step,
-				Caller: caller,
-				Callee: callee,
+				Screen: context.Screen, Operation: context.Operation,
+				Caller: caller, Callee: callee,
 			}
 			c.runtimeCallStats[callKey] = stats
 		}
@@ -1672,6 +2366,10 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Type == jhlog.EventCounter && event.Metric.MetricRef.Stable {
 			name = c.resolveOwnerRef(dict, event.Metric.MetricRef)
 		}
+		context := c.eventContext("", "")
+		c.databaseCorrelation.addGC(databaseTimelineContext{
+			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
+		}, name, event)
 		if event.Type == jhlog.EventCounter && name == "jankhunter.heap_dump.created.count" && event.Metric.Value > 0 {
 			c.lastHeapDumpMS = event.TimeMS
 		}
@@ -1684,8 +2382,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		} else {
 			c.counterValues[name] += event.Metric.Value
 		}
+		if c.workerCorrelationOn {
+			c.recordWorkerMetric(name, event)
+		}
+		c.runtimeAnalysis.addMetric(name, event, c.currentLogIndex)
 	}
 }
+
+const databaseStatementGroupLimit = 4_096
 
 func (c *collector) isHeapDumpStall(eventTimeMS uint64, owner string) bool {
 	if c.lastHeapDumpMS == 0 || eventTimeMS < c.lastHeapDumpMS || !isLikelySystemClass(owner) {
@@ -1695,31 +2399,30 @@ func (c *collector) isHeapDumpStall(eventTimeMS uint64, owner string) bool {
 }
 
 func (c *collector) markCohort() {
-	c.cohortSamples[fmt.Sprintf(
-		"app=%s build=%s sdk=%s device=%s process=%s network=%s root=%s",
-		c.currentAppVersion,
-		c.currentBuild,
-		c.currentSDK,
-		c.currentDevice,
-		c.currentProcess,
-		c.currentNetwork,
-		rootCohortValue(c.currentRootKnown, c.currentRooted),
-	)]++
+	if c.currentCohortDirty {
+		c.currentCohortKey = fmt.Sprintf(
+			"app=%s build=%s sdk=%s device=%s process=%s network=%s root=%s",
+			c.currentAppVersion,
+			c.currentBuild,
+			c.currentSDK,
+			c.currentDevice,
+			c.currentProcess,
+			c.currentNetwork,
+			rootCohortValue(c.currentRootKnown, c.currentRooted),
+		)
+		c.currentCohortDirty = false
+	}
+	c.cohortSamples[c.currentCohortKey]++
 }
 
 func (c *collector) resolveOwnerRef(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	if !ref.Stable {
-		return c.deobfuscate(ResolveOwnerAlias(c.ownerMap, jhlog.ResolveSymbol(dict, ref)))
+		return c.deobfuscate(jhlog.ResolveSymbol(dict, ref))
 	}
 	if embedded := c.stableSymbols.embedded[ref.ID]; embedded != "" {
 		return c.deobfuscate(embedded)
 	}
 	canonical := jhlog.ResolveSymbol(dict, ref)
-	resolved := ResolveOwnerAlias(c.ownerMap, canonical)
-	if resolved != canonical {
-		c.stableSymbols.externalResolved = true
-		return c.deobfuscate(resolved)
-	}
 	c.stableSymbols.unresolved[canonical] = struct{}{}
 	return canonical
 }
@@ -1732,12 +2435,9 @@ func (c *collector) validateStableSymbols() error {
 		}
 		sort.Strings(ids)
 		return fmt.Errorf(
-			"log contains %d unresolved external stable symbol(s), first is %s; rerun with --external-symbols and --artifacts-dir <build/generated/jankhunter/variant>, or collect a new log with JankHunterSymbolMode.EMBEDDED",
+			"log violates the self-contained stable-symbol contract: %d unresolved symbol(s), first is %s; collect a new log with the current Android SDK",
 			len(ids), ids[0],
 		)
-	}
-	if c.stableSymbols.requireExplicit && c.stableSymbols.externalResolved && !c.stableSymbols.external {
-		return fmt.Errorf("log uses external stable symbols; rerun with --external-symbols and the matching --artifacts-dir (or --owner-map)")
 	}
 	return nil
 }
@@ -1749,59 +2449,46 @@ func (c *collector) deobfuscate(value string) string {
 	return c.nameMap.Deobfuscate(value)
 }
 
-func (c *collector) flowKey(screenOverride, ownerOverride string) string {
-	return c.contextKey(screenOverride, ownerOverride, "", "")
-}
-
-func (c *collector) contextKey(screenOverride, ownerOverride, flowOverride, stepOverride string) string {
+func (c *collector) contextKey(screenOverride, ownerOverride string) string {
 	return strings.Join([]string{
 		firstKnown(screenOverride, c.currentAttrScreen),
-		firstKnown(flowOverride, c.currentAttrFlow),
-		firstKnown(stepOverride, c.currentAttrStep),
+		c.operationAnalysis.activeName(c.currentOperationID),
 		firstKnown(ownerOverride, c.currentAttrOwner),
 	}, "\x00")
 }
 
-func (c *collector) flowContextFromKey(key string) FlowStats {
+func (c *collector) signalContextFromKey(key string) SignalContextStats {
 	parts := strings.Split(key, "\x00")
-	for len(parts) < 4 {
+	for len(parts) < 3 {
 		parts = append(parts, "unknown")
 	}
-	return FlowStats{
-		Screen: attrValue(parts[0]),
-		Flow:   attrValue(parts[1]),
-		Step:   attrValue(parts[2]),
-		Owner:  attrValue(parts[3]),
+	return SignalContextStats{
+		Screen:    attrValue(parts[0]),
+		Operation: attrValue(parts[1]),
+		Owner:     attrValue(parts[2]),
 	}
 }
 
-func (c *collector) ensureFlow(key string) *FlowStats {
-	stats := c.flowStats[key]
+func (c *collector) ensureSignalContext(key string) *SignalContextStats {
+	stats := c.signalContextStats[key]
 	if stats != nil {
 		return stats
 	}
-	context := c.flowContextFromKey(key)
-	stats = &FlowStats{
-		Screen: context.Screen,
-		Flow:   context.Flow,
-		Step:   context.Step,
-		Owner:  context.Owner,
+	context := c.signalContextFromKey(key)
+	stats = &SignalContextStats{
+		Screen: context.Screen, Operation: context.Operation, Owner: context.Owner,
 	}
-	c.flowStats[key] = stats
+	c.signalContextStats[key] = stats
 	return stats
 }
 
-func (c *collector) addProblemWindow(context FlowStats, kind string, windowMS, count, maxMS uint64) {
-	key := c.contextKey(context.Screen, context.Owner, context.Flow, context.Step)
+func (c *collector) addProblemWindow(context SignalContextStats, kind string, windowMS, count, maxMS uint64) {
+	key := strings.Join([]string{context.Screen, context.Operation, context.Owner}, "\x00")
 	problemKey := key + "\x00" + kind
 	stats := c.problemStats[problemKey]
 	if stats == nil {
 		stats = &ProblemWindowStats{
-			Screen: context.Screen,
-			Flow:   context.Flow,
-			Step:   context.Step,
-			Owner:  context.Owner,
-			Kind:   kind,
+			Screen: context.Screen, Operation: context.Operation, Owner: context.Owner, Kind: kind,
 		}
 		c.problemStats[problemKey] = stats
 	}
@@ -1809,9 +2496,9 @@ func (c *collector) addProblemWindow(context FlowStats, kind string, windowMS, c
 	stats.Count += count
 	stats.TotalWindowMS += windowMS
 	stats.MaxMS = maxUint64(stats.MaxMS, maxMS)
-	flow := c.ensureFlow(key)
-	flow.ProblemCount += count
-	flow.ProblemMaxMS = maxUint64(flow.ProblemMaxMS, maxMS)
+	contextStats := c.ensureSignalContext(key)
+	contextStats.ProblemCount += count
+	contextStats.ProblemMaxMS = maxUint64(contextStats.ProblemMaxMS, maxMS)
 }
 
 func (c *collector) sampleSet(target map[string]*uint64SampleSet, key string) *uint64SampleSet {
@@ -1821,15 +2508,6 @@ func (c *collector) sampleSet(target map[string]*uint64SampleSet, key string) *u
 		target[key] = set
 	}
 	return set
-}
-
-func (c *collector) routeBurst(route string) *routeBurstAccumulator {
-	stats := c.routeBursts[route]
-	if stats == nil {
-		stats = &routeBurstAccumulator{}
-		c.routeBursts[route] = stats
-	}
-	return stats
 }
 
 func (c *collector) gauge(name string) *gaugeStats {
@@ -1844,7 +2522,7 @@ func (c *collector) gauge(name string) *gaugeStats {
 func (c *collector) addMemoryLeakSuspect(
 	className,
 	holder string,
-	context FlowStats,
+	context SignalContextStats,
 	ageMs,
 	count uint64,
 	evidence jhlog.RetentionEvidence,
@@ -1852,15 +2530,14 @@ func (c *collector) addMemoryLeakSuspect(
 ) {
 	className = attrValue(className)
 	holder = firstKnown(holder, context.Owner, className)
-	key := strings.Join([]string{className, holder, context.Screen, context.Flow, context.Step}, "\x00")
+	key := strings.Join([]string{className, holder, context.Screen, context.Operation}, "\x00")
 	stats := c.memoryLeakStats[key]
 	if stats == nil {
 		stats = &memoryLeakStats{
 			className: className,
 			holder:    holder,
 			screen:    context.Screen,
-			flow:      context.Flow,
-			step:      context.Step,
+			operation: context.Operation,
 		}
 		c.memoryLeakStats[key] = stats
 	}
@@ -1892,13 +2569,13 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 			count = 1
 		}
 		holder := c.deobfuscate(firstKnown(leak.Holder, leak.HolderField))
-		if !c.matchesFilters("", FlowStats{}, []string{className}, holder) {
+		if !c.matchesFilters("", SignalContextStats{}, []string{className}, holder) {
 			continue
 		}
 		c.addMemoryLeakSuspect(
 			className,
 			holder,
-			FlowStats{},
+			SignalContextStats{},
 			0,
 			count,
 			jhlog.RetentionEvidenceUnknown,
@@ -1987,42 +2664,79 @@ func (c *collector) finish() Summary {
 	if summary.LogCount > 1 && c.logsWithEvents > 1 {
 		summary.Warnings = append(
 			summary.Warnings,
-			"Несколько логов считаются независимыми прогонами: длительность в обзоре равна сумме длительностей логов, а math timeline накладывает события по относительному времени.",
+			"Несколько логов считаются независимыми прогонами: длительность в обзоре равна сумме длительностей логов, а математическая временная шкала накладывает события по относительному времени.",
 		)
 	}
 	summary.TrafficRxMax = c.totalTrafficRxBytes
 	summary.TrafficTxMax = c.totalTrafficTxBytes
 
-	for route, set := range c.routeDurations {
-		ttfbAvg := uint64(0)
-		if c.routeTTFBCount[route] > 0 {
-			ttfbAvg = c.routeTTFB[route] / c.routeTTFBCount[route]
-		}
-		burst := c.routeBursts[route]
+	networkAnalysis := NetworkAnalysis{}
+	contextCounts := make(map[string]int, len(c.networkRoutes))
+	for key, stats := range c.networkCalls {
+		contextCounts[key.route]++
+		networkAnalysis.Calls = append(networkAnalysis.Calls, networkCallStats(key, stats))
+	}
+	for route, stats := range c.networkRoutes {
 		burstStatus := "exact_rolling_second"
-		if burst != nil && burst.approximate {
+		if stats.burst.approximate {
 			burstStatus = "bounded_approximation"
 		}
+		maxConcurrency, peakConcurrencyAtMS := maxHTTPConcurrency(stats.intervals)
 		row := RouteStats{
-			Route:               route,
-			Count:               set.seen,
-			Failures:            c.routeFailures[route],
-			P50MS:               set.percentile(0.50),
-			P95MS:               set.percentile(0.95),
-			MaxMS:               set.max,
-			AvgTTFBMS:           ttfbAvg,
-			BytesRx:             c.routeRx[route],
-			BytesTx:             c.routeTx[route],
-			OwnerSample:         c.routeOwner[route],
-			BurstEstimateStatus: burstStatus,
-		}
-		if burst != nil {
-			row.PeakRequestsPerSecond = burst.peak
-			row.PeakWindowStartMS = burst.peakWindowStartMS
+			Route:                 route,
+			ServiceSample:         stats.serviceSample,
+			InitiatorSample:       stats.initiatorSample,
+			Count:                 stats.count,
+			ContextCount:          contextCounts[route],
+			Failures:              stats.failures,
+			TransportFailures:     stats.transportFailures,
+			HTTP4xx:               stats.http4xx,
+			HTTP5xx:               stats.http5xx,
+			Canceled:              stats.canceled,
+			CacheHits:             stats.cacheHits,
+			ReusedConnections:     stats.reusedConnections,
+			KnownRequestBytes:     stats.knownRequestBytes,
+			KnownResponseBytes:    stats.knownResponseBytes,
+			Attempts:              stats.attempts,
+			DNSAttempts:           stats.dnsAttempts,
+			ConnectAttempts:       stats.connectAttempts,
+			TLSAttempts:           stats.tlsAttempts,
+			Retries:               stats.retries,
+			Redirects:             stats.redirects,
+			ConnectFailures:       stats.connectFailures,
+			TLSFailures:           stats.tlsFailures,
+			P50MS:                 stats.durations.percentile(0.50),
+			P95MS:                 stats.durations.percentile(0.95),
+			MaxMS:                 stats.durations.max,
+			TotalDurationMS:       stats.durationTotal,
+			AvgTTFBMS:             phaseAverage(stats, 5),
+			MaxConcurrency:        maxConcurrency,
+			PeakConcurrencyAtMS:   peakConcurrencyAtMS,
+			Phases:                httpPhaseStats(stats),
+			BytesRx:               stats.bytesRx,
+			BytesTx:               stats.bytesTx,
+			OwnerSample:           stats.ownerSample,
+			BurstEstimateStatus:   burstStatus,
+			PeakRequestsPerSecond: stats.burst.peak,
+			PeakWindowStartMS:     stats.burst.peakWindowStartMS,
 		}
 		summary.Routes = append(summary.Routes, row)
 	}
-	summary.HTTPP95MS = c.httpDurations.percentile(0.95)
+	summary.HTTPP95MS = c.networkTotals.durations.percentile(0.95)
+	if c.networkTotals.count > 0 {
+		networkAnalysis = c.finalizeNetworkAnalysis(networkAnalysis)
+		summary.NetworkAnalysis = &networkAnalysis
+	}
+	if c.webSocketTotals.opened > 0 || c.webSocketTotals.closed > 0 || c.webSocketTotals.failures > 0 {
+		summary.WebSocketAnalysis = c.finalizeWebSocketAnalysis()
+	}
+	if c.databaseTotals.overall.calls > 0 || c.databaseTransactions.events > 0 || c.databaseEvidence != nil {
+		summary.DatabaseAnalysis = c.finalizeDatabaseAnalysis()
+	}
+	summary.DatabaseCoverage = buildDatabaseCoverage(summary, c.diagnostics)
+	if workerAnalysis := c.finalizeWorkerAnalysis(); workerAnalysis != nil {
+		summary.WorkerAnalysis = workerAnalysis
+	}
 
 	for _, stats := range c.screenStats {
 		if stats.Frames > 0 {
@@ -2044,14 +2758,14 @@ func (c *collector) finish() Summary {
 	for _, stats := range c.ownerStats {
 		summary.Owners = append(summary.Owners, *stats)
 	}
-	for key, stats := range c.flowStats {
-		if durations := c.flowHTTPDurations[key]; durations != nil {
+	for key, stats := range c.signalContextStats {
+		if durations := c.signalContextHTTPDurations[key]; durations != nil {
 			stats.HTTPP95MS = durations.percentile(0.95)
 		}
 		if stats.UIFrames > 0 {
 			stats.UIJankPct = float64(stats.UIJank) * 100 / float64(stats.UIFrames)
 		}
-		summary.Flows = append(summary.Flows, *stats)
+		summary.SignalContexts = append(summary.SignalContexts, *stats)
 	}
 	for _, stats := range c.logSpamStats {
 		summary.LogSpam = append(summary.LogSpam, *stats)
@@ -2065,8 +2779,37 @@ func (c *collector) finish() Summary {
 	for _, stats := range c.processExitStats {
 		summary.ProcessExits = append(summary.ProcessExits, *stats)
 	}
-	for _, stats := range c.ioStats {
-		summary.IOOperations = append(summary.IOOperations, *stats)
+	criticalIOCalls := make([]IOStats, 0, len(c.ioStats))
+	for _, aggregate := range c.ioStats {
+		criticalIOCalls = append(criticalIOCalls, aggregate.finalize())
+	}
+	sortIOOperations(criticalIOCalls)
+	summary.IOAnalysis = c.ioAnalysis.finalize(criticalIOCalls)
+	summary.AsyncAnalysis = c.runtimeAnalysis.async.finalize()
+	summary.GCAnalysis = c.runtimeAnalysis.gc.finalize()
+	summary.StartupAnalysis = c.runtimeAnalysis.startup.finalize()
+	summary.OperationAnalysis = c.operationAnalysis.finalize()
+	if androidAnalysis := c.androidAnalysis.finalize(summary.CollectionQuality); androidAnalysis.Available ||
+		androidAnalysis.Coverage.CatalogAvailable {
+		summary.AndroidComponents = androidAnalysis
+		if androidAnalysis.Partial {
+			summary.Warnings = append(
+				summary.Warnings,
+				"Анализ компонентов Android и IPC частичный: "+strings.Join(androidAnalysis.PartialReasons, "; ")+".",
+			)
+		}
+	}
+	if operations := summary.OperationAnalysis; operations != nil {
+		if operations.MissingFinish > 0 || operations.MissingStart > 0 || operations.DuplicateStart > 0 ||
+			operations.InconsistentLifecycle > 0 {
+			summary.Warnings = append(summary.Warnings, fmt.Sprintf(
+				"Жизненный цикл операций неполон: без завершения=%d, без начала=%d, повторных начал=%d, противоречий=%d.",
+				operations.MissingFinish,
+				operations.MissingStart,
+				operations.DuplicateStart,
+				operations.InconsistentLifecycle,
+			))
+		}
 	}
 	for name, value := range c.counterValues {
 		summary.Counters = append(summary.Counters, NamedValue{Name: name, Value: value})
@@ -2137,14 +2880,16 @@ func (c *collector) finish() Summary {
 	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
 
 	sortRoutes(summary.Routes)
+	if summary.NetworkAnalysis != nil {
+		sortNetworkCalls(summary.NetworkAnalysis.Calls)
+	}
 	sortScreens(summary.Screens)
 	sortOwners(summary.Owners)
-	sortFlows(summary.Flows)
+	sortSignalContexts(summary.SignalContexts)
 	sortLogSpam(summary.LogSpam)
 	sortProblems(summary.ProblemWindows)
 	sortRuntimeCalls(summary.RuntimeCalls)
 	sortProcessExits(summary.ProcessExits)
-	sortIOOperations(summary.IOOperations)
 	sortNamed(summary.AppVersions)
 	sortNamed(summary.Builds)
 	sortNamed(summary.Devices)
@@ -2159,6 +2904,7 @@ func (c *collector) finish() Summary {
 	sortNamed(summary.Counters)
 	sortNamed(summary.Gauges)
 	summary.LogGrowth = buildLogGrowthSummary(c.streamResults)
+	dependencyInjection := c.dependencyInjection
 	// Every base aggregate has been copied into Summary. Drop the mutable collection maps before
 	// materializing influence views and the code-problem registry so both representations do not
 	// coexist at peak heap usage on large applications.
@@ -2166,7 +2912,11 @@ func (c *collector) finish() Summary {
 	summary.Influence = BuildInfluence(summary, c.classGraph)
 	summary.CodeProblems = BuildCodeProblemRegistry(summary)
 	summary.AnalysisInputs = c.analysisInputCompleteness(summary)
-	problemReport, problemErr := BuildProblemReport(summary)
+	problemReport, problemErr := buildProblemReportWithCatalog(
+		summary,
+		DefaultProblemDetectorConfig(),
+		dependencyInjection,
+	)
 	if problemErr != nil {
 		summary.Warnings = append(summary.Warnings, "problem engine: "+problemErr.Error())
 	} else {
@@ -2182,22 +2932,25 @@ func (c *collector) finish() Summary {
 }
 
 func (c *collector) releaseAggregationState() {
-	c.ownerMap = nil
 	c.nameMap = nil
-	c.routeDurations = nil
-	c.routeFailures = nil
-	c.routeRx = nil
-	c.routeTx = nil
-	c.routeTTFB = nil
-	c.routeTTFBCount = nil
-	c.routeOwner = nil
-	c.routeBursts = nil
+	c.dependencyInjection = nil
+	c.networkTotals = httpAggregate{}
+	c.networkRoutes = nil
+	c.networkCalls = nil
+	c.networkStatusCodes = nil
+	c.databaseTotals = databaseAggregate{}
+	c.databaseStatements = databaseStatementStore{}
+	c.workerCollectorState.release()
+	c.runtimeAnalysis = runtimeAnalysisAccumulator{}
+	c.operationAnalysis.release()
+	c.androidAnalysis = nil
+	c.databaseCorrelation = databaseCorrelationAccumulator{}
 	c.screenStats = nil
 	c.processExitStats = nil
 	c.ioStats = nil
 	c.ownerStats = nil
-	c.flowStats = nil
-	c.flowHTTPDurations = nil
+	c.signalContextStats = nil
+	c.signalContextHTTPDurations = nil
 	c.logSpamStats = nil
 	c.problemStats = nil
 	c.runtimeCallStats = nil
@@ -2226,13 +2979,9 @@ func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputComp
 	runtimeEvidence := summary.LogCount > 0 && summary.DataRecordCount > 0
 	classGraph := summary.Influence.HasClassGraph
 	diagnostics := c.diagnostics != nil && c.diagnostics.Available && c.diagnostics.ClassCount > 0
-	symbolMode := "embedded"
-	if c.stableSymbols.externalResolved {
-		symbolMode = "external"
-	}
 	missing := make([]string, 0, 4)
 	if !runtimeEvidence {
-		missing = append(missing, "runtime events")
+		missing = append(missing, "события выполнения")
 	}
 	if !classGraph {
 		missing = append(missing, "class-graph.jsonl")
@@ -2240,27 +2989,25 @@ func (c *collector) analysisInputCompleteness(summary Summary) AnalysisInputComp
 	if !diagnostics {
 		missing = append(missing, "instrumentation-diagnostics.jsonl")
 	}
-	artifactIdentityVerified := len(c.artifactNamespace) == ownerMapNamespaceBytes
+	artifactIdentityVerified := len(c.artifactNamespace) == symbolNamespaceBytes
 	if (classGraph || diagnostics) && !artifactIdentityVerified {
-		missing = append(missing, "matching artifact symbolNamespace")
+		missing = append(missing, "совпадающее пространство имён артефактов")
 	}
 	complete := len(missing) == 0
 	status := "complete"
-	explanation := "runtime evidence, статический class graph и ASM diagnostics подключены"
+	explanation := "данные выполнения, статический граф классов и диагностика ASM подключены"
 	if !complete {
 		status = "partial"
-		explanation = "часть аналитических входов отсутствует; соответствующие выводы и companion reports ограничены"
+		explanation = "часть входных данных анализа отсутствует; соответствующие выводы и дополнительные отчёты ограничены"
 		if runtimeEvidence && !classGraph && !diagnostics {
 			status = "runtime_only"
-			explanation = "доступны runtime evidence, но статический граф, hot paths, cycles и ASM diagnostics неполны"
+			explanation = "доступны данные выполнения, но статический граф, горячие пути, циклы и диагностика ASM неполны"
 		}
 	}
 	return AnalysisInputCompleteness{
 		Status:                     status,
 		Complete:                   complete,
 		RuntimeEvidence:            runtimeEvidence,
-		SymbolsResolved:            len(c.stableSymbols.unresolved) == 0,
-		SymbolMode:                 symbolMode,
 		ClassGraph:                 classGraph,
 		InstrumentationDiagnostics: diagnostics,
 		HeapEvidence:               c.heap != nil && len(c.heap.Sources) > 0,
@@ -2276,7 +3023,7 @@ func validateArtifactNamespace(namespace []byte, header jhlog.SegmentHeader, sou
 	if len(namespace) == 0 {
 		return nil
 	}
-	if len(namespace) != ownerMapNamespaceBytes || !bytes.Equal(namespace, header.SymbolNamespace) {
+	if len(namespace) != symbolNamespaceBytes || !bytes.Equal(namespace, header.SymbolNamespace) {
 		return fmt.Errorf(
 			"Jank Hunter artifact bundle %q does not match .jhlog %q symbol namespace; rebuild the same app variant or pass its exact --artifacts-dir",
 			directory,
@@ -2484,10 +3231,10 @@ func (c *collector) finalizeCollectionQuality() {
 					uint64(len(observedProcesses)) == scope.expectedCount &&
 					observedFingerprint == scope.expectedFingerprint
 				if !quality.RunCohortConsistent {
-					addReason("low", "process roster не доказан: процессы принадлежат разным run cohort")
+					addReason("low", "состав процессов не доказан: процессы принадлежат разным группам запусков")
 				} else if !quality.ProcessRosterComplete {
 					addNotice(fmt.Sprintf(
-						"наблюдается %d процессов из %d объявленных в configured scope; отсутствующие процессы могли не запускаться либо их сегменты не были переданы, поэтому это неопределённость охвата, а не доказанная потеря",
+						"наблюдается %d процессов из %d указанных в области сбора; отсутствующие процессы могли не запускаться либо их сегменты не были переданы, поэтому это неопределённость охвата, а не доказанная потеря",
 						len(observedProcesses),
 						scope.expectedCount,
 					))
@@ -2786,20 +3533,22 @@ func (c *collector) finalizeCollectionQuality() {
 	quality.ChainIssues = uniqueStrings(quality.ChainIssues)
 	quality.Notices = uniqueStrings(quality.Notices)
 	quality.Reasons = uniqueStrings(quality.Reasons)
-	quality.TrustScorePercent, quality.TrustComponents = collectionTrustScore(quality)
-	quality.TrustScoreModel = collectionTrustScoreModel
-	quality.TrustLevel, quality.TrustLevelExplanation = describeCollectionTrust(
-		quality.TrustScorePercent,
-		quality.TrustComponents,
-	)
+	quality.DiagnosticCompletenessPercent, quality.DiagnosticCompletenessComponents =
+		collectionDiagnosticCompleteness(quality)
+	quality.DiagnosticCompletenessModel = diagnosticCompletenessModel
+	quality.DiagnosticCompletenessLevel, quality.DiagnosticCompletenessExplanation =
+		describeDiagnosticCompleteness(
+			quality.DiagnosticCompletenessPercent,
+			quality.DiagnosticCompletenessComponents,
+		)
 	c.summary.CollectionQuality = quality
 	for _, reason := range quality.Reasons {
 		c.summary.Warnings = append(c.summary.Warnings, "Качество сбора: "+reason+".")
 	}
 }
 
-func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrustComponent) {
-	components := make([]CollectionTrustComponent, 0, 4)
+func collectionDiagnosticCompleteness(quality CollectionQuality) (float64, []DiagnosticCompletenessComponent) {
+	components := make([]DiagnosticCompletenessComponent, 0, 4)
 	activeWeight := 0.0
 	earnedWeight := 0.0
 	appendComponent := func(id, label string, weight, coverage float64, excluded bool, explanation string) {
@@ -2812,26 +3561,23 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 			activeWeight += weight
 			earnedWeight += earned
 		}
-		components = append(components, CollectionTrustComponent{
+		components = append(components, DiagnosticCompletenessComponent{
 			ID:              id,
 			Label:           label,
 			Weight:          weight,
 			Excluded:        excluded,
-			CoveragePercent: roundTrustValue(coverage * 100),
-			EarnedPoints:    roundTrustValue(earned),
-			MissingPoints:   roundTrustValue(missing),
+			CoveragePercent: roundDiagnosticCompleteness(coverage * 100),
+			EarnedPoints:    roundDiagnosticCompleteness(earned),
+			MissingPoints:   roundDiagnosticCompleteness(missing),
 			Explanation:     explanation,
 		})
 	}
 
 	transportCoverage := 1.0
-	transportExplanation := fmt.Sprintf(
-		"EXACT admission; записано %d событий, известных потерь нет",
-		quality.WrittenEvents,
-	)
+	transportExplanation := "Все принятые события записаны; известных пропусков журнала нет"
 	if !quality.ExactAdmission {
 		transportCoverage = 0
-		transportExplanation = "BEST_EFFORT admission не доказывает отсутствие событий, потерянных до регистрации"
+		transportExplanation = "Режим доставки не позволяет подтвердить полноту журнала; количественные оценки могут быть занижены"
 	} else if quality.KnownLostEvents > 0 {
 		transportTotal := saturatingUint64Sum(quality.WrittenEvents, quality.KnownLostEvents)
 		if transportTotal == 0 {
@@ -2839,12 +3585,7 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 		} else {
 			transportCoverage = float64(quality.WrittenEvents) / float64(transportTotal)
 		}
-		transportExplanation = fmt.Sprintf(
-			"записано %d из как минимум %d событий; известно потеряно %d",
-			quality.WrittenEvents,
-			transportTotal,
-			quality.KnownLostEvents,
-		)
+		transportExplanation = "Часть событий журнала недоступна; количественные оценки могут быть занижены"
 	}
 	appendComponent("transport", "Доставка событий", 40, transportCoverage, false, transportExplanation)
 
@@ -2853,31 +3594,22 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 		quality.RuntimeGraphInputEvents,
 		quality.RuntimeGraphStackMismatches,
 	)
-	runtimeExplanation := fmt.Sprintf(
-		"декодировано %d из %d входных runtime-вызовов",
-		quality.DecodedRuntimeGraphCalls,
-		runtimeDenominator,
-	)
+	runtimeExplanation := "Все записанные связи вызовов доступны"
 	if !quality.RuntimeGraphEnabled {
 		runtimeCoverage = 1
-		runtimeExplanation = "Runtime-граф отключён конфигурацией и исключён из расчёта индекса"
+		runtimeExplanation = "Граф вызовов во время выполнения отключён настройками и исключён из расчёта индекса"
 	} else if runtimeDenominator == 0 {
 		runtimeCoverage = 1
-		runtimeExplanation = "runtime-граф включён; входных вызовов и признаков их потери не зарегистрировано"
+		runtimeExplanation = "Сбор связей вызовов включён, но вызовов в этом сценарии не зарегистрировано"
 	} else {
 		runtimeCoverage = float64(quality.DecodedRuntimeGraphCalls) / float64(runtimeDenominator)
-		if quality.RuntimeGraphStackMismatches > 0 {
-			runtimeExplanation = fmt.Sprintf(
-				"декодировано %d из как минимум %d runtime-вызовов; stack mismatch=%d",
-				quality.DecodedRuntimeGraphCalls,
-				runtimeDenominator,
-				quality.RuntimeGraphStackMismatches,
-			)
+		if runtimeCoverage < 1 || quality.RuntimeGraphStackMismatches > 0 {
+			runtimeExplanation = "Часть связей вызовов недоступна; цепочки вызовов и количество повторов могут быть неполными"
 		}
 	}
 	appendComponent(
 		"runtime_graph",
-		"Runtime-граф",
+		"Граф вызовов во время выполнения",
 		20,
 		runtimeCoverage,
 		!quality.RuntimeGraphEnabled,
@@ -2886,29 +3618,28 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 
 	processCoverage := 0.0
 	processExplanation := fmt.Sprintf(
-		"наблюдается %d из %d потенциальных процессов configured scope; manifest не доказывает запуск отсутствующих процессов",
+		"записано %d из %d потенциальных процессов; AndroidManifest не доказывает, что остальные процессы запускались",
 		quality.ObservedProcessCount,
 		quality.ExpectedProcessCount,
 	)
 	if quality.ProcessRosterComplete {
 		processCoverage = 1
 		processExplanation = fmt.Sprintf(
-			"подтверждены все %d процессов configured scope %s",
+			"подтверждены все %d ожидаемых процессов",
 			quality.ExpectedProcessCount,
-			quality.ProcessScope,
 		)
 	} else if quality.ProcessRosterDeclarationComplete && quality.RunCohortConsistent &&
 		quality.ProcessScopeConsistent && quality.ExpectedProcessCount > 0 &&
 		quality.ObservedProcessCount < quality.ExpectedProcessCount {
 		processCoverage = float64(quality.ObservedProcessCount) / float64(quality.ExpectedProcessCount)
 	} else if !quality.ProcessRosterDeclarationComplete {
-		processExplanation = "Android manifest не позволил доказать полный список процессов configured scope"
+		processExplanation = "AndroidManifest не позволил подтвердить полный список ожидаемых процессов"
 	} else if !quality.RunCohortConsistent {
-		processExplanation = "входные сегменты относятся к разным run cohort"
+		processExplanation = "входные сегменты относятся к разным прогонам"
 	} else if !quality.ProcessScopeConsistent {
-		processExplanation = "process scope или allowlist не согласованы между сегментами"
+		processExplanation = "настройки охвата процессов не согласованы между сегментами"
 	} else {
-		processExplanation = "количество или fingerprint процессов не совпадает с объявленным roster"
+		processExplanation = "количество или состав процессов не совпадает с объявленным списком"
 	}
 	appendComponent("process_roster", "Охват процессов", 20, processCoverage, false, processExplanation)
 
@@ -2920,36 +3651,28 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 		integrityIssues = append(integrityIssues, "инварианты счётчиков")
 	}
 	if !quality.QualityProgressionValid {
-		integrityIssues = append(integrityIssues, "монотонность quality")
+		integrityIssues = append(integrityIssues, "последовательность показателей качества")
 	}
 	if quality.DamagedSegments > 0 {
 		integrityIssues = append(integrityIssues, fmt.Sprintf("повреждённые/аварийные сегменты=%d", quality.DamagedSegments))
 	}
 	if quality.SegmentsWithoutQuality > 0 {
-		integrityIssues = append(integrityIssues, fmt.Sprintf("сегменты без quality=%d", quality.SegmentsWithoutQuality))
+		integrityIssues = append(integrityIssues, "сегменты без сведений о качестве")
 	}
 	if quality.CriticalRuntimeHookFailures > 0 {
-		integrityIssues = append(integrityIssues, fmt.Sprintf(
-			"hook failures с влиянием на evidence=%d (%s)",
-			quality.CriticalRuntimeHookFailures,
-			runtimeHookFailureReasonSummary(quality.RuntimeHookFailureDetails, true),
-		))
+		integrityIssues = append(integrityIssues, "ошибки перехвата, способные скрыть часть событий")
 	}
 	if quality.DictionaryOverflow > 0 || quality.DictionaryTruncated > 0 {
-		integrityIssues = append(integrityIssues, fmt.Sprintf(
-			"dictionary overflow/truncated=%d/%d",
-			quality.DictionaryOverflow,
-			quality.DictionaryTruncated,
-		))
+		integrityIssues = append(integrityIssues, "неполный словарь имён")
 	}
 	if quality.ControlFailures > 0 {
-		integrityIssues = append(integrityIssues, fmt.Sprintf("control failures=%d", quality.ControlFailures))
+		integrityIssues = append(integrityIssues, "ошибки служебных записей журнала")
 	}
 	if quality.OtherEvidenceLoss > 0 {
-		integrityIssues = append(integrityIssues, fmt.Sprintf("потери прочих runtime evidence=%d", quality.OtherEvidenceLoss))
+		integrityIssues = append(integrityIssues, "часть диагностических данных недоступна")
 	}
 	integrityCoverage := 1.0
-	integrityExplanation := "digest chain, quality progression, schema и счётчики согласованы"
+	integrityExplanation := "цепочка сегментов, схема и счётчики согласованы"
 	if len(integrityIssues) > 0 {
 		integrityCoverage = 0
 		integrityExplanation = "не доказаны: " + strings.Join(integrityIssues, "; ")
@@ -2958,11 +3681,11 @@ func collectionTrustScore(quality CollectionQuality) (float64, []CollectionTrust
 	if activeWeight == 0 {
 		return 100, components
 	}
-	return roundTrustValue(earnedWeight * 100 / activeWeight), components
+	return roundDiagnosticCompleteness(earnedWeight * 100 / activeWeight), components
 }
 
-func describeCollectionTrust(score float64, components []CollectionTrustComponent) (string, string) {
-	level, explanation := collectionTrustTier(score)
+func describeDiagnosticCompleteness(score float64, components []DiagnosticCompletenessComponent) (string, string) {
+	level, explanation := diagnosticCompletenessTier(score)
 	missing := make([]string, 0, len(components))
 	excluded := make([]string, 0, len(components))
 	for _, component := range components {
@@ -2986,27 +3709,27 @@ func describeCollectionTrust(score float64, components []CollectionTrustComponen
 		explanation += " Почему не 100%: " + strings.Join(missing, "; ") + "."
 	}
 	if len(excluded) > 0 {
-		explanation += " Отключены конфигурацией и не входят в denominator: " + strings.Join(excluded, ", ") + "."
+		explanation += " Отключены настройками и не входят в расчёт: " + strings.Join(excluded, ", ") + "."
 	}
 	return level, explanation
 }
 
-func collectionTrustTier(score float64) (string, string) {
+func diagnosticCompletenessTier(score float64) (string, string) {
 	switch {
 	case score >= 95:
-		return "excellent", "Максимальное доверие: индекс 95–100%; все активные источники evidence практически полностью подтверждены."
+		return "excellent", "Максимальная полнота: индекс 95–100%; все активные источники диагностических данных практически полностью подтверждены."
 	case score >= 85:
-		return "high", "Высокое доверие: индекс 85–94,99%; основные evidence подтверждены, оставшиеся ограничения явно перечислены."
+		return "high", "Высокая полнота: индекс 85–94,99%; основные диагностические данные подтверждены, оставшиеся ограничения явно перечислены."
 	case score >= 65:
-		return "sufficient", "Достаточное доверие: индекс 65–84,99%; выводы применимы с учётом перечисленных ограничений."
+		return "sufficient", "Достаточная полнота: индекс 65–84,99%; выводы применимы с учётом перечисленных ограничений."
 	case score >= 40:
-		return "limited", "Ограниченное доверие: индекс 40–64,99%; существенная часть активного evidence не подтверждена."
+		return "limited", "Ограниченная полнота: индекс 40–64,99%; существенная часть активных диагностических данных не подтверждена."
 	default:
-		return "low", "Низкое доверие: индекс ниже 40%; отчёт нельзя использовать для уверенных выводов без повторного сбора."
+		return "low", "Низкая полнота: индекс ниже 40%; отчёт нельзя использовать для уверенных выводов без повторного сбора."
 	}
 }
 
-func roundTrustValue(value float64) float64 {
+func roundDiagnosticCompleteness(value float64) float64 {
 	return math.Round(value*100) / 100
 }
 
@@ -3163,6 +3886,10 @@ func qualityCounterWarnings(counters map[uint64]uint64, exactAdmission bool) []s
 		{jhlog.QualityObjectWatcherLimit, "наблюдатель удержания достиг лимита объектов"},
 		{jhlog.QualityJankStatsHandleLimit, "реестр JankStats достиг лимита активных окон"},
 		{jhlog.QualityMetricFlushTimeout, "агрегированные метрики не успели попасть в writer до таймаута"},
+		{jhlog.QualityPreparedStatementRegistryEviction, "реестр prepared statement вытеснил активные записи из-за лимита ёмкости"},
+		{jhlog.QualityPreparedStatementResolutionMiss, "execute-вызовы потеряли SQL-шаблон после вытеснения из реестра prepared statement"},
+		{jhlog.QualityReceiverAsyncRegistryEviction, "реестр BroadcastReceiver.goAsync вытеснил незавершённые PendingResult из-за лимита ёмкости"},
+		{jhlog.QualityReceiverAsyncResolutionMiss, "PendingResult.finish не удалось сопоставить с goAsync после вытеснения из реестра"},
 	}
 	if !exactAdmission {
 		items = append(items, struct {
@@ -3195,7 +3922,7 @@ func runtimeHookFailureDetails(counters map[uint64]uint64) ([]RuntimeHookFailure
 		{jhlog.QualityRuntimeHookAsyncWrapperFailure, "async_wrapper", "evidence_loss", "обёртка Runnable, Callable или coroutine не записала evidence"},
 		{jhlog.QualityRuntimeHookLifecycleFailure, "runtime_lifecycle", "evidence_loss", "операция запуска, остановки или flush runtime завершилась ошибкой"},
 		{jhlog.QualityRuntimeHookCollectorFailure, "collector", "evidence_loss", "runtime collector подавил внутреннюю ошибку"},
-		{jhlog.QualityRuntimeHookContextFailure, "context", "evidence_loss", "контекст screen, owner или flow мог быть неполным"},
+		{jhlog.QualityRuntimeHookContextFailure, "context", "evidence_loss", "контекст экрана, операции или источника мог быть неполным"},
 		{jhlog.QualityRuntimeHookSchedulerFailure, "scheduler", "evidence_loss", "служебная задача runtime не была выполнена штатно"},
 		{jhlog.QualityJankStatsDependencyMissing, "jankstats_dependency_missing", "fallback", "AndroidX Metrics отсутствовал; использован Choreographer fallback"},
 		{jhlog.QualityJankStatsInstallFailure, "jankstats_install", "fallback", "JankStats не установился; использован Choreographer fallback"},
@@ -3279,10 +4006,10 @@ func (c *collector) instrumentationQualityWarnings() []string {
 func (c *collector) attributionQualityWarnings(summary Summary) []string {
 	var warnings []string
 	if totalProblemWindows(summary) > 0 && unknownProblemOwnerRate(summary.ProblemWindows) >= 0.8 {
-		warnings = append(warnings, "Качество сбора: большинство проблемных окон не имеют понятного owner; добавьте ownerHint/withOwner или проверьте owner-map.")
+		warnings = append(warnings, "Качество сбора: большинство проблемных окон не имеют понятного owner; добавьте ownerHint/withOwner или проверьте охват ASM-инструментации.")
 	}
-	if len(summary.Flows) > 0 && unknownFlowContextRate(summary.Flows) >= 0.8 {
-		warnings = append(warnings, "Качество сбора: большинство сценариев не имеют screen/flow/step/owner; проверьте автотрекинг Activity, @JankHunterTrace/withFlow/withOwner и ASM owner-map.")
+	if len(summary.SignalContexts) > 0 && unknownSignalContextRate(summary.SignalContexts) >= 0.8 {
+		warnings = append(warnings, "Качество сбора: большинство сигналов не имеют экрана, операции или источника; проверьте автоматическое отслеживание экранов, @JankHunterOperation/traceOperation/withOwner и охват инструментирования.")
 	}
 	if summary.EventCount > 0 && datavalue.IsUnknown(c.currentDevice) {
 		warnings = append(warnings, "Качество сбора: модель устройства не записана в session-событие; проверьте JankHunter init и device snapshot при старте runtime.")
@@ -3327,19 +4054,18 @@ func unknownProblemOwnerRate(problems []ProblemWindowStats) float64 {
 	return float64(unknown) / float64(total)
 }
 
-func unknownFlowContextRate(flows []FlowStats) float64 {
+func unknownSignalContextRate(contexts []SignalContextStats) float64 {
 	var total uint64
 	var unknown uint64
-	for _, flow := range flows {
-		count := uint64(flow.HTTPCount) + uint64(flow.StallCount) + flow.LogSpam + flow.ProblemCount + uint64(flow.UIWindows)
+	for _, context := range contexts {
+		count := uint64(context.HTTPCount) + uint64(context.StallCount) + context.LogSpam + context.ProblemCount + uint64(context.UIWindows)
 		if count == 0 {
 			count = 1
 		}
 		total += count
-		if datavalue.IsUnknown(flow.Screen) &&
-			datavalue.IsUnknown(flow.Flow) &&
-			datavalue.IsUnknown(flow.Step) &&
-			datavalue.IsUnknown(flow.Owner) {
+		if datavalue.IsUnknown(context.Screen) &&
+			datavalue.IsUnknown(context.Operation) &&
+			datavalue.IsUnknown(context.Owner) {
 			unknown += count
 		}
 	}
@@ -3440,6 +4166,15 @@ func Compare(baseline, candidate Summary) Comparison {
 	comparison.CohortWarnings = cohortWarnings(baseline, candidate)
 	comparison.QualityWarnings = comparisonQualityWarnings(baseline, candidate)
 	comparison.ExposureWarnings = durationComparisonWarnings(baseline, candidate)
+	comparison.Database = compareDatabaseAnalysis(baseline, candidate)
+	comparison.AndroidComponents = compareAndroidComponentAnalysis(baseline, candidate)
+	comparison.OperationDeltas = compareOperationAnalysis(baseline, candidate)
+	androidPartial := baseline.AndroidComponents != nil && baseline.AndroidComponents.Partial ||
+		candidate.AndroidComponents != nil && candidate.AndroidComponents.Partial
+	if comparison.AndroidComponents.Note != "" && (androidPartial ||
+		!comparison.AndroidComponents.Comparable) && (baseline.AndroidComponents != nil || candidate.AndroidComponents != nil) {
+		comparison.QualityWarnings = append(comparison.QualityWarnings, "Android Components/IPC: "+comparison.AndroidComponents.Note)
+	}
 	comparison.Warnings = append(append(append([]string{}, comparison.CohortWarnings...), comparison.QualityWarnings...), comparison.ExposureWarnings...)
 	comparison.ProblemComparison = CompareProblems(baseline, candidate, len(comparison.CohortWarnings) == 0)
 	return comparison
@@ -3827,6 +4562,24 @@ func sortRoutes(routes []RouteStats) {
 	})
 }
 
+func sortNetworkCalls(calls []NetworkCallStats) {
+	sort.Slice(calls, func(i, j int) bool {
+		if calls[i].Count != calls[j].Count {
+			return calls[i].Count > calls[j].Count
+		}
+		if calls[i].P95MS != calls[j].P95MS {
+			return calls[i].P95MS > calls[j].P95MS
+		}
+		if calls[i].Route != calls[j].Route {
+			return calls[i].Route < calls[j].Route
+		}
+		if calls[i].Initiator != calls[j].Initiator {
+			return calls[i].Initiator < calls[j].Initiator
+		}
+		return calls[i].Owner < calls[j].Owner
+	})
+}
+
 func sortScreens(screens []ScreenStats) {
 	sort.Slice(screens, func(i, j int) bool {
 		if screens[i].JankRatePct == screens[j].JankRatePct {
@@ -3859,7 +4612,16 @@ func sortIOOperations(operations []IOStats) {
 		if operations[i].Operation != operations[j].Operation {
 			return operations[i].Operation < operations[j].Operation
 		}
-		return operations[i].Owner < operations[j].Owner
+		if operations[i].Source != operations[j].Source {
+			return operations[i].Source < operations[j].Source
+		}
+		if operations[i].Owner != operations[j].Owner {
+			return operations[i].Owner < operations[j].Owner
+		}
+		if operations[i].Screen != operations[j].Screen {
+			return operations[i].Screen < operations[j].Screen
+		}
+		return operations[i].ContextOperation < operations[j].ContextOperation
 	})
 }
 
@@ -3872,25 +4634,25 @@ func sortOwners(owners []OwnerStats) {
 	})
 }
 
-func sortFlows(flows []FlowStats) {
-	sort.Slice(flows, func(i, j int) bool {
-		left := flowSeverityScore(flows[i])
-		right := flowSeverityScore(flows[j])
+func sortSignalContexts(contexts []SignalContextStats) {
+	sort.Slice(contexts, func(i, j int) bool {
+		left := signalContextSeverityScore(contexts[i])
+		right := signalContextSeverityScore(contexts[j])
 		if left == right {
-			return flows[i].Flow < flows[j].Flow
+			return contexts[i].Operation < contexts[j].Operation
 		}
 		return left > right
 	})
 }
 
-func flowSeverityScore(flow FlowStats) uint64 {
-	return flow.ProblemCount*10_000 +
-		uint64(flow.StallCount)*5_000 +
-		flow.UIJank*100 +
-		flow.LogSpam*10 +
-		uint64(flow.HTTPFailed)*500 +
-		flow.HTTPP95MS +
-		flow.ProblemMaxMS
+func signalContextSeverityScore(context SignalContextStats) uint64 {
+	return context.ProblemCount*10_000 +
+		uint64(context.StallCount)*5_000 +
+		context.UIJank*100 +
+		context.LogSpam*10 +
+		uint64(context.HTTPFailed)*500 +
+		context.HTTPP95MS +
+		context.ProblemMaxMS
 }
 
 func sortLogSpam(items []LogSpamStats) {

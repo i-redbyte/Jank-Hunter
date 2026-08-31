@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     `java-gradle-plugin`
     id("io.jankhunter.kotlin-gradle-plugin")
+    id("io.jankhunter.sql-normalizer-sources")
 }
 
 val sharedProperties = Properties().apply {
@@ -25,9 +26,12 @@ gradlePlugin {
 
 dependencies {
     compileOnly(libs.android.gradle.plugin)
+    implementation(libs.asm.analysis)
     implementation(libs.asm.commons)
+    implementation(libs.asm.tree)
     implementation(libs.kotlin.metadata.jvm)
     testImplementation(libs.android.gradle.plugin)
+    testImplementation(libs.androidx.room.runtime)
     testImplementation(libs.asm.util)
     testImplementation(libs.junit)
 }

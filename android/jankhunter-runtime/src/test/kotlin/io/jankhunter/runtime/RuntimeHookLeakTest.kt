@@ -1,9 +1,13 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,6 +77,45 @@ class RuntimeHookLeakTest {
         assertEquals("retained dynamic symbols: ${references.map { it.get() }}", references.size, collected)
     }
 
+    @Test
+    fun shutdownReleasesProducerStateOwnedByLiveApplicationThread() {
+        val directory = Files.createTempDirectory("jankhunter-live-thread-release").toFile()
+        val writer = writer(directory)
+        val graph = graph()
+        val events = RuntimeHookEventTransport({ 16 }, { 16 })
+        val ready = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val graphState = AtomicReference<WeakReference<Any>>()
+        val eventState = AtomicReference<WeakReference<Any>>()
+        graph.resetFlushState(writer)
+        events.start(writer)
+
+        val producer = Thread {
+            graph.recordEdge(1L, 2L)
+            events.recordMethod(2L, "live-thread-method")
+            graphState.set(currentThreadLocalTarget(graph, "threadState"))
+            eventState.set(currentThreadLocalTarget(events, "threadBuffer"))
+            ready.countDown()
+            release.await(5L, TimeUnit.SECONDS)
+        }
+        producer.start()
+        assertTrue(ready.await(5L, TimeUnit.SECONDS))
+        assertTrue(producer.isAlive)
+
+        graph.flushForShutdown()
+        events.stopAndFlush(5_000L)
+        graph.clear()
+        events.clear()
+        val references = listOf(graphState.get(), eventState.get())
+        val collected = awaitGc(references.size) { references.count { it.get() == null } }
+
+        release.countDown()
+        producer.join(5_000L)
+        writer.close()
+        directory.deleteRecursively()
+        assertEquals("live producer state retained after shutdown", references.size, collected)
+    }
+
     private fun createProducerThreads(
         graph: RuntimeCallGraph,
         queue: ReferenceQueue<Thread>,
@@ -99,8 +142,7 @@ class RuntimeHookLeakTest {
         val graph = RuntimeCallGraph(
             nowMs = { 1L },
             captureScreen = { screen },
-            captureFlow = { null },
-            captureStep = { null },
+            captureOperationId = { 0L },
             maxKeys = { 16 },
         )
         val events = RuntimeHookEventTransport({ 16 }, { 16 })
@@ -111,7 +153,7 @@ class RuntimeHookLeakTest {
         graph.exit(child, 2L)
         graph.exit(parent, 1L)
         events.recordMethod(2L, method)
-        events.recordLogSpam(screen, owner, null, null, source, 3)
+        events.recordLogSpam(screen, owner, source, 3)
         screen = null
         graph.flushForShutdown()
         events.stopAndFlush(5_000L)
@@ -120,6 +162,14 @@ class RuntimeHookLeakTest {
         writer.close()
         directory.deleteRecursively()
         return references
+    }
+
+    private fun currentThreadLocalTarget(owner: Any, fieldName: String): WeakReference<Any> {
+        val field = owner.javaClass.getDeclaredField(fieldName).apply { isAccessible = true }
+        val local = field.get(owner) as ThreadLocal<*>
+        val value = local.get()
+        val target = if (value is WeakReference<*>) value.get() else value
+        return WeakReference(checkNotNull(target))
     }
 
     private fun awaitGc(expected: Int, observed: () -> Int): Int {
@@ -149,14 +199,13 @@ class RuntimeHookLeakTest {
         return RuntimeCallGraph(
             nowMs = { System.nanoTime() / 1_000_000L },
             captureScreen = { "screen" },
-            captureFlow = { "flow" },
-            captureStep = { "step" },
+            captureOperationId = { 41L },
             maxKeys = { 128 },
         )
     }
 
     private fun writer(directory: java.io.File): AsyncLogWriter {
-        return AsyncLogWriter.open(
+        return AsyncLogWriterFactory().open(
             directory,
             JankHunterConfig.builder().autoStartCollectors(false).flushIntervalMs(60_000).build(),
             "main",

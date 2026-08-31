@@ -15,6 +15,7 @@ internal object InstrumentationPackages {
         "io.jankhunter.gradle.",
         "io.jankhunter.okhttp3.",
         "io.jankhunter.runtime.",
+        "io.jankhunter.workmanager.",
     )
 
     fun effectiveIncludes(

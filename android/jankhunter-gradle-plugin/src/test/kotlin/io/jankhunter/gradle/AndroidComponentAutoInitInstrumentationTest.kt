@@ -37,6 +37,8 @@ class AndroidComponentAutoInitInstrumentationTest {
         assertTrue(hasMethod(output, "onCreate", "()V"))
         assertEquals(1, countCalls(output, "onCreate", "io/jankhunter/runtime/JankHunter", "autoInit"))
         assertEquals(1, countCalls(output, "onCreate", "android/app/Service", "onCreate"))
+        assertEquals(1, countCalls(output, "onCreate", JANK_HUNTER_ANDROID_HOOKS, "enterServiceCallback"))
+        assertEquals(2, countCalls(output, "onCreate", JANK_HUNTER_ANDROID_HOOKS, "exitServiceCallback"))
     }
 
     @Test
@@ -93,13 +95,13 @@ class AndroidComponentAutoInitInstrumentationTest {
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = false,
                     classGraph = false,
                     runtimeCallGraph = false,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = "",
-                    ownerMapEntriesDirectory = "",
+                    androidComponents = true,
                 ),
                 classHierarchy = hierarchy,
             ),
@@ -179,5 +181,9 @@ class AndroidComponentAutoInitInstrumentationTest {
             }
         }, 0)
         return count
+    }
+
+    private companion object {
+        const val JANK_HUNTER_ANDROID_HOOKS = "io/jankhunter/runtime/JankHunterAndroidHooks"
     }
 }

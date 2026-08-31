@@ -43,6 +43,34 @@ class RetainedHeapDumperTest {
     }
 
     @Test
+    fun storageValveRedirectsFutureHeapArtifactsWithoutRecreatingDumper() {
+        val root = Files.createTempDirectory("jankhunter-heap-storage-switch").toFile()
+        try {
+            val first = ArtifactStorage(File(root, "first"))
+            val second = ArtifactStorage(File(root, "second"))
+            val dumper = RetainedHeapDumper(
+                directory = File(root, "fallback"),
+                binaryStorage = first,
+                minIntervalMs = 0L,
+                maxDumpCount = 1,
+                clock = { 1_000L },
+                wallClock = { 42L },
+                dumpHprof = { path -> File(path).writeText("hprof") },
+            )
+
+            dumper.switchBinaryStorage(second)
+            val result = dumper.maybeDump("Switched", "Owner", 5_000L, 1L)
+
+            assertTrue(result is RetainedHeapDumper.Result.Dumped)
+            assertTrue(first.directory.listFiles().isNullOrEmpty())
+            assertEquals(1, second.commits)
+            assertTrue((result as RetainedHeapDumper.Result.Dumped).file.path.startsWith(second.directory.path))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun writesHprofThroughInjectedDumperAndAppliesSafeFileName() {
         var now = 1_000L
         val dir = tempDir()

@@ -114,26 +114,27 @@ type runtimeInfluenceEdge struct {
 }
 
 type influenceAccumulator struct {
-	className string
-	score     float64
-	problems  uint64
-	logSpam   uint64
-	mainMS    uint64
-	runtimeMS uint64
-	networkMS uint64
-	memoryKB  uint64
-	uiJank    uint64
-	retained  uint64
-	heap      bool
-	flows     map[string]struct{}
-	screens   map[string]struct{}
-	routes    map[string]struct{}
-	reasons   map[string]struct{}
-	runtime   bool
-	static    bool
+	className  string
+	score      float64
+	problems   uint64
+	logSpam    uint64
+	mainMS     uint64
+	runtimeMS  uint64
+	networkMS  uint64
+	memoryKB   uint64
+	uiJank     uint64
+	retained   uint64
+	heap       bool
+	operations map[string]struct{}
+	screens    map[string]struct{}
+	routes     map[string]struct{}
+	reasons    map[string]struct{}
+	runtime    bool
+	static     bool
 }
 
 func (b *influenceBuilder) addRuntime(summary Summary) {
+	b.addDatabaseRuntime(summary.DatabaseAnalysis)
 	for _, spam := range summary.LogSpam {
 		className := classFromOwner(spam.Owner)
 		if className == "" {
@@ -142,7 +143,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node := b.node(className)
 		node.runtime = true
 		node.logSpam += spam.Count
-		node.addFlow(spam.Flow)
+		node.addOperation(spam.Operation)
 		node.addScreen(spam.Screen)
 		node.addReason("спам логами")
 		node.score += scoreContribution(spam.Count, 160)
@@ -161,7 +162,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		if problemKindIsMainThread(problem.Kind) {
 			node.mainMS += problem.TotalWindowMS
 		}
-		node.addFlow(problem.Flow)
+		node.addOperation(problem.Operation)
 		node.addScreen(problem.Screen)
 		node.addReason(problemReason(problem.Kind))
 		node.score += scoreContribution(problem.Count, 8)
@@ -184,7 +185,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.retained += leak.Count
 		node.memoryKB += leak.EstimatedRetainedKB
 		node.heap = node.heap || leak.HeapEvidence
-		node.addFlow(leak.Flow)
+		node.addOperation(leak.Operation)
 		node.addScreen(leak.Screen)
 		node.addReason(leak.EvidenceLabel)
 		node.score += leak.Score * 0.45
@@ -199,12 +200,12 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		callee := b.node(calleeClass)
 		caller.runtime = true
 		callee.runtime = true
-		caller.addFlow(call.Flow)
+		caller.addOperation(call.Operation)
 		caller.addScreen(call.Screen)
-		callee.addFlow(call.Flow)
+		callee.addOperation(call.Operation)
 		callee.addScreen(call.Screen)
-		caller.addReason("runtime-вызов")
-		callee.addReason("runtime-вызов")
+		caller.addReason("вызов при выполнении")
+		callee.addReason("вызов при выполнении")
 		caller.score += scoreContribution(call.Count, 220) * 0.45
 		callee.score += scoreContribution(call.Count, 160) + scoreContribution(call.TotalMS, 2200) + scoreContribution(call.MaxMS, 500)
 		caller.runtimeMS += call.TotalMS / 4
@@ -217,18 +218,18 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			maxMS:   call.MaxMS,
 		})
 	}
-	for _, flow := range summary.Flows {
-		className := classFromOwner(flow.Owner)
+	for _, context := range summary.SignalContexts {
+		className := classFromOwner(context.Owner)
 		if className == "" {
 			continue
 		}
 		node := b.node(className)
 		node.runtime = true
-		node.addFlow(flow.Flow)
-		node.addScreen(flow.Screen)
-		node.addRoute(flow.RouteSample)
-		node.networkMS = maxUint64Value(node.networkMS, flow.HTTPP95MS)
-		node.uiJank += flow.UIJank
+		node.addOperation(context.Operation)
+		node.addScreen(context.Screen)
+		node.addRoute(context.RouteSample)
+		node.networkMS = maxUint64Value(node.networkMS, context.HTTPP95MS)
+		node.uiJank += context.UIJank
 	}
 	for _, route := range summary.Routes {
 		className := classFromOwner(route.OwnerSample)
@@ -239,6 +240,65 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.runtime = true
 		node.addRoute(route.Route)
 		node.networkMS = maxUint64Value(node.networkMS, route.P95MS)
+	}
+}
+
+func (b *influenceBuilder) addDatabaseRuntime(analysis *DatabaseAnalysis) {
+	if analysis == nil {
+		return
+	}
+	for statementIndex := range analysis.Statements {
+		statement := &analysis.Statements[statementIndex]
+		for contextIndex := range statement.Contexts {
+			context := &statement.Contexts[contextIndex]
+			className := classFromOwner(context.Source)
+			if className == "" {
+				continue
+			}
+			node := b.node(className)
+			node.runtime = true
+			node.problems = saturatingUint64Sum(node.problems, context.Overall.Failures)
+			node.runtimeMS = saturatingUint64Sum(node.runtimeMS, context.Overall.TotalDurationUS/1_000)
+			node.mainMS = saturatingUint64Sum(node.mainMS, context.Main.TotalDurationUS/1_000)
+			node.addOperation(context.ContextOperation)
+			node.addScreen(context.Screen)
+			node.addReason("SQL-вызовы базы данных")
+			node.score += scoreContribution(context.Overall.Calls, 64)
+			node.score += scoreContribution(context.Overall.Failures, 4)
+			node.score += scoreContribution(context.Overall.TotalDurationUS/1_000, 750)
+			node.score += scoreContribution(context.Main.TotalDurationUS/1_000, 250)
+		}
+	}
+	for candidateIndex := range analysis.Scenarios.Candidates {
+		candidate := &analysis.Scenarios.Candidates[candidateIndex]
+		className := classFromOwner(candidate.Source)
+		if className == "" {
+			continue
+		}
+		node := b.node(className)
+		node.runtime = true
+		node.addOperation(candidate.ContextOperation)
+		node.addScreen(candidate.Screen)
+		node.addReason("гипотеза о повторных SQL-вызовах в одном сценарии")
+		node.score += scoreContribution(candidate.EstimatedCalls, 48)
+		node.score += scoreContribution(candidate.MaxCallsPerScope, 12)
+	}
+	if analysis.Transactions == nil {
+		return
+	}
+	for transactionIndex := range analysis.Transactions.Transactions {
+		transaction := &analysis.Transactions.Transactions[transactionIndex]
+		className := classFromOwner(transaction.Source)
+		if className == "" {
+			continue
+		}
+		node := b.node(className)
+		node.runtime = true
+		node.addOperation(transaction.ContextOperation)
+		node.addScreen(transaction.Screen)
+		node.addReason("транзакция базы данных")
+		node.score += scoreContribution(transaction.StatementCount, 32)
+		node.score += scoreContribution(transaction.DurationUS/1_000, 500)
 	}
 }
 
@@ -279,7 +339,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 	for _, node := range b.nodes {
 		if node.runtime {
 			runtimeNodes++
-			node.score += float64(len(node.flows)+len(node.screens)+len(node.routes)) * 0.35
+			node.score += float64(len(node.operations)+len(node.screens)+len(node.routes)) * 0.35
 		}
 		if node.static {
 			staticNodes++
@@ -336,7 +396,7 @@ func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
 		HotPaths:         hotPaths,
 		MethodHotspots:   methodHotspots,
 		Cycles:           cycles,
-		StandaloneReason: "Все связи участвуют в анализе; HTML получает ограниченные представления с явными totals и причинами исключения.",
+		StandaloneReason: "В первую очередь показаны связи, которые ведут к проблемам; дополнительные представления помогают проверить полный контекст.",
 	}
 	out.Heuristic = influenceHeuristic(out)
 	return out
@@ -451,11 +511,11 @@ func (b *influenceBuilder) node(className string) *influenceAccumulator {
 		return node
 	}
 	node = &influenceAccumulator{
-		className: className,
-		flows:     map[string]struct{}{},
-		screens:   map[string]struct{}{},
-		routes:    map[string]struct{}{},
-		reasons:   map[string]struct{}{},
+		className:  className,
+		operations: map[string]struct{}{},
+		screens:    map[string]struct{}{},
+		routes:     map[string]struct{}{},
+		reasons:    map[string]struct{}{},
 	}
 	b.nodes[className] = node
 	return node
@@ -487,7 +547,7 @@ func (n *influenceAccumulator) toNode() InfluenceNode {
 		UIJank:          n.uiJank,
 		Retained:        n.retained,
 		HeapEvidence:    n.heap,
-		Flows:           sortedSet(n.flows, 0),
+		Operations:      sortedSet(n.operations, 0),
 		Screens:         sortedSet(n.screens, 0),
 		Routes:          sortedSet(n.routes, 0),
 		Reasons:         sortedSet(n.reasons, 0),
@@ -501,8 +561,8 @@ func maxUint64Value(left uint64, right uint64) uint64 {
 	return left
 }
 
-func (n *influenceAccumulator) addFlow(value string) {
-	addNonEmpty(n.flows, value)
+func (n *influenceAccumulator) addOperation(value string) {
+	addNonEmpty(n.operations, value)
 }
 
 func (n *influenceAccumulator) addScreen(value string) {
@@ -670,29 +730,29 @@ func problemReason(kind string) string {
 	case "main_thread_stall":
 		return "паузы главного потока"
 	case "main_thread_dispatch":
-		return "медленный dispatch главного потока"
+		return "медленная обработка сообщения главного потока"
 	case "main_thread_io", "main_thread_disk_io", "disk_io_main_thread":
-		return "IO на главном потоке"
+		return "файловая операция на главном потоке"
 	case "ui_jank":
-		return "UI-подтормаживания"
+		return "Подтормаживания интерфейса"
 	case "log_spam":
 		return "спам логами"
 	case "retained_object", "memory_retained":
 		return "удержанные объекты"
 	case "wrapped_runnable":
-		return "долгая Runnable-задача"
+		return "долгая задача Runnable"
 	case "wrapped_handler_runnable":
-		return "долгая Handler-задача"
+		return "долгая задача обработчика Handler"
 	case "wrapped_callable":
-		return "долгая Callable-задача"
+		return "долгая вычислительная задача Callable"
 	case "wrapped_coroutine":
-		return "долгая coroutine-задача"
+		return "долгая задача корутины"
 	case "wrapped_executor":
-		return "долгая executor-задача"
+		return "долгая задача исполнителя"
 	case "wrapped_click":
-		return "долгий click-handler"
+		return "долгий обработчик нажатия"
 	case "gc_pressure", "gc_count", "gc_time":
-		return "давление GC"
+		return "давление сборки мусора"
 	default:
 		if kind == "" {
 			return "проблемные окна"

@@ -3,6 +3,7 @@ package io.jankhunter.plugin.execution
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
 import java.nio.file.Files
+import org.junit.Assert.assertThrows
 
 class JankHunterCommandBuilderTest : BasePlatformTestCase() {
     fun testInspectDefaultsToAllSessions() {
@@ -70,6 +71,22 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
         }
     }
 
+    fun testInspectLatestLogScopeRejectsDirectoryWithoutCanonicalLogs() {
+        withTempLogDir { dir ->
+            log(dir, "jh-session-log.2026-07-15.1.jhlog", modifiedAt = 3_000)
+
+            assertThrows(IllegalArgumentException::class.java) {
+                JankHunterCommandBuilder.build(
+                    project,
+                    request(
+                        logs = "${dir.path}/*.jhlog",
+                        inspectLogScope = JankHunterLogScope.LATEST_LOG,
+                    ),
+                )
+            }
+        }
+    }
+
     fun testInspectLatestLogScopeKeepsEverySegmentAndProcessFromLatestRun() {
         withTempLogDir { dir ->
             val old = log(dir, sessionName("2026-07-14", RUN_1, 8), modifiedAt = 4_000)
@@ -99,6 +116,17 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
         val flagIndex = command.args.indexOf("--di-catalog")
         assertTrue(flagIndex >= 0)
         assertEquals("/tmp/di-catalog.jsonl", command.args[flagIndex + 1])
+    }
+
+    fun testInspectForwardsArtifactDirectory() {
+        val command = JankHunterCommandBuilder.build(
+            project,
+            request(logs = "/tmp/run.jhlog").copy(artifactsDir = "/tmp/generated/jankhunter/debug"),
+        )
+
+        val flagIndex = command.args.indexOf("--artifacts-dir")
+        assertTrue(flagIndex >= 0)
+        assertEquals("/tmp/generated/jankhunter/debug", command.args[flagIndex + 1])
     }
 
     fun testProblemsExportRemainsAvailableOutsideTheMainUi() {
@@ -144,7 +172,7 @@ class JankHunterCommandBuilderTest : BasePlatformTestCase() {
             baseline = "",
             candidate = "",
             output = "/tmp/report.html",
-            ownerMap = "",
+            artifactsDir = "",
             mapping = "",
             classGraph = "",
             diagnostics = "",

@@ -10,17 +10,17 @@
 <header class="hero di-hero">
   <div class="hero-grid">
     <div>
-      <div class="eyebrow">Jank Hunter · dependency injection</div>
+      <div class="eyebrow">Jank Hunter · анализ DI</div>
       <h1>DI-каталог</h1>
-      <div class="subhead">{{.DependencyInjection.Source}} · variant {{if .DependencyInjection.Variant}}{{.DependencyInjection.Variant}}{{else}}не указан{{end}} · создан {{.GeneratedAt}}</div>
-      <div class="di-disclaimer"><span class="di-badge">DI · BUILD TIME</span><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
+      <div class="subhead">{{.DependencyInjection.Source}} · вариант сборки {{if .DependencyInjection.Variant}}{{.DependencyInjection.Variant}}{{else}}не указан{{end}} · создан {{.GeneratedAt}}</div>
+      <div class="di-disclaimer"><span class="di-badge">DI · ПРИ СБОРКЕ</span><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
       {{if .MainReportHref}}<div class="hero-actions"><a class="math-link" href="{{.MainReportHref}}">← Обзор</a></div>{{end}}
     </div>
     <div class="hero-side">
       <div class="env-card di-summary-card">
         <div class="env-title">Покрытие DI</div>
         <strong class="env-device">{{ruCount .DependencyInjection.ClassCount "класс" "класса" "классов"}}</strong>
-        <div class="env-subtitle">{{.DependencyInjection.EdgeCount}} направленных связей consumer → dependency</div>
+        <div class="env-subtitle">{{.DependencyInjection.EdgeCount}} направленных связей «потребитель → зависимость»</div>
         <div class="env-grid">
           <div class="env-item"><div class="env-label">Классы в отчёте</div><div class="env-value">{{len .DependencyInjection.Classes}}</div><div class="env-detail">полный список без скрытого ограничения</div></div>
           <div class="env-item"><div class="env-label">Связи в отчёте</div><div class="env-value">{{len .DependencyInjection.Edges}}</div><div class="env-detail">полный список без скрытого ограничения</div></div>
@@ -38,28 +38,28 @@
 <main>
   <section id="overview" class="panel di-panel">
     <div class="panel-head">
-      <div><h2>Build-time карта зависимостей</h2><div class="panel-kicker">Каталог построен из аннотаций и однозначно распознанных generated-сигнатур, без запуска приложения и без runtime tracing. Он описывает wiring сборки, а не фактическое создание объектов.</div></div>
-      <span class="di-badge">DI · BUILD TIME</span>
+      <div><h2>Карта зависимостей, построенная при сборке</h2><div class="panel-kicker">Каталог построен из аннотаций и однозначно распознанных сигнатур созданного кода, без запуска приложения. Он описывает связи DI в сборке, а не фактическое создание объектов.</div></div>
+      <span class="di-badge">DI · ПРИ СБОРКЕ</span>
     </div>
     <div class="grid">
       {{range .DependencyInjection.Frameworks}}
       <div class="metric di-framework-card"><div class="label">{{.Name}}</div><div class="value">{{.Classes}}</div><div class="hint">{{ruCount .Classes "класс" "класса" "классов"}} · {{ruCount .Edges "связь" "связи" "связей"}}</div></div>
-      {{else}}<div class="muted">Записи DI-framework не найдены. Это может означать отсутствие поддерживаемого DI, пустую область сканирования или неподдерживаемый способ объявления.</div>{{end}}
+      {{else}}<div class="muted">Записи поддерживаемых систем DI не найдены. Это может означать отсутствие DI, пустую область анализа или неподдерживаемый способ объявления.</div>{{end}}
     </div>
     <div class="report-guide di-guide">
-      <div class="guide-card"><strong>Направление</strong>Каждая запись читается как consumer → dependency: левому классу по metadata сборки нужна правая зависимость. Это не означает, что оба объекта были созданы в прогоне.</div>
-      <div class="guide-card"><strong>Наблюдение</strong>Фиолетовая пометка «встречается отдельно» означает только совпадение имени с runtime или memory-отчётом.</div>
-      <div class="guide-card"><strong>Изоляция</strong>DI-каталог не передаётся в расчёты проблем, утечек, влияния, confidence или регрессионных gate. Предупреждения этой страницы не меняют статус приложения.</div>
+      <div class="guide-card"><strong>Направление</strong>Каждая запись читается как «потребитель → зависимость»: левому классу по данным сборки нужна правая зависимость. Это не означает, что оба объекта были созданы в прогоне.</div>
+      <div class="guide-card"><strong>Наблюдение</strong>Фиолетовая пометка «встречается отдельно» означает только совпадение имени с данными времени работы или отчётом о памяти.</div>
+      <div class="guide-card"><strong>Изоляция</strong>Связи DI не считаются причиной автоматически. Категория DI лишь объединяет уже зарегистрированные проблемы, места которых относятся к известным DI-классам.</div>
     </div>
   </section>
 
   <section id="classes" class="panel di-panel">
     <div class="panel-head">
-      <div><h2>DI-классы</h2><div class="panel-kicker">Роли, scopes и components получены из build-time metadata. Generated-классы помечены отдельно и не инструментируются Jank Hunter runtime hooks.</div></div>
+      <div><h2>DI-классы</h2><div class="panel-kicker">Роли, области жизни и компоненты получены из данных сборки. Созданные генератором классы помечены отдельно и не инструментируются перехватчиками Jank Hunter.</div></div>
     </div>
     <div class="table-scroll">
       <table class="di-class-table">
-        <thead><tr><th>{{tip "Класс" "Класс, найденный в DI metadata или generated-коде выбранного варианта сборки."}}</th><th>{{tip "Framework" "DI-система, для которой распознана запись: например Dagger, Hilt или Koin."}}</th><th>{{tip "Роли" "Как класс участвует в wiring: consumer, dependency, module, component и т. п. Роль не описывает время жизни объекта."}}</th><th>{{tip "Scope / component" "Build-time scope и component из аннотаций. Scope задаёт правила DI-контейнера, но сам по себе не доказывает удержание объекта в памяти."}}</th><th>{{tip "Отдельное наблюдение" "Совпадение имени класса с runtime- или memory-данными. Это независимые факты: каталог не связывает DI-ребро с симптомом автоматически."}}</th></tr></thead>
+        <thead><tr><th>{{tip "Класс" "Класс, найденный в данных DI или созданном коде выбранного варианта сборки."}}</th><th>{{tip "Система DI" "Система DI, для которой распознана запись: например Dagger, Hilt или Koin."}}</th><th>{{tip "Роли" "Как класс участвует во внедрении зависимостей. Роль не описывает время жизни объекта."}}</th><th>{{tip "Область жизни / компонент" "Данные из аннотаций задают правила DI-контейнера, но сами по себе не доказывают удержание объекта в памяти."}}</th><th>{{tip "Отдельное наблюдение" "Совпадение имени класса с данными времени работы или анализа памяти. Каталог не связывает зависимость DI с симптомом автоматически."}}</th></tr></thead>
         <tbody>{{if .DependencyInjection.Classes}}{{deferredRows "di-class-row" .DependencyInjection.Classes 50 50 5 "DI-классы"}}{{else}}<tr><td colspan="5" class="muted">DI-классы не найдены.</td></tr>{{end}}</tbody>
       </table>
     </div>
@@ -67,24 +67,24 @@
 
   <section id="edges" class="panel di-panel">
     <div class="panel-head">
-      <div><h2>DI-связи</h2><div class="panel-kicker">Фиолетовая стрелка означает только build-time wiring. Resolution показывает, откуда получена запись: из declaration или однозначно распознанного generated binding.</div></div>
-      <span class="di-badge">CONSUMER → DEPENDENCY</span>
+      <div><h2>DI-связи</h2><div class="panel-kicker">Фиолетовая стрелка означает только связь, найденную при сборке. В последнем столбце указано, откуда получено подтверждение.</div></div>
+      <span class="di-badge">ПОТРЕБИТЕЛЬ → ЗАВИСИМОСТЬ</span>
     </div>
     <div class="di-disclaimer compact"><strong>{{.DependencyInjection.Disclaimer}}</strong></div>
     <div class="table-scroll">
       <table class="di-edge-table">
-        <thead><tr><th>{{tip "Consumer" "Класс, которому DI-контейнер предоставляет зависимость по metadata сборки."}}</th><th></th><th>{{tip "Dependency" "Предоставляемый тип. Ребро не является runtime-ссылкой из heap dump."}}</th><th>{{tip "Тип / framework" "Способ injection и DI-framework. Qualifier уточняет, какой binding выбран среди типов с одинаковым контрактом."}}</th><th>{{tip "Место" "Метод, поле, constructor или generated-site, из которого восстановлена связь."}}</th><th>{{tip "Resolution" "Источник подтверждения build-time связи. Это уверенность распознавания wiring, а не вероятность runtime-создания объекта."}}</th></tr></thead>
+        <thead><tr><th>{{tip "Потребитель" "Класс, которому DI-контейнер предоставляет зависимость по данным сборки."}}</th><th></th><th>{{tip "Зависимость" "Предоставляемый тип. Эта связь не является ссылкой из снимка памяти."}}</th><th>{{tip "Способ / система DI" "Способ внедрения и система DI. Квалификатор уточняет выбранную реализацию контракта."}}</th><th>{{tip "Место" "Метод, поле, конструктор или созданный участок кода, из которого восстановлена связь."}}</th><th>{{tip "Основание" "Источник подтверждения связи при сборке. Это качество распознавания, а не вероятность создания объекта во время работы."}}</th></tr></thead>
         <tbody>{{if .DependencyInjection.Edges}}{{deferredRows "di-edge-row" .DependencyInjection.Edges 50 50 6 "DI-связи"}}{{else}}<tr><td colspan="6" class="muted">Однозначно распознанные DI-связи не найдены; обнаруженные классы и роли всё равно сохранены в каталоге. Отсутствие строк не доказывает отсутствие DI wiring.</td></tr>{{end}}</tbody>
       </table>
     </div>
   </section>
 
   <section id="coverage" class="panel di-panel">
-    <div class="panel-head"><div><h2>Покрытие и ограничения</h2><div class="panel-kicker">Jank Hunter пропускает неоднозначную связь, если её нельзя надёжно восстановить из build-time данных. Поэтому каталог может быть неполным, но не должен выдавать догадку за подтверждённое ребро.</div></div></div>
+    <div class="panel-head"><div><h2>Покрытие и ограничения</h2><div class="panel-kicker">Jank Hunter пропускает неоднозначную связь, если её нельзя надёжно восстановить из данных сборки. Поэтому каталог может быть неполным, но не должен выдавать догадку за подтверждённую связь.</div></div></div>
     <div class="report-guide di-guide">
       <div class="guide-card"><strong>Dagger / Hilt</strong>Поддержаны @Inject, @Provides, @Binds, entry points, InstallIn, Factory.newInstance и MembersInjector.</div>
-      <div class="guide-card"><strong>Koin</strong>Поддержаны annotations и KSP-generated роли. Произвольный Kotlin runtime DSL без статического контракта не интерпретируется.</div>
-      <div class="guide-card"><strong>Runtime impact</strong>Generated DI-классы проходят только read-only ASM scan: hooks и Jank Hunter marker в них не добавляются. Каталог не создаёт runtime overhead.</div>
+      <div class="guide-card"><strong>Koin</strong>Поддержаны аннотации и роли, созданные KSP. Произвольный динамический DSL Kotlin без статического контракта не интерпретируется.</div>
+      <div class="guide-card"><strong>Влияние на приложение</strong>Созданные DI-классы проходят только чтение при ASM-анализе: перехватчики и маркер Jank Hunter в них не добавляются. Каталог не создаёт накладных расходов во время работы.</div>
     </div>
     {{range .DependencyInjection.Warnings}}<p class="warning di-warning">{{.}}</p>{{end}}
   </section>
@@ -94,10 +94,10 @@
 </html>
 
 {{- define "di-class-row"}}{{$row := .Value}}<tr class="di-class-row">
-  <td><div class="di-class-name"><span class="di-badge">DI</span>{{if $row.Generated}}<span class="di-badge di-generated">GENERATED</span>{{end}}<code>{{$row.Name}}</code></div></td>
+  <td><div class="di-class-name"><span class="di-badge">DI</span>{{if $row.Generated}}<span class="di-badge di-generated">СОЗДАН</span>{{end}}<code>{{$row.Name}}</code></div></td>
   <td><span class="di-framework">{{$row.Framework}}</span></td>
-  <td>{{range $row.Roles}}<span class="di-role">{{.}}</span>{{else}}<span class="muted">не определена</span>{{end}}</td>
-  <td>{{range $row.Scopes}}<div><code>{{.}}</code></div>{{end}}{{range $row.Components}}<div><code>{{.}}</code></div>{{end}}{{if and (not $row.Scopes) (not $row.Components)}}<span class="muted">нет metadata</span>{{end}}</td>
+  <td>{{range $row.Roles}}<span class="di-role">{{diTermLabel .}}</span>{{else}}<span class="muted">не определена</span>{{end}}</td>
+  <td>{{range $row.Scopes}}<div><code>{{.}}</code></div>{{end}}{{range $row.Components}}<div><code>{{.}}</code></div>{{end}}{{if and (not $row.Scopes) (not $row.Components)}}<span class="muted">нет данных</span>{{end}}</td>
   <td>{{range $row.Observed}}<div class="di-observed">{{.}}</div>{{else}}<span class="muted">не сопоставлен с сигналами прогона</span>{{end}}</td>
 </tr>{{end -}}
 
@@ -105,7 +105,7 @@
   <td><code>{{$row.Consumer}}</code>{{if $row.ConsumerObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
   <td class="di-arrow" aria-label="зависит от">→</td>
   <td><code>{{$row.Dependency}}</code>{{if $row.DependencyObserved}}<div class="di-observed">отдельно встречается в прогоне</div>{{end}}</td>
-  <td><span class="di-role">{{$row.InjectionKind}}</span><div class="muted">{{$row.Framework}}</div>{{range $row.Qualifiers}}<div><code>{{.}}</code></div>{{end}}</td>
+  <td><span class="di-role">{{diTermLabel $row.InjectionKind}}</span><div class="muted">{{$row.Framework}}</div>{{range $row.Qualifiers}}<div><code>{{.}}</code></div>{{end}}</td>
   <td><code>{{$row.Site}}</code></td>
-  <td><span class="di-resolution">{{$row.Resolution}}</span></td>
+  <td><span class="di-resolution">{{diTermLabel $row.Resolution}}</span></td>
 </tr>{{end -}}

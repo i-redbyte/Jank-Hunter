@@ -1,5 +1,7 @@
 package io.jankhunter.runtime.internal.io
 
+import io.jankhunter.runtime.RuntimeLongSource
+import io.jankhunter.runtime.RuntimeLongOperator
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
@@ -26,8 +28,8 @@ internal class RunArchiveBudget private constructor(
     private val limitBytes: Long,
     private val stateAccess: RandomAccessFile,
     private val reservationLease: Lease,
-    private val processLock: Any,
-    private val reclaimBytesTo: (Long) -> Long,
+    private val processLock: CrossProcessFileLocks.ProcessLockHandle,
+    private val reclaimBytesTo: RuntimeLongOperator,
 ) : Closeable {
     private var remainingReservation = TERMINAL_RESERVE_BYTES
     private var closed = false
@@ -48,7 +50,7 @@ internal class RunArchiveBudget private constructor(
                 state.reserved = actualReserved
                 nextReserved = state.reserved - if (terminal) remainingReservation else 0L
                 val targetBytes = (limitBytes - nextReserved - bytes).coerceAtLeast(0L)
-                val reclaimedBytes = reclaimBytesTo(targetBytes).coerceAtLeast(0L)
+                val reclaimedBytes = reclaimBytesTo.apply(targetBytes).coerceAtLeast(0L)
                 state.used = (state.used - reclaimedBytes).coerceAtLeast(0L)
                 writeState(channel, state)
             }
@@ -69,7 +71,7 @@ internal class RunArchiveBudget private constructor(
     override fun close() {
         if (closed) return
         val cleanup = {
-            synchronized(processLock) {
+            synchronized(processLock.monitor) {
                 if (closed) return@synchronized
                 closed = true
                 runCatching {
@@ -87,9 +89,10 @@ internal class RunArchiveBudget private constructor(
             }
         }
         CrossProcessFileLocks.withDirectoryLock(directory, DIRECTORY_LOCK_FILE, cleanup)
+        processLock.close()
     }
 
-    private inline fun <T> withStateLock(block: (FileChannel) -> T): T = synchronized(processLock) {
+    private inline fun <T> withStateLock(block: (FileChannel) -> T): T = synchronized(processLock.monitor) {
         stateAccess.channel.lock().use { block(stateAccess.channel) }
     }
 
@@ -154,22 +157,23 @@ internal class RunArchiveBudget private constructor(
             directory: File,
             runId: String,
             limitBytes: Long,
-            actualArchiveBytes: () -> Long,
-            reclaimBytesTo: (Long) -> Long,
+            actualArchiveBytes: RuntimeLongSource,
+            reclaimBytesTo: RuntimeLongOperator,
         ): RunArchiveBudget {
             require(limitBytes > 0L && limitBytes < Long.MAX_VALUE) { "archive budget must be finite and positive" }
             require(isCanonicalRunId(runId)) { "archive budget run ID must be canonical" }
             if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create Jank Hunter metadata directory")
-            val processLock = CrossProcessFileLocks.processLock(directory, DIRECTORY_LOCK_FILE)
+            val processLock = CrossProcessFileLocks.acquireProcessLock(directory, DIRECTORY_LOCK_FILE)
             val stateFile = File(directory, "$STATE_FILE_PREFIX$runId$STATE_FILE_SUFFIX")
-            return CrossProcessFileLocks.withDirectoryLock(directory, DIRECTORY_LOCK_FILE) {
-                deleteObsoleteRunStates(directory, runId)
-                synchronized(processLock) {
+            return try {
+                CrossProcessFileLocks.withDirectoryLock(directory, DIRECTORY_LOCK_FILE) {
+                    deleteObsoleteRunStates(directory, runId)
+                    synchronized(processLock.monitor) {
                     RandomAccessFile(stateFile, "rw").use { stateAccess ->
                         stateAccess.channel.lock().use {
                             val active = activeReservations(directory, runId)
                             val state = if (active.count == 0) {
-                                State(used = actualArchiveBytes().coerceAtLeast(0L), reserved = 0L)
+                                State(used = actualArchiveBytes.getAsLong().coerceAtLeast(0L), reserved = 0L)
                             } else {
                                 readExistingState(stateAccess.channel, runId)
                             }
@@ -177,7 +181,7 @@ internal class RunArchiveBudget private constructor(
                             if (!fits(limitBytes, state.used, state.reserved, TERMINAL_RESERVE_BYTES)) {
                                 val targetBytes = (limitBytes - state.reserved - TERMINAL_RESERVE_BYTES)
                                     .coerceAtLeast(0L)
-                                val reclaimedBytes = reclaimBytesTo(targetBytes).coerceAtLeast(0L)
+                                val reclaimedBytes = reclaimBytesTo.apply(targetBytes).coerceAtLeast(0L)
                                 state.used = (state.used - reclaimedBytes).coerceAtLeast(0L)
                             }
                             if (
@@ -211,7 +215,11 @@ internal class RunArchiveBudget private constructor(
                             }
                         }
                     }
+                    }
                 }
+            } catch (error: Throwable) {
+                processLock.close()
+                throw error
             }
         }
 

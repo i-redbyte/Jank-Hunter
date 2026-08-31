@@ -97,6 +97,24 @@ func TestAnalyzeCompareReportsAppearedNetworkLoop(t *testing.T) {
 	t.Fatalf("appeared network loop delta was not reported: %+v", report.NetworkLoopDeltas)
 }
 
+func TestNetworkLoopExplanationMakesMissingOwnerActionable(t *testing.T) {
+	loop := NetworkLoopFinding{
+		Route: "POST /messages",
+		Owner: "unknown",
+		Path:  networkLoopPath("route", "POST /messages", "unknown", nil, 0.8),
+	}
+	visible := strings.Join(append(
+		[]string{networkLoopProbableCause("route", loop.Route, loop.Owner), causalFallbackLabel("owner", loop.Owner)},
+		networkLoopEvidence(loop)...,
+	), " ")
+	if strings.Contains(strings.ToLower(visible), "unknown") {
+		t.Fatalf("missing owner leaked as unknown: %s", visible)
+	}
+	if !strings.Contains(visible, "место запуска") || !strings.Contains(visible, "инструментирован") {
+		t.Fatalf("missing owner explanation is not actionable: %s", visible)
+	}
+}
+
 func writeDNSLoopFixture(t *testing.T, loop bool) string {
 	return writeDNSLoopFixtureWithBase(t, loop, 0)
 }

@@ -89,7 +89,7 @@ const buildReportSet = (name, presentation = false) => {
         { intent: "logspam.android.util.Log.d", signature: "logspam.android.util.Log.d", count: 9 },
       ],
       decisions: [{ kind: "unsupported", module: "okhttp", family: "okhttp", reason: "unsupported_signature", count: 2 }],
-      annotations: [{ owner: "FeedOwner", screen: "Feed", flow: "feed.open", trace: "refresh", count: 3 }],
+      annotations: [{ owner: "FeedOwner", screen: "Feed", operation: "feed.open", operationKind: "navigation", operationBudgetMs: 800, count: 3 }],
     }),
     JSON.stringify({
       format: 1,
@@ -101,7 +101,7 @@ const buildReportSet = (name, presentation = false) => {
       hooks: [
         { intent: "coroutine.wrap_block.function2_before_continuation", signature: "kotlinx.coroutines.suspend_builders.function2_continuation.v1", bridge: "kotlinx.coroutines.bridge.v1", count: 2 },
       ],
-      annotations: [{ owner: "CheckoutPresenter", screen: "Checkout", flow: "checkout.pay", trace: "submit", count: 2 }],
+      annotations: [{ owner: "CheckoutPresenter", screen: "Checkout", operation: "checkout.pay", operationKind: "submit", operationBudgetMs: 1200, count: 2 }],
     }),
   ].join("\n") + "\n");
   const diagnosticsArgs = ["--instrumentation-diagnostics", diagnosticsPath];
@@ -149,43 +149,11 @@ const buildReportSet = (name, presentation = false) => {
   }, null, 2));
   const heapInspectArgs = ["--heap-evidence", heapEvidencePath];
   const heapCompareArgs = ["--baseline-heap-evidence", heapEvidencePath, "--candidate-heap-evidence", heapEvidencePath];
-  const ownerMapArgs = [];
-  if (presentation) {
-    const ownerMapPath = resolve(setDir, "owner-map.json");
-    const ownerRecords = [
-      {
-        format: 4,
-        kind: "metadata",
-        symbolNamespace: "00112233445566778899aabbccddeeff",
-      },
-      {
-        format: 4,
-        kind: "entry",
-        id: "stable:0x0000000000001001",
-        owner: "registration.ui.RegistrationActivity ru.mail.instantmessenger.flat.main.MainActivity __jh_dictionary_overflow__ click",
-      },
-      {
-        format: 4,
-        kind: "entry",
-        id: "stable:0x0000000000001002",
-        owner: "lifecycle.destroyed.ru.mail.instantmessenger.flat.main.MainActivity",
-      },
-      {
-        format: 4,
-        kind: "entry",
-        id: "stable:0x0000000000001003",
-        owner: "ru.mail.instantmessenger.flat.main.MainActivity.render.__jh_dictionary_overflow__.bind",
-      },
-    ];
-    writeFileSync(ownerMapPath, ownerRecords.map((record) => JSON.stringify(record)).join("\n") + "\n");
-    ownerMapArgs.push("--owner-map", ownerMapPath);
-  }
-  run(["inspect", ...logs, ...ownerMapArgs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
+  run(["inspect", ...logs, ...diagnosticsArgs, ...classGraphArgs, ...heapInspectArgs, ...presentationFlag, "--out", inspectPath]);
   run([
     "compare",
     "--baseline", logs.join(","),
     "--candidate", candidateLogs.join(","),
-    ...ownerMapArgs,
     ...diagnosticsArgs,
     ...classGraphArgs,
     ...heapCompareArgs,
@@ -221,7 +189,7 @@ const buildReportSet = (name, presentation = false) => {
     reports.push(
       { set: name, type: "readme-inspect-hero", path: inspectPath, page: "overview", readme: true },
       { set: name, type: "readme-inspect-signals", path: inspectPath, page: "overview", section: "overview", readme: true },
-      { set: name, type: "readme-inspect-flows", path: inspectPath, page: "overview", section: "flows", readme: true },
+      { set: name, type: "readme-inspect-operations", path: inspectPath, page: "overview", section: "signal-contexts", readme: true },
       { set: name, type: "readme-leaks-explorer", path: inspectPath, page: "leaks", section: "summary", readme: true },
       { set: name, type: "readme-math-summary", path: inspectPath, page: "math", section: "math-overview", readme: true },
       { set: name, type: "readme-math-network-loops", path: inspectPath, page: "math", section: "network-loops", openDetails: true, readme: true },
@@ -282,8 +250,21 @@ const visualStabilityCSS = `
 const failures = [];
 
 const checkCodeProblemEvidence = async (frame) => {
-  const details = await frame.$(".code-problem-details[data-code-problem-evidence-key]");
+  const candidates = await frame.$$(".code-problem-details[data-code-problem-evidence-key]");
+  let details = candidates[0];
+  for (const candidate of candidates) {
+    const signalCount = await candidate.evaluate((element) =>
+      Number.parseInt(element.querySelector("summary small")?.textContent || "0", 10) || 0,
+    );
+    if (signalCount > 0) {
+      details = candidate;
+      break;
+    }
+  }
   if (!details) return { available: false };
+  const expectedSignals = await details.evaluate((element) =>
+    Number.parseInt(element.querySelector("summary small")?.textContent || "0", 10) || 0,
+  );
   await details.evaluate((element) => { element.open = true; });
   const loaded = await frame.waitForFunction(
     () => document.querySelector(".code-problem-details[data-evidence-loaded='true']"),
@@ -291,13 +272,14 @@ const checkCodeProblemEvidence = async (frame) => {
     { timeout: 2000 },
   ).then(() => true, () => false);
   if (!loaded) return { available: true, loaded: false, signals: 0, drilldowns: 0 };
-  const result = await details.evaluate((element) => ({
+  const result = await details.evaluate((element, expected) => ({
     available: true,
     loaded: true,
+    expectedSignals: expected,
     signals: element.querySelectorAll(".problem-signal").length,
     drilldowns: element.querySelectorAll(".problem-drill").length,
     error: element.textContent.includes("Не удалось прочитать полные доказательства"),
-  }));
+  }), expectedSignals);
   await details.evaluate((element) => { element.open = false; });
   return result;
 };
@@ -362,6 +344,7 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     .filter((table) => !table.closest(".table-scroll"))
     .map((table) => table.textContent.trim().slice(0, 120));
   const tallRows = Array.from(document.querySelectorAll("tr"))
+    .filter((row) => !row.classList.contains("leak-card-row"))
     .map((row) => ({
       height: row.getBoundingClientRect().height,
       top: row.getBoundingClientRect().top,
@@ -381,6 +364,12 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 120));
   const clippedTooltips = Array.from(document.querySelectorAll("[data-tip]"))
     .filter((node) => {
+      if (node.closest("[hidden], details:not([open])")) return false;
+      if (typeof node.checkVisibility === "function" && !node.checkVisibility({ checkVisibilityCSS: true })) {
+        return false;
+      }
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return false;
       const rect = node.getBoundingClientRect();
       return rect.width === 0 || rect.height === 0;
     })
@@ -408,7 +397,7 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
         });
     })
     .map((cell) => cell.textContent.trim().replace(/\s+/g, " ").slice(0, 160));
-  const escapedScenarioContent = Array.from(document.querySelectorAll(".scenario-insight-card, .ui-screen-insight, .ui-cause-card"))
+  const escapedInsightContent = Array.from(document.querySelectorAll(".operation-context-insight-card, .ui-screen-insight, .ui-cause-card"))
     .flatMap((card) => {
       const cardRect = card.getBoundingClientRect();
       if (cardRect.width <= 0 || cardRect.height <= 0) return [];
@@ -544,7 +533,7 @@ const collectLayoutIssues = async (page) => page.evaluate(() => {
     clippedCells,
     nakedOverflowCells,
     escapedProblemCells,
-    escapedScenarioContent,
+    escapedInsightContent,
     missingArrowMarkers,
     leakLabelOverlaps,
     influenceTextOverflow,
@@ -919,8 +908,8 @@ try {
       if (issues.escapedProblemCells.length > 0) {
         failures.push(`${viewport.name}/${displayName}: содержимое problem/leak таблицы вышло за границы ячейки: ${JSON.stringify(issues.escapedProblemCells.slice(0, 3))}`);
       }
-      if (issues.escapedScenarioContent.length > 0) {
-        failures.push(`${viewport.name}/${displayName}: содержимое сценарной карточки вышло за границы: ${JSON.stringify(issues.escapedScenarioContent.slice(0, 3))}`);
+      if (issues.escapedInsightContent.length > 0) {
+        failures.push(`${viewport.name}/${displayName}: содержимое аналитической карточки вышло за границы: ${JSON.stringify(issues.escapedInsightContent.slice(0, 3))}`);
       }
       if (issues.missingArrowMarkers > 0) {
         failures.push(`${viewport.name}/${displayName}: у ${issues.missingArrowMarkers} SVG-связей отсутствует рабочий marker-end`);
@@ -960,7 +949,9 @@ try {
       for (const issue of growthIssues) {
         failures.push(`${viewport.name}/${displayName}: ${issue}`);
       }
-      if (codeEvidence.available && (!codeEvidence.loaded || codeEvidence.error || codeEvidence.signals === 0)) {
+      if (codeEvidence.available && (
+        !codeEvidence.loaded || codeEvidence.error || codeEvidence.signals !== codeEvidence.expectedSignals
+      )) {
         failures.push(`${viewport.name}/${displayName}: полные доказательства строки кода не раскрылись (${JSON.stringify(codeEvidence)})`);
       }
       for (const issue of problemSearchIssues) {

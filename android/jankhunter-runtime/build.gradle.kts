@@ -1,13 +1,10 @@
 plugins {
     id("io.jankhunter.android-library")
+    id("io.jankhunter.sql-normalizer-sources")
 }
 
 android {
     namespace = "io.jankhunter.runtime"
-
-    defaultConfig {
-        consumerProguardFiles("consumer-rules.pro")
-    }
 
     testOptions {
         unitTests.isReturnDefaultValues = true
@@ -15,6 +12,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.core)
     implementation(libs.androidx.metrics.performance)
 
     androidTestImplementation(libs.bundles.androidx.test)

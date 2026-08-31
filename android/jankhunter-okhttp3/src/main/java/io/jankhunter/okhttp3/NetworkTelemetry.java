@@ -1,30 +1,31 @@
 package io.jankhunter.okhttp3;
 
-import io.jankhunter.runtime.JankHunter;
+import io.jankhunter.runtime.JankHunterNetworkRuntime;
 import io.jankhunter.runtime.JankHunterContextSnapshot;
+import io.jankhunter.runtime.JankHunterHttpEvent;
+import io.jankhunter.runtime.JankHunterWebSocketEvent;
 
-/** Package-private fail-open boundary shared by the HTTP and WebSocket state machines. */
+/**
+ * Внутренняя отказоустойчивая граница для сбора HTTP- и WebSocket-событий.
+ *
+ * <p>Java используется намеренно, чтобы сохранить настоящую пакетную видимость на уровне JVM.
+ * Kotlin {@code internal} сделал бы этот интерфейс открытым в байткоде и частью двоичного интерфейса
+ * библиотеки.
+ */
 interface NetworkTelemetry {
     JankHunterContextSnapshot captureContextSnapshot();
 
-    void recordCounter(String name, long delta);
+    void recordHttp(JankHunterHttpEvent event);
 
-    void recordGauge(String name, long value);
-
-    void recordHttp(
-            JankHunterContextSnapshot contextSnapshot,
-            String requestLabel,
-            long durationMs,
-            long dnsMs,
-            long connectMs,
-            long ttfbMs,
-            int statusClass,
-            long responseBodyBytes,
-            long requestBodyBytes,
-            long flags);
+    void recordWebSocket(JankHunterWebSocketEvent event);
 }
 
-/** Package-private singleton; neither the helper nor its seam is exported from the AAR. */
+/**
+ * Внутренняя реализация, передающая сетевые события в среду выполнения JankHunter.
+ *
+ * <p>Java сохраняет пакетную видимость класса и не позволяет случайно экспортировать эту реализацию
+ * из AAR.
+ */
 final class RuntimeNetworkTelemetry implements NetworkTelemetry {
     static final RuntimeNetworkTelemetry INSTANCE = new RuntimeNetworkTelemetry();
 
@@ -32,41 +33,16 @@ final class RuntimeNetworkTelemetry implements NetworkTelemetry {
 
     @Override
     public JankHunterContextSnapshot captureContextSnapshot() {
-        return JankHunter.captureContextSnapshot();
+        return JankHunterNetworkRuntime.captureContext();
     }
 
     @Override
-    public void recordCounter(String name, long delta) {
-        JankHunter.recordCounter(name, delta);
+    public void recordHttp(JankHunterHttpEvent event) {
+        JankHunterNetworkRuntime.recordHttp(event);
     }
 
     @Override
-    public void recordGauge(String name, long value) {
-        JankHunter.recordGauge(name, value);
-    }
-
-    @Override
-    public void recordHttp(
-            JankHunterContextSnapshot contextSnapshot,
-            String requestLabel,
-            long durationMs,
-            long dnsMs,
-            long connectMs,
-            long ttfbMs,
-            int statusClass,
-            long responseBodyBytes,
-            long requestBodyBytes,
-            long flags) {
-        JankHunter.recordHttpWithContextSnapshot(
-                contextSnapshot,
-                requestLabel,
-                durationMs,
-                dnsMs,
-                connectMs,
-                ttfbMs,
-                statusClass,
-                responseBodyBytes,
-                requestBodyBytes,
-                flags);
+    public void recordWebSocket(JankHunterWebSocketEvent event) {
+        JankHunterNetworkRuntime.recordWebSocket(event);
     }
 }

@@ -30,13 +30,12 @@ class InstrumentationDiagnosticsTest {
                     handlers = false,
                     executors = false,
                     coroutines = true,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = true,
                     classGraph = false,
                     runtimeCallGraph = false,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
-                    ownerMapEntriesDirectory = "",
                 ),
             ),
             0,
@@ -58,8 +57,8 @@ class InstrumentationDiagnosticsTest {
         assertTrue(text.contains("\"line\":55"))
         assertTrue(text.contains("\"owner\":\"FeedOwner\""))
         assertTrue(text.contains("\"screen\":\"FeedScreen\""))
-        assertTrue(text.contains("\"flow\":\"feed.open\""))
-        assertTrue(text.contains("\"trace\":\"refresh\""))
+        assertTrue(text.contains("\"operation\":\"refresh\""))
+        assertTrue(text.contains("\"operationKind\":\"USER\""))
     }
 
     @Test
@@ -73,19 +72,18 @@ class InstrumentationDiagnosticsTest {
                 "example/Filtered",
                 HookConfig(
                     methodCounters = true,
-                    methodFilterMode = JankHunterMethodFilterMode.ENABLED,
+                    methodFilterMode = JankHunterMethodFilterMode.FILTER,
                     okhttp = false,
                     webSockets = false,
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = true,
                     classGraph = false,
                     runtimeCallGraph = true,
                     classGraphDirectory = "",
                     instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
-                    ownerMapEntriesDirectory = "",
                 ),
             ),
             0,
@@ -155,9 +153,9 @@ class InstrumentationDiagnosticsTest {
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "example/Diagnostics", null, "java/lang/Object", null)
         writer.visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue("FeedOwner")
         writer.visitAnnotation(SCREEN_DESCRIPTOR, false).finishStringValue("FeedScreen")
-        writer.visitAnnotation(FLOW_DESCRIPTOR, false).finishStringValue("feed.open")
+        writer.visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("feed.open")
         writer.visitMethod(Opcodes.ACC_PUBLIC, "load", "()V", null, null).run {
-            visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue("refresh")
+            visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue("refresh")
             visitCode()
             val logLine = Label()
             visitLabel(logLine)
@@ -199,7 +197,6 @@ class InstrumentationDiagnosticsTest {
     private companion object {
         private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOwner;"
         private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
-        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
-        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+        private const val OPERATION_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOperation;"
     }
 }

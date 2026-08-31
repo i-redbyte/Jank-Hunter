@@ -9,14 +9,14 @@ import kotlin.io.path.isRegularFile
 
 data class JankHunterArtifactSet(
     val variant: String,
-    val ownerMap: String = "",
+    val artifactsDir: String = "",
     val mapping: String = "",
     val classGraph: String = "",
     val diagnostics: String = "",
     val diCatalog: String = "",
 ) {
     val isEmpty: Boolean
-        get() = ownerMap.isBlank() && mapping.isBlank() && classGraph.isBlank() && diagnostics.isBlank() && diCatalog.isBlank()
+        get() = artifactsDir.isBlank() && mapping.isBlank() && classGraph.isBlank() && diagnostics.isBlank() && diCatalog.isBlank()
 
     fun displayName(): String = if (variant.isBlank()) "detected" else variant
 }
@@ -83,7 +83,7 @@ object JankHunterArtifactDiscovery {
                 val key = "$module|$variant"
                 val artifacts = grouped.getOrPut(key) { MutableArtifactSet(displayVariant(module, variant)) }
                 when (file.name) {
-                    "owner-map.json" -> artifacts.ownerMap = file.path
+                    "artifact-metadata.json" -> artifacts.artifactsDir = file.parentFile.path
                     "class-graph.jsonl" -> artifacts.classGraph = file.path
                     "instrumentation-diagnostics.jsonl" -> artifacts.diagnostics = file.path
                     "di-catalog.jsonl" -> artifacts.diCatalog = file.path
@@ -107,7 +107,7 @@ object JankHunterArtifactDiscovery {
             .map { (_, mutable) ->
                 JankHunterArtifactSet(
                     variant = mutable.variant,
-                    ownerMap = mutable.ownerMap,
+                    artifactsDir = mutable.artifactsDir,
                     mapping = mutable.mapping,
                     classGraph = mutable.classGraph,
                     diagnostics = mutable.diagnostics,
@@ -124,7 +124,7 @@ object JankHunterArtifactDiscovery {
 
     private fun score(set: JankHunterArtifactSet): Int {
         var score = 0
-        if (set.ownerMap.isNotBlank()) score += 4
+        if (set.artifactsDir.isNotBlank()) score += 4
         if (set.classGraph.isNotBlank()) score += 3
         if (set.diagnostics.isNotBlank()) score += 2
         if (set.mapping.isNotBlank()) score += 1
@@ -134,7 +134,7 @@ object JankHunterArtifactDiscovery {
     }
 
     private fun latestModified(set: JankHunterArtifactSet): Long =
-        listOf(set.ownerMap, set.mapping, set.classGraph, set.diagnostics, set.diCatalog)
+        listOf(set.artifactsDir, set.mapping, set.classGraph, set.diagnostics, set.diCatalog)
             .asSequence()
             .filter(String::isNotBlank)
             .mapNotNull { path -> runCatching { Files.getLastModifiedTime(Path.of(path)).toMillis() }.getOrNull() }
@@ -177,7 +177,7 @@ object JankHunterArtifactDiscovery {
     private fun File.relativeToOrNull(base: File): File? = runCatching { relativeTo(base) }.getOrNull()
 
     private class MutableArtifactSet(val variant: String) {
-        var ownerMap: String = ""
+        var artifactsDir: String = ""
         var mapping: String = ""
         var classGraph: String = ""
         var diagnostics: String = ""

@@ -328,34 +328,22 @@ jankHunter {
     enabled = true
     enabledBuildTypes.add("debug")
     enabledBuildTypes.add("release")
-    autoInit = true
-    dependencyInjectionAnalysis = io.jankhunter.gradle.JankHunterFeatureMode.ENABLED
-    sessionLogSizeLimitEnabled = true
-    maxSessionLogSizeMiB = 8
-    releaseSafety {
-        allowInstrumentation = true
-        privacyReviewed = true
-        allowHeapDumps = true
-        performanceBudgetEvidence = "release-performance-budget.md"
+    storageLimitMiB(8)
+    enable(
+        io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+        io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS,
+    )
+    profile = io.jankhunter.gradle.JankHunterProfile.FULL
+    privacyReviewed()
+    release {
+        allowHeapDumps()
+        allowSecondaryProcesses()
+        performanceBudget(file("release-performance-budget.md"))
     }
-    retainedHeapDump {
-        enabled = true
-        privacyApproved = true
-        minIntervalMs = 600_000
-        maxCount = 1
-        minRetainedAgeMs = 30_000
-    }
-    instrument {
-        okhttp = true
-        webSockets = true
-        methodCounters = true
-        handlers = true
-        logSpam = true
-        classGraph = true
-        runtimeCallGraph = true
-        includeWholeApplication = true
-        asmProgressLog = false
-    }
+    tuning.heapDumps.minIntervalMs = 600_000
+    tuning.heapDumps.maxCount = 1
+    tuning.heapDumps.minRetainedAgeMs = 30_000
+    scope = io.jankhunter.gradle.JankHunterInstrumentationScope.WHOLE_APPLICATION
 }
 
 dependencies {
@@ -409,13 +397,16 @@ android {
 jankHunter {
     enabled = true
     enabledBuildTypes.add("debug")
-    instrument {
-        methodCounters = true
-        handlers = true
-        logSpam = true
-        classGraph = true
-        runtimeCallGraph = true
-        asmProgressLog = false
+    profile = io.jankhunter.gradle.JankHunterProfile.TARGETED
+    debug {
+        enable(
+            io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS,
+            io.jankhunter.gradle.JankHunterFeatureBundle.CONCURRENCY_ALL,
+            io.jankhunter.gradle.JankHunterFeature.LOGGING,
+            io.jankhunter.gradle.JankHunterFeature.CLASS_GRAPH,
+            io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH,
+            io.jankhunter.gradle.JankHunterFeature.LIFECYCLE_LEAKS,
+        )
     }
 }
 EOF
@@ -699,18 +690,17 @@ main() {
     assert_single_banner "$cached_output" "$version"
   fi
 
-  local owner_map="$fixture_dir/app/build/generated/jankhunter/debug/owner-map.json"
-  require_file_contains "$owner_map" '"class":"com.example.jhsmoke.MainActivity"' "Application owner map"
-  require_file_contains "$owner_map" '"methodCounters":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"okhttp":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"webSockets":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"handlers":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"logSpam":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"classGraph":true' "Application owner map metadata"
-  require_file_contains "$owner_map" '"runtimeCallGraph":true' "Application owner map metadata"
-  local feature_owner_map="$fixture_dir/feature/build/generated/jankhunter/debug/owner-map.json"
-  require_file_contains "$feature_owner_map" '"class":"com.example.jhsmoke.feature.FeatureEntry"' "Feature owner map"
-  require_file_contains "$feature_owner_map" '"method":"touch"' "Feature owner map"
+  local artifact_metadata="$fixture_dir/app/build/generated/jankhunter/debug/artifact-metadata.json"
+  require_file_contains "$artifact_metadata" '"kind":"artifact-metadata"' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"methodCounters":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"okhttp":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"webSockets":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"handlers":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"logSpam":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"classGraph":true' "Application artifact metadata"
+  require_file_contains "$artifact_metadata" '"runtimeCallGraph":true' "Application artifact metadata"
+  local feature_artifact_metadata="$fixture_dir/feature/build/generated/jankhunter/debug/artifact-metadata.json"
+  require_file_contains "$feature_artifact_metadata" '"kind":"artifact-metadata"' "Feature artifact metadata"
 
   local class_graph="$fixture_dir/app/build/generated/jankhunter/debug/class-graph.jsonl"
   require_file_contains "$class_graph" '"class":"com.example.jhsmoke.MainActivity"' "Application class graph"
@@ -729,8 +719,8 @@ main() {
   require_file_contains "$feature_diagnostics" '"intent":"lifecycle.watch_retained"' "Feature lifecycle diagnostics"
   require_file_not_contains "$diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Application lifecycle diagnostics"
 
-  local release_owner_map="$fixture_dir/app/build/generated/jankhunter/release/owner-map.json"
-  require_file_contains "$release_owner_map" '"includeWholeApplication":true' "Release owner map metadata"
+  local release_artifact_metadata="$fixture_dir/app/build/generated/jankhunter/release/artifact-metadata.json"
+  require_file_contains "$release_artifact_metadata" '"includeWholeApplication":true' "Release artifact metadata"
   local release_diagnostics="$fixture_dir/app/build/generated/jankhunter/release/instrumentation-diagnostics.jsonl"
   require_file_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
   require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release dependency OkHttp hook diagnostics"

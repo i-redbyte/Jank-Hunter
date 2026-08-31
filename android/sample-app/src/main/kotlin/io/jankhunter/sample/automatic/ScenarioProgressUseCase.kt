@@ -57,6 +57,17 @@ internal enum class ScenarioStep(
         ),
         screenName = "sample.compose.network",
     ),
+    DATABASE(
+        labelRes = R.string.auto_stage_database,
+        titleRes = R.string.auto_database_title,
+        descriptionRes = R.string.auto_database_description,
+        factRes = listOf(
+            R.string.auto_database_fact_threads,
+            R.string.auto_database_fact_transactions,
+            R.string.auto_database_fact_privacy,
+        ),
+        screenName = "sample.compose.database",
+    ),
     MEMORY(
         labelRes = R.string.auto_stage_memory,
         titleRes = R.string.auto_memory_title,

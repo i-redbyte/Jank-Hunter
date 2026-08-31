@@ -97,9 +97,11 @@ internal object DefaultInstrumentationBridgeProvider : InstrumentationBridgeProv
         AndroidHandlerBridge,
         JdkExecutorBridge,
         KotlinxCoroutinesBridge,
-        AndroidViewFlowBridge,
+        AndroidViewInteractionOperationBridge,
         AndroidLogSpamBridge,
         TimberLogSpamBridge,
+        CriticalIOBridge,
+        DatabaseBridgeV1,
     )
 }
 
@@ -120,8 +122,10 @@ internal object VersionedBridgeCatalog {
     val handlers: List<VersionedInstrumentationBridge> = registry.family("handler")
     val executors: List<VersionedInstrumentationBridge> = registry.family("executor")
     val coroutines: List<VersionedInstrumentationBridge> = registry.family("coroutines")
-    val flows: List<VersionedInstrumentationBridge> = registry.family("flow")
+    val interactionOperations: List<VersionedInstrumentationBridge> = registry.family("interaction-operation")
     val logSpam: List<VersionedInstrumentationBridge> = registry.family("logspam")
+    val io: List<VersionedInstrumentationBridge> = registry.family("io")
+    val database: List<VersionedInstrumentationBridge> = registry.family("database")
 
     fun matchOkHttp(call: MethodCall, intents: Set<String>): VersionedBridgeMatch? {
         return okHttp.firstNotNullOfOrNull { bridge ->
@@ -130,6 +134,287 @@ internal object VersionedBridgeCatalog {
     }
 
     fun all(): List<VersionedInstrumentationBridge> = registry.all()
+}
+
+private object DatabaseBridgeV1 : VersionedInstrumentationBridge {
+    override val id: String = "android.database.bridge.v1"
+    override val family: String = "database"
+    override val signatures: List<VersionedBridgeSignature> = listOf(
+        exact(
+            "android.sqlite_database.raw_query",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("rawQuery"),
+            setOf(
+                "(Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;",
+                "(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;",
+            ),
+        ),
+        exact(
+            "android.sqlite_database.raw_query_factory",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("rawQueryWithFactory"),
+            setOf(
+                "(Landroid/database/sqlite/SQLiteDatabase\$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+                "(Landroid/database/sqlite/SQLiteDatabase\$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;",
+            ),
+        ),
+        exact(
+            "android.sqlite_database.exec",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("execSQL"),
+            setOf("(Ljava/lang/String;)V", "(Ljava/lang/String;[Ljava/lang/Object;)V"),
+        ),
+        exact(
+            "android.sqlite_database.compile",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("compileStatement"),
+            setOf("(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;"),
+        ),
+        exact(
+            "android.sqlite_database.insert",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("insert", "insertOrThrow", "replace", "replaceOrThrow"),
+            setOf("(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J"),
+        ),
+        exact(
+            "android.sqlite_database.insert_conflict",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("insertWithOnConflict"),
+            setOf("(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;I)J"),
+        ),
+        exact(
+            "android.sqlite_database.update",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("update"),
+            setOf("(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I"),
+        ),
+        exact(
+            "android.sqlite_database.delete",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("delete"),
+            setOf("(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I"),
+        ),
+        exact(
+            "android.sqlite_database.update_conflict",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("updateWithOnConflict"),
+            setOf("(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;I)I"),
+        ),
+        exact(
+            "android.sqlite_statement.execute",
+            setOf("android/database/sqlite/SQLiteStatement"),
+            setOf("execute"),
+            setOf("()V"),
+        ),
+        exact(
+            "android.sqlite_statement.execute_insert",
+            setOf("android/database/sqlite/SQLiteStatement"),
+            setOf("executeInsert"),
+            setOf("()J"),
+        ),
+        exact(
+            "android.sqlite_statement.execute_update_delete",
+            setOf("android/database/sqlite/SQLiteStatement"),
+            setOf("executeUpdateDelete"),
+            setOf("()I"),
+        ),
+        exact(
+            "android.sqlite_statement.query_long",
+            setOf("android/database/sqlite/SQLiteStatement"),
+            setOf("simpleQueryForLong"),
+            setOf("()J"),
+        ),
+        exact(
+            "android.sqlite_statement.query_string",
+            setOf("android/database/sqlite/SQLiteStatement"),
+            setOf("simpleQueryForString"),
+            setOf("()Ljava/lang/String;"),
+        ),
+        exact(
+            "androidx.support_sqlite_database.query",
+            setOf("androidx/sqlite/db/SupportSQLiteDatabase", "androidx/room/RoomDatabase"),
+            setOf("query"),
+            setOf(
+                "(Ljava/lang/String;)Landroid/database/Cursor;",
+                "(Ljava/lang/String;[Ljava/lang/Object;)Landroid/database/Cursor;",
+                "(Landroidx/sqlite/db/SupportSQLiteQuery;)Landroid/database/Cursor;",
+                "(Landroidx/sqlite/db/SupportSQLiteQuery;Landroid/os/CancellationSignal;)Landroid/database/Cursor;",
+            ),
+        ),
+        exact(
+            "androidx.support_sqlite_database.exec",
+            setOf("androidx/sqlite/db/SupportSQLiteDatabase", "androidx/room/RoomDatabase"),
+            setOf("execSQL"),
+            setOf("(Ljava/lang/String;)V", "(Ljava/lang/String;[Ljava/lang/Object;)V"),
+        ),
+        exact(
+            "androidx.support_sqlite_database.compile",
+            setOf("androidx/sqlite/db/SupportSQLiteDatabase", "androidx/room/RoomDatabase"),
+            setOf("compileStatement"),
+            setOf("(Ljava/lang/String;)Landroidx/sqlite/db/SupportSQLiteStatement;"),
+        ),
+        exact(
+            "androidx.support_sqlite_statement.execute",
+            setOf("androidx/sqlite/db/SupportSQLiteStatement"),
+            setOf("execute"),
+            setOf("()V"),
+        ),
+        exact(
+            "androidx.support_sqlite_statement.execute_insert",
+            setOf("androidx/sqlite/db/SupportSQLiteStatement"),
+            setOf("executeInsert"),
+            setOf("()J"),
+        ),
+        exact(
+            "androidx.support_sqlite_statement.execute_update_delete",
+            setOf("androidx/sqlite/db/SupportSQLiteStatement"),
+            setOf("executeUpdateDelete"),
+            setOf("()I"),
+        ),
+        exact(
+            "androidx.support_sqlite_statement.query_long",
+            setOf("androidx/sqlite/db/SupportSQLiteStatement"),
+            setOf("simpleQueryForLong"),
+            setOf("()J"),
+        ),
+        exact(
+            "androidx.support_sqlite_statement.query_string",
+            setOf("androidx/sqlite/db/SupportSQLiteStatement"),
+            setOf("simpleQueryForString"),
+            setOf("()Ljava/lang/String;"),
+        ),
+        exact(
+            "android.database.transaction",
+            setOf(
+                "android/database/sqlite/SQLiteDatabase",
+                "androidx/sqlite/db/SupportSQLiteDatabase",
+                "androidx/room/RoomDatabase",
+            ),
+            setOf("beginTransaction", "beginTransactionNonExclusive", "setTransactionSuccessful", "endTransaction"),
+            setOf("()V"),
+        ),
+        exact(
+            "android.database.transaction_listener",
+            setOf("android/database/sqlite/SQLiteDatabase"),
+            setOf("beginTransactionWithListener", "beginTransactionWithListenerNonExclusive"),
+            setOf("(Landroid/database/sqlite/SQLiteTransactionListener;)V"),
+        ),
+        roomAdapter(
+            "androidx.room.entity_insert",
+            setOf("androidx/room/EntityInsertAdapter", "androidx/room/EntityUpsertAdapter"),
+            setOf(
+                "insert",
+                "insertAndReturnId",
+                "insertAndReturnIdsArray",
+                "insertAndReturnIdsArrayBox",
+                "insertAndReturnIdsList",
+                "upsert",
+                "upsertAndReturnId",
+                "upsertAndReturnIdsArray",
+                "upsertAndReturnIdsArrayBox",
+                "upsertAndReturnIdsList",
+            ),
+            setOf("V", "J", "[J", "[Ljava/lang/Long;", "Ljava/util/List;"),
+        ),
+        roomAdapter(
+            "androidx.room.entity_mutation",
+            setOf("androidx/room/EntityDeleteOrUpdateAdapter"),
+            setOf("handle", "handleMultiple"),
+            setOf("I"),
+        ),
+    )
+
+    private fun exact(
+        id: String,
+        owners: Set<String>,
+        names: Set<String>,
+        descriptors: Set<String>,
+    ): VersionedBridgeSignature {
+        return VersionedBridgeSignature.exact(
+            SignatureSpec(id = id, owners = owners, names = names, descriptors = descriptors),
+            HookIntent.DatabaseCall(DatabaseFrameworkKind.SQLITE, DatabaseOperationKind.EXECUTE),
+        )
+    }
+
+    private fun roomAdapter(
+        id: String,
+        owners: Set<String>,
+        names: Set<String>,
+        returnDescriptors: Set<String>,
+    ): VersionedBridgeSignature {
+        return VersionedBridgeSignature(
+            id = id,
+            intent = HookIntent.DatabaseCall(DatabaseFrameworkKind.ROOM, DatabaseOperationKind.EXECUTE),
+            owners = owners,
+            names = names,
+            descriptorMatcher = { call ->
+                ROOM_ADAPTER_ARGUMENTS.any(call.descriptor::startsWith) &&
+                    call.descriptor.substringAfterLast(')') in returnDescriptors
+            },
+        )
+    }
+
+    private val ROOM_ADAPTER_ARGUMENTS = arrayOf(
+        "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Object;)",
+        "(Landroidx/sqlite/SQLiteConnection;Ljava/lang/Iterable;)",
+        "(Landroidx/sqlite/SQLiteConnection;Ljava/util/Collection;)",
+        "(Landroidx/sqlite/SQLiteConnection;[Ljava/lang/Object;)",
+    )
+}
+
+private object CriticalIOBridge : VersionedInstrumentationBridge {
+    override val id: String = "critical.io.bridge.v1"
+    override val family: String = "io"
+    override val signatures: List<VersionedBridgeSignature> = listOf(
+        exactIO(
+            "kotlin.file.read_bytes",
+            "kotlin/io/FilesKt",
+            "readBytes",
+            "(Ljava/io/File;)[B",
+            CriticalIOCallKind.FILE_READ_BYTES,
+        ),
+        exactIO(
+            "kotlin.file.write_bytes",
+            "kotlin/io/FilesKt",
+            "writeBytes",
+            "(Ljava/io/File;[B)V",
+            CriticalIOCallKind.FILE_WRITE_BYTES,
+        ),
+        exactIO(
+            "kotlin.file.append_bytes",
+            "kotlin/io/FilesKt",
+            "appendBytes",
+            "(Ljava/io/File;[B)V",
+            CriticalIOCallKind.FILE_APPEND_BYTES,
+        ),
+        exactIO(
+            "java.file_descriptor.sync",
+            "java/io/FileDescriptor",
+            "sync",
+            "()V",
+            CriticalIOCallKind.FILE_DESCRIPTOR_SYNC,
+        ),
+        exactIO(
+            "java.file_channel.force",
+            "java/nio/channels/FileChannel",
+            "force",
+            "(Z)V",
+            CriticalIOCallKind.FILE_CHANNEL_FORCE,
+        ),
+    )
+
+    private fun exactIO(
+        id: String,
+        owner: String,
+        name: String,
+        descriptor: String,
+        kind: CriticalIOCallKind,
+    ): VersionedBridgeSignature {
+        return VersionedBridgeSignature.exact(
+            SignatureSpec(id = id, owner = owner, name = name, descriptor = descriptor),
+            HookIntent.CriticalIO(kind),
+        )
+    }
 }
 
 private object OkHttp3Bridge : VersionedInstrumentationBridge {
@@ -141,8 +426,16 @@ private object OkHttp3Bridge : VersionedInstrumentationBridge {
             HookIntent.WrapOkHttpEventListenerFactory,
         ),
         VersionedBridgeSignature.exact(
+            HookSignatureCatalog.okHttpEventListener,
+            HookIntent.InstallOkHttpEventListener,
+        ),
+        VersionedBridgeSignature.exact(
             HookSignatureCatalog.okHttpBuild,
             HookIntent.InstallOkHttpEventListenerFactory,
+        ),
+        VersionedBridgeSignature.exact(
+            HookSignatureCatalog.okHttpNewCall,
+            HookIntent.GuardOkHttpNewCall,
         ),
         VersionedBridgeSignature.exact(
             HookSignatureCatalog.okHttpNewWebSocket,
@@ -263,9 +556,9 @@ private object JdkExecutorBridge : VersionedInstrumentationBridge {
     }
 }
 
-private object AndroidViewFlowBridge : VersionedInstrumentationBridge {
-    override val id: String = "android.view.flow.bridge.v1"
-    override val family: String = "flow"
+private object AndroidViewInteractionOperationBridge : VersionedInstrumentationBridge {
+    override val id: String = "android.view.interaction-operation.bridge.v1"
+    override val family: String = "interaction-operation"
     override val signatures: List<VersionedBridgeSignature> = listOf(
         VersionedBridgeSignature(
             id = "android.view.click_listener.v1",

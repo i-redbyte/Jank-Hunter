@@ -4,15 +4,23 @@ import io.jankhunter.runtime.internal.system.ObjectRetentionWatcher
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ObjectRetentionWatcherTest {
     @Test
+    fun cardinalityLossUsesPrimitivePort() {
+        val field = ObjectRetentionWatcher::class.java.getDeclaredField("onCardinalityLoss")
+
+        assertFalse(field.type == Function1::class.java)
+    }
+
+    @Test
     fun retainedHolderFallsBackToClassNameWhenHolderIsMissing() {
-        assertEquals("com.example.Owner", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "com.example.Owner"))
-        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", null))
-        assertEquals("com.example.LeakyActivity", JankHunter.effectiveRetainedHolder("com.example.LeakyActivity", "unknown"))
+        assertEquals("com.example.Owner", firstContextValue("com.example.Owner", "com.example.LeakyActivity"))
+        assertEquals("com.example.LeakyActivity", firstContextValue(null, "com.example.LeakyActivity"))
+        assertEquals("com.example.LeakyActivity", firstContextValue("unknown", "com.example.LeakyActivity"))
     }
 
     @Test
@@ -174,8 +182,6 @@ class ObjectRetentionWatcherTest {
         val context = JankHunterContext(
             screen = "LeakDemoScreen",
             owner = "sample.memory_leak.listener_registry",
-            flow = "sample.memory_leak.demo",
-            step = "listener_callback",
         )
         enableManualWatch(watcher)
         try {

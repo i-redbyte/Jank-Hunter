@@ -1,12 +1,23 @@
 package io.jankhunter.runtime
 
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeMetricsServiceTest {
+    @Test
+    fun maintenanceSchedulingUsesPrimitiveResultPorts() {
+        val fields = RuntimeMetricsService::class.java.declaredFields.associateBy { it.name }
+
+        assertFalse(fields.getValue("executeMaintenance").type == Function1::class.java)
+        assertFalse(fields.getValue("executeDelayedMaintenance").type == Function2::class.java)
+        assertFalse(fields.getValue("executeMaintenanceAndWait").type == Function2::class.java)
+    }
+
     @Test
     fun firstSampleSchedulesOneDelayedWindowFlush() {
         withService { service, immediate, delayed, _ ->
@@ -39,7 +50,7 @@ class RuntimeMetricsServiceTest {
     fun criticalLifecycleMetricsBypassTheBulkAggregator() {
         var contextUpdates = 0
         withService(ensureContextRecorded = { contextUpdates++ }) { service, immediate, delayed, writer ->
-            service.recordCounter("app.lifecycle.foreground.count", 1L)
+            service.recordCounter("app.lifecycle.ui_visible.count", 1L)
             service.recordGauge("screen.checkout.lifecycle.time_to_resume_ms", 120L)
 
             assertTrue(immediate.isEmpty())
@@ -75,7 +86,7 @@ class RuntimeMetricsServiceTest {
             .metricAggregationWindowMs(WINDOW_MS)
             .maxMetricAggregationKeys(16)
             .build()
-        val writer = AsyncLogWriter.open(directory, config, "main")
+        val writer = AsyncLogWriterFactory().open(directory, config, "main")
         val immediate = mutableListOf<() -> Unit>()
         val delayed = mutableListOf<DelayedTask>()
         var nowMs = 10_000L

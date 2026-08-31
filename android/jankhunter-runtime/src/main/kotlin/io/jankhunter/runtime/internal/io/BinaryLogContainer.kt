@@ -12,7 +12,6 @@ import java.security.MessageDigest
 internal interface BinaryLogContainer : Closeable {
     val file: File?
     val path: String
-    val usesChunkLocalDictionary: Boolean
 
     fun retainedBytes(): Long
 
@@ -26,6 +25,7 @@ internal interface BinaryLogContainer : Closeable {
         flags: Int,
         sequence: Long,
         stored: ByteArray,
+        storedSize: Int,
         rawSize: Int,
         recordCount: Int,
         rawCrc: Long,
@@ -63,7 +63,6 @@ internal class SequentialJhlogContainer private constructor(
         archiveBudget = archiveBudget,
     )
 
-    override val usesChunkLocalDictionary = false
     private val output = BufferedOutputStream(output, IO_BUFFER_BYTES)
     private val digest = MessageDigest.getInstance("SHA-256")
     private val physicalByteLimit = maxPhysicalBytes.takeIf { it > 0L } ?: Long.MAX_VALUE
@@ -126,6 +125,7 @@ internal class SequentialJhlogContainer private constructor(
         flags: Int,
         sequence: Long,
         stored: ByteArray,
+        storedSize: Int,
         rawSize: Int,
         recordCount: Int,
         rawCrc: Long,
@@ -135,7 +135,8 @@ internal class SequentialJhlogContainer private constructor(
         putUInt16Le(header, 4, Jhlog.CHUNK_HEADER_BYTES)
         putUInt16Le(header, 6, flags)
         putUInt32Le(header, 8, sequence)
-        putUInt32Le(header, 12, stored.size.toLong())
+        require(storedSize in 0..stored.size)
+        putUInt32Le(header, 12, storedSize.toLong())
         putUInt32Le(header, 16, rawSize.toLong())
         putUInt32Le(header, 20, recordCount.toLong())
         putUInt32Le(header, 24, rawCrc)
@@ -143,19 +144,19 @@ internal class SequentialJhlogContainer private constructor(
 
         val trailer = commitTrailer
         putUInt32Le(trailer, 4, sequence)
-        putUInt32Le(trailer, 8, stored.size.toLong())
+        putUInt32Le(trailer, 8, storedSize.toLong())
         putUInt32Le(trailer, 12, rawSize.toLong())
         putUInt32Le(trailer, 16, rawCrc)
 
-        val physicalBytes = header.size.toLong() + stored.size.toLong() + trailer.size.toLong()
+        val physicalBytes = header.size.toLong() + storedSize.toLong() + trailer.size.toLong()
         ensureCapacity(physicalBytes, terminalReserveBytes)
         archiveBudget?.claim(physicalBytes, terminal = terminalReserveBytes == 0L)
         output.write(header)
-        output.write(stored)
+        output.write(stored, 0, storedSize)
         output.write(trailer)
         output.flush()
         digest.update(header)
-        digest.update(stored)
+        digest.update(stored, 0, storedSize)
         digest.update(trailer)
         bytesWritten += physicalBytes
         return physicalBytes

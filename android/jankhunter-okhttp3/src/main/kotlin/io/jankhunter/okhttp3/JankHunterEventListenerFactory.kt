@@ -2,12 +2,20 @@ package io.jankhunter.okhttp3
 
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterContextSnapshot
+import io.jankhunter.runtime.JankHunterHttpEvent
 import io.jankhunter.runtime.JankHunterNetworkEventFlags
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.Proxy
+import java.net.ProtocolException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.ArrayDeque
+import javax.net.ssl.SSLException
 import kotlin.math.max
 import okhttp3.Call
 import okhttp3.Connection
@@ -20,26 +28,38 @@ import okhttp3.Response
 class JankHunterEventListenerFactory private constructor(
     private val delegate: EventListener.Factory?,
     private val telemetry: NetworkTelemetry,
-    private val clock: () -> Long,
+    private val clock: NetworkLongSource,
+    serviceAlias: String?,
 ) : EventListener.Factory {
     constructor() : this(null)
 
     constructor(delegate: EventListener.Factory?) : this(
         delegate = delegate,
         telemetry = RuntimeNetworkTelemetry.INSTANCE,
-        clock = SystemClock::elapsedRealtime,
+        clock = NetworkLongSource { SystemClock.elapsedRealtime() },
+        serviceAlias = null,
     )
+
+    constructor(delegate: EventListener.Factory?, serviceAlias: String?) : this(
+        delegate = delegate,
+        telemetry = RuntimeNetworkTelemetry.INSTANCE,
+        clock = NetworkLongSource { SystemClock.elapsedRealtime() },
+        serviceAlias = serviceAlias,
+    )
+
+    private val serviceAlias = NetworkMetricNames.serviceAlias(serviceAlias)
 
     override fun create(call: Call): EventListener {
         // This is application/OkHttp business code: call it once and let its exception propagate.
         val base = delegate?.create(call) ?: EventListener.NONE
-        return EventListenerNonFatal.bestEffort(base) { Listener(base, telemetry, clock) }
+        return EventListenerNonFatal.bestEffort(base) { Listener(base, telemetry, clock, serviceAlias) }
     }
 
     private class Listener(
         private val delegate: EventListener,
         private val telemetry: NetworkTelemetry,
-        private val clock: () -> Long,
+        private val clock: NetworkLongSource,
+        private val serviceAlias: String?,
     ) : EventListener() {
         /** Protects only this call's small in-memory state; delegates and metric I/O run outside it. */
         private val stateLock = Any()
@@ -48,49 +68,52 @@ class JankHunterEventListenerFactory private constructor(
         private var connectedRoutesAwaitingAcquisition: HashSet<ConnectKey>? = null
 
         private var startedAt = UNSET_TIME
+        private var firstIOAt = UNSET_TIME
+        private var requestStartedAt = UNSET_TIME
         private var requestFinishedAt = UNSET_TIME
+        private var responseStartedAt = UNSET_TIME
         private var dnsMs = 0L
         private var connectMs = 0L
+        private var tlsMs = 0L
+        private var requestMs = 0L
         private var ttfbMs = 0L
-        private var statusClass = 0
+        private var responseMs = 0L
+        private var statusCode = 0
+        private var protocol = JankHunterHttpEvent.PROTOCOL_UNKNOWN
         private var flags = 0L
-        private var connectionReleased = false
         private var dnsAttemptCount = 0
         private var connectAttemptCount = 0
         private var tlsAttemptCount = 0
+        private var connectFailureCount = 0
+        private var tlsFailureCount = 0
+        private var requestAttemptCount = 0
+        private var redirectCount = 0
         private var nextConnectSequence = 0L
         private var requestBodyBytes = 0L
         private var responseBodyBytes = 0L
         private var phase = PHASE_CALL
-        private var phaseFailureRecorded = false
         private var terminalRecorded = false
         private var contextCaptureAttempted = false
         private var callIdentityAttempted = false
         private var contextSnapshot: JankHunterContextSnapshot? = null
-        private var routeKey = UNKNOWN
         private var requestLabel = UNKNOWN
 
         override fun callStart(call: Call) {
             prepareCallback(call)
-            val route = state { routeKey }
-            recordCounter("network.request.started.count")
-            recordCounter("network.route.$route.started.count")
             delegate.callStart(call)
         }
 
         override fun dnsStart(call: Call, domainName: String) {
             prepareCallback(call)
             val started = now()
-            val route = state {
+            state {
+                markFirstIO(started)
                 phase = PHASE_DNS
                 dnsAttemptCount++
                 val startsByDomain = dnsStartsByDomain
                     ?: HashMap<String, ArrayDeque<Long>>().also { dnsStartsByDomain = it }
                 startsByDomain.getOrPut(domainName, ::ArrayDeque).addLast(started)
-                routeKey
             }
-            recordCounter("network.dns.lookup.count")
-            recordCounter("network.route.$route.dns.lookup.count")
             delegate.dnsStart(call, domainName)
         }
 
@@ -113,7 +136,8 @@ class JankHunterEventListenerFactory private constructor(
             val started = now()
             val callbackThread = Thread.currentThread()
             val key = ConnectKey(inetSocketAddress, proxy)
-            val route = state {
+            state {
+                markFirstIO(started)
                 phase = PHASE_CONNECT
                 connectAttemptCount++
                 val attempt = ConnectAttempt(
@@ -126,16 +150,15 @@ class JankHunterEventListenerFactory private constructor(
                         connectAttemptsByRoute = it
                     }
                 attemptsByRoute.getOrPut(key, ::ArrayDeque).addLast(attempt)
-                routeKey
             }
-            recordCounter("network.connect.attempt.count")
-            recordCounter("network.route.$route.connect.attempt.count")
             delegate.connectStart(call, inetSocketAddress, proxy)
         }
 
         override fun secureConnectStart(call: Call) {
             prepareCallback(call)
+            val started = now()
             state {
+                markFirstIO(started)
                 phase = PHASE_TLS
                 tlsAttemptCount++
                 // HTTP_TLS is an aggregate fact for the whole OkHttp Call (redirects included).
@@ -144,16 +167,21 @@ class JankHunterEventListenerFactory private constructor(
                 findConnectAttempt(Thread.currentThread()) { !it.tlsStarted }?.let { attempt ->
                     attempt.tlsStarted = true
                     attempt.tlsInProgress = true
+                    attempt.tlsStartedAt = started
                 }
             }
-            recordCounter("network.tls.handshake.count")
             delegate.secureConnectStart(call)
         }
 
         override fun secureConnectEnd(call: Call, handshake: Handshake?) {
             prepareCallback(call)
+            val ended = now()
             state {
-                findConnectAttempt(Thread.currentThread()) { it.tlsInProgress }?.tlsInProgress = false
+                findConnectAttempt(Thread.currentThread()) { it.tlsInProgress }?.let { attempt ->
+                    tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, ended))
+                    attempt.tlsStartedAt = UNSET_TIME
+                    attempt.tlsInProgress = false
+                }
                 if (handshake != null) flags = flags or JankHunterNetworkEventFlags.HTTP_TLS
             }
             delegate.secureConnectEnd(call, handshake)
@@ -171,6 +199,7 @@ class JankHunterEventListenerFactory private constructor(
                 val key = ConnectKey(inetSocketAddress, proxy)
                 val attempt = removeConnectAttempt(key, Thread.currentThread())
                 connectMs = addDuration(connectMs, elapsed(attempt?.startedAt ?: UNSET_TIME, ended))
+                this.protocol = protocolCode(protocol)
                 if (attempt != null) {
                     val connectedRoutes = connectedRoutesAwaitingAcquisition
                         ?: HashSet<ConnectKey>().also { connectedRoutesAwaitingAcquisition = it }
@@ -189,58 +218,61 @@ class JankHunterEventListenerFactory private constructor(
         ) {
             prepareCallback(call)
             val ended = now()
-            val failure = state {
+            state {
                 val key = ConnectKey(inetSocketAddress, proxy)
                 val attempt = removeConnectAttempt(key, Thread.currentThread())
                 connectMs = addDuration(connectMs, elapsed(attempt?.startedAt ?: UNSET_TIME, ended))
+                if (attempt?.tlsInProgress == true) {
+                    tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, ended))
+                }
                 val failedPhase = if (attempt?.tlsStarted == true) PHASE_TLS else PHASE_CONNECT
+                if (failedPhase == PHASE_TLS) tlsFailureCount++ else connectFailureCount++
                 phase = failedPhase
-                if (terminalRecorded) null else claimPhaseFailure(failedPhase, ioe)
             }
-            recordPhaseFailure(failure)
             delegate.connectFailed(call, inetSocketAddress, proxy, protocol, ioe)
         }
 
         override fun connectionAcquired(call: Call, connection: Connection) {
             prepareCallback(call)
+            val acquiredAt = now()
             val connectionKey = EventListenerNonFatal.bestEffort<ConnectKey?>(null) {
                 val route = connection.route()
                 ConnectKey(route.socketAddress(), route.proxy())
             }
             val hasTls = EventListenerNonFatal.bestEffort(false) { connection.handshake() != null }
-            val classification = state {
+            val acquiredProtocol = EventListenerNonFatal.bestEffort(JankHunterHttpEvent.PROTOCOL_UNKNOWN) {
+                protocolCode(connection.protocol())
+            }
+            state {
+                markFirstIO(acquiredAt)
                 if (hasTls) flags = flags or JankHunterNetworkEventFlags.HTTP_TLS
+                if (acquiredProtocol != JankHunterHttpEvent.PROTOCOL_UNKNOWN) protocol = acquiredProtocol
                 when {
-                    connectionKey == null -> ConnectionClassification.UNKNOWN
-                    consumeConnectedRoute(connectionKey) -> ConnectionClassification.NEW
+                    connectionKey == null -> Unit
+                    consumeConnectedRoute(connectionKey) -> Unit
                     else -> {
                         flags = flags or JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION
-                        ConnectionClassification.REUSED
                     }
                 }
-            }
-            val route = state { routeKey }
-            when (classification) {
-                ConnectionClassification.NEW -> recordCounter("network.request.new_connection.count")
-                ConnectionClassification.REUSED -> {
-                    recordCounter("network.request.reused_connection.count")
-                    recordCounter("network.route.$route.reused_connection.count")
-                }
-
-                ConnectionClassification.UNKNOWN -> Unit
             }
             delegate.connectionAcquired(call, connection)
         }
 
         override fun connectionReleased(call: Call, connection: Connection) {
             prepareCallback(call)
-            state { connectionReleased = true }
             delegate.connectionReleased(call, connection)
         }
 
         override fun requestHeadersStart(call: Call) {
             prepareCallback(call)
-            state { phase = PHASE_REQUEST }
+            val started = now()
+            state {
+                markFirstIO(started)
+                finishRequest(started)
+                phase = PHASE_REQUEST
+                requestStartedAt = started
+                requestAttemptCount++
+            }
             delegate.requestHeadersStart(call)
         }
 
@@ -249,14 +281,23 @@ class JankHunterEventListenerFactory private constructor(
             val finished = now()
             state {
                 phase = PHASE_REQUEST
-                requestFinishedAt = finished
+                val hasBody = EventListenerNonFatal.bestEffort(false) { request.body() != null }
+                if (!hasBody) {
+                    finishRequest(finished)
+                    flags = flags or JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN
+                }
             }
             delegate.requestHeadersEnd(call, request)
         }
 
         override fun requestBodyStart(call: Call) {
             prepareCallback(call)
-            state { phase = PHASE_REQUEST }
+            val started = now()
+            state {
+                markFirstIO(started)
+                phase = PHASE_REQUEST
+                if (requestStartedAt == UNSET_TIME) requestStartedAt = started
+            }
             delegate.requestBodyStart(call)
         }
 
@@ -266,7 +307,9 @@ class JankHunterEventListenerFactory private constructor(
             state {
                 phase = PHASE_REQUEST
                 requestBodyBytes = max(0L, byteCount)
-                requestFinishedAt = finished
+                flags = flags or JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN
+                if (requestStartedAt == UNSET_TIME) requestStartedAt = finished
+                finishRequest(finished)
             }
             delegate.requestBodyEnd(call, byteCount)
         }
@@ -275,60 +318,67 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val responseStartedAt = now()
             state {
+                markFirstIO(responseStartedAt)
+                finishRequest(responseStartedAt)
+                finishResponse(responseStartedAt)
                 phase = PHASE_RESPONSE
                 val base = if (requestFinishedAt != UNSET_TIME) requestFinishedAt else startedAt
-                ttfbMs = elapsed(base, responseStartedAt)
+                ttfbMs = addDuration(ttfbMs, elapsed(base, responseStartedAt))
+                this.responseStartedAt = responseStartedAt
             }
             delegate.responseHeadersStart(call)
         }
 
         override fun responseHeadersEnd(call: Call, response: Response) {
             prepareCallback(call)
-            val responseStatusClass = EventListenerNonFatal.bestEffort<Int?>(null) {
-                response.code() / HTTP_STATUS_CLASS_DIVISOR
+            val code = EventListenerNonFatal.bestEffort(0) { response.code() }
+            val responseProtocol = EventListenerNonFatal.bestEffort(JankHunterHttpEvent.PROTOCOL_UNKNOWN) {
+                protocolCode(response.protocol())
             }
-            if (responseStatusClass != null) state { statusClass = responseStatusClass }
+            val cacheHit = EventListenerNonFatal.bestEffort(false) { response.cacheResponse() != null }
+            val redirect = EventListenerNonFatal.bestEffort(false) { isRedirect(response) }
+            state {
+                statusCode = code
+                protocol = responseProtocol
+                if (cacheHit) flags = flags or JankHunterNetworkEventFlags.HTTP_CACHE_HIT
+                if (redirect) redirectCount++
+            }
             delegate.responseHeadersEnd(call, response)
         }
 
         override fun responseBodyStart(call: Call) {
             prepareCallback(call)
-            state { phase = PHASE_RESPONSE }
+            val started = now()
+            state {
+                markFirstIO(started)
+                phase = PHASE_RESPONSE
+                if (responseStartedAt == UNSET_TIME) responseStartedAt = started
+            }
             delegate.responseBodyStart(call)
         }
 
         override fun responseBodyEnd(call: Call, byteCount: Long) {
             prepareCallback(call)
+            val finished = now()
             state {
                 phase = PHASE_RESPONSE
                 responseBodyBytes = max(0L, byteCount)
+                flags = flags or JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN
+                finishResponse(finished)
             }
             delegate.responseBodyEnd(call, byteCount)
         }
 
         override fun callEnd(call: Call) {
             prepareCallback(call)
-            val snapshot = terminalSnapshot(failed = false, throwable = null)
-            if (snapshot != null) {
-                record(snapshot)
-                recordCounter("network.request.finished.count")
-                recordCounter("network.route.${snapshot.routeKey}.finished.count")
-            }
+            terminalEvent(failed = false, cancelled = false, throwable = null)?.let(::record)
             delegate.callEnd(call)
         }
 
         override fun callFailed(call: Call, ioe: IOException) {
             prepareCallback(call)
-            // The terminal claim and phase-failure claim are atomic. Duplicate terminal callbacks
-            // cannot emit phase counters before discovering that the call was already recorded.
-            val snapshot = terminalSnapshot(failed = true, throwable = ioe)
-            if (snapshot != null) {
-                recordPhaseFailure(snapshot.phaseFailure)
-                record(snapshot)
-                recordCounter("network.request.failed.count")
-                recordCounter("network.failure.${NetworkMetricNames.throwable(ioe)}.count")
-                recordCounter("network.route.${snapshot.routeKey}.failed.count")
-            }
+            val cancelled = EventListenerNonFatal.bestEffort(false) { call.isCanceled() }
+            terminalEvent(failed = true, cancelled = cancelled, throwable = ioe)?.let(::record)
             delegate.callFailed(call, ioe)
         }
 
@@ -350,18 +400,10 @@ class JankHunterEventListenerFactory private constructor(
                 }
             }
             if (resolveCallIdentity) {
-                EventListenerNonFatal.bestEffort<CallIdentity?>(null) {
+                EventListenerNonFatal.bestEffort<String?>(null) {
                     val request = call.request()
-                    CallIdentity(
-                        routeKey = metricRouteKey(request),
-                        requestLabel = "${request.method()} ${request.url().encodedPath()}",
-                    )
-                }?.let { identity ->
-                    state {
-                        routeKey = identity.routeKey
-                        requestLabel = identity.requestLabel
-                    }
-                }
+                    NetworkMetricNames.route(request.method(), request.url().encodedPath())
+                }?.let { label -> state { requestLabel = label } }
             }
             if (captureContext) {
                 val snapshot = EventListenerNonFatal.bestEffort<JankHunterContextSnapshot?>(null) {
@@ -371,99 +413,65 @@ class JankHunterEventListenerFactory private constructor(
             }
         }
 
-        private fun terminalSnapshot(failed: Boolean, throwable: Throwable?): TerminalSnapshot? {
+        private fun terminalEvent(
+            failed: Boolean,
+            cancelled: Boolean,
+            throwable: Throwable?,
+        ): JankHunterHttpEvent? {
             val endedAt = now()
             return state {
                 if (terminalRecorded) return@state null
                 terminalRecorded = true
-                val phaseFailure = if (failed) claimPhaseFailure(phase, throwable) else null
-                TerminalSnapshot(
-                    contextSnapshot = contextSnapshot,
-                    requestLabel = requestLabel,
-                    durationMs = elapsed(startedAt, endedAt),
-                    dnsMs = dnsMs,
-                    connectMs = connectMs,
-                    ttfbMs = ttfbMs,
-                    statusClass = statusClass,
-                    responseBodyBytes = responseBodyBytes,
-                    requestBodyBytes = requestBodyBytes,
-                    flags = if (failed) flags or JankHunterNetworkEventFlags.HTTP_FAILED else flags,
-                    connectionReleased = connectionReleased,
-                    dnsAttemptCount = dnsAttemptCount,
-                    connectAttemptCount = connectAttemptCount,
-                    tlsAttemptCount = tlsAttemptCount,
-                    routeKey = routeKey,
-                    phaseFailure = phaseFailure,
+                finishRequest(endedAt)
+                finishResponse(endedAt)
+                var terminalFlags = if (failed) flags or JankHunterNetworkEventFlags.HTTP_FAILED else flags
+                if (cancelled) terminalFlags = terminalFlags or JankHunterNetworkEventFlags.HTTP_CANCELLED
+                val event = JankHunterHttpEvent(
+                    contextSnapshot,
+                    requestLabel,
+                    serviceAlias,
+                    elapsed(startedAt, endedAt),
+                    elapsed(startedAt, firstIOAt),
+                    dnsMs,
+                    connectMs,
+                    tlsMs,
+                    requestMs,
+                    ttfbMs,
+                    responseMs,
+                    statusCode,
+                    if (failed) failurePhase(phase, cancelled) else JankHunterHttpEvent.FAILURE_PHASE_UNKNOWN,
+                    if (failed) failureKind(throwable, cancelled) else JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
+                    protocol,
+                    responseBodyBytes,
+                    requestBodyBytes,
+                    requestAttemptCount,
+                    dnsAttemptCount,
+                    connectAttemptCount,
+                    tlsAttemptCount,
+                    connectFailureCount,
+                    tlsFailureCount,
+                    redirectCount,
+                    terminalFlags,
                 )
+                clearTerminalReferences()
+                event
             }
         }
 
-        private fun record(snapshot: TerminalSnapshot) {
-            telemetry {
-                telemetry.recordHttp(
-                    snapshot.contextSnapshot,
-                    snapshot.requestLabel,
-                    snapshot.durationMs,
-                    snapshot.dnsMs,
-                    snapshot.connectMs,
-                    snapshot.ttfbMs,
-                    snapshot.statusClass,
-                    snapshot.responseBodyBytes,
-                    snapshot.requestBodyBytes,
-                    snapshot.flags,
-                )
-            }
-            recordGauge("network.request.duration_ms", snapshot.durationMs)
-            recordGauge("network.request.dns_attempts", snapshot.dnsAttemptCount.toLong())
-            recordGauge("network.request.connect_attempts", snapshot.connectAttemptCount.toLong())
-            recordGauge("network.request.tls_attempts", snapshot.tlsAttemptCount.toLong())
-            recordGauge(
-                "network.request.connection_released",
-                if (snapshot.connectionReleased) 1L else 0L,
-            )
-            if (
-                snapshot.dnsAttemptCount > 1 ||
-                snapshot.connectAttemptCount > 1 ||
-                snapshot.tlsAttemptCount > 1
-            ) {
-                recordCounter("network.request.retry_or_reconnect.count")
-                recordCounter("network.route.${snapshot.routeKey}.retry_or_reconnect.count")
-            }
+        /** Must be called with [stateLock] held after the immutable terminal event is built. */
+        private fun clearTerminalReferences() {
+            dnsStartsByDomain = null
+            connectAttemptsByRoute = null
+            connectedRoutesAwaitingAcquisition = null
+            contextSnapshot = null
+            requestLabel = UNKNOWN
         }
 
-        /** Must be called with [stateLock] held. */
-        private fun claimPhaseFailure(failedPhase: String, throwable: Throwable?): PhaseFailure? {
-            if (phaseFailureRecorded) return null
-            phaseFailureRecorded = true
-            return PhaseFailure(failedPhase, routeKey, throwable)
-        }
-
-        private fun recordPhaseFailure(failure: PhaseFailure?) {
-            if (failure == null) return
-            val phaseKey = NetworkMetricNames.owner(failure.phase)
-            recordCounter("network.phase.$phaseKey.failure.count")
-            recordCounter("network.route.${failure.routeKey}.phase.$phaseKey.failure.count")
-            recordCounter(
-                "network.phase.$phaseKey.failure.${NetworkMetricNames.throwable(failure.throwable)}.count",
-            )
-        }
-
-        private fun recordCounter(name: String) {
-            telemetry { telemetry.recordCounter(name, 1) }
-        }
-
-        private fun recordGauge(name: String, value: Long) {
-            telemetry { telemetry.recordGauge(name, value) }
-        }
-
-        private fun metricRouteKey(request: Request): String {
-            return NetworkMetricNames.route(request.method(), request.url().encodedPath())
-        }
+        private fun record(event: JankHunterHttpEvent) = telemetry { telemetry.recordHttp(event) }
 
         private fun now(): Long {
-            return EventListenerNonFatal.bestEffort(UNSET_TIME) {
-                clock().takeIf { it >= 0L } ?: UNSET_TIME
-            }
+            val value = EventListenerNonFatal.bestEffortLong(UNSET_TIME, clock)
+            return value.takeIf { it >= 0L } ?: UNSET_TIME
         }
 
         private fun removeConnectAttempt(key: ConnectKey, callbackThread: Thread): ConnectAttempt? {
@@ -515,6 +523,77 @@ class JankHunterEventListenerFactory private constructor(
             return if (duration > Long.MAX_VALUE - total) Long.MAX_VALUE else total + duration
         }
 
+        /** Must be called with [stateLock] held. */
+        private fun markFirstIO(timestamp: Long) {
+            if (firstIOAt == UNSET_TIME && timestamp != UNSET_TIME) firstIOAt = timestamp
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun finishRequest(timestamp: Long) {
+            if (requestStartedAt == UNSET_TIME) return
+            requestMs = addDuration(requestMs, elapsed(requestStartedAt, timestamp))
+            requestStartedAt = UNSET_TIME
+            requestFinishedAt = timestamp
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun finishResponse(timestamp: Long) {
+            if (responseStartedAt == UNSET_TIME) return
+            responseMs = addDuration(responseMs, elapsed(responseStartedAt, timestamp))
+            responseStartedAt = UNSET_TIME
+        }
+
+        private fun failurePhase(currentPhase: String, cancelled: Boolean): Int {
+            if (cancelled) return JankHunterHttpEvent.FAILURE_PHASE_CANCELLED
+            if (firstIOAt == UNSET_TIME && currentPhase == PHASE_CALL) {
+                return JankHunterHttpEvent.FAILURE_PHASE_QUEUE
+            }
+            return when (currentPhase) {
+                PHASE_DNS -> JankHunterHttpEvent.FAILURE_PHASE_DNS
+                PHASE_CONNECT -> JankHunterHttpEvent.FAILURE_PHASE_CONNECT
+                PHASE_TLS -> JankHunterHttpEvent.FAILURE_PHASE_TLS
+                PHASE_REQUEST -> JankHunterHttpEvent.FAILURE_PHASE_REQUEST
+                PHASE_RESPONSE -> JankHunterHttpEvent.FAILURE_PHASE_RESPONSE
+                else -> JankHunterHttpEvent.FAILURE_PHASE_CALL
+            }
+        }
+
+        private fun failureKind(throwable: Throwable?, cancelled: Boolean): Int {
+            if (cancelled) return JankHunterHttpEvent.FAILURE_KIND_CANCELLED
+            return when (throwable) {
+                is UnknownHostException -> JankHunterHttpEvent.FAILURE_KIND_DNS
+                is SocketTimeoutException, is InterruptedIOException -> JankHunterHttpEvent.FAILURE_KIND_TIMEOUT
+                is ConnectException, is NoRouteToHostException -> JankHunterHttpEvent.FAILURE_KIND_CONNECTION
+                is SSLException -> JankHunterHttpEvent.FAILURE_KIND_TLS
+                is ProtocolException -> JankHunterHttpEvent.FAILURE_KIND_PROTOCOL
+                is IOException -> JankHunterHttpEvent.FAILURE_KIND_IO
+                null -> JankHunterHttpEvent.FAILURE_KIND_UNKNOWN
+                else -> JankHunterHttpEvent.FAILURE_KIND_OTHER
+            }
+        }
+
+        private fun protocolCode(value: Protocol?): Int {
+            return when (value) {
+                Protocol.HTTP_1_0 -> JankHunterHttpEvent.PROTOCOL_HTTP_1_0
+                Protocol.HTTP_1_1 -> JankHunterHttpEvent.PROTOCOL_HTTP_1_1
+                Protocol.HTTP_2, Protocol.H2_PRIOR_KNOWLEDGE -> JankHunterHttpEvent.PROTOCOL_HTTP_2
+                null -> JankHunterHttpEvent.PROTOCOL_UNKNOWN
+                else -> if (value.toString() == HTTP_3_PROTOCOL) {
+                    JankHunterHttpEvent.PROTOCOL_HTTP_3
+                } else {
+                    JankHunterHttpEvent.PROTOCOL_UNKNOWN
+                }
+            }
+        }
+
+        private fun isRedirect(response: Response): Boolean {
+            val redirectStatus = when (response.code()) {
+                300, 301, 302, 303, 307, 308 -> true
+                else -> false
+            }
+            return redirectStatus && response.header(LOCATION_HEADER) != null
+        }
+
         private inline fun <T> state(block: () -> T): T = synchronized(stateLock, block)
 
         private inline fun telemetry(block: () -> Unit) {
@@ -523,8 +602,9 @@ class JankHunterEventListenerFactory private constructor(
 
         private companion object {
             private const val UNSET_TIME = -1L
-            private const val HTTP_STATUS_CLASS_DIVISOR = 100
             private const val UNKNOWN = "unknown"
+            private const val HTTP_3_PROTOCOL = "h3"
+            private const val LOCATION_HEADER = "Location"
             private const val PHASE_CALL = "call"
             private const val PHASE_DNS = "dns"
             private const val PHASE_CONNECT = "connect"
@@ -533,11 +613,6 @@ class JankHunterEventListenerFactory private constructor(
             private const val PHASE_RESPONSE = "response"
         }
     }
-
-    private data class CallIdentity(
-        val routeKey: String,
-        val requestLabel: String,
-    )
 
     private data class ConnectKey(
         val inetSocketAddress: InetSocketAddress,
@@ -550,43 +625,21 @@ class JankHunterEventListenerFactory private constructor(
         val sequence: Long,
         var tlsStarted: Boolean = false,
         var tlsInProgress: Boolean = false,
+        var tlsStartedAt: Long = -1L,
     )
-
-    private data class PhaseFailure(
-        val phase: String,
-        val routeKey: String,
-        val throwable: Throwable?,
-    )
-
-    @Suppress("LongParameterList")
-    private data class TerminalSnapshot(
-        val contextSnapshot: JankHunterContextSnapshot?,
-        val requestLabel: String,
-        val durationMs: Long,
-        val dnsMs: Long,
-        val connectMs: Long,
-        val ttfbMs: Long,
-        val statusClass: Int,
-        val responseBodyBytes: Long,
-        val requestBodyBytes: Long,
-        val flags: Long,
-        val connectionReleased: Boolean,
-        val dnsAttemptCount: Int,
-        val connectAttemptCount: Int,
-        val tlsAttemptCount: Int,
-        val routeKey: String,
-        val phaseFailure: PhaseFailure?,
-    )
-
-    private enum class ConnectionClassification {
-        UNKNOWN,
-        NEW,
-        REUSED,
-    }
 
 }
 
 private object EventListenerNonFatal {
+    fun bestEffortLong(fallback: Long, supplier: NetworkLongSource): Long {
+        return try {
+            supplier.getAsLong()
+        } catch (throwable: Throwable) {
+            if (throwable is VirtualMachineError || throwable is ThreadDeath) throw throwable
+            fallback
+        }
+    }
+
     inline fun <T> bestEffort(fallback: T, block: () -> T): T {
         return try {
             block()

@@ -1,5 +1,7 @@
 package io.jankhunter.sample.automatic
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import io.jankhunter.sample.LocalScenarioServer
 import io.jankhunter.sample.graph.NetworkScenarioUseCase
 import io.jankhunter.runtime.JankHunter
@@ -45,24 +47,22 @@ internal class AutomaticNetworkScenario(
         graphScenario.close()
     }
 
-    private fun runHttpFlow(flow: String, step: String, port: Int, path: String) {
-        JankHunter.withFlow(flow) {
-            JankHunter.markFlowStep(step)
+    private fun runHttpFlow(operation: String, stage: String, port: Int, path: String) {
+        JankHunterTelemetry.traceOperation("$operation.$stage") {
             graphScenario.executeHttp(port, path).onSuccess { status ->
-                JankHunter.recordCounter("sample.auto.network.http.$status.count", 1)
+                JankHunterTelemetry.counter("sample.auto.network.http.$status.count", 1)
             }.onFailure {
-                JankHunter.recordCounter("sample.auto.network.exception.count", 1)
+                JankHunterTelemetry.counter("sample.auto.network.exception.count", 1)
             }
         }
     }
 
     private fun runWebSocketFlow(port: Int) {
-        JankHunter.withFlow("sample.auto.websocket.success") {
-            JankHunter.markFlowStep("open_message_disconnect")
+        JankHunterTelemetry.traceOperation("sample.auto.websocket.open_message_disconnect") {
             val completed = CountDownLatch(1)
             val delegate = object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    JankHunter.recordCounter("sample.auto.websocket.message.count", 1)
+                    JankHunterTelemetry.counter("sample.auto.websocket.message.count", 1)
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -70,7 +70,7 @@ internal class AutomaticNetworkScenario(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    JankHunter.recordCounter("sample.auto.websocket.success.count", 1)
+                    JankHunterTelemetry.counter("sample.auto.websocket.success.count", 1)
                     completed.countDown()
                 }
 
@@ -84,12 +84,11 @@ internal class AutomaticNetworkScenario(
     }
 
     private fun runWebSocketFailureFlow(port: Int) {
-        JankHunter.withFlow("sample.auto.websocket.failure") {
-            JankHunter.markFlowStep("connection_refused")
+        JankHunterTelemetry.traceOperation("sample.auto.websocket.connection_refused") {
             val completed = CountDownLatch(1)
             val delegate = object : WebSocketListener() {
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    JankHunter.recordCounter("sample.auto.websocket.expected_failure.count", 1)
+                    JankHunterTelemetry.counter("sample.auto.websocket.expected_failure.count", 1)
                     completed.countDown()
                 }
             }

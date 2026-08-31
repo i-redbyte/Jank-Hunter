@@ -32,10 +32,7 @@ func ReadSessionHeader(path string) (SegmentHeader, error) {
 	defer file.Close()
 
 	var prefix [magicSize]byte
-	n, err := io.ReadFull(file, prefix[:])
-	if isLegacyV1(prefix[:n]) {
-		return SegmentHeader{}, legacyV1UnsupportedError(path)
-	}
+	_, err = io.ReadFull(file, prefix[:])
 	if err != nil {
 		return SegmentHeader{}, fmt.Errorf("%s: read .jhlog magic: %w", path, err)
 	}
@@ -74,9 +71,6 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 	if prefixErr != nil && !errors.Is(prefixErr, io.EOF) && !errors.Is(prefixErr, io.ErrUnexpectedEOF) {
 		return result, prefixErr
 	}
-	if isLegacyV1(prefix[:n]) {
-		return corruptResult(result, legacyV1UnsupportedError(path))
-	}
 	if n < len(Magic) && bytes.Equal(prefix[:n], Magic[:n]) {
 		return corruptResult(result, fmt.Errorf("incomplete file magic: %d of %d bytes", n, len(Magic)))
 	}
@@ -85,19 +79,13 @@ func StreamFileWithResult(path string, handle EventHandler) (StreamResult, error
 		_, _ = digest.Write(prefix[:])
 		return streamBinary(file, result, handle, digest)
 	}
+	if n == len(Magic) && bytes.Equal(prefix[:8], Magic[:8]) {
+		return corruptResult(result, fmt.Errorf(
+			"unsupported JHLOG version %d.%d.%d; expected %s",
+			prefix[8], prefix[9], prefix[10], FormatVersionString,
+		))
+	}
 	return corruptResult(result, fmt.Errorf("unsupported .jhlog format; expected %s", FormatVersionString))
-}
-
-func isLegacyV1(prefix []byte) bool {
-	return len(prefix) >= len(legacyV1Magic) && bytes.Equal(prefix[:len(legacyV1Magic)], legacyV1Magic)
-}
-
-func legacyV1UnsupportedError(path string) error {
-	return fmt.Errorf(
-		"%s: legacy JHLOG 1.0 is not supported; capture a new log (expected JHLOG %s)",
-		path,
-		FormatVersionString,
-	)
 }
 
 func newStreamResult(source string) StreamResult {
@@ -432,11 +420,10 @@ func decodeChunkRecords(
 				expanded.runtimeCalls = nil
 				expanded.RuntimeCall = &call
 				expanded.Attribution = AttributionContext{
-					Present: true,
-					Screen:  row.screen,
-					Owner:   row.caller,
-					Flow:    row.flow,
-					Step:    row.step,
+					Present:     true,
+					Screen:      row.screen,
+					Owner:       row.caller,
+					OperationID: row.operationID,
 				}
 				if rowIndex > 0 {
 					expanded.DeltaUS = 0
@@ -504,12 +491,12 @@ func decodeRecord(
 	position RecordPosition,
 	runtimeCallScratch []runtimeCallRow,
 ) (Event, recordDecodeState, error) {
-	reader := bytes.NewReader(body)
-	eventType, err := binary.ReadUvarint(reader)
+	reader := recordReader{data: body}
+	eventType, err := reader.readUvarint()
 	if err != nil {
 		return Event{}, state, fmt.Errorf("type: %w", err)
 	}
-	flags, err := binary.ReadUvarint(reader)
+	flags, err := reader.readUvarint()
 	if err != nil {
 		return Event{}, state, fmt.Errorf("envelope flags: %w", err)
 	}
@@ -528,7 +515,7 @@ func decodeRecord(
 	}
 	nextState := state
 	if flags&uint64(EnvelopeHasTime) != 0 {
-		rawDelta, err := binary.ReadUvarint(reader)
+		rawDelta, err := reader.readUvarint()
 		if err != nil {
 			return Event{}, state, fmt.Errorf("producer timestamp delta: %w", err)
 		}
@@ -548,7 +535,7 @@ func decodeRecord(
 	event.TimeUS = uint64(nextState.lastElapsedUS)
 	event.TimeMS = event.TimeUS / 1000
 	if flags&uint64(EnvelopeHasThread) != 0 {
-		threadID, err := binary.ReadUvarint(reader)
+		threadID, err := reader.readUvarint()
 		if err != nil {
 			return Event{}, state, fmt.Errorf("producer thread: %w", err)
 		}
@@ -563,7 +550,7 @@ func decodeRecord(
 			event.Attribution = state.lastContext
 			event.Attribution.Present = true
 		} else {
-			context, err := readAttribution(reader, symbolNamespace)
+			context, err := readAttribution(&reader, symbolNamespace)
 			if err != nil {
 				return Event{}, state, err
 			}
@@ -573,14 +560,14 @@ func decodeRecord(
 		}
 	}
 	if flags&uint64(EnvelopeHasAttributes) != 0 {
-		attributes, err := binary.ReadUvarint(reader)
+		attributes, err := reader.readUvarint()
 		if err != nil {
 			return Event{}, state, fmt.Errorf("event attributes: %w", err)
 		}
 		event.Flags |= attributes
 	}
 
-	if err := decodeEventPayload(reader, &event, header, symbolNamespace, runtimeCallScratch); err != nil {
+	if err := decodeEventPayload(&reader, &event, header, symbolNamespace, runtimeCallScratch); err != nil {
 		return Event{}, state, err
 	}
 	if reader.Len() != 0 {
@@ -599,13 +586,55 @@ func addSignedTimestamp(current, delta int64) (int64, error) {
 	return current + delta, nil
 }
 
-func readAttribution(reader *bytes.Reader, symbolNamespace string) (AttributionContext, error) {
-	mask, err := binary.ReadUvarint(reader)
+type recordReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *recordReader) Len() int {
+	return len(r.data) - r.offset
+}
+
+func (r *recordReader) readUvarint() (uint64, error) {
+	var value uint64
+	for shift := uint(0); shift < 64; shift += 7 {
+		if r.offset >= len(r.data) {
+			if shift == 0 {
+				return 0, io.EOF
+			}
+			return 0, io.ErrUnexpectedEOF
+		}
+		current := r.data[r.offset]
+		r.offset++
+		if current < 0x80 {
+			if shift == 63 && current > 1 {
+				return 0, errUvarintOverflow
+			}
+			return value | uint64(current)<<shift, nil
+		}
+		value |= uint64(current&0x7f) << shift
+	}
+	return 0, errUvarintOverflow
+}
+
+func (r *recordReader) readFull(target []byte) error {
+	if len(target) > r.Len() {
+		return io.ErrUnexpectedEOF
+	}
+	copy(target, r.data[r.offset:r.offset+len(target)])
+	r.offset += len(target)
+	return nil
+}
+
+var errUvarintOverflow = errors.New("binary: varint overflows a 64-bit integer")
+
+func readAttribution(reader *recordReader, symbolNamespace string) (AttributionContext, error) {
+	mask, err := reader.readUvarint()
 	if err != nil {
 		return AttributionContext{}, fmt.Errorf("context presence mask: %w", err)
 	}
-	if mask&^uint64(0x0f) != 0 {
-		return AttributionContext{}, fmt.Errorf("unsupported context presence bits 0x%x", mask&^uint64(0x0f))
+	if mask&^uint64(0x7) != 0 {
+		return AttributionContext{}, fmt.Errorf("unsupported context presence bits 0x%x", mask&^uint64(0x7))
 	}
 	context := AttributionContext{Present: true}
 	targets := []struct {
@@ -614,8 +643,6 @@ func readAttribution(reader *bytes.Reader, symbolNamespace string) (AttributionC
 	}{
 		{1 << 0, &context.Screen},
 		{1 << 1, &context.Owner},
-		{1 << 2, &context.Flow},
-		{1 << 3, &context.Step},
 	}
 	for _, item := range targets {
 		if mask&item.bit == 0 {
@@ -627,11 +654,21 @@ func readAttribution(reader *bytes.Reader, symbolNamespace string) (AttributionC
 		}
 		*item.ref = ref
 	}
+	if mask&(1<<2) != 0 {
+		operationID, err := reader.readUvarint()
+		if err != nil {
+			return AttributionContext{}, fmt.Errorf("context operation ID: %w", err)
+		}
+		if operationID == 0 {
+			return AttributionContext{}, fmt.Errorf("context operation ID must be non-zero")
+		}
+		context.OperationID = operationID
+	}
 	return context, nil
 }
 
-func readSymbolRef(reader *bytes.Reader, symbolNamespace string) (SymbolRef, error) {
-	token, err := binary.ReadUvarint(reader)
+func readSymbolRef(reader *recordReader, symbolNamespace string) (SymbolRef, error) {
+	token, err := reader.readUvarint()
 	if err != nil {
 		return SymbolRef{}, err
 	}
@@ -640,7 +677,7 @@ func readSymbolRef(reader *bytes.Reader, symbolNamespace string) (SymbolRef, err
 		return SymbolRef{}, nil
 	case token == 1:
 		var raw [8]byte
-		if _, err := io.ReadFull(reader, raw[:]); err != nil {
+		if err := reader.readFull(raw[:]); err != nil {
 			return SymbolRef{}, err
 		}
 		return SymbolRef{ID: binary.LittleEndian.Uint64(raw[:]), Namespace: symbolNamespace, Stable: true}, nil
@@ -652,14 +689,14 @@ func readSymbolRef(reader *bytes.Reader, symbolNamespace string) (SymbolRef, err
 }
 
 func decodeEventPayload(
-	reader *bytes.Reader,
+	reader *recordReader,
 	event *Event,
 	header SegmentHeader,
 	symbolNamespace string,
 	runtimeCallScratch []runtimeCallRow,
 ) error {
 	read := func(name string) (uint64, error) {
-		value, err := binary.ReadUvarint(reader)
+		value, err := reader.readUvarint()
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w", name, err)
 		}
@@ -694,11 +731,11 @@ func decodeEventPayload(
 			return fmt.Errorf("dictionary data length %d exceeds remaining %d", values[3], reader.Len())
 		}
 		data := make([]byte, int(values[3]))
-		if _, err := io.ReadFull(reader, data); err != nil {
+		if err := reader.readFull(data); err != nil {
 			return fmt.Errorf("dictionary data: %w", err)
 		}
 		entry := &DictionaryEntry{Kind: DictKind(values[0]), ID: values[1], Encoding: values[2], Data: data}
-		if entry.Kind > DictStableSymbol {
+		if entry.Kind > DictAttributeValue {
 			return fmt.Errorf("unsupported dictionary kind %d", entry.Kind)
 		}
 		if entry.Encoding != 0 {
@@ -789,22 +826,47 @@ func decodeEventPayload(
 		if err != nil {
 			return err
 		}
-		values, err := readValues("duration", "DNS", "connect", "TTFB", "status", "rx bytes", "tx bytes")
+		service, err := readRef("service")
 		if err != nil {
 			return err
 		}
-		if values[4] > uint64(Status5xx) {
-			return fmt.Errorf("unsupported HTTP status class %d", values[4])
+		initiator, err := readRef("initiator")
+		if err != nil {
+			return err
 		}
-		for index, phase := range values[1:4] {
-			if phase > values[0] {
-				return fmt.Errorf("HTTP phase %d duration %d exceeds request duration %d", index, phase, values[0])
+		values, err := readValues(
+			"duration", "queue", "DNS", "connect", "TLS", "request", "TTFB", "response",
+			"status code", "failure phase", "failure kind", "protocol", "rx bytes", "tx bytes",
+			"attempts", "DNS attempts", "connect attempts", "TLS attempts", "connect failures", "TLS failures",
+			"redirects",
+		)
+		if err != nil {
+			return err
+		}
+		for index, value := range values[14:21] {
+			if value > math.MaxUint16 {
+				return fmt.Errorf("HTTP count %d value %d exceeds %d", index, value, uint64(math.MaxUint16))
 			}
 		}
-		event.HTTP = &HTTPEvent{
-			RouteRef: route, DurationMS: values[0], DNSMS: values[1],
-			ConnectMS: values[2], TTFBMS: values[3], Status: StatusClass(values[4]), RxBytes: values[5], TxBytes: values[6],
+		if values[8] > math.MaxUint16 {
+			return fmt.Errorf("HTTP status code %d exceeds %d", values[8], uint64(math.MaxUint16))
 		}
+		httpEvent := &HTTPEvent{
+			RouteRef: route, ServiceRef: service, InitiatorRef: initiator,
+			DurationMS: values[0], QueueMS: values[1], DNSMS: values[2], ConnectMS: values[3],
+			TLSMS: values[4], RequestMS: values[5], TTFBMS: values[6], ResponseMS: values[7],
+			StatusCode: uint16(values[8]), FailurePhase: HTTPFailurePhase(values[9]),
+			FailureKind: HTTPFailureKind(values[10]), Protocol: HTTPProtocol(values[11]),
+			RxBytes: values[12], TxBytes: values[13], Attempts: uint16(values[14]),
+			DNSAttempts: uint16(values[15]), ConnectAttempts: uint16(values[16]),
+			TLSAttempts: uint16(values[17]), ConnectFailures: uint16(values[18]),
+			TLSFailures: uint16(values[19]), Redirects: uint16(values[20]),
+		}
+		httpEvent.Status = StatusClassForHTTPCode(httpEvent.StatusCode)
+		if err := validateHTTPEvent(httpEvent, httpEvent.StatusCode); err != nil {
+			return err
+		}
+		event.HTTP = httpEvent
 	case EventUIWindow:
 		values, err := readValues("window", "frames", "jank", "source", "frame deadline")
 		if err != nil {
@@ -891,6 +953,51 @@ func decodeEventPayload(
 			return fmt.Errorf("metric max %d exceeds sum %d", values[3], values[2])
 		}
 		event.Metric = &MetricEvent{MetricRef: metricRef, Value: values[0], Count: values[1], Sum: values[2], Max: values[3], Mode: MetricMode(values[4])}
+	case EventOperation:
+		nameRef, err := readRef("operation name")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"operation ID",
+			"operation parent ID",
+			"operation phase",
+			"operation kind",
+			"operation outcome",
+			"operation duration",
+			"operation budget",
+			"operation attribute count",
+		)
+		if err != nil {
+			return err
+		}
+		if values[7] > MaxOperationAttributes {
+			return fmt.Errorf("operation attribute count %d exceeds %d", values[7], MaxOperationAttributes)
+		}
+		operation := &OperationEvent{
+			NameRef: nameRef,
+			ID:      values[0], ParentID: values[1], Phase: OperationPhase(values[2]),
+			Kind: OperationKind(values[3]), Outcome: OperationOutcome(values[4]),
+			DurationUS: values[5], BudgetUS: values[6],
+		}
+		if values[7] > 0 {
+			operation.Attributes = make([]OperationAttribute, int(values[7]))
+			for index := range operation.Attributes {
+				keyRef, err := readRef("operation attribute key")
+				if err != nil {
+					return err
+				}
+				valueRef, err := readRef("operation attribute value")
+				if err != nil {
+					return err
+				}
+				operation.Attributes[index] = OperationAttribute{KeyRef: keyRef, ValueRef: valueRef}
+			}
+		}
+		if err := validateOperationEvent(operation); err != nil {
+			return err
+		}
+		event.Operation = operation
 	case EventLogSpam:
 		sourceRef, err := readRef("log source")
 		if err != nil {
@@ -923,7 +1030,7 @@ func decodeEventPayload(
 		if rowCount == 0 || rowCount > MaxRuntimeCallBlockRows {
 			return fmt.Errorf("runtime call row count %d is outside 1..%d", rowCount, MaxRuntimeCallBlockRows)
 		}
-		if rowCount > uint64(reader.Len()/8) {
+		if rowCount > uint64(reader.Len()/7) {
 			return fmt.Errorf("runtime call row count %d exceeds remaining payload", rowCount)
 		}
 		var calls []runtimeCallRow
@@ -948,18 +1055,11 @@ func decodeEventPayload(
 			calls[index].caller = ref
 		}
 		for index := range calls {
-			ref, err := readRef("flow")
+			value, err := read("operation ID")
 			if err != nil {
 				return err
 			}
-			calls[index].flow = ref
-		}
-		for index := range calls {
-			ref, err := readRef("step")
-			if err != nil {
-				return err
-			}
-			calls[index].step = ref
+			calls[index].operationID = value
 		}
 		for index := range calls {
 			ref, err := readRef("callee")
@@ -1020,15 +1120,242 @@ func decodeEventPayload(
 			PSSKB: values[3], RSSKB: values[4], ProcessRef: processRef,
 		}
 	case EventIO:
-		values, err := readValues("I/O operation", "I/O duration", "I/O bytes")
+		sourceRef, err := readRef("I/O source")
+		if err != nil {
+			return err
+		}
+		values, err := readValues("I/O operation", "I/O outcome", "I/O duration", "I/O bytes")
 		if err != nil {
 			return err
 		}
 		operation := IOOperationKind(values[0])
-		if operation <= IOOperationUnknown || operation > IOOperationContentWrite {
-			return fmt.Errorf("unsupported I/O operation %d", operation)
+		ioEvent := &IOEvent{
+			SourceRef: sourceRef, Operation: operation, Outcome: IOOutcome(values[1]),
+			DurationUS: values[2], Bytes: values[3],
 		}
-		event.IO = &IOEvent{Operation: operation, DurationUS: values[1], Bytes: values[2]}
+		if err := validateIOEvent(ioEvent, event.Flags); err != nil {
+			return err
+		}
+		event.IO = ioEvent
+	case EventWorker:
+		workerRef, err := readRef("worker")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"worker instance ID", "worker stage", "worker outcome", "worker duration",
+			"worker run attempt", "worker generation", "worker stop reason",
+		)
+		if err != nil {
+			return err
+		}
+		if values[4] > math.MaxUint32 || values[5] > math.MaxUint32 || values[6] > math.MaxUint32 {
+			return fmt.Errorf("worker count or stop reason exceeds %d", uint64(math.MaxUint32))
+		}
+		worker := &WorkerEvent{
+			WorkerRef: workerRef, InstanceID: values[0], Stage: WorkerStage(values[1]),
+			Outcome: WorkerOutcome(values[2]), DurationMS: values[3], RunAttempt: uint32(values[4]),
+			Generation: uint32(values[5]), StopReason: uint32(values[6]),
+		}
+		if err := validateWorkerEvent(worker, event.Flags); err != nil {
+			return err
+		}
+		event.Worker = worker
+	case EventWebSocket:
+		routeRef, err := readRef("WebSocket route")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"WebSocket connection ID", "WebSocket stage", "WebSocket duration",
+			"WebSocket status code", "WebSocket close code", "WebSocket failure kind",
+			"WebSocket text messages", "WebSocket binary messages", "WebSocket received bytes",
+			"WebSocket reconnect ordinal",
+		)
+		if err != nil {
+			return err
+		}
+		if values[3] > math.MaxUint16 || values[4] > math.MaxUint16 || values[9] > math.MaxUint32 {
+			return fmt.Errorf("WebSocket status, close code or reconnect ordinal exceeds wire bounds")
+		}
+		webSocket := &WebSocketEvent{
+			RouteRef: routeRef, ConnectionID: values[0], Stage: WebSocketStage(values[1]),
+			DurationMS: values[2], StatusCode: uint16(values[3]), CloseCode: uint16(values[4]),
+			FailureKind: WebSocketFailureKind(values[5]), TextMessages: values[6],
+			BinaryMessages: values[7], ReceivedBytes: values[8], ReconnectOrdinal: uint32(values[9]),
+		}
+		if err := validateWebSocketEvent(webSocket); err != nil {
+			return err
+		}
+		event.WebSocket = webSocket
+	case EventDatabase:
+		queryRef, err := readRef("database query")
+		if err != nil {
+			return err
+		}
+		sourceRef, err := readRef("database source")
+		if err != nil {
+			return err
+		}
+		var values [17]uint64
+		names := [...]string{
+			"database statement fingerprint",
+			"database framework",
+			"database operation",
+			"database outcome",
+			"database failure kind",
+			"database boundary",
+			"database result known",
+			"database result kind",
+			"database result count bucket",
+			"database transaction ID",
+			"database statement token",
+			"database phase mask",
+			"database pool wait duration",
+			"database lock wait duration",
+			"database execute duration",
+			"database materialize duration",
+			"database total duration",
+		}
+		for index := range names {
+			value, err := read(names[index])
+			if err != nil {
+				return err
+			}
+			values[index] = value
+		}
+		if values[6] > 1 {
+			return fmt.Errorf("database result known flag %d is not boolean", values[6])
+		}
+		database := &DatabaseEvent{
+			QueryRef: queryRef, SourceRef: sourceRef, StatementFingerprint: values[0],
+			Framework: DatabaseFramework(values[1]), Operation: DatabaseOperation(values[2]),
+			Outcome: DatabaseOutcome(values[3]), FailureKind: DatabaseFailureKind(values[4]),
+			Boundary: DatabaseBoundary(values[5]), ResultKnown: values[6] == 1,
+			ResultKind: DatabaseResultKind(values[7]), ResultCountBucket: DatabaseCountBucket(values[8]),
+			TransactionID: values[9], StatementToken: values[10], PhaseMask: DatabasePhase(values[11]),
+			PoolWaitUS: values[12], LockWaitUS: values[13], ExecuteUS: values[14],
+			MaterializeUS: values[15], DurationUS: values[16],
+		}
+		if err := validateDatabaseEvent(database); err != nil {
+			return err
+		}
+		event.Database = database
+	case EventDatabaseTransaction:
+		sourceRef, err := readRef("database transaction source")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"database transaction ID",
+			"database transaction parent ID",
+			"database transaction stage",
+			"database transaction mode",
+			"database transaction outcome",
+			"database transaction failure kind",
+			"database transaction duration",
+			"database transaction statement count",
+			"database transaction read count",
+			"database transaction write count",
+		)
+		if err != nil {
+			return err
+		}
+		transaction := &DatabaseTransactionEvent{
+			SourceRef: sourceRef, TransactionID: values[0], ParentID: values[1],
+			Stage: DatabaseTransactionStage(values[2]), Mode: DatabaseTransactionMode(values[3]),
+			Outcome: DatabaseTransactionOutcome(values[4]), FailureKind: DatabaseFailureKind(values[5]),
+			DurationUS: values[6], StatementCount: values[7], ReadCount: values[8], WriteCount: values[9],
+		}
+		if err := validateDatabaseTransactionEvent(transaction); err != nil {
+			return err
+		}
+		event.DatabaseTransaction = transaction
+	case EventProcessState:
+		values, err := readValues(
+			"process UI visibility",
+			"process importance",
+			"Android process importance",
+			"process state reason",
+		)
+		if err != nil {
+			return err
+		}
+		if values[2] > math.MaxUint32 {
+			return fmt.Errorf("Android process importance exceeds %d", uint64(math.MaxUint32))
+		}
+		processState := &ProcessStateEvent{
+			UIVisibility: ProcessUIVisibility(values[0]), Importance: ProcessImportance(values[1]),
+			AndroidImportance: uint32(values[2]), Reason: ProcessStateReason(values[3]),
+		}
+		if err := validateProcessStateEvent(processState); err != nil {
+			return err
+		}
+		event.ProcessState = processState
+	case EventAndroidComponent:
+		componentRef, err := readRef("Android component")
+		if err != nil {
+			return err
+		}
+		actionRef, err := readRef("Android component action")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"Android component instance ID",
+			"Android component flow ID",
+			"Android component kind",
+			"Android component stage",
+			"Android component outcome",
+			"Android component duration",
+			"Android component flags",
+		)
+		if err != nil {
+			return err
+		}
+		component := &AndroidComponentEvent{
+			ComponentRef: componentRef, ActionRef: actionRef, InstanceID: values[0], FlowID: values[1],
+			Kind: ComponentKind(values[2]), Stage: ComponentStage(values[3]),
+			Outcome: ComponentOutcome(values[4]), DurationUS: values[5], Flags: ComponentFlag(values[6]),
+		}
+		if err := validateAndroidComponentEvent(component); err != nil {
+			return err
+		}
+		event.AndroidComponent = component
+	case EventBinderTransaction:
+		descriptorRef, err := readRef("Binder descriptor")
+		if err != nil {
+			return err
+		}
+		methodRef, err := readRef("Binder method")
+		if err != nil {
+			return err
+		}
+		values, err := readValues(
+			"Binder call ID",
+			"Binder direction",
+			"Binder transaction code",
+			"Binder outcome",
+			"Binder failure kind",
+			"Binder duration",
+			"Binder flags",
+		)
+		if err != nil {
+			return err
+		}
+		if values[2] > math.MaxUint32 {
+			return fmt.Errorf("Binder transaction code exceeds %d", uint64(math.MaxUint32))
+		}
+		binder := &BinderTransactionEvent{
+			DescriptorRef: descriptorRef, MethodRef: methodRef, CallID: values[0],
+			Direction: BinderDirection(values[1]), TransactionCode: uint32(values[2]),
+			Outcome: BinderOutcome(values[3]), FailureKind: BinderFailureKind(values[4]),
+			DurationUS: values[5], Flags: BinderFlag(values[6]),
+		}
+		if err := validateBinderTransactionEvent(binder, event.Flags); err != nil {
+			return err
+		}
+		event.BinderTransaction = binder
 	case EventQualitySnapshot:
 		values, err := readValues("quality sequence", "quality captured time", "quality entry count")
 		if err != nil {
@@ -1072,7 +1399,7 @@ func decodeEventPayload(
 			return fmt.Errorf("log-growth payload length %d exceeds remaining %d", values[1], reader.Len())
 		}
 		raw := make([]byte, int(values[1]))
-		if _, err := io.ReadFull(reader, raw); err != nil {
+		if err := reader.readFull(raw); err != nil {
 			return fmt.Errorf("log-growth payload: %w", err)
 		}
 		record, err := decodeLogGrowthRecord(LogGrowthRecordKind(values[0]), raw)

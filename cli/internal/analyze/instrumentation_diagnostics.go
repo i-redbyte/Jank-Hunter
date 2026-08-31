@@ -50,11 +50,12 @@ type InstrumentationDecisionSummary struct {
 }
 
 type InstrumentationAnnotationSummary struct {
-	Owner  string
-	Screen string
-	Flow   string
-	Trace  string
-	Count  uint64
+	Owner             string
+	Screen            string
+	Operation         string
+	OperationKind     string
+	OperationBudgetMS uint64
+	Count             uint64
 }
 
 type InstrumentationClassDiagnostic struct {
@@ -161,10 +162,11 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 	}
 	for _, item := range class.Annotations {
 		b.annotations[instrumentationAnnotationKey{
-			owner:  item.Owner,
-			screen: item.Screen,
-			flow:   item.Flow,
-			trace:  item.Trace,
+			owner:             item.Owner,
+			screen:            item.Screen,
+			operation:         item.Operation,
+			operationKind:     item.OperationKind,
+			operationBudgetMS: item.OperationBudgetMS,
 		}] += item.Count
 	}
 	b.methods += record.Methods
@@ -242,11 +244,12 @@ type instrumentationDecisionRecord struct {
 }
 
 type instrumentationAnnotationRecord struct {
-	Owner  string `json:"owner"`
-	Screen string `json:"screen"`
-	Flow   string `json:"flow"`
-	Trace  string `json:"trace"`
-	Count  uint64 `json:"count"`
+	Owner             string `json:"owner"`
+	Screen            string `json:"screen"`
+	Operation         string `json:"operation"`
+	OperationKind     string `json:"operationKind"`
+	OperationBudgetMS uint64 `json:"operationBudgetMs"`
+	Count             uint64 `json:"count"`
 }
 
 type instrumentationHookKey struct {
@@ -267,10 +270,11 @@ type instrumentationDecisionKey struct {
 }
 
 type instrumentationAnnotationKey struct {
-	owner  string
-	screen string
-	flow   string
-	trace  string
+	owner             string
+	screen            string
+	operation         string
+	operationKind     string
+	operationBudgetMS uint64
 }
 
 func skippedSummaries(records []instrumentationSkippedRecord) []InstrumentationSkippedSummary {
@@ -303,7 +307,11 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 func annotationSummaries(records []instrumentationAnnotationRecord) []InstrumentationAnnotationSummary {
 	out := make([]InstrumentationAnnotationSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationAnnotationSummary(record))
+		out = append(out, InstrumentationAnnotationSummary{
+			Owner: record.Owner, Screen: record.Screen, Operation: record.Operation,
+			OperationKind: record.OperationKind, OperationBudgetMS: record.OperationBudgetMS,
+			Count: record.Count,
+		})
 	}
 	sortAnnotationSummaries(out)
 	return out
@@ -355,11 +363,12 @@ func annotationMapSummaries(values map[instrumentationAnnotationKey]uint64) []In
 	out := make([]InstrumentationAnnotationSummary, 0, len(values))
 	for key, count := range values {
 		out = append(out, InstrumentationAnnotationSummary{
-			Owner:  key.owner,
-			Screen: key.screen,
-			Flow:   key.flow,
-			Trace:  key.trace,
-			Count:  count,
+			Owner:             key.owner,
+			Screen:            key.screen,
+			Operation:         key.operation,
+			OperationKind:     key.operationKind,
+			OperationBudgetMS: key.operationBudgetMS,
+			Count:             count,
 		})
 	}
 	sortAnnotationSummaries(out)
@@ -431,9 +440,12 @@ func sortAnnotationSummaries(values []InstrumentationAnnotationSummary) {
 		if values[i].Screen != values[j].Screen {
 			return values[i].Screen < values[j].Screen
 		}
-		if values[i].Flow != values[j].Flow {
-			return values[i].Flow < values[j].Flow
+		if values[i].Operation != values[j].Operation {
+			return values[i].Operation < values[j].Operation
 		}
-		return values[i].Trace < values[j].Trace
+		if values[i].OperationKind != values[j].OperationKind {
+			return values[i].OperationKind < values[j].OperationKind
+		}
+		return values[i].OperationBudgetMS < values[j].OperationBudgetMS
 	})
 }

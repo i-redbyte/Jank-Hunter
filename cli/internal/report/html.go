@@ -302,6 +302,7 @@ func (c *cachedReportTemplate) parsed() (*template.Template, error) {
 		funcs["deferredRows"] = func(rowTemplate string, rows any, initial, chunkSize, columns int, label string) (template.HTML, error) {
 			return renderDeferredRows(parsed, rowTemplate, rows, initial, chunkSize, columns, label)
 		}
+		funcs["deferredOperationRows"] = renderDeferredOperationRows
 		parsed, c.err = template.New(c.name).Funcs(funcs).Parse(sharedComponentsTemplate + c.source)
 		c.tmpl = parsed
 	})
@@ -332,6 +333,25 @@ func renderDeferredRows(
 	if tmpl == nil || !value.IsValid() || value.Kind() != reflect.Slice {
 		return "", fmt.Errorf("deferred rows require a parsed template and a slice")
 	}
+	renderRange := func(target *strings.Builder, start, end int) error {
+		for index := start; index < end; index++ {
+			if err := tmpl.ExecuteTemplate(target, rowTemplate, deferredRow{Index: index, Value: value.Index(index).Interface()}); err != nil {
+				return fmt.Errorf("render deferred row %d with %s: %w", index, rowTemplate, err)
+			}
+		}
+		return nil
+	}
+	return renderDeferredRowPages(value.Len(), initial, chunkSize, columns, label, renderRange)
+}
+
+func renderDeferredRowPages(
+	total int,
+	initial int,
+	chunkSize int,
+	columns int,
+	label string,
+	renderRange func(*strings.Builder, int, int) error,
+) (template.HTML, error) {
 	if initial < 0 {
 		initial = 0
 	}
@@ -341,30 +361,30 @@ func renderDeferredRows(
 	if columns < 1 {
 		columns = 1
 	}
-	total := value.Len()
 	if initial > total {
 		initial = total
 	}
 
-	var output strings.Builder
-	renderRange := func(target *strings.Builder, start, end int) error {
-		for index := start; index < end; index++ {
-			if err := tmpl.ExecuteTemplate(target, rowTemplate, deferredRow{Index: index, Value: value.Index(index).Interface()}); err != nil {
-				return fmt.Errorf("render deferred row %d with %s: %w", index, rowTemplate, err)
-			}
-		}
-		return nil
-	}
-	if err := renderRange(&output, 0, initial); err != nil {
+	var firstPage strings.Builder
+	if err := renderRange(&firstPage, 0, initial); err != nil {
 		return "", err
 	}
+	estimatedRowBytes := 256
+	if initial > 0 {
+		estimatedRowBytes = max(estimatedRowBytes, (firstPage.Len()+initial-1)/initial)
+	}
+	var output strings.Builder
+	growDeferredBuilder(&output, estimatedRowBytes, total)
+	output.WriteString(firstPage.String())
 	for start := initial; start < total; start += chunkSize {
 		end := min(start+chunkSize, total)
 		var chunk strings.Builder
+		growDeferredBuilder(&chunk, estimatedRowBytes, end-start)
 		if err := renderRange(&chunk, start, end); err != nil {
 			return "", err
 		}
 		var encoded strings.Builder
+		encoded.Grow(chunk.Len() + 2)
 		encoder := json.NewEncoder(&encoded)
 		encoder.SetEscapeHTML(false)
 		if err := encoder.Encode(chunk.String()); err != nil {
@@ -395,6 +415,459 @@ func renderDeferredRows(
 		)
 	}
 	return template.HTML(output.String()), nil
+}
+
+func growDeferredBuilder(target *strings.Builder, estimatedRowBytes, rows int) {
+	const maxPreallocation = 16 * 1024 * 1024
+	if estimatedRowBytes <= 0 || rows <= 0 || rows > maxPreallocation/estimatedRowBytes {
+		return
+	}
+	target.Grow(estimatedRowBytes * rows)
+}
+
+func renderDeferredOperationRows(
+	rows any,
+	initial int,
+	chunkSize int,
+	columns int,
+	label string,
+) (template.HTML, error) {
+	total, renderRange, err := operationRowRenderer(rows)
+	if err != nil {
+		return "", err
+	}
+	return renderDeferredRowPages(total, initial, chunkSize, columns, label, renderRange)
+}
+
+func operationRowRenderer(rows any) (int, func(*strings.Builder, int, int) error, error) {
+	switch values := rows.(type) {
+	case []analyze.OperationStats:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationStatsRow(target, values[index])
+			}
+			return nil
+		}, nil
+	case []analyze.OperationTimeSlot:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationTimeSlotRow(target, values[index])
+			}
+			return nil
+		}, nil
+	case []analyze.OperationDimensionStats:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationDimensionRow(target, values[index])
+			}
+			return nil
+		}, nil
+	case []analyze.OperationStageStats:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationStageRow(target, values[index])
+			}
+			return nil
+		}, nil
+	case []analyze.OperationIncident:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationIncidentRow(target, values[index])
+			}
+			return nil
+		}, nil
+	case []analyze.OperationDelta:
+		return len(values), func(target *strings.Builder, start, end int) error {
+			for index := start; index < end; index++ {
+				writeOperationDeltaRow(target, values[index])
+			}
+			return nil
+		}, nil
+	default:
+		return 0, nil, fmt.Errorf("unsupported operation row slice %T", rows)
+	}
+}
+
+func writeOperationStatsRow(target *strings.Builder, row analyze.OperationStats) {
+	target.WriteString(`<tr>`)
+	writeCodeCell(target, row.Operation)
+	writeTextCell(target, operationKindLabel(row.Kind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeUintCell(target, row.Count)
+	writeTripleUintCell(target, row.Failures, row.Cancelled, row.Timeouts)
+	writeQuantileMillisCell(target, row.P50MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
+	writeMillisCell(target, row.MaxMS)
+	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "бюджет не задан")
+	writeOperationNetworkCell(target, row.CorrelatedHTTP, row.CorrelatedHTTPFailures, row.CorrelatedHTTPDurationMS)
+	writePairUintCell(target, row.CorrelatedStalls, row.CorrelatedStallMaxMS, " мс")
+	writeOperationIOCell(target, row.CorrelatedIO, row.CorrelatedIODurationUS, row.CorrelatedIOBytes)
+	writeUintCell(target, row.CorrelatedProblems)
+	writeOperationRuntimeLogCell(target, row.CorrelatedRuntimeCalls, row.CorrelatedLogRecords, row.CorrelatedRuntimeTotalMS)
+	writeOperationMemoryMetricCell(target, row.CorrelatedRetainedObjects, row.MaxPSSKB, row.CorrelatedMetricEvents)
+	writeOperationUICell(target, row.CorrelatedUIFrames, row.CorrelatedUIJank, row.CorrelatedUIJankRatePct)
+	target.WriteString(`</tr>`)
+}
+
+func writeOperationTimeSlotRow(target *strings.Builder, row analyze.OperationTimeSlot) {
+	target.WriteString(`<tr>`)
+	writeTextCell(target, row.Label)
+	writeCodeCell(target, row.Operation)
+	writeTextCell(target, operationKindLabel(row.Kind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeUintCell(target, row.Count)
+	writeUintCell(target, row.Failures)
+	writeQuantileMillisCell(target, row.P50MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
+	writeMillisCell(target, row.MaxMS)
+	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "—")
+	writeOperationNetworkCell(target, row.CorrelatedHTTP, row.CorrelatedHTTPFailures, row.CorrelatedHTTPDurationMS)
+	writePairUintCell(target, row.CorrelatedStalls, row.CorrelatedStallMaxMS, " мс")
+	writeOperationIOCell(target, row.CorrelatedIO, row.CorrelatedIODurationUS, row.CorrelatedIOBytes)
+	writeUintCell(target, row.CorrelatedProblems)
+	writeOperationRuntimeLogCell(target, row.CorrelatedRuntimeCalls, row.CorrelatedLogRecords, row.CorrelatedRuntimeTotalMS)
+	writeOperationMemoryMetricCell(target, row.CorrelatedRetainedObjects, row.MaxPSSKB, row.CorrelatedMetricEvents)
+	writeOperationUICell(target, row.CorrelatedUIFrames, row.CorrelatedUIJank, row.CorrelatedUIJankRatePct)
+	target.WriteString(`</tr>`)
+}
+
+func writeOperationDimensionRow(target *strings.Builder, row analyze.OperationDimensionStats) {
+	target.WriteString(`<tr>`)
+	writeCodeCell(target, row.Operation)
+	writeTextCell(target, operationKindLabel(row.Kind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeCodeCell(target, row.Key)
+	writeCodeCell(target, row.Value)
+	writeUintCell(target, row.Count)
+	writeUintCell(target, row.Failures)
+	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
+	writeMillisCell(target, row.MaxMS)
+	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "—")
+	target.WriteString(`</tr>`)
+}
+
+func writeOperationStageRow(target *strings.Builder, row analyze.OperationStageStats) {
+	target.WriteString(`<tr>`)
+	writeCodeCell(target, row.ParentOperation)
+	writeTextCell(target, operationKindLabel(row.ParentKind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeCodeCell(target, row.Stage)
+	writeUintCell(target, row.Count)
+	writeQuantileMillisCell(target, row.P50MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
+	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
+	writeMillisCell(target, row.MaxMS)
+	writeTextCell(target, humanDuration(row.TotalMS))
+	target.WriteString(`<td>`)
+	writeFloat2(target, row.SharePct)
+	target.WriteString(`%</td></tr>`)
+}
+
+func writeOperationIncidentRow(target *strings.Builder, row analyze.OperationIncident) {
+	target.WriteString(`<tr>`)
+	writeTextCell(target, unixMillisTime(row.StartUnixMS))
+	writeCodeCell(target, row.Operation)
+	writeTextCell(target, operationKindLabel(row.Kind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeTextCell(target, operationOutcomeLabel(row.Outcome))
+	writeTextCell(target, humanDuration(row.DurationMS))
+	if row.BudgetMS == 0 {
+		writeTextCell(target, "не задан")
+	} else {
+		writePairUintCell(target, row.BudgetMS, row.BudgetExceededMS, " мс")
+	}
+	writeOperationNetworkCell(target, row.CorrelatedHTTP, row.HTTPFailures, row.HTTPDurationMS)
+	writePairUintCell(target, row.CorrelatedStalls, row.StallMaxMS, " мс")
+	writeOperationIOCell(target, row.CorrelatedIO, row.IODurationUS, row.IOBytes)
+	writeUintCell(target, row.CorrelatedProblems)
+	writeOperationRuntimeLogCell(target, row.CorrelatedRuntimeCalls, row.CorrelatedLogRecords, row.CorrelatedRuntimeTotalMS)
+	writeOperationMemoryMetricCell(target, row.CorrelatedRetainedObjects, row.MaxPSSKB, row.CorrelatedMetricEvents)
+	uiJankRate := float64(0)
+	if row.CorrelatedUIFrames > 0 {
+		uiJankRate = float64(row.CorrelatedUIJank) * 100 / float64(row.CorrelatedUIFrames)
+	}
+	writeOperationUICell(target, row.CorrelatedUIFrames, row.CorrelatedUIJank, uiJankRate)
+	target.WriteString(`</tr>`)
+}
+
+func writeOperationDeltaRow(target *strings.Builder, row analyze.OperationDelta) {
+	target.WriteString(`<tr>`)
+	writeCodeCell(target, row.Operation)
+	writeTextCell(target, operationKindLabel(row.Kind))
+	writeCodeCell(target, reportValue(row.Screen, "любой экран"))
+	writeUintCell(target, row.BaselineCount)
+	writeUintCell(target, row.CandidateCount)
+	writeOptionalQuantileMillisCell(target, row.BaselineCount, row.BaselineP95MS, row.BaselineQuantilesApproximated)
+	writeOptionalQuantileMillisCell(target, row.CandidateCount, row.CandidateP95MS, row.CandidateQuantilesApproximated)
+	if row.Comparable {
+		target.WriteString(`<td>`)
+		writeEscaped(target, signedFloat(row.P95ChangeMS, "мс"))
+		target.WriteString(" · ")
+		writeEscaped(target, signedFloat(row.P95ChangePct, "%"))
+		target.WriteString(`</td>`)
+	} else {
+		writeTextCell(target, "не вычисляется")
+	}
+	writeOptionalBudgetPercentCell(target, row.BaselineBudgeted, row.BaselineBudgetBreachPct)
+	writeOptionalBudgetPercentCell(target, row.CandidateBudgeted, row.CandidateBudgetBreachPct)
+	if row.Comparable {
+		writeTextCell(target, signedFloat(row.FailureRateChangePP, "п.п."))
+	} else {
+		writeTextCell(target, "не вычисляется")
+	}
+	writeOperationDatabaseDeltaCell(target, row)
+	target.WriteString(`<td class="`)
+	writeEscaped(target, severityCSSClass(row.Severity))
+	target.WriteString(`">`)
+	writeEscaped(target, operationStatusLabel(row.Status))
+	target.WriteString(`</td>`)
+	writeTextCell(target, confidenceLabel(row.Confidence))
+	writeTextCell(target, row.Note)
+	target.WriteString(`</tr>`)
+}
+
+func writeOperationDatabaseDeltaCell(target *strings.Builder, row analyze.OperationDelta) {
+	if !row.DatabaseComparable {
+		writeTextCell(target, "нет сопоставимых DB-событий")
+		return
+	}
+	target.WriteString(`<td><div>выз./операцию `)
+	writeFloat2(target, row.BaselineDatabaseCallsPerOperation)
+	target.WriteString(` → `)
+	writeFloat2(target, row.CandidateDatabaseCallsPerOperation)
+	target.WriteString(`</div><div>главный поток `)
+	writeFloat2(target, row.BaselineDatabaseMainRatePct)
+	target.WriteString(`% → `)
+	writeFloat2(target, row.CandidateDatabaseMainRatePct)
+	target.WriteString(`%</div><div>ошибки `)
+	writeFloat2(target, row.BaselineDatabaseFailureRatePct)
+	target.WriteString(`% → `)
+	writeFloat2(target, row.CandidateDatabaseFailureRatePct)
+	target.WriteString(`%</div><div>полное время `)
+	writeFloat2(target, row.BaselineDatabaseWallMSPerOperation)
+	target.WriteString(` → `)
+	writeFloat2(target, row.CandidateDatabaseWallMSPerOperation)
+	target.WriteString(` мс/операцию</div></td>`)
+}
+
+func writeEscaped(target *strings.Builder, value string) {
+	if strings.IndexAny(value, `&<'">`) < 0 {
+		target.WriteString(value)
+		return
+	}
+	target.WriteString(template.HTMLEscapeString(value))
+}
+
+func writeTextCell(target *strings.Builder, value string) {
+	target.WriteString(`<td>`)
+	writeEscaped(target, value)
+	target.WriteString(`</td>`)
+}
+
+func writeCodeCell(target *strings.Builder, value string) {
+	target.WriteString(`<td><code>`)
+	writeEscaped(target, value)
+	target.WriteString(`</code></td>`)
+}
+
+func writeUintCell(target *strings.Builder, value uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, value)
+	target.WriteString(`</td>`)
+}
+
+func writeMillisCell(target *strings.Builder, value uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, value)
+	target.WriteString(` мс</td>`)
+}
+
+func writeQuantileMillisCell(target *strings.Builder, value uint64, approximated bool) {
+	target.WriteString(`<td>`)
+	if approximated {
+		target.WriteString(`≈`)
+	}
+	writeUint(target, value)
+	target.WriteString(` мс</td>`)
+}
+
+func writeOptionalMillisCell(target *strings.Builder, sample, value uint64) {
+	if sample == 0 {
+		writeTextCell(target, "нет данных")
+		return
+	}
+	writeMillisCell(target, value)
+}
+
+func writeOptionalQuantileMillisCell(target *strings.Builder, sample, value uint64, approximated bool) {
+	if sample == 0 {
+		writeTextCell(target, "нет данных")
+		return
+	}
+	writeQuantileMillisCell(target, value, approximated)
+}
+
+func writeOptionalBudgetPercentCell(target *strings.Builder, budgeted uint64, value float64) {
+	if budgeted == 0 {
+		writeTextCell(target, "бюджет не задан")
+		return
+	}
+	target.WriteString(`<td>`)
+	writeFloat2(target, value)
+	target.WriteString(`%</td>`)
+}
+
+func writeBudgetCell(target *strings.Builder, budgeted, breaches uint64, rate float64, fallback string) {
+	if budgeted == 0 {
+		writeTextCell(target, fallback)
+		return
+	}
+	target.WriteString(`<td>`)
+	writeUint(target, breaches)
+	target.WriteString(" из ")
+	writeUint(target, budgeted)
+	target.WriteString(" · ")
+	writeFloat2(target, rate)
+	target.WriteString(`%</td>`)
+}
+
+func writePairUintCell(target *strings.Builder, left, right uint64, suffix string) {
+	target.WriteString(`<td>`)
+	writeUint(target, left)
+	target.WriteString(" / ")
+	writeUint(target, right)
+	target.WriteString(suffix)
+	target.WriteString(`</td>`)
+}
+
+func writeTripleUintCell(target *strings.Builder, first, second, third uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, first)
+	target.WriteString(" / ")
+	writeUint(target, second)
+	target.WriteString(" / ")
+	writeUint(target, third)
+	target.WriteString(`</td>`)
+}
+
+func writeOperationNetworkCell(target *strings.Builder, calls, failures, durationMS uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, calls)
+	target.WriteString(" / ")
+	writeUint(target, failures)
+	target.WriteString(" / ")
+	writeUint(target, durationMS)
+	target.WriteString(` мс</td>`)
+}
+
+func writeOperationIOCell(target *strings.Builder, operations, durationUS, bytes uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, operations)
+	target.WriteString(" / ")
+	writeMicroseconds(target, durationUS)
+	target.WriteString(" / ")
+	writeDataSizeBytes(target, bytes)
+	target.WriteString(`</td>`)
+}
+
+func writeOperationRuntimeLogCell(target *strings.Builder, calls, records, durationMS uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, calls)
+	target.WriteString(" / ")
+	writeUint(target, records)
+	target.WriteString(" / ")
+	writeUint(target, durationMS)
+	target.WriteString(` мс</td>`)
+}
+
+func writeOperationMemoryMetricCell(target *strings.Builder, retained, pssKB, metrics uint64) {
+	target.WriteString(`<td>`)
+	writeUint(target, retained)
+	target.WriteString(" / ")
+	writeDataSizeKB(target, pssKB)
+	target.WriteString(" / ")
+	writeUint(target, metrics)
+	target.WriteString(`</td>`)
+}
+
+func writeOperationUICell(target *strings.Builder, frames, jank uint64, jankRatePct float64) {
+	if frames == 0 {
+		writeTextCell(target, "нет кадров")
+		return
+	}
+	target.WriteString(`<td>`)
+	writeUint(target, jank)
+	target.WriteString(" из ")
+	writeUint(target, frames)
+	target.WriteString(" · ")
+	writeFloat2(target, jankRatePct)
+	target.WriteString(`%</td>`)
+}
+
+func writeUint(target *strings.Builder, value uint64) {
+	var buffer [20]byte
+	target.Write(strconv.AppendUint(buffer[:0], value, 10))
+}
+
+func writeFloat2(target *strings.Builder, value float64) {
+	var buffer [32]byte
+	target.Write(strconv.AppendFloat(buffer[:0], value, 'f', 2, 64))
+}
+
+func writeFloat1(target *strings.Builder, value float64) {
+	var buffer [32]byte
+	target.Write(strconv.AppendFloat(buffer[:0], value, 'f', 1, 64))
+}
+
+func writeMicroseconds(target *strings.Builder, value uint64) {
+	if value < 1_000 {
+		writeUint(target, value)
+		target.WriteString(" мкс")
+		return
+	}
+	writeFloat2(target, float64(value)/1_000)
+	target.WriteString(" мс")
+}
+
+func writeDataSizeBytes(target *strings.Builder, value uint64) {
+	const (
+		kib = uint64(1024)
+		mib = 1024 * kib
+		gib = 1024 * mib
+	)
+	switch {
+	case value >= gib:
+		writeFloat1(target, float64(value)/float64(gib))
+		target.WriteString(" ГБ")
+	case value >= mib:
+		writeFloat1(target, float64(value)/float64(mib))
+		target.WriteString(" МБ")
+	case value >= kib:
+		writeFloat1(target, float64(value)/float64(kib))
+		target.WriteString(" КБ")
+	default:
+		writeUint(target, value)
+		target.WriteString(" Б")
+	}
+}
+
+func writeDataSizeKB(target *strings.Builder, value uint64) {
+	const kibPerMib = uint64(1024)
+	const kibPerGib = 1024 * kibPerMib
+	switch {
+	case value >= kibPerGib:
+		writeFloat1(target, float64(value)/float64(kibPerGib))
+		target.WriteString(" ГБ")
+	case value >= kibPerMib:
+		writeFloat1(target, float64(value)/float64(kibPerMib))
+		target.WriteString(" МБ")
+	default:
+		writeUint(target, value)
+		target.WriteString(" КБ")
+	}
 }
 
 func execute(path string, cached *cachedReportTemplate, data any, transient bool) error {
@@ -512,20 +985,7 @@ func reportTemplateFuncs() template.FuncMap {
 		"fpsScore": func(value float64) float64 {
 			return clampPct(value * 100 / 60)
 		},
-		"severityClass": func(value string) string {
-			switch value {
-			case "critical":
-				return "sev-critical"
-			case "high":
-				return "sev-high"
-			case "medium":
-				return "sev-medium"
-			case "low":
-				return "sev-low"
-			default:
-				return "sev-ok"
-			}
-		},
+		"severityClass": severityCSSClass,
 		"statusLabel": func(value string) string {
 			switch value {
 			case "high":
@@ -552,63 +1012,77 @@ func reportTemplateFuncs() template.FuncMap {
 		"bucketRange": func(bucket mathanalysis.TimelineBucket) string {
 			return fmt.Sprintf("%.1f-%.1fs", float64(bucket.StartMS)/1000, float64(bucket.EndMS)/1000)
 		},
-		"humanDuration":              humanDuration,
-		"humanMicros":                humanMicroseconds,
-		"unixMillisTime":             unixMillisTime,
-		"formatDurationNs":           formatDurationNs,
-		"dataSize":                   humanDataSizeKB,
-		"ruCount":                    russianCount,
-		"tip":                        tooltipHTML,
-		"metricHelp":                 metricHelp,
-		"memoryHelp":                 memoryMetricHelp,
-		"integralHelp":               integralHelp,
-		"scoreHelp":                  scoreHelp,
-		"scoreGuide":                 scoreGuideHTML,
-		"integralCriteria":           integralCriteria,
-		"ownerKind":                  ownerKindLabel,
-		"problemKind":                problemKindLabel,
-		"codeProblemLocation":        codeProblemLocation,
-		"codeProblemDrillPath":       codeProblemDrillPath,
-		"codeProblemMetric":          codeProblemMetric,
-		"codeProblemCategoryOptions": codeProblemCategoryOptions,
-		"codeProblemCategories":      codeProblemCategoryStats,
-		"codeProblemSeverities":      codeProblemSeverityStats,
-		"codeProblemEvidenceKey":     codeProblemEvidenceKey,
-		"codeProblemEvidenceArchive": codeProblemEvidenceArchive,
-		"codeProblemCompareArchive":  codeProblemCompareArchive,
-		"limitRows":                  limitRows,
-		"rowLimitNote":               rowLimitNote,
-		"leakObjectKindOptions":      leakObjectKindOptions,
-		"leakObjectKindLabel":        leakObjectKindLabel,
-		"leakGraphSVG":               leakGraphSVG,
-		"leakModeLabel":              leakModeLabel,
-		"leakDeltaStatusClass":       leakDeltaStatusClass,
-		"codeProblemCompareRows":     codeProblemCompareRows,
-		"memoryLeakCompareRows":      memoryLeakCompareRows,
-		"deltaGroups":                compareDeltaGroups,
-		"deltaLabel":                 compareDeltaLabel,
-		"deltaHelp":                  compareDeltaHelp,
-		"deltaValue":                 compareDeltaValue,
-		"deltaChange":                compareDeltaChange,
-		"deltaInterval":              compareDeltaInterval,
-		"problemDeltas":              problemDeltas,
-		"severityLabel":              severityLabel,
-		"codeSeverityLabel":          codeSeverityLabel,
+		"humanDuration":                   humanDuration,
+		"humanMicros":                     humanMicroseconds,
+		"unixMillisTime":                  unixMillisTime,
+		"formatDurationNs":                formatDurationNs,
+		"dataSize":                        humanDataSizeKB,
+		"ruCount":                         russianCount,
+		"tip":                             tooltipHTML,
+		"metricHelp":                      metricHelp,
+		"memoryHelp":                      memoryMetricHelp,
+		"integralHelp":                    integralHelp,
+		"scoreHelp":                       scoreHelp,
+		"scoreGuide":                      scoreGuideHTML,
+		"integralCriteria":                integralCriteria,
+		"ownerKind":                       ownerKindLabel,
+		"frameSourceLabel":                frameSourceLabel,
+		"httpPhaseLabel":                  httpPhaseLabel,
+		"webSocketFailureLabel":           webSocketFailureLabel,
+		"problemKind":                     problemKindLabel,
+		"codeProblemLocation":             codeProblemLocation,
+		"codeProblemDrillPath":            codeProblemDrillPath,
+		"codeProblemMetric":               codeProblemMetric,
+		"codeProblemCategoryOptions":      codeProblemCategoryOptions,
+		"codeProblemCategories":           codeProblemCategoryStats,
+		"codeProblemSeverities":           codeProblemSeverityStats,
+		"codeProblemEvidenceKey":          codeProblemEvidenceKey,
+		"codeProblemEvidenceArchive":      codeProblemEvidenceArchive,
+		"codeProblemCompareArchive":       codeProblemCompareArchive,
+		"limitRows":                       limitRows,
+		"rowLimitNote":                    rowLimitNote,
+		"leakObjectKindOptions":           leakObjectKindOptions,
+		"leakObjectKindLabel":             leakObjectKindLabel,
+		"leakGraphSVG":                    leakGraphSVG,
+		"leakModeLabel":                   leakModeLabel,
+		"leakDeltaStatusClass":            leakDeltaStatusClass,
+		"codeProblemCompareRows":          codeProblemCompareRows,
+		"memoryLeakCompareRows":           memoryLeakCompareRows,
+		"deltaGroups":                     compareDeltaGroups,
+		"deltaLabel":                      compareDeltaLabel,
+		"deltaHelp":                       compareDeltaHelp,
+		"deltaValue":                      compareDeltaValue,
+		"deltaChange":                     compareDeltaChange,
+		"deltaInterval":                   compareDeltaInterval,
+		"problemDeltas":                   problemDeltas,
+		"databaseProblemRows":             databaseProblemRows,
+		"databaseObservationRows":         databaseObservationRows,
+		"databaseTransactionRows":         databaseTransactionRows,
+		"databaseScenarioRows":            databaseScenarioRows,
+		"databaseScenarioScopeLabel":      databaseScenarioScopeLabel,
+		"databasePlanKindLabel":           databasePlanKindLabel,
+		"databaseProblemTransactionRows":  databaseProblemTransactionRows,
+		"databaseObservedTransactionRows": databaseObservedTransactionRows,
+		"databaseTaxonomyLabel":           databaseTaxonomyLabel,
+		"severityLabel":                   severityLabel,
+		"codeSeverityLabel":               codeSeverityLabel,
 		"confidenceLabel": func(value string) string {
 			return confidenceLabel(value)
 		},
-		"problemCategoryLabel":       problemCategoryLabel,
-		"problemCoverageStatusLabel": problemCoverageStatusLabel,
-		"evidenceQualityStatusLabel": evidenceQualityStatusLabel,
-		"problemStatusLabel":         problemStatusLabel,
-		"problemClaimLabel":          problemClaimLabel,
-		"problemLocationText":        problemLocationText,
-		"problemEvidenceLabel":       problemEvidenceLabel,
-		"problemEvidenceHelp":        problemEvidenceHelp,
-		"problemEvidenceDisplay":     problemEvidenceDisplay,
-		"problemEvidenceUnit":        problemEvidenceUnit,
-		"problemEvidenceThreshold":   problemEvidenceThreshold,
-		"problemRiskComponentLabel":  problemRiskComponentLabel,
+		"problemCategoryLabel":          problemCategoryLabel,
+		"problemCoverageStatusLabel":    problemCoverageStatusLabel,
+		"evidenceQualityStatusLabel":    evidenceQualityStatusLabel,
+		"problemStatusLabel":            problemStatusLabel,
+		"problemClaimLabel":             problemClaimLabel,
+		"problemLocationText":           problemLocationText,
+		"problemEvidenceLabel":          problemEvidenceLabel,
+		"problemEvidenceHelp":           problemEvidenceHelp,
+		"problemEvidenceDisplay":        problemEvidenceDisplay,
+		"problemEvidenceUnit":           problemEvidenceUnit,
+		"problemEvidenceThreshold":      problemEvidenceThreshold,
+		"problemPriorityComponentLabel": problemPriorityComponentLabel,
+		"problemPriorityBandLabel":      problemPriorityBandLabel,
+		"diTermLabel":                   dependencyInjectionTermLabel,
 		"problemPrimaryRecommendation": func(value analyze.ProblemFinding) *analyze.ProblemRecommendation {
 			if len(value.Recommendations) == 0 {
 				return nil
@@ -624,28 +1098,45 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return analyze.ProblemFinding{}
 		},
-		"riskWidth": func(value int) template.CSS {
+		"problemDiagnosisData":              problemDiagnosisData,
+		"problemDeltaDiagnosisData":         problemDeltaDiagnosisData,
+		"problemOrientedCollectionWarnings": problemOrientedCollectionWarnings,
+		"priorityWidth": func(value int) template.CSS {
 			return template.CSS(fmt.Sprintf("width:%d%%", min(100, max(0, value))))
 		},
-		"trustLevelLabel": trustLevelLabel,
+		"diagnosticCompletenessLevelLabel": diagnosticCompletenessLevelLabel,
 		"processScopeLabel": func(value string) string {
 			return processScopeLabel(value)
 		},
-		"influenceRoleLabel":      influenceRoleLabel,
-		"influenceGraphData":      influenceGraphData,
-		"influenceEvidenceLabel":  influenceEvidenceLabel,
-		"routeCompareRows":        routeCompareRows,
-		"screenCompareRows":       screenCompareRows,
-		"ownerCompareRows":        ownerCompareRows,
-		"flowCompareRows":         flowCompareRows,
-		"uiScreenInsights":        uiScreenInsights,
-		"semanticWorkOverviews":   semanticWorkOverviews,
-		"semanticWorkRows":        semanticWorkRows,
-		"ordinaryRuntimeCalls":    ordinaryRuntimeCalls,
-		"scenarioInsights":        scenarioInsights,
-		"customMetricInsights":    customMetricInsights,
-		"primaryCategoryCoverage": primaryCategoryCoverage,
-		"findingCategoryCoverage": findingCategoryCoverage,
+		"influenceRoleLabel":         influenceRoleLabel,
+		"influenceGraphData":         influenceGraphData,
+		"influenceEvidenceLabel":     influenceEvidenceLabel,
+		"routeCompareRows":           routeCompareRows,
+		"screenCompareRows":          screenCompareRows,
+		"ownerCompareRows":           ownerCompareRows,
+		"signalContextCompareRows":   signalContextCompareRows,
+		"operationKindLabel":         operationKindLabel,
+		"operationOutcomeLabel":      operationOutcomeLabel,
+		"operationStatusLabel":       operationStatusLabel,
+		"databaseCompareStatusLabel": databaseCompareStatusLabel,
+		"uiScreenInsights":           uiScreenInsights,
+		"uiProblemCount":             uiProblemCount,
+		"hasComposeWork":             hasComposeWork,
+		"hasRoomWork":                hasRoomWork,
+		"composeWorkReport":          composeWorkReport,
+		"roomWorkRows":               roomWorkRows,
+		"databaseStatementRows":      databaseStatementRows,
+		"databaseCoverage":           databaseCoverage,
+		"workerRows":                 workerRows,
+		"criticalIORows":             criticalIORows,
+		"asyncKindLabel":             asyncKindLabel,
+		"hundredths":                 hundredths,
+		"humanBytesPerSecond":        humanBytesPerSecond,
+		"ordinaryRuntimeCalls":       ordinaryRuntimeCalls,
+		"operationContextInsights":   operationContextInsights,
+		"customMetricInsights":       customMetricInsights,
+		"primaryCategoryCoverage":    primaryCategoryCoverage,
+		"findingCategoryCoverage":    findingCategoryCoverage,
 		"problemCards": func(summary analyze.Summary) []analyze.ProblemFinding {
 			if len(summary.ProblemIncidents) > 0 {
 				return summary.ProblemIncidents
@@ -736,12 +1227,122 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return value
 		},
-		"contextHint": contextValueHint,
-		"reportValue": reportValue,
-		"reportHint":  reportValueHint,
-		"cohortHint":  cohortValueHint,
-		"flowKeyHint": flowKeyLabelHint,
-		"bodyClass":   bodyClass,
+		"contextHint":             contextValueHint,
+		"databaseSourceQueryHint": databaseSourceQueryHint,
+		"growthFreshnessReason":   localizedGrowthFreshnessReason,
+		"reportValue":             reportValue,
+		"reportHint":              reportValueHint,
+		"cohortHint":              cohortValueHint,
+		"signalContextHint":       signalContextLabelHint,
+		"bodyClass":               bodyClass,
+	}
+}
+
+func httpPhaseLabel(value string) string {
+	switch value {
+	case "queue":
+		return "Очередь"
+	case "dns":
+		return "Поиск адреса (DNS)"
+	case "connect":
+		return "Соединение"
+	case "tls":
+		return "Защищённое соединение (TLS)"
+	case "request":
+		return "Отправка"
+	case "ttfb":
+		return "Ожидание первого байта (TTFB)"
+	case "response":
+		return "Получение"
+	default:
+		return value
+	}
+}
+
+func webSocketFailureLabel(value string) string {
+	switch value {
+	case "timeout":
+		return "тайм-аут"
+	case "connection":
+		return "соединение"
+	case "tls":
+		return "TLS"
+	case "protocol":
+		return "протокол"
+	case "io":
+		return "ввод-вывод"
+	case "other":
+		return "другая"
+	default:
+		return value
+	}
+}
+
+func operationKindLabel(value string) string {
+	switch value {
+	case "user":
+		return "действие пользователя"
+	case "screen":
+		return "открытие экрана"
+	case "background":
+		return "фоновая работа"
+	case "system":
+		return "системная работа"
+	case "stage":
+		return "этап"
+	default:
+		return reportValue(value, "тип не указан")
+	}
+}
+
+func operationOutcomeLabel(value string) string {
+	switch value {
+	case "success":
+		return "успешно"
+	case "failure":
+		return "ошибка"
+	case "cancelled":
+		return "отменено"
+	case "timeout":
+		return "превышено время ожидания"
+	default:
+		return reportValue(value, "результат не указан")
+	}
+}
+
+func operationStatusLabel(value string) string {
+	switch value {
+	case "regressed":
+		return "ухудшение"
+	case "improved":
+		return "улучшение"
+	case "stable":
+		return "без заметного изменения"
+	case "new":
+		return "есть только в кандидате"
+	case "removed":
+		return "есть только в базе"
+	case "insufficient_data":
+		return "недостаточно данных"
+	default:
+		return reportValue(value, "статус не определён")
+	}
+}
+
+func databaseCompareStatusLabel(value string) string {
+	switch value {
+	case "compared":
+		return "сопоставлено"
+	case "new":
+		return "только в кандидате"
+	case "removed":
+		return "только в базе"
+	case "insufficient_data":
+		return "недостаточно данных"
+	case "not_comparable":
+		return "наборы несопоставимы"
+	default:
+		return reportValue(value, "статус не определён")
 	}
 }
 
@@ -805,7 +1406,7 @@ type influenceHTMLNode struct {
 	UIJank               uint64   `json:",omitempty"`
 	Retained             uint64   `json:",omitempty"`
 	HeapEvidence         bool     `json:",omitempty"`
-	Flows                []string `json:",omitempty"`
+	Operations           []string `json:",omitempty"`
 	Screens              []string `json:",omitempty"`
 	Routes               []string `json:",omitempty"`
 	Reasons              []string `json:",omitempty"`
@@ -961,7 +1562,7 @@ func compactInfluenceHTMLNode(node analyze.InfluenceGraphNode, detailed bool) in
 	result.MemoryPressure = node.MemoryPressure
 	result.UIJank = node.UIJank
 	result.Retained = node.Retained
-	result.Flows = node.Flows
+	result.Operations = node.Operations
 	result.Screens = node.Screens
 	result.Routes = node.Routes
 	result.ChildCount = node.ChildCount
@@ -1213,7 +1814,7 @@ type robustStatGroup struct {
 }
 
 func robustStatGroups(stats []mathanalysis.RobustStat) []robustStatGroup {
-	order := []string{"Маршрут", "Экран", "Источник", "Gauge-метрика", "Счетчик", "Память", "Контекст"}
+	order := []string{"Маршрут", "Экран", "Источник", "Пользовательская метрика", "Счетчик", "Память", "Контекст"}
 	return groupRobustStats(stats, order)
 }
 
@@ -1255,7 +1856,7 @@ func robustDeltaGroups(deltas []mathanalysis.RobustDelta) []robustDeltaGroup {
 	for _, delta := range deltas {
 		byDimension[delta.Dimension] = append(byDimension[delta.Dimension], delta)
 	}
-	order := []string{"Маршрут", "Экран", "Источник", "Gauge-метрика", "Счетчик", "Память", "Контекст"}
+	order := []string{"Маршрут", "Экран", "Источник", "Пользовательская метрика", "Счетчик", "Память", "Контекст"}
 	seen := map[string]struct{}{}
 	var groups []robustDeltaGroup
 	for _, dimension := range order {
@@ -1283,17 +1884,17 @@ func metricHelp(name string) string {
 	lower := strings.ToLower(name)
 	switch {
 	case strings.Contains(lower, "gc.bytes_allocated.delta"):
-		return "Сколько байт было выделено за интервал или сценарий. 4092288 — примерно 4 МБ новых аллокаций: само по себе не всегда плохо, но при росте рядом с подтормаживаниями UI, GC или падением свободной RAM указывает на давление памяти."
+		return "Сколько байт было выделено за интервал или сценарий. 4092288 — примерно 4 МБ новой памяти: само по себе это не всегда плохо, но рост рядом с подтормаживаниями интерфейса, сборкой мусора или падением свободной памяти указывает на давление памяти."
 	case strings.Contains(lower, "gc"):
-		return "Метрика сборщика мусора или аллокаций. Смотрите не только абсолютное значение, но и совпадение с подтормаживаниями UI, паузами главного потока и ростом PSS."
+		return "Показатель сборки мусора или выделения памяти. Смотрите не только абсолютное значение, но и совпадение с подтормаживаниями интерфейса, паузами главного потока и ростом занимаемой процессом памяти."
 	case strings.Contains(lower, "queue") || strings.Contains(lower, "executor"):
 		return "Очередь или исполнитель задач. Рост значения означает накопление работы; если рядом падает FPS или растут паузы главного потока, очередь может быть причиной задержек."
 	case strings.Contains(lower, "network") || strings.Contains(lower, "http") || strings.Contains(lower, "retry") || strings.Contains(lower, "connect"):
-		return "Пользовательская сетевая метрика. Высокие значения стоит сопоставлять с HTTP p95, DNS, соединением, TTFB и сетевыми циклами."
+		return "Пользовательский сетевой показатель. Высокие значения стоит сопоставлять с границей верхних 5% HTTP-задержек, поиском адреса, соединением, временем до первого байта и сетевыми циклами."
 	case strings.Contains(lower, "jank") || strings.Contains(lower, "frame"):
 		return "Метрика кадров или подтормаживаний. Чем выше значение рядом с пользовательским действием, тем выше риск видимой просадки интерфейса."
 	default:
-		return "Пользовательская метрика из приложения. Для счетчика важна сумма за сценарий, для gauge-метрики — уровень во времени. Интерпретируйте значение рядом с HTTP, UI, памятью и контекстом устройства."
+		return "Пользовательский показатель из приложения. Для счётчика важна сумма за сценарий, для изменяемого во времени показателя — его уровень. Интерпретируйте значение рядом с сетью, интерфейсом, памятью и контекстом устройства."
 	}
 }
 
@@ -1303,11 +1904,11 @@ func memoryMetricHelp(name string) string {
 	case strings.Contains(lower, "pss"):
 		return "PSS — proportional set size, пропорциональный размер памяти процесса. Он учитывает долю разделяемых страниц и лучше показывает вклад приложения в потребление RAM, чем одна куча объектов."
 	case strings.Contains(lower, "java"):
-		return "Куча Java — память объектов JVM/ART. Рост может приводить к более частому GC и паузам, особенно если одновременно растут аллокации."
+		return "Куча Java — память объектов JVM/ART. Рост может приводить к более частой сборке мусора и паузам, особенно если одновременно растёт выделение памяти."
 	case strings.Contains(lower, "native"):
 		return "Нативная куча — память нативных аллокаций. Рост может идти от bitmap, JNI, графики или библиотек и не всегда виден в куче Java."
 	case strings.Contains(lower, "avail") || strings.Contains(lower, "free"):
-		return "Свободная RAM показывает запас системы. Низкий запас усиливает давление памяти: GC, вытеснение кэшей и риск убийства процесса системой."
+		return "Свободная оперативная память показывает запас системы. Низкий запас усиливает давление памяти: сборку мусора, вытеснение кэшей и риск завершения процесса системой."
 	default:
 		return "Метрика памяти. Смотрите тренд вместе с PSS, кучей Java, нативной кучей, удержанными объектами и свободной RAM."
 	}
@@ -1318,15 +1919,15 @@ func integralHelp(id string) string {
 	case "network_failure_burn":
 		return "Условная накопленная нагрузка сетевых повторов объединяет HTTP-ошибки, всплески DNS/соединений и кандидаты циклов. Это не время, трафик или расход батареи; число нужно использовать только для ранжирования одинаковых сценариев."
 	case "memory_pressure_area":
-		return "Площадь давления памяти объединяет рост PSS относительно базового уровня и длительность низкого запаса свободной RAM. Это не расшифровка PSS, а интегральная оценка риска GC, вытеснения кэшей и убийства процесса."
+		return "Площадь давления памяти объединяет рост занимаемой процессом памяти относительно базового уровня и длительность низкого запаса свободной памяти. Это интегральная оценка риска частой сборки мусора, вытеснения кэшей и завершения процесса системой."
 	case "recovery_debt":
 		return "Долг восстановления растет, когда плохие временные окна идут подряд. Он показывает, как долго пользователь остается в деградировавшем состоянии."
 	case "latency_pain_area":
 		return "Накопленная сетевая задержка выше целевого порога. Учитывает не только пик, но и длительность медленного периода."
 	case "main_thread_stall_burden":
-		return "Сумма превышений максимальной паузы главного потока над 100 мс в каждом интервале. Это нижняя оценка нагрузки пауз, а не их полная длительность, потому что таймлайн хранит один максимум на интервал."
+		return "Сумма превышений максимальной паузы главного потока над 100 мс в каждом интервале. Это нижняя оценка нагрузки пауз, а не их полная длительность, потому что временная шкала хранит один максимум на интервал."
 	case "jank_pressure_area":
-		return "Накопленная доля подтормаживающих UI-кадров во времени. Длинная умеренная просадка может быть важнее короткого пика."
+		return "Накопленная доля подтормаживающих кадров интерфейса во времени. Длинная умеренная просадка может быть важнее короткого пика."
 	default:
 		return "Интегральная оценка: значение сигнала умножается на длительность временного интервала и суммируется по сценарию."
 	}
@@ -1335,9 +1936,9 @@ func integralHelp(id string) string {
 func integralCriteria(id string) string {
 	switch id {
 	case "jank_pressure_area":
-		return "Стартовый ориентир: до 60 %*с — спокойно, 60–180 — проверить, от 180 — высокий приоритет. Порог не является универсальным SLA и зависит от длительности сценария."
+		return "Стартовый ориентир: до 60 %*с — спокойно, 60–180 — проверить, от 180 — высокий приоритет. Порог не является универсальным целевым нормативом и зависит от длительности сценария."
 	case "latency_pain_area":
-		return "Стартовый ориентир: до 500 мс*с — спокойно, 500–2000 — проверить, от 2000 — высокий приоритет. Считается только часть HTTP p95 выше 300 мс."
+		return "Стартовый ориентир: до 500 мс*с — спокойно, 500–2000 — проверить, от 2000 — высокий приоритет. Считается только часть границы верхних 5% HTTP-задержек выше 300 мс."
 	case "main_thread_stall_burden":
 		return "Стартовый ориентир: до 500 мс — спокойно, 500–2000 — проверить, от 2000 — высокий приоритет. Суммируется только превышение максимальной паузы над 100 мс в каждом интервале."
 	case "network_failure_burn":
@@ -1356,7 +1957,7 @@ func scoreHelp(kind string) string {
 	case "change":
 		return "Оценка точки изменения показывает, насколько сильный сдвиг сигнала виден на фоне локального шума. Примерно до 3 — слабый сигнал, 3–6 — заметный, выше 6 — сильный. Для задержек, памяти и подтормаживаний больше обычно хуже."
 	case "influence":
-		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растет от HTTP p95, пауз главного потока, UI-подтормаживаний, памяти, спама логами, проблемных окон и связей сценария. Меньше 5 — низкий риск, от 5 до 15 — средний, от 15 — высокий. Статическая связь без runtime-сигнала не доказывает влияние на производительность."
+		return "Оценка влияния — приоритет расследования внутри этого прогона. Она растёт от границы верхних 5% HTTP-задержек, пауз главного потока, подтормаживаний интерфейса, памяти, избытка сообщений журнала, проблемных окон и связей сценария. Меньше 5 — низкий риск, от 5 до 15 — средний, от 15 — высокий. Статическая связь без сигнала во время выполнения не доказывает влияние на производительность."
 	case "network_burn":
 		return "Условная нагрузка кандидата сетевого цикла растет от числа и размера повторяющихся всплесков и уверенности детектора. Это не миллисекунды, байты или расход батареи. До 5 — слабый сигнал, 5–20 — проверить, выше 20 — высокий приоритет."
 	case "confidence":
@@ -1373,13 +1974,13 @@ func scoreHelp(kind string) string {
 func scoreGuideHTML(kind string) template.HTML {
 	switch kind {
 	case "code":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Каждое семейство событий оценивается один раз через канонический сигнал: проблемное окно, удержание, лог или runtime-вызов. Производные owner/flow/граф представляют контекст и повторно score не увеличивают.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала реестра кода</strong><span class="score-band sev-ok">0-5: низкий риск</span><span class="score-band sev-medium">5-15: предупреждение</span><span class="score-band sev-high">15+: критично</span><p>Каждое семейство событий оценивается один раз через основной сигнал: проблемное окно, удержание, запись журнала или вызов во время выполнения. Производные источник/операция/граф представляют контекст и повторно оценку не увеличивают.</p></div></div>`)
 	case "leak":
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сигналов удержания</strong><span class="score-band sev-ok">до 7: наблюдать</span><span class="score-band sev-medium">7-16: проверить</span><span class="score-band sev-high">16+: высокий приоритет</span><p>time_only получает меньший вес, after_explicit_gc — средний, confirmed_hprof/path — полный. Оценка задает порядок расследования и сама по себе не доказывает утечку.</p></div></div>`)
 	case "math":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: проверить</span><span class="score-band sev-high">6+: высокий приоритет</span><p>Шкалы ранжируют наблюдения внутри сопоставимых сценариев и не являются универсальным SLA. Уверенность показывает поддержку данными, а не вероятность ошибки в коде.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала математических оценок</strong><span class="score-band sev-ok">0-3: слабый сигнал</span><span class="score-band sev-medium">3-6: проверить</span><span class="score-band sev-high">6+: высокий приоритет</span><p>Шкалы ранжируют наблюдения внутри сопоставимых сценариев и не являются универсальным целевым нормативом. Уверенность показывает поддержку данными, а не вероятность ошибки в коде.</p></div></div>`)
 	case "compare":
-		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сравнения</strong><span class="score-band sev-ok">зеленый: ухудшение не подтверждено</span><span class="score-band sev-medium">желтый: нужна проверка</span><span class="score-band sev-high">красный: сильное ухудшение</span><p>Вердикт учитывает направление метрики, размер эффекта и выборку. Для пользовательской gauge-метрики направление неизвестно, поэтому изменение не считается регрессией автоматически.</p></div></div>`)
+		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Шкала сравнения</strong><span class="score-band sev-ok">зелёный: ухудшение не подтверждено</span><span class="score-band sev-medium">жёлтый: нужна проверка</span><span class="score-band sev-high">красный: сильное ухудшение</span><p>Вывод учитывает направление метрики, размер эффекта и выборку. Для пользовательской метрики направление неизвестно, поэтому изменение не считается ухудшением автоматически.</p></div></div>`)
 	default:
 		return template.HTML(`<div class="score-guide"><div class="score-guide-card"><strong>Как читать оценку</strong><p>Оценка - это относительный приоритет внутри текущего отчета. Смотрите рядом критерии, доверие, размер выборки и контекст.</p></div></div>`)
 	}
@@ -1702,11 +2303,8 @@ func codeProblemDrillPath(drill analyze.CodeProblemDrillDown) string {
 	if drill.Screen != "" {
 		context = append(context, "экран "+drill.Screen)
 	}
-	if drill.Flow != "" {
-		context = append(context, "сценарий "+drill.Flow)
-	}
-	if drill.Step != "" {
-		context = append(context, "шаг "+drill.Step)
+	if drill.Operation != "" {
+		context = append(context, "операция "+drill.Operation)
 	}
 	if drill.Route != "" {
 		context = append(context, "маршрут "+drill.Route)
@@ -1887,7 +2485,7 @@ func memoryLeakCompareRows(comparison analyze.Comparison) []memoryLeakCompareRow
 			}
 			return out[i].DeltaScore > out[j].DeltaScore
 		}
-		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
+		return severityRank(out[i].Severity) > severityRank(out[j].Severity)
 	})
 	return out
 }
@@ -1959,20 +2557,9 @@ func codeProblemCompareRows(comparison analyze.Comparison) []codeProblemCompareR
 			}
 			return out[i].DeltaScore > out[j].DeltaScore
 		}
-		return reportSeverityRank(out[i].Severity) > reportSeverityRank(out[j].Severity)
+		return severityRank(out[i].Severity) > severityRank(out[j].Severity)
 	})
 	return out
-}
-
-func reportSeverityRank(value string) int {
-	switch value {
-	case "high":
-		return 3
-	case "medium":
-		return 2
-	default:
-		return 1
-	}
 }
 
 type compareDeltaGroup struct {
@@ -1985,7 +2572,7 @@ func compareDeltaGroups(deltas []analyze.Delta) []compareDeltaGroup {
 	order := []string{"network", "ui", "memory", "context", "other"}
 	titles := map[string]string{
 		"network": "Сеть и трафик",
-		"ui":      "UI и главный поток",
+		"ui":      "Интерфейс и главный поток",
 		"memory":  "Память и удержания",
 		"context": "Контекст и когорты",
 		"other":   "Остальные сигналы",
@@ -2045,13 +2632,13 @@ func compareDeltaCategory(name string) string {
 func compareDeltaLabel(name string) string {
 	switch name {
 	case "HTTP p95":
-		return "HTTP p95-задержка"
+		return "Граница верхних 5% HTTP-задержек"
 	case "HTTP failure rate":
 		return "Доля HTTP-ошибок"
 	case "UI jank rate":
-		return "Доля подтормаживаний UI"
+		return "Доля подтормаживаний интерфейса"
 	case "UI avg FPS":
-		return "Средний FPS UI"
+		return "Средняя частота кадров интерфейса"
 	case "Main-thread stall max":
 		return "Макс. пауза главного потока"
 	case "Max PSS":
@@ -2068,6 +2655,68 @@ func compareDeltaLabel(name string) string {
 		return "Спам логами"
 	case "Problem windows":
 		return "Проблемные окна"
+	case "DB main-thread p95":
+		return "Граница верхних 5% SQL на главном потоке"
+	case "DB background p95":
+		return "Граница верхних 5% фонового SQL"
+	case "DB calls per minute":
+		return "Вызовов БД в минуту"
+	case "DB calls per operation":
+		return "Вызовов БД на операцию приложения"
+	case "DB main-thread rate":
+		return "Доля вызовов БД на главном потоке"
+	case "DB failure rate":
+		return "Доля ошибок вызовов БД"
+	case "DB rapid-repeat rate":
+		return "Доля быстрых повторов SQL"
+	case "DB wall per minute":
+		return "Суммарное время БД в минуту"
+	case "DB wall per operation":
+		return "Суммарное время БД на операцию приложения"
+	case "DB transactions per minute":
+		return "Завершённых транзакций БД в минуту"
+	case "DB transaction p95":
+		return "Граница верхних 5% транзакций БД"
+	case "DB main-thread transaction rate":
+		return "Доля транзакций БД на главном потоке"
+	case "DB transaction failure rate":
+		return "Доля неуспешных транзакций БД"
+	case "DB transaction rollback rate":
+		return "Доля отменённых транзакций БД"
+	case "DB incomplete transaction rate":
+		return "Доля незавершённых транзакций БД"
+	case "DB statements per transaction":
+		return "Среднее число SQL-вызовов на транзакцию"
+	case "DB repeated calls per operation scope":
+		return "Повторных вызовов БД на операцию приложения"
+	case "DB repeated calls per transaction scope":
+		return "Повторных вызовов БД на транзакцию"
+	case "DB batch-candidate calls per transaction scope":
+		return "Кандидатов на пакетную запись БД на транзакцию"
+	case "Service failure rate":
+		return "Доля ошибок методов службы"
+	case "Service timeout rate":
+		return "Доля тайм-аутов службы"
+	case "Service slow callback rate":
+		return "Доля долгих методов службы"
+	case "Receiver failure rate":
+		return "Доля ошибок BroadcastReceiver"
+	case "Receiver async deadline risk rate":
+		return "Доля async Receiver у системного дедлайна"
+	case "Receiver sync slow rate":
+		return "Доля долгих синхронных onReceive"
+	case "Binder client p95":
+		return "Граница верхних 5% задержек клиента Binder"
+	case "Binder slow main-thread rate":
+		return "Доля медленных Binder-вызовов на главном потоке"
+	case "Binder failure rate":
+		return "Доля ошибок на границе Binder"
+	case "Binder unhandled rate":
+		return "Доля необработанных кодов транзакций Binder"
+	case "Binder correlation coverage":
+		return "Полнота связи клиента и сервера Binder"
+	case "Hidden foreground-service share":
+		return "Доля службы переднего плана при скрытом интерфейсе"
 	case "Process mix":
 		return "Состав процессов"
 	case "App version mix":
@@ -2088,11 +2737,11 @@ func compareDeltaLabel(name string) string {
 func compareDeltaHelp(name string) string {
 	switch name {
 	case "HTTP p95":
-		return "95-й процентиль длительности HTTP-запросов. Рост обычно означает, что хвост сетевых задержек стал хуже."
+		return "95% HTTP-запросов завершились не дольше этого значения. Рост обычно означает, что самые медленные запросы стали хуже."
 	case "HTTP failure rate":
 		return "Доля HTTP-вызовов с транспортной ошибкой или статусом 5xx. Сравнивается процент, а не сырое количество, поэтому разное число запросов не создает ложную регрессию. На малой выборке результат нужно подтвердить повтором."
 	case "UI jank rate":
-		return "Доля медленных UI-кадров. Рост в процентных пунктах показывает, что интерфейс стал чаще дергаться."
+		return "Доля медленных кадров интерфейса. Рост в процентных пунктах показывает, что интерфейс стал чаще дёргаться."
 	case "UI avg FPS":
 		return "Средняя частота кадров. Для FPS ухудшением считается падение значения."
 	case "Main-thread stall max":
@@ -2109,6 +2758,36 @@ func compareDeltaHelp(name string) string {
 		return "Частота вызовов android.util.Log.* и Timber.* в минуту. Нормализация по времени не дает более длинному прогону автоматически выглядеть хуже."
 	case "Problem windows":
 		return "Частота агрегированных проблемных окон в минуту. Окно объединяет близкие симптомы, но не доказывает их общую первопричину."
+	case "DB main-thread p95", "DB background p95":
+		return "Граница верхних 5% сравнивается отдельно для главного и фонового потоков и только при наличии не менее 20 вызовов каждого класса в обоих прогонах."
+	case "DB calls per minute", "DB wall per minute":
+		return "Нагрузка нормирована по длительности прогона, поэтому более длинный сценарий не выглядит хуже только из-за времени наблюдения."
+	case "DB calls per operation", "DB wall per operation":
+		return "Нагрузка делится на число завершённых операций приложения и сравнивается только при достаточном числе наблюдений."
+	case "DB main-thread rate", "DB failure rate", "DB rapid-repeat rate":
+		return "Сравнивается доля от всех DB-вызовов, а не сырое количество."
+	case "DB transactions per minute":
+		return "Число завершённых транзакций нормировано по длительности прогона."
+	case "DB transaction p95":
+		return "Граница верхних 5% рассчитывается только по завершённым транзакциям; незавершённым транзакциям не назначается искусственная длительность."
+	case "DB main-thread transaction rate", "DB transaction failure rate", "DB transaction rollback rate", "DB incomplete transaction rate":
+		return "Сравнивается доля от всех наблюдаемых транзакций, а не абсолютное количество."
+	case "DB statements per transaction":
+		return "Число SQL-вызовов делится на число завершённых транзакций. Рост означает больше вызовов внутри транзакции, но сам по себе не доказывает N+1."
+	case "DB repeated calls per operation scope", "DB repeated calls per transaction scope", "DB batch-candidate calls per transaction scope":
+		return "Повторы одного нормализованного SQL-шаблона делятся на число наблюдаемых операций или транзакций. Это проверяемая гипотеза, а не доказанный N+1."
+	case "Service failure rate", "Service timeout rate", "Service slow callback rate":
+		return "Сравнивается доля от завершённых методов службы; работа, не успевшая завершиться до конца записи, в знаменатель не подставляется."
+	case "Receiver failure rate", "Receiver async deadline risk rate", "Receiver sync slow rate":
+		return "Сравниваются однородные завершённые Receiver flows: async и sync не смешиваются для time-budget метрик."
+	case "Binder client p95":
+		return "Задержка измеряется на вызывающей стороне Binder: это полное время вызова, а не чистое процессорное время серверной стороны."
+	case "Binder slow main-thread rate", "Binder failure rate", "Binder unhandled rate":
+		return "Сравнивается доля типизированных событий на границе Binder, а не абсолютное число событий."
+	case "Binder correlation coverage":
+		return "Доля клиентских вызовов с единственным серверным кандидатом сравнима только при одинаковом полном охвате процессов; связь остаётся сопоставлением, а не точным доказательством."
+	case "Hidden foreground-service share":
+		return "Описывает состав сценария: служба переднего плана при скрытом окне Activity не означает активный интерфейс и сама по себе не является регрессией."
 	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
 		return "Проверка честности сравнения: база и кандидат должны быть собраны в сопоставимых условиях."
 	default:
@@ -2170,26 +2849,93 @@ func severityLabel(value string) string {
 	}
 }
 
+func severityCSSClass(value string) string {
+	switch value {
+	case "critical":
+		return "sev-critical"
+	case "high":
+		return "sev-high"
+	case "medium":
+		return "sev-medium"
+	case "low":
+		return "sev-low"
+	default:
+		return "sev-ok"
+	}
+}
+
+func problemPriorityBandLabel(value string) string {
+	switch value {
+	case "critical":
+		return "критичный приоритет"
+	case "high":
+		return "высокий приоритет"
+	case "medium":
+		return "средний приоритет"
+	case "low":
+		return "низкий приоритет"
+	default:
+		return "информационный приоритет"
+	}
+}
+
 func problemCategoryLabel(value string) string {
 	switch value {
 	case analyze.ProblemCategoryStability:
 		return "Стабильность"
+	case analyze.ProblemCategoryOperations:
+		return "Операции приложения"
 	case analyze.ProblemCategoryUI:
-		return "UI и главный поток"
+		return "Интерфейс и главный поток"
 	case analyze.ProblemCategoryNetwork:
 		return "Сеть"
 	case analyze.ProblemCategoryMemory:
-		return "Память и GC"
+		return "Память и сборка мусора"
 	case analyze.ProblemCategoryIO:
-		return "I/O и хранилище"
+		return "Файлы и база данных"
 	case analyze.ProblemCategoryCPU:
-		return "CPU и задачи"
+		return "Процессор и фоновые задачи"
 	case analyze.ProblemCategoryPower:
 		return "Энергия и нагрев"
 	case analyze.ProblemCategoryLogs:
 		return "Логи"
+	case analyze.ProblemCategoryAndroidComponents:
+		return "Компоненты Android и IPC"
+	case analyze.ProblemCategoryDependencyInjection:
+		return "DI"
 	default:
 		return value
+	}
+}
+
+func dependencyInjectionTermLabel(value string) string {
+	switch value {
+	case "consumer":
+		return "потребитель"
+	case "dependency":
+		return "зависимость"
+	case "module":
+		return "модуль"
+	case "component":
+		return "компонент"
+	case "entry_point":
+		return "точка входа"
+	case "factory":
+		return "фабрика"
+	case "constructor":
+		return "конструктор"
+	case "field":
+		return "поле"
+	case "method":
+		return "метод"
+	case "generated_factory":
+		return "созданная фабрика"
+	case "declared":
+		return "объявлено в коде"
+	case "generated_confirmed":
+		return "подтверждено созданным кодом"
+	default:
+		return strings.ReplaceAll(value, "_", " ")
 	}
 }
 
@@ -2299,7 +3045,10 @@ func problemEvidenceUnit(value string) string {
 	replacer := strings.NewReplacer(
 		"requests/s", "запросов/с",
 		"events/s", "операций/с",
+		"calls/boundary", "вызовов/границу",
+		"calls", "вызовов",
 		"requests", "запросов",
+		"attempts", "попыток",
 		"events", "событий",
 		"samples", "замеров",
 		"bytes", "байт",
@@ -2315,8 +3064,12 @@ func problemEvidenceDisplay(value analyze.ProblemEvidence) string {
 		switch value.Unit {
 		case "requests":
 			return russianCount(count, "запрос", "запроса", "запросов")
+		case "attempts":
+			return russianCount(count, "попытка", "попытки", "попыток")
 		case "events":
 			return russianCount(count, "событие", "события", "событий")
+		case "calls":
+			return russianCount(count, "вызов", "вызова", "вызовов")
 		case "samples":
 			return russianCount(count, "замер", "замера", "замеров")
 		}
@@ -2335,18 +3088,18 @@ func problemEvidenceThreshold(value string) string {
 	return "ориентир " + localized
 }
 
-func problemRiskComponentLabel(value string) string {
+func problemPriorityComponentLabel(value string) string {
 	switch value {
 	case "impact":
 		return "Влияние на пользователя"
 	case "magnitude":
-		return "Сила отклонения"
+		return "Величина отклонения"
 	case "exposure":
-		return "Частота проявления"
+		return "Повторяемость / охват запусков"
 	case "breadth":
-		return "Охват сценариев"
+		return "Широта локализации"
 	case "compounding":
-		return "Сочетание симптомов"
+		return "Сочетание сигналов"
 	default:
 		return value
 	}
@@ -2368,8 +3121,7 @@ func problemLocationText(values []analyze.ProblemLocation) string {
 			value string
 		}{
 			{name: "screen", label: "экран", value: value.Screen},
-			{name: "flow", label: "сценарий", value: value.Flow},
-			{name: "step", label: "шаг", value: value.Step},
+			{name: "operation", label: "операция", value: value.Operation},
 			{name: "route", label: "маршрут", value: value.Route},
 			{name: "owner", label: "источник", value: value.Owner},
 			{name: "class", label: "класс", value: value.Class},
@@ -2452,18 +3204,18 @@ func confidenceLabel(value string) string {
 	}
 }
 
-func trustLevelLabel(value string) string {
+func diagnosticCompletenessLevelLabel(value string) string {
 	switch value {
 	case "excellent":
-		return "максимальное"
+		return "максимальная"
 	case "high":
-		return "высокое"
+		return "высокая"
 	case "sufficient":
-		return "достаточное"
+		return "достаточная"
 	case "limited":
-		return "ограниченное"
+		return "ограниченная"
 	case "low":
-		return "низкое"
+		return "низкая"
 	default:
 		return "неизвестно"
 	}
@@ -2474,13 +3226,28 @@ func processScopeLabel(value string) string {
 	case "all_processes":
 		return "все процессы"
 	case "main_process_only":
-		return "только main-процесс"
+		return "только основной процесс"
 	case "process_allowlist":
-		return "allowlist процессов"
+		return "разрешённый список процессов"
 	case "mixed":
 		return "смешанный"
 	default:
 		return "неизвестный"
+	}
+}
+
+func frameSourceLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "mixed":
+		return "смешанный"
+	case "choreographer":
+		return "Choreographer"
+	case "jankstats":
+		return "JankStats"
+	case "", "unknown":
+		return "не записан"
+	default:
+		return value
 	}
 }
 
@@ -2725,10 +3492,9 @@ func ownerCompareRows(baseline, candidate analyze.Summary) []ownerCompareRow {
 	return rows
 }
 
-type flowCompareRow struct {
+type signalContextCompareRow struct {
 	Screen                string
-	Flow                  string
-	Step                  string
+	Operation             string
 	Owner                 string
 	BaselineProblems      uint64
 	CandidateProblems     uint64
@@ -2759,21 +3525,21 @@ type flowCompareRow struct {
 	CountsComparable      bool
 }
 
-func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
-	base := map[string]analyze.FlowStats{}
-	cand := map[string]analyze.FlowStats{}
+func signalContextCompareRows(baseline, candidate analyze.Summary) []signalContextCompareRow {
+	base := map[string]analyze.SignalContextStats{}
+	cand := map[string]analyze.SignalContextStats{}
 	keys := map[string]struct{}{}
-	for _, flow := range baseline.Flows {
-		key := flowStatsKey(flow)
-		base[key] = flow
+	for _, context := range baseline.SignalContexts {
+		key := signalContextStatsKey(context)
+		base[key] = context
 		keys[key] = struct{}{}
 	}
-	for _, flow := range candidate.Flows {
-		key := flowStatsKey(flow)
-		cand[key] = flow
+	for _, context := range candidate.SignalContexts {
+		key := signalContextStatsKey(context)
+		cand[key] = context
 		keys[key] = struct{}{}
 	}
-	rows := make([]flowCompareRow, 0, len(keys))
+	rows := make([]signalContextCompareRow, 0, len(keys))
 	for key := range keys {
 		b, hasBaseline := base[key]
 		c, hasCandidate := cand[key]
@@ -2802,18 +3568,17 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 		comparable := countsComparable || httpComparable || stallComparable || uiComparable
 		severity := "ok"
 		if comparable {
-			severity = flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta)
+			severity = signalContextDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta, jankDelta)
 		}
-		note := comparePresenceNote(hasBaseline, hasCandidate, "сценарий")
+		note := comparePresenceNote(hasBaseline, hasCandidate, "контекст операции")
 		if hasBaseline && hasCandidate && !comparable {
 			note = "нет метрик с сопоставимым покрытием"
 		} else if hasBaseline && hasCandidate && !countsComparable {
 			note = "количества не сравниваются из-за разной длительности; статус рассчитан по доступным latency/UI метрикам"
 		}
-		rows = append(rows, flowCompareRow{
+		rows = append(rows, signalContextCompareRow{
 			Screen:                firstNonEmpty(c.Screen, b.Screen),
-			Flow:                  firstNonEmpty(c.Flow, b.Flow),
-			Step:                  firstNonEmpty(c.Step, b.Step),
+			Operation:             firstNonEmpty(c.Operation, b.Operation),
 			Owner:                 firstNonEmpty(c.Owner, b.Owner),
 			BaselineProblems:      b.ProblemCount,
 			CandidateProblems:     c.ProblemCount,
@@ -2848,12 +3613,12 @@ func flowCompareRows(baseline, candidate analyze.Summary) []flowCompareRow {
 		if severityRank(rows[i].Severity) != severityRank(rows[j].Severity) {
 			return severityRank(rows[i].Severity) > severityRank(rows[j].Severity)
 		}
-		left := flowDeltaSortScore(rows[i])
-		right := flowDeltaSortScore(rows[j])
+		left := signalContextDeltaSortScore(rows[i])
+		right := signalContextDeltaSortScore(rows[j])
 		if left != right {
 			return left > right
 		}
-		return flowKeyLabel(rows[i].Screen, rows[i].Flow, rows[i].Step, rows[i].Owner) < flowKeyLabel(rows[j].Screen, rows[j].Flow, rows[j].Step, rows[j].Owner)
+		return signalContextLabel(rows[i].Screen, rows[i].Operation, rows[i].Owner) < signalContextLabel(rows[j].Screen, rows[j].Operation, rows[j].Owner)
 	})
 	return rows
 }
@@ -2870,7 +3635,7 @@ func comparePresenceNote(hasBaseline, hasCandidate bool, entity string) string {
 }
 
 func capSeverity(value, maximum string) string {
-	if reportSeverityRank(value) > reportSeverityRank(maximum) {
+	if severityRank(value) > severityRank(maximum) {
 		return maximum
 	}
 	return value
@@ -2888,28 +3653,28 @@ func durationComparableForReport(baselineMS, candidateMS uint64) bool {
 	return float64(longer-shorter)/float64(shorter) <= 0.2
 }
 
-func flowDeltaSortScore(row flowCompareRow) uint64 {
+func signalContextDeltaSortScore(row signalContextCompareRow) uint64 {
 	score := saturatingMulUint64(int64Magnitude(row.DeltaProblems), 10_000)
 	score = saturatingAddUint64(score, saturatingMulUint64(int64Magnitude(row.DeltaLogSpam), 10))
 	score = saturatingAddUint64(score, int64Magnitude(row.DeltaStallMaxMS))
 	return saturatingAddUint64(score, int64Magnitude(row.DeltaHTTPP95MS))
 }
 
-func flowStatsKey(flow analyze.FlowStats) string {
-	return strings.Join([]string{flow.Screen, flow.Flow, flow.Step, flow.Owner}, "\x00")
+func signalContextStatsKey(context analyze.SignalContextStats) string {
+	return strings.Join([]string{context.Screen, context.Operation, context.Owner}, "\x00")
 }
 
-func flowKeyLabel(screen, flow, step, owner string) string {
-	parts := compactReportParts(screen, flow, step, owner)
+func signalContextLabel(screen, operation, owner string) string {
+	parts := compactReportParts(screen, operation, owner)
 	if len(parts) == 0 {
 		return "контекст не задан"
 	}
 	return strings.Join(parts, " / ")
 }
 
-func flowKeyLabelHint(screen, flow, step, owner string) template.HTML {
-	label := flowKeyLabel(screen, flow, step, owner)
-	hint := flowContextHint(screen, flow, step, owner)
+func signalContextLabelHint(screen, operation, owner string) template.HTML {
+	label := signalContextLabel(screen, operation, owner)
+	hint := signalContextHint(screen, operation, owner)
 	if hint == "" {
 		return inlineHTMLText(label)
 	}
@@ -2918,6 +3683,14 @@ func flowKeyLabelHint(screen, flow, step, owner string) template.HTML {
 
 func contextValueHint(value string, field string) template.HTML {
 	return reportValueHint(value, "нет данных", field)
+}
+
+func databaseSourceQueryHint(source, query string) template.HTML {
+	body := strings.TrimSpace(query)
+	if isUnknownReportValue(body) {
+		body = missingDataHint("query")
+	}
+	return tooltipHTML(reportValue(source, "место вызова не записано"), body)
 }
 
 func reportValue(value string, fallback string) string {
@@ -3025,16 +3798,13 @@ func cohortHasMissingPart(value string) bool {
 	return false
 }
 
-func flowContextHint(screen, flow, step, owner string) string {
-	missing := make([]string, 0, 4)
+func signalContextHint(screen, operation, owner string) string {
+	missing := make([]string, 0, 3)
 	if isUnknownReportValue(screen) {
 		missing = append(missing, "экран: "+missingDataHint("screen"))
 	}
-	if isUnknownReportValue(flow) {
-		missing = append(missing, "сценарий: "+missingDataHint("flow"))
-	}
-	if isUnknownReportValue(step) {
-		missing = append(missing, "шаг: "+missingDataHint("step"))
+	if isUnknownReportValue(operation) {
+		missing = append(missing, "операция: "+missingDataHint("operation"))
 	}
 	if isUnknownReportValue(owner) {
 		missing = append(missing, "источник: "+missingDataHint("owner"))
@@ -3042,44 +3812,55 @@ func flowContextHint(screen, flow, step, owner string) string {
 	return strings.Join(missing, "\n\n")
 }
 
+func localizedGrowthFreshnessReason(value string) string {
+	return strings.NewReplacer(
+		"growth checkpoint", "контрольная точка роста журнала",
+		"committed events", "зафиксированные события",
+		"live checkpoint", "текущая контрольная точка",
+		"session", "сессия",
+		"freshness", "актуальность",
+		"lag=", "отставание ",
+	).Replace(value)
+}
+
 func missingDataHint(field string) string {
 	switch strings.ToLower(strings.TrimSpace(field)) {
 	case "screen":
-		return "Экран берется из Activity lifecycle callbacks. Если он не записался, ActivityTracker не подключился к Application, событие произошло до первого Activity callback или лог создан старой версией SDK."
-	case "flow":
-		return "Сценарий появляется из startFlow/withFlow, @JankHunterFlow или ASM flowInteractions. Если его нет, этот участок не был размечен как сценарий или instrumentation не попал в пакет."
-	case "step", "trace":
-		return "Шаг появляется из markFlowStep/withFlowStep, @JankHunterTrace или ASM flowInteractions. Если его нет, конкретный участок сценария не был размечен."
+		return "Экран определяется по обратным вызовам жизненного цикла Activity. Если он не записался, ActivityTracker не подключился к Application или событие произошло до первого обратного вызова Activity."
+	case "operation":
+		return "Операция появляется из startOperation/traceOperation, @JankHunterOperation или автоматического измерения взаимодействий. Если её нет, участок не был размечен либо инструментирование не попало в пакет."
 	case "owner":
-		return "Источник приходит из встроенных ASM-символов, @JankHunterOwner/@JankHunterTrace, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции; для developer-режима STABLE_EXTERNAL дополнительно нужен owner-map."
+		return "Источник приходит из встроенных символов преобразования байткода, @JankHunterOwner, @JankHunterOperation, withOwner или ownerHint. Если его нет, участок выполнился без атрибуции."
 	case "log-source":
-		return "Источник логов берется из Log/Timber bytecode hook. Если его нет, вызов прошел без ASM-инструментации или сигнатура logger не поддержана текущим bridge."
+		return "Источник логов определяется при инструментировании вызовов Log/Timber. Если его нет, вызов прошёл без ASM-инструментации или сигнатура логгера не поддержана текущим адаптером."
 	case "route", "network-route":
-		return "Маршрут берется из OkHttp/HTTP instrumentation. Если он отсутствует при сетевых симптомах, проверьте instrument.okhttp, includePackages, scope ALL и поддержку версии OkHttp bridge."
+		return "Маршрут определяется при инструментировании OkHttp/HTTP. Если он отсутствует при сетевых симптомах, проверьте настройки instrument.okhttp и includePackages, полный охват приложения и поддержку используемой версии OkHttp."
+	case "query", "sql":
+		return "SQL-шаблон не записан. Откройте указанное рядом место вызова DAO или SQLite и проверьте выполняемый им запрос."
 	case "call", "caller", "callee":
-		return "Узел графа вызовов берется из runtimeCallGraph instrumentation. Если его нет, вызов не попал в инструментированные пакеты, ребро было отброшено лимитом или для developer-режима STABLE_EXTERNAL не передан owner-map."
+		return "Узел графа вызовов определяется инструментированием runtimeCallGraph. Если его нет, вызов не попал в указанные пакеты или связь не удалось сохранить из-за ограничения объёма данных."
 	case "stack":
-		return "Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра или событие записано старой версией runtime."
+		return "Подсказка стека берется из верхнего пользовательского кадра при фиксации работы. Если ее нет, стек не содержал подходящего кадра."
 	case "holder":
-		return "Держатель утечки восстанавливается из ownerHint, текущего owner или className. Если он не определен, watchObject был вызван без ownerHint и без активного контекста; для старых логов CLI пытается восстановить держатель из className."
+		return "Держатель утечки восстанавливается из ownerHint, текущего владельца или имени класса. Если он не определён, watchObject был вызван без ownerHint, имени класса и активного контекста."
 	case "device", "session":
-		return "Метаданные устройства пишутся session-событием при старте runtime. Если они пустые, JankHunter не успел стартовать до событий, init прошел без Application context или лог создан старой версией SDK."
+		return "Метаданные устройства записываются при начале запуска Jank Hunter. Если они пустые, Jank Hunter не успел запуститься до событий или инициализация прошла без контекста Application."
 	case "app", "build":
-		return "Версия приложения берется из PackageInfo при старте runtime. Если ее нет, session-событие не записалось или PackageInfo был недоступен в этом процессе."
+		return "Версия приложения берётся из PackageInfo при запуске Jank Hunter. Если её нет, начальное событие не записалось или PackageInfo был недоступен в этом процессе."
 	case "sdk", "android":
-		return "Версия Android и SDK пишутся device snapshot при старте runtime. Если их нет, session-событие не попало в лог или лог создан старой версией SDK."
+		return "Версия Android и SDK записываются в снимке устройства при запуске Jank Hunter. Если их нет, начальное событие не попало в журнал."
 	case "process":
-		return "Имя процесса пишется session-событием. Если его нет, runtime не смог получить processName в этом процессе или session metadata не попала в лог."
+		return "Имя процесса записывается в начале запуска. Если его нет, Jank Hunter не смог получить имя процесса или начальные сведения не попали в журнал."
 	case "network":
-		return "Тип сети пишется context snapshot через ConnectivityManager/NetworkCapabilities. Если его нет, snapshot не успел выполниться или система не вернула активную сеть."
+		return "Тип сети записывается в снимке контекста через ConnectivityManager/NetworkCapabilities. Если его нет, снимок не успел выполниться или система не вернула активную сеть."
 	case "cohort":
-		return "Когорта собирается из device/app/build/process/network metadata. Неизвестная часть означает, что соответствующее session/context-событие не попало в лог."
+		return "Когорта собирается из сведений об устройстве, приложении, сборке, процессе и сети. Неопределённая часть означает, что соответствующее начальное событие или снимок контекста не попал в журнал."
 	default:
 		return ""
 	}
 }
 
-func flowDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta int64, jankDelta float64) string {
+func signalContextDeltaSeverity(problemDelta, logDelta, httpDelta, stallDelta int64, jankDelta float64) string {
 	if problemDelta >= 10 || stallDelta >= 500 || httpDelta >= 500 || jankDelta >= 3 {
 		return "high"
 	}
@@ -3253,20 +4034,25 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 	if len(report.NetworkLoops) > 0 {
 		loop := report.NetworkLoops[0]
 		target := firstNonEmpty(loop.Route, loop.Owner, "сетевой сценарий")
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Кандидат сетевого цикла", Detail: fmt.Sprintf("Проверьте %s: предполагаемый период %.1f сек, уверенность %.2f, условная нагрузка %.1f. Это гипотеза, а не доказанная причина.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Признак сетевого цикла", Detail: fmt.Sprintf("Проверьте %s: предполагаемый период %.1f сек, уверенность %.2f, условная нагрузка %.1f. Это гипотеза, а не доказанная причина.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
 	}
 	if len(report.CausalGraph.OwnerScores) > 0 {
 		owner := report.CausalGraph.OwnerScores[0]
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Источник, чаще связанный с проблемами", Detail: fmt.Sprintf("%s получил оценку связи %.2f только по плохим состояниям и сетевым циклам. Проверьте трассировку и код: граф сам по себе не доказывает вину источника.", owner.Owner, owner.Score)})
+		ownerLabel := reportValue(owner.Owner, "место запуска не записано")
+		detail := fmt.Sprintf("%s чаще других совпадало по времени с плохими состояниями и сетевыми циклами; условная оценка %.2f. Проверьте трассировку и код: совпадение не доказывает причину.", ownerLabel, owner.Score)
+		if isUnknownReportValue(owner.Owner) {
+			detail += " Чтобы восстановить место запуска, проверьте инструментирование сетевого клиента и включение пакета с кодом, который запускает запрос."
+		}
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Место запуска, чаще связанное с проблемами", Detail: detail})
 	}
-	if flow, ok := topProblemFlow(report.Summary); ok {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: flowCardSeverity(flow), Title: "Сценарий с причинами", Detail: fmt.Sprintf("%s: проблем %d, спам логами %d, HTTP p95 %d мс, макс. пауза %d мс.", flowKeyLabel(flow.Screen, flow.Flow, flow.Step, flow.Owner), flow.ProblemCount, flow.LogSpam, flow.HTTPP95MS, flow.StallMaxMS)})
+	if context, ok := topProblemSignalContext(report.Summary); ok {
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: signalContextCardSeverity(context), Title: "Операция со связанными сигналами", Detail: fmt.Sprintf("%s: проблем %d, лишних сообщений журнала %d, граница верхних 5%% HTTP-задержек %d мс, максимальная пауза %d мс.", signalContextLabel(context.Screen, context.Operation, context.Owner), context.ProblemCount, context.LogSpam, context.HTTPP95MS, context.StallMaxMS)})
 	}
 	if score, ok := topIntegralScore(report.IntegralScores); ok {
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: score.Severity, Title: score.Title, Detail: fmt.Sprintf("%.1f %s. %s", score.Value, score.Unit, score.Explanation)})
 	}
 	if len(summary.Cards) == 0 {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Используйте отчет как контрольную точку. При предупреждении начните с измеренного сигнала, затем проверьте таймлайн, сырые события и граф связей."})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Используйте отчёт как контрольную точку. При предупреждении начните с измеренного сигнала, затем проверьте временную шкалу, исходные события и граф связей."})
 	}
 	return summary
 }
@@ -3280,7 +4066,7 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 	}
 	switch summary.Severity {
 	case "high":
-		summary.Status = "Кандидат требует расследования"
+		summary.Status = "Проверяемый прогон требует расследования"
 		summary.Summary = "Есть сильные математические дельты. Проверьте, совпадают ли они с изменениями маршрутов, экранов, памяти или контекста устройства."
 	case "medium":
 		summary.Status = "Есть предупреждения по кандидату"
@@ -3307,51 +4093,51 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 		delta := report.CausalDeltas[0]
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Граф связей изменился", Detail: delta.Summary})
 	}
-	if row, ok := topFlowDelta(report.Comparison.Baseline, report.Comparison.Candidate); ok && row.Severity != "ok" {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Сценарий ухудшился", Detail: fmt.Sprintf("%s: Δ проблем %d, Δ спама %d, Δ HTTP p95 %d мс, Δ UI %+.2f п.п.", flowKeyLabel(row.Screen, row.Flow, row.Step, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
+	if row, ok := topSignalContextDelta(report.Comparison.Baseline, report.Comparison.Candidate); ok && row.Severity != "ok" {
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: row.Severity, Title: "Связанные сигналы операции ухудшились", Detail: fmt.Sprintf("%s: изменение числа проблем %d, лишних сообщений журнала %d, границы верхних 5%% HTTP-задержек %d мс, подтормаживаний интерфейса %+.2f п.п.", signalContextLabel(row.Screen, row.Operation, row.Owner), row.DeltaProblems, row.DeltaLogSpam, row.DeltaHTTPP95MS, row.DeltaJankPct)})
 	}
 	if len(summary.Cards) == 0 {
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующем ухудшении начните с распределений, таймлайна и сырых событий, а граф связей используйте только как список гипотез."})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: "ok", Title: "Что проверить первым", Detail: "Сохраните сравнение как контрольную точку. При следующем ухудшении начните с распределений, временной шкалы и исходных событий, а граф связей используйте только как список гипотез."})
 	}
 	return summary
 }
 
-func topProblemFlow(summary analyze.Summary) (analyze.FlowStats, bool) {
-	if len(summary.Flows) == 0 {
-		return analyze.FlowStats{}, false
+func topProblemSignalContext(summary analyze.Summary) (analyze.SignalContextStats, bool) {
+	if len(summary.SignalContexts) == 0 {
+		return analyze.SignalContextStats{}, false
 	}
-	best := summary.Flows[0]
-	for _, flow := range summary.Flows[1:] {
-		if flowProblemScore(flow) > flowProblemScore(best) {
-			best = flow
+	best := summary.SignalContexts[0]
+	for _, context := range summary.SignalContexts[1:] {
+		if signalContextProblemScore(context) > signalContextProblemScore(best) {
+			best = context
 		}
 	}
-	if flowProblemScore(best) == 0 {
-		return analyze.FlowStats{}, false
+	if signalContextProblemScore(best) == 0 {
+		return analyze.SignalContextStats{}, false
 	}
 	return best, true
 }
 
-func flowProblemScore(flow analyze.FlowStats) uint64 {
-	score := saturatingMulUint64(flow.ProblemCount, 10_000)
-	score = saturatingAddUint64(score, saturatingMulUint64(flow.LogSpam, 10))
-	score = saturatingAddUint64(score, saturatingMulUint64(nonNegativeInt(flow.StallCount), 1_000))
-	score = saturatingAddUint64(score, flow.StallMaxMS)
-	score = saturatingAddUint64(score, flow.HTTPP95MS)
-	return saturatingAddUint64(score, flow.UIJank)
+func signalContextProblemScore(context analyze.SignalContextStats) uint64 {
+	score := saturatingMulUint64(context.ProblemCount, 10_000)
+	score = saturatingAddUint64(score, saturatingMulUint64(context.LogSpam, 10))
+	score = saturatingAddUint64(score, saturatingMulUint64(nonNegativeInt(context.StallCount), 1_000))
+	score = saturatingAddUint64(score, context.StallMaxMS)
+	score = saturatingAddUint64(score, context.HTTPP95MS)
+	return saturatingAddUint64(score, context.UIJank)
 }
 
-func flowCardSeverity(flow analyze.FlowStats) string {
-	if flow.ProblemCount >= 10 || flow.StallMaxMS >= 1000 || flow.HTTPP95MS >= 1500 {
+func signalContextCardSeverity(context analyze.SignalContextStats) string {
+	if context.ProblemCount >= 10 || context.StallMaxMS >= 1000 || context.HTTPP95MS >= 1500 {
 		return "high"
 	}
-	if flow.ProblemCount > 0 || flow.LogSpam >= 50 || flow.StallMaxMS >= 250 || flow.HTTPP95MS >= 500 {
+	if context.ProblemCount > 0 || context.LogSpam >= 50 || context.StallMaxMS >= 250 || context.HTTPP95MS >= 500 {
 		return "medium"
 	}
 	return "ok"
 }
 
-type scenarioInsight struct {
+type operationContextInsight struct {
 	Title       string
 	Severity    string
 	Status      string
@@ -3363,24 +4149,24 @@ type scenarioInsight struct {
 	Tooltip     string
 }
 
-func scenarioInsights(summary analyze.Summary) []scenarioInsight {
-	insights := make([]scenarioInsight, 0, len(summary.Flows))
-	for _, flow := range summary.Flows {
-		if !flowNeedsAttention(flow) {
+func operationContextInsights(summary analyze.Summary) []operationContextInsight {
+	insights := make([]operationContextInsight, 0, len(summary.SignalContexts))
+	for _, context := range summary.SignalContexts {
+		if !signalContextNeedsAttention(context) {
 			continue
 		}
-		severity, status := scenarioVerdict(flow)
-		signals := scenarioSignalSummary(flow)
-		insights = append(insights, scenarioInsight{
-			Title:       scenarioTitle(flow),
+		severity, status := operationContextVerdict(context)
+		signals := operationContextSignalSummary(context)
+		insights = append(insights, operationContextInsight{
+			Title:       operationContextTitle(context),
 			Severity:    severity,
 			Status:      status,
-			Context:     scenarioContext(flow),
+			Context:     operationContextDescription(context),
 			Summary:     strings.Join(signals, " "),
-			Impact:      scenarioImpact(flow),
-			FirstCheck:  scenarioFirstCheck(flow),
-			SignalCount: scenarioSignalCount(flow),
-			Tooltip:     "Карточка объединяет сигналы, записанные в одном экранном и сценарном контексте, и предлагает первый практический шаг проверки.",
+			Impact:      operationContextImpact(context),
+			FirstCheck:  operationContextFirstCheck(context),
+			SignalCount: operationContextSignalCount(context),
+			Tooltip:     "Карточка объединяет сигналы, записанные для одной операции и экрана, и предлагает первый практический шаг проверки.",
 		})
 	}
 	sort.SliceStable(insights, func(i, j int) bool {
@@ -3400,108 +4186,105 @@ func scenarioInsights(summary analyze.Summary) []scenarioInsight {
 	return insights
 }
 
-func flowNeedsAttention(flow analyze.FlowStats) bool {
-	return flow.ProblemCount > 0 || flow.HTTPFailed > 0 || flow.HTTPP95MS >= 700 ||
-		flow.StallCount > 0 || flow.UIJank > 0 || flow.LogSpam >= 10 || flow.MemoryMaxKB >= 256*1024
+func signalContextNeedsAttention(context analyze.SignalContextStats) bool {
+	return context.ProblemCount > 0 || context.HTTPFailed > 0 || context.HTTPP95MS >= 700 ||
+		context.StallCount > 0 || context.UIJank > 0 || context.LogSpam >= 10 || context.MemoryMaxKB >= 256*1024
 }
 
-func scenarioVerdict(flow analyze.FlowStats) (string, string) {
+func operationContextVerdict(context analyze.SignalContextStats) (string, string) {
 	switch {
-	case flow.StallMaxMS >= 1500 || flow.UIJankPct >= 20 || flow.HTTPFailed >= 3:
+	case context.StallMaxMS >= 1500 || context.UIJankPct >= 20 || context.HTTPFailed >= 3:
 		return "critical", "критично"
-	case flow.StallMaxMS >= 700 || flow.UIJankPct >= 10 || flow.HTTPP95MS >= 1500 || flow.HTTPFailed > 0:
+	case context.StallMaxMS >= 700 || context.UIJankPct >= 10 || context.HTTPP95MS >= 1500 || context.HTTPFailed > 0:
 		return "high", "высокий риск"
-	case flow.StallCount > 0 || flow.UIJankPct >= 5 || flow.HTTPP95MS >= 700 || flow.LogSpam >= 50 || flow.ProblemCount > 0:
+	case context.StallCount > 0 || context.UIJankPct >= 5 || context.HTTPP95MS >= 700 || context.LogSpam >= 50 || context.ProblemCount > 0:
 		return "medium", "нужно проверить"
 	default:
 		return "low", "наблюдение"
 	}
 }
 
-func scenarioTitle(flow analyze.FlowStats) string {
+func operationContextTitle(context analyze.SignalContextStats) string {
 	parts := make([]string, 0, 2)
-	if !isUnknownReportValue(flow.Flow) {
-		parts = append(parts, flow.Flow)
-	} else if !isUnknownReportValue(flow.Screen) {
-		parts = append(parts, flow.Screen)
-	} else if !isUnknownReportValue(flow.Owner) {
-		parts = append(parts, flow.Owner)
-	} else if !isUnknownReportValue(flow.RouteSample) {
-		parts = append(parts, flow.RouteSample)
+	if !isUnknownReportValue(context.Operation) {
+		parts = append(parts, context.Operation)
+	} else if !isUnknownReportValue(context.Screen) {
+		parts = append(parts, context.Screen)
+	} else if !isUnknownReportValue(context.Owner) {
+		parts = append(parts, context.Owner)
+	} else if !isUnknownReportValue(context.RouteSample) {
+		parts = append(parts, context.RouteSample)
 	} else {
-		parts = append(parts, "Сценарий без названия")
-	}
-	if !isUnknownReportValue(flow.Step) {
-		parts = append(parts, flow.Step)
+		parts = append(parts, "Операция без названия")
 	}
 	return strings.Join(parts, " · ")
 }
 
-func scenarioContext(flow analyze.FlowStats) string {
+func operationContextDescription(context analyze.SignalContextStats) string {
 	parts := make([]string, 0, 4)
-	if !isUnknownReportValue(flow.Screen) {
-		parts = append(parts, "экран "+flow.Screen)
+	if !isUnknownReportValue(context.Screen) {
+		parts = append(parts, "экран "+context.Screen)
 	}
-	if !isUnknownReportValue(flow.Owner) {
-		parts = append(parts, "источник "+flow.Owner)
+	if !isUnknownReportValue(context.Owner) {
+		parts = append(parts, "источник "+context.Owner)
 	}
-	if !isUnknownReportValue(flow.RouteSample) {
-		parts = append(parts, "маршрут "+flow.RouteSample)
+	if !isUnknownReportValue(context.RouteSample) {
+		parts = append(parts, "маршрут "+context.RouteSample)
 	}
 	if len(parts) == 0 {
-		return "Точное место не размечено; добавьте экран, сценарий или источник работ."
+		return "Точное место не размечено; добавьте экран, операцию или источник работ."
 	}
 	return strings.Join(parts, " · ")
 }
 
-func scenarioSignalSummary(flow analyze.FlowStats) []string {
+func operationContextSignalSummary(context analyze.SignalContextStats) []string {
 	parts := make([]string, 0, 6)
-	if flow.UIFrames > 0 && flow.UIJank > 0 {
-		parts = append(parts, fmt.Sprintf("Медленными были %s из %s (%.1f%%).", russianCount(flow.UIJank, "кадр", "кадра", "кадров"), russianCount(flow.UIFrames, "кадра", "кадров", "кадров"), flow.UIJankPct))
+	if context.UIFrames > 0 && context.UIJank > 0 {
+		parts = append(parts, fmt.Sprintf("Медленными были %s из %s (%.1f%%).", russianCount(context.UIJank, "кадр", "кадра", "кадров"), russianCount(context.UIFrames, "кадра", "кадров", "кадров"), context.UIJankPct))
 	}
-	if flow.StallCount > 0 {
-		parts = append(parts, fmt.Sprintf("Главный поток останавливался %s; максимум — %d мс.", russianCount(flow.StallCount, "раз", "раза", "раз"), flow.StallMaxMS))
+	if context.StallCount > 0 {
+		parts = append(parts, fmt.Sprintf("Главный поток останавливался %s; максимум — %d мс.", russianCount(context.StallCount, "раз", "раза", "раз"), context.StallMaxMS))
 	}
-	if flow.HTTPCount > 0 {
-		parts = append(parts, scenarioHTTPText(flow))
+	if context.HTTPCount > 0 {
+		parts = append(parts, operationContextHTTPText(context))
 	}
-	if flow.LogSpam > 0 {
-		parts = append(parts, fmt.Sprintf("Лишних записей в лог — %d.", flow.LogSpam))
+	if context.LogSpam > 0 {
+		parts = append(parts, fmt.Sprintf("Лишних записей в лог — %d.", context.LogSpam))
 	}
-	if flow.ProblemCount > 0 {
-		parts = append(parts, fmt.Sprintf("Объединённых проблемных сигналов — %d.", flow.ProblemCount))
+	if context.ProblemCount > 0 {
+		parts = append(parts, fmt.Sprintf("Объединённых проблемных сигналов — %d.", context.ProblemCount))
 	}
-	if flow.MemoryMaxKB > 0 {
-		parts = append(parts, fmt.Sprintf("Память в этом контексте доходила до %s.", humanDataSizeKB(flow.MemoryMaxKB)))
+	if context.MemoryMaxKB > 0 {
+		parts = append(parts, fmt.Sprintf("Память в этом контексте доходила до %s.", humanDataSizeKB(context.MemoryMaxKB)))
 	}
 	return parts
 }
 
-func scenarioHTTPText(flow analyze.FlowStats) string {
+func operationContextHTTPText(context analyze.SignalContextStats) string {
 	var text string
 	switch {
-	case flow.HTTPCount == 1:
-		text = fmt.Sprintf("Единственный сетевой вызов занял до %d мс", flow.HTTPP95MS)
-	case flow.HTTPCount < 20:
-		text = fmt.Sprintf("В небольшой выборке из %d сетевых вызовов верхняя задержка составила %d мс", flow.HTTPCount, flow.HTTPP95MS)
+	case context.HTTPCount == 1:
+		text = fmt.Sprintf("Единственный сетевой вызов занял до %d мс", context.HTTPP95MS)
+	case context.HTTPCount < 20:
+		text = fmt.Sprintf("В небольшой выборке из %d сетевых вызовов верхняя задержка составила %d мс", context.HTTPCount, context.HTTPP95MS)
 	default:
-		text = fmt.Sprintf("У 95%% из %d сетевых вызовов длительность не превышала %d мс", flow.HTTPCount, flow.HTTPP95MS)
+		text = fmt.Sprintf("У 95%% из %d сетевых вызовов длительность не превышала %d мс", context.HTTPCount, context.HTTPP95MS)
 	}
-	if flow.HTTPFailed > 0 {
-		text += fmt.Sprintf("; с ошибкой завершилось %d", flow.HTTPFailed)
+	if context.HTTPFailed > 0 {
+		text += fmt.Sprintf("; с ошибкой завершилось %d", context.HTTPFailed)
 	}
 	return text + "."
 }
 
-func scenarioSignalCount(flow analyze.FlowStats) int {
+func operationContextSignalCount(context analyze.SignalContextStats) int {
 	count := 0
 	for _, present := range []bool{
-		flow.UIJank > 0,
-		flow.StallCount > 0,
-		flow.HTTPCount > 0,
-		flow.LogSpam > 0,
-		flow.ProblemCount > 0,
-		flow.MemoryMaxKB > 0,
+		context.UIJank > 0,
+		context.StallCount > 0,
+		context.HTTPCount > 0,
+		context.LogSpam > 0,
+		context.ProblemCount > 0,
+		context.MemoryMaxKB > 0,
 	} {
 		if present {
 			count++
@@ -3510,21 +4293,21 @@ func scenarioSignalCount(flow analyze.FlowStats) int {
 	return count
 }
 
-func scenarioImpact(flow analyze.FlowStats) string {
+func operationContextImpact(context analyze.SignalContextStats) string {
 	impacts := make([]string, 0, 3)
-	if flow.UIJank > 0 || flow.StallCount > 0 {
+	if context.UIJank > 0 || context.StallCount > 0 {
 		impacts = append(impacts, "рывки интерфейса и задержка реакции на действие")
 	}
-	if flow.HTTPFailed > 0 {
+	if context.HTTPFailed > 0 {
 		impacts = append(impacts, "ошибка или незавершённый пользовательский сценарий")
-	} else if flow.HTTPP95MS >= 700 {
+	} else if context.HTTPP95MS >= 700 {
 		impacts = append(impacts, "долгое ожидание данных")
 	}
-	if flow.MemoryMaxKB >= 256*1024 {
+	if context.MemoryMaxKB >= 256*1024 {
 		impacts = append(impacts, "рост числа сборок мусора и риск нехватки памяти")
 	}
-	if flow.LogSpam >= 50 {
-		impacts = append(impacts, "лишняя нагрузка на процессор и I/O из-за частого логирования")
+	if context.LogSpam >= 50 {
+		impacts = append(impacts, "лишняя нагрузка на процессор и хранилище из-за частого ведения журнала")
 	}
 	if len(impacts) == 0 {
 		return "Влияние на пользователя по текущим данным невелико, но сигнал стоит перепроверить."
@@ -3532,24 +4315,24 @@ func scenarioImpact(flow analyze.FlowStats) string {
 	return "Для пользователя это может означать: " + strings.Join(impacts, "; ") + "."
 }
 
-func scenarioFirstCheck(flow analyze.FlowStats) string {
-	place := "в этом сценарии"
-	if !isUnknownReportValue(flow.Owner) {
-		place = "в " + flow.Owner
+func operationContextFirstCheck(context analyze.SignalContextStats) string {
+	place := "в этой операции"
+	if !isUnknownReportValue(context.Owner) {
+		place = "в " + context.Owner
 	}
 	switch {
-	case flow.StallCount > 0:
+	case context.StallCount > 0:
 		return "Сначала откройте трассу главного потока " + place + " и найдите синхронную работу вокруг самой длинной паузы."
-	case flow.HTTPFailed > 0:
-		return "Сначала проверьте ошибки, повторные вызовы и обработку ответа маршрута " + reportValue(flow.RouteSample, "в этом сценарии") + "."
-	case flow.HTTPP95MS >= 700:
-		return "Сначала проверьте длительный и повторный сетевой вызов маршрута " + reportValue(flow.RouteSample, "в этом сценарии") + "."
-	case flow.UIJank > 0:
+	case context.HTTPFailed > 0:
+		return "Сначала проверьте ошибки, повторные вызовы и обработку ответа маршрута " + reportValue(context.RouteSample, "в этой операции") + "."
+	case context.HTTPP95MS >= 700:
+		return "Сначала проверьте длительный и повторный сетевой вызов маршрута " + reportValue(context.RouteSample, "в этой операции") + "."
+	case context.UIJank > 0:
 		return "Сначала профилируйте отрисовку экрана и работу " + place + " во время медленных кадров."
-	case flow.LogSpam >= 10:
-		return "Сначала сократите частое логирование " + place + " и повторите сценарий."
+	case context.LogSpam >= 10:
+		return "Сначала сократите частое логирование " + place + " и повторите операцию."
 	default:
-		return "Повторите сценарий с теми же входными данными и сравните длительность, память и плавность."
+		return "Повторите операцию с теми же входными данными и сравните длительность, память и плавность."
 	}
 }
 
@@ -3581,7 +4364,7 @@ func primaryCategoryCoverage(items []analyze.CategoryCoverage) []analyze.Categor
 func findingCategoryCoverage(items []analyze.CategoryCoverage) []analyze.CategoryCoverage {
 	visible := make([]analyze.CategoryCoverage, 0, len(items))
 	for _, item := range items {
-		if item.FindingCount > 0 {
+		if item.FindingCount > 0 || item.Category == analyze.ProblemCategoryDependencyInjection {
 			visible = append(visible, item)
 		}
 	}
@@ -3646,11 +4429,11 @@ func customMetricInsights(summary analyze.Summary) []customMetricInsight {
 		names []string
 	}
 	groups := []metricGroup{
-		{id: "memory", title: "Память и GC"},
+		{id: "memory", title: "Память и сборка мусора"},
 		{id: "network", title: "Сеть"},
-		{id: "ui", title: "UI и отрисовка"},
+		{id: "ui", title: "Интерфейс и отрисовка"},
 		{id: "tasks", title: "Очереди и задачи"},
-		{id: "io", title: "I/O и хранилище"},
+		{id: "io", title: "Файлы и база данных"},
 		{id: "other", title: "Остальные показатели"},
 	}
 	add := func(item analyze.NamedValue) {
@@ -3722,7 +4505,7 @@ func customMetricRelation(group string, summary analyze.Summary) (string, string
 	switch group {
 	case "memory":
 		if summary.Retained > 0 || summary.MemoryMaxKB > 0 {
-			return "medium", fmt.Sprintf("В этом же прогоне: удержанных объектов — %d, максимум PSS — %s. Смотрите эти значения вместе с аллокациями и частотой GC.", summary.Retained, humanDataSizeKB(summary.MemoryMaxKB)), "Повторите сценарий и проверьте, возвращаются ли память и число удержаний к исходному уровню."
+			return "medium", fmt.Sprintf("В этом же прогоне: удержанных объектов — %d, максимум занятой процессом памяти — %s. Смотрите эти значения вместе с выделением памяти и частотой сборки мусора.", summary.Retained, humanDataSizeKB(summary.MemoryMaxKB)), "Повторите сценарий и проверьте, возвращаются ли память и число удержаний к исходному уровню."
 		}
 		return "low", "Основных событий памяти рядом не записано.", "Используйте эти показатели для сравнения одинаковых сценариев между прогонами."
 	case "network":
@@ -3732,28 +4515,28 @@ func customMetricRelation(group string, summary analyze.Summary) (string, string
 		return "low", "Основных сетевых событий рядом не записано.", "Проверьте, записывает ли сценарий маршрут и источник сетевой работы."
 	case "ui":
 		if summary.UIFrames > 0 {
-			return "medium", fmt.Sprintf("Основной сборщик UI увидел %.1f%% медленных кадров из %d.", summary.UIJankPct, summary.UIFrames), "Сверьте название показателя с экраном и причиной в разделе «Плавность UI»."
+			return "medium", fmt.Sprintf("Основной сборщик интерфейса увидел %.1f%% медленных кадров из %d.", summary.UIJankPct, summary.UIFrames), "Сверьте название показателя с экраном и причиной в разделе «Плавность интерфейса»."
 		}
-		return "low", "Основные события UI в этом прогоне не записаны.", "Для связи с экраном повторите сценарий со включённым сбором кадров."
+		return "low", "Основные события интерфейса в этом прогоне не записаны.", "Для связи с экраном повторите сценарий со включённым сбором кадров."
 	case "tasks":
 		if summary.StallCount > 0 {
 			return "medium", fmt.Sprintf("В этом же прогоне главный поток останавливался %s; максимум — %d мс.", russianCount(summary.StallCount, "раз", "раза", "раз"), summary.StallMaxMS), "Ищите рост очереди рядом с длинными задачами главного потока."
 		}
 		return "low", "Длинные паузы главного потока в этом прогоне не записаны.", "Сравнивайте размер очереди в одинаковых сценариях и на одинаковом устройстве."
 	case "io":
-		if len(summary.IOOperations) > 0 {
-			return "medium", fmt.Sprintf("Типизированных I/O-операций в прогоне — %d.", len(summary.IOOperations)), "Сопоставьте рост показателя с операцией, потоком и источником в сценарии."
+		if count := totalTypedIOOperations(summary); count > 0 {
+			return "medium", fmt.Sprintf("Типизированных файловых операций в прогоне — %d.", count), "Сопоставьте рост показателя с операцией, потоком и источником в подробном анализе хранилища."
 		}
-		return "low", "Типизированные I/O-операции в этом прогоне не записаны.", "Для точной привязки добавьте запись операции с потоком и источником."
+		return "low", "Типизированные файловые операции в этом прогоне не записаны.", "Для точной привязки добавьте запись операции с потоком и источником."
 	default:
 		return "low", "Эти показатели пока не относятся к известной группе Jank Hunter.", "Добавьте понятное имя и описание единицы измерения, затем сравнивайте одинаковые сценарии."
 	}
 }
 
-func topFlowDelta(baseline, candidate analyze.Summary) (flowCompareRow, bool) {
-	rows := flowCompareRows(baseline, candidate)
+func topSignalContextDelta(baseline, candidate analyze.Summary) (signalContextCompareRow, bool) {
+	rows := signalContextCompareRows(baseline, candidate)
 	if len(rows) == 0 {
-		return flowCompareRow{}, false
+		return signalContextCompareRow{}, false
 	}
 	return rows[0], true
 }

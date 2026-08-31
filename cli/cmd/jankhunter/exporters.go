@@ -103,13 +103,13 @@ type problemExportEnvelope struct {
 func problemsTable(rows []analyze.ProblemFinding) csvTable {
 	table := csvTable{header: []string{
 		"fingerprint", "detector_id", "detector_version", "category", "subcategory", "severity", "status",
-		"risk_score", "confidence", "title", "what_happened", "where", "claim_level", "why", "impact",
+		"investigation_priority", "confidence", "title", "what_happened", "where", "claim_level", "why", "impact",
 		"evidence", "recommendation", "limitations",
 	}}
 	for _, row := range rows {
 		table.rows = append(table.rows, []string{
 			row.Fingerprint, row.DetectorID, row.DetectorVersion, row.Category, row.Subcategory, row.Severity, row.Status,
-			fmt.Sprint(row.RiskScore), row.Confidence, row.Title, row.WhatHappened, problemLocationsText(row.Where),
+			fmt.Sprint(row.InvestigationPriority), row.Confidence, row.Title, row.WhatHappened, problemLocationsText(row.Where),
 			row.Why.ClaimLevel, row.Why.Summary, strings.Join(row.Impact, " | "), problemEvidenceText(row.Evidence),
 			problemRecommendationText(row.Recommendations), strings.Join(row.Limitations, " | "),
 		})
@@ -121,7 +121,7 @@ func problemLocationsText(values []analyze.ProblemLocation) string {
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
 		fields := []string{}
-		for _, pair := range []struct{ key, value string }{{"process", value.Process}, {"screen", value.Screen}, {"flow", value.Flow}, {"step", value.Step}, {"route", value.Route}, {"owner", value.Owner}, {"class", value.Class}, {"method", value.Method}} {
+		for _, pair := range []struct{ key, value string }{{"process", value.Process}, {"screen", value.Screen}, {"operation", value.Operation}, {"route", value.Route}, {"owner", value.Owner}, {"class", value.Class}, {"method", value.Method}} {
 			if pair.value != "" {
 				fields = append(fields, pair.key+"="+pair.value)
 			}
@@ -175,6 +175,89 @@ func writeCSVTable(output io.Writer, table csvTable) error {
 	return writer.Error()
 }
 
+func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
+	table := csvTable{header: []string{
+		"record_type", "name", "operation", "baseline", "candidate", "change",
+		"severity", "confidence", "comparable", "note",
+	}}
+	for _, delta := range comparison.Deltas {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("metric", delta))
+	}
+	for _, delta := range comparison.Database.Metrics {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("database_metric", delta))
+	}
+	for _, delta := range comparison.AndroidComponents.Metrics {
+		table.rows = append(table.rows, comparisonDeltaCSVRow("android_component_metric", delta))
+	}
+	for _, statement := range comparison.Database.Statements {
+		table.rows = append(table.rows, []string{
+			"database_statement",
+			statement.Query,
+			statement.Operation,
+			fmt.Sprint(statement.BaselineCalls),
+			fmt.Sprint(statement.CandidateCalls),
+			fmt.Sprintf(
+				"calls/min %.2f -> %.2f; main p95 us %d -> %d; background p95 us %d -> %d; failure rate %.2f -> %.2f pp; wall ms/operation %.2f -> %.2f",
+				statement.BaselineCallsPerMinute,
+				statement.CandidateCallsPerMinute,
+				statement.BaselineMainP95US,
+				statement.CandidateMainP95US,
+				statement.BaselineBackgroundP95US,
+				statement.CandidateBackgroundP95US,
+				statement.BaselineFailureRatePct,
+				statement.CandidateFailureRatePct,
+				statement.BaselineWallMSPerOperation,
+				statement.CandidateWallMSPerOperation,
+			),
+			statement.Severity,
+			statement.Confidence,
+			fmt.Sprint(statement.Comparable),
+			statement.Note,
+		})
+	}
+	for _, operation := range comparison.OperationDeltas {
+		if !operation.DatabaseComparable {
+			continue
+		}
+		table.rows = append(table.rows, []string{
+			"database_operation",
+			operation.Operation,
+			operation.Screen,
+			fmt.Sprintf("%.2f", operation.BaselineDatabaseCallsPerOperation),
+			fmt.Sprintf("%.2f", operation.CandidateDatabaseCallsPerOperation),
+			fmt.Sprintf(
+				"main rate %.2f -> %.2f pp; failure rate %.2f -> %.2f pp; wall ms/operation %.2f -> %.2f",
+				operation.BaselineDatabaseMainRatePct,
+				operation.CandidateDatabaseMainRatePct,
+				operation.BaselineDatabaseFailureRatePct,
+				operation.CandidateDatabaseFailureRatePct,
+				operation.BaselineDatabaseWallMSPerOperation,
+				operation.CandidateDatabaseWallMSPerOperation,
+			),
+			operation.Severity,
+			operation.Confidence,
+			"true",
+			operation.Note,
+		})
+	}
+	return writeCSVTable(writer, table)
+}
+
+func comparisonDeltaCSVRow(recordType string, delta analyze.Delta) []string {
+	return []string{
+		recordType,
+		delta.Name,
+		"",
+		delta.Baseline,
+		delta.Candidate,
+		delta.Change,
+		delta.Severity,
+		delta.Confidence,
+		fmt.Sprint(delta.Comparable),
+		strings.TrimSpace(strings.Join([]string{delta.ComparisonNote, delta.Interval}, " ")),
+	}
+}
+
 func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 	table := csvTable{
 		header: []string{
@@ -185,8 +268,7 @@ func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 			"categories",
 			"problems",
 			"screen",
-			"flow",
-			"step",
+			"operation",
 			"route",
 			"evidence",
 			"recommendation",
@@ -211,8 +293,7 @@ func codeProblemsTable(rows []analyze.CodeProblemStats) csvTable {
 				strings.Join(row.Categories, "|"),
 				strings.Join(row.Problems, "|"),
 				drill.Screen,
-				drill.Flow,
-				drill.Step,
+				drill.Operation,
 				drill.Route,
 				firstNonEmpty(drill.Evidence, row.Evidence),
 				firstNonEmpty(drill.Recommendation, row.Recommendation),
@@ -228,8 +309,7 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			"class",
 			"holder",
 			"screen",
-			"flow",
-			"step",
+			"operation",
 			"severity",
 			"score",
 			"count",
@@ -254,8 +334,7 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			row.ClassName,
 			row.Holder,
 			row.Screen,
-			row.Flow,
-			row.Step,
+			row.Operation,
 			row.Severity,
 			fmt.Sprintf("%.1f", row.Score),
 			fmt.Sprintf("%d", row.Count),
@@ -290,7 +369,7 @@ func influenceTable(influence analyze.InfluenceSummary) csvTable {
 			"runtime_confirmed",
 			"count",
 			"screens",
-			"flows",
+			"operations",
 			"routes",
 			"evidence",
 		},
@@ -306,7 +385,7 @@ func influenceTable(influence analyze.InfluenceSummary) csvTable {
 			fmt.Sprintf("%t", node.RuntimeEvidence),
 			fmt.Sprintf("%d", node.Problems),
 			strings.Join(node.Screens, "|"),
-			strings.Join(node.Flows, "|"),
+			strings.Join(node.Operations, "|"),
 			strings.Join(node.Routes, "|"),
 			strings.Join(node.Reasons, "|"),
 		})

@@ -7,15 +7,16 @@ internal class DictionaryIds(
     private val idsByKind = arrayOfNulls<MutableMap<String, Long>>(FAST_KIND_COUNT)
     private val uncommonKinds = HashMap<Int, MutableMap<String, Long>>()
     private val definitionsById = ArrayList<Definition?>().apply { add(null) }
+    private val sanitizedValue = SanitizedValue()
     private var nextId = 1L
     private var regularEntryCount = 0
 
-    fun idFor(kind: Int, rawValue: String?): Result {
-        val sanitized = sanitizeValue(rawValue)
+    fun resolve(kind: Int, rawValue: String?, result: DictionaryLookupResult): Long {
+        val sanitized = sanitizeValue(rawValue, sanitizedValue)
         val value = sanitized.value
         val ids = idsFor(kind)
         ids[value]?.let {
-            return Result(
+            return result.set(
                 id = it,
                 definition = null,
                 overflowed = sanitized.forcedOverflow,
@@ -24,32 +25,38 @@ internal class DictionaryIds(
         }
 
         if (sanitized.forcedOverflow) {
-            return overflowId(kind, sanitized.truncated)
+            return overflowId(kind, sanitized.truncated, result)
         }
 
         if (regularEntryCount >= maxRegularEntries.coerceAtLeast(0)) {
-            return overflowId(kind, sanitized.truncated)
+            return overflowId(kind, sanitized.truncated, result)
         }
 
-        return define(kind, value, overflowed = false, truncated = sanitized.truncated).also {
-            regularEntryCount++
-        }
+        val id = define(kind, value, overflowed = false, truncated = sanitized.truncated, result)
+        regularEntryCount++
+        return id
     }
 
-    private fun overflowId(kind: Int, truncated: Boolean): Result {
+    private fun overflowId(kind: Int, truncated: Boolean, result: DictionaryLookupResult): Long {
         idsFor(kind)[OVERFLOW_VALUE]?.let {
-            return Result(it, null, overflowed = true, truncated = truncated)
+            return result.set(it, null, overflowed = true, truncated = truncated)
         }
-        return define(kind, OVERFLOW_VALUE, overflowed = true, truncated = truncated)
+        return define(kind, OVERFLOW_VALUE, overflowed = true, truncated = truncated, result)
     }
 
-    private fun define(kind: Int, value: String, overflowed: Boolean, truncated: Boolean): Result {
+    private fun define(
+        kind: Int,
+        value: String,
+        overflowed: Boolean,
+        truncated: Boolean,
+        result: DictionaryLookupResult,
+    ): Long {
         val id = nextId++
         idsFor(kind)[value] = id
         val definition = Definition(kind, id, value)
         while (definitionsById.size <= id.toInt()) definitionsById.add(null)
         definitionsById[id.toInt()] = definition
-        return Result(id, definition, overflowed, truncated)
+        return result.set(id, definition, overflowed, truncated)
     }
 
     fun definition(id: Long): Definition? {
@@ -57,11 +64,11 @@ internal class DictionaryIds(
         return definitionsById.getOrNull(id.toInt())
     }
 
-    private fun sanitizeValue(rawValue: String?): SanitizedValue {
+    private fun sanitizeValue(rawValue: String?, result: SanitizedValue): SanitizedValue {
         val value = rawValue?.takeIf { it.isNotEmpty() } ?: UNKNOWN_VALUE
         val maxBytes = maxValueBytes.coerceAtLeast(0)
         if (maxBytes == 0) {
-            return SanitizedValue(
+            return result.set(
                 value = OVERFLOW_VALUE,
                 truncated = true,
                 forcedOverflow = true,
@@ -77,11 +84,11 @@ internal class DictionaryIds(
             offset += packedWidth ushr UTF8_WIDTH_CHAR_SHIFT
         }
         if (offset == value.length) {
-            return SanitizedValue(value, truncated = false, forcedOverflow = false)
+            return result.set(value, truncated = false, forcedOverflow = false)
         }
 
         val truncatedValue = value.substring(0, offset)
-        return SanitizedValue(
+        return result.set(
             value = truncatedValue.takeIf { it.isNotEmpty() } ?: OVERFLOW_VALUE,
             truncated = true,
             forcedOverflow = truncatedValue.isEmpty(),
@@ -115,24 +122,27 @@ internal class DictionaryIds(
         return (1 shl UTF8_WIDTH_CHAR_SHIFT) or byteCount
     }
 
-    data class Result(
-        val id: Long,
-        val definition: Definition?,
-        val overflowed: Boolean,
-        val truncated: Boolean,
-    )
-
     data class Definition(
         val kind: Int,
         val id: Long,
         val value: String,
     )
 
-    private data class SanitizedValue(
-        val value: String,
-        val truncated: Boolean,
-        val forcedOverflow: Boolean,
-    )
+    private class SanitizedValue {
+        var value: String = ""
+            private set
+        var truncated: Boolean = false
+            private set
+        var forcedOverflow: Boolean = false
+            private set
+
+        fun set(value: String, truncated: Boolean, forcedOverflow: Boolean): SanitizedValue {
+            this.value = value
+            this.truncated = truncated
+            this.forcedOverflow = forcedOverflow
+            return this
+        }
+    }
 
     companion object {
         const val DEFAULT_MAX_REGULAR_ENTRIES = 8192
@@ -142,5 +152,30 @@ internal class DictionaryIds(
         private const val UTF8_WIDTH_CHAR_SHIFT = 3
         private const val UTF8_WIDTH_BYTE_MASK = (1 shl UTF8_WIDTH_CHAR_SHIFT) - 1
         private const val UNKNOWN_VALUE = "unknown"
+    }
+}
+
+/** Caller-owned result buffer keeping repeated dictionary hits allocation-free. */
+internal class DictionaryLookupResult {
+    var id: Long = 0L
+        private set
+    var definition: DictionaryIds.Definition? = null
+        private set
+    var overflowed: Boolean = false
+        private set
+    var truncated: Boolean = false
+        private set
+
+    fun set(
+        id: Long,
+        definition: DictionaryIds.Definition?,
+        overflowed: Boolean,
+        truncated: Boolean,
+    ): Long {
+        this.id = id
+        this.definition = definition
+        this.overflowed = overflowed
+        this.truncated = truncated
+        return id
     }
 }

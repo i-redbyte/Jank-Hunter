@@ -1,5 +1,7 @@
 package io.jankhunter.sample.graph
 
+import io.jankhunter.runtime.JankHunterTelemetry
+
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunter
 
@@ -9,14 +11,14 @@ internal class PerformanceScenarioUseCase(
 ) {
     fun calculateFor(durationMs: Long): Long {
         var checksum = 0L
-        JankHunter.withOwner(CheckoutCalculator::class.java.name) {
+        JankHunterTelemetry.withOwner(CheckoutCalculator::class.java.name) {
             checksum = calculator.calculateFor(durationMs)
         }
         return checksum
     }
 
     fun renderFor(durationMs: Long) {
-        JankHunter.withOwner(CheckoutRenderer::class.java.name) {
+        JankHunterTelemetry.withOwner(CheckoutRenderer::class.java.name) {
             renderer.renderFor(durationMs)
         }
     }

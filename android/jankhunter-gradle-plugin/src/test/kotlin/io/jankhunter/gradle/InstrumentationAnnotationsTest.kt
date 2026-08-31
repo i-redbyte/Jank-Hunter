@@ -74,37 +74,38 @@ class InstrumentationAnnotationsTest {
     }
 
     @Test
-    fun screenFlowAndTraceAnnotationsEnterRuntimeContext() {
+    fun screenAndOperationAnnotationsEnterRuntimeContextAndOperation() {
         val instrumented = instrument(
             ownerFixture(
                 classScreen = "FeedScreen",
-                classFlow = "feed.open",
-                methodTrace = "refresh",
+                classOperation = "feed.open",
+                methodOperation = "refresh",
             ),
         )
 
         val strings = collectMethodStrings(instrumented, "load")
         assertTrue(strings.contains("FeedScreen"))
         assertTrue(strings.contains("FeedOwner"))
-        assertTrue(strings.contains("feed.open"))
         assertTrue(strings.contains("refresh"))
         assertEquals(1, countRuntimeCalls(instrumented, "enterAnnotatedContext"))
         assertEquals(2, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
+        assertEquals(1, countRuntimeCalls(instrumented, "startAnnotatedOperation"))
+        assertEquals(2, countRuntimeCalls(instrumented, "finishAnnotatedOperation"))
     }
 
     @Test
-    fun defaultTraceAnnotationUsesMethodName() {
-        val instrumented = instrument(ownerFixture(methodTrace = ""))
+    fun blankOperationAnnotationIsIgnored() {
+        val instrumented = instrument(ownerFixture(methodOperation = ""))
 
         val strings = collectMethodStrings(instrumented, "load")
 
-        assertTrue(strings.contains("load"))
-        assertEquals(1, countRuntimeCalls(instrumented, "enterAnnotatedContext"))
+        assertFalse(strings.contains("load"))
+        assertEquals(0, countRuntimeCalls(instrumented, "startAnnotatedOperation"))
     }
 
     @Test
     fun declaredConstructorsReceiveBoundaryAndAnnotationHooksAfterSuper() {
-        val instrumented = instrument(ownerFixture(constructorTrace = "create"))
+        val instrumented = instrument(ownerFixture(constructorOperation = "create"))
 
         val strings = collectMethodStrings(instrumented, "<init>")
 
@@ -113,6 +114,8 @@ class InstrumentationAnnotationsTest {
         assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "recordMethodCall"))
         assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "enterAnnotatedContext"))
         assertEquals(2, countRuntimeCallsInMethod(instrumented, "<init>", "exitAnnotatedContext"))
+        assertEquals(1, countRuntimeCallsInMethod(instrumented, "<init>", "startAnnotatedOperation"))
+        assertEquals(2, countRuntimeCallsInMethod(instrumented, "<init>", "finishAnnotatedOperation"))
         assertEquals(1, countCatchAllHandlers(instrumented, "<init>"))
     }
 
@@ -125,10 +128,11 @@ class InstrumentationAnnotationsTest {
 
     @Test
     fun annotatedContextGetsCatchAllExitForExceptionUnwind() {
-        val instrumented = instrument(ownerFixture(methodTrace = "refresh", throwsException = true))
+        val instrumented = instrument(ownerFixture(methodOperation = "refresh", throwsException = true))
 
         assertEquals(1, countCatchAllHandlers(instrumented, "load"))
         assertEquals(1, countRuntimeCalls(instrumented, "exitAnnotatedContext"))
+        assertEquals(1, countRuntimeCalls(instrumented, "finishAnnotatedOperation"))
     }
 
     private fun instrument(bytes: ByteArray, classGraphDirectory: String = ""): ByteArray {
@@ -145,13 +149,12 @@ class InstrumentationAnnotationsTest {
                     handlers = false,
                     executors = false,
                     coroutines = false,
-                    flowInteractions = false,
+                    interactionOperations = false,
                     logSpam = false,
                     classGraph = classGraphDirectory.isNotBlank(),
                     runtimeCallGraph = false,
                     classGraphDirectory = classGraphDirectory,
                     instrumentationDiagnosticsDirectory = "",
-                    ownerMapEntriesDirectory = "",
                 ),
             ),
             ClassReader.EXPAND_FRAMES,
@@ -163,9 +166,9 @@ class InstrumentationAnnotationsTest {
         classOwner: String? = null,
         methodOwner: String? = null,
         classScreen: String? = null,
-        classFlow: String? = null,
-        methodTrace: String? = null,
-        constructorTrace: String? = null,
+        classOperation: String? = null,
+        methodOperation: String? = null,
+        constructorOperation: String? = null,
         classIgnored: Boolean = false,
         methodIgnored: Boolean = false,
         throwsException: Boolean = false,
@@ -177,8 +180,8 @@ class InstrumentationAnnotationsTest {
         if (classScreen != null) {
             writer.visitAnnotation(SCREEN_DESCRIPTOR, false).finishStringValue(classScreen)
         }
-        if (classFlow != null) {
-            writer.visitAnnotation(FLOW_DESCRIPTOR, false).finishStringValue(classFlow)
+        if (classOperation != null) {
+            writer.visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue(classOperation)
         }
         if (classIgnored) {
             writer.visitAnnotation(IGNORE_DESCRIPTOR, false).visitEnd()
@@ -192,8 +195,8 @@ class InstrumentationAnnotationsTest {
         }
 
         writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
-            if (constructorTrace != null) {
-                visitAnnotation(TRACE_DESCRIPTOR, false).finishStringValue(constructorTrace)
+            if (constructorOperation != null) {
+                visitAnnotation(OPERATION_DESCRIPTOR, false).finishStringValue(constructorOperation)
             }
             visitCode()
             visitVarInsn(Opcodes.ALOAD, 0)
@@ -207,10 +210,10 @@ class InstrumentationAnnotationsTest {
             if (methodOwner != null) {
                 visitAnnotation(OWNER_DESCRIPTOR, false).finishStringValue(methodOwner)
             }
-            if (methodTrace != null) {
-                val annotation = visitAnnotation(TRACE_DESCRIPTOR, false)
-                if (methodTrace.isNotEmpty()) {
-                    annotation.finishStringValue(methodTrace)
+            if (methodOperation != null) {
+                val annotation = visitAnnotation(OPERATION_DESCRIPTOR, false)
+                if (methodOperation.isNotEmpty()) {
+                    annotation.finishStringValue(methodOperation)
                 } else {
                     annotation.visitEnd()
                 }
@@ -361,8 +364,7 @@ class InstrumentationAnnotationsTest {
     private companion object {
         private const val OWNER_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOwner;"
         private const val SCREEN_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterScreen;"
-        private const val FLOW_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterFlow;"
-        private const val TRACE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterTrace;"
+        private const val OPERATION_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterOperation;"
         private const val IGNORE_DESCRIPTOR = "Lio/jankhunter/annotations/JankHunterIgnore;"
     }
 }
