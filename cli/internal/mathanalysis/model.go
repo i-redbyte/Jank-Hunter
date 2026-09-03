@@ -529,10 +529,6 @@ func titleFromPaths(paths []string) string {
 	return strings.Join(paths, ", ")
 }
 
-func dataQualityFindings(summary analyze.Summary) []Finding {
-	return dataQualityFindingsForRuns(summary, 1)
-}
-
 func dataQualityFindingsForRuns(summary analyze.Summary, independentRunCount int) []Finding {
 	findings := warningFindings("", summary.Warnings, "Проверьте целостность входных .jhlog и фильтры команды перед тем, как доверять математическим выводам.")
 	if normalizedRunCount(independentRunCount) > 1 {

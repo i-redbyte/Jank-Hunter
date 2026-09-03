@@ -161,7 +161,7 @@ class JankHunterConfigTest {
         assertTrue(config.sessionLogSizeLimitEnabled())
         assertEquals(50, config.maxSessionLogSizeMiB())
         assertTrue(config.logGrowthAnalyticsEnabled())
-        assertFalse(config.deleteObsoleteJhlogFormats())
+        assertTrue(config.deleteObsoleteJhlogFormats())
         assertEquals(50L * 1024L * 1024L, config.sessionLogSizeLimitBytes())
         assertEquals(8192, config.maxDictionaryEntries())
         assertEquals(1024, config.maxDictionaryValueBytes())
@@ -361,6 +361,18 @@ class JankHunterConfigTest {
             ),
             config.symbolNamespace(),
         )
+        assertTrue(config.deleteObsoleteJhlogFormats())
+    }
+
+    @Test
+    fun obsoleteJhlogCleanupCanBeDisabledExplicitly() {
+        val metadata = TestManifestMetadata(
+            mapOf(JankHunterManifestConfig.META_DELETE_OBSOLETE_JHLOG_FORMATS to false),
+        )
+
+        val config = JankHunterManifestConfig.fromMetadata(metadata, defaultEnabled = true)
+
+        assertFalse(config.deleteObsoleteJhlogFormats())
     }
 
     @Test

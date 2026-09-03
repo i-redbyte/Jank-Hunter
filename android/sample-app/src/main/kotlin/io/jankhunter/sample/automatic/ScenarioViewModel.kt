@@ -7,7 +7,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.jankhunter.sample.R
 import io.jankhunter.sample.SampleApplication
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel

@@ -50,6 +50,34 @@ class LogQualityCountersTest {
         assertEquals(1L, snapshot[QualityCounterId.ACCEPTED_EVENT_TOTAL] ?: 0L)
     }
 
+    @Test
+    fun primitiveSnapshotPreservesSortedIdsWithoutEntryAllocations() {
+        val counters = LogQualityCounters()
+        counters.add(QualityCounterId.COMMITTED_CHUNK_TOTAL, 7L)
+        counters.add(QualityCounterId.ACCEPTED_EVENT_TOTAL, 5L)
+        val ids = IntArray(counters.counterCapacity())
+        val values = LongArray(counters.counterCapacity())
+
+        val count = counters.snapshotInto(ids, values)
+
+        assertEquals(2, count)
+        assertEquals(QualityCounterId.ACCEPTED_EVENT_TOTAL, ids[0])
+        assertEquals(5L, values[0])
+        assertEquals(QualityCounterId.COMMITTED_CHUNK_TOTAL, ids[1])
+        assertEquals(7L, values[1])
+    }
+
+    @Test
+    fun primitiveSnapshotReportsRequiredCapacityWithoutTruncatingSilently() {
+        val counters = LogQualityCounters()
+        counters.add(QualityCounterId.ACCEPTED_EVENT_TOTAL, 5L)
+        counters.add(QualityCounterId.COMMITTED_CHUNK_TOTAL, 7L)
+
+        val count = counters.snapshotInto(IntArray(1), LongArray(1))
+
+        assertEquals(-2, count)
+    }
+
     private companion object {
         const val WORKER_COUNT = 4
         const val UPDATES_PER_WORKER = 5_000

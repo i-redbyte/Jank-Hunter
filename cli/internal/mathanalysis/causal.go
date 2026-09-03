@@ -267,10 +267,6 @@ func causalShortestPaths(nodes []CausalNode, edges []CausalEdge) []GraphPath {
 	return paths
 }
 
-func shortestGraphPath(nodes map[string]CausalNode, edges []CausalEdge, source, target string) (GraphPath, bool) {
-	return shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), source, target)
-}
-
 func shortestGraphPathWithAdjacency(
 	nodes map[string]CausalNode,
 	adjacency map[string][]CausalEdge,

@@ -8,14 +8,14 @@ import (
 )
 
 func TestDataQualityFindingsIncludeSummaryWarnings(t *testing.T) {
-	findings := dataQualityFindings(analyze.Summary{
+	findings := dataQualityFindingsForRuns(analyze.Summary{
 		LogCount:     1,
 		EventCount:   100,
 		HTTPCount:    10,
 		UIFrames:     600,
 		ContextCount: 5,
 		Warnings:     []string{"ignored partial trailing compact event"},
-	})
+	}, 1)
 
 	if sectionStatus(findings) != "medium" {
 		t.Fatalf("sectionStatus() = %q, want medium", sectionStatus(findings))
@@ -26,7 +26,7 @@ func TestDataQualityFindingsIncludeSummaryWarnings(t *testing.T) {
 }
 
 func TestDataQualityFindingsHideInternalBufferCounters(t *testing.T) {
-	findings := dataQualityFindings(analyze.Summary{
+	findings := dataQualityFindingsForRuns(analyze.Summary{
 		LogCount:     1,
 		EventCount:   100,
 		HTTPCount:    10,
@@ -37,7 +37,7 @@ func TestDataQualityFindingsHideInternalBufferCounters(t *testing.T) {
 			"Качество сбора: writer отклонил batch runtime-графа: 25661.",
 			"Анализ компонентов Android и IPC частичный: записан 1 из 3 ожидаемых процессов.",
 		},
-	})
+	}, 1)
 
 	if findingDetailsContain(findings, "25661") || findingDetailsContain(findings, "runtime-реестры") {
 		t.Fatalf("internal counters leaked into user findings: %+v", findings)

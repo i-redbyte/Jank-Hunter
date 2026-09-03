@@ -6,29 +6,48 @@ import (
 )
 
 type ClassGraphIndex struct {
-	Outgoing map[string][]ClassGraphEdge
-	Incoming map[string][]ClassGraphEdge
+	edges    []ClassGraphEdge
+	outgoing map[string][]uint32
+	incoming map[string][]uint32
 }
 
 type MethodGraphIndex struct {
-	Outgoing map[string][]MethodGraphEdge
-	Incoming map[string][]MethodGraphEdge
+	edges    []ClassGraphEdge
+	outgoing map[methodGraphNodeKey][]uint32
+	incoming map[methodGraphNodeKey][]uint32
 }
 
-type MethodGraphEdge struct {
-	FromClass  string
-	FromMethod string
-	ToClass    string
-	ToMethod   string
-	Count      uint64
+type classGraphEdgeKey struct {
+	from, to                   string
+	callerMethod, calleeMethod string
+}
+
+type methodGraphNodeKey struct {
+	className  string
+	methodName string
 }
 
 func NewClassGraphIndex(edges []ClassGraphEdge) *ClassGraphIndex {
+	return newClassGraphIndex(canonicalClassGraphEdges(edges))
+}
+
+func newClassGraphIndex(edges []ClassGraphEdge) *ClassGraphIndex {
 	index := &ClassGraphIndex{
-		Outgoing: map[string][]ClassGraphEdge{},
-		Incoming: map[string][]ClassGraphEdge{},
+		edges:    edges,
+		outgoing: make(map[string][]uint32),
+		incoming: make(map[string][]uint32),
 	}
-	merged := map[string]ClassGraphEdge{}
+	for edgeIndex := range edges {
+		edge := &edges[edgeIndex]
+		index.outgoing[edge.From] = append(index.outgoing[edge.From], uint32(edgeIndex))
+		index.incoming[edge.To] = append(index.incoming[edge.To], uint32(edgeIndex))
+	}
+	index.sort()
+	return index
+}
+
+func canonicalClassGraphEdges(edges []ClassGraphEdge) []ClassGraphEdge {
+	merged := make(map[classGraphEdgeKey]ClassGraphEdge, len(edges))
 	for _, edge := range edges {
 		from := normalizeClassName(edge.From)
 		to := normalizeClassName(edge.To)
@@ -40,7 +59,10 @@ func NewClassGraphIndex(edges []ClassGraphEdge) *ClassGraphIndex {
 		if edge.Count == 0 {
 			edge.Count = 1
 		}
-		key := edgeKey(edge)
+		key := classGraphEdgeKey{
+			from: edge.From, to: edge.To,
+			callerMethod: edge.CallerMethod, calleeMethod: edge.CalleeMethod,
+		}
 		existing := merged[key]
 		if existing.From == "" {
 			existing = edge
@@ -49,89 +71,32 @@ func NewClassGraphIndex(edges []ClassGraphEdge) *ClassGraphIndex {
 		}
 		merged[key] = existing
 	}
-	mergedEdges := make([]ClassGraphEdge, 0, len(merged))
+	canonical := make([]ClassGraphEdge, 0, len(merged))
 	for _, edge := range merged {
-		mergedEdges = append(mergedEdges, edge)
+		canonical = append(canonical, edge)
 	}
-	for _, edge := range mergedEdges {
-		index.Outgoing[edge.From] = append(index.Outgoing[edge.From], edge)
-		index.Incoming[edge.To] = append(index.Incoming[edge.To], edge)
-	}
-	index.sort()
-	return index
+	return canonical
 }
 
 func NewMethodGraphIndex(edges []ClassGraphEdge) *MethodGraphIndex {
+	return newMethodGraphIndex(canonicalClassGraphEdges(edges))
+}
+
+func newMethodGraphIndex(edges []ClassGraphEdge) *MethodGraphIndex {
 	index := &MethodGraphIndex{
-		Outgoing: map[string][]MethodGraphEdge{},
-		Incoming: map[string][]MethodGraphEdge{},
+		edges:    edges,
+		outgoing: make(map[methodGraphNodeKey][]uint32),
+		incoming: make(map[methodGraphNodeKey][]uint32),
 	}
-	merged := map[string]MethodGraphEdge{}
-	for _, edge := range edges {
-		fromClass := normalizeClassName(edge.From)
-		toClass := normalizeClassName(edge.To)
-		if fromClass == "" || toClass == "" || fromClass == toClass {
-			continue
-		}
-		methodEdge := MethodGraphEdge{
-			FromClass:  fromClass,
-			FromMethod: normalizeGraphMethodName(edge.CallerMethod),
-			ToClass:    toClass,
-			ToMethod:   normalizeGraphMethodName(edge.CalleeMethod),
-			Count:      edge.Count,
-		}
-		if methodEdge.Count == 0 {
-			methodEdge.Count = 1
-		}
-		key := methodNodeKey(methodEdge.FromClass, methodEdge.FromMethod) + "\x00" + methodNodeKey(methodEdge.ToClass, methodEdge.ToMethod)
-		existing := merged[key]
-		if existing.FromClass == "" {
-			existing = methodEdge
-		} else {
-			existing.Count = saturatingUint64Sum(existing.Count, methodEdge.Count)
-		}
-		merged[key] = existing
-	}
-	mergedEdges := make([]MethodGraphEdge, 0, len(merged))
-	for _, edge := range merged {
-		mergedEdges = append(mergedEdges, edge)
-	}
-	for _, edge := range mergedEdges {
-		from := methodNodeKey(edge.FromClass, edge.FromMethod)
-		to := methodNodeKey(edge.ToClass, edge.ToMethod)
-		index.Outgoing[from] = append(index.Outgoing[from], edge)
-		index.Incoming[to] = append(index.Incoming[to], edge)
+	for edgeIndex := range edges {
+		edge := &edges[edgeIndex]
+		from := methodGraphNodeKey{className: edge.From, methodName: normalizeGraphMethodName(edge.CallerMethod)}
+		to := methodGraphNodeKey{className: edge.To, methodName: normalizeGraphMethodName(edge.CalleeMethod)}
+		index.outgoing[from] = append(index.outgoing[from], uint32(edgeIndex))
+		index.incoming[to] = append(index.incoming[to], uint32(edgeIndex))
 	}
 	index.sort()
 	return index
-}
-
-func (i *ClassGraphIndex) RelevantEdges(selected map[string]struct{}, runtimeTargets map[string]struct{}) []ClassGraphEdge {
-	if i == nil {
-		return nil
-	}
-	edgesByKey := map[string]ClassGraphEdge{}
-	for node := range selected {
-		i.addEdges(edgesByKey, i.Outgoing[node])
-		i.addEdges(edgesByKey, i.Incoming[node])
-	}
-	for node := range runtimeTargets {
-		i.addEdges(edgesByKey, i.Incoming[node])
-	}
-	out := make([]ClassGraphEdge, 0, len(edgesByKey))
-	for _, edge := range edgesByKey {
-		out = append(out, edge)
-	}
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].From == out[b].From {
-			if out[a].To == out[b].To {
-				return out[a].Count > out[b].Count
-			}
-			return out[a].To < out[b].To
-		}
-		return out[a].From < out[b].From
-	})
-	return out
 }
 
 func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycle {
@@ -153,7 +118,8 @@ func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycl
 		stack = append(stack, node)
 		onStack[node] = true
 
-		for _, edge := range i.Outgoing[node] {
+		for _, edgeIndex := range i.outgoing[node] {
+			edge := i.edges[edgeIndex]
 			next := edge.To
 			if _, seen := indexes[next]; !seen {
 				visit(next)
@@ -186,7 +152,8 @@ func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycl
 			}
 			var weight uint64
 			for _, item := range component {
-				for _, edge := range i.Outgoing[item] {
+				for _, edgeIndex := range i.outgoing[item] {
+					edge := i.edges[edgeIndex]
 					if _, inside := componentSet[edge.To]; inside {
 						weight = saturatingUint64Sum(weight, edge.Count)
 					}
@@ -196,7 +163,7 @@ func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycl
 		}
 	}
 
-	for node := range i.Outgoing {
+	for node := range i.outgoing {
 		if _, seen := indexes[node]; !seen {
 			visit(node)
 		}
@@ -226,7 +193,7 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 		if score <= 0 {
 			continue
 		}
-		if _, ok := i.Outgoing[className]; !ok {
+		if _, ok := i.outgoing[className]; !ok {
 			continue
 		}
 		sources = append(sources, source{className: className, score: score})
@@ -256,7 +223,8 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 			if len(current.edges) >= 4 {
 				continue
 			}
-			for _, edge := range i.Outgoing[current.node] {
+			for _, edgeIndex := range i.outgoing[current.node] {
+				edge := i.edges[edgeIndex]
 				if edge.To == src.className {
 					continue
 				}
@@ -334,17 +302,18 @@ func (i *MethodGraphIndex) HotMethods(scores map[string]float64, runtimeTargets 
 		row.item.Weight += math.Log1p(float64(count)) * (1 + score)
 		row.item.RuntimeTouched = row.item.RuntimeTouched || runtimeTouched
 	}
-	for _, edges := range i.Outgoing {
-		for _, edge := range edges {
-			fromScore := scores[edge.FromClass]
-			toScore := scores[edge.ToClass]
-			_, fromRuntime := runtimeTargets[edge.FromClass]
-			_, toRuntime := runtimeTargets[edge.ToClass]
+	for _, edgeIndexes := range i.outgoing {
+		for _, edgeIndex := range edgeIndexes {
+			edge := i.edges[edgeIndex]
+			fromScore := scores[edge.From]
+			toScore := scores[edge.To]
+			_, fromRuntime := runtimeTargets[edge.From]
+			_, toRuntime := runtimeTargets[edge.To]
 			if fromScore == 0 && toScore == 0 && !fromRuntime && !toRuntime {
 				continue
 			}
-			add(edge.FromClass, edge.FromMethod, "caller", edge.Count, fromScore, fromRuntime || toRuntime)
-			add(edge.ToClass, edge.ToMethod, "callee", edge.Count, toScore, fromRuntime || toRuntime)
+			add(edge.From, normalizeGraphMethodName(edge.CallerMethod), "caller", edge.Count, fromScore, fromRuntime || toRuntime)
+			add(edge.To, normalizeGraphMethodName(edge.CalleeMethod), "callee", edge.Count, toScore, fromRuntime || toRuntime)
 		}
 	}
 	out := make([]InfluenceMethod, 0, len(aggregates))
@@ -370,58 +339,60 @@ func (i *MethodGraphIndex) HotMethods(scores map[string]float64, runtimeTargets 
 	return out
 }
 
-func (i *ClassGraphIndex) addEdges(edgesByKey map[string]ClassGraphEdge, edges []ClassGraphEdge) {
-	for _, edge := range edges {
-		key := edgeKey(edge)
-		if _, ok := edgesByKey[key]; ok {
-			continue
-		}
-		edgesByKey[key] = edge
-	}
-}
-
 func (i *ClassGraphIndex) sort() {
-	for node := range i.Outgoing {
-		sort.Slice(i.Outgoing[node], func(a, b int) bool {
-			if i.Outgoing[node][a].Count == i.Outgoing[node][b].Count {
-				return i.Outgoing[node][a].To < i.Outgoing[node][b].To
+	for node := range i.outgoing {
+		edges := i.outgoing[node]
+		sort.Slice(edges, func(a, b int) bool {
+			left := i.edges[edges[a]]
+			right := i.edges[edges[b]]
+			if left.Count == right.Count {
+				return left.To < right.To
 			}
-			return i.Outgoing[node][a].Count > i.Outgoing[node][b].Count
+			return left.Count > right.Count
 		})
 	}
-	for node := range i.Incoming {
-		sort.Slice(i.Incoming[node], func(a, b int) bool {
-			if i.Incoming[node][a].Count == i.Incoming[node][b].Count {
-				return i.Incoming[node][a].From < i.Incoming[node][b].From
+	for node := range i.incoming {
+		edges := i.incoming[node]
+		sort.Slice(edges, func(a, b int) bool {
+			left := i.edges[edges[a]]
+			right := i.edges[edges[b]]
+			if left.Count == right.Count {
+				return left.From < right.From
 			}
-			return i.Incoming[node][a].Count > i.Incoming[node][b].Count
+			return left.Count > right.Count
 		})
 	}
 }
 
 func (i *MethodGraphIndex) sort() {
-	for node := range i.Outgoing {
-		sort.Slice(i.Outgoing[node], func(a, b int) bool {
-			if i.Outgoing[node][a].Count == i.Outgoing[node][b].Count {
-				return methodNodeKey(i.Outgoing[node][a].ToClass, i.Outgoing[node][a].ToMethod) <
-					methodNodeKey(i.Outgoing[node][b].ToClass, i.Outgoing[node][b].ToMethod)
+	for node := range i.outgoing {
+		edges := i.outgoing[node]
+		sort.Slice(edges, func(a, b int) bool {
+			left := i.edges[edges[a]]
+			right := i.edges[edges[b]]
+			if left.Count == right.Count {
+				if left.To != right.To {
+					return left.To < right.To
+				}
+				return normalizeGraphMethodName(left.CalleeMethod) < normalizeGraphMethodName(right.CalleeMethod)
 			}
-			return i.Outgoing[node][a].Count > i.Outgoing[node][b].Count
+			return left.Count > right.Count
 		})
 	}
-	for node := range i.Incoming {
-		sort.Slice(i.Incoming[node], func(a, b int) bool {
-			if i.Incoming[node][a].Count == i.Incoming[node][b].Count {
-				return methodNodeKey(i.Incoming[node][a].FromClass, i.Incoming[node][a].FromMethod) <
-					methodNodeKey(i.Incoming[node][b].FromClass, i.Incoming[node][b].FromMethod)
+	for node := range i.incoming {
+		edges := i.incoming[node]
+		sort.Slice(edges, func(a, b int) bool {
+			left := i.edges[edges[a]]
+			right := i.edges[edges[b]]
+			if left.Count == right.Count {
+				if left.From != right.From {
+					return left.From < right.From
+				}
+				return normalizeGraphMethodName(left.CallerMethod) < normalizeGraphMethodName(right.CallerMethod)
 			}
-			return i.Incoming[node][a].Count > i.Incoming[node][b].Count
+			return left.Count > right.Count
 		})
 	}
-}
-
-func edgeKey(edge ClassGraphEdge) string {
-	return edge.From + "\x00" + edge.To + "\x00" + edge.CallerMethod + "\x00" + edge.CalleeMethod
 }
 
 func normalizeGraphMethodName(value string) string {
@@ -429,14 +400,6 @@ func normalizeGraphMethodName(value string) string {
 		return "<unknown>"
 	}
 	return value
-}
-
-func methodNodeKey(className string, methodName string) string {
-	methodName = normalizeGraphMethodName(methodName)
-	if methodName == "" || methodName == "<unknown>" {
-		return className
-	}
-	return className + "#" + methodName
 }
 
 func pathNodes(edges []ClassGraphEdge) []string {

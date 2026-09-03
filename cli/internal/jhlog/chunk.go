@@ -10,26 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	maxHeaderPayloadSize  = 4 * 1024
-	defaultRawChunkTarget = 64 * 1024
-	maxRawChunkSize       = 256 * 1024
-	maxStoredChunkSize    = 512 * 1024
-	processScopeHashSize  = 32
-	segmentDigestSize     = 32
-	chunkHeaderSize       = 32
-	commitTrailerSize     = 20
-
-	chunkFlagGZIP   uint16 = 1 << 0
-	chunkFlagFinal  uint16 = 1 << 1
-	chunkKnownFlags        = chunkFlagGZIP | chunkFlagFinal
-)
-
-var (
-	chunkMagic  = [4]byte{'J', 'H', 'C', '1'}
-	commitMagic = [4]byte{'J', 'H', 'C', 'M'}
-)
-
 type chunkMetadata struct {
 	Flags       uint16
 	Sequence    uint32
@@ -290,13 +270,39 @@ func validateFeatureContract(required, optional uint64) error {
 			BestEffortFeatures,
 		)
 	}
-	if optional != OptionalFeatures {
+	if optional & ^(OptionalFeatures|FeatureRANSMicroPageSections) != 0 {
 		return fmt.Errorf(
-			"optional feature contract 0x%x differs from JHLOG %s contract 0x%x",
+			"optional feature contract 0x%x contains features unknown to JHLOG %s",
 			optional,
 			FormatVersionString,
-			OptionalFeatures,
 		)
+	}
+	nonCompression := OptionalFeatures &^ compressionFeatures
+	if optional&nonCompression != nonCompression {
+		return fmt.Errorf("optional feature contract 0x%x is missing required transforms 0x%x", optional, nonCompression)
+	}
+	compression := optional & compressionFeatures
+	if compression != FeatureGZIPChunks && compression != FeatureRANSMicroPageSections {
+		return fmt.Errorf("optional feature contract 0x%x must select exactly one chunk/section compression policy", optional)
+	}
+	return nil
+}
+
+func compressionOptionalFeatures(gzipChunks bool) uint64 {
+	if gzipChunks {
+		return OptionalFeatures
+	}
+	return RawOptionalFeatures
+}
+
+func useRANSSections(optional uint64, gzipChunk bool) bool {
+	return optional&FeatureRANSMicroPageSections != 0 && !gzipChunk
+}
+
+func validateChunkCompressionPolicy(optional uint64, chunkFlags uint16) error {
+	gzipChunk := chunkFlags&chunkFlagGZIP != 0
+	if gzipChunk != (optional&FeatureGZIPChunks != 0) {
+		return fmt.Errorf("chunk gzip flag conflicts with optional feature contract 0x%x", optional)
 	}
 	return nil
 }
@@ -365,8 +371,7 @@ func readBoundedBytes(reader *bytes.Reader, name string, limit uint64) ([]byte, 
 	return value, nil
 }
 
-func marshalChunkHeader(metadata chunkMetadata) [chunkHeaderSize]byte {
-	var out [chunkHeaderSize]byte
+func fillChunkHeader(out *[chunkHeaderSize]byte, metadata chunkMetadata) {
 	copy(out[0:4], chunkMagic[:])
 	binary.LittleEndian.PutUint16(out[4:6], chunkHeaderSize)
 	binary.LittleEndian.PutUint16(out[6:8], metadata.Flags)
@@ -376,7 +381,6 @@ func marshalChunkHeader(metadata chunkMetadata) [chunkHeaderSize]byte {
 	binary.LittleEndian.PutUint32(out[20:24], metadata.RecordCount)
 	binary.LittleEndian.PutUint32(out[24:28], metadata.RawCRC)
 	binary.LittleEndian.PutUint32(out[28:32], crc32.ChecksumIEEE(out[:28]))
-	return out
 }
 
 func parseChunkHeader(raw []byte, expectedSequence uint32) (chunkMetadata, error) {
@@ -421,14 +425,12 @@ func parseChunkHeader(raw []byte, expectedSequence uint32) (chunkMetadata, error
 	return metadata, nil
 }
 
-func marshalCommitTrailer(metadata chunkMetadata) [commitTrailerSize]byte {
-	var out [commitTrailerSize]byte
+func fillCommitTrailer(out *[commitTrailerSize]byte, metadata chunkMetadata) {
 	copy(out[0:4], commitMagic[:])
 	binary.LittleEndian.PutUint32(out[4:8], metadata.Sequence)
 	binary.LittleEndian.PutUint32(out[8:12], metadata.StoredLen)
 	binary.LittleEndian.PutUint32(out[12:16], metadata.RawLen)
 	binary.LittleEndian.PutUint32(out[16:20], metadata.RawCRC)
-	return out
 }
 
 func validateCommitTrailer(raw []byte, metadata chunkMetadata) error {

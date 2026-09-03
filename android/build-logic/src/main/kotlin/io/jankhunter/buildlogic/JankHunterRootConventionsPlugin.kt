@@ -17,6 +17,7 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
         require(this == rootProject)
         configureProjectMetadata()
+        configureAllKotlinImportAnalysis()
     }
 
     private fun Project.configureProjectMetadata() {
@@ -38,6 +39,20 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
         }
     }
 
+}
+
+private fun Project.configureAllKotlinImportAnalysis() {
+    configureJankHunterDetekt()
+    val repositoryRoot = projectDir.parentFile
+    tasks.named("detekt", Detekt::class.java) {
+        description = "Checks imports in every Jank Hunter Kotlin source set and build script."
+        setSource(
+            fileTree(repositoryRoot) {
+                include("android/**/*.kt", "android/**/*.kts", "plugin-as/**/*.kt", "plugin-as/**/*.kts")
+                exclude("**/build/**", "**/.gradle/**", "**/.kotlin/**", "**/.intellijPlatform/**")
+            },
+        )
+    }
 }
 
 internal fun Project.configureJankHunterDetekt() {

@@ -97,7 +97,7 @@ internal class HandlerWrapperRegistry(
             if (!acquire(shard, exact)) return@forEach
             try {
                 cleanLocked(shard)
-                val keys = shard.keysByOriginalHash[originalHash]?.toList().orEmpty()
+                val keys = copyKeys(shard, shard.keysByOriginalHash[originalHash])
                 keys.forEach { key ->
                     val entry = shard.entriesByKey[key] ?: return@forEach
                     if (key.original() === delegate) {
@@ -113,6 +113,7 @@ internal class HandlerWrapperRegistry(
                     }
                 }
             } finally {
+                shard.keyScratch.clear()
                 publishSnapshot(shard)
                 shard.lock.unlock()
             }
@@ -143,7 +144,7 @@ internal class HandlerWrapperRegistry(
         if (!acquire(shard, exactAdmission.getAsBoolean())) return
         try {
             cleanLocked(shard)
-            val keys = shard.keysByHandlerHash[System.identityHashCode(handler)]?.toList() ?: return
+            val keys = copyKeys(shard, shard.keysByHandlerHash[System.identityHashCode(handler)])
             keys.forEach { key ->
                 val entry = shard.entriesByKey[key] ?: return@forEach
                 if (key.handler() === handler) {
@@ -158,6 +159,7 @@ internal class HandlerWrapperRegistry(
                 }
             }
         } finally {
+            shard.keyScratch.clear()
             publishSnapshot(shard)
             shard.lock.unlock()
         }
@@ -231,6 +233,13 @@ internal class HandlerWrapperRegistry(
         return false
     }
 
+    private fun copyKeys(shard: Shard, source: Set<EntryKey>?): List<EntryKey> {
+        val target = shard.keyScratch
+        target.clear()
+        if (source != null) target.addAll(source)
+        return target
+    }
+
     private inline fun removeWrappers(
         wrappers: MutableList<WrapperEntry>,
         shouldRemove: (WrapperEntry) -> Boolean,
@@ -299,6 +308,7 @@ internal class HandlerWrapperRegistry(
         val entriesByKey = HashMap<EntryKey, Entry>()
         val keysByHandlerHash = HashMap<Int, MutableSet<EntryKey>>()
         val keysByOriginalHash = HashMap<Int, MutableSet<EntryKey>>()
+        val keyScratch = ArrayList<EntryKey>(INITIAL_KEY_SCRATCH_CAPACITY)
         var dirty = false
 
         @Volatile
@@ -358,6 +368,7 @@ internal class HandlerWrapperRegistry(
 
     private companion object {
         const val SHARD_COUNT = 16
+        const val INITIAL_KEY_SCRATCH_CAPACITY = 4
         val EMPTY_WRAPPERS = emptyArray<Runnable>()
         val EMPTY_RUNNABLE = Runnable {}
     }

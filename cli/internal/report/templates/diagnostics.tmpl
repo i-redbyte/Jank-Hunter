@@ -80,7 +80,7 @@
       <table>
         <tr><th>{{tip "Решение" "Что сделал matcher: отключил правило, не поддержал сигнатуру или пропустил место по безопасному ограничению."}}</th><th>{{tip "Модуль" "Функциональный модуль instrumentation, к которому относится решение."}}</th><th>{{tip "Семейство" "Группа похожих API или сигнатур, например OkHttp или coroutine."}}</th><th>{{tip "Причина" "Машинный код причины. unsupported_signature означает пробел покрытия телеметрии, а не проблему производительности приложения."}}</th><th>Метод</th><th>Строка</th><th>{{tip "Места" "Число build-time мест с одинаковым решением."}}</th></tr>
         {{range .Diagnostics.Decisions}}
-        <tr><td>{{.Kind}}</td><td><code>{{.Module}}</code></td><td>{{.Family}}</td><td><code>{{.Reason}}</code></td><td>{{if .Method}}<code>{{.Method}}</code>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{if .Line}}{{.Line}}{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Count}}</td></tr>
+        <tr><td>{{.Kind}}</td><td><code>{{.Module}}</code></td><td>{{.Family}}</td><td><code>{{.Reason}}</code>{{if .Detail}}<div class="muted">{{.Detail}}</div>{{end}}</td><td>{{if .Method}}<code>{{.Method}}</code>{{else}}<span class="muted">нет</span>{{end}}</td><td>{{if .Line}}{{.Line}}{{else}}<span class="muted">нет</span>{{end}}</td><td>{{.Count}}</td></tr>
         {{else}}<tr><td colspan="7" class="muted">Нет отключенных, неподдержанных или пропущенных решений. Все релевантные места вызова либо сработали, либо не попадали в известные семейства.</td></tr>{{end}}
       </table>
     </div>

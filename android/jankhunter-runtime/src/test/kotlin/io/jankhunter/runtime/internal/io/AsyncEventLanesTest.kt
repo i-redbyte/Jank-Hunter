@@ -20,7 +20,7 @@ class AsyncEventLanesTest {
     }
 
     private fun event(sequence: Long): PendingLogEvent {
-        return PendingLogEvent.Counter(null, "lane", sequence).also { event ->
+        return PendingCounterEvent(null, "lane", sequence).also { event ->
             event.sequence = sequence
         }
     }

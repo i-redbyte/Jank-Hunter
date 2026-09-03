@@ -7,7 +7,6 @@ import io.jankhunter.sample.ReleasedCheckoutProbe
 import io.jankhunter.sample.RetainedCheckoutCache
 import io.jankhunter.sample.RetainedCheckoutScreen
 import io.jankhunter.sample.SampleApplication
-import io.jankhunter.runtime.JankHunter
 
 internal class MemoryScenarioUseCase(
     private val allocator: CheckoutMemoryAllocator,

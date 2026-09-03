@@ -15,6 +15,7 @@ internal data class DecisionDiagnosticKey(
     val reason: String,
     val method: String,
     val line: Int?,
+    val detail: String? = null,
 )
 
 internal data class AnnotationDiagnosticKey(
@@ -133,6 +134,32 @@ internal class InstrumentationDiagnosticsClassBuilder(
             HookDecision.NotMatched -> return
         }
         decisions[key] = (decisions[key] ?: 0) + 1
+    }
+
+    fun recordHierarchyResolutionFailures(failures: Map<ClassHierarchyResolutionFailure, Int>) {
+        failures.forEach { (failure, count) ->
+            val omitted = failure.errorType == CLASS_HIERARCHY_OMITTED_FAILURE_TYPE
+            val key = DecisionDiagnosticKey(
+                kind = "warning",
+                module = "class_hierarchy",
+                family = "metadata",
+                reason = if (omitted) "metadata_failures_omitted" else "metadata_load_failed",
+                method = failure.className,
+                line = null,
+                detail = if (omitted) {
+                    failure.detail
+                } else {
+                    buildString {
+                        append(failure.errorType)
+                        failure.detail?.takeIf(String::isNotBlank)?.let {
+                            append(": ")
+                            append(it)
+                        }
+                    }
+                },
+            )
+            decisions[key] = (decisions[key] ?: 0) + count
+        }
     }
 
     fun finish(): InstrumentationDiagnosticsRecord {
@@ -260,6 +287,11 @@ internal object InstrumentationDiagnosticsWriter {
                 entry.key.line?.let {
                     append(",\"line\":")
                     append(it)
+                }
+                entry.key.detail?.let {
+                    append(",\"detail\":\"")
+                    append(escapeJsonString(it))
+                    append('"')
                 }
                 append('}')
             }

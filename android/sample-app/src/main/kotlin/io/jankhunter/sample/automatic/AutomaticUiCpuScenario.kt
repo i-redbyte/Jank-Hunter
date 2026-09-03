@@ -4,7 +4,6 @@ import io.jankhunter.runtime.JankHunterTelemetry
 
 import android.os.SystemClock
 import io.jankhunter.sample.graph.PerformanceScenarioUseCase
-import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 

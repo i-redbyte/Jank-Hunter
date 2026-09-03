@@ -93,7 +93,7 @@ class RuntimeHookLeakTest {
         val producer = Thread {
             graph.recordEdge(1L, 2L)
             events.recordMethod(2L, "live-thread-method")
-            graphState.set(currentThreadLocalTarget(graph, "threadState"))
+            graphState.set(currentNestedThreadLocalTarget(graph, "producer", "threadState"))
             eventState.set(currentThreadLocalTarget(events, "threadBuffer"))
             ready.countDown()
             release.await(5L, TimeUnit.SECONDS)
@@ -170,6 +170,15 @@ class RuntimeHookLeakTest {
         val value = local.get()
         val target = if (value is WeakReference<*>) value.get() else value
         return WeakReference(checkNotNull(target))
+    }
+
+    private fun currentNestedThreadLocalTarget(
+        owner: Any,
+        componentName: String,
+        fieldName: String,
+    ): WeakReference<Any> {
+        val componentField = owner.javaClass.getDeclaredField(componentName).apply { isAccessible = true }
+        return currentThreadLocalTarget(checkNotNull(componentField.get(owner)), fieldName)
     }
 
     private fun awaitGc(expected: Int, observed: () -> Int): Int {

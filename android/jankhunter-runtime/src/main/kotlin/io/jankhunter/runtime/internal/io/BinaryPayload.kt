@@ -1,7 +1,5 @@
 package io.jankhunter.runtime.internal.io
 
-import java.nio.charset.StandardCharsets
-
 /** Reusable growable byte sink for JHLOG payload and envelope encoding. */
 internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
     private var bytes = ByteArray(initialCapacity.coerceAtLeast(1))
@@ -29,12 +27,27 @@ internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
 
     fun symbolRef(localId: Long): BinaryPayload = uvarint(if (localId <= 0L) 0L else localId shl 1)
 
-    fun stableSymbolRef(stableId: Long): BinaryPayload {
+    fun stableSymbolAlias(alias: Long): BinaryPayload {
+        require(alias > 0L)
+        return uvarint((alias shl 1) or 1L)
+    }
+
+    fun inlineStableSymbolRef(stableId: Long): BinaryPayload {
         uvarint(1L)
+        return fixedLongLe(stableId)
+    }
+
+    fun fixedLongLe(value: Long): BinaryPayload {
         ensureCapacity(size + Long.SIZE_BYTES)
         repeat(Long.SIZE_BYTES) { byteIndex ->
-            bytes[size++] = (stableId ushr (byteIndex * Byte.SIZE_BITS)).toByte()
+            bytes[size++] = (value ushr (byteIndex * Byte.SIZE_BITS)).toByte()
         }
+        return this
+    }
+
+    fun byte(value: Int): BinaryPayload {
+        ensureCapacity(size + 1)
+        bytes[size++] = value.toByte()
         return this
     }
 
@@ -48,6 +61,14 @@ internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
         return this
     }
 
+    fun bytes(value: ByteArray, offset: Int, length: Int): BinaryPayload {
+        require(offset >= 0 && length >= 0 && offset + length <= value.size)
+        ensureCapacity(size + length)
+        value.copyInto(bytes, destinationOffset = size, startIndex = offset, endIndex = offset + length)
+        size += length
+        return this
+    }
+
     fun bytes(value: BinaryPayload): BinaryPayload {
         ensureCapacity(size + value.size)
         value.bytes.copyInto(bytes, destinationOffset = size, endIndex = value.size)
@@ -58,7 +79,61 @@ internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
     fun fixedBytes(value: ByteArray): BinaryPayload = bytes(value)
 
     fun boundedString(value: String, maxBytes: Int): BinaryPayload {
-        return boundedBytes(validUtf8Prefix(value, maxBytes), maxBytes)
+        val limit = maxBytes.coerceAtLeast(0)
+        var encodedSize = 0
+        var charLimit = 0
+        while (charLimit < value.length) {
+            val first = value[charLimit]
+            val pairedSurrogate = Character.isHighSurrogate(first) &&
+                charLimit + 1 < value.length && Character.isLowSurrogate(value[charLimit + 1])
+            val byteCount = when {
+                pairedSurrogate -> 4
+                Character.isSurrogate(first) || first.code <= 0x7f -> 1
+                first.code <= 0x7ff -> 2
+                else -> 3
+            }
+            if (encodedSize + byteCount > limit) break
+            encodedSize += byteCount
+            charLimit += if (pairedSurrogate) 2 else 1
+        }
+
+        uvarint(encodedSize.toLong())
+        ensureCapacity(size + encodedSize)
+        var offset = 0
+        while (offset < charLimit) {
+            val first = value[offset]
+            when {
+                Character.isHighSurrogate(first) &&
+                    offset + 1 < charLimit && Character.isLowSurrogate(value[offset + 1]) -> {
+                    val codePoint = Character.toCodePoint(first, value[offset + 1])
+                    bytes[size++] = (0xf0 or (codePoint ushr 18)).toByte()
+                    bytes[size++] = (0x80 or (codePoint ushr 12 and 0x3f)).toByte()
+                    bytes[size++] = (0x80 or (codePoint ushr 6 and 0x3f)).toByte()
+                    bytes[size++] = (0x80 or (codePoint and 0x3f)).toByte()
+                    offset += 2
+                }
+                Character.isSurrogate(first) -> {
+                    bytes[size++] = '?'.code.toByte()
+                    offset++
+                }
+                first.code <= 0x7f -> {
+                    bytes[size++] = first.code.toByte()
+                    offset++
+                }
+                first.code <= 0x7ff -> {
+                    bytes[size++] = (0xc0 or (first.code ushr 6)).toByte()
+                    bytes[size++] = (0x80 or (first.code and 0x3f)).toByte()
+                    offset++
+                }
+                else -> {
+                    bytes[size++] = (0xe0 or (first.code ushr 12)).toByte()
+                    bytes[size++] = (0x80 or (first.code ushr 6 and 0x3f)).toByte()
+                    bytes[size++] = (0x80 or (first.code and 0x3f)).toByte()
+                    offset++
+                }
+            }
+        }
+        return this
     }
 
     fun boundedBytes(value: ByteArray, maxBytes: Int): BinaryPayload {
@@ -73,6 +148,18 @@ internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
 
     fun copyBytes(): ByteArray = bytes.copyOf(size)
 
+    /**
+     * Borrows the backing buffer without allocation. Only the prefix `[0, size)` is initialized;
+     * callers must not retain it across any operation that can grow this payload.
+     */
+    fun prefixBuffer(): ByteArray = bytes
+
+    fun copyTo(destination: ByteArray, destinationOffset: Int): Int {
+        require(destinationOffset >= 0 && destinationOffset + size <= destination.size)
+        bytes.copyInto(destination, destinationOffset = destinationOffset, endIndex = size)
+        return destinationOffset + size
+    }
+
     private fun ensureCapacity(required: Int) {
         if (required <= bytes.size) return
         var capacity = bytes.size
@@ -81,29 +168,6 @@ internal class BinaryPayload(initialCapacity: Int = DEFAULT_CAPACITY) {
             capacity = if (next > capacity) next else required
         }
         bytes = bytes.copyOf(capacity)
-    }
-
-    private fun validUtf8Prefix(value: String, maxBytes: Int): ByteArray {
-        val limit = maxBytes.coerceAtLeast(0)
-        val encoded = value.toByteArray(StandardCharsets.UTF_8)
-        if (encoded.size <= limit) return encoded
-        if (limit == 0) return ByteArray(0)
-
-        val builder = StringBuilder()
-        var usedBytes = 0
-        var offset = 0
-        while (offset < value.length) {
-            val codePoint = value.codePointAt(offset)
-            val charCount = Character.charCount(codePoint)
-            val codePointBytes = value
-                .substring(offset, offset + charCount)
-                .toByteArray(StandardCharsets.UTF_8)
-            if (usedBytes + codePointBytes.size > limit) break
-            builder.appendCodePoint(codePoint)
-            usedBytes += codePointBytes.size
-            offset += charCount
-        }
-        return builder.toString().toByteArray(StandardCharsets.UTF_8)
     }
 
     private companion object {

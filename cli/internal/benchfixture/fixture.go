@@ -10,8 +10,8 @@ import (
 
 const (
 	ownerIDBase         uint64 = 1_000
-	metadataSchema             = 4
-	finalControlRecords        = 2
+	metadataSchema      int    = 4
+	finalControlRecords int    = 2
 )
 
 type Profile struct {

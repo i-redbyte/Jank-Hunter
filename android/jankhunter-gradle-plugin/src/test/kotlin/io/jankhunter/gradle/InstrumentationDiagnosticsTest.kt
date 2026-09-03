@@ -3,7 +3,6 @@ package io.jankhunter.gradle
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
-import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.ClassVisitor
@@ -97,6 +96,51 @@ class InstrumentationDiagnosticsTest {
         val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
         assertTrue(text.contains("\"methodFilterExcluded\":1"))
         assertTrue(text.contains("\"reason\":\"excluded:acc_synthetic\""))
+    }
+
+    @Test
+    fun classVisitorWritesHierarchyResolutionFailuresAsActionableDiagnostics() {
+        val diagnostics = Files.createTempDirectory("jankhunter-hierarchy-diagnostics").toFile()
+        val reader = ClassReader(fixture())
+        val writer = ClassWriter(reader, ClassWriter.COMPUTE_FRAMES or ClassWriter.COMPUTE_MAXS)
+        reader.accept(
+            JankHunterClassVisitor(
+                writer,
+                "example/Diagnostics",
+                HookConfig(
+                    methodCounters = false,
+                    okhttp = false,
+                    webSockets = false,
+                    handlers = false,
+                    executors = false,
+                    coroutines = false,
+                    interactionOperations = false,
+                    logSpam = false,
+                    classGraph = false,
+                    runtimeCallGraph = false,
+                    classGraphDirectory = "",
+                    instrumentationDiagnosticsDirectory = diagnostics.absolutePath,
+                ),
+                hierarchyResolutionDiagnostics = {
+                    mapOf(
+                        ClassHierarchyResolutionFailure(
+                            className = "broken.Parent",
+                            errorType = "java.lang.IllegalStateException",
+                            detail = "invalid class metadata",
+                        ) to 1,
+                    )
+                },
+                diagnosticsOnlyWhenHookApplied = true,
+            ),
+            0,
+        )
+
+        val text = InstrumentationArtifactFiles.readJsonlLines(diagnostics).joinToString("\n")
+        assertTrue(text.contains("\"kind\":\"warning\""))
+        assertTrue(text.contains("\"module\":\"class_hierarchy\""))
+        assertTrue(text.contains("\"reason\":\"metadata_load_failed\""))
+        assertTrue(text.contains("\"method\":\"broken.Parent\""))
+        assertTrue(text.contains("\"detail\":\"java.lang.IllegalStateException: invalid class metadata\""))
     }
 
     private fun syntheticLogFixture(): ByteArray {

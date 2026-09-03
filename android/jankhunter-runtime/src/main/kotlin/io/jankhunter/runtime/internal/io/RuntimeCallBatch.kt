@@ -9,7 +9,10 @@ import io.jankhunter.runtime.internal.saturatingAdd
  * primitive arrays and batching the cold-path queue hand-off prevents a graph flush from filling
  * the writer queue with thousands of individual objects.
  */
-internal class RuntimeCallBatch(capacity: Int) {
+internal class RuntimeCallBatch(
+    capacity: Int,
+    private val pool: RuntimeCallBatchPool? = null,
+) {
     private val screens = arrayOfNulls<String>(capacity)
     private val callers = LongArray(capacity)
     private val callerNames = arrayOfNulls<String>(capacity)
@@ -22,6 +25,7 @@ internal class RuntimeCallBatch(capacity: Int) {
 
     var size: Int = 0
         private set
+    private var leased = pool != null
 
     fun add(
         screen: String?,
@@ -71,5 +75,23 @@ internal class RuntimeCallBatch(capacity: Int) {
             result = saturatingAdd(result, counts[index])
         }
         return result
+    }
+
+    internal fun recycle() {
+        val target = pool ?: return
+        if (!leased) return
+        for (index in 0 until size) {
+            screens[index] = null
+            callerNames[index] = null
+            calleeNames[index] = null
+        }
+        size = 0
+        leased = false
+        target.release(this)
+    }
+
+    internal fun prepareForReuse() {
+        check(pool != null && !leased) { "Runtime call batch is already leased" }
+        leased = true
     }
 }

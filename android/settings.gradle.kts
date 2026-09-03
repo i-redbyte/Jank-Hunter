@@ -2,6 +2,12 @@ pluginManagement {
     includeBuild("build-logic")
     includeBuild("jankhunter-gradle-plugin")
     repositories {
+        maven {
+            url = uri("https://registry.vktech.team/repository/maven-gradle-plugins-remote-internal-proxy/")
+        }
+        maven {
+            url = uri("https://nexus.vkteam.ru/repository/maven-gradle-plugins-remote/")
+        }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -19,6 +25,9 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
+        maven {
+            url = uri("https://registry.vktech.team/repository/maven-internal-proxy/")
+        }
         mavenCentral()
     }
 }

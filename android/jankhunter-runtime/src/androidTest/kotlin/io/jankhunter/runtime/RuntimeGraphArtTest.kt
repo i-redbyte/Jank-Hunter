@@ -5,7 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.jankhunter.runtime.internal.concurrent.SpscSlotSequencer
-import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit

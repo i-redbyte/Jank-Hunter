@@ -239,6 +239,49 @@ class RuntimeCallGraphTest {
     }
 
     @Test
+    fun producerPageDeadlineLossIsCountedExactly() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-capacity").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 4_096 },
+            admissionWaitNanos = { 0L },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                assertTrue("consumer release timed out", releaseConsumer.await(5L, TimeUnit.SECONDS))
+            },
+        )
+        graph.resetFlushState(writer)
+        try {
+            assertTrue("runtime graph consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            val capacity = RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY * RUNTIME_GRAPH_PAGE_MAX_KEYS
+            repeat(capacity + 1) { index ->
+                graph.recordSemantic(
+                    callerId = 1L,
+                    callerName = "caller",
+                    calleeId = index.toLong() + 2L,
+                    calleeName = "callee",
+                    durationMs = 1L,
+                    enabled = true,
+                )
+            }
+            assertEquals(capacity.toLong() + 1L, graph.attemptedForTest())
+            assertEquals(capacity.toLong(), graph.acceptedForTest())
+            assertEquals(1L, graph.producerCapacityLossForTest())
+        } finally {
+            releaseConsumer.countDown()
+            graph.flushForShutdown()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun shutdownTerminatesDedicatedDaemonConsumer() {
         val directory = Files.createTempDirectory("jankhunter-runtime-call-graph").toFile()
         val writer = writer(directory)

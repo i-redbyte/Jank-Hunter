@@ -45,6 +45,66 @@ func TestProblemEngineBuildsCompoundNetworkFinding(t *testing.T) {
 	}
 }
 
+func TestProblemEngineDoesNotReportSparseLongPollAsSlowStorm(t *testing.T) {
+	summary := Summary{
+		DurationMS:        341_700,
+		HTTPCount:         32,
+		CollectionQuality: CollectionQuality{Complete: true},
+		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
+		Routes: []RouteStats{{
+			Route:                 "GET /api/v149/bos/a-04-10/aim/fetchEvents",
+			Count:                 32,
+			P50MS:                 94,
+			P95MS:                 12_997,
+			MaxMS:                 17_975,
+			TotalDurationMS:       41_900,
+			MaxConcurrency:        1,
+			PeakRequestsPerSecond: 1,
+			Phases: []HTTPPhaseStats{{
+				Name: "ttfb", SampleCount: 32, P50MS: 72, P95MS: 12_979, MaxMS: 17_950,
+			}},
+		}},
+	}
+
+	report, err := BuildProblemReport(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByDetector(report.Problems, "network.route_health"); finding != nil {
+		t.Fatalf("sustained long-poll classified as route defect: %+v", finding)
+	}
+}
+
+func TestProblemEngineStillReportsSparseSerialSlowRequest(t *testing.T) {
+	summary := Summary{
+		DurationMS:        341_700,
+		HTTPCount:         32,
+		CollectionQuality: CollectionQuality{Complete: true},
+		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
+		Routes: []RouteStats{{
+			Route:                 "GET /api/profile",
+			Count:                 32,
+			P50MS:                 94,
+			P95MS:                 12_997,
+			MaxMS:                 17_975,
+			TotalDurationMS:       41_900,
+			MaxConcurrency:        1,
+			PeakRequestsPerSecond: 1,
+			Phases: []HTTPPhaseStats{{
+				Name: "ttfb", SampleCount: 32, P50MS: 72, P95MS: 12_979, MaxMS: 17_950,
+			}},
+		}},
+	}
+
+	report, err := BuildProblemReport(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByDetector(report.Problems, "network.route_health"); finding == nil {
+		t.Fatal("ordinary sparse slow request was hidden as long-poll")
+	}
+}
+
 func TestProblemEngineFindsWebSocketReconnectAndFailureStorm(t *testing.T) {
 	summary := Summary{
 		DurationMS:        60_000,

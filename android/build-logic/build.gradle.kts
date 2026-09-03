@@ -6,12 +6,6 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     compilerOptions.allWarningsAsErrors.set(true)
 }
 
-repositories {
-    google()
-    mavenCentral()
-    gradlePluginPortal()
-}
-
 dependencies {
     implementation(libs.android.gradle.plugin)
     implementation(libs.detekt.gradle.plugin)

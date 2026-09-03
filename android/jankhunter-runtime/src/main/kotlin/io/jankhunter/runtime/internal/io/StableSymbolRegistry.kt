@@ -4,7 +4,9 @@ package io.jankhunter.runtime.internal.io
 internal class StableSymbolRegistry(initialCapacity: Int = DEFAULT_CAPACITY) {
     private var keys = LongArray(tableCapacity(initialCapacity))
     private var values = arrayOfNulls<String>(keys.size)
+    private var aliases = LongArray(keys.size)
     private var size = 0
+    private var nextAlias = 1L
 
     fun get(id: Long): String? {
         var index = hash(id) and (keys.size - 1)
@@ -15,34 +17,48 @@ internal class StableSymbolRegistry(initialCapacity: Int = DEFAULT_CAPACITY) {
         }
     }
 
-    fun put(id: Long, value: String) {
-        if (size * 2 >= keys.size) grow()
-        insert(id, value)
+    fun alias(id: Long): Long {
+        var index = hash(id) and (keys.size - 1)
+        while (true) {
+            if (values[index] == null) return 0L
+            if (keys[index] == id) return aliases[index]
+            index = (index + 1) and (keys.size - 1)
+        }
     }
 
-    private fun insert(id: Long, value: String) {
+    fun put(id: Long, value: String): Long {
+        if (size * 2 >= keys.size) grow()
+        return insert(id, value, 0L)
+    }
+
+    private fun insert(id: Long, value: String, retainedAlias: Long): Long {
         var index = hash(id) and (keys.size - 1)
         while (values[index] != null) {
             if (keys[index] == id) {
                 values[index] = value
-                return
+                return aliases[index]
             }
             index = (index + 1) and (keys.size - 1)
         }
+        val alias = retainedAlias.takeIf { it > 0L } ?: nextAlias++
         keys[index] = id
         values[index] = value
+        aliases[index] = alias
         size++
+        return alias
     }
 
     private fun grow() {
         val oldKeys = keys
         val oldValues = values
+        val oldAliases = aliases
         keys = LongArray(oldKeys.size shl 1)
         values = arrayOfNulls(keys.size)
+        aliases = LongArray(keys.size)
         size = 0
         for (index in oldValues.indices) {
             val value = oldValues[index] ?: continue
-            insert(oldKeys[index], value)
+            insert(oldKeys[index], value, oldAliases[index])
         }
     }
 

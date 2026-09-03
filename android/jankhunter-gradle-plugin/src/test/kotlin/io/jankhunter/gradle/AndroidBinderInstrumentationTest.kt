@@ -35,6 +35,20 @@ class AndroidBinderInstrumentationTest {
     }
 
     @Test
+    fun runtimeDescriptorAcceptsOnlyExactAidlStubAndProxySuffixes() {
+        assertEquals(
+            "example.ISync",
+            AndroidBinderInstrumentationPolicy.runtimeDescriptor("example/ISync\$Stub", null),
+        )
+        assertEquals(
+            "example.ISync",
+            AndroidBinderInstrumentationPolicy.runtimeDescriptor("example/ISync\$Stub\$Proxy", null),
+        )
+        assertNull(AndroidBinderInstrumentationPolicy.runtimeDescriptor("example/ISync\$StubHelper", null))
+        assertNull(AndroidBinderInstrumentationPolicy.runtimeDescriptor("example/ISync\$Stub\$ProxyHelper", null))
+    }
+
+    @Test
     fun serverOnTransactHasBalancedSuccessAndFailureHooks() {
         val output = instrument(
             binderServerFixture(),

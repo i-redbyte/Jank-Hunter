@@ -191,24 +191,34 @@ class SessionLogAllocatorTest {
         val current = File(directory, SessionLogName.create(DATE, RUN_ID, dailySessionIndex = 0L, segmentIndex = 0L))
         val obsoleteName = "jh-session-log.v2.$DATE.${SessionLogName.runIdHex(OLD_RUN_ID)}.0.jhlog"
         val obsolete = File(directory, obsoleteName)
+        val obsoleteV3 = File(
+            directory,
+            SessionLogName.create(DATE, OLD_RUN_ID, dailySessionIndex = 1L, segmentIndex = 0L),
+        )
+        val obsoleteV4 = File(
+            directory,
+            SessionLogName.create(DATE, OLD_RUN_ID, dailySessionIndex = 2L, segmentIndex = 0L),
+        )
         val currentWithLegacyName = File(
             directory,
             "jh-session-log.v2.$DATE.${SessionLogName.runIdHex(RUN_ID)}.9.jhlog",
         )
         val unrelated = File(directory, "application.jhlog")
-        val future = File(directory, "jh-session-log.v4.$DATE.opaque.0.jhlog")
+        val future = File(directory, "jh-session-log.v6.$DATE.opaque.0.jhlog")
         val malformedCurrent = File(directory, "jh-session-log.$DATE.invalid.jhlog")
         val obsoleteSequence = File(directory, ".jh-session-log.v2.$DATE.seq")
         val legacyUnversionedSequence = File(directory, ".jh-session-log.$DATE.seq")
         val currentSequence = File(directory, ".jh-session-index.$DATE.seq")
-        val futureSequence = File(directory, ".jh-session-log.v4.$DATE.seq")
+        val futureSequence = File(directory, ".jh-session-log.v6.$DATE.seq")
         val lease = File(directory, ".${obsoleteName.removeSuffix(SessionLogName.SUFFIX)}.lease")
         try {
             current.writeBytes(Jhlog.FILE_MAGIC)
             obsolete.writeBytes(formatMagic(major = 2))
+            obsoleteV3.writeBytes(formatMagic(major = 3))
+            obsoleteV4.writeBytes(formatMagic(major = 4))
             currentWithLegacyName.writeBytes(Jhlog.FILE_MAGIC)
             unrelated.writeBytes(byteArrayOf(3))
-            future.writeBytes(formatMagic(major = 4))
+            future.writeBytes(formatMagic(major = 6))
             malformedCurrent.writeBytes(byteArrayOf(5))
             obsoleteSequence.writeBytes(byteArrayOf(4))
             legacyUnversionedSequence.writeBytes(byteArrayOf(4))
@@ -219,11 +229,13 @@ class SessionLogAllocatorTest {
                 val lock = randomAccess.channel.lock()
                 try {
                     val first = ObsoleteSessionLogCleaner.clean(directory, storage = null)
-                    assertEquals(2L, first.deleted)
+                    assertEquals(4L, first.deleted)
                     assertEquals(1L, first.protected)
                     assertTrue(obsolete.exists())
                     assertFalse(obsoleteSequence.exists())
                     assertFalse(legacyUnversionedSequence.exists())
+                    assertFalse(obsoleteV3.exists())
+                    assertFalse(obsoleteV4.exists())
                 } finally {
                     lock.release()
                 }

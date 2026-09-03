@@ -24,10 +24,17 @@ internal fun databaseResultCountBucket(value: Long, capture: Int): Int {
 }
 
 internal class PreparedStatementSnapshot(
-    var query: String?,
-    var fingerprint: Long,
+    statement: Any,
+    val query: String?,
+    val fingerprint: Long,
     val token: Long,
-)
+) {
+    private val statement = WeakReference(statement)
+
+    fun refersTo(candidate: Any): Boolean = statement.get() === candidate
+
+    fun isRetained(): Boolean = statement.get() != null
+}
 
 internal class PreparedStatementRegistry(
     capacity: Int = DEFAULT_PREPARED_STATEMENT_CAPACITY,
@@ -35,80 +42,78 @@ internal class PreparedStatementRegistry(
     private val onResolutionMissAfterEviction: () -> Unit = {},
 ) {
     private val mask: Int
-    private val references: Array<WeakReference<Any>?>
-    private val snapshots: Array<PreparedStatementSnapshot?>
+    private val snapshots: AtomicReferenceArray<PreparedStatementSnapshot?>
     private var nextToken = 1L
     private var evictionCursor = 0
-    private var evictionCount = 0L
+    private val evictionCount = AtomicLong()
 
     init {
         require(capacity >= 2 && capacity and (capacity - 1) == 0)
         mask = capacity - 1
-        references = arrayOfNulls(capacity)
-        snapshots = arrayOfNulls(capacity)
+        snapshots = AtomicReferenceArray(capacity)
     }
 
     @Synchronized
     fun register(statement: Any, query: String?, fingerprint: Long): Long {
         val start = identityIndex(statement)
         var reclaim = -1
-        val probes = minOf(references.size, MAX_PREPARED_STATEMENT_PROBES)
+        val probes = minOf(snapshots.length(), MAX_PREPARED_STATEMENT_PROBES)
         for (offset in 0 until probes) {
             val index = (start + offset) and mask
-            val current = references[index]?.get()
-            if (current === statement) {
-                val snapshot = snapshots[index] ?: return replace(index, statement, query, fingerprint)
-                snapshot.query = query
-                snapshot.fingerprint = fingerprint
-                return snapshot.token
+            val snapshot = snapshots.get(index)
+            if (snapshot?.refersTo(statement) == true) {
+                return replace(index, statement, query, fingerprint, snapshot.token)
             }
-            if (current == null && reclaim < 0) reclaim = index
+            if (snapshot?.isRetained() != true && reclaim < 0) reclaim = index
         }
         val index = if (reclaim >= 0) {
             reclaim
         } else {
-            if (evictionCount != Long.MAX_VALUE) evictionCount++
+            if (evictionCount.get() != Long.MAX_VALUE) evictionCount.incrementAndGet()
             onEviction()
             (start + (evictionCursor++ and (probes - 1))) and mask
         }
         return replace(index, statement, query, fingerprint)
     }
 
-    @Synchronized
     fun resolve(statement: Any?): PreparedStatementSnapshot? {
         if (statement == null) return null
         val start = identityIndex(statement)
-        val probes = minOf(references.size, MAX_PREPARED_STATEMENT_PROBES)
+        val probes = minOf(snapshots.length(), MAX_PREPARED_STATEMENT_PROBES)
         for (offset in 0 until probes) {
             val index = (start + offset) and mask
-            val current = references[index]?.get()
-            if (current === statement) return snapshots[index]
+            val snapshot = snapshots.get(index)
+            if (snapshot?.refersTo(statement) == true) return snapshot
         }
-        if (evictionCount != 0L) onResolutionMissAfterEviction()
+        if (evictionCount.get() != 0L) onResolutionMissAfterEviction()
         return null
     }
 
     @Synchronized
     internal fun retainedEntryCount(): Int {
         var count = 0
-        for (index in references.indices) {
-            if (references[index]?.get() != null) {
+        for (index in 0 until snapshots.length()) {
+            if (snapshots.get(index)?.isRetained() == true) {
                 count++
             } else {
-                references[index] = null
-                snapshots[index] = null
+                snapshots.set(index, null)
             }
         }
         return count
     }
 
-    @Synchronized
-    internal fun evictionCount(): Long = evictionCount
+    internal fun evictionCount(): Long = evictionCount.get()
 
-    private fun replace(index: Int, statement: Any, query: String?, fingerprint: Long): Long {
-        val token = nextToken()
-        references[index] = WeakReference(statement)
-        snapshots[index] = PreparedStatementSnapshot(query, fingerprint, token)
+    internal fun capacityForTest(): Int = snapshots.length()
+
+    private fun replace(
+        index: Int,
+        statement: Any,
+        query: String?,
+        fingerprint: Long,
+        token: Long = nextToken(),
+    ): Long {
+        snapshots.set(index, PreparedStatementSnapshot(statement, query, fingerprint, token))
         return token
     }
 
@@ -124,8 +129,10 @@ internal class PreparedStatementRegistry(
     }
 
     private companion object {
-        const val DEFAULT_PREPARED_STATEMENT_CAPACITY = 1_024
-        const val MAX_PREPARED_STATEMENT_PROBES = 8
+        // One AtomicReferenceArray replaces the former reference+snapshot arrays. 4K entries cost
+        // only ~16 KiB more fixed memory while sharply reducing live-entry collisions.
+        const val DEFAULT_PREPARED_STATEMENT_CAPACITY = 4_096
+        const val MAX_PREPARED_STATEMENT_PROBES = 16
     }
 }
 

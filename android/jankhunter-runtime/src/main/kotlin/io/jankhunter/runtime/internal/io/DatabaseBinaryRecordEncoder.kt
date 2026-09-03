@@ -4,13 +4,28 @@ package io.jankhunter.runtime.internal.io
 internal interface BinaryEncodingSink {
     fun payload(): BinaryPayload
 
+    fun symbolId(kind: Int, value: String?): Long = optionalSymbolId(kind, value)
+
     fun optionalSymbolId(kind: Int, value: String?): Long
 
-    fun defineStableSymbol(id: Long, name: String?)
+    fun defineStableSymbol(id: Long, name: String?): Long
 
     fun producerContext(owner: String? = null): BinaryRecordContext?
 
-    fun emit(
+    fun producerContextWithScreen(screen: String?): BinaryRecordContext? = producerContext()
+
+    fun context(screen: String?, owner: String?, operationId: Long = 0L): BinaryRecordContext =
+        BinaryRecordContext().set(screenId = 0L, ownerId = 0L, operationId = operationId)
+
+    fun recordInvalidMetric() = Unit
+
+    /** Emits segment dictionary state without semantic producer metadata. */
+    fun emitDictionaryDefinition(payload: BinaryPayload)
+
+    /** Emits writer-owned control state without semantic producer metadata. */
+    fun emitControl(recordType: Int, payload: BinaryPayload)
+
+    fun emitSemantic(
         recordType: Int,
         attributes: Long,
         payload: BinaryPayload,
@@ -23,6 +38,15 @@ internal interface BinaryEncodingSink {
 internal class DatabaseBinaryRecordEncoder(
     private val sink: BinaryEncodingSink,
 ) {
+    private val descriptors = DatabaseDescriptorRegistry()
+    private val descriptorResolution = DatabaseDescriptorRegistry.Resolution()
+    private var lastTransactionId = 0L
+
+    /** Starts the segment-local transaction delta stream from its canonical zero base. */
+    fun resetSegmentState() {
+        lastTransactionId = 0L
+    }
+
     fun database(
         sourceId: Long,
         sourceName: String?,
@@ -66,28 +90,65 @@ internal class DatabaseBinaryRecordEncoder(
         require(lockWaitUs <= durationUs - poolWaitUs)
         require(executeUs <= durationUs - poolWaitUs - lockWaitUs)
         require(materializeUs <= durationUs - poolWaitUs - lockWaitUs - executeUs)
-        sink.defineStableSymbol(sourceId, sourceName)
+        val sourceAlias = sink.defineStableSymbol(sourceId, sourceName)
+        val queryId = sink.optionalSymbolId(BinaryLogWriter.DICT_GENERIC, query)
+        descriptors.resolve(
+            sourceId = sourceId,
+            queryId = queryId,
+            statementFingerprint = statementFingerprint,
+            framework = framework,
+            operation = operation,
+            boundary = boundary,
+            result = descriptorResolution,
+        )
+        val descriptorToken = (descriptorResolution.id shl 1) or if (descriptorResolution.definition) 1L else 0L
         val payload = sink.payload()
-            .symbolRef(sink.optionalSymbolId(BinaryLogWriter.DICT_GENERIC, query))
-            .stableSymbolRef(sourceId)
-            .uvarint(statementFingerprint)
-            .uvarint(framework)
-            .uvarint(operation)
+            .uvarint(descriptorToken)
+        if (descriptorResolution.definition) {
+            payload
+                .symbolRef(queryId)
+                .stableSymbolAlias(sourceAlias)
+                .uvarint(statementFingerprint)
+                .uvarint(framework)
+                .uvarint(operation)
+                .uvarint(boundary)
+        }
+        var presence = 0L
+        if (failureKind != Jhlog.DATABASE_FAILURE_NONE) presence = presence or DATABASE_PRESENCE_FAILURE
+        if (resultKnown) presence = presence or DATABASE_PRESENCE_RESULT
+        if (transactionId != 0L) presence = presence or DATABASE_PRESENCE_TRANSACTION
+        if (statementToken != 0L) presence = presence or DATABASE_PRESENCE_STATEMENT_TOKEN
+        if (phaseMask != 0L) presence = presence or DATABASE_PRESENCE_PHASES
+        payload
             .uvarint(outcome)
-            .uvarint(failureKind)
-            .uvarint(boundary)
-            .uvarint(if (resultKnown) 1L else 0L)
-            .uvarint(resultKind)
-            .uvarint(resultCountBucket)
-            .uvarint(BinaryLogWriter.nonNegative(transactionId))
-            .uvarint(BinaryLogWriter.nonNegative(statementToken))
-            .uvarint(phaseMask)
-            .uvarint(BinaryLogWriter.nonNegative(poolWaitUs))
-            .uvarint(BinaryLogWriter.nonNegative(lockWaitUs))
-            .uvarint(BinaryLogWriter.nonNegative(executeUs))
-            .uvarint(BinaryLogWriter.nonNegative(materializeUs))
             .uvarint(BinaryLogWriter.nonNegative(durationUs))
-        sink.emit(
+            .uvarint(presence)
+        if (presence and DATABASE_PRESENCE_FAILURE != 0L) payload.uvarint(failureKind)
+        if (presence and DATABASE_PRESENCE_RESULT != 0L) {
+            payload.uvarint(resultKind).uvarint(resultCountBucket)
+        }
+        if (presence and DATABASE_PRESENCE_TRANSACTION != 0L) {
+            payload.transactionIdDelta(transactionId)
+        }
+        if (presence and DATABASE_PRESENCE_STATEMENT_TOKEN != 0L) {
+            payload.uvarint(BinaryLogWriter.nonNegative(statementToken))
+        }
+        if (presence and DATABASE_PRESENCE_PHASES != 0L) {
+            payload.uvarint(phaseMask)
+            if (phaseMask and Jhlog.DATABASE_PHASE_POOL_WAIT != 0L) {
+                payload.uvarint(BinaryLogWriter.nonNegative(poolWaitUs))
+            }
+            if (phaseMask and Jhlog.DATABASE_PHASE_LOCK_WAIT != 0L) {
+                payload.uvarint(BinaryLogWriter.nonNegative(lockWaitUs))
+            }
+            if (phaseMask and Jhlog.DATABASE_PHASE_EXECUTE != 0L) {
+                payload.uvarint(BinaryLogWriter.nonNegative(executeUs))
+            }
+            if (phaseMask and Jhlog.DATABASE_PHASE_MATERIALIZE != 0L) {
+                payload.uvarint(BinaryLogWriter.nonNegative(materializeUs))
+            }
+        }
+        sink.emitSemantic(
             Jhlog.TYPE_DATABASE,
             if (mainThread) BinaryLogWriter.FLAG_THREAD_MAIN else 0L,
             payload,
@@ -126,24 +187,208 @@ internal class DatabaseBinaryRecordEncoder(
             require(outcome == Jhlog.DATABASE_TRANSACTION_FAILURE || failureKind == Jhlog.DATABASE_FAILURE_NONE)
             require(readCount <= statementCount && writeCount <= statementCount - readCount)
         }
-        sink.defineStableSymbol(sourceId, sourceName)
+        val sourceAlias = sink.defineStableSymbol(sourceId, sourceName)
+        var presence = 0L
+        if (parentId != 0L) presence = presence or TRANSACTION_PRESENCE_PARENT
+        if (mode != Jhlog.DATABASE_TRANSACTION_MODE_UNKNOWN) presence = presence or TRANSACTION_PRESENCE_MODE
+        if (outcome != Jhlog.DATABASE_TRANSACTION_OUTCOME_UNKNOWN) presence = presence or TRANSACTION_PRESENCE_OUTCOME
+        if (failureKind != Jhlog.DATABASE_FAILURE_NONE) presence = presence or TRANSACTION_PRESENCE_FAILURE
+        if (durationUs != 0L) presence = presence or TRANSACTION_PRESENCE_DURATION
+        if (statementCount != 0L) presence = presence or TRANSACTION_PRESENCE_STATEMENTS
+        if (readCount != 0L) presence = presence or TRANSACTION_PRESENCE_READS
+        if (writeCount != 0L) presence = presence or TRANSACTION_PRESENCE_WRITES
         val payload = sink.payload()
-            .stableSymbolRef(sourceId)
-            .uvarint(transactionId)
-            .uvarint(BinaryLogWriter.nonNegative(parentId))
+            .stableSymbolAlias(sourceAlias)
+            .transactionIdDelta(transactionId)
             .uvarint(stage)
-            .uvarint(mode)
-            .uvarint(outcome)
-            .uvarint(failureKind)
-            .uvarint(BinaryLogWriter.nonNegative(durationUs))
-            .uvarint(BinaryLogWriter.nonNegative(statementCount))
-            .uvarint(BinaryLogWriter.nonNegative(readCount))
-            .uvarint(BinaryLogWriter.nonNegative(writeCount))
-        sink.emit(
+            .uvarint(presence)
+        if (presence and TRANSACTION_PRESENCE_PARENT != 0L) payload.svarint(parentId - transactionId)
+        if (presence and TRANSACTION_PRESENCE_MODE != 0L) payload.uvarint(mode)
+        if (presence and TRANSACTION_PRESENCE_OUTCOME != 0L) payload.uvarint(outcome)
+        if (presence and TRANSACTION_PRESENCE_FAILURE != 0L) payload.uvarint(failureKind)
+        if (presence and TRANSACTION_PRESENCE_DURATION != 0L) payload.uvarint(BinaryLogWriter.nonNegative(durationUs))
+        if (presence and TRANSACTION_PRESENCE_STATEMENTS != 0L) payload.uvarint(BinaryLogWriter.nonNegative(statementCount))
+        if (presence and TRANSACTION_PRESENCE_READS != 0L) payload.uvarint(BinaryLogWriter.nonNegative(readCount))
+        if (presence and TRANSACTION_PRESENCE_WRITES != 0L) payload.uvarint(BinaryLogWriter.nonNegative(writeCount))
+        sink.emitSemantic(
             Jhlog.TYPE_DATABASE_TRANSACTION,
             if (mainThread) BinaryLogWriter.FLAG_THREAD_MAIN else 0L,
             payload,
             sink.producerContext(),
         )
+    }
+
+    private fun BinaryPayload.transactionIdDelta(transactionId: Long): BinaryPayload {
+        require(transactionId > 0L)
+        svarint(transactionId - lastTransactionId)
+        lastTransactionId = transactionId
+        return this
+    }
+
+    private companion object {
+        const val DATABASE_PRESENCE_FAILURE = 1L shl 0
+        const val DATABASE_PRESENCE_RESULT = 1L shl 1
+        const val DATABASE_PRESENCE_TRANSACTION = 1L shl 2
+        const val DATABASE_PRESENCE_STATEMENT_TOKEN = 1L shl 3
+        const val DATABASE_PRESENCE_PHASES = 1L shl 4
+
+        const val TRANSACTION_PRESENCE_PARENT = 1L shl 0
+        const val TRANSACTION_PRESENCE_MODE = 1L shl 1
+        const val TRANSACTION_PRESENCE_OUTCOME = 1L shl 2
+        const val TRANSACTION_PRESENCE_FAILURE = 1L shl 3
+        const val TRANSACTION_PRESENCE_DURATION = 1L shl 4
+        const val TRANSACTION_PRESENCE_STATEMENTS = 1L shl 5
+        const val TRANSACTION_PRESENCE_READS = 1L shl 6
+        const val TRANSACTION_PRESENCE_WRITES = 1L shl 7
+    }
+}
+
+/** Bounded primitive interner for the static half of database observations. */
+internal class DatabaseDescriptorRegistry(
+    private val maxEntries: Int = DEFAULT_MAX_ENTRIES,
+) {
+    class Resolution {
+        var id: Long = 0L
+        var definition: Boolean = false
+    }
+
+    private var descriptorIds = LongArray(INITIAL_CAPACITY)
+    private var sourceIds = LongArray(INITIAL_CAPACITY)
+    private var queryIds = LongArray(INITIAL_CAPACITY)
+    private var fingerprints = LongArray(INITIAL_CAPACITY)
+    private var frameworks = LongArray(INITIAL_CAPACITY)
+    private var operations = LongArray(INITIAL_CAPACITY)
+    private var boundaries = LongArray(INITIAL_CAPACITY)
+    private var size = 0
+
+    fun resolve(
+        sourceId: Long,
+        queryId: Long,
+        statementFingerprint: Long,
+        framework: Long,
+        operation: Long,
+        boundary: Long,
+        result: Resolution,
+    ) {
+        var index = find(sourceId, queryId, statementFingerprint, framework, operation, boundary)
+        if (index >= 0) {
+            result.id = descriptorIds[index]
+            result.definition = false
+            return
+        }
+        if (size >= maxEntries.coerceAtLeast(0)) {
+            result.id = 0L
+            result.definition = true
+            return
+        }
+        if ((size + 1) * 2 > descriptorIds.size) {
+            grow()
+            index = find(sourceId, queryId, statementFingerprint, framework, operation, boundary)
+        }
+        index = index.inv()
+        val descriptorId = size.toLong() + 1L
+        descriptorIds[index] = descriptorId
+        sourceIds[index] = sourceId
+        queryIds[index] = queryId
+        fingerprints[index] = statementFingerprint
+        frameworks[index] = framework
+        operations[index] = operation
+        boundaries[index] = boundary
+        size++
+        result.id = descriptorId
+        result.definition = true
+    }
+
+    private fun find(
+        sourceId: Long,
+        queryId: Long,
+        statementFingerprint: Long,
+        framework: Long,
+        operation: Long,
+        boundary: Long,
+    ): Int {
+        var index = hash(sourceId, queryId, statementFingerprint, framework, operation, boundary) and
+            descriptorIds.lastIndex
+        while (descriptorIds[index] != 0L) {
+            if (
+                sourceIds[index] == sourceId &&
+                queryIds[index] == queryId &&
+                fingerprints[index] == statementFingerprint &&
+                frameworks[index] == framework &&
+                operations[index] == operation &&
+                boundaries[index] == boundary
+            ) {
+                return index
+            }
+            index = (index + 1) and descriptorIds.lastIndex
+        }
+        return index.inv()
+    }
+
+    private fun grow() {
+        val oldDescriptorIds = descriptorIds
+        val oldSourceIds = sourceIds
+        val oldQueryIds = queryIds
+        val oldFingerprints = fingerprints
+        val oldFrameworks = frameworks
+        val oldOperations = operations
+        val oldBoundaries = boundaries
+        val newCapacity = descriptorIds.size shl 1
+        descriptorIds = LongArray(newCapacity)
+        sourceIds = LongArray(newCapacity)
+        queryIds = LongArray(newCapacity)
+        fingerprints = LongArray(newCapacity)
+        frameworks = LongArray(newCapacity)
+        operations = LongArray(newCapacity)
+        boundaries = LongArray(newCapacity)
+        for (oldIndex in oldDescriptorIds.indices) {
+            val descriptorId = oldDescriptorIds[oldIndex]
+            if (descriptorId == 0L) continue
+            val index = find(
+                oldSourceIds[oldIndex],
+                oldQueryIds[oldIndex],
+                oldFingerprints[oldIndex],
+                oldFrameworks[oldIndex],
+                oldOperations[oldIndex],
+                oldBoundaries[oldIndex],
+            ).inv()
+            descriptorIds[index] = descriptorId
+            sourceIds[index] = oldSourceIds[oldIndex]
+            queryIds[index] = oldQueryIds[oldIndex]
+            fingerprints[index] = oldFingerprints[oldIndex]
+            frameworks[index] = oldFrameworks[oldIndex]
+            operations[index] = oldOperations[oldIndex]
+            boundaries[index] = oldBoundaries[oldIndex]
+        }
+    }
+
+    private fun hash(
+        sourceId: Long,
+        queryId: Long,
+        statementFingerprint: Long,
+        framework: Long,
+        operation: Long,
+        boundary: Long,
+    ): Int {
+        var value = sourceId
+        value = mix(value xor queryId.rotateLeft(11))
+        value = mix(value xor statementFingerprint.rotateLeft(23))
+        value = mix(value xor framework shl 3 xor operation shl 11 xor boundary shl 19)
+        return value.toInt()
+    }
+
+    private fun mix(raw: Long): Long {
+        var value = raw
+        value = (value xor (value ushr 33)) * -49064778989728563L
+        value = (value xor (value ushr 33)) * -4265267296055464877L
+        return value xor (value ushr 33)
+    }
+
+    private fun Long.rotateLeft(distance: Int): Long =
+        (this shl distance) or (this ushr (Long.SIZE_BITS - distance))
+
+    private companion object {
+        const val INITIAL_CAPACITY = 32
+        const val DEFAULT_MAX_ENTRIES = 4_096
     }
 }

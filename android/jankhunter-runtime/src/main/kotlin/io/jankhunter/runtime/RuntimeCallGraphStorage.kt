@@ -6,8 +6,13 @@ import io.jankhunter.runtime.internal.io.RuntimeCallBatch
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicLong
 
-internal const val RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY = 4
-internal const val RUNTIME_GRAPH_PAGE_MAX_KEYS = 64
+// Eight bounded pages absorb short producer bursts while the dedicated consumer is descheduled.
+// The 128-slot power-of-two table keeps bit-mask probing correct and its 75% load limit carries
+// 96 unique edges per publication. This layout doubles burst capacity while using only 4/3 of the
+// memory of the former four-page, incorrectly sized 192-slot layout.
+internal const val RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY = 8
+internal const val RUNTIME_GRAPH_PAGE_MAX_KEYS = 96
+internal const val RUNTIME_GRAPH_PAGE_TABLE_CAPACITY = 128
 internal const val RUNTIME_GRAPH_MAX_FLUSH_RECORDS = 128
 internal const val RUNTIME_GRAPH_ADD_FULL = 0
 internal const val RUNTIME_GRAPH_ADD_AGGREGATED = 1
@@ -177,6 +182,10 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
         if (page.add(callerId, callerName, calleeId, calleeName, screen, operationId, durationMs)) {
             return RUNTIME_GRAPH_ADD_AGGREGATED
         }
+        // Keep the last full page producer-owned while the ring is saturated. Hot edges already
+        // present in that page can still be aggregated without races or extra memory; a later new
+        // edge will rotate the page as soon as the consumer releases a slot.
+        if (!sequencer.canAdvanceProducerAfterPublish(producerPosition)) return RUNTIME_GRAPH_ADD_FULL
         publishActivePage()
         if (!ensureActivePage()) return RUNTIME_GRAPH_ADD_FULL
         page = activePage()
@@ -364,7 +373,7 @@ internal class RuntimeGraphAggregatePage {
     }
 
     private companion object {
-        const val TABLE_CAPACITY = RUNTIME_GRAPH_PAGE_MAX_KEYS * 2
+        const val TABLE_CAPACITY = RUNTIME_GRAPH_PAGE_TABLE_CAPACITY
         const val TABLE_MASK = TABLE_CAPACITY - 1
         const val EMPTY: Byte = 0
         const val OCCUPIED: Byte = 1

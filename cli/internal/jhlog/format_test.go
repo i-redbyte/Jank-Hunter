@@ -1,6 +1,16 @@
 package jhlog
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
+
+func TestGeneratedWireContractIsCurrent(t *testing.T) {
+	command := exec.Command("python3", "../../../wire/generate.py", "--check")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("wire generated sources are stale: %v\n%s", err, output)
+	}
+}
 
 func TestResolveSymbolFormatsCanonicalStableID(t *testing.T) {
 	tests := []struct {

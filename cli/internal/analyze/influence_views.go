@@ -25,12 +25,14 @@ const (
 )
 
 type influenceViewBuilder struct {
-	nodes      []InfluenceNode
-	edges      []InfluenceEdge
-	nodeByID   map[string]*InfluenceNode
-	outgoing   map[string][]InfluenceEdge
-	incoming   map[string][]InfluenceEdge
-	classNodes map[string]influenceClassNodeProjection
+	nodes          []InfluenceNode
+	edges          []InfluenceEdge
+	nodeByID       map[string]uint32
+	outgoing       influenceAdjacency
+	incoming       influenceAdjacency
+	classNodes     map[string]influenceClassNodeProjection
+	contextMarks   []uint8
+	contextTouched []uint32
 }
 
 type influenceClassNodeProjection struct {
@@ -45,20 +47,21 @@ type influenceClassCandidate struct {
 }
 
 type influencePackageAggregate struct {
-	name        string
-	children    []string
-	childCount  int
-	maxClass    string
-	maxScore    float64
-	maxSeverity string
-	runtime     int
-	staticOnly  int
-	problems    int
+	name         string
+	children     [packageChildSample]uint32
+	childSamples uint8
+	childCount   int
+	maxClass     string
+	maxScore     float64
+	maxSeverity  string
+	runtime      int
+	staticOnly   int
+	problems     int
 }
 
 type influencePackageEdgeKey struct {
-	from *influencePackageAggregate
-	to   *influencePackageAggregate
+	from int
+	to   int
 }
 
 type influencePackageEdgeAggregate struct {
@@ -68,8 +71,36 @@ type influencePackageEdgeAggregate struct {
 	influence    float64
 }
 
+type influenceContextKind uint8
+
+const (
+	influenceContextOperation influenceContextKind = iota
+	influenceContextRoute
+	influenceContextScreen
+)
+
+type influenceContextKey struct {
+	value string
+	kind  influenceContextKind
+}
+
+type influenceContextCounts struct {
+	runtimeNodes int
+	problemNodes int
+}
+
+type influenceContextCandidate struct {
+	key    influenceContextKey
+	counts influenceContextCounts
+}
+
+type influenceContextSelection struct {
+	items []InfluenceGraphContext
+	total int
+}
+
 func buildInfluenceViews(nodes []InfluenceNode, edges []InfluenceEdge) ([]InfluenceGraphView, InfluenceGraphWorkspace) {
-	builder := newInfluenceViewBuilder(nodes, edges)
+	builder := newPreparedInfluenceViewBuilder(nodes, edges)
 	views := []InfluenceGraphView{
 		builder.problemsView(),
 		builder.runtimeView(),
@@ -78,11 +109,8 @@ func buildInfluenceViews(nodes []InfluenceNode, edges []InfluenceEdge) ([]Influe
 		views = append(views, builder.packagesView(depth))
 	}
 	views = append(views, builder.neighborhoodView(builder.defaultNode(), "both", 1, false))
-	contexts := builder.contexts()
-	for index, context := range contexts {
-		if index >= workspaceMaxContexts {
-			break
-		}
+	contexts := builder.boundedContexts()
+	for _, context := range contexts.items {
 		views = append(views, builder.contextView(context))
 	}
 	return views, builder.workspace(contexts)
@@ -95,22 +123,26 @@ func newInfluenceViewBuilder(nodes []InfluenceNode, edges []InfluenceEdge) *infl
 		return influenceNodeLess(nodeCopy[i], nodeCopy[j])
 	})
 	sortInfluenceEdges(edgeCopy)
+	return newPreparedInfluenceViewBuilder(nodeCopy, edgeCopy)
+}
+
+// newPreparedInfluenceViewBuilder takes ownership of already sorted slices produced by
+// influenceBuilder.finish. Keeping that contract explicit avoids duplicating the complete graph
+// immediately before bounded views discard most of it.
+func newPreparedInfluenceViewBuilder(nodes []InfluenceNode, edges []InfluenceEdge) *influenceViewBuilder {
 	builder := &influenceViewBuilder{
-		nodes:      nodeCopy,
-		edges:      edgeCopy,
-		nodeByID:   map[string]*InfluenceNode{},
-		outgoing:   map[string][]InfluenceEdge{},
-		incoming:   map[string][]InfluenceEdge{},
-		classNodes: map[string]influenceClassNodeProjection{},
+		nodes:          nodes,
+		edges:          edges,
+		nodeByID:       make(map[string]uint32, len(nodes)),
+		classNodes:     make(map[string]influenceClassNodeProjection),
+		contextMarks:   make([]uint8, len(nodes)),
+		contextTouched: make([]uint32, 0, min(len(nodes), 256)),
 	}
-	for index := range nodeCopy {
-		node := &nodeCopy[index]
-		builder.nodeByID[node.ClassName] = node
+	for index := range nodes {
+		node := &nodes[index]
+		builder.nodeByID[node.ClassName] = uint32(index) + 1
 	}
-	for _, edge := range edgeCopy {
-		builder.outgoing[edge.From] = append(builder.outgoing[edge.From], edge)
-		builder.incoming[edge.To] = append(builder.incoming[edge.To], edge)
-	}
+	builder.outgoing, builder.incoming = newInfluenceAdjacency(builder.nodeByID, edges)
 	return builder
 }
 
@@ -124,14 +156,14 @@ func (b *influenceViewBuilder) problemsView() InfluenceGraphView {
 		problemNodes[node.ClassName] = struct{}{}
 		candidates[node.ClassName] = false
 	}
-	candidateEdges := make([]InfluenceGraphEdge, 0)
+	totalEdges := 0
 	for _, edge := range b.edges {
 		_, fromProblem := problemNodes[edge.From]
 		_, toProblem := problemNodes[edge.To]
 		if !fromProblem && !toProblem {
 			continue
 		}
-		candidateEdges = append(candidateEdges, graphEdge(edge, false))
+		totalEdges++
 		for _, className := range []string{edge.From, edge.To} {
 			if _, exists := candidates[className]; exists {
 				continue
@@ -141,16 +173,36 @@ func (b *influenceViewBuilder) problemsView() InfluenceGraphView {
 			}
 		}
 	}
+	nodes := b.boundedClassNodes(candidates, problemViewMaxNodes)
+	selected := influenceGraphNodeIDs(nodes)
+	edges := make([]InfluenceGraphEdge, 0, min(totalEdges, problemViewMaxEdges))
+	for _, edge := range b.edges {
+		_, fromProblem := problemNodes[edge.From]
+		_, toProblem := problemNodes[edge.To]
+		if !fromProblem && !toProblem {
+			continue
+		}
+		if _, ok := selected[edge.From]; !ok {
+			continue
+		}
+		if _, ok := selected[edge.To]; !ok {
+			continue
+		}
+		edges = append(edges, graphEdge(edge, false))
+		if len(edges) == problemViewMaxEdges {
+			break
+		}
+	}
 	return boundedInfluenceViewWithTotals(
 		"problems",
 		"problems",
 		"Проблемы",
 		"Классы с наибольшей оценкой риска и ближайшие связующие классы. Оценка задаёт порядок проверки и не доказывает причину.",
 		InfluenceGraphFilters{},
-		b.boundedClassNodes(candidates, problemViewMaxNodes),
-		candidateEdges,
+		nodes,
+		edges,
 		len(candidates),
-		len(candidateEdges),
+		totalEdges,
 		InfluenceGraphLimits{MaxNodes: problemViewMaxNodes, MaxEdges: problemViewMaxEdges},
 	)
 }
@@ -162,7 +214,7 @@ func (b *influenceViewBuilder) runtimeView() InfluenceGraphView {
 			candidates[node.ClassName] = false
 		}
 	}
-	edges := make([]InfluenceGraphEdge, 0)
+	totalEdges := 0
 	for _, edge := range b.edges {
 		if edge.RuntimeCount == 0 {
 			continue
@@ -173,7 +225,25 @@ func (b *influenceViewBuilder) runtimeView() InfluenceGraphView {
 		if _, toOK := candidates[edge.To]; !toOK {
 			continue
 		}
+		totalEdges++
+	}
+	nodes := b.boundedClassNodes(candidates, runtimeViewMaxNodes)
+	selected := influenceGraphNodeIDs(nodes)
+	edges := make([]InfluenceGraphEdge, 0, min(totalEdges, runtimeViewMaxEdges))
+	for _, edge := range b.edges {
+		if edge.RuntimeCount == 0 {
+			continue
+		}
+		if _, ok := selected[edge.From]; !ok {
+			continue
+		}
+		if _, ok := selected[edge.To]; !ok {
+			continue
+		}
 		edges = append(edges, graphEdge(edge, false))
+		if len(edges) == runtimeViewMaxEdges {
+			break
+		}
 	}
 	return boundedInfluenceViewWithTotals(
 		"runtime",
@@ -181,27 +251,36 @@ func (b *influenceViewBuilder) runtimeView() InfluenceGraphView {
 		"Только выполнение",
 		"Только классы и связи, реально записанные во время этого прогона. Изолированные классы с наблюдаемыми симптомами сохраняются.",
 		InfluenceGraphFilters{RuntimeOnly: true},
-		b.boundedClassNodes(candidates, runtimeViewMaxNodes),
+		nodes,
 		edges,
 		len(candidates),
-		len(edges),
+		totalEdges,
 		InfluenceGraphLimits{MaxNodes: runtimeViewMaxNodes, MaxEdges: runtimeViewMaxEdges},
 	)
 }
 
 func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
-	aggregates := map[string]*influencePackageAggregate{}
-	packageByClass := map[string]*influencePackageAggregate{}
-	for _, node := range b.nodes {
+	aggregateIndexes := make(map[string]int)
+	packageByNode := make([]uint32, len(b.nodes))
+	for index := range b.nodes {
+		node := &b.nodes[index]
 		packageName := influencePackage(node.ClassName, depth)
-		aggregate := aggregates[packageName]
-		if aggregate == nil {
-			aggregate = &influencePackageAggregate{name: packageName}
-			aggregates[packageName] = aggregate
+		slot := aggregateIndexes[packageName]
+		if slot == 0 {
+			slot = len(aggregateIndexes) + 1
+			aggregateIndexes[packageName] = slot
 		}
-		packageByClass[node.ClassName] = aggregate
+		packageByNode[index] = uint32(slot)
+	}
+	aggregates := make([]influencePackageAggregate, len(aggregateIndexes))
+	for packageName, slot := range aggregateIndexes {
+		aggregates[slot-1].name = packageName
+	}
+	for nodeIndex := range b.nodes {
+		node := &b.nodes[nodeIndex]
+		aggregate := &aggregates[packageByNode[nodeIndex]-1]
 		aggregate.childCount++
-		aggregate.addChildSample(node)
+		aggregate.addChildSample(nodeIndex)
 		if aggregate.maxClass == "" {
 			aggregate.maxClass = node.ClassName
 			aggregate.maxScore = node.Score
@@ -212,17 +291,17 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 		} else {
 			aggregate.staticOnly++
 		}
-		if isInfluenceProblem(node) {
+		if isInfluenceProblem(*node) {
 			aggregate.problems++
 		}
 	}
-	orderedAggregates := make([]*influencePackageAggregate, 0, len(aggregates))
-	for _, aggregate := range aggregates {
-		orderedAggregates = append(orderedAggregates, aggregate)
+	orderedAggregates := make([]int, len(aggregates))
+	for index := range orderedAggregates {
+		orderedAggregates[index] = index
 	}
 	sort.Slice(orderedAggregates, func(i, j int) bool {
-		left := orderedAggregates[i]
-		right := orderedAggregates[j]
+		left := &aggregates[orderedAggregates[i]]
+		right := &aggregates[orderedAggregates[j]]
 		if left.maxScore != right.maxScore {
 			return left.maxScore > right.maxScore
 		}
@@ -239,10 +318,15 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 		orderedAggregates = orderedAggregates[:packageViewMaxNodes]
 	}
 	nodes := make([]InfluenceGraphNode, 0, len(orderedAggregates))
-	selectedPackages := make(map[*influencePackageAggregate]struct{}, len(orderedAggregates))
-	for _, aggregate := range orderedAggregates {
+	selectedPackages := make([]bool, len(aggregates))
+	for _, aggregateIndex := range orderedAggregates {
+		aggregate := &aggregates[aggregateIndex]
 		packageID := "package:" + aggregate.name
-		selectedPackages[aggregate] = struct{}{}
+		selectedPackages[aggregateIndex] = true
+		children := make([]string, aggregate.childSamples)
+		for index := range children {
+			children[index] = b.nodes[aggregate.children[index]].ClassName
+		}
 		nodes = append(nodes, InfluenceGraphNode{
 			InfluenceNode: InfluenceNode{
 				ClassName:       aggregate.name,
@@ -261,7 +345,7 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 			RuntimeClassCount:    aggregate.runtime,
 			StaticOnlyClassCount: aggregate.staticOnly,
 			ProblemClassCount:    aggregate.problems,
-			Children:             append([]string(nil), aggregate.children...),
+			Children:             children,
 			Explanation: fmt.Sprintf(
 				"Пакет %s объединяет %d классов. Оценка %.1f равна максимальной оценке дочернего класса %s, а не сумме.",
 				aggregate.name,
@@ -273,12 +357,17 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 	}
 	edgeByKey := map[influencePackageEdgeKey]influencePackageEdgeAggregate{}
 	for _, edge := range b.edges {
-		fromPackage := packageByClass[edge.From]
-		toPackage := packageByClass[edge.To]
-		if fromPackage == nil || toPackage == nil || fromPackage == toPackage {
+		fromNodeSlot := b.nodeByID[edge.From]
+		toNodeSlot := b.nodeByID[edge.To]
+		if fromNodeSlot == 0 || toNodeSlot == 0 {
 			continue
 		}
-		key := influencePackageEdgeKey{from: fromPackage, to: toPackage}
+		fromSlot := int(packageByNode[fromNodeSlot-1])
+		toSlot := int(packageByNode[toNodeSlot-1])
+		if fromSlot == 0 || toSlot == 0 || fromSlot == toSlot {
+			continue
+		}
+		key := influencePackageEdgeKey{from: fromSlot - 1, to: toSlot - 1}
 		aggregated := edgeByKey[key]
 		aggregated.runtimeCount += edge.RuntimeCount
 		aggregated.staticCount += edge.StaticCount
@@ -289,15 +378,17 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 	totalEdges := len(edgeByKey)
 	edges := make([]InfluenceGraphEdge, 0, min(totalEdges, packageViewMaxEdges))
 	for key, aggregate := range edgeByKey {
-		if _, ok := selectedPackages[key.from]; !ok {
+		if !selectedPackages[key.from] {
 			continue
 		}
-		if _, ok := selectedPackages[key.to]; !ok {
+		if !selectedPackages[key.to] {
 			continue
 		}
+		fromPackage := &aggregates[key.from]
+		toPackage := &aggregates[key.to]
 		edge := InfluenceEdge{
-			From:         "package:" + key.from.name,
-			To:           "package:" + key.to.name,
+			From:         "package:" + fromPackage.name,
+			To:           "package:" + toPackage.name,
 			Count:        aggregate.count,
 			RuntimeCount: aggregate.runtimeCount,
 			StaticCount:  aggregate.staticCount,
@@ -320,9 +411,10 @@ func (b *influenceViewBuilder) packagesView(depth int) InfluenceGraphView {
 	)
 }
 
-func (a *influencePackageAggregate) addChildSample(node InfluenceNode) {
-	if len(a.children) < packageChildSample {
-		a.children = append(a.children, node.ClassName)
+func (a *influencePackageAggregate) addChildSample(nodeIndex int) {
+	if a.childSamples < packageChildSample {
+		a.children[a.childSamples] = uint32(nodeIndex)
+		a.childSamples++
 	}
 }
 
@@ -351,15 +443,21 @@ func (b *influenceViewBuilder) neighborhoodView(selected string, direction strin
 		if currentDepth >= depth {
 			continue
 		}
-		adjacent := make([]InfluenceEdge, 0)
+		currentSlot := b.nodeByID[current]
+		outgoing := b.outgoing.edgesForSlot(currentSlot)
+		incoming := b.incoming.edgesForSlot(currentSlot)
+		adjacent := make([]uint32, 0, len(outgoing)+len(incoming))
 		if direction == "outgoing" || direction == "both" {
-			adjacent = append(adjacent, b.outgoing[current]...)
+			adjacent = append(adjacent, outgoing...)
 		}
 		if direction == "incoming" || direction == "both" {
-			adjacent = append(adjacent, b.incoming[current]...)
+			adjacent = append(adjacent, incoming...)
 		}
-		sortInfluenceEdges(adjacent)
-		for _, edge := range adjacent {
+		sort.Slice(adjacent, func(i, j int) bool {
+			return influenceEdgeLess(b.edges[adjacent[i]], b.edges[adjacent[j]])
+		})
+		for _, edgeIndex := range adjacent {
+			edge := b.edges[edgeIndex]
 			if runtimeOnly && edge.RuntimeCount == 0 {
 				continue
 			}
@@ -408,123 +506,208 @@ func (b *influenceViewBuilder) neighborhoodView(selected string, direction strin
 }
 
 func (b *influenceViewBuilder) contextView(context InfluenceGraphContext) InfluenceGraphView {
-	targets := map[string]struct{}{}
-	for _, node := range b.nodes {
-		if influenceNodeMatchesContext(node, context.Kind, context.Value) {
-			targets[node.ClassName] = struct{}{}
+	const (
+		contextTargetMark uint8 = 1 << iota
+		contextFromTargetMark
+		contextToTargetMark
+		contextSelectedMark
+	)
+	for index := range b.nodes {
+		node := &b.nodes[index]
+		if influenceNodeMatchesContext(*node, context.Kind, context.Value) {
+			b.markContextNode(uint32(index), contextTargetMark)
 		}
 	}
-	inFromTarget := map[string]bool{}
-	outToTarget := map[string]bool{}
-	for _, edge := range b.edges {
-		if _, ok := targets[edge.From]; ok {
-			inFromTarget[edge.To] = true
-		}
-		if _, ok := targets[edge.To]; ok {
-			outToTarget[edge.From] = true
-		}
-	}
-	connectors := map[string]struct{}{}
-	for className := range inFromTarget {
-		if outToTarget[className] {
-			if _, target := targets[className]; !target {
-				connectors[className] = struct{}{}
-			}
-		}
-	}
-	candidates := map[string]bool{}
-	for className := range targets {
-		if _, ok := b.nodeByID[className]; ok {
-			candidates[className] = false
-		}
-	}
-	for className := range connectors {
-		if _, ok := b.nodeByID[className]; ok {
-			candidates[className] = true
-		}
-	}
-	edges := make([]InfluenceGraphEdge, 0)
-	for _, edge := range b.edges {
-		if _, fromOK := candidates[edge.From]; !fromOK {
+	for index := range b.edges {
+		edge := &b.edges[index]
+		fromSlot := b.nodeByID[edge.From]
+		toSlot := b.nodeByID[edge.To]
+		if fromSlot == 0 || toSlot == 0 {
 			continue
 		}
-		if _, toOK := candidates[edge.To]; !toOK {
+		fromIndex := fromSlot - 1
+		toIndex := toSlot - 1
+		if b.contextMarks[fromIndex]&contextTargetMark != 0 {
+			b.markContextNode(toIndex, contextFromTargetMark)
+		}
+		if b.contextMarks[toIndex]&contextTargetMark != 0 {
+			b.markContextNode(fromIndex, contextToTargetMark)
+		}
+	}
+	nodes, totalNodes := b.boundedContextNodes(contextViewMaxNodes)
+	for index := range nodes {
+		if slot := b.nodeByID[nodes[index].ID]; slot != 0 {
+			b.contextMarks[slot-1] |= contextSelectedMark
+		}
+	}
+	edges := make([]InfluenceGraphEdge, 0, contextViewMaxEdges)
+	totalEdges := 0
+	for index := range b.edges {
+		edge := b.edges[index]
+		fromSlot := b.nodeByID[edge.From]
+		toSlot := b.nodeByID[edge.To]
+		if fromSlot == 0 || toSlot == 0 {
 			continue
 		}
-		_, fromTarget := targets[edge.From]
-		_, toTarget := targets[edge.To]
-		if !fromTarget && !toTarget {
+		fromMark := b.contextMarks[fromSlot-1]
+		toMark := b.contextMarks[toSlot-1]
+		fromCandidate := fromMark&contextTargetMark != 0 || fromMark&(contextFromTargetMark|contextToTargetMark) == contextFromTargetMark|contextToTargetMark
+		toCandidate := toMark&contextTargetMark != 0 || toMark&(contextFromTargetMark|contextToTargetMark) == contextFromTargetMark|contextToTargetMark
+		if !fromCandidate || !toCandidate || fromMark&contextTargetMark == 0 && toMark&contextTargetMark == 0 {
+			continue
+		}
+		totalEdges++
+		if fromMark&contextSelectedMark == 0 || toMark&contextSelectedMark == 0 {
 			continue
 		}
 		edges = append(edges, graphEdge(edge, false))
 	}
+	b.resetContextMarks()
 	return boundedInfluenceViewWithTotals(
 		context.ID,
 		"context",
 		"Экран / операция",
 		"Классы с записанным контекстом и необходимые связующие классы на расстоянии до двух связей. Связующий класс не считается непосредственным участником экрана, операции или маршрута.",
 		InfluenceGraphFilters{ContextKind: context.Kind, ContextValue: context.Value},
-		b.boundedClassNodes(candidates, contextViewMaxNodes),
+		nodes,
 		edges,
-		len(candidates),
-		len(edges),
+		totalNodes,
+		totalEdges,
 		InfluenceGraphLimits{MaxNodes: contextViewMaxNodes, MaxEdges: contextViewMaxEdges},
 	)
 }
 
-func (b *influenceViewBuilder) contexts() []InfluenceGraphContext {
-	byKey := map[string]*InfluenceGraphContext{}
-	add := func(kind string, value string, problem bool) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
+func (b *influenceViewBuilder) markContextNode(index uint32, mark uint8) {
+	if b.contextMarks[index] == 0 {
+		b.contextTouched = append(b.contextTouched, index)
+	}
+	b.contextMarks[index] |= mark
+}
+
+func (b *influenceViewBuilder) resetContextMarks() {
+	for _, index := range b.contextTouched {
+		b.contextMarks[index] = 0
+	}
+	b.contextTouched = b.contextTouched[:0]
+}
+
+func (b *influenceViewBuilder) boundedContextNodes(limit int) ([]InfluenceGraphNode, int) {
+	const connectorMarks = uint8(1<<1 | 1<<2)
+	ordered := make([]influenceClassCandidate, 0, limit)
+	total := 0
+	for _, index := range b.contextTouched {
+		mark := b.contextMarks[index]
+		target := mark&1 != 0
+		connector := !target && mark&connectorMarks == connectorMarks
+		if !target && !connector {
+			continue
 		}
-		key := kind + "\x00" + value
-		context := byKey[key]
-		if context == nil {
-			context = &InfluenceGraphContext{ID: "context:" + kind + ":" + value, Kind: kind, Value: value}
-			byKey[key] = context
+		total++
+		candidate := influenceClassCandidate{node: &b.nodes[index], connector: connector}
+		if len(ordered) < limit {
+			ordered = append(ordered, candidate)
+		} else if !influenceClassCandidateLess(candidate, ordered[len(ordered)-1]) {
+			continue
+		} else {
+			ordered[len(ordered)-1] = candidate
 		}
-		context.RuntimeNodes++
-		if problem {
-			context.ProblemNodes++
+		for position := len(ordered) - 1; position > 0 && influenceClassCandidateLess(ordered[position], ordered[position-1]); position-- {
+			ordered[position], ordered[position-1] = ordered[position-1], ordered[position]
 		}
 	}
+	nodes := make([]InfluenceGraphNode, len(ordered))
+	for index := range ordered {
+		nodes[index] = b.classNode(*ordered[index].node, ordered[index].connector)
+	}
+	return nodes, total
+}
+
+func (b *influenceViewBuilder) boundedContexts() influenceContextSelection {
+	byKey := make(map[influenceContextKey]influenceContextCounts)
 	for _, node := range b.nodes {
 		if !node.RuntimeEvidence {
 			continue
 		}
 		problem := isInfluenceProblem(node)
 		for _, value := range node.Screens {
-			add("screen", value, problem)
+			addInfluenceContext(byKey, influenceContextScreen, value, problem)
 		}
 		for _, value := range node.Operations {
-			add("operation", value, problem)
+			addInfluenceContext(byKey, influenceContextOperation, value, problem)
 		}
 		for _, value := range node.Routes {
-			add("route", value, problem)
+			addInfluenceContext(byKey, influenceContextRoute, value, problem)
 		}
 	}
-	contexts := make([]InfluenceGraphContext, 0, len(byKey))
-	for _, context := range byKey {
-		contexts = append(contexts, *context)
+	ordered := make([]influenceContextCandidate, 0, min(len(byKey), workspaceMaxContexts))
+	for key, counts := range byKey {
+		candidate := influenceContextCandidate{key: key, counts: counts}
+		if len(ordered) < workspaceMaxContexts {
+			ordered = append(ordered, candidate)
+		} else if !influenceContextCandidateLess(candidate, ordered[len(ordered)-1]) {
+			continue
+		} else {
+			ordered[len(ordered)-1] = candidate
+		}
+		for position := len(ordered) - 1; position > 0 && influenceContextCandidateLess(ordered[position], ordered[position-1]); position-- {
+			ordered[position], ordered[position-1] = ordered[position-1], ordered[position]
+		}
 	}
-	sort.Slice(contexts, func(i, j int) bool {
-		if contexts[i].ProblemNodes != contexts[j].ProblemNodes {
-			return contexts[i].ProblemNodes > contexts[j].ProblemNodes
+	contexts := make([]InfluenceGraphContext, len(ordered))
+	for index, candidate := range ordered {
+		kind := candidate.key.kind.name()
+		contexts[index] = InfluenceGraphContext{
+			ID:           "context:" + kind + ":" + candidate.key.value,
+			Kind:         kind,
+			Value:        candidate.key.value,
+			RuntimeNodes: candidate.counts.runtimeNodes,
+			ProblemNodes: candidate.counts.problemNodes,
 		}
-		if contexts[i].RuntimeNodes != contexts[j].RuntimeNodes {
-			return contexts[i].RuntimeNodes > contexts[j].RuntimeNodes
-		}
-		if contexts[i].Kind != contexts[j].Kind {
-			return contexts[i].Kind < contexts[j].Kind
-		}
-		return contexts[i].Value < contexts[j].Value
-	})
-	return contexts
+	}
+	return influenceContextSelection{items: contexts, total: len(byKey)}
 }
 
-func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) InfluenceGraphWorkspace {
+func addInfluenceContext(byKey map[influenceContextKey]influenceContextCounts, kind influenceContextKind, value string, problem bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	key := influenceContextKey{value: value, kind: kind}
+	counts := byKey[key]
+	counts.runtimeNodes++
+	if problem {
+		counts.problemNodes++
+	}
+	byKey[key] = counts
+}
+
+func influenceContextCandidateLess(left, right influenceContextCandidate) bool {
+	if left.counts.problemNodes != right.counts.problemNodes {
+		return left.counts.problemNodes > right.counts.problemNodes
+	}
+	if left.counts.runtimeNodes != right.counts.runtimeNodes {
+		return left.counts.runtimeNodes > right.counts.runtimeNodes
+	}
+	if left.key.kind != right.key.kind {
+		return left.key.kind < right.key.kind
+	}
+	return left.key.value < right.key.value
+}
+
+func (kind influenceContextKind) name() string {
+	switch kind {
+	case influenceContextScreen:
+		return "screen"
+	case influenceContextOperation:
+		return "operation"
+	case influenceContextRoute:
+		return "route"
+	default:
+		return "unknown"
+	}
+}
+
+func (b *influenceViewBuilder) workspace(contexts influenceContextSelection) InfluenceGraphWorkspace {
 	nodes := make([]InfluenceGraphNode, 0, min(len(b.nodes), workspaceMaxNodes))
 	selected := map[string]struct{}{}
 	for _, node := range b.nodes {
@@ -547,10 +730,7 @@ func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) Influ
 		}
 		edges = append(edges, graphEdge(edge, false))
 	}
-	shownContexts := contexts
-	if len(shownContexts) > workspaceMaxContexts {
-		shownContexts = shownContexts[:workspaceMaxContexts]
-	}
+	shownContexts := contexts.items
 	reasons := []string{}
 	if len(nodes) < len(b.nodes) {
 		reasons = append(reasons, fmt.Sprintf("область поиска ограничена %d наиболее приоритетными классами", workspaceMaxNodes))
@@ -558,8 +738,8 @@ func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) Influ
 	if len(edges) < len(b.edges) {
 		reasons = append(reasons, fmt.Sprintf("область поиска ограничена %d наиболее значимыми связями", workspaceMaxEdges))
 	}
-	if len(shownContexts) < len(contexts) {
-		reasons = append(reasons, fmt.Sprintf("показаны %d из %d контекстов", len(shownContexts), len(contexts)))
+	if len(shownContexts) < contexts.total {
+		reasons = append(reasons, fmt.Sprintf("показаны %d из %d контекстов", len(shownContexts), contexts.total))
 	}
 	return InfluenceGraphWorkspace{
 		Nodes:           nodes,
@@ -571,7 +751,7 @@ func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) Influ
 		OmittedNodes:    len(b.nodes) - len(nodes),
 		OmittedEdges:    len(b.edges) - len(edges),
 		Contexts:        append([]InfluenceGraphContext(nil), shownContexts...),
-		TotalContexts:   len(contexts),
+		TotalContexts:   contexts.total,
 		ShownContexts:   len(shownContexts),
 		OmissionReasons: reasons,
 	}
@@ -583,25 +763,14 @@ func (b *influenceViewBuilder) workspace(contexts []InfluenceGraphContext) Influ
 func (b *influenceViewBuilder) boundedClassNodes(candidates map[string]bool, limit int) []InfluenceGraphNode {
 	ordered := make([]influenceClassCandidate, 0, len(candidates))
 	for className, connector := range candidates {
-		node := b.nodeByID[className]
-		if node == nil {
+		slot := b.nodeByID[className]
+		if slot == 0 {
 			continue
 		}
-		ordered = append(ordered, influenceClassCandidate{node: node, connector: connector})
+		ordered = append(ordered, influenceClassCandidate{node: &b.nodes[slot-1], connector: connector})
 	}
 	sort.Slice(ordered, func(i, j int) bool {
-		left := ordered[i]
-		right := ordered[j]
-		if left.node.Score != right.node.Score {
-			return left.node.Score > right.node.Score
-		}
-		if left.node.RuntimeEvidence != right.node.RuntimeEvidence {
-			return left.node.RuntimeEvidence
-		}
-		if left.connector != right.connector {
-			return !left.connector
-		}
-		return left.node.ClassName < right.node.ClassName
+		return influenceClassCandidateLess(ordered[i], ordered[j])
 	})
 	if limit > 0 && len(ordered) > limit {
 		ordered = ordered[:limit]
@@ -611,6 +780,27 @@ func (b *influenceViewBuilder) boundedClassNodes(candidates map[string]bool, lim
 		nodes = append(nodes, b.classNode(*candidate.node, candidate.connector))
 	}
 	return nodes
+}
+
+func influenceGraphNodeIDs(nodes []InfluenceGraphNode) map[string]struct{} {
+	selected := make(map[string]struct{}, len(nodes))
+	for index := range nodes {
+		selected[nodes[index].ID] = struct{}{}
+	}
+	return selected
+}
+
+func influenceClassCandidateLess(left, right influenceClassCandidate) bool {
+	if left.node.Score != right.node.Score {
+		return left.node.Score > right.node.Score
+	}
+	if left.node.RuntimeEvidence != right.node.RuntimeEvidence {
+		return left.node.RuntimeEvidence
+	}
+	if left.connector != right.connector {
+		return !left.connector
+	}
+	return left.node.ClassName < right.node.ClassName
 }
 
 func (b *influenceViewBuilder) classNode(node InfluenceNode, connector bool) InfluenceGraphNode {
@@ -682,23 +872,28 @@ func (b *influenceViewBuilder) confirmedRuntimePath(target string) []string {
 	seen := map[string]struct{}{target: {}}
 	current := target
 	for len(path) < 5 {
-		incoming := make([]InfluenceEdge, 0)
-		for _, edge := range b.incoming[current] {
+		incomingEdges := b.incoming.edgesForSlot(b.nodeByID[current])
+		incoming := make([]uint32, 0, len(incomingEdges))
+		for _, edgeIndex := range incomingEdges {
+			edge := b.edges[edgeIndex]
 			if edge.RuntimeCount > 0 {
-				incoming = append(incoming, edge)
+				incoming = append(incoming, edgeIndex)
 			}
 		}
 		if len(incoming) == 0 {
 			break
 		}
 		sort.Slice(incoming, func(i, j int) bool {
-			if incoming[i].RuntimeCount != incoming[j].RuntimeCount {
-				return incoming[i].RuntimeCount > incoming[j].RuntimeCount
+			left := b.edges[incoming[i]]
+			right := b.edges[incoming[j]]
+			if left.RuntimeCount != right.RuntimeCount {
+				return left.RuntimeCount > right.RuntimeCount
 			}
-			return incoming[i].From < incoming[j].From
+			return left.From < right.From
 		})
 		next := ""
-		for _, edge := range incoming {
+		for _, edgeIndex := range incoming {
+			edge := b.edges[edgeIndex]
 			if _, duplicate := seen[edge.From]; !duplicate {
 				next = edge.From
 				break
@@ -727,30 +922,6 @@ func (b *influenceViewBuilder) defaultNode() string {
 		return b.nodes[0].ClassName
 	}
 	return ""
-}
-
-func boundedInfluenceView(
-	id string,
-	mode string,
-	title string,
-	explanation string,
-	filters InfluenceGraphFilters,
-	nodes []InfluenceGraphNode,
-	edges []InfluenceGraphEdge,
-	limits InfluenceGraphLimits,
-) InfluenceGraphView {
-	return boundedInfluenceViewWithTotals(
-		id,
-		mode,
-		title,
-		explanation,
-		filters,
-		nodes,
-		edges,
-		len(nodes),
-		len(edges),
-		limits,
-	)
 }
 
 func boundedInfluenceViewWithTotals(
@@ -869,17 +1040,21 @@ func influenceNodeLess(left InfluenceNode, right InfluenceNode) bool {
 
 func sortInfluenceEdges(edges []InfluenceEdge) {
 	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Influence != edges[j].Influence {
-			return edges[i].Influence > edges[j].Influence
-		}
-		if edges[i].RuntimeCount != edges[j].RuntimeCount {
-			return edges[i].RuntimeCount > edges[j].RuntimeCount
-		}
-		if edges[i].From != edges[j].From {
-			return edges[i].From < edges[j].From
-		}
-		return edges[i].To < edges[j].To
+		return influenceEdgeLess(edges[i], edges[j])
 	})
+}
+
+func influenceEdgeLess(left, right InfluenceEdge) bool {
+	if left.Influence != right.Influence {
+		return left.Influence > right.Influence
+	}
+	if left.RuntimeCount != right.RuntimeCount {
+		return left.RuntimeCount > right.RuntimeCount
+	}
+	if left.From != right.From {
+		return left.From < right.From
+	}
+	return left.To < right.To
 }
 
 func sortGraphEdges(edges []InfluenceGraphEdge) {
@@ -898,15 +1073,25 @@ func sortGraphEdges(edges []InfluenceGraphEdge) {
 }
 
 func influencePackage(className string, depth int) string {
-	parts := strings.Split(strings.TrimSpace(className), ".")
-	if len(parts) <= 1 {
+	className = strings.TrimSpace(className)
+	packageEnd := strings.LastIndexByte(className, '.')
+	if packageEnd < 0 {
 		return "без пакета"
 	}
-	packageParts := parts[:len(parts)-1]
-	if depth > 0 && len(packageParts) > depth {
-		packageParts = packageParts[:depth]
+	if depth > 0 {
+		separators := 0
+		for index := 0; index < packageEnd; index++ {
+			if className[index] != '.' {
+				continue
+			}
+			separators++
+			if separators == depth {
+				packageEnd = index
+				break
+			}
+		}
 	}
-	return strings.Join(packageParts, ".")
+	return className[:packageEnd]
 }
 
 func influenceBreadcrumbs(className string) []string {

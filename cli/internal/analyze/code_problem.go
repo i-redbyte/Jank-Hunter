@@ -3,7 +3,8 @@ package analyze
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -64,8 +65,13 @@ type codeProblemContextAccumulator struct {
 	value   uint64
 }
 
+type codeProblemKey struct {
+	className string
+	method    string
+}
+
 func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
-	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
 	builder.addProblemWindows(summary.ProblemWindows)
 	builder.addMemoryLeaks(summary.MemoryLeaks)
 	builder.addLogSpam(summary.LogSpam)
@@ -74,7 +80,7 @@ func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
 }
 
 type codeProblemBuilder struct {
-	items map[string]*codeProblemAccumulator
+	items map[codeProblemKey]*codeProblemAccumulator
 }
 
 func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
@@ -232,16 +238,19 @@ func (b *codeProblemBuilder) finish() []CodeProblemStats {
 		}
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool {
-		leftScore := roundedCodeProblemScore(items[i].score)
-		rightScore := roundedCodeProblemScore(items[j].score)
+	slices.SortFunc(items, func(left, right *codeProblemAccumulator) int {
+		leftScore := roundedCodeProblemScore(left.score)
+		rightScore := roundedCodeProblemScore(right.score)
 		if leftScore == rightScore {
-			if items[i].className == items[j].className {
-				return items[i].method < items[j].method
+			if left.className == right.className {
+				return strings.Compare(left.method, right.method)
 			}
-			return items[i].className < items[j].className
+			return strings.Compare(left.className, right.className)
 		}
-		return leftScore > rightScore
+		if leftScore > rightScore {
+			return -1
+		}
+		return 1
 	})
 	out := make([]CodeProblemStats, 0, len(items))
 	for _, item := range items {
@@ -251,7 +260,7 @@ func (b *codeProblemBuilder) finish() []CodeProblemStats {
 }
 
 func (b *codeProblemBuilder) item(className, method, owner string) *codeProblemAccumulator {
-	key := className + "\x00" + method
+	key := codeProblemKey{className: className, method: method}
 	item := b.items[key]
 	if item != nil {
 		if item.owner == "" {
@@ -350,19 +359,22 @@ func (a *codeProblemAccumulator) addCategory(category string) {
 }
 
 func (a *codeProblemAccumulator) toStats() CodeProblemStats {
-	signals := append([]CodeProblemSignal(nil), a.signals...)
+	signals := a.signals
 	for index := range signals {
 		signals[index].Score = math.Round(signals[index].Score*10) / 10
 	}
-	sort.Slice(signals, func(i, j int) bool {
-		if signals[i].Score == signals[j].Score {
-			return signals[i].Name < signals[j].Name
+	slices.SortFunc(signals, func(left, right CodeProblemSignal) int {
+		if left.Score == right.Score {
+			return strings.Compare(left.Name, right.Name)
 		}
-		return signals[i].Score > signals[j].Score
+		if left.Score > right.Score {
+			return -1
+		}
+		return 1
 	})
 	score := roundedCodeProblemScore(a.score)
-	categories := sortedCodeProblemValues(a.categories)
-	problems := sortedCodeProblemValues(a.problemNames)
+	categories := sortCodeProblemValues(a.categories)
+	problems := sortCodeProblemValues(a.problemNames)
 	recommendation := codeProblemRecommendation(categories)
 	drillDown, screens, operations, routes := codeProblemDrillDown(a, recommendation)
 	return CodeProblemStats{
@@ -395,17 +407,17 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 	[]string,
 	[]string,
 ) {
-	contexts := append([]codeProblemContextAccumulator(nil), a.contexts...)
-	sort.Slice(contexts, func(i, j int) bool {
-		left := contexts[i].context
-		right := contexts[j].context
+	contexts := a.contexts
+	slices.SortFunc(contexts, func(leftAccumulator, rightAccumulator codeProblemContextAccumulator) int {
+		left := leftAccumulator.context
+		right := rightAccumulator.context
 		if left.screen != right.screen {
-			return left.screen < right.screen
+			return strings.Compare(left.screen, right.screen)
 		}
 		if left.operation != right.operation {
-			return left.operation < right.operation
+			return strings.Compare(left.operation, right.operation)
 		}
-		return left.route < right.route
+		return strings.Compare(left.route, right.route)
 	})
 	out := make([]CodeProblemDrillDown, 0, len(contexts))
 	var screens []string
@@ -414,6 +426,7 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 	for index := range contexts {
 		observation := &contexts[index]
 		context := observation.context
+		signals := sortCodeProblemValues(observation.signals)
 		screens = appendUniqueCodeProblemValue(screens, context.screen)
 		operations = appendUniqueCodeProblemValue(operations, context.operation)
 		routes = appendUniqueCodeProblemValue(routes, context.route)
@@ -423,14 +436,14 @@ func codeProblemDrillDown(a *codeProblemAccumulator, recommendation string) (
 			Screen:         context.screen,
 			Operation:      context.operation,
 			Route:          context.route,
-			Evidence:       codeProblemContextEvidence(observation),
+			Evidence:       codeProblemContextEvidence(observation, signals),
 			Recommendation: recommendation,
-			Signals:        sortedCodeProblemValues(observation.signals),
+			Signals:        signals,
 		})
 	}
-	sort.Strings(screens)
-	sort.Strings(operations)
-	sort.Strings(routes)
+	slices.Sort(screens)
+	slices.Sort(operations)
+	slices.Sort(routes)
 	return out, screens, operations, routes
 }
 
@@ -446,30 +459,46 @@ func appendUniqueCodeProblemValue(values []string, value string) []string {
 	return append(values, value)
 }
 
-func sortedCodeProblemValues(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
+func sortCodeProblemValues(values []string) []string {
+	slices.Sort(values)
+	return values
 }
 
-func codeProblemContextEvidence(observation *codeProblemContextAccumulator) string {
+func codeProblemContextEvidence(observation *codeProblemContextAccumulator, signals []string) string {
 	if observation == nil {
 		return "Контекст зафиксирован без агрегированных метрик."
 	}
-	parts := []string{"Сигналы: " + strings.Join(sortedCodeProblemValues(observation.signals), ", ")}
+	var builder strings.Builder
+	builder.Grow(96 + len(signals)*16)
+	builder.WriteString("Сигналы: ")
+	for index, signal := range signals {
+		if index > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(signal)
+	}
 	if observation.count > 0 {
-		parts = append(parts, fmt.Sprintf("наблюдений=%d", observation.count))
+		appendCodeProblemEvidenceMetric(&builder, "наблюдений=", observation.count, "")
 	}
 	if observation.totalMS > 0 {
-		parts = append(parts, fmt.Sprintf("суммарно=%d мс", observation.totalMS))
+		appendCodeProblemEvidenceMetric(&builder, "суммарно=", observation.totalMS, " мс")
 	}
 	if observation.maxMS > 0 {
-		parts = append(parts, fmt.Sprintf("максимум=%d мс", observation.maxMS))
+		appendCodeProblemEvidenceMetric(&builder, "максимум=", observation.maxMS, " мс")
 	}
 	if observation.value > 0 {
-		parts = append(parts, fmt.Sprintf("значение=%d", observation.value))
+		appendCodeProblemEvidenceMetric(&builder, "значение=", observation.value, "")
 	}
-	return strings.Join(parts, "; ") + "."
+	builder.WriteByte('.')
+	return builder.String()
+}
+
+func appendCodeProblemEvidenceMetric(builder *strings.Builder, label string, value uint64, suffix string) {
+	var digits [20]byte
+	builder.WriteString("; ")
+	builder.WriteString(label)
+	builder.Write(strconv.AppendUint(digits[:0], value, 10))
+	builder.WriteString(suffix)
 }
 
 func codeLocationFromOwner(owner string) (string, string) {
@@ -539,128 +568,68 @@ func codeProblemSeverity(score float64, signals []CodeProblemSignal) string {
 	}
 }
 
-func codeProblemImpact(categories []string, runtimeEvidence bool) string {
-	if runtimeEvidence && len(categories) == 1 && categories[0] == codeCategoryRuntime {
-		return codeProblemRuntimeImpact
-	}
-	parts := make([]string, 0, len(categories)+1)
-	for _, category := range categories {
-		switch category {
-		case codeCategoryNetwork:
-			parts = append(parts, "увеличивает задержки сценария и может создавать сетевые циклы")
-		case codeCategoryUI:
-			parts = append(parts, "ухудшает плавность интерфейса и отклик на действия")
-		case codeCategoryMainThread:
-			parts = append(parts, "блокирует главный поток, повышая риск АНР и пропуска кадров")
-		case codeCategoryMemory:
-			parts = append(parts, "повышает давление памяти, частоту GC и риск удержаний")
-		case codeCategoryLogs:
-			parts = append(parts, "создает шум логами и лишнюю работу в горячем сценарии")
-		case codeCategoryRuntime:
-			parts = append(parts, "утяжеляет цепочку выполнения в измеренном сценарии")
-		case codeCategoryInfluence:
-			parts = append(parts, "попал в граф влияния рядом с симптомами; это подсказка для расследования, а не самостоятельное доказательство бага")
-		case codeCategoryANR:
-			parts = append(parts, "создает риск ANR из-за долгой работы или цепочки на главном потоке")
-		case codeCategoryOOM:
-			parts = append(parts, "повышает риск OOM из-за роста памяти или удержаний")
-		case codeCategoryGCPressure:
-			parts = append(parts, "создает давление GC и может давать периодические паузы")
-		case codeCategoryDuplicate:
-			parts = append(parts, "может дублировать сетевые запросы или повторять один маршрут без дедупликации")
-		case codeCategoryLifecycle:
-			parts = append(parts, "похож на утечку жизненного цикла: объект живет дольше экрана или сценария")
-		case codeCategoryLogSpam:
-			parts = append(parts, "создает спам логами в горячем пути")
-		case codeCategoryMainIO:
-			parts = append(parts, "указывает на риск IO на главном потоке")
-		}
-	}
-	if !runtimeEvidence {
-		parts = append(parts, "пока нет подтверждения выполнением в этом прогоне")
-	}
-	if len(parts) == 0 {
-		return "Нужна ручная проверка: сигнал есть, но влияние пока слабое."
-	}
-	return strings.Join(parts, "; ") + "."
-}
-
-func codeProblemRecommendation(categories []string) string {
-	if len(categories) == 1 && categories[0] == codeCategoryRuntime {
-		return codeProblemRuntimeRecommendation
-	}
-	recommendations := []string{}
-	for _, category := range categories {
-		switch category {
-		case codeCategoryNetwork:
-			recommendations = append(recommendations, "проверьте дедупликацию запросов, кеширование, таймауты и повторные фоновые циклы")
-		case codeCategoryUI:
-			recommendations = append(recommendations, "проверьте отрисовку, привязку данных, сложную компоновку и работу при прокрутке")
-		case codeCategoryMainThread:
-			recommendations = append(recommendations, "перенесите тяжёлую работу с главного потока и проверьте цепочку диспетчеризации, обработки нажатий и слушателей")
-		case codeCategoryMemory:
-			recommendations = append(recommendations, "проверьте владельцев ссылок, жизненный цикл, кеши и рост PSS рядом с GC")
-		case codeCategoryLogs:
-			recommendations = append(recommendations, "уменьшите частоту логирования или вынесите шумные отладочные логи из часто выполняемого пути")
-		case codeCategoryRuntime:
-			recommendations = append(recommendations, "проверьте цепочку вызовов и стоимость вызываемого метода")
-		case codeCategoryInfluence:
-			recommendations = append(recommendations, "откройте граф влияния и проверьте соседние узлы с подтверждёнными вызовами; приоритет выше, если рядом есть паузы, сеть, память или вызовы при выполнении")
-		case codeCategoryANR:
-			recommendations = append(recommendations, "разбейте долгую работу, проверьте StrictMode и трассу выполнения и уберите блокировки с главного потока")
-		case codeCategoryOOM:
-			recommendations = append(recommendations, "проверьте рост кучи и PSS, лимиты кэшей, создание изображений и буферов и жизненный цикл владельцев")
-		case codeCategoryGCPressure:
-			recommendations = append(recommendations, "уменьшите текучесть аллокаций в горячем пути и проверьте повторные сборки/создание временных объектов")
-		case codeCategoryDuplicate:
-			recommendations = append(recommendations, "добавьте дедупликацию запросов в работе, кеширование ответа или задержку повторного запуска сценария")
-		case codeCategoryLifecycle:
-			recommendations = append(recommendations, "проверьте очистку слушателей, обратных вызовов и привязок представления, а также отмену корутинных задач и задач исполнителя на границе жизненного цикла")
-		case codeCategoryLogSpam:
-			recommendations = append(recommendations, "ограничьте частоту логов, уберите отладочные логи из часто выполняемого пути или агрегируйте события")
-		case codeCategoryMainIO:
-			recommendations = append(recommendations, "вынесите дисковый и сетевой ввод-вывод с главного потока и проверьте нарушения StrictMode")
-		}
-	}
-	if len(recommendations) == 0 {
-		return "Проверьте источник вручную и сопоставьте его с временной шкалой."
-	}
-	return strings.Join(uniqueStrings(recommendations), "; ") + "."
-}
-
 func codeProblemEvidence(a *codeProblemAccumulator) string {
-	parts := []string{}
-	if a.problems > 0 {
-		parts = append(parts, fmt.Sprintf("проблем=%d", a.problems))
+	metrics := [...]codeProblemEvidenceMetric{
+		{label: "проблем=", value: a.problems},
+		{label: "главный поток=", value: a.mainThreadMS, suffix: " мс"},
+		{label: "сеть=", value: a.networkMS, suffix: " мс"},
+		{label: "медленных кадров=", value: a.uiJank},
+		{label: "логов=", value: a.logSpam},
+		{label: "удержано=", value: a.retained},
+		{label: "память=", value: a.memoryKB, suffix: " КБ"},
+		{label: "вызовов=", value: a.runtimeCalls},
+		{label: "макс=", value: a.maxMS, suffix: " мс"},
 	}
-	if a.mainThreadMS > 0 {
-		parts = append(parts, fmt.Sprintf("главный поток=%d мс", a.mainThreadMS))
+	const prefix = "Сводка сигналов: "
+	length := len(prefix) + 1
+	count := 0
+	for _, metric := range metrics {
+		if metric.value == 0 {
+			continue
+		}
+		if count > 0 {
+			length += 2
+		}
+		length += len(metric.label) + decimalUint64Length(metric.value) + len(metric.suffix)
+		count++
 	}
-	if a.networkMS > 0 {
-		parts = append(parts, fmt.Sprintf("сеть=%d мс", a.networkMS))
-	}
-	if a.uiJank > 0 {
-		parts = append(parts, fmt.Sprintf("медленных кадров=%d", a.uiJank))
-	}
-	if a.logSpam > 0 {
-		parts = append(parts, fmt.Sprintf("логов=%d", a.logSpam))
-	}
-	if a.retained > 0 {
-		parts = append(parts, fmt.Sprintf("удержано=%d", a.retained))
-	}
-	if a.memoryKB > 0 {
-		parts = append(parts, fmt.Sprintf("память=%d КБ", a.memoryKB))
-	}
-	if a.runtimeCalls > 0 {
-		parts = append(parts, fmt.Sprintf("вызовов=%d", a.runtimeCalls))
-	}
-	if a.maxMS > 0 {
-		parts = append(parts, fmt.Sprintf("макс=%d мс", a.maxMS))
-	}
-	if len(parts) == 0 {
+	if count == 0 {
 		return "Доказательства выполнения ограничены: отчет видит только слабую связь с графом или статический след."
 	}
-	return "Сводка сигналов: " + strings.Join(parts, ", ") + "."
+	var builder strings.Builder
+	builder.Grow(length)
+	builder.WriteString(prefix)
+	var digits [20]byte
+	written := 0
+	for _, metric := range metrics {
+		if metric.value == 0 {
+			continue
+		}
+		if written > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(metric.label)
+		builder.Write(strconv.AppendUint(digits[:0], metric.value, 10))
+		builder.WriteString(metric.suffix)
+		written++
+	}
+	builder.WriteByte('.')
+	return builder.String()
+}
+
+type codeProblemEvidenceMetric struct {
+	label  string
+	suffix string
+	value  uint64
+}
+
+func decimalUint64Length(value uint64) int {
+	length := 1
+	for value >= 10 {
+		value /= 10
+		length++
+	}
+	return length
 }
 
 func problemKindForCodeProblem(kind string) string {

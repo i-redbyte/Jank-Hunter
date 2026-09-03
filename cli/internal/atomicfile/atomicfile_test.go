@@ -78,23 +78,6 @@ func TestWriteFailureKeepsDestinationAndRemovesTemporaryFile(t *testing.T) {
 	assertNoTemporaryOutputs(t, directory)
 }
 
-func TestWriteFileUsesRequestedModeForNewOutput(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "scorecard.json")
-
-	if err := WriteFile(path, []byte("{}\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o640 {
-		t.Fatalf("mode = %o, want 640", got)
-	}
-	assertNoTemporaryOutputs(t, directory)
-}
-
 func assertNoTemporaryOutputs(t *testing.T, directory string) {
 	t.Helper()
 	entries, err := os.ReadDir(directory)

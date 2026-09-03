@@ -1,6 +1,5 @@
 package io.jankhunter.runtime
 
-import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch

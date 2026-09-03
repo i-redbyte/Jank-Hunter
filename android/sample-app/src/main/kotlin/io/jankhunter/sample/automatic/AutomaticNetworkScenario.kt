@@ -4,7 +4,6 @@ import io.jankhunter.runtime.JankHunterTelemetry
 
 import io.jankhunter.sample.LocalScenarioServer
 import io.jankhunter.sample.graph.NetworkScenarioUseCase
-import io.jankhunter.runtime.JankHunter
 import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit

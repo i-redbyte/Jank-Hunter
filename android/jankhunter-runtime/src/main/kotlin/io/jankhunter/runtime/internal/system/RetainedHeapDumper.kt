@@ -51,7 +51,12 @@ internal class RetainedHeapDumper(
         }
         return try {
             val fileName = "retained-${wallClock.getAsLong()}-${safeName(className)}-${nextCount}.hprof"
-            val file = dumpToFile(fileName)
+            val storage = binaryStorage
+            val file = dumpToFile(fileName, storage)
+            if (!enforceRetention(storage, file)) {
+                deleteDump(storage, file)
+                throw RetentionCleanupException()
+            }
             Result.Dumped(file, safeName(className), safeName(holder), ageMs, count)
         } catch (error: Throwable) {
             dumpCount.decrementAndGet()
@@ -60,13 +65,17 @@ internal class RetainedHeapDumper(
         }
     }
 
-    private fun dumpToFile(fileName: String): File {
-        val storage = binaryStorage
+    private fun dumpToFile(fileName: String, storage: JankHunterBinaryStorage?): File {
         if (storage == null) {
             directory.mkdirs()
             val file = File(directory, fileName)
-            dumpHprof(file.absolutePath)
-            return file
+            return try {
+                dumpHprof(file.absolutePath)
+                file
+            } catch (error: Throwable) {
+                file.delete()
+                throw error
+            }
         }
 
         val artifact = storage.createArtifact(fileName)
@@ -81,6 +90,44 @@ internal class RetainedHeapDumper(
             if (!committed) {
                 runCatching { artifact.abort() }
             }
+        }
+    }
+
+    private fun enforceRetention(storage: JankHunterBinaryStorage?, newest: File): Boolean {
+        val paths = try {
+            if (storage == null) {
+                directory.listFiles { file -> file.isFile }.orEmpty().map(File::getAbsolutePath)
+            } else {
+                storage.listFiles()
+            }
+        } catch (_: Throwable) {
+            return false
+        }
+        val dumps = ArrayList<ManagedHeapDump>(paths.size)
+        for (path in paths) {
+            managedHeapDump(path)
+                ?.takeUnless { dump -> dump.name == newest.name }
+                ?.let(dumps::add)
+        }
+        val retainedPreviousCount = maxCount - 1
+        if (dumps.size <= retainedPreviousCount) return true
+        dumps.sortWith(MANAGED_DUMP_NEWEST_FIRST)
+        for (index in retainedPreviousCount until dumps.size) {
+            if (!deleteDump(storage, File(dumps[index].path))) return false
+        }
+        return true
+    }
+
+    private fun deleteDump(storage: JankHunterBinaryStorage?, file: File): Boolean {
+        return try {
+            if (storage == null) {
+                !file.exists() || file.delete()
+            } else {
+                storage.delete(file.name)
+                storage.listFiles().none { path -> File(path).name == file.name }
+            }
+        } catch (_: Throwable) {
+            false
         }
     }
 
@@ -103,6 +150,12 @@ internal class RetainedHeapDumper(
     }
 
     companion object {
+        private const val MANAGED_DUMP_PREFIX = "retained-"
+        private const val MANAGED_DUMP_SUFFIX = ".hprof"
+        private val MANAGED_DUMP_NEWEST_FIRST = compareByDescending<ManagedHeapDump> { dump -> dump.timestamp }
+            .thenByDescending { dump -> dump.sequence }
+            .thenByDescending { dump -> dump.name }
+
         internal fun safeName(value: String?): String {
             val normalized = value
                 ?.trim()
@@ -119,5 +172,45 @@ internal class RetainedHeapDumper(
             }
             return out.toString().take(96).ifEmpty { "unknown" }
         }
+
+        private fun managedHeapDump(path: String): ManagedHeapDump? {
+            val name = File(path).name
+            if (!name.startsWith(MANAGED_DUMP_PREFIX) || !name.endsWith(MANAGED_DUMP_SUFFIX)) return null
+            val contentEnd = name.length - MANAGED_DUMP_SUFFIX.length
+            val timestampEnd = name.indexOf('-', MANAGED_DUMP_PREFIX.length)
+            val sequenceStart = name.lastIndexOf('-', contentEnd - 1) + 1
+            if (timestampEnd <= MANAGED_DUMP_PREFIX.length || sequenceStart <= timestampEnd + 1 || sequenceStart >= contentEnd) {
+                return null
+            }
+            val timestamp = asciiLong(name, MANAGED_DUMP_PREFIX.length, timestampEnd) ?: return null
+            val sequence = asciiLong(name, sequenceStart, contentEnd) ?: return null
+            val safeNameStart = timestampEnd + 1
+            val safeNameEnd = sequenceStart - 1
+            if (safeNameEnd - safeNameStart !in 1..96) return null
+            for (index in safeNameStart until safeNameEnd) {
+                val char = name[index]
+                if (!char.isLetterOrDigit() && char != '.' && char != '_' && char != '-') return null
+            }
+            return ManagedHeapDump(path, name, timestamp, sequence)
+        }
+
+        private fun asciiLong(value: String, start: Int, end: Int): Long? {
+            var result = 0L
+            for (index in start until end) {
+                val digit = value[index].code - '0'.code
+                if (digit !in 0..9 || result > (Long.MAX_VALUE - digit) / 10L) return null
+                result = result * 10L + digit
+            }
+            return result
+        }
     }
+
+    private data class ManagedHeapDump(
+        val path: String,
+        val name: String,
+        val timestamp: Long,
+        val sequence: Long,
+    )
+
+    private class RetentionCleanupException : IllegalStateException("managed HPROF retention cleanup failed")
 }

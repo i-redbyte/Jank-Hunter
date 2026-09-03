@@ -301,7 +301,7 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var sessionLogSizeLimitEnabled = true
         internal var maxSessionLogSizeMiB = 50
         internal var logGrowthAnalyticsEnabled = true
-        internal var deleteObsoleteJhlogFormats = false
+        internal var deleteObsoleteJhlogFormats = true
         internal var maxDictionaryEntries = 8192
         internal var maxDictionaryValueBytes = DictionaryIds.DEFAULT_MAX_VALUE_BYTES
         internal var flushIntervalMs = 5_000L

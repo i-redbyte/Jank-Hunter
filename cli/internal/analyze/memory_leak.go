@@ -15,7 +15,7 @@ const (
 )
 
 func buildMemoryLeakSuspects(
-	items map[string]*memoryLeakStats,
+	items map[memoryLeakKey]*memoryLeakStats,
 	lowMemoryCount int,
 	maxPSSKB uint64,
 	heap *HeapEvidence,
@@ -874,7 +874,7 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 	bestScore := -1
 	for i := range heap.Leaks {
 		leak := heap.Leaks[i]
-		if leak.ClassName != item.className {
+		if leak.ClassName != item.className || !heapHolderMatchesRuntime(item, leak) {
 			continue
 		}
 		score := 0
@@ -898,6 +898,63 @@ func bestHeapEvidence(item memoryLeakStats, heap *HeapEvidence) *HeapLeakEvidenc
 		return nil
 	}
 	return &heap.Leaks[bestIndex]
+}
+
+func heapHolderMatchesRuntime(item memoryLeakStats, leak HeapLeakEvidence) bool {
+	holder := strings.TrimSpace(item.holder)
+	if holder == "" || holder == "unknown" || holder == "не определен" || strings.HasPrefix(holder, "lifecycle.") {
+		return true
+	}
+	runtimeHolders := [2]string{normalizeHeapHolderClass(holder), ""}
+	if className, member := splitHolderReference(holder); member != "" {
+		runtimeHolders[1] = normalizeHeapHolderClass(className)
+	}
+	for _, candidate := range runtimeHolders {
+		if candidate == "" {
+			continue
+		}
+		if heapHolderIdentityEqual(candidate, normalizeHeapHolderClass(leak.Holder)) ||
+			heapHolderIdentityEqual(candidate, normalizeHeapHolderFieldOwner(leak.HolderField)) {
+			return true
+		}
+		for _, step := range leak.ReferencePath {
+			if heapHolderIdentityEqual(
+				candidate,
+				normalizeHeapHolderClass(strings.TrimPrefix(step.ClassName, "GC root: ")),
+			) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func heapHolderIdentityEqual(runtime, heap string) bool {
+	if runtime == "" || heap == "" {
+		return false
+	}
+	if runtime == heap {
+		return true
+	}
+	if strings.IndexByte(runtime, '.') >= 0 {
+		return false
+	}
+	if dot := strings.LastIndexByte(heap, '.'); dot >= 0 {
+		heap = heap[dot+1:]
+	}
+	return runtime == heap
+}
+
+func normalizeHeapHolderClass(value string) string {
+	return strings.ToLower(normalizeClassName(strings.TrimPrefix(strings.TrimSpace(value), "owner.")))
+}
+
+func normalizeHeapHolderFieldOwner(value string) string {
+	value = strings.TrimSpace(value)
+	if dot := strings.LastIndexByte(value, '.'); dot > 0 {
+		value = value[:dot]
+	}
+	return normalizeHeapHolderClass(value)
 }
 
 func heapDominatorPath(heap HeapLeakEvidence, className string) []string {

@@ -437,7 +437,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
 	assertCurrentReportStyle(t, diagnosticsPath)
-	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
+	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "invalid class metadata", "Иерархия broken.Parent разрешена частично", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
 
 	dependencyInjectionPath := filepath.Join(dir, "inspect-di.html")
 	if err := WriteDependencyInjectionWithOptions(
@@ -1715,90 +1715,6 @@ func TestInspectMathHeuristicExplainsMissingOwnerInsteadOfShowingUnknown(t *test
 	}
 }
 
-func TestMathReportPath(t *testing.T) {
-	tests := map[string]string{
-		"report.html":               "report-math.html",
-		"report-math.html":          "report-math.html",
-		"/tmp/report.html":          "/tmp/report-math.html",
-		"/tmp/report":               "/tmp/report-math.html",
-		"/tmp/report.with.dots.htm": "/tmp/report.with.dots-math.htm",
-	}
-	for input, want := range tests {
-		if got := MathReportPath(input); got != want {
-			t.Fatalf("MathReportPath(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestInfluenceReportPath(t *testing.T) {
-	tests := map[string]string{
-		"report.html":                    "report-influence.html",
-		"/tmp/report.html":               "/tmp/report-influence.html",
-		"/tmp/report-math.html":          "/tmp/report-influence.html",
-		"/tmp/report.with.dots.html":     "/tmp/report.with.dots-influence.html",
-		"/tmp/report.with.dots-math.htm": "/tmp/report.with.dots-influence.htm",
-		"/tmp/report.with.dots":          "/tmp/report.with-influence.dots",
-		"/tmp/report-math":               "/tmp/report-influence.html",
-	}
-	for input, want := range tests {
-		if got := InfluenceReportPath(input); got != want {
-			t.Fatalf("InfluenceReportPath(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestLeakReportPath(t *testing.T) {
-	tests := map[string]string{
-		"report.html":                         "report-leaks.html",
-		"/tmp/report.html":                    "/tmp/report-leaks.html",
-		"/tmp/report-math.html":               "/tmp/report-leaks.html",
-		"/tmp/report-influence.html":          "/tmp/report-leaks.html",
-		"/tmp/report-diagnostics.html":        "/tmp/report-leaks.html",
-		"/tmp/report.with.dots.html":          "/tmp/report.with.dots-leaks.html",
-		"/tmp/report.with.dots-influence.htm": "/tmp/report.with.dots-leaks.htm",
-		"/tmp/report-math":                    "/tmp/report-leaks.html",
-	}
-	for input, want := range tests {
-		if got := LeakReportPath(input); got != want {
-			t.Fatalf("LeakReportPath(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestDiagnosticsReportPath(t *testing.T) {
-	tests := map[string]string{
-		"report.html":                         "report-diagnostics.html",
-		"/tmp/report.html":                    "/tmp/report-diagnostics.html",
-		"/tmp/report-math.html":               "/tmp/report-diagnostics.html",
-		"/tmp/report-influence.html":          "/tmp/report-diagnostics.html",
-		"/tmp/report.with.dots.html":          "/tmp/report.with.dots-diagnostics.html",
-		"/tmp/report.with.dots-influence.htm": "/tmp/report.with.dots-diagnostics.htm",
-		"/tmp/report-math":                    "/tmp/report-diagnostics.html",
-	}
-	for input, want := range tests {
-		if got := DiagnosticsReportPath(input); got != want {
-			t.Fatalf("DiagnosticsReportPath(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestDependencyInjectionReportPath(t *testing.T) {
-	tests := map[string]string{
-		"report.html":                         "report-di.html",
-		"/tmp/report.html":                    "/tmp/report-di.html",
-		"/tmp/report-math.html":               "/tmp/report-di.html",
-		"/tmp/report-influence.html":          "/tmp/report-di.html",
-		"/tmp/report-diagnostics.html":        "/tmp/report-di.html",
-		"/tmp/report-leaks.html":              "/tmp/report-di.html",
-		"/tmp/report.with.dots-influence.htm": "/tmp/report.with.dots-di.htm",
-	}
-	for input, want := range tests {
-		if got := DependencyInjectionReportPath(input); got != want {
-			t.Fatalf("DependencyInjectionReportPath(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 func TestPathsForKeepsPrimarySuffixOpaque(t *testing.T) {
 	paths := PathsFor("/tmp/report-math.html")
 	if paths.Main != "/tmp/report-math.html" ||
@@ -1924,6 +1840,7 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		},
 		Decisions: []analyze.InstrumentationDecisionSummary{
 			{Kind: "unsupported", Module: "okhttp", Family: "okhttp", Reason: "unsupported_signature", Method: "client()V", Count: 2},
+			{Kind: "warning", Module: "class_hierarchy", Family: "metadata", Reason: "metadata_load_failed", Method: "broken.Parent", Detail: "java.lang.IllegalStateException: invalid class metadata", Count: 1},
 		},
 		Annotations: []analyze.InstrumentationAnnotationSummary{
 			{Owner: "FeedOwner", Screen: "Feed", Operation: "feed.open", OperationKind: "navigation", OperationBudgetMS: 800, Count: 1},
@@ -1941,6 +1858,9 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 					{Owner: "FeedOwner", Screen: "Feed", Operation: "feed.open", OperationKind: "navigation", OperationBudgetMS: 800, Count: 1},
 				},
 			},
+		},
+		Warnings: []string{
+			"Иерархия broken.Parent разрешена частично: AGP не смог прочитать метаданные класса.",
 		},
 	}
 }

@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+var (
+	codeProblemEvidenceAllocationSink       string
+	codeProblemImpactAllocationSink         string
+	codeProblemRecommendationAllocationSink string
+)
+
 func TestCodeProblemRegistryAddsRiskCategoriesAndDrillDown(t *testing.T) {
 	summary := Summary{
 		Routes: []RouteStats{{
@@ -148,7 +154,7 @@ func TestCodeProblemFinishMatchesMaterializeAllSelection(t *testing.T) {
 }
 
 func TestCodeProblemDrillDownKeepsOnlyObservedContextTuples(t *testing.T) {
-	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
 	item := builder.item("com.app.FeedPresenter", "render", "com.app.FeedPresenter.render")
 	for index := range 15 {
 		item.addContextSignal(
@@ -204,7 +210,7 @@ func TestCodeProblemSeverityMatchesDisplayedScoreBands(t *testing.T) {
 }
 
 func codeProblemSelectionFixture() codeProblemBuilder {
-	builder := codeProblemBuilder{items: map[string]*codeProblemAccumulator{}}
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
 	for index := range 260 {
 		className := fmt.Sprintf("com.app.problem.Class%03d", index)
 		method := fmt.Sprintf("method%02d", index%17)
@@ -247,4 +253,118 @@ func finishCodeProblemsMaterializeAllForTest(builder *codeProblemBuilder) []Code
 		return out[i].Score > out[j].Score
 	})
 	return out
+}
+
+func TestCodeProblemLookupDoesNotAllocate(t *testing.T) {
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
+	builder.item("com.app.FeedPresenter", "render", "com.app.FeedPresenter.render")
+
+	allocations := testing.AllocsPerRun(1_000, func() {
+		builder.item("com.app.FeedPresenter", "render", "com.app.FeedPresenter.render")
+	})
+	if allocations != 0 {
+		t.Fatalf("code-problem lookup allocates %.2f objects, want zero", allocations)
+	}
+}
+
+func TestCodeProblemKeyCannotCollideOnFieldSeparator(t *testing.T) {
+	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
+	builder.item("com.app.Feed\x00render", "now", "first")
+	builder.item("com.app.Feed", "render\x00now", "second")
+
+	if got := len(builder.items); got != 2 {
+		t.Fatalf("code-problem registry has %d entries, want two distinct locations", got)
+	}
+}
+
+func TestCodeProblemDrillDownAllocationBudget(t *testing.T) {
+	accumulator := &codeProblemAccumulator{
+		className: "com.app.FeedPresenter",
+		method:    "render",
+		contexts: []codeProblemContextAccumulator{{
+			context: codeProblemContext{screen: "Feed", operation: "feed.render", route: "GET /feed"},
+			signals: []string{"stall", "jank", "runtime", "network"},
+			count:   4,
+			totalMS: 120,
+			maxMS:   60,
+		}},
+	}
+	allocations := testing.AllocsPerRun(1_000, func() {
+		codeProblemDrillDown(accumulator, "inspect")
+	})
+	if allocations > 8 {
+		t.Fatalf("drill-down allocates %.2f objects, want at most 8", allocations)
+	}
+}
+
+func TestCodeProblemEvidenceAllocationBudget(t *testing.T) {
+	accumulator := &codeProblemAccumulator{
+		problems:     1,
+		mainThreadMS: 2,
+		networkMS:    3,
+		uiJank:       4,
+		logSpam:      5,
+		retained:     6,
+		memoryKB:     7,
+		runtimeCalls: 8,
+		maxMS:        9,
+	}
+	want := "Сводка сигналов: проблем=1, главный поток=2 мс, сеть=3 мс, медленных кадров=4, логов=5, удержано=6, память=7 КБ, вызовов=8, макс=9 мс."
+	if got := codeProblemEvidence(accumulator); got != want {
+		t.Fatalf("evidence = %q, want %q", got, want)
+	}
+	allocations := testing.AllocsPerRun(1_000, func() {
+		codeProblemEvidenceAllocationSink = codeProblemEvidence(accumulator)
+	})
+	if allocations > 2 {
+		t.Fatalf("code-problem evidence allocates %.2f objects, want at most 2", allocations)
+	}
+}
+
+func TestCodeProblemGuidanceAllocationBudget(t *testing.T) {
+	categories := []string{codeCategoryNetwork, codeCategoryRuntime, codeCategoryNetwork}
+	wantImpact := "увеличивает задержки сценария и может создавать сетевые циклы; утяжеляет цепочку выполнения в измеренном сценарии; увеличивает задержки сценария и может создавать сетевые циклы; пока нет подтверждения выполнением в этом прогоне."
+	wantRecommendation := "проверьте дедупликацию запросов, кеширование, таймауты и повторные фоновые циклы; проверьте цепочку вызовов и стоимость вызываемого метода."
+	if got := codeProblemImpact(categories, false); got != wantImpact {
+		t.Fatalf("impact = %q, want %q", got, wantImpact)
+	}
+	if got := codeProblemRecommendation(categories); got != wantRecommendation {
+		t.Fatalf("recommendation = %q, want %q", got, wantRecommendation)
+	}
+	allocations := testing.AllocsPerRun(1_000, func() {
+		codeProblemImpactAllocationSink = codeProblemImpact(categories, false)
+		codeProblemRecommendationAllocationSink = codeProblemRecommendation(categories)
+	})
+	if allocations > 4 {
+		t.Fatalf("code-problem guidance allocates %.2f objects, want at most 4", allocations)
+	}
+}
+
+func TestCodeProblemMaterializationReusesOwnedValueSlices(t *testing.T) {
+	accumulator := &codeProblemAccumulator{
+		className:    "com.app.FeedPresenter",
+		method:       "render",
+		categories:   []string{codeCategoryRuntime, codeCategoryUI},
+		problemNames: []string{"Runtime", "Jank"},
+		signals: []CodeProblemSignal{
+			{Name: "Runtime", Category: codeCategoryRuntime, Score: 1},
+			{Name: "Jank", Category: codeCategoryUI, Score: 2},
+		},
+		contexts: []codeProblemContextAccumulator{{
+			context: codeProblemContext{screen: "Feed"},
+			signals: []string{"Runtime", "Jank"},
+		}},
+	}
+	categoryStorage := &accumulator.categories[0]
+	problemStorage := &accumulator.problemNames[0]
+	signalStorage := &accumulator.signals[0]
+	contextSignalStorage := &accumulator.contexts[0].signals[0]
+
+	row := accumulator.toStats()
+	if &row.Categories[0] != categoryStorage || &row.Problems[0] != problemStorage || &row.Signals[0] != signalStorage {
+		t.Fatal("code-problem materialization copied an accumulator-owned value slice")
+	}
+	if &row.DrillDown[0].Signals[0] != contextSignalStorage {
+		t.Fatal("code-problem drill-down copied accumulator-owned signals")
+	}
 }

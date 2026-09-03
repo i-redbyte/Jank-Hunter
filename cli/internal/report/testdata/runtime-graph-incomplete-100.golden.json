@@ -97,8 +97,8 @@
   },
   "Warnings": [
     "Качество сбора: полнота runtime-графа 20.00% (2 из 10 логических вызовов).",
-    "Качество сбора: ограниченные runtime-реестры потеряли 8 элементов evidence.",
-    "Качество сбора: writer отклонил batch runtime-графа: 8."
+    "Качество сбора: runtime-подсистемы потеряли 8 элементов evidence.",
+    "Качество сбора: writer не принял логические вызовы runtime-графа: 8."
   ],
   "CollectionSegments": [
     {
@@ -231,8 +231,16 @@
     "decoded_committed_chunks": 2,
     "reported_committed_chunks": 2,
     "known_lost_events": 0,
+    "pre_admission_lost_events": 0,
+    "post_admission_lost_events": 0,
+    "admission_contention_lost_events": 0,
     "writer_backpressure_count": 0,
     "writer_backpressure_nanos": 0,
+    "runtime_graph_backpressure_count": 0,
+    "runtime_graph_backpressure_nanos": 0,
+    "runtime_graph_producer_capacity_loss": 0,
+    "runtime_event_backpressure_count": 0,
+    "runtime_event_backpressure_nanos": 0,
     "runtime_graph_input_events": 10,
     "runtime_graph_emitted_events": 2,
     "decoded_runtime_graph_calls": 2,
@@ -247,7 +255,7 @@
     "dictionary_truncated": 0,
     "reasons": [
       "полнота runtime-графа 20.00% (2 из 10 логических вызовов)",
-      "ограниченные runtime-реестры потеряли 8 элементов evidence"
+      "runtime-подсистемы потеряли 8 элементов evidence"
     ]
   },
   "AnalysisInputs": {

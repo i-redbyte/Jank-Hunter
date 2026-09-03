@@ -3,7 +3,6 @@ package io.jankhunter.sample.graph
 import io.jankhunter.runtime.JankHunterTelemetry
 
 import android.os.SystemClock
-import io.jankhunter.runtime.JankHunter
 
 internal class PerformanceScenarioUseCase(
     private val calculator: CheckoutCalculator,
