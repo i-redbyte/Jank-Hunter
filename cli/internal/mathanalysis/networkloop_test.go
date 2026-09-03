@@ -115,6 +115,34 @@ func TestNetworkLoopExplanationMakesMissingOwnerActionable(t *testing.T) {
 	}
 }
 
+func TestGlobalNetworkLoopDoesNotClaimOneOfSeveralRoutes(t *testing.T) {
+	points := make([]float64, 25)
+	tokens := make(map[int]map[string]int, 7)
+	for bucket := 0; bucket <= 24; bucket += 4 {
+		points[bucket] = 3
+		tokens[bucket] = map[string]int{
+			"dns_high":                  3,
+			"route:GET /events":         2,
+			"route:POST /telemetry":     1,
+			"owner:EventsRepository":    2,
+			"owner:TelemetryRepository": 1,
+		}
+	}
+
+	finding, ok := analyzeNetworkLoopSignal(&networkLoopSignal{
+		name: "DNS всплески", kind: "dns", points: points, tokens: tokens,
+	}, DefaultBucketMS)
+	if !ok {
+		t.Fatal("global network loop was not detected")
+	}
+	if finding.Route != "" || finding.Owner != "" {
+		t.Fatalf("ambiguous global loop claimed route/owner: %+v", finding)
+	}
+	if strings.Contains(finding.ProbableCause, "GET /events") || strings.Contains(finding.ProbableCause, "POST /telemetry") {
+		t.Fatalf("probable cause blamed an arbitrary route: %q", finding.ProbableCause)
+	}
+}
+
 func writeDNSLoopFixture(t *testing.T, loop bool) string {
 	return writeDNSLoopFixtureWithBase(t, loop, 0)
 }

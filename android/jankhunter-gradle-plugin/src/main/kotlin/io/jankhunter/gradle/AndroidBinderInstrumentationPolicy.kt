@@ -38,8 +38,12 @@ internal object AndroidBinderInstrumentationPolicy {
 
     fun runtimeDescriptor(className: String, declaredDescriptor: String?): String? {
         if (!declaredDescriptor.isNullOrBlank()) return declaredDescriptor
-        if (AIDL_STUB_SUFFIX !in className) return null
-        val interfaceClass = className.substringBefore(AIDL_STUB_SUFFIX)
+        val suffixLength = when {
+            className.endsWith(AIDL_PROXY_SUFFIX) -> AIDL_PROXY_SUFFIX.length
+            className.endsWith(AIDL_STUB_SUFFIX) -> AIDL_STUB_SUFFIX.length
+            else -> return null
+        }
+        val interfaceClass = className.substring(0, className.length - suffixLength)
         return interfaceClass.replace('/', '.')
     }
 

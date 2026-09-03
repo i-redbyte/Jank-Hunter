@@ -2,7 +2,6 @@ package io.jankhunter.sample.graph
 
 import io.jankhunter.runtime.JankHunterTelemetry
 
-import io.jankhunter.runtime.JankHunter
 import java.io.Closeable
 import java.net.Proxy
 import java.util.concurrent.TimeUnit

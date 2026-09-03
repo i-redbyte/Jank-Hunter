@@ -8,6 +8,13 @@ import org.junit.Test
 
 class HandlerWrapperRegistryTest {
     @Test
+    fun removalUsesShardOwnedScratchInsteadOfAllocatingKeyCopies() {
+        val shardType = Class.forName("io.jankhunter.runtime.HandlerWrapperRegistry\$Shard")
+
+        assertTrue(shardType.declaredFields.any { field -> field.name == "keyScratch" })
+    }
+
+    @Test
     fun wrapperLookupReturnsFinalArrayWithoutIntermediateCollectionContract() {
         val method = HandlerWrapperRegistry::class.java.getDeclaredMethod(
             "wrappers",

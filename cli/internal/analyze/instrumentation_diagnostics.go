@@ -45,6 +45,7 @@ type InstrumentationDecisionSummary struct {
 	Family string
 	Reason string
 	Method string
+	Detail string
 	Line   int
 	Count  uint64
 }
@@ -122,7 +123,6 @@ type instrumentationDiagnosticsBuilder struct {
 	ignored     int
 	annotated   int
 	hookCount   uint64
-	warnings    []string
 }
 
 func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnosticsRecord) {
@@ -157,6 +157,7 @@ func (b *instrumentationDiagnosticsBuilder) add(record instrumentationDiagnostic
 			family: item.Family,
 			reason: item.Reason,
 			method: item.Method,
+			detail: item.Detail,
 			line:   item.Line,
 		}] += item.Count
 	}
@@ -190,6 +191,7 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		}
 		return left.ClassName < right.ClassName
 	})
+	decisions := decisionMapSummaries(b.decisions)
 	return &InstrumentationDiagnostics{
 		Available:            true,
 		Source:               b.source,
@@ -200,10 +202,10 @@ func (b instrumentationDiagnosticsBuilder) finish() *InstrumentationDiagnostics 
 		HookCount:            b.hookCount,
 		SkippedMethods:       skippedMapSummaries(b.skipped),
 		Hooks:                hookMapSummaries(b.hooks),
-		Decisions:            decisionMapSummaries(b.decisions),
+		Decisions:            decisions,
 		Annotations:          annotationMapSummaries(b.annotations),
 		Classes:              b.classes,
-		Warnings:             b.warnings,
+		Warnings:             hierarchyResolutionWarnings(decisions),
 	}
 }
 
@@ -239,6 +241,7 @@ type instrumentationDecisionRecord struct {
 	Family string `json:"family"`
 	Reason string `json:"reason"`
 	Method string `json:"method"`
+	Detail string `json:"detail"`
 	Line   int    `json:"line"`
 	Count  uint64 `json:"count"`
 }
@@ -266,6 +269,7 @@ type instrumentationDecisionKey struct {
 	family string
 	reason string
 	method string
+	detail string
 	line   int
 }
 
@@ -307,11 +311,7 @@ func decisionSummaries(records []instrumentationDecisionRecord) []Instrumentatio
 func annotationSummaries(records []instrumentationAnnotationRecord) []InstrumentationAnnotationSummary {
 	out := make([]InstrumentationAnnotationSummary, 0, len(records))
 	for _, record := range records {
-		out = append(out, InstrumentationAnnotationSummary{
-			Owner: record.Owner, Screen: record.Screen, Operation: record.Operation,
-			OperationKind: record.OperationKind, OperationBudgetMS: record.OperationBudgetMS,
-			Count: record.Count,
-		})
+		out = append(out, InstrumentationAnnotationSummary(record))
 	}
 	sortAnnotationSummaries(out)
 	return out
@@ -351,12 +351,49 @@ func decisionMapSummaries(values map[instrumentationDecisionKey]uint64) []Instru
 			Family: key.family,
 			Reason: key.reason,
 			Method: key.method,
+			Detail: key.detail,
 			Line:   key.line,
 			Count:  count,
 		})
 	}
 	sortDecisionSummaries(out)
 	return out
+}
+
+func hierarchyResolutionWarnings(decisions []InstrumentationDecisionSummary) []string {
+	const maxWarnings = 20
+	warnings := make([]string, 0, min(len(decisions), maxWarnings+1))
+	omitted := 0
+	for _, decision := range decisions {
+		if decision.Kind != "warning" || decision.Module != "class_hierarchy" {
+			continue
+		}
+		if len(warnings) >= maxWarnings {
+			omitted++
+			continue
+		}
+		if decision.Reason == "metadata_failures_omitted" {
+			warnings = append(warnings, fmt.Sprintf(
+				"Иерархия %s разрешена частично: дополнительно скрыто %d ошибок чтения метаданных. Подробности ограничены, чтобы не раздувать отчёт.",
+				decision.Method,
+				decision.Count,
+			))
+			continue
+		}
+		detail := strings.TrimSpace(decision.Detail)
+		if detail == "" {
+			detail = "причина не передана"
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"Иерархия %s разрешена частично: AGP не смог прочитать метаданные класса (%s). Возможны пропуски распознавания Service, IBinder, AIDL, BroadcastReceiver и БД; проверьте classpath и целостность байткода.",
+			decision.Method,
+			detail,
+		))
+	}
+	if omitted > 0 {
+		warnings = append(warnings, fmt.Sprintf("Ещё %d предупреждений об иерархии скрыто; полный список сохранён в таблице решений.", omitted))
+	}
+	return warnings
 }
 
 func annotationMapSummaries(values map[instrumentationAnnotationKey]uint64) []InstrumentationAnnotationSummary {
@@ -424,6 +461,9 @@ func sortDecisionSummaries(values []InstrumentationDecisionSummary) {
 		}
 		if values[i].Method != values[j].Method {
 			return values[i].Method < values[j].Method
+		}
+		if values[i].Detail != values[j].Detail {
+			return values[i].Detail < values[j].Detail
 		}
 		return values[i].Line < values[j].Line
 	})

@@ -5,48 +5,6 @@ import (
 	"fmt"
 )
 
-const FormatMarker = 0x81
-const FormatMajor = 3
-const FormatMinor = 0
-const FormatPatch = 0
-const FormatVersionString = "3.0.0"
-
-const magicSize = 11
-
-var Magic = []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', FormatMarker, FormatMajor, FormatMinor, FormatPatch}
-
-const (
-	HeaderSchemaV2 uint64 = 2
-
-	FeatureChunkCRCCommit        uint64 = 1 << 0
-	FeatureLengthDelimited       uint64 = 1 << 1
-	FeatureSymbolRefs            uint64 = 1 << 2
-	FeatureProducerMetadata      uint64 = 1 << 3
-	FeatureChunkLocalContext     uint64 = 1 << 4
-	FeatureQualityRecords        uint64 = 1 << 5
-	FeatureEmbeddedStableSymbols uint64 = 1 << 6
-	FeatureLogGrowthRecords      uint64 = 1 << 7
-	FeatureExactEventAdmission   uint64 = 1 << 8
-	FeatureProcessScope          uint64 = 1 << 9
-	FeatureColumnarRuntimeCalls  uint64 = 1 << 10
-	FeatureSegmentDigestChain    uint64 = 1 << 11
-	FeatureProcessRoster         uint64 = 1 << 12
-	FeatureOperationLifecycle    uint64 = 1 << 13
-	FeatureDatabaseLifecycle     uint64 = 1 << 14
-	FeatureProcessState          uint64 = 1 << 15
-	FeatureAndroidComponents     uint64 = 1 << 16
-	FeatureBinderIPC             uint64 = 1 << 17
-	FeatureGZIPChunks            uint64 = 1 << 0
-	RequiredFeatures                    = FeatureChunkCRCCommit | FeatureLengthDelimited | FeatureSymbolRefs |
-		FeatureProducerMetadata | FeatureChunkLocalContext | FeatureQualityRecords | FeatureEmbeddedStableSymbols |
-		FeatureLogGrowthRecords | FeatureExactEventAdmission | FeatureProcessScope | FeatureColumnarRuntimeCalls |
-		FeatureSegmentDigestChain | FeatureProcessRoster | FeatureOperationLifecycle | FeatureDatabaseLifecycle |
-		FeatureProcessState | FeatureAndroidComponents | FeatureBinderIPC
-	BestEffortFeatures      = RequiredFeatures &^ FeatureExactEventAdmission
-	OptionalFeatures        = FeatureGZIPChunks
-	MaxRuntimeCallBlockRows = 128
-)
-
 type ID128 [16]byte
 
 func (id ID128) IsZero() bool {
@@ -69,13 +27,6 @@ func DatabaseStatementFingerprint(template string) uint64 {
 }
 
 type ProcessScope uint64
-
-const (
-	ProcessScopeUnknown ProcessScope = iota
-	ProcessScopeAll
-	ProcessScopeMainOnly
-	ProcessScopeAllowlist
-)
 
 func (scope ProcessScope) String() string {
 	switch scope {
@@ -200,35 +151,6 @@ type LogGrowthDay struct {
 
 type EventType uint64
 
-const (
-	EventDictionary          EventType = 1
-	EventSession             EventType = 2
-	EventContext             EventType = 3
-	EventHTTP                EventType = 4
-	EventUIWindow            EventType = 5
-	EventStall               EventType = 6
-	EventMemory              EventType = 7
-	EventRetained            EventType = 8
-	EventCounter             EventType = 9
-	EventGauge               EventType = 10
-	EventOperation           EventType = 11
-	EventLogSpam             EventType = 12
-	EventProblem             EventType = 13
-	EventRuntimeCall         EventType = 14
-	EventQualitySnapshot     EventType = 15
-	EventSegmentEnd          EventType = 16
-	EventLogGrowth           EventType = 17
-	EventProcessExit         EventType = 18
-	EventIO                  EventType = 19
-	EventWorker              EventType = 20
-	EventWebSocket           EventType = 21
-	EventDatabase            EventType = 22
-	EventDatabaseTransaction EventType = 23
-	EventProcessState        EventType = 24
-	EventAndroidComponent    EventType = 25
-	EventBinderTransaction   EventType = 26
-)
-
 // IsSemanticData reports whether a record contributes an application/runtime
 // observation. Dictionary and control records are transport metadata and must
 // not inflate event sample sizes or observed durations.
@@ -245,14 +167,6 @@ func (eventType EventType) IsSemanticData() bool {
 }
 
 type EnvelopeFlag uint64
-
-const (
-	EnvelopeHasTime       EnvelopeFlag = 1 << 0
-	EnvelopeHasThread     EnvelopeFlag = 1 << 1
-	EnvelopeHasContext    EnvelopeFlag = 1 << 2
-	EnvelopeSameContext   EnvelopeFlag = 1 << 3
-	EnvelopeHasAttributes EnvelopeFlag = 1 << 4
-)
 
 type Flag uint64
 
@@ -517,11 +431,17 @@ func (e RetentionEvidence) String() string {
 }
 
 type DictionaryEntry struct {
-	Kind     DictKind `json:"kind"`
-	ID       uint64   `json:"id"`
-	Encoding uint64   `json:"encoding,omitempty"`
-	Data     []byte   `json:"data,omitempty"`
-	Value    string   `json:"value"`
+	Kind        DictKind `json:"kind"`
+	ID          uint64   `json:"id"`
+	Alias       uint64   `json:"alias,omitempty"`
+	Encoding    uint64   `json:"encoding,omitempty"`
+	Data        []byte   `json:"data,omitempty"`
+	Value       string   `json:"value"`
+	frontPrefix uint64
+	frontData   []byte
+	frontReady  bool
+	tokenData   []byte
+	tokenReady  bool
 }
 
 type Event struct {
@@ -563,6 +483,8 @@ type Event struct {
 
 	// runtimeCalls exists only while one columnar wire record is expanded into semantic events.
 	runtimeCalls []runtimeCallRow
+	// microPage exists only while one physical page is expanded into its logical wire records.
+	microPage *decodedMicroPage
 }
 
 type LogGrowthRecordKind uint64
@@ -578,6 +500,10 @@ type LogGrowthRecord struct {
 	Projection *LogGrowthProjection `json:"projection,omitempty"`
 	Live       *LogGrowthSession    `json:"live,omitempty"`
 	Raw        []byte               `json:"-"`
+	wireMode   uint64
+	wirePrefix uint64
+	wireSuffix uint64
+	wireReady  bool
 }
 
 type SessionEvent struct {
@@ -945,6 +871,9 @@ type DatabaseEvent struct {
 	ExecuteUS            uint64              `json:"execute_us,omitempty"`
 	MaterializeUS        uint64              `json:"materialize_us,omitempty"`
 	DurationUS           uint64              `json:"duration_us"`
+	descriptorID         uint64
+	descriptorDefinition bool
+	descriptorPrepared   bool
 }
 
 type DatabaseTransactionStage uint8
@@ -1133,13 +1062,16 @@ type BinderTransactionEvent struct {
 }
 
 type runtimeCallRow struct {
-	screen      SymbolRef
-	caller      SymbolRef
-	operationID uint64
-	callee      SymbolRef
-	count       uint64
-	total       uint64
-	max         uint64
+	screen         SymbolRef
+	caller         SymbolRef
+	operationID    uint64
+	callee         SymbolRef
+	count          uint64
+	total          uint64
+	max            uint64
+	edgeID         uint64
+	edgeDefinition bool
+	edgeReady      bool
 }
 
 type QualitySnapshot struct {
@@ -1255,6 +1187,7 @@ const (
 	QualityPreparedStatementResolutionMiss   uint64 = 0x2036
 	QualityReceiverAsyncRegistryEviction     uint64 = 0x2037
 	QualityReceiverAsyncResolutionMiss       uint64 = 0x2038
+	QualityRuntimeGraphProducerCapacityLoss  uint64 = 0x2039
 )
 
 type QualityLossReason uint64
@@ -1403,6 +1336,8 @@ func QualityCounterName(id uint64) string {
 		return "receiver_async_registry_eviction_total"
 	case QualityReceiverAsyncResolutionMiss:
 		return "receiver_async_resolution_miss_after_eviction_total"
+	case QualityRuntimeGraphProducerCapacityLoss:
+		return "runtime_graph_producer_capacity_loss_total"
 	}
 	if id >= 0x1000 && id < 0x2000 {
 		return fmt.Sprintf("event_%d_reason_%d_total", (id-0x1000)/16, (id-0x1000)%16)
@@ -1459,7 +1394,8 @@ func IsKnownQualityCounter(id uint64) bool {
 		QualityPreparedStatementRegistryEviction,
 		QualityPreparedStatementResolutionMiss,
 		QualityReceiverAsyncRegistryEviction,
-		QualityReceiverAsyncResolutionMiss:
+		QualityReceiverAsyncResolutionMiss,
+		QualityRuntimeGraphProducerCapacityLoss:
 		return true
 	}
 	if id < 0x1000 || id >= 0x2000 {

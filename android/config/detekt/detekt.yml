@@ -5,6 +5,8 @@ config:
 ktlint:
   active: true
   android: false
+  NoUnusedImports:
+    active: true
 
 complexity:
   active: false

@@ -19,7 +19,7 @@ internal class AndroidComponentBinaryRecordEncoder(
             .uvarint(processImportance)
             .uvarint(androidImportance)
             .uvarint(reason)
-        sink.emit(Jhlog.TYPE_PROCESS_STATE, 0L, payload, sink.producerContext())
+        sink.emitSemantic(Jhlog.TYPE_PROCESS_STATE, 0L, payload, sink.producerContext())
     }
 
     fun androidComponent(
@@ -41,9 +41,9 @@ internal class AndroidComponentBinaryRecordEncoder(
         require(outcome in Jhlog.COMPONENT_OUTCOME_UNKNOWN..Jhlog.COMPONENT_OUTCOME_CANCELLED)
         require(durationUs >= 0L)
         require(componentFlags and Jhlog.COMPONENT_FLAG_KNOWN_MASK.inv() == 0L)
-        sink.defineStableSymbol(componentId, componentName)
+        val componentAlias = sink.defineStableSymbol(componentId, componentName)
         val payload = sink.payload()
-            .stableSymbolRef(componentId)
+            .stableSymbolAlias(componentAlias)
             .symbolRef(sink.optionalSymbolId(BinaryLogWriter.DICT_GENERIC, action))
             .uvarint(instanceId)
             .uvarint(flowId)
@@ -52,7 +52,7 @@ internal class AndroidComponentBinaryRecordEncoder(
             .uvarint(outcome)
             .uvarint(durationUs)
             .uvarint(componentFlags)
-        sink.emit(Jhlog.TYPE_ANDROID_COMPONENT, 0L, payload, sink.producerContext())
+        sink.emitSemantic(Jhlog.TYPE_ANDROID_COMPONENT, 0L, payload, sink.producerContext())
     }
 
     fun binderTransaction(
@@ -86,7 +86,7 @@ internal class AndroidComponentBinaryRecordEncoder(
             .uvarint(failureKind)
             .uvarint(durationUs)
             .uvarint(binderFlags)
-        sink.emit(
+        sink.emitSemantic(
             Jhlog.TYPE_BINDER_TRANSACTION,
             if (mainThread) BinaryLogWriter.FLAG_THREAD_MAIN else 0L,
             payload,

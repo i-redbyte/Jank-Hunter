@@ -14,7 +14,7 @@ func TestShortestGraphPathUsesLowerCostRoute(t *testing.T) {
 		{From: "state:Janky", To: "owner:Feed", Weight: 1, Confidence: 0.8},
 	}
 
-	path, ok := shortestGraphPath(nodes, edges, "symptom:jank", "owner:Feed")
+	path, ok := shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), "symptom:jank", "owner:Feed")
 	if !ok {
 		t.Fatalf("shortestGraphPath() returned no path")
 	}
@@ -42,7 +42,7 @@ func TestShortestGraphPathChoosesStableLexicographicEqualCostRoute(t *testing.T)
 	}
 
 	for iteration := range 200 {
-		path, ok := shortestGraphPath(nodes, edges, "symptom:jank", "owner:Feed")
+		path, ok := shortestGraphPathWithAdjacency(nodes, causalAdjacency(edges), "symptom:jank", "owner:Feed")
 		if !ok {
 			t.Fatalf("iteration %d: shortestGraphPath() returned no path", iteration)
 		}

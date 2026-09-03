@@ -1,23 +1,23 @@
 package io.jankhunter.runtime.internal.io
 
-/** Reusable context carrier; a synchronized writer never needs one allocation per event. */
+/** Reusable context carrier owned by the thread-confined writer; no allocation per event. */
 internal class BinaryRecordContext {
     var screenId = 0L
     var ownerId = 0L
-    var stableOwnerId = 0L
+    var stableOwnerAlias = 0L
     var hasStableOwner = false
     var operationId = 0L
 
     fun set(
         screenId: Long,
         ownerId: Long,
-        stableOwnerId: Long = 0L,
+        stableOwnerAlias: Long = 0L,
         hasStableOwner: Boolean = false,
         operationId: Long = 0L,
     ): BinaryRecordContext {
         this.screenId = screenId
         this.ownerId = ownerId
-        this.stableOwnerId = stableOwnerId
+        this.stableOwnerAlias = stableOwnerAlias
         this.hasStableOwner = hasStableOwner
         this.operationId = operationId
         return this
@@ -36,7 +36,7 @@ internal class BinaryRecordEncoder(
     private var hasLastContext = false
     private var lastScreenId = 0L
     private var lastOwnerId = 0L
-    private var lastStableOwnerId = 0L
+    private var lastStableOwnerAlias = 0L
     private var lastHasStableOwner = false
     private var lastOperationId = 0L
 
@@ -70,7 +70,7 @@ internal class BinaryRecordEncoder(
             if (presence and Jhlog.CONTEXT_SCREEN != 0L) body.symbolRef(context.screenId)
             if (presence and Jhlog.CONTEXT_OWNER != 0L) {
                 if (context.hasStableOwner) {
-                    body.stableSymbolRef(context.stableOwnerId)
+                    body.stableSymbolAlias(context.stableOwnerAlias)
                 } else {
                     body.symbolRef(context.ownerId)
                 }
@@ -88,7 +88,7 @@ internal class BinaryRecordEncoder(
         hasLastContext = true
         lastScreenId = context.screenId
         lastOwnerId = context.ownerId
-        lastStableOwnerId = context.stableOwnerId
+        lastStableOwnerAlias = context.stableOwnerAlias
         lastHasStableOwner = context.hasStableOwner
         lastOperationId = context.operationId
     }
@@ -102,7 +102,7 @@ internal class BinaryRecordEncoder(
         return hasLastContext &&
             lastScreenId == context.screenId &&
             lastOwnerId == context.ownerId &&
-            lastStableOwnerId == context.stableOwnerId &&
+            lastStableOwnerAlias == context.stableOwnerAlias &&
             lastHasStableOwner == context.hasStableOwner &&
             lastOperationId == context.operationId
     }

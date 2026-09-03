@@ -61,15 +61,20 @@ internal class RuntimeTelemetryAccess(
 
     fun ensureContextRecorded(screenOverride: String? = null, ownerOverride: String? = null) {
         val activeWriter = writer ?: return
-        val context = captureContext(screenOverride, ownerOverride)
+        val screen = contexts.capturedScreen(screenOverride)
+        val owner = contexts.capturedOwner(ownerOverride)
+        val operationId = contexts.currentOperationId()
         val mainLooper = Looper.getMainLooper()
         if (mainLooper != null && Looper.myLooper() === mainLooper) {
-            state.mainThreadContext = context
+            val current = state.mainThreadContext
+            if (current == null || current.screen != screen || current.owner != owner || current.operationId != operationId) {
+                state.mainThreadContext = JankHunterContext(screen, owner, operationId)
+            }
         }
         activeWriter.updateProducerContext(
-            context.screen,
-            context.owner,
-            context.operationId,
+            screen,
+            owner,
+            operationId,
         )
     }
 

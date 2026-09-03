@@ -2,10 +2,12 @@ package io.jankhunter.runtime
 
 import android.os.Process
 import io.jankhunter.runtime.internal.saturatingAdd
+import io.jankhunter.runtime.internal.concurrent.CoalescedWakeSignal
 import io.jankhunter.runtime.internal.concurrent.SpscSlotSequencer
 import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.QualityCounterId
 import io.jankhunter.runtime.internal.io.StableCounterBatch
+import io.jankhunter.runtime.internal.io.StableCounterBatchPool
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
@@ -26,8 +28,7 @@ internal class RuntimeHookEventTransport(
     private val epoch = AtomicLong(1L)
     private val running = AtomicBoolean(false)
     private val consumerFailed = AtomicBoolean(false)
-    private val publisherState = AtomicLong()
-    private val producerWakePending = AtomicBoolean()
+    private val producerWake = CoalescedWakeSignal()
     private val bufferLoss = AtomicLong()
     private val writerLoss = AtomicLong()
     private val backpressureCount = AtomicLong()
@@ -38,9 +39,11 @@ internal class RuntimeHookEventTransport(
     private val emitted = AtomicLong()
     private val flushRequest = AtomicLong()
     private val flushCompleted = AtomicLong()
+    private val stableCounterBatchPool = StableCounterBatchPool(BATCH_POOL_CAPACITY, MAX_BATCH_SIZE)
 
     @Volatile private var writer: AsyncLogWriter? = null
     @Volatile private var consumer: Thread? = null
+    @Volatile private var acceptingPublishers = false
 
     fun start(writer: AsyncLogWriter) {
         check(consumer?.isAlive != true) { "Runtime hook event consumer is already running" }
@@ -50,7 +53,7 @@ internal class RuntimeHookEventTransport(
         this.writer = writer
         consumerFailed.set(false)
         running.set(true)
-        publisherState.set(PUBLISHER_GATE_OPEN)
+        acceptingPublishers = true
         consumer = Thread(::runConsumerFailOpen, CONSUMER_NAME).apply {
             isDaemon = true
             start()
@@ -141,7 +144,7 @@ internal class RuntimeHookEventTransport(
     internal fun backpressureCountForTest(): Long = backpressureCount.get()
     internal fun attemptedForTest(): Long = saturatingAdd(producerAcceptedTotal(), preAdmissionLossTotal.get())
     internal fun consumerForTest(): Thread? = consumer
-    internal fun acceptingPublishersForTest(): Boolean = publisherState.get() and PUBLISHER_GATE_OPEN != 0L
+    internal fun acceptingPublishersForTest(): Boolean = acceptingPublishers
     internal fun registeredProducerCountForTest(): Int {
         var count = 0
         buffers.forEach { count++ }
@@ -149,14 +152,16 @@ internal class RuntimeHookEventTransport(
     }
 
     private inline fun publish(write: (EventBuffer, Int) -> Unit): Boolean {
-        if (!acquirePublisher()) return false
+        if (!acceptingPublishers) return false
+        val buffer = producerBuffer()
+        buffer.producerActive = true
         try {
+            if (!acceptingPublishers) return false
             publisherAdmissionObserver?.invoke()
             if (consumerFailed.get()) {
                 recordPreAdmissionLoss(bufferLoss)
                 return false
             }
-            val buffer = producerBuffer()
             val exact = exactAdmission.getAsBoolean()
             var position = buffer.sequencer.tryClaimProducer()
             if (position == SpscSlotSequencer.NO_POSITION && !exact) {
@@ -191,32 +196,14 @@ internal class RuntimeHookEventTransport(
             wakeConsumer()
             return true
         } finally {
-            releasePublisher()
+            buffer.producerActive = false
+            if (!acceptingPublishers) consumer?.let(LockSupport::unpark)
         }
-    }
-
-    private fun acquirePublisher(): Boolean {
-        while (true) {
-            val state = publisherState.get()
-            if (state and PUBLISHER_GATE_OPEN == 0L) return false
-            if (publisherState.compareAndSet(state, state + 1L)) return true
-        }
-    }
-
-    private fun releasePublisher() {
-        val state = publisherState.decrementAndGet()
-        if (state and PUBLISHER_COUNT_MASK == 0L) consumer?.let(LockSupport::unpark)
     }
 
     private fun closePublisherGate() {
-        while (true) {
-            val state = publisherState.get()
-            if (state and PUBLISHER_GATE_OPEN == 0L) return
-            if (publisherState.compareAndSet(state, state and PUBLISHER_COUNT_MASK)) return
-        }
+        acceptingPublishers = false
     }
-
-    private fun activePublisherCount(): Long = publisherState.get() and PUBLISHER_COUNT_MASK
 
     private fun producerBuffer(): EventBuffer {
         val currentEpoch = epoch.get()
@@ -236,9 +223,9 @@ internal class RuntimeHookEventTransport(
             } catch (_: Throwable) {
             }
             var lastFlushAtNs = System.nanoTime()
-            while (running.get() || activePublisherCount() > 0L || hasBufferedEvents()) {
+            while (running.get() || hasActiveOrBufferedEvents()) {
                 consumerLoopObserver?.invoke()
-                producerWakePending.set(false)
+                producerWake.clear()
                 delayConsumerForTest()
                 val drained = drain(methods, logs)
                 val request = flushRequest.get()
@@ -266,7 +253,7 @@ internal class RuntimeHookEventTransport(
             consumerFailed.set(true)
             running.set(false)
             buffers.forEach { buffer -> buffer.owner.get()?.let(LockSupport::unpark) }
-            while (activePublisherCount() > 0L) LockSupport.parkNanos(WAIT_POLL_NS)
+            while (hasActivePublishers()) LockSupport.parkNanos(WAIT_POLL_NS)
             val stranded = saturatingAdd(bufferedEventCount(), aggregateCount(methods, logs))
             recordAcceptedLoss(writerLoss, stranded.coerceAtLeast(1L))
             flushQuality()
@@ -278,13 +265,14 @@ internal class RuntimeHookEventTransport(
 
     private fun drain(methods: MethodCounterAccumulator, logs: LogSpamAccumulator): Int {
         var drained = 0
+        val currentEpoch = epoch.get()
         for (buffer in buffers) {
             var fromBuffer = 0
             while (fromBuffer < BUFFER_CAPACITY) {
                 val position = buffer.sequencer.tryClaimConsumer()
                 if (position == SpscSlotSequencer.NO_POSITION) break
                 val slot = buffer.sequencer.slotIndex(position)
-                if (buffer.epochs[slot] == epoch.get()) {
+                if (buffer.epochs[slot] == currentEpoch) {
                     when (buffer.types[slot]) {
                         TYPE_METHOD -> aggregateMethod(buffer, slot, methods)
                         TYPE_LOG_SPAM -> aggregateLog(buffer, slot, logs)
@@ -303,7 +291,7 @@ internal class RuntimeHookEventTransport(
     }
 
     private fun wakeConsumer() {
-        if (producerWakePending.compareAndSet(false, true)) consumer?.let(LockSupport::unpark)
+        if (producerWake.tryRequest()) consumer?.let(LockSupport::unpark)
     }
 
     private fun delayConsumerForTest() {
@@ -352,21 +340,26 @@ internal class RuntimeHookEventTransport(
     }
 
     private fun emitMethods(methods: MethodCounterAccumulator) {
-        var batch = StableCounterBatch(MAX_BATCH_SIZE)
+        var batch = stableCounterBatchPool.acquire()
         methods.drain { id, name, count ->
             if (batch.size == MAX_BATCH_SIZE) {
                 emitMethodBatch(batch)
-                batch = StableCounterBatch(MAX_BATCH_SIZE)
+                batch = stableCounterBatchPool.acquire()
             }
             batch.add(id, name, count)
         }
-        if (batch.size > 0) emitMethodBatch(batch)
+        if (batch.size > 0) emitMethodBatch(batch) else batch.recycle()
     }
 
     private fun emitMethodBatch(batch: StableCounterBatch) {
         val logicalCount = batch.logicalEventCount()
         val admitted = try { writer?.stableCounters(batch) == true } catch (_: Throwable) { false }
-        if (admitted) emitted.addAndGet(logicalCount) else recordAcceptedLoss(writerLoss, logicalCount)
+        if (admitted) {
+            emitted.addAndGet(logicalCount)
+        } else {
+            batch.recycle()
+            recordAcceptedLoss(writerLoss, logicalCount)
+        }
     }
 
     private fun emitLogs(logs: LogSpamAccumulator) {
@@ -405,8 +398,15 @@ internal class RuntimeHookEventTransport(
         acceptedLossTotal.addAndGet(delta)
     }
 
-    private fun hasBufferedEvents(): Boolean {
-        for (buffer in buffers) if (!buffer.sequencer.isEmpty()) return true
+    private fun hasActiveOrBufferedEvents(): Boolean {
+        for (buffer in buffers) {
+            if (buffer.producerActive || !buffer.sequencer.isEmpty()) return true
+        }
+        return false
+    }
+
+    private fun hasActivePublishers(): Boolean {
+        for (buffer in buffers) if (buffer.producerActive) return true
         return false
     }
 
@@ -451,7 +451,7 @@ internal class RuntimeHookEventTransport(
         emitted.set(0L)
         flushRequest.set(0L)
         flushCompleted.set(0L)
-        producerWakePending.set(false)
+        producerWake.clear()
     }
 
     private class EventBuffer(thread: Thread, val epoch: Long) {
@@ -465,6 +465,7 @@ internal class RuntimeHookEventTransport(
         val screens = arrayOfNulls<String>(BUFFER_CAPACITY)
         val owners = arrayOfNulls<String>(BUFFER_CAPACITY)
 
+        @Volatile var producerActive = false
         @Volatile var producerWaiting = false
         @Volatile private var producerAccepted = 0L
 
@@ -484,6 +485,7 @@ internal class RuntimeHookEventTransport(
             names.fill(null)
             screens.fill(null)
             owners.fill(null)
+            producerActive = false
             producerAccepted = 0L
         }
     }
@@ -493,6 +495,7 @@ internal class RuntimeHookEventTransport(
         const val NO_FLUSH_REQUEST = -1L
         const val BUFFER_CAPACITY = 256
         const val MAX_BATCH_SIZE = 128
+        const val BATCH_POOL_CAPACITY = 256
         const val TYPE_METHOD: Byte = 1
         const val TYPE_LOG_SPAM: Byte = 2
         const val CONSUMER_PARK_NS = 50_000_000L
@@ -501,7 +504,5 @@ internal class RuntimeHookEventTransport(
         const val FLUSH_INTERVAL_NS = 5_000_000_000L
         const val BACKPRESSURE_PARK_NS = 100_000L
         const val EVENT_CONSUMER_PRIORITY = Process.THREAD_PRIORITY_DEFAULT + 1
-        const val PUBLISHER_GATE_OPEN = Long.MIN_VALUE
-        const val PUBLISHER_COUNT_MASK = Long.MAX_VALUE
     }
 }

@@ -13,7 +13,6 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import io.jankhunter.sample.SampleApplication
-import io.jankhunter.runtime.JankHunter
 import io.jankhunter.runtime.JankHunterDatabaseOperation
 import io.jankhunter.runtime.JankHunterDatabasePhase
 import io.jankhunter.runtime.JankHunterDatabaseResultKind

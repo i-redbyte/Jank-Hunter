@@ -12,45 +12,21 @@ internal data class InstrumentationClassSelection(
     fun any(): Boolean = runtime || networkBoundary || databaseBoundary || autoInit || dependencyInjection
 }
 
-/** Evaluates all class-level instrumentation policies once for one immutable parameter snapshot. */
-internal class InstrumentationClassSelector(
-    private val params: JankHunterInstrumentationParameters,
-) {
-    fun evaluate(classData: ClassData): InstrumentationClassSelection {
-        val alreadyInstrumented = InstrumentationMarker.isPresent(classData.classAnnotations)
-        val generatedDiClass = DependencyInjectionClassMatcher.isGeneratedDiClass(classData)
-        return InstrumentationClassSelection(
-            runtime = runtimeMatches(classData, alreadyInstrumented, generatedDiClass),
-            networkBoundary = networkMatches(classData, alreadyInstrumented),
-            databaseBoundary = databaseMatches(classData, alreadyInstrumented),
-            autoInit = autoInitMatches(classData, alreadyInstrumented),
-            dependencyInjection = dependencyInjectionMatches(classData),
-        )
-    }
-
-    private fun autoInitMatches(classData: ClassData, alreadyInstrumented: Boolean): Boolean {
-        if (!params.autoInit.getOrElse(false) || alreadyInstrumented) return false
-        if (classData.className.startsWith("io.jankhunter.runtime.")) return false
-        return AndroidComponentAutoInit.matches(classData)
-    }
-
-    private fun runtimeMatches(
+/** Allocation-free class-level policy over the normalized, immutable AGP parameter values. */
+internal object InstrumentationClassSelector {
+    fun evaluate(
+        params: JankHunterInstrumentationParameters,
         classData: ClassData,
-        alreadyInstrumented: Boolean,
-        generatedDiClass: Boolean,
-    ): Boolean {
-        if (!runtimeHooksEnabled() || alreadyInstrumented || generatedDiClass) return false
-        return InstrumentationMatcher(
-            params.includePackages.getOrElse(emptySet()),
-            params.excludePackages.getOrElse(emptySet()),
-            params.includeWholeApplication.getOrElse(false),
-        ).matches(classData.className)
-    }
-
-    private fun runtimeHooksEnabled(): Boolean {
-        return params.methodCounters.getOrElse(false) ||
-            params.okhttp.getOrElse(false) ||
-            params.webSockets.getOrElse(false) ||
+    ): InstrumentationClassSelection {
+        val includePackages = params.includePackages.getOrElse(emptySet())
+        val excludePackages = params.excludePackages.getOrElse(emptySet())
+        val includeWholeApplication = params.includeWholeApplication.getOrElse(false)
+        val okhttpEnabled = params.okhttp.getOrElse(false)
+        val webSocketsEnabled = params.webSockets.getOrElse(false)
+        val databaseTracingEnabled = params.databaseTracing.getOrElse(true)
+        val runtimeHooksEnabled = params.methodCounters.getOrElse(false) ||
+            okhttpEnabled ||
+            webSocketsEnabled ||
             params.handlers.getOrElse(false) ||
             params.executors.getOrElse(false) ||
             params.coroutines.getOrElse(false) ||
@@ -61,37 +37,70 @@ internal class InstrumentationClassSelector(
             params.runtimeCallGraph.getOrElse(false) ||
             params.composeTracing.getOrElse(true) ||
             params.roomTracing.getOrElse(true) ||
-            params.databaseTracing.getOrElse(true) ||
+            databaseTracingEnabled ||
             params.workerTracing.getOrElse(true) ||
             params.androidComponents.getOrElse(false) ||
             params.binderIPC.getOrElse(false) ||
             params.ioTracing.getOrElse(false)
-    }
-
-    private fun dependencyInjectionMatches(classData: ClassData): Boolean {
-        if (!params.dependencyInjectionAnalysis.getOrElse(false)) return false
-        return DependencyInjectionClassMatcher.shouldScan(
-            classData,
-            params.includePackages.getOrElse(emptySet()),
-            params.includeWholeApplication.getOrElse(false),
+        val networkBoundaryEnabled = params.networkWholeApplication.getOrElse(true) &&
+            (okhttpEnabled || webSocketsEnabled)
+        val databaseBoundaryEnabled = params.databaseWholeApplication.getOrElse(true) &&
+            databaseTracingEnabled
+        val alreadyInstrumented = InstrumentationMarker.isPresent(classData.classAnnotations)
+        val generatedDiClass = DependencyInjectionClassMatcher.isGeneratedDiClass(classData)
+        val normalizedClassName = InstrumentationPackages.normalizePackage(classData.className)
+        val boundaryMatches = !alreadyInstrumented && (networkBoundaryEnabled || databaseBoundaryEnabled) &&
+            InstrumentationMatcher.matchesNormalizedClassName(
+                normalizedClassName,
+                emptySet(),
+                excludePackages,
+                includeWholeApplication = true,
+            )
+        return InstrumentationClassSelection(
+            runtime = runtimeHooksEnabled && !alreadyInstrumented && !generatedDiClass &&
+                InstrumentationMatcher.matchesNormalizedClassName(
+                    normalizedClassName,
+                    includePackages,
+                    excludePackages,
+                    includeWholeApplication,
+                ),
+            networkBoundary = networkBoundaryEnabled && boundaryMatches,
+            databaseBoundary = databaseBoundaryEnabled && boundaryMatches &&
+                !isDatabaseImplementationClass(normalizedClassName),
+            autoInit = params.autoInit.getOrElse(false) && !alreadyInstrumented &&
+                !normalizedClassName.startsWith(JANK_HUNTER_RUNTIME_PACKAGE) &&
+                AndroidComponentAutoInit.matches(classData),
+            dependencyInjection = params.dependencyInjectionAnalysis.getOrElse(false) &&
+                (generatedDiClass || dependencyInjectionMatches(
+                    normalizedClassName,
+                    includePackages,
+                    includeWholeApplication,
+                )),
         )
     }
 
-    private fun networkMatches(classData: ClassData, alreadyInstrumented: Boolean): Boolean {
-        if (!params.networkWholeApplication.getOrElse(true) || alreadyInstrumented) return false
-        if (!params.okhttp.getOrElse(false) && !params.webSockets.getOrElse(false)) return false
-        return wholeApplicationBoundaryMatches(
-            className = classData.className,
-            excludePackages = params.excludePackages.getOrElse(emptySet()),
-        )
+    private fun dependencyInjectionMatches(
+        normalizedClassName: String,
+        includePackages: Set<String>,
+        includeWholeApplication: Boolean,
+    ): Boolean {
+        return if (includeWholeApplication) {
+            InstrumentationMatcher.matchesNormalizedClassName(
+                normalizedClassName,
+                emptySet(),
+                emptySet(),
+                includeWholeApplication = true,
+            )
+        } else {
+            InstrumentationMatcher.matchesNormalizedClassName(
+                normalizedClassName,
+                includePackages,
+                JANK_HUNTER_PACKAGES,
+                includeBuiltinExcludes = false,
+            )
+        }
     }
 
-    private fun databaseMatches(classData: ClassData, alreadyInstrumented: Boolean): Boolean {
-        if (!params.databaseWholeApplication.getOrElse(true) || alreadyInstrumented) return false
-        if (!params.databaseTracing.getOrElse(true)) return false
-        return databaseBoundaryMatches(
-            className = classData.className,
-            excludePackages = params.excludePackages.getOrElse(emptySet()),
-        )
-    }
+    private const val JANK_HUNTER_RUNTIME_PACKAGE = "io.jankhunter.runtime."
+    private val JANK_HUNTER_PACKAGES = setOf("io.jankhunter")
 }

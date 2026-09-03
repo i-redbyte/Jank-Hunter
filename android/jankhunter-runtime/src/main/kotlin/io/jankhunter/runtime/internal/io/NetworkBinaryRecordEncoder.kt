@@ -10,14 +10,16 @@ internal class NetworkBinaryRecordEncoder(
     fun http(owner: String?, route: String?, event: JankHunterHttpEvent, flags: Long) {
         val safeDurationMs = nonNegative(event.durationMs)
         val initiator = event.contextSnapshot
-        if (initiator?.initiatorPresent == true) {
+        val initiatorAlias = if (initiator?.initiatorPresent == true) {
             sink.defineStableSymbol(initiator.initiatorId, initiator.initiatorName)
+        } else {
+            0L
         }
         val payload = sink.payload()
             .symbolRef(sink.optionalSymbolId(BinaryLogWriter.DICT_ROUTE, route))
             .symbolRef(sink.optionalSymbolId(BinaryLogWriter.DICT_GENERIC, event.serviceAlias))
         if (initiator?.initiatorPresent == true) {
-            payload.stableSymbolRef(initiator.initiatorId)
+            payload.stableSymbolAlias(initiatorAlias)
         } else {
             payload.symbolRef(0L)
         }
@@ -46,7 +48,7 @@ internal class NetworkBinaryRecordEncoder(
             .uvarint(event.connectFailures.coerceIn(0, safeConnectAttempts).toLong())
             .uvarint(event.tlsFailures.coerceIn(0, safeTlsAttempts).toLong())
             .uvarint(event.redirects.coerceIn(0, safeAttempts).toLong())
-        sink.emit(Jhlog.TYPE_HTTP, flags, payload, sink.producerContext(owner))
+        sink.emitSemantic(Jhlog.TYPE_HTTP, flags, payload, sink.producerContext(owner))
     }
 
     fun webSocket(owner: String?, event: JankHunterWebSocketEvent) {
@@ -76,7 +78,7 @@ internal class NetworkBinaryRecordEncoder(
             .uvarint(nonNegative(event.binaryMessages))
             .uvarint(nonNegative(event.receivedBytes))
             .uvarint(event.reconnectOrdinal.coerceAtLeast(0).toLong())
-        sink.emit(Jhlog.TYPE_WEBSOCKET, 0L, payload, sink.producerContext(owner))
+        sink.emitSemantic(Jhlog.TYPE_WEBSOCKET, 0L, payload, sink.producerContext(owner))
     }
 
     private fun nonNegative(value: Long): Long = value.coerceAtLeast(0L)

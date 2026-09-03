@@ -14,10 +14,8 @@ import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
 import io.jankhunter.runtime.internal.system.RetentionEvidence
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.LockSupport
-import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
@@ -42,15 +40,21 @@ internal class AsyncLogWriter internal constructor(
     private val logGrowthManager: LogGrowthManager?,
     private val onTerminalStop: AsyncWriterTerminalObserver,
 ) : OperationEventSink {
-    private val controlLane = AsyncControlLane(CONTROL_QUEUE_CAPACITY)
-    private val queuedEvents = Semaphore(0)
-    private val admissionLock = ReentrantLock()
+    private val producer = AsyncWriterProducer(config)
+    private val consumer = AsyncWriterConsumer(
+        directory = directory,
+        config = config,
+        processName = processName,
+        sessionLocalDate = sessionLocalDate,
+        quality = quality,
+    )
     private val lifecycle = AsyncWriterLifecycle()
-    private val producerContext = ProducerContextTracker()
-    @Volatile
-    private var binaryStorage: JankHunterBinaryStorage? = config.binaryStorage()
-
-    private val eventLanes = AsyncEventLanes(config.maxQueueSize())
+    private val controls = AsyncWriterControlCoordinator(
+        exactEventCollection = config.exactEventCollectionEnabled(),
+        quality = quality,
+        beginSubmission = ::beginControlSubmission,
+        wakeWorker = producer.queuedEvents::release,
+    )
     private val sessionFactory = AsyncLogSessionFactory(
         directory = directory,
         config = config,
@@ -61,25 +65,6 @@ internal class AsyncLogWriter internal constructor(
         quality = quality,
         logGrowthManager = logGrowthManager,
     )
-
-    private var acceptedSequence = 0L
-    private var completedSequence = 0L
-    private val segmentLedger = SessionSegmentLedger(directory, processName)
-    private var writer: BinaryLogWriter? = null
-    private var runCohortLease: ProcessRunCohort.Lease? = null
-    private var runId = ByteArray(0)
-    private var runLocalDate = sessionLocalDate
-    private var dailySessionIndex = 0L
-    private val sessionId = BinaryLogFileHeader.randomId()
-    private var segmentIndex = 0L
-    private var previousSegmentDigest = ByteArray(0)
-    private var completedSegmentStats = LogContainerStats.EMPTY
-    private var lastFlushAtMs = SystemClock.elapsedRealtime()
-    private val runtimeHookFailures = RuntimeHookFailureQualitySynchronizer(quality)
-    private val retention = SessionLogRetentionCoordinator(directory, config, quality)
-
-    @Volatile
-    private var worker: Thread? = null
 
     fun session(
         appVersion: String?,
@@ -99,8 +84,8 @@ internal class AsyncLogWriter internal constructor(
         collectorFlags: Long,
     ): Boolean {
         return enqueue(Jhlog.TYPE_SESSION, LogEventLane.CRITICAL) {
-            PendingLogEvent.Session(
-                producerContext.capture(),
+            PendingSessionEvent(
+                producer.context.capture(),
                 appVersion,
                 build,
                 device,
@@ -126,7 +111,7 @@ internal class AsyncLogWriter internal constructor(
         owner: String?,
         operationId: Long = 0L,
     ) {
-        producerContext.update(screen, owner, operationId)
+        producer.context.update(screen, owner, operationId)
     }
 
     fun context(
@@ -147,8 +132,8 @@ internal class AsyncLogWriter internal constructor(
         foreground: Boolean,
     ) {
         enqueue(Jhlog.TYPE_DEVICE_CONTEXT, LogEventLane.BULK) {
-            PendingLogEvent.DeviceContext(
-                producerContext.capture(),
+            PendingDeviceContextEvent(
+                producer.context.capture(),
                 networkKind,
                 batteryPct,
                 availMemoryKb,
@@ -176,8 +161,8 @@ internal class AsyncLogWriter internal constructor(
         flags: Long,
     ) {
         enqueue(Jhlog.TYPE_HTTP, LogEventLane.BULK) {
-            PendingLogEvent.Http(
-                producerContext.capture(screen, owner),
+            PendingHttpEvent(
+                producer.context.capture(screen, owner),
                 owner,
                 route,
                 event,
@@ -192,7 +177,7 @@ internal class AsyncLogWriter internal constructor(
         event: JankHunterWebSocketEvent,
     ) {
         enqueue(Jhlog.TYPE_WEBSOCKET, LogEventLane.BULK) {
-            PendingLogEvent.WebSocket(producerContext.capture(screen, owner), owner, event)
+            PendingWebSocketEvent(producer.context.capture(screen, owner), owner, event)
         }
     }
 
@@ -220,8 +205,8 @@ internal class AsyncLogWriter internal constructor(
         materializeUs: Long = 0L,
     ) {
         enqueue(Jhlog.TYPE_DATABASE, if (mainThread) LogEventLane.CRITICAL else LogEventLane.BULK) {
-            PendingLogEvent.Database(
-                producerContext.capture(), sourceId, sourceName, query, framework,
+            producer.databaseEventPool.acquire(
+                producer.context.capture(), sourceId, sourceName, query, framework,
                 operation, outcome, durationUs, mainThread, failureKind, boundary,
                 statementFingerprint, resultKnown, resultKind, resultCountBucket,
                 transactionId, statementToken, phaseMask, poolWaitUs, lockWaitUs,
@@ -246,8 +231,8 @@ internal class AsyncLogWriter internal constructor(
         mainThread: Boolean,
     ) {
         enqueue(Jhlog.TYPE_DATABASE_TRANSACTION, if (mainThread) LogEventLane.CRITICAL else LogEventLane.BULK) {
-            PendingLogEvent.DatabaseTransaction(
-                producerContext.capture(), sourceId, sourceName, transactionId, parentId, stage, mode,
+            producer.databaseTransactionEventPool.acquire(
+                producer.context.capture(), sourceId, sourceName, transactionId, parentId, stage, mode,
                 outcome, failureKind, durationUs, statementCount, readCount, writeCount, mainThread,
             )
         }
@@ -260,8 +245,8 @@ internal class AsyncLogWriter internal constructor(
         reason: Long,
     ) {
         enqueue(Jhlog.TYPE_PROCESS_STATE, LogEventLane.CRITICAL) {
-            PendingLogEvent.ProcessState(
-                producerContext.capture(),
+            PendingProcessStateEvent(
+                producer.context.capture(),
                 uiVisibility,
                 processImportance,
                 androidImportance,
@@ -283,8 +268,8 @@ internal class AsyncLogWriter internal constructor(
         componentFlags: Long,
     ) {
         enqueue(Jhlog.TYPE_ANDROID_COMPONENT, LogEventLane.CRITICAL) {
-            PendingLogEvent.AndroidComponent(
-                producerContext.capture(),
+            PendingAndroidComponentEvent(
+                producer.context.capture(),
                 componentId,
                 componentName,
                 action,
@@ -317,8 +302,8 @@ internal class AsyncLogWriter internal constructor(
             LogEventLane.BULK
         }
         enqueue(Jhlog.TYPE_BINDER_TRANSACTION, lane) {
-            PendingLogEvent.BinderTransaction(
-                producerContext.capture(),
+            PendingBinderTransactionEvent(
+                producer.context.capture(),
                 descriptor,
                 method,
                 callId,
@@ -341,8 +326,8 @@ internal class AsyncLogWriter internal constructor(
         foreground: Boolean,
     ) {
         enqueue(Jhlog.TYPE_STALL, LogEventLane.CRITICAL) {
-            PendingLogEvent.Stall(
-                producerContext.capture(screen, owner),
+            PendingStallEvent(
+                producer.context.capture(screen, owner),
                 screen,
                 owner,
                 stackHint,
@@ -354,7 +339,7 @@ internal class AsyncLogWriter internal constructor(
 
     fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean) {
         enqueue(Jhlog.TYPE_MEMORY, LogEventLane.BULK) {
-            PendingLogEvent.Memory(producerContext.capture(), pssKb, javaHeapKb, nativeHeapKb, foreground)
+            PendingMemoryEvent(producer.context.capture(), pssKb, javaHeapKb, nativeHeapKb, foreground)
         }
     }
 
@@ -369,8 +354,8 @@ internal class AsyncLogWriter internal constructor(
         evidence: RetentionEvidence,
     ) {
         enqueue(Jhlog.TYPE_RETAINED, LogEventLane.CRITICAL) {
-            PendingLogEvent.Retained(
-                producerContext.capture(),
+            PendingRetainedEvent(
+                producer.context.capture(),
                 screen,
                 owner,
                 className,
@@ -395,8 +380,8 @@ internal class AsyncLogWriter internal constructor(
         flags: Long = 0L,
     ) {
         enqueue(Jhlog.TYPE_UI_WINDOW, LogEventLane.BULK) {
-            PendingLogEvent.UiWindow(
-                producerContext.capture(),
+            PendingUiWindowEvent(
+                producer.context.capture(),
                 screen,
                 windowMs,
                 frameCount,
@@ -419,8 +404,8 @@ internal class AsyncLogWriter internal constructor(
         processName: String?,
     ) {
         enqueue(Jhlog.TYPE_PROCESS_EXIT, LogEventLane.CRITICAL) {
-            PendingLogEvent.ProcessExit(
-                producerContext.capture(),
+            PendingProcessExitEvent(
+                producer.context.capture(),
                 reason,
                 timestampUnixMs,
                 importance,
@@ -442,8 +427,8 @@ internal class AsyncLogWriter internal constructor(
         bytesKnown: Boolean,
     ) {
         enqueue(Jhlog.TYPE_IO, if (mainThread) LogEventLane.CRITICAL else LogEventLane.BULK) {
-            PendingLogEvent.IO(
-                producerContext.capture(),
+            PendingIoEvent(
+                producer.context.capture(),
                 operation,
                 durationUs,
                 bytes,
@@ -469,8 +454,8 @@ internal class AsyncLogWriter internal constructor(
         flags: Long,
     ) {
         enqueue(Jhlog.TYPE_WORKER, LogEventLane.CRITICAL) {
-            PendingLogEvent.Worker(
-                producerContext.capture(),
+            PendingWorkerEvent(
+                producer.context.capture(),
                 workerId,
                 workerName,
                 instanceId,
@@ -499,8 +484,8 @@ internal class AsyncLogWriter internal constructor(
         attributes: JankHunterOperationAttributes,
     ): Boolean {
         return enqueue(Jhlog.TYPE_OPERATION, LogEventLane.CRITICAL) {
-            PendingLogEvent.Operation(
-                producerContext.captureOperation(screen, owner, operationId),
+            PendingOperationEvent(
+                producer.context.captureOperation(screen, owner, operationId),
                 name,
                 operationId,
                 parentId,
@@ -520,14 +505,14 @@ internal class AsyncLogWriter internal constructor(
             return
         }
         enqueue(Jhlog.TYPE_COUNTER, metricLane(name)) {
-            PendingLogEvent.Counter(producerContext.capture(), name, value)
+            PendingCounterEvent(producer.context.capture(), name, value)
         }
     }
 
     fun stableCounters(batch: StableCounterBatch): Boolean {
         if (batch.size <= 0) return true
         return enqueue(Jhlog.TYPE_COUNTER, LogEventLane.BULK, batch.logicalEventCount()) {
-            PendingLogEvent.StableCounters(producerContext.capture(), batch)
+            producer.stableCountersEventPool.acquire(producer.context.capture(), batch)
         }
     }
 
@@ -544,7 +529,7 @@ internal class AsyncLogWriter internal constructor(
             return
         }
         enqueue(Jhlog.TYPE_GAUGE, metricLane(name)) {
-            PendingLogEvent.Gauge(producerContext.capture(), name, value, count, sum, max, mode)
+            PendingGaugeEvent(producer.context.capture(), name, value, count, sum, max, mode)
         }
     }
 
@@ -557,8 +542,8 @@ internal class AsyncLogWriter internal constructor(
         count: Long,
     ): Boolean {
         return enqueue(Jhlog.TYPE_LOG_SPAM, LogEventLane.BULK, count) {
-            PendingLogEvent.LogSpam(
-                producerContext.captureOperation(screen, owner, operationId),
+            PendingLogSpamEvent(
+                producer.context.captureOperation(screen, owner, operationId),
                 screen,
                 owner,
                 operationId,
@@ -579,8 +564,8 @@ internal class AsyncLogWriter internal constructor(
         foreground: Boolean = false,
     ) {
         enqueue(Jhlog.TYPE_PROBLEM, LogEventLane.CRITICAL) {
-            PendingLogEvent.Problem(
-                producerContext.capture(),
+            PendingProblemEvent(
+                producer.context.capture(),
                 screen,
                 owner,
                 kind,
@@ -595,7 +580,7 @@ internal class AsyncLogWriter internal constructor(
     fun runtimeCalls(batch: RuntimeCallBatch): Boolean {
         if (batch.size <= 0) return true
         return enqueue(Jhlog.TYPE_RUNTIME_CALL, LogEventLane.BULK, batch.logicalEventCount()) {
-            PendingLogEvent.RuntimeCalls(producerContext.capture(), batch)
+            producer.runtimeCallsEventPool.acquire(producer.context.capture(), batch)
         }
     }
 
@@ -609,34 +594,26 @@ internal class AsyncLogWriter internal constructor(
     internal fun terminalFailureCause(): Throwable? = lifecycle.terminalFailure()
 
     fun flush() {
-        val target = beginControlSubmission()
-        if (target < 0L) return
-        try {
-            if (!controlLane.offer(AsyncControlRequest(target, writeLogGrowth = false, blocking = false))) {
-                quality.add(QualityCounterId.CONTROL_LANE_FULL_TOTAL)
-            }
-        } finally {
-            controlLane.finishSubmission()
-        }
+        controls.flush()
     }
 
     fun flushBlocking(
         timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS,
         waitForExactFrontier: Boolean = true,
     ): Boolean {
-        return submitBlockingControl(timeoutMs, writeLogGrowth = false, waitForExactFrontier)
+        return controls.submitBlocking(timeoutMs, writeLogGrowth = false, waitForExactFrontier)
     }
 
     internal fun writeLogGrowthSummaryBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
         if (logGrowthManager == null) return false
-        return submitBlockingControl(timeoutMs, writeLogGrowth = true, waitForExactFrontier = true)
+        return controls.submitBlocking(timeoutMs, writeLogGrowth = true, waitForExactFrontier = true)
     }
 
     internal fun captureSnapshotBlocking(
         timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS,
     ): LogSnapshotResult? {
         var snapshot: LogSnapshotResult? = null
-        val succeeded = submitBlockingControl(
+        val succeeded = controls.submitBlocking(
             timeoutMs = timeoutMs,
             writeLogGrowth = logGrowthManager != null,
             waitForExactFrontier = true,
@@ -651,11 +628,11 @@ internal class AsyncLogWriter internal constructor(
         timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS,
     ): JankHunterStorageSwitchResult {
         if (!lifecycle.isAccepting()) return JankHunterStorageSwitchResult.NOT_ACCEPTING
-        if (Thread.currentThread() === worker) return JankHunterStorageSwitchResult.FAILED
-        if (binaryStorage === storage) return JankHunterStorageSwitchResult.ALREADY_ACTIVE
+        if (Thread.currentThread() === consumer.worker) return JankHunterStorageSwitchResult.FAILED
+        if (consumer.binaryStorage === storage) return JankHunterStorageSwitchResult.ALREADY_ACTIVE
         var result = JankHunterStorageSwitchResult.FAILED
         var completed = false
-        submitBlockingControl(
+        controls.submitBlocking(
             timeoutMs = timeoutMs,
             writeLogGrowth = logGrowthManager != null,
             waitForExactFrontier = true,
@@ -672,110 +649,20 @@ internal class AsyncLogWriter internal constructor(
     }
 
     internal fun logGrowthSummary(): JankHunterLogGrowthSummary? =
-        logGrowthManager?.summary(writer?.logGrowthStats())
-
-    private fun submitBlockingControl(
-        timeoutMs: Long,
-        writeLogGrowth: Boolean,
-        waitForExactFrontier: Boolean,
-        sealSnapshot: Boolean = false,
-        storageSwitch: StorageSwitchRequest? = null,
-        onComplete: ((AsyncControlRequest) -> Unit)? = null,
-    ): Boolean {
-        val target = beginControlSubmission(startIfNeeded = writeLogGrowth || sealSnapshot || storageSwitch != null)
-        if (target == CONTROL_NO_WORK) return !writeLogGrowth && !sealSnapshot
-        if (target == CONTROL_NOT_ACCEPTING) return false
-        if (config.exactEventCollectionEnabled() && waitForExactFrontier) {
-            return submitExactBlockingControl(target, writeLogGrowth, sealSnapshot, storageSwitch, onComplete)
-        }
-        val timeoutNs = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
-        val startedAtNs = System.nanoTime()
-        val request = AsyncControlRequest(target, writeLogGrowth, sealSnapshot, storageSwitch, blocking = true)
-        val admitted = try {
-            controlLane.offer(request, timeoutNs, TimeUnit.NANOSECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            quality.add(QualityCounterId.CONTROL_INTERRUPTED_TOTAL)
-            return false
-        } finally {
-            controlLane.finishSubmission()
-        }
-        if (!admitted) {
-            quality.add(QualityCounterId.CONTROL_TIMEOUT_TOTAL)
-            return false
-        }
-        queuedEvents.release()
-
-        val remainingNs = timeoutNs - (System.nanoTime() - startedAtNs).coerceAtLeast(0L)
-        if (remainingNs <= 0L) {
-            if (request.isComplete()) {
-                onComplete?.invoke(request)
-                return request.succeeded
-            }
-            quality.add(QualityCounterId.CONTROL_TIMEOUT_TOTAL)
-            return false
-        }
-        val completed = try {
-            request.await(remainingNs)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            quality.add(QualityCounterId.CONTROL_INTERRUPTED_TOTAL)
-            return false
-        }
-        if (!completed) {
-            quality.add(QualityCounterId.CONTROL_TIMEOUT_TOTAL)
-            return false
-        }
-        onComplete?.invoke(request)
-        return request.succeeded
-    }
-
-    private fun submitExactBlockingControl(
-        target: Long,
-        writeLogGrowth: Boolean,
-        sealSnapshot: Boolean,
-        storageSwitch: StorageSwitchRequest?,
-        onComplete: ((AsyncControlRequest) -> Unit)?,
-    ): Boolean {
-        val request = AsyncControlRequest(target, writeLogGrowth, sealSnapshot, storageSwitch, blocking = true)
-        var interrupted = false
-        try {
-            var admitted = false
-            while (!admitted) {
-                try {
-                    admitted = controlLane.offer(request, CONTROL_WAIT_POLL_MS, TimeUnit.MILLISECONDS)
-                } catch (_: InterruptedException) {
-                    interrupted = true
-                }
-            }
-        } finally {
-            controlLane.finishSubmission()
-        }
-        queuedEvents.release()
-        while (!request.isComplete()) {
-            try {
-                request.await(TimeUnit.MILLISECONDS.toNanos(CONTROL_WAIT_POLL_MS))
-            } catch (_: InterruptedException) {
-                interrupted = true
-            }
-        }
-        if (interrupted) Thread.currentThread().interrupt()
-        onComplete?.invoke(request)
-        return request.succeeded
-    }
+        logGrowthManager?.summary(consumer.writer?.logGrowthStats())
 
     fun close(timeoutMs: Long = closeTimeoutMs()): Boolean {
-        admissionLock.withLock {
+        producer.admissionLock.withLock {
             lifecycle.stopAccepting()
         }
-        val activeWorker = worker
+        val activeWorker = consumer.worker
         if (activeWorker == null) {
             finishSession(null)
             return true
         }
         // Wake an idle poll without interrupting an in-flight file lock, custom storage call or
         // chunk commit. Interrupting those operations can turn an orderly shutdown into data loss.
-        queuedEvents.release()
+        producer.queuedEvents.release()
         val finished = waitForWorker(
             activeWorker,
             timeoutMs.coerceAtLeast(1L),
@@ -808,7 +695,7 @@ internal class AsyncLogWriter internal constructor(
         var contentionRecorded = false
         while (true) {
             var retryReason = QualityCounterId.REASON_ADMISSION_CONTENTION
-            val acquired = admissionLock.tryLock()
+            val acquired = producer.admissionLock.tryLock()
             if (!acquired) {
                 if (!contentionRecorded) {
                     contentionRecorded = true
@@ -830,27 +717,30 @@ internal class AsyncLogWriter internal constructor(
                         )
                         return false
                     }
-                    if (eventLanes.hasCapacity(lane)) {
+                    if (producer.eventLanes.hasCapacity(lane)) {
                         val event = createEvent()
-                        val sequence = acceptedSequence + 1L
+                        val sequence = producer.acceptedSequence + 1L
                         event.sequence = sequence
-                        when (eventLanes.tryOffer(lane, event)) {
+                        when (producer.eventLanes.tryOffer(lane, event)) {
                             OfferResult.OFFERED -> {
-                                acceptedSequence = sequence
+                                producer.acceptedSequence = sequence
                                 quality.addAccepted(event.logicalEventCount)
                                 recordWriterBackpressure(blockedAtNs)
                                 if (!startWorker()) return false
-                                queuedEvents.release()
+                                producer.queuedEvents.release()
                                 return true
                             }
-                            OfferResult.FULL -> retryReason = QualityCounterId.REASON_QUEUE_FULL
-                            OfferResult.CONTENDED -> Unit
+                            OfferResult.FULL -> {
+                                event.rejectBeforeAdmission()
+                                retryReason = QualityCounterId.REASON_QUEUE_FULL
+                            }
+                            OfferResult.CONTENDED -> event.rejectBeforeAdmission()
                         }
                     } else {
                         retryReason = QualityCounterId.REASON_QUEUE_FULL
                     }
                 } finally {
-                    admissionLock.unlock()
+                    producer.admissionLock.unlock()
                 }
             }
             if (retryReason == QualityCounterId.REASON_ADMISSION_CONTENTION && !contentionRecorded) {
@@ -884,25 +774,27 @@ internal class AsyncLogWriter internal constructor(
     }
 
     private fun beginControlSubmission(startIfNeeded: Boolean = false): Long {
-        return admissionLock.withLock {
-            if (!lifecycle.isAccepting()) return@withLock CONTROL_NOT_ACCEPTING
-            if (worker == null && (!startIfNeeded || !startWorker())) return@withLock CONTROL_NO_WORK
-            controlLane.beginSubmission()
-            acceptedSequence
+        return producer.admissionLock.withLock {
+            if (!lifecycle.isAccepting()) return@withLock AsyncWriterControlCoordinator.NOT_ACCEPTING
+            if (consumer.worker == null && (!startIfNeeded || !startWorker())) {
+                return@withLock AsyncWriterControlCoordinator.NO_WORK
+            }
+            controls.beginLaneSubmission()
+            producer.acceptedSequence
         }
     }
 
     private fun startWorker(): Boolean {
-        if (worker != null) return true
+        if (consumer.worker != null) return true
         return try {
             val startedWorker = Thread(::runWorkerFailOpen, "JankHunterWriter").apply {
                 isDaemon = true
             }
-            worker = startedWorker
+            consumer.worker = startedWorker
             startedWorker.start()
             true
         } catch (error: Throwable) {
-            worker = null
+            consumer.worker = null
             if (!error.isFatal()) quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
             terminateWithoutWorker(error)
             if (error.isFatal()) throw error
@@ -964,31 +856,36 @@ internal class AsyncLogWriter internal constructor(
             while (
                 lifecycle.isRunning() ||
                 hasPendingEvents() ||
-                controlLane.hasPending() ||
-                controlLane.hasSubmitters()
+                controls.hasPending() ||
+                controls.hasSubmitters()
             ) {
-                if (writer == null) {
+                if (consumer.writer == null) {
                     // A size or I/O failure rejects queued events, so controls targeting their
                     // sequence can never become ready. Complete them as failed instead of keeping
                     // the daemon alive until every caller times out.
-                    failPendingControls()
-                    if (controlLane.hasSubmitters()) LockSupport.parkNanos(CONTROL_DRAIN_PARK_NS)
+                    controls.failPending()
+                    if (controls.hasSubmitters()) LockSupport.parkNanos(CONTROL_DRAIN_PARK_NS)
                     continue
                 }
                 val event = pollNextEvent()
                 if (event != null) {
-                    if (writeEvent(event)) {
-                        completedSequence = event.sequence
+                    val eventSequence = event.sequence
+                    try {
+                        if (writeEvent(event)) {
+                            consumer.completedSequence = eventSequence
+                        }
+                    } finally {
+                        event.recycle()
                     }
                 }
                 processReadyControls()
                 flushIfNeeded(force = false)
                 if (event != null && initialCleanupPending) {
                     initialCleanupPending = false
-                    retention.enforce(writer, binaryStorage, runId)
+                    consumer.retention.enforce(consumer.writer, consumer.binaryStorage, consumer.runId)
                 }
             }
-            if (writer != null) {
+            if (consumer.writer != null) {
                 processReadyControls()
                 flushIfNeeded(force = true)
             }
@@ -999,51 +896,51 @@ internal class AsyncLogWriter internal constructor(
             }
             quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
             stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_IO_LOST, failure = error)
-            writer?.let(::sealIoFailure)
+            consumer.writer?.let(::sealIoFailure)
         } finally {
-            failPendingControlsAfterAdmissionClosed()
+            controls.failAfterAdmissionClosed()
             closeSessionWriter()
         }
     }
 
     private fun openSessionWriter(
-        storage: JankHunterBinaryStorage? = binaryStorage,
+        storage: JankHunterBinaryStorage? = consumer.binaryStorage,
         terminalOnFailure: Boolean = true,
     ): Boolean {
         return try {
-            if (runCohortLease == null) {
+            if (consumer.runCohortLease == null) {
                 val authoritativeStoragePaths = storage?.let { activeStorage ->
                     runCatching { activeStorage.listFiles() }.getOrNull()
                 }
-                runCohortLease = ProcessRunCohort.join(
+                consumer.runCohortLease = ProcessRunCohort.join(
                     directory,
                     sessionLocalDate,
                     authoritativeStoragePaths,
                 ).also { lease ->
-                    runId = lease.runId()
-                    runLocalDate = lease.localDate()
-                    dailySessionIndex = lease.dailySessionIndex()
+                    consumer.runId = lease.runId()
+                    consumer.runLocalDate = lease.localDate()
+                    consumer.dailySessionIndex = lease.dailySessionIndex()
                 }
             }
             val opened = sessionFactory.open(
-                localDate = runLocalDate,
-                dailySessionIndex = dailySessionIndex,
-                runId = runId,
-                sessionId = sessionId,
-                segmentIndex = segmentIndex,
-                previousSegmentDigest = previousSegmentDigest,
-                baseStats = completedSegmentStats,
-                segmentStartElapsedUs = if (segmentIndex == 0L) collectorStartElapsedUs else nowElapsedUs(),
-                segmentStartUnixMs = if (segmentIndex == 0L) {
+                localDate = consumer.runLocalDate,
+                dailySessionIndex = consumer.dailySessionIndex,
+                runId = consumer.runId,
+                sessionId = consumer.sessionId,
+                segmentIndex = consumer.segmentIndex,
+                previousSegmentDigest = consumer.previousSegmentDigest,
+                baseStats = consumer.completedSegmentStats,
+                segmentStartElapsedUs = if (consumer.segmentIndex == 0L) collectorStartElapsedUs else nowElapsedUs(),
+                segmentStartUnixMs = if (consumer.segmentIndex == 0L) {
                     sessionStartMs
                 } else {
                     currentTimeMs.getAsLong().coerceAtLeast(0L)
                 },
                 storage = storage,
             )
-            segmentLedger.register(opened, storage)
-            binaryStorage = storage
-            writer = opened.writer
+            consumer.segmentLedger.register(opened, storage)
+            consumer.binaryStorage = storage
+            consumer.writer = opened.writer
             true
         } catch (error: StorageBudgetExhaustedException) {
             if (terminalOnFailure) {
@@ -1060,22 +957,22 @@ internal class AsyncLogWriter internal constructor(
         }
     }
 
-    private fun hasPendingEvents(): Boolean = eventLanes.hasEvents()
+    private fun hasPendingEvents(): Boolean = producer.eventLanes.hasEvents()
 
     private fun pollNextEvent(): PendingLogEvent? {
         val available = try {
-            queuedEvents.tryAcquire(WORKER_POLL_MS, TimeUnit.MILLISECONDS)
+            producer.queuedEvents.tryAcquire(WORKER_POLL_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             false
         }
         if (!available) return null
-        return eventLanes.pollNext()
+        return producer.eventLanes.pollNext()
     }
 
     private fun writeEvent(event: PendingLogEvent): Boolean {
         var rotatedWithoutProgress = false
         while (true) {
-            val activeWriter = writer ?: return false
+            val activeWriter = consumer.writer ?: return false
             val remainingBeforeWrite = event.remainingEventCount
             try {
                 event.writeTo(activeWriter)
@@ -1139,21 +1036,21 @@ internal class AsyncLogWriter internal constructor(
         } catch (error: Throwable) {
             if (error.isFatal()) throw error
             quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
-            if (writer === activeWriter) activeWriter.abort()
+            if (consumer.writer === activeWriter) activeWriter.abort()
             stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_IO_LOST, failure = error)
             false
         }
     }
 
     private fun switchStorage(target: JankHunterBinaryStorage?): JankHunterStorageSwitchResult {
-        if (binaryStorage === target) return JankHunterStorageSwitchResult.ALREADY_ACTIVE
-        val activeWriter = writer ?: return JankHunterStorageSwitchResult.NOT_STARTED
-        val previousStorage = binaryStorage
+        if (consumer.binaryStorage === target) return JankHunterStorageSwitchResult.ALREADY_ACTIVE
+        val activeWriter = consumer.writer ?: return JankHunterStorageSwitchResult.NOT_STARTED
+        val previousStorage = consumer.binaryStorage
         return try {
             sealSegment(activeWriter)
-            val handoff = segmentLedger.prepareHandoff(target)
+            val handoff = consumer.segmentLedger.prepareHandoff(target)
             if (!openSessionWriter(target, terminalOnFailure = false)) {
-                segmentLedger.rollbackHandoff(target, handoff)
+                consumer.segmentLedger.rollbackHandoff(target, handoff)
                 if (!openSessionWriter(previousStorage, terminalOnFailure = false)) {
                     stopAndDrain(
                         currentEvent = null,
@@ -1163,13 +1060,13 @@ internal class AsyncLogWriter internal constructor(
                 }
                 JankHunterStorageSwitchResult.FAILED
             } else {
-                segmentLedger.commitHandoff(handoff)
+                consumer.segmentLedger.commitHandoff(handoff)
                 JankHunterStorageSwitchResult.SWITCHED
             }
         } catch (error: Throwable) {
             if (error.isFatal()) throw error
             quality.add(QualityCounterId.WRITER_IO_ERROR_TOTAL)
-            if (writer == null && !openSessionWriter(previousStorage, terminalOnFailure = false)) {
+            if (consumer.writer == null && !openSessionWriter(previousStorage, terminalOnFailure = false)) {
                 stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_IO_LOST, failure = error)
             }
             JankHunterStorageSwitchResult.FAILED
@@ -1178,27 +1075,27 @@ internal class AsyncLogWriter internal constructor(
 
     private fun sealSegment(activeWriter: BinaryLogWriter) {
         activeWriter.sealRotation()
-        previousSegmentDigest = activeWriter.sealedDigest()
+        consumer.previousSegmentDigest = activeWriter.sealedDigest()
             ?: throw IOException("Sealed Jank Hunter segment has no SHA-256 digest")
         val sealedStats = activeWriter.logGrowthStats()
-        completedSegmentStats = sealedStats.copy(
+        consumer.completedSegmentStats = sealedStats.copy(
             segmentRotationCount = saturatedAdd(sealedStats.segmentRotationCount, 1L),
         )
-        segmentLedger.seal(activeWriter.path, binaryStorage)
-        retention.enforce(activeWriter, binaryStorage, runId)
-        if (writer === activeWriter) writer = null
-        if (segmentIndex == Long.MAX_VALUE) throw IOException("Jank Hunter segment index exhausted")
-        segmentIndex++
+        consumer.segmentLedger.seal(activeWriter.path, consumer.binaryStorage)
+        consumer.retention.enforce(activeWriter, consumer.binaryStorage, consumer.runId)
+        if (consumer.writer === activeWriter) consumer.writer = null
+        if (consumer.segmentIndex == Long.MAX_VALUE) throw IOException("Jank Hunter segment index exhausted")
+        consumer.segmentIndex++
     }
 
     private fun processReadyControls() {
         while (true) {
-            val request = controlLane.peek() ?: return
-            if (completedSequence < request.targetSequence) return
-            if (controlLane.poll() !== request) continue
+            val request = controls.peek() ?: return
+            if (consumer.completedSequence < request.targetSequence) return
+            if (controls.poll() !== request) continue
             val flushed = flushIfNeeded(force = true)
             val succeeded = if (flushed && request.writeLogGrowth) {
-                writer?.writeLogGrowthSummary() == true
+                consumer.writer?.writeLogGrowthSummary() == true
             } else {
                 flushed
             }
@@ -1211,11 +1108,11 @@ internal class AsyncLogWriter internal constructor(
             }
             val snapshotSucceeded = if (switchSucceeded && request.sealSnapshot) {
                 val capturedAtMs = currentTimeMs.getAsLong().coerceAtLeast(0L)
-                val activeWriter = writer
+                val activeWriter = consumer.writer
                 if (activeWriter != null && rotateSegment(activeWriter)) {
                     request.snapshot = LogSnapshotResult(
                         capturedAtMs = capturedAtMs,
-                        logPaths = segmentLedger.completedPaths(),
+                        logPaths = consumer.segmentLedger.completedPaths(),
                     )
                     true
                 } else {
@@ -1228,32 +1125,12 @@ internal class AsyncLogWriter internal constructor(
         }
     }
 
-    private fun failPendingControls() {
-        while (true) {
-            val request = controlLane.poll() ?: return
-            request.complete(success = false)
-        }
-    }
-
-    /**
-     * A submitter increments under [admissionLock] before publishing its control and decrements only
-     * after the offer. Once admission is closed no new submitter can appear, so observing zero and
-     * draining once more establishes a terminal frontier for every accepted control.
-     */
-    private fun failPendingControlsAfterAdmissionClosed() {
-        while (controlLane.hasSubmitters()) {
-            failPendingControls()
-            LockSupport.parkNanos(CONTROL_DRAIN_PARK_NS)
-        }
-        failPendingControls()
-    }
-
     private fun flushIfNeeded(force: Boolean): Boolean {
-        runtimeHookFailures.sync()
+        consumer.runtimeHookFailures.sync()
         val now = SystemClock.elapsedRealtime()
         val interval = config.flushIntervalMs()
-        if (!force && (interval <= 0L || now - lastFlushAtMs < interval)) return true
-        val activeWriter = writer ?: return false
+        if (!force && (interval <= 0L || now - consumer.lastFlushAtMs < interval)) return true
+        val activeWriter = consumer.writer ?: return false
         return try {
             if (logGrowthManager == null) {
                 activeWriter.flush()
@@ -1262,7 +1139,7 @@ internal class AsyncLogWriter internal constructor(
                     activeWriter.flush()
                 }
             }
-            lastFlushAtMs = now
+            consumer.lastFlushAtMs = now
             true
         } catch (error: StorageBudgetExhaustedException) {
             stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_STORAGE_BUDGET, failure = error)
@@ -1303,7 +1180,7 @@ internal class AsyncLogWriter internal constructor(
         failure: Throwable? = null,
     ) {
         lifecycle.recordTermination(reason, failure)
-        admissionLock.withLock {
+        producer.admissionLock.withLock {
             lifecycle.stopAccepting()
             rejectAllQueuedLocked(reason)
         }
@@ -1312,7 +1189,7 @@ internal class AsyncLogWriter internal constructor(
         }
     }
 
-    /** Called while [admissionLock] is held when the worker could not be started. */
+    /** Called while the producer admission lock is held when the worker could not be started. */
     private fun terminateWithoutWorker(error: Throwable) {
         lifecycle.recordTermination(QualityCounterId.REASON_IO_LOST, error)
         lifecycle.stopAccepting()
@@ -1321,7 +1198,7 @@ internal class AsyncLogWriter internal constructor(
         } catch (_: Throwable) {
             // Admission is already closed; quality accounting is best effort under VM pressure.
         }
-        failPendingControlsAfterAdmissionClosed()
+        controls.failAfterAdmissionClosed()
     }
 
     private fun terminateAfterEscapedFailure(error: Throwable) {
@@ -1336,7 +1213,7 @@ internal class AsyncLogWriter internal constructor(
             lifecycle.stopAccepting()
         }
         try {
-            failPendingControlsAfterAdmissionClosed()
+            controls.failAfterAdmissionClosed()
         } catch (_: Throwable) {
             // Keep the fail-open boundary intact even when the VM cannot finish diagnostics.
         }
@@ -1348,20 +1225,24 @@ internal class AsyncLogWriter internal constructor(
 
     private fun rejectAllQueuedLocked(reason: Int) {
         while (true) {
-            val event = eventLanes.pollNext() ?: break
-            quality.addRejected(event.recordType, reason, event.remainingEventCount)
+            val event = producer.eventLanes.pollNext() ?: break
+            try {
+                quality.addRejected(event.recordType, reason, event.remainingEventCount)
+            } finally {
+                event.recycle()
+            }
         }
-        queuedEvents.drainPermits()
+        producer.queuedEvents.drainPermits()
     }
 
     private fun closeSessionWriter() {
-        val activeWriter = writer
+        val activeWriter = consumer.writer
         if (activeWriter == null) {
             finishSession(null)
             return
         }
         try {
-            retention.enforce(activeWriter, binaryStorage, runId)
+            consumer.retention.enforce(activeWriter, consumer.binaryStorage, consumer.runId)
             activeWriter.close(Jhlog.SEGMENT_END_SHUTDOWN)
         } catch (error: Throwable) {
             if (error.isFatal()) throw error
@@ -1374,24 +1255,20 @@ internal class AsyncLogWriter internal constructor(
 
     private fun finishSession(activeWriter: BinaryLogWriter?) {
         if (!lifecycle.markSessionFinished()) return
-        if (writer === activeWriter) writer = null
+        if (consumer.writer === activeWriter) consumer.writer = null
         try {
-            if (activeWriter != null) retention.enforce(activeWriter, binaryStorage, runId)
+            if (activeWriter != null) consumer.retention.enforce(activeWriter, consumer.binaryStorage, consumer.runId)
         } finally {
-            segmentLedger.finish()
-            runCohortLease?.close()
-            runCohortLease = null
+            consumer.segmentLedger.finish()
+            consumer.runCohortLease?.close()
+            consumer.runCohortLease = null
         }
     }
 
     companion object {
-        private const val CONTROL_NOT_ACCEPTING = -2L
-        private const val CONTROL_NO_WORK = -1L
         private const val CLOSE_JOIN_POLL_MS = 250L
         private const val DEFAULT_BLOCKING_TIMEOUT_MS = 1_000L
         private const val WORKER_POLL_MS = 50L
-        private const val CONTROL_QUEUE_CAPACITY = 16
-        private const val CONTROL_WAIT_POLL_MS = 50L
         private const val CONTROL_DRAIN_PARK_NS = 100_000L
         private const val EXACT_BACKPRESSURE_PARK_NS = 100_000L
         private const val MAIN_THREAD_NAME = "main"

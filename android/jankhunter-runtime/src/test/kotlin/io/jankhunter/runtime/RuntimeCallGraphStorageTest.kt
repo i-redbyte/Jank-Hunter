@@ -8,6 +8,83 @@ import org.junit.Test
 
 class RuntimeCallGraphStorageTest {
     @Test
+    fun producerPageTableCapacitySupportsBitMaskProbingAtTargetLoad() {
+        assertEquals(0, RUNTIME_GRAPH_PAGE_TABLE_CAPACITY and (RUNTIME_GRAPH_PAGE_TABLE_CAPACITY - 1))
+        assertEquals(
+            RUNTIME_GRAPH_PAGE_MAX_KEYS,
+            RUNTIME_GRAPH_PAGE_TABLE_CAPACITY * 3 / 4,
+        )
+    }
+
+    @Test
+    fun producerBufferAbsorbsEightFullPagesWithoutConsumer() {
+        val buffer = RuntimeGraphAggregateBuffer(Thread.currentThread())
+        val burstCapacity = 8 * RUNTIME_GRAPH_PAGE_MAX_KEYS
+
+        repeat(burstCapacity) { index ->
+            assertTrue(
+                "edge $index unexpectedly overflowed producer buffer",
+                buffer.tryAdd(
+                    callerId = index.toLong(),
+                    callerName = "caller",
+                    calleeId = index.toLong() + 1L,
+                    calleeName = "callee",
+                    screen = null,
+                    operationId = 0L,
+                    durationMs = 1L,
+                ) != RUNTIME_GRAPH_ADD_FULL,
+            )
+        }
+        assertEquals(burstCapacity.toLong(), buffer.bufferedLogicalEventCount())
+    }
+
+    @Test
+    fun saturatedProducerBufferStillAggregatesAnEdgeFromItsActivePage() {
+        val buffer = RuntimeGraphAggregateBuffer(Thread.currentThread())
+        val burstCapacity = RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY * RUNTIME_GRAPH_PAGE_MAX_KEYS
+
+        repeat(burstCapacity) { index ->
+            assertTrue(
+                buffer.tryAdd(
+                    callerId = index.toLong(),
+                    callerName = "caller",
+                    calleeId = index.toLong() + 1L,
+                    calleeName = "callee",
+                    screen = null,
+                    operationId = 0L,
+                    durationMs = 1L,
+                ) != RUNTIME_GRAPH_ADD_FULL,
+            )
+        }
+
+        assertEquals(
+            RUNTIME_GRAPH_ADD_FULL,
+            buffer.tryAdd(
+                callerId = burstCapacity.toLong(),
+                callerName = "overflow-caller",
+                calleeId = burstCapacity.toLong() + 1L,
+                calleeName = "overflow-callee",
+                screen = null,
+                operationId = 0L,
+                durationMs = 1L,
+            ),
+        )
+        assertEquals(
+            RUNTIME_GRAPH_ADD_AGGREGATED,
+            buffer.tryAdd(
+                callerId = (burstCapacity - 1).toLong(),
+                callerName = "caller",
+                calleeId = burstCapacity.toLong(),
+                calleeName = "callee",
+                screen = null,
+                operationId = 0L,
+                durationMs = 7L,
+            ),
+        )
+        assertEquals(burstCapacity.toLong() + 1L, buffer.bufferedLogicalEventCount())
+    }
+
+    @Test
     fun producerPageAggregatesRepeatedEdgeExactly() {
         val page = RuntimeGraphAggregatePage()
 

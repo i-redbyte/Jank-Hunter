@@ -55,19 +55,37 @@ internal object AndroidServiceInstrumentationPolicy {
             else -> return null
         }
         if (opcode == Opcodes.INVOKESTATIC && owner == ANDROIDX_SERVICE_COMPAT) {
-            if (descriptor !in SERVICE_COMPAT_SIGNATURES) return null
+            if (!isServiceCompatDescriptor(name, descriptor)) return null
             return AndroidServiceForegroundCall(stage, serviceArgument = 0)
         }
         if (opcode == Opcodes.INVOKESTATIC || ANDROID_SERVICE !in ownerHierarchy && owner != ANDROID_SERVICE) {
             return null
         }
-        if (descriptor !in FRAMEWORK_SIGNATURES) return null
+        if (!isFrameworkDescriptor(name, descriptor)) return null
         return AndroidServiceForegroundCall(stage, AndroidServiceForegroundCall.INVOCATION_RECEIVER)
     }
 
     fun needsOwnerHierarchy(owner: String, name: String, descriptor: String): Boolean {
         return owner != ANDROID_SERVICE && owner != ANDROIDX_SERVICE_COMPAT &&
-            (name == "startForeground" || name == "stopForeground") && descriptor in FRAMEWORK_SIGNATURES
+            isFrameworkDescriptor(name, descriptor)
+    }
+
+    private fun isServiceCompatDescriptor(name: String, descriptor: String): Boolean {
+        return when (name) {
+            "startForeground" -> descriptor == SERVICE_COMPAT_START_DESCRIPTOR
+            "stopForeground" -> descriptor == SERVICE_COMPAT_STOP_DESCRIPTOR
+            else -> false
+        }
+    }
+
+    private fun isFrameworkDescriptor(name: String, descriptor: String): Boolean {
+        return when (name) {
+            "startForeground" -> descriptor == FRAMEWORK_START_DESCRIPTOR ||
+                descriptor == FRAMEWORK_START_WITH_TYPE_DESCRIPTOR
+            "stopForeground" -> descriptor == FRAMEWORK_STOP_BOOLEAN_DESCRIPTOR ||
+                descriptor == FRAMEWORK_STOP_FLAGS_DESCRIPTOR
+            else -> false
+        }
     }
 
     private const val ANDROID_SERVICE = "android/app/Service"
@@ -85,14 +103,11 @@ internal object AndroidServiceInstrumentationPolicy {
         "onTimeout(I)V" to AndroidServiceCallback.TIMEOUT,
         "onTimeout(II)V" to AndroidServiceCallback.TIMEOUT,
     )
-    private val FRAMEWORK_SIGNATURES = setOf(
-        "(ILandroid/app/Notification;)V",
-        "(ILandroid/app/Notification;I)V",
-        "(Z)V",
-        "(I)V",
-    )
-    private val SERVICE_COMPAT_SIGNATURES = setOf(
-        "(Landroid/app/Service;ILandroid/app/Notification;I)V",
-        "(Landroid/app/Service;I)V",
-    )
+    private const val FRAMEWORK_START_DESCRIPTOR = "(ILandroid/app/Notification;)V"
+    private const val FRAMEWORK_START_WITH_TYPE_DESCRIPTOR = "(ILandroid/app/Notification;I)V"
+    private const val FRAMEWORK_STOP_BOOLEAN_DESCRIPTOR = "(Z)V"
+    private const val FRAMEWORK_STOP_FLAGS_DESCRIPTOR = "(I)V"
+    private const val SERVICE_COMPAT_START_DESCRIPTOR =
+        "(Landroid/app/Service;ILandroid/app/Notification;I)V"
+    private const val SERVICE_COMPAT_STOP_DESCRIPTOR = "(Landroid/app/Service;I)V"
 }

@@ -5,7 +5,6 @@ import io.jankhunter.runtime.JankHunterTelemetry
 import android.os.SystemClock
 import io.jankhunter.sample.ReleasedCheckoutProbe
 import io.jankhunter.sample.graph.BaselineScenarioUseCase
-import io.jankhunter.runtime.JankHunter
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 

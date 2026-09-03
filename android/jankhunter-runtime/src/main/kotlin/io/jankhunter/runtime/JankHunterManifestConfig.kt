@@ -135,7 +135,7 @@ class JankHunterManifestConfig private constructor() {
                 .sessionLogSizeLimitEnabled(metadata.boolean(META_SESSION_LOG_SIZE_LIMIT_ENABLED, true))
                 .maxSessionLogSizeMiB(metadata.int(META_MAX_SESSION_LOG_SIZE_MIB, 50))
                 .logGrowthAnalyticsEnabled(metadata.boolean(META_LOG_GROWTH_ANALYTICS_ENABLED, true))
-                .deleteObsoleteJhlogFormats(metadata.boolean(META_DELETE_OBSOLETE_JHLOG_FORMATS, false))
+                .deleteObsoleteJhlogFormats(metadata.boolean(META_DELETE_OBSOLETE_JHLOG_FORMATS, true))
                 .maxDictionaryEntries(metadata.int(META_MAX_DICTIONARY_ENTRIES, 8192))
                 .maxDictionaryValueBytes(metadata.int(META_MAX_DICTIONARY_VALUE_BYTES, DictionaryIds.DEFAULT_MAX_VALUE_BYTES))
                 .flushIntervalMs(metadata.long(META_FLUSH_INTERVAL_MS, 5_000L))

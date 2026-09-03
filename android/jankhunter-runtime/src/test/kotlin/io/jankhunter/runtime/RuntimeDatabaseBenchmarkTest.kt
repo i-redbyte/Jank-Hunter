@@ -1,6 +1,5 @@
 package io.jankhunter.runtime
 
-import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.BinaryLogWriter
 import io.jankhunter.runtime.internal.io.Jhlog
@@ -76,6 +75,82 @@ class RuntimeDatabaseBenchmarkTest {
                 result,
                 ACTIVE_LATENCY_BUDGET_NS,
                 ACTIVE_ALLOCATION_BUDGET,
+            )
+        }
+    }
+
+    @Test
+    fun activeHookReusesSteadyStateQueueEntries() {
+        assumeBenchmarksEnabled()
+        val iterations = iterations(ACTIVE_MIN_ITERATIONS)
+        ActiveDatabaseHarness().use { harness ->
+            var batchSize = 0
+            val result = RuntimeBenchmarkHarness.measure(iterations, WARMUP_ITERATIONS) {
+                val token = harness.telemetry.enter()
+                harness.telemetry.exit(
+                    token = token,
+                    sourceId = SOURCE_ID,
+                    sourceName = SOURCE,
+                    query = QUERY,
+                    statementFingerprint = FINGERPRINT,
+                    framework = Jhlog.DATABASE_FRAMEWORK_SQLITE.toInt(),
+                    operation = Jhlog.DATABASE_OPERATION_QUERY.toInt(),
+                    boundary = Jhlog.DATABASE_BOUNDARY_EXECUTE.toInt(),
+                    resultKnown = false,
+                    resultKind = Jhlog.DATABASE_RESULT_UNKNOWN.toInt(),
+                    resultCountBucket = Jhlog.DATABASE_COUNT_UNKNOWN.toInt(),
+                    statementToken = 0L,
+                    succeeded = true,
+                    throwable = null,
+                )
+                batchSize++
+                if (batchSize == STEADY_STATE_BATCH_SIZE) {
+                    check(harness.flush())
+                    batchSize = 0
+                }
+                token
+            }
+
+            RuntimeBenchmarkHarness.report("database hook steady-state reuse", result)
+            RuntimeBenchmarkHarness.assertBudget(
+                "database hook steady-state reuse",
+                result,
+                ACTIVE_LATENCY_BUDGET_NS,
+                STEADY_STATE_ALLOCATION_BUDGET,
+            )
+        }
+    }
+
+    @Test
+    fun activeTransactionHookReusesSteadyStateQueueEntries() {
+        assumeBenchmarksEnabled()
+        val iterations = iterations(ACTIVE_MIN_ITERATIONS)
+        val database = Any()
+        ActiveDatabaseHarness().use { harness ->
+            var batchSize = 0
+            val result = RuntimeBenchmarkHarness.measure(iterations, WARMUP_ITERATIONS) {
+                val token = harness.telemetry.beginTransaction(
+                    database,
+                    SOURCE_ID,
+                    SOURCE,
+                    Jhlog.DATABASE_TRANSACTION_IMMEDIATE.toInt(),
+                )
+                harness.telemetry.markTransactionSuccessful(database)
+                harness.telemetry.endTransaction(database, null)
+                batchSize++
+                if (batchSize == STEADY_STATE_TRANSACTION_BATCH_SIZE) {
+                    check(harness.flush())
+                    batchSize = 0
+                }
+                token
+            }
+
+            RuntimeBenchmarkHarness.report("database transaction hook steady-state reuse", result)
+            RuntimeBenchmarkHarness.assertBudget(
+                "database transaction hook steady-state reuse",
+                result,
+                ACTIVE_LATENCY_BUDGET_NS,
+                STEADY_STATE_TRANSACTION_ALLOCATION_BUDGET,
             )
         }
     }
@@ -230,6 +305,8 @@ class RuntimeDatabaseBenchmarkTest {
             RuntimeTelemetryAccess(state, ContextTracker(), coordinator, { 1L }, { 100 }),
         )
 
+        fun flush(): Boolean = state.writer?.flushBlocking(5_000L) == true
+
         override fun close() {
             state.started.set(false)
             state.writer?.close()
@@ -256,6 +333,10 @@ class RuntimeDatabaseBenchmarkTest {
         const val WRITER_LATENCY_BUDGET_NS = 100_000.0
         const val ZERO_ALLOCATION_BUDGET = 0.5
         const val ACTIVE_ALLOCATION_BUDGET = 2_048.0
+        const val STEADY_STATE_ALLOCATION_BUDGET = 40.0
+        const val STEADY_STATE_BATCH_SIZE = 512
+        const val STEADY_STATE_TRANSACTION_ALLOCATION_BUDGET = 80.0
+        const val STEADY_STATE_TRANSACTION_BATCH_SIZE = 256
         const val WRITER_ALLOCATION_BUDGET = 1.0
         const val WRITER_CONTEXT_ALLOCATION_BUDGET = 1.0
     }

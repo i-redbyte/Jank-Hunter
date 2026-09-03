@@ -357,7 +357,7 @@ const singleHTMLBundlePrefix = `<!doctype html>
     .report-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 0; min-width: 0; padding: 28px 20px 22px; color: var(--shell-rail-text); background: var(--shell-rail); border-right: 1px solid rgba(16, 32, 23, .22); z-index: 2; }
     .report-brand { flex: 0 0 auto; padding: 0 6px 20px; border-bottom: 1px solid rgba(16, 32, 23, .24); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
     .report-logo { display: block; width: 100%; max-width: 184px; height: auto; max-height: 114px; object-fit: contain; object-position: left center; }
-    .report-brand::after { content: "JHLOG 3.0.0"; display: block; margin-top: 8px; color: rgba(16, 32, 23, .64); font-size: 11px; letter-spacing: .08em; }
+    .report-brand::after { content: "JHLOG 5.0.0"; display: block; margin-top: 8px; color: rgba(16, 32, 23, .64); font-size: 11px; letter-spacing: .08em; }
     .report-tabs { display: grid; gap: 6px; min-width: 0; margin-top: 24px; }
     .report-tabs::before { content: "РАЗДЕЛЫ ОТЧЁТА"; display: block; margin: 0 7px 6px; color: rgba(16, 32, 23, .64); font-family: Menlo, "SFMono-Regular", Consolas, monospace; font-size: 11px; letter-spacing: .08em; }
     .report-tab { width: 100%; min-width: 0; appearance: none; border: 0; border-radius: 4px; padding: 11px 10px; background: transparent; color: rgba(16, 32, 23, .72); font-weight: 400; text-align: left; overflow-wrap: anywhere; cursor: pointer; transition: background .16s ease, color .16s ease; }

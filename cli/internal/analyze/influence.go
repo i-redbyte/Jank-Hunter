@@ -113,6 +113,18 @@ type runtimeInfluenceEdge struct {
 	maxMS   uint64
 }
 
+type influenceEdgeKey struct {
+	from string
+	to   string
+}
+
+type influenceEdgeAccumulator struct {
+	count        uint64
+	runtimeCount uint64
+	staticCount  uint64
+	influence    float64
+}
+
 type influenceAccumulator struct {
 	className  string
 	score      float64
@@ -312,25 +324,14 @@ func (b *influenceBuilder) addStatic(graph *ClassGraph) {
 		}
 		b.node(name).static = true
 	}
-	for _, edge := range graph.Edges {
-		from := normalizeClassName(edge.From)
-		to := normalizeClassName(edge.To)
-		if from == "" || to == "" || from == to {
-			continue
-		}
-		count := edge.Count
-		if count == 0 {
-			count = 1
-		}
-		b.node(from).static = true
-		b.node(to).static = true
-		edge.From = from
-		edge.To = to
-		edge.Count = count
-		b.edges = append(b.edges, edge)
+	b.edges = canonicalClassGraphEdges(graph.Edges)
+	for index := range b.edges {
+		edge := &b.edges[index]
+		b.node(edge.From).static = true
+		b.node(edge.To).static = true
 	}
-	b.staticIndex = NewClassGraphIndex(b.edges)
-	b.methodIndex = NewMethodGraphIndex(b.edges)
+	b.staticIndex = newClassGraphIndex(b.edges)
+	b.methodIndex = newMethodGraphIndex(b.edges)
 }
 
 func (b *influenceBuilder) finish(graph *ClassGraph) InfluenceSummary {
@@ -462,41 +463,42 @@ func (b *influenceBuilder) cycles(runtimeTargets map[string]struct{}) []Influenc
 }
 
 func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
-	dedup := map[string]*InfluenceEdge{}
+	dedup := make(map[influenceEdgeKey]influenceEdgeAccumulator, len(b.edges)+len(b.runtimeEdges))
 	for _, edge := range b.edges {
 		fromNode := b.nodes[edge.From]
 		toNode := b.nodes[edge.To]
 		if fromNode == nil || toNode == nil {
 			continue
 		}
-		key := edge.From + "\x00" + edge.To
+		key := influenceEdgeKey{from: edge.From, to: edge.To}
 		row := dedup[key]
-		if row == nil {
-			row = &InfluenceEdge{From: edge.From, To: edge.To}
-			dedup[key] = row
-		}
-		row.Count += edge.Count
-		row.StaticCount += edge.Count
+		row.count += edge.Count
+		row.staticCount += edge.Count
 		priority := math.Max(toNode.score, fromNode.score*0.35)
-		row.Influence += math.Log1p(float64(edge.Count)) * (1 + priority)
+		row.influence += math.Log1p(float64(edge.Count)) * (1 + priority)
+		dedup[key] = row
 	}
 	for _, edge := range b.runtimeEdges {
 		if b.nodes[edge.from] == nil || b.nodes[edge.to] == nil {
 			continue
 		}
-		key := edge.from + "\x00" + edge.to
+		key := influenceEdgeKey{from: edge.from, to: edge.to}
 		row := dedup[key]
-		if row == nil {
-			row = &InfluenceEdge{From: edge.from, To: edge.to}
-			dedup[key] = row
-		}
-		row.Count += edge.count
-		row.RuntimeCount += edge.count
-		row.Influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
+		row.count += edge.count
+		row.runtimeCount += edge.count
+		row.influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
+		dedup[key] = row
 	}
 	out := make([]InfluenceEdge, 0, len(dedup))
-	for _, edge := range dedup {
-		normalized := normalizeInfluenceEvidence(*edge)
+	for key, edge := range dedup {
+		normalized := normalizeInfluenceEvidence(InfluenceEdge{
+			From:         key.from,
+			To:           key.to,
+			Count:        edge.count,
+			RuntimeCount: edge.runtimeCount,
+			StaticCount:  edge.staticCount,
+			Influence:    edge.influence,
+		})
 		normalized.Influence = roundedInfluence(normalized.Influence)
 		out = append(out, normalized)
 	}
@@ -510,13 +512,7 @@ func (b *influenceBuilder) node(className string) *influenceAccumulator {
 	if node != nil {
 		return node
 	}
-	node = &influenceAccumulator{
-		className:  className,
-		operations: map[string]struct{}{},
-		screens:    map[string]struct{}{},
-		routes:     map[string]struct{}{},
-		reasons:    map[string]struct{}{},
-	}
+	node = &influenceAccumulator{className: className}
 	b.nodes[className] = node
 	return node
 }
@@ -562,27 +558,31 @@ func maxUint64Value(left uint64, right uint64) uint64 {
 }
 
 func (n *influenceAccumulator) addOperation(value string) {
-	addNonEmpty(n.operations, value)
+	n.operations = addNonEmpty(n.operations, value)
 }
 
 func (n *influenceAccumulator) addScreen(value string) {
-	addNonEmpty(n.screens, value)
+	n.screens = addNonEmpty(n.screens, value)
 }
 
 func (n *influenceAccumulator) addRoute(value string) {
-	addNonEmpty(n.routes, value)
+	n.routes = addNonEmpty(n.routes, value)
 }
 
 func (n *influenceAccumulator) addReason(value string) {
-	addNonEmpty(n.reasons, value)
+	n.reasons = addNonEmpty(n.reasons, value)
 }
 
-func addNonEmpty(target map[string]struct{}, value string) {
+func addNonEmpty(target map[string]struct{}, value string) map[string]struct{} {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "unknown" {
-		return
+		return target
+	}
+	if target == nil {
+		target = make(map[string]struct{}, 1)
 	}
 	target[value] = struct{}{}
+	return target
 }
 
 func normalizeClassGraph(graph *ClassGraph) {
@@ -671,7 +671,10 @@ func classFromOwner(owner string) string {
 }
 
 func normalizeClassName(value string) string {
-	value = strings.TrimSpace(strings.ReplaceAll(value, "/", "."))
+	value = strings.TrimSpace(value)
+	if strings.IndexByte(value, '/') >= 0 {
+		value = strings.ReplaceAll(value, "/", ".")
+	}
 	value = strings.TrimPrefix(value, "L")
 	value = strings.TrimSuffix(value, ";")
 	value = strings.Trim(value, ".")
@@ -686,11 +689,15 @@ func shortClassName(value string) string {
 	if value == "" {
 		return ""
 	}
-	parts := strings.Split(value, ".")
-	if len(parts) <= 2 {
+	lastDot := strings.LastIndexByte(value, '.')
+	if lastDot < 0 {
 		return value
 	}
-	return strings.Join(parts[len(parts)-2:], ".")
+	previousDot := strings.LastIndexByte(value[:lastDot], '.')
+	if previousDot < 0 {
+		return value
+	}
+	return value[previousDot+1:]
 }
 
 func scoreContribution(value uint64, pivot uint64) float64 {

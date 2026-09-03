@@ -49,6 +49,7 @@ kotlin {
 
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions {
+        allWarningsAsErrors.set(true)
         jvmTarget.set(JvmTarget.JVM_21)
     }
 }

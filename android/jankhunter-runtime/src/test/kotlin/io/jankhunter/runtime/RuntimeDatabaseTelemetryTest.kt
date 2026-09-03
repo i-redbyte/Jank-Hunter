@@ -42,6 +42,11 @@ class RuntimeDatabaseTelemetryTest {
     }
 
     @Test
+    fun defaultPreparedStatementRegistryUsesExpandedSingleTable() {
+        assertEquals(4_096, PreparedStatementRegistry().capacityForTest())
+    }
+
+    @Test
     fun preparedStatementRegistryReportsCapacityEvictionAndAffectedResolutionMiss() {
         val evictions = AtomicInteger()
         val misses = AtomicInteger()

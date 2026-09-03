@@ -605,6 +605,46 @@ func TestDiscoverHeapDumpsNearLogs(t *testing.T) {
 	}
 }
 
+func TestOptionsWithHeapEvidenceRejectsAmbiguousAutoDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "capture.jhlog")
+	if err := os.WriteFile(logPath, []byte("jhlog"), 0o600); err != nil {
+		t.Fatalf("WriteFile(log) error = %v", err)
+	}
+	for _, name := range []string{"retained-1.hprof", "retained-2.hprof"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("hprof"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+
+	_, err := optionsWithHeapEvidence("capture", []string{logPath}, analyze.Options{}, "", "")
+	if err == nil || !strings.Contains(err.Error(), "--heap-dump") {
+		t.Fatalf("optionsWithHeapEvidence() error = %v, want explicit heap dump requirement", err)
+	}
+}
+
+func TestComparisonRejectsOneAutoDiscoveredHeapForBothSides(t *testing.T) {
+	dir := t.TempDir()
+	baseline := filepath.Join(dir, "baseline.jhlog")
+	candidate := filepath.Join(dir, "candidate.jhlog")
+	for _, path := range []string{baseline, candidate, filepath.Join(dir, "retained-1.hprof")} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+
+	err := rejectComparisonHeapInputOverlap(
+		heapInputFlags{},
+		[]string{baseline},
+		heapInputFlags{},
+		[]string{candidate},
+	)
+	if err == nil || !strings.Contains(err.Error(), "baseline-heap-dump") ||
+		!strings.Contains(err.Error(), "candidate-heap-dump") {
+		t.Fatalf("rejectComparisonHeapInputOverlap() error = %v", err)
+	}
+}
+
 func TestCommandRegistryRoutesVersionAndUnknownCommands(t *testing.T) {
 	var buffer bytes.Buffer
 	registry := newCommandRegistry(&buffer)
@@ -935,7 +975,7 @@ func TestAnalysisOptionsBuilderConsumesSharedFlags(t *testing.T) {
 			builder.diagnosticsPath,
 		)
 	}
-	options, err := (analysisOptionsBuilder{databaseEvidencePath: databaseEvidencePath}).build()
+	options, err := (analysisOptionsBuilder{databaseEvidencePath: databaseEvidencePath}).buildWithArtifactNamespaces(nil)
 	if err != nil {
 		t.Fatalf("build() error = %v", err)
 	}
@@ -992,7 +1032,7 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	if got := strings.Join(remaining, ","); got != "sample.jhlog" {
 		t.Fatalf("remaining = %q", got)
 	}
-	options, err := builder.build()
+	options, err := builder.buildWithArtifactNamespaces(nil)
 	if err != nil {
 		t.Fatalf("build() error = %v", err)
 	}
@@ -1015,7 +1055,7 @@ func TestAnalysisOptionsBuilderDoesNotAttachUnrequestedArtifacts(t *testing.T) {
 	directory := filepath.Join(root, "android", "sample-app", "build", "generated", "jankhunter", "debug")
 	writeAndroidArtifactBundle(t, directory, false)
 
-	options, err := (analysisOptionsBuilder{}).build()
+	options, err := (analysisOptionsBuilder{}).buildWithArtifactNamespaces(nil)
 	if err != nil {
 		t.Fatalf("build() error = %v", err)
 	}
@@ -1033,7 +1073,7 @@ func TestAnalysisOptionsBuilderRejectsIncompleteArtifactBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	builder := analysisOptionsBuilder{artifactsDir: directory}
-	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "class-graph.jsonl") {
+	if _, err := builder.buildWithArtifactNamespaces(nil); err == nil || !strings.Contains(err.Error(), "class-graph.jsonl") {
 		t.Fatalf("build() error = %v, want missing class graph", err)
 	}
 }
@@ -1049,6 +1089,38 @@ func TestAnalysisOptionsBuilderRejectsExplicitMismatchedBundleBeforeLogScan(t *t
 	_, err := (analysisOptionsBuilder{artifactsDir: directory}).buildForLogs([]string{logPath})
 	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact artifact directory") {
 		t.Fatalf("explicit mismatch error = %v", err)
+	}
+}
+
+func TestAnalysisOptionsBuilderVerifiesSidecarsForExplicitArtifacts(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "generated", "jankhunter", "debug")
+	writeAndroidArtifactBundle(t, directory, false)
+	namespace, err := hex.DecodeString("aabb0000000000000000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := analysisOptionsBuilder{
+		classGraphPath:  filepath.Join(directory, "class-graph.jsonl"),
+		diagnosticsPath: filepath.Join(directory, "instrumentation-diagnostics.jsonl"),
+	}
+
+	options, err := builder.buildWithArtifactNamespaces(map[string]struct{}{string(namespace): {}})
+	if err != nil {
+		t.Fatalf("buildWithArtifactNamespaces() error = %v", err)
+	}
+	if !bytes.Equal(options.ArtifactSymbolNamespace, namespace) {
+		t.Fatalf("artifact namespace = %x, want %x", options.ArtifactSymbolNamespace, namespace)
+	}
+}
+
+func TestAnalysisOptionsBuilderRejectsMismatchedSidecarForExplicitArtifact(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "generated", "jankhunter", "debug")
+	writeAndroidArtifactBundle(t, directory, false)
+	builder := analysisOptionsBuilder{classGraphPath: filepath.Join(directory, "class-graph.jsonl")}
+
+	_, err := builder.buildWithArtifactNamespaces(map[string]struct{}{string(make([]byte, 16)): {}})
+	if err == nil || !strings.Contains(err.Error(), "class-graph") || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("explicit sidecar mismatch error = %v", err)
 	}
 }
 
@@ -1222,45 +1294,4 @@ func writeAndroidArtifactBundle(t *testing.T, directory string, includeDI bool) 
 	if includeDI {
 		writeDependencyInjectionFixture(t, filepath.Join(directory, "di-catalog.jsonl"))
 	}
-}
-
-func rewriteArtifactNamespace(t *testing.T, directory, namespace string) []byte {
-	t.Helper()
-	path := filepath.Join(directory, "artifact-metadata.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = bytes.Replace(data, []byte("aabb0000000000000000000000000000"), []byte(namespace), 1)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := hex.DecodeString(namespace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return decoded
-}
-
-func changeWorkingDirectory(t *testing.T, directory string) {
-	t.Helper()
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(directory); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previous); err != nil {
-			t.Errorf("restore working directory: %v", err)
-		}
-	})
-}
-
-func samePath(t *testing.T, left, right string) bool {
-	t.Helper()
-	leftInfo, leftErr := os.Stat(left)
-	rightInfo, rightErr := os.Stat(right)
-	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }

@@ -931,8 +931,16 @@ type CollectionQuality struct {
 	DecodedCommittedChunks            uint64                            `json:"decoded_committed_chunks"`
 	ReportedCommittedChunks           uint64                            `json:"reported_committed_chunks"`
 	KnownLostEvents                   uint64                            `json:"known_lost_events"`
+	PreAdmissionLostEvents            uint64                            `json:"pre_admission_lost_events"`
+	PostAdmissionLostEvents           uint64                            `json:"post_admission_lost_events"`
+	AdmissionContentionLostEvents     uint64                            `json:"admission_contention_lost_events"`
 	WriterBackpressureCount           uint64                            `json:"writer_backpressure_count"`
 	WriterBackpressureNanos           uint64                            `json:"writer_backpressure_nanos"`
+	RuntimeGraphBackpressureCount     uint64                            `json:"runtime_graph_backpressure_count"`
+	RuntimeGraphBackpressureNanos     uint64                            `json:"runtime_graph_backpressure_nanos"`
+	RuntimeGraphProducerCapacityLoss  uint64                            `json:"runtime_graph_producer_capacity_loss"`
+	RuntimeEventBackpressureCount     uint64                            `json:"runtime_event_backpressure_count"`
+	RuntimeEventBackpressureNanos     uint64                            `json:"runtime_event_backpressure_nanos"`
 	RuntimeHookFailures               uint64                            `json:"runtime_hook_failures,omitempty"`
 	CriticalRuntimeHookFailures       uint64                            `json:"critical_runtime_hook_failures,omitempty"`
 	RuntimeHookFailureDetails         []RuntimeHookFailureDetail        `json:"runtime_hook_failure_details,omitempty"`

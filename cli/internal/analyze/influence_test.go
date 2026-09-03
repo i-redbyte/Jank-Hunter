@@ -97,6 +97,30 @@ func TestBuildInfluenceWorksWithoutClassGraph(t *testing.T) {
 	}
 }
 
+func TestInfluenceEdgeIdentityCannotCollideOnFieldSeparator(t *testing.T) {
+	firstFrom := "com.app.First\x00com.app.Middle"
+	firstTo := "com.app.Last"
+	secondFrom := "com.app.First"
+	secondTo := "com.app.Middle\x00com.app.Last"
+	builder := influenceBuilder{
+		nodes: map[string]*influenceAccumulator{
+			firstFrom:  {className: firstFrom},
+			firstTo:    {className: firstTo},
+			secondFrom: {className: secondFrom},
+			secondTo:   {className: secondTo},
+		},
+		edges: []ClassGraphEdge{
+			{From: firstFrom, To: firstTo, Count: 2},
+			{From: secondFrom, To: secondTo, Count: 3},
+		},
+	}
+
+	edges := builder.allInfluenceEdges()
+	if len(edges) != 2 {
+		t.Fatalf("influence edge registry collapsed distinct endpoint pairs: %+v", edges)
+	}
+}
+
 func TestBuildInfluenceIncludesTypedDatabaseSourcesAndScenarioContext(t *testing.T) {
 	influence := BuildInfluence(Summary{DatabaseAnalysis: &DatabaseAnalysis{
 		Statements: []DatabaseStatementStats{{
@@ -121,7 +145,7 @@ func TestBuildInfluenceIncludesTypedDatabaseSourcesAndScenarioContext(t *testing
 	}
 	node := influence.TopNodes[0]
 	if node.ClassName != "com.app.data.FeedDao" || node.RuntimeWallMS != 500 ||
-		node.MainThreadMS != 200 || !influenceContains(node.Operations, "feed.open") ||
+		node.MainThreadMS != 200 || node.Problems != 1 || !influenceContains(node.Operations, "feed.open") ||
 		!influenceContains(node.Reasons, "SQL-вызовы базы данных") ||
 		!influenceContains(node.Reasons, "гипотеза о повторных SQL-вызовах в одном сценарии") {
 		t.Fatalf("database influence node = %+v", node)
@@ -194,6 +218,23 @@ func TestInfluenceSeverityUsesPublishedBandsAndCapsStaticNodes(t *testing.T) {
 	node := (&influenceAccumulator{className: "com.app.StaticOnly", score: 30, static: true, operations: map[string]struct{}{}, screens: map[string]struct{}{}, routes: map[string]struct{}{}, reasons: map[string]struct{}{}}).toNode()
 	if node.Severity != "medium" || node.RuntimeEvidence {
 		t.Fatalf("static-only node was presented as runtime critical: %+v", node)
+	}
+}
+
+func TestInfluenceNodeAllocatesContextSetsOnlyWhenUsed(t *testing.T) {
+	builder := influenceBuilder{nodes: map[string]*influenceAccumulator{}}
+	node := builder.node("com.app.StaticOnly")
+
+	if node.operations != nil || node.screens != nil || node.routes != nil || node.reasons != nil {
+		t.Fatal("new influence node eagerly allocated context sets")
+	}
+	node.addOperation("unknown")
+	node.addScreen("  Checkout  ")
+	if node.operations != nil || node.routes != nil || node.reasons != nil {
+		t.Fatal("empty context values allocated unrelated sets")
+	}
+	if _, ok := node.screens["Checkout"]; !ok || len(node.screens) != 1 {
+		t.Fatalf("screen context was not normalized and stored: %+v", node.screens)
 	}
 }
 

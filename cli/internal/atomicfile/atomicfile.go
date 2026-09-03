@@ -70,16 +70,6 @@ func Write(path string, mode fs.FileMode, write func(*os.File) error) (resultErr
 	return nil
 }
 
-// WriteFile atomically replaces path with data.
-func WriteFile(path string, data []byte, mode fs.FileMode) error {
-	return Write(path, mode, func(file *os.File) error {
-		if _, err := file.Write(data); err != nil {
-			return fmt.Errorf("write bytes: %w", err)
-		}
-		return nil
-	})
-}
-
 func outputMode(path string, fallback fs.FileMode) (fs.FileMode, error) {
 	info, err := os.Stat(path)
 	switch {

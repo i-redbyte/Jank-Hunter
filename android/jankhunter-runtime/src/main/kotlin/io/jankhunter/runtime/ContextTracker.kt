@@ -15,7 +15,7 @@ internal class ContextTracker(
 
     fun currentScreen(): String = screenOverride.get() ?: screen
 
-    fun currentScreenOrNull(): String? = normalizedContextValue(screenOverride.get() ?: screen)
+    fun currentScreenOrNull(): String? = capturedScreen(null)
 
     fun ownerOrNull(): String? = owner.get()
 
@@ -77,10 +77,18 @@ internal class ContextTracker(
         ownerOverride: String? = null,
     ): JankHunterContext {
         return JankHunterContext(
-            screen = normalizedContextValue(firstContextValue(screenOverride, currentScreen())),
-            owner = normalizedContextValue(firstContextValue(ownerOverride, owner.get())),
+            screen = capturedScreen(screenOverride),
+            owner = capturedOwner(ownerOverride),
             operationId = currentOperationId(),
         )
+    }
+
+    fun capturedScreen(override: String?): String? {
+        return normalizedContextValue(firstContextValue(override, currentScreen()))
+    }
+
+    fun capturedOwner(override: String?): String? {
+        return normalizedContextValue(firstContextValue(override, owner.get()))
     }
 
     fun <T> callWithContext(

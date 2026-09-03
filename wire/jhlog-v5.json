@@ -1,0 +1,121 @@
+{
+  "format": {
+    "prefix_hex": "4a484c4f470d0a",
+    "marker": 129,
+    "major": 5,
+    "minor": 0,
+    "patch": 0,
+    "header_schema": 2,
+    "chunk_magic_hex": "4a484331",
+    "commit_magic_hex": "4a48434d"
+  },
+  "limits": [
+    {"kotlin": "MAX_FILE_HEADER_BYTES", "go": "maxHeaderPayloadSize", "value": 4096},
+    {"kotlin": "TARGET_RAW_CHUNK_BYTES", "go": "defaultRawChunkTarget", "value": 65536},
+    {"kotlin": "MAX_RAW_CHUNK_BYTES", "go": "maxRawChunkSize", "value": 262144},
+    {"kotlin": "CHUNK_HEADER_BYTES", "go": "chunkHeaderSize", "value": 32},
+    {"kotlin": "COMMIT_TRAILER_BYTES", "go": "commitTrailerSize", "value": 20},
+    {"kotlin": "MAX_MICRO_PAGE_ROWS", "go": "maxMicroPageRows", "value": 128},
+    {"kotlin": "MAX_MICRO_PAGE_PAYLOAD_BYTES", "go": "maxMicroPagePayloadBytes", "value": 49152},
+    {"kotlin": "MAX_RUNTIME_CALL_BLOCK_ROWS", "go": "MaxRuntimeCallBlockRows", "value": 128},
+    {"kotlin": "PROCESS_SCOPE_FINGERPRINT_BYTES", "go": "processScopeHashSize", "value": 32},
+    {"kotlin": "SEGMENT_DIGEST_BYTES", "go": "segmentDigestSize", "value": 32},
+    {"kotlin": "PROCESS_ROSTER_FINGERPRINT_BYTES", "value": 32},
+    {"go": "maxStoredChunkSize", "value": 524288}
+  ],
+  "required_features": [
+    {"kotlin": "FEATURE_CHUNK_CRC_COMMIT", "go": "FeatureChunkCRCCommit", "bit": 0},
+    {"kotlin": "FEATURE_LENGTH_DELIMITED_RECORDS", "go": "FeatureLengthDelimited", "bit": 1},
+    {"kotlin": "FEATURE_SYMBOL_REFERENCES", "go": "FeatureSymbolRefs", "bit": 2},
+    {"kotlin": "FEATURE_PRODUCER_METADATA", "go": "FeatureProducerMetadata", "bit": 3},
+    {"kotlin": "FEATURE_CHUNK_LOCAL_CONTEXT", "go": "FeatureChunkLocalContext", "bit": 4},
+    {"kotlin": "FEATURE_QUALITY_RECORDS", "go": "FeatureQualityRecords", "bit": 5},
+    {"kotlin": "FEATURE_EMBEDDED_STABLE_SYMBOLS", "go": "FeatureEmbeddedStableSymbols", "bit": 6},
+    {"kotlin": "FEATURE_LOG_GROWTH_RECORDS", "go": "FeatureLogGrowthRecords", "bit": 7},
+    {"kotlin": "FEATURE_EXACT_EVENT_ADMISSION", "go": "FeatureExactEventAdmission", "bit": 8},
+    {"kotlin": "FEATURE_PROCESS_SCOPE", "go": "FeatureProcessScope", "bit": 9},
+    {"kotlin": "FEATURE_COLUMNAR_RUNTIME_CALLS", "go": "FeatureColumnarRuntimeCalls", "bit": 10},
+    {"kotlin": "FEATURE_SEGMENT_DIGEST_CHAIN", "go": "FeatureSegmentDigestChain", "bit": 11},
+    {"kotlin": "FEATURE_PROCESS_ROSTER", "go": "FeatureProcessRoster", "bit": 12},
+    {"kotlin": "FEATURE_OPERATION_LIFECYCLE", "go": "FeatureOperationLifecycle", "bit": 13},
+    {"kotlin": "FEATURE_DATABASE_LIFECYCLE", "go": "FeatureDatabaseLifecycle", "bit": 14},
+    {"kotlin": "FEATURE_PROCESS_STATE", "go": "FeatureProcessState", "bit": 15},
+    {"kotlin": "FEATURE_ANDROID_COMPONENT_LIFECYCLE", "go": "FeatureAndroidComponents", "bit": 16},
+    {"kotlin": "FEATURE_BINDER_IPC", "go": "FeatureBinderIPC", "bit": 17},
+    {"kotlin": "FEATURE_COMPACT_PAYLOADS", "go": "FeatureCompactPayloads", "bit": 18},
+    {"kotlin": "FEATURE_RUNTIME_EDGE_REGISTRY", "go": "FeatureRuntimeEdgeRegistry", "bit": 19},
+    {"kotlin": "FEATURE_COLUMNAR_MICRO_PAGES", "go": "FeatureColumnarMicroPages", "bit": 20},
+    {"kotlin": "FEATURE_DELTA_CONTROL_RECORDS", "go": "FeatureDeltaControlRecords", "bit": 21},
+    {"kotlin": "FEATURE_FRONT_CODED_DICTIONARY", "go": "FeatureFrontCodedDictionary", "bit": 23},
+    {"kotlin": "FEATURE_RUNTIME_EDGE_BIT_PLANES", "go": "FeatureRuntimeEdgeBitPlanes", "bit": 24},
+    {"kotlin": "FEATURE_IMPLICIT_STABLE_ALIASES", "go": "FeatureImplicitStableAliases", "bit": 25},
+    {"kotlin": "FEATURE_COLUMNAR_RUNTIME_EDGE_TUPLES", "go": "FeatureColumnarRuntimeEdgeTuples", "bit": 26}
+  ],
+  "optional_features": [
+    {"kotlin": "OPTIONAL_FEATURE_GZIP_CHUNKS", "go": "FeatureGZIPChunks", "bit": 0, "profiles": ["gzip"]},
+    {"kotlin": "OPTIONAL_FEATURE_DATABASE_TRANSACTION_DELTA", "go": "FeatureDatabaseTransactionDelta", "bit": 1, "profiles": ["gzip", "raw"]},
+    {"kotlin": "OPTIONAL_FEATURE_COLUMNAR_DATABASE_PAGES", "go": "FeatureColumnarDatabasePages", "bit": 2, "profiles": ["gzip", "raw"]},
+    {"kotlin": "OPTIONAL_FEATURE_SEGMENT_DICTIONARY_TOKENS", "go": "FeatureSegmentDictionaryTokens", "bit": 3, "profiles": ["gzip", "raw"]},
+    {"kotlin": "OPTIONAL_FEATURE_RUNTIME_NUMERIC_COLUMNS", "go": "FeatureRuntimeNumericColumns", "bit": 4, "profiles": ["gzip", "raw"]},
+    {"kotlin": "FEATURE_RANS_MICRO_PAGE_SECTIONS", "go": "FeatureRANSMicroPageSections", "bit": 5, "profiles": ["raw"]}
+  ],
+  "process_scopes": [
+    {"kotlin": "PROCESS_SCOPE_ALL", "go": "ProcessScopeAll", "value": 1},
+    {"kotlin": "PROCESS_SCOPE_MAIN_ONLY", "go": "ProcessScopeMainOnly", "value": 2},
+    {"kotlin": "PROCESS_SCOPE_ALLOWLIST", "go": "ProcessScopeAllowlist", "value": 3}
+  ],
+  "chunk_flags": [
+    {"kotlin": "CHUNK_FLAG_GZIP", "go": "chunkFlagGZIP", "bit": 0},
+    {"kotlin": "CHUNK_FLAG_FINAL", "go": "chunkFlagFinal", "bit": 1}
+  ],
+  "envelope_flags": [
+    {"kotlin": "ENVELOPE_HAS_TIME", "go": "EnvelopeHasTime", "bit": 0},
+    {"kotlin": "ENVELOPE_HAS_THREAD", "go": "EnvelopeHasThread", "bit": 1},
+    {"kotlin": "ENVELOPE_HAS_CONTEXT", "go": "EnvelopeHasContext", "bit": 2},
+    {"kotlin": "ENVELOPE_SAME_CONTEXT", "go": "EnvelopeSameContext", "bit": 3},
+    {"kotlin": "ENVELOPE_HAS_ATTRIBUTES", "go": "EnvelopeHasAttributes", "bit": 4}
+  ],
+  "context_flags": [
+    {"kotlin": "CONTEXT_SCREEN", "bit": 0},
+    {"kotlin": "CONTEXT_OWNER", "bit": 1},
+    {"kotlin": "CONTEXT_OPERATION", "bit": 2}
+  ],
+  "record_types": [
+    {"kotlin": "TYPE_DICTIONARY", "go": "EventDictionary", "value": 1},
+    {"kotlin": "TYPE_SESSION", "go": "EventSession", "value": 2},
+    {"kotlin": "TYPE_DEVICE_CONTEXT", "go": "EventContext", "value": 3},
+    {"kotlin": "TYPE_HTTP", "go": "EventHTTP", "value": 4},
+    {"kotlin": "TYPE_UI_WINDOW", "go": "EventUIWindow", "value": 5},
+    {"kotlin": "TYPE_STALL", "go": "EventStall", "value": 6},
+    {"kotlin": "TYPE_MEMORY", "go": "EventMemory", "value": 7},
+    {"kotlin": "TYPE_RETAINED", "go": "EventRetained", "value": 8},
+    {"kotlin": "TYPE_COUNTER", "go": "EventCounter", "value": 9},
+    {"kotlin": "TYPE_GAUGE", "go": "EventGauge", "value": 10},
+    {"kotlin": "TYPE_OPERATION", "go": "EventOperation", "value": 11},
+    {"kotlin": "TYPE_LOG_SPAM", "go": "EventLogSpam", "value": 12},
+    {"kotlin": "TYPE_PROBLEM", "go": "EventProblem", "value": 13},
+    {"kotlin": "TYPE_RUNTIME_CALL", "go": "EventRuntimeCall", "value": 14},
+    {"kotlin": "TYPE_QUALITY_SNAPSHOT", "go": "EventQualitySnapshot", "value": 15},
+    {"kotlin": "TYPE_SEGMENT_END", "go": "EventSegmentEnd", "value": 16},
+    {"kotlin": "TYPE_LOG_GROWTH", "go": "EventLogGrowth", "value": 17},
+    {"kotlin": "TYPE_PROCESS_EXIT", "go": "EventProcessExit", "value": 18},
+    {"kotlin": "TYPE_IO", "go": "EventIO", "value": 19},
+    {"kotlin": "TYPE_WORKER", "go": "EventWorker", "value": 20},
+    {"kotlin": "TYPE_WEBSOCKET", "go": "EventWebSocket", "value": 21},
+    {"kotlin": "TYPE_DATABASE", "go": "EventDatabase", "value": 22},
+    {"kotlin": "TYPE_DATABASE_TRANSACTION", "go": "EventDatabaseTransaction", "value": 23},
+    {"kotlin": "TYPE_PROCESS_STATE", "go": "EventProcessState", "value": 24},
+    {"kotlin": "TYPE_ANDROID_COMPONENT", "go": "EventAndroidComponent", "value": 25},
+    {"kotlin": "TYPE_BINDER_TRANSACTION", "go": "EventBinderTransaction", "value": 26},
+    {"kotlin": "TYPE_MICRO_PAGE", "go": "eventMicroPage", "value": 27}
+  ],
+  "layouts": {
+    "dictionary_stable": ["kind", "stable_id_le64", "front_or_token_value"],
+    "runtime_edge_block": ["row_count_and_columnar_flag", "definition_bit_plane", "edge_id_column", "tuple_columns", "count_column", "total_column", "max_column"]
+  },
+  "goldens": {
+    "file-magic.bin": "4a484c4f470d0a81050000",
+    "dictionary-stable.bin": "0c0807060504030201000179",
+    "runtime-edge-columnar.bin": "09050101010c050001040a14040203050505"
+  }
+}

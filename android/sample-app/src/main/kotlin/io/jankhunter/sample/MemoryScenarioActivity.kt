@@ -15,7 +15,6 @@ import io.jankhunter.sample.automatic.ScenarioStep
 import io.jankhunter.sample.graph.ScenarioGraphComponent
 import io.jankhunter.sample.ui.SampleTheme
 import io.jankhunter.sample.ui.ScenarioScreen
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.launch
 
 internal class MemoryScenarioActivity : ComponentActivity() {

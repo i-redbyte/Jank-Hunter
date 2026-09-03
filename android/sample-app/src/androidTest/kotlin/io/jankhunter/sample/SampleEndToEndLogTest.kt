@@ -10,7 +10,6 @@ import androidx.test.runner.lifecycle.Stage
 import io.jankhunter.sample.automatic.ScenarioStep
 import io.jankhunter.sample.graph.SampleRoomDatabase
 import io.jankhunter.runtime.JankHunter
-import io.jankhunter.runtime.JankHunterConfig
 import io.jankhunter.runtime.JankHunterManifestConfig
 import io.jankhunter.runtime.JankHunterTelemetry
 import java.io.File

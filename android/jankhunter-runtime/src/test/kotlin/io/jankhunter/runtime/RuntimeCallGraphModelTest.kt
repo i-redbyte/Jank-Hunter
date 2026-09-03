@@ -1,6 +1,5 @@
 package io.jankhunter.runtime
 
-import io.jankhunter.runtime.internal.io.AsyncLogWriter
 import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.RuntimeCallBatch
 import java.nio.file.Files

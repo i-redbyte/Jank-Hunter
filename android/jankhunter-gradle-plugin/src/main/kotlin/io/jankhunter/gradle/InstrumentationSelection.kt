@@ -54,10 +54,13 @@ private fun hasInstrumentationMarker(
     }
 }
 
+/** One instance is confined to one ASM class visitor because AGP scopes [ClassContext] to that class. */
 internal class ClassHierarchyResolver(
     private val classContext: ClassContext,
 ) {
     private val cache = mutableMapOf<String, Set<String>>()
+    private var failures: MutableMap<ClassHierarchyResolutionFailure, Int>? = null
+    private var omittedFailures = 0
 
     fun resolve(className: String): Set<String> {
         val root = className.toInternalClassName()
@@ -67,9 +70,15 @@ internal class ClassHierarchyResolver(
             pending.add(root)
             while (pending.isNotEmpty()) {
                 val candidate = pending.removeFirst()
-                val data = runCatching {
+                val data = try {
                     classContext.loadClassData(candidate.replace('/', '.'))
-                }.getOrNull() ?: continue
+                } catch (exception: Exception) {
+                    if (exception is InterruptedException || exception is java.util.concurrent.CancellationException) {
+                        throw exception
+                    }
+                    recordFailure(candidate, exception)
+                    continue
+                } ?: continue
                 (data.superClasses + data.interfaces).forEach { parent ->
                     val normalized = parent.toInternalClassName()
                     if (resolved.add(normalized)) pending.add(normalized)
@@ -79,8 +88,51 @@ internal class ClassHierarchyResolver(
         }
     }
 
+    fun diagnostics(): Map<ClassHierarchyResolutionFailure, Int> {
+        val recorded = failures ?: return emptyMap()
+        if (omittedFailures == 0) return recorded
+        return LinkedHashMap(recorded).apply {
+            put(
+                ClassHierarchyResolutionFailure(
+                    className = classContext.currentClassData.className,
+                    errorType = CLASS_HIERARCHY_OMITTED_FAILURE_TYPE,
+                    detail = null,
+                ),
+                omittedFailures,
+            )
+        }
+    }
+
+    private fun recordFailure(className: String, exception: Exception) {
+        val failure = ClassHierarchyResolutionFailure(
+            className = className.replace('/', '.'),
+            errorType = exception.javaClass.name,
+            detail = exception.message?.take(MAX_DETAIL_LENGTH),
+        )
+        val diagnostics = failures ?: linkedMapOf<ClassHierarchyResolutionFailure, Int>().also { failures = it }
+        val count = diagnostics[failure]
+        when {
+            count != null -> diagnostics[failure] = count + 1
+            diagnostics.size < MAX_RECORDED_FAILURES -> diagnostics[failure] = 1
+            else -> omittedFailures++
+        }
+    }
+
     private fun String.toInternalClassName(): String = replace('.', '/')
+
+    private companion object {
+        const val MAX_RECORDED_FAILURES = 32
+        const val MAX_DETAIL_LENGTH = 256
+    }
 }
+
+internal const val CLASS_HIERARCHY_OMITTED_FAILURE_TYPE = "additional_failures_omitted"
+
+internal data class ClassHierarchyResolutionFailure(
+    val className: String,
+    val errorType: String,
+    val detail: String?,
+)
 
 internal data class HookConfig(
     val autoInit: Boolean = false,

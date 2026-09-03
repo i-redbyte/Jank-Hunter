@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+var influenceBuilderAllocationSink *influenceViewBuilder
+
 func TestInfluenceViewsSeparateProblemsAndRuntimeEvidence(t *testing.T) {
 	nodes := []InfluenceNode{
 		influenceViewTestNode("com.app.feature.A", 12, true),
@@ -40,6 +42,35 @@ func TestInfluenceViewsSeparateProblemsAndRuntimeEvidence(t *testing.T) {
 	}
 }
 
+func TestPreparedInfluenceViewBuilderTakesOwnershipWithoutCopying(t *testing.T) {
+	nodes := []InfluenceNode{influenceViewTestNode("com.app.A", 1, true)}
+	edges := []InfluenceEdge{influenceViewTestEdge("com.app.A", "com.app.B", 1, 0)}
+	builder := newPreparedInfluenceViewBuilder(nodes, edges)
+
+	if &builder.nodes[0] != &nodes[0] || &builder.edges[0] != &edges[0] {
+		t.Fatal("prepared influence builder copied its owned node or edge storage")
+	}
+}
+
+func TestPreparedInfluenceViewBuilderAdjacencyAllocationBudget(t *testing.T) {
+	const nodeCount = 4_096
+	nodes := make([]InfluenceNode, nodeCount)
+	edges := make([]InfluenceEdge, 0, nodeCount-1)
+	for index := range nodes {
+		nodes[index] = influenceViewTestNode(fmt.Sprintf("com.app.Node%04d", index), 1, true)
+		if index > 0 {
+			edges = append(edges, influenceViewTestEdge(nodes[index-1].ClassName, nodes[index].ClassName, 1, 0))
+		}
+	}
+
+	allocations := testing.AllocsPerRun(5, func() {
+		influenceBuilderAllocationSink = newPreparedInfluenceViewBuilder(nodes, edges)
+	})
+	if allocations > 64 {
+		t.Fatalf("prepared influence adjacency allocates %.2f objects, want at most 64", allocations)
+	}
+}
+
 func TestInfluencePackageAggregationUsesMaximumScoreAndSeparateEvidenceCounts(t *testing.T) {
 	nodes := []InfluenceNode{
 		influenceViewTestNode("com.shop.checkout.alpha.A", 4, true),
@@ -64,6 +95,26 @@ func TestInfluencePackageAggregationUsesMaximumScoreAndSeparateEvidenceCounts(t 
 	}
 	if !aggregated.Aggregate {
 		t.Fatal("package edge is not marked as aggregate")
+	}
+}
+
+func TestInfluencePackageViewAllocationBudget(t *testing.T) {
+	const nodeCount = 4_096
+	nodes := make([]InfluenceNode, nodeCount)
+	for index := range nodes {
+		nodes[index] = influenceViewTestNode(fmt.Sprintf("com.app.feature%04d.Node", index), float64(nodeCount-index), true)
+	}
+	builder := newInfluenceViewBuilder(nodes, nil)
+	builder.packagesView(4)
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+
+	allocations := testing.AllocsPerRun(5, func() {
+		builder.packagesView(4)
+	})
+	if allocations > 1_056 {
+		t.Fatalf("package view allocates %.2f objects, want at most 1056", allocations)
 	}
 }
 
@@ -141,6 +192,64 @@ func TestInfluenceContextViewMarksConnectorWithoutChangingScore(t *testing.T) {
 	}
 }
 
+func TestInfluenceContextViewAllocationsStayBounded(t *testing.T) {
+	const nodeCount = 4_096
+	nodes := make([]InfluenceNode, nodeCount)
+	for index := range nodes {
+		nodes[index] = influenceViewTestNode(fmt.Sprintf("com.app.feature.Node%04d", index), float64(nodeCount-index), true)
+		nodes[index].Operations = []string{"shared.operation"}
+	}
+	builder := newInfluenceViewBuilder(nodes, nil)
+	context := InfluenceGraphContext{ID: "context:operation:shared.operation", Kind: "operation", Value: "shared.operation"}
+	builder.contextView(context)
+
+	allocations := testing.AllocsPerRun(25, func() {
+		builder.contextView(context)
+	})
+	if allocations > 32 {
+		t.Fatalf("bounded context view allocates %.2f objects, want at most 32", allocations)
+	}
+}
+
+func TestInfluenceContextsBoundMaterializationAndKeepExactTotal(t *testing.T) {
+	const contextCount = 100
+	nodes := make([]InfluenceNode, contextCount)
+	for index := range nodes {
+		nodes[index] = influenceViewTestNode(fmt.Sprintf("com.app.Node%03d", index), 1, true)
+		nodes[index].Operations = []string{fmt.Sprintf("operation-%03d", index)}
+	}
+	builder := newInfluenceViewBuilder(nodes, nil)
+
+	selection := builder.boundedContexts()
+	if selection.total != contextCount || len(selection.items) != workspaceMaxContexts {
+		t.Fatalf("context selection = total:%d shown:%d, want %d/%d", selection.total, len(selection.items), contextCount, workspaceMaxContexts)
+	}
+	for index, context := range selection.items {
+		want := fmt.Sprintf("operation-%03d", index)
+		if context.Kind != "operation" || context.Value != want || context.ID != "context:operation:"+want {
+			t.Fatalf("context %d = %+v, want operation %q", index, context, want)
+		}
+	}
+}
+
+func TestInfluenceContextSelectionAllocationBudget(t *testing.T) {
+	const contextCount = 4_096
+	nodes := make([]InfluenceNode, contextCount)
+	for index := range nodes {
+		nodes[index] = influenceViewTestNode(fmt.Sprintf("com.app.Node%04d", index), 1, true)
+		nodes[index].Operations = []string{fmt.Sprintf("operation-%04d", index)}
+	}
+	builder := newInfluenceViewBuilder(nodes, nil)
+	builder.boundedContexts()
+
+	allocations := testing.AllocsPerRun(10, func() {
+		builder.boundedContexts()
+	})
+	if allocations > 256 {
+		t.Fatalf("bounded context selection allocates %.2f objects, want at most 256", allocations)
+	}
+}
+
 func TestInfluenceClassNodeCacheKeepsConnectorProjectionIndependent(t *testing.T) {
 	node := influenceViewTestNode("com.app.shared.Dispatcher", 3, true)
 	builder := newInfluenceViewBuilder([]InfluenceNode{node}, nil)
@@ -174,6 +283,28 @@ func TestInfluenceViewTotalsAndOmissionsAreCalculatedBeforeLimits(t *testing.T) 
 	}
 	if view.TotalEdges != len(edges) || view.OmittedEdges == 0 || len(view.OmissionReasons) == 0 {
 		t.Fatalf("edge omissions are not explicit: %+v", view)
+	}
+}
+
+func TestInfluenceProblemViewAllocationBudget(t *testing.T) {
+	const nodeCount = 4_096
+	nodes := make([]InfluenceNode, nodeCount)
+	edges := make([]InfluenceEdge, 0, nodeCount-1)
+	for index := range nodes {
+		name := fmt.Sprintf("com.app.problem.Node%04d", index)
+		nodes[index] = influenceViewTestNode(name, float64(nodeCount-index), true)
+		if index > 0 {
+			edges = append(edges, influenceViewTestEdge(nodes[index-1].ClassName, name, 1, 0))
+		}
+	}
+	builder := newInfluenceViewBuilder(nodes, edges)
+	builder.problemsView()
+
+	allocations := testing.AllocsPerRun(5, func() {
+		builder.problemsView()
+	})
+	if allocations > 512 {
+		t.Fatalf("bounded problem view allocates %.2f objects, want at most 512", allocations)
 	}
 }
 
@@ -289,6 +420,30 @@ func BenchmarkBuildInfluenceLargeGraph(b *testing.B) {
 		if influence.TotalNodes != nodeCount {
 			b.Fatalf("nodes = %d, want %d", influence.TotalNodes, nodeCount)
 		}
+	}
+}
+
+var benchmarkInfluenceString string
+var benchmarkInfluenceIndex uint32
+
+func TestInfluenceClassNameProjectionsDoNotAllocate(t *testing.T) {
+	allocations := testing.AllocsPerRun(1_000, func() {
+		benchmarkInfluenceString = influencePackage("com.example.feature.FeedPresenter", 3)
+		benchmarkInfluenceString = shortClassName("com.example.feature.FeedPresenter")
+	})
+	if allocations != 0 {
+		t.Fatalf("class-name projection allocates %.2f objects, want zero", allocations)
+	}
+}
+
+func TestInfluencePackageChildSampleDoesNotAllocate(t *testing.T) {
+	allocations := testing.AllocsPerRun(1_000, func() {
+		var aggregate influencePackageAggregate
+		aggregate.addChildSample(42)
+		benchmarkInfluenceIndex = aggregate.children[0]
+	})
+	if allocations != 0 {
+		t.Fatalf("package child sample allocates %.2f objects, want zero", allocations)
 	}
 }
 

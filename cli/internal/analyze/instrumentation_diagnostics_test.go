@@ -13,7 +13,7 @@ func TestLoadInstrumentationDiagnosticsAggregatesJSONL(t *testing.T) {
 	path := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
 	if err := os.WriteFile(path, []byte(
 		`{"format":1,"class":"com.app.Feed","methods":3,"ignoredMethods":1,"annotatedMethods":1,"skippedMethods":[{"reason":"constructor","count":1}],"hooks":[{"intent":"logspam.android.util.Log.d","signature":"logspam.android.util.Log.d","method":"load()V","line":42,"count":2}],"annotations":[{"owner":"FeedOwner","screen":"Feed","operation":"feed.open","operationKind":"USER","operationBudgetMs":250,"count":1}]}`+"\n"+
-			`{"format":1,"class":"com.app.Net","methods":2,"ignoredMethods":0,"annotatedMethods":0,"skippedMethods":[],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","line":12,"count":1}],"decisions":[{"kind":"unsupported","module":"okhttp","family":"okhttp","reason":"unsupported_signature","method":"client()V","line":13,"count":2}],"annotations":[]}`+"\n",
+			`{"format":1,"class":"com.app.Net","methods":2,"ignoredMethods":0,"annotatedMethods":0,"skippedMethods":[],"hooks":[{"intent":"okhttp.install_event_listener_factory","signature":"okhttp3.builder.build.v3","bridge":"okhttp3.bridge.v3","method":"client()V","line":12,"count":1}],"decisions":[{"kind":"unsupported","module":"okhttp","family":"okhttp","reason":"unsupported_signature","method":"client()V","line":13,"count":2},{"kind":"warning","module":"class_hierarchy","family":"metadata","reason":"metadata_load_failed","method":"broken.Parent","detail":"java.lang.IllegalStateException: invalid class metadata","count":1}],"annotations":[]}`+"\n",
 	), 0o644); err != nil {
 		t.Fatalf("write diagnostics fixture: %v", err)
 	}
@@ -46,14 +46,20 @@ func TestLoadInstrumentationDiagnosticsAggregatesJSONL(t *testing.T) {
 	if got := diagnostics.Annotations[0].OperationBudgetMS; got != 250 {
 		t.Fatalf("annotation budget = %d", got)
 	}
-	if len(diagnostics.Decisions) != 1 || diagnostics.Decisions[0].Reason != "unsupported_signature" {
+	if len(diagnostics.Decisions) != 2 || diagnostics.Decisions[0].Reason != "unsupported_signature" {
 		t.Fatalf("unexpected decisions: %+v", diagnostics.Decisions)
+	}
+	if got := diagnostics.Decisions[1].Detail; got != "java.lang.IllegalStateException: invalid class metadata" {
+		t.Fatalf("hierarchy decision detail = %q", got)
 	}
 	if got := diagnostics.Decisions[0].Line; got != 13 {
 		t.Fatalf("decision line = %d", got)
 	}
 	if got := diagnostics.Decisions[0].Method; got != "client()V" {
 		t.Fatalf("decision method = %q", got)
+	}
+	if len(diagnostics.Warnings) != 1 || !strings.Contains(diagnostics.Warnings[0], "broken.Parent") {
+		t.Fatalf("hierarchy warning is not actionable: %+v", diagnostics.Warnings)
 	}
 	if got := diagnostics.Classes[0].ClassName; got != "com.app.Feed" {
 		t.Fatalf("top class = %q", got)

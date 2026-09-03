@@ -31,6 +31,13 @@ internal class SpscSlotSequencer(
         return if (sequences.get(index(position)) == position) position else NO_POSITION
     }
 
+    /** True when publishing the currently owned slot can be followed by claiming another slot. */
+    fun canAdvanceProducerAfterPublish(position: Long): Boolean {
+        check(position == producerPosition) { "Producer position is not owned" }
+        val next = position + 1L
+        return sequences.get(index(next)) == next
+    }
+
     fun publish(position: Long) {
         check(position == producerPosition) { "Producer position is not owned" }
         sequences.lazySet(index(position), position + 1L)

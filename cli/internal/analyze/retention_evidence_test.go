@@ -220,11 +220,13 @@ func TestOpenSegmentWithTailDowngradesRetentionConfidence(t *testing.T) {
 
 func TestDictionaryTruncationOutsideRetainedFieldsDoesNotDowngradeLeakIdentity(t *testing.T) {
 	c := &collector{
-		qualitySnapshots: map[string]segmentQualityState{"main": {
-			snapshot: jhlog.QualitySnapshot{Counters: map[uint64]uint64{
-				jhlog.QualityDictionaryValueTruncated: 1,
+		collectorQualityState: collectorQualityState{
+			qualitySnapshots: map[string]segmentQualityState{"main": {
+				snapshot: jhlog.QualitySnapshot{Counters: map[uint64]uint64{
+					jhlog.QualityDictionaryValueTruncated: 1,
+				}},
 			}},
-		}},
+		},
 	}
 
 	quality := c.retentionDataQuality()

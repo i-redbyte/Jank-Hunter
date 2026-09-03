@@ -22,10 +22,6 @@ type integralDefinition struct {
 	value       func([]TimelineBucket, []NetworkLoopFinding) float64
 }
 
-func computeIntegralScores(timeline []TimelineBucket, loops []NetworkLoopFinding) []IntegralScore {
-	return computeIntegralScoresForRuns(timeline, loops, 1)
-}
-
 func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoopFinding, runCount int) []IntegralScore {
 	if len(timeline) == 0 {
 		return nil

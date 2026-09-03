@@ -482,9 +482,7 @@ func (a *androidComponentAnalysisAccumulator) finalize(quality CollectionQuality
 	for _, finding := range a.findings {
 		analysis.Findings = append(analysis.Findings, *finding)
 	}
-	for _, finding := range a.binder.findings() {
-		analysis.Findings = append(analysis.Findings, finding)
-	}
+	analysis.Findings = append(analysis.Findings, a.binder.findings()...)
 	analysis.PartialReasons = androidAnalysisPartialReasons(
 		quality,
 		analysis.Binder.CorrelationDroppedEvents,

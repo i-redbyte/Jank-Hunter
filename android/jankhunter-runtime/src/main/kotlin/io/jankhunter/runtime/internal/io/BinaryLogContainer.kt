@@ -72,6 +72,7 @@ internal class SequentialJhlogContainer private constructor(
     private val commitTrailer = ByteArray(Jhlog.COMMIT_TRAILER_BYTES).also { trailer ->
         System.arraycopy(Jhlog.COMMIT_MAGIC, 0, trailer, 0, Jhlog.COMMIT_MAGIC.size)
     }
+    @Volatile
     private var bytesWritten = initialBytesWritten
 
     init {

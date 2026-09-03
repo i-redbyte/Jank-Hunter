@@ -30,7 +30,6 @@ import io.jankhunter.sample.manual.ManualControlsViewModel
 import io.jankhunter.sample.ui.ManualControlsScreen
 import io.jankhunter.sample.ui.SampleTheme
 import io.jankhunter.sample.ui.ScenarioScreen
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.launch
 
 internal class MainActivity : ComponentActivity() {

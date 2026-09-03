@@ -53,6 +53,42 @@ func TestLogGrowthControlRecordRoundTripsWithoutInflatingEventTotals(t *testing.
 	}
 }
 
+func TestLogGrowthPrefixSuffixDeltaRoundTripsExactly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "growth-delta.jhlog")
+	closer, writer, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testGrowthLivePayload(7, 0x11, 0x22, 1_000, 2_000, false)
+	second := testGrowthLivePayload(8, 0x11, 0x22, 1_000, 2_001, true)
+	prepared, err := prepareLogGrowthDelta(LogGrowthRecord{Kind: LogGrowthLive, Raw: second}, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.wireMode != controlDeltaPrefixSuffix {
+		t.Fatalf("log-growth mode = %d, want prefix/suffix delta", prepared.wireMode)
+	}
+	for _, raw := range [][]byte{first, second} {
+		if err := writer.WriteEvent(Event{
+			Type: EventLogGrowth, LogGrowth: &LogGrowthRecord{Kind: LogGrowthLive, Raw: raw},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if log.Result.LogGrowth == nil || log.Result.LogGrowth.Live == nil ||
+		log.Result.LogGrowth.LiveGeneration != 8 || log.Result.LogGrowth.Live.GeneratedBytes != 2_001 ||
+		!log.Result.LogGrowth.Live.Completed {
+		t.Fatalf("delta log growth = %+v", log.Result.LogGrowth)
+	}
+}
+
 func TestLogGrowthKeepsHistoryAndLiveGenerationsIndependent(t *testing.T) {
 	history := &LogGrowthProjection{
 		Generation: 4,
@@ -116,7 +152,7 @@ func TestLogGrowthRejectsPreBudgetSemanticsSchema(t *testing.T) {
 	}
 }
 
-func TestWriteSampleStreamsCommittedVersionThree(t *testing.T) {
+func TestWriteSampleStreamsCommittedCurrentFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sample.jhlog")
 	if err := WriteSample(path); err != nil {
 		t.Fatalf("WriteSample() error = %v", err)
@@ -130,7 +166,7 @@ func TestWriteSampleStreamsCommittedVersionThree(t *testing.T) {
 		t.Fatalf("status = %q, want %q", log.Result.Status, SegmentStatusClosedClean)
 	}
 	if !log.Result.Sealed {
-		t.Fatal("sample 3.0.0 log is closed but not FINAL-sealed")
+		t.Fatal("sample 5.0.0 log is closed but not FINAL-sealed")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -178,12 +214,41 @@ func TestWriteSampleStreamsCommittedVersionThree(t *testing.T) {
 }
 
 func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
-	want := []byte{'J', 'H', 'L', 'O', 'G', '\r', '\n', 0x81, 3, 0, 0}
+	want := readWireGolden(t, "file-magic.bin")
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeatures != 0x3ffff || OptionalFeatures != 0x01 {
-		t.Fatalf("features = required 0x%x optional 0x%x", RequiredFeatures, OptionalFeatures)
+	if RequiredFeatures != 0x7bfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
+		t.Fatalf(
+			"features = required 0x%x gzip optional 0x%x raw optional 0x%x",
+			RequiredFeatures,
+			OptionalFeatures,
+			RawOptionalFeatures,
+		)
+	}
+}
+
+func TestCompressionPolicyMakesGZIPAndRANSMutuallyExclusive(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		optional uint64
+	}{
+		{name: "gzip", optional: OptionalFeatures},
+		{name: "raw rans", optional: RawOptionalFeatures},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateFeatureContract(RequiredFeatures, test.optional); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, optional := range []uint64{
+		OptionalFeatures | FeatureRANSMicroPageSections,
+		OptionalFeatures &^ FeatureGZIPChunks,
+	} {
+		if err := validateFeatureContract(RequiredFeatures, optional); err == nil {
+			t.Fatalf("optional compression policy 0x%x was accepted", optional)
+		}
 	}
 }
 
@@ -287,7 +352,7 @@ func TestOperationLifecycleValidation(t *testing.T) {
 	}
 }
 
-func TestVersionThreeHeaderRejectsUnparsedTrailingBytes(t *testing.T) {
+func TestCurrentHeaderRejectsUnparsedTrailingBytes(t *testing.T) {
 	raw, _, err := encodeFileHeader(DefaultSegmentHeader())
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +373,7 @@ func TestDeclaredProcessRosterRejectsMissingFingerprint(t *testing.T) {
 	}
 }
 
-func TestVersionThreeRejectsMissingMandatoryWireFeatures(t *testing.T) {
+func TestCurrentHeaderRejectsMissingMandatoryWireFeatures(t *testing.T) {
 	header := DefaultSegmentHeader()
 	header.RequiredFeatures &^= FeatureSegmentDigestChain
 	if _, _, err := encodeFileHeader(header); err == nil || !strings.Contains(err.Error(), "required feature contract") {
@@ -316,7 +381,7 @@ func TestVersionThreeRejectsMissingMandatoryWireFeatures(t *testing.T) {
 	}
 }
 
-func TestVersionThreeAcceptsOnlyCanonicalFeatureContracts(t *testing.T) {
+func TestHeaderAcceptsOnlyCurrentFeatureContract(t *testing.T) {
 	tests := []struct {
 		name     string
 		required uint64
@@ -325,6 +390,12 @@ func TestVersionThreeAcceptsOnlyCanonicalFeatureContracts(t *testing.T) {
 	}{
 		{name: "exact", required: RequiredFeatures, optional: OptionalFeatures},
 		{name: "best effort", required: BestEffortFeatures, optional: OptionalFeatures},
+		{name: "missing columnar edge tuples", required: RequiredFeatures &^ FeatureColumnarRuntimeEdgeTuples, optional: OptionalFeatures, wantErr: true},
+		{name: "missing runtime numeric columns", required: RequiredFeatures, optional: OptionalFeatures &^ FeatureRuntimeNumericColumns, wantErr: true},
+		{name: "missing dictionary tokens", required: RequiredFeatures, optional: OptionalFeatures &^ FeatureSegmentDictionaryTokens, wantErr: true},
+		{name: "missing database columns", required: RequiredFeatures, optional: OptionalFeatures &^ FeatureColumnarDatabasePages, wantErr: true},
+		{name: "missing transaction deltas", required: RequiredFeatures, optional: OptionalFeatures &^ FeatureDatabaseTransactionDelta, wantErr: true},
+		{name: "missing gzip contract", required: RequiredFeatures, optional: OptionalFeatures &^ FeatureGZIPChunks, wantErr: true},
 		{name: "unknown required bit", required: RequiredFeatures | 1<<63, optional: OptionalFeatures, wantErr: true},
 		{name: "missing required bit", required: RequiredFeatures &^ FeatureProcessRoster, optional: OptionalFeatures, wantErr: true},
 		{name: "unknown optional bit", required: RequiredFeatures, optional: OptionalFeatures | 1<<63, wantErr: true},
@@ -443,6 +514,211 @@ func TestRuntimeCallColumnarBlockRoundTripsAsSemanticRows(t *testing.T) {
 	}
 }
 
+func TestRuntimeCallSparseColumnsPreserveDefaultsAndExceptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-sparse.jhlog")
+	events := make([]Event, 16)
+	for index := range events {
+		events[index] = Event{
+			Type: EventRuntimeCall,
+			Attribution: AttributionContext{
+				Present: true,
+				Owner:   StableSymbol(uint64(index + 1)),
+			},
+			RuntimeCall: &RuntimeCallEvent{
+				CalleeRef: StableSymbol(uint64(index + 101)),
+				Count:     1,
+			},
+		}
+	}
+	events[3].Attribution.OperationID = 41
+	events[4].RuntimeCall.Count = 3
+	events[4].RuntimeCall.TotalMS = 12
+	events[4].RuntimeCall.MaxMS = 7
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteRuntimeCallBlock(events); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) {
+		t.Fatalf("decoded %d runtime rows, want %d", len(log.Events), len(events))
+	}
+	for index := range events {
+		if log.Events[index].Attribution.OperationID != events[index].Attribution.OperationID ||
+			!reflect.DeepEqual(log.Events[index].RuntimeCall, events[index].RuntimeCall) {
+			t.Fatalf("runtime row %d = %+v, want %+v", index, log.Events[index], events[index])
+		}
+	}
+}
+
+func TestRuntimeEdgeRegistryReusesDefinitionsAcrossBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime-edges.jhlog")
+	file, writer, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []DictionaryEntry{
+		{Kind: DictStableSymbol, ID: 11, Value: "example.Caller.call"},
+		{Kind: DictStableSymbol, ID: 17, Value: "example.Callee.call"},
+	} {
+		if err := writer.WriteEvent(Event{Type: EventDictionary, Dictionary: &entry}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := Event{
+		Type: EventRuntimeCall,
+		Attribution: AttributionContext{
+			Present: true, Screen: LocalSymbol(7), Owner: StableSymbol(11), OperationID: 13,
+		},
+		RuntimeCall: &RuntimeCallEvent{CalleeRef: StableSymbol(17), Count: 1, TotalMS: 2, MaxMS: 2},
+	}
+	if err := writer.WriteEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteEvent(event); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != 2 || !reflect.DeepEqual(log.Events[0].Attribution, log.Events[1].Attribution) ||
+		!reflect.DeepEqual(log.Events[0].RuntimeCall, log.Events[1].RuntimeCall) {
+		t.Fatalf("runtime edge round trip = %+v", log.Events)
+	}
+}
+
+func TestRuntimeEdgeDecoderRejectsUndefinedAndNonSequentialIDs(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		token uint64
+		want  string
+	}{
+		{name: "undefined reference", token: 2, want: "undefined runtime edge ID 1"},
+		{name: "non sequential definition", token: 5, want: "not the next sequential ID"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var payload bytes.Buffer
+			_ = writeUvarint(&payload, 2) // one row, row-wise exact fallback
+			_ = payload.WriteByte(byte(test.token & 1))
+			_ = writeRuntimeNumericColumn(&payload, []uint64{test.token >> 1}, true, false, 0)
+			if test.token&1 != 0 {
+				for range 4 {
+					_ = writeUvarint(&payload, 0)
+				}
+			}
+			reader := recordReader{data: payload.Bytes()}
+			event := Event{Type: EventRuntimeCall}
+			err := decodeEventPayload(&reader, &event, "", "", nil)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("runtime edge decode error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestStableAliasRoundTripSupportsZeroAndLargeIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stable-aliases.jhlog")
+	const largeID = ^uint64(0) - 7
+	writeClosedEvents(t, path, []Event{
+		{Type: EventDictionary, Dictionary: &DictionaryEntry{Kind: DictStableSymbol, ID: 0, Value: "zero.symbol"}},
+		{Type: EventDictionary, Dictionary: &DictionaryEntry{Kind: DictStableSymbol, ID: largeID, Value: "large.symbol"}},
+		{Type: EventCounter, Metric: &MetricEvent{MetricRef: StableSymbol(0), Value: 1, Count: 1, Sum: 1, Max: 1}},
+		{Type: EventCounter, Metric: &MetricEvent{MetricRef: StableSymbol(largeID), Value: 2, Count: 1, Sum: 2, Max: 2}},
+	})
+
+	var aliases []uint64
+	var metricRefs []SymbolRef
+	if _, err := StreamFileWithResult(path, func(event Event, _ map[uint64]string) error {
+		if event.Dictionary != nil && event.Dictionary.Kind == DictStableSymbol {
+			aliases = append(aliases, event.Dictionary.Alias)
+		}
+		if event.Metric != nil {
+			metricRefs = append(metricRefs, event.Metric.MetricRef)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(aliases, []uint64{1, 2}) ||
+		!reflect.DeepEqual(metricRefs, []SymbolRef{StableSymbol(0), StableSymbol(largeID)}) {
+		t.Fatalf("aliases=%v metric refs=%+v", aliases, metricRefs)
+	}
+}
+
+func TestCompactPayloadDecoderRejectsUndefinedAliases(t *testing.T) {
+	aliasReader := recordReader{data: []byte{3}}
+	if _, err := readSymbolRef(&aliasReader, "namespace", map[uint64]uint64{}); err == nil ||
+		!strings.Contains(err.Error(), "undefined stable symbol alias 1") {
+		t.Fatalf("undefined alias error = %v", err)
+	}
+}
+
+func TestCompactDominantPayloadSizeRegression(t *testing.T) {
+	aliases := map[uint64]uint64{11: 1, 22: 2, 33: 3}
+	var inlineRef bytes.Buffer
+	if err := writeSymbolRef(&inlineRef, StableSymbol(11), nil); err != nil {
+		t.Fatal(err)
+	}
+	var aliasRef bytes.Buffer
+	if err := writeSymbolRef(&aliasRef, StableSymbol(11), aliases); err != nil {
+		t.Fatal(err)
+	}
+	if inlineRef.Len() != 9 || aliasRef.Len() != 1 {
+		t.Fatalf("stable reference sizes = inline %d, alias %d", inlineRef.Len(), aliasRef.Len())
+	}
+
+	runtimeRows := make([]runtimeCallRow, MaxRuntimeCallBlockRows)
+	for index := range runtimeRows {
+		runtimeRows[index] = runtimeCallRow{caller: StableSymbol(11), callee: StableSymbol(22), count: 1}
+	}
+	runtimeBlocks := newRuntimeBlockEncoder()
+	runtimeBlocks.prepareEdges(runtimeRows)
+	var runtimePayload bytes.Buffer
+	if err := encodeEventPayload(&runtimePayload, Event{
+		Type:         EventRuntimeCall,
+		RuntimeCall:  &RuntimeCallEvent{},
+		runtimeCalls: runtimeRows,
+	}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if runtimePayload.Len() > 400 {
+		t.Fatalf("default-heavy runtime payload = %d bytes, want <= 400", runtimePayload.Len())
+	}
+
+	database := DatabaseEvent{
+		QueryRef: LocalSymbol(1), SourceRef: StableSymbol(33),
+		Framework: DatabaseFrameworkSQLite, Operation: DatabaseOperationQuery,
+		Outcome: DatabaseOutcomeSuccess, Boundary: DatabaseBoundaryExecute,
+		descriptorID: 1, descriptorDefinition: true, descriptorPrepared: true,
+	}
+	var definition bytes.Buffer
+	if err := encodeEventPayload(&definition, Event{Type: EventDatabase, Database: &database}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	database.descriptorDefinition = false
+	var reference bytes.Buffer
+	if err := encodeEventPayload(&reference, Event{Type: EventDatabase, Database: &database}, aliases); err != nil {
+		t.Fatal(err)
+	}
+	if reference.Len()*2 >= definition.Len() {
+		t.Fatalf("database descriptor sizes = definition %d, reference %d", definition.Len(), reference.Len())
+	}
+}
+
 func TestRuntimeCallWriterRejectsInvalidLogicalAggregates(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -470,11 +746,11 @@ func TestRuntimeCallColumnarBlockRejectsInvalidRowCounts(t *testing.T) {
 		var body bytes.Buffer
 		_ = writeUvarint(&body, uint64(EventRuntimeCall))
 		_ = writeUvarint(&body, 0)
-		_ = writeUvarint(&body, rowCount)
+		_ = writeUvarint(&body, rowCount<<1)
 		_, _, err := decodeRecord(
 			body.Bytes(),
 			recordDecodeState{},
-			DefaultSegmentHeader(),
+			"",
 			"",
 			"invalid",
 			RecordPosition{},
@@ -500,17 +776,19 @@ func TestRuntimeCallColumnarBlockRejectsInvalidLogicalAggregates(t *testing.T) {
 			var body bytes.Buffer
 			_ = writeUvarint(&body, uint64(EventRuntimeCall))
 			_ = writeUvarint(&body, 0)
-			_ = writeUvarint(&body, 1)
-			for range 5 {
+			_ = writeUvarint(&body, 2) // one row, row-wise exact fallback
+			_ = body.WriteByte(0)
+			_ = writeRuntimeNumericColumn(&body, []uint64{0}, true, false, 0)
+			for range 4 { // inline edge tuple fields
 				_ = writeUvarint(&body, 0)
 			}
-			_ = writeUvarint(&body, test.count)
-			_ = writeUvarint(&body, test.total)
-			_ = writeUvarint(&body, test.max)
+			_ = writeRuntimeNumericColumn(&body, []uint64{test.count}, true, true, 1)
+			_ = writeRuntimeNumericColumn(&body, []uint64{test.total}, true, true, 0)
+			_ = writeRuntimeNumericColumn(&body, []uint64{test.max}, true, true, 0)
 			if _, _, err := decodeRecord(
 				body.Bytes(),
 				recordDecodeState{},
-				DefaultSegmentHeader(),
+				"",
 				"",
 				"invalid",
 				RecordPosition{},
@@ -522,7 +800,7 @@ func TestRuntimeCallColumnarBlockRejectsInvalidLogicalAggregates(t *testing.T) {
 	}
 }
 
-func TestProcessScopeRoundTripsInVersionThreeHeader(t *testing.T) {
+func TestProcessScopeRoundTripsInCurrentHeader(t *testing.T) {
 	header := DefaultSegmentHeader()
 	header.ProcessScope = ProcessScopeAllowlist
 	header.AllowedProcessCount = 3
@@ -576,7 +854,57 @@ func TestQualityProgressionRejectsRegressedCounter(t *testing.T) {
 	}
 }
 
-func TestKnownQualityCounterSetIsClosedForVersionThree(t *testing.T) {
+func TestQualityDeltasReconstructFullMonotonicSnapshots(t *testing.T) {
+	state := decodeSegmentState(nil)
+	encode := func(sequenceDelta, capturedDelta uint64, entries ...uint64) []byte {
+		var payload bytes.Buffer
+		_ = writeUvarint(&payload, sequenceDelta)
+		_ = writeUvarint(&payload, capturedDelta)
+		_ = writeUvarint(&payload, uint64(len(entries)/2))
+		for _, value := range entries {
+			_ = writeUvarint(&payload, value)
+		}
+		return payload.Bytes()
+	}
+	secondID := QualityCommittedChunkTotal
+	first := encode(
+		1,
+		encodeSVarint(100),
+		QualityAcceptedEventTotal,
+		5,
+		secondID-QualityAcceptedEventTotal,
+		7,
+	)
+	event := Event{Type: EventQualitySnapshot}
+	if err := decodeEventPayload(&recordReader{data: first}, &event, "", "", nil, state); err != nil {
+		t.Fatal(err)
+	}
+	if event.Quality.Sequence != 1 || event.Quality.CapturedElapsedUS != 100 ||
+		event.Quality.Counters[QualityAcceptedEventTotal] != 5 || event.Quality.Counters[secondID] != 7 {
+		t.Fatalf("first quality delta = %+v", event.Quality)
+	}
+
+	second := encode(1, encodeSVarint(50), QualityAcceptedEventTotal, 3)
+	event = Event{Type: EventQualitySnapshot}
+	if err := decodeEventPayload(&recordReader{data: second}, &event, "", "", nil, state); err != nil {
+		t.Fatal(err)
+	}
+	if event.Quality.Sequence != 2 || event.Quality.CapturedElapsedUS != 150 ||
+		event.Quality.Counters[QualityAcceptedEventTotal] != 8 || event.Quality.Counters[secondID] != 7 {
+		t.Fatalf("second quality delta = %+v", event.Quality)
+	}
+}
+
+func TestQualityDeltaRejectsZeroCounterIDDelta(t *testing.T) {
+	reader := recordReader{data: []byte{1, 0, 1, 0, 1}}
+	event := Event{Type: EventQualitySnapshot}
+	err := decodeEventPayload(&reader, &event, "", "", nil)
+	if err == nil || !strings.Contains(err.Error(), "counter id delta 0") {
+		t.Fatalf("quality delta error = %v", err)
+	}
+}
+
+func TestKnownQualityCounterSetIsClosedForCurrentFormat(t *testing.T) {
 	known := []uint64{
 		QualityAcceptedEventTotal,
 		QualityRuntimeEventBackpressureNanos,
@@ -656,6 +984,9 @@ func TestReaderAcceptsRawChunkCodec(t *testing.T) {
 	if result.Status != SegmentStatusClosedClean || result.Events != 1 {
 		t.Fatalf("result = %+v", result)
 	}
+	if result.Header.OptionalFeatures != RawOptionalFeatures {
+		t.Fatalf("raw optional features = 0x%x, want 0x%x", result.Header.OptionalFeatures, RawOptionalFeatures)
+	}
 }
 
 func TestRetainedEvidenceRoundTrips(t *testing.T) {
@@ -709,7 +1040,7 @@ func TestRetainedPayloadRequiresKnownEvidence(t *testing.T) {
 				}
 			}
 			event := Event{Type: EventRetained}
-			err := decodeEventPayload(&recordReader{data: payload.Bytes()}, &event, DefaultSegmentHeader(), "", nil)
+			err := decodeEventPayload(&recordReader{data: payload.Bytes()}, &event, "", "", nil)
 			if err == nil || !strings.Contains(err.Error(), test.message) {
 				t.Fatalf("invalid retained evidence: err=%v event=%+v", err, event.Retained)
 			}
@@ -800,6 +1131,7 @@ func TestRuntimeEventTransportQualityCountersKeepWireNames(t *testing.T) {
 		QualityRuntimeGraphEmittedTotal:         "runtime_graph_emitted_total",
 		QualityRuntimeGraphBackpressureCount:    "runtime_graph_backpressure_count_total",
 		QualityRuntimeGraphBackpressureNanos:    "runtime_graph_backpressure_nanos_total",
+		QualityRuntimeGraphProducerCapacityLoss: "runtime_graph_producer_capacity_loss_total",
 		QualityWriterBackpressureCount:          "writer_backpressure_count_total",
 		QualityWriterBackpressureNanos:          "writer_backpressure_nanos_total",
 		QualityRuntimeEventBackpressureCount:    "runtime_event_backpressure_count_total",
@@ -821,7 +1153,7 @@ func TestProfileFilesReportsJH100ControlAndEventSizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-3.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
+	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-5.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
 		t.Fatalf("file profile = %+v", profile.Files)
 	}
 	rows := map[EventType]SizeProfileType{}
@@ -863,7 +1195,7 @@ func TestSessionContextAndMetricRoundTrip(t *testing.T) {
 	}
 }
 
-func TestVersionThreeTypedEvidenceRoundTrip(t *testing.T) {
+func TestCurrentFormatTypedEvidenceRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "typed-evidence.jhlog")
 	buckets := make([]uint64, UIFrameHistogramBucketCount)
 	buckets[1] = 50
@@ -1176,14 +1508,19 @@ func TestDatabaseQueryRoundTrip(t *testing.T) {
 			LockWaitUS: 10_000, ExecuteUS: 200_000, DurationUS: 250_000,
 		},
 	}
-	writeClosedEvents(t, path, []Event{event})
+	second := event
+	second.TimeMS = 500
+	secondDatabase := *event.Database
+	secondDatabase.DurationUS = 251_000
+	second.Database = &secondDatabase
+	writeClosedEvents(t, path, []Event{event, second})
 	log, err := readLog(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(log.Events) != 1 || !reflect.DeepEqual(log.Events[0].Database, event.Database) ||
-		log.Events[0].Flags != event.Flags {
-		t.Fatalf("database event = %+v, want %+v", log.Events, event)
+	if len(log.Events) != 2 || !reflect.DeepEqual(log.Events[0].Database, event.Database) ||
+		!reflect.DeepEqual(log.Events[1].Database, second.Database) || log.Events[0].Flags != event.Flags {
+		t.Fatalf("database events = %+v, want %+v and %+v", log.Events, event, second)
 	}
 }
 
@@ -1216,6 +1553,57 @@ func TestDatabaseTransactionRoundTrip(t *testing.T) {
 		!reflect.DeepEqual(log.Events[0].DatabaseTransaction, events[0].DatabaseTransaction) ||
 		!reflect.DeepEqual(log.Events[1].DatabaseTransaction, events[1].DatabaseTransaction) {
 		t.Fatalf("database transaction events = %+v, want %+v", log.Events, events)
+	}
+}
+
+func TestDatabaseTransactionDeltaRoundTripsAcrossDatabaseEventTypes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "database-transaction-delta.jhlog")
+	events := []Event{
+		{
+			Type: EventDatabaseTransaction, TimeUS: 100,
+			DatabaseTransaction: &DatabaseTransactionEvent{
+				SourceRef: StableSymbol(0x51), TransactionID: 300,
+				Stage: DatabaseTransactionBegin, Mode: DatabaseTransactionImmediate,
+			},
+		},
+		{
+			Type: EventDatabase, TimeUS: 110,
+			Database: &DatabaseEvent{
+				QueryRef: LocalSymbol(1), SourceRef: StableSymbol(0x51),
+				Framework: DatabaseFrameworkRoom, Operation: DatabaseOperationQuery,
+				Outcome: DatabaseOutcomeSuccess, Boundary: DatabaseBoundaryExecute,
+				StatementFingerprint: 0x7123, DurationUS: 10, TransactionID: 300,
+			},
+		},
+		{
+			Type: EventDatabaseTransaction, TimeUS: 120,
+			DatabaseTransaction: &DatabaseTransactionEvent{
+				SourceRef: StableSymbol(0x51), TransactionID: 301, ParentID: 300,
+				Stage: DatabaseTransactionBegin, Mode: DatabaseTransactionImmediate,
+			},
+		},
+		{
+			Type: EventDatabaseTransaction, TimeUS: 130,
+			DatabaseTransaction: &DatabaseTransactionEvent{
+				SourceRef: StableSymbol(0x51), TransactionID: 301, ParentID: 300,
+				Stage: DatabaseTransactionTerminal, Mode: DatabaseTransactionImmediate,
+				Outcome: DatabaseTransactionSuccess, DurationUS: 10,
+			},
+		},
+	}
+	writeClosedEvents(t, path, events)
+	log, err := readLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log.Events) != len(events) {
+		t.Fatalf("database event count = %d, want %d", len(log.Events), len(events))
+	}
+	for index := range events {
+		if !reflect.DeepEqual(log.Events[index].Database, events[index].Database) ||
+			!reflect.DeepEqual(log.Events[index].DatabaseTransaction, events[index].DatabaseTransaction) {
+			t.Fatalf("database event %d = %+v, want %+v", index, log.Events[index], events[index])
+		}
 	}
 }
 
@@ -1288,14 +1676,14 @@ func TestDatabaseQueryValidation(t *testing.T) {
 }
 
 func TestVersionTwoLogIsRejectedAfterCleanBreak(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-v2.jhlog")
-	legacyMagic := append([]byte(nil), Magic...)
-	legacyMagic[8] = 2
-	if err := os.WriteFile(path, legacyMagic, 0o644); err != nil {
+	path := filepath.Join(t.TempDir(), "unsupported-v2.jhlog")
+	olderMagic := append([]byte(nil), Magic...)
+	olderMagic[8] = 2
+	if err := os.WriteFile(path, olderMagic, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readLog(path); err == nil || !strings.Contains(err.Error(), "unsupported JHLOG version") {
-		t.Fatalf("legacy v2 error = %v", err)
+		t.Fatalf("unsupported v2 error = %v", err)
 	}
 }
 
@@ -1530,7 +1918,7 @@ func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
 		want   string
 	}{
 		{name: "unknown marker 0x80", marker: 0x80, major: 2, want: "unsupported .jhlog format"},
-		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.0.0; expected 3.0.0"},
+		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.0.0; expected 5.0.0"},
 		{name: "unknown marker", marker: 0x82, major: 2, want: "unsupported .jhlog format"},
 	} {
 		t.Run(version.name, func(t *testing.T) {
@@ -1563,7 +1951,7 @@ func TestWriterRejectsUnsupportedDictionaryEncoding(t *testing.T) {
 	}
 }
 
-func TestVersionThreeRejectsUnsupportedRecordContracts(t *testing.T) {
+func TestCurrentFormatRejectsUnsupportedRecordContracts(t *testing.T) {
 	tests := []struct {
 		name  string
 		event Event
@@ -1604,7 +1992,7 @@ func TestVersionThreeRejectsUnsupportedRecordContracts(t *testing.T) {
 	}
 }
 
-func TestVersionThreeWriterRejectsUnknownSegmentEndReason(t *testing.T) {
+func TestCurrentWriterRejectsUnknownSegmentEndReason(t *testing.T) {
 	var output bytes.Buffer
 	writer, err := NewWriter(&output)
 	if err != nil {
@@ -1616,10 +2004,10 @@ func TestVersionThreeWriterRejectsUnknownSegmentEndReason(t *testing.T) {
 	}
 }
 
-func TestVersionThreeDecoderRejectsUnsupportedEventTypes(t *testing.T) {
+func TestCurrentDecoderRejectsUnsupportedEventTypes(t *testing.T) {
 	for _, eventType := range []EventType{99} {
 		event := Event{Type: eventType}
-		err := decodeEventPayload(&recordReader{}, &event, DefaultSegmentHeader(), "test", nil)
+		err := decodeEventPayload(&recordReader{}, &event, "", "test", nil)
 		want := fmt.Sprintf("unsupported event type %d", eventType)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("event type %d: decodeEventPayload() error = %v", eventType, err)

@@ -24,4 +24,31 @@ internal class InstrumentationMatcher(
             return className == packageName || className.startsWith(childPrefix)
         }
     }
+
+    companion object {
+        fun matchesNormalizedClassName(
+            normalizedClassName: String,
+            includePackages: Iterable<String>,
+            excludePackages: Iterable<String>,
+            includeWholeApplication: Boolean = false,
+            includeBuiltinExcludes: Boolean = true,
+        ): Boolean {
+            if (matchesAnyBoundary(normalizedClassName, excludePackages)) return false
+            if (includeBuiltinExcludes &&
+                matchesAnyBoundary(normalizedClassName, InstrumentationPackages.builtinExcludePrefixes)
+            ) {
+                return false
+            }
+            if (InstrumentationPackages.isGeneratedAndroidClass(normalizedClassName)) return false
+            return includeWholeApplication || matchesAnyBoundary(normalizedClassName, includePackages)
+        }
+
+        private fun matchesAnyBoundary(className: String, packages: Iterable<String>): Boolean {
+            return packages.any { packageName ->
+                className == packageName ||
+                    className.length > packageName.length && className.startsWith(packageName) &&
+                    className[packageName.length] == '.'
+            }
+        }
+    }
 }

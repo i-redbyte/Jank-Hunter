@@ -29,6 +29,66 @@ class AndroidServiceInstrumentationTest {
     }
 
     @Test
+    fun serviceCompatForegroundMethodsRequireTheirExactSignatures() {
+        assertEquals(
+            AndroidServiceForegroundCall(COMPONENT_SERVICE_FOREGROUND_ENTERED, serviceArgument = 0),
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKESTATIC,
+                ANDROIDX_SERVICE_COMPAT,
+                "startForeground",
+                SERVICE_COMPAT_START_DESCRIPTOR,
+                emptySet(),
+            ),
+        )
+        assertEquals(
+            AndroidServiceForegroundCall(COMPONENT_SERVICE_FOREGROUND_EXITED, serviceArgument = 0),
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKESTATIC,
+                ANDROIDX_SERVICE_COMPAT,
+                "stopForeground",
+                SERVICE_COMPAT_STOP_DESCRIPTOR,
+                emptySet(),
+            ),
+        )
+        assertNull(
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKESTATIC,
+                ANDROIDX_SERVICE_COMPAT,
+                "startForeground",
+                SERVICE_COMPAT_STOP_DESCRIPTOR,
+                emptySet(),
+            ),
+        )
+        assertNull(
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKESTATIC,
+                ANDROIDX_SERVICE_COMPAT,
+                "stopForeground",
+                SERVICE_COMPAT_START_DESCRIPTOR,
+                emptySet(),
+            ),
+        )
+        assertNull(
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKEVIRTUAL,
+                ANDROID_SERVICE,
+                "startForeground",
+                "(Z)V",
+                setOf(ANDROID_SERVICE),
+            ),
+        )
+        assertNull(
+            AndroidServiceInstrumentationPolicy.foregroundCall(
+                Opcodes.INVOKEVIRTUAL,
+                ANDROID_SERVICE,
+                "stopForeground",
+                "(ILandroid/app/Notification;)V",
+                setOf(ANDROID_SERVICE),
+            ),
+        )
+    }
+
+    @Test
     fun serviceCallbacksHaveBalancedSuccessAndFailureHooks() {
         val methods = instrumentAndCollect(serviceFixture())
 
@@ -221,8 +281,12 @@ class AndroidServiceInstrumentationTest {
 
     private companion object {
         const val ANDROID_SERVICE = "android/app/Service"
+        const val ANDROIDX_SERVICE_COMPAT = "androidx/core/app/ServiceCompat"
         const val JANK_HUNTER_ANDROID_HOOKS = "io/jankhunter/runtime/JankHunterAndroidHooks"
         const val COMPONENT_SERVICE_FOREGROUND_ENTERED = 7
         const val COMPONENT_SERVICE_FOREGROUND_EXITED = 8
+        const val SERVICE_COMPAT_START_DESCRIPTOR =
+            "(Landroid/app/Service;ILandroid/app/Notification;I)V"
+        const val SERVICE_COMPAT_STOP_DESCRIPTOR = "(Landroid/app/Service;I)V"
     }
 }

@@ -192,6 +192,30 @@ func TestBestHeapEvidencePrefersActionablePathForSameRuntimeLeak(t *testing.T) {
 	}
 }
 
+func TestBestHeapEvidenceRejectsClassOnlyMatchWithDifferentKnownHolder(t *testing.T) {
+	heap := &HeapEvidence{Leaks: []HeapLeakEvidence{{
+		ClassName:   "android.widget.FrameLayout",
+		Holder:      "com.app.registration.PreRegistrationActivity",
+		HolderField: "com.app.registration.PreRegistrationActivity.contentView",
+		ReferencePath: []HeapPathElement{
+			{ClassName: "GC root: sticky class", Kind: "gc_root"},
+			{ClassName: "com.app.registration.PreRegistrationActivity", Kind: "root_object"},
+			{ClassName: "android.widget.FrameLayout", FieldName: "contentView", Kind: "field"},
+		},
+	}}}
+
+	best := bestHeapEvidence(
+		memoryLeakStats{
+			className: "android.widget.FrameLayout",
+			holder:    "com.app.chat.ChatFragment",
+		},
+		heap,
+	)
+	if best != nil {
+		t.Fatalf("bestHeapEvidence() = %+v, want no cross-scenario class-only match", best)
+	}
+}
+
 func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
 	parser := newHprofParser("large.hprof", map[string]struct{}{"com.app.LeakedActivity": struct{}{}})
 	rootID := uint64(1)
@@ -217,6 +241,128 @@ func TestHprofEvidenceLimitsExactRetainedSizeWork(t *testing.T) {
 	}
 	if !strings.Contains(evidence.Leaks[0].Confidence, "удержанный размер ограничен") {
 		t.Fatalf("expected limited confidence on best leak: %+v", evidence.Leaks[0])
+	}
+}
+
+func TestRetainedSizeReusesRootReachabilityAndNeedsOnlyOneBoundedTraversal(t *testing.T) {
+	parser := newHprofParser("single-pass.hprof", nil)
+	root := parser.ensureNode(1, "java.lang.Class", 16)
+	target := parser.ensureNode(2, "com.app.LeakedActivity", 32)
+	parser.ensureNode(3, "android.view.View", 64)
+	parser.ensureNode(4, "com.app.Unrelated", 128)
+	parser.roots = []heapRoot{{id: root.id, kind: "sticky class"}}
+	parser.addEdge(root, target.id, "static leak", "static")
+	parser.addEdge(target, 3, "content", "field")
+	parser.addEdge(root, 4, "unrelated", "static")
+
+	rootReachability := parser.rootBFS()
+	budget := &heapTraversalBudget{remaining: 3}
+	scratch := newHeapReachabilityScratch(len(rootReachability))
+	size, count, _, exact := parser.retainedSizeForLimited(
+		target.id,
+		parser.rootIDs(),
+		rootReachability,
+		scratch,
+		budget,
+		true,
+	)
+
+	if !exact {
+		t.Fatalf("retained size unexpectedly exhausted the single-traversal budget")
+	}
+	if size != 96 || count != 2 {
+		t.Fatalf("retained size/count = %d/%d, want 96/2", size, count)
+	}
+}
+
+func TestRetainedSizeScratchDoesNotLeakReachabilityBetweenTargets(t *testing.T) {
+	parser := newHprofParser("scratch.hprof", nil)
+	root := parser.ensureNode(1, "java.lang.Class", 16)
+	first := parser.ensureNode(2, "com.app.FirstActivity", 32)
+	parser.ensureNode(3, "android.view.FirstView", 64)
+	second := parser.ensureNode(4, "com.app.SecondActivity", 128)
+	parser.ensureNode(5, "android.view.SecondView", 256)
+	parser.roots = []heapRoot{{id: root.id, kind: "sticky class"}}
+	parser.addEdge(root, first.id, "first", "static")
+	parser.addEdge(first, 3, "content", "field")
+	parser.addEdge(root, second.id, "second", "static")
+	parser.addEdge(second, 5, "content", "field")
+
+	reachability := parser.rootBFS()
+	scratch := newHeapReachabilityScratch(len(reachability))
+	firstSize, firstCount, _, firstExact := parser.retainedSizeForLimited(
+		first.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 16}, true,
+	)
+	secondSize, secondCount, _, secondExact := parser.retainedSizeForLimited(
+		second.id, parser.rootIDs(), reachability, scratch, &heapTraversalBudget{remaining: 16}, true,
+	)
+
+	if !firstExact || firstSize != 96 || firstCount != 2 {
+		t.Fatalf("first retained size/count/exact = %d/%d/%t, want 96/2/true", firstSize, firstCount, firstExact)
+	}
+	if !secondExact || secondSize != 384 || secondCount != 2 {
+		t.Fatalf("second retained size/count/exact = %d/%d/%t, want 384/2/true", secondSize, secondCount, secondExact)
+	}
+}
+
+func TestHprofEvidenceDoesNotSearchAlternativePathsForDiscardedCandidate(t *testing.T) {
+	const pathologicalFanIn = 6_001
+	const targetClass = "com.app.LeakedActivity"
+	parser := newHprofParser("branching.hprof", map[string]struct{}{targetClass: {}})
+	root := parser.ensureNode(1, "java.lang.Class", 16)
+	discarded := parser.ensureNode(2, targetClass, 32)
+	selected := parser.ensureNode(3, targetClass, 32)
+	holder := parser.ensureNode(4, "com.app.LeakHolder", 32)
+	parser.roots = []heapRoot{{id: root.id, kind: "sticky class"}}
+	parser.addEdge(root, discarded.id, "discarded", "static")
+	parser.addEdge(root, holder.id, "holder", "static")
+	parser.addEdge(holder, selected.id, "activityListener", "field")
+	for index := 0; index < pathologicalFanIn; index++ {
+		noise := parser.ensureNode(uint64(10+index), "java.lang.Object", 8)
+		parser.addEdge(noise, discarded.id, "noise", "field")
+	}
+
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 || evidence.Leaks[0].Holder != "com.app.LeakHolder" {
+		t.Fatalf("unexpected selected evidence: %+v", evidence)
+	}
+	if warningContains(evidence.Warnings, "Поиск альтернативных HPROF-путей достиг лимита") {
+		t.Fatalf("discarded candidate degraded selected evidence: %+v", evidence.Warnings)
+	}
+}
+
+func TestHprofEvidenceFindsRepresentativePathsWithoutTraversingUnreachableFanIn(t *testing.T) {
+	const pathologicalFanIn = 6_001
+	const targetClass = "com.app.LeakedActivity"
+	parser := newHprofParser("fan-in.hprof", map[string]struct{}{targetClass: {}})
+	root := parser.ensureNode(1, "java.lang.Class", 16)
+	firstHolder := parser.ensureNode(2, "com.app.FirstHolder", 32)
+	secondHolder := parser.ensureNode(3, "com.app.SecondHolder", 32)
+	thirdHolder := parser.ensureNode(4, "com.app.ThirdHolder", 32)
+	target := parser.ensureNode(5, targetClass, 64)
+	parser.roots = []heapRoot{{id: root.id, kind: "sticky class"}}
+	parser.addEdge(root, firstHolder.id, "first", "static")
+	parser.addEdge(root, secondHolder.id, "second", "static")
+	parser.addEdge(root, thirdHolder.id, "third", "static")
+	parser.addEdge(firstHolder, target.id, "listenerA", "field")
+	parser.addEdge(secondHolder, target.id, "listenerB", "field")
+	parser.addEdge(thirdHolder, target.id, "listenerC", "field")
+	for index := 0; index < pathologicalFanIn; index++ {
+		noise := parser.ensureNode(uint64(10+index), "java.lang.Object", 8)
+		parser.addEdge(noise, target.id, "a-noise", "field")
+	}
+
+	evidence := parser.evidence()
+
+	if evidence == nil || len(evidence.Leaks) != 1 {
+		t.Fatalf("unexpected evidence: %+v", evidence)
+	}
+	if len(evidence.Leaks[0].AlternativePaths) != 2 {
+		t.Fatalf("alternative paths = %d, want 2", len(evidence.Leaks[0].AlternativePaths))
+	}
+	if warningContains(evidence.Warnings, "Поиск альтернативных HPROF-путей достиг лимита") {
+		t.Fatalf("unreachable fan-in degraded representative paths: %+v", evidence.Warnings)
 	}
 }
 

@@ -3,7 +3,6 @@ package io.jankhunter.sample.automatic
 import io.jankhunter.runtime.JankHunterTelemetry
 
 import io.jankhunter.sample.graph.MemoryScenarioUseCase
-import io.jankhunter.runtime.JankHunter
 import kotlinx.coroutines.delay
 
 internal class AutomaticMemoryScenario(

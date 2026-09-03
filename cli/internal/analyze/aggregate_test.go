@@ -9,12 +9,39 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
+
+func TestCollectorOwnsStateThroughFocusedStateObjects(t *testing.T) {
+	typeOfCollector := reflect.TypeOf(collector{})
+	want := map[string]struct{}{
+		"collectorOutputState":   {},
+		"collectorInputState":    {},
+		"collectorTimelineState": {},
+		"collectorQualityState":  {},
+		"collectorDomainState":   {},
+		"collectorSignalState":   {},
+		"collectorSessionState":  {},
+	}
+	if typeOfCollector.NumField() != len(want) {
+		t.Fatalf("collector owns %d direct fields, want %d focused states", typeOfCollector.NumField(), len(want))
+	}
+	for index := 0; index < typeOfCollector.NumField(); index++ {
+		field := typeOfCollector.Field(index)
+		if _, ok := want[field.Type.Name()]; !ok || !field.Anonymous {
+			t.Fatalf("collector field %q has type %q and anonymous=%t", field.Name, field.Type.Name(), field.Anonymous)
+		}
+	}
+}
+
+func (c *collector) addStreamResult(result jhlog.StreamResult) {
+	c.addSegmentStreamResult(result, true)
+}
 
 var benchmarkUint64Percentile uint64
 
@@ -551,6 +578,50 @@ func TestCollectionQualityTreatsExactBackpressureAsNoLoss(t *testing.T) {
 	}
 }
 
+func TestCollectionQualitySeparatesTransportAndRuntimeGraphAdmissionLoss(t *testing.T) {
+	collector := newCollector("reason-coded admission", 1, Options{})
+	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
+		jhlog.QualityAcceptedEventTotal: 574_040,
+		jhlog.QualityWrittenEventTotal:  574_040,
+		jhlog.EventQualityCounterID(
+			jhlog.EventHTTP,
+			jhlog.QualityLossAdmissionContention,
+		): 322,
+		jhlog.EventQualityCounterID(
+			jhlog.EventRuntimeCall,
+			jhlog.QualityLossAdmissionContention,
+		): 32_067,
+		jhlog.QualityRuntimeGraphInputTotal:           70_199_087,
+		jhlog.QualityRuntimeGraphEmittedTotal:         70_024_864,
+		jhlog.QualityRuntimeGraphWriterRejectionLoss:  32_067,
+		jhlog.QualityRuntimeGraphProducerCapacityLoss: 142_156,
+		jhlog.QualityRuntimeGraphBackpressureCount:    20_353,
+		jhlog.QualityRuntimeGraphBackpressureNanos:    51_945_575_042,
+	}}
+	collector.addStreamResult(jhlog.StreamResult{
+		Source: "admission.jhlog", Header: collectionTestHeader(31, 0),
+		Status: jhlog.SegmentStatusClosedClean, Sealed: true, LatestQuality: &quality,
+		SegmentEnd:               &jhlog.SegmentEndEvent{Reason: jhlog.SegmentEndShutdown},
+		RuntimeGraphLogicalCalls: 70_024_864,
+	})
+	collector.finalizeCollectionQuality()
+
+	got := collector.summary.CollectionQuality
+	if got.KnownLostEvents != 322 || got.PreAdmissionLostEvents != 322 ||
+		got.AdmissionContentionLostEvents != 322 || got.PostAdmissionLostEvents != 0 {
+		t.Fatalf("transport loss accounting = %+v", got)
+	}
+	if got.RuntimeGraphBackpressureCount != 20_353 || got.RuntimeGraphBackpressureNanos != 51_945_575_042 {
+		t.Fatalf("runtime graph backpressure = %+v", got)
+	}
+	if got.RuntimeGraphProducerCapacityLoss != 142_156 || got.OtherEvidenceLoss != 0 {
+		t.Fatalf("runtime graph capacity loss = %+v", got)
+	}
+	if got.RuntimeGraphCompletenessRatio >= 1 || !warningsContain(got.Notices, "producer page") {
+		t.Fatalf("runtime graph quality = %+v", got)
+	}
+}
+
 func TestCollectionQualityFailsClosedOnSuppressedRuntimeHookFailure(t *testing.T) {
 	collector := newCollector("hook failure", 1, Options{})
 	quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
@@ -604,6 +675,18 @@ func TestQualityWarningsDescribeExactAdmissionContentionAsLosslessBackpressure(t
 	}
 }
 
+func TestQualityWarningsUseLogicalCallUnitsForRuntimeGraphLoss(t *testing.T) {
+	warnings := qualityCounterWarnings(map[uint64]uint64{
+		jhlog.QualityRuntimeGraphWriterRejectionLoss:  25_164,
+		jhlog.QualityRuntimeGraphProducerCapacityLoss: 59_133,
+	}, true)
+	if !warningsContain(warnings, "writer не принял логические вызовы runtime-графа") ||
+		!warningsContain(warnings, "логических вызовов runtime-графа после deadline") ||
+		warningsContain(warnings, "batch runtime-графа") {
+		t.Fatalf("runtime graph loss warnings use wrong units: %+v", warnings)
+	}
+}
+
 func TestQualityWarningsExplainPreparedStatementEvidenceLoss(t *testing.T) {
 	warnings := qualityCounterWarnings(map[uint64]uint64{
 		jhlog.QualityPreparedStatementRegistryEviction: 3,
@@ -625,7 +708,9 @@ func TestQualityWarningsExplainReceiverAsyncEvidenceLoss(t *testing.T) {
 }
 
 func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvidence(t *testing.T) {
-	runtimeOnlyCollector := &collector{stableSymbols: stableSymbolResolver{unresolved: map[string]struct{}{}}}
+	runtimeOnlyCollector := &collector{collectorSessionState: collectorSessionState{
+		stableSymbols: stableSymbolResolver{unresolved: map[string]struct{}{}},
+	}}
 	runtimeOnly := runtimeOnlyCollector.analysisInputCompleteness(Summary{
 		LogCount:        1,
 		DataRecordCount: 10,
@@ -638,13 +723,17 @@ func TestAnalysisInputCompletenessSeparatesRuntimeOnlyFromCompleteDeveloperEvide
 	}
 
 	completeCollector := &collector{
-		diagnostics: &InstrumentationDiagnostics{Available: true, ClassCount: 1},
-		stableSymbols: stableSymbolResolver{
-			unresolved: map[string]struct{}{},
+		collectorInputState: collectorInputState{
+			diagnostics:       &InstrumentationDiagnostics{Available: true, ClassCount: 1},
+			artifactDirectory: "/project/app/build/generated/jankhunter/debug",
+			artifactAuto:      true,
+			artifactNamespace: make([]byte, symbolNamespaceBytes),
 		},
-		artifactDirectory: "/project/app/build/generated/jankhunter/debug",
-		artifactAuto:      true,
-		artifactNamespace: make([]byte, symbolNamespaceBytes),
+		collectorSessionState: collectorSessionState{
+			stableSymbols: stableSymbolResolver{
+				unresolved: map[string]struct{}{},
+			},
+		},
 	}
 	complete := completeCollector.analysisInputCompleteness(Summary{
 		LogCount:        1,
@@ -664,6 +753,21 @@ func TestArtifactNamespaceRejectsAnotherBuildVariant(t *testing.T) {
 	err := validateArtifactNamespace(wrongNamespace, header, "session.jhlog", "/project/wrong-variant")
 	if err == nil || !strings.Contains(err.Error(), "does not match") || !strings.Contains(err.Error(), "exact --artifacts-dir") {
 		t.Fatalf("namespace mismatch error = %v", err)
+	}
+}
+
+func TestArtifactIdentityWarningsExposeUnverifiedExplicitAnalysisInputs(t *testing.T) {
+	collector := &collector{
+		collectorInputState: collectorInputState{
+			classGraph:  &ClassGraph{Edges: make([]ClassGraphEdge, 1)},
+			diagnostics: &InstrumentationDiagnostics{Available: true, ClassCount: 1},
+		},
+	}
+
+	warnings := collector.artifactIdentityWarnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "не подтверждена") ||
+		!strings.Contains(warnings[0], "artifact-metadata.json") {
+		t.Fatalf("artifact identity warnings = %+v", warnings)
 	}
 }
 
@@ -963,10 +1067,12 @@ func TestCollectionQualityCapsConfidenceForUnsealedAndLossyStreams(t *testing.T)
 	t.Run("lossy", func(t *testing.T) {
 		collector := newCollector("lossy", 1, Options{})
 		quality := jhlog.QualitySnapshot{Sequence: 1, Counters: map[uint64]uint64{
-			jhlog.QualityAcceptedEventTotal:             1_000,
-			jhlog.QualityWrittenEventTotal:              900,
-			jhlog.QualityQueueFullTotal:                 10,
-			jhlog.QualityWriterAdmissionContentionTotal: 7,
+			jhlog.QualityAcceptedEventTotal:                                                    1_000,
+			jhlog.QualityWrittenEventTotal:                                                     900,
+			jhlog.QualityQueueFullTotal:                                                        10,
+			jhlog.QualityWriterAdmissionContentionTotal:                                        7,
+			jhlog.EventQualityCounterID(jhlog.EventHTTP, jhlog.QualityLossQueueFull):           10,
+			jhlog.EventQualityCounterID(jhlog.EventHTTP, jhlog.QualityLossAdmissionContention): 7,
 		}}
 		header := collectionTestHeader(11, 0)
 		header.RequiredFeatures &^= jhlog.FeatureExactEventAdmission
@@ -1252,6 +1358,65 @@ func TestInspectMultipleLogsSumsPerLogDuration(t *testing.T) {
 	}
 	if len(summary.Warnings) == 0 {
 		t.Fatalf("expected multi-log duration warning")
+	}
+}
+
+func TestInspectOrdersRotatedSessionAndKeepsContext(t *testing.T) {
+	directory := t.TempDir()
+	firstPath := filepath.Join(directory, "session.0.jhlog")
+	secondPath := filepath.Join(directory, "session.0-1.jhlog")
+
+	firstHeader := collectionTestHeader(21, 0)
+	firstCloser, firstWriter, err := jhlog.CreateWithHeader(firstPath, firstHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWriter.WriteEvent(jhlog.Event{
+		Type: jhlog.EventSession, TimeMS: 1_000,
+		Session: &jhlog.SessionEvent{SDKInt: 35, ProcessName: "main"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstWriter.CloseWithReason(jhlog.SegmentEndRotation); err != nil {
+		t.Fatal(err)
+	}
+	firstDigest := firstWriter.SegmentDigest()
+	if err := firstCloser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondHeader := collectionTestHeader(21, 1)
+	secondHeader.PreviousSegmentDigest = firstDigest
+	secondCloser, secondWriter, err := jhlog.CreateWithHeader(secondPath, secondHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondWriter.WriteEvent(jhlog.Event{
+		Type: jhlog.EventHTTP, TimeMS: 3_000,
+		HTTP: &jhlog.HTTPEvent{DurationMS: 20, Status: jhlog.Status2xx},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondCloser.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := inspectFilesForTest("rotated", []string{secondPath, firstPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.CollectionSegments) != 2 ||
+		summary.CollectionSegments[0].SegmentIndex != 0 || summary.CollectionSegments[1].SegmentIndex != 1 {
+		t.Fatalf("segment order = %+v", summary.CollectionSegments)
+	}
+	if summary.DurationMS != 2_000 {
+		t.Fatalf("DurationMS = %d, want 2000", summary.DurationMS)
+	}
+	if warningsContain(summary.Warnings, "независимых сессий") {
+		t.Fatalf("rotation chain was reported as independent sessions: %+v", summary.Warnings)
+	}
+	if len(summary.Cohorts) != 1 || !strings.Contains(summary.Cohorts[0].Name, "sdk=api-35") || summary.Cohorts[0].Value != 1 {
+		t.Fatalf("context from segment zero was not retained: %+v", summary.Cohorts)
 	}
 }
 
