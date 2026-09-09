@@ -121,12 +121,12 @@ internal class RuntimeDatabaseTelemetry(
     }
 
     fun markTransactionSuccessful(database: Any?) {
-        if (database == null || !isEnabled()) return
+        if (database == null) return
         transactions.markSuccessful(database)
     }
 
     fun endTransaction(database: Any?, throwable: Throwable?, forceFailure: Boolean = false) {
-        if (database == null || !isEnabled()) return
+        if (database == null) return
         RuntimeHookGuard.run {
             val failed = forceFailure || throwable != null
             val failureKind = if (failed) databaseFailureKind(throwable) else DatabaseFailureKind.OTHER

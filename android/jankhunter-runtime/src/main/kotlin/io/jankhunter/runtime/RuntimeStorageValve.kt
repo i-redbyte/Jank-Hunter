@@ -34,6 +34,7 @@ internal class RuntimeStorageValve(
             val configurationUpdated = synchronized(state.lifecycleLock) updateConfiguration@{
                 if (state.config !== snapshot.config) return@updateConfiguration false
                 state.config = snapshot.config.toBuilder().binaryStorage(storage).build()
+                state.selectedBinaryStorage = storage
                 true
             }
             if (configurationUpdated) collectors.switchBinaryStorage(storage)

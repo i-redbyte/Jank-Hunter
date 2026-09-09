@@ -145,3 +145,11 @@ class JankHunterKotlinGradlePlugin : Plugin<Project> {
         configureJvm17()
     }
 }
+
+class JankHunterCliPackagePlugin : Plugin<Project> {
+    override fun apply(target: Project) = with(target) {
+        pluginManager.apply("base")
+        pluginManager.apply("maven-publish")
+        configureJankHunterPublishing()
+    }
+}

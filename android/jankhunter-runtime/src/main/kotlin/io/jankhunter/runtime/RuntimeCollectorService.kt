@@ -121,8 +121,11 @@ internal class RuntimeCollectorService(
     fun stop() {
         RuntimeHookGuard.swallow {
             state.activityTracker?.let { tracker ->
-                state.application?.unregisterActivityLifecycleCallbacks(tracker)
-                tracker.close()
+                try {
+                    state.application?.unregisterActivityLifecycleCallbacks(tracker)
+                } finally {
+                    tracker.close()
+                }
             }
         }
         RuntimeHookGuard.swallow { state.watchdog?.stop() }
@@ -140,6 +143,8 @@ internal class RuntimeCollectorService(
 
     fun reset() {
         state.uiVisibility.set(RuntimeUiVisibility.UNKNOWN.wireValue)
+        state.heapDumpInProgress.set(false)
+        state.heapDumpAttributionUntilMs.set(0L)
         state.activityTracker = null
         state.mainThreadContext = null
         state.application = null

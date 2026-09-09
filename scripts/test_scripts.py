@@ -250,6 +250,14 @@ android {{
         self.run_script(
             project,
             *common_old,
+            "--profile",
+            "full",
+            "--collection",
+            "exact",
+            "--processes",
+            "all",
+            "--scope",
+            "whole-application",
             "--build-type",
             "qa",
             "--build-type",
@@ -262,7 +270,14 @@ android {{
             "--okhttp",
             "--websockets",
             "--analyze-di",
-            "--max-session-log-size-mib",
+            "--enable-feature",
+            "method-counters",
+            "--disable-feature",
+            "heap-dumps",
+            "--no-auto-init",
+            "--no-growth-analytics",
+            "--delete-obsolete-logs",
+            "--storage-limit-mib",
             "12",
         )
 
@@ -275,6 +290,18 @@ android {{
         self.assertNotIn("0.9.0", first_build)
         self.assertIn(f'jankhunter-android-sdk:{VERSION}', first_build)
         self.assertIn('enabledBuildTypes.set(setOf("qa", "staging"))' if dsl == "kts" else 'enabledBuildTypes.set(["qa", "staging"])', first_build)
+        self.assertIn("profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)", first_build)
+        self.assertIn("collection.set(io.jankhunter.gradle.JankHunterCollection.EXACT)", first_build)
+        self.assertIn("processes.set(io.jankhunter.gradle.JankHunterProcesses.ALL)", first_build)
+        self.assertIn(
+            "scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.WHOLE_APPLICATION)",
+            first_build,
+        )
+        self.assertIn("autoInit.set(false)", first_build)
+        self.assertIn("growthAnalytics.set(false)", first_build)
+        self.assertIn("deleteObsoleteLogs.set(true)", first_build)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS)", first_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS)", first_build)
         self.assertEqual(1, first_build.count("managed configuration - BEGIN"))
         self.assertEqual(1, first_build.count("optional helper dependencies - BEGIN"))
         self.assertEqual(2, first_settings.count(old_maven))
@@ -282,6 +309,14 @@ android {{
         self.run_script(
             project,
             *common_new,
+            "--profile",
+            "targeted",
+            "--collection",
+            "balanced",
+            "--processes",
+            "main_only",
+            "--scope",
+            "packages-only",
             "--build-type",
             "qa",
             "--build-type",
@@ -292,7 +327,14 @@ android {{
             "--no-okhttp",
             "--no-websockets",
             "--no-analyze-di",
-            "--no-session-log-size-limit",
+            "--enable-feature",
+            "ui-all",
+            "--disable-feature",
+            "METHOD_COUNTERS",
+            "--auto-init",
+            "--growth-analytics",
+            "--keep-obsolete-logs",
+            "--unlimited-storage",
         )
         second_build = build_file.read_text(encoding="utf-8")
         second_settings = settings_file.read_text(encoding="utf-8")
@@ -311,6 +353,18 @@ android {{
         self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)", second_build)
         self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.HTTP)", second_build)
         self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)", second_build)
+        self.assertIn("profile.set(io.jankhunter.gradle.JankHunterProfile.TARGETED)", second_build)
+        self.assertIn("collection.set(io.jankhunter.gradle.JankHunterCollection.BALANCED)", second_build)
+        self.assertIn("processes.set(io.jankhunter.gradle.JankHunterProcesses.MAIN_ONLY)", second_build)
+        self.assertIn(
+            "scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.PACKAGES_ONLY)",
+            second_build,
+        )
+        self.assertIn("autoInit.set(true)", second_build)
+        self.assertIn("growthAnalytics.set(true)", second_build)
+        self.assertIn("deleteObsoleteLogs.set(false)", second_build)
+        self.assertIn("enable(io.jankhunter.gradle.JankHunterFeatureBundle.UI_ALL)", second_build)
+        self.assertIn("disable(io.jankhunter.gradle.JankHunterFeature.METHOD_COUNTERS)", second_build)
         self.assertIn("com.example.updated", second_build)
         self.assertNotIn("com.example.first", second_build)
         self.assertEqual(1, second_build.count("managed configuration - BEGIN"))
@@ -328,6 +382,14 @@ android {{
         self.run_script(
             project,
             *common_new,
+            "--profile",
+            "targeted",
+            "--collection",
+            "balanced",
+            "--processes",
+            "main-only",
+            "--scope",
+            "packages-only",
             "--build-type",
             "qa",
             "--build-type",
@@ -338,7 +400,14 @@ android {{
             "--no-okhttp",
             "--no-websockets",
             "--no-analyze-di",
-            "--no-session-log-size-limit",
+            "--enable-feature",
+            "ui-all",
+            "--disable-feature",
+            "method-counters",
+            "--auto-init",
+            "--growth-analytics",
+            "--keep-obsolete-logs",
+            "--unlimited-storage",
         )
         self.assertEqual(second_build, build_file.read_text(encoding="utf-8"))
         self.assertEqual(second_settings, settings_file.read_text(encoding="utf-8"))
@@ -348,6 +417,34 @@ android {{
 
     def test_reintegrates_existing_groovy_dsl_project(self) -> None:
         self.assert_reintegration("groovy")
+
+    def test_rejects_conflicting_feature_directives_before_writes(self) -> None:
+        project = self.create_project("kts", existing_integration=False)
+        settings = project / "settings.gradle.kts"
+        build = project / "app/build.gradle.kts"
+        before_settings = settings.read_bytes()
+        before_build = build.read_bytes()
+
+        completed = self.run_script(
+            project,
+            "--module",
+            ":app",
+            "--enable-feature",
+            "HTTP",
+            "--disable-feature",
+            "http",
+            "--dry-run",
+            "--skip-publish",
+            "--skip-cli-build",
+            "--skip-local-properties",
+            "--no-gitignore",
+            expected_status=1,
+        )
+
+        self.assertIn("feature is both enabled and disabled: HTTP", completed.stderr)
+        self.assertEqual(before_settings, settings.read_bytes())
+        self.assertEqual(before_build, build.read_bytes())
+        self.assertFalse((project / ".jankhunter-backups").exists())
 
     def test_reintegrates_groovy_project_with_slashy_literals_idempotently(self) -> None:
         project = self.create_project("groovy", existing_integration=True)
@@ -1680,6 +1777,18 @@ class GradlePluginSmokeScriptValidationTest(unittest.TestCase):
         completed = self.run_smoke("--help", "unexpected")
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("unknown or unexpected arguments", completed.stderr)
+
+    def test_external_fixture_uses_the_public_android_sdk_contract(self) -> None:
+        source = GRADLE_SMOKE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'implementation("$group:jankhunter-android-sdk:$version")', source
+        )
+        self.assertNotIn(
+            'implementation("$group:jankhunter-okhttp3:$version")', source
+        )
+        self.assertIn('"module": "jankhunter-runtime"', source)
+        self.assertIn('"module": "jankhunter-annotations"', source)
+        self.assertIn('"module": "jankhunter-okhttp3"', source)
 
 
 if __name__ == "__main__":

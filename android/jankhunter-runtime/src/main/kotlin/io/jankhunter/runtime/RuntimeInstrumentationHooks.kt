@@ -104,7 +104,10 @@ internal class RuntimeInstrumentationHooks(
         )
     }
 
-    fun enterServiceCallback(): Long = androidComponentTelemetry.enterServiceCallback()
+    fun enterServiceCallback(): Long {
+        if (!isEnabled(JankHunterRuntimeFeature.ANDROID_COMPONENTS)) return 0L
+        return androidComponentTelemetry.enterServiceCallback()
+    }
 
     fun exitServiceCallback(
         token: Long,
@@ -136,6 +139,7 @@ internal class RuntimeInstrumentationHooks(
         componentName: String,
         stage: Int,
     ) {
+        if (!isEnabled(JankHunterRuntimeFeature.ANDROID_COMPONENTS)) return
         androidComponentTelemetry.recordServiceForegroundTransition(service, componentId, componentName, stage)
     }
 
@@ -145,6 +149,7 @@ internal class RuntimeInstrumentationHooks(
         componentId: Long,
         componentName: String,
     ): Long {
+        if (!isEnabled(JankHunterRuntimeFeature.ANDROID_COMPONENTS)) return 0L
         return androidComponentTelemetry.enterReceiverCallback(receiver, intent, componentId, componentName)
     }
 
@@ -192,7 +197,10 @@ internal class RuntimeInstrumentationHooks(
         androidComponentTelemetry.finishReceiverAsync(pendingResult)
     }
 
-    fun enterBinderClient(): Long = binderTelemetry.enter()
+    fun enterBinderClient(): Long {
+        if (!isEnabled(JankHunterRuntimeFeature.BINDER_IPC)) return 0L
+        return binderTelemetry.enter()
+    }
 
     fun exitBinderClient(
         token: Long,
@@ -206,7 +214,10 @@ internal class RuntimeInstrumentationHooks(
         binderTelemetry.exitClient(token, descriptor, method, code, flags, handled, throwable)
     }
 
-    fun enterBinderServer(): Long = binderTelemetry.enter()
+    fun enterBinderServer(): Long {
+        if (!isEnabled(JankHunterRuntimeFeature.BINDER_IPC)) return 0L
+        return binderTelemetry.enter()
+    }
 
     fun exitBinderServer(
         token: Long,
@@ -254,32 +265,43 @@ internal class RuntimeInstrumentationHooks(
     fun classifyWorkerOutcome(result: Any?): Int = workerTelemetry.classifyOutcome(result)
 
     fun recordMethodCall(methodId: Long, methodName: String) {
-        if (telemetryAccess.isActive()) runtimeHookEvents.recordMethod(methodId, methodName)
+        if (isEnabled(JankHunterRuntimeFeature.METHOD_COUNTERS)) {
+            runtimeHookEvents.recordMethod(methodId, methodName)
+        }
     }
 
-    fun recordCounter(name: String?, value: Long) = systemTelemetry.recordCounter(name, value)
+    fun recordCounter(name: String?, value: Long) {
+        if (isEnabled(JankHunterRuntimeFeature.HANDLERS)) systemTelemetry.recordCounter(name, value)
+    }
 
     fun recordLogSpam(ownerName: String?, source: String?, level: Int) {
-        systemTelemetry.recordLogSpam(ownerName, source, level)
+        if (isEnabled(JankHunterRuntimeFeature.LOGGING)) {
+            systemTelemetry.recordLogSpam(ownerName, source, level)
+        }
     }
 
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
+        if (!isEnabled(JankHunterRuntimeFeature.EXECUTORS)) return runnable
         return asyncTelemetry.wrapRunnable(runnable, ownerName)
     }
 
     fun <T> wrapCallable(callable: Callable<T>?, ownerName: String?): Callable<T>? {
+        if (!isEnabled(JankHunterRuntimeFeature.EXECUTORS)) return callable
         return asyncTelemetry.wrapCallable(callable, ownerName)
     }
 
     fun wrapCoroutineBlock(block: Function2<*, *, *>?, ownerName: String?): Function2<*, *, *>? {
+        if (!isEnabled(JankHunterRuntimeFeature.COROUTINES)) return block
         return asyncTelemetry.wrapCoroutineBlock(block, ownerName)
     }
 
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
+        if (!isEnabled(JankHunterRuntimeFeature.INTERACTIONS)) return listener
         return asyncTelemetry.wrapClickListener(listener, ownerName)
     }
 
     fun wrapHandlerRunnable(handler: Handler, runnable: Runnable, token: Any?, ownerName: String?): Runnable {
+        if (!isEnabled(JankHunterRuntimeFeature.HANDLERS)) return runnable
         return handlerHooks.wrap(handler, runnable, token, ownerName)
     }
 
@@ -295,19 +317,31 @@ internal class RuntimeInstrumentationHooks(
         handlerHooks.clear(handler, runnable, token)
     }
 
-    fun clearHandlerWrappers(handler: Handler, token: Any?) = handlerHooks.clear(handler, token)
+    fun clearHandlerWrappers(handler: Handler, token: Any?) {
+        handlerHooks.clear(handler, token)
+    }
 
     fun enterAnnotatedContext(screenName: String?, ownerName: String?): Any? {
+        if (!isEnabled(JankHunterRuntimeFeature.INTERACTIONS)) return null
         return contextTelemetry.enterAnnotated(screenName, ownerName)
     }
 
-    fun exitAnnotatedContext(token: Any?) = contextTelemetry.exitAnnotated(token)
+    fun exitAnnotatedContext(token: Any?) {
+        contextTelemetry.exitAnnotated(token)
+    }
 
     fun startOperation(name: String, kind: JankHunterOperationKind, budgetMs: Long): JankHunterOperation {
+        if (!isEnabled(JankHunterRuntimeFeature.INTERACTIONS)) return JankHunterOperation.NONE
         return operationTelemetry.start(name, kind, budgetMs, JankHunterOperationAttributes.EMPTY)
     }
 
     fun watchLifecycleObject(instance: Any?, lifecycleEvent: String?, ownerHint: String?) {
-        retentionTelemetry.watchLifecycleObject(instance, lifecycleEvent, ownerHint)
+        if (isEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS)) {
+            retentionTelemetry.watchLifecycleObject(instance, lifecycleEvent, ownerHint)
+        }
+    }
+
+    private fun isEnabled(feature: JankHunterRuntimeFeature): Boolean {
+        return telemetryAccess.isActive() && config()?.isRuntimeFeatureEnabled(feature) == true
     }
 }

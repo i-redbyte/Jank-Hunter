@@ -1,17 +1,28 @@
 package io.jankhunter.runtime
 
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Handler
 import android.view.View
+import java.io.File
 import java.lang.reflect.Modifier
+import java.nio.file.Files
 import java.util.concurrent.Callable
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 
 class JankHunterHooksTest {
+    @After
+    fun tearDown() {
+        JankHunter.shutdown()
+    }
+
     @Test
     fun facadeHasStableJvmOwnerAndStaticEntrypoints() {
         val facade = Class.forName("io.jankhunter.runtime.JankHunterHooks")
@@ -91,5 +102,79 @@ class JankHunterHooksTest {
         JankHunterHooks.recordMethodCall(0L, "test.Owner.call")
         JankHunterHooks.exitMethod(0L, 0L)
         assertEquals(0, calls.get())
+    }
+
+    @Test
+    fun disabledBytecodeFeaturesReturnOriginalObjectsWithoutWrapperAllocations() {
+        val directory = Files.createTempDirectory("jankhunter-disabled-hooks").toFile()
+        val context = TestContext(directory)
+        val runnable = Runnable {}
+        val callable = Callable { Unit }
+        val coroutine: (Any?, Any?) -> Any? = { _, _ -> Unit }
+        val clickListener = View.OnClickListener {}
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(directory)
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.EXECUTORS, false)
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.COROUTINES, false)
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.INTERACTIONS, false)
+                .build(),
+        )
+
+        assertSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+        assertSame(callable, JankHunterHooks.wrapCallable(callable, "owner"))
+        assertSame(coroutine, JankHunterHooks.wrapCoroutineBlock(coroutine, "owner"))
+        assertSame(clickListener, JankHunterHooks.wrapClickListener(clickListener, "owner"))
+    }
+
+    @Test
+    fun networkRuntimeExposesIndependentHttpAndWebSocketGates() {
+        val directory = Files.createTempDirectory("jankhunter-disabled-network").toFile()
+        JankHunter.init(
+            TestContext(directory),
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(directory)
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.HTTP, false)
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.WEBSOCKETS, true)
+                .build(),
+        )
+
+        assertFalse(JankHunterNetworkRuntime.isHttpActive())
+        assertTrue(JankHunterNetworkRuntime.isWebSocketActive())
+    }
+
+    @Test
+    fun exitUsesEnterTokenAfterFeatureIsDisabled() {
+        val directory = Files.createTempDirectory("jankhunter-hook-token").toFile()
+        JankHunter.init(
+            TestContext(directory),
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(directory)
+                .build(),
+        )
+        val token = JankHunterHooks.enterAnnotatedContext("Checkout", "submit")
+        assertEquals("Checkout", JankHunterTelemetry.currentScreen())
+
+        assertTrue(JankHunter.reconfigure("remote_config") { builder ->
+            builder.runtimeFeatureEnabled(JankHunterRuntimeFeature.INTERACTIONS, false)
+        })
+        JankHunterHooks.exitAnnotatedContext(token)
+
+        assertEquals("unknown", JankHunterTelemetry.currentScreen())
+        assertEquals("unknown", JankHunterTelemetry.currentOwner())
+    }
+
+    private class TestContext(private val filesDirectory: File) : ContextWrapper(null) {
+        override fun getApplicationContext(): Context = this
+
+        override fun getPackageName(): String = "com.example"
+
+        override fun getFilesDir(): File = filesDirectory
+
+        override fun getSystemService(name: String): Any? = null
     }
 }

@@ -1,75 +1,94 @@
 # Служебные скрипты Jank Hunter
 
-Скрипты в этой директории подключают Jank Hunter к Android-проекту, проверяют Gradle-плагин и сквозной сценарий на устройстве, а также фиксируют локальный performance-контракт. Запускайте их из корня репозитория Jank Hunter: так команды и пути в примерах совпадут с фактическим окружением.
+Скрипты подключают Android `1.0.9` к приложению, проверяют Gradle-плагин и сквозной сценарий, измеряют производительность и маршрутизируют проверки монорепозитория.
 
-## Что здесь находится
+## Состав
 
 | Файл | Назначение |
 | --- | --- |
-| `integrate-android-project.sh` | Локально публикует Android-артефакты и CLI, затем подключает их к другому Android-проекту. Поддерживает как первичную, так и повторную интеграцию. |
-| `gradle-plugin-smoke.sh` | Публикует Jank Hunter в изолированный Maven-репозиторий, собирает внешний тестовый app/library-проект и проверяет контракт Gradle-плагина. |
-| `android-e2e.sh` | Запускает instrumentation-тест sample app на устройстве, забирает `.jhlog` и строит JSON/HTML-отчёт. |
-| `performance-baseline.py` | Создаёт воспроизводимый локальный performance-снимок и сравнивает candidate с reference и порогами качества. |
-| `test_performance_baseline.py` | Быстрые unit-тесты формата performance-снимка, парсеров и fail-closed проверок. Реальные бенчмарки не запускает. |
-| `test_scripts.py` | Regression-тесты интегратора, Android E2E quality gate и валидации smoke-скрипта на временных fixtures. Устройство и полную Android-сборку не запускает. |
+| `integrate-android-project.sh` | Публикует Jank Hunter локально и подключает его к существующему Android-проекту. |
+| `gradle-plugin-smoke.sh` | Собирает внешний проект-потребитель и проверяет контракт плагина и SDK. |
+| `android-e2e.sh` | Запускает демонстрационный сценарий на устройстве, копирует журнал и создаёт отчёт. |
+| `validate-android-e2e.py` | Проверяет итоговый JSON по версионируемому контракту. |
+| `performance-baseline.py` | Создаёт и сравнивает локальные снимки производительности. |
+| `jank_hunter_ci.py` | Определяет область изменений и запускает нужную группу проверок монорепозитория. |
+| `run-runtime-arm64-soak.sh` | Многократно запускает проверку графа среды выполнения на устройстве ARM64. |
+| `sync-github-master-to-gitlab.sh` | Синхронизирует внешний GitHub-проект с поддеревом GitLab и обновляет версию. |
+| `test_*.py` | Модульные и регрессионные проверки скриптов. |
 
-У каждого исполняемого скрипта есть актуальная справка:
+Справка:
 
 ```bash
 ./scripts/integrate-android-project.sh --help
 ./scripts/gradle-plugin-smoke.sh --help
 ./scripts/android-e2e.sh --help
 python3 -B scripts/performance-baseline.py --help
-python3 -B scripts/performance-baseline.py capture --help
-python3 -B scripts/performance-baseline.py check --help
+python3 -B scripts/jank_hunter_ci.py --help
 ```
 
-Быстрая проверка логики всех шести скриптов:
+## Требования
 
-```bash
-python3 -B scripts/test_scripts.py -v
-python3 -B scripts/test_performance_baseline.py -v
-```
+- Bash и стандартные Unix-утилиты;
+- Perl для интегратора;
+- Go для сборки командной утилиты;
+- JDK 17 или новее для Android-сборки;
+- Android SDK и установленная версия Build Tools;
+- Python 3 для сценариев проверки;
+- `adb` и устройство либо эмулятор только для проверок на Android.
 
-## Общие требования и безопасный запуск
+Перед изменением реального приложения рекомендуется проверить чистоту Git и сначала использовать `--dry-run`. Интегратор не создаёт коммиты в целевом проекте.
 
-Базовый набор инструментов:
+## Подключение к Android-проекту
 
-- Bash и стандартные Unix-утилиты (`awk`, `sed`, `find`, `grep`, `tar`), а для интегратора также Perl;
-- Go для сборки CLI и генерации отчётов;
-- JDK 17 или новее для Android/Gradle-задач;
-- Android SDK с нужной платформой и установленными Build Tools;
-- Gradle wrapper из `android/`; для `--verify` также желателен wrapper целевого проекта;
-- Python 3 для performance runner и его unit-тестов;
-- `adb` и онлайн-устройство/эмулятор только для `android-e2e.sh`.
-
-Перед изменением реального приложения рекомендуется иметь чистое состояние Git и сначала выполнить интегратор с `--dry-run`. Скрипты не создают коммиты и не отправляют изменения в удалённый репозиторий.
-
-## Интеграция в Android-проект
-
-### Первый запуск
-
-Минимальный вариант:
+Минимальный запуск из корня Jank Hunter:
 
 ```bash
 ./scripts/integrate-android-project.sh ~/work/MyApp
 ```
 
-Практический вариант с явной областью ASM и физическим лимитом `.jhlog`:
+Рекомендуемый явный запуск:
 
 ```bash
 ./scripts/integrate-android-project.sh \
   --target ~/work/MyApp \
   --module :app \
-  --build-type debug \
-  --include-package com.myapp.feature \
-  --include-package com.myapp.data \
-  --exclude-packages com.myapp.generated,com.myapp.di \
-  --max-session-log-size-mib 16 \
+  --profile balanced \
+  --collection balanced \
+  --processes main-only \
+  --scope namespace-and-packages \
+  --include-package com.example.app \
+  --exclude-package com.example.generated \
+  --storage-limit-mib 16 \
   --verify
 ```
 
-Если `--module` не задан, скрипт ищет Android application-модули и предпочитает настоящий запускаемый app-модуль. Для нестандартного или многомодульного проекта безопаснее передать один или несколько модулей явно:
+Скрипт читает `jankHunterVersion=1.0.9` из `android/gradle.properties` текущей рабочей копии и использует эту версию для плагина и `jankhunter-android-sdk`.
+
+### Что изменяется
+
+По умолчанию интегратор:
+
+1. Проверяет структуру целевого проекта и выбранные модули.
+2. Публикует Android-артефакты в `<target>/.jankhunter/maven`.
+3. Собирает утилиту и копирует её в `<target>/.jankhunter/bin/jankhunter`.
+4. Добавляет локальный Maven-репозиторий в `pluginManagement` и `dependencyResolutionManagement`.
+5. Добавляет плагин `io.jankhunter.android` версии `1.0.9`.
+6. Добавляет единую зависимость `io.jankhunter:jankhunter-android-sdk:1.0.9`.
+7. Создаёт управляемый блок `jankHunter { ... }` только для явно переданных настроек.
+8. При необходимости создаёт или обновляет `sdk.dir` в `local.properties`.
+9. Добавляет локальные каталоги и `local.properties` в `.gitignore`.
+
+Перед записью изменяемые файлы копируются в:
+
+```text
+<target>/.jankhunter-backups/YYYYMMDD-HHMMSS-<pid>.<random>/
+```
+
+Запись выполняется атомарно. Ошибка после начала транзакции, включая неуспешный `--verify`, восстанавливает файлы проекта из резервной копии. Уже опубликованный локальный Maven-репозиторий, утилита и каталоги сборки могут остаться для диагностики.
+
+### Выбор модуля
+
+Без `--module` скрипт ищет модули с Android application-плагином и ранжирует их как запускаемые приложения. В многомодульном проекте лучше задать модули явно:
 
 ```bash
 ./scripts/integrate-android-project.sh \
@@ -78,264 +97,164 @@ python3 -B scripts/test_performance_baseline.py -v
   --module :demo
 ```
 
-Повторяемые `--module`, `--include-package`, `--exclude-package` и `--build-type` накапливаются. Для package/build type поддерживается и список через запятую. Дубликаты удаляются с сохранением порядка.
+`--module`, `--include-package`, `--exclude-package`, `--enable-feature`, `--disable-feature` и `--build-type` можно повторять. Для пакетов и типов сборки поддерживаются списки через запятую.
 
-### Что изменяется
+### Профили и возможности
 
-По умолчанию скрипт:
+```bash
+./scripts/integrate-android-project.sh \
+  --target ~/work/MyApp \
+  --module :app \
+  --profile targeted \
+  --collection exact \
+  --enable-feature jank-stats \
+  --enable-feature network-all \
+  --enable-feature database-all \
+  --disable-feature logging \
+  --include-package com.example.app
+```
 
-1. Читает group/version из `android/gradle.properties` текущего checkout Jank Hunter.
-2. Публикует Android-артефакты в `<target>/.jankhunter/maven`.
-3. Собирает CLI и копирует executable в `<target>/.jankhunter/bin/jankhunter`.
-4. Добавляет локальный Maven-репозиторий в `pluginManagement` и `dependencyResolutionManagement` файла `settings.gradle(.kts)`.
-5. Создаёт или обновляет `sdk.dir` в `local.properties`.
-6. Добавляет plugin `io.jankhunter.android` в выбранные `build.gradle(.kts)`; DSL-блок создаётся только для явно переданных опций, иначе работают defaults плагина.
-7. Добавляет одну публичную зависимость `implementation("io.jankhunter:jankhunter-android-sdk:<version>")`; runtime, annotations и OkHttp/WebSocket support приходят транзитивно.
-8. Добавляет `.jankhunter/`, `.jankhunter-backups/`, `local.properties`, а также явные custom `--maven-dir`/`--cli-dir` в `.gitignore`.
+Профили: `minimal`, `balanced`, `full`, `release-safe`, `targeted`.
 
-Перед записью существующие файлы копируются с сохранением относительного пути в:
+Возможности:
 
 ```text
-<target>/.jankhunter-backups/YYYYMMDD-HHMMSS-<pid>.<random>/
+jank-stats, main-looper, sqlite, room, http, websockets,
+runtime-io, bytecode-io, di-analysis, handlers, executors,
+coroutines, interactions, lifecycle-leaks, logging, class-graph,
+call-graph, compose, workers, android-components, binder-ipc,
+method-counters, heap-dumps
 ```
 
-`--maven-dir` и `--cli-dir` принимают только относительные пути внутри target. Выход через symlink, обход через `..`, повисшие ссылки и не-директории в пути отклоняются. Backup base `.jankhunter-backups` тоже канонизируется и обязан оставаться внутри target.
+Наборы:
 
-До публикации артефактов и любой записи в target выполняется полный preflight: `settings`, root Gradle, все выбранные модули, version catalog, managed markers и все затрагиваемые файлы. Неоднозначная Gradle-структура, дублирующиеся/перепутанные `BEGIN/END` или symlink вместо `settings.gradle(.kts)`, root/module build file, `libs.versions.toml`, `local.properties` или `.gitignore` завершают работу до изменений.
-
-Файлы target пишутся через private temporary file и atomic rename. После старта транзакции любая ошибка, включая неуспешный `--verify`, восстанавливает Gradle/config-файлы из backup. Локальный Maven repo, CLI и Gradle build outputs в эту транзакцию не входят и при ошибке могут остаться для диагностики.
-
-### Повторный запуск поверх существующей интеграции
-
-Повторный запуск предназначен для обновления уже подключённого проекта:
-
-- managed repository/config/helper blocks распознаются только по exact `BEGIN/END` markers, заменяются на месте и не дублируются;
-- ручные `jankHunter { ... }`, dependencies, repositories и комментарии без markers сохраняются, включая manual `jankhunter-*` dependencies;
-- helper-блок старой версии скрипта мигрируется с учётом Gradle-строк, скобок и комментариев; посторонние строки из него не теряются;
-- версия literal `io.jankhunter.android` обновляется в модуле, `pluginManagement` файла settings и корневом `plugins { ... apply false }`; поддерживаются и one-line `plugins`, а текст в строках/комментариях за declaration не выдаётся;
-- standard `gradle/libs.versions.toml` поддерживает inline `version` и отдельный, не используемый другими alias `version.ref`;
-- shared `version.ref`, unknown/custom alias, non-literal/legacy apply-versioning, дублирующиеся plugin declarations и другая неоднозначность приводят к fail-fast без записи;
-- повторный запуск с теми же аргументами оставляет Gradle/settings/catalog byte-for-byte неизменными.
-
-Если на повторном запуске не передать ни одной DSL/network/build-type опции, скрипт сохранит свой прежний managed overlay и helper. Если передана хотя бы одна такая опция, managed overlay пересобирается только из явно указанных значений, а скрипт пишет об этом в лог. Ручной `jankHunter`-блок остаётся, но более поздний managed overlay имеет precedence для тех же полей.
-
-Настройки DI-анализа и лимита размера добавляются в overlay только при явном выборе:
-
-```bash
-./scripts/integrate-android-project.sh ~/work/MyApp \
-  --analyze-di \
-  --max-session-log-size-mib 16
-
-./scripts/integrate-android-project.sh ~/work/MyApp \
-  --no-analyze-di \
-  --no-session-log-size-limit
+```text
+ui-all, network-all, database-all, io-all,
+concurrency-all, android-system-all
 ```
 
-Без новых DSL-опций эти строки сохраняются. Чтобы изменить их, передайте новый полный набор явных overlay-опций.
+Одну возможность нельзя одновременно передать в `--enable-feature` и `--disable-feature`. Конфликт обнаруживается до публикации и записи файлов.
 
-### Опции интегратора
+Сохранились краткие совместимые параметры:
 
-| Опция | Эффект |
+| Параметр | Эквивалент |
 | --- | --- |
-| `PATH` или `--target PATH` | Корень изменяемого Android-проекта; обязателен. |
-| `--jankhunter PATH` | Checkout Jank Hunter, из которого берутся версия, артефакты и CLI. |
-| `--module :app` | Модуль для изменения; можно повторять. Алиас: `--app-module`. |
-| `--include-package PACKAGE` | Include-prefix ASM; можно повторять. Алиас: `--include`. |
-| `--include-packages a,b` | Несколько include-prefix. Алиас: `--includes`. |
-| `--exclude-package PACKAGE` | Exclude-prefix ASM; можно повторять. Алиас: `--exclude`. |
-| `--exclude-packages a,b` | Несколько exclude-prefix. Алиас: `--excludes`. |
-| `--build-type TYPE` | Явный список включённых build types; можно повторять или передать CSV. Без опции existing overlay сохраняется, новая интеграция полагается на default плагина. |
-| `--runtime-call-graph` / `--no-runtime-call-graph` | Включает/выключает глубокий runtime caller → callee graph. |
-| `--okhttp` / `--no-okhttp` | Включает/выключает OkHttp hooks. Единая SDK-зависимость не меняется. |
-| `--websockets` / `--no-websockets` | Включает/выключает WebSocket hooks. Единая SDK-зависимость не меняется. |
-| `--analyze-di` / `--no-analyze-di` | Включает/выключает build-time анализ Dagger/Hilt/Koin. Поддерживаются также варианты `analyse`. |
-| `--asm-progress-log` / `--no-asm-progress-log` | Управляет однострочной ASM-диагностикой во время сборки. |
-| `--max-session-log-size-mib N` | Включает физический лимит одной сессии `.jhlog`, `N` — положительное число MiB. |
-| `--no-session-log-size-limit` | Явно отключает физический лимит файла. |
-| `--maven-dir PATH` | Локальный Maven repo внутри target; default `.jankhunter/maven`. |
-| `--cli-dir PATH` | Директория CLI внутри target; default `.jankhunter/bin`. |
-| `--android-sdk PATH` | Явный Android SDK. Алиас: `--android-sdk-dir`. |
-| `--android-build-tools VERSION` | Явная установленная версия Build Tools. Алиас: `--android-build-tools-version`. |
-| `--verify` | После записи запускает `<module>:tasks` и проверяет Gradle resolution. |
-| `--dry-run` | Выполняет тот же fail-fast preflight и показывает план, но не собирает, не публикует и не пишет; `--verify` пропускается. |
-| `--skip-publish` | Не публикует Android-артефакты; требуемые файлы уже должны находиться в выбранном Maven repo. Алиас: `--no-build`. |
-| `--skip-cli-build` | Не собирает CLI; в target уже должен быть executable `jankhunter`. |
-| `--skip-local-properties` | Не меняет `local.properties`. SDK всё равно используется при публикации Android-артефактов. |
-| `--no-gitignore` | Не меняет `.gitignore`. |
+| `--okhttp` | `--enable-feature http` |
+| `--websockets` | `--enable-feature websockets` |
+| `--runtime-call-graph` | `--enable-feature call-graph` |
+| `--analyze-di` | `--enable-feature di-analysis` |
 
-SDK ищется в следующем порядке: `--android-sdk`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, валидный `sdk.dir` target, валидный `android/local.properties` Jank Hunter, стандартный путь macOS `~/Library/Android/sdk`, затем Linux `~/Android/Sdk`. Если версия Build Tools не задана, выбирается максимальная установленная числовая версия.
+Для каждого есть отрицательная форма `--no-...`.
 
-Release-like build types намеренно отклоняются. Для релизной интеграции нужны ручная настройка `releaseSafety` и отдельные замеры влияния библиотеки на приложение.
+### Полный перечень основных параметров
 
-### Regression-тесты shell-скриптов
+| Параметр | Действие |
+| --- | --- |
+| `PATH`, `--target PATH` | Корень целевого Android-проекта; обязателен. |
+| `--jankhunter PATH` | Рабочая копия Jank Hunter с каталогами `android/` и `cli/`. |
+| `--module :app` | Изменяемый Android-модуль; можно повторять. |
+| `--profile NAME` | Один из пяти профилей. |
+| `--collection balanced\|exact` | Режим приёма событий. |
+| `--processes main-only\|all` | Главный или все процессы приложения. |
+| `--scope namespace-and-packages\|packages-only\|whole-application` | Область ASM-внедрения. |
+| `--enable-feature NAME` | Включить возможность или набор. |
+| `--disable-feature NAME` | Выключить возможность или набор. |
+| `--include-package PREFIX` | Добавить пакет в область внедрения. |
+| `--exclude-package PREFIX` | Исключить пакет из области внедрения. |
+| `--build-type TYPE` | Включённый тип сборки. |
+| `--auto-init`, `--no-auto-init` | Управлять автоматической инициализацией. |
+| `--growth-analytics`, `--no-growth-analytics` | Управлять историей роста журналов. |
+| `--delete-obsolete-logs`, `--keep-obsolete-logs` | Удалять или сохранять старые форматы. |
+| `--storage-limit-mib N` | Ограничить размер сегмента положительным числом МиБ. |
+| `--unlimited-storage` | Снять внутренний предел размера. |
+| `--maven-dir PATH` | Локальный Maven-репозиторий внутри целевого проекта. |
+| `--cli-dir PATH` | Каталог утилиты внутри целевого проекта. |
+| `--android-sdk PATH` | Явный путь к Android SDK. |
+| `--android-build-tools VERSION` | Явная установленная версия Build Tools. |
+| `--verify` | Проверить разрешение Gradle-задач после записи. |
+| `--dry-run` | Выполнить предварительную проверку и показать план без записи. |
+| `--skip-publish` | Не публиковать Android-артефакты. |
+| `--skip-cli-build` | Не собирать и не копировать утилиту. |
+| `--skip-local-properties` | Не менять `local.properties`. |
+| `--no-gitignore` | Не менять `.gitignore`. |
 
-```bash
-python3 -B scripts/test_scripts.py -v
-```
+Старые имена `--max-session-log-size-mib` и `--no-session-log-size-limit` сохранены как совместимые псевдонимы для новых `--storage-limit-mib` и `--unlimited-storage`.
 
-Тесты создают temporary Kotlin/Groovy projects и проверяют first/re-integration, managed/manual ownership, root/settings/catalog versioning, idempotence, fail-fast/rollback/symlink safety, fake Android E2E quality gate и smoke argument validation. Они не заменяют полный `gradle-plugin-smoke.sh` и реальный E2E на устройстве.
+### Повторный запуск
 
-## Smoke-тест Gradle-плагина
+Скрипт владеет только блоками между своими маркерами `BEGIN/END`. Ручные `jankHunter { ... }`, зависимости, репозитории и комментарии вне этих блоков сохраняются.
 
-Запуск:
+Если не передана ни одна настройка DSL, существующий управляемый блок сохраняется без изменений. Если передан хотя бы один параметр профиля, сбора, процессов, области, возможности, пакета, типа сборки, инициализации, аналитики или хранилища, блок целиком пересобирается только из текущего явного набора. Поэтому при изменении настройки повторяйте все желаемые явные параметры.
+
+Повторный запуск с одинаковыми аргументами не должен менять `settings.gradle(.kts)`, `build.gradle(.kts)` и каталог версий.
+
+### Безопасность путей
+
+`--maven-dir` и `--cli-dir` должны быть относительными путями внутри целевого проекта. Переход через `..`, выход через символьную ссылку, повисшая ссылка или файл вместо ожидаемого каталога отклоняются. Неоднозначные объявления плагина, повреждённые маркеры и небезопасные пути останавливают работу до изменений.
+
+## Проверка Gradle-плагина внешним потребителем
 
 ```bash
 ./scripts/gradle-plugin-smoke.sh
 ```
 
-Это host-side проверка, устройство не требуется. Скрипт:
+Сценарий:
 
-- находит JDK 17+ и Android SDK;
-- публикует артефакты в изолированный временный Maven repo;
-- создаёт внешний Kotlin DSL fixture с application- и library-модулями;
-- собирает `:app:assembleDebug` с Handler/Log/OkHttp/WebSocket, ASM/runtime call graph и DI analysis fixtures;
-- проверяет metadata опубликованных plugin/runtime/annotations/OkHttp артефактов;
-- проверяет, что build banner `JANK HUNTER <version> ENABLED` появился ровно один раз;
-- проверяет owner map, class graph, instrumentation diagnostics, DI catalog, runtime manifest, auto-init provider, kill switch и metadata лимита сессии;
-- по умолчанию повторяет consumer build и требует reuse configuration cache;
-- убеждается, что library-модуль не получил runtime manifest приложения.
+1. Публикует плагин и Android-артефакты `1.0.9` в изолированный Maven-репозиторий.
+2. Проверяет, что `jankhunter-android-sdk` транзитивно содержит среду выполнения, аннотации и поддержку OkHttp.
+3. Создаёт внешний проект с приложением и библиотечными модулями.
+4. Собирает `debug` и `release`, включая R8.
+5. Проверяет эффективную настройку, артефакты внедрения, манифест, граф классов, DI, OkHttp/WebSocket и WorkManager.
+6. Повторяет сборку и требует повторного использования конфигурационного кэша.
 
-Требуются JDK 17+, Android SDK, платформа `android-35` по умолчанию, Build Tools и доступ к зависимостям Gradle. Настройка выполняется переменными окружения:
+Переменные окружения:
 
 | Переменная | Назначение |
 | --- | --- |
-| `SMOKE_JAVA_HOME` | JDK 17+; затем проверяются `JAVA_HOME`, macOS helper и `java` из `PATH`. |
-| `SMOKE_AGP_VERSION` | AGP consumer fixture; по умолчанию читается из `android/build.gradle.kts`. |
-| `SMOKE_COMPILE_SDK` | `compileSdk`/`targetSdk`, default `35`. |
-| `ANDROID_BUILD_TOOLS_VERSION` | Установленная версия Build Tools; без неё берётся максимальная. |
-| `SMOKE_CONFIGURATION_CACHE=0` | Отключает двойную проверку create/reuse configuration cache. |
-| `SMOKE_WORK_DIR` | Родитель для новой уникальной cold-run директории. Она сохраняется после завершения. |
-| `KEEP_SMOKE_DIR=1` | Сохраняет автоматически созданную директорию `/tmp/jankhunter-gradle-smoke.*`. |
+| `SMOKE_JAVA_HOME` | JDK 17 или новее. |
+| `SMOKE_AGP_VERSION` | Версия AGP внешнего проекта. |
+| `SMOKE_COMPILE_SDK` | Версия `compileSdk` и `targetSdk`. |
+| `ANDROID_BUILD_TOOLS_VERSION` | Установленная версия Build Tools. |
+| `SMOKE_CONFIGURATION_CACHE=0` | Отключить двойную проверку конфигурационного кэша. |
+| `SMOKE_WORK_DIR` | Родитель уникального каталога прогона, сохраняемого для анализа. |
+| `KEEP_SMOKE_DIR=1` | Сохранить автоматически созданный временный каталог. |
 
-Пример для диагностики:
-
-```bash
-SMOKE_JAVA_HOME="$JAVA_HOME" \
-SMOKE_WORK_DIR=/tmp/jankhunter-smoke-debug \
-./scripts/gradle-plugin-smoke.sh
-```
-
-Каждый запуск создаёт новый cold fixture и не переиспользует вывод прошлого прогона. Без `SMOKE_WORK_DIR` и `KEEP_SMOKE_DIR=1` временная директория удаляется при выходе только при наличии корректного ownership marker. При сохранении изучайте `consumer-build.txt`, `consumer-build-cached.txt`, `maven/` и `consumer/build/`.
-
-## Сквозной Android E2E
-
-Запуск при одном подключённом устройстве:
+## Сквозная проверка Android
 
 ```bash
 ./scripts/android-e2e.sh
 ```
 
-Если устройств несколько, serial обязателен:
+При нескольких устройствах:
 
 ```bash
 adb devices
 ./scripts/android-e2e.sh --serial emulator-5554
-
-# Эквивалент через стандартную переменную adb:
-ANDROID_SERIAL=emulator-5554 ./scripts/android-e2e.sh
 ```
 
-Скрипт учитывает только устройства в состоянии `device`; `offline` и `unauthorized` не выбираются. Перед стартом должны быть доступны `adb`, `go`, `tar`, Android Gradle wrapper и онлайн-устройство/эмулятор. Скрипт намеренно работает только с `io.jankhunter.sample`: package ID обоих APK проверяются через `aapt` до установки.
+Основные параметры:
 
-Параметры и их env-эквиваленты:
-
-| Опция | Переменная | Default |
-| --- | --- | --- |
-| `--out-dir PATH` | `OUT_DIR` | `reports/android-e2e` |
-| `--serial SERIAL` | `ANDROID_SERIAL` | единственное онлайн-устройство |
-| `--instrumentation-diagnostics PATH` | — | не передаётся |
-| `--contract PATH` | `ANDROID_E2E_CONTRACT` | `scripts/contracts/android-sample-e2e.json` |
-| — | `ADB` | `adb` из `PATH` |
-| — | `PYTHON` | `python3` из `PATH` |
-| — | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | Android SDK; затем `android/local.properties` и standard path |
-| — | `ANDROID_BUILD_TOOLS_VERSION` | максимальная установленная числовая версия |
-
-`--instrumentation-diagnostics` принимает непустой JSONL, созданный Gradle-плагином, и передаёт его CLI-команде `inspect`. Если файл указан, предупреждение об отсутствующей ASM-диагностике считается ошибкой; без файла допускается только это одно диагностическое предупреждение.
-
-Последовательность проверки:
-
-1. Gradle собирает debug APK sample app и instrumentation APK с найденной версией Build Tools.
-2. До установки `aapt` подтверждает package ID, а `adb shell pm list packages` проверяет, что sample app и test package ещё не установлены. Скрипт не перезаписывает и не удаляет существующее приложение с данными.
-3. Скрипт устанавливает оба APK и запускает ровно `SampleEndToEndLogTest`. Instrumentation проходит реальную цепочку `Main → Baseline → UI/CPU → Network → Memory → Result`, дожидается стабильного HPROF, закрывает runtime и требует итог `OK (1 test)`.
-4. Пока package ещё установлен, `adb exec-out run-as io.jankhunter.sample` копирует `files/jankhunter-e2e` с устройства вместе с `.jhlog` и `.hprof`; затем оба тестовых package строго удаляются. Ошибка uninstall делает прогон неуспешным, а EXIT trap повторяет cleanup и печатает диагностику.
-5. CLI получает все найденные `.jhlog`, автоматически подключает HPROF и полный debug bundle Gradle-плагина, если он создан, и строит JSON и HTML. Явный `--instrumentation-diagnostics` имеет приоритет для diagnostics-файла.
-6. Fail-closed quality gate проверяет sealed chain, отсутствие потерь и overflow/truncation, обязательные маркеры полного сценария и запрещённые warnings.
-7. `validate-android-e2e.py` применяет версионируемый JSON-контракт к итоговому отчету. Контракт проверяет точные счетчики, допустимые диапазоны нестабильных измерений, HTTP/WebSocket, stalls, UI, CPU, память, GC, retention, HPROF-пути, логи, runtime graph, экраны и системные snapshot-метрики.
-8. Ошибка instrumentation/cleanup, пустые артефакты, нарушение качества или любое несовпадение с контрактом считается ошибкой.
-
-Контракт состоит из независимых assertions с уникальными `id`. Селектор задается через `path`, при необходимости дополняется `where` и `field`; `cardinality` проверяет число совпадений, `expect` — тип, точное значение, диапазон, длину или состав. `relations` связывает значения разных полей отчета, например `EventCount`, `DataRecordCount`, `accepted_events` и `written_events`. Это позволяет расширять покрытие без изменения instrumentation и shell-runner.
-
-Результат:
-
-```text
-reports/android-e2e/
-├── .jankhunter-android-e2e-owned
-├── instrumentation.txt
-├── logs/*.jhlog
-├── logs/*.hprof
-├── inspect.json
-└── report.html
-```
-
-Важно: скрипт очищает `--out-dir` только при наличии точного ownership marker. На первом запуске marker создаётся только в пустой директории. Непустой чужой каталог, symlink/marker с неверным содержимым, `/`, домашняя директория и корень репозитория не очищаются.
-
-## Performance reference/candidate
-
-### Что измеряется
-
-`performance-baseline.py capture` создаёт детерминированный синтетический `.jhlog` и измеряет:
-
-- Go-бенчмарки decoder/analyzer/report: `ns/op`, `B/op`, `allocs/op`;
-- Android runtime hot paths;
-- размеры runtime AAR, annotations JAR, OkHttp AAR, Gradle plugin JAR и sample APK;
-- wall time и peak RSS команд CLI `size`, `inspect --json`, HTML `inspect` и `compare`;
-- суммарный размер и состав страниц HTML-отчётов;
-- точную композицию fixture, счётчики событий/словаря и структурированный `CollectionQuality`.
-
-Текущие схемы: capture `4`, fixture `2`, acceptance `3`. При capture проверяются exact fields, типы и numeric bounds. На `check` обе стороны — reference и candidate — обязаны иметь pristine `CollectionQuality`: `level=high`, complete/valid sealed chain, ноль unsealed/lost/overflow/truncated, равные accepted/written/fixture event counts, пустые issues/reasons и ни одного forbidden quality warning. Плохой reference не может «узаконить» потери в candidate.
-
-Профиль `representative` предназначен для реального сравнения, `smoke` — только для быстрой отладки runner.
-
-### Требования
-
-Для полного capture нужны Python 3, Go, JDK, Android SDK/Gradle и `/usr/bin/time` на macOS/Linux для peak RSS. При `--skip-android` Android runtime/artifacts пропускаются; при `--skip-go-benchmarks` пропускаются только Go microbenchmarks, но Go всё ещё нужен для fixture и CLI.
-
-Версию Build Tools можно зафиксировать через `--android-build-tools VERSION` (алиас `--android-build-tools-version`); иначе runner ищет SDK candidate с stable numeric Build Tools и берёт максимальную версию. Порядок candidates: `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `android/local.properties`, standard SDK path для ОС. Выбранная версия записывается в capture и передаётся Gradle.
-
-Для Java runner берёт `$JAVA_HOME/bin/java`, если `JAVA_HOME` задан, иначе `java` из `PATH`. В environment capture попадают OS/release, architecture, CPU identifier, Python, Go и Java. Снимайте reference и candidate на одной машине, с теми же toolchains, Build Tools, power mode и без тяжёлой фоновой нагрузки. Профиль, counts, skip-флаги, CPU/environment и доступность RSS должны совпадать.
-
-### Capture options
-
-| Опция | Эффект |
+| Параметр | Значение по умолчанию |
 | --- | --- |
-| `--out PATH` | Обязательный output; suffix должен быть ровно `.json` с учётом регистра. |
-| `--profile PROFILE` | Fixture profile: `representative` или `smoke`; default `representative`. |
-| `--benchmark-count N` | Число Go benchmark samples, `1..1000`; default `3`. |
-| `--runtime-iterations N` | Android runtime iterations, `1..1000000000`; default `100000`. |
-| `--android-build-tools VERSION` | Явная Build Tools version; без неё берётся максимальная stable numeric. |
-| `--skip-android` | Диагностический capture без Android runtime/artifacts. |
-| `--skip-go-benchmarks` | Диагностический capture без Go microbenchmarks. |
+| `--out-dir PATH` | `reports/android-e2e` |
+| `--serial SERIAL` | Единственное устройство в состоянии `device` |
+| `--instrumentation-diagnostics PATH` | Не передаётся |
+| `--contract PATH` | `scripts/contracts/android-sample-e2e.json` |
 
-### Рабочий процесс
+Сценарий собирает APK, проверяет идентификаторы пакетов, запускает ровно `SampleEndToEndLogTest`, копирует `.jhlog` и HPROF через `run-as`, удаляет тестовые пакеты, создаёт JSON и HTML и применяет строгий контракт. Потери, повреждение, отсутствие обязательных событий или несоответствие метрик завершают прогон ошибкой.
 
-На последней заведомо хорошей ревизии:
+Выходной каталог очищается только при наличии точного маркера владения. Чужой непустой каталог, домашний каталог, корень репозитория и символьная ссылка не очищаются.
 
-```bash
-python3 -B scripts/performance-baseline.py capture \
-  --out benchmarks/results/reference.json \
-  --profile representative \
-  --benchmark-count 3 \
-  --runtime-iterations 100000
-```
+## Контракт производительности
 
-После переключения на проверяемую ревизию:
+Создание эталона и кандидата:
 
 ```bash
 python3 -B scripts/performance-baseline.py capture \
-  --out benchmarks/results/candidate.json \
-  --profile representative \
-  --benchmark-count 3 \
-  --runtime-iterations 100000
+  --out benchmarks/results/reference.json
+
+python3 -B scripts/performance-baseline.py capture \
+  --out benchmarks/results/candidate.json
 ```
 
 Сравнение:
@@ -346,100 +265,61 @@ python3 -B scripts/performance-baseline.py check \
   --candidate benchmarks/results/candidate.json
 ```
 
-По умолчанию применяется production-контракт `benchmarks/acceptance.json`. Он требует от обеих сторон все production surfaces: Go benchmarks, Android runtime, Android artifacts, CLI и reports, а также все обязательные inspect/compare HTML pages. Поэтому capture с `--skip-android` или `--skip-go-benchmarks` намеренно не может получить `PASS` со штатным acceptance.
+Текущие версии схем: снимок `12`, критерии `4`, синтетический набор `4`. Штатный контракт находится в `benchmarks/acceptance.json`. Подробности - в [`../benchmarks/README.md`](../benchmarks/README.md).
 
-Для локальной быстрой итерации можно отключить одинаковые поверхности с обеих сторон:
-
-```bash
-python3 -B scripts/performance-baseline.py capture \
-  --skip-android \
-  --out benchmarks/results/reference-cli.json
-
-python3 -B scripts/performance-baseline.py capture \
-  --skip-android \
-  --out benchmarks/results/candidate-cli.json
-```
-
-Для focused-диагностики можно снять одинаково урезанные reference/candidate, но проверять их нужно с отдельным `--acceptance PATH`, где `required_surfaces` явно сужен. Не подменяйте им production-контракт. Reference и candidate в любом режиме обязаны иметь одинаковые profile, fixture metadata, capture config, environment и surfaces. Один и тот же файл, symlink на него или hard link нельзя выдать одновременно за reference и candidate.
-
-Рядом с `<name>.json` создаётся `<name>-artifacts/` с fixture, stdout/stderr, локальным CLI, JSON и HTML. Директория пересоздаётся только при наличии exact ownership marker `.jankhunter-performance-artifacts-v1`; symlink или чужая непустая директория не удаляются. Public JSON пишется атомарно и только после полной валидации.
-
-Для каждого output постоянно остаётся lock `.jankhunter-performance-<output.name>.lock`. Runner проверяет magic ownership, отклоняет symlink/чужой lock и не даёт двум capture одновременно писать один output. Lock после освобождения намеренно не удаляется.
-
-В Git добавляйте только осознанно отобранные JSON-контракты; личные `.jhlog`, heap dump, machine paths и сырые артефакты коммитить нельзя.
-
-### Exit codes
-
-- `capture`: `0` — успех; `2` — ошибка аргументов, окружения, команды, пути или внутренней валидации;
-- `check`: `0` и `PASS` — контракт выполнен; `1` и `FAIL` — любое нарушение, включая unreadable/invalid JSON, schema/quality/surface/environment mismatch и одинаковый inode;
-- argparse-ошибка до запуска команды завершается кодом `2`.
-
-### Unit-тесты runner
-
-Перед изменениями performance-контракта:
+## Маршрутизация CI
 
 ```bash
-python3 -B scripts/test_performance_baseline.py -v
+python3 -B scripts/jank_hunter_ci.py scope
+python3 -B scripts/jank_hunter_ci.py run static-analysis
+python3 -B scripts/jank_hunter_ci.py run assemble
+python3 -B scripts/jank_hunter_ci.py run unit-tests
 ```
 
-Тесты используют Python standard library и temporary files. Они проверяют production acceptance, schemas, symmetric quality, surface/config/environment parity, exact metrics/pages, numeric bounds, RSS, Build Tools/SDK/JAVA_HOME/CPU, owned artifacts/lock, atomic output и artifact provenance. Это проверка логики runner, а не измерение производительности.
+Команда `scope` определяет, достаточно ли проверок поддерева Jank Hunter или требуется общий конвейер монорепозитория. При отсутствии достоверных сведений о сравнении изменений выбирается безопасный общий вариант.
 
-## Диагностика проблем
-
-### `Android SDK path was not found`
-
-Передайте SDK явно или экспортируйте переменную:
+## Длительная проверка ARM64
 
 ```bash
-export ANDROID_HOME="$HOME/Library/Android/sdk" # macOS
-# export ANDROID_HOME="$HOME/Android/Sdk"       # Linux
+SOAK_ITERATIONS=20 ADB_BIN=adb ./scripts/run-runtime-arm64-soak.sh
 ```
 
-Для интегратора также можно использовать `--android-sdk "$ANDROID_HOME"`.
+Требуется ровно одно авторизованное устройство с ABI `arm64-v8a`. Скрипт запускает `RuntimeGraphArtTest` указанное число раз.
 
-### `Android Build Tools ... was not found`
-
-Укажите реально установленную версию или установите нужную через `sdkmanager`:
+## Синхронизация GitHub и GitLab
 
 ```bash
-"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0"
+./scripts/sync-github-master-to-gitlab.sh --dry-run
+./scripts/sync-github-master-to-gitlab.sh --version 1.0.9 --branch <ветка>
 ```
 
-### Gradle использует неподходящую Java
+Сценарий требует чистое состояние отслеживаемых файлов, копирует ветку `master` внешнего проекта в поддерево `jank-hunter/`, обновляет версию, создаёт коммит и отправляет выбранную ветку GitLab. Без `--version` увеличивается номер исправления. Сначала всегда используйте `--dry-run`.
 
-Для smoke задайте `SMOKE_JAVA_HOME`. Для интегратора и целевого проекта проверьте `JAVA_HOME` и JVM, выбранную Gradle wrapper.
+## Модульные проверки скриптов
 
-### E2E не видит устройство
+```bash
+python3 -m unittest \
+  scripts.test_scripts \
+  scripts.test_gradle_plugin_repositories \
+  scripts.test_jank_hunter_ci \
+  scripts.test_performance_baseline \
+  scripts.test_ci_routing
+```
 
-Проверьте `adb devices`. Устройство должно иметь состояние `device`; подтвердите USB debugging. При нескольких устройствах задайте `--serial` или `ANDROID_SERIAL`.
+Проверки используют временные каталоги и подменённые внешние команды. Они не запускают устройство и не выполняют полный набор измерений производительности.
 
-### Instrumentation не вернул `OK (1 test)` или `.jhlog` не найден
+## Частые проблемы
 
-Откройте `reports/android-e2e/instrumentation.txt`, проверьте debug-вариант sample app и причину падения теста. Скрипт держит app и test APK установленными до копирования, затем удаляет их; при cleanup-ошибке прогон завершается с ошибкой и EXIT trap повторяет попытку. `run-as` работает только для debuggable package, а скрипт читает каталог `files/jankhunter-e2e` внутри sandbox приложения.
+Если не найден Android SDK, передайте `--android-sdk` интегратору или задайте `ANDROID_HOME`/`ANDROID_SDK_ROOT`.
 
-### Интегратор выбрал не тот модуль
+Если Gradle использует неподходящую Java, задайте `SMOKE_JAVA_HOME` для проверки внешнего потребителя и проверьте JVM, выбранную Gradle Wrapper целевого проекта.
 
-Передайте `--module :нужный-модуль` явно. Для нескольких приложений повторите опцию. Build types, похожие на release, скрипт намеренно не включает.
+Если сквозная проверка не видит устройство, выполните `adb devices`; учитываются только строки со статусом `device`. При нескольких устройствах укажите `--serial` или `ANDROID_SERIAL`.
 
-### После повторной интеграции изменились настройки hooks
-
-Без DSL/network/build-type аргументов скрипт должен byte-for-byte сохранить прежний managed overlay. Если была явно передана хотя бы одна такая опция, весь managed overlay намеренно пересобирается только из явно указанных значений и скрипт логирует это. В таком случае повторите полный желаемый набор явных опций. Ручные блоки без Jank Hunter markers остаются; managed overlay применяется позже для тех же полей.
-
-### Нужно увидеть изменения без сборки и записи
+Если интегратор выбрал не тот модуль, передайте `--module :нужный-модуль` явно. Для просмотра плана без сборки и записи используйте:
 
 ```bash
 ./scripts/integrate-android-project.sh \
   --target ~/work/MyApp \
-  --dry-run \
-  --verify
+  --dry-run
 ```
-
-В dry-run режиме сначала выполняется тот же полный preflight. Публикация, сборка CLI, изменение файлов и Gradle verification не выполняются; вывод показывает планируемые действия.
-
-### Performance check сообщает `environment differs` или `captured surface differs`
-
-Переснимите обе стороны на одном хосте и с одинаковыми опциями. Не редактируйте surfaces вручную: отсутствие обязательной метрики трактуется как ошибка, а не как нулевой расход.
-
-### Performance capture завершился ошибкой
-
-Смотрите соответствующие `*.stderr.txt`, `*.stdout.txt` и `*.time.txt` в `<name>-artifacts/`. Runner специально не записывает успешный контракт при неполных измерениях или рассинхронизации fixture/CLI.

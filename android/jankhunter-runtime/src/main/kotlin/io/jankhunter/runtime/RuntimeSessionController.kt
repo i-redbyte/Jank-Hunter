@@ -35,7 +35,6 @@ internal class RuntimeSessionController(
             return logDirectory(appContext, config)
         }
 
-        state.config = config
         metrics.configure(config.maxMetricAggregationKeys(), config.exactEventCollectionEnabled())
         sampling.configure(config)
 
@@ -230,7 +229,10 @@ internal class RuntimeSessionController(
         coordinator.markStopped()
         if (clearInit) {
             state.config = null
+            state.baseConfig = null
+            state.selectedBinaryStorage = null
             state.initContext = null
+            state.lifecycleGeneration++
             state.collectionInactiveSinceElapsedMs.set(0L)
             state.runtimeEnabled.set(true)
         }

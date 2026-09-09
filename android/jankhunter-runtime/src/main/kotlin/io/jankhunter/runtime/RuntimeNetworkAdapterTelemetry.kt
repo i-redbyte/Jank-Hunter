@@ -10,6 +10,12 @@ internal class RuntimeNetworkAdapterTelemetry(
 ) {
     fun isActive(): Boolean = access.isActive()
 
+    fun isHttpActive(): Boolean =
+        access.isActive() && access.config?.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP) == true
+
+    fun isWebSocketActive(): Boolean =
+        access.isActive() && access.config?.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.WEBSOCKETS) == true
+
     fun captureContext(): JankHunterContextSnapshot = context.captureSnapshot()
 
     fun recordHttp(event: JankHunterHttpEvent) {

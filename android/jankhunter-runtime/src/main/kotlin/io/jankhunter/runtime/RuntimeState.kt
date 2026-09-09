@@ -44,6 +44,17 @@ internal class RuntimeState {
     @Volatile
     var config: JankHunterConfig? = null
 
+    /** Immutable build-time baseline used for every non-cumulative remote reconfiguration. */
+    @Volatile
+    var baseConfig: JankHunterConfig? = null
+
+    /** Last storage selected through the storage valve, including an explicit built-in `null`. */
+    @Volatile
+    var selectedBinaryStorage: JankHunterBinaryStorage? = null
+
+    /** Changes whenever bound configuration or runtime availability changes. Guarded by lifecycleLock. */
+    var lifecycleGeneration: Long = 0L
+
     @Volatile
     var initContext: Context? = null
 

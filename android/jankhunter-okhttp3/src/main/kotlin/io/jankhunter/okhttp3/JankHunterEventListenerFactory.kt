@@ -52,6 +52,10 @@ class JankHunterEventListenerFactory private constructor(
     override fun create(call: Call): EventListener {
         // This is application/OkHttp business code: call it once and let its exception propagate.
         val base = delegate?.create(call) ?: EventListener.NONE
+        val telemetryActive = EventListenerNonFatal.bestEffort(false) {
+            telemetry.isHttpCollectionEnabled()
+        }
+        if (!telemetryActive) return base
         return EventListenerNonFatal.bestEffort(base) { Listener(base, telemetry, clock, serviceAlias) }
     }
 
@@ -419,8 +423,8 @@ class JankHunterEventListenerFactory private constructor(
             throwable: Throwable?,
         ): JankHunterHttpEvent? {
             val endedAt = now()
-            return state {
-                if (terminalRecorded) return@state null
+            return synchronized(stateLock) {
+                if (terminalRecorded) return@synchronized null
                 terminalRecorded = true
                 finishRequest(endedAt)
                 finishResponse(endedAt)
@@ -594,7 +598,9 @@ class JankHunterEventListenerFactory private constructor(
             return redirectStatus && response.header(LOCATION_HEADER) != null
         }
 
-        private inline fun <T> state(block: () -> T): T = synchronized(stateLock, block)
+        private inline fun state(block: () -> Unit) {
+            synchronized(stateLock, block)
+        }
 
         private inline fun telemetry(block: () -> Unit) {
             EventListenerNonFatal.bestEffort(Unit, block)

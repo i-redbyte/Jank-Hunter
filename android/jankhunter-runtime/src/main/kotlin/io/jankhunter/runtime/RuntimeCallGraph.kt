@@ -39,6 +39,7 @@ internal class RuntimeCallGraph(
         advanceRuntimeEpoch(producer.epoch)
         clearRegistry()
         clearQuality()
+        lifecycle.clearRequested.set(false)
         lifecycle.producerWake.clear()
         lifecycle.activeWriter = writer
         lifecycle.consumerFailed.set(false)
@@ -52,15 +53,12 @@ internal class RuntimeCallGraph(
     fun clear() {
         lifecycle.acceptingPublishers = false
         lifecycle.running.set(false)
-        lifecycle.consumerThread?.let(LockSupport::unpark)
-        clearRegistry()
+        lifecycle.clearRequested.set(true)
+        val graphThread = lifecycle.consumerThread
+        graphThread?.let(LockSupport::unpark)
         producer.threadState.remove()
-        lifecycle.activeWriter = null
-        lifecycle.consumerThread = null
-        lifecycle.flushRequest.set(0L)
-        lifecycle.flushCompleted.set(0L)
-        lifecycle.producerWake.clear()
-        clearQuality()
+        if (graphThread?.isAlive == true) return
+        clearStoppedState()
     }
 
     fun enter(methodId: Long, methodName: String, enabled: Boolean): Long {
@@ -81,11 +79,11 @@ internal class RuntimeCallGraph(
         return currentEpoch
     }
 
-    fun hasCurrentMethod(): Boolean = producer.threadState.get()?.get()?.stack?.hasCurrentMethod() == true
+    fun hasCurrentMethod(): Boolean = currentStack()?.hasCurrentMethod() == true
 
-    fun currentMethodId(): Long = producer.threadState.get()?.get()?.stack?.currentMethodId() ?: 0L
+    fun currentMethodId(): Long = currentStack()?.currentMethodId() ?: 0L
 
-    fun currentMethodName(): String? = producer.threadState.get()?.get()?.stack?.currentMethodName()
+    fun currentMethodName(): String? = currentStack()?.currentMethodName()
 
     fun exit(token: Long, methodId: Long) {
         if (token == DISABLED_TOKEN) return
@@ -248,11 +246,14 @@ internal class RuntimeCallGraph(
     }
 
     fun flushBlocking(timeoutMs: Long): Boolean {
-        if (!lifecycle.running.get()) return true
+        if (!lifecycle.running.get()) {
+            return !lifecycle.consumerFailed.get() && lifecycle.consumerThread?.isAlive != true
+        }
         val request = lifecycle.flushRequest.incrementAndGet()
         lifecycle.consumerThread?.let(LockSupport::unpark)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(1L))
         while (lifecycle.flushCompleted.get() < request) {
+            if (lifecycle.consumerFailed.get() || !lifecycle.running.get()) return false
             val remaining = deadline - System.nanoTime()
             if (remaining <= 0L) return false
             LockSupport.parkNanos(minOf(remaining, FLUSH_WAIT_POLL_NS))
@@ -290,11 +291,6 @@ internal class RuntimeCallGraph(
             }
         }
         if (interrupted) Thread.currentThread().interrupt()
-        if (graphThread.isAlive) {
-            val lost = bufferedEventCount()
-            lifecycle.shutdownLoss.addAndGet(lost)
-            lifecycle.acceptedEventLoss.addAndGet(lost)
-        }
         flushQuality(lifecycle.activeWriter)
     }
 
@@ -308,7 +304,7 @@ internal class RuntimeCallGraph(
 
     internal fun acceptedEventLossForTest(): Long = lifecycle.acceptedEventLoss.get()
 
-    internal fun currentThreadDepthForTest(): Int = producer.threadState.get()?.get()?.stack?.depth ?: 0
+    internal fun currentThreadDepthForTest(): Int = currentStack()?.depth ?: 0
 
     internal fun consumerForTest(): Thread? = lifecycle.consumerThread
 
@@ -370,13 +366,17 @@ internal class RuntimeCallGraph(
             lifecycle.running.set(false)
             producer.registry.forEach { entry -> entry.buffer.owner.get()?.let(LockSupport::unpark) }
             while (hasAdmittedProducers()) LockSupport.parkNanos(FLUSH_WAIT_POLL_NS)
-            val lost = saturatingAdd(bufferedEventCount(), table.logicalEventCount())
-            lifecycle.shutdownLoss.addAndGet(lost.coerceAtLeast(1L))
-            lifecycle.acceptedEventLoss.addAndGet(lost.coerceAtLeast(1L))
+            val lost = unaccountedAcceptedEventCount()
+            addSaturating(lifecycle.shutdownLoss, lost)
+            addSaturating(lifecycle.acceptedEventLoss, lost)
             flushQuality(lifecycle.activeWriter)
         } finally {
             producer.registry.forEach { entry -> entry.buffer.owner.get()?.let(LockSupport::unpark) }
-            lifecycle.consumerThread = null
+            if (lifecycle.clearRequested.get()) {
+                clearStoppedState()
+            } else {
+                lifecycle.consumerThread = null
+            }
         }
     }
 
@@ -428,7 +428,6 @@ internal class RuntimeCallGraph(
 
     private fun recordShutdownLoss() {
         lifecycle.shutdownLoss.incrementAndGet()
-        lifecycle.acceptedEventLoss.incrementAndGet()
     }
 
     private fun rotateProducerPages() {
@@ -508,6 +507,18 @@ internal class RuntimeCallGraph(
         return total
     }
 
+    private fun unaccountedAcceptedEventCount(): Long {
+        val accounted = saturatingAdd(consumer.emitted.get(), lifecycle.acceptedEventLoss.get())
+        return (producerAcceptedTotal() - accounted).coerceAtLeast(0L)
+    }
+
+    private fun currentStack(): RuntimeCallStack? {
+        if (!lifecycle.acceptingPublishers) return null
+        val state = producer.threadState.get()?.get() ?: return null
+        if (state.epoch != producer.epoch.get()) return null
+        return state.stack
+    }
+
     private fun hasBufferedEvents(): Boolean {
         for (entry in producer.registry) {
             if (entry.buffer.hasPublishedPages()) return true
@@ -521,14 +532,6 @@ internal class RuntimeCallGraph(
             if (buffer.producerActive || buffer.producerAdmitted) return true
         }
         return false
-    }
-
-    private fun bufferedEventCount(): Long {
-        var count = 0L
-        for (entry in producer.registry) {
-            count = saturatingAdd(count, entry.buffer.bufferedLogicalEventCount())
-        }
-        return count
     }
 
     private fun reclaimDeadBuffers() {
@@ -545,6 +548,18 @@ internal class RuntimeCallGraph(
 
     private fun clearRegistry() {
         while (true) producer.registry.poll()?.buffer?.clear() ?: break
+    }
+
+    private fun clearStoppedState() {
+        clearRegistry()
+        lifecycle.activeWriter = null
+        lifecycle.flushRequest.set(0L)
+        lifecycle.flushCompleted.set(0L)
+        lifecycle.producerWake.clear()
+        clearQuality()
+        lifecycle.clearRequested.set(false)
+        // Publish the stopped state only after all state shared with a future consumer is reset.
+        lifecycle.consumerThread = null
     }
 
     private fun clearQuality() {

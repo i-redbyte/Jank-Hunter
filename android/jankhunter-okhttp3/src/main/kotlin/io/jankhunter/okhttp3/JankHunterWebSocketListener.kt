@@ -24,7 +24,7 @@ class JankHunterWebSocketListener private constructor(
     private val delegate: WebSocketListener?,
     private val telemetrySink: NetworkTelemetry,
     private val clock: NetworkLongSource,
-    private val telemetryEnabled: NetworkBooleanSource,
+    telemetryEnabled: NetworkBooleanSource,
 ) : WebSocketListener() {
     constructor() : this(owner = null, route = null, delegate = null)
 
@@ -38,11 +38,12 @@ class JankHunterWebSocketListener private constructor(
         delegate = delegate,
         telemetrySink = RuntimeNetworkTelemetry.INSTANCE,
         clock = NetworkLongSource { SystemClock.elapsedRealtime() },
-        telemetryEnabled = NetworkBooleanSource { JankHunterNetworkRuntime.isActive() },
+        telemetryEnabled = NetworkBooleanSource { JankHunterNetworkRuntime.isWebSocketActive() },
     )
 
-    private val connectionId = nextConnectionId.getAndIncrement().coerceAtLeast(1L)
-    private val createdAt = now()
+    private val collectTelemetry = nonFatalBoolean(false, telemetryEnabled)
+    private val connectionId = if (collectTelemetry) nextConnectionId.getAndIncrement().coerceAtLeast(1L) else 0L
+    private val createdAt = if (collectTelemetry) now() else UNSET_TIME
     private val terminalRecorded = AtomicBoolean()
     private val listenerIdentity = System.identityHashCode(delegate ?: this)
 
@@ -57,31 +58,33 @@ class JankHunterWebSocketListener private constructor(
     private var receivedBytes = 0L
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
-        val opened = now()
-        openedAt = opened
-        statusCode = response.code().takeIf { it in 100..599 } ?: 0
-        routeLabel = responseRoute(response) ?: routeLabel
-        reconnectOrdinal = reconnectTracker.consumeFailure(currentReconnectKey()) ?: 0
-        val ordinal = reconnectOrdinal
-        record {
-            val snapshot = contextSnapshot ?: telemetrySink.captureContextSnapshot().also { contextSnapshot = it }
-            telemetrySink.recordWebSocket(
-                JankHunterWebSocketEvent(
-                    snapshot,
-                    routeLabel,
-                    owner,
-                    connectionId,
-                    JankHunterWebSocketEvent.STAGE_OPENED,
-                    elapsed(createdAt, opened),
-                    statusCode,
-                    0,
-                    JankHunterWebSocketEvent.FAILURE_UNKNOWN,
-                    0L,
-                    0L,
-                    0L,
-                    ordinal,
-                ),
-            )
+        if (collectTelemetry) {
+            val opened = now()
+            openedAt = opened
+            statusCode = response.code().takeIf { it in 100..599 } ?: 0
+            routeLabel = responseRoute(response) ?: routeLabel
+            reconnectOrdinal = reconnectTracker.consumeFailure(currentReconnectKey()) ?: 0
+            val ordinal = reconnectOrdinal
+            record {
+                val snapshot = contextSnapshot ?: telemetrySink.captureContextSnapshot().also { contextSnapshot = it }
+                telemetrySink.recordWebSocket(
+                    JankHunterWebSocketEvent(
+                        snapshot,
+                        routeLabel,
+                        owner,
+                        connectionId,
+                        JankHunterWebSocketEvent.STAGE_OPENED,
+                        elapsed(createdAt, opened),
+                        statusCode,
+                        0,
+                        JankHunterWebSocketEvent.FAILURE_UNKNOWN,
+                        0L,
+                        0L,
+                        0L,
+                        ordinal,
+                    ),
+                )
+            }
         }
         delegate?.onOpen(webSocket, response)
     }
@@ -127,7 +130,7 @@ class JankHunterWebSocketListener private constructor(
     }
 
     private fun terminal(stage: Int, response: Response?, closeCode: Int, failureKind: Int) {
-        if (!terminalRecorded.compareAndSet(false, true)) return
+        if (!collectTelemetry || !terminalRecorded.compareAndSet(false, true)) return
         val endedAt = now()
         if (response != null) {
             statusCode = response.code().takeIf { it in 100..599 } ?: statusCode
@@ -136,25 +139,31 @@ class JankHunterWebSocketListener private constructor(
         if (stage == JankHunterWebSocketEvent.STAGE_FAILED) {
             reconnectTracker.markFailure(currentReconnectKey(), saturatedIncrement(reconnectOrdinal))
         }
-        record {
-            val snapshot = contextSnapshot ?: telemetrySink.captureContextSnapshot().also { contextSnapshot = it }
-            telemetrySink.recordWebSocket(
-                JankHunterWebSocketEvent(
-                    snapshot,
-                    routeLabel,
-                    owner,
-                    connectionId,
-                    stage,
-                    elapsed(openedAt.takeIf { it != UNSET_TIME } ?: createdAt, endedAt),
-                    statusCode,
-                    closeCode,
-                    failureKind,
-                    textMessages,
-                    binaryMessages,
-                    receivedBytes,
-                    reconnectOrdinal,
-                ),
-            )
+        try {
+            record {
+                val snapshot = contextSnapshot ?: telemetrySink.captureContextSnapshot().also { contextSnapshot = it }
+                telemetrySink.recordWebSocket(
+                    JankHunterWebSocketEvent(
+                        snapshot,
+                        routeLabel,
+                        owner,
+                        connectionId,
+                        stage,
+                        elapsed(openedAt.takeIf { it != UNSET_TIME } ?: createdAt, endedAt),
+                        statusCode,
+                        closeCode,
+                        failureKind,
+                        textMessages,
+                        binaryMessages,
+                        receivedBytes,
+                        reconnectOrdinal,
+                    ),
+                )
+            }
+        } finally {
+            contextSnapshot = null
+            reconnectKey = null
+            routeLabel = null
         }
     }
 
@@ -174,18 +183,14 @@ class JankHunterWebSocketListener private constructor(
         return value.takeIf { it >= 0L } ?: UNSET_TIME
     }
 
-    /**
-     * Подсчёт сообщений намеренно следует за флагом среды выполнения: обход большой строки ради
-     * размера UTF-8 недопустим при отключённом сборе. Поэтому переключение флага во время уже
-     * открытого соединения делает итоговые счётчики неполными.
-     */
+    /** The connection snapshots collection state once, avoiding partial lifecycle events. */
     private inline fun collect(block: () -> Unit) {
-        if (!nonFatalBoolean(false, telemetryEnabled)) return
+        if (!collectTelemetry) return
         nonFatal(block)
     }
 
     private inline fun record(block: () -> Unit) {
-        if (!nonFatalBoolean(false, telemetryEnabled)) return
+        if (!collectTelemetry) return
         nonFatal(block)
     }
 

@@ -66,6 +66,19 @@ object JankHunter {
     }
 
     /**
+     * Restarts collection with overrides applied to the original build-time configuration.
+     * The currently selected binary storage is retained across the restart.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun reconfigure(
+        reason: String? = "manual",
+        updater: JankHunterConfigUpdater,
+    ): Boolean {
+        return runtime.lifecycle.reconfigure(reason, updater)
+    }
+
+    /**
      * Atomically moves the active session to [storage] without restarting collection. Passing
      * `null` restores Jank Hunter's built-in file storage. The selected storage is retained while
      * runtime collection is disabled and is used by the next runtime start.

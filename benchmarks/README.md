@@ -1,57 +1,99 @@
-# Performance baseline and acceptance
+# Эталон и критерии производительности
 
-This directory defines the local, reproducible performance contract for Jank Hunter. It deliberately uses generated synthetic data: personal `.jhlog` files, heap dumps, device identifiers, and absolute workstation paths must not be committed.
+Каталог задаёт локальный воспроизводимый контракт производительности Jank Hunter. Проверка использует только детерминированные синтетические данные. Личные `.jhlog`, HPROF, идентификаторы устройств и абсолютные пути рабочей станции добавлять в Git нельзя.
 
-The runner covers four surfaces:
+Текущие версии внутренних схем:
 
-- Android artifact sizes produced by release/debug assembly;
-- runtime hot paths through the opt-in `JankHunterRuntimeBenchmarkTest` suite;
-- Go decoder and analyzer benchmarks with allocation metrics;
-- end-to-end CLI analysis and HTML report generation, including wall time, peak RSS when the host supports it, and bundle size.
+| Схема | Версия |
+| --- | ---: |
+| Снимок измерений | `12` |
+| Критерии приёмки | `4` |
+| Синтетический набор данных | `4` |
 
-## Capture a reference
+Версия формата создаваемого журнала определяется текущей утилитой; сейчас это JHLOG `5.0.0`.
 
-Run from the `jank-hunter` root on a quiet machine:
+## Что измеряется
+
+- размеры Android-артефактов после сборки `debug` и `release`;
+- горячие пути среды выполнения Android через явно включаемый `JankHunterRuntimeBenchmarkTest`;
+- тесты производительности декодера, анализатора и генератора отчётов на Go с числами выделений памяти;
+- полный анализ утилитой и создание HTML, включая время выполнения, пиковую постоянную память на поддерживаемой системе и размер комплекта отчётов;
+- качество синтетического журнала: число событий, словарь, служебные записи, целостность сегментов и отсутствие потерь.
+
+Скрипт не запускает `detekt`. Задача Android с измерениями принудительно выполняется заново, поэтому результат `UP-TO-DATE` не может скрыть отсутствие данных.
+
+## Создание эталона
+
+Запускайте из корня `jank-hunter` на незагруженной машине:
 
 ```bash
 ./scripts/performance-baseline.py capture \
   --out benchmarks/results/reference.json
 ```
 
-The default `representative` fixture is generated deterministically and models a noisy short session: a large method dictionary, repeated flow attribution, and a high-cardinality runtime graph. Use `--profile smoke` only while iterating on the runner.
+Профиль `representative`, выбранный по умолчанию, моделирует насыщенный короткий сеанс: большой словарь методов, повторяющуюся атрибуцию операций и граф вызовов высокой размерности. Профиль `smoke` предназначен только для быстрой отладки скрипта.
 
-Fixture metadata follows the `.jhlog v9` accounting model: semantic data events, dictionary records, and final control records are separate counters. A capture is rejected unless the CLI's decoded semantic-event and dictionary counts exactly match the generated fixture metadata; the minimum values in `acceptance.json` are additional profile-volume guards, not substitutes for that equality check.
-
-For stable comparisons, keep the same machine, JDK, Go version, power mode, profile, iteration counts, and sample counts. Record a reference from the last known-good revision, then record the candidate from the revision under review.
-
-Useful focused captures:
+Полезные сокращённые измерения:
 
 ```bash
-./scripts/performance-baseline.py capture --skip-android --out benchmarks/results/cli.json
-./scripts/performance-baseline.py capture --skip-go-benchmarks --out benchmarks/results/android.json
+./scripts/performance-baseline.py capture \
+  --skip-android \
+  --out benchmarks/results/cli.json
+
+./scripts/performance-baseline.py capture \
+  --skip-go-benchmarks \
+  --out benchmarks/results/android.json
 ```
 
-Each result records the enabled capture surfaces (`go_benchmarks`, Android runtime and artifacts, CLI, reports, and peak RSS). A reference and candidate must enable exactly the same surfaces; a focused capture therefore must be compared only with a reference captured with the same skip flags and host RSS capability.
+Сокращённый снимок можно сравнивать только со снимком, созданным с теми же параметрами и отдельным контрактом `--acceptance`, где список обязательных поверхностей явно уменьшен. Штатный [`acceptance.json`](acceptance.json) требует полный набор.
 
-The runner never invokes `detekt`. Android benchmarks are opt-in and filtered to `JankHunterRuntimeBenchmarkTest`; normal unit tests are not part of this command. Their Gradle task is forced to execute on every capture, so an `UP-TO-DATE` result cannot silently remove benchmark measurements from a repeated run.
+Для устойчивого сравнения эталон и кандидат должны использовать одну машину, JDK, Go, Android Build Tools, режим питания, профиль, число повторов и одинаковые возможности измерения памяти.
 
-## Check a candidate
+## Создание и проверка кандидата
 
 ```bash
+./scripts/performance-baseline.py capture \
+  --out benchmarks/results/candidate.json
+
 ./scripts/performance-baseline.py check \
   --reference benchmarks/results/reference.json \
   --candidate benchmarks/results/candidate.json
 ```
 
-[`acceptance.json`](acceptance.json) contains relative regression tolerances and final product ceilings. Every enabled surface must contain measurements, all reference and candidate metric sets must match, and both report groups must contain every required page. Missing values for absolute targets fail as `not measured`.
+[`acceptance.json`](acceptance.json) содержит допустимые относительные регрессии, абсолютные пределы и обязательные страницы отчётов. Проверка завершается ошибкой, если:
 
-Peak RSS is disabled only when the host OS is unsupported or `/usr/bin/time` is unavailable. When RSS capture is enabled, every CLI command must report it; missing or unparseable timing output aborts capture instead of silently writing `null`.
+- отсутствует обязательная метрика или страница;
+- набор измеряемых поверхностей различается;
+- окружение, профиль или параметры эталона и кандидата несовместимы;
+- синтетический журнал декодирован не полностью;
+- обнаружены потери, переполнение, усечение или повреждение данных;
+- превышен относительный либо абсолютный предел.
 
-The JSON results contain relative command labels and environment versions, not input paths. Raw command output, generated logs, binaries, and reports stay under `benchmarks/results/`, which is ignored by Git.
+Пиковая память измеряется через `/usr/bin/time`, если это поддерживает система. Если измерение включено, отсутствие или ошибка разбора значения останавливает создание снимка вместо записи `null`.
 
-## Interpreting results
+## Файлы результата
 
-- Compare time and allocation metrics only against a reference captured with the same profile and toolchain.
-- Treat a single microbenchmark as a diagnostic, not proof of end-user impact. The end-to-end `inspect_json`, `inspect_report`, and `compare_report` measurements are the release-oriented signals.
-- A performance improvement must not weaken quality: the generated fixture must decode completely, report the expected event count, have no partial/corruption/drop warnings, and produce every required report page.
-- Device-side CPU, ANR, and frame impact remain a separate final validation on a representative application. This local suite is the fast guardrail that catches regressions before that run.
+Публичный JSON содержит относительные названия команд и версии окружения, но не входные абсолютные пути. Рядом создаётся принадлежащий скрипту каталог `<имя>-artifacts/` с журналом, отчётами и диагностическими потоками команд.
+
+Каталог пересоздаётся только при наличии точного служебного маркера. Для одного выходного файла используется постоянный файл блокировки `.jankhunter-performance-<имя>.lock`; символьные ссылки, чужие непустые каталоги и параллельную запись в один результат скрипт отклоняет.
+
+В Git следует добавлять только осознанно выбранные JSON-результаты. Сырые журналы, дампы памяти, исполняемые файлы и отчёты остаются в игнорируемом каталоге `benchmarks/results/`.
+
+## Как читать результат
+
+- Сравнивайте время и выделения памяти только при одинаковом окружении и профиле.
+- Отдельный микротест служит диагностикой, а не доказательством влияния на пользователя.
+- Основные выпускные сигналы - `inspect_json`, `inspect_report` и `compare_report`.
+- Ускорение не должно ослаблять качество: журнал обязан полностью декодироваться и создавать все обязательные страницы.
+- Влияние на процессор устройства, ANR и кадры проверяется отдельно на представительном приложении.
+
+## Проверка скрипта
+
+```bash
+python3 -B scripts/test_performance_baseline.py -v
+python3 -B scripts/performance-baseline.py --help
+python3 -B scripts/performance-baseline.py capture --help
+python3 -B scripts/performance-baseline.py check --help
+```
+
+Модульные тесты проверяют схемы, качество обеих сторон, совместимость окружения и поверхностей, обязательные метрики, пиковую память, безопасное владение файлами и атомарную публикацию результата. Реальные измерения они не запускают.

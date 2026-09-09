@@ -8,6 +8,84 @@ import org.junit.Test
 
 class JankHunterConfigTest {
     @Test
+    fun runtimeFeatureGatesCanOnlyDisableFeaturesPresentInBytecode() {
+        val config = JankHunterConfig.builder()
+            .availableRuntimeFeatures(
+                setOf(
+                    JankHunterRuntimeFeature.HTTP,
+                    JankHunterRuntimeFeature.HANDLERS,
+                ),
+            )
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.HTTP, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.HANDLERS, true)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.COROUTINES, true)
+            .build()
+
+        assertFalse(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP))
+        assertTrue(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HANDLERS))
+        assertFalse(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.COROUTINES))
+    }
+
+    @Test
+    fun runtimeFeatureMasksSurviveCopyWithoutAllocatingOnLookup() {
+        val config = JankHunterConfig.builder()
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.LOGGING, false)
+            .build()
+
+        val copy = config.toBuilder().build()
+
+        assertFalse(copy.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.LOGGING))
+        assertTrue(copy.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.BINDER_IPC))
+    }
+
+    @Test
+    fun runtimeFeaturesGateRelatedCollectorSettings() {
+        val config = JankHunterConfig.builder()
+            .mainLooperDispatchMonitorEnabled(true)
+            .retainedHeapDumpEnabled(true)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.CALL_GRAPH, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.MAIN_LOOPER, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.RUNTIME_IO, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.BYTECODE_IO, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.COMPOSE, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.ROOM, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.SQLITE, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.WORKERS, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.HEAP_DUMPS, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS, false)
+            .build()
+
+        assertFalse(config.runtimeCallGraphEnabled())
+        assertFalse(config.mainLooperDispatchMonitorEnabled())
+        assertFalse(config.ioTracingEnabled())
+        assertFalse(config.bytecodeIoTracingEnabled())
+        assertFalse(config.composeTracingEnabled())
+        assertFalse(config.roomTracingEnabled())
+        assertFalse(config.databaseTracingEnabled())
+        assertFalse(config.workerTracingEnabled())
+        assertFalse(config.objectWatcherEnabled())
+        assertFalse(config.retainedHeapDumpEnabled())
+        assertFalse(config.fpsMonitorEnabled())
+        assertFalse(config.jankStatsEnabled())
+    }
+
+    @Test
+    fun semanticTracingHonorsRuntimeFeatureAvailabilityAndOverrides() {
+        val remotelyDisabled = JankHunterConfig.builder()
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.COMPOSE, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.ROOM, false)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.WORKERS, false)
+            .build()
+        val absentFromBytecode = JankHunterConfig.builder()
+            .availableRuntimeFeatures(emptySet())
+            .build()
+
+        assertFalse(remotelyDisabled.semanticTracingEnabled())
+        assertFalse(absentFromBytecode.semanticTracingEnabled())
+    }
+
+    @Test
     fun runtimeConfigDoesNotOwnAndroidManifestSchema() {
         assertFalse(JankHunterConfig::class.java.declaredFields.any { it.name.startsWith("META_") })
     }
@@ -362,6 +440,38 @@ class JankHunterConfigTest {
             config.symbolNamespace(),
         )
         assertTrue(config.deleteObsoleteJhlogFormats())
+    }
+
+    @Test
+    fun manifestMetadataRestrictsRuntimeFeaturesToBuildCapabilities() {
+        val metadata = TestManifestMetadata(
+            mapOf(
+                JankHunterManifestConfig.META_AVAILABLE_RUNTIME_FEATURES to
+                    "HTTP,HANDLERS,UNKNOWN_FEATURE",
+            ),
+        )
+
+        val config = JankHunterManifestConfig.fromMetadata(metadata, defaultEnabled = true)
+
+        assertTrue(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP))
+        assertTrue(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HANDLERS))
+        assertFalse(config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.COROUTINES))
+    }
+
+    @Test
+    fun providedConfigurationCannotOverrideBuildFeatureAvailability() {
+        val provided = JankHunterConfig.builder()
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.HTTP, true)
+            .runtimeFeatureEnabled(JankHunterRuntimeFeature.HANDLERS, true)
+            .build()
+        val metadata = TestManifestMetadata(
+            mapOf(JankHunterManifestConfig.META_AVAILABLE_RUNTIME_FEATURES to "HANDLERS"),
+        )
+
+        val merged = JankHunterManifestConfig.mergeBuildMetadata(provided, metadata)
+
+        assertFalse(merged.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP))
+        assertTrue(merged.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HANDLERS))
     }
 
     @Test

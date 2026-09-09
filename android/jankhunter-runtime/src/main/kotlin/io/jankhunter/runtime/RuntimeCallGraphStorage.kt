@@ -66,12 +66,12 @@ internal class RuntimeCallStack {
 
     private fun ensureCapacity(required: Int) {
         if (required <= ids.size) return
-        val capacity = ids.size shl 1
-        ids = ids.copyOf(capacity)
-        startedAtMs = startedAtMs.copyOf(capacity)
-        names = names.copyOf(capacity)
-        screens = screens.copyOf(capacity)
-        operationIds = operationIds.copyOf(capacity)
+        val newCapacity = ids.size shl 1
+        ids = ids.copyOf(newCapacity)
+        startedAtMs = startedAtMs.copyOf(newCapacity)
+        names = names.copyOf(newCapacity)
+        screens = screens.copyOf(newCapacity)
+        operationIds = operationIds.copyOf(newCapacity)
     }
 
     /** Returns false and discards unmatched inner frames when exits arrive out of LIFO order. */
@@ -516,24 +516,24 @@ internal class RuntimeGraphEdgeTable {
 
     private fun ensureInsertCapacity() {
         if ((used + 1) * LOAD_DENOMINATOR < states.size * LOAD_NUMERATOR) return
-        val capacity = if ((size + 1) * LOAD_DENOMINATOR < states.size * LOAD_NUMERATOR) {
+        val newCapacity = if ((size + 1) * LOAD_DENOMINATOR < states.size * LOAD_NUMERATOR) {
             states.size
         } else {
             states.size shl 1
         }
-        rehash(capacity)
+        rehash(newCapacity)
     }
 
     private fun rehash(capacity: Int) {
-        val old = StorageSnapshot(
+        val snapshot = StorageSnapshot(
             states, hashes, callers, callerNames, callees, calleeNames, counts, totalsMs, maximaMs,
             screens, operationIds,
         )
         allocate(capacity)
-        for (oldIndex in old.states.indices) {
-            if (old.states[oldIndex] != OCCUPIED) continue
-            val index = findInsertIndex(old.hashes[oldIndex])
-            copyEntry(old, oldIndex, index)
+        for (source in snapshot.states.indices) {
+            if (snapshot.states[source] != OCCUPIED) continue
+            val target = findInsertIndex(snapshot.hashes[source])
+            copyFromSnapshot(snapshot, source, target)
             size++
             used++
         }
@@ -556,18 +556,18 @@ internal class RuntimeGraphEdgeTable {
         drainCursor = 0
     }
 
-    private fun copyEntry(old: StorageSnapshot, from: Int, to: Int) {
-        states[to] = OCCUPIED
-        hashes[to] = old.hashes[from]
-        callers[to] = old.callers[from]
-        callerNames[to] = old.callerNames[from]
-        callees[to] = old.callees[from]
-        calleeNames[to] = old.calleeNames[from]
-        counts[to] = old.counts[from]
-        totalsMs[to] = old.totalsMs[from]
-        maximaMs[to] = old.maximaMs[from]
-        screens[to] = old.screens[from]
-        operationIds[to] = old.operationIds[from]
+    private fun copyFromSnapshot(snapshot: StorageSnapshot, source: Int, target: Int) {
+        states[target] = OCCUPIED
+        hashes[target] = snapshot.hashes[source]
+        callers[target] = snapshot.callers[source]
+        callerNames[target] = snapshot.callerNames[source]
+        callees[target] = snapshot.callees[source]
+        calleeNames[target] = snapshot.calleeNames[source]
+        counts[target] = snapshot.counts[source]
+        totalsMs[target] = snapshot.totalsMs[source]
+        maximaMs[target] = snapshot.maximaMs[source]
+        screens[target] = snapshot.screens[source]
+        operationIds[target] = snapshot.operationIds[source]
     }
 
     private class StorageSnapshot(
@@ -595,11 +595,19 @@ internal class RuntimeGraphEdgeTable {
     }
 }
 
+private const val HASH_CALLEE_ROTATION = 29
+private const val HASH_SCREEN_SHIFT = 32
+private const val HASH_OPERATION_ROTATION = 17
+private const val HASH_AVALANCHE_SHIFT = 33
+private const val HASH_FOLD_SHIFT = 32
+private const val HASH_AVALANCHE_MULTIPLIER_1 = -49064778989728563L
+private const val HASH_AVALANCHE_MULTIPLIER_2 = -4265267296055464877L
+
 private fun runtimeGraphEdgeHash(caller: Long, callee: Long, screen: String?, operationId: Long): Int {
-    var mixed = caller xor java.lang.Long.rotateLeft(callee, 29)
-    mixed = mixed xor ((screen?.hashCode() ?: 0).toLong() shl 32)
-    mixed = mixed xor java.lang.Long.rotateLeft(operationId, 17)
-    mixed = (mixed xor (mixed ushr 33)) * -49064778989728563L
-    mixed = (mixed xor (mixed ushr 33)) * -4265267296055464877L
-    return (mixed xor (mixed ushr 32)).toInt()
+    var mixed = caller xor java.lang.Long.rotateLeft(callee, HASH_CALLEE_ROTATION)
+    mixed = mixed xor ((screen?.hashCode() ?: 0).toLong() shl HASH_SCREEN_SHIFT)
+    mixed = mixed xor java.lang.Long.rotateLeft(operationId, HASH_OPERATION_ROTATION)
+    mixed = (mixed xor (mixed ushr HASH_AVALANCHE_SHIFT)) * HASH_AVALANCHE_MULTIPLIER_1
+    mixed = (mixed xor (mixed ushr HASH_AVALANCHE_SHIFT)) * HASH_AVALANCHE_MULTIPLIER_2
+    return (mixed xor (mixed ushr HASH_FOLD_SHIFT)).toInt()
 }

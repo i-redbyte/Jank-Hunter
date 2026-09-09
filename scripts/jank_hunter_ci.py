@@ -22,6 +22,7 @@ JANK_HUNTER_CI_CONTROL_PATHS = frozenset(
         "GitlabConfigs/custom_jobs/build_scripts.yml",
         "GitlabConfigs/custom_jobs/static_analyse.yml",
         "GitlabConfigs/custom_jobs/tests_scripts.yml",
+        "scripts/jank-hunter-publish/publish-android.sh",
     }
 )
 

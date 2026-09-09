@@ -65,6 +65,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
     abstract val runtimeCallGraphEnabled: Property<Boolean>
 
     @get:Input
+    abstract val availableRuntimeFeatures: Property<String>
+
+    @get:Input
     abstract val composeTracingEnabled: Property<Boolean>
 
     @get:Input
@@ -187,6 +190,9 @@ abstract class GenerateJankHunterRuntimeManifestTask : DefaultTask() {
                     <meta-data
                         android:name="io.jankhunter.runtime_call_graph_enabled"
                         android:value="${runtimeCallGraphEnabled.get()}" />
+                    <meta-data
+                        android:name="io.jankhunter.available_runtime_features"
+                        android:value="${availableRuntimeFeatures.get()}" />
                     <meta-data
                         android:name="io.jankhunter.compose_tracing_enabled"
                         android:value="${composeTracingEnabled.get()}" />

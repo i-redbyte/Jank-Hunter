@@ -1,6 +1,7 @@
 package io.jankhunter.runtime
 
 import android.os.SystemClock
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
@@ -18,11 +19,16 @@ internal class JankHunterCoroutineFunction2 internal constructor(
         val start = RuntimeHookGuard.value(0L, RuntimeHookFailureReason.ASYNC_WRAPPER) { SystemClock.elapsedRealtime() }
         var completedByContinuation = false
         var failed = false
+        var wrappedContinuation: JankHunterContinuation<Any?>? = null
         val continuation = if (p2 is Continuation<*>) {
-            val wrapped = RuntimeHookGuard.value<Any?>(p2, RuntimeHookFailureReason.ASYNC_WRAPPER) {
+            val wrapped = RuntimeHookGuard.value<JankHunterContinuation<Any?>?>(
+                null,
+                RuntimeHookFailureReason.ASYNC_WRAPPER,
+            ) {
                 JankHunterContinuation(p2 as Continuation<Any?>, ownerName, capturedContext, start, callbacks)
             }
-            if (wrapped === p2) return delegate.invoke(p1, p2)
+            if (wrapped == null) return delegate.invoke(p1, p2)
+            wrappedContinuation = wrapped
             completedByContinuation = true
             wrapped
         } else {
@@ -43,7 +49,7 @@ internal class JankHunterCoroutineFunction2 internal constructor(
             throw throwable
         } finally {
             if (!completedByContinuation) {
-                recordCompletion(start, failed)
+                wrappedContinuation?.recordCompletion(failed) ?: recordCompletion(start, failed)
             }
         }
     }
@@ -67,6 +73,11 @@ private class JankHunterContinuation<T>(
     private val startedAtMs: Long,
     private val callbacks: RuntimeAsyncCallbacks,
 ) : Continuation<T> {
+    @JvmSynthetic
+    @JvmField
+    @Volatile
+    internal var completionState = COMPLETION_PENDING
+
     override val context: CoroutineContext
         get() = delegate.context
 
@@ -75,20 +86,33 @@ private class JankHunterContinuation<T>(
             delegate.resumeWith(result)
             return
         }
-        val failed = result.exceptionOrNull() != null
+        var failed = result.exceptionOrNull() != null
         try {
             callbacks.callWithContext(capturedContext, ownerName) {
                 delegate.resumeWith(result)
             }
+        } catch (throwable: Throwable) {
+            failed = true
+            throw throwable
         } finally {
-            RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
-                val durationMs = if (startedAtMs > 0L) {
-                    (SystemClock.elapsedRealtime() - startedAtMs).coerceAtLeast(0L)
-                } else {
-                    0L
-                }
-                callbacks.recordWrappedWork(ownerName, "coroutine", durationMs, failed)
-            }
+            recordCompletion(failed)
         }
+    }
+
+    fun recordCompletion(failed: Boolean) {
+        if (!COMPLETION.compareAndSet(this, COMPLETION_PENDING, COMPLETION_RECORDED)) return
+        RuntimeHookGuard.run(RuntimeHookFailureReason.ASYNC_WRAPPER) {
+            callbacks.recordWrappedWork(ownerName, "coroutine", elapsedRealtimeSince(startedAtMs), failed)
+        }
+    }
+
+    private companion object {
+        const val COMPLETION_PENDING = 0
+        const val COMPLETION_RECORDED = 1
+
+        val COMPLETION = AtomicIntegerFieldUpdater.newUpdater(
+            JankHunterContinuation::class.java,
+            "completionState",
+        )
     }
 }
