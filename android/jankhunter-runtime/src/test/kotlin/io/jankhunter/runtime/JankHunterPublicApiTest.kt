@@ -41,6 +41,7 @@ class JankHunterPublicApiTest {
                 "initDiagnostics",
                 "isRuntimeEnabled",
                 "isStarted",
+                "reconfigure",
                 "setRuntimeEnabled",
                 "shutdown",
                 "switchBinaryStorage",

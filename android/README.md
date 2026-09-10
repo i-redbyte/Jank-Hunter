@@ -1,720 +1,462 @@
-# Jank Hunter Android
+# Jank Hunter для Android
 
-Android-часть Jank Hunter отвечает за сбор сигналов внутри приложения и запись компактных `.jhlog` файлов. Эти файлы потом разбирает утилита `jankhunter` из каталога `cli/`.
+Android-часть Jank Hunter автоматически внедряет диагностические перехватчики на этапе сборки, собирает события во время работы приложения и сохраняет их в `.jhlog`. Актуальная версия SDK и Gradle-плагина - `1.0.9`.
 
-Данные не отправляются в сеть. По умолчанию логи лежат в песочнице приложения, пока вы сами не заберёте их через `adb`, общий доступ Android или плагин для Android Studio.
+```properties
+jankHunterVersion=1.0.9
+```
 
 ## Модули
 
-- `jankhunter-annotations`: лёгкие аннотации для атрибуции и управления ASM-внедрением.
-- `jankhunter-runtime`: Android-библиотека сбора сигналов и записи `.jhlog`.
-- `jankhunter-okhttp3`: слушатель OkHttp и помощники для WebSocket.
-- `jankhunter-workmanager`: опциональные enqueue/lifecycle API и базовые Worker/CoroutineWorker.
-- `jankhunter-android-sdk`: единая публичная зависимость, которая транзитивно подключает runtime, annotations и OkHttp/WebSocket support.
-- `jankhunter-gradle-plugin`: Gradle-плагин, который добавляет настройки манифеста, создаёт карту владельцев, граф классов, диагностику ASM и внедряет перехватчики в байткод.
-- `sample-app`: пример приложения для ручной проверки, утечек, сравнения прогонов и демонстрации отчётов.
+| Артефакт | Назначение |
+| --- | --- |
+| `jankhunter-android-sdk` | Единая пользовательская зависимость: среда выполнения, аннотации и поддержка OkHttp/WebSocket. |
+| `jankhunter-gradle-plugin` | Настройка вариантов сборки, ASM-внедрение и дополнительные диагностические артефакты. |
+| `jankhunter-runtime` | Среда выполнения и ручной API; отдельно обычно не подключается. |
+| `jankhunter-annotations` | Аннотации владельцев, экранов, операций и исключений из внедрения. |
+| `jankhunter-okhttp3` | Поддержка OkHttp и WebSocket; входит в `jankhunter-android-sdk`. |
+| `jankhunter-workmanager` | Необязательная интеграция с WorkManager; подключается отдельно. |
+| `sample-app` | Демонстрационное приложение и сквозной сценарий проверки. |
 
-## Быстрое Подключение
+## Быстрое подключение
 
-Для первого шага подключайте только отладочные или проверочные сборки:
+В модуле приложения добавьте плагин и единый SDK-артефакт одной версии:
 
 ```kotlin
 plugins {
-    id("io.jankhunter.android") version "1.0.7"
+    id("io.jankhunter.android") version "1.0.9"
 }
+
 dependencies {
-    implementation("io.jankhunter:jankhunter-android-sdk:1.0.7")
+    implementation("io.jankhunter:jankhunter-android-sdk:1.0.9")
 }
 ```
 
-Это единственная обязательная пользовательская dependency: SDK экспортирует runtime, annotations и
-OkHttp/WebSocket support. WorkManager-интеграция подключается отдельно и не добавляет WorkManager
-транзитивно. Плагин проверяет runtime до ASM и останавливает небезопасное
-внедрение, если dependency resolution был вручную изменён.
+Минимальная настройка:
 
-Для каждого включённого application-варианта плагин создаёт manifest metadata с `io.jankhunter.enabled=true` и runtime-настройками. `io.jankhunter.runtime.JankHunterAutoInitProvider` добавляется в этот манифест только при `autoInit = true`; при `autoInit = false` настройки сохраняются для ручного `JankHunter.init(...)`, но provider не генерируется. Library-модули и выключенные варианты не получают ни runtime manifest, ни provider.
+```kotlin
+jankHunter {
+    enabled.set(true)
+    enabledBuildTypes.set(setOf("debug"))
+    profile.set(io.jankhunter.gradle.JankHunterProfile.BALANCED)
+    packages("com.example.app")
+    storageLimitMiB(16)
+}
+```
 
-При фактической сборке любого включённого application-варианта Gradle один раз выводит заметный баннер с версией Jank Hunter. Он не зависит от `verboseLogs`; выключенные варианты его не выводят:
+По умолчанию Jank Hunter включён только для `debug`, использует профиль `BALANCED`, область `NAMESPACE_AND_PACKAGES`, главный процесс, автоматическую инициализацию и ограниченное файловое хранилище.
+
+Во время сборки включённого варианта выводится строка:
 
 ```text
-================JANK HUNTER 1.0.7 ENABLED================
+================JANK HUNTER 1.0.9 ENABLED================
 ```
 
-Без Gradle-плагина можно подключить runtime вручную и вызвать `JankHunter.init(...)`:
+## Инициализация и управление сбором
+
+Gradle-плагин добавляет `JankHunterAutoInitProvider`, который запускает среду выполнения до `Application.onCreate()`. Дополнительный код приложения не требуется.
+
+Для ручной инициализации:
 
 ```kotlin
-dependencies {
-    debugImplementation("io.jankhunter:jankhunter-runtime:1.0.7")
+jankHunter {
+    autoInit.set(false)
 }
 ```
 
-Аннотации без ASM-прохода сами по себе ничего не внедряют. Для ручного auto-init нужно самостоятельно объявить `JankHunterAutoInitProvider` в манифесте; безопаснее начать с явного вызова `JankHunter.init(...)`.
-
-Минимальные `meta-data`:
-
-```xml
-<meta-data android:name="io.jankhunter.enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.runtime_enabled" android:value="true" />
+```kotlin
+class App : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        io.jankhunter.runtime.JankHunter.init(this)
+    }
+}
 ```
 
-Часто полезно сразу задать пороги и лимиты:
-
-```xml
-<meta-data android:name="io.jankhunter.main_thread_stall_threshold_ms" android:value="700" />
-<meta-data android:name="io.jankhunter.memory_sample_interval_ms" android:value="10000" />
-<meta-data android:name="io.jankhunter.system_sampler_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.system_sample_interval_ms" android:value="15000" />
-<meta-data android:name="io.jankhunter.fps_monitor_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.jank_frame_threshold_ms" android:value="32" />
-<meta-data android:name="io.jankhunter.max_queue_size" android:value="2048" />
-<meta-data android:name="io.jankhunter.session_log_size_limit_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.max_session_log_size_mib" android:value="16" />
-<meta-data android:name="io.jankhunter.flush_interval_ms" android:value="5000" />
-```
-
-Ручная инициализация тоже доступна:
+Публичный фасад жизненного цикла и хранилища:
 
 ```kotlin
-val config = JankHunterConfig.builder()
-    .enabled(true)
-    .runtimeEnabled(true)
-    .autoStartCollectors(true)
-    .mainThreadStallThresholdMs(700)
-    .ownerBlockThresholdMs(250)
-    .httpSlowThresholdMs(1_000)
-    .memorySampleIntervalMs(10_000)
-    .systemSamplerEnabled(true)
-    .systemSampleIntervalMs(15_000)
-    .mainLooperDispatchMonitorEnabled(false)
-    .retainedHeapDumpEnabled(false)
-    .retainedHeapDumpPrivacyApproved(false)
-    .fpsMonitorEnabled(true)
-    .jankStatsEnabled(true)
-    .jankFrameThresholdMs(32)
-    .uiWindowP95ThresholdMs(32)
-    .maxQueueSize(2048)
-    .sessionLogSizeLimitEnabled(true)
-    .maxSessionLogSizeMiB(16)
-    .logGrowthAnalyticsEnabled(true)
-    .flushIntervalMs(5_000)
-    .build()
-
-JankHunter.init(context, config)
-```
-
-При включённых `jankStats` и `fpsMonitor` используется один поток UI-событий: JankStats имеет
-приоритет для активного окна, а Choreographer включается только как fallback. Глобальный
-`MainLooper.setMessageLogging(Printer)` по умолчанию выключен; включайте
-`mainLooperDispatchMonitor` явно только для короткой углублённой диагностики.
-
-## Переключатель Сбора
-
-`io.jankhunter.enabled` является жёстким установочным переключателем. Если он равен `false`, библиотека не поднимется автоматически.
-
-Для продуктовых или проверочных переключателей используйте `runtime_enabled`:
-
-```xml
-<meta-data android:name="io.jankhunter.enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.runtime_enabled" android:value="false" />
-```
-
-Затем включайте сбор из своей системы настроек:
-
-```kotlin
-val enabledForUser = featureFlags.isEnabled("jank_hunter_runtime")
-JankHunter.setRuntimeEnabled(enabledForUser, "remote_config")
-```
-
-При выключении библиотека сбрасывает буфер, останавливает сборщики и запечатывает текущий `.jhlog`. При включении начинается новая сессия сбора с новым файлом. Перезапуск приложения не нужен.
-
-Проверки состояния:
-
-```kotlin
-JankHunter.isRuntimeEnabled()
 JankHunter.isStarted()
+JankHunter.isRuntimeEnabled()
+JankHunter.setRuntimeEnabled(false, "проверка")
+JankHunter.setRuntimeEnabled(true, "продолжение")
 JankHunter.flush()
+JankHunter.initDiagnostics()
+JankHunter.shutdown()
 ```
 
-## Автоподключение К Проекту
+`setRuntimeEnabled` временно останавливает или возобновляет приём событий без пересборки приложения. `flush()` отправляет уже принятые события на запись, но не запечатывает весь запуск.
 
-Из корня репозитория:
-
-```bash
-scripts/integrate-android-project.sh ~/work/MyApp
-```
-
-С явным модулем, пакетами и графом вызовов:
-
-```bash
-scripts/integrate-android-project.sh \
-  --target ~/work/MyApp \
-  --module :app \
-  --include-package com.myapp.feature \
-  --include-package com.myapp.data \
-  --exclude-packages com.myapp.generated,com.myapp.di \
-  --runtime-call-graph
-```
-
-Скрипт:
-
-- выбирает app-модуль, если `--module` не указан;
-- публикует Android-модули Jank Hunter в `.jankhunter/maven`;
-- собирает утилиту `jankhunter` в `.jankhunter/bin/jankhunter`;
-- добавляет репозиторий в `settings.gradle` или `settings.gradle.kts`;
-- прописывает `sdk.dir` в `local.properties`, если это нужно;
-- подключает `io.jankhunter.android`; annotations и runtime добавляются Gradle-плагином, а опциональный OkHttp helper — явной variant-зависимостью;
-- создаёт `jankHunter { ... }` с осторожными начальными настройками;
-- оставляет копии изменённых файлов в `.jankhunter-backups/<timestamp>`.
-
-Полезные флаги:
-
-```bash
-scripts/integrate-android-project.sh ~/work/MyApp --android-sdk "$ANDROID_HOME"
-scripts/integrate-android-project.sh ~/work/MyApp --android-build-tools 35.0.0
-scripts/integrate-android-project.sh ~/work/MyApp --verify
-scripts/integrate-android-project.sh ~/work/MyApp --dry-run
-```
-
-## Атрибуция Кода И Операций
-
-Явный владелец работы:
+Согласованный снимок файлов активных процессов:
 
 ```kotlin
-JankHunter.withOwner("FeedRepository.refresh") {
-    repository.refresh()
-}
+val snapshot = JankHunter.captureLogSnapshot()
+val archive = JankHunter.captureLogArchive(File(cacheDir, "jankhunter.zip"))
 ```
 
-Синхронная операция и вложенные этапы:
+`captureLogSnapshot()` закрывает текущие сегменты и сразу продолжает сбор в новых. `captureLogArchive(...)` дополнительно создаёт один ZIP без повторного сжатия уже сжатых блоков JHLOG.
 
-```kotlin
-JankHunter.traceOperation(
-    name = "checkout.open",
-    kind = JankHunterOperationKind.SCREEN,
-    budgetMs = 800,
-    attributes = JankHunterOperationAttributes.of("source", "cart"),
-) {
-    JankHunter.traceOperation("checkout.network", JankHunterOperationKind.STAGE, 300) {
-        repository.loadCheckout()
-    }
-    JankHunter.traceOperation("checkout.render", JankHunterOperationKind.STAGE, 200) {
-        adapter.submitList(items)
-    }
-}
-```
+## Профили
 
-Для асинхронной работы сохраните результат `startOperation(...)` и завершите его ровно один раз
-через `success()`, `failure()`, `cancel()` или `timeout()`. Завершённый объект освобождает ссылки
-на контроллер, признаки и родительскую операцию.
+Профиль задаёт исходный набор возможностей, режим сбора, число процессов и вместимость очереди. Явные настройки применяются поверх него.
 
-Аннотации нужны только на пути компиляции:
+| Профиль | Сбор | Очередь | Процессы | Возможности |
+| --- | --- | ---: | --- | --- |
+| `MINIMAL` | `BALANCED` | `8192` | `MAIN_ONLY` | `JANK_STATS` |
+| `BALANCED` | `BALANCED` | `32768` | `MAIN_ONLY` | кадры, SQLite/Room, HTTP, асинхронная работа, операции, жизненный цикл, журналирование, граф классов, Compose, WorkManager и компоненты Android |
+| `FULL` | `EXACT` | `65536` | `ALL` | все безопасные возможности, включая WebSocket, ввод-вывод, DI, граф вызовов и Binder IPC |
+| `RELEASE_SAFE` | `BALANCED` | `16384` | `MAIN_ONLY` | ограниченный набор для релизной диагностики |
+| `TARGETED` | `EXACT` | `65536` | `MAIN_ONLY` | только явно включённые возможности |
 
-```kotlin
-import io.jankhunter.annotations.JankHunterIgnore
-import io.jankhunter.annotations.JankHunterOperation
-import io.jankhunter.annotations.JankHunterOperationKind
-import io.jankhunter.annotations.JankHunterOwner
+`FULL` намеренно не включает `MAIN_LOOPER`, `METHOD_COUNTERS` и `HEAP_DUMPS`: у этих возможностей отдельная цена или требования к конфиденциальности.
 
-@JankHunterOwner("FeedRepository")
-class FeedRepository {
-    @JankHunterOperation("feed.refresh", JankHunterOperationKind.BACKGROUND, budgetMs = 500)
-    fun refresh() {
-        // Перехватчики внутри метода получат владельца FeedRepository.
-    }
-
-    @JankHunterIgnore
-    fun generatedOrTooNoisyPath() {
-        // Этот метод не будет обрабатываться ASM-проходом Jank Hunter.
-    }
-}
-```
-
-`@JankHunterOperation` создаёт измеряемую операцию вокруг метода, а `@JankHunterScreen` задаёт
-экран для связанных сигналов. В отчёте операции группируются по названию, виду и экрану; отдельно
-показываются временные интервалы, признаки, этапы, превышения бюджета и неуспешные завершения.
-
-## Gradle-Плагин И ASM
-
-Подключение:
-
-```kotlin
-import io.jankhunter.gradle.JankHunterFeatureMode
-
-plugins {
-    id("io.jankhunter.android")
-}
-```
-
-Пример для отладочных и проверочных сборок:
+Пример целевого прогона:
 
 ```kotlin
 jankHunter {
-    enabled = true
-    enabledBuildTypes.add("debug")
-    enabledBuildTypes.add("qa")
-    autoInit = true
-    sessionLogSizeLimitEnabled = true
-    maxSessionLogSizeMiB = 16
-    // По явному согласию удаляет накопленные файлы форматов до JHLOG 2.0.
-    deleteObsoleteJhlogFormats = true
-    verboseLogs = false
-    dependencyInjectionAnalysis = JankHunterFeatureMode.DISABLED
+    profile.set(io.jankhunter.gradle.JankHunterProfile.TARGETED)
+    enable(
+        io.jankhunter.gradle.JankHunterFeature.JANK_STATS,
+        io.jankhunter.gradle.JankHunterFeatureBundle.NETWORK_ALL,
+        io.jankhunter.gradle.JankHunterFeatureBundle.DATABASE_ALL,
+    )
+}
+```
 
-    runtime {
-        mainThreadStallThresholdMs = 700
-        ownerBlockThresholdMs = 250
-        httpSlowThresholdMs = 1_000
-        mainLooperDispatchMonitor = false
-        jankStats = true
-        mainProcessOnly = true
+## Возможности и наборы
+
+Поддерживаются следующие значения `JankHunterFeature`:
+
+| Область | Возможности |
+| --- | --- |
+| Интерфейс | `JANK_STATS`, `MAIN_LOOPER`, `INTERACTIONS`, `COMPOSE` |
+| Сеть | `HTTP`, `WEBSOCKETS` |
+| Базы данных | `SQLITE`, `ROOM` |
+| Ввод-вывод | `RUNTIME_IO`, `BYTECODE_IO` |
+| Асинхронная работа | `HANDLERS`, `EXECUTORS`, `COROUTINES`, `WORKERS` |
+| Память и жизненный цикл | `LIFECYCLE_LEAKS`, `HEAP_DUMPS` |
+| Код и сборка | `DI_ANALYSIS`, `CLASS_GRAPH`, `CALL_GRAPH`, `METHOD_COUNTERS` |
+| Android | `ANDROID_COMPONENTS`, `BINDER_IPC` |
+| Журналирование | `LOGGING` |
+
+Готовые наборы `JankHunterFeatureBundle`: `UI_ALL`, `NETWORK_ALL`, `DATABASE_ALL`, `IO_ALL`, `CONCURRENCY_ALL`, `ANDROID_SYSTEM_ALL`.
+
+```kotlin
+jankHunter {
+    profile.set(io.jankhunter.gradle.JankHunterProfile.BALANCED)
+    enable(io.jankhunter.gradle.JankHunterFeatureBundle.NETWORK_ALL)
+    disable(io.jankhunter.gradle.JankHunterFeature.LOGGING)
+}
+```
+
+Явный выбор одной возможности имеет приоритет над выбором набора на том же уровне. Одновременное явное включение и выключение одной возможности на одном уровне считается ошибкой настройки.
+
+## Варианты сборки
+
+Настройки применяются по возрастанию приоритета:
+
+```text
+общие → тип сборки → вариант продукта → точный вариант
+```
+
+```kotlin
+jankHunter {
+    profile.set(io.jankhunter.gradle.JankHunterProfile.BALANCED)
+
+    debug {
+        enable(io.jankhunter.gradle.JankHunterFeature.CALL_GRAPH)
     }
 
-    retainedHeapDump {
-        enabled = false
-        minIntervalMs = 600_000
-        maxCount = 1
-        minRetainedAgeMs = 30_000
+    buildType("benchmark", io.jankhunter.gradle.JankHunterProfile.MINIMAL) {
+        storageLimitMiB(8)
     }
 
-    instrument {
-        okhttp = false
-        webSockets = false
-        handlers = true
-        executors = true
-        coroutines = false
-        interactionOperations = true
-        lifecycleLeaks = true
-        logSpam = true
-        classGraph = true
-        runtimeCallGraph = false
-        workerTracing = true
-        methodCounters = false
-        includeWholeApplication = false
-        asmProgressLog = false
+    flavor("environment", "staging") {
+        enable(io.jankhunter.gradle.JankHunterFeature.WEBSOCKETS)
+    }
 
-        includePackages("com.myapp.feature", "com.myapp.data")
-        excludePackages("com.myapp.generated", "com.myapp.di")
+    variant("stagingDebug") {
+        profile.set(io.jankhunter.gradle.JankHunterProfile.FULL)
+        disable(io.jankhunter.gradle.JankHunterFeature.DI_ANALYSIS)
     }
 }
 ```
 
-`deleteObsoleteJhlogFormats` по умолчанию выключен. При включении очистка выполняется до создания
-нового журнала, удаляет только файлы со старой схемой имени и не затрагивает текущие журналы
-JHLOG 2.0, активные файлы других процессов и произвольные пользовательские `.jhlog`.
+`packages(...)` и `excludePackages(...)` накапливаются между уровнями. Для остальных значений побеждает наиболее конкретная настройка.
 
-`instrument.okhttp` и `instrument.webSockets` используют support из единой
-`jankhunter-android-sdk`; отдельная `jankhunter-okhttp3` dependency не нужна.
-
-Метаданные устройства собираются всегда для стабильной атрибуции локальных отчётов.
-Для проверки приватности используйте `releaseSafety.privacyReviewed`, `processNameRedactor`
-и redactor сетевых маршрутов; сами `.jhlog` файлы остаются локальными, пока приложение
-явно их не выгрузит.
-
-HTTP integration пишет одно типизированное событие на завершённый OkHttp `Call`: total и
-queue-to-first-I/O, DNS/connect/TLS/request/TTFB/response, точный status/protocol, попытки,
-неудачные connect/TLS попытки, redirects, cache/reuse/cancellation и byte counts с признаком
-известности. Host, query, IP и текст исключения в `.jhlog` не попадают. Для нескольких backend-ов
-задайте безопасный низкокардинальный alias на factory (он нормализуется и ограничивается):
+## Режим сбора, процессы и область внедрения
 
 ```kotlin
-builder.eventListenerFactory(
-    JankHunterEventListenerFactory(existingFactory, "mail-api"),
-)
-```
-
-При включённом runtime call graph событие также получает стабильный ASM ID верхнего app-метода
-в момент `callStart`; stacktrace для этого не строится.
-
-Синхронный `androidx.work.Worker.doWork()` инструментируется автоматически при
-`instrument.workerTracing = true`: `.jhlog` получает отдельные STARTED/FINISHED-события,
-результат, длительность и `runAttemptCount`. UUID WorkManager не сохраняется — runtime преобразует
-его в процессный приватный 64-битный ID и не удерживает объект Worker. Для enqueue и ручных
-интеграций доступны примитивные lifecycle API:
-
-```kotlin
-val instanceId = JankHunter.workerInstanceId(request.id.mostSignificantBits, request.id.leastSignificantBits)
-JankHunter.workerEnqueued(instanceId, periodic = false)
-
-val token = JankHunter.workerStarted(instanceId, "SyncContactsWorker", runAttemptCount)
-try {
-    // work
-    JankHunter.workerFinished(token, instanceId, "SyncContactsWorker", JankHunterWorkerOutcome.SUCCESS)
-} catch (error: Throwable) {
-    JankHunter.workerFinished(token, instanceId, "SyncContactsWorker", JankHunterWorkerOutcome.FAILURE)
-    throw error
+jankHunter {
+    collection.set(io.jankhunter.gradle.JankHunterCollection.BALANCED)
+    processes.set(io.jankhunter.gradle.JankHunterProcesses.MAIN_ONLY)
+    scope.set(io.jankhunter.gradle.JankHunterInstrumentationScope.NAMESPACE_AND_PACKAGES)
+    packages("com.example.feature", "com.example.data")
+    excludePackages("com.example.generated", "com.example.di")
 }
 ```
 
-`recordWorker`, `traceWorker` и `traceSuspendingWorker` остаются компактными API для кода вне
-WorkManager; suspending-вариант измеряет выполнение до реального завершения корутины.
+- `BALANCED` ограничивает ожидание и допускает контролируемый отказ от события при перегрузке.
+- `EXACT` использует точный режим приёма, но всё равно соблюдает заданные пределы ожидания, чтобы не блокировать приложение неограниченно.
+- `MAIN_ONLY` собирает только главный процесс.
+- `ALL` включает все процессы приложения; для релизной сборки требуется отдельное подтверждение.
+- `NAMESPACE_AND_PACKAGES` обрабатывает Android `namespace` и явно добавленные пакеты.
+- `PACKAGES_ONLY` обрабатывает только пакеты из `packages(...)`.
+- `WHOLE_APPLICATION` снимает пакетное ограничение для прикладных классов итогового приложения; системные и служебные пакеты по-прежнему исключаются.
 
-Для точного enqueue, generation и stop reason подключите опциональный модуль вместе с уже
-используемой приложением версией WorkManager:
+В модуле приложения AGP предоставляет внедрению классы итогового приложения, а в библиотечном модуле - только классы проекта. Фактический фильтр Jank Hunter дополнительно ограничивается `scope`, `packages(...)` и `excludePackages(...)`.
+
+## Настройка очереди и порогов
+
+```kotlin
+jankHunter {
+    tuning.queueCapacity.set(32_768)
+    tuning.methodFiltering.set(io.jankhunter.gradle.JankHunterMethodFilterMode.FILTER)
+
+    tuning.thresholds.mainThreadStallMs.set(700)
+    tuning.thresholds.ownerBlockMs.set(250)
+    tuning.thresholds.slowHttpMs.set(1_000)
+    tuning.thresholds.jankFrameMs.set(32)
+    tuning.thresholds.uiWindowP95Ms.set(32)
+
+    tuning.admission.mainThreadWaitMs.set(0)
+    tuning.admission.backgroundWaitMs.set(5)
+}
+```
+
+Значения времени указываются в миллисекундах. Вместимость очереди и основные пороги должны быть положительными, пределы ожидания - неотрицательными; это проверяется Gradle-задачей до сборки варианта.
+
+## Хранилище и рост журналов
+
+```kotlin
+jankHunter {
+    storageLimitMiB(16)
+    growthAnalytics.set(true)
+    deleteObsoleteLogs.set(false)
+}
+```
+
+`storageLimitMiB(...)` ограничивает размер сегмента. После достижения предела среда выполнения запечатывает файл и продолжает тот же запуск в следующем сегменте. `unlimitedStorage()` снимает внутренний предел; в релизной сборке это требует `allowUnlimitedStorage()`.
+
+`growthAnalytics` добавляет ограниченную историю роста журналов в JHLOG. `deleteObsoleteLogs` разрешает удаление файлов прежних несовместимых форматов при запуске; по умолчанию они сохраняются.
+
+Встроенное хранилище можно заменить во время работы:
+
+```kotlin
+val result = JankHunter.switchBinaryStorage(customStorage)
+JankHunter.switchBinaryStorage(null) // вернуться к встроенному хранилищу
+```
+
+Пользовательская реализация `JankHunterBinaryStorage` сама отвечает за архивный бюджет и очистку.
+
+## Релизная диагностика
+
+Релизные и похожие на них варианты требуют явного одобрения. Настройки не включаются скрыто: Gradle останавливает сборку, если отсутствует подтверждение конфиденциальности или файл с бюджетом производительности.
+
+```kotlin
+jankHunter {
+    enabledBuildTypes.set(setOf("debug", "release"))
+
+    buildType("release", io.jankhunter.gradle.JankHunterProfile.RELEASE_SAFE) {
+        storageLimitMiB(16)
+    }
+
+    release {
+        privacyReviewed()
+        performanceBudget(project.file("docs/jankhunter-release-budget.md"))
+    }
+}
+```
+
+Файл бюджета должен существовать и содержать маркер:
+
+```text
+jankhunter_release_performance_budget_v1
+```
+
+При соответствующих настройках внутри `release { ... }` также требуются:
+
+- `allowHeapDumps()` для `HEAP_DUMPS`;
+- `allowSecondaryProcesses()` для `processes=ALL`;
+- `allowUnlimitedStorage()` для неограниченного хранилища.
+
+## Дампы памяти
+
+Лёгкие сигналы удержания собираются возможностью `LIFECYCLE_LEAKS`. Для HPROF нужно явно включить `HEAP_DUMPS` и подтвердить проверку конфиденциальности:
+
+```kotlin
+jankHunter {
+    debug {
+        enable(io.jankhunter.gradle.JankHunterFeature.HEAP_DUMPS)
+        privacyReviewed()
+        tuning.heapDumps.minIntervalMs.set(600_000)
+        tuning.heapDumps.maxCount.set(1)
+        tuning.heapDumps.minRetainedAgeMs.set(30_000)
+    }
+}
+```
+
+Сначала записывается лёгкий сигнал. HPROF создаётся только после достижения минимального возраста и при условии, что объект всё ещё жив. Файл `retained-*.hprof` сохраняется рядом с журналами и автоматически обнаруживается утилитой, если передан тот же каталог.
+
+Подтверждение конфиденциальности является проверкой Gradle и намеренно не записывается в AndroidManifest.
+
+## Аннотации и ручная телеметрия
+
+Доступны аннотации:
+
+```kotlin
+@JankHunterOwner("FeedRepository")
+@JankHunterScreen("Feed")
+@JankHunterOperation("Загрузка ленты", kind = JankHunterOperationKind.USER, budgetMs = 500)
+@JankHunterIgnore
+```
+
+Они задают устойчивую атрибуцию для класса, функции или конструктора. `@JankHunterIgnore` исключает соответствующую область из внедрения.
+
+Для динамического контекста используйте `JankHunterTelemetry`:
+
+```kotlin
+JankHunterTelemetry.setScreen("Feed")
+
+JankHunterTelemetry.withContext("Feed", "FeedRepository") {
+    JankHunterTelemetry.traceOperation("Обновление", budgetMs = 500) {
+        repository.refresh()
+    }
+}
+
+JankHunterTelemetry.counter("feed.refresh", 1)
+JankHunterTelemetry.gauge("feed.items", items.size.toLong())
+JankHunterTelemetry.watch(activity, "экран после onDestroy", "FeedActivity")
+```
+
+Также доступны ручные обёртки исполнителей, трассировка Compose и ввода-вывода, сеть через `JankHunterNetworkRuntime` и база данных через `JankHunterDatabaseTracing`.
+
+## Автоматическое внедрение
+
+В зависимости от включённых возможностей Gradle-плагин может:
+
+- устанавливать `EventListener.Factory` для OkHttp и оборачивать `WebSocketListener`;
+- измерять SQLite, Room и транзакции базы данных;
+- оборачивать `Handler`, `Executor`, `Callable` и основные точки запуска корутин;
+- связывать нажатия, экраны, Compose, WorkManager и жизненный цикл;
+- считать вызовы `android.util.Log` и Timber без записи текста сообщений;
+- собирать сведения о Service, BroadcastReceiver, AIDL и Binder;
+- строить статический граф классов и агрегированный граф выполненных вызовов;
+- измерять разрешённые целостные файловые операции.
+
+Внедрение повторяемо, защищено служебной аннотацией и работает по принципу безопасного отказа: ошибка диагностического перехватчика не должна ломать исходную операцию приложения.
+
+`CALL_GRAPH` записывает фактические связи вызывающий → вызываемый. `CLASS_GRAPH` создаёт только статические связи на этапе сборки. При отключённом `CALL_GRAPH` отчёт не может восстановить фактическую цепочку вызовов из одного статического графа.
+
+## WorkManager
 
 ```kotlin
 dependencies {
-    implementation("io.jankhunter:jankhunter-workmanager:1.0.7")
-    implementation("androidx.work:work-runtime:<ваша-версия-2.9.0+>")
-}
-
-workManager.enqueueWithJankHunter(request)
-
-class SyncContactsWorker(
-    context: Context,
-    parameters: WorkerParameters,
-) : JankHunterCoroutineWorker(context, parameters) {
-    override suspend fun doJankHunterWork(): Result {
-        contacts.sync()
-        return Result.success()
-    }
+    implementation("io.jankhunter:jankhunter-workmanager:1.0.9")
+    implementation("androidx.work:work-runtime:<версия-приложения>")
 }
 ```
 
-`JankHunterWorker` делает то же для синхронного Worker. Оба базовых класса оставляют `doWork()`
-финальной lifecycle-границей; disabled path — одна проверка и прямой вызов пользовательской работы.
-Enqueue-listener не удерживает `WorkRequest`, input/output `Data` или tags: только приватные
-64-битные ID и periodic-биты до завершения `Operation`. Минимальная совместимая версия
-WorkManager — 2.9.0; модуль компилируется и тестируется с 2.11.2.
+Модуль предоставляет `enqueueWithJankHunter(...)`, `JankHunterWorker` и `JankHunterCoroutineWorker`. Зависимость от WorkManager объявлена как `compileOnly`, поэтому приложение сохраняет выбранную им версию.
 
-Временное выключение всего Gradle-вклада:
+## Файлы JHLOG
 
-```kotlin
-jankHunter {
-    enabled = false
-}
-```
-
-Без include-настроек плагин уже использует `namespace` модуля как безопасную границу. Дополнительные пакеты можно указать явно:
-
-```kotlin
-jankHunter {
-    instrument {
-        includePackages("com.myapp.shared")
-        excludePackages("com.myapp.generated", "com.myapp.di")
-    }
-}
-```
-
-Чтобы application-модуль инструментировал классы всех подключённых project-модулей и внешних
-зависимостей, включите `includeWholeApplication = true`. Системные пакеты, AndroidX, Kotlin,
-OkHttp и сам Jank Hunter при этом остаются исключёнными; дополнительные исключения задаются через
-`excludePackages`.
-
-Что внедряется:
-
-- `okhttp`: оборачивает `OkHttpClient.Builder.build()` и `eventListenerFactory(...)`.
-- `webSockets`: оборачивает `WebSocketListener`.
-- `handlers`: оборачивает `Handler.post*`, сохраняя работу `removeCallbacks`, `removeCallbacksAndMessages` и `hasCallbacks`.
-- `executors`: оборачивает `Runnable` и `Callable` в `Executor` и `ExecutorService`.
-- `coroutines`: оборачивает основные создатели корутин без зависимости Android-библиотеки от `kotlinx.coroutines`; по умолчанию выключено из-за цены ASM и wrapper-объектов.
-- `interactionOperations`: создаёт операцию действия пользователя при `View.setOnClickListener`, если явная операция ещё не задана.
-- `lifecycleLeaks`: помогает связать удержанные объекты с жизненным циклом.
-- `logSpam`: считает вызовы `android.util.Log.*` и Timber, не записывая текст логов.
-- `classGraph`: пишет статический граф классов во время сборки.
-- `runtimeCallGraph`: пишет агрегированные связи `caller -> callee` по реально выполненным методам.
-- `workerTracing`: автоматически измеряет синхронные Worker и включает ручные Worker lifecycle API.
-- `methodCounters`: пишет счётчики входов в методы, по умолчанию выключено.
-
-Отдельный build-time анализ DI включается явно:
-
-```kotlin
-jankHunter {
-    dependencyInjectionAnalysis = JankHunterFeatureMode.ENABLED
-}
-```
-
-Он читает `@Inject`, `@Provides`, `@Binds`, Hilt metadata, Dagger Factory/MembersInjector и
-Koin annotations/KSP. Generated DI-классы не получают `JankHunterHooks` или marker и не создают
-runtime-события. Произвольный Koin runtime DSL намеренно не интерпретируется без достоверного
-статического контракта.
-
-`runtimeCallGraph`, `methodCounters`, OkHttp и WebSocket hooks по умолчанию выключены. В `<init>`
-call-site hooks добавляются только после обязательного вызова `super`/`this`, а `<clinit>` не меняется.
-Повторный ASM-проход распознаётся по marker-аннотации, runtime-вызовы идут через fail-open
-`JankHunterHooks`. `.jhlog` всегда сам хранит определения реально встретившихся методов
-`stable ID -> class.method`. Системный CLI поэтому раскрывает имена и runtime-связи, имея только
-лог; в словарь попадают только реально встретившиеся методы, и они не расходуют лимит обычного
-runtime-словаря.
-Отключить определения нельзя: это гарантирует переносимость логов между компьютерами без
-доступа к исходному проекту и `build/` исходной сборки.
-
-Плагин вычисляет глобальный 16-байтный `symbolNamespace` из точной версии алгоритма
-stable ID и формата встроенных символов. Он намеренно одинаков для application и library модулей: один
-процесс может исполнять инструментированный код из нескольких модулей, а в `.jhlog`
-есть один header. Fingerprint попадает в manifest и компактный `artifact-metadata.json`; CLI
-использует его только для проверки принадлежности дополнительных build-time артефактов логу.
-
-Для каждого варианта сборки создаются:
-
-```text
-build/generated/jankhunter/<variant>/artifact-metadata.json
-build/generated/jankhunter/<variant>/class-graph.jsonl
-build/generated/jankhunter/<variant>/instrumentation-diagnostics.jsonl
-build/generated/jankhunter/<variant>/di-catalog.jsonl  # только при ENABLED
-```
-
-Эти файлы необязательны. Их можно передать разработчику для
-дополнительного статического графа, ASM-диагностики, DI-каталога и deobfuscation:
-
-```bash
-jankhunter inspect logs/*.jhlog \
-  --artifacts-dir app/build/generated/jankhunter/debug \
-  --mapping app/build/outputs/mapping/debug/mapping.txt \
-  --class-graph app/build/generated/jankhunter/debug/class-graph.jsonl \
-  --instrumentation-diagnostics app/build/generated/jankhunter/debug/instrumentation-diagnostics.jsonl \
-  --di-catalog app/build/generated/jankhunter/debug/di-catalog.jsonl \
-  --out report.html
-```
-
-Так в едином `report.html` появляются вкладки «Граф влияния», «ASM диагностика» и «DI-каталог».
-`--artifacts-dir` принимает каталог одного варианта и сверяет его `symbolNamespace` с `.jhlog`.
-Имена runtime-символов всегда находятся в самом логе; build-time артефакты их не дополняют.
-
-Вкладка «DI-каталог» всегда отделяет build-time wiring от телеметрии. DI edges не передаются в
-leak/runtime score, severity, evidence или граф влияния.
-
-## Защита Релизных Сборок
-
-Плагин считает варианты вроде `release` и `paidRelease` чувствительными. Если вы всё-таки включаете Jank Hunter там, нужно явно подтвердить решение:
-
-```kotlin
-jankHunter {
-    enabledBuildTypes.add("release")
-
-    runtime {
-        mainProcessOnly = true
-    }
-
-    releaseSafety {
-        allowInstrumentation = true
-        privacyReviewed = true
-        performanceBudgetEvidence = "docs/jankhunter-release-budget.md"
-        allowHeapDumps = false
-        allowSecondaryProcesses = false
-    }
-}
-```
-
-`releaseSafety` не переписывает runtime-настройки молча: он только останавливает сборку, если для release-like варианта включена чувствительная возможность без явного подтверждения. Если включены дампы памяти, нужен ещё `allowHeapDumps = true`; если `runtime.mainProcessOnly = false`, нужен `allowSecondaryProcesses = true`.
-
-В application-модуле ASM visitors работают с `InstrumentationScope.ALL`, поэтому могут видеть код
-подключённых модулей и зависимостей; в library-модуле область остаётся `PROJECT`. Android namespace
-задаёт безопасную область пакетов по умолчанию, `includePackages` расширяет её, а
-`includeWholeApplication = true` снимает пакетное ограничение для прикладных классов. Системные и
-служебные пакеты по-прежнему исключаются, а `excludePackages` позволяет точечно исключить код.
-
-## Утечки Памяти И HPROF
-
-Лёгкий режим включён всегда: библиотека записывает удержанные объекты, владельца, экран, операцию, возраст и число удержаний.
-
-Дампы памяти выключены по умолчанию. Для короткой диагностической сессии:
-
-```kotlin
-jankHunter {
-    retainedHeapDump {
-        enabled = true
-        privacyApproved = true
-        minIntervalMs = 600_000
-        maxCount = 1
-        minRetainedAgeMs = 30_000
-    }
-}
-```
-
-Watcher сначала записывает лёгкий сигнал удержания, но не держит сам объект сильной ссылкой.
-Если `minRetainedAgeMs` ещё не достигнут, слабое наблюдение продолжается до этого порога:
-HPROF создаётся только когда объект всё ещё жив. Освободившийся до порога объект не вызывает dump.
-
-Или через манифест:
-
-```xml
-<meta-data android:name="io.jankhunter.retained_heap_dump_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.retained_heap_dump_privacy_approved" android:value="true" />
-<meta-data android:name="io.jankhunter.retained_heap_dump_min_interval_ms" android:value="600000" />
-<meta-data android:name="io.jankhunter.retained_heap_dump_max_count" android:value="1" />
-<meta-data android:name="io.jankhunter.retained_heap_dump_min_retained_age_ms" android:value="30000" />
-```
-
-При подтверждённом удержании появится `retained-*.hprof` рядом с `.jhlog`. Утилита подключит его автоматически, если файл лежит рядом:
-
-```bash
-jankhunter inspect logs/*.jhlog --out report.html
-```
-
-Если дамп лежит отдельно:
-
-```bash
-jankhunter inspect logs/*.jhlog \
-  --heap-dump retained-*.hprof \
-  --out report.html
-```
-
-Вкладка «Утечки памяти» в `report.html` в лёгком режиме показывает вероятную цепочку выполнения. С HPROF она показывает путь `GC root -> holder field -> retained object`, размер удержания, альтернативные пути и чеклист проверки.
-
-Готовый помощник для отладочного приложения:
-
-```bash
-../cli/scripts/collect-android-leak-report.sh \
-  --package com.example.app \
-  --out /tmp/jankhunter-leaks
-```
-
-## Где Лежит Лог
-
-По умолчанию один запуск пишет последовательность сегментов:
+По умолчанию файлы находятся здесь:
 
 ```text
 context.filesDir/jankhunter/jh-session-log.YYYY-MM-DD.<run-id>.<index>.jhlog
 ```
 
-Пример:
+Текущий формат - JHLOG `5.0.0`. Он хранит заголовок запуска и процесса, словарь, компактные записи событий, снимки качества и подтверждённые блоки. Сегменты одного запуска связаны контрольными суммами. Незавершённый хвост активного файла отделяется от повреждения, поэтому утилита может безопасно анализировать подтверждённую часть.
 
-```text
-/data/data/com.myapp/files/jankhunter/jh-session-log.2026-07-14.67cefff4ff3f804654a23838a00d2342.3.jhlog
-```
-
-Локальная дата и `run-id` фиксируются при старте запуска, а десятичный `index` монотонно растёт и
-не переиспользуется. Имя файла намеренно не содержит имени процесса: run/process/session identity,
-process scope и ожидаемый roster хранятся в заголовке, а CLI группирует данные по содержимому.
-
-Файл и writer thread создаются лениво — только после первого принятого события. Частые агрегаты и
-rare critical evidence используют две bounded MPSC-lane с единым admission sequence. Даже в EXACT
-режиме ожидание producer ограничено отдельным main/background budget; после deadline runtime
-fail-open отклоняет событие и публикует точные reason/count/wait quality-счётчики вместо
-неограниченной блокировки host-приложения.
-
-Внутренний ограничитель текущего файла управляется `session_log_size_limit_enabled` и
-`max_session_log_size_mib`; по умолчанию он включён и равен 16 МиБ. При конечном лимите встроенное
-хранилище запечатывает текущий `.jhlog 2.0.0` и продолжает тот же запуск новым сегментом.
-Сегменты связаны digest-chain, а физический размер каждого файла не превышает выбранный предел.
-`session_log_size_limit_enabled=false` снимает внутренний предел. Положительный
-`JankHunterBinaryStorage.fileSizeLimitBytes` действует всегда; если включены оба ограничителя,
-используется меньшее значение. Встроенное и пользовательское хранилища получают один и тот же
-последовательный формат 2.0.0; новый сегмент всегда открывается пустым.
-
-Встроенное хранилище автоматически удаляет старые закрытые сессии сверх фиксированного бюджета
-64 МиБ, не затрагивая текущий или другой активный файл. Пользовательский `JankHunterBinaryStorage`
-самостоятельно управляет архивным бюджетом и очисткой через `cleanup`.
-
-`.jhlog 2.0.0` хранит независимо сжатые блоки с CRC и завершающей записью. Финальная печать содержит
-точные event/dictionary/chunk counters и digest; следующий сегмент ссылается на digest предыдущего.
-CLI читает committed prefix активного файла, отличает `open_clean` от corruption и не поддерживает
-предыдущие wire-форматы.
-
-## Сводка Роста Журналов
-
-Сбор включён по умолчанию и отключается одним параметром:
-
-```kotlin
-jankHunter {
-    logGrowthAnalyticsEnabled = false
-}
-```
-
-При ручной настройке используйте `.logGrowthAnalyticsEnabled(false)`. Если сбор отключён,
-служебный файл истории не создаётся и сведения в `.jhlog` не добавляются.
-
-История ограничена последними 1024 сессиями и 400 днями. В каждый новый `.jhlog 2.0.0`
-автоматически вкладываются до 256 последних сессий, дневные итоги и текущая сессия, поэтому
-служебный файл передавать вместе с журналом не требуется. В обычном пути записи выполняется
-только сравнение счётчика переполнений без выделения объектов и без обращения к диску; запись
-служебного состояния происходит при начале и завершении сессии, переполнении или явном запросе.
-
-```kotlin
-val summary = JankHunter.logGrowthSummary()
-val success = JankHunter.writeLogGrowthSummary()
-```
-
-Первый метод возвращает снимок в памяти. Второй сначала сбрасывает принятые события, затем
-записывает актуальную сводку в активный журнал; это удобно непосредственно перед отправкой
-файла с работающего устройства.
-
-Забрать логи через `adb`:
+Копирование из отладочного приложения:
 
 ```bash
-APP_ID=com.myapp
+APP_ID=com.example.app
 mkdir -p logs
-
-adb shell run-as "$APP_ID" ls files/jankhunter
 adb exec-out run-as "$APP_ID" tar -C files/jankhunter -cf - . | tar -xf - -C logs
-
 jankhunter inspect logs/*.jhlog --out report.html
 ```
 
-Для сравнения:
+## Артефакты Gradle-плагина
 
-```bash
-jankhunter compare \
-  --baseline "logs/baseline/*.jhlog" \
-  --candidate "logs/candidate/*.jhlog" \
-  --out compare.html
+Для каждого включённого варианта создаются:
+
+```text
+build/generated/jankhunter/<variant>/artifact-metadata.json
+build/generated/jankhunter/<variant>/class-graph.jsonl
+build/generated/jankhunter/<variant>/instrumentation-diagnostics.jsonl
+build/generated/jankhunter/<variant>/di-catalog.jsonl
+build/generated/jankhunter/<variant>/android-components-catalog.jsonl
 ```
 
-Если `adb run-as` неудобен, можно добавить в приложение отладочный `FileProvider` и отправлять `.jhlog` через системное окно общего доступа. В релизной сборке такой путь лучше не оставлять без отдельного решения по безопасности.
-
-## Что С Собственной Нагрузкой
-
-Практические правила:
-
-- начните с Android-библиотеки, OkHttp, кадров, памяти и системного среза;
-- высокочастотный ASM ограничен `InstrumentationScope.PROJECT`, а lifecycle-only проход — Android `namespace`;
-- дополнительные include/exclude задавайте по границам пакетов;
-- `classGraph` не добавляет вызовы в приложение, он работает во время сборки;
-- `runtimeCallGraph` добавляет лёгкие входы и выходы из методов, поэтому проверяйте затраты на быстрой проверочной сборке;
-- `methodCounters` не включайте на весь проект без причины;
-- HPROF включайте только для коротких проверочных сессий.
-
-Сбор идёт асинхронно. При переполнении очереди событие отбрасывается со счётчиком, а не блокирует приложение.
-
-Дополнительные ограничители:
-
-```xml
-<meta-data android:name="io.jankhunter.adaptive_sampling_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.adaptive_memory_stable_interval_ms" android:value="60000" />
-<meta-data android:name="io.jankhunter.adaptive_context_stable_interval_ms" android:value="60000" />
-<meta-data android:name="io.jankhunter.metric_aggregation_enabled" android:value="true" />
-<meta-data android:name="io.jankhunter.metric_aggregation_window_ms" android:value="5000" />
-<meta-data android:name="io.jankhunter.max_metric_aggregation_keys" android:value="2048" />
-<meta-data android:name="io.jankhunter.max_log_spam_keys" android:value="2048" />
-<meta-data android:name="io.jankhunter.max_runtime_call_graph_keys" android:value="4096" />
-<meta-data android:name="io.jankhunter.max_handler_tracking_entries" android:value="4096" />
-<meta-data android:name="io.jankhunter.max_handler_wrappers_per_runnable" android:value="32" />
-```
-
-## Пример Приложения И Проверки
-
-Запуск примера:
+Часть файлов может быть пустой, если соответствующая возможность выключена. `artifact-metadata.json` содержит версию схемы, отпечаток пространства символов и эффективные параметры внедрения.
 
 ```bash
-../run-sample-app.sh
+jankhunter inspect logs/*.jhlog \
+  --artifacts-dir app/build/generated/jankhunter/debug \
+  --mapping app/build/outputs/mapping/debug/mapping.txt \
+  --out report.html
 ```
 
-Сквозной прогон:
+`--artifacts-dir` проверяет совместимость артефактов с журналом. Явные параметры `--class-graph`, `--instrumentation-diagnostics`, `--di-catalog` и `--android-components-catalog` имеют приоритет.
+
+Каталог DI описывает связи Dagger, Hilt и поддерживаемые статические определения Koin только на этапе сборки. Эти связи не считаются вызовами времени выполнения, ссылками удержания или доказательством утечки и не влияют на оценку проблемы.
+
+## Диагностические Gradle-задачи
 
 ```bash
+./gradlew :app:jankHunterListProfiles
+./gradlew :app:jankHunterCheckEnvironment
+./gradlew :app:jankHunterPrintConfiguration
+./gradlew :app:jankHunterPrintDebugConfiguration --details
+./gradlew :app:jankHunterPrintDebugInstrumentationPlan
+./gradlew :app:jankHunterValidateConfiguration
+./gradlew :app:jankHunterCheckDebugReleaseParity
+./gradlew :app:jankHunterCheckReleaseReadiness
+./gradlew :app:jankHunterExportConfiguration
+```
+
+Экспорт эффективных настроек находится в `app/build/reports/jankhunter/configuration.json`. Проверка конкретного варианта автоматически подключается к его `pre<Variant>Build`.
+
+## Нагрузка и безопасные настройки
+
+- Начинайте с `BALANCED` и ограниченной области пакетов.
+- Для короткой целевой проверки используйте `TARGETED` или точечные изменения поверх профиля.
+- `CLASS_GRAPH` работает на этапе сборки и не добавляет события вызовов во время работы.
+- `CALL_GRAPH`, `METHOD_COUNTERS`, `MAIN_LOOPER`, `COROUTINES` и `HEAP_DUMPS` требуют отдельной оценки затрат.
+- События записываются асинхронно; при исчерпании бюджета ожидания они отклоняются с точным счётчиком причины, а не блокируют приложение неограниченно.
+- Окончательное решение о допустимости нагрузки принимайте после прогона на представительном приложении и устройстве.
+
+## Автоматическое подключение
+
+Из корня Jank Hunter:
+
+```bash
+./scripts/integrate-android-project.sh \
+  --target ~/work/MyApp \
+  --module :app \
+  --profile balanced \
+  --include-package com.example.app \
+  --storage-limit-mib 16 \
+  --verify
+```
+
+Скрипт использует `jankHunterVersion=1.0.9` из `android/gradle.properties`, добавляет плагин, `jankhunter-android-sdk:1.0.9`, локальный Maven-репозиторий и командную утилиту. Повторный запуск обновляет только принадлежащие скрипту блоки.
+
+## Проверки
+
+```bash
+./gradlew detekt \
+  :jankhunter-gradle-plugin:test \
+  :jankhunter-runtime:testDebugUnitTest \
+  :jankhunter-okhttp3:testDebugUnitTest \
+  :jankhunter-workmanager:testDebugUnitTest \
+  :sample-app:assembleDebug \
+  --no-daemon
+
+../scripts/gradle-plugin-smoke.sh
 ../scripts/android-e2e.sh
 ```
 
-Проверки Android-части:
-
-```bash
-./gradlew detekt :jankhunter-gradle-plugin:test :jankhunter-okhttp3:testDebugUnitTest :jankhunter-workmanager:testDebugUnitTest :jankhunter-runtime:testDebugUnitTest :sample-app:assembleDebug --no-daemon
-```
-
-Проверка Gradle-плагина как внешнего потребителя:
-
-```bash
-../scripts/gradle-plugin-smoke.sh
-```
-
-Локальные замеры горячих путей:
-
-```bash
-./gradlew :jankhunter-runtime:testDebugUnitTest \
-  -Djankhunter.benchmark=true \
-  -Djankhunter.benchmark.iterations=200000 \
-  --tests io.jankhunter.runtime.JankHunterRuntimeBenchmarkTest \
-  --no-daemon
-```
-
-Это быстрая проверка здравого смысла. Для окончательного решения по большому приложению всё равно нужен прогон на реальном устройстве или стенде.
+`gradle-plugin-smoke.sh` публикует Android `1.0.9` в изолированный Maven-репозиторий, собирает внешний проект в `debug` и `release` и проверяет повторное использование конфигурационного кэша.

@@ -35,6 +35,7 @@ class JankHunterManifestConfig private constructor() {
         internal const val META_ENABLED = "io.jankhunter.enabled"
         internal const val META_RUNTIME_ENABLED = "io.jankhunter.runtime_enabled"
         internal const val META_RUNTIME_CALL_GRAPH_ENABLED = "io.jankhunter.runtime_call_graph_enabled"
+        internal const val META_AVAILABLE_RUNTIME_FEATURES = "io.jankhunter.available_runtime_features"
         internal const val META_AUTO_START_COLLECTORS = "io.jankhunter.auto_start_collectors"
         internal const val META_MAIN_THREAD_STALL_THRESHOLD_MS = "io.jankhunter.main_thread_stall_threshold_ms"
         internal const val META_OWNER_BLOCK_THRESHOLD_MS = "io.jankhunter.owner_block_threshold_ms"
@@ -102,6 +103,9 @@ class JankHunterManifestConfig private constructor() {
                 .enabled(metadata.boolean(META_ENABLED, defaultEnabled))
                 .runtimeEnabled(metadata.boolean(META_RUNTIME_ENABLED, true))
                 .runtimeCallGraphEnabled(metadata.boolean(META_RUNTIME_CALL_GRAPH_ENABLED, true))
+                .availableRuntimeFeatures(
+                    JankHunterRuntimeFeature.parseAvailable(metadata.string(META_AVAILABLE_RUNTIME_FEATURES)),
+                )
                 .autoStartCollectors(metadata.boolean(META_AUTO_START_COLLECTORS, true))
                 .mainThreadStallThresholdMs(metadata.long(META_MAIN_THREAD_STALL_THRESHOLD_MS, 700L))
                 .ownerBlockThresholdMs(metadata.long(META_OWNER_BLOCK_THRESHOLD_MS, 250L))
@@ -155,9 +159,16 @@ class JankHunterManifestConfig private constructor() {
                 .build()
         }
 
-        internal fun mergeBuildSymbolNamespace(config: JankHunterConfig, context: Context): JankHunterConfig {
+        internal fun mergeBuildMetadata(config: JankHunterConfig, context: Context): JankHunterConfig {
+            return mergeBuildMetadata(config, metadata(context))
+        }
+
+        internal fun mergeBuildMetadata(config: JankHunterConfig, metadata: ManifestMetadata): JankHunterConfig {
             return config.toBuilder()
-                .symbolNamespace(decodeSymbolNamespace(metadata(context).string(META_SYMBOL_NAMESPACE)))
+                .availableRuntimeFeatures(
+                    JankHunterRuntimeFeature.parseAvailable(metadata.string(META_AVAILABLE_RUNTIME_FEATURES)),
+                )
+                .symbolNamespace(decodeSymbolNamespace(metadata.string(META_SYMBOL_NAMESPACE)))
                 .build()
         }
 

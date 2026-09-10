@@ -7,6 +7,8 @@ class JankHunterConfig private constructor(builder: Builder) {
     private val enabled = builder.enabled
     private val runtimeEnabled = builder.runtimeEnabled
     private val runtimeCallGraphEnabled = builder.runtimeCallGraphEnabled
+    private val availableRuntimeFeaturesMask = builder.availableRuntimeFeaturesMask
+    private val enabledRuntimeFeaturesMask = builder.enabledRuntimeFeaturesMask
     private val autoStartCollectors = builder.autoStartCollectors
     private val mainThreadStallThresholdMs = builder.mainThreadStallThresholdMs
     private val ownerBlockThresholdMs = builder.ownerBlockThresholdMs
@@ -67,7 +69,13 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun runtimeEnabled(): Boolean = runtimeEnabled
 
-    fun runtimeCallGraphEnabled(): Boolean = runtimeCallGraphEnabled
+    fun runtimeCallGraphEnabled(): Boolean =
+        runtimeCallGraphEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.CALL_GRAPH)
+
+    fun isRuntimeFeatureEnabled(feature: JankHunterRuntimeFeature): Boolean {
+        val mask = feature.mask
+        return availableRuntimeFeaturesMask and enabledRuntimeFeaturesMask and mask != 0L
+    }
 
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
@@ -83,30 +91,41 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun systemSampleIntervalMs(): Long = systemSampleIntervalMs.coerceAtLeast(1L)
 
-    fun mainLooperDispatchMonitorEnabled(): Boolean = mainLooperDispatchMonitorEnabled
+    fun mainLooperDispatchMonitorEnabled(): Boolean =
+        mainLooperDispatchMonitorEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.MAIN_LOOPER)
 
     fun processExitInfoEnabled(): Boolean = processExitInfoEnabled
 
-    fun ioTracingEnabled(): Boolean = ioTracingEnabled
+    fun ioTracingEnabled(): Boolean =
+        ioTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.RUNTIME_IO)
 
-    fun composeTracingEnabled(): Boolean = composeTracingEnabled
+    internal fun bytecodeIoTracingEnabled(): Boolean =
+        ioTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.BYTECODE_IO)
 
-    fun roomTracingEnabled(): Boolean = roomTracingEnabled
+    fun composeTracingEnabled(): Boolean =
+        composeTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.COMPOSE)
 
-    fun databaseTracingEnabled(): Boolean = databaseTracingEnabled
+    fun roomTracingEnabled(): Boolean =
+        roomTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.ROOM)
 
-    fun workerTracingEnabled(): Boolean = workerTracingEnabled
+    fun databaseTracingEnabled(): Boolean =
+        databaseTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.SQLITE)
+
+    fun workerTracingEnabled(): Boolean =
+        workerTracingEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.WORKERS)
 
     internal fun semanticTracingEnabled(): Boolean =
-        composeTracingEnabled || roomTracingEnabled || workerTracingEnabled
+        composeTracingEnabled() || roomTracingEnabled() || workerTracingEnabled()
 
-    fun objectWatcherEnabled(): Boolean = objectWatcherEnabled
+    fun objectWatcherEnabled(): Boolean =
+        objectWatcherEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.LIFECYCLE_LEAKS)
 
     fun retainedObjectDelayMs(): Long = retainedObjectDelayMs.coerceAtLeast(0L)
 
     fun retainedObjectForceGcEnabled(): Boolean = retainedObjectForceGcEnabled
 
-    fun retainedHeapDumpEnabled(): Boolean = retainedHeapDumpEnabled
+    fun retainedHeapDumpEnabled(): Boolean =
+        retainedHeapDumpEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HEAP_DUMPS)
 
     fun retainedHeapDumpMinIntervalMs(): Long = retainedHeapDumpMinIntervalMs.coerceAtLeast(0L)
 
@@ -116,9 +135,11 @@ class JankHunterConfig private constructor(builder: Builder) {
 
     fun retainedHeapDumpDirectory(): File? = retainedHeapDumpDirectory
 
-    fun fpsMonitorEnabled(): Boolean = fpsMonitorEnabled
+    fun fpsMonitorEnabled(): Boolean =
+        fpsMonitorEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS)
 
-    fun jankStatsEnabled(): Boolean = jankStatsEnabled
+    fun jankStatsEnabled(): Boolean =
+        jankStatsEnabled && isRuntimeFeatureEnabled(JankHunterRuntimeFeature.JANK_STATS)
 
     fun fpsWindowMs(): Long = fpsWindowMs.coerceAtLeast(1L)
 
@@ -200,6 +221,8 @@ class JankHunterConfig private constructor(builder: Builder) {
             .enabled(enabled)
             .runtimeEnabled(runtimeEnabled)
             .runtimeCallGraphEnabled(runtimeCallGraphEnabled)
+            .availableRuntimeFeaturesMask(availableRuntimeFeaturesMask)
+            .enabledRuntimeFeaturesMask(enabledRuntimeFeaturesMask)
             .autoStartCollectors(autoStartCollectors)
             .mainThreadStallThresholdMs(mainThreadStallThresholdMs)
             .ownerBlockThresholdMs(ownerBlockThresholdMs)
@@ -267,6 +290,8 @@ class JankHunterConfig private constructor(builder: Builder) {
         internal var enabled = true
         internal var runtimeEnabled = true
         internal var runtimeCallGraphEnabled = true
+        internal var availableRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
+        internal var enabledRuntimeFeaturesMask = JankHunterRuntimeFeature.allMask
         internal var autoStartCollectors = true
         internal var mainThreadStallThresholdMs = 700L
         internal var ownerBlockThresholdMs = 250L
@@ -328,6 +353,26 @@ class JankHunterConfig private constructor(builder: Builder) {
         fun runtimeEnabled(value: Boolean) = apply { runtimeEnabled = value }
 
         fun runtimeCallGraphEnabled(value: Boolean) = apply { runtimeCallGraphEnabled = value }
+
+        internal fun availableRuntimeFeatures(features: Set<JankHunterRuntimeFeature>) = apply {
+            availableRuntimeFeaturesMask = JankHunterRuntimeFeature.maskOf(features)
+        }
+
+        fun runtimeFeatureEnabled(feature: JankHunterRuntimeFeature, value: Boolean) = apply {
+            enabledRuntimeFeaturesMask = if (value) {
+                enabledRuntimeFeaturesMask or feature.mask
+            } else {
+                enabledRuntimeFeaturesMask and feature.mask.inv()
+            }
+        }
+
+        internal fun availableRuntimeFeaturesMask(value: Long) = apply {
+            availableRuntimeFeaturesMask = value and JankHunterRuntimeFeature.allMask
+        }
+
+        internal fun enabledRuntimeFeaturesMask(value: Long) = apply {
+            enabledRuntimeFeaturesMask = value and JankHunterRuntimeFeature.allMask
+        }
 
         fun autoStartCollectors(value: Boolean) = apply { autoStartCollectors = value }
 

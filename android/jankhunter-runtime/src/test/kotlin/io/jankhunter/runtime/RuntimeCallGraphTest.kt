@@ -63,6 +63,28 @@ class RuntimeCallGraphTest {
     }
 
     @Test
+    fun stoppedGraphDoesNotExposeStaleCallSite() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-stale-context").toFile()
+        val writer = writer(directory)
+        val graph = graph()
+        graph.resetFlushState(writer)
+        try {
+            graph.enter(42L, enabled = true)
+            assertTrue(graph.hasCurrentMethod())
+
+            graph.flushForShutdown()
+
+            assertFalse(graph.hasCurrentMethod())
+            assertEquals(0L, graph.currentMethodId())
+            assertEquals(null, graph.currentMethodName())
+        } finally {
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun zeroAndNegativeStableIdsArePublished() = withGraph { graph ->
         val parent = graph.enter(0L, enabled = true)
         val child = graph.enter(Long.MIN_VALUE, enabled = true)
@@ -374,6 +396,112 @@ class RuntimeCallGraphTest {
             assertEquals(1L, graph.acceptedEventLossForTest())
         } finally {
             failConsumer.countDown()
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerFailureWithoutAcceptedEventsDoesNotInventLoss() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-empty-failure").toFile()
+        val writer = writer(directory)
+        val graph = graph(consumerLoopObserver = { error("injected consumer failure") })
+        graph.resetFlushState(writer)
+        try {
+            awaitConsumerStopped(graph)
+
+            assertEquals(0L, graph.acceptedForTest())
+            assertEquals(0L, graph.emittedForTest())
+            assertEquals(0L, graph.acceptedEventLossForTest())
+            assertFalse(graph.flushBlocking(10L))
+        } finally {
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun consumerFailureAccountsForBatchAlreadyRemovedFromAggregateTable() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-batch-failure").toFile()
+        val writer = writer(directory)
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            batchObserver = { error("injected batch hand-off failure") },
+        )
+        graph.resetFlushState(writer)
+        try {
+            repeat(7) {
+                graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = true)
+            }
+
+            graph.flushForShutdown()
+
+            assertEquals(7L, graph.acceptedForTest())
+            assertEquals(0L, graph.emittedForTest())
+            assertEquals(7L, graph.acceptedEventLossForTest())
+            assertFalse(graph.flushBlocking(10L))
+        } finally {
+            graph.clear()
+            writer.close()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptedNonExactShutdownDoesNotDiscardConsumerStateDuringClear() {
+        val directory = Files.createTempDirectory("jankhunter-runtime-call-graph-deferred-clear").toFile()
+        val writer = writer(directory)
+        val consumerEntered = CountDownLatch(1)
+        val releaseConsumer = CountDownLatch(1)
+        val observedEvents = AtomicLong()
+        val graph = RuntimeCallGraph(
+            nowMs = { 1L },
+            captureScreen = { "screen" },
+            captureOperationId = { 41L },
+            maxKeys = { 128 },
+            exactAdmission = { false },
+            batchObserver = { batch -> observedEvents.addAndGet(batch.logicalEventCount()) },
+            consumerLoopObserver = {
+                consumerEntered.countDown()
+                assertTrue("consumer release timed out", releaseConsumer.await(5L, TimeUnit.SECONDS))
+            },
+        )
+        graph.resetFlushState(writer)
+        val consumer = graph.consumerForTest()
+        val shutdown = Thread(graph::flushForShutdown, "JankHunterInterruptedShutdown")
+        try {
+            assertTrue("consumer did not start", consumerEntered.await(5L, TimeUnit.SECONDS))
+            repeat(7) {
+                graph.recordSemantic(1L, "root", 2L, "callee", 1L, enabled = true)
+            }
+
+            shutdown.start()
+            awaitPublisherGateClosed(graph)
+            shutdown.interrupt()
+            shutdown.join(2_000L)
+
+            assertFalse("non-exact shutdown did not return after interruption", shutdown.isAlive)
+            assertTrue("consumer unexpectedly stopped before release", consumer?.isAlive == true)
+            assertEquals(0L, graph.acceptedEventLossForTest())
+
+            graph.clear()
+            assertTrue("clear hid the still-running consumer", graph.consumerForTest()?.isAlive == true)
+
+            releaseConsumer.countDown()
+            consumer?.join(5_000L)
+            assertFalse("consumer did not finish deferred clear", consumer?.isAlive == true)
+            assertEquals(7L, observedEvents.get())
+            assertEquals(0, graph.registeredProducerCountForTest())
+        } finally {
+            releaseConsumer.countDown()
+            shutdown.interrupt()
+            shutdown.join(2_000L)
+            consumer?.join(5_000L)
             graph.clear()
             writer.close()
             directory.deleteRecursively()

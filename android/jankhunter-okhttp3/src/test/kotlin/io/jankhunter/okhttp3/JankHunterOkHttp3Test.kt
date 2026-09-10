@@ -17,6 +17,7 @@ import java.net.UnknownHostException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.SocketFactory
 import okhttp3.Address
@@ -861,6 +862,40 @@ class JankHunterOkHttp3Test {
     }
 
     @Test
+    fun requestStartedWhileActiveCompletesAfterRuntimeIsDisabled() {
+        val enabled = AtomicBoolean(true)
+        val collectionChecks = AtomicInteger()
+        val telemetry = RecordingTelemetry(
+            httpCollectionEnabled = {
+                collectionChecks.incrementAndGet()
+                enabled.get()
+            },
+        )
+        val call = call()
+        val listener = testFactory(null, telemetry, NetworkLongSource { 10L }).create(call)
+        val address = InetSocketAddress("127.0.0.1", 443)
+
+        listener.callStart(call)
+        listener.dnsStart(call, "example.com")
+        listener.connectStart(call, address, java.net.Proxy.NO_PROXY)
+        enabled.set(false)
+        listener.callEnd(call)
+
+        assertEquals(1, telemetry.httpEvents.size)
+        assertEquals(1, collectionChecks.get())
+        listOf(
+            "dnsStartsByDomain",
+            "connectAttemptsByRoute",
+            "connectedRoutesAwaitingAcquisition",
+            "contextSnapshot",
+        ).forEach { fieldName ->
+            val field = listener.javaClass.getDeclaredField(fieldName)
+            field.isAccessible = true
+            assertNull("terminal listener retained $fieldName", field.get(listener))
+        }
+    }
+
+    @Test
     fun racingTerminalCallbacksRecordExactlyOneConsistentOutcome() {
         val telemetry = RecordingTelemetry()
         val call = call()
@@ -956,7 +991,16 @@ class JankHunterOkHttp3Test {
     @Test
     fun capturesNetworkAttributionAtCallStart() {
         val call = call()
-        val listener = JankHunterEventListenerFactory().create(call)
+        val telemetry = object : NetworkTelemetry {
+            override fun captureContextSnapshot(): JankHunterContextSnapshot? {
+                return RuntimeNetworkTelemetry.INSTANCE.captureContextSnapshot()
+            }
+
+            override fun recordHttp(event: JankHunterHttpEvent) = Unit
+
+            override fun recordWebSocket(event: JankHunterWebSocketEvent) = Unit
+        }
+        val listener = testFactory(null, telemetry, NetworkLongSource { 10L }).create(call)
         try {
             JankHunterTelemetry.setScreen("CheckoutScreen")
 
@@ -993,6 +1037,16 @@ class JankHunterOkHttp3Test {
         listener.responseBodyStart(call)
 
         assertEquals(3, calls.get())
+    }
+
+    @Test
+    fun inactiveRuntimeDoesNotAllocateWebSocketWrapper() {
+        val listener = object : okhttp3.WebSocketListener() {}
+        val request = Request.Builder().url("https://example.com/socket").build()
+
+        val wrapped = JankHunterOkHttp3.wrapWebSocketListener(request, listener, "owner")
+
+        assertSame(listener, wrapped)
     }
 
     private fun eventListenerFactory(builder: OkHttpClient.Builder): EventListener.Factory {
@@ -1099,7 +1153,7 @@ class JankHunterOkHttp3Test {
 
     private fun testFactory(
         delegate: EventListener.Factory?,
-        telemetry: RecordingTelemetry,
+        telemetry: NetworkTelemetry,
         clock: NetworkLongSource,
         serviceAlias: String? = null,
     ): JankHunterEventListenerFactory {
@@ -1112,8 +1166,11 @@ class JankHunterOkHttp3Test {
 
     private class RecordingTelemetry(
         private val captureFailure: Throwable? = null,
+        private val httpCollectionEnabled: () -> Boolean = { true },
     ) : NetworkTelemetry {
         val httpEvents = mutableListOf<JankHunterHttpEvent>()
+
+        override fun isHttpCollectionEnabled(): Boolean = httpCollectionEnabled()
 
         @Synchronized
         override fun captureContextSnapshot(): JankHunterContextSnapshot? {

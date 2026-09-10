@@ -5,11 +5,16 @@ import android.content.ContextWrapper
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -140,6 +145,190 @@ class JankHunterInitDiagnosticsTest {
 
         assertTrue(bootstrap.jhlogs().isEmpty())
         assertTrue(target.directory.jhlogs().isNotEmpty())
+    }
+
+    @Test
+    fun reconfigureUsesInitialConfigAsBaseAndPreservesSelectedStorage() {
+        val root = tempDir()
+        val bootstrap = File(root, "bootstrap")
+        val target = FileStorage(File(root, "external"))
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(bootstrap)
+                .build(),
+        )
+        assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(target))
+        val runnable = Runnable { }
+        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+
+        assertTrue(JankHunter.reconfigure("remote_config") { builder ->
+            builder.runtimeFeatureEnabled(JankHunterRuntimeFeature.EXECUTORS, false)
+        })
+        assertSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+
+        assertTrue(JankHunter.reconfigure("remote_config") { })
+        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+        JankHunterTelemetry.counter("reconfigured.storage", 1L)
+        JankHunter.shutdown()
+
+        assertTrue(bootstrap.jhlogs().isEmpty())
+        assertTrue(target.directory.jhlogs().size >= 3)
+    }
+
+    @Test
+    fun reconfigurePublishesDisabledConfigAndCannotRestartStaleSession() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "logs"))
+                .build(),
+        )
+        assertTrue(JankHunter.isStarted())
+
+        assertTrue(JankHunter.reconfigure("remote_config") { builder -> builder.enabled(false) })
+
+        assertFalse(JankHunter.isStarted())
+        assertFalse(JankHunter.isRuntimeEnabled())
+        assertEquals("disabled", JankHunter.initDiagnostics().status)
+        assertFalse(JankHunter.setRuntimeEnabled(true, "must_not_restore_stale_config"))
+        assertFalse(JankHunter.isStarted())
+        assertFalse(JankHunter.isRuntimeEnabled())
+    }
+
+    @Test
+    fun repeatedInitDoesNotReplaceConfigurationOfActiveSession() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "logs"))
+                .build(),
+        )
+        val runnable = Runnable { }
+        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "other-logs"))
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.EXECUTORS, false)
+                .build(),
+        )
+
+        assertEquals("already_started", JankHunter.initDiagnostics().status)
+        assertTrue(JankHunter.isStarted())
+        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+    }
+
+    @Test
+    fun reconfigurePreservesExplicitSelectionOfBuiltInStorage() {
+        val root = tempDir()
+        val builtIn = File(root, "built-in")
+        val initialExternal = FileStorage(File(root, "initial-external"))
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(builtIn)
+                .binaryStorage(initialExternal)
+                .build(),
+        )
+
+        assertEquals(JankHunterStorageSwitchResult.SWITCHED, JankHunter.switchBinaryStorage(null))
+        assertTrue(JankHunter.reconfigure("remote_config") { })
+        JankHunterTelemetry.counter("storage.valve.after-reconfigure", 1L)
+        JankHunter.shutdown()
+
+        assertTrue(initialExternal.directory.jhlogs().isEmpty())
+        assertTrue(builtIn.jhlogs().isNotEmpty())
+    }
+
+    @Test
+    fun reconfigureReturnsFalseAndKeepsSessionWhenUpdaterFails() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "logs"))
+                .build(),
+        )
+        val runnable = Runnable { }
+
+        assertFalse(JankHunter.reconfigure("broken_config") { throw IllegalStateException("broken updater") })
+
+        assertTrue(JankHunter.isStarted())
+        assertNotSame(runnable, JankHunterHooks.wrapRunnable(runnable, "owner"))
+    }
+
+    @Test
+    fun reconfigureDoesNotRunUpdaterUnderLifecycleLock() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "logs"))
+                .build(),
+        )
+        val updaterStarted = CountDownLatch(1)
+        val releaseUpdater = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+
+        try {
+            val reconfigure = executor.submit<Boolean> {
+                JankHunter.reconfigure("slow_config") {
+                    updaterStarted.countDown()
+                    releaseUpdater.await()
+                }
+            }
+            assertTrue(updaterStarted.await(5, TimeUnit.SECONDS))
+
+            val disable = executor.submit<Boolean> {
+                JankHunter.setRuntimeEnabled(false, "concurrent_disable")
+            }
+            assertTrue(disable.get(5, TimeUnit.SECONDS))
+
+            releaseUpdater.countDown()
+            assertFalse(reconfigure.get(5, TimeUnit.SECONDS))
+            assertFalse(JankHunter.isStarted())
+            assertFalse(JankHunter.isRuntimeEnabled())
+        } finally {
+            releaseUpdater.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun reconfigureRestoresPreviousSessionWhenReplacementCannotStart() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        JankHunter.init(
+            context,
+            JankHunterConfig.builder()
+                .autoStartCollectors(false)
+                .logDirectory(File(root, "logs"))
+                .build(),
+        )
+
+        assertFalse(JankHunter.reconfigure("broken_config") { builder ->
+            builder.processNameRedactor(JankHunterProcessNameRedactor { throw IllegalStateException("broken") })
+        })
+
+        assertTrue(JankHunter.isStarted())
+        assertTrue(JankHunter.isRuntimeEnabled())
     }
 
     @Test

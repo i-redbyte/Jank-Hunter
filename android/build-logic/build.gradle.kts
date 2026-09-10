@@ -36,6 +36,10 @@ gradlePlugin {
             id = "io.jankhunter.kotlin-gradle-plugin"
             implementationClass = "io.jankhunter.buildlogic.JankHunterKotlinGradlePlugin"
         }
+        register("cliPackage") {
+            id = "io.jankhunter.cli-package"
+            implementationClass = "io.jankhunter.buildlogic.JankHunterCliPackagePlugin"
+        }
         register("sqlNormalizerSources") {
             id = "io.jankhunter.sql-normalizer-sources"
             implementationClass = "io.jankhunter.buildlogic.JankHunterSqlNormalizerSourcesPlugin"

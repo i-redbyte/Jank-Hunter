@@ -1,7 +1,9 @@
 package io.jankhunter.runtime
 
+import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.Jhlog
 import java.lang.ref.WeakReference
+import java.nio.file.Files
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -117,6 +119,48 @@ class RuntimeDatabaseTelemetryTest {
         assertEquals(0L, tracker.currentTransactionId())
         assertFalse(tracker.markSuccessful(database))
         assertFalse(tracker.finish(database, DatabaseFailureKind.OTHER, failed = false))
+    }
+
+    @Test
+    fun automaticTransactionStateIsReleasedAfterRuntimeFeatureIsDisabled() {
+        val directory = Files.createTempDirectory("jankhunter-database-feature-toggle").toFile()
+        val enabledConfig = JankHunterConfig.builder()
+            .databaseTracingEnabled(true)
+            .build()
+        val state = RuntimeState().apply {
+            config = enabledConfig
+            writer = AsyncLogWriterFactory().open(directory, enabledConfig, "test")
+            lifecycle = RuntimeLifecycle.STARTED
+            started.set(true)
+        }
+        val telemetry = RuntimeDatabaseTelemetry(
+            RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { 1L }, { 1L }, { 100 }),
+        )
+        try {
+            val database = Any()
+            assertTrue(
+                telemetry.beginTransaction(
+                    database,
+                    sourceId = 1L,
+                    sourceName = "Database.transaction",
+                    mode = Jhlog.DATABASE_TRANSACTION_IMMEDIATE.toInt(),
+                ) > 0L,
+            )
+
+            state.config = enabledConfig.toBuilder()
+                .runtimeFeatureEnabled(JankHunterRuntimeFeature.SQLITE, false)
+                .build()
+            telemetry.markTransactionSuccessful(database)
+            telemetry.endTransaction(database, throwable = null)
+
+            val transactionsField = RuntimeDatabaseTelemetry::class.java.getDeclaredField("transactions")
+            transactionsField.isAccessible = true
+            val transactions = transactionsField.get(telemetry) as DatabaseTransactionTracker
+            assertEquals(0L, transactions.currentTransactionId())
+        } finally {
+            state.writer?.close()
+            directory.deleteRecursively()
+        }
     }
 
     @Test

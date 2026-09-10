@@ -73,7 +73,9 @@ object JankHunterOkHttp3 {
         ownerName: String?,
     ): WebSocketListener? {
         return okHttpNonFatalOr(listener) {
-            if (listener == null || listener is JankHunterWebSocketListener) {
+            if (listener == null || listener is JankHunterWebSocketListener ||
+                !JankHunterNetworkRuntime.isWebSocketActive()
+            ) {
                 listener
             } else {
                 val route = NetworkMetricNames.route(request.method(), request.url().encodedPath())

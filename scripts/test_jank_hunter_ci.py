@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import unittest
@@ -55,6 +56,7 @@ class JankHunterCiTest(unittest.TestCase):
                     "GitlabConfigs/custom_jobs/build_scripts.yml",
                     "GitlabConfigs/custom_jobs/static_analyse.yml",
                     "GitlabConfigs/custom_jobs/tests_scripts.yml",
+                    "scripts/jank-hunter-publish/publish-android.sh",
                 )
             )
         )
@@ -135,9 +137,81 @@ class JankHunterCiTest(unittest.TestCase):
             "/GitlabConfigs/custom_jobs/build_scripts.yml",
             "/GitlabConfigs/custom_jobs/static_analyse.yml",
             "/GitlabConfigs/custom_jobs/tests_scripts.yml",
+            "/GitlabConfigs/job_configs/deployment_jobs.json",
+            "/GitlabConfigs/job_configs/web_build_jobs.json",
         ):
             with self.subTest(path=path):
                 self.assertIn(path, codeowners)
+
+    def test_cli_artifact_job_is_available_for_merge_request_and_web_pipelines(self) -> None:
+        build_scripts = (
+            REPOSITORY_ROOT / "GitlabConfigs/custom_jobs/build_scripts.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".buildJankHunterCli:", build_scripts)
+        self.assertIn(
+            ":jankhunter-cli:packageDarwinArm64Cli",
+            build_scripts,
+        )
+        self.assertIn("sha256sum ./*.tar.gz > checksums.txt", build_scripts)
+
+        for relative_path in (
+            "GitlabConfigs/job_configs/deployment_jobs.json",
+            "GitlabConfigs/job_configs/web_build_jobs.json",
+        ):
+            with self.subTest(path=relative_path):
+                config = json.loads(
+                    (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
+                )
+                job = config["buildJankHunterCli"]
+                self.assertEqual("manual", job["when"])
+                self.assertEqual(
+                    "!reference [.buildJankHunterCli, script]",
+                    job["script"],
+                )
+                self.assertEqual([], job["before_script"])
+                self.assertEqual("30 days", job["artifacts"]["expire_in"])
+                self.assertEqual(
+                    [
+                        "jank-hunter/android/jankhunter-cli/"
+                        "build/distributions/"
+                    ],
+                    job["artifacts"]["paths"],
+                )
+
+    def test_android_studio_plugin_artifact_job_is_available_for_merge_request_and_web_pipelines(
+        self,
+    ) -> None:
+        build_scripts = (
+            REPOSITORY_ROOT / "GitlabConfigs/custom_jobs/build_scripts.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".buildJankHunterAndroidStudioPlugin:", build_scripts)
+        self.assertIn(
+            "jank-hunter/plugin-as/gradlew -p jank-hunter/plugin-as buildPlugin",
+            build_scripts,
+        )
+        self.assertIn("sha256sum ./*.zip > checksums.txt", build_scripts)
+
+        for relative_path in (
+            "GitlabConfigs/job_configs/deployment_jobs.json",
+            "GitlabConfigs/job_configs/web_build_jobs.json",
+        ):
+            with self.subTest(path=relative_path):
+                config = json.loads(
+                    (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
+                )
+                job = config["buildJankHunterAndroidStudioPlugin"]
+                self.assertEqual("manual", job["when"])
+                self.assertEqual(["build-app-mac"], job["tags"])
+                self.assertEqual(
+                    "!reference [.buildJankHunterAndroidStudioPlugin, script]",
+                    job["script"],
+                )
+                self.assertEqual([], job["before_script"])
+                self.assertEqual("30 days", job["artifacts"]["expire_in"])
+                self.assertEqual(
+                    ["jank-hunter/plugin-as/build/distributions/"],
+                    job["artifacts"]["paths"],
+                )
 
 
 if __name__ == "__main__":

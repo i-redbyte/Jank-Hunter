@@ -62,6 +62,8 @@ internal class RuntimeGraphLifecycle {
     val reportedAttempted = AtomicLong()
     @JvmField
     val reportedEmitted = AtomicLong()
+    @JvmField
+    val clearRequested = AtomicBoolean(false)
 
     @JvmField
     @Volatile

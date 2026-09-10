@@ -13,6 +13,10 @@ import io.jankhunter.runtime.JankHunterWebSocketEvent;
  * библиотеки.
  */
 interface NetworkTelemetry {
+    default boolean isHttpCollectionEnabled() {
+        return true;
+    }
+
     JankHunterContextSnapshot captureContextSnapshot();
 
     void recordHttp(JankHunterHttpEvent event);
@@ -30,6 +34,11 @@ final class RuntimeNetworkTelemetry implements NetworkTelemetry {
     static final RuntimeNetworkTelemetry INSTANCE = new RuntimeNetworkTelemetry();
 
     private RuntimeNetworkTelemetry() {}
+
+    @Override
+    public boolean isHttpCollectionEnabled() {
+        return JankHunterNetworkRuntime.isHttpActive();
+    }
 
     @Override
     public JankHunterContextSnapshot captureContextSnapshot() {

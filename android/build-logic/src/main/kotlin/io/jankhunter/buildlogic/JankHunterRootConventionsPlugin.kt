@@ -34,6 +34,7 @@ class JankHunterRootConventionsPlugin : Plugin<Project> {
                 "jankhunter-okhttp3" -> "Optional OkHttp 3 integration for Jank Hunter network telemetry."
                 "jankhunter-workmanager" -> "Optional WorkManager lifecycle integration for Jank Hunter."
                 "jankhunter-gradle-plugin" -> "Gradle/ASM instrumentation plugin for Jank Hunter Android builds."
+                "jankhunter-cli" -> "Command-line tools for inspecting and comparing Jank Hunter logs."
                 else -> "Jank Hunter Android component."
             }
         }

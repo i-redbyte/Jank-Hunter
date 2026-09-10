@@ -343,14 +343,14 @@ jankHunter {
     tuning.heapDumps.minIntervalMs = 600_000
     tuning.heapDumps.maxCount = 1
     tuning.heapDumps.minRetainedAgeMs = 30_000
-    scope = io.jankhunter.gradle.JankHunterInstrumentationScope.WHOLE_APPLICATION
+    scope = io.jankhunter.gradle.JankHunterInstrumentationScope.NAMESPACE_AND_PACKAGES
 }
 
 dependencies {
     implementation(project(":feature"))
     implementation(project(":network-feature"))
     implementation("com.squareup.okhttp3:okhttp:3.12.13")
-    implementation("$group:jankhunter-okhttp3:$version")
+    implementation("$group:jankhunter-android-sdk:$version")
 }
 EOF
 
@@ -642,13 +642,18 @@ main() {
   local group_path
   group_path="$(printf '%s' "$group" | tr '.' '/')"
   local plugin_module="$maven_repo/$group_path/jankhunter-gradle-plugin/$version/jankhunter-gradle-plugin-$version.module"
+  local sdk_module="$maven_repo/$group_path/jankhunter-android-sdk/$version/jankhunter-android-sdk-$version.module"
   local runtime_module="$maven_repo/$group_path/jankhunter-runtime/$version/jankhunter-runtime-$version.module"
   local annotations_module="$maven_repo/$group_path/jankhunter-annotations/$version/jankhunter-annotations-$version.module"
   local okhttp_module="$maven_repo/$group_path/jankhunter-okhttp3/$version/jankhunter-okhttp3-$version.module"
   [[ -f "$plugin_module" ]] || fail "Published plugin metadata was not found: $plugin_module"
+  [[ -f "$sdk_module" ]] || fail "Published Android SDK metadata was not found: $sdk_module"
   [[ -f "$runtime_module" ]] || fail "Published runtime metadata was not found: $runtime_module"
   [[ -f "$annotations_module" ]] || fail "Published annotations metadata was not found: $annotations_module"
   [[ -f "$okhttp_module" ]] || fail "Published OkHttp helper metadata was not found: $okhttp_module"
+  require_file_contains "$sdk_module" '"module": "jankhunter-runtime"' "Android SDK metadata"
+  require_file_contains "$sdk_module" '"module": "jankhunter-annotations"' "Android SDK metadata"
+  require_file_contains "$sdk_module" '"module": "jankhunter-okhttp3"' "Android SDK metadata"
   grep -q '"org.gradle.jvm.version": 17' "$plugin_module" ||
     fail "Published Gradle plugin metadata is not Java 17-compatible: $plugin_module"
 
@@ -720,10 +725,10 @@ main() {
   require_file_not_contains "$diagnostics" '"class":"com.example.jhsmoke.feature.FeatureFragment"' "Application lifecycle diagnostics"
 
   local release_artifact_metadata="$fixture_dir/app/build/generated/jankhunter/release/artifact-metadata.json"
-  require_file_contains "$release_artifact_metadata" '"includeWholeApplication":true' "Release artifact metadata"
+  require_file_contains "$release_artifact_metadata" '"includeWholeApplication":false' "Release artifact metadata"
   local release_diagnostics="$fixture_dir/app/build/generated/jankhunter/release/instrumentation-diagnostics.jsonl"
-  require_file_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
-  require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release dependency OkHttp hook diagnostics"
+  require_file_not_contains "$release_diagnostics" '"class":"org.example.jhsmoke.network.ReleaseNetworkClient"' "Release dependency instrumentation diagnostics"
+  require_file_contains "$release_diagnostics" '"intent":"okhttp.install_event_listener_factory"' "Release OkHttp hook diagnostics"
   local release_mapping="$fixture_dir/app/build/outputs/mapping/release/mapping.txt"
   require_file_contains "$release_mapping" 'okhttp3.EventListener$Factory eventListenerFactory -> eventListenerFactory' "Release R8 mapping"
 
@@ -743,7 +748,7 @@ main() {
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.session_log_size_limit_enabled true
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.max_session_log_size_mib 8
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_enabled true
-  assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_privacy_approved true
+  require_file_not_contains "$runtime_manifest" 'io.jankhunter.retained_heap_dump_privacy_approved' "Application runtime manifest"
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_min_interval_ms 600000
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_max_count 1
   assert_manifest_metadata "$runtime_manifest" io.jankhunter.retained_heap_dump_min_retained_age_ms 30000

@@ -6,6 +6,12 @@ object JankHunterNetworkRuntime {
     fun isActive(): Boolean = JankHunter.networkTelemetry().isActive()
 
     @JvmStatic
+    fun isHttpActive(): Boolean = JankHunter.networkTelemetry().isHttpActive()
+
+    @JvmStatic
+    fun isWebSocketActive(): Boolean = JankHunter.networkTelemetry().isWebSocketActive()
+
+    @JvmStatic
     fun captureContext(): JankHunterContextSnapshot = JankHunter.networkTelemetry().captureContext()
 
     @JvmStatic

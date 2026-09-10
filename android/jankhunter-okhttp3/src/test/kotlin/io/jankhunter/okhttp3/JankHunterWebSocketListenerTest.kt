@@ -8,6 +8,7 @@ import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.net.SocketTimeoutException
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.Protocol
 import okhttp3.Request
@@ -135,18 +136,46 @@ class JankHunterWebSocketListenerTest {
     fun disabledRuntimeSkipsTelemetryAndStillCallsDelegate() {
         val telemetry = RecordingTelemetry()
         val delegateCalls = AtomicInteger()
+        val gateChecks = AtomicInteger()
         val delegate = object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 delegateCalls.incrementAndGet()
             }
         }
-        val listener = listener(delegate = delegate, telemetry = telemetry, telemetryEnabled = { false })
+        val listener = listener(
+            delegate = delegate,
+            telemetry = telemetry,
+            telemetryEnabled = {
+                gateChecks.incrementAndGet()
+                false
+            },
+        )
 
         listener.onMessage(webSocket(), "payload")
         listener.onFailure(webSocket(), IOException("failure"), null)
 
         assertTrue(telemetry.webSockets.isEmpty())
         assertEquals(1, delegateCalls.get())
+        assertEquals(1, gateChecks.get())
+    }
+
+    @Test
+    fun connectionStartedWhileActiveCompletesAfterRuntimeIsDisabled() {
+        val enabled = AtomicBoolean(true)
+        val telemetry = RecordingTelemetry()
+        val listener = listener(
+            telemetry = telemetry,
+            telemetryEnabled = NetworkBooleanSource(enabled::get),
+        )
+        val socket = webSocket()
+
+        listener.onOpen(socket, response())
+        enabled.set(false)
+        listener.onMessage(socket, "payload")
+        listener.onClosed(socket, 1000, "done")
+
+        assertEquals(2, telemetry.webSockets.size)
+        assertEquals(1L, telemetry.webSockets.last().textMessages)
     }
 
     @Test

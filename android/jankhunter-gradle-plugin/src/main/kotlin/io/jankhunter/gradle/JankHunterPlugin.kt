@@ -95,6 +95,12 @@ class JankHunterPlugin : Plugin<Project> {
                     it.mainThreadAdmissionWaitMs.set(runtime.mainThreadAdmissionWaitMs)
                     it.backgroundAdmissionWaitMs.set(runtime.backgroundAdmissionWaitMs)
                     it.runtimeCallGraphEnabled.set(instrumentation.runtimeCallGraph)
+                    it.availableRuntimeFeatures.set(
+                        configuration.features.asSequence()
+                            .map(JankHunterFeature::name)
+                            .sorted()
+                            .joinToString(","),
+                    )
                     it.composeTracingEnabled.set(instrumentation.composeTracing)
                     it.roomTracingEnabled.set(instrumentation.roomTracing)
                     it.databaseTracingEnabled.set(instrumentation.databaseTracing)
