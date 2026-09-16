@@ -45,7 +45,8 @@ class SemanticWorkInstrumentationTest {
         assertEquals(1, calls["doWork"]?.workerInstanceIds)
         assertEquals(1, calls["doWork"]?.workerEnters)
         assertEquals(2, calls["doWork"]?.workerExits)
-        assertEquals(1, calls["doWork"]?.workerOutcomeClassifications)
+        assertEquals(0, calls["doWork"]?.workerOutcomeClassifications)
+        assertEquals(3, calls["doWork"]?.workerOutcomeTypeChecks)
         assertTrue(calls["doWork"]?.stringConstants?.contains("example.SyncWorker.doWork") == true)
         assertEquals(null, calls["helper"])
     }
@@ -99,6 +100,12 @@ class SemanticWorkInstrumentationTest {
                             if (methodName == "exitWorker") stats.workerExits++
                             if (methodName == "classifyWorkerOutcome") stats.workerOutcomeClassifications++
                         }
+
+                        override fun visitTypeInsn(opcode: Int, type: String) {
+                            if (opcode == Opcodes.INSTANCEOF && type.startsWith("androidx/work/ListenableWorker")) {
+                                calls.getOrPut(name, ::SemanticCalls).workerOutcomeTypeChecks++
+                            }
+                        }
                     }
                 }
             },
@@ -106,7 +113,7 @@ class SemanticWorkInstrumentationTest {
         )
         return calls.filterValues { calls ->
             calls.enters > 0 || calls.exits > 0 || calls.workerInstanceIds > 0 ||
-                calls.workerEnters > 0 || calls.workerExits > 0
+                calls.workerEnters > 0 || calls.workerExits > 0 || calls.workerOutcomeTypeChecks > 0
         }
     }
 
@@ -208,6 +215,7 @@ class SemanticWorkInstrumentationTest {
         var workerEnters: Int = 0,
         var workerExits: Int = 0,
         var workerOutcomeClassifications: Int = 0,
+        var workerOutcomeTypeChecks: Int = 0,
         val stringConstants: MutableSet<String> = linkedSetOf(),
     )
 

@@ -112,7 +112,7 @@ func WriteCompareReportWithOptions(path string, comparison analyze.Comparison, b
 		"Comparison":  comparison,
 		"LogGroups": []logReportGroup{
 			{Title: "Логи базы", Empty: "Детали логов базы не встроены.", Logs: baselineLogs},
-			{Title: "Логи кандидата", Empty: "Детали логов кандидата не встроены.", Logs: candidateLogs},
+			{Title: "Логи проверяемого прогона", Empty: "Данные логов проверяемого прогона не встроены.", Logs: candidateLogs},
 		},
 		"Analysis":                      compareAnalysis(comparison, lang),
 		"MathReportHref":                options.Links.Math,
@@ -131,6 +131,7 @@ func WriteMathInspectWithOptions(path string, mathReport mathanalysis.MathReport
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"MainReportHref":      options.Links.Main,
+		"LeakReportHref":      options.Links.Leaks,
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
@@ -143,6 +144,7 @@ func WriteMathCompareWithOptions(path string, mathReport mathanalysis.CompareMat
 		"Math":                mathReport,
 		"MethodReferences":    mathanalysis.MethodReferences(),
 		"MainReportHref":      options.Links.Main,
+		"LeakReportHref":      options.Links.Leaks,
 		"InfluenceReportHref": options.Links.Influence,
 		"PresentationMode":    options.PresentationMode,
 		"AnimatedBackground":  options.AnimatedBackground,
@@ -472,7 +474,7 @@ func writeOperationTimeSlotRow(target *strings.Builder, row analyze.OperationTim
 	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
 	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
 	writeMillisCell(target, row.MaxMS)
-	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "—")
+	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "-")
 	writeOperationNetworkCell(target, row.CorrelatedHTTP, row.CorrelatedHTTPFailures, row.CorrelatedHTTPDurationMS)
 	writePairUintCell(target, row.CorrelatedStalls, row.CorrelatedStallMaxMS, " мс")
 	writeOperationIOCell(target, row.CorrelatedIO, row.CorrelatedIODurationUS, row.CorrelatedIOBytes)
@@ -495,7 +497,7 @@ func writeOperationDimensionRow(target *strings.Builder, row analyze.OperationDi
 	writeQuantileMillisCell(target, row.P90MS, row.QuantilesApproximated)
 	writeQuantileMillisCell(target, row.P95MS, row.QuantilesApproximated)
 	writeMillisCell(target, row.MaxMS)
-	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "—")
+	writeBudgetCell(target, row.Budgeted, row.BudgetBreaches, row.BudgetBreachRatePct, "-")
 	target.WriteString(`</tr>`)
 }
 

@@ -8,9 +8,12 @@ import io.jankhunter.runtime.internal.io.AsyncLogWriterFactory
 import io.jankhunter.runtime.internal.io.Jhlog
 import io.jankhunter.runtime.internal.io.ProcessLogSnapshotCoordinator
 import io.jankhunter.runtime.internal.io.QualityCounterId
+import io.jankhunter.runtime.internal.monotonicDeadlineAfterMillis
 import io.jankhunter.runtime.internal.system.DeviceSnapshots
 import io.jankhunter.runtime.internal.system.ProcessNames
+import io.jankhunter.runtime.internal.system.isRuntimeMainThread
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal class RuntimeSessionController(
     private val state: RuntimeState,
@@ -20,10 +23,13 @@ internal class RuntimeSessionController(
     private val hookEvents: RuntimeHookEventTransport,
     private val callGraph: RuntimeCallGraph,
     private val handlerHooks: RuntimeHandlerHooks,
+    private val asyncTelemetry: RuntimeAsyncTelemetry,
     private val collectors: RuntimeCollectorService,
     private val writerFactory: AsyncLogWriterFactory,
     private val elapsedRealtimeMs: RuntimeLongSource,
 ) {
+    private val crashDrainInProgress = AtomicBoolean()
+
     fun start(
         appContext: Context,
         config: JankHunterConfig,
@@ -80,35 +86,47 @@ internal class RuntimeSessionController(
         recordRuntimeStartMetadata(writer, config, attempt)
 
         collectors.start(appContext, config, directory)
-        state.logSnapshotCoordinator = runCatching {
+        state.logSnapshotCoordinator = try {
             ProcessLogSnapshotCoordinator.start(
                 context = appContext,
                 directory = directory,
                 processName = redactedProcessName,
                 captureLocal = ::captureProcessLogSnapshot,
             )
-        }.getOrNull()
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
+            null
+        }
         if (!state.runtimeEnabled.get()) {
             stop(clearInit = false)
             recordRuntimeDisabledStatus()
             return directory
         }
         coordinator.recordInitStatus("started", attempt, processName, directory)
-        coordinator.markStarted()
+        coordinator.markStarted(config)
         return directory
     }
 
     fun stop(clearInit: Boolean) {
         val stopResources = coordinator.beginStop()
         if (stopResources) {
-            val shutdownDeadlineNs = System.nanoTime() + BLOCKING_FLUSH_TIMEOUT_MS * NANOS_PER_MILLISECOND
+            val activeWriter = state.writer
+            val shutdownDeadlineNs = monotonicDeadlineAfterMillis(BLOCKING_FLUSH_TIMEOUT_MS)
             RuntimeHookGuard.swallow { state.logSnapshotCoordinator?.close() }
             state.logSnapshotCoordinator = null
-            RuntimeHookGuard.swallow { collectors.stop() }
+            RuntimeHookGuard.swallow { collectors.stopProducers(remainingTimeoutMs(shutdownDeadlineNs)) }
             RuntimeHookGuard.swallow { flushMetricsBlocking(remainingTimeoutMs(shutdownDeadlineNs)) }
             RuntimeHookGuard.swallow { hookEvents.stopAndFlush(remainingTimeoutMs(shutdownDeadlineNs)) }
-            RuntimeHookGuard.swallow { callGraph.flushForShutdown() }
-            RuntimeHookGuard.swallow { writer?.close(remainingTimeoutMs(shutdownDeadlineNs)) }
+            RuntimeHookGuard.swallow { callGraph.flushForShutdown(remainingTimeoutMs(shutdownDeadlineNs)) }
+            RuntimeHookGuard.swallow { collectors.shutdownMaintenance(remainingTimeoutMs(shutdownDeadlineNs)) }
+            if (activeWriter != null) {
+                RuntimeHookGuard.swallow {
+                    val drain = RuntimeWriterDrain(activeWriter, remainingTimeoutMs(shutdownDeadlineNs))
+                    hookEvents.whenWriterDrained(activeWriter, drain::complete)
+                    callGraph.whenWriterDrained(activeWriter, drain::complete)
+                }
+            }
         }
         RuntimeHookGuard.swallow { restoreCrashFlushHandler() }
         reset(clearInit)
@@ -128,6 +146,16 @@ internal class RuntimeSessionController(
     }
 
     fun captureLogSnapshot(): JankHunterLogSnapshot? {
+        if (isRuntimeMainThread()) return null
+        return captureLogSnapshotBlocking()
+    }
+
+    fun captureLogSnapshotAsync(callback: JankHunterCaptureCallback<JankHunterLogSnapshot>): Boolean {
+        val scheduler = state.maintenanceScheduler ?: return false
+        return scheduler.execute { callback.onComplete(captureLogSnapshotBlocking()) }
+    }
+
+    private fun captureLogSnapshotBlocking(): JankHunterLogSnapshot? {
         val snapshotCoordinator = state.logSnapshotCoordinator
         return when {
             snapshotCoordinator != null -> snapshotCoordinator.capture()
@@ -137,8 +165,27 @@ internal class RuntimeSessionController(
     }
 
     fun captureLogArchive(destination: File): JankHunterLogArchive? {
-        val snapshot = captureLogSnapshot() ?: return null
-        return runCatching { JankHunterLogArchiveWriter.write(destination, snapshot) }.getOrNull()
+        if (isRuntimeMainThread()) return null
+        return captureLogArchiveBlocking(destination)
+    }
+
+    fun captureLogArchiveAsync(
+        destination: File,
+        callback: JankHunterCaptureCallback<JankHunterLogArchive>,
+    ): Boolean {
+        val scheduler = state.maintenanceScheduler ?: return false
+        return scheduler.execute { callback.onComplete(captureLogArchiveBlocking(destination)) }
+    }
+
+    private fun captureLogArchiveBlocking(destination: File): JankHunterLogArchive? {
+        val snapshot = captureLogSnapshotBlocking() ?: return null
+        return try {
+            JankHunterLogArchiveWriter.write(destination, snapshot)
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.RUNTIME_LIFECYCLE)
+            null
+        }
     }
 
     fun logDirectory(appContext: Context, config: JankHunterConfig): File {
@@ -147,7 +194,14 @@ internal class RuntimeSessionController(
 
     fun recordRuntimeDisabledStatus() {
         val appContext = state.initContext
-        val processName = appContext?.let { runCatching { ProcessNames.current(it) }.getOrNull() }
+        val processName = appContext?.let {
+            try {
+                ProcessNames.current(it)
+            } catch (throwable: Throwable) {
+                RuntimeHookGuard.rethrowFatal(throwable)
+                null
+            }
+        }
         val directory = state.config?.logDirectory() ?: appContext?.filesDir?.let { File(it, "jankhunter") }
         coordinator.recordInitStatus("runtime_disabled", state.initAttempts.get(), processName, directory)
     }
@@ -178,12 +232,13 @@ internal class RuntimeSessionController(
         }
     }
 
-    private fun captureProcessLogSnapshot(): JankHunterLogSnapshot? {
+    private fun captureProcessLogSnapshot(timeoutMs: Long = BLOCKING_FLUSH_TIMEOUT_MS): JankHunterLogSnapshot? {
         val activeWriter = writer ?: return null
-        if (!flushMetricsBlocking()) return null
-        if (!hookEvents.flushBlocking(BLOCKING_FLUSH_TIMEOUT_MS)) return null
-        if (!callGraph.flushBlocking(BLOCKING_FLUSH_TIMEOUT_MS)) return null
-        val snapshot = activeWriter.captureSnapshotBlocking(BLOCKING_FLUSH_TIMEOUT_MS) ?: return null
+        val deadlineNs = monotonicDeadlineAfterMillis(timeoutMs.coerceAtLeast(1L))
+        if (!flushMetricsBlocking(remainingTimeoutMs(deadlineNs))) return null
+        if (!hookEvents.flushBlocking(remainingTimeoutMs(deadlineNs))) return null
+        if (!callGraph.flushBlocking(remainingTimeoutMs(deadlineNs))) return null
+        val snapshot = activeWriter.captureSnapshotBlocking(remainingTimeoutMs(deadlineNs)) ?: return null
         return JankHunterLogSnapshot(snapshot.capturedAtMs, snapshot.logPaths)
     }
 
@@ -202,7 +257,8 @@ internal class RuntimeSessionController(
                 stop(clearInit = false)
                 coordinator.recordInitFailure(terminalFailure, attempt, processName, logDirectory)
             }
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
             // Terminal recovery is diagnostic infrastructure and must remain fail-open.
         }
     }
@@ -226,13 +282,12 @@ internal class RuntimeSessionController(
         RuntimeHookGuard.swallow { hookEvents.clear() }
         RuntimeHookGuard.swallow { callGraph.clear() }
         RuntimeHookGuard.swallow { handlerHooks.clear() }
+        RuntimeHookGuard.swallow { asyncTelemetry.clearCoroutineExecutions() }
         coordinator.markStopped()
         if (clearInit) {
-            state.config = null
-            state.baseConfig = null
-            state.selectedBinaryStorage = null
+            RuntimeHookGuard.run(RuntimeHookFailureReason.COLLECTOR) { state.activityObservation.close() }
+            state.clearConfiguration()
             state.initContext = null
-            state.lifecycleGeneration++
             state.collectionInactiveSinceElapsedMs.set(0L)
             state.runtimeEnabled.set(true)
         }
@@ -242,20 +297,23 @@ internal class RuntimeSessionController(
         val current = Thread.getDefaultUncaughtExceptionHandler()
         if (current === state.crashFlushHandler) return
         state.previousCrashHandler = current
-        val previous = current
-        val handler = Thread.UncaughtExceptionHandler { thread, throwable ->
-            try {
-                RuntimeHookGuard.swallow {
-                    val crashWriter = writer
-                    crashWriter?.counter("jankhunter.runtime.crash.count", 1)
-                    crashWriter?.flushBlocking(CRASH_FLUSH_TIMEOUT_MS, waitForExactFrontier = false)
-                }
-            } finally {
-                previous?.uncaughtException(thread, throwable) ?: throw throwable
-            }
-        }
+        val handler = createCrashFlushHandler(current)
         state.crashFlushHandler = handler
         Thread.setDefaultUncaughtExceptionHandler(handler)
+    }
+
+    internal fun createCrashFlushHandler(previous: Thread.UncaughtExceptionHandler?): Thread.UncaughtExceptionHandler {
+        val crashWriter = writer
+        return RuntimeCrashFlushHandler(
+            previous = previous,
+            diagnostic = { name -> crashWriter?.recordCrashDiagnostic(name) },
+            metrics = { timeoutMs -> metrics.flushBlocking(timeoutMs, crashWriter) },
+            hooks = { timeoutMs -> state.writer === crashWriter && hookEvents.flushBlocking(timeoutMs) },
+            graph = { timeoutMs -> state.writer === crashWriter && callGraph.flushBlocking(timeoutMs) },
+            writer = { timeoutMs -> crashWriter?.flushBlocking(timeoutMs) ?: true },
+            draining = crashDrainInProgress,
+            requestWriterFlush = { crashWriter?.flush() },
+        )
     }
 
     private fun restoreCrashFlushHandler() {
@@ -280,8 +338,9 @@ internal class RuntimeSessionController(
     }
 
     private fun flushMetricsBlocking(timeoutMs: Long = BLOCKING_FLUSH_TIMEOUT_MS): Boolean {
-        return metrics.flushBlocking(timeoutMs).also { succeeded ->
-            if (!succeeded) writer?.recordQuality(QualityCounterId.METRIC_FLUSH_TIMEOUT)
+        val activeWriter = writer
+        return metrics.flushBlocking(timeoutMs, activeWriter).also { succeeded ->
+            if (!succeeded) activeWriter?.recordQuality(QualityCounterId.METRIC_FLUSH_TIMEOUT)
         }
     }
 
@@ -301,6 +360,7 @@ internal class RuntimeSessionController(
         if (config.roomTracingEnabled()) flags = flags or Jhlog.COLLECTOR_ROOM
         if (config.databaseTracingEnabled()) flags = flags or Jhlog.COLLECTOR_DATABASE
         if (config.workerTracingEnabled()) flags = flags or Jhlog.COLLECTOR_WORKER
+        if (config.isRuntimeFeatureEnabled(JankHunterRuntimeFeature.HTTP)) flags = flags or Jhlog.COLLECTOR_HTTP
         return flags
     }
 
@@ -322,7 +382,6 @@ internal class RuntimeSessionController(
 
     private companion object {
         const val BLOCKING_FLUSH_TIMEOUT_MS = 1_000L
-        const val CRASH_FLUSH_TIMEOUT_MS = 100L
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }

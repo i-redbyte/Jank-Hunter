@@ -141,7 +141,7 @@ func compareDeltaGroups(deltas []analyze.Delta) []compareDeltaGroup {
 		"network": "Сеть и трафик",
 		"ui":      "Интерфейс и главный поток",
 		"memory":  "Память и удержания",
-		"context": "Контекст и когорты",
+		"context": "Условия запуска",
 		"other":   "Остальные сигналы",
 	}
 	details := map[string]string{
@@ -259,7 +259,7 @@ func compareDeltaLabel(name string) string {
 	case "DB repeated calls per transaction scope":
 		return "Повторных вызовов БД на транзакцию"
 	case "DB batch-candidate calls per transaction scope":
-		return "Кандидатов на пакетную запись БД на транзакцию"
+		return "Возможностей объединить записи БД в batch на транзакцию"
 	case "Service failure rate":
 		return "Доля ошибок методов службы"
 	case "Service timeout rate":
@@ -295,7 +295,7 @@ func compareDeltaLabel(name string) string {
 	case "Network mix":
 		return "Состав сети"
 	case "Cohort mix":
-		return "Состав когорт"
+		return "Состав групп запусков"
 	default:
 		return strings.ReplaceAll(name, "_", " ")
 	}
@@ -308,7 +308,7 @@ func compareDeltaHelp(name string) string {
 	case "HTTP failure rate":
 		return "Доля HTTP-вызовов с транспортной ошибкой или статусом 5xx. Сравнивается процент, а не сырое количество, поэтому разное число запросов не создает ложную регрессию. На малой выборке результат нужно подтвердить повтором."
 	case "UI jank rate":
-		return "Доля медленных кадров интерфейса. Рост в процентных пунктах показывает, что интерфейс стал чаще дёргаться."
+		return "Доля медленных кадров. Рост означает, что подтормаживания UI стали происходить чаще."
 	case "UI avg FPS":
 		return "Средняя частота кадров. Для FPS ухудшением считается падение значения."
 	case "Main-thread stall max":
@@ -324,7 +324,7 @@ func compareDeltaHelp(name string) string {
 	case "Log spam":
 		return "Частота вызовов android.util.Log.* и Timber.* в минуту. Нормализация по времени не дает более длинному прогону автоматически выглядеть хуже."
 	case "Problem windows":
-		return "Частота агрегированных проблемных окон в минуту. Окно объединяет близкие симптомы, но не доказывает их общую первопричину."
+		return "Частота проблемных окон в минуту. Окно объединяет близкие по времени симптомы, но не доказывает общую причину."
 	case "DB main-thread p95", "DB background p95":
 		return "Граница верхних 5% сравнивается отдельно для главного и фонового потоков и только при наличии не менее 20 вызовов каждого класса в обоих прогонах."
 	case "DB calls per minute", "DB wall per minute":
@@ -352,13 +352,13 @@ func compareDeltaHelp(name string) string {
 	case "Binder slow main-thread rate", "Binder failure rate", "Binder unhandled rate":
 		return "Сравнивается доля типизированных событий на границе Binder, а не абсолютное число событий."
 	case "Binder correlation coverage":
-		return "Доля клиентских вызовов с единственным серверным кандидатом сравнима только при одинаковом полном охвате процессов; связь остаётся сопоставлением, а не точным доказательством."
+		return "Долю однозначно связанных вызовов можно сравнивать только при одинаковом охвате процессов. Такая связь помогает расследованию, но не доказывает причину."
 	case "Hidden foreground-service share":
 		return "Описывает состав сценария: служба переднего плана при скрытом окне Activity не означает активный интерфейс и сама по себе не является регрессией."
 	case "Process mix", "App version mix", "SDK mix", "Device mix", "Network mix", "Cohort mix":
-		return "Проверка честности сравнения: база и кандидат должны быть собраны в сопоставимых условиях."
+		return "Базовый и проверяемый прогоны должны быть собраны в одинаковых условиях."
 	default:
-		return "Сравнительная метрика: смотрите направление изменения, доверие и размер выборки."
+		return "Сравнительная метрика: смотрите направление изменения, надёжность и количество данных."
 	}
 }
 

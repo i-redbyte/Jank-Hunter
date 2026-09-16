@@ -28,17 +28,19 @@ type ScorecardArtifacts struct {
 }
 
 type ScorecardDataQuality struct {
-	Confidence                 string            `json:"confidence"`
-	BaselineLogs               int               `json:"baseline_logs"`
-	CandidateLogs              int               `json:"candidate_logs"`
-	BaselineEvents             int               `json:"baseline_events"`
-	CandidateEvents            int               `json:"candidate_events"`
-	BaselineCollectionQuality  CollectionQuality `json:"baseline_collection_quality"`
-	CandidateCollectionQuality CollectionQuality `json:"candidate_collection_quality"`
-	CohortWarnings             []string          `json:"cohort_warnings,omitempty"`
-	QualityWarnings            []string          `json:"quality_warnings,omitempty"`
-	ExposureWarnings           []string          `json:"exposure_warnings,omitempty"`
-	Warnings                   []string          `json:"warnings,omitempty"`
+	BaselineAcquisition        AcquisitionEvidence `json:"baseline_acquisition"`
+	CandidateAcquisition       AcquisitionEvidence `json:"candidate_acquisition"`
+	Confidence                 string              `json:"confidence"`
+	BaselineLogs               int                 `json:"baseline_logs"`
+	CandidateLogs              int                 `json:"candidate_logs"`
+	BaselineEvents             int                 `json:"baseline_events"`
+	CandidateEvents            int                 `json:"candidate_events"`
+	BaselineCollectionQuality  CollectionQuality   `json:"baseline_collection_quality"`
+	CandidateCollectionQuality CollectionQuality   `json:"candidate_collection_quality"`
+	CohortWarnings             []string            `json:"cohort_warnings,omitempty"`
+	QualityWarnings            []string            `json:"quality_warnings,omitempty"`
+	ExposureWarnings           []string            `json:"exposure_warnings,omitempty"`
+	Warnings                   []string            `json:"warnings,omitempty"`
 }
 
 type ScorecardRow struct {
@@ -90,6 +92,8 @@ func BuildValidationScorecard(
 			CandidateHeapSources: comparison.Candidate.HeapSources(),
 		},
 		DataQuality: ScorecardDataQuality{
+			BaselineAcquisition:        AcquisitionEvidenceFor(comparison.Baseline),
+			CandidateAcquisition:       AcquisitionEvidenceFor(comparison.Candidate),
 			Confidence:                 comparison.Confidence(),
 			BaselineLogs:               comparison.Baseline.LogCount,
 			CandidateLogs:              comparison.Candidate.LogCount,
@@ -146,12 +150,10 @@ func dataQualityScore(comparison Comparison) ScorecardRow {
 		Score0To10: roundScore(score),
 		Status:     statusForScore(score),
 		Evidence: fmt.Sprintf(
-			"confidence=%s, baseline logs/events=%d/%d, candidate logs/events=%d/%d, cohort warnings=%d, quality warnings=%d, exposure warnings=%d; %s; %s",
+			"confidence=%s, %s; %s, cohort warnings=%d, quality warnings=%d, exposure warnings=%d; %s; %s",
 			comparison.Confidence(),
-			comparison.Baseline.LogCount,
-			comparison.Baseline.EventCount,
-			comparison.Candidate.LogCount,
-			comparison.Candidate.EventCount,
+			acquisitionGateDetail("baseline", comparison.Baseline),
+			acquisitionGateDetail("candidate", comparison.Candidate),
 			len(comparison.CohortWarnings),
 			len(comparison.QualityWarnings),
 			len(comparison.ExposureWarnings),
@@ -285,7 +287,7 @@ func ciGateReadinessScore(comparison Comparison) ScorecardRow {
 	if len(comparison.ExposureWarnings) > 0 {
 		score -= 1
 	}
-	if comparison.Baseline.LogCount >= 5 && comparison.Candidate.LogCount >= 5 {
+	if AcquisitionEvidenceFor(comparison.Baseline).IndependentGroups >= 5 && AcquisitionEvidenceFor(comparison.Candidate).IndependentGroups >= 5 {
 		score += 1
 	}
 	score = clampScore(score)
@@ -294,10 +296,10 @@ func ciGateReadinessScore(comparison Comparison) ScorecardRow {
 		Score0To10: roundScore(score),
 		Status:     statusForScore(score),
 		Evidence: fmt.Sprintf(
-			"confidence=%s, baseline_logs=%d, candidate_logs=%d, cohort_warnings=%d, quality_warnings=%d, exposure_warnings=%d; %s; %s",
+			"confidence=%s, %s; %s, cohort_warnings=%d, quality_warnings=%d, exposure_warnings=%d; %s; %s",
 			comparison.Confidence(),
-			comparison.Baseline.LogCount,
-			comparison.Candidate.LogCount,
+			acquisitionGateDetail("baseline", comparison.Baseline),
+			acquisitionGateDetail("candidate", comparison.Candidate),
 			len(comparison.CohortWarnings),
 			len(comparison.QualityWarnings),
 			len(comparison.ExposureWarnings),
@@ -381,7 +383,7 @@ func scorecardSummary(
 func dataQualityActions(comparison Comparison) []string {
 	var actions []string
 	if sampleConfidence(comparison.Baseline, comparison.Candidate) != "high" {
-		actions = append(actions, "Collect 5+ logs and 500+ events per baseline/candidate cohort for high confidence.")
+		actions = append(actions, "Collect 5+ independent acquisition groups with complete run/process identities and 500+ non-session events per baseline/candidate cohort for high confidence. Rotation does not create replication.")
 	}
 	if len(comparison.CohortWarnings) > 0 {
 		actions = append(actions, "Normalize cohorts before comparing regressions.")

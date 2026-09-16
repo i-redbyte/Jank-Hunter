@@ -6,11 +6,19 @@ import java.nio.file.Files
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 class JankHunterIOHooksTest {
     private lateinit var directory: java.io.File
+
+    @Test
+    fun recordPathReusesTelemetryResolvedByTheEntryHook() {
+        val record = JankHunterIOHooks::class.java.declaredMethods.single { it.name == "record" }
+
+        assertTrue(record.parameterTypes.firstOrNull() == RuntimeIOTelemetry::class.java)
+    }
 
     @Before
     fun setUp() {

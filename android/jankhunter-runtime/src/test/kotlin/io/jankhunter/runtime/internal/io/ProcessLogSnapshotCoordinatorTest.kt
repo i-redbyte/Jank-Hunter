@@ -2,11 +2,15 @@ package io.jankhunter.runtime.internal.io
 
 import io.jankhunter.runtime.JankHunterLogSnapshot
 import java.io.IOException
+import java.io.RandomAccessFile
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -94,8 +98,68 @@ class ProcessLogSnapshotCoordinatorTest {
         assertEquals("snapshot", result.value)
     }
 
+    @Test
+    fun deadlineRunnerDoesNotHideFatalCaptureFailure() {
+        assertThrows(FatalCaptureError::class.java) {
+            ProcessLogSnapshotCoordinator.runBeforeDeadline(Long.MAX_VALUE) {
+                throw FatalCaptureError()
+            }
+        }
+    }
+
+    @Test
+    fun fileLockAcquisitionHonorsTheCaptureDeadline() {
+        val file = Files.createTempFile("jankhunter-snapshot-lock", ".lock").toFile()
+        RandomAccessFile(file, "rw").use { owner ->
+            RandomAccessFile(file, "rw").use { contender ->
+                owner.channel.lock().use {
+                    val startedAtNs = System.nanoTime()
+                    val deadlineNs = startedAtNs + TimeUnit.MILLISECONDS.toNanos(TEST_TIMEOUT_MS)
+
+                    val acquired = ProcessLogSnapshotCoordinator.acquireLockBeforeDeadline(
+                        contender.channel,
+                        deadlineNs,
+                    )
+                    val elapsedNs = System.nanoTime() - startedAtNs
+
+                    assertNull(acquired)
+                    assertTrue(elapsedNs >= TimeUnit.MILLISECONDS.toNanos(TEST_TIMEOUT_MS / 2L))
+                    assertTrue(elapsedNs < TimeUnit.SECONDS.toNanos(MAX_TEST_DURATION_SECONDS))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun responseAdmissionIsReleasedWhenCaptureWasNotHandedOff() {
+        val responseInFlight = AtomicBoolean(true)
+
+        ProcessLogSnapshotCoordinator.releaseUnhandedResponseAdmission(
+            responseInFlight = responseInFlight,
+            captureAllowed = true,
+            captureHandedOff = false,
+        )
+
+        assertFalse(responseInFlight.get())
+    }
+
+    @Test
+    fun responseAdmissionStaysOwnedByHandedOffCapture() {
+        val responseInFlight = AtomicBoolean(true)
+
+        ProcessLogSnapshotCoordinator.releaseUnhandedResponseAdmission(
+            responseInFlight = responseInFlight,
+            captureAllowed = true,
+            captureHandedOff = true,
+        )
+
+        assertTrue(responseInFlight.get())
+    }
+
     private companion object {
         const val TEST_TIMEOUT_MS = 100L
         const val MAX_TEST_DURATION_SECONDS = 2L
     }
+
+    private class FatalCaptureError : VirtualMachineError()
 }

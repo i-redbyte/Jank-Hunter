@@ -19,10 +19,10 @@ class ProcessLogSnapshotCoordinatorArtTest {
     fun concurrentRequestersCaptureEveryParticipantWithoutDeadlock() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val directory = context.cacheDir.resolve("jankhunter-snapshot-${System.nanoTime()}").apply { mkdirs() }
-        val first = ProcessLogSnapshotCoordinator.start(context, directory, "app") {
+        val first = ProcessLogSnapshotCoordinator.start(context, directory, "app") { _ ->
             JankHunterLogSnapshot(10L, listOf("/data/main.jhlog"))
         }
-        val second = ProcessLogSnapshotCoordinator.start(context, directory, "app:remote") {
+        val second = ProcessLogSnapshotCoordinator.start(context, directory, "app:remote") { _ ->
             JankHunterLogSnapshot(15L, listOf("/data/remote.jhlog"))
         }
         val start = CountDownLatch(1)
@@ -47,6 +47,62 @@ class ProcessLogSnapshotCoordinatorArtTest {
             secondThread.join(1_000L)
             assertFalse(firstThread.isAlive)
             assertFalse(secondThread.isAlive)
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interruptedRequesterStopsWaitingForAMissingParticipant() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val directory = context.cacheDir.resolve("jankhunter-snapshot-interrupt-${System.nanoTime()}").apply { mkdirs() }
+        val localCaptured = CountDownLatch(1)
+        val coordinator = ProcessLogSnapshotCoordinator.start(context, directory, "app") { _ ->
+            localCaptured.countDown()
+            JankHunterLogSnapshot(10L, listOf("/data/main.jhlog"))
+        }
+        val silentParticipant = ProcessSnapshotParticipants.join(directory, "app:silent")
+        val captureThread = Thread({ coordinator.capture() }, "JankHunterSnapshotInterruptedRequester")
+        try {
+            captureThread.start()
+            assertTrue("local snapshot was not captured", localCaptured.await(2L, TimeUnit.SECONDS))
+
+            captureThread.interrupt()
+            captureThread.join(1_000L)
+
+            assertFalse("interrupted snapshot requester kept polling", captureThread.isAlive)
+        } finally {
+            coordinator.close()
+            silentParticipant.close()
+            captureThread.interrupt()
+            captureThread.join(1_000L)
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun requesterStopsSoonAfterAParticipantLeaves() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val directory = context.cacheDir.resolve("jankhunter-snapshot-leave-${System.nanoTime()}").apply { mkdirs() }
+        val localCaptured = CountDownLatch(1)
+        val coordinator = ProcessLogSnapshotCoordinator.start(context, directory, "app") { _ ->
+            localCaptured.countDown()
+            JankHunterLogSnapshot(10L, listOf("/data/main.jhlog"))
+        }
+        val leavingParticipant = ProcessSnapshotParticipants.join(directory, "app:leaving")
+        val captureThread = Thread({ coordinator.capture() }, "JankHunterSnapshotLeavingRequester")
+        try {
+            captureThread.start()
+            assertTrue("local snapshot was not captured", localCaptured.await(2L, TimeUnit.SECONDS))
+
+            leavingParticipant.close()
+            captureThread.join(2_000L)
+
+            assertFalse("snapshot requester waited for the full deadline", captureThread.isAlive)
+        } finally {
+            coordinator.close()
+            leavingParticipant.close()
+            captureThread.interrupt()
+            captureThread.join(1_000L)
             directory.deleteRecursively()
         }
     }

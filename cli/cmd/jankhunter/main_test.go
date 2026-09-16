@@ -35,8 +35,8 @@ func TestConfigureCLIGarbageCollectorUsesBoundedMemoryDefault(t *testing.T) {
 	debug.SetGCPercent(137)
 
 	restore := configureCLIGarbageCollector()
-	if current := currentGCPercent(); current != 35 {
-		t.Fatalf("GC percent = %d, want 35", current)
+	if current := currentGCPercent(); current != 75 {
+		t.Fatalf("GC percent = %d, want 75", current)
 	}
 	restore()
 	if current := currentGCPercent(); current != 137 {
@@ -171,11 +171,11 @@ func TestRepresentativeReportBundlesStayWithinBudget(t *testing.T) {
 		t,
 		inspectPath,
 		"overview",
-		`data-deferred-total="12925"`,
-		"Показать ещё 50",
+		"Связи вызовов:</strong> показано 256 из 12925",
+		"Полный машинный набор доступен в JSON-выводе",
 	)
-	assertBundlePageNotContains(t, inspectPath, "overview", `data-search=`, "Ребра runtime-графа:</strong> показано 256 из 12925")
-	assertBundlePageContains(t, inspectPath, "math", `href="inspect.html#runtime-calls"`, "не дублируется второй раз")
+	assertBundlePageNotContains(t, inspectPath, "overview", `data-search=`, `data-deferred-total="12925"`)
+	assertBundlePageContains(t, inspectPath, "math", `href="inspect.html#runtime-calls"`, "повторно не выводится")
 	assertBundlePageNotContains(t, inspectPath, "math", `data-deferred-total="12925"`)
 
 	candidate := copyFileForTest(t, fixture, filepath.Join(directory, "candidate.jhlog"))
@@ -223,7 +223,7 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	assertFileContains(t, inspectPath, `data-jankhunter-single-html`)
 	assertBundlePageContains(t, inspectPath, "overview", "Подробный анализ", `href="report-math.html"`, "Утечки памяти", `href="report-leaks.html"`, "Удержания и возможные утечки памяти")
 	assertBundlePageContains(t, inspectPath, "math", "Математический анализ", "Качество данных", "Разбор утечек памяти", "Устойчивая статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Что измеряет")
-	assertBundlePageContains(t, inspectPath, "leaks", "Удержания и возможные утечки памяти", "Проводник утечек", "Сигналы достижимости", "легкий режим", "Контекст обнаружения удержанного объекта")
+	assertBundlePageContains(t, inspectPath, "leaks", "Удержания и возможные утечки памяти", "Подробности удержания объектов", "Сигналы достижимости", "легкий режим", "Контекст обнаружения удержанного объекта")
 	assertNoCompanionReports(t, inspectPath)
 
 	diagnosticsPath := filepath.Join(dir, "instrumentation-diagnostics.jsonl")
@@ -267,9 +267,9 @@ func TestInspectAndCompareWriteMathReports(t *testing.T) {
 	if err := runCompare([]string{"--baseline", samplePath, "--candidate", candidatePath, "--out", comparePath}); err != nil {
 		t.Fatalf("runCompare() error = %v", err)
 	}
-	assertBundlePageContains(t, comparePath, "overview", "λ Анализ", `href="compare-math.html"`, "Утечки памяти", `href="compare-leaks.html"`, "Сравнение сигналов удержания памяти")
+	assertBundlePageContains(t, comparePath, "overview", "Подробный анализ", `href="compare-math.html"`, "Утечки памяти", `href="compare-leaks.html"`, "Сравнение сигналов удержания памяти")
 	assertBundlePageContains(t, comparePath, "math", "Математический анализ сравнения", "Качество сравнения", "Сравнение сигналов удержания памяти", "Устойчивая статистика", "Точки изменения", "Периодические сигналы", "Сетевые циклы", "Граф связей и гипотез", "Сводка разделов", "Справка по методам", "Поля при сравнении")
-	assertBundlePageContains(t, comparePath, "leaks", "Сравнение сигналов удержания памяти", "Проводник изменений удержания", "количество сигналов удержания не изменилось")
+	assertBundlePageContains(t, comparePath, "leaks", "Сравнение сигналов удержания памяти", "Разбор изменений удержания", "количество сигналов удержания не изменилось")
 	assertNoCompanionReports(t, comparePath)
 
 	customComparePath := filepath.Join(dir, "another.custom.name.html")
@@ -844,7 +844,7 @@ func TestReportUsesSoleCurrentStyleAndRejectsRemovedFlag(t *testing.T) {
 			t,
 			reportPath,
 			pageID,
-			"--bg: #111512",
+			"--forest: #006400",
 			"padding: 8px !important",
 		)
 	}
@@ -1021,6 +1021,10 @@ func TestAnalysisOptionsBuilderLeavesRemovedSymbolFlagsUnsupported(t *testing.T)
 func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "app", "build", "generated", "jankhunter", "debug")
 	writeAndroidArtifactBundle(t, directory, true)
+	lambdaCaptures := `{"format":1,"class":"com.app.Feed","captures":[{"callsiteId":"stable:0x0000000000000001","owner":"com.app.Feed.load()V","implementation":"com.app.Feed.load$lambda$0","functionalInterface":"java.lang.Runnable","representation":"invokedynamic","values":[{"type":"com.app.MainActivity","role":"capture","strength":"strong"}],"sinks":["handler.queue"]}]}` + "\n"
+	if err := os.WriteFile(filepath.Join(directory, "lambda-captures.jsonl"), []byte(lambdaCaptures), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	builder, remaining, err := takeAnalysisOptionsBuilder([]string{
 		"--artifacts-dir", directory,
@@ -1047,6 +1051,9 @@ func TestAnalysisOptionsBuilderLoadsCanonicalArtifactBundle(t *testing.T) {
 	}
 	if options.AndroidComponentCatalog == nil || !options.AndroidComponentCatalog.Available {
 		t.Fatalf("Android component catalog = %+v", options.AndroidComponentCatalog)
+	}
+	if options.LambdaCaptures == nil || !options.LambdaCaptures.Available || len(options.LambdaCaptures.Captures) != 1 {
+		t.Fatalf("lambda captures = %+v", options.LambdaCaptures)
 	}
 }
 

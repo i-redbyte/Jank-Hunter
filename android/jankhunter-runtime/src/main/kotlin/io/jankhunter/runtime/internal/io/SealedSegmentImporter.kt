@@ -33,7 +33,7 @@ internal object SealedSegmentImporter {
         val destination = File(artifact.path)
         val parent = destination.parentFile
             ?: throw IOException("Jank Hunter target segment has no parent: ${destination.absolutePath}")
-        if (!parent.isDirectory && !parent.mkdirs()) {
+        if (!parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
             throw IOException("Cannot create Jank Hunter target directory: ${parent.absolutePath}")
         }
         val temporary = File.createTempFile(".${destination.name}.", ".handoff", parent)
@@ -70,7 +70,7 @@ internal object SealedSegmentImporter {
     fun import(sourcePath: String, targetDirectory: File): ImportResult {
         val source = File(sourcePath)
         if (!source.isFile) throw IOException("Jank Hunter source segment is missing: $sourcePath")
-        if (!targetDirectory.isDirectory && !targetDirectory.mkdirs()) {
+        if (!targetDirectory.isDirectory && !targetDirectory.mkdirs() && !targetDirectory.isDirectory) {
             throw IOException("Cannot create Jank Hunter target directory: ${targetDirectory.absolutePath}")
         }
         val destination = File(targetDirectory, source.name)

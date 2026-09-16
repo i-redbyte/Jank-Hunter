@@ -2,7 +2,6 @@ package io.jankhunter.runtime
 
 import android.view.View
 import java.util.concurrent.Callable
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,7 +9,15 @@ import org.junit.Test
 class RuntimeDecoratorFactoryTest {
     private val callbacks: RuntimeAsyncCallbacks
         get() = JankHunter.asyncTelemetry()
-    private val handlerOwner = HandlerRunnableOwner { _, _ -> }
+
+    @Test
+    fun additionalTypeContractClassificationUsesBoundedWeakCaches() {
+        val factory = Class.forName("io.jankhunter.runtime.RuntimeDecoratorFactoryKt")
+
+        assertTrue(
+            factory.declaredFields.count { it.type == BoundedWeakIdentityCache::class.java } >= 2,
+        )
+    }
 
     @Test
     fun publicDecoratorsAreNoopsWhenRuntimeInactive() {
@@ -50,16 +57,6 @@ class RuntimeDecoratorFactoryTest {
 
         assertSame(priorityRunnable, wrapRunnableDecorator(priorityRunnable, "owner", true, callbacks))
         assertSame(priorityCallable, wrapCallableDecorator(priorityCallable, "owner", true, callbacks))
-    }
-
-    @Test
-    fun handlerRunnableWrapperUsesReplacementDecorator() {
-        val runnable = Runnable {}
-        val wrapped = wrapHandlerRunnableDecorator(runnable, "owner", true, callbacks, handlerOwner)
-
-        assertNotSame(runnable, wrapped)
-        assertTrue(wrapped is JankHunterHandlerRunnable)
-        assertSame(wrapped, wrapHandlerRunnableDecorator(wrapped, "owner", true, callbacks, handlerOwner))
     }
 
     private interface PriorityRunnable : Runnable

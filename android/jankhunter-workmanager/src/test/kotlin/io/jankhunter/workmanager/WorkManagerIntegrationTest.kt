@@ -5,6 +5,9 @@ import androidx.work.ListenableWorker
 import androidx.work.OneTimeWorkRequest
 import androidx.work.PeriodicWorkRequest
 import androidx.work.Worker
+import androidx.work.WorkInfo
+import com.google.common.util.concurrent.ListenableFuture
+import java.util.concurrent.Executor
 import androidx.work.WorkerParameters
 import io.jankhunter.runtime.JankHunterWorkerRuntime
 import io.jankhunter.runtime.JankHunterWorkerOutcome
@@ -53,11 +56,17 @@ class WorkManagerIntegrationTest {
             listOf(OneTimeWorkRequest.Builder(TestWorker::class.java).build()),
         )
 
-        WorkEnqueueListener(CompletableFuture.completedFuture(Unit), batch, sink).run()
+        val lookup = WorkRegistrationLookup { id ->
+            object : CompletableFuture<WorkInfo?>(), ListenableFuture<WorkInfo?> {
+                init { complete(WorkInfo(id, WorkInfo.State.ENQUEUED, emptySet())) }
+                override fun addListener(listener: Runnable, executor: Executor) = executor.execute(listener)
+            }
+        }
+        WorkEnqueueListener(CompletableFuture.completedFuture(Unit), batch, sink, lookup).run()
         val failed = CompletableFuture<Unit>().also { it.completeExceptionally(IllegalStateException("rejected")) }
-        WorkEnqueueListener(failed, batch, sink).run()
+        WorkEnqueueListener(failed, batch, sink, lookup).run()
         val cancelled = CompletableFuture<Unit>().also { it.cancel(false) }
-        WorkEnqueueListener(cancelled, batch, sink).run()
+        WorkEnqueueListener(cancelled, batch, sink, lookup).run()
 
         assertEquals(1, accepted.get())
     }

@@ -2,6 +2,7 @@ package io.jankhunter.runtime
 
 import android.os.Looper
 import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicLong
 
 internal class RuntimeContextTelemetry(
     private val state: RuntimeState,
@@ -10,6 +11,35 @@ internal class RuntimeContextTelemetry(
     private val callGraph: RuntimeCallGraph,
     private val elapsedRealtimeMs: RuntimeLongSource,
 ) {
+    private val stallIds = AtomicLong()
+
+    fun nextMainThreadStallId(): Long = stallIds.incrementAndGet().also { check(it > 0L) }
+
+    fun bindMainThreadStallCallbacks(): MainThreadStallCallbacks {
+        val writer = access.writer
+        return object : MainThreadStallCallbacks {
+            private var foreground = access.isUiVisible()
+
+            override fun nextMainThreadStallId(): Long = this@RuntimeContextTelemetry.nextMainThreadStallId()
+
+            override fun captureMainThreadStallContext(owner: String?): JankHunterContextSnapshot {
+                if (writer !== access.writer) return JankHunterContextSnapshot(null, owner)
+                foreground = access.isUiVisible()
+                return this@RuntimeContextTelemetry.captureMainThreadStallContext(owner)
+            }
+
+            override fun recordMainThreadStall(
+                context: JankHunterContextSnapshot, stackHint: String?, durationMs: Long,
+                incidentId: Long, state: MainThreadStallState,
+            ) {
+                writer?.updateProducerContext(context.screen, context.owner, context.operationId)
+                writer?.stall(context.screen, context.owner, stackHint, durationMs, foreground, incidentId, state.wireValue)
+                // Make the first observation available in an open log, without main-thread recovery.
+                writer?.flush()
+            }
+        }
+    }
+
     fun withOwner(ownerName: String?, runnable: Runnable) {
         val start = elapsedRealtimeMs.getAsLong()
         try {
@@ -52,7 +82,10 @@ internal class RuntimeContextTelemetry(
         RuntimeHookGuard.run { access.ensureContextRecorded() }
     }
 
-    fun captureSnapshot(): JankHunterContextSnapshot {
+    fun captureSnapshot(
+        collectionEpochId: Long = access.collectionEpoch?.id ?: 0L,
+        httpToken: Long = 0L,
+    ): JankHunterContextSnapshot {
         val context = access.captureContext()
         return JankHunterContextSnapshot(
             context.screen,
@@ -61,6 +94,8 @@ internal class RuntimeContextTelemetry(
             callGraph.currentMethodId(),
             callGraph.currentMethodName(),
             operationId = context.operationId,
+            collectionEpochId = collectionEpochId,
+            httpToken = httpToken,
         )
     }
 
@@ -112,14 +147,20 @@ internal class RuntimeContextTelemetry(
         contextSnapshot: JankHunterContextSnapshot,
         stackHint: String?,
         durationMs: Long,
+        incidentId: Long,
+        stallState: MainThreadStallState,
     ) {
         val context = contextSnapshot.asRuntimeContext()
-        access.writer?.stall(
+        val writer = access.writer
+        writer?.updateProducerContext(context.screen, context.owner, context.operationId)
+        writer?.stall(
             context.screen,
             context.owner,
             stackHint,
             durationMs,
             foreground = access.isUiVisible(),
+            incidentId = incidentId,
+            state = stallState.wireValue,
         )
     }
 

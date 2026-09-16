@@ -11,10 +11,13 @@ import io.jankhunter.runtime.JankHunterStorageSwitchResult
 import io.jankhunter.runtime.OperationEventSink
 import io.jankhunter.runtime.RuntimeLongSource
 import io.jankhunter.runtime.internal.concurrent.BoundedMpscQueue.OfferResult
+import io.jankhunter.runtime.internal.monotonicDeadlineAfterMillis
 import io.jankhunter.runtime.internal.system.RetentionEvidence
+import io.jankhunter.runtime.internal.system.isRuntimeMainThread
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.locks.LockSupport
 import kotlin.concurrent.withLock
 
@@ -37,9 +40,14 @@ internal class AsyncLogWriter internal constructor(
     private val collectorStartElapsedUs: Long,
     private val currentTimeMs: RuntimeLongSource,
     private val quality: LogQualityCounters,
-    private val logGrowthManager: LogGrowthManager?,
+    private val prepareSession: () -> LogGrowthManager?,
     private val onTerminalStop: AsyncWriterTerminalObserver,
+    private val workerThreadFactory: (Runnable, String) -> Thread = ::Thread,
 ) : OperationEventSink {
+    @Volatile
+    private var logGrowthManager: LogGrowthManager? = null
+
+    private var sessionFactory: AsyncLogSessionFactory? = null
     private val producer = AsyncWriterProducer(config)
     private val consumer = AsyncWriterConsumer(
         directory = directory,
@@ -49,23 +57,15 @@ internal class AsyncLogWriter internal constructor(
         quality = quality,
     )
     private val lifecycle = AsyncWriterLifecycle()
+    private val collectionEndLock = ReentrantLock()
+    private var collectionEndObserver: (() -> Unit)? = null
+    // Match relative semaphore waits: active time, excluding Android deep sleep.
+    private val flushIntervalNs = TimeUnit.MILLISECONDS.toNanos(config.flushIntervalMs())
     private val controls = AsyncWriterControlCoordinator(
-        exactEventCollection = config.exactEventCollectionEnabled(),
         quality = quality,
         beginSubmission = ::beginControlSubmission,
-        wakeWorker = producer.queuedEvents::release,
+        wakeWorker = { producer.requestWorkerWake() },
     )
-    private val sessionFactory = AsyncLogSessionFactory(
-        directory = directory,
-        config = config,
-        processName = processName,
-        expectedProcesses = expectedProcesses,
-        rosterDeclarationComplete = rosterDeclarationComplete,
-        collectorStartElapsedUs = collectorStartElapsedUs,
-        quality = quality,
-        logGrowthManager = logGrowthManager,
-    )
-
     fun session(
         appVersion: String?,
         build: String?,
@@ -130,6 +130,8 @@ internal class AsyncLogWriter internal constructor(
         totalStorageKb: Long,
         networkVpn: Boolean,
         foreground: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ) {
         enqueue(Jhlog.TYPE_DEVICE_CONTEXT, LogEventLane.BULK) {
             PendingDeviceContextEvent(
@@ -149,6 +151,8 @@ internal class AsyncLogWriter internal constructor(
                 totalStorageKb,
                 networkVpn,
                 foreground,
+                trafficUidPlusOne,
+                trafficKnownFlags,
             )
         }
     }
@@ -324,7 +328,10 @@ internal class AsyncLogWriter internal constructor(
         stackHint: String?,
         durationMs: Long,
         foreground: Boolean,
+        incidentId: Long = 0L,
+        state: Long = Jhlog.STALL_STATE_RECOVERED,
     ) {
+        validateStallLifecycle(incidentId, state)
         enqueue(Jhlog.TYPE_STALL, LogEventLane.CRITICAL) {
             PendingStallEvent(
                 producer.context.capture(screen, owner),
@@ -333,6 +340,8 @@ internal class AsyncLogWriter internal constructor(
                 stackHint,
                 durationMs,
                 foreground,
+                incidentId,
+                state,
             )
         }
     }
@@ -499,6 +508,44 @@ internal class AsyncLogWriter internal constructor(
         }
     }
 
+    internal fun recordCrash() = recordCrashDiagnostic("jankhunter.runtime.crash.count")
+
+    internal fun recordCrashDiagnostic(name: String): Boolean {
+        // One cold-path attempt keeps the ordinary inline enqueue bytecode unchanged. As in
+        // enqueue, the admission lock guards offer + sequence publication; rejections create no gap.
+        if (!producer.admissionLock.tryLock()) return rejectCrashDiagnostic(QualityCounterId.REASON_ADMISSION_CONTENTION)
+        try {
+            if (!lifecycle.isAccepting()) return rejectCrashDiagnostic(QualityCounterId.REASON_NOT_ACCEPTING)
+            if (!producer.eventLanes.hasCapacity(LogEventLane.CRITICAL)) {
+                return rejectCrashDiagnostic(QualityCounterId.REASON_QUEUE_FULL)
+            }
+            val event = PendingCounterEvent(producer.context.capture(), name, 1L)
+            event.sequence = producer.acceptedSequence + 1L
+            val result = producer.eventLanes.tryOffer(LogEventLane.CRITICAL, event)
+            if (result == OfferResult.OFFERED) {
+                producer.acceptedSequence = event.sequence
+                quality.addAccepted(event.logicalEventCount)
+                if (!startWorker()) return false
+                producer.requestWorkerWake()
+                return true
+            }
+            event.rejectBeforeAdmission()
+            return rejectCrashDiagnostic(
+                if (result == OfferResult.FULL) QualityCounterId.REASON_QUEUE_FULL else QualityCounterId.REASON_ADMISSION_CONTENTION,
+            )
+        } finally {
+            producer.admissionLock.unlock()
+        }
+    }
+
+    private fun rejectCrashDiagnostic(reason: Int): Boolean {
+        if (reason == QualityCounterId.REASON_ADMISSION_CONTENTION) {
+            quality.add(QualityCounterId.WRITER_ADMISSION_CONTENTION_TOTAL)
+        }
+        quality.addRejected(Jhlog.TYPE_COUNTER, reason)
+        return false
+    }
+
     fun counter(name: String?, value: Long) {
         if (value < 0L) {
             recordQuality(QualityCounterId.INVALID_METRIC)
@@ -530,6 +577,16 @@ internal class AsyncLogWriter internal constructor(
         }
         enqueue(Jhlog.TYPE_GAUGE, metricLane(name)) {
             PendingGaugeEvent(producer.context.capture(), name, value, count, sum, max, mode)
+        }
+    }
+
+    fun gaugeWide(name: String?, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long) {
+        if (value < 0L || count <= 0L || max < 0L || sumHigh < 0L || sumHigh >= count) {
+            recordQuality(QualityCounterId.INVALID_METRIC)
+            return
+        }
+        enqueue(Jhlog.TYPE_GAUGE, metricLane(name)) {
+            PendingGaugeEvent(producer.context.capture(), name, value, count, sum, max, mode, sumHigh)
         }
     }
 
@@ -589,7 +646,44 @@ internal class AsyncLogWriter internal constructor(
         quality.add(counterId, delta)
     }
 
+    internal fun recordQualityOnce(counterId: Int, value: Long) = quality.recordOnce(counterId, value)
+
     internal fun isAcceptingEvents(): Boolean = lifecycle.isAccepting()
+
+    /** Internal primitive accounting only: must finish before a terminal quality snapshot is sealed. */
+    internal fun bindCollectionEndObserver(observer: () -> Unit) = collectionEndLock.withLock {
+        check(collectionEndObserver == null) { "Collection observer already bound" }
+        if (lifecycle.isAccepting()) collectionEndObserver = observer else observer()
+    }
+
+    private fun stopAccepting() = collectionEndLock.withLock { finishCollectionAccounting() }
+
+    private fun stopAccepting(deadlineNs: Long): Boolean {
+        val acquired = try {
+            collectionEndLock.tryLock((deadlineNs - System.nanoTime()).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!acquired) return false
+        try {
+            finishCollectionAccounting()
+        } finally {
+            collectionEndLock.unlock()
+        }
+        return true
+    }
+
+    private fun finishCollectionAccounting() {
+        val observer = collectionEndObserver
+        collectionEndObserver = null
+        try {
+            // Concurrent close must not let the consumer seal before this callback has finished.
+            observer?.invoke()
+        } finally {
+            lifecycle.stopAccepting()
+        }
+    }
 
     internal fun terminalFailureCause(): Throwable? = lifecycle.terminalFailure()
 
@@ -597,16 +691,17 @@ internal class AsyncLogWriter internal constructor(
         controls.flush()
     }
 
-    fun flushBlocking(
-        timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS,
-        waitForExactFrontier: Boolean = true,
-    ): Boolean {
-        return controls.submitBlocking(timeoutMs, writeLogGrowth = false, waitForExactFrontier)
+    fun flushBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
+        return controls.submitBlocking(timeoutMs, writeLogGrowth = false)
     }
 
     internal fun writeLogGrowthSummaryBlocking(timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS): Boolean {
-        if (logGrowthManager == null) return false
-        return controls.submitBlocking(timeoutMs, writeLogGrowth = true, waitForExactFrontier = true)
+        if (!config.logGrowthAnalyticsEnabled()) return false
+        return controls.submitBlocking(
+            timeoutMs,
+            writeLogGrowth = true,
+            requireLogGrowth = true,
+        )
     }
 
     internal fun captureSnapshotBlocking(
@@ -615,8 +710,7 @@ internal class AsyncLogWriter internal constructor(
         var snapshot: LogSnapshotResult? = null
         val succeeded = controls.submitBlocking(
             timeoutMs = timeoutMs,
-            writeLogGrowth = logGrowthManager != null,
-            waitForExactFrontier = true,
+            writeLogGrowth = config.logGrowthAnalyticsEnabled(),
             sealSnapshot = true,
             onComplete = { request -> snapshot = request.snapshot },
         )
@@ -626,24 +720,26 @@ internal class AsyncLogWriter internal constructor(
     internal fun switchBinaryStorageBlocking(
         storage: JankHunterBinaryStorage?,
         timeoutMs: Long = DEFAULT_BLOCKING_TIMEOUT_MS,
+        onComplete: (JankHunterStorageSwitchResult) -> Unit = {},
     ): JankHunterStorageSwitchResult {
         if (!lifecycle.isAccepting()) return JankHunterStorageSwitchResult.NOT_ACCEPTING
         if (Thread.currentThread() === consumer.worker) return JankHunterStorageSwitchResult.FAILED
         if (consumer.binaryStorage === storage) return JankHunterStorageSwitchResult.ALREADY_ACTIVE
         var result = JankHunterStorageSwitchResult.FAILED
         var completed = false
-        controls.submitBlocking(
+        val submission = controls.submitBlockingOutcome(
             timeoutMs = timeoutMs,
-            writeLogGrowth = logGrowthManager != null,
-            waitForExactFrontier = true,
+            writeLogGrowth = config.logGrowthAnalyticsEnabled(),
             storageSwitch = StorageSwitchRequest(storage),
             onComplete = { request ->
                 result = request.storageSwitchResult
                 completed = true
             },
+            onDeferredComplete = { request -> onComplete(request.storageSwitchResult) },
         )
         return if (completed) result else when {
             !lifecycle.isAccepting() -> JankHunterStorageSwitchResult.NOT_ACCEPTING
+            submission == AsyncControlSubmissionOutcome.IN_PROGRESS -> JankHunterStorageSwitchResult.IN_PROGRESS
             else -> JankHunterStorageSwitchResult.TIMED_OUT
         }
     }
@@ -652,25 +748,36 @@ internal class AsyncLogWriter internal constructor(
         logGrowthManager?.summary(consumer.writer?.logGrowthStats())
 
     fun close(timeoutMs: Long = closeTimeoutMs()): Boolean {
-        producer.admissionLock.withLock {
-            lifecycle.stopAccepting()
+        val deadlineNs = monotonicDeadlineAfterMillis(timeoutMs.coerceAtLeast(0L))
+        if (!stopAccepting(deadlineNs)) {
+            quality.add(QualityCounterId.CLOSE_TIMEOUT_TOTAL)
+            return false
         }
-        val activeWorker = consumer.worker
+        producer.requestWorkerWake()
+        // The worker reference may be published before Thread.start returns. Admission is the
+        // completion barrier for both event publication and lazy worker startup, with one deadline.
+        val acquired = try {
+            producer.admissionLock.tryLock((deadlineNs - System.nanoTime()).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!acquired) {
+            quality.add(QualityCounterId.CLOSE_TIMEOUT_TOTAL)
+            return false
+        }
+        val activeWorker = try {
+            consumer.worker
+        } finally {
+            producer.admissionLock.unlock()
+        }
         if (activeWorker == null) {
             finishSession(null)
             return true
         }
-        // Wake an idle poll without interrupting an in-flight file lock, custom storage call or
-        // chunk commit. Interrupting those operations can turn an orderly shutdown into data loss.
-        producer.queuedEvents.release()
-        val finished = waitForWorker(
-            activeWorker,
-            timeoutMs.coerceAtLeast(1L),
-            waitUntilFinished = config.exactEventCollectionEnabled(),
-        )
-        if (!finished) {
-            quality.add(QualityCounterId.CLOSE_TIMEOUT_TOTAL)
-        }
+        if (Thread.currentThread() === activeWorker) return true
+        val finished = waitForWorker(activeWorker, deadlineNs)
+        if (!finished) quality.add(QualityCounterId.CLOSE_TIMEOUT_TOTAL)
         return finished
     }
 
@@ -682,7 +789,7 @@ internal class AsyncLogWriter internal constructor(
     ): Boolean {
         val exact = config.exactEventCollectionEnabled()
         val admissionBudgetNs = if (exact) {
-            val waitMs = if (Thread.currentThread().name == MAIN_THREAD_NAME) {
+            val waitMs = if (isRuntimeMainThread()) {
                 config.mainThreadAdmissionWaitMs()
             } else {
                 config.backgroundAdmissionWaitMs()
@@ -727,7 +834,7 @@ internal class AsyncLogWriter internal constructor(
                                 quality.addAccepted(event.logicalEventCount)
                                 recordWriterBackpressure(blockedAtNs)
                                 if (!startWorker()) return false
-                                producer.queuedEvents.release()
+                                producer.requestWorkerWake()
                                 return true
                             }
                             OfferResult.FULL -> {
@@ -773,21 +880,26 @@ internal class AsyncLogWriter internal constructor(
         )
     }
 
-    private fun beginControlSubmission(startIfNeeded: Boolean = false): Long {
-        return producer.admissionLock.withLock {
-            if (!lifecycle.isAccepting()) return@withLock AsyncWriterControlCoordinator.NOT_ACCEPTING
+    private fun beginControlSubmission(startIfNeeded: Boolean, deadlineNs: Long): Long {
+        val acquired = producer.admissionLock.tryLock() ||
+            producer.admissionLock.tryLock((deadlineNs - System.nanoTime()).coerceAtLeast(0L), TimeUnit.NANOSECONDS)
+        if (!acquired) return AsyncWriterControlCoordinator.ADMISSION_TIMED_OUT
+        return try {
+            if (!lifecycle.isAccepting()) return AsyncWriterControlCoordinator.NOT_ACCEPTING
             if (consumer.worker == null && (!startIfNeeded || !startWorker())) {
-                return@withLock AsyncWriterControlCoordinator.NO_WORK
+                return AsyncWriterControlCoordinator.NO_WORK
             }
             controls.beginLaneSubmission()
             producer.acceptedSequence
+        } finally {
+            producer.admissionLock.unlock()
         }
     }
 
     private fun startWorker(): Boolean {
         if (consumer.worker != null) return true
         return try {
-            val startedWorker = Thread(::runWorkerFailOpen, "JankHunterWriter").apply {
+            val startedWorker = workerThreadFactory(Runnable(::runWorkerFailOpen), "JankHunterWriter").apply {
                 isDaemon = true
             }
             consumer.worker = startedWorker
@@ -812,24 +924,17 @@ internal class AsyncLogWriter internal constructor(
 
     private fun closeTimeoutMs(): Long = DEFAULT_BLOCKING_TIMEOUT_MS
 
-    private fun waitForWorker(activeWorker: Thread, timeoutMs: Long, waitUntilFinished: Boolean): Boolean {
-        val deadlineNs = if (waitUntilFinished) Long.MAX_VALUE else {
-            System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
-        }
+    private fun waitForWorker(activeWorker: Thread, deadlineNs: Long): Boolean {
         var interrupted = false
         while (activeWorker.isAlive) {
-            val remainingMs = if (waitUntilFinished) {
-                CLOSE_JOIN_POLL_MS
-            } else {
-                val remainingNs = deadlineNs - System.nanoTime()
-                if (remainingNs <= 0L) break
-                TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceAtLeast(1L)
-            }
+            val remainingNs = deadlineNs - System.nanoTime()
+            if (remainingNs <= 0L) break
+            val remainingMs = TimeUnit.NANOSECONDS.toMillis(remainingNs).coerceAtLeast(1L)
             try {
                 activeWorker.join(minOf(CLOSE_JOIN_POLL_MS, remainingMs))
             } catch (_: InterruptedException) {
                 interrupted = true
-                if (!waitUntilFinished) break
+                break
             }
         }
         if (interrupted) Thread.currentThread().interrupt()
@@ -857,7 +962,9 @@ internal class AsyncLogWriter internal constructor(
                 lifecycle.isRunning() ||
                 hasPendingEvents() ||
                 controls.hasPending() ||
-                controls.hasSubmitters()
+                controls.hasSubmitters() ||
+                // A publisher admitted before stop may still be constructing/publishing its event.
+                producer.admissionLock.isLocked
             ) {
                 if (consumer.writer == null) {
                     // A size or I/O failure rejects queued events, so controls targeting their
@@ -907,6 +1014,7 @@ internal class AsyncLogWriter internal constructor(
         storage: JankHunterBinaryStorage? = consumer.binaryStorage,
         terminalOnFailure: Boolean = true,
     ): Boolean {
+        val activeSessionFactory = sessionFactory ?: createSessionFactory().also { sessionFactory = it }
         return try {
             if (consumer.runCohortLease == null) {
                 val authoritativeStoragePaths = storage?.let { activeStorage ->
@@ -922,7 +1030,7 @@ internal class AsyncLogWriter internal constructor(
                     consumer.dailySessionIndex = lease.dailySessionIndex()
                 }
             }
-            val opened = sessionFactory.open(
+            val opened = activeSessionFactory.open(
                 localDate = consumer.runLocalDate,
                 dailySessionIndex = consumer.dailySessionIndex,
                 runId = consumer.runId,
@@ -957,11 +1065,30 @@ internal class AsyncLogWriter internal constructor(
         }
     }
 
+    private fun createSessionFactory(): AsyncLogSessionFactory {
+        logGrowthManager = prepareSession()
+        return AsyncLogSessionFactory(
+            directory = directory,
+            config = config,
+            processName = processName,
+            expectedProcesses = expectedProcesses,
+            rosterDeclarationComplete = rosterDeclarationComplete,
+            collectorStartElapsedUs = collectorStartElapsedUs,
+            quality = quality,
+            logGrowthManager = logGrowthManager,
+        )
+    }
+
     private fun hasPendingEvents(): Boolean = producer.eventLanes.hasEvents()
 
     private fun pollNextEvent(): PendingLogEvent? {
+        producer.eventLanes.pollNext()?.let { return it }
+        producer.prepareWorkerWait()
+        producer.eventLanes.pollNext()?.let { return it }
+        if (controls.hasPending() || !lifecycle.isRunning()) return null
         val available = try {
-            producer.queuedEvents.tryAcquire(WORKER_POLL_MS, TimeUnit.MILLISECONDS)
+            val remainingNs = flushIntervalNs - (System.nanoTime() - consumer.lastFlushAtNs)
+            producer.queuedEvents.tryAcquire(remainingNs, TimeUnit.NANOSECONDS)
         } catch (_: InterruptedException) {
             false
         }
@@ -1090,14 +1217,14 @@ internal class AsyncLogWriter internal constructor(
 
     private fun processReadyControls() {
         while (true) {
-            val request = controls.peek() ?: return
-            if (consumer.completedSequence < request.targetSequence) return
-            if (controls.poll() !== request) continue
+            val request = controls.claimReady(consumer.completedSequence) ?: return
             val flushed = flushIfNeeded(force = true)
-            val succeeded = if (flushed && request.writeLogGrowth) {
-                consumer.writer?.writeLogGrowthSummary() == true
-            } else {
-                flushed
+            val succeeded = when {
+                !flushed -> false
+                !request.writeLogGrowth -> true
+                logGrowthManager != null -> consumer.writer?.writeLogGrowthSummary() == true
+                request.requireLogGrowth -> false
+                else -> true
             }
             val switchSucceeded = if (succeeded && request.storageSwitch != null) {
                 request.storageSwitchResult = switchStorage(request.storageSwitch.storage)
@@ -1127,9 +1254,8 @@ internal class AsyncLogWriter internal constructor(
 
     private fun flushIfNeeded(force: Boolean): Boolean {
         consumer.runtimeHookFailures.sync()
-        val now = SystemClock.elapsedRealtime()
-        val interval = config.flushIntervalMs()
-        if (!force && (interval <= 0L || now - consumer.lastFlushAtMs < interval)) return true
+        val now = System.nanoTime()
+        if (!force && now - consumer.lastFlushAtNs < flushIntervalNs) return true
         val activeWriter = consumer.writer ?: return false
         return try {
             if (logGrowthManager == null) {
@@ -1139,7 +1265,7 @@ internal class AsyncLogWriter internal constructor(
                     activeWriter.flush()
                 }
             }
-            consumer.lastFlushAtMs = now
+            consumer.lastFlushAtNs = now
             true
         } catch (error: StorageBudgetExhaustedException) {
             stopAndDrain(currentEvent = null, reason = QualityCounterId.REASON_STORAGE_BUDGET, failure = error)
@@ -1181,7 +1307,7 @@ internal class AsyncLogWriter internal constructor(
     ) {
         lifecycle.recordTermination(reason, failure)
         producer.admissionLock.withLock {
-            lifecycle.stopAccepting()
+            stopAccepting()
             rejectAllQueuedLocked(reason)
         }
         currentEvent?.let { event ->
@@ -1192,7 +1318,7 @@ internal class AsyncLogWriter internal constructor(
     /** Called while the producer admission lock is held when the worker could not be started. */
     private fun terminateWithoutWorker(error: Throwable) {
         lifecycle.recordTermination(QualityCounterId.REASON_IO_LOST, error)
-        lifecycle.stopAccepting()
+        stopAccepting()
         try {
             rejectAllQueuedLocked(QualityCounterId.REASON_IO_LOST)
         } catch (_: Throwable) {
@@ -1210,7 +1336,7 @@ internal class AsyncLogWriter internal constructor(
             )
         } catch (_: Throwable) {
             lifecycle.recordTermination(QualityCounterId.REASON_IO_LOST, error)
-            lifecycle.stopAccepting()
+            stopAccepting()
         }
         try {
             controls.failAfterAdmissionClosed()
@@ -1232,7 +1358,7 @@ internal class AsyncLogWriter internal constructor(
                 event.recycle()
             }
         }
-        producer.queuedEvents.drainPermits()
+        producer.prepareWorkerWait()
     }
 
     private fun closeSessionWriter() {
@@ -1268,10 +1394,8 @@ internal class AsyncLogWriter internal constructor(
     companion object {
         private const val CLOSE_JOIN_POLL_MS = 250L
         private const val DEFAULT_BLOCKING_TIMEOUT_MS = 1_000L
-        private const val WORKER_POLL_MS = 50L
         private const val CONTROL_DRAIN_PARK_NS = 100_000L
         private const val EXACT_BACKPRESSURE_PARK_NS = 100_000L
-        private const val MAIN_THREAD_NAME = "main"
         private const val APP_LIFECYCLE_METRIC_PREFIX = "app.lifecycle."
         private const val SCREEN_LIFECYCLE_METRIC_MARKER = ".lifecycle."
         private const val RUNTIME_SESSION_METRIC_PREFIX = "jankhunter.runtime.session."

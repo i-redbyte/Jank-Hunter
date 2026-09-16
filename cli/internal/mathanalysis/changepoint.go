@@ -65,7 +65,7 @@ func detectChangePoints(timeline []TimelineBucket) []ChangePoint {
 			noiseFloor: 1,
 			badWhenUp:  true,
 			value: func(bucket TimelineBucket) (float64, bool) {
-				return float64(bucket.HTTPFailed), true
+				return float64(bucket.HTTPFailed), httpCountPresent(bucket)
 			},
 		},
 	}
@@ -93,6 +93,9 @@ func detectSignalChangePoints(timeline []TimelineBucket, signal changeSignal) []
 	}
 	var candidates []changePointCandidate
 	for split := changeWindowBuckets; split <= len(points)-changeWindowBuckets; split++ {
+		if points[split+changeWindowBuckets-1].index-points[split-changeWindowBuckets].index != 2*changeWindowBuckets-1 {
+			continue
+		}
 		before := pointValues(points[split-changeWindowBuckets : split])
 		after := pointValues(points[split : split+changeWindowBuckets])
 		beforeMedian := medianSorted(sortedFloatCopy(before))

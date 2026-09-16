@@ -5,7 +5,6 @@ import io.jankhunter.sql.SqlNormalizer
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import org.objectweb.asm.commons.AdviceAdapter
-import org.objectweb.asm.commons.GeneratorAdapter
 
 internal interface BytecodeCommand {
     val id: String
@@ -52,22 +51,22 @@ internal object BytecodeCommandFactory {
             is HookIntent.HandlerRunnable -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = true,
-                action = { emitter, invocation -> emitter.postHandlerRunnable(intent.kind, invocation) },
+                action = { emitter, invocation -> emitter.postHandlerRunnable(invocation) },
             )
             is HookIntent.HandlerRemoveCallbacks -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = true,
-                action = { emitter, invocation -> emitter.removeHandlerCallbacks(intent.kind, invocation) },
+                action = { emitter, invocation -> emitter.preserveInvocation(invocation) },
             )
             HookIntent.HandlerRemoveCallbacksAndMessages -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = true,
-                action = { emitter, invocation -> emitter.removeHandlerCallbacksAndMessages(invocation) },
+                action = { emitter, invocation -> emitter.preserveInvocation(invocation) },
             )
             HookIntent.HandlerHasCallbacks -> SimpleCommand(
                 id = intent.id,
                 replacesOriginalCall = true,
-                action = { emitter, invocation -> emitter.hasHandlerCallbacks(invocation) },
+                action = { emitter, invocation -> emitter.preserveInvocation(invocation) },
             )
             HookIntent.HandlerMessageSend -> SimpleCommand(
                 id = intent.id,
@@ -427,210 +426,19 @@ internal class HookBytecodeEmitter(
         )
     }
 
-    fun postHandlerRunnable(kind: HandlerRunnableKind, invocation: MethodInvocation) {
-        val saved = saveInstanceInvocation(invocation)
-        val originalRunnable = saved.argumentLocals[0]
-        val wrappedRunnable = visitor.newLocal(RUNNABLE_TYPE)
-        visitor.loadLocal(saved.receiverLocal)
-        visitor.loadLocal(originalRunnable)
-        loadHandlerToken(saved, kind)
-        visitor.visitLdcInsn(ownerLabel())
-        invokeHook(
-            "wrapHandlerRunnable",
-            "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Runnable;",
-        )
-        visitor.storeLocal(wrappedRunnable)
-
-        val resultLocal = visitor.newLocal(Type.BOOLEAN_TYPE)
-        val throwableLocal = visitor.newLocal(THROWABLE_TYPE)
-        val tryStart = org.objectweb.asm.Label()
-        val tryEnd = org.objectweb.asm.Label()
-        val catchHandler = org.objectweb.asm.Label()
-        val done = org.objectweb.asm.Label()
-        emitTryCatchBlock(tryStart, tryEnd, catchHandler, null)
-        visitor.visitLabel(tryStart)
-        loadInvocation(saved, replacementArgument = 0, replacementLocal = wrappedRunnable)
-        emitOriginal(invocation)
-        visitor.storeLocal(resultLocal)
-        visitor.visitLabel(tryEnd)
-        emitHandlerPostResult(originalRunnable, wrappedRunnable, resultLocal)
-        visitor.loadLocal(resultLocal)
-        visitor.goTo(done)
-        visitor.visitLabel(catchHandler)
-        visitor.storeLocal(throwableLocal)
-        emitHandlerPostResult(originalRunnable, wrappedRunnable, null)
-        visitor.loadLocal(throwableLocal)
-        visitor.throwException()
-        visitor.visitLabel(done)
-    }
-
-    fun removeHandlerCallbacks(kind: HandlerRemoveCallbacksKind, invocation: MethodInvocation) {
-        val saved = saveInstanceInvocation(invocation)
-        val originalRunnable = saved.argumentLocals[0]
-        val tokenLocal = when (kind) {
-            HandlerRemoveCallbacksKind.RUNNABLE -> null
-            HandlerRemoveCallbacksKind.RUNNABLE_OBJECT -> saved.argumentLocals[1]
-        }
-
-        // Preserve the application's call and exception exactly; JH lookup starts only after it succeeds.
-        loadInvocation(saved)
-        emitOriginal(invocation)
-
-        val wrappersLocal = visitor.newLocal(RUNNABLE_ARRAY_TYPE)
-        visitor.loadLocal(saved.receiverLocal)
-        visitor.loadLocal(originalRunnable)
-        loadNullableLocal(tokenLocal)
-        invokeHook(
-            "handlerWrappers",
-            "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;)[Ljava/lang/Runnable;",
-        )
-        visitor.storeLocal(wrappersLocal)
-        emitForEachHandlerWrapper(saved, invocation, wrappersLocal)
-
-        visitor.loadLocal(saved.receiverLocal)
-        visitor.loadLocal(originalRunnable)
-        loadNullableLocal(tokenLocal)
-        invokeHook(
-            "clearHandlerWrappers",
-            "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;)V",
-        )
-    }
-
-    fun removeHandlerCallbacksAndMessages(invocation: MethodInvocation) {
-        val saved = saveInstanceInvocation(invocation)
-        loadInvocation(saved)
-        emitOriginal(invocation)
-        visitor.loadLocal(saved.receiverLocal)
-        visitor.loadLocal(saved.argumentLocals[0])
-        invokeHook("clearHandlerWrappers", "(Landroid/os/Handler;Ljava/lang/Object;)V")
-    }
-
-    fun hasHandlerCallbacks(invocation: MethodInvocation) {
+    fun postHandlerRunnable(invocation: MethodInvocation) {
         val saved = saveInstanceInvocation(invocation)
         val originalRunnable = saved.argumentLocals[0]
         val resultLocal = visitor.newLocal(Type.BOOLEAN_TYPE)
+        // Preserve identity and the single platform call, including its return value and exceptions.
         loadInvocation(saved)
         emitOriginal(invocation)
         visitor.storeLocal(resultLocal)
-
-        val done = org.objectweb.asm.Label()
-        visitor.loadLocal(resultLocal)
-        visitor.ifZCmp(GeneratorAdapter.NE, done)
-
-        val wrappersLocal = visitor.newLocal(RUNNABLE_ARRAY_TYPE)
-        visitor.loadLocal(saved.receiverLocal)
         visitor.loadLocal(originalRunnable)
-        visitor.visitInsn(Opcodes.ACONST_NULL)
-        invokeHook(
-            "handlerWrappers",
-            "(Landroid/os/Handler;Ljava/lang/Runnable;Ljava/lang/Object;)[Ljava/lang/Runnable;",
-        )
-        visitor.storeLocal(wrappersLocal)
-        emitAnyHandlerWrapper(saved, invocation, wrappersLocal, resultLocal, done)
-        visitor.visitLabel(done)
+        visitor.loadLocal(originalRunnable)
         visitor.loadLocal(resultLocal)
-    }
-
-    private fun emitForEachHandlerWrapper(
-        saved: SavedInvocation,
-        invocation: MethodInvocation,
-        wrappersLocal: Int,
-    ) {
-        val indexLocal = visitor.newLocal(Type.INT_TYPE)
-        val wrapperLocal = visitor.newLocal(RUNNABLE_TYPE)
-        val loop = org.objectweb.asm.Label()
-        val next = org.objectweb.asm.Label()
-        val finished = org.objectweb.asm.Label()
-        visitor.loadLocal(wrappersLocal)
-        visitor.ifNull(finished)
-        visitor.push(0)
-        visitor.storeLocal(indexLocal)
-        visitor.visitLabel(loop)
-        visitor.loadLocal(indexLocal)
-        visitor.loadLocal(wrappersLocal)
-        visitor.arrayLength()
-        visitor.ifICmp(GeneratorAdapter.GE, finished)
-        visitor.loadLocal(wrappersLocal)
-        visitor.loadLocal(indexLocal)
-        visitor.arrayLoad(RUNNABLE_TYPE)
-        visitor.storeLocal(wrapperLocal)
-
-        val tryStart = org.objectweb.asm.Label()
-        val tryEnd = org.objectweb.asm.Label()
-        val catchHandler = org.objectweb.asm.Label()
-        emitTryCatchBlock(tryStart, tryEnd, catchHandler, "java/lang/Throwable")
-        visitor.visitLabel(tryStart)
-        loadInvocation(saved, replacementArgument = 0, replacementLocal = wrapperLocal)
-        emitOriginal(invocation)
-        visitor.visitLabel(tryEnd)
-        visitor.goTo(next)
-        visitor.visitLabel(catchHandler)
-        visitor.pop()
-        visitor.visitLabel(next)
-        visitor.iinc(indexLocal, 1)
-        visitor.goTo(loop)
-        visitor.visitLabel(finished)
-    }
-
-    private fun emitAnyHandlerWrapper(
-        saved: SavedInvocation,
-        invocation: MethodInvocation,
-        wrappersLocal: Int,
-        resultLocal: Int,
-        success: org.objectweb.asm.Label,
-    ) {
-        val indexLocal = visitor.newLocal(Type.INT_TYPE)
-        val wrapperLocal = visitor.newLocal(RUNNABLE_TYPE)
-        val loop = org.objectweb.asm.Label()
-        val next = org.objectweb.asm.Label()
-        val finished = org.objectweb.asm.Label()
-        visitor.loadLocal(wrappersLocal)
-        visitor.ifNull(finished)
-        visitor.push(0)
-        visitor.storeLocal(indexLocal)
-        visitor.visitLabel(loop)
-        visitor.loadLocal(indexLocal)
-        visitor.loadLocal(wrappersLocal)
-        visitor.arrayLength()
-        visitor.ifICmp(GeneratorAdapter.GE, finished)
-        visitor.loadLocal(wrappersLocal)
-        visitor.loadLocal(indexLocal)
-        visitor.arrayLoad(RUNNABLE_TYPE)
-        visitor.storeLocal(wrapperLocal)
-
-        val tryStart = org.objectweb.asm.Label()
-        val tryEnd = org.objectweb.asm.Label()
-        val catchHandler = org.objectweb.asm.Label()
-        emitTryCatchBlock(tryStart, tryEnd, catchHandler, "java/lang/Throwable")
-        visitor.visitLabel(tryStart)
-        loadInvocation(saved, replacementArgument = 0, replacementLocal = wrapperLocal)
-        emitOriginal(invocation)
-        visitor.visitLabel(tryEnd)
-        visitor.ifZCmp(GeneratorAdapter.EQ, next)
-        visitor.push(true)
-        visitor.storeLocal(resultLocal)
-        visitor.goTo(success)
-        visitor.visitLabel(catchHandler)
-        visitor.pop()
-        visitor.visitLabel(next)
-        visitor.iinc(indexLocal, 1)
-        visitor.goTo(loop)
-        visitor.visitLabel(finished)
-    }
-
-    private fun emitHandlerPostResult(originalLocal: Int, wrappedLocal: Int, resultLocal: Int?) {
-        visitor.loadLocal(originalLocal)
-        visitor.loadLocal(wrappedLocal)
-        if (resultLocal == null) visitor.push(false) else visitor.loadLocal(resultLocal)
         invokeHook("onHandlerPostResult", "(Ljava/lang/Runnable;Ljava/lang/Runnable;Z)V")
-    }
-
-    private fun loadHandlerToken(saved: SavedInvocation, kind: HandlerRunnableKind) {
-        when (kind) {
-            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_DELAY,
-            HandlerRunnableKind.RUNNABLE_OBJECT_LONG_TIME -> visitor.loadLocal(saved.argumentLocals[1])
-            else -> visitor.visitInsn(Opcodes.ACONST_NULL)
-        }
+        visitor.loadLocal(resultLocal)
     }
 
     private fun saveInstanceInvocation(invocation: MethodInvocation): SavedInvocation {
@@ -647,24 +455,14 @@ internal class HookBytecodeEmitter(
         return SavedInvocation(receiverLocal, argumentLocals, argumentTypes)
     }
 
-    private fun loadInvocation(
-        saved: SavedInvocation,
-        replacementArgument: Int = -1,
-        replacementLocal: Int = -1,
-    ) {
+    private fun loadInvocation(saved: SavedInvocation) {
         visitor.loadLocal(saved.receiverLocal)
         saved.argumentTypes.indices.forEach { index ->
-            if (index == replacementArgument) {
-                visitor.loadLocal(replacementLocal)
-            } else {
-                visitor.loadLocal(saved.argumentLocals[index], saved.argumentTypes[index])
-            }
+            visitor.loadLocal(saved.argumentLocals[index], saved.argumentTypes[index])
         }
     }
 
-    private fun loadNullableLocal(local: Int?) {
-        if (local == null) visitor.visitInsn(Opcodes.ACONST_NULL) else visitor.loadLocal(local)
-    }
+    fun preserveInvocation(invocation: MethodInvocation) = emitOriginal(invocation)
 
     private fun invokeHook(name: String, descriptor: String) {
         visitor.visitMethodInsn(Opcodes.INVOKESTATIC, JANK_HUNTER_HOOKS, name, descriptor, false)
@@ -822,8 +620,6 @@ internal class HookBytecodeEmitter(
         private const val JANK_HUNTER_IO_HOOKS = "io/jankhunter/runtime/JankHunterIOHooks"
         private val OBJECT_TYPE: Type = Type.getType("Ljava/lang/Object;")
         private val STRING_TYPE: Type = Type.getType("Ljava/lang/String;")
-        private val RUNNABLE_TYPE: Type = Type.getType("Ljava/lang/Runnable;")
-        private val RUNNABLE_ARRAY_TYPE: Type = Type.getType("[Ljava/lang/Runnable;")
         private val THROWABLE_TYPE: Type = Type.getType("Ljava/lang/Throwable;")
     }
 }

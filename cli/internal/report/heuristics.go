@@ -32,7 +32,7 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 	switch summary.Severity {
 	case "high":
 		summary.Status = "Требуется разбор"
-		summary.Summary = "Есть сильные математические сигналы деградации. Начните с карточек ниже и проверьте связанные маршруты, источники и контекст."
+		summary.Summary = "Есть сильные математические сигналы ухудшения. Начните с карточек ниже и проверьте связанные маршруты, источники и контекст."
 	case "medium":
 		summary.Status = "Есть сигналы для проверки"
 		summary.Summary = "Обнаружены предупреждения. Их стоит подтвердить повторным прогоном и связать с конкретными владельцами работ."
@@ -40,14 +40,14 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 	if len(report.NetworkLoops) > 0 {
 		loop := report.NetworkLoops[0]
 		target := firstNonEmpty(loop.Route, loop.Owner, "сетевой сценарий")
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Признак сетевого цикла", Detail: fmt.Sprintf("Проверьте %s: предполагаемый период %.1f сек, уверенность %.2f, условная нагрузка %.1f. Это гипотеза, а не доказанная причина.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: networkLoopCardSeverity(loop.Confidence, loop.BurnScore), Title: "Повторяющийся сетевой запрос", Detail: fmt.Sprintf("Проверьте %s: период около %.1f сек, надёжность %.2f, условная нагрузка %.1f. Это гипотеза, а не доказанная причина.", target, float64(loop.PeriodMS)/1000, loop.Confidence, loop.BurnScore)})
 	}
 	if len(report.CausalGraph.OwnerScores) > 0 {
 		owner := report.CausalGraph.OwnerScores[0]
 		ownerLabel := reportValue(owner.Owner, "место запуска не записано")
 		detail := fmt.Sprintf("%s чаще других совпадало по времени с плохими состояниями и сетевыми циклами; условная оценка %.2f. Проверьте трассировку и код: совпадение не доказывает причину.", ownerLabel, owner.Score)
 		if isUnknownReportValue(owner.Owner) {
-			detail += " Чтобы восстановить место запуска, проверьте инструментирование сетевого клиента и включение пакета с кодом, который запускает запрос."
+			detail += " Чтобы найти место запуска, проверьте ASM-хуки сетевого клиента и включение пакета с кодом запроса."
 		}
 		summary.Cards = append(summary.Cards, heuristicCard{Severity: "medium", Title: "Место запуска, чаще связанное с проблемами", Detail: detail})
 	}
@@ -64,7 +64,7 @@ func inspectMathHeuristic(report mathanalysis.MathReport) heuristicSummary {
 }
 
 func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummary {
-	summary := heuristicSummary{Severity: "ok", Status: "Сравнение выглядит стабильным", Summary: "Сильных математических ухудшений между базой и кандидатом не найдено."}
+	summary := heuristicSummary{Severity: "ok", Status: "Сравнение выглядит стабильным", Summary: "Сильных математических ухудшений между базовым и проверяемым прогонами не найдено."}
 	for _, section := range report.Sections {
 		if severityRank(section.Status) > severityRank(summary.Severity) {
 			summary.Severity = section.Status
@@ -75,7 +75,7 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 		summary.Status = "Проверяемый прогон требует расследования"
 		summary.Summary = "Есть сильные математические дельты. Проверьте, совпадают ли они с изменениями маршрутов, экранов, памяти или контекста устройства."
 	case "medium":
-		summary.Status = "Есть предупреждения по кандидату"
+		summary.Status = "Есть предупреждения по проверяемому прогону"
 		summary.Summary = "Найдены умеренные отличия. Подтвердите их повторным прогоном перед инженерным выводом."
 	}
 	if len(report.RobustDeltas) > 0 {
@@ -83,7 +83,7 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 			if delta.Severity == "high" || delta.Severity == "medium" {
 				detail := delta.Summary
 				if delta.Comparable && delta.DeltaPctAvailable {
-					detail = fmt.Sprintf("%s / %s: p95 изменился на %+.1f %s (%+.1f%%), доверие %s.", delta.Dimension, delta.Metric, delta.P95Delta, delta.Unit, delta.P95DeltaPct, delta.Confidence)
+					detail = fmt.Sprintf("%s / %s: p95 изменился на %+.1f %s (%+.1f%%), надёжность %s.", delta.Dimension, delta.Metric, delta.P95Delta, delta.Unit, delta.P95DeltaPct, delta.Confidence)
 				}
 				summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Распределение изменилось", Detail: detail})
 				break
@@ -93,7 +93,7 @@ func compareMathHeuristic(report mathanalysis.CompareMathReport) heuristicSummar
 	if len(report.NetworkLoopDeltas) > 0 {
 		delta := report.NetworkLoopDeltas[0]
 		target := firstNonEmpty(delta.Route, delta.Owner, "сетевой цикл")
-		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Изменение кандидата сетевого цикла", Detail: fmt.Sprintf("%s: изменение условной нагрузки %+.1f, изменение уверенности %+.2f.", target, delta.BurnDelta, delta.ConfidenceDelta)})
+		summary.Cards = append(summary.Cards, heuristicCard{Severity: delta.Severity, Title: "Изменился сетевой цикл", Detail: fmt.Sprintf("%s: условная нагрузка изменилась на %+.1f, надёжность сигнала - на %+.2f.", target, delta.BurnDelta, delta.ConfidenceDelta)})
 	}
 	if len(report.CausalDeltas) > 0 {
 		delta := report.CausalDeltas[0]
@@ -249,16 +249,29 @@ func operationContextSignalSummary(context analyze.SignalContextStats) []string 
 		parts = append(parts, fmt.Sprintf("Медленными были %s из %s (%.1f%%).", russianCount(context.UIJank, "кадр", "кадра", "кадров"), russianCount(context.UIFrames, "кадра", "кадров", "кадров"), context.UIJankPct))
 	}
 	if context.StallCount > 0 {
-		parts = append(parts, fmt.Sprintf("Главный поток останавливался %s; максимум — %d мс.", russianCount(context.StallCount, "раз", "раза", "раз"), context.StallMaxMS))
+		maximum := "максимум"
+		if context.StallStates.Ongoing+context.StallStates.Interrupted > 0 {
+			maximum = "максимальная наблюдаемая длительность"
+		}
+		parts = append(parts, fmt.Sprintf("Главный поток останавливался %s; %s - %d мс.", russianCount(context.StallCount, "раз", "раза", "раз"), maximum, context.StallMaxMS))
+		if context.StallStates.Ongoing > 0 {
+			parts = append(parts, fmt.Sprintf("Для %d зависаний восстановление не зафиксировано; последняя запись сделана во время зависания.", context.StallStates.Ongoing))
+		}
+		if context.StallStates.Interrupted > 0 {
+			parts = append(parts, fmt.Sprintf("Для %d зависаний наблюдение прекращено до подтверждения восстановления.", context.StallStates.Interrupted))
+		}
+		if context.StallStates.Unknown > 0 {
+			parts = append(parts, fmt.Sprintf("Для %d зависаний статус завершения не указан в логе.", context.StallStates.Unknown))
+		}
 	}
 	if context.HTTPCount > 0 {
 		parts = append(parts, operationContextHTTPText(context))
 	}
 	if context.LogSpam > 0 {
-		parts = append(parts, fmt.Sprintf("Лишних записей в лог — %d.", context.LogSpam))
+		parts = append(parts, fmt.Sprintf("Лишних записей в лог - %d.", context.LogSpam))
 	}
 	if context.ProblemCount > 0 {
-		parts = append(parts, fmt.Sprintf("Объединённых проблемных сигналов — %d.", context.ProblemCount))
+		parts = append(parts, fmt.Sprintf("Объединённых проблемных сигналов - %d.", context.ProblemCount))
 	}
 	if context.MemoryMaxKB > 0 {
 		parts = append(parts, fmt.Sprintf("Память в этом контексте доходила до %s.", humanDataSizeKB(context.MemoryMaxKB)))
@@ -302,7 +315,7 @@ func operationContextSignalCount(context analyze.SignalContextStats) int {
 func operationContextImpact(context analyze.SignalContextStats) string {
 	impacts := make([]string, 0, 3)
 	if context.UIJank > 0 || context.StallCount > 0 {
-		impacts = append(impacts, "рывки интерфейса и задержка реакции на действие")
+		impacts = append(impacts, "подтормаживания UI и медленная реакция на действие")
 	}
 	if context.HTTPFailed > 0 {
 		impacts = append(impacts, "ошибка или незавершённый пользовательский сценарий")
@@ -442,23 +455,23 @@ func customMetricInsights(summary analyze.Summary) []customMetricInsight {
 		{id: "io", title: "Файлы и база данных"},
 		{id: "other", title: "Остальные показатели"},
 	}
-	add := func(item analyze.NamedValue) {
-		id := customMetricGroupID(item.Name)
+	add := func(name string) {
+		id := customMetricGroupID(name)
 		for index := range groups {
 			if groups[index].id == id {
-				groups[index].names = append(groups[index].names, item.Name)
+				groups[index].names = append(groups[index].names, name)
 				return
 			}
 		}
 	}
 	for _, item := range summary.Counters {
-		add(item)
+		add(item.Name)
 	}
 	for _, item := range summary.Gauges {
-		add(item)
+		add(item.Name)
 	}
 	for _, item := range summary.JankStats {
-		add(item)
+		add(item.Name)
 	}
 
 	insights := make([]customMetricInsight, 0, len(groups))
@@ -511,12 +524,12 @@ func customMetricRelation(group string, summary analyze.Summary) (string, string
 	switch group {
 	case "memory":
 		if summary.Retained > 0 || summary.MemoryMaxKB > 0 {
-			return "medium", fmt.Sprintf("В этом же прогоне: удержанных объектов — %d, максимум занятой процессом памяти — %s. Смотрите эти значения вместе с выделением памяти и частотой сборки мусора.", summary.Retained, humanDataSizeKB(summary.MemoryMaxKB)), "Повторите сценарий и проверьте, возвращаются ли память и число удержаний к исходному уровню."
+			return "medium", fmt.Sprintf("В этом же прогоне: удержанных объектов - %d, максимум занятой процессом памяти - %s. Смотрите эти значения вместе с выделением памяти и частотой сборки мусора.", summary.Retained, humanDataSizeKB(summary.MemoryMaxKB)), "Повторите сценарий и проверьте, возвращаются ли память и число удержаний к исходному уровню."
 		}
 		return "low", "Основных событий памяти рядом не записано.", "Используйте эти показатели для сравнения одинаковых сценариев между прогонами."
 	case "network":
 		if summary.HTTPCount > 0 {
-			return "medium", fmt.Sprintf("В этом же прогоне записано %s; задержка верхней части выборки — %d мс.", russianCount(summary.HTTPCount, "сетевой вызов", "сетевых вызова", "сетевых вызовов"), summary.HTTPP95MS), "Сопоставьте пользовательские показатели сети с маршрутом и сценарием в разделе проблем."
+			return "medium", fmt.Sprintf("В этом же прогоне записано %s; задержка верхней части выборки - %d мс.", russianCount(summary.HTTPCount, "сетевой вызов", "сетевых вызова", "сетевых вызовов"), summary.HTTPP95MS), "Сопоставьте пользовательские показатели сети с маршрутом и сценарием в разделе проблем."
 		}
 		return "low", "Основных сетевых событий рядом не записано.", "Проверьте, записывает ли сценарий маршрут и источник сетевой работы."
 	case "ui":
@@ -526,12 +539,12 @@ func customMetricRelation(group string, summary analyze.Summary) (string, string
 		return "low", "Основные события интерфейса в этом прогоне не записаны.", "Для связи с экраном повторите сценарий со включённым сбором кадров."
 	case "tasks":
 		if summary.StallCount > 0 {
-			return "medium", fmt.Sprintf("В этом же прогоне главный поток останавливался %s; максимум — %d мс.", russianCount(summary.StallCount, "раз", "раза", "раз"), summary.StallMaxMS), "Ищите рост очереди рядом с длинными задачами главного потока."
+			return "medium", fmt.Sprintf("В этом же прогоне главный поток останавливался %s; максимум - %d мс.", russianCount(summary.StallCount, "раз", "раза", "раз"), summary.StallMaxMS), "Ищите рост очереди рядом с длинными задачами главного потока."
 		}
 		return "low", "Длинные паузы главного потока в этом прогоне не записаны.", "Сравнивайте размер очереди в одинаковых сценариях и на одинаковом устройстве."
 	case "io":
 		if count := totalTypedIOOperations(summary); count > 0 {
-			return "medium", fmt.Sprintf("Типизированных файловых операций в прогоне — %d.", count), "Сопоставьте рост показателя с операцией, потоком и источником в подробном анализе хранилища."
+			return "medium", fmt.Sprintf("Типизированных файловых операций в прогоне - %d.", count), "Сопоставьте рост показателя с операцией, потоком и источником в подробном анализе хранилища."
 		}
 		return "low", "Типизированные файловые операции в этом прогоне не записаны.", "Для точной привязки добавьте запись операции с потоком и источником."
 	default:

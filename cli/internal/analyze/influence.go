@@ -1,75 +1,96 @@
 package analyze
 
 import (
-	"bufio"
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"strings"
 )
+
+const (
+	classGraphMaxFileBytes = 512 << 20
+	classGraphMaxLineBytes = 8 << 20
+	classGraphMaxRecords   = 250_000
+	classGraphMaxEdges     = 2_000_000
+	classGraphMaxTextBytes = 65_535
+)
+
+type classGraphJSONLRecord struct {
+	Format int    `json:"format"`
+	Class  string `json:"class"`
+	Edges  []struct {
+		Caller       string `json:"caller"`
+		CalleeClass  string `json:"calleeClass"`
+		CalleeMethod string `json:"calleeMethod"`
+		Count        uint64 `json:"count"`
+	} `json:"edges"`
+}
 
 func LoadClassGraph(path string) (*ClassGraph, error) {
 	if path == "" {
 		return nil, nil
 	}
-	file, err := os.Open(path)
+	input, err := openBoundedTextInput(path, "class graph", classGraphMaxFileBytes, 64*1024, classGraphMaxLineBytes)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer input.Close()
 
 	graph := &ClassGraph{Format: ClassGraphFormat, Classes: map[string]ClassGraphClass{}}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	lineCount := 0
+	scanner := input.Scanner
+	lineNumber := 0
+	recordCount := 0
+	edgeCount := 0
+	var fullGraph *ClassGraph
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		lineNumber++
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
-		lineCount++
-		if lineCount == 1 && strings.HasPrefix(line, "{") && strings.Contains(line, "\"classes\"") && strings.Contains(line, "\"edges\"") {
+		recordCount++
+		if recordCount > classGraphMaxRecords {
+			return nil, fmt.Errorf("%s: class graph exceeds record limit %d", path, classGraphMaxRecords)
+		}
+		if fullGraph != nil {
+			return nil, fmt.Errorf("class graph has a trailing record at line %d", lineNumber)
+		}
+		if recordCount == 1 && line[0] == '{' && bytes.Contains(line, []byte(`"classes"`)) && bytes.Contains(line, []byte(`"edges"`)) {
 			var full ClassGraph
-			if err := json.Unmarshal([]byte(line), &full); err != nil {
+			if err := decodeStrictJSON(line, &full); err != nil {
 				return nil, err
 			}
 			if err := validateArtifactFormat(path, "class graph", full.Format, ClassGraphFormat); err != nil {
 				return nil, err
 			}
+			if err := validateFullClassGraph(full); err != nil {
+				return nil, fmt.Errorf("parse class graph line %d: %w", lineNumber, err)
+			}
 			normalizeClassGraph(&full)
-			return &full, nil
-		}
-		var record struct {
-			Format int    `json:"format"`
-			Class  string `json:"class"`
-			Edges  []struct {
-				Caller       string `json:"caller"`
-				CalleeClass  string `json:"calleeClass"`
-				CalleeMethod string `json:"calleeMethod"`
-				Count        uint64 `json:"count"`
-			} `json:"edges"`
-		}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			return nil, fmt.Errorf("parse class graph line %d: %w", lineCount, err)
-		}
-		if err := validateArtifactFormat(path, "class graph", record.Format, ClassGraphFormat); err != nil {
-			return nil, fmt.Errorf("parse class graph line %d: %w", lineCount, err)
-		}
-		from := normalizeClassName(record.Class)
-		if from == "" {
+			fullGraph = &full
 			continue
 		}
+		var record classGraphJSONLRecord
+		if err := decodeStrictJSON(line, &record); err != nil {
+			return nil, fmt.Errorf("parse class graph line %d: %w", lineNumber, err)
+		}
+		if err := validateArtifactFormat(path, "class graph", record.Format, ClassGraphFormat); err != nil {
+			return nil, fmt.Errorf("parse class graph line %d: %w", lineNumber, err)
+		}
+		if err := validateClassGraphJSONLRecord(record); err != nil {
+			return nil, fmt.Errorf("parse class graph line %d: %w", lineNumber, err)
+		}
+		if len(record.Edges) > classGraphMaxEdges-edgeCount {
+			return nil, fmt.Errorf("%s: class graph exceeds edge limit %d", path, classGraphMaxEdges)
+		}
+		edgeCount += len(record.Edges)
+		from := normalizeClassName(record.Class)
 		graph.Classes[from] = ClassGraphClass{Name: from}
 		for _, edge := range record.Edges {
 			to := normalizeClassName(edge.CalleeClass)
-			if to == "" || to == from {
+			if to == from {
 				continue
-			}
-			count := edge.Count
-			if count == 0 {
-				count = 1
 			}
 			graph.Classes[to] = ClassGraphClass{Name: to}
 			graph.Edges = append(graph.Edges, ClassGraphEdge{
@@ -77,15 +98,84 @@ func LoadClassGraph(path string) (*ClassGraph, error) {
 				To:           to,
 				CallerMethod: edge.Caller,
 				CalleeMethod: edge.CalleeMethod,
-				Count:        count,
+				Count:        edge.Count,
 			})
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := input.Err(); err != nil {
 		return nil, err
+	}
+	if fullGraph != nil {
+		return fullGraph, nil
 	}
 	normalizeClassGraph(graph)
 	return graph, nil
+}
+
+func validateClassGraphJSONLRecord(record classGraphJSONLRecord) error {
+	if err := validateClassGraphText("class", record.Class, true); err != nil {
+		return err
+	}
+	if len(record.Edges) > classGraphMaxEdges {
+		return fmt.Errorf("edges exceed limit %d", classGraphMaxEdges)
+	}
+	for index, edge := range record.Edges {
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].caller", index), edge.Caller, false); err != nil {
+			return err
+		}
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].calleeClass", index), edge.CalleeClass, true); err != nil {
+			return err
+		}
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].calleeMethod", index), edge.CalleeMethod, false); err != nil {
+			return err
+		}
+		if edge.Count == 0 {
+			return fmt.Errorf("edges[%d].count must be positive", index)
+		}
+	}
+	return nil
+}
+
+func validateFullClassGraph(graph ClassGraph) error {
+	if len(graph.Classes) > classGraphMaxRecords {
+		return fmt.Errorf("classes exceed limit %d", classGraphMaxRecords)
+	}
+	if len(graph.Edges) > classGraphMaxEdges {
+		return fmt.Errorf("edges exceed limit %d", classGraphMaxEdges)
+	}
+	for name, class := range graph.Classes {
+		if err := validateClassGraphText("class", firstNonEmpty(class.Name, name), true); err != nil {
+			return err
+		}
+	}
+	for index, edge := range graph.Edges {
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].from", index), edge.From, true); err != nil {
+			return err
+		}
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].to", index), edge.To, true); err != nil {
+			return err
+		}
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].caller_method", index), edge.CallerMethod, false); err != nil {
+			return err
+		}
+		if err := validateClassGraphText(fmt.Sprintf("edges[%d].callee_method", index), edge.CalleeMethod, false); err != nil {
+			return err
+		}
+		if edge.Count == 0 {
+			return fmt.Errorf("edges[%d].count must be positive", index)
+		}
+	}
+	return nil
+}
+
+func validateClassGraphText(field, value string, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(value) > classGraphMaxTextBytes {
+		return fmt.Errorf("%s exceeds %d bytes", field, classGraphMaxTextBytes)
+	}
+	return nil
 }
 
 func BuildInfluence(summary Summary, graph *ClassGraph) InfluenceSummary {
@@ -154,7 +244,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		}
 		node := b.node(className)
 		node.runtime = true
-		node.logSpam += spam.Count
+		node.logSpam = saturatingUint64Sum(node.logSpam, spam.Count)
 		node.addOperation(spam.Operation)
 		node.addScreen(spam.Screen)
 		node.addReason("спам логами")
@@ -170,9 +260,9 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		}
 		node := b.node(className)
 		node.runtime = true
-		node.problems += problem.Count
+		node.problems = saturatingUint64Sum(node.problems, problem.Count)
 		if problemKindIsMainThread(problem.Kind) {
-			node.mainMS += problem.TotalWindowMS
+			node.mainMS = saturatingUint64Sum(node.mainMS, problem.TotalWindowMS)
 		}
 		node.addOperation(problem.Operation)
 		node.addScreen(problem.Screen)
@@ -193,9 +283,10 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 			continue
 		}
 		node := b.node(className)
-		node.runtime = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
-		node.retained += leak.Count
-		node.memoryKB += leak.EstimatedRetainedKB
+		node.runtime = node.runtime || leak.TimeOnlyCount > 0 || leak.AfterExplicitGCCount > 0
+		node.retained = saturatingUint64Sum(node.retained, leak.Count)
+		// Retained subtrees can overlap, so the largest estimate is the conservative value.
+		node.memoryKB = maxUint64Value(node.memoryKB, leak.EstimatedRetainedKB)
 		node.heap = node.heap || leak.HeapEvidence
 		node.addOperation(leak.Operation)
 		node.addScreen(leak.Screen)
@@ -220,8 +311,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		callee.addReason("вызов при выполнении")
 		caller.score += scoreContribution(call.Count, 220) * 0.45
 		callee.score += scoreContribution(call.Count, 160) + scoreContribution(call.TotalMS, 2200) + scoreContribution(call.MaxMS, 500)
-		caller.runtimeMS += call.TotalMS / 4
-		callee.runtimeMS += call.TotalMS
+		callee.runtimeMS = saturatingUint64Sum(callee.runtimeMS, call.TotalMS)
 		b.runtimeEdges = append(b.runtimeEdges, runtimeInfluenceEdge{
 			from:    callerClass,
 			to:      calleeClass,
@@ -241,7 +331,7 @@ func (b *influenceBuilder) addRuntime(summary Summary) {
 		node.addScreen(context.Screen)
 		node.addRoute(context.RouteSample)
 		node.networkMS = maxUint64Value(node.networkMS, context.HTTPP95MS)
-		node.uiJank += context.UIJank
+		node.uiJank = saturatingUint64Sum(node.uiJank, context.UIJank)
 	}
 	for _, route := range summary.Routes {
 		className := classFromOwner(route.OwnerSample)
@@ -472,8 +562,8 @@ func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
 		}
 		key := influenceEdgeKey{from: edge.From, to: edge.To}
 		row := dedup[key]
-		row.count += edge.Count
-		row.staticCount += edge.Count
+		row.count = saturatingUint64Sum(row.count, edge.Count)
+		row.staticCount = saturatingUint64Sum(row.staticCount, edge.Count)
 		priority := math.Max(toNode.score, fromNode.score*0.35)
 		row.influence += math.Log1p(float64(edge.Count)) * (1 + priority)
 		dedup[key] = row
@@ -484,8 +574,8 @@ func (b *influenceBuilder) allInfluenceEdges() []InfluenceEdge {
 		}
 		key := influenceEdgeKey{from: edge.from, to: edge.to}
 		row := dedup[key]
-		row.count += edge.count
-		row.runtimeCount += edge.count
+		row.count = saturatingUint64Sum(row.count, edge.count)
+		row.runtimeCount = saturatingUint64Sum(row.runtimeCount, edge.count)
 		row.influence += float64(edge.count) + float64(edge.totalMS)/25 + float64(edge.maxMS)/5
 		dedup[key] = row
 	}
@@ -606,17 +696,13 @@ func normalizeClassGraph(graph *ClassGraph) {
 		if from == "" || to == "" || from == to {
 			continue
 		}
-		count := edge.Count
-		if count == 0 {
-			count = 1
-		}
 		key := from + "\x00" + to + "\x00" + edge.CallerMethod + "\x00" + edge.CalleeMethod
 		merged := edgeCounts[key]
 		merged.From = from
 		merged.To = to
 		merged.CallerMethod = edge.CallerMethod
 		merged.CalleeMethod = edge.CalleeMethod
-		merged.Count += count
+		merged.Count = saturatingUint64Sum(merged.Count, edge.Count)
 		edgeCounts[key] = merged
 		graph.Classes[from] = ClassGraphClass{Name: from}
 		graph.Classes[to] = ClassGraphClass{Name: to}
@@ -753,7 +839,9 @@ func problemReason(kind string) string {
 	case "wrapped_callable":
 		return "долгая вычислительная задача Callable"
 	case "wrapped_coroutine":
-		return "долгая задача корутины"
+		return "долгая задача корутины по полной длительности"
+	case "wrapped_coroutine_active":
+		return "долгое активное выполнение корутины"
 	case "wrapped_executor":
 		return "долгая задача исполнителя"
 	case "wrapped_click":

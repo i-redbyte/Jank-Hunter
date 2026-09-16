@@ -10,6 +10,7 @@ import (
 )
 
 type heapInputFlags struct {
+	outputPath  string
 	dumpRaw     string
 	evidenceRaw string
 }
@@ -27,10 +28,14 @@ func takeHeapInputFlags(args []string, dumpFlag, evidenceFlag string) (heapInput
 }
 
 func (h heapInputFlags) apply(title string, paths []string, options analyze.Options) (analyze.Options, error) {
-	return optionsWithHeapEvidence(title, paths, options, h.evidenceRaw, h.dumpRaw)
+	return optionsWithHeapEvidenceForOutput(title, paths, options, h.evidenceRaw, h.dumpRaw, h.outputPath)
 }
 
 func optionsWithHeapEvidence(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw string) (analyze.Options, error) {
+	return optionsWithHeapEvidenceForOutput(title, paths, options, heapEvidenceRaw, heapDumpRaw, "")
+}
+
+func optionsWithHeapEvidenceForOutput(title string, paths []string, options analyze.Options, heapEvidenceRaw, heapDumpRaw, output string) (analyze.Options, error) {
 	heapEvidencePaths, err := canonicalizeFileInputs(expandComma(heapEvidenceRaw), "heap evidence")
 	if err != nil {
 		return options, err
@@ -57,13 +62,19 @@ func optionsWithHeapEvidence(title string, paths []string, options analyze.Optio
 			return options, nil
 		}
 	}
+	if err := rejectOutputInputOverlap(output, append(append([]string{}, heapEvidencePaths...), heapDumpPaths...)); err != nil {
+		return options, err
+	}
 	targetClasses := []string{}
 	if len(heapDumpPaths) > 0 {
 		preliminary, err := analyze.InspectFilesWithOptions(title, paths, options)
 		if err != nil {
 			return options, err
 		}
-		targetClasses = analyze.HeapTargetClasses(preliminary)
+		targetClasses = analyze.ExpandMappedClassAliases(
+			analyze.HeapTargetClasses(preliminary),
+			options.ObfuscationMap,
+		)
 	}
 	heapInputs, err := canonicalizeFileInputs(
 		append(append([]string{}, heapEvidencePaths...), heapDumpPaths...),
@@ -77,15 +88,7 @@ func optionsWithHeapEvidence(title string, paths []string, options analyze.Optio
 		return options, err
 	}
 	if autoDiscoveredHeapDumps {
-		evidence.Warnings = append(
-			[]string{
-				fmt.Sprintf(
-					"CLI автоматически подключил HPROF рядом с Jank Hunter логами: %s. Чтобы использовать другой дамп памяти, передайте --heap-dump явно.",
-					strings.Join(heapDumpPaths, ", "),
-				),
-			},
-			evidence.Warnings...,
-		)
+		evidence.AddDiagnostic(analyze.HeapDiagnostic{Code: "auto_discovery", Severity: analyze.HeapDiagnosticInfo, Impact: analyze.HeapImpactNone, Source: heapDumpPaths[0], Message: fmt.Sprintf("CLI автоматически подключил HPROF рядом с Jank Hunter логами: %s. Чтобы использовать другой дамп памяти, передайте --heap-dump явно.", strings.Join(heapDumpPaths, ", "))})
 	}
 	options.HeapEvidence = evidence
 	return options, nil

@@ -30,6 +30,29 @@ func TestDatabaseColumnPageDecodesCanonicalTenMaskWireLayout(t *testing.T) {
 	}
 }
 
+func TestDatabaseColumnPageReusesCallerOwnedDecoder(t *testing.T) {
+	section := []byte{
+		1, 1, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 7,
+		0, 1,
+		0, 10,
+	}
+	var scratch databaseColumnDecoder
+
+	first, err := decodeDatabaseColumnSectionInto(section, 1, 0, &scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := decodeDatabaseColumnSectionInto(section, 1, 0, &scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != &scratch || second != &scratch {
+		t.Fatal("database column decode replaced caller-owned storage")
+	}
+}
+
 func TestDatabaseColumnPageRoundTripsWirePayloads(t *testing.T) {
 	aliases := map[uint64]uint64{0x51: 1}
 	state := eventPayloadEncodeState{}

@@ -63,6 +63,9 @@ func writeProblemsDatasetJSON(
 	case datasetInfluence:
 		return encoder.Encode(summary.Influence)
 	case datasetMathFindings:
+		if err := mathFindingExportError(mathReport); err != nil {
+			return err
+		}
 		return encoder.Encode(mathFindingRows(mathReport))
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
@@ -85,10 +88,24 @@ func writeProblemsDatasetCSV(
 	case datasetInfluence:
 		return writeCSVTable(writer, influenceTable(summary.Influence))
 	case datasetMathFindings:
+		if err := mathFindingExportError(mathReport); err != nil {
+			return err
+		}
 		return writeCSVTable(writer, mathFindingsTable(mathReport))
 	default:
 		return fmt.Errorf("unsupported problems dataset %q", dataset)
 	}
+}
+
+func mathFindingExportError(report *mathanalysis.MathReport) error {
+	if report == nil || len(report.CollectionLimits) == 0 {
+		return nil
+	}
+	limit := report.CollectionLimits[0]
+	if limit.Work != nil {
+		return fmt.Errorf("math-findings unavailable: spectral work limit %d operations reached; partial findings are not exported", limit.Work.LimitOperations)
+	}
+	return fmt.Errorf("math-findings unavailable: collection memory limit %d bytes reached by %s; partial findings are not exported", limit.LimitBytes, limit.Component)
 }
 
 type problemExportEnvelope struct {
@@ -180,6 +197,27 @@ func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
 		"record_type", "name", "operation", "baseline", "candidate", "change",
 		"severity", "confidence", "comparable", "note",
 	}}
+	beforeTiming, afterTiming := comparison.Baseline.CollectionQuality.HTTPFirstByte, comparison.Candidate.CollectionQuality.HTTPFirstByte
+	if beforeTiming != nil || afterTiming != nil {
+		for _, name := range []string{"known", "unknown", "legacy"} {
+			table.rows = append(table.rows, []string{"http_first_byte_coverage", name, "",
+				httpFirstByteCoverageText(beforeTiming, name), httpFirstByteCoverageText(afterTiming, name),
+				"", "", "", "false", "покрытие замеров; unknown и legacy не участвуют в сравнении задержки; известный ноль сохранён"})
+		}
+	}
+	if comparison.Baseline.CollectionQuality.DiagnosticCompletenessModel != "" || comparison.Candidate.CollectionQuality.DiagnosticCompletenessModel != "" {
+		before, after := comparison.Baseline.CollectionQuality, comparison.Candidate.CollectionQuality
+		comparable := before.DiagnosticCompletenessModel != "" && after.DiagnosticCompletenessModel != "" && before.DiagnosticCompletenessPercent >= 0 && after.DiagnosticCompletenessPercent >= 0
+		note := ""
+		if !comparable {
+			note = "полнота неизвестна; числовое сравнение недоступно"
+		}
+		beforeText, afterText := before.DiagnosticCompletenessText(), after.DiagnosticCompletenessText()
+		table.rows = append(table.rows, []string{"collection_quality", "diagnostic_completeness_percent", "", beforeText, afterText, "", "", "", fmt.Sprint(comparable), note})
+	}
+	if before, after := comparison.Baseline.CollectionQuality.AsyncAttribution, comparison.Candidate.CollectionQuality.AsyncAttribution; before != nil || after != nil {
+		table.rows = append(table.rows, []string{"async_attribution", "handler_posts_without_context", "", asyncAttributionCountText(before), asyncAttributionCountText(after), "", "", "", "false", "связь отправки с выполнением unknown; успешные post могут быть отменены; число post не измеряет потерянные выполнения"})
+	}
 	for _, delta := range comparison.Deltas {
 		table.rows = append(table.rows, comparisonDeltaCSVRow("metric", delta))
 	}
@@ -241,6 +279,20 @@ func writeComparisonCSV(writer io.Writer, comparison analyze.Comparison) error {
 		})
 	}
 	return writeCSVTable(writer, table)
+}
+
+func httpFirstByteCoverageText(quality *analyze.HTTPFirstByteQuality, name string) string {
+	if quality == nil {
+		return ""
+	}
+	switch name {
+	case "known":
+		return fmt.Sprint(quality.Known)
+	case "unknown":
+		return fmt.Sprint(quality.Unknown)
+	default:
+		return fmt.Sprint(quality.Legacy)
+	}
 }
 
 func comparisonDeltaCSVRow(recordType string, delta analyze.Delta) []string {
@@ -327,9 +379,18 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			"verification_steps",
 			"evidence",
 			"recommendation",
+			"heap_class_gc_root",
+			"heap_class_gc_root_category",
+			"heap_class_gc_root_object_id",
+			"heap_class_reference_path_state",
 		},
 	}
 	for _, row := range rows {
+		var candidateRoot, candidateRootCategory, candidateRootID, candidatePathState string
+		if heap := row.HeapClassEvidence; heap != nil {
+			candidateRoot, candidateRootCategory, candidateRootID = heap.GCRoot, heap.GCRootCategory, heap.GCRootObjectID
+			candidatePathState = firstNonEmpty(string(heap.ReferencePathState), string(analyze.HeapPathUnknown))
+		}
 		table.rows = append(table.rows, []string{
 			row.ClassName,
 			row.Holder,
@@ -352,6 +413,10 @@ func leakSuspectsTable(rows []analyze.MemoryLeakSuspect) csvTable {
 			strings.Join(row.VerificationSteps, " | "),
 			row.Evidence,
 			row.Recommendation,
+			candidateRoot,
+			candidateRootCategory,
+			candidateRootID,
+			candidatePathState,
 		})
 	}
 	return table
@@ -471,6 +536,12 @@ func mathFindingRows(report *mathanalysis.MathReport) []mathFindingExportRow {
 		return nil
 	}
 	rows := make([]mathFindingExportRow, 0, len(report.Findings))
+	if detail := mathanalysis.HTTPCountCoverageExplanation(report.Timeline); detail != "" {
+		rows = append(rows, mathFindingExportRow{Section: "Качество данных", Severity: "medium", Title: "Наблюдение HTTP-счётчиков", Detail: detail})
+	}
+	if detail := mathanalysis.NetworkLoopAttributionExplanation(report.NetworkLoops); detail != "" {
+		rows = append(rows, mathFindingExportRow{Section: "Качество данных", Severity: "medium", Title: "Контекст сетевых циклов", Detail: detail})
+	}
 	for _, finding := range report.Findings {
 		rows = append(rows, mathFindingExportRow{
 			Section:        "итог",
@@ -511,4 +582,11 @@ func mathFindingsTable(report *mathanalysis.MathReport) csvTable {
 		})
 	}
 	return table
+}
+
+func asyncAttributionCountText(quality *analyze.AsyncAttributionQuality) string {
+	if quality == nil {
+		return "нет данных"
+	}
+	return fmt.Sprint(quality.HandlerPostsWithoutContext)
 }

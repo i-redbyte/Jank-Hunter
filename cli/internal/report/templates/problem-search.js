@@ -60,6 +60,9 @@ const initializeProblemSearch = (revealDeferredEntry, archivedEntries) => {
       const deferredEntry = searchID ? deferredEntries.get(searchID) : null;
       if (deferredEntry) {
         deferredEntry.node = node;
+        deferredEntry.deferredScript = null;
+        deferredEntry.deferredBody = null;
+        deferredEntries.delete(searchID);
         indexedDetailNodes.add(node);
         return;
       }
@@ -107,6 +110,7 @@ const initializeProblemSearch = (revealDeferredEntry, archivedEntries) => {
       deferredIndexPromise = new Promise((resolve) => {
         let index = 0;
         const finish = async () => {
+          deferredScripts.length = 0;
           try {
             const entries = await archivedEntries();
             entries.forEach((entry) => {
@@ -114,7 +118,7 @@ const initializeProblemSearch = (revealDeferredEntry, archivedEntries) => {
               detailIndex.push({
                 ...entry,
                 node: null,
-                text: normalize(entry.text),
+                text: entry.normalized ? entry.text : normalize(entry.text),
                 id: `report-search-match-${inboxIndex + 1}-${detailSequence}`,
               });
             });
@@ -254,8 +258,8 @@ const initializeProblemSearch = (revealDeferredEntry, archivedEntries) => {
             'Фильтры справа изменяют только карточки проблем.';
         } else if (totalMatches > 0) {
           feedback.textContent =
-            `По запросу «${search.value.trim()}»: карточек проблем — ${visible}, ` +
-            `совпадений в подробностях — ${detailMatches.length}.${incompleteNote}`;
+            `По запросу «${search.value.trim()}»: карточек проблем - ${visible}, ` +
+            `совпадений в подробностях - ${detailMatches.length}.${incompleteNote}`;
         } else {
           feedback.textContent =
             `В отчёте нет совпадений с «${search.value.trim()}». ` +

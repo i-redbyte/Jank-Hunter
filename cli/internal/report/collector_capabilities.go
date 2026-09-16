@@ -24,6 +24,9 @@ type collectorCapabilityDefinition struct {
 }
 
 var collectorCapabilityDefinitions = [...]collectorCapabilityDefinition{
+	{flag: jhlog.CollectorHTTP, label: "HTTP-события", description: "Завершения HTTP-вызовов в подключённой инструментации.", observation: func(summary analyze.Summary) string {
+		return "Счётчики описывают полученные завершения вызовов; непрерывность проверяется отдельно."
+	}},
 	{
 		flag:        jhlog.CollectorFPS,
 		label:       "Частота кадров",
@@ -155,7 +158,7 @@ func semanticCollectorObservation(summary analyze.Summary, prefix string) string
 	var boundaries int
 	for _, call := range summary.RuntimeCalls {
 		if strings.HasPrefix(call.Caller, prefix) {
-			calls += call.Count
+			calls = saturatingAddUint64(calls, call.Count)
 			boundaries++
 		}
 	}
@@ -189,6 +192,15 @@ func collectorCapabilities(summary analyze.Summary) []collectorCapability {
 }
 
 func collectorCapabilityStatus(summary analyze.Summary, flag jhlog.CollectorFlag) (string, string) {
+	if flag == jhlog.CollectorHTTP {
+		known := len(summary.CollectionSegments) > 0
+		for _, segment := range summary.CollectionSegments {
+			known = known && segment.HTTPCollectionStateKnown
+		}
+		if !known {
+			return "unknown", "состояние не записано"
+		}
+	}
 	mask := uint64(flag)
 	switch {
 	case summary.CollectorFlagsAll&mask != 0:

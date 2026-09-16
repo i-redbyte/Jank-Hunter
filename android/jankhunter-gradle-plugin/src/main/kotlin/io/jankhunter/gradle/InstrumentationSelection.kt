@@ -19,7 +19,7 @@ internal fun wholeApplicationBoundaryMatches(className: String, excludePackages:
     if (InstrumentationPackages.isGeneratedAndroidClass(normalized)) return false
     for (excluded in excludePackages) {
         val boundary = InstrumentationPackages.normalizePackage(excluded)
-        if (boundary.isNotEmpty() && (normalized == boundary || normalized.startsWith("$boundary."))) {
+        if (boundary.isNotEmpty() && InstrumentationPackages.matchesPackageBoundary(normalized, boundary)) {
             return false
         }
     }
@@ -149,6 +149,7 @@ internal data class HookConfig(
     val classGraph: Boolean,
     val runtimeCallGraph: Boolean,
     val classGraphDirectory: String,
+    val lambdaCaptureDirectory: String = "",
     val instrumentationDiagnosticsDirectory: String,
     val androidComponentCatalogDirectory: String = "",
     val androidComponents: Boolean = false,

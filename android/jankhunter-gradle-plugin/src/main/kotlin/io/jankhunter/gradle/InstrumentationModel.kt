@@ -14,13 +14,17 @@ internal data class MethodCall(
     val descriptor: String,
     val caller: CallerMethod? = null,
     val line: Int? = null,
-    val ownerHierarchy: Set<String> = setOf(owner),
+    val ownerHierarchy: Set<String> = emptySet(),
     val databaseQuery: String? = null,
     val databaseQueryArgument: Int? = null,
 )
 
 internal fun MethodCall.matchesOwner(owners: Set<String>): Boolean {
-    return ownerHierarchy.any(owners::contains)
+    if (owner in owners) return true
+    ownerHierarchy.forEach { hierarchyOwner ->
+        if (hierarchyOwner in owners) return true
+    }
+    return false
 }
 
 internal enum class ArgumentRole {
@@ -482,18 +486,62 @@ internal class InstrumentationModuleRegistry(
     modules: List<InstrumentationModule>,
 ) {
     private val modules = modules.sortedWith(compareBy<InstrumentationModule> { it.priority }.thenBy { it.id })
+    private val candidatesByName: Map<String, CandidateMasks>
+
+    init {
+        require(this.modules.size < Int.SIZE_BITS) { "Too many instrumentation modules for an Int candidate mask" }
+        val mutableCandidates = hashMapOf<String, MutableCandidateMasks>()
+        this.modules.forEachIndexed { moduleIndex, module ->
+            val moduleMask = 1 shl moduleIndex
+            module.bridges.forEach { bridge ->
+                bridge.signatures.forEach { signature ->
+                    signature.names.forEach { name ->
+                        val candidates = mutableCandidates.getOrPut(name, ::MutableCandidateMasks)
+                        candidates.named = candidates.named or moduleMask
+                        val exactDescriptors = signature.exactDescriptors
+                        if (exactDescriptors == null) {
+                            candidates.wildcard = candidates.wildcard or moduleMask
+                        } else {
+                            exactDescriptors.forEach { descriptor ->
+                                candidates.byDescriptor[descriptor] =
+                                    candidates.byDescriptor.getOrDefault(descriptor, 0) or moduleMask
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        candidatesByName = mutableCandidates.mapValues { (_, candidates) ->
+            CandidateMasks(candidates.named, candidates.wildcard, candidates.byDescriptor)
+        }
+    }
 
     fun resolve(call: MethodCall, config: HookConfig): HookDecision {
+        return resolve(call, config, namedCandidateMask(call.name))
+    }
+
+    fun resolve(call: MethodCall, config: HookConfig, candidateMask: Int): HookDecision {
         var firstDiagnostic: HookDecision? = null
-        modules.forEach { module ->
+        var remainingCandidates = candidateMask
+        while (remainingCandidates != 0) {
+            val moduleIndex = Integer.numberOfTrailingZeros(remainingCandidates)
+            val module = modules[moduleIndex]
             val decision = module.match(call, config)
             if (decision is HookDecision.Matched) return decision
             if (decision !is HookDecision.NotMatched && firstDiagnostic == null) {
                 firstDiagnostic = decision
             }
+            remainingCandidates = remainingCandidates and (remainingCandidates - 1)
         }
         return firstDiagnostic ?: HookDecision.NotMatched
     }
+
+    fun candidateMask(name: String, descriptor: String): Int {
+        val candidates = candidatesByName[name] ?: return 0
+        return candidates.wildcard or candidates.byDescriptor.getOrDefault(descriptor, 0)
+    }
+
+    fun namedCandidateMask(name: String): Int = candidatesByName[name]?.named ?: 0
 
     fun modules(): List<InstrumentationModule> = modules
 
@@ -502,6 +550,18 @@ internal class InstrumentationModuleRegistry(
     fun needsControlFlow(config: HookConfig): Boolean {
         return modules.any { it.needsControlFlow && it.enabled(config) }
     }
+
+    private class MutableCandidateMasks(
+        var named: Int = 0,
+        var wildcard: Int = 0,
+        val byDescriptor: MutableMap<String, Int> = hashMapOf(),
+    )
+
+    private data class CandidateMasks(
+        val named: Int,
+        val wildcard: Int,
+        val byDescriptor: Map<String, Int>,
+    )
 }
 
 internal object HookIntentResolver {
@@ -523,6 +583,14 @@ internal object HookIntentResolver {
         return registry.resolve(call, config)
     }
 
+    fun resolve(call: MethodCall, config: HookConfig, candidateMask: Int): HookDecision {
+        return registry.resolve(call, config, candidateMask)
+    }
+
+    fun candidateMask(name: String, descriptor: String): Int = registry.candidateMask(name, descriptor)
+
+    fun namedCandidateMask(name: String): Int = registry.namedCandidateMask(name)
+
     fun modules(): List<InstrumentationModule> = registry.modules()
 
     fun needsControlFlow(): Boolean = registry.needsControlFlow()
@@ -532,26 +600,35 @@ internal object HookIntentResolver {
 
 internal object HookNearMissDiagnostics {
     fun resolve(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
-        return coroutineNearMiss(call, config)
-            ?: okHttpNearMiss(call, config)
+        return resolve(call.owner, call.name, call.descriptor, config)
     }
 
-    private fun coroutineNearMiss(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
+    fun resolve(owner: String, name: String, descriptor: String, config: HookConfig): HookDecision.Skipped? {
+        return coroutineNearMiss(owner, name, descriptor, config)
+            ?: okHttpNearMiss(owner, name, config)
+    }
+
+    private fun coroutineNearMiss(
+        owner: String,
+        name: String,
+        descriptor: String,
+        config: HookConfig,
+    ): HookDecision.Skipped? {
         if (!config.coroutines) return null
-        if (!call.owner.startsWith("kotlinx/coroutines/")) return null
-        val knownBuilderName = call.name.removeSuffix("\$default") in coroutineBuilderNames
-        val descriptorLooksRelevant = call.descriptor.contains("Lkotlin/jvm/functions/Function2;") ||
-            call.descriptor.contains("Lkotlin/coroutines/Continuation;")
+        if (!owner.startsWith("kotlinx/coroutines/")) return null
+        val knownBuilderName = name.removeSuffix("\$default") in coroutineBuilderNames
+        val descriptorLooksRelevant = descriptor.contains("Lkotlin/jvm/functions/Function2;") ||
+            descriptor.contains("Lkotlin/coroutines/Continuation;")
         if (!knownBuilderName && !descriptorLooksRelevant) return null
         return HookDecision.Skipped("coroutine", "coroutines", "near_miss_coroutine_signature")
     }
 
-    private fun okHttpNearMiss(call: MethodCall, config: HookConfig): HookDecision.Skipped? {
-        if (!call.owner.startsWith("okhttp3/")) return null
-        if (config.webSockets && call.name == "newWebSocket") {
+    private fun okHttpNearMiss(owner: String, name: String, config: HookConfig): HookDecision.Skipped? {
+        if (!owner.startsWith("okhttp3/")) return null
+        if (config.webSockets && name == "newWebSocket") {
             return HookDecision.Skipped("websocket", "okhttp", "near_miss_okhttp_signature")
         }
-        if (config.okhttp && call.name in okHttpBuilderNames) {
+        if (config.okhttp && name in okHttpBuilderNames) {
             return HookDecision.Skipped("okhttp", "okhttp", "near_miss_okhttp_signature")
         }
         return null
@@ -835,9 +912,7 @@ internal fun databaseQueryArgumentIndex(owner: String, name: String, descriptor:
 internal fun isDatabaseImplementationClass(className: String): Boolean {
     val normalized = className.replace('/', '.')
     return DATABASE_IMPLEMENTATION_PACKAGES.any { packageName ->
-        normalized == packageName ||
-            normalized.length > packageName.length && normalized.startsWith(packageName) &&
-            normalized[packageName.length] == '.'
+        InstrumentationPackages.matchesPackageBoundary(normalized, packageName)
     }
 }
 

@@ -39,3 +39,20 @@ func TestDiagnoseMainThreadStallExplainsObservedICQStacks(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnoseMainThreadStallDoesNotBlameLibraryConstructor(t *testing.T) {
+	diagnosis := DiagnoseMainThreadStall(
+		"com.google.android.material.appbar.AppBarLayout",
+		"com.google.android.material.appbar.AppBarLayout.<init>(AppBarLayout.java:303)",
+	)
+
+	if !strings.Contains(diagnosis.Title, "библиотеки") {
+		t.Fatalf("library frame is presented as an application cause: %+v", diagnosis)
+	}
+	if !strings.Contains(diagnosis.Explanation, "наблюдени") {
+		t.Fatalf("diagnosis does not explain the evidence boundary: %+v", diagnosis)
+	}
+	if !strings.Contains(diagnosis.Action, "приложени") || !strings.Contains(diagnosis.Action, "layout") {
+		t.Fatalf("diagnosis does not point to an actionable application callsite: %+v", diagnosis)
+	}
+}

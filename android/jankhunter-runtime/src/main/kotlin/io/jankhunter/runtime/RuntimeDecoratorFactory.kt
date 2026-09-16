@@ -3,6 +3,10 @@ package io.jankhunter.runtime
 import android.view.View
 import java.util.concurrent.Callable
 
+private const val TYPE_CONTRACT_CACHE_CAPACITY = 64
+private val runnableTypeContracts = BoundedWeakIdentityCache<Class<*>, TypeContract>(TYPE_CONTRACT_CACHE_CAPACITY)
+private val callableTypeContracts = BoundedWeakIdentityCache<Class<*>, TypeContract>(TYPE_CONTRACT_CACHE_CAPACITY)
+
 internal fun wrapRunnableDecorator(
         runnable: Runnable?,
         ownerName: String?,
@@ -14,20 +18,6 @@ internal fun wrapRunnableDecorator(
         if (hasAdditionalTypeContract(runnable, Runnable::class.java)) return runnable
         return failOpen(runnable) {
             JankHunterRunnable(runnable, ownerName, callbacks)
-        }
-    }
-
-internal fun wrapHandlerRunnableDecorator(
-        runnable: Runnable,
-        ownerName: String?,
-        runtimeActive: Boolean,
-        callbacks: RuntimeAsyncCallbacks,
-        owner: HandlerRunnableOwner,
-    ): Runnable {
-        if (runnable is JankHunterHandlerRunnable || runnable is JankHunterRunnable) return runnable
-        if (!runtimeActive) return runnable
-        return failOpen(runnable) {
-            JankHunterHandlerRunnable(runnable, ownerName, callbacks, owner)
         }
     }
 
@@ -77,14 +67,26 @@ private inline fun <T> failOpen(original: T, create: () -> T): T {
     }
 
 private fun hasAdditionalTypeContract(value: Any, plainType: Class<*>): Boolean {
-        val valueType = value.javaClass
-        if (valueType.interfaces.any { it != plainType }) return true
+    val valueType = value.javaClass
+    val cache = if (plainType === Runnable::class.java) runnableTypeContracts else callableTypeContracts
+    return cache.getOrPut(valueType) {
+        if (computeAdditionalTypeContract(valueType, plainType)) TypeContract.ADDITIONAL else TypeContract.PLAIN
+    } == TypeContract.ADDITIONAL
+}
 
-        var current = valueType.superclass
+private fun computeAdditionalTypeContract(valueType: Class<*>, plainType: Class<*>): Boolean {
+    if (valueType.interfaces.any { it != plainType }) return true
+
+    var current: Class<*>? = valueType.superclass
         while (current != null && current != Any::class.java) {
             if (plainType.isAssignableFrom(current)) return true
             current = current.superclass
         }
 
-        return false
+    return false
+}
+
+private enum class TypeContract {
+    PLAIN,
+    ADDITIONAL,
 }

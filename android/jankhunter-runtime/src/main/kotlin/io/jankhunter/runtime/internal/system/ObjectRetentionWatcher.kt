@@ -3,12 +3,17 @@ package io.jankhunter.runtime.internal.system
 import android.os.SystemClock
 import io.jankhunter.runtime.JankHunterContext
 import io.jankhunter.runtime.RuntimeHookGuard
+import io.jankhunter.runtime.RuntimeHookFailureReason
 import io.jankhunter.runtime.RuntimeLongConsumer
 import io.jankhunter.runtime.RuntimeLongSource
+import io.jankhunter.runtime.internal.monotonicDeadlineAfterMillis
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.max
 import kotlin.math.min
 
@@ -48,39 +53,105 @@ internal class ObjectRetentionWatcher(
     private val checkIntervalMs = max(500L, min(delayMs / 2L, 2_000L))
     private val running = AtomicBoolean(false)
     private val queue = ReferenceQueue<Any>()
-    private val watched = ConcurrentLinkedQueue<WatchedReference>()
-    private val registryLock = Any()
-    private val checkLock = Any()
     private val capacity = maxWatchedReferences.coerceAtLeast(0)
+    private val watched = ArrayList<WatchedReference>()
+    private val watchedByIdentityHash = HashMap<Int, WatchedReference>()
+    private val registryLock = Any()
+    private val checkLock = ReentrantLock()
+    private val lifecycleLock = Any()
     private val heapDumpAgeMs = max(delayMs, heapDumpMinRetainedAgeMs.coerceAtLeast(0L))
-    private var watchedCount = 0
     private var maintenance: MaintenanceHandle? = null
 
+    @Volatile
+    private var finalCheck: FinalCheck? = null
+
     fun start(scheduler: RuntimeMaintenanceScheduler) {
-        if (!running.compareAndSet(false, true)) return
-        maintenance = scheduler.schedule(delayMs = { checkIntervalMs }) { checkRetained() }
+        synchronized(lifecycleLock) {
+            if (running.get() || finalCheck?.completed?.count == 1L || !checkLock.tryLock()) return
+            try {
+                finalCheck = null
+                running.set(true)
+                maintenance = scheduler.schedule(delayMs = { checkIntervalMs }) { checkRetained() }
+            } finally {
+                checkLock.unlock()
+            }
+        }
     }
 
-    fun stop() {
-        maintenance?.cancel()
-        maintenance = null
-        synchronized(checkLock) {
-            if (exactAdmission && running.get()) {
-                checkRetainedLocked()
-                // A force-GC first pass marks candidates and requests collection. The second pass
-                // seals survivors instead of waiting for a periodic task that has been cancelled.
-                checkRetainedLocked()
+    fun stop(timeoutMs: Long = DEFAULT_STOP_TIMEOUT_MS): StopResult {
+        val deadlineNs = monotonicDeadlineAfterMillis(timeoutMs)
+        var launch = false
+        val final = synchronized(lifecycleLock) {
+            if (!running.getAndSet(false)) return@synchronized finalCheck
+            maintenance?.cancel()
+            maintenance = null
+            launch = true
+            FinalCheck(deadlineNs).also { finalCheck = it }
+        } ?: return StopResult.COMPLETED
+        // The platform cannot interrupt an HPROF dump. This worker owns final diagnostics even
+        // after the caller's deadline, and never holds the lifecycle lock while doing that work.
+        if (launch) {
+            try {
+                Thread({ finish(final) }, "JankHunterRetentionStop").apply {
+                    isDaemon = true
+                    priority = Thread.MIN_PRIORITY
+                    start()
+                }
+            } catch (failure: Throwable) {
+                final.result = StopResult.FAILED
+                complete(final)
+                RuntimeHookGuard.rethrowFatal(failure)
             }
-            running.set(false)
         }
-        synchronized(registryLock) {
-            watched.clear()
-            watchedCount = 0
-            while (queue.poll() != null) {
-                // Do not retain stale references between runtime sessions.
+        return final.await(deadlineNs)
+    }
+
+    private fun finish(final: FinalCheck) {
+        try {
+            val remainingNs = (final.deadlineNs - System.nanoTime()).coerceAtLeast(0L)
+            if (!checkLock.tryLock(remainingNs, TimeUnit.NANOSECONDS)) return
+            try {
+                if (exactAdmission && canDiagnose()) {
+                    checkRetainedLocked()
+                    // Seal force-GC survivors without waiting for the cancelled periodic task.
+                    checkRetainedLocked()
+                }
+                final.result = when {
+                    !exactAdmission -> StopResult.SKIPPED
+                    final.deadlineNs - System.nanoTime() <= 0L -> StopResult.TIMED_OUT
+                    else -> StopResult.COMPLETED
+                }
+            } finally {
+                checkLock.unlock()
             }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            final.result = StopResult.INTERRUPTED
+        } catch (failure: Throwable) {
+            final.result = StopResult.FAILED
+            RuntimeHookGuard.rethrowFatal(failure)
+        } finally {
+            complete(final)
         }
     }
+
+    private fun complete(final: FinalCheck) {
+        try {
+            synchronized(registryLock) {
+                watched.forEach(WatchedReference::retire)
+                watched.clear()
+                watchedByIdentityHash.clear()
+                while (queue.poll() != null) {
+                    // Do not retain stale references between runtime sessions.
+                }
+            }
+        } finally {
+            final.completed.countDown()
+        }
+    }
+
+    private fun canDiagnose(): Boolean = running.get() ||
+        (exactAdmission && finalCheck?.let { it.deadlineNs - System.nanoTime() > 0L } == true)
 
     fun watch(instance: Any?, description: String?, ownerHint: String?, context: JankHunterContext?) {
         if (instance == null || !running.get()) return
@@ -90,132 +161,184 @@ internal class ObjectRetentionWatcher(
     private fun addWatched(instance: Any, description: String?, ownerHint: String?, context: JankHunterContext?) {
         var dropped = false
         synchronized(registryLock) {
+            drainClearedLocked()
             if (!running.get() || isAlreadyWatchedLocked(instance)) return
-            if (watchedCount >= capacity) {
+            if (watched.size >= capacity) {
                 dropped = true
             } else {
-                watched.add(
+                addWatchedLocked(
                     WatchedReference(
-                        instance,
-                        queue,
-                        safeClassName(instance, description),
-                        ownerHint?.takeIf { it.isNotBlank() },
-                        context,
-                        clock.getAsLong(),
+                        referent = instance,
+                        queue = queue,
+                        className = safeClassName(instance, description),
+                        ownerHint = ownerHint?.takeIf { it.isNotBlank() },
+                        context = context,
+                        watchStartedMs = clock.getAsLong(),
+                        identityHash = System.identityHashCode(instance),
                     ),
                 )
-                watchedCount++
             }
         }
         if (dropped) recordCardinalityLoss()
     }
 
     private fun isAlreadyWatchedLocked(instance: Any): Boolean {
-        for (ref in watched) {
-            if (!ref.removed && ref.get() === instance) {
-                return true
-            }
+        var candidate = watchedByIdentityHash[System.identityHashCode(instance)]
+        while (candidate != null) {
+            if (candidate.get() === instance) return true
+            candidate = candidate.identityHashNext
         }
         return false
     }
 
-    private fun drainCleared(): Boolean {
-        var removed = false
+    private fun addWatchedLocked(ref: WatchedReference) {
+        ref.watchedIndex = watched.size
+        ref.identityHashNext = watchedByIdentityHash.put(ref.identityHash, ref)
+        watched.add(ref)
+    }
+
+    private fun drainClearedLocked() {
         while (true) {
-            val ref = queue.poll() as? WatchedReference ?: return removed
-            ref.removed = true
-            removed = true
+            val ref = queue.poll() as? WatchedReference ?: return
+            removeWatchedLocked(ref)
         }
     }
 
     internal fun checkRetained() {
-        synchronized(checkLock) {
+        checkLock.withLock {
             checkRetainedLocked()
         }
     }
 
     private fun checkRetainedLocked() {
-        if (!running.get()) return
+        if (!canDiagnose()) return
         val now = clock.getAsLong()
-        val retainedGroups = linkedMapOf<String, RetainedGroup>()
-        val heapDumpGroups = linkedMapOf<String, RetainedGroup>()
+        var retainedGroups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>? = null
+        var heapDumpGroups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>? = null
         var shouldRequestGc = false
-        var shouldCompact = drainCleared()
 
-        for (ref in watched) {
-            if (ref.removed) {
-                shouldCompact = true
-                continue
-            }
-            if (ref.get() == null) {
-                ref.removed = true
-                shouldCompact = true
-                continue
-            }
-
-            val ageMs = now - ref.watchStartedMs
-            if (ageMs < delayMs) continue
-
-            if (ref.firstRetainedAtMs == 0L) {
-                ref.firstRetainedAtMs = now
-                if (forceGcBeforeReport && !ref.gcRequested) {
-                    ref.gcRequested = true
-                    shouldRequestGc = true
+        synchronized(registryLock) {
+            drainClearedLocked()
+            var index = 0
+            while (index < watched.size) {
+                val ref = watched[index]
+                if (ref.get() == null) {
+                    removeWatchedLocked(ref)
                     continue
                 }
-            }
 
-            val key = ref.groupKey()
-            if (!ref.retentionReported) {
-                retainedGroups.getOrPut(key) { ref.newGroup() }
-                    .add(ageMs, ref.evidence())
-                ref.retentionReported = true
-            }
+                val ageMs = now - ref.watchStartedMs
+                if (ageMs < delayMs) {
+                    index++
+                    continue
+                }
 
-            if (heapDumpReporter != null && ageMs >= heapDumpAgeMs) {
-                heapDumpGroups.getOrPut(key) { ref.newGroup() }
-                    .add(ageMs)
-                ref.removed = true
-                shouldCompact = true
-            } else if (heapDumpReporter == null) {
-                ref.removed = true
-                shouldCompact = true
-            }
-        }
+                if (ref.firstRetainedAtMs == 0L) {
+                    ref.firstRetainedAtMs = now
+                    if (forceGcBeforeReport && !ref.gcRequested) {
+                        ref.gcRequested = true
+                        shouldRequestGc = true
+                        index++
+                        continue
+                    }
+                }
 
-        if (shouldCompact) {
-            compactWatched()
-        }
+                if (!ref.retentionReported) {
+                    retainedGroups = addToGroups(retainedGroups, ref, ageMs, ref.evidence())
+                    ref.retentionReported = true
+                }
 
-        if (shouldRequestGc && running.get()) {
-            val completed = runCatching { requestGc() }.isSuccess
-            for (ref in watched) {
-                if (ref.gcRequested && ref.firstRetainedAtMs != 0L) {
-                    ref.gcCompleted = completed
+                if (heapDumpReporter != null && ageMs >= heapDumpAgeMs) {
+                    heapDumpGroups = addToGroups(heapDumpGroups, ref, ageMs, null)
+                    removeWatchedLocked(ref)
+                } else if (heapDumpReporter == null) {
+                    removeWatchedLocked(ref)
+                } else {
+                    index++
                 }
             }
         }
-        if (!running.get()) return
-        for (group in retainedGroups.values) {
-            reporter(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count, group.evidence)
+
+        if (shouldRequestGc && canDiagnose()) {
+            val completed = RuntimeHookGuard.value(false, RuntimeHookFailureReason.COLLECTOR) {
+                requestGc()
+                true
+            }
+            synchronized(registryLock) {
+                for (ref in watched) {
+                    if (ref.gcRequested && ref.firstRetainedAtMs != 0L) {
+                        ref.gcCompleted = completed
+                    }
+                }
+            }
         }
+        if (!canDiagnose()) return
+        retainedGroups?.reportTo(reporter)
         val dumpReporter = heapDumpReporter ?: return
-        for (group in heapDumpGroups.values) {
-            dumpReporter(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count)
+        heapDumpGroups?.reportTo(dumpReporter)
+    }
+
+    private fun removeWatchedLocked(ref: WatchedReference) {
+        val index = ref.watchedIndex
+        if (index < 0) return
+        val lastIndex = watched.lastIndex
+        val last = watched.removeAt(lastIndex)
+        if (index < lastIndex) {
+            watched[index] = last
+            last.watchedIndex = index
+        }
+        removeFromIdentityIndexLocked(ref)
+        ref.retire()
+    }
+
+    private fun removeFromIdentityIndexLocked(ref: WatchedReference) {
+        var previous: WatchedReference? = null
+        var candidate = watchedByIdentityHash[ref.identityHash]
+        while (candidate != null) {
+            if (candidate === ref) {
+                if (previous == null) {
+                    val next = candidate.identityHashNext
+                    if (next == null) watchedByIdentityHash.remove(ref.identityHash)
+                    else watchedByIdentityHash[ref.identityHash] = next
+                } else {
+                    previous.identityHashNext = candidate.identityHashNext
+                }
+                candidate.identityHashNext = null
+                return
+            }
+            previous = candidate
+            candidate = candidate.identityHashNext
         }
     }
 
-    private fun compactWatched() {
-        synchronized(registryLock) {
-            val survivors = ArrayList<WatchedReference>(watchedCount)
-            while (true) {
-                val ref = watched.poll() ?: break
-                if (!ref.removed && ref.get() != null) {
-                    survivors.add(ref)
-                }
+    private fun addToGroups(
+        groups: LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>>?,
+        ref: WatchedReference,
+        ageMs: Long,
+        evidence: RetentionEvidence?,
+    ): LinkedHashMap<String, LinkedHashMap<String?, RetainedGroup>> {
+        val target = groups ?: linkedMapOf()
+        val group = target.getOrPut(ref.className, ::linkedMapOf)
+            .getOrPut(ref.ownerHint, ref::newGroup)
+        if (evidence == null) group.add(ageMs) else group.add(ageMs, evidence)
+        return target
+    }
+
+    private fun Map<String, Map<String?, RetainedGroup>>.reportTo(target: RetentionReporter) {
+        for (ownerGroups in values) {
+            for (group in ownerGroups.values) {
+                if (!canDiagnose()) return
+                target(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count, group.evidence)
             }
-            watchedCount = survivors.size
-            survivors.forEach(watched::add)
+        }
+    }
+
+    private fun Map<String, Map<String?, RetainedGroup>>.reportTo(target: HeapDumpReporter) {
+        for (ownerGroups in values) {
+            for (group in ownerGroups.values) {
+                if (!canDiagnose()) return
+                target(group.className, group.ownerHint, group.context, group.maxAgeMs, group.count)
+            }
         }
     }
 
@@ -261,24 +384,53 @@ internal class ObjectRetentionWatcher(
         val ownerHint: String?,
         val context: JankHunterContext?,
         val watchStartedMs: Long,
+        val identityHash: Int,
     ) : WeakReference<Any>(referent, queue) {
+        var watchedIndex = -1
+        var identityHashNext: WatchedReference? = null
         var firstRetainedAtMs = 0L
         var gcRequested = false
         var gcCompleted = false
         var retentionReported = false
-        @Volatile
-        var removed = false
-
-        fun groupKey(): String = className + "\u0000" + ownerHint.orEmpty()
 
         fun newGroup(): RetainedGroup = RetainedGroup(className, ownerHint, context)
+
+        fun retire() {
+            watchedIndex = -1
+            identityHashNext = null
+            clear()
+        }
 
         fun evidence(): RetentionEvidence {
             return if (gcCompleted) RetentionEvidence.AFTER_EXPLICIT_GC else RetentionEvidence.TIME_ONLY
         }
     }
 
+    enum class StopResult(val counterName: String) {
+        COMPLETED("completed"),
+        TIMED_OUT("timed_out"),
+        INTERRUPTED("interrupted"),
+        SKIPPED("skipped"),
+        FAILED("failed"),
+    }
+
+    private class FinalCheck(val deadlineNs: Long) {
+        val completed = CountDownLatch(1)
+
+        @Volatile
+        var result = StopResult.TIMED_OUT
+
+        fun await(callerDeadlineNs: Long): StopResult = try {
+            val remainingNs = (callerDeadlineNs - System.nanoTime()).coerceAtLeast(0L)
+            if (completed.await(remainingNs, TimeUnit.NANOSECONDS)) result else StopResult.TIMED_OUT
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            StopResult.INTERRUPTED
+        }
+    }
+
     private companion object {
+        const val DEFAULT_STOP_TIMEOUT_MS = 5_000L
         const val DEFAULT_MAX_WATCHED_REFERENCES = 2_048
         val NO_OP_REPORTER: RetentionReporter = { _, _, _, _, _, _ -> }
         val NO_OP_CARDINALITY_LOSS = RuntimeLongConsumer { }

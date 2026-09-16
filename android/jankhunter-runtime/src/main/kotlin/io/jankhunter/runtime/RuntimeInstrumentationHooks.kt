@@ -25,13 +25,12 @@ internal class RuntimeInstrumentationHooks(
     private val contextTelemetry: RuntimeContextTelemetry,
     private val operationTelemetry: RuntimeOperationTelemetry,
     private val retentionTelemetry: RuntimeRetentionTelemetry,
-    private val config: () -> JankHunterConfig?,
 ) {
     fun enterMethod(methodId: Long, methodName: String): Long {
         return runtimeCallGraph.enter(
             methodId,
             methodName,
-            telemetryAccess.isActive() && config()?.runtimeCallGraphEnabled() == true,
+            telemetryAccess.isFeatureActive(JankHunterRuntimeFeature.CALL_GRAPH),
         )
     }
 
@@ -295,6 +294,24 @@ internal class RuntimeInstrumentationHooks(
         return asyncTelemetry.wrapCoroutineBlock(block, ownerName)
     }
 
+    fun enterCoroutineSegment(continuation: Any?, ownerName: String?): Long {
+        return asyncTelemetry.enterCoroutineSegment(
+            continuation,
+            ownerName,
+            collectNew = isEnabled(JankHunterRuntimeFeature.COROUTINES),
+        )
+    }
+
+    fun exitCoroutineSegment(token: Long, continuation: Any?, result: Any?, throwable: Throwable?) {
+        val suspended = throwable == null && result === kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+        val outcome = when {
+            throwable is java.util.concurrent.CancellationException -> CoroutineExecutionOutcome.CANCELLED
+            throwable != null -> CoroutineExecutionOutcome.FAILURE
+            else -> CoroutineExecutionOutcome.SUCCESS
+        }
+        asyncTelemetry.exitCoroutineSegment(token, continuation, suspended, outcome)
+    }
+
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         if (!isEnabled(JankHunterRuntimeFeature.INTERACTIONS)) return listener
         return asyncTelemetry.wrapClickListener(listener, ownerName)
@@ -342,6 +359,6 @@ internal class RuntimeInstrumentationHooks(
     }
 
     private fun isEnabled(feature: JankHunterRuntimeFeature): Boolean {
-        return telemetryAccess.isActive() && config()?.isRuntimeFeatureEnabled(feature) == true
+        return telemetryAccess.isFeatureActive(feature)
     }
 }

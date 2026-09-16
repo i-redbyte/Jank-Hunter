@@ -47,7 +47,11 @@ func printSummary(summary analyze.Summary) {
 	if len(summary.Processes) > 0 {
 		fmt.Printf("processes: %s\n", namedValues(summary.Processes))
 	}
-	fmt.Printf("context: samples=%d battery_min=%d%% avail_mem_min=%dKB low_mem=%d rx_max=%d tx_max=%d\n", summary.ContextCount, summary.BatteryMinPct, summary.AvailMemoryMinKB, summary.LowMemoryCount, summary.TrafficRxMax, summary.TrafficTxMax)
+	rxState, txState := "unknown", "unknown"
+	if e := summary.CollectionQuality.Traffic; e != nil {
+		rxState, txState = e.RX.State, e.TX.State
+	}
+	fmt.Printf("context: samples=%d battery_min=%d%% avail_mem_min=%dKB low_mem=%d rx_max=%d tx_max=%d rx_status=%s tx_status=%s\n", summary.ContextCount, summary.BatteryMinPct, summary.AvailMemoryMinKB, summary.LowMemoryCount, summary.TrafficRxMax, summary.TrafficTxMax, rxState, txState)
 	fmt.Printf("memory: max_pss=%dKB retained=%d\n", summary.MemoryMaxKB, summary.Retained)
 	inputs := summary.AnalysisInputs
 	fmt.Printf(

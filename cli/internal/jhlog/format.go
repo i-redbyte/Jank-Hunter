@@ -85,6 +85,7 @@ const (
 )
 
 type StreamResult struct {
+	FormatVersion            string               `json:"format_version,omitempty"`
 	Source                   string               `json:"source"`
 	Header                   SegmentHeader        `json:"header"`
 	Status                   SegmentStatus        `json:"status"`
@@ -192,11 +193,21 @@ const (
 	FlagWorkerPeriodic         Flag = 1 << 20
 	FlagWorkerStopReasonKnown  Flag = 1 << 21
 	FlagIOBytesKnown           Flag = 1 << 22
+	FlagHTTPBodyTotals         Flag = 1 << 23
+	FlagHTTPTTFBObserved       Flag = 1 << 24
+	FlagHTTPTTFBKnown          Flag = 1 << 25
 )
 
 const semanticAttributeMask = uint64((1<<14)-1) |
 	uint64(FlagHTTPSlow|FlagUIProblem|FlagHTTPClassified|FlagUIClassified|
-		FlagWorkerPeriodic|FlagWorkerStopReasonKnown|FlagIOBytesKnown)
+		FlagWorkerPeriodic|FlagWorkerStopReasonKnown|FlagIOBytesKnown|FlagHTTPBodyTotals|FlagHTTPTTFBObserved|FlagHTTPTTFBKnown)
+
+// HasObservedHTTPFirstByte excludes both legacy header-read intent and unknown observations.
+// A known zero remains a measurement.
+func HasObservedHTTPFirstByte(flags uint64) bool {
+	const mask = uint64(FlagHTTPTTFBObserved | FlagHTTPTTFBKnown)
+	return flags&mask == mask
+}
 
 type SymbolRef struct {
 	ID        uint64 `json:"id,omitempty"`
@@ -362,11 +373,12 @@ const (
 	CollectorRoom
 	CollectorWorker
 	CollectorDatabase
+	CollectorHTTP
 )
 
 const CollectorKnownMask = CollectorFPS | CollectorJankStats | CollectorProcessExit | CollectorIOTracing |
 	CollectorSystemSampler | CollectorMainThreadStalls | CollectorRetainedObjects | CollectorCompose |
-	CollectorRoom | CollectorWorker | CollectorDatabase
+	CollectorRoom | CollectorWorker | CollectorDatabase | CollectorHTTP
 
 type UIFrameSource uint64
 
@@ -525,21 +537,28 @@ type SessionEvent struct {
 	DeviceRooted      bool      `json:"device_rooted,omitempty"`
 }
 
+const (
+	TrafficRXKnown = 1 << iota
+	TrafficTXKnown
+)
+
 type ContextEvent struct {
-	Network          NetworkKind `json:"network"`
-	BatteryPct       uint64      `json:"battery_pct"`
-	AvailMemoryKB    uint64      `json:"avail_memory_kb"`
-	TotalMemoryKB    uint64      `json:"total_memory_kb,omitempty"`
-	BatteryState     uint64      `json:"battery_state,omitempty"`
-	BatteryTempDeciC int64       `json:"battery_temp_deci_c,omitempty"`
-	LowMemory        bool        `json:"low_memory,omitempty"`
-	NetworkMetered   bool        `json:"network_metered,omitempty"`
-	NetworkValidated bool        `json:"network_validated,omitempty"`
-	NetworkVPN       bool        `json:"network_vpn,omitempty"`
-	RxBytes          uint64      `json:"rx_bytes,omitempty"`
-	TxBytes          uint64      `json:"tx_bytes,omitempty"`
-	FreeStorageKB    uint64      `json:"free_storage_kb,omitempty"`
-	TotalStorageKB   uint64      `json:"total_storage_kb,omitempty"`
+	TrafficUIDPlusOne uint32      `json:"traffic_uid_plus_one,omitempty"`
+	TrafficKnownFlags uint8       `json:"traffic_known_flags,omitempty"`
+	Network           NetworkKind `json:"network"`
+	BatteryPct        uint64      `json:"battery_pct"`
+	AvailMemoryKB     uint64      `json:"avail_memory_kb"`
+	TotalMemoryKB     uint64      `json:"total_memory_kb,omitempty"`
+	BatteryState      uint64      `json:"battery_state,omitempty"`
+	BatteryTempDeciC  int64       `json:"battery_temp_deci_c,omitempty"`
+	LowMemory         bool        `json:"low_memory,omitempty"`
+	NetworkMetered    bool        `json:"network_metered,omitempty"`
+	NetworkValidated  bool        `json:"network_validated,omitempty"`
+	NetworkVPN        bool        `json:"network_vpn,omitempty"`
+	RxBytes           uint64      `json:"rx_bytes,omitempty"`
+	TxBytes           uint64      `json:"tx_bytes,omitempty"`
+	FreeStorageKB     uint64      `json:"free_storage_kb,omitempty"`
+	TotalStorageKB    uint64      `json:"total_storage_kb,omitempty"`
 }
 
 type HTTPEvent struct {
@@ -582,9 +601,13 @@ type UIWindowEvent struct {
 	P99MS                uint64        `json:"derived_p99_ms"`
 }
 
+type StallState uint8
+
 type StallEvent struct {
-	StackRef   SymbolRef `json:"stack_ref,omitempty"`
-	DurationMS uint64    `json:"duration_ms"`
+	IncidentID uint64     `json:"incident_id,omitempty"`
+	State      StallState `json:"state,omitempty"`
+	StackRef   SymbolRef  `json:"stack_ref,omitempty"`
+	DurationMS uint64     `json:"duration_ms"`
 }
 
 type MemoryEvent struct {
@@ -606,6 +629,7 @@ type MetricEvent struct {
 	Value     uint64     `json:"value"`
 	Count     uint64     `json:"count,omitempty"`
 	Sum       uint64     `json:"sum,omitempty"`
+	SumHigh   uint64     `json:"sum_high,omitempty"`
 	Max       uint64     `json:"max,omitempty"`
 	Mode      MetricMode `json:"mode,omitempty"`
 }
@@ -704,13 +728,6 @@ const (
 )
 
 type WorkerStage uint8
-
-const (
-	WorkerStageUnknown WorkerStage = iota
-	WorkerStageEnqueued
-	WorkerStageStarted
-	WorkerStageFinished
-)
 
 type WorkerOutcome uint8
 
@@ -1142,52 +1159,71 @@ const (
 	QualityWriterAdmissionContentionTotal uint64 = 18
 	QualityEventLostAfterStorageBudget    uint64 = 19
 
-	QualityMetricCardinalityLoss             uint64 = 0x2000
-	QualityInvalidMetric                     uint64 = 0x2001
-	QualityRuntimeStackMismatch              uint64 = 0x2003
-	QualityLogSpamCardinalityLoss            uint64 = 0x2004
-	QualityHandlerEntryLimit                 uint64 = 0x2005
-	QualityHandlerWrapperLimit               uint64 = 0x2006
-	QualityLifecycleRegistryLimit            uint64 = 0x2007
-	QualityObjectWatcherLimit                uint64 = 0x2008
-	QualityJankStatsHandleLimit              uint64 = 0x2009
-	QualityMetricFlushTimeout                uint64 = 0x200a
-	QualityRuntimeGraphShutdownLoss          uint64 = 0x200f
-	QualityRuntimeGraphWriterRejectionLoss   uint64 = 0x2010
-	QualityHandlerContentionBypass           uint64 = 0x2013
-	QualityRuntimeEventBufferCapacityLoss    uint64 = 0x2017
-	QualityRuntimeEventRegistryCapacityLoss  uint64 = 0x2018
-	QualityMethodCounterCardinalityLoss      uint64 = 0x2019
-	QualityRuntimeEventWriterRejectionLoss   uint64 = 0x201a
-	QualityRuntimeGraphInputTotal            uint64 = 0x201b
-	QualityRuntimeGraphEmittedTotal          uint64 = 0x201c
-	QualityRuntimeGraphBackpressureCount     uint64 = 0x201f
-	QualityRuntimeGraphBackpressureNanos     uint64 = 0x2020
-	QualityWriterBackpressureCount           uint64 = 0x2021
-	QualityWriterBackpressureNanos           uint64 = 0x2022
-	QualityRuntimeEventBackpressureCount     uint64 = 0x2023
-	QualityRuntimeEventBackpressureNanos     uint64 = 0x2024
-	QualityRuntimeGraphDisabled              uint64 = 0x2025
-	QualityRuntimeHookFailureTotal           uint64 = 0x2026
-	QualityArchiveEvictedRunTotal            uint64 = 0x2027
-	QualityArchiveEvictedSegmentTotal        uint64 = 0x2028
-	QualityArchiveEvictedBytesTotal          uint64 = 0x2029
-	QualityRuntimeHookInstrumentationFailure uint64 = 0x202a
-	QualityRuntimeHookAsyncWrapperFailure    uint64 = 0x202b
-	QualityRuntimeHookLifecycleFailure       uint64 = 0x202c
-	QualityRuntimeHookCollectorFailure       uint64 = 0x202d
-	QualityRuntimeHookContextFailure         uint64 = 0x202e
-	QualityRuntimeHookSchedulerFailure       uint64 = 0x202f
-	QualityJankStatsDependencyMissing        uint64 = 0x2030
-	QualityJankStatsInstallFailure           uint64 = 0x2031
-	QualityJankStatsFrameFailure             uint64 = 0x2032
-	QualityJankStatsControlFailure           uint64 = 0x2033
-	QualityRuntimeHookUnclassifiedFailure    uint64 = 0x2034
-	QualityPreparedStatementRegistryEviction uint64 = 0x2035
-	QualityPreparedStatementResolutionMiss   uint64 = 0x2036
-	QualityReceiverAsyncRegistryEviction     uint64 = 0x2037
-	QualityReceiverAsyncResolutionMiss       uint64 = 0x2038
-	QualityRuntimeGraphProducerCapacityLoss  uint64 = 0x2039
+	QualityMetricCardinalityLoss                   uint64 = 0x2000
+	QualityInvalidMetric                           uint64 = 0x2001
+	QualityRuntimeStackMismatch                    uint64 = 0x2003
+	QualityLogSpamCardinalityLoss                  uint64 = 0x2004
+	QualityHandlerEntryLimit                       uint64 = 0x2005
+	QualityHandlerWrapperLimit                     uint64 = 0x2006
+	QualityLifecycleRegistryLimit                  uint64 = 0x2007
+	QualityObjectWatcherLimit                      uint64 = 0x2008
+	QualityJankStatsHandleLimit                    uint64 = 0x2009
+	QualityMetricFlushTimeout                      uint64 = 0x200a
+	QualityRuntimeGraphShutdownLoss                uint64 = 0x200f
+	QualityRuntimeGraphWriterRejectionLoss         uint64 = 0x2010
+	QualityHandlerContentionBypass                 uint64 = 0x2013
+	QualityRuntimeEventBufferCapacityLoss          uint64 = 0x2017
+	QualityRuntimeEventRegistryCapacityLoss        uint64 = 0x2018
+	QualityMethodCounterCardinalityLoss            uint64 = 0x2019
+	QualityRuntimeEventWriterRejectionLoss         uint64 = 0x201a
+	QualityRuntimeGraphInputTotal                  uint64 = 0x201b
+	QualityRuntimeGraphEmittedTotal                uint64 = 0x201c
+	QualityRuntimeGraphBackpressureCount           uint64 = 0x201f
+	QualityRuntimeGraphBackpressureNanos           uint64 = 0x2020
+	QualityWriterBackpressureCount                 uint64 = 0x2021
+	QualityWriterBackpressureNanos                 uint64 = 0x2022
+	QualityRuntimeEventBackpressureCount           uint64 = 0x2023
+	QualityRuntimeEventBackpressureNanos           uint64 = 0x2024
+	QualityRuntimeGraphDisabled                    uint64 = 0x2025
+	QualityRuntimeHookFailureTotal                 uint64 = 0x2026
+	QualityArchiveEvictedRunTotal                  uint64 = 0x2027
+	QualityArchiveEvictedSegmentTotal              uint64 = 0x2028
+	QualityArchiveEvictedBytesTotal                uint64 = 0x2029
+	QualityRuntimeHookInstrumentationFailure       uint64 = 0x202a
+	QualityRuntimeHookAsyncWrapperFailure          uint64 = 0x202b
+	QualityRuntimeHookLifecycleFailure             uint64 = 0x202c
+	QualityRuntimeHookCollectorFailure             uint64 = 0x202d
+	QualityRuntimeHookContextFailure               uint64 = 0x202e
+	QualityRuntimeHookSchedulerFailure             uint64 = 0x202f
+	QualityJankStatsDependencyMissing              uint64 = 0x2030
+	QualityJankStatsInstallFailure                 uint64 = 0x2031
+	QualityJankStatsFrameFailure                   uint64 = 0x2032
+	QualityJankStatsControlFailure                 uint64 = 0x2033
+	QualityRuntimeHookUnclassifiedFailure          uint64 = 0x2034
+	QualityPreparedStatementRegistryEviction       uint64 = 0x2035
+	QualityPreparedStatementResolutionMiss         uint64 = 0x2036
+	QualityReceiverAsyncRegistryEviction           uint64 = 0x2037
+	QualityReceiverAsyncResolutionMiss             uint64 = 0x2038
+	QualityRuntimeGraphProducerCapacityLoss        uint64 = 0x2039
+	QualityRuntimeEventGenerationCapacityLoss      uint64 = 0x203a
+	QualityRuntimeGraphGenerationCapacityLoss      uint64 = 0x203b
+	QualityRuntimeGraphGenerationSkippedEntryTotal uint64 = 0x203c
+	QualityHandlerPostContextUnavailable           uint64 = 0x203d
+	QualityAsyncCompletionStale                    uint64 = 0x203e
+	QualityAsyncCompletionDuplicate                uint64 = 0x203f
+	QualityAsyncCompletionInvalid                  uint64 = 0x2040
+	QualityAsyncTokenCapacityRejected              uint64 = 0x2041
+	QualityAsyncTokenIdExhausted                   uint64 = 0x2042
+	QualityAsyncCompletionFeatureDisabled          uint64 = 0x2043
+	QualityAsyncUnfinishedHTTP                     uint64 = 0x2044
+	QualityAsyncUnfinishedDatabase                 uint64 = 0x2045
+	QualityAsyncUnfinishedWorker                   uint64 = 0x2046
+	QualityAsyncUnfinishedDatabaseTransaction      uint64 = 0x2047
+	QualityAsyncCompletionInProgressAtStop         uint64 = 0x2048
+	QualityHTTPLegacyContextCompletion             uint64 = 0x2049
+	QualityRuntimeGraphStorageSkippedEntryTotal    uint64 = 0x204a
+	QualityCollectionWindowStartElapsedMS          uint64 = 0x204b
+	QualityCollectionWindowEndElapsedMS            uint64 = 0x204c
 )
 
 type QualityLossReason uint64
@@ -1272,6 +1308,44 @@ func QualityCounterName(id uint64) string {
 		return "runtime_graph_writer_rejection_loss_total"
 	case QualityHandlerContentionBypass:
 		return "handler_contention_bypass_total"
+	case QualityRuntimeEventGenerationCapacityLoss:
+		return "runtime_event_generation_capacity_loss_total"
+	case QualityRuntimeGraphGenerationCapacityLoss:
+		return "runtime_graph_generation_capacity_loss_total"
+	case QualityRuntimeGraphGenerationSkippedEntryTotal:
+		return "runtime_graph_generation_skipped_entry_total"
+	case QualityCollectionWindowStartElapsedMS:
+		return "collection_window_start_elapsed_ms"
+	case QualityCollectionWindowEndElapsedMS:
+		return "collection_window_end_elapsed_ms"
+	case QualityRuntimeGraphStorageSkippedEntryTotal:
+		return "runtime_graph_storage_skipped_entry_total"
+	case QualityHandlerPostContextUnavailable:
+		return "handler_post_context_unavailable_total"
+	case QualityAsyncCompletionStale:
+		return "async_completion_stale_total"
+	case QualityAsyncCompletionDuplicate:
+		return "async_completion_duplicate_total"
+	case QualityAsyncCompletionInvalid:
+		return "async_completion_invalid_total"
+	case QualityAsyncTokenCapacityRejected:
+		return "async_token_capacity_rejected_total"
+	case QualityAsyncTokenIdExhausted:
+		return "async_token_id_exhausted_total"
+	case QualityAsyncCompletionFeatureDisabled:
+		return "async_completion_feature_disabled_total"
+	case QualityAsyncUnfinishedHTTP:
+		return "async_unfinished_http_total"
+	case QualityAsyncUnfinishedDatabase:
+		return "async_unfinished_database_total"
+	case QualityAsyncUnfinishedWorker:
+		return "async_unfinished_worker_total"
+	case QualityAsyncUnfinishedDatabaseTransaction:
+		return "async_unfinished_database_transaction_total"
+	case QualityAsyncCompletionInProgressAtStop:
+		return "async_completion_in_progress_at_stop_total"
+	case QualityHTTPLegacyContextCompletion:
+		return "http_legacy_context_completion_total"
 	case QualityRuntimeEventBufferCapacityLoss:
 		return "runtime_event_buffer_capacity_loss_total"
 	case QualityRuntimeEventRegistryCapacityLoss:
@@ -1363,6 +1437,24 @@ func IsKnownQualityCounter(id uint64) bool {
 		QualityRuntimeGraphShutdownLoss,
 		QualityRuntimeGraphWriterRejectionLoss,
 		QualityHandlerContentionBypass,
+		QualityRuntimeEventGenerationCapacityLoss,
+		QualityRuntimeGraphGenerationCapacityLoss,
+		QualityRuntimeGraphGenerationSkippedEntryTotal,
+		QualityRuntimeGraphStorageSkippedEntryTotal,
+		QualityCollectionWindowStartElapsedMS, QualityCollectionWindowEndElapsedMS,
+		QualityHandlerPostContextUnavailable,
+		QualityAsyncCompletionStale,
+		QualityAsyncCompletionDuplicate,
+		QualityAsyncCompletionInvalid,
+		QualityAsyncTokenCapacityRejected,
+		QualityAsyncTokenIdExhausted,
+		QualityAsyncCompletionFeatureDisabled,
+		QualityAsyncUnfinishedHTTP,
+		QualityAsyncUnfinishedDatabase,
+		QualityAsyncUnfinishedWorker,
+		QualityAsyncUnfinishedDatabaseTransaction,
+		QualityAsyncCompletionInProgressAtStop,
+		QualityHTTPLegacyContextCompletion,
 		QualityRuntimeEventBufferCapacityLoss,
 		QualityRuntimeEventRegistryCapacityLoss,
 		QualityMethodCounterCardinalityLoss,
@@ -1460,4 +1552,8 @@ func formatUint(v uint64) string {
 		v /= 10
 	}
 	return string(buf[i:])
+}
+
+func isCollectionWindowCounter(id uint64) bool {
+	return id == QualityCollectionWindowStartElapsedMS || id == QualityCollectionWindowEndElapsedMS
 }

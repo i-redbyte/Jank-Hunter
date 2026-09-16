@@ -32,7 +32,7 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 			id:          "jank_pressure_area",
 			title:       "Площадь подтормаживаний UI",
 			formula:     "Σ ((janky_frames / frames) * 100) * Δt",
-			explanation: "Суммирует долю медленных UI-кадров по времени: короткий пик и длинная умеренная деградация получают разный вес.",
+			explanation: "Суммирует долю медленных UI-кадров по времени: короткий пик и долгое умеренное ухудшение получают разный вес.",
 			unit:        "%*с",
 			value:       jankPressureArea,
 		},
@@ -81,6 +81,9 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 	scores := make([]IntegralScore, 0, len(definitions))
 	durationMS := integralTimelineDurationMS(timeline)
 	for _, definition := range definitions {
+		if definition.id == "network_failure_burn" && !completeHTTPCounts(timeline) {
+			continue
+		}
 		value := definition.value(timeline, loops)
 		if definition.id == "network_failure_burn" {
 			value /= float64(runCount)
@@ -98,9 +101,9 @@ func computeIntegralScoresForRuns(timeline []TimelineBucket, loops []NetworkLoop
 		}
 		if definition.id == "network_failure_burn" && runCount > 1 {
 			score.Formula = "(Σ (HTTP_ошибки + 0.25*DNS + 0.25*соединение) * Δt + Σ нагрузка_цикла) / число_прогонов"
-			score.Explanation += " При объединении независимых прогонов сумма делится на их количество, чтобы число повторов само по себе не увеличивало оценку."
+			score.Explanation += " При объединении временных шкал сумма делится на их количество, чтобы число повторов само по себе не увеличивало оценку."
 		}
-		score.Summary = fmt.Sprintf("%s: %.1f %s; независимых прогонов: %d. %s", score.Title, score.Value, score.Unit, score.RunCount, score.Explanation)
+		score.Summary = fmt.Sprintf("%s: %.1f %s; временных шкал: %d. %s", score.Title, score.Value, score.Unit, score.RunCount, score.Explanation)
 		scores = append(scores, score)
 	}
 	return scores
@@ -122,8 +125,11 @@ func compareIntegralScores(baseline, candidate []IntegralScore) []IntegralDelta 
 	}
 	deltas := make([]IntegralDelta, 0, len(ids))
 	for _, id := range ids {
-		base := baselineByID[id]
-		cand := candidateByID[id]
+		base, basePresent := baselineByID[id]
+		cand, candidatePresent := candidateByID[id]
+		if !basePresent || !candidatePresent {
+			continue
+		}
 		delta := cand.Value - base.Value
 		deltaPct := percentDelta(base.Value, cand.Value)
 		baseRunCount := normalizedRunCount(base.RunCount)
@@ -427,7 +433,7 @@ func compareIntegralSummary(deltas []IntegralDelta) string {
 		}
 	}
 	if incomparable > 0 {
-		return fmt.Sprintf("Сопоставимо %d из %d накопленных оценок; для %d оценок длительность различается больше чем на 20%% или число независимых прогонов не совпадает. Среди сопоставимых выросло %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
+		return fmt.Sprintf("Сопоставимо %d из %d накопленных оценок; для %d оценок длительность различается больше чем на 20%% или число временных шкал не совпадает. Среди сопоставимых выросло %d.", len(deltas)-incomparable, len(deltas), incomparable, worse)
 	}
 	if worse == 0 {
 		return "Проверяемый прогон не увеличил накопленную нагрузку относительно базового."
@@ -499,7 +505,7 @@ func worstIntegralScore(scores []IntegralScore) IntegralScore {
 
 func integralDeltaSummary(title string, baseline, candidate, delta, deltaPct float64, unit string, comparable bool, baselineDurationMS, candidateDurationMS uint64, baselineRunCount, candidateRunCount int) string {
 	if !comparable {
-		return fmt.Sprintf("%s: базовый прогон %.1f %s за %.1f с (независимых запусков: %d), проверяемый прогон %.1f %s за %.1f с (независимых запусков: %d). Длительность различается больше чем на 20%% или число запусков не совпадает, поэтому изменение не считается ухудшением автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
+		return fmt.Sprintf("%s: базовый прогон %.1f %s за %.1f с (временных шкал: %d), проверяемый прогон %.1f %s за %.1f с (временных шкал: %d). Длительность различается больше чем на 20%% или число запусков не совпадает, поэтому изменение не считается ухудшением автоматически.", title, baseline, unit, seconds(baselineDurationMS), baselineRunCount, candidate, unit, seconds(candidateDurationMS), candidateRunCount)
 	}
 	if delta <= 0 {
 		return fmt.Sprintf("%s улучшилась или не выросла: %.1f -> %.1f %s.", title, baseline, candidate, unit)

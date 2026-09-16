@@ -2,7 +2,6 @@ package analyze
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
 )
@@ -86,23 +85,12 @@ func LoadDatabaseEvidence(path string) (*DatabaseEvidence, error) {
 	if path == "" {
 		return nil, nil
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if info.IsDir() || info.Size() <= 0 || info.Size() > maxDatabaseEvidenceBytes {
-		return nil, fmt.Errorf(
-			"%s: database evidence size must be between 1 and %d bytes",
-			path,
-			maxDatabaseEvidenceBytes,
-		)
-	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedFile(path, "database evidence", maxDatabaseEvidenceBytes)
 	if err != nil {
 		return nil, err
 	}
 	var evidence DatabaseEvidence
-	if err := decodeArtifactMetadataRecord(data, &evidence); err != nil {
+	if err := decodeStrictJSON(data, &evidence); err != nil {
 		return nil, fmt.Errorf("%s: parse database evidence: %w", path, err)
 	}
 	if err := validateDatabaseEvidence(&evidence); err != nil {
@@ -426,7 +414,7 @@ func databasePlanFinding(
 			"Импортированный план подтверждает временное B-tree для %s.",
 			databaseEvidencePurposeLabel(step.Purpose),
 		)
-		finding.Action = "Проверьте возможность выполнить сортировку или группировку подходящим индексом и сравните план и latency на том же наборе данных."
+		finding.Action = "Проверьте, может ли подходящий индекс выполнить сортировку или группировку. Затем сравните план и время выполнения на том же наборе данных."
 		return finding, true
 	case "automatic_index":
 		finding.Summary = fmt.Sprintf("Импортированный план подтверждает automatic index для %s.", step.Table)

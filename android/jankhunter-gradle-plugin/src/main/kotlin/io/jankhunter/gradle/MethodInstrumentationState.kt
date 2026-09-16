@@ -24,6 +24,8 @@ internal class MethodInstrumentationState {
     var receiverPendingResultLocal = UNALLOCATED_LOCAL
     var binderServerStartLocal = UNALLOCATED_LOCAL
     var binderServerResultLocal = UNALLOCATED_LOCAL
+    var coroutineSegmentTokenLocal = UNALLOCATED_LOCAL
+    var coroutineSegmentResultLocal = UNALLOCATED_LOCAL
     val methodTryStart = Label()
     val methodTryEnd = Label()
     val methodExceptionHandler = Label()

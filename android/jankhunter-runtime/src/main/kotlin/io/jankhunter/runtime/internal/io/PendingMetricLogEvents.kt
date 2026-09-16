@@ -60,8 +60,9 @@ internal class PendingGaugeEvent(
     private val sum: Long,
     private val max: Long,
     private val mode: MetricAggregationMode,
+    private val sumHigh: Long = 0L,
 ) : PendingLogEvent(Jhlog.TYPE_GAUGE, producerContext) {
-    override fun writePayload(writer: BinaryLogWriter) = writer.gauge(name, value, count, sum, max, mode)
+    override fun writePayload(writer: BinaryLogWriter) = writer.gaugeWide(name, value, count, sum, max, mode, sumHigh)
 }
 
 internal class PendingLogSpamEvent(

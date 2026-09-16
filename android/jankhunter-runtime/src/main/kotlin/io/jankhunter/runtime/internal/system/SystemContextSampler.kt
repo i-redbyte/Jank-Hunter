@@ -23,6 +23,7 @@ internal class SystemContextSampler(
     private val callbacks: RuntimeCollectorCallbacks,
     private val userRelevant: RuntimeBooleanSource = RuntimeBooleanSource { true },
 ) {
+    private val trafficUid = Process.myUid()
     private val appContext = context.applicationContext
     private val activityManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
     private val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -68,6 +69,8 @@ internal class SystemContextSampler(
             storage.freeKb,
             storage.totalKb,
             network.vpn,
+            traffic.uidPlusOne,
+            traffic.knownFlags,
         )
         recordBatteryPowerMetrics(battery)
         recordCpuMetrics(cpu)
@@ -131,17 +134,11 @@ internal class SystemContextSampler(
         }
     }
 
-    private fun readTraffic(): TrafficSnapshot {
-        val uid = Process.myUid()
-        return TrafficSnapshot(
-            rxBytes = sanitizeTraffic(TrafficStats.getUidRxBytes(uid)),
-            txBytes = sanitizeTraffic(TrafficStats.getUidTxBytes(uid)),
-        )
-    }
-
-    private fun sanitizeTraffic(value: Long): Long {
-        return if (value == TrafficStats.UNSUPPORTED.toLong() || value < 0L) 0L else value
-    }
+    private fun readTraffic(): UidTrafficSample = UidTrafficSample.from(
+        trafficUid,
+        TrafficStats.getUidRxBytes(trafficUid),
+        TrafficStats.getUidTxBytes(trafficUid),
+    )
 
     private fun readStorage(): StorageSnapshot {
         return try {
@@ -223,11 +220,6 @@ internal class SystemContextSampler(
         val metered: Boolean,
         val validated: Boolean,
         val vpn: Boolean,
-    )
-
-    private data class TrafficSnapshot(
-        val rxBytes: Long,
-        val txBytes: Long,
     )
 
     private data class StorageSnapshot(

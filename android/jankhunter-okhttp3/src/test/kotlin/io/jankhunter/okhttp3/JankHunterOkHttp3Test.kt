@@ -188,7 +188,8 @@ class JankHunterOkHttp3Test {
         assertEquals(25L, event.connectMs)
         assertEquals(10L, event.tlsMs)
         assertEquals(20L, event.requestMs)
-        assertEquals(20L, event.ttfbMs)
+        assertEquals("Header callbacks alone cannot establish the first response byte", 0L, event.ttfbMs)
+        assertEquals(0L, event.flags and JankHunterNetworkEventFlags.HTTP_TTFB_KNOWN)
         assertEquals(50L, event.responseMs)
         assertEquals(503, event.statusCode)
         assertEquals(JankHunterHttpEvent.PROTOCOL_HTTP_2, event.protocol)
@@ -207,6 +208,151 @@ class JankHunterOkHttp3Test {
             JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN,
             event.flags and JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN,
         )
+    }
+
+    @Test
+    fun bodyBytesAccumulateAcrossAllExchangesInsteadOfKeepingOnlyTheLast() {
+        val event = bodyAccountingEvent(longArrayOf(100L, 200L), longArrayOf(50L, 80L))
+        assertEquals(300L, event.requestBodyBytes)
+        assertEquals(130L, event.responseBodyBytes)
+        assertEquals(2, event.attempts)
+        assertByteCountsKnown(event, true)
+    }
+
+    @Test
+    fun duplicateBodyCompletionsDoNotDoubleCountAnExchange() {
+        val event = bodyAccountingEvent(longArrayOf(100L, 200L), longArrayOf(50L, 80L), repeatEnd = true)
+        assertEquals(300L, event.requestBodyBytes)
+        assertEquals(130L, event.responseBodyBytes)
+        assertByteCountsKnown(event, true)
+    }
+
+    @Test
+    fun duplicateBodyStartAndEndCannotCountOneBodyTwiceWithoutANewExchange() {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { 1L }).create(call)
+        listener.callStart(call)
+        listener.requestHeadersStart(call)
+        repeat(2) {
+            listener.requestBodyStart(call)
+            listener.requestBodyEnd(call, 100L)
+        }
+        listener.responseHeadersStart(call)
+        repeat(2) {
+            listener.responseBodyStart(call)
+            listener.responseBodyEnd(call, 50L)
+        }
+        listener.callEnd(call)
+        val event = telemetry.singleHttpEvent()
+        assertEquals(100L, event.requestBodyBytes)
+        assertEquals(50L, event.responseBodyBytes)
+        assertByteCountsKnown(event, true)
+    }
+
+    @Test
+    fun emptyLastBodiesDoNotEraseEarlierBytes() {
+        val event = bodyAccountingEvent(longArrayOf(100L, 0L), longArrayOf(50L, 0L))
+        assertEquals(100L, event.requestBodyBytes)
+        assertEquals(50L, event.responseBodyBytes)
+        assertByteCountsKnown(event, true)
+    }
+
+    @Test
+    fun byteCountOverflowSaturatesAndCannotBeReportedAsAnExactTotal() {
+        val event = bodyAccountingEvent(longArrayOf(Long.MAX_VALUE, 1L), longArrayOf(Long.MAX_VALUE, 2L))
+        assertEquals(Long.MAX_VALUE, event.requestBodyBytes)
+        assertEquals(Long.MAX_VALUE, event.responseBodyBytes)
+        assertByteCountsKnown(event, false)
+    }
+
+    @Test
+    fun invalidNegativeByteCountsCannotBecomeKnownZero() {
+        val event = bodyAccountingEvent(longArrayOf(-1L), longArrayOf(-2L))
+        assertEquals(0L, event.requestBodyBytes)
+        assertEquals(0L, event.responseBodyBytes)
+        assertByteCountsKnown(event, false)
+    }
+
+    @Test
+    fun failedLaterRequestBodyKeepsObservedBytesButClearsExactTotalFlag() {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { 1L }).create(call)
+        listener.callStart(call)
+        listener.requestHeadersStart(call)
+        listener.requestBodyStart(call)
+        listener.requestBodyEnd(call, 100L)
+        listener.requestHeadersStart(call)
+        listener.requestBodyStart(call)
+        listener.callFailed(call, IOException("incomplete upload"))
+        val event = telemetry.singleHttpEvent()
+        assertEquals(100L, event.requestBodyBytes)
+        assertEquals(0L, event.flags and JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN)
+    }
+
+    @Test
+    fun failedEarlierBodyCannotBeMadeExactByASuccessfulRetry() {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { 1L }).create(call)
+        listener.callStart(call)
+        listener.requestHeadersStart(call)
+        listener.requestBodyStart(call)
+        listener.requestHeadersStart(call)
+        listener.requestBodyStart(call)
+        listener.requestBodyEnd(call, 200L)
+        listener.callEnd(call)
+        val event = telemetry.singleHttpEvent()
+        assertEquals(200L, event.requestBodyBytes)
+        assertEquals(0L, event.flags and JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN)
+    }
+
+    @Test
+    fun incompleteResponseBodyCannotLeaveEarlierTotalMarkedKnown() {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { 1L }).create(call)
+        listener.callStart(call)
+        listener.responseHeadersStart(call)
+        listener.responseBodyStart(call)
+        listener.responseBodyEnd(call, 50L)
+        listener.responseHeadersStart(call)
+        listener.responseBodyStart(call)
+        listener.callFailed(call, IOException("incomplete response"))
+        val event = telemetry.singleHttpEvent()
+        assertEquals(50L, event.responseBodyBytes)
+        assertEquals(0L, event.flags and JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN)
+    }
+
+    private fun bodyAccountingEvent(
+        requests: LongArray,
+        responses: LongArray,
+        repeatEnd: Boolean = false,
+    ): JankHunterHttpEvent {
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, { 1L }).create(call)
+        listener.callStart(call)
+        for (index in requests.indices) {
+            listener.requestHeadersStart(call)
+            listener.requestBodyStart(call)
+            listener.requestBodyEnd(call, requests[index])
+            if (repeatEnd) listener.requestBodyEnd(call, requests[index])
+            listener.responseHeadersStart(call)
+            listener.responseBodyStart(call)
+            listener.responseBodyEnd(call, responses[index])
+            if (repeatEnd) listener.responseBodyEnd(call, responses[index])
+        }
+        listener.callEnd(call)
+        listener.callEnd(call)
+        return telemetry.singleHttpEvent()
+    }
+
+    private fun assertByteCountsKnown(event: JankHunterHttpEvent, known: Boolean) {
+        val flags = JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN or
+            JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN
+        assertEquals(if (known) flags else 0L, event.flags and flags)
     }
 
     @Test
@@ -536,7 +682,8 @@ class JankHunterOkHttp3Test {
         assertEquals(100L, event.durationMs)
         assertEquals(15L, event.dnsMs)
         assertEquals(20L, event.connectMs)
-        assertEquals(20L, event.ttfbMs)
+        assertEquals("Header callbacks alone cannot establish the first response byte", 0L, event.ttfbMs)
+        assertEquals(0L, event.flags and JankHunterNetworkEventFlags.HTTP_TTFB_KNOWN)
         assertEquals(21L, event.requestBodyBytes)
         assertEquals(55L, event.responseBodyBytes)
         assertEquals(1, event.dnsAttempts)
@@ -649,6 +796,33 @@ class JankHunterOkHttp3Test {
 
         assertEquals(160L, telemetry.singleHttpEvent().dnsMs)
         assertEquals(4, telemetry.singleHttpEvent().dnsAttempts)
+    }
+
+    @Test
+    fun singleDnsAndConnectAttemptDoNotCreateFallbackCollections() {
+        var now = 0L
+        val telemetry = RecordingTelemetry()
+        val call = call()
+        val listener = testFactory(null, telemetry, NetworkLongSource { now }).create(call)
+        val socketAddress = InetSocketAddress("127.0.0.1", 443)
+
+        listener.callStart(call)
+        now = 10L
+        listener.dnsStart(call, "example.com")
+        assertNull(listenerField(listener, "dnsStartsByDomain"))
+        now = 20L
+        listener.dnsEnd(call, "example.com", emptyList())
+
+        now = 30L
+        listener.connectStart(call, socketAddress, java.net.Proxy.NO_PROXY)
+        assertNull(listenerField(listener, "connectAttemptsByRoute"))
+        now = 50L
+        listener.connectEnd(call, socketAddress, java.net.Proxy.NO_PROXY, Protocol.HTTP_1_1)
+        assertNull(listenerField(listener, "connectedRoutesAwaitingAcquisition"))
+
+        listener.callEnd(call)
+        assertEquals(10L, telemetry.singleHttpEvent().dnsMs)
+        assertEquals(20L, telemetry.singleHttpEvent().connectMs)
     }
 
     @Test
@@ -850,8 +1024,14 @@ class JankHunterOkHttp3Test {
         listener.callEnd(call)
 
         listOf(
+            "dnsDomain",
             "dnsStartsByDomain",
+            "connectAddress",
+            "connectProxy",
+            "connectThread",
             "connectAttemptsByRoute",
+            "connectedAddress",
+            "connectedProxy",
             "connectedRoutesAwaitingAcquisition",
             "contextSnapshot",
         ).forEach { fieldName ->
@@ -884,8 +1064,14 @@ class JankHunterOkHttp3Test {
         assertEquals(1, telemetry.httpEvents.size)
         assertEquals(1, collectionChecks.get())
         listOf(
+            "dnsDomain",
             "dnsStartsByDomain",
+            "connectAddress",
+            "connectProxy",
+            "connectThread",
             "connectAttemptsByRoute",
+            "connectedAddress",
+            "connectedProxy",
             "connectedRoutesAwaitingAcquisition",
             "contextSnapshot",
         ).forEach { fieldName ->
@@ -1149,6 +1335,13 @@ class JankHunterOkHttp3Test {
                 else -> null
             }
         } as Connection
+    }
+
+    private fun listenerField(listener: EventListener, name: String): Any? {
+        return listener.javaClass.getDeclaredField(name).run {
+            isAccessible = true
+            get(listener)
+        }
     }
 
     private fun testFactory(

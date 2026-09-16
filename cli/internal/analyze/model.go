@@ -1,11 +1,22 @@
 package analyze
 
-import "github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
+import (
+	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
+	"github.com/i-redbyte/jank-hunter/cli/internal/traffic"
+)
 
 type NamedValue struct {
 	Name  string
 	Value uint64
 	Extra string
+}
+
+type NamedGauge struct {
+	Name        string
+	Value       uint64
+	Extra       string
+	maximum     uint64
+	sampleCount uint64
 }
 
 type InfoItem struct {
@@ -28,19 +39,22 @@ type Filter struct {
 }
 
 type Options struct {
-	Filter                     Filter
-	ObfuscationMap             *NameMapping
-	ClassGraph                 *ClassGraph
-	InstrumentationDiagnostics *InstrumentationDiagnostics
-	DependencyInjectionCatalog *DependencyInjectionCatalog
-	AndroidComponentCatalog    *AndroidComponentCatalog
-	DatabaseEvidence           *DatabaseEvidence
-	HeapEvidence               *HeapEvidence
-	BaselineHeapEvidence       *HeapEvidence
-	CandidateHeapEvidence      *HeapEvidence
-	ArtifactDirectory          string
-	ArtifactsAutoDiscovered    bool
-	ArtifactSymbolNamespace    []byte
+	MathMemoryLimitBytes            uint64
+	MathSpectralWorkLimitOperations uint64
+	Filter                          Filter
+	ObfuscationMap                  *NameMapping
+	ClassGraph                      *ClassGraph
+	LambdaCaptures                  *LambdaCaptureCatalog
+	InstrumentationDiagnostics      *InstrumentationDiagnostics
+	DependencyInjectionCatalog      *DependencyInjectionCatalog
+	AndroidComponentCatalog         *AndroidComponentCatalog
+	DatabaseEvidence                *DatabaseEvidence
+	HeapEvidence                    *HeapEvidence
+	BaselineHeapEvidence            *HeapEvidence
+	CandidateHeapEvidence           *HeapEvidence
+	ArtifactDirectory               string
+	ArtifactsAutoDiscovered         bool
+	ArtifactSymbolNamespace         []byte
 }
 
 type RouteStats struct {
@@ -213,6 +227,7 @@ type DatabaseStatementStats struct {
 	EstimatedCalls         uint64
 	FrequencyEstimateError uint64
 	Contexts               []DatabaseStatementContextStats
+	BurstEstimateStatus    string `json:",omitempty"`
 }
 
 type DatabaseStatementContextStats struct {
@@ -235,6 +250,7 @@ type DatabaseStatementContextStats struct {
 	RapidRepeats           uint64
 	EstimatedCalls         uint64
 	FrequencyEstimateError uint64
+	BurstEstimateStatus    string `json:",omitempty"`
 }
 
 type DatabaseExecutionStats struct {
@@ -417,6 +433,7 @@ type DatabaseAnalysis struct {
 	DroppedRelatedIntervals     uint64
 	EvictedRelatedIntervals     uint64
 	Statements                  []DatabaseStatementStats
+	BurstEstimateStatus         string `json:",omitempty"`
 }
 
 type DatabaseCoverage struct {
@@ -447,37 +464,38 @@ type DatabaseCoverage struct {
 // values describe signals whose measurement windows overlap Worker execution; they do not imply
 // that the Worker caused those values.
 type WorkerAnalysis struct {
-	Instances         uint64
-	Executions        uint64
-	Enqueued          uint64
-	Started           uint64
-	Finished          uint64
-	Success           uint64
-	Failures          uint64
-	Retries           uint64
-	Cancelled         uint64
-	PeriodicInstances uint64
-	MainThreadStarts  uint64
-	MissingEnqueue    uint64
-	MissingStart      uint64
-	MissingFinish     uint64
-	WaitSamples       uint64
-	WaitP50MS         uint64
-	WaitP95MS         uint64
-	WaitMaxMS         uint64
-	TotalWaitMS       uint64
-	RunSamples        uint64
-	RunP50MS          uint64
-	RunP95MS          uint64
-	RunMaxMS          uint64
-	TotalRunMS        uint64
-	MaxQueued         uint64
-	PeakQueuedAtMS    uint64
-	MaxRunning        uint64
-	PeakRunningAtMS   uint64
-	Outcomes          []NamedValue
-	StopReasons       []NamedValue
-	Workers           []WorkerStats
+	Instances          uint64
+	Executions         uint64
+	RegisteredObserved uint64
+	Enqueued           uint64
+	Started            uint64
+	Finished           uint64
+	Success            uint64
+	Failures           uint64
+	Retries            uint64
+	Cancelled          uint64
+	PeriodicInstances  uint64
+	MainThreadStarts   uint64
+	MissingEnqueue     uint64
+	MissingStart       uint64
+	MissingFinish      uint64
+	WaitSamples        uint64
+	WaitP50MS          uint64
+	WaitP95MS          uint64
+	WaitMaxMS          uint64
+	TotalWaitMS        uint64
+	RunSamples         uint64
+	RunP50MS           uint64
+	RunP95MS           uint64
+	RunMaxMS           uint64
+	TotalRunMS         uint64
+	MaxQueued          uint64
+	PeakQueuedAtMS     uint64
+	MaxRunning         uint64
+	PeakRunningAtMS    uint64
+	Outcomes           []NamedValue
+	StopReasons        []NamedValue
+	Workers            []WorkerStats
 }
 
 type WorkerStats struct {
@@ -487,6 +505,7 @@ type WorkerStats struct {
 	Owner                        string
 	Instances                    uint64
 	Executions                   uint64
+	RegisteredObserved           uint64
 	Enqueued                     uint64
 	Started                      uint64
 	Finished                     uint64
@@ -590,6 +609,7 @@ type IOStats struct {
 	Screen                  string
 	ContextOperation        string
 	Owner                   string
+	BurstEstimateStatus     string `json:",omitempty"`
 }
 
 // IOAnalysis intentionally excludes database operations: SQL and DAO evidence has a dedicated
@@ -614,6 +634,7 @@ type IOAnalysis struct {
 	PeakConcurrencyAtMS     uint64
 	SourceCount             int
 	Calls                   []IOStats
+	BurstEstimateStatus     string `json:",omitempty"`
 }
 
 // AsyncAnalysis projects bounded runtime metric windows. Executor samples cover every wrapped
@@ -625,32 +646,49 @@ type AsyncAnalysis struct {
 }
 
 type AsyncExecutorStats struct {
-	Name                   string
-	Started                uint64
-	Failures               uint64
-	WaitSamples            uint64
-	AvgWaitMS              uint64
-	MaxWaitMS              uint64
-	ServiceSamples         uint64
-	AvgServiceMS           uint64
-	MaxServiceMS           uint64
-	QueueSamples           uint64
-	AvgQueueDepthX100      uint64
-	MaxQueueDepth          uint64
-	ActiveSamples          uint64
-	AvgActiveCountX100     uint64
-	MaxActiveCount         uint64
-	MaxPoolSize            uint64
-	CompletedHighWatermark uint64
+	Name                     string
+	Started                  uint64
+	Failures                 uint64
+	WaitSamples              uint64
+	AvgWaitMS                uint64
+	MaxWaitMS                uint64
+	ScheduledDelaySamples    uint64
+	AvgScheduledDelayMS      uint64
+	MaxScheduledDelayMS      uint64
+	ScheduledLatenessSamples uint64
+	AvgScheduledLatenessMS   uint64
+	MaxScheduledLatenessMS   uint64
+	ServiceSamples           uint64
+	AvgServiceMS             uint64
+	MaxServiceMS             uint64
+	QueueSamples             uint64
+	AvgQueueDepthX100        uint64
+	MaxQueueDepth            uint64
+	ActiveSamples            uint64
+	AvgActiveCountX100       uint64
+	MaxActiveCount           uint64
+	MaxPoolSize              uint64
+	CompletedHighWatermark   uint64
 }
 
 type AsyncTaskStats struct {
-	Kind            string
-	Owner           string
-	DurationSamples uint64
-	AvgDurationMS   uint64
-	MaxDurationMS   uint64
-	Failures        uint64
+	Kind              string
+	Owner             string
+	DurationSamples   uint64
+	AvgDurationMS     uint64
+	MaxDurationMS     uint64
+	Failures          uint64
+	SegmentedSamples  uint64
+	ActiveSamples     uint64
+	AvgActiveMS       uint64
+	MaxActiveMS       uint64
+	SuspendedSamples  uint64
+	AvgSuspendedMS    uint64
+	MaxSuspendedMS    uint64
+	Suspensions       uint64
+	ThreadMigrations  uint64
+	SegmentedFailures uint64
+	Cancellations     uint64
 }
 
 // GCAnalysis is process-level evidence. Nearby UI windows are temporal correlations and do not
@@ -695,7 +733,15 @@ type OwnerStats struct {
 	StackHint string
 }
 
+type StallStateCounts struct {
+	Ongoing     int
+	Recovered   int
+	Interrupted int
+	Unknown     int
+}
+
 type SignalContextStats struct {
+	StallStates  StallStateCounts
 	Screen       string
 	Operation    string
 	Owner        string
@@ -789,6 +835,10 @@ type CodeProblemDrillDown struct {
 }
 
 type MemoryLeakSuspect struct {
+	// JHLOG retention records have no verified mapping to an HPROF object ID.
+	WatchedObjectAssociation EvidenceState
+	HeapClassEvidence        *HeapLeakEvidence
+	EvidenceSources          RetentionEvidenceSources
 	ClassName                string
 	Holder                   string
 	Screen                   string
@@ -840,16 +890,37 @@ type MemoryLeakSuspect struct {
 }
 
 type HeapEvidence struct {
-	Sources  []string           `json:"sources,omitempty"`
-	Leaks    []HeapLeakEvidence `json:"leaks"`
-	Warnings []string           `json:"warnings,omitempty"`
+	DiagnosticsVersion int                `json:"diagnostics_version,omitempty"`
+	Diagnostics        []HeapDiagnostic   `json:"diagnostics,omitempty"`
+	Sources            []string           `json:"sources,omitempty"`
+	Leaks              []HeapLeakEvidence `json:"leaks"`
+	Warnings           []string           `json:"warnings,omitempty"`
+}
+
+type HeapSizeState string
+
+const (
+	HeapSizeExact     HeapSizeState = "exact"
+	HeapSizeEstimated HeapSizeState = "estimated"
+	HeapSizeUnknown   HeapSizeState = "unknown"
+)
+
+func heapRetainedSizeState(exact bool) HeapSizeState {
+	if exact {
+		return HeapSizeExact
+	}
+	return HeapSizeEstimated
 }
 
 type HeapLeakEvidence struct {
+	RetainedSizeState   HeapSizeState       `json:"retained_size_state,omitempty"`
+	Reachability        EvidenceState       `json:"reachability,omitempty"`
+	ReferencePathState  HeapPathState       `json:"reference_path_state,omitempty"`
 	ClassName           string              `json:"class_name"`
 	Holder              string              `json:"holder,omitempty"`
 	HolderField         string              `json:"holder_field,omitempty"`
 	GCRoot              string              `json:"gc_root,omitempty"`
+	GCRootObjectID      string              `json:"gc_root_object_id,omitempty"`
 	GCRootCategory      string              `json:"gc_root_category,omitempty"`
 	ChainFingerprint    string              `json:"chain_fingerprint,omitempty"`
 	RetainedSizeKB      uint64              `json:"retained_size_kb,omitempty"`
@@ -864,6 +935,14 @@ type HeapLeakEvidence struct {
 	Confidence          string              `json:"confidence,omitempty"`
 }
 
+type HeapPathState string
+
+const (
+	HeapPathComplete  HeapPathState = "complete"
+	HeapPathTruncated HeapPathState = "truncated"
+	HeapPathUnknown   HeapPathState = "unknown"
+)
+
 type HeapPathElement struct {
 	ClassName string `json:"class_name,omitempty"`
 	FieldName string `json:"field_name,omitempty"`
@@ -872,6 +951,7 @@ type HeapPathElement struct {
 }
 
 type CollectionSegment struct {
+	HTTPCollectionStateKnown         bool `json:",omitempty"`
 	Source                           string
 	Status                           string
 	Sealed                           bool
@@ -898,8 +978,42 @@ type CollectionSegment struct {
 	QualityCounters                  []NamedValue
 }
 
+// AsyncAttributionQuality is separate from delivery completeness: a submitted task may be cancelled.
+// A missing value means no coverage observation was supplied, including by legacy SDKs.
+type AsyncAttributionQuality struct {
+	Status                     string `json:"status"`
+	HandlerPostsWithoutContext uint64 `json:"handler_posts_without_context"`
+}
+
+type AsyncLifecycleQuality struct {
+	StaleCompletions               uint64 `json:"stale_completions"`
+	DuplicateCompletions           uint64 `json:"duplicate_completions"`
+	InvalidCompletions             uint64 `json:"invalid_completions"`
+	FeatureDisabledCompletions     uint64 `json:"feature_disabled_completions"`
+	CapacityRejected               uint64 `json:"capacity_rejected"`
+	IdentityExhausted              uint64 `json:"identity_exhausted"`
+	UnfinishedHTTP                 uint64 `json:"unfinished_http"`
+	UnfinishedDatabase             uint64 `json:"unfinished_database"`
+	UnfinishedWorker               uint64 `json:"unfinished_worker"`
+	UnfinishedDatabaseTransactions uint64 `json:"unfinished_database_transactions"`
+	CompletionsInProgressAtStop    uint64 `json:"completions_in_progress_at_stop"`
+	LegacyHTTPCompletions          uint64 `json:"legacy_http_completions"`
+}
+
+// HTTPFirstByteQuality describes selected HTTP events, independently of event delivery completeness.
+type HTTPFirstByteQuality struct {
+	Known   uint64 `json:"known"`
+	Unknown uint64 `json:"unknown"`
+	Legacy  uint64 `json:"legacy"`
+}
+
 type CollectionQuality struct {
-	Level                             string                            `json:"level"`
+	Traffic          *traffic.Evidence        `json:"traffic,omitempty"`
+	HTTPFirstByte    *HTTPFirstByteQuality    `json:"http_first_byte,omitempty"`
+	AsyncLifecycle   *AsyncLifecycleQuality   `json:"async_lifecycle,omitempty"`
+	AsyncAttribution *AsyncAttributionQuality `json:"async_attribution,omitempty"`
+	Level            string                   `json:"level"`
+	// -1 means unknown buffer loss; it must not participate in percentage arithmetic.
 	DiagnosticCompletenessPercent     float64                           `json:"diagnostic_completeness_percent"`
 	DiagnosticCompletenessModel       string                            `json:"diagnostic_completeness_model"`
 	DiagnosticCompletenessLevel       string                            `json:"diagnostic_completeness_level"`
@@ -1198,6 +1312,8 @@ type OperationDatabaseStatementStats struct {
 }
 
 type Summary struct {
+	HeapDiagnostics          []HeapDiagnostic `json:",omitempty"`
+	Acquisition              *AcquisitionEvidence
 	Title                    string
 	LogCount                 int
 	EventCount               int
@@ -1220,6 +1336,7 @@ type Summary struct {
 	UIFPSStatus              string
 	UIAvgFPS                 float64
 	UIMinFPS                 float64
+	StallStates              StallStateCounts
 	StallCount               int
 	StallMaxMS               uint64
 	ContextCount             int
@@ -1265,36 +1382,37 @@ type Summary struct {
 	OperationAnalysis        *OperationAnalysis        `json:",omitempty"`
 	AndroidComponents        *AndroidComponentAnalysis `json:",omitempty"`
 
-	Routes               []RouteStats
-	Screens              []ScreenStats
-	ProcessExits         []ProcessExitStats
-	Owners               []OwnerStats
-	SignalContexts       []SignalContextStats
-	LogSpam              []LogSpamStats
-	ProblemWindows       []ProblemWindowStats
-	RuntimeCalls         []RuntimeCallStats
-	CodeProblems         []CodeProblemStats
-	MemoryLeaks          []MemoryLeakSuspect
-	AppVersions          []NamedValue
-	Builds               []NamedValue
-	Devices              []NamedValue
-	SDKs                 []NamedValue
-	Cohorts              []NamedValue
-	Processes            []NamedValue
-	Network              []NamedValue
-	Memory               []NamedValue
-	RetainedClasses      []NamedValue
-	RetainedAgeBuckets   []NamedValue
-	JankStats            []NamedValue
-	Counters             []NamedValue
-	Gauges               []NamedValue
-	Influence            InfluenceSummary
-	ProblemSchemaVersion string             `json:"problem_schema_version"`
-	ProblemSummary       ProblemSummary     `json:"problem_summary"`
-	Problems             []ProblemFinding   `json:"problems"`
-	ProblemIncidents     []ProblemFinding   `json:"problem_incidents"`
-	CategoryCoverage     []CategoryCoverage `json:"category_coverage"`
-	Detectors            []DetectorMetadata `json:"detectors"`
+	Routes                []RouteStats
+	Screens               []ScreenStats
+	ProcessExits          []ProcessExitStats
+	Owners                []OwnerStats
+	SignalContexts        []SignalContextStats
+	LogSpam               []LogSpamStats
+	ProblemWindows        []ProblemWindowStats
+	RuntimeCalls          []RuntimeCallStats
+	CodeProblems          []CodeProblemStats
+	LambdaCaptureAnalysis *LambdaCaptureAnalysis `json:"lambda_capture_analysis,omitempty"`
+	MemoryLeaks           []MemoryLeakSuspect
+	AppVersions           []NamedValue
+	Builds                []NamedValue
+	Devices               []NamedValue
+	SDKs                  []NamedValue
+	Cohorts               []NamedValue
+	Processes             []NamedValue
+	Network               []NamedValue
+	Memory                []NamedValue
+	RetainedClasses       []NamedValue
+	RetainedAgeBuckets    []NamedValue
+	JankStats             []NamedValue
+	Counters              []NamedValue
+	Gauges                []NamedGauge
+	Influence             InfluenceSummary
+	ProblemSchemaVersion  string             `json:"problem_schema_version"`
+	ProblemSummary        ProblemSummary     `json:"problem_summary"`
+	Problems              []ProblemFinding   `json:"problems"`
+	ProblemIncidents      []ProblemFinding   `json:"problem_incidents"`
+	CategoryCoverage      []CategoryCoverage `json:"category_coverage"`
+	Detectors             []DetectorMetadata `json:"detectors"`
 }
 
 type EvidenceQualityVector struct {
@@ -1316,6 +1434,7 @@ type AnalysisInputCompleteness struct {
 	Complete                   bool     `json:"complete"`
 	RuntimeEvidence            bool     `json:"runtime_evidence"`
 	ClassGraph                 bool     `json:"class_graph"`
+	LambdaCaptures             bool     `json:"lambda_captures,omitempty"`
 	InstrumentationDiagnostics bool     `json:"instrumentation_diagnostics"`
 	HeapEvidence               bool     `json:"heap_evidence"`
 	ArtifactDirectory          string   `json:"artifact_directory,omitempty"`
@@ -1706,17 +1825,17 @@ type ProblemGateThreshold struct {
 }
 
 type MetricThreshold struct {
-	MaxSeverity      string  `json:"max_severity"`
-	MaxRegressionAbs float64 `json:"max_regression_abs"`
-	MaxRegressionPct float64 `json:"max_regression_pct"`
+	MaxSeverity      string   `json:"max_severity,omitempty"`
+	MaxRegressionAbs *float64 `json:"max_regression_abs,omitempty"`
+	MaxRegressionPct *float64 `json:"max_regression_pct,omitempty"`
 }
 
 type LeakThreshold struct {
-	MaxCandidateTotal  int  `json:"max_candidate_total"`
-	MaxNew             int  `json:"max_new"`
-	MaxWorse           int  `json:"max_worse"`
-	MaxHigh            int  `json:"max_high"`
-	MaxRuntimeOnly     int  `json:"max_runtime_only"`
+	MaxCandidateTotal  *int `json:"max_candidate_total,omitempty"`
+	MaxNew             *int `json:"max_new,omitempty"`
+	MaxWorse           *int `json:"max_worse,omitempty"`
+	MaxHigh            *int `json:"max_high,omitempty"`
+	MaxRuntimeOnly     *int `json:"max_runtime_only,omitempty"`
 	FailOnNew          bool `json:"fail_on_new"`
 	FailOnWorse        bool `json:"fail_on_worse"`
 	FailOnNewHigh      bool `json:"fail_on_new_high"`

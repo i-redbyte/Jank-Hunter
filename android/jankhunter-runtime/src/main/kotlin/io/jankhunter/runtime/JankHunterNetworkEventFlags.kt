@@ -16,4 +16,10 @@ object JankHunterNetworkEventFlags {
     const val HTTP_RESPONSE_BYTES_KNOWN: Long = 1L shl 13
     const val HTTP_SLOW: Long = 1L shl 15
     const val HTTP_CLASSIFIED: Long = 1L shl 17
+    /** Body byte fields sum observed exchanges for the whole Call; known flags still govern exactness. */
+    const val HTTP_BODY_TOTALS: Long = 1L shl 23
+    /** First-byte semantics; exactness separately requires [HTTP_TTFB_KNOWN]. */
+    const val HTTP_TTFB_OBSERVED: Long = 1L shl 24
+    /** A plaintext transport read established the first response byte, including a zero interval. */
+    const val HTTP_TTFB_KNOWN: Long = 1L shl 25
 }

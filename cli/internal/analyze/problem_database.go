@@ -25,7 +25,7 @@ func (b *problemBuilder) detectDatabaseCalls() {
 		}
 
 		linkedToUI := assessment.MainThreadSlow && statement.MainCorrelation.UIWindowOverlaps > 0 &&
-			statement.MainCorrelation.UIOverlapMaxDurationUS >= b.cfg.DatabaseMainThreadMS*1_000
+			statement.MainCorrelation.UIOverlapMaxDurationUS >= saturatingMultiply(b.cfg.DatabaseMainThreadMS, 1_000)
 		where := databaseProblemLocations(statement.Contexts, linkedToUI)
 		owner := where[0].Owner
 		p50MS := microsecondsToMillisecondsCeil(statement.Overall.P50DurationUS)
@@ -45,7 +45,7 @@ func (b *problemBuilder) detectDatabaseCalls() {
 			statement.Background.QuantilesApproximated {
 			limits = append(
 				limits,
-				"После 128 выполнений квантили рассчитываются потоковым детерминированным алгоритмом с ограниченной памятью; максимум и количество остаются точными.",
+				"После 128 выполнений p50 и p95 рассчитываются приближённо с постоянным расходом памяти; максимум и количество остаются точными.",
 			)
 		}
 
@@ -77,7 +77,7 @@ func (b *problemBuilder) detectDatabaseCalls() {
 			{Name: upperFiveDurationLabel, Observed: fmt.Sprint(p95MS), Unit: "ms", ExpectedOrThreshold: fmt.Sprintf("< %d ms в фоне; < %d ms на главном потоке", b.cfg.DatabaseBackgroundMS, b.cfg.DatabaseMainThreadMS), Source: "typed_database"},
 			{Name: "Максимальная длительность", Observed: fmt.Sprint(maxMS), Unit: "ms", Source: "typed_database"},
 			{Name: "На главном потоке", Observed: fmt.Sprint(statement.Main.Calls), Unit: "events", Denominator: u64ptr(statement.Overall.Calls), Source: "typed_database"},
-			{Name: "Пиковая частота", Observed: fmt.Sprint(statement.PeakCallsPerSecond), Unit: "events/s", ExpectedOrThreshold: fmt.Sprintf("< %d events/s", b.cfg.DatabaseStormRate), Source: "typed_database"},
+			{Name: "Пиковая частота", Observed: FormatRollingPeak(statement.PeakCallsPerSecond, statement.BurstEstimateStatus), Unit: "events/s", ExpectedOrThreshold: fmt.Sprintf("< %d events/s", b.cfg.DatabaseStormRate), Source: "typed_database"},
 			{Name: "Быстрые повторы", Observed: fmt.Sprint(statement.RapidRepeats), Unit: "events", ExpectedOrThreshold: fmt.Sprintf("< %d", b.cfg.DatabaseRapidRepeatCount), Source: "typed_database"},
 			{Name: "Ошибки", Observed: fmt.Sprint(statement.Overall.Failures), Unit: "events", Denominator: u64ptr(statement.Overall.Calls), Source: "typed_database"},
 		}
@@ -140,18 +140,18 @@ func (b *problemBuilder) detectDatabaseCalls() {
 		magnitude := 6
 		if assessment.MainThreadSlow {
 			mainMS := microsecondsToMillisecondsCeil(assessment.MainDurationUS)
-			magnitude = max(magnitude, min(25, 8+int(mainMS/maxUint64(b.cfg.DatabaseMainThreadMS, 1))*4))
+			magnitude = max(magnitude, boundedUint64RatioScore(mainMS, maxUint64(b.cfg.DatabaseMainThreadMS, 1), 8, 4, 25))
 		}
 		if assessment.BackgroundSlow {
 			backgroundMS := microsecondsToMillisecondsCeil(assessment.BackgroundDurationUS)
-			magnitude = max(magnitude, min(25, 8+int(backgroundMS/maxUint64(b.cfg.DatabaseBackgroundMS, 1))*4))
+			magnitude = max(magnitude, boundedUint64RatioScore(backgroundMS, maxUint64(b.cfg.DatabaseBackgroundMS, 1), 8, 4, 25))
 		}
 		if assessment.Failures {
-			magnitude = max(magnitude, min(25, 8+int(assessment.FailureRate/b.cfg.DatabaseFailureRate)*4))
+			magnitude = max(magnitude, boundedFloatRatioScore(assessment.FailureRate, b.cfg.DatabaseFailureRate, 8, 4, 25))
 		}
 		exposure := min(20, 4+int(math.Log2(float64(callEstimate)+1))*3)
 		if assessment.Storm {
-			exposure = max(exposure, min(20, 8+int(statement.PeakCallsPerSecond/b.cfg.DatabaseStormRate)*3))
+			exposure = max(exposure, boundedUint64RatioScore(statement.PeakCallsPerSecond, b.cfg.DatabaseStormRate, 8, 3, 20))
 		}
 
 		why := "Событие БД напрямую связывает шаблон SQL, место вызова, поток, длительность и результат выполнения."
@@ -163,7 +163,7 @@ func (b *problemBuilder) detectDatabaseCalls() {
 			Category: ProblemCategoryIO, Subcategory: databaseFindingSubcategory(assessment, linkedToUI), Status: "observed",
 			Confidence: confidence, ConfidenceReasons: reasons,
 			Title:             fmt.Sprintf("Проблемный SQL-вызов в %s", displayUnknown(owner, "неизвестном месте")),
-			WhatHappened:      fmt.Sprintf("%s: %s вызовов, граница верхних 5%% длительностей %d мс, максимум %d мс, %d вызовов на главном потоке, пик %d/с. %s.", displayUnknown(statement.Query, "SQL-текст не определён"), callText, p95MS, maxMS, statement.Main.Calls, statement.PeakCallsPerSecond, strings.Join(signals, "; ")),
+			WhatHappened:      fmt.Sprintf("%s: %s вызовов, граница верхних 5%% длительностей %d мс, максимум %d мс, %d вызовов на главном потоке, пик %s/с. %s.", displayUnknown(statement.Query, "SQL-текст не определён"), callText, p95MS, maxMS, statement.Main.Calls, FormatRollingPeak(statement.PeakCallsPerSecond, statement.BurstEstimateStatus), strings.Join(signals, "; ")),
 			Where:             where,
 			Why:               ProblemWhy{ClaimLevel: "linked", Summary: why},
 			Impact:            []string{"Задержка интерфейса, лишняя нагрузка на хранилище и рост времени пользовательского сценария"},
@@ -270,9 +270,9 @@ func (b *problemBuilder) detectDatabaseScenarios() {
 		)
 		limits = append(limits,
 			"Нормализованный SQL-шаблон не содержит значений параметров: он подтверждает повтор формы запроса, но не отличает N+1 от полного дублирования.",
-			"Пакетная обработка, объединение запросов и кэширование — варианты для проверки, а не автоматический рецепт без знания семантики данных.",
+			"Пакетная обработка, объединение запросов и кэширование - варианты для проверки, а не автоматический рецепт без знания семантики данных.",
 			fmt.Sprintf(
-				"Число вызовов рассчитано приближённо; подробно сохранено %d замеров, максимальная погрешность оценки частоты — %s.",
+				"Число вызовов рассчитано приближённо; подробно сохранено %d замеров, максимальная погрешность оценки частоты - %s.",
 				scenario.RetainedCalls,
 				russianCountUint64(analysis.Scenarios.FrequencyEstimateError, "вызов", "вызова", "вызовов"),
 			),
@@ -285,7 +285,7 @@ func (b *problemBuilder) detectDatabaseScenarios() {
 		}
 		title := "Повторные SQL-вызовы внутри одного сценария"
 		if scenario.Kind == "batch_candidate" {
-			title = "Кандидат на пакетную запись БД"
+			title = "Повторные записи в БД можно объединить в batch"
 		}
 		claim := scenario.ClaimLevel
 		if claim == "" {
@@ -330,7 +330,7 @@ func (b *problemBuilder) detectDatabaseScenarios() {
 			Recommendations: []ProblemRecommendation{{
 				Action:       "Откройте указанное место вызова и проверьте, можно ли заменить повторы пакетной записью, одним SQL-запросом или кэшем.",
 				Rationale:    "Форма SQL-вызова и его суммарное время известны, но значения параметров намеренно не записываются.",
-				Verification: "Повторите тот же сценарий: результат должен сохраниться, а максимум вызовов в одной границе и суммарное время БД — уменьшиться.",
+				Verification: "Повторите тот же сценарий: результат должен сохраниться, а максимум вызовов в одной границе и суммарное время БД - уменьшиться.",
 			}},
 			Limitations: limits,
 			Drilldowns: []ProblemDrilldown{{
@@ -356,7 +356,7 @@ func databaseScenarioExplanation(scenario DatabaseScenarioStats) (string, []stri
 		identity = fmt.Sprintf("Вызов БД с SQL-шаблоном «%s»", query)
 	} else {
 		factors = append(factors, fmt.Sprintf(
-			"SQL-шаблон не записан. Проблема локализована по месту вызова %s; откройте этот DAO или метод и проверьте выполняемый им SQL.",
+			"SQL-шаблон не записан. Известно место вызова %s. Откройте этот DAO или метод и проверьте выполняемый SQL.",
 			location,
 		))
 	}
@@ -428,12 +428,12 @@ func (b *problemBuilder) detectDatabaseTransactions() {
 		}
 		magnitude := 8
 		if assessment.MainThreadSlow {
-			magnitude = min(25, 10+int(transaction.DurationUS/1_000/b.cfg.DatabaseTransactionMainMS)*3)
+			magnitude = boundedUint64RatioScore(transaction.DurationUS/1_000, b.cfg.DatabaseTransactionMainMS, 10, 3, 25)
 		} else if assessment.BackgroundSlow {
-			magnitude = min(25, 8+int(transaction.DurationUS/1_000/b.cfg.DatabaseTransactionBackgroundMS)*3)
+			magnitude = boundedUint64RatioScore(transaction.DurationUS/1_000, b.cfg.DatabaseTransactionBackgroundMS, 8, 3, 25)
 		}
 		if assessment.ManyStatements {
-			magnitude = max(magnitude, min(25, 8+int(transaction.StatementCount/b.cfg.DatabaseTransactionStatements)*3))
+			magnitude = max(magnitude, boundedUint64RatioScore(transaction.StatementCount, b.cfg.DatabaseTransactionStatements, 8, 3, 25))
 		}
 		b.add(ProblemFinding{
 			DetectorID: "io.database_transaction", DetectorVersion: b.cfg.Version,
@@ -671,7 +671,7 @@ func databaseRecommendations(
 	if assessment.MainThreadSlow {
 		recommendations = append(recommendations, ProblemRecommendation{
 			Action:       "Перенести вызов БД с главного потока и повторить тот же сценарий",
-			Rationale:    "Thread-specific измерение подтверждает превышение бюджета кадра именно на главном потоке.",
+			Rationale:    "Отдельное измерение главного потока подтверждает, что SQL-вызов превысил бюджет кадра именно там.",
 			Verification: "На главном потоке остаётся 0 медленных вызовов; фоновые вызовы оцениваются отдельно.",
 		})
 	}
@@ -704,7 +704,7 @@ func databaseRecommendations(
 			rationale = "События БД подтверждают безопасные классы ошибок: " + failureKinds + ". Текст ошибки, стек и значения параметров SQL не сохраняются."
 		}
 		recommendations = append(recommendations, ProblemRecommendation{
-			Action:       "Локализовать неуспешное завершение в указанном месте кода и воспроизвести входные условия",
+			Action:       "Найти причину неуспешного завершения в указанном месте кода и воспроизвести входные условия",
 			Rationale:    rationale,
 			Verification: "Повторный прогон не содержит ошибок этого SQL-шаблона.",
 		})

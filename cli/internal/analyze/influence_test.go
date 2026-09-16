@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,52 @@ func TestLoadClassGraphRequiresSupportedFormat(t *testing.T) {
 
 	if _, err := LoadClassGraph(path); err == nil {
 		t.Fatal("LoadClassGraph() accepted graph record without format")
+	}
+}
+
+func TestLoadClassGraphRejectsTrailingRecordsAfterFullDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "class-graph.jsonl")
+	data := `{"format":1,"classes":{"com.app.Feed":{"name":"com.app.Feed"}},"edges":[]}` + "\n" +
+		`{"format":1,"class":"com.app.Trailing","edges":[]}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadClassGraph(path)
+	if err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("LoadClassGraph() error = %v, want trailing record diagnostic", err)
+	}
+}
+
+func TestLoadClassGraphJSONLRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "class-graph.jsonl")
+	data := `{"format":1,"class":"com.app.Feature","edges":[],"edgez":[]}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadClassGraph(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("LoadClassGraph() error = %v, want strict schema rejection", err)
+	}
+}
+
+func TestLoadClassGraphRejectsEdgesWithoutPositiveEvidence(t *testing.T) {
+	for name, data := range map[string]string{
+		"jsonl":         `{"format":1,"class":"com.app.Feature","edges":[{"caller":"open()V","calleeClass":"com.app.Repository","calleeMethod":"load()V","count":0}]}` + "\n",
+		"full document": `{"format":1,"classes":{},"edges":[{"from":"com.app.Feature","to":"com.app.Repository","count":0}]}` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "class-graph.jsonl")
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadClassGraph(path)
+			if err == nil || !strings.Contains(err.Error(), "count") {
+				t.Fatalf("LoadClassGraph() error = %v, want zero-count rejection", err)
+			}
+		})
 	}
 }
 
@@ -198,8 +245,8 @@ func TestBuildInfluenceSeparatesRuntimeWallTimeAndRetainedMemory(t *testing.T) {
 	if presenter.MainThreadMS != 0 {
 		t.Fatalf("non-main-thread problem contributed to main thread: %+v", presenter)
 	}
-	if presenter.RuntimeWallMS != 200 {
-		t.Fatalf("caller runtime wall = %d, want 200: %+v", presenter.RuntimeWallMS, presenter)
+	if presenter.RuntimeWallMS != 0 {
+		t.Fatalf("caller inherited fabricated runtime duration: %+v", presenter)
 	}
 	repository := influenceNodeByClass(influence.TopNodes, "com.app.FeedRepository")
 	if repository.MainThreadMS != 0 || repository.RuntimeWallMS != 800 {
@@ -208,6 +255,34 @@ func TestBuildInfluenceSeparatesRuntimeWallTimeAndRetainedMemory(t *testing.T) {
 	activity := influenceNodeByClass(influence.TopNodes, "com.app.FeedActivity")
 	if activity.MemoryPressure != 4_096 {
 		t.Fatalf("heap retained size missing or age used as memory: %+v", activity)
+	}
+}
+
+func TestBuildInfluenceSaturatesCountersAndDoesNotSumOverlappingRetainedTrees(t *testing.T) {
+	influence := BuildInfluence(Summary{
+		RuntimeCalls: []RuntimeCallStats{
+			{Caller: "com.app.FeedPresenter.render", Callee: "com.app.FeedView.bind", Count: ^uint64(0), TotalMS: ^uint64(0)},
+			{Caller: "com.app.FeedPresenter.render", Callee: "com.app.FeedView.bind", Count: 1, TotalMS: 1},
+		},
+		MemoryLeaks: []MemoryLeakSuspect{
+			{ClassName: "com.app.LargeBitmap", Holder: "com.app.FeedActivity", Count: ^uint64(0), TimeOnlyCount: 1, EstimatedRetainedKB: 8_192, Score: 10},
+			{ClassName: "com.app.SmallBitmap", Holder: "com.app.FeedActivity", Count: 1, EstimatedRetainedKB: 4_096, Score: 5},
+		},
+	}, nil)
+
+	view := influenceNodeByClass(influence.TopNodes, "com.app.FeedView")
+	if view.RuntimeWallMS != ^uint64(0) {
+		t.Fatalf("runtime wall time wrapped around: %+v", view)
+	}
+	activity := influenceNodeByClass(influence.TopNodes, "com.app.FeedActivity")
+	if !activity.RuntimeEvidence || activity.Retained != ^uint64(0) || activity.MemoryPressure != 8_192 {
+		t.Fatalf("memory influence aggregation is not conservative: %+v", activity)
+	}
+	for _, edge := range influence.TopEdges {
+		if edge.From == "com.app.FeedPresenter" && edge.To == "com.app.FeedView" &&
+			(edge.Count != ^uint64(0) || edge.RuntimeCount != ^uint64(0)) {
+			t.Fatalf("runtime influence edge counters wrapped around: %+v", edge)
+		}
 	}
 }
 
@@ -298,7 +373,8 @@ func TestProblemReasonMapsRuntimeKinds(t *testing.T) {
 		"wrapped_runnable":         "долгая задача Runnable",
 		"wrapped_handler_runnable": "долгая задача обработчика Handler",
 		"wrapped_callable":         "долгая вычислительная задача Callable",
-		"wrapped_coroutine":        "долгая задача корутины",
+		"wrapped_coroutine":        "долгая задача корутины по полной длительности",
+		"wrapped_coroutine_active": "долгое активное выполнение корутины",
 		"wrapped_executor":         "долгая задача исполнителя",
 		"wrapped_click":            "долгий обработчик нажатия",
 		"gc_pressure":              "давление сборки мусора",

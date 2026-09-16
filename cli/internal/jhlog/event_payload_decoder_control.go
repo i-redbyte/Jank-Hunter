@@ -40,7 +40,7 @@ func decodeQualityPayload(
 			return fmt.Errorf("quality counter id delta %d is invalid", entry[0])
 		}
 		counterID := previousID + entry[0]
-		if !IsKnownQualityCounter(counterID) {
+		if !IsKnownQualityCounter(counterID) || (segmentState.legacyHTTPCollectionState && isCollectionWindowCounter(counterID)) {
 			return fmt.Errorf("unsupported quality counter id %d", counterID)
 		}
 		previousValue := segmentState.qualityCounters[counterID]

@@ -101,6 +101,46 @@ func TestDependencyInjectionCatalogRejectsRuntimeOrScoringSemantics(t *testing.T
 	}
 }
 
+func TestDependencyInjectionCatalogRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "di-catalog.jsonl")
+	metadata := `{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false,"runtimeTrace":false}`
+	if err := os.WriteFile(path, []byte(metadata+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadDependencyInjectionCatalog(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v, want strict schema rejection", err)
+	}
+}
+
+func TestDependencyInjectionCatalogRejectsMixedRecordShapes(t *testing.T) {
+	for name, records := range map[string][]string{
+		"blank variant": {
+			`{"format":1,"kind":"metadata","variant":"","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+		},
+		"class with edge payload": {
+			`{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+			`{"format":1,"kind":"class","name":"com.app.Feed","framework":"hilt","consumer":"com.app.Hidden"}`,
+		},
+		"edge with class payload": {
+			`{"format":1,"kind":"metadata","variant":"debug","semantics":"build_time_di","edgeDirection":"consumer_to_dependency","runtimeTracing":false,"affectsScore":false}`,
+			`{"format":1,"kind":"edge","consumer":"com.app.Feed","dependency":"com.app.Repo","framework":"hilt","injectionKind":"constructor","site":"Feed#<init>","resolution":"declared","roles":["consumer"]}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "di-catalog.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(records, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if catalog, err := LoadDependencyInjectionCatalog(path); err == nil {
+				t.Fatalf("LoadDependencyInjectionCatalog() accepted ambiguous record: %+v", catalog)
+			}
+		})
+	}
+}
+
 func TestDependencyInjectionCatalogDoesNotChangeRuntimeAnalysis(t *testing.T) {
 	withoutCatalog := newCollector("same", 0, Options{}).finish()
 	withCatalog := newCollector("same", 0, Options{

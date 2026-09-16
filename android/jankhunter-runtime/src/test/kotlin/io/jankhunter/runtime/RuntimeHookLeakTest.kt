@@ -93,8 +93,11 @@ class RuntimeHookLeakTest {
         val producer = Thread {
             graph.recordEdge(1L, 2L)
             events.recordMethod(2L, "live-thread-method")
-            graphState.set(currentNestedThreadLocalTarget(graph, "producer", "threadState"))
-            eventState.set(currentThreadLocalTarget(events, "threadBuffer"))
+            graphState.set(currentNestedThreadLocalTarget(
+                checkNotNull(graph.javaClass.getDeclaredField("primary").apply { isAccessible = true }.get(graph)),
+                "producer", "threadState",
+            ))
+            eventState.set(currentNestedThreadLocalTarget(events, "primary", "threadBuffer"))
             ready.countDown()
             release.await(5L, TimeUnit.SECONDS)
         }

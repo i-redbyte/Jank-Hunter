@@ -139,6 +139,7 @@ internal class PreparedStatementRegistry(
 internal class DatabaseTransactionTracker(
     private val ids: DatabaseTransactionIdGenerator = DatabaseTransactionIdGenerator(),
     private val completionSink: DatabaseTransactionCompletionSink = DatabaseTransactionCompletionSink.NONE,
+    private val epochId: RuntimeLongSource = RuntimeLongSource { 0L },
     private val nanoTime: RuntimeLongSource,
 ) {
     private val localSlot = ThreadLocal<Array<Any?>>()
@@ -150,12 +151,14 @@ internal class DatabaseTransactionTracker(
         sourceName: String,
         mode: Long,
         rootParentId: Long = 0L,
+        transactionId: Long = ids.next(),
+        expectedEpochId: Long = epochId.getAsLong(),
     ): Long {
-        val slot = currentSlotOrCreate()
-        val state = slot.active ?: statePool.acquire().also { slot.active = it }
-        if (state.depth == MAX_TRANSACTION_DEPTH) return 0L
+        val slot = currentSlotOrCreate(expectedEpochId) ?: return 0L
+        var state = slot.active ?: statePool.acquire().also { slot.active = it }
+        if (state.depth == state.capacity) state = state.grow().also { slot.active = it }
         val index = state.depth
-        val id = ids.next()
+        val id = transactionId
         state.receivers[index] = slot.receiver(database)
         state.ids[index] = id
         state.parents[index] = if (index == 0) rootParentId else state.ids[index - 1]
@@ -163,7 +166,7 @@ internal class DatabaseTransactionTracker(
         state.sourceNames[index] = sourceName
         state.modes[index] = mode
         state.startedNanos[index] = nanoTime.getAsLong().coerceAtLeast(0L)
-        state.successful[index] = false
+        state.flags[index] = 0
         state.statementCounts[index] = 0L
         state.readCounts[index] = 0L
         state.writeCounts[index] = 0L
@@ -175,12 +178,12 @@ internal class DatabaseTransactionTracker(
         val state = currentSlot()?.active ?: return false
         val index = state.find(database)
         if (index < 0) return false
-        state.successful[index] = true
+        state.flags[index] = (state.flags[index].toInt() or TRANSACTION_MARKED_SUCCESSFUL).toByte()
         return true
     }
 
-    fun recordStatement(operation: Long): Long {
-        val state = currentSlot()?.active ?: return 0L
+    fun recordStatement(operation: Long, expectedEpochId: Long = epochId.getAsLong()): Long {
+        val state = currentSlot(expectedEpochId)?.active ?: return 0L
         val index = state.depth - 1
         if (index < 0) return 0L
         state.statementCounts[index]++
@@ -204,7 +207,7 @@ internal class DatabaseTransactionTracker(
         val mode = state.modes[index]
         val outcome = when {
             failed -> Jhlog.DATABASE_TRANSACTION_FAILURE
-            state.successful[index] -> Jhlog.DATABASE_TRANSACTION_SUCCESS
+            state.flags[index].toInt() == TRANSACTION_MARKED_SUCCESSFUL -> Jhlog.DATABASE_TRANSACTION_SUCCESS
             else -> Jhlog.DATABASE_TRANSACTION_ROLLBACK
         }
         val recordedFailureKind = if (failed) failureKind.wireValue else Jhlog.DATABASE_FAILURE_NONE
@@ -212,6 +215,7 @@ internal class DatabaseTransactionTracker(
         val statementCount = state.statementCounts[index]
         val readCount = state.readCounts[index]
         val writeCount = state.writeCounts[index]
+        if (outcome != Jhlog.DATABASE_TRANSACTION_SUCCESS) state.markParentFailed(database, index)
         state.remove(index)
         if (state.depth == 0) {
             slot.active = null
@@ -234,17 +238,19 @@ internal class DatabaseTransactionTracker(
         return true
     }
 
-    fun currentTransactionId(): Long {
-        val state = currentSlot()?.active ?: return 0L
+    fun currentTransactionId(expectedEpochId: Long = epochId.getAsLong()): Long {
+        val state = currentSlot(expectedEpochId)?.active ?: return 0L
         return if (state.depth == 0) 0L else state.ids[state.depth - 1]
     }
 
-    fun currentParentId(): Long {
-        val state = currentSlot()?.active ?: return 0L
+    fun currentParentId(expectedEpochId: Long = epochId.getAsLong()): Long {
+        val state = currentSlot(expectedEpochId)?.active ?: return 0L
         return if (state.depth == 0) 0L else state.parents[state.depth - 1]
     }
 
-    private fun currentSlotOrCreate(): TransactionStateSlot {
+    private fun currentSlotOrCreate(expectedEpochId: Long): TransactionStateSlot? {
+        if (epochId.getAsLong() != expectedEpochId) return null
+        currentSlot(expectedEpochId)
         var holder = localSlot.get()
         if (holder == null) {
             holder = arrayOfNulls(SLOT_HOLDER_SIZE)
@@ -254,15 +260,23 @@ internal class DatabaseTransactionTracker(
         if (active != null) return active
         val cached = (holder[WEAK_SLOT_INDEX] as? WeakReference<*>)?.get() as? TransactionStateSlot
         val slot = cached ?: TransactionStateSlot().also { holder[WEAK_SLOT_INDEX] = WeakReference(it) }
+        slot.epochId = expectedEpochId
         holder[ACTIVE_SLOT_INDEX] = slot
         return slot
     }
 
-    private fun currentSlot(): TransactionStateSlot? {
-        return localSlot.get()?.get(ACTIVE_SLOT_INDEX) as? TransactionStateSlot
+    private fun currentSlot(expectedEpochId: Long = epochId.getAsLong()): TransactionStateSlot? {
+        if (epochId.getAsLong() != expectedEpochId) return null
+        val holder = localSlot.get() ?: return null
+        val slot = holder[ACTIVE_SLOT_INDEX] as? TransactionStateSlot ?: return null
+        if (slot.epochId == expectedEpochId) return slot
+        slot.active = null
+        holder[ACTIVE_SLOT_INDEX] = null
+        return null
     }
 
     private class TransactionStateSlot(var active: TransactionState? = null) {
+        var epochId = 0L
         private val receiverCache = arrayOfNulls<WeakReference<Any>>(RECEIVER_CACHE_CAPACITY)
         private var replacementCursor = 0
 
@@ -291,7 +305,9 @@ internal class DatabaseTransactionTracker(
             return TransactionState()
         }
 
+        // A rare deep transaction must not permanently enlarge the cross-thread state pool.
         fun release(state: TransactionState) {
+            if (state.capacity != INITIAL_TRANSACTION_DEPTH) return
             val start = cursor.getAndIncrement() and STATE_POOL_MASK
             repeat(STATE_POOL_CAPACITY) { offset ->
                 if (slots.compareAndSet((start + offset) and STATE_POOL_MASK, null, state)) return
@@ -299,19 +315,40 @@ internal class DatabaseTransactionTracker(
         }
     }
 
-    private class TransactionState {
+    private class TransactionState(val capacity: Int = INITIAL_TRANSACTION_DEPTH) {
         var depth = 0
-        val receivers: Array<WeakReference<Any>?> = arrayOfNulls(MAX_TRANSACTION_DEPTH)
-        val ids = LongArray(MAX_TRANSACTION_DEPTH)
-        val parents = LongArray(MAX_TRANSACTION_DEPTH)
-        val sourceIds = LongArray(MAX_TRANSACTION_DEPTH)
-        val sourceNames = arrayOfNulls<String>(MAX_TRANSACTION_DEPTH)
-        val modes = LongArray(MAX_TRANSACTION_DEPTH)
-        val startedNanos = LongArray(MAX_TRANSACTION_DEPTH)
-        val successful = BooleanArray(MAX_TRANSACTION_DEPTH)
-        val statementCounts = LongArray(MAX_TRANSACTION_DEPTH)
-        val readCounts = LongArray(MAX_TRANSACTION_DEPTH)
-        val writeCounts = LongArray(MAX_TRANSACTION_DEPTH)
+        val receivers: Array<WeakReference<Any>?> = arrayOfNulls(capacity)
+        val ids = LongArray(capacity)
+        val parents = LongArray(capacity)
+        val sourceIds = LongArray(capacity)
+        val sourceNames = arrayOfNulls<String>(capacity)
+        val modes = LongArray(capacity)
+        val startedNanos = LongArray(capacity)
+        // Independent bits preserve child rollback at every depth and after out-of-order removal.
+        val flags = ByteArray(capacity)
+        val statementCounts = LongArray(capacity)
+        val readCounts = LongArray(capacity)
+        val writeCounts = LongArray(capacity)
+
+        fun grow(): TransactionState {
+            val nextCapacity = if (capacity <= Int.MAX_VALUE / 2) capacity * 2 else Int.MAX_VALUE
+            check(nextCapacity > capacity) { "Transaction stack capacity exhausted" }
+            return TransactionState(nextCapacity).also { next ->
+                // Publish the new storage only after every array has been allocated and copied.
+                receivers.copyInto(next.receivers, endIndex = depth)
+                ids.copyInto(next.ids, endIndex = depth)
+                parents.copyInto(next.parents, endIndex = depth)
+                sourceIds.copyInto(next.sourceIds, endIndex = depth)
+                sourceNames.copyInto(next.sourceNames, endIndex = depth)
+                modes.copyInto(next.modes, endIndex = depth)
+                startedNanos.copyInto(next.startedNanos, endIndex = depth)
+                flags.copyInto(next.flags, endIndex = depth)
+                statementCounts.copyInto(next.statementCounts, endIndex = depth)
+                readCounts.copyInto(next.readCounts, endIndex = depth)
+                writeCounts.copyInto(next.writeCounts, endIndex = depth)
+                next.depth = depth
+            }
+        }
 
         fun find(database: Any): Int {
             for (index in depth - 1 downTo 0) {
@@ -320,12 +357,22 @@ internal class DatabaseTransactionTracker(
             return -1
         }
 
+        fun markParentFailed(database: Any, child: Int) {
+            for (index in child - 1 downTo 0) {
+                if (receivers[index]?.get() === database) {
+                    flags[index] = (flags[index].toInt() or TRANSACTION_CHILD_FAILED).toByte()
+                    return
+                }
+            }
+        }
+
         fun remove(index: Int) {
+            // Transactions on independent databases may finish out of global stack order.
             for (target in index until depth - 1) copy(target + 1, target)
             depth--
             receivers[depth] = null
             sourceNames[depth] = null
-            successful[depth] = false
+            flags[depth] = 0
             ids[depth] = 0L
             parents[depth] = 0L
             sourceIds[depth] = 0L
@@ -344,7 +391,7 @@ internal class DatabaseTransactionTracker(
             sourceNames[target] = sourceNames[source]
             modes[target] = modes[source]
             startedNanos[target] = startedNanos[source]
-            successful[target] = successful[source]
+            flags[target] = flags[source]
             statementCounts[target] = statementCounts[source]
             readCounts[target] = readCounts[source]
             writeCounts[target] = writeCounts[source]
@@ -352,7 +399,9 @@ internal class DatabaseTransactionTracker(
     }
 
     private companion object {
-        const val MAX_TRANSACTION_DEPTH = 16
+        const val INITIAL_TRANSACTION_DEPTH = 16
+        const val TRANSACTION_MARKED_SUCCESSFUL = 1
+        const val TRANSACTION_CHILD_FAILED = 2
         const val STATE_POOL_CAPACITY = 32
         const val STATE_POOL_MASK = STATE_POOL_CAPACITY - 1
         const val RECEIVER_CACHE_CAPACITY = 4
@@ -398,6 +447,7 @@ internal class DatabaseTransactionIdGenerator {
 internal class ManualDatabaseTransactionTracker(
     private val ids: DatabaseTransactionIdGenerator,
     private val nanoTime: RuntimeLongSource,
+    private val epochId: RuntimeLongSource = RuntimeLongSource { 0L },
 ) {
     private val current = ThreadLocal<WeakReference<JankHunterDatabaseTransactionToken>?>()
 
@@ -406,30 +456,33 @@ internal class ManualDatabaseTransactionTracker(
         sourceName: String,
         mode: Long,
         automaticParentId: Long,
+        transactionId: Long = ids.next(),
+        expectedEpochId: Long = epochId.getAsLong(),
     ): JankHunterDatabaseTransactionToken {
-        val manualParent = activeToken()
+        val manualParent = activeToken(expectedEpochId)
         val parentId = if (manualParent == null || automaticParentId > manualParent.id) {
             automaticParentId
         } else {
             manualParent.id
         }
         val token = JankHunterDatabaseTransactionToken(
-            id = ids.next(),
+            id = transactionId,
             sourceId = sourceId,
             sourceName = sourceName,
             mode = mode,
             parentId = parentId,
             startedNanos = nanoTime.getAsLong().coerceAtLeast(0L),
             parent = manualParent?.let(::WeakReference),
+            collectionEpochId = expectedEpochId,
         )
         current.set(WeakReference(token))
         return token
     }
 
-    fun currentTransactionId(): Long = activeToken()?.id ?: 0L
+    fun currentTransactionId(expectedEpochId: Long = epochId.getAsLong()): Long = activeToken(expectedEpochId)?.id ?: 0L
 
-    fun recordStatement(operation: Long): Long {
-        val token = activeToken() ?: return 0L
+    fun recordStatement(operation: Long, expectedEpochId: Long = epochId.getAsLong()): Long {
+        val token = activeToken(expectedEpochId) ?: return 0L
         token.recordStatement(operation)
         return token.id
     }
@@ -444,8 +497,10 @@ internal class ManualDatabaseTransactionTracker(
         }
     }
 
-    private fun activeToken(): JankHunterDatabaseTransactionToken? {
+    private fun activeToken(expectedEpochId: Long = epochId.getAsLong()): JankHunterDatabaseTransactionToken? {
+        if (epochId.getAsLong() != expectedEpochId) return null
         var token = current.get()?.get()
+        if (token != null && token.collectionEpochId != expectedEpochId) token = null
         while (token != null && token.isCompleted()) token = token.parent?.get()
         if (token == null) {
             current.remove()

@@ -7,6 +7,10 @@ import (
 )
 
 func analyzeNetworkLoopSignal(signal *networkLoopSignal, bucketMS uint64) (NetworkLoopFinding, bool) {
+	return analyzeNetworkLoopSignalWithBudget(signal, bucketMS, nil)
+}
+
+func analyzeNetworkLoopSignalWithBudget(signal *networkLoopSignal, bucketMS uint64, budget *collectionBudget) (NetworkLoopFinding, bool) {
 	if len(signal.points) < minNetworkLoopPoints || !hasNonZeroFloat(signal.points) {
 		return NetworkLoopFinding{}, false
 	}
@@ -14,7 +18,10 @@ func analyzeNetworkLoopSignal(signal *networkLoopSignal, bucketMS uint64) (Netwo
 	if len(bursts) < minNetworkLoopBursts {
 		return NetworkLoopFinding{}, false
 	}
-	periodic := analyzePeriodicSignal(signal.name, "шт", bucketMS, signal.points)
+	periodic := analyzePeriodicSignalWithBudget(signal.name, "шт", bucketMS, signal.points, budget)
+	if budget != nil && budget.err() != nil {
+		return NetworkLoopFinding{}, false
+	}
 	periodMS := networkLoopPeriod(periodic, bursts, bucketMS)
 	if periodMS == 0 {
 		return NetworkLoopFinding{}, false
@@ -32,26 +39,21 @@ func analyzeNetworkLoopSignal(signal *networkLoopSignal, bucketMS uint64) (Netwo
 	if confidence < 0.35 {
 		return NetworkLoopFinding{}, false
 	}
-	route := signal.route
-	owner := signal.owner
-	if route == "" {
-		route = uniqueMotifValue(motif, "route:")
-	}
-	if owner == "" {
-		owner = uniqueMotifValue(motif, "owner:")
-	}
+	route, owner, routeStatus, ownerStatus := networkLoopBurstContexts(signal, bursts)
 	burnScore := networkLoopBurn(signal.points, bursts, confidence)
 	return NetworkLoopFinding{
-		Route:         route,
-		Owner:         owner,
-		PeriodMS:      periodMS,
-		Confidence:    clamp01(confidence),
-		Motif:         motif,
-		FirstMS:       uint64(bursts[0]) * bucketMS,
-		LastMS:        uint64(bursts[len(bursts)-1]) * bucketMS,
-		BurnScore:     burnScore,
-		ProbableCause: networkLoopProbableCause(signal.kind, route, owner),
-		Path:          networkLoopPath(signal.kind, route, owner, motif, confidence),
+		RouteAttributionStatus: routeStatus,
+		OwnerAttributionStatus: ownerStatus,
+		Route:                  route,
+		Owner:                  owner,
+		PeriodMS:               periodMS,
+		Confidence:             clamp01(confidence),
+		Motif:                  motif,
+		FirstMS:                uint64(bursts[0]+signal.bucketOffset) * bucketMS,
+		LastMS:                 uint64(bursts[len(bursts)-1]+signal.bucketOffset) * bucketMS,
+		BurnScore:              burnScore,
+		ProbableCause:          networkLoopProbableCause(signal.kind, route, owner),
+		Path:                   networkLoopPath(signal.kind, route, owner, motif, confidence),
 	}, true
 }
 
@@ -164,7 +166,7 @@ func networkLoopMotif(signal *networkLoopSignal, bursts []int) []string {
 	}
 	counts := map[string]*tokenCount{}
 	for _, index := range bursts {
-		for token, total := range signal.tokens[index] {
+		for token, total := range signal.tokens[index+signal.bucketOffset] {
 			item := counts[token]
 			if item == nil {
 				item = &tokenCount{token: token}
@@ -216,7 +218,7 @@ func networkLoopMotifScore(signal *networkLoopSignal, bursts []int, motif []stri
 	for _, token := range motif {
 		var buckets int
 		for _, index := range bursts {
-			if signal.tokens[index][token] > 0 {
+			if signal.tokens[index+signal.bucketOffset][token] > 0 {
 				buckets++
 			}
 		}

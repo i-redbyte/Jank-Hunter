@@ -30,7 +30,34 @@ internal class RuntimeTelemetryAccess(
     val config: JankHunterConfig?
         get() = state.config
 
+    val collectionEpoch: RuntimeCollectionEpoch?
+        get() = state.collectionEpochs.current
+
+    fun epochForCompletion(token: Long): RuntimeCollectionEpoch? {
+        if (token <= 0L) return null
+        val epoch = collectionEpoch
+        if (epoch == null) state.collectionEpochs.reject(RuntimeAsyncTokenTable.REJECT_CLOSED)
+        return epoch
+    }
+
+    fun rejectAsyncCompletion(reason: Int) = state.collectionEpochs.reject(reason)
+
+    fun claimAsync(epoch: RuntimeCollectionEpoch, token: Long, kind: Int, feature: JankHunterRuntimeFeature): Long {
+        val started = epoch.tokens.claim(token, kind)
+        if (started < 0L) return -1L
+        if (!isFeatureActive(feature)) {
+            epoch.tokens.release(token)
+            rejectAsyncCompletion(RuntimeCollectionEpochs.REJECT_FEATURE_DISABLED)
+            return -1L
+        }
+        return started
+    }
+
     fun isActive(): Boolean = coordinator.isActiveForHooks()
+
+    fun isFeatureActive(feature: JankHunterRuntimeFeature): Boolean = state.featureGate.isEnabled(feature)
+
+    fun lifecycleGeneration(): Long = state.lifecycleGeneration
 
     fun captureContext(screenOverride: String? = null, ownerOverride: String? = null): JankHunterContext {
         return contexts.capture(screenOverride, ownerOverride)
@@ -45,7 +72,7 @@ internal class RuntimeTelemetryAccess(
         return if (context == null) block() else callWithContext(context, ownerName, block)
     }
 
-    fun <T> callWithContext(context: JankHunterContext, ownerName: String?, block: () -> T): T {
+    inline fun <T> callWithContext(context: JankHunterContext, ownerName: String?, block: () -> T): T {
         var delegateStarted = false
         return try {
             contexts.callWithContext(context, ownerName, contextChanged) {
@@ -59,8 +86,12 @@ internal class RuntimeTelemetryAccess(
         }
     }
 
-    fun ensureContextRecorded(screenOverride: String? = null, ownerOverride: String? = null) {
-        val activeWriter = writer ?: return
+    fun ensureContextRecorded(
+        screenOverride: String? = null,
+        ownerOverride: String? = null,
+        activeWriter: AsyncLogWriter? = writer,
+    ) {
+        if (activeWriter == null) return
         val screen = contexts.capturedScreen(screenOverride)
         val owner = contexts.capturedOwner(ownerOverride)
         val operationId = contexts.currentOperationId()

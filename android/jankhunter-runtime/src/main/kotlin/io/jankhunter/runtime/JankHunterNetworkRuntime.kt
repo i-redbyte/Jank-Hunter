@@ -15,6 +15,9 @@ object JankHunterNetworkRuntime {
     fun captureContext(): JankHunterContextSnapshot = JankHunter.networkTelemetry().captureContext()
 
     @JvmStatic
+    fun captureHttpContext(): JankHunterContextSnapshot = JankHunter.networkTelemetry().captureHttpContext()
+
+    @JvmStatic
     fun recordHttp(event: JankHunterHttpEvent) = JankHunter.networkTelemetry().recordHttp(event)
 
     @JvmStatic

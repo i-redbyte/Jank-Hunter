@@ -250,11 +250,13 @@ internal class BinaryLogWriter private constructor(
         totalStorageKb: Long,
         networkVpn: Boolean,
         foreground: Boolean = true,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ) {
         sessionRecords.deviceContext(
             networkKind, batteryPct, availMemoryKb, batteryState, batteryTempDeciC, lowMemory,
             networkMetered, networkValidated, rxBytes, txBytes, totalMemoryKb, freeStorageKb,
-            totalStorageKb, networkVpn, foreground,
+            totalStorageKb, networkVpn, foreground, trafficUidPlusOne, trafficKnownFlags,
         )
     }
 
@@ -413,8 +415,10 @@ internal class BinaryLogWriter private constructor(
         stackHint: String?,
         durationMs: Long,
         foreground: Boolean = true,
+        incidentId: Long = 0L,
+        state: Long = Jhlog.STALL_STATE_RECOVERED,
     ) {
-        sessionRecords.stall(screen, owner, stackHint, durationMs, foreground)
+        sessionRecords.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state)
     }
 
     fun memory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long, foreground: Boolean = true) {
@@ -519,6 +523,10 @@ internal class BinaryLogWriter private constructor(
 
     fun gauge(name: String?, value: Long) {
         metricRecords.gauge(name, value)
+    }
+
+    fun gaugeWide(name: String?, value: Long, count: Long, sum: Long, max: Long, mode: MetricAggregationMode, sumHigh: Long) {
+        metricRecords.gaugeWide(name, value, count, sum, max, mode, sumHigh)
     }
 
     fun gauge(
@@ -1147,6 +1155,7 @@ internal class BinaryLogWriter private constructor(
             if (count > 0) quality.addRejected(recordType, reason, count)
         }
         microPage.rejectSemanticCounts(quality, reason)
+        logGrowthRecords.discardDeltaBases()
         resetChunkState()
     }
 
@@ -1169,7 +1178,8 @@ internal class BinaryLogWriter private constructor(
         private const val FLAG_KNOWN_MASK: Long =
             ((1L shl 14) - 1L) or FLAG_HTTP_SLOW or FLAG_UI_PROBLEM or FLAG_HTTP_CLASSIFIED or
                 FLAG_UI_CLASSIFIED or Jhlog.FLAG_WORKER_PERIODIC or Jhlog.FLAG_WORKER_STOP_REASON_KNOWN or
-                Jhlog.FLAG_IO_BYTES_KNOWN
+                Jhlog.FLAG_IO_BYTES_KNOWN or Jhlog.FLAG_HTTP_BODY_TOTALS or
+                Jhlog.FLAG_HTTP_TTFB_OBSERVED or Jhlog.FLAG_HTTP_TTFB_KNOWN
         private const val TERMINAL_RESERVE_BYTES = 8L * 1024L
         private const val DEFAULT_LOCAL_FILE_LIMIT_BYTES = 16L * 1024L * 1024L
         private const val MAX_HEADER_STRING_BYTES = 1024

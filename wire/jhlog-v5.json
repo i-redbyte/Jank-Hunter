@@ -3,12 +3,68 @@
     "prefix_hex": "4a484c4f470d0a",
     "marker": 129,
     "major": 5,
-    "minor": 0,
+    "minor": 1,
     "patch": 0,
     "header_schema": 2,
     "chunk_magic_hex": "4a484331",
     "commit_magic_hex": "4a48434d"
   },
+  "readable_legacy_versions": [{"major": 5, "minor": 0, "patch": 0}],
+  "http_first_byte_contract": {
+    "introduced": "5.1.0",
+    "required_feature_bit": 28,
+    "semantics_flag_bit": 24,
+    "known_flag_bit": 25,
+    "measurement": "HTTP_TTFB_OBSERVED marks first-byte semantics, not successful observation. With HTTP_TTFB_KNOWN, ttfb_ms is the interval from the first requestHeadersStart of the Call to the first positive plaintext transport read containing its response byte, before HTTP parsing. HTTP/2 uses the first byte of the HEADERS frame for the actual stream ID; partial frame headers preserve the first-fragment timestamp.",
+    "scope": "Includes request upload and retries before the first response, excludes preceding DNS/connect/TLS. The first informational or redirect response counts. This is an application-observed read time, not a kernel arrival or remote server timestamp. Request and response intervals can overlap this interval and must not be summed as disjoint phases.",
+    "unknown": "Known zero is a valid sample. Without HTTP_TTFB_KNOWN the observed-semantics value must be zero and is not a timing sample. Missing/unsupported hooks, unavailable clocks, refused registrations, cache-only responses and failure before a response leave timing unknown. This is timing coverage, separate from event delivery completeness.",
+    "legacy": "Without HTTP_TTFB_OBSERVED, preserve the recorded legacy field but exclude it from actual first-byte statistics, mathematical analysis and comparisons. Historical EventListener header-read intent is not a first-byte observation. Readers without required feature 28 reject new logs."
+  },
+  "gauge_sum_contract": {
+    "introduced": "5.1.0",
+    "feature": "FEATURE_GAUGE_WIDE_SUM",
+    "payload": "With required feature bit 27, every GAUGE appends sum_high:uvarint after mode. Existing sum is the unsigned low 64 bits. The exact sum is sum_high * 2^64 + sum; zero low word is not a missing-value sentinel when sum_high is nonzero. COUNTER layout is unchanged.",
+    "legacy": "Without bit 27, GAUGE has no high word and decodes sum_high=0. Old readers reject bit 27. Historical saturated SDK sums cannot be reconstructed.",
+    "bounds": "Unsigned 128-bit sum, positive count; average-mode sum is at most count * max. A sum below max is invalid only for additive modes; LAST and STATE retain their historical last-value semantics."
+  },
+  "http_body_contract": {
+    "introduced": "5.1.0",
+    "flag": {"kotlin": "FLAG_HTTP_BODY_TOTALS", "public_kotlin": "HTTP_BODY_TOTALS", "go": "FlagHTTPBodyTotals", "bit": 23},
+    "totals": "When HTTP_BODY_TOTALS is set, the existing request/response byte fields sum observed body bytes across all exchanges of one Call, including authentication retries and redirects. Headers and transport overhead are not included.",
+    "known": "Existing request/response bytes-known flags independently identify an exact whole-Call total. The totals marker alone does not imply completeness. Incomplete exchanges, invalid counts and saturation clear knownness for that direction while preserving observed lower bounds.",
+    "legacy": "Logs without the marker remain readable. With attempts > 1 or redirects > 0, historical SDK byte fields may contain only the last exchange; treat their whole-Call totals as incomplete even if historical known flags are set. Preserve recorded byte values as lower bounds.",
+    "android_saturation": "The SDK saturates accumulated body bytes at Long.MAX_VALUE and clears the corresponding known flag. Repeated body callbacks within one exchange must not add bytes twice."
+  },
+  "worker_stages": [
+    {"kotlin": "WORKER_STAGE_UNKNOWN", "go": "WorkerStageUnknown", "value": 0},
+    {"kotlin": "WORKER_STAGE_ENQUEUED", "go": "WorkerStageEnqueued", "value": 1},
+    {"kotlin": "WORKER_STAGE_STARTED", "go": "WorkerStageStarted", "value": 2},
+    {"kotlin": "WORKER_STAGE_FINISHED", "go": "WorkerStageFinished", "value": 3},
+    {"kotlin": "WORKER_STAGE_REGISTERED_OBSERVED", "go": "WorkerStageRegisteredObserved", "value": 4}
+  ],
+  "worker_registration_contract": {
+    "introduced": "5.1.0",
+    "stage": 4,
+    "name": "REGISTERED_OBSERVED",
+    "meaning": "An asynchronous WorkManager query returned WorkInfo with the exact submitted UUID after successful Operation completion. This proves observed registration, not insertion time or acceptance of this enqueue attempt.",
+    "lifecycle": "An observation may precede or follow STARTED/FINISHED and may describe an already existing, completed or periodic request. It does not create a future-start expectation or a queue-time sample. Null, failed and cancelled lookups emit no registration claim; no polling is performed.",
+    "legacy": "ENQUEUED=1 remains readable as legacy evidence with its historical matching semantics. MissingEnqueue counts starts without a legacy enqueue timestamp and does not prove data loss."
+  },
+  "stall_contract": {
+    "payload_5_1_0": ["stack_ref:symbol_ref", "duration_ms:uvarint", "incident_id:uvarint", "state:uvarint"],
+    "legacy_5_0_0": "stack_ref and duration_ms only; decode incident_id=0 and state=unknown",
+    "identity": "Opaque nonzero ID scoped to one runtime session, preserved across its segments. Zero means a standalone observation without lifecycle correlation.",
+    "duration": "Watchdog 5.1.0 measures uptime milliseconds since the last main-thread heartbeat. Ongoing and interrupted durations are observed lower bounds; recovered ends at the first subsequent heartbeat.",
+    "states": "unknown=0; ongoing=1; recovered=2; interrupted=3. Zero ID is valid only with unknown or recovered.",
+    "sequence": "A nonzero ID has ongoing observations followed by at most one terminal state. A terminal-only observation is valid when earlier segments or records are missing. No update may follow a terminal state.",
+    "comparison": "Unknown, ongoing and interrupted evidence must not pass a configured exact stall-duration regression check."
+  },
+  "stall_states": [
+    {"kotlin": "STALL_STATE_UNKNOWN", "go": "StallStateUnknown", "value": 0},
+    {"kotlin": "STALL_STATE_ONGOING", "go": "StallStateOngoing", "value": 1},
+    {"kotlin": "STALL_STATE_RECOVERED", "go": "StallStateRecovered", "value": 2},
+    {"kotlin": "STALL_STATE_INTERRUPTED", "go": "StallStateInterrupted", "value": 3}
+  ],
   "limits": [
     {"kotlin": "MAX_FILE_HEADER_BYTES", "go": "maxHeaderPayloadSize", "value": 4096},
     {"kotlin": "TARGET_RAW_CHUNK_BYTES", "go": "defaultRawChunkTarget", "value": 65536},
@@ -23,6 +79,11 @@
     {"kotlin": "PROCESS_ROSTER_FINGERPRINT_BYTES", "value": 32},
     {"go": "maxStoredChunkSize", "value": 524288}
   ],
+  "http_collection_state_contract": {
+    "feature": "Required bit30 makes SESSION collector bit11 the effective HTTP feature state (available AND enabled). An absent bit means disabled only when feature30 is present. Historical logs keep unknown HTTP collection state.",
+    "scope": "This declares permission to collect instrumented HTTP completions, not universal application network coverage. Quiet counts also require continuous sealed input and absence of relevant loss; the flag alone cannot prove an observed zero.",
+    "collection_window": "QUALITY entries 0x204b (collection_window_start_elapsed_ms) and 0x204c (collection_window_end_elapsed_ms) are immutable clock bounds, not loss counts. Start is rounded up after feature-gate activation; end is sampled before its first deactivation or writer admission closure. A missing, reversed or changing bound means unknown coverage. Values persist across rotation; only a complete terminal chain proves the interval. Startup and writer drain are excluded."
+  },
   "required_features": [
     {"kotlin": "FEATURE_CHUNK_CRC_COMMIT", "go": "FeatureChunkCRCCommit", "bit": 0},
     {"kotlin": "FEATURE_LENGTH_DELIMITED_RECORDS", "go": "FeatureLengthDelimited", "bit": 1},
@@ -49,7 +110,11 @@
     {"kotlin": "FEATURE_FRONT_CODED_DICTIONARY", "go": "FeatureFrontCodedDictionary", "bit": 23},
     {"kotlin": "FEATURE_RUNTIME_EDGE_BIT_PLANES", "go": "FeatureRuntimeEdgeBitPlanes", "bit": 24},
     {"kotlin": "FEATURE_IMPLICIT_STABLE_ALIASES", "go": "FeatureImplicitStableAliases", "bit": 25},
-    {"kotlin": "FEATURE_COLUMNAR_RUNTIME_EDGE_TUPLES", "go": "FeatureColumnarRuntimeEdgeTuples", "bit": 26}
+    {"kotlin": "FEATURE_COLUMNAR_RUNTIME_EDGE_TUPLES", "go": "FeatureColumnarRuntimeEdgeTuples", "bit": 26},
+    {"kotlin": "FEATURE_GAUGE_WIDE_SUM", "go": "FeatureGaugeWideSum", "bit": 27},
+    {"kotlin": "FEATURE_HTTP_FIRST_BYTE", "go": "FeatureHTTPFirstByte", "bit": 28},
+    {"kotlin": "FEATURE_UID_TRAFFIC", "go": "FeatureUIDTraffic", "bit": 29},
+    {"kotlin": "FEATURE_HTTP_COLLECTION_STATE", "go": "FeatureHTTPCollectionState", "bit": 30}
   ],
   "optional_features": [
     {"kotlin": "OPTIONAL_FEATURE_GZIP_CHUNKS", "go": "FeatureGZIPChunks", "bit": 0, "profiles": ["gzip"]},
@@ -109,12 +174,53 @@
     {"kotlin": "TYPE_BINDER_TRANSACTION", "go": "EventBinderTransaction", "value": 26},
     {"kotlin": "TYPE_MICRO_PAGE", "go": "eventMicroPage", "value": 27}
   ],
+  "uid_traffic_contract": {
+    "feature": "Required bit29 FEATURE_UID_TRAFFIC appends traffic_uid_plus_one and traffic_known_flags as unsigned varints after the ten existing DEVICE_CONTEXT values. Without the bit, historical payloads have no provenance.",
+    "uid": "Zero means unknown. Android UID0 is encoded as1; maximum encoded UID is2^31. Flags use bit0 for RX-known and bit1 for TX-known; other bits and known-without-UID are invalid. A known counter may be zero. Unsupported counters have a clear known bit, independently per direction.",
+    "origin": "SystemContextSampler records the process UID and TrafficStats support before sanitizing negative counters. Caller-supplied manual context has no invented UID. Changes in UID or known flags pass adaptive sampling.",
+    "scope": "SDK RunID is a live process cohort protected by held OS file locks. The counter domain is RunID plus UID, never PID. Different runs never share a baseline. Continuous source samples across rotation require matching run/process/session/collector-clock identity, consecutive segment indices, a clean sealed rotation and matching previous digest.",
+    "aggregation": "Union half-open byte-counter ranges to count each observed byte once. Unknown UID collapses counter ranges inside that run for a lower bound; unknown run identity collapses all runs. Reset, missing boundary, unsupported observations and overflow prevent exactness. Math assigns each byte to the first observation-end bucket confirming it, not inferred packet-arrival time.",
+    "compatibility": "New CLI reads prior5.0/5.1 without provenance as uncertain. Old readers reject bit29. Numeric aggregate fields remain, with independent exact/lower_bound/unknown direction evidence. Only exact direction passes a requested traffic CI gate or contributes a traffic time series. Delivery completeness remains separate. Collection explanations appear only in mathematical analysis data-quality."
+  },
+  "async_epoch_contract": {
+    "epoch": "One continuous collection session. Stop, disable and reconfigure close it; segment rotation preserves it. Existing run/process identity and event payload layouts are unchanged.",
+    "tokens": "Opaque primitive identity only; no retained writer, runtime session, UI object or timestamp truncation. Completed and previous-epoch tokens cannot write into a replacement epoch.",
+    "boundary": "Unfinished observations and completions already being published are recorded separately before final quality sealing. These counts describe a telemetry boundary, not proof that the application operation never finished or an invented lost-delivery count.",
+    "rejections": "Stale, duplicate, invalid and feature-disabled completions are separate observations. Counts while no epoch can record them are retained for the next epoch and do not count as its event delivery losses.",
+    "capacity": "HTTP, SQL call and Worker observation slots are bounded and never evict active work. Exact active transaction stacks remain proportional to depth without this slot limit. Invalid completion, capacity or identity exhaustion makes diagnostic completeness unknown (-1), because the missing event count cannot be inferred from the observation count. Completions still publishing at the final snapshot also make completeness unknown: that snapshot does not establish their delivery outcome. No lost-event count is invented.",
+    "http": "captureHttpContext registers a tracked HTTP operation. Generic same-epoch context remains supported for a single completion with an explicit legacy coverage count; unfinished HTTP observations cannot be enumerated through that legacy API. Unverifiable epoch identity is rejected.",
+    "report": "Jank Hunter CLI reports remain problem-first. All collection diagnostics are placed only in the dedicated data-quality section of the mathematical-analysis inspect/compare pages.",
+    "quality_counter_ids": {
+      "async_completion_stale_total": 8254,
+      "async_completion_duplicate_total": 8255,
+      "async_completion_invalid_total": 8256,
+      "async_token_capacity_rejected_total": 8257,
+      "async_token_id_exhausted_total": 8258,
+      "async_completion_feature_disabled_total": 8259,
+      "async_unfinished_http_total": 8260,
+      "async_unfinished_database_total": 8261,
+      "async_unfinished_worker_total": 8262,
+      "async_unfinished_database_transaction_total": 8263,
+      "async_completion_in_progress_at_stop_total": 8264,
+      "http_legacy_context_completion_total": 8265
+    }
+  },
+  "runtime_graph_storage_contract": {
+    "quota": "Each generation reserves at most 8 MiB for producer metadata, stack arrays and aggregate pages before allocating them, including old and new arrays during stack growth. The at-most-two-generation lifecycle bounds these quotas to 16 MiB; this is not a whole-SDK or process RSS limit. Shared string contents, consumer tables, writer queues and JVM-owned ThreadLocal maps are outside this storage quota.",
+    "lifetime": "Oversized empty stacks release arrays at full unwind. Drained terminated producers and stopped generations release storage independently of Thread object reachability. A bounded cache of 16 detached empty pages remains charged until reused or discarded.",
+    "known_edge_loss": "Denied semantic edges are included once in runtime_graph_input_total and runtime_graph_producer_capacity_loss. Accepted edges retain existing emitted/lost accounting.",
+    "unknown_edges": "runtime_graph_storage_skipped_entry_total counts omitted method entries. It does not determine an absent-edge count. Any positive count makes diagnostic_completeness_percent=-1 and level=unknown; requested completeness gates cannot pass. Stack context stays unknown across the omitted interval.",
+    "compatibility": "Existing event layouts and JHLOG 5.1.0 remain unchanged. Readers predating this quality counter explicitly reject it when present, rather than silently claiming completeness. New readers continue to read historical logs.",
+    "quality_counter_ids": {
+      "runtime_graph_storage_skipped_entry_total": 8266
+    }
+  },
   "layouts": {
     "dictionary_stable": ["kind", "stable_id_le64", "front_or_token_value"],
     "runtime_edge_block": ["row_count_and_columnar_flag", "definition_bit_plane", "edge_id_column", "tuple_columns", "count_column", "total_column", "max_column"]
   },
   "goldens": {
-    "file-magic.bin": "4a484c4f470d0a81050000",
+    "file-magic.bin": "4a484c4f470d0a81050100",
     "dictionary-stable.bin": "0c0807060504030201000179",
     "runtime-edge-columnar.bin": "09050101010c050001040a14040203050505"
   }

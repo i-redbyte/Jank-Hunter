@@ -34,6 +34,18 @@ dependencies {
     testImplementation(libs.androidx.room.runtime)
     testImplementation(libs.asm.util)
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp)
 }
 
 apply(from = file("../gradle/plugin-metadata.gradle.kts"))
+apply(from = file("../gradle/runtime-benchmarks.gradle.kts"))
+
+tasks.register<JavaExec>("writeOkHttpTransportFixture") {
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("io.jankhunter.gradle.OkHttpTransportFixture")
+    val output = layout.buildDirectory.file("test-fixtures/okhttp-transport.jar")
+    outputs.file(output)
+    inputs.files(classpath)
+    args(output.get().asFile.absolutePath)
+}

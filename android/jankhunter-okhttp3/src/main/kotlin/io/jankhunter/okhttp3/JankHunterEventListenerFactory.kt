@@ -48,6 +48,9 @@ class JankHunterEventListenerFactory private constructor(
     )
 
     private val serviceAlias = NetworkMetricNames.serviceAlias(serviceAlias)
+    private val firstByteClock = NetworkLongSource {
+        if (telemetry.isHttpCollectionEnabled()) clock.getAsLong() else Long.MIN_VALUE
+    }
 
     override fun create(call: Call): EventListener {
         // This is application/OkHttp business code: call it once and let its exception propagate.
@@ -56,7 +59,7 @@ class JankHunterEventListenerFactory private constructor(
             telemetry.isHttpCollectionEnabled()
         }
         if (!telemetryActive) return base
-        return EventListenerNonFatal.bestEffort(base) { Listener(base, telemetry, clock, serviceAlias) }
+        return EventListenerNonFatal.bestEffort(base) { Listener(base, telemetry, clock, serviceAlias, firstByteClock) }
     }
 
     private class Listener(
@@ -64,11 +67,24 @@ class JankHunterEventListenerFactory private constructor(
         private val telemetry: NetworkTelemetry,
         private val clock: NetworkLongSource,
         private val serviceAlias: String?,
-    ) : EventListener() {
+        override val firstByteClock: NetworkLongSource,
+    ) : EventListener(), HttpTransportObservation {
         /** Protects only this call's small in-memory state; delegates and metric I/O run outside it. */
         private val stateLock = Any()
+        private var dnsDomain: String? = null
+        private var dnsStartedAt = UNSET_TIME
         private var dnsStartsByDomain: HashMap<String, ArrayDeque<Long>>? = null
+        private var connectAddress: InetSocketAddress? = null
+        private var connectProxy: Proxy? = null
+        private var connectStartedAt = UNSET_TIME
+        private var connectThread: Thread? = null
+        private var connectSequence = 0L
+        private var connectTlsStarted = false
+        private var connectTlsInProgress = false
+        private var connectTlsStartedAt = UNSET_TIME
         private var connectAttemptsByRoute: HashMap<ConnectKey, ArrayDeque<ConnectAttempt>>? = null
+        private var connectedAddress: InetSocketAddress? = null
+        private var connectedProxy: Proxy? = null
         private var connectedRoutesAwaitingAcquisition: HashSet<ConnectKey>? = null
 
         private var startedAt = UNSET_TIME
@@ -81,10 +97,18 @@ class JankHunterEventListenerFactory private constructor(
         private var tlsMs = 0L
         private var requestMs = 0L
         private var ttfbMs = 0L
+        private var firstRequestAt = UNSET_TIME
+        private var firstRequestObserved = false
+        private var firstByteObserved = false
+        private var firstByteKnown = false
+        private var transportSource: HttpResponseByteSource? = null
+        private var cachedSource: CachedResponseBodySource? = null
+        private var transportStream = 0
+        private var http1Transport = false
         private var responseMs = 0L
         private var statusCode = 0
         private var protocol = JankHunterHttpEvent.PROTOCOL_UNKNOWN
-        private var flags = 0L
+        private var flags = JankHunterNetworkEventFlags.HTTP_BODY_TOTALS or JankHunterNetworkEventFlags.HTTP_TTFB_OBSERVED
         private var dnsAttemptCount = 0
         private var connectAttemptCount = 0
         private var tlsAttemptCount = 0
@@ -95,6 +119,8 @@ class JankHunterEventListenerFactory private constructor(
         private var nextConnectSequence = 0L
         private var requestBodyBytes = 0L
         private var responseBodyBytes = 0L
+        // Four state bits per direction; no per-exchange objects or callback allocations.
+        private var bodyByteState = 0
         private var phase = PHASE_CALL
         private var terminalRecorded = false
         private var contextCaptureAttempted = false
@@ -114,9 +140,7 @@ class JankHunterEventListenerFactory private constructor(
                 markFirstIO(started)
                 phase = PHASE_DNS
                 dnsAttemptCount++
-                val startsByDomain = dnsStartsByDomain
-                    ?: HashMap<String, ArrayDeque<Long>>().also { dnsStartsByDomain = it }
-                startsByDomain.getOrPut(domainName, ::ArrayDeque).addLast(started)
+                addDnsStart(domainName, started)
             }
             delegate.dnsStart(call, domainName)
         }
@@ -125,11 +149,7 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val ended = now()
             state {
-                val startsByDomain = dnsStartsByDomain
-                val starts = startsByDomain?.get(domainName)
-                val started = starts?.pollFirst() ?: UNSET_TIME
-                if (starts != null && starts.isEmpty()) startsByDomain.remove(domainName)
-                if (startsByDomain != null && startsByDomain.isEmpty()) dnsStartsByDomain = null
+                val started = removeDnsStart(domainName)
                 dnsMs = addDuration(dnsMs, elapsed(started, ended))
             }
             delegate.dnsEnd(call, domainName, inetAddressList)
@@ -139,21 +159,11 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val started = now()
             val callbackThread = Thread.currentThread()
-            val key = ConnectKey(inetSocketAddress, proxy)
             state {
                 markFirstIO(started)
                 phase = PHASE_CONNECT
                 connectAttemptCount++
-                val attempt = ConnectAttempt(
-                    startedAt = started,
-                    callbackThread = callbackThread,
-                    sequence = nextConnectSequence++,
-                )
-                val attemptsByRoute = connectAttemptsByRoute
-                    ?: HashMap<ConnectKey, ArrayDeque<ConnectAttempt>>().also {
-                        connectAttemptsByRoute = it
-                    }
-                attemptsByRoute.getOrPut(key, ::ArrayDeque).addLast(attempt)
+                addConnectAttempt(inetSocketAddress, proxy, started, callbackThread)
             }
             delegate.connectStart(call, inetSocketAddress, proxy)
         }
@@ -168,11 +178,7 @@ class JankHunterEventListenerFactory private constructor(
                 // HTTP_TLS is an aggregate fact for the whole OkHttp Call (redirects included).
                 // Failure phase classification stays attached to the individual connect attempt.
                 flags = flags or JankHunterNetworkEventFlags.HTTP_TLS
-                findConnectAttempt(Thread.currentThread()) { !it.tlsStarted }?.let { attempt ->
-                    attempt.tlsStarted = true
-                    attempt.tlsInProgress = true
-                    attempt.tlsStartedAt = started
-                }
+                startTls(Thread.currentThread(), started)
             }
             delegate.secureConnectStart(call)
         }
@@ -181,11 +187,7 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val ended = now()
             state {
-                findConnectAttempt(Thread.currentThread()) { it.tlsInProgress }?.let { attempt ->
-                    tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, ended))
-                    attempt.tlsStartedAt = UNSET_TIME
-                    attempt.tlsInProgress = false
-                }
+                finishTls(Thread.currentThread(), ended)
                 if (handshake != null) flags = flags or JankHunterNetworkEventFlags.HTTP_TLS
             }
             delegate.secureConnectEnd(call, handshake)
@@ -200,15 +202,9 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val ended = now()
             state {
-                val key = ConnectKey(inetSocketAddress, proxy)
-                val attempt = removeConnectAttempt(key, Thread.currentThread())
-                connectMs = addDuration(connectMs, elapsed(attempt?.startedAt ?: UNSET_TIME, ended))
+                val completion = finishConnectAttempt(inetSocketAddress, proxy, Thread.currentThread(), ended)
                 this.protocol = protocolCode(protocol)
-                if (attempt != null) {
-                    val connectedRoutes = connectedRoutesAwaitingAcquisition
-                        ?: HashSet<ConnectKey>().also { connectedRoutesAwaitingAcquisition = it }
-                    connectedRoutes.add(key)
-                }
+                if (completion != CONNECT_NOT_FOUND) markConnectedRoute(inetSocketAddress, proxy)
             }
             delegate.connectEnd(call, inetSocketAddress, proxy, protocol)
         }
@@ -223,13 +219,8 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val ended = now()
             state {
-                val key = ConnectKey(inetSocketAddress, proxy)
-                val attempt = removeConnectAttempt(key, Thread.currentThread())
-                connectMs = addDuration(connectMs, elapsed(attempt?.startedAt ?: UNSET_TIME, ended))
-                if (attempt?.tlsInProgress == true) {
-                    tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, ended))
-                }
-                val failedPhase = if (attempt?.tlsStarted == true) PHASE_TLS else PHASE_CONNECT
+                val completion = finishConnectAttempt(inetSocketAddress, proxy, Thread.currentThread(), ended)
+                val failedPhase = if (completion == CONNECT_TLS) PHASE_TLS else PHASE_CONNECT
                 if (failedPhase == PHASE_TLS) tlsFailureCount++ else connectFailureCount++
                 phase = failedPhase
             }
@@ -239,21 +230,25 @@ class JankHunterEventListenerFactory private constructor(
         override fun connectionAcquired(call: Call, connection: Connection) {
             prepareCallback(call)
             val acquiredAt = now()
-            val connectionKey = EventListenerNonFatal.bestEffort<ConnectKey?>(null) {
-                val route = connection.route()
-                ConnectKey(route.socketAddress(), route.proxy())
-            }
+            val route = EventListenerNonFatal.bestEffort(null) { connection.route() }
             val hasTls = EventListenerNonFatal.bestEffort(false) { connection.handshake() != null }
             val acquiredProtocol = EventListenerNonFatal.bestEffort(JankHunterHttpEvent.PROTOCOL_UNKNOWN) {
                 protocolCode(connection.protocol())
             }
             state {
                 markFirstIO(acquiredAt)
+                disarmTransport()
+                if (!firstByteObserved) {
+                    transportSource = (connection as? JankHunterHttpTransportV1)?.jankHunterTransportState()
+                        as? HttpResponseByteSource
+                    http1Transport = acquiredProtocol == JankHunterHttpEvent.PROTOCOL_HTTP_1_0 ||
+                        acquiredProtocol == JankHunterHttpEvent.PROTOCOL_HTTP_1_1
+                }
                 if (hasTls) flags = flags or JankHunterNetworkEventFlags.HTTP_TLS
                 if (acquiredProtocol != JankHunterHttpEvent.PROTOCOL_UNKNOWN) protocol = acquiredProtocol
                 when {
-                    connectionKey == null -> Unit
-                    consumeConnectedRoute(connectionKey) -> Unit
+                    route == null -> Unit
+                    consumeConnectedRoute(route.socketAddress(), route.proxy()) -> Unit
                     else -> {
                         flags = flags or JankHunterNetworkEventFlags.HTTP_REUSED_CONNECTION
                     }
@@ -264,6 +259,7 @@ class JankHunterEventListenerFactory private constructor(
 
         override fun connectionReleased(call: Call, connection: Connection) {
             prepareCallback(call)
+            state { disarmTransport() }
             delegate.connectionReleased(call, connection)
         }
 
@@ -275,7 +271,14 @@ class JankHunterEventListenerFactory private constructor(
                 finishRequest(started)
                 phase = PHASE_REQUEST
                 requestStartedAt = started
+                if (!firstRequestObserved) {
+                    firstRequestObserved = true
+                    firstRequestAt = started
+                }
+                if (http1Transport) transportSource?.let { armTransport(it, 0) }
                 requestAttemptCount++
+                bodyByteState = bodyByteState and RESPONSE_HEADERS_STARTED.inv()
+                beginByteExchange(REQUEST_BYTE_SHIFT)
             }
             delegate.requestHeadersStart(call)
         }
@@ -288,7 +291,8 @@ class JankHunterEventListenerFactory private constructor(
                 val hasBody = EventListenerNonFatal.bestEffort(false) { request.body() != null }
                 if (!hasBody) {
                     finishRequest(finished)
-                    flags = flags or JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN
+                    // Headers can establish a known empty body without consuming a body callback.
+                    bodyByteState = (bodyByteState and BODY_PENDING.inv()) or BODY_OBSERVED
                 }
             }
             delegate.requestHeadersEnd(call, request)
@@ -298,8 +302,10 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val started = now()
             state {
+                if (bodyBytesCompleted(REQUEST_BYTE_SHIFT)) return@state
                 markFirstIO(started)
                 phase = PHASE_REQUEST
+                beginBodyBytes(REQUEST_BYTE_SHIFT)
                 if (requestStartedAt == UNSET_TIME) requestStartedAt = started
             }
             delegate.requestBodyStart(call)
@@ -309,9 +315,9 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val finished = now()
             state {
+                if (bodyBytesCompleted(REQUEST_BYTE_SHIFT)) return@state
                 phase = PHASE_REQUEST
-                requestBodyBytes = max(0L, byteCount)
-                flags = flags or JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN
+                requestBodyBytes = completeBodyBytes(requestBodyBytes, byteCount, REQUEST_BYTE_SHIFT)
                 if (requestStartedAt == UNSET_TIME) requestStartedAt = finished
                 finishRequest(finished)
             }
@@ -326,8 +332,11 @@ class JankHunterEventListenerFactory private constructor(
                 finishRequest(responseStartedAt)
                 finishResponse(responseStartedAt)
                 phase = PHASE_RESPONSE
-                val base = if (requestFinishedAt != UNSET_TIME) requestFinishedAt else startedAt
-                ttfbMs = addDuration(ttfbMs, elapsed(base, responseStartedAt))
+                // Expect: 100-continue can start response headers twice within one request.
+                if (bodyByteState and RESPONSE_HEADERS_STARTED == 0 || bodyBytesCompleted(RESPONSE_BYTE_SHIFT)) {
+                    beginByteExchange(RESPONSE_BYTE_SHIFT)
+                    bodyByteState = bodyByteState or RESPONSE_HEADERS_STARTED
+                }
                 this.responseStartedAt = responseStartedAt
             }
             delegate.responseHeadersStart(call)
@@ -342,6 +351,12 @@ class JankHunterEventListenerFactory private constructor(
             val cacheHit = EventListenerNonFatal.bestEffort(false) { response.cacheResponse() != null }
             val redirect = EventListenerNonFatal.bestEffort(false) { isRedirect(response) }
             state {
+                // Complete headers prove that the first response has already arrived. If the
+                // transport observation was unavailable, a later retry must not replace it.
+                if (!firstByteObserved) {
+                    firstByteObserved = true
+                    disarmTransport()
+                }
                 statusCode = code
                 protocol = responseProtocol
                 if (cacheHit) flags = flags or JankHunterNetworkEventFlags.HTTP_CACHE_HIT
@@ -354,8 +369,10 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val started = now()
             state {
+                if (bodyBytesCompleted(RESPONSE_BYTE_SHIFT)) return@state
                 markFirstIO(started)
                 phase = PHASE_RESPONSE
+                beginBodyBytes(RESPONSE_BYTE_SHIFT)
                 if (responseStartedAt == UNSET_TIME) responseStartedAt = started
             }
             delegate.responseBodyStart(call)
@@ -365,9 +382,9 @@ class JankHunterEventListenerFactory private constructor(
             prepareCallback(call)
             val finished = now()
             state {
+                if (bodyBytesCompleted(RESPONSE_BYTE_SHIFT)) return@state
                 phase = PHASE_RESPONSE
-                responseBodyBytes = max(0L, byteCount)
-                flags = flags or JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN
+                responseBodyBytes = completeBodyBytes(responseBodyBytes, byteCount, RESPONSE_BYTE_SHIFT)
                 finishResponse(finished)
             }
             delegate.responseBodyEnd(call, byteCount)
@@ -384,6 +401,65 @@ class JankHunterEventListenerFactory private constructor(
             val cancelled = EventListenerNonFatal.bestEffort(false) { call.isCanceled() }
             terminalEvent(failed = true, cancelled = cancelled, throwable = ioe)?.let(::record)
             delegate.callFailed(call, ioe)
+        }
+
+        override fun armTransport(source: HttpResponseByteSource, streamId: Int) = state {
+            if (terminalRecorded || firstByteObserved) return@state
+            disarmTransport()
+            val armed = if (streamId == 0) source.armHttp1(this) else source.armStream(streamId, this)
+            if (armed) {
+                transportSource = source
+                transportStream = streamId
+            }
+        }
+
+        override fun onFirstByte(atMs: Long) = state {
+            if (terminalRecorded || firstByteObserved) return@state
+            firstByteObserved = true
+            firstByteKnown = firstRequestObserved && firstRequestAt >= 0L && atMs >= firstRequestAt
+            if (firstByteKnown) ttfbMs = atMs - firstRequestAt
+            disarmTransport()
+        }
+
+        override fun onFinalResponse(response: Response) {
+            if (response.cacheResponse() != null && response.networkResponse() == null) {
+                val source = (response.body() as? JankHunterHttpTransportV1)?.jankHunterTransportState()
+                    as? CachedResponseBodySource ?: return
+                state {
+                    if (terminalRecorded) return
+                    statusCode = response.code()
+                    protocol = protocolCode(response.protocol())
+                    phase = PHASE_RESPONSE
+                    responseStartedAt = now()
+                    flags = flags or JankHunterNetworkEventFlags.HTTP_CACHE_HIT
+                    // A redirect may have performed network exchanges before this cached response.
+                    // Cache reads add no network bytes and cannot repair incomplete earlier totals.
+                    if (requestAttemptCount == 0) {
+                        bodyByteState = (BODY_OBSERVED or BODY_COMPLETED) or
+                            ((BODY_OBSERVED or BODY_COMPLETED) shl RESPONSE_BYTE_SHIFT)
+                    }
+                    cachedSource = source
+                }
+                // bind may synchronously publish a body already consumed by an interceptor.
+                source.bind(this)
+                // A competing terminal callback may have cleared the reference before bind.
+                state { if (terminalRecorded) source.detach(this) }
+                return
+            }
+            val completed = synchronized(stateLock) { bodyBytesCompleted(RESPONSE_BYTE_SHIFT) }
+            if (completed) terminalEvent(failed = false, cancelled = false, throwable = null)?.let(::record)
+        }
+
+        override fun onCachedBodyComplete(failureKind: Int) {
+            terminalEvent(failed = failureKind != JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
+                cancelled = false, throwable = null, failureKindOverride = failureKind)?.let(::record)
+        }
+
+        /** Called only with this listener's lock held. Source callbacks run outside the Source lock. */
+        private fun disarmTransport() {
+            transportSource?.disarm(transportStream, this)
+            transportSource = null
+            transportStream = 0
         }
 
         private fun prepareCallback(call: Call) {
@@ -411,7 +487,7 @@ class JankHunterEventListenerFactory private constructor(
             }
             if (captureContext) {
                 val snapshot = EventListenerNonFatal.bestEffort<JankHunterContextSnapshot?>(null) {
-                    telemetry.captureContextSnapshot()
+                    telemetry.captureHttpContextSnapshot()
                 }
                 state { contextSnapshot = snapshot }
             }
@@ -421,6 +497,7 @@ class JankHunterEventListenerFactory private constructor(
             failed: Boolean,
             cancelled: Boolean,
             throwable: Throwable?,
+            failureKindOverride: Int = JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
         ): JankHunterHttpEvent? {
             val endedAt = now()
             return synchronized(stateLock) {
@@ -429,6 +506,17 @@ class JankHunterEventListenerFactory private constructor(
                 finishRequest(endedAt)
                 finishResponse(endedAt)
                 var terminalFlags = if (failed) flags or JankHunterNetworkEventFlags.HTTP_FAILED else flags
+                if (firstByteKnown && ttfbMs <= elapsed(startedAt, endedAt)) {
+                    terminalFlags = terminalFlags or JankHunterNetworkEventFlags.HTTP_TTFB_KNOWN
+                } else {
+                    ttfbMs = 0L
+                }
+                if (bodyBytesKnown(REQUEST_BYTE_SHIFT)) {
+                    terminalFlags = terminalFlags or JankHunterNetworkEventFlags.HTTP_REQUEST_BYTES_KNOWN
+                }
+                if (bodyBytesKnown(RESPONSE_BYTE_SHIFT)) {
+                    terminalFlags = terminalFlags or JankHunterNetworkEventFlags.HTTP_RESPONSE_BYTES_KNOWN
+                }
                 if (cancelled) terminalFlags = terminalFlags or JankHunterNetworkEventFlags.HTTP_CANCELLED
                 val event = JankHunterHttpEvent(
                     contextSnapshot,
@@ -444,7 +532,8 @@ class JankHunterEventListenerFactory private constructor(
                     responseMs,
                     statusCode,
                     if (failed) failurePhase(phase, cancelled) else JankHunterHttpEvent.FAILURE_PHASE_UNKNOWN,
-                    if (failed) failureKind(throwable, cancelled) else JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
+                    if (failureKindOverride != JankHunterHttpEvent.FAILURE_KIND_UNKNOWN) failureKindOverride else
+                        if (failed) failureKind(throwable, cancelled) else JankHunterHttpEvent.FAILURE_KIND_UNKNOWN,
                     protocol,
                     responseBodyBytes,
                     requestBodyBytes,
@@ -464,8 +553,16 @@ class JankHunterEventListenerFactory private constructor(
 
         /** Must be called with [stateLock] held after the immutable terminal event is built. */
         private fun clearTerminalReferences() {
+            disarmTransport()
+            cachedSource?.detach(this)
+            cachedSource = null
+            dnsDomain = null
+            dnsStartedAt = UNSET_TIME
             dnsStartsByDomain = null
+            clearFastConnect()
             connectAttemptsByRoute = null
+            connectedAddress = null
+            connectedProxy = null
             connectedRoutesAwaitingAcquisition = null
             contextSnapshot = null
             requestLabel = UNKNOWN
@@ -473,31 +570,103 @@ class JankHunterEventListenerFactory private constructor(
 
         private fun record(event: JankHunterHttpEvent) = telemetry { telemetry.recordHttp(event) }
 
+        /** A new exchange cannot make bytes from an unfinished earlier body known again. */
+        private fun beginByteExchange(shift: Int) {
+            if (bodyByteState and (BODY_PENDING shl shift) != 0) {
+                bodyByteState = bodyByteState or (BODY_INCOMPLETE shl shift)
+            }
+            beginBodyBytes(shift)
+        }
+
+        private fun beginBodyBytes(shift: Int) {
+            bodyByteState = (bodyByteState and (BODY_COMPLETED shl shift).inv()) or (BODY_PENDING shl shift)
+        }
+
+        private fun bodyBytesCompleted(shift: Int): Boolean = bodyByteState and (BODY_COMPLETED shl shift) != 0
+
+        private fun bodyBytesKnown(shift: Int): Boolean {
+            val state = bodyByteState ushr shift
+            return state and BODY_OBSERVED != 0 && state and (BODY_PENDING or BODY_INCOMPLETE) == 0
+        }
+
+        private fun completeBodyBytes(total: Long, count: Long, shift: Int): Long {
+            if (bodyBytesCompleted(shift)) return total
+            bodyByteState = (bodyByteState and (BODY_PENDING shl shift).inv()) or
+                ((BODY_COMPLETED or BODY_OBSERVED) shl shift)
+            if (count < 0L) {
+                bodyByteState = bodyByteState or (BODY_INCOMPLETE shl shift)
+                return total
+            }
+            if (count > Long.MAX_VALUE - total) {
+                bodyByteState = bodyByteState or (BODY_INCOMPLETE shl shift)
+                return Long.MAX_VALUE
+            }
+            return total + count
+        }
+
         private fun now(): Long {
             val value = EventListenerNonFatal.bestEffortLong(UNSET_TIME, clock)
-            return value.takeIf { it >= 0L } ?: UNSET_TIME
+            return if (value >= 0L) value else UNSET_TIME
         }
 
-        private fun removeConnectAttempt(key: ConnectKey, callbackThread: Thread): ConnectAttempt? {
-            val attemptsByRoute = connectAttemptsByRoute ?: return null
-            val attempts = attemptsByRoute[key] ?: return null
-            val matching = attempts.firstOrNull { it.callbackThread === callbackThread }
-            val removed = matching ?: attempts.peekFirst()
-            if (removed != null) attempts.remove(removed)
-            if (attempts.isEmpty()) attemptsByRoute.remove(key)
-            if (attemptsByRoute.isEmpty()) connectAttemptsByRoute = null
-            return removed
+        /** Must be called with [stateLock] held. */
+        private fun addDnsStart(domainName: String, startedAt: Long) {
+            if (dnsDomain == null && dnsStartsByDomain == null) {
+                dnsDomain = domainName
+                dnsStartedAt = startedAt
+                return
+            }
+            val startsByDomain = dnsStartsByDomain
+                ?: HashMap<String, ArrayDeque<Long>>().also { dnsStartsByDomain = it }
+            startsByDomain.getOrPut(domainName, ::ArrayDeque).addLast(startedAt)
         }
 
-        private inline fun findConnectAttempt(
+        /** Must be called with [stateLock] held. */
+        private fun removeDnsStart(domainName: String): Long {
+            if (dnsDomain == domainName) {
+                val startedAt = dnsStartedAt
+                dnsDomain = null
+                dnsStartedAt = UNSET_TIME
+                return startedAt
+            }
+            val startsByDomain = dnsStartsByDomain ?: return UNSET_TIME
+            val starts = startsByDomain[domainName] ?: return UNSET_TIME
+            val startedAt = starts.pollFirst() ?: UNSET_TIME
+            if (starts.isEmpty()) startsByDomain.remove(domainName)
+            if (startsByDomain.isEmpty()) dnsStartsByDomain = null
+            return startedAt
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun addConnectAttempt(
+            address: InetSocketAddress,
+            proxy: Proxy,
+            startedAt: Long,
             callbackThread: Thread,
-            predicate: (ConnectAttempt) -> Boolean,
-        ): ConnectAttempt? {
+        ) {
+            val sequence = nextConnectSequence++
+            if (connectAddress == null && connectAttemptsByRoute == null) {
+                connectAddress = address
+                connectProxy = proxy
+                connectStartedAt = startedAt
+                connectThread = callbackThread
+                connectSequence = sequence
+                return
+            }
+            val attemptsByRoute = connectAttemptsByRoute
+                ?: HashMap<ConnectKey, ArrayDeque<ConnectAttempt>>().also { connectAttemptsByRoute = it }
+            attemptsByRoute.getOrPut(ConnectKey(address, proxy), ::ArrayDeque).addLast(
+                ConnectAttempt(startedAt, callbackThread, sequence),
+            )
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun startTls(callbackThread: Thread, startedAt: Long) {
             var newestOnThread: ConnectAttempt? = null
             var newestFallback: ConnectAttempt? = null
             connectAttemptsByRoute?.values?.forEach { attempts ->
                 attempts.forEach { attempt ->
-                    if (!predicate(attempt)) return@forEach
+                    if (attempt.tlsStarted) return@forEach
                     if (newestFallback == null || attempt.sequence > newestFallback!!.sequence) {
                         newestFallback = attempt
                     }
@@ -509,12 +678,152 @@ class JankHunterEventListenerFactory private constructor(
                     }
                 }
             }
-            return newestOnThread ?: newestFallback
+            val fastEligible = connectAddress != null && !connectTlsStarted
+            val useFast = shouldUseFastConnect(fastEligible, callbackThread, newestOnThread, newestFallback)
+            if (useFast) {
+                connectTlsStarted = true
+                connectTlsInProgress = true
+                connectTlsStartedAt = startedAt
+                return
+            }
+            (newestOnThread ?: newestFallback)?.let { attempt ->
+                attempt.tlsStarted = true
+                attempt.tlsInProgress = true
+                attempt.tlsStartedAt = startedAt
+            }
         }
 
-        private fun consumeConnectedRoute(key: ConnectKey): Boolean {
+        /** Must be called with [stateLock] held. */
+        private fun finishTls(callbackThread: Thread, endedAt: Long) {
+            var newestOnThread: ConnectAttempt? = null
+            var newestFallback: ConnectAttempt? = null
+            connectAttemptsByRoute?.values?.forEach { attempts ->
+                attempts.forEach { attempt ->
+                    if (!attempt.tlsInProgress) return@forEach
+                    if (newestFallback == null || attempt.sequence > newestFallback!!.sequence) {
+                        newestFallback = attempt
+                    }
+                    if (
+                        attempt.callbackThread === callbackThread &&
+                        (newestOnThread == null || attempt.sequence > newestOnThread!!.sequence)
+                    ) {
+                        newestOnThread = attempt
+                    }
+                }
+            }
+            val useFast = shouldUseFastConnect(connectTlsInProgress, callbackThread, newestOnThread, newestFallback)
+            if (useFast) {
+                tlsMs = addDuration(tlsMs, elapsed(connectTlsStartedAt, endedAt))
+                connectTlsStartedAt = UNSET_TIME
+                connectTlsInProgress = false
+                return
+            }
+            (newestOnThread ?: newestFallback)?.let { attempt ->
+                tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, endedAt))
+                attempt.tlsStartedAt = UNSET_TIME
+                attempt.tlsInProgress = false
+            }
+        }
+
+        private fun shouldUseFastConnect(
+            eligible: Boolean,
+            callbackThread: Thread,
+            newestOnThread: ConnectAttempt?,
+            newestFallback: ConnectAttempt?,
+        ): Boolean {
+            if (!eligible) return false
+            return if (connectThread === callbackThread) {
+                newestOnThread == null || connectSequence > newestOnThread.sequence
+            } else {
+                newestOnThread == null && (newestFallback == null || connectSequence > newestFallback.sequence)
+            }
+        }
+
+        /** Returns CONNECT_NOT_FOUND, CONNECT_PLAIN or CONNECT_TLS. Must hold [stateLock]. */
+        private fun finishConnectAttempt(
+            address: InetSocketAddress,
+            proxy: Proxy,
+            callbackThread: Thread,
+            endedAt: Long,
+        ): Int {
+            val fastMatches = connectAddress == address && connectProxy == proxy
+            if (fastMatches && connectThread === callbackThread) return finishFastConnect(endedAt)
+
+            val attemptsByRoute = connectAttemptsByRoute
+            val key = if (attemptsByRoute == null) null else ConnectKey(address, proxy)
+            val attempts = if (key == null || attemptsByRoute == null) null else attemptsByRoute[key]
+            val matching = attempts?.firstOrNull { it.callbackThread === callbackThread }
+            if (matching != null) return finishFallbackConnect(checkNotNull(key), attempts, matching, endedAt)
+            if (fastMatches) return finishFastConnect(endedAt)
+            val first = attempts?.peekFirst() ?: return CONNECT_NOT_FOUND
+            return finishFallbackConnect(checkNotNull(key), attempts, first, endedAt)
+        }
+
+        private fun finishFastConnect(endedAt: Long): Int {
+            connectMs = addDuration(connectMs, elapsed(connectStartedAt, endedAt))
+            if (connectTlsInProgress) {
+                tlsMs = addDuration(tlsMs, elapsed(connectTlsStartedAt, endedAt))
+            }
+            val result = if (connectTlsStarted) CONNECT_TLS else CONNECT_PLAIN
+            clearFastConnect()
+            return result
+        }
+
+        private fun finishFallbackConnect(
+            key: ConnectKey,
+            attempts: ArrayDeque<ConnectAttempt>,
+            attempt: ConnectAttempt,
+            endedAt: Long,
+        ): Int {
+            attempts.remove(attempt)
+            val attemptsByRoute = checkNotNull(connectAttemptsByRoute)
+            if (attempts.isEmpty()) attemptsByRoute.remove(key)
+            if (attemptsByRoute.isEmpty()) connectAttemptsByRoute = null
+            connectMs = addDuration(connectMs, elapsed(attempt.startedAt, endedAt))
+            if (attempt.tlsInProgress) {
+                tlsMs = addDuration(tlsMs, elapsed(attempt.tlsStartedAt, endedAt))
+            }
+            return if (attempt.tlsStarted) CONNECT_TLS else CONNECT_PLAIN
+        }
+
+        private fun clearFastConnect() {
+            connectAddress = null
+            connectProxy = null
+            connectStartedAt = UNSET_TIME
+            connectThread = null
+            connectSequence = 0L
+            connectTlsStarted = false
+            connectTlsInProgress = false
+            connectTlsStartedAt = UNSET_TIME
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun markConnectedRoute(address: InetSocketAddress, proxy: Proxy) {
+            val connectedRoutes = connectedRoutesAwaitingAcquisition
+            if (connectedAddress == null && connectedRoutes == null) {
+                connectedAddress = address
+                connectedProxy = proxy
+                return
+            }
+            if (connectedAddress == address && connectedProxy == proxy) return
+            val routes = connectedRoutes ?: HashSet<ConnectKey>().also { created ->
+                created.add(ConnectKey(checkNotNull(connectedAddress), checkNotNull(connectedProxy)))
+                connectedAddress = null
+                connectedProxy = null
+                connectedRoutesAwaitingAcquisition = created
+            }
+            routes.add(ConnectKey(address, proxy))
+        }
+
+        /** Must be called with [stateLock] held. */
+        private fun consumeConnectedRoute(address: InetSocketAddress, proxy: Proxy): Boolean {
+            if (connectedAddress == address && connectedProxy == proxy) {
+                connectedAddress = null
+                connectedProxy = null
+                return true
+            }
             val connectedRoutes = connectedRoutesAwaitingAcquisition ?: return false
-            val removed = connectedRoutes.remove(key)
+            val removed = connectedRoutes.remove(ConnectKey(address, proxy))
             if (connectedRoutes.isEmpty()) connectedRoutesAwaitingAcquisition = null
             return removed
         }
@@ -607,6 +916,13 @@ class JankHunterEventListenerFactory private constructor(
         }
 
         private companion object {
+            private const val REQUEST_BYTE_SHIFT = 0
+            private const val RESPONSE_BYTE_SHIFT = 4
+            private const val RESPONSE_HEADERS_STARTED = 1 shl 8
+            private const val BODY_PENDING = 1
+            private const val BODY_COMPLETED = 2
+            private const val BODY_OBSERVED = 4
+            private const val BODY_INCOMPLETE = 8
             private const val UNSET_TIME = -1L
             private const val UNKNOWN = "unknown"
             private const val HTTP_3_PROTOCOL = "h3"
@@ -617,6 +933,9 @@ class JankHunterEventListenerFactory private constructor(
             private const val PHASE_TLS = "tls"
             private const val PHASE_REQUEST = "request"
             private const val PHASE_RESPONSE = "response"
+            private const val CONNECT_NOT_FOUND = -1
+            private const val CONNECT_PLAIN = 0
+            private const val CONNECT_TLS = 1
         }
     }
 

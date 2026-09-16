@@ -151,6 +151,24 @@ func validateHTTPEvent(event *HTTPEvent, statusCode uint16) error {
 	return nil
 }
 
+func validateHTTPFirstByte(event *HTTPEvent, flags uint64, legacy bool) error {
+	if event == nil {
+		return fmt.Errorf("http payload is nil")
+	}
+	observed := flags&uint64(FlagHTTPTTFBObserved) != 0
+	known := flags&uint64(FlagHTTPTTFBKnown) != 0
+	if legacy && (observed || known) {
+		return fmt.Errorf("first-byte flags require the HTTP first-byte feature")
+	}
+	if known && !observed {
+		return fmt.Errorf("known first byte requires observed semantics")
+	}
+	if observed && !known && event.TTFBMS != 0 {
+		return fmt.Errorf("unknown first byte cannot carry a timing value")
+	}
+	return nil
+}
+
 func validateHTTPPhase(name string, phaseDuration, requestDuration uint64) error {
 	if phaseDuration > requestDuration {
 		return fmt.Errorf("HTTP %s duration %d exceeds request duration %d", name, phaseDuration, requestDuration)
@@ -162,7 +180,7 @@ func validateWorkerEvent(event *WorkerEvent, flags uint64) error {
 	if event.InstanceID == 0 {
 		return fmt.Errorf("worker instance ID must be non-zero")
 	}
-	if event.Stage <= WorkerStageUnknown || event.Stage > WorkerStageFinished {
+	if event.Stage <= WorkerStageUnknown || event.Stage > WorkerStageRegisteredObserved {
 		return fmt.Errorf("unsupported worker stage %d", event.Stage)
 	}
 	if event.Outcome > WorkerOutcomeCancelled {
@@ -184,7 +202,7 @@ func validateWorkerEvent(event *WorkerEvent, flags uint64) error {
 	if flags&uint64(FlagWorkerStopReasonKnown) == 0 && event.StopReason != 0 {
 		return fmt.Errorf("worker stop reason requires the known flag")
 	}
-	if event.Stage != WorkerStageEnqueued && event.WorkerRef.ID == 0 {
+	if (event.Stage == WorkerStageStarted || event.Stage == WorkerStageFinished) && event.WorkerRef.ID == 0 {
 		return fmt.Errorf("started or finished worker requires a worker reference")
 	}
 	return nil
@@ -422,6 +440,25 @@ func validateUIWindow(window *UIWindowEvent) error {
 	}
 	if total != window.FrameCount {
 		return fmt.Errorf("UI frame histogram count %d differs from frame count %d", total, window.FrameCount)
+	}
+	return nil
+}
+
+func validateTrafficProvenance(payload *ContextEvent, legacy bool) error {
+	if payload == nil {
+		return fmt.Errorf("device context payload is nil")
+	}
+	if payload.TrafficUIDPlusOne > 1<<31 {
+		return fmt.Errorf("traffic UID exceeds Android UID range")
+	}
+	if payload.TrafficKnownFlags & ^uint8(TrafficRXKnown|TrafficTXKnown) != 0 {
+		return fmt.Errorf("unsupported traffic known flags %d", payload.TrafficKnownFlags)
+	}
+	if payload.TrafficKnownFlags != 0 && payload.TrafficUIDPlusOne == 0 {
+		return fmt.Errorf("known UID traffic has no UID")
+	}
+	if legacy && (payload.TrafficUIDPlusOne != 0 || payload.TrafficKnownFlags != 0) {
+		return fmt.Errorf("traffic provenance requires UID traffic feature")
 	}
 	return nil
 }

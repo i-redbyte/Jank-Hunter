@@ -127,6 +127,7 @@ class JankHunterPlugin : Plugin<Project> {
                 ArtifactSchemas.instrumentationArtifactsPath(variant.name),
             )
             val classGraphDirectory = artifactRoot.map { it.dir("class-graph") }
+            val lambdaCaptureDirectory = artifactRoot.map { it.dir("lambda-captures") }
             val diagnosticsDirectory = artifactRoot.map { it.dir("diagnostics") }
             val dependencyInjectionCatalogDirectory = artifactRoot.map { it.dir("dependency-injection") }
             val androidComponentCatalogDirectory = artifactRoot.map { it.dir("android-components") }
@@ -187,6 +188,9 @@ class JankHunterPlugin : Plugin<Project> {
             val classGraphOutput = project.layout.buildDirectory.file(
                 "generated/jankhunter/${variant.name}/class-graph.jsonl",
             )
+            val lambdaCaptureOutput = project.layout.buildDirectory.file(
+                "generated/jankhunter/${variant.name}/lambda-captures.jsonl",
+            )
             val instrumentationDiagnosticsOutput = project.layout.buildDirectory.file(
                 "generated/jankhunter/${variant.name}/instrumentation-diagnostics.jsonl",
             )
@@ -201,8 +205,14 @@ class JankHunterPlugin : Plugin<Project> {
                 MergeJankHunterInstrumentationArtifactsTask::class.java,
             ) {
                 it.classGraphDirectory.set(classGraphDirectory)
+                it.lambdaCaptureDirectory.set(lambdaCaptureDirectory)
                 it.diagnosticsDirectory.set(diagnosticsDirectory)
                 it.classGraphFiles.from(classGraphDirectory.map { directory ->
+                    directory.asFileTree.matching { pattern ->
+                        pattern.include("**/*.jsonl")
+                    }
+                })
+                it.lambdaCaptureFiles.from(lambdaCaptureDirectory.map { directory ->
                     directory.asFileTree.matching { pattern ->
                         pattern.include("**/*.jsonl")
                     }
@@ -219,6 +229,7 @@ class JankHunterPlugin : Plugin<Project> {
                     }
                 })
                 it.classGraphOutputFile.set(classGraphOutput)
+                it.lambdaCaptureOutputFile.set(lambdaCaptureOutput)
                 it.diagnosticsOutputFile.set(instrumentationDiagnosticsOutput)
                 it.androidComponentCatalogOutputFile.set(androidComponentCatalogOutput)
             }
@@ -259,6 +270,16 @@ class JankHunterPlugin : Plugin<Project> {
                 it.finalizedBy(mergeDependencyInjectionCatalog)
             }
 
+            if (instrumentation.okhttp && okHttpHelperAvailable) {
+                variant.instrumentation.transformClassesWith(
+                    OkHttpTransportClassVisitorFactory::class.java,
+                    effectiveInstrumentationScope,
+                ) { params ->
+                    params.excludePackages.set(effectiveExcludePackages)
+                    params.supportClasspath.from(variant.compileClasspath)
+                }
+            }
+
             variant.instrumentation.transformClassesWith(
                 JankHunterClassVisitorFactory::class.java,
                 effectiveInstrumentationScope,
@@ -286,6 +307,7 @@ class JankHunterPlugin : Plugin<Project> {
                 params.binderIPC.set(instrumentation.binderIPC)
                 params.ioTracing.set(instrumentation.ioTracing)
                 params.classGraphDirectory.set(classGraphDirectory.map { it.asFile.absolutePath })
+                params.lambdaCaptureDirectory.set(lambdaCaptureDirectory.map { it.asFile.absolutePath })
                 params.instrumentationDiagnosticsDirectory.set(
                     diagnosticsDirectory.map { it.asFile.absolutePath },
                 )

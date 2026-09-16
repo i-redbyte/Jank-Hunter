@@ -7,9 +7,18 @@ import io.jankhunter.runtime.JankHunterWorkerOutcome
 import java.util.UUID
 
 internal object WorkerTelemetry {
+    private val successResultClass = ListenableWorker.Result.success().javaClass
+    private val failureResultClass = ListenableWorker.Result.failure().javaClass
+    private val retryResultClass = ListenableWorker.Result.retry().javaClass
+
     fun instanceId(id: UUID): Long = JankHunterWorkerRuntime.instanceId(id.mostSignificantBits, id.leastSignificantBits)
 
-    fun outcome(result: ListenableWorker.Result): JankHunterWorkerOutcome = JankHunterWorkerRuntime.classify(result)
+    fun outcome(result: ListenableWorker.Result): JankHunterWorkerOutcome = when (result.javaClass) {
+        successResultClass -> JankHunterWorkerOutcome.SUCCESS
+        failureResultClass -> JankHunterWorkerOutcome.FAILURE
+        retryResultClass -> JankHunterWorkerOutcome.RETRY
+        else -> JankHunterWorkerOutcome.UNKNOWN
+    }
 
     fun finish(
         worker: ListenableWorker,

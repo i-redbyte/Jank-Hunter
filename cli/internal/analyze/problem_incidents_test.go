@@ -121,3 +121,74 @@ func TestUIIncidentFingerprintStaysStableWhenRelatedSignalsChange(t *testing.T) 
 		t.Fatalf("UI incident identity changed with related evidence: before=%+v after=%+v", before, after)
 	}
 }
+
+func TestProblemIncidentsGroupRepeatedRetentionWithoutLosingRawFindings(t *testing.T) {
+	findings := make([]ProblemFinding, 0, 12)
+	for index := 0; index < 12; index++ {
+		count := uint64(index + 1)
+		memoryKB := uint64(4_096 + index)
+		owner := "com.example.AppCache" + string(rune('A'+index))
+		findings = append(findings, ProblemFinding{
+			ID:                    "retention-" + string(rune('a'+index)),
+			Fingerprint:           strings.Repeat(string(rune('a'+index)), 64),
+			DetectorID:            "memory.retention",
+			Category:              ProblemCategoryMemory,
+			Subcategory:           "retained_object",
+			Severity:              "medium",
+			Status:                "observed",
+			InvestigationPriority: 40 + index,
+			Confidence:            "medium",
+			Title:                 "com.example.LeakedActivity подозрительно долго удерживается",
+			WhatHappened:          "Объект оставался достижимым после завершения экрана.",
+			Where: []ProblemLocation{{
+				Screen: "Screen" + string(rune('A'+index)), Operation: "open", Owner: owner, Class: "com.example.LeakedActivity",
+			}},
+			Why:       ProblemWhy{ClaimLevel: "hypothesis", Summary: "Путь из HPROF не записан."},
+			Evidence:  []ProblemEvidence{{Name: "Возраст удержания", Observed: "30000", Unit: "ms", Sample: u64ptr(count), Source: "retention"}},
+			Frequency: &ProblemFrequency{Count: count},
+			Cost:      &ProblemCost{MemoryKB: &memoryKB},
+			PriorityBreakdown: priority(
+				18, 10, 8, 2, 0,
+				"риск OOM", "удерживаемый размер", "повторяемость", "контекст", "нет HPROF",
+			),
+			Recommendations: []ProblemRecommendation{{Action: "Очистить ссылку AppCache на Activity"}},
+		})
+	}
+
+	incidents := buildProblemIncidents(findings)
+	if len(incidents) != 1 {
+		t.Fatalf("retention incidents = %d, want one actionable target", len(incidents))
+	}
+	incident := incidents[0]
+	if len(incident.RelatedFindings) != len(findings) {
+		t.Fatalf("related findings = %d, want %d", len(incident.RelatedFindings), len(findings))
+	}
+	if len(incident.Where) > maxProblemIncidentLocations {
+		t.Fatalf("incident retained %d locations, limit is %d", len(incident.Where), maxProblemIncidentLocations)
+	}
+	if incident.Frequency == nil || incident.Frequency.Count != 78 {
+		t.Fatalf("aggregated retention count = %+v, want 78", incident.Frequency)
+	}
+	if incident.Cost == nil || incident.Cost.MemoryKB == nil || *incident.Cost.MemoryKB != 4_107 {
+		t.Fatalf("incident memory estimate = %+v, want maximum single estimate 4107 KB", incident.Cost)
+	}
+	if !strings.Contains(incident.WhatHappened, "12 контекст") || strings.Contains(incident.Title, "Экран ") {
+		t.Fatalf("retention summary is not problem-oriented: title=%q what=%q", incident.Title, incident.WhatHappened)
+	}
+	if len(findings) != 12 {
+		t.Fatal("raw detector findings were changed")
+	}
+}
+
+func TestProblemIncidentsDoNotMutateInputSliceBackingArrays(t *testing.T) {
+	backing := []string{"existing", "sentinel"}
+	finding := ProblemFinding{
+		ID: "single", Fingerprint: strings.Repeat("a", 64), DetectorID: "network.route_health",
+		Category: ProblemCategoryNetwork, RelatedCategories: backing[:1],
+	}
+
+	_ = buildProblemIncidents([]ProblemFinding{finding})
+	if backing[1] != "sentinel" {
+		t.Fatalf("incident construction mutated caller backing array: %+v", backing)
+	}
+}

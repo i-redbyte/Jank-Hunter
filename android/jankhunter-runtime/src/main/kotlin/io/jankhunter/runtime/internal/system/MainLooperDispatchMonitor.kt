@@ -30,7 +30,8 @@ internal class MainLooperDispatchMonitor(
     private val printer = Printer { line ->
         try {
             previousPrinter?.println(line)
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
         }
         if (!running.get()) return@Printer
         RuntimeHookGuard.run {
@@ -42,7 +43,14 @@ internal class MainLooperDispatchMonitor(
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
-        previousPrinter = safeCurrentPrinter()?.takeUnless { it === printer }
+        val currentPrinter = try {
+            getMessageLogging()
+        } catch (throwable: Throwable) {
+            running.set(false)
+            throwable.recordOrRethrow()
+            return
+        }
+        previousPrinter = currentPrinter?.takeUnless { it === printer }
         try {
             setMessageLogging(printer)
         } catch (throwable: Throwable) {
@@ -55,7 +63,12 @@ internal class MainLooperDispatchMonitor(
     fun stop() {
         if (!running.getAndSet(false)) return
         if (safeCurrentPrinter() === printer) {
-            RuntimeHookGuard.run { setMessageLogging(previousPrinter) }
+            try {
+                setMessageLogging(previousPrinter)
+                previousPrinter = null
+            } catch (throwable: Throwable) {
+                throwable.recordOrRethrow()
+            }
         }
         // If a later profiler replaced the global printer, replacing it here would break that profiler.
         // Leave its chain in place; this wrapper is inactive and only forwards to the printer it captured.
@@ -64,7 +77,8 @@ internal class MainLooperDispatchMonitor(
     private fun safeCurrentPrinter(): Printer? {
         return try {
             getMessageLogging()
-        } catch (_: Throwable) {
+        } catch (throwable: Throwable) {
+            RuntimeHookGuard.rethrowFatal(throwable)
             null
         }
     }
@@ -76,11 +90,7 @@ private fun Throwable.recordOrRethrow() {
 }
 
 private fun readMainLooperPrinter(): Printer? {
-    return try {
-        val field = Looper::class.java.getDeclaredField("mLogging")
-        field.isAccessible = true
-        field.get(Looper.getMainLooper()) as? Printer
-    } catch (_: Throwable) {
-        null
-    }
+    val field = Looper::class.java.getDeclaredField("mLogging")
+    field.isAccessible = true
+    return field.get(Looper.getMainLooper()) as? Printer
 }

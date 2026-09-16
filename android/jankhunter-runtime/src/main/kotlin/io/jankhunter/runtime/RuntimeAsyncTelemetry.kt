@@ -12,6 +12,8 @@ internal interface RuntimeAsyncCallbacks {
 
     fun isActive(): Boolean
 
+    fun isExecutorActive(): Boolean = isActive()
+
     fun <T> callWithContext(context: JankHunterContext, ownerName: String?, block: () -> T): T
 
     fun startOperation(name: String, kind: JankHunterOperationKind): JankHunterOperation
@@ -20,17 +22,27 @@ internal interface RuntimeAsyncCallbacks {
 
     fun recordClick(ownerName: String?, durationMs: Long, failed: Boolean)
 
-    fun recordExecutorWait(executorName: String, ownerName: String?, waitMs: Long)
+    fun recordExecutorQueueChanged(keys: ExecutorMetricKeys, executor: Executor, queued: Int)
 
-    fun recordExecutorSnapshot(executorName: String, executor: Executor, queued: Int)
+    fun recordExecutorStarted(keys: ExecutorMetricKeys, executor: Executor, queued: Int, waitMs: Long, scheduled: Boolean = false)
 
-    fun runExecutorTask(executorName: String, ownerName: String?, command: Runnable, clock: RuntimeLongSource)
+    fun recordExecutorScheduledDelay(keys: ExecutorMetricKeys, delayMs: Long) = Unit
+
+    fun runExecutorTask(
+        keys: ExecutorMetricKeys, ownerName: String?, context: JankHunterContext?, executor: Executor,
+        queued: Int, waitMs: Long, command: Runnable, clock: RuntimeLongSource, scheduled: Boolean = false,
+    )
 
     fun <T> callExecutorTask(
-        executorName: String,
+        keys: ExecutorMetricKeys,
         ownerName: String?,
+        context: JankHunterContext?,
+        executor: Executor,
+        queued: Int,
+        waitMs: Long,
         callable: Callable<T>,
         clock: RuntimeLongSource,
+        scheduled: Boolean = false,
     ): T
 }
 
@@ -38,7 +50,17 @@ internal class RuntimeAsyncTelemetry(
     private val access: RuntimeTelemetryAccess,
     private val metrics: RuntimeMetricsService,
     private val operations: RuntimeOperationTelemetry,
+    nowMs: RuntimeLongSource,
 ) : RuntimeAsyncCallbacks {
+    private val coroutineExecutions = CoroutineExecutionTracker(
+        clock = nowMs,
+        threadId = RuntimeLongSource { Thread.currentThread().id },
+        onComplete = ::recordCoroutineExecution,
+        onEviction = { recordCounter(COROUTINE_REGISTRY_EVICTION_METRIC, 1L) },
+        onInvalidTransition = { recordCounter(COROUTINE_INVALID_TRANSITION_METRIC, 1L) },
+        onResolutionMiss = { recordCounter(COROUTINE_RESOLUTION_MISS_METRIC, 1L) },
+    )
+
     fun wrapRunnable(runnable: Runnable?, ownerName: String?): Runnable? {
         return RuntimeHookGuard.value(runnable) {
             wrapRunnableDecorator(runnable, ownerName, access.isActive(), this)
@@ -57,6 +79,22 @@ internal class RuntimeAsyncTelemetry(
         }
     }
 
+    fun enterCoroutineSegment(continuation: Any?, ownerName: String?, collectNew: Boolean): Long {
+        val owner = ownerName?.takeIf(String::isNotBlank) ?: "unknown"
+        return coroutineExecutions.enter(continuation, owner, collectNew, access.lifecycleGeneration())
+    }
+
+    fun exitCoroutineSegment(
+        token: Long,
+        continuation: Any?,
+        suspended: Boolean,
+        outcome: CoroutineExecutionOutcome,
+    ) {
+        coroutineExecutions.exit(token, continuation, suspended, outcome)
+    }
+
+    fun clearCoroutineExecutions() = coroutineExecutions.clear()
+
     fun wrapClickListener(listener: View.OnClickListener?, ownerName: String?): View.OnClickListener? {
         return RuntimeHookGuard.value(listener) {
             wrapClickListenerDecorator(listener, ownerName, access.isActive(), this)
@@ -65,7 +103,7 @@ internal class RuntimeAsyncTelemetry(
 
     fun wrapExecutor(executor: Executor?, name: String?, ownerName: String?): Executor? {
         if (executor == null || isWrappedExecutor(executor)) return executor
-        if (!access.isActive()) return executor
+        if (!isExecutorActive()) return executor
         return if (executor is ExecutorService) {
             wrapExecutorService(executor, name, ownerName)
         } else {
@@ -83,7 +121,7 @@ internal class RuntimeAsyncTelemetry(
         ) {
             return executor
         }
-        if (!access.isActive()) return executor
+        if (!isExecutorActive()) return executor
         return if (executor is ScheduledExecutorService) {
             JankHunterScheduledExecutorService(executor, name, ownerName, callbacks = this)
         } else {
@@ -97,7 +135,7 @@ internal class RuntimeAsyncTelemetry(
         ownerName: String?,
     ): ScheduledExecutorService? {
         if (executor == null || executor is JankHunterScheduledExecutorService) return executor
-        if (!access.isActive()) return executor
+        if (!isExecutorActive()) return executor
         return JankHunterScheduledExecutorService(executor, name, ownerName, callbacks = this)
     }
 
@@ -106,6 +144,8 @@ internal class RuntimeAsyncTelemetry(
     }
 
     override fun isActive(): Boolean = RuntimeHookGuard.value(false) { access.isActive() }
+
+    override fun isExecutorActive(): Boolean = access.isFeatureActive(JankHunterRuntimeFeature.EXECUTORS)
 
     override fun <T> callWithContext(
         context: JankHunterContext,
@@ -123,68 +163,110 @@ internal class RuntimeAsyncTelemetry(
         }
     }
 
-    override fun recordExecutorWait(executorName: String, ownerName: String?, waitMs: Long) {
-        if (waitMs > 0) {
-            recordGauge("executor.$executorName.wait_ms", waitMs)
-        }
-        recordCounter("executor.$executorName.started.count", 1)
-        ownerName?.takeIf { it.isNotBlank() }?.let {
-            recordCounter("owner.${metricOwner(it)}.executor.started.count", 1)
+    override fun recordExecutorQueueChanged(keys: ExecutorMetricKeys, executor: Executor, queued: Int) {
+        RuntimeHookGuard.run {
+            val pool = executor as? ThreadPoolExecutor
+            metrics.recordExecutorQueueChanged(
+                keys = keys,
+                queueDepth = queued,
+                activeCount = pool?.snapshotActiveCount() ?: NO_POOL_SNAPSHOT,
+                poolSize = pool?.poolSize ?: NO_POOL_SNAPSHOT,
+                completedTaskCount = pool?.completedTaskCount ?: NO_POOL_SNAPSHOT.toLong(),
+            )
         }
     }
 
-    override fun recordExecutorSnapshot(executorName: String, executor: Executor, queued: Int) {
-        recordGauge("executor.$executorName.queue_depth", queued.toLong())
-        if (executor is ThreadPoolExecutor) {
-            recordGauge("executor.$executorName.active_count", executor.snapshotActiveCount().toLong())
-            recordGauge("executor.$executorName.pool_size", executor.poolSize.toLong())
-            recordGauge("executor.$executorName.completed_task_count", executor.completedTaskCount)
+    override fun recordExecutorStarted(keys: ExecutorMetricKeys, executor: Executor, queued: Int, waitMs: Long, scheduled: Boolean) {
+        RuntimeHookGuard.run {
+            val pool = executor as? ThreadPoolExecutor
+            metrics.recordExecutorStarted(
+                keys = keys,
+                waitMs = waitMs,
+                scheduled = scheduled,
+                queueDepth = queued,
+                activeCount = pool?.snapshotActiveCount() ?: NO_POOL_SNAPSHOT,
+                poolSize = pool?.poolSize ?: NO_POOL_SNAPSHOT,
+                completedTaskCount = pool?.completedTaskCount ?: NO_POOL_SNAPSHOT.toLong(),
+            )
         }
+    }
+
+    override fun recordExecutorScheduledDelay(keys: ExecutorMetricKeys, delayMs: Long) {
+        RuntimeHookGuard.run { metrics.recordGauge(keys.scheduledDelay, delayMs) }
     }
 
     override fun runExecutorTask(
-        executorName: String,
+        keys: ExecutorMetricKeys,
         ownerName: String?,
+        context: JankHunterContext?,
+        executor: Executor,
+        queued: Int,
+        waitMs: Long,
         command: Runnable,
         clock: RuntimeLongSource,
+        scheduled: Boolean,
     ) {
-        val start = clock.getAsLong()
-        var failed = false
-        try {
-            access.callWithOwner(ownerName) {
+        access.callWithContext(context ?: JankHunterContext(null, null), ownerName) {
+            recordExecutorStarted(keys, executor, queued, waitMs, scheduled)
+            val start = executorTimeMillis(clock)
+            var failed = false
+            try {
                 command.run()
+            } catch (throwable: Throwable) {
+                failed = true
+                throw throwable
+            } finally {
+                val end = executorTimeMillis(clock)
+                val durationMs = if (start >= 0L && end >= start) end - start else -1L
+                recordExecutorWork(keys, ownerName, durationMs, failed)
             }
-        } catch (throwable: Throwable) {
-            failed = true
-            throw throwable
-        } finally {
-            val durationMs = clock.getAsLong() - start
-            recordGauge("executor.$executorName.service_ms", durationMs)
-            if (failed) recordCounter("executor.$executorName.failure.count", 1)
-            recordWrappedWork(ownerName, "executor", durationMs, failed)
         }
     }
 
     override fun <T> callExecutorTask(
-        executorName: String,
+        keys: ExecutorMetricKeys,
         ownerName: String?,
+        context: JankHunterContext?,
+        executor: Executor,
+        queued: Int,
+        waitMs: Long,
         callable: Callable<T>,
         clock: RuntimeLongSource,
+        scheduled: Boolean,
     ): T {
-        val start = clock.getAsLong()
-        var failed = false
-        try {
-            return access.callWithOwner(ownerName) {
+        return access.callWithContext(context ?: JankHunterContext(null, null), ownerName) {
+            recordExecutorStarted(keys, executor, queued, waitMs, scheduled)
+            val start = executorTimeMillis(clock)
+            var failed = false
+            try {
                 callable.call()
+            } catch (throwable: Throwable) {
+                failed = true
+                throw throwable
+            } finally {
+                val end = executorTimeMillis(clock)
+                val durationMs = if (start >= 0L && end >= start) end - start else -1L
+                recordExecutorWork(keys, ownerName, durationMs, failed)
             }
-        } catch (throwable: Throwable) {
-            failed = true
-            throw throwable
-        } finally {
-            val durationMs = clock.getAsLong() - start
-            recordGauge("executor.$executorName.service_ms", durationMs)
-            if (failed) recordCounter("executor.$executorName.failure.count", 1)
-            recordWrappedWork(ownerName, "executor", durationMs, failed)
+        }
+    }
+
+    private fun recordExecutorWork(
+        keys: ExecutorMetricKeys,
+        ownerName: String?,
+        durationMs: Long,
+        failed: Boolean,
+    ) {
+        RuntimeHookGuard.run {
+            metrics.recordExecutorFinished(
+                keys = keys,
+                durationMs = durationMs,
+                failed = failed,
+                recordOwnerDuration = durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS,
+            )
+            if (durationMs >= 0L && (failed || durationMs >= ownerBlockThresholdMs())) {
+                recordProblemWindow("wrapped_executor", durationMs, ownerName)
+            }
         }
     }
 
@@ -209,8 +291,38 @@ internal class RuntimeAsyncTelemetry(
         if (durationMs >= WRAPPED_WORK_GAUGE_THRESHOLD_MS) {
             recordGauge("owner.$owner.$kind.duration_ms", durationMs)
         }
-        if (failed || durationMs >= ownerBlockThresholdMs()) {
+        if (kind != COROUTINE_KIND && (failed || durationMs >= ownerBlockThresholdMs())) {
             recordProblemWindow("wrapped_$kind", durationMs, ownerName)
+        }
+    }
+
+    private fun recordCoroutineExecution(
+        owner: String,
+        activeDurationMs: Long,
+        suspendedDurationMs: Long,
+        suspensionCount: Int,
+        threadMigrationCount: Int,
+        generation: Long,
+        outcome: CoroutineExecutionOutcome,
+    ) {
+        if (generation != access.lifecycleGeneration() || !access.isActive()) return
+        val prefix = "owner.${metricOwner(owner)}.$COROUTINE_KIND."
+        recordGauge(prefix + "active_duration_ms", activeDurationMs)
+        recordGauge(prefix + "suspended_duration_ms", suspendedDurationMs)
+        if (suspensionCount > 0) {
+            recordCounter(prefix + "suspension.count", suspensionCount.toLong())
+        }
+        if (threadMigrationCount > 0) {
+            recordCounter(prefix + "thread_migration.count", threadMigrationCount.toLong())
+        }
+        when (outcome) {
+            CoroutineExecutionOutcome.SUCCESS -> Unit
+            CoroutineExecutionOutcome.FAILURE -> recordCounter(prefix + "segmented_failure.count", 1L)
+            CoroutineExecutionOutcome.CANCELLED -> recordCounter(prefix + "segmented_cancellation.count", 1L)
+        }
+        if (outcome == CoroutineExecutionOutcome.FAILURE || activeDurationMs >= ownerBlockThresholdMs()
+        ) {
+            recordProblemWindow("wrapped_coroutine_active", activeDurationMs, owner)
         }
     }
 
@@ -249,5 +361,10 @@ internal class RuntimeAsyncTelemetry(
     private companion object {
         const val WRAPPED_WORK_GAUGE_THRESHOLD_MS = 50L
         const val DEFAULT_OWNER_BLOCK_THRESHOLD_MS = 250L
+        const val NO_POOL_SNAPSHOT = -1
+        const val COROUTINE_KIND = "coroutine"
+        const val COROUTINE_REGISTRY_EVICTION_METRIC = "jankhunter.coroutine.state_registry.eviction.count"
+        const val COROUTINE_INVALID_TRANSITION_METRIC = "jankhunter.coroutine.state_registry.invalid_transition.count"
+        const val COROUTINE_RESOLUTION_MISS_METRIC = "jankhunter.coroutine.state_registry.resolution_miss.count"
     }
 }

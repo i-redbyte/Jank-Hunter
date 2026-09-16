@@ -15,6 +15,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,6 +48,47 @@ class JankHunterInitDiagnosticsTest {
 
         val diagnostics = JankHunter.initDiagnostics()
         assertEquals(previousAttempts, diagnostics.attempts)
+    }
+
+    @Test
+    fun initDoesNotSwallowFatalRuntimeFailure() {
+        val fatal = FatalInitError()
+        val previousAttempts = JankHunter.initDiagnostics().attempts
+        val context = object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = throw fatal
+        }
+
+        val actual = assertThrows(FatalInitError::class.java) {
+            JankHunter.init(context, JankHunterConfig.builder().build())
+        }
+
+        assertSame(fatal, actual)
+        assertEquals(previousAttempts + 1L, JankHunter.initDiagnostics().attempts)
+    }
+
+    @Test
+    fun fatalSessionStartFailureReleasesPartialRuntimeForRetry() {
+        val root = tempDir()
+        val context = FailingLogDirectoryContext(File(root, "files").apply { mkdirs() })
+        var throwFatal = true
+
+        assertThrows(FatalInitError::class.java) {
+            JankHunter.init(
+                context,
+                JankHunterConfig.builder()
+                    .autoStartCollectors(false)
+                    .logDirectory(File(root, "logs"))
+                    .processNameRedactor(JankHunterProcessNameRedactor { processName ->
+                        if (throwFatal) throw FatalInitError()
+                        processName
+                    })
+                    .build(),
+            )
+        }
+
+        throwFatal = false
+        assertTrue(JankHunter.setRuntimeEnabled(true, "fatal_start_retry"))
+        assertTrue(JankHunter.isStarted())
     }
 
     @Test
@@ -383,6 +425,8 @@ class JankHunterInitDiagnosticsTest {
 
         override fun getSystemService(name: String): Any? = null
     }
+
+    private class FatalInitError : VirtualMachineError()
 
     private class FileStorage(
         val directory: File,

@@ -65,7 +65,7 @@ func (b *problemBuilder) detectCriticalIO(operation IOStats) {
 		{Name: "Суммарная длительность", Observed: fmt.Sprint(totalMS), Unit: "ms", Source: "typed_io"},
 		{Name: "Неуспешные операции", Observed: fmt.Sprint(operation.Failures), Unit: "events", Denominator: u64ptr(operation.Count), Source: "typed_io"},
 		{Name: "Максимальный известный объём", Observed: fmt.Sprint(operation.MaxBytes), Unit: "bytes", Denominator: u64ptr(operation.KnownByteOperations), Source: "typed_io"},
-		{Name: "Пик за скользящую секунду", Observed: fmt.Sprint(operation.PeakOperationsPerSecond), Unit: "events/s", Source: "typed_io"},
+		{Name: "Пик за скользящую секунду", Observed: FormatRollingPeak(operation.PeakOperationsPerSecond, operation.BurstEstimateStatus), Unit: "events/s", Source: "typed_io"},
 	}
 	thresholdMS := b.cfg.IOBackgroundMS
 	if operation.MainThread {
@@ -73,31 +73,31 @@ func (b *problemBuilder) detectCriticalIO(operation IOStats) {
 	}
 	evidence[0].ExpectedOrThreshold = fmt.Sprintf("< %d ms", thresholdMS)
 	peakRate := float64(operation.PeakOperationsPerSecond)
-	magnitude := min(25, 6+int(maxMS/maxUint64(thresholdMS, 1))*4)
+	magnitude := boundedUint64RatioScore(maxMS, maxUint64(thresholdMS, 1), 6, 4, 25)
 	if classification.has(ioSignalRepeatedFailures) {
-		magnitude = max(magnitude, min(25, 8+int(classification.failureRate/b.cfg.IOFailureRate)*4))
+		magnitude = max(magnitude, boundedFloatRatioScore(classification.failureRate, b.cfg.IOFailureRate, 8, 4, 25))
 	}
 	largeThreshold := b.cfg.IOLargeBackgroundBytes
 	if operation.MainThread {
 		largeThreshold = b.cfg.IOLargeMainBytes
 	}
 	if operation.MaxBytes >= largeThreshold {
-		magnitude = max(magnitude, min(25, 8+int(operation.MaxBytes/maxUint64(largeThreshold, 1))*3))
+		magnitude = max(magnitude, boundedUint64RatioScore(operation.MaxBytes, maxUint64(largeThreshold, 1), 8, 3, 25))
 	}
 	exposure := min(20, 5+int(math.Log2(float64(operation.Count)+1))*3)
 	if classification.has(ioSignalSmallOperationStorm) {
-		exposure = max(exposure, min(20, 10+int(peakRate/b.cfg.IOStormRate)*2))
+		exposure = max(exposure, boundedFloatRatioScore(peakRate, b.cfg.IOStormRate, 10, 2, 20))
 	}
 	compound := boolScore(classification.signalCount() > 1, 5)
 	whatHappened := fmt.Sprintf(
-		"%s из %s: %d операций, %d ошибок, граница верхних 5%% %s, максимум %s, пик %d операций/с; известно %d из %d размеров (%d байт).",
+		"%s из %s: %d операций, %d ошибок, граница верхних 5%% %s, максимум %s, пик %s операций/с; известно %d из %d размеров (%d байт).",
 		ioOperationLabel(operation.Operation),
 		displayUnknown(operation.Source, operation.Owner),
 		operation.Count,
 		operation.Failures,
 		formatMicroseconds(operation.P95DurationUS),
 		formatMicroseconds(operation.MaxDurationUS),
-		operation.PeakOperationsPerSecond,
+		FormatRollingPeak(operation.PeakOperationsPerSecond, operation.BurstEstimateStatus),
 		operation.KnownByteOperations,
 		operation.Count,
 		operation.Bytes,
@@ -134,7 +134,7 @@ func (b *problemBuilder) detectCriticalIO(operation IOStats) {
 		),
 		Recommendations: []ProblemRecommendation{{
 			Action:       action,
-			Rationale:    "Стабильное место вызова уже локализовано; снижение числа, объёма и длительности обращений уменьшает измеренную нагрузку на хранилище.",
+			Rationale:    "Место вызова уже известно. Снижение числа, объёма и длительности обращений уменьшит нагрузку на хранилище.",
 			Verification: "Повторить тот же сценарий и сравнить границу верхних 5%, максимум, ошибки, известный объём и точный пик операций за скользящую секунду.",
 		}},
 		Limitations: limits,

@@ -129,12 +129,15 @@ class RuntimeDatabaseTelemetryTest {
             .build()
         val state = RuntimeState().apply {
             config = enabledConfig
+            featureGate.activate(enabledConfig)
             writer = AsyncLogWriterFactory().open(directory, enabledConfig, "test")
             lifecycle = RuntimeLifecycle.STARTED
             started.set(true)
         }
+        val coordinator = RuntimeCoordinator(state) { 1L }
+        coordinator.markStarted(enabledConfig)
         val telemetry = RuntimeDatabaseTelemetry(
-            RuntimeTelemetryAccess(state, ContextTracker(), RuntimeCoordinator(state) { 1L }, { 1L }, { 100 }),
+            RuntimeTelemetryAccess(state, ContextTracker(), coordinator, { 1L }, { 100 }),
         )
         try {
             val database = Any()
@@ -150,6 +153,7 @@ class RuntimeDatabaseTelemetryTest {
             state.config = enabledConfig.toBuilder()
                 .runtimeFeatureEnabled(JankHunterRuntimeFeature.SQLITE, false)
                 .build()
+                .also(state.featureGate::activate)
             telemetry.markTransactionSuccessful(database)
             telemetry.endTransaction(database, throwable = null)
 

@@ -59,7 +59,7 @@ func TestUIProblemWindowUsesObservedP99AsMaximum(t *testing.T) {
 	}
 }
 
-func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
+func TestHeapDumpPauseIsExcludedFromApplicationStallMetrics(t *testing.T) {
 	dict := map[uint64]string{
 		1: "jankhunter.heap_dump.created.count",
 		2: "android.view.DisplayEventReceiver",
@@ -82,12 +82,8 @@ func TestHeapDumpPauseIsAttributedToDiagnostics(t *testing.T) {
 		},
 	}})
 
-	if len(summary.ProblemWindows) != 1 {
-		t.Fatalf("heap dump stall windows = %+v", summary.ProblemWindows)
-	}
-	window := summary.ProblemWindows[0]
-	if window.Owner != "jankhunter.heap_dump" {
-		t.Fatalf("heap dump stall attribution = %+v", window)
+	if summary.StallCount != 0 || summary.StallMaxMS != 0 || len(summary.ProblemWindows) != 0 {
+		t.Fatalf("heap dump pause leaked into application stall metrics: %+v", summary)
 	}
 }
 
@@ -162,8 +158,62 @@ func TestRetentionEvidenceChangesConfidenceAndSeverity(t *testing.T) {
 	if gcSuspect.EvidenceKind != RetentionEvidenceAfterExplicitGC || gcSuspect.Score <= timeSuspect.Score {
 		t.Fatalf("after_explicit_gc should be stronger than time_only: time=%+v gc=%+v", timeSuspect, gcSuspect)
 	}
-	if !heapSuspect.HeapEvidence || heapSuspect.EvidenceKind != RetentionEvidenceConfirmedHPROFPath || heapSuspect.Score <= gcSuspect.Score {
-		t.Fatalf("confirmed HPROF path should be the strongest evidence: gc=%+v heap=%+v", gcSuspect, heapSuspect)
+	if heapSuspect.HeapEvidence || heapSuspect.EvidenceKind != RetentionEvidenceAfterExplicitGC || heapSuspect.Score != gcSuspect.Score {
+		t.Fatalf("class-only HPROF path must preserve runtime evidence: gc=%+v heap=%+v", gcSuspect, heapSuspect)
+	}
+}
+
+func TestUnreachableHeapClassDoesNotEraseIndependentRuntimeSignal(t *testing.T) {
+	stats := memoryLeakStats{
+		className:     "com.app.LeakedView",
+		holder:        "com.app.Screen",
+		count:         1,
+		maxAgeMs:      5_000,
+		timeOnlyCount: 1,
+	}
+	heap := &HeapLeakEvidence{
+		ClassName:  stats.className,
+		Source:     "sample.hprof",
+		Confidence: "высокое: объект найден, но не достижим от распознанных корней GC",
+	}
+
+	withoutHeap := memoryLeakSuspectFromStats(stats, 0, 0, nil, retentionDataQuality{})
+	withHeap := memoryLeakSuspectFromStats(stats, 0, 0, heap, retentionDataQuality{})
+
+	if withHeap.EvidenceKind != RetentionEvidenceTimeOnly || !withHeap.HeapCandidate || withHeap.HeapEvidence {
+		t.Fatalf("unreachable HPROF target classification = %+v", withHeap)
+	}
+	if withHeap.Score != withoutHeap.Score || withHeap.Severity != withoutHeap.Severity {
+		t.Fatalf("class-level HPROF evidence changed independent runtime priority: without=%+v with=%+v", withoutHeap, withHeap)
+	}
+	if withHeap.HeapClassEvidence == nil || !strings.Contains(withHeap.HeapClassEvidence.Confidence, "не достижим") {
+		t.Fatalf("negative HPROF evidence is not explained: %q", withHeap.Evidence)
+	}
+	if strings.Contains(withHeap.Evidence, heap.Source) || strings.Contains(withHeap.RetainedSizeExplanation, heap.Source) {
+		t.Fatalf("human-readable leak details expose a noisy HPROF path: evidence=%q size=%q", withHeap.Evidence, withHeap.RetainedSizeExplanation)
+	}
+	if strings.Contains(withHeap.Recommendation, "исправление кода не требуется") {
+		t.Fatalf("absence of a class path exonerated runtime code: %+v", withHeap)
+	}
+}
+
+func TestProblemEngineDoesNotReportHeapDumpDiagnosticPauseAsApplicationStall(t *testing.T) {
+	summary := Summary{
+		DurationMS:        60_000,
+		CollectionQuality: CollectionQuality{Complete: true},
+		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
+		ProblemWindows: []ProblemWindowStats{{
+			Screen: "MainActivity", Owner: "jankhunter.heap_dump",
+			Kind: "main_thread_stall", Windows: 1, Count: 1, MaxMS: 2_259, TotalWindowMS: 2_259,
+		}},
+	}
+
+	report, err := BuildProblemReport(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByDetector(report.Problems, "stability.main_thread_stall"); finding != nil {
+		t.Fatalf("Jank Hunter diagnostic pause became an application problem: %+v", finding)
 	}
 }
 
@@ -181,10 +231,10 @@ func TestRetentionQualityLossDowngradesEvidenceConfidence(t *testing.T) {
 		runtimeNotes:           []string{"наблюдатель удержания достиг лимита"},
 	})
 
-	if clean.DataQuality != "complete" || !strings.HasPrefix(clean.EvidenceConfidence, "среднее") {
+	if clean.DataQuality != "complete" || clean.EvidenceConfidence != "средняя" {
 		t.Fatalf("clean confidence = %+v", clean)
 	}
-	if degraded.DataQuality != "degraded" || !strings.HasPrefix(degraded.EvidenceConfidence, "низкое") {
+	if degraded.DataQuality != "degraded" || !strings.HasPrefix(degraded.EvidenceConfidence, "низкая") {
 		t.Fatalf("degraded confidence was not downgraded: %+v", degraded)
 	}
 }

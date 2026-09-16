@@ -70,6 +70,7 @@ class InstrumentationFactoryArchitectureTest {
         listOf(
             JankHunterClassVisitorFactory::class.java,
             JankHunterLifecycleClassVisitorFactory::class.java,
+            OkHttpTransportClassVisitorFactory::class.java,
         ).forEach { factory ->
             val instanceFields = factory.declaredFields.filterNot { field -> Modifier.isStatic(field.modifiers) }
             assertTrue(

@@ -22,6 +22,7 @@ type databaseStatementRow struct {
 	Telemetry              analyze.DatabaseTelemetryStats
 	MainCorrelation        analyze.DatabaseCorrelationStats
 	BackgroundCorrelation  analyze.DatabaseCorrelationStats
+	BurstEstimateStatus    string
 	PeakCallsPerSecond     uint64
 	PeakWindowStartMS      uint64
 	RapidRepeats           uint64
@@ -77,7 +78,7 @@ func databaseScenarioRows(summary analyze.Summary) []databaseScenarioRow {
 		rows = append(rows, databaseScenarioRow{
 			Stats: scenario, Title: title, Severity: severity,
 			Why: fmt.Sprintf(
-				"Один нормализованный SQL-шаблон вызван до %d раз внутри одной границы сценария (%s); %s — %s. Серия повторов подтверждена, но N+1 или одинаковые параметры не доказаны.",
+				"Один нормализованный SQL-шаблон вызван до %d раз внутри одной границы сценария (%s); %s - %s. Серия повторов подтверждена, но N+1 или одинаковые параметры не доказаны.",
 				scenario.MaxCallsPerScope, databaseScenarioScopeLabel(scenario.ScopeKind), costQualifier,
 				humanMicroseconds(scenario.TotalDurationUS),
 			),
@@ -273,9 +274,9 @@ func databaseTaxonomyLabel(value string) string {
 	case "deferred":
 		return "отложенная"
 	case "2_10":
-		return "2–10"
+		return "2-10"
 	case "11_100":
-		return "11–100"
+		return "11-100"
 	case "101_plus":
 		return ">100"
 	case "none", "unknown", "":
@@ -308,8 +309,9 @@ func databaseStatementRows(summary analyze.Summary) []databaseStatementRow {
 			Overall:      statement.Overall, Main: statement.Main, Background: statement.Background,
 			Telemetry:       statement.Telemetry,
 			MainCorrelation: statement.MainCorrelation, BackgroundCorrelation: statement.BackgroundCorrelation,
-			PeakCallsPerSecond: statement.PeakCallsPerSecond,
-			PeakWindowStartMS:  statement.PeakWindowStartMS, RapidRepeats: statement.RapidRepeats,
+			PeakCallsPerSecond:  statement.PeakCallsPerSecond,
+			BurstEstimateStatus: statement.BurstEstimateStatus,
+			PeakWindowStartMS:   statement.PeakWindowStartMS, RapidRepeats: statement.RapidRepeats,
 			EstimatedCalls: statement.EstimatedCalls, FrequencyEstimateError: statement.FrequencyEstimateError,
 			Status: status, Severity: severity, Problem: severity != "ok",
 			Why: databaseStatementWhy(statement, status), Action: databaseStatementAction(statement, cfg),
@@ -364,7 +366,7 @@ func databaseStatementWhy(statement analyze.DatabaseStatementStats, status strin
 		)
 	}
 	return fmt.Sprintf(
-		"%s: на главном потоке %d вызовов (верхние 5%% — %s), в фоне %d (верхние 5%% — %s), ошибок %d, быстрых повторов %d.",
+		"%s: на главном потоке %d вызовов (верхние 5%% - %s), в фоне %d (верхние 5%% - %s), ошибок %d, быстрых повторов %d.",
 		status,
 		statement.Main.Calls,
 		humanMicroseconds(statement.Main.P95DurationUS),

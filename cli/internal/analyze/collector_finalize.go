@@ -10,19 +10,35 @@ import (
 func (c *collector) finish() Summary {
 	c.finalizeCollectionQuality()
 	summary := c.summary
+	var acquisition AcquisitionEvidence
+	if c.acquisition != nil {
+		acquisition = c.acquisition.result()
+	} else {
+		acquisition = buildAcquisitionEvidence(summary.CollectionSegments)
+	}
+	summary.Acquisition = &acquisition
+	if stats := &c.networkTotals; stats.count > 0 {
+		known := stats.phases[5].seen
+		summary.CollectionQuality.HTTPFirstByte = &HTTPFirstByteQuality{
+			Known: uint64(known), Legacy: uint64(stats.legacyTTFB),
+			Unknown: uint64(stats.count - stats.legacyTTFB - known),
+		}
+	}
+	if unfinished := summary.StallStates.Ongoing + summary.StallStates.Interrupted; unfinished > 0 {
+		summary.Warnings = append(summary.Warnings, fmt.Sprintf(
+			"Для %d зависаний завершение не наблюдалось: длительность - нижняя граница, а не полное время зависания (ещё наблюдаются: %d, наблюдение прервано: %d).",
+			unfinished, summary.StallStates.Ongoing, summary.StallStates.Interrupted,
+		))
+	}
 	if c.logsWithEvents > 0 {
 		summary.DurationMS = c.totalLogDurationMS
 	} else if c.seenEvent && c.lastTime >= c.firstTime {
 		summary.DurationMS = c.lastTime - c.firstTime
 	}
 	if c.logsWithEvents > 1 {
-		summary.Warnings = append(
-			summary.Warnings,
-			"Несколько независимых сессий объединены в отчёте: длительность в обзоре равна сумме длительностей сессий, а математическая временная шкала накладывает события по относительному времени.",
-		)
+		summary.Warnings = append(summary.Warnings, combinedSessionTimelineWarning(summary.CollectionQuality.RunCohortCount))
 	}
-	summary.TrafficRxMax = c.totalTrafficRxBytes
-	summary.TrafficTxMax = c.totalTrafficTxBytes
+	c.finalizeTraffic(&summary)
 
 	networkAnalysis := NetworkAnalysis{}
 	contextCounts := make(map[string]int, len(c.networkRoutes))
@@ -31,11 +47,8 @@ func (c *collector) finish() Summary {
 		networkAnalysis.Calls = append(networkAnalysis.Calls, networkCallStats(key, stats))
 	}
 	for route, stats := range c.networkRoutes {
-		burstStatus := "exact_rolling_second"
-		if stats.burst.approximate {
-			burstStatus = "bounded_approximation"
-		}
-		maxConcurrency, peakConcurrencyAtMS := maxHTTPConcurrency(stats.intervals)
+		var burst routeBurstAccumulator
+		maxConcurrency, peakConcurrencyAtMS := scanHTTPIntervals(stats.intervals, &burst)
 		row := RouteStats{
 			Route:                 route,
 			ServiceSample:         stats.serviceSample,
@@ -70,9 +83,9 @@ func (c *collector) finish() Summary {
 			BytesRx:               stats.bytesRx,
 			BytesTx:               stats.bytesTx,
 			OwnerSample:           stats.ownerSample,
-			BurstEstimateStatus:   burstStatus,
-			PeakRequestsPerSecond: stats.burst.peak,
-			PeakWindowStartMS:     stats.burst.peakWindowStartMS,
+			BurstEstimateStatus:   burst.status(),
+			PeakRequestsPerSecond: burst.peak,
+			PeakWindowStartMS:     burst.peakWindowStartMS,
 		}
 		summary.Routes = append(summary.Routes, row)
 	}
@@ -174,7 +187,13 @@ func (c *collector) finish() Summary {
 	for name, values := range c.gaugeValues {
 		value := values.value()
 		extra := values.extra()
-		summary.Gauges = append(summary.Gauges, NamedValue{Name: name, Value: value, Extra: extra})
+		summary.Gauges = append(summary.Gauges, NamedGauge{
+			Name:        name,
+			Value:       value,
+			Extra:       extra,
+			maximum:     values.max,
+			sampleCount: values.count,
+		})
 		if isJankStatsMetric(name) {
 			summary.JankStats = append(summary.JankStats, NamedValue{Name: name, Value: value, Extra: extra})
 		}
@@ -219,9 +238,19 @@ func (c *collector) finish() Summary {
 		c.heap,
 		c.retentionDataQuality(),
 	)
-	if c.heap != nil {
-		summary.Warnings = append(summary.Warnings, c.heap.Warnings...)
+	for _, suspect := range summary.MemoryLeaks {
+		if suspect.HeapClassEvidence != nil {
+			summary.Warnings = append(summary.Warnings, "Качество сбора: HPROF сопоставлен только по классу и контексту; связь с наблюдаемым объектом неизвестна. JHLOG не содержит проверяемого соответствия HPROF object ID, времени дампа и runtime-объекта.")
+			break
+		}
 	}
+	summary.HeapDiagnostics = append([]HeapDiagnostic(nil), c.heap.effectiveDiagnostics()...)
+	for _, diagnostic := range summary.HeapDiagnostics {
+		if !diagnostic.Informational() {
+			summary.Warnings = append(summary.Warnings, "Качество сбора: HPROF: "+diagnostic.Message)
+		}
+	}
+
 	summary.Memory = append(summary.Memory, NamedValue{Name: "max_pss_kb", Value: summary.MemoryMaxKB, Extra: formatMB(summary.MemoryMaxKB)})
 	if summary.AvailMemoryMinKB > 0 {
 		summary.Memory = append(summary.Memory, NamedValue{Name: "min_available_kb", Value: summary.AvailMemoryMinKB, Extra: formatMB(summary.AvailMemoryMinKB)})
@@ -232,6 +261,7 @@ func (c *collector) finish() Summary {
 	summary.Environment = c.runEnvironment(summary)
 	summary.Warnings = append(summary.Warnings, c.telemetryHealthWarnings(summary)...)
 	summary.Warnings = append(summary.Warnings, c.filterWarnings(summary)...)
+	summary.Warnings = append(summary.Warnings, rollingPeakWarnings(summary)...)
 
 	sortRoutes(summary.Routes)
 	if summary.NetworkAnalysis != nil {
@@ -256,20 +286,23 @@ func (c *collector) finish() Summary {
 	sortMemoryLeaks(summary.MemoryLeaks)
 	sortNamed(summary.JankStats)
 	sortNamed(summary.Counters)
-	sortNamed(summary.Gauges)
+	sortGauges(summary.Gauges)
 	summary.LogGrowth = buildLogGrowthSummary(c.streamResults)
 	dependencyInjection := c.dependencyInjection
+	lambdaCaptures := c.lambdaCaptures
+	summary.LambdaCaptureAnalysis = BuildLambdaCaptureAnalysis(lambdaCaptures)
 	// Every base aggregate has been copied into Summary. Drop the mutable collection maps before
 	// materializing influence views and the code-problem registry so both representations do not
 	// coexist at peak heap usage on large applications.
 	c.releaseAggregationState()
 	summary.Influence = BuildInfluence(summary, c.classGraph)
-	summary.CodeProblems = BuildCodeProblemRegistry(summary)
+	summary.CodeProblems = BuildCodeProblemRegistryWithLambdaCaptures(summary, lambdaCaptures)
 	summary.AnalysisInputs = c.analysisInputCompleteness(summary)
-	problemReport, problemErr := buildProblemReportWithCatalog(
+	problemReport, problemErr := buildProblemReportWithLambdaCaptures(
 		summary,
 		DefaultProblemDetectorConfig(),
 		dependencyInjection,
+		lambdaCaptures,
 	)
 	if problemErr != nil {
 		summary.Warnings = append(summary.Warnings, "problem engine: "+problemErr.Error())
@@ -285,9 +318,26 @@ func (c *collector) finish() Summary {
 	return summary
 }
 
+func combinedSessionTimelineWarning(runCohortCount uint64) string {
+	const timelineNote = "В обзоре показана сумма длительностей, а математическая временная шкала совмещает сессии по времени от их начала."
+	switch runCohortCount {
+	case 0:
+		return "В отчёт объединено несколько сессий без подтверждённого идентификатора запуска. " + timelineNote
+	case 1:
+		return "В отчёт объединено несколько сессий одного запуска приложения. " + timelineNote
+	default:
+		return fmt.Sprintf(
+			"В отчёт объединены сессии %d запусков приложения. %s",
+			runCohortCount,
+			timelineNote,
+		)
+	}
+}
+
 func (c *collector) releaseAggregationState() {
 	c.nameMap = nil
 	c.dependencyInjection = nil
+	c.lambdaCaptures = nil
 	c.networkTotals = httpAggregate{}
 	c.networkRoutes = nil
 	c.networkCalls = nil

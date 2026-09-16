@@ -218,7 +218,7 @@ func TestFormatMagicAndFeatureBitsGolden(t *testing.T) {
 	if !bytes.Equal(Magic, want) {
 		t.Fatalf("magic = %v, want %v", Magic, want)
 	}
-	if RequiredFeatures != 0x7bfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
+	if RequiredFeatures != 0x7fbfffff || OptionalFeatures != 0x1f || RawOptionalFeatures != 0x3e {
 		t.Fatalf(
 			"features = required 0x%x gzip optional 0x%x raw optional 0x%x",
 			RequiredFeatures,
@@ -1153,7 +1153,7 @@ func TestProfileFilesReportsJH100ControlAndEventSizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-5.0.0" || profile.Files[0].Status != SegmentStatusClosedClean {
+	if len(profile.Files) != 1 || profile.Files[0].Format != "jhlog-"+FormatVersionString || profile.Files[0].Status != SegmentStatusClosedClean {
 		t.Fatalf("file profile = %+v", profile.Files)
 	}
 	rows := map[EventType]SizeProfileType{}
@@ -1918,7 +1918,7 @@ func TestReaderRejectsOtherBinaryVersions(t *testing.T) {
 		want   string
 	}{
 		{name: "unknown marker 0x80", marker: 0x80, major: 2, want: "unsupported .jhlog format"},
-		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.0.0; expected 5.0.0"},
+		{name: "previous major", marker: 0x81, major: 1, want: "unsupported JHLOG version 1.1.0; expected 5.1.0"},
 		{name: "unknown marker", marker: 0x82, major: 2, want: "unsupported .jhlog format"},
 	} {
 		t.Run(version.name, func(t *testing.T) {

@@ -24,6 +24,7 @@ internal object InstrumentationHookConfigFactory {
         binderIPC = params.binderIPC.getOrElse(false),
         ioTracing = params.ioTracing.getOrElse(false),
         classGraphDirectory = params.classGraphDirectory.getOrElse(""),
+        lambdaCaptureDirectory = params.lambdaCaptureDirectory.getOrElse(""),
         instrumentationDiagnosticsDirectory = params.instrumentationDiagnosticsDirectory.getOrElse(""),
         androidComponentCatalogDirectory = params.androidComponentCatalogDirectory.getOrElse(""),
         lifecycleLeaks = params.lifecycleLeaks.getOrElse(false),

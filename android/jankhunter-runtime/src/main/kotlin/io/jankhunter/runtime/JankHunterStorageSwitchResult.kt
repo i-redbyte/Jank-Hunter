@@ -19,4 +19,7 @@ enum class JankHunterStorageSwitchResult {
 
     /** Target preparation failed and Jank Hunter kept or restored the previous storage. */
     FAILED,
+
+    /** The switch crossed its ordered frontier and will publish its final state asynchronously. */
+    IN_PROGRESS,
 }

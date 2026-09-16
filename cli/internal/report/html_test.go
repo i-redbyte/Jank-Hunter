@@ -248,15 +248,17 @@ func TestInspectExplainsUICauseCandidatesWithoutInventingTemporalCausality(t *te
 	}
 	html := string(payload)
 	for _, want := range []string{
-		"Диагноз и план расследования",
-		"Что доказано данными",
-		"Цепочка влияния",
-		"Кандидаты на первопричину",
-		"Что пока не доказано",
+		"Разобрать проблему",
+		"Что произошло",
+		"Что подтверждено",
+		"Почему это важно",
+		"Как связаны события",
+		"Возможные причины",
+		"Чего не хватает",
 		"ComponentFactoryImpl.create",
 		"ArrayLinkedVariables.add",
 		"не доказывает совпадение по времени",
-		"Пошаговый план проверки",
+		"Как проверить исправление",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("actionable UI diagnosis misses %q", want)
@@ -386,11 +388,11 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
 	assertCurrentReportStyle(t, inspectPath)
-	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск охватывает не только карточки проблем", "Поиск по всем данным страницы", "все классы и строки подробных разделов этой страницы, включая ещё не раскрытые", "Фильтры справа изменяют только карточки проблем", "Что делать", "Состав приоритета", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Связанные сигналы", "Спам логами", "Проблемные окна", "Связи вызовов", "Код и полные доказательства", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "data-registry-category", "data-registry-severity", "span-all", "Шкала сигналов удержания", "Фильтр реестра утечек памяти", "FeedPresenter", "Быстрые проверки цепочки", "Вероятный пользовательский держатель", "Оценка удержанного размера", "Путь / контекст удержания", "leak-dominator", "4.0 МБ", "Фильтр по классу", "data-code-registry", "data-code-sort", "Как читать отчет", "Что исправлять", "jh-tooltip", "GET /feed", "Подтормаживания интерфейса", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Диагностический индекс полноты: 80.00", "не оценка риска приложения", "Граф вызовов во время выполнения отключён", "Не хватает", "Подробный анализ", `href="inspect-math.html"`)
+	assertHTMLContains(t, inspectPath, "Проблемы приложения", `id="problems"`, "data-problem-inbox", "data-problem-search", "data-problem-search-clear", "data-problem-search-results", "Поиск по всему отчёту", "Поиск по всем данным страницы", "Закрытые разделы тоже учитываются", "Введите запрос или выберите фильтры", "Что делать", "Расчёт приоритета и ограничения", "Контекст устройства", "Pixel 8", "Рут-доступ", "Все записанные сетевые маршруты", "Ниже показаны все маршруты, а не только худшие", "Связанные сигналы", "Спам логами", "Проблемные окна", "Связи вызовов", "Где искать в коде", "Открыть полный реестр кода и подтверждающие данные", "Удержания и возможные утечки памяти", "Открыть разбор удержаний памяти", "FeedPresenter", "Индекс приоритета расследования", "Главный вывод", "jh-tooltip", "GET /feed", "Подтормаживания интерфейса", "Граф влияния кода", "influence-tile-body", "gauge-ring", `pathLength="100"`, "stroke-dasharray: var(--value) 100", "Подробный анализ", `href="inspect-math.html"`)
 	assertHTMLContains(t, inspectPath, "Подробный сетевой анализ", "Максимальная одновременность", "Запросы по месту вызова и контексту", "feed-api", "FeedViewModel.load", "Фазы маршрутов", "TTFB", "Повторы без перенаправлений", "Точные HTTP-коды", "503", "network-route-table wide-analysis-table", "network-call-table wide-analysis-table", "min-width: 2440px", "word-break: keep-all", "WebSocket: соединения, сообщения и обрывы", "GET /socket", "RealtimeRepository", "websocket-connection-table wide-analysis-table", "тайм-аут")
 	assertHTMLContains(t, inspectPath, "z-index: 2147483647", "word-break: keep-all", "table-scroll", "wrapTables", "table-cell-clip", "cell-toggle", "scheduleTableMeasure", "details.addEventListener('toggle'", "IntersectionObserver", "tooltipTarget", "ensureSelectOption", "setSelectFromChip", "viewportBox", "descriptiveBlock", ".problem-card[hidden]", "minmax(min(100%, 340px), 1fr)", "indexDeferredScript", "report-search-deferred", "revealDeferredSearchEntry", "details.parentElement?.closest('details')")
-	assertHTMLContains(t, inspectPath, "Достаточность данных для выводов", "Проверка правил на эталонных данных", "нет эталонной проверки", "Задержка верхних 5% кадров", "Плавность интерфейса и возможные причины", "Итог анализа", "Все найденные проблемные элементы и факторы", "Уровень связи", "кандидат из кода", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
-	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)", "reservoir", "approx-badge", `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр реестра проблем кода")
+	assertHTMLContains(t, inspectPath, "Задержка верхних 5% кадров", "Плавность UI и возможные причины", "Итог анализа", "Наиболее сильные проблемные элементы и факторы", "Уровень связи", "возможная причина в коде", "Почему это показано", "Где смотреть код", "Как проверить версию", "Что происходило рядом", "С чего начать", "ui-cause-grid", "relation-context")
+	assertHTMLNotContains(t, inspectPath, "Drill-down", "conic-gradient(var(--color)", "reservoir", "approx-badge", `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр реестра проблем кода", "Фильтр реестра утечек памяти", `id="signal-context-table"`, `id="collection-quality"`, "Полнота записи включённых источников", "известных потерь")
 
 	mathInspectPath := filepath.Join(dir, "inspect-math.html")
 	if err := WriteMathInspectWithOptions(mathInspectPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{
@@ -400,7 +402,7 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteMathInspect() error = %v", err)
 	}
 	assertCurrentReportStyle(t, mathInspectPath)
-	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Атрибуция операций и источников", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Устойчивая статистика", "дельта Клиффа", "Граф связей и гипотез", "Уверенность", "Доля плохих состояний", "Повторение проблемных состояний", "Вклады симптомов", "Проекция внутри записанного прогона", "Методика и наблюдения", "Пропуск означает отсутствие замера памяти", "Самое большое реально наблюдавшееся значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Поддержка модели: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, `href="inspect.html#runtime-calls"`, "не дублируется второй раз", "← Обзор", "periodic-analysis-table wide-analysis-table", "integral-score-table wide-analysis-table", "min-width: 2240px")
+	assertHTMLContains(t, mathInspectPath, "Математический анализ", "Качество данных", "Сетевые циклы", "Связь проблем с операциями и кодом", "Реестр проблем кода", `id="code-problems" class="fold code-registry-fold" open`, "Разбор утечек памяти", "Шкала математических оценок", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "overview-attribution-fold", "data-zero-scope", "closest('[data-zero-scope]')", "Пустые интервалы скрыты", "Вызовы выполнения", "Как читать оценки", "Критерии", "Накопленная нагрузка", "Детали раздела", "Сводка разделов", "Справка по методам", "Устойчивая статистика", "дельта Клиффа", "Граф связей и гипотез", "Надёжность", "Доля плохих состояний", "Повторение проблемных состояний", "Вклады симптомов", "Проекция внутри записанного прогона", "Методика и наблюдения", "Пропуск означает отсутствие замера памяти", "Самое большое записанное значение", "Пустой интервал пропускается и разрывает последовательность", "измерено", "Поддержка модели: <strong>низкая</strong>", `data-markov-forecast="insufficient"`, `href="inspect.html"`, `href="inspect.html#runtime-calls"`, "повторно не выводится", "← Обзор", "periodic-analysis-table wide-analysis-table", "integral-score-table wide-analysis-table", "min-width: 2240px", `id="data-quality"`, "Техническая справка о данных", "Достаточность данных для выводов", "Проверка правил на эталонных данных", "нет эталонной проверки", "Полнота записи включённых источников: 80.00", "известных потерь нет")
 
 	comparePath := filepath.Join(dir, "compare.html")
 	comparison := analyze.Compare(summary, summary)
@@ -414,30 +416,30 @@ func TestWriteReports(t *testing.T) {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
 	assertCurrentReportStyle(t, comparePath)
-	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Код и подтверждающие данные кандидата", "Открыть сравнительный реестр кода и подтверждающие данные", "Сравнение сигналов удержания памяти", "Шкала сравнения", "data-registry-category", "data-registry-severity", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "data-code-registry", "data-code-sort", "дельта", "Где изменилось", "Сравнение связанных сигналов", "Как читать сравнение", "Контекст устройств", "Детали по каждому журналу", "Эвристический итог", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Диагностический индекс полноты: база 80.00%", "кандидат 80.00%", "не статистическая вероятность или оценка риска", "Граф вызовов во время выполнения отключён", "λ Анализ", `href="compare-math.html"`)
-	assertHTMLNotContains(t, comparePath, `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр сравнительного реестра проблем кода")
+	assertHTMLContains(t, comparePath, "Изменения проблем", `id="problem-changes"`, `data-status="persistent"`, "data-problem-status", "Контекст сравнения", "Сеть и трафик", "Где искать изменения в коде", "Открыть сравнение кода", "Сравнение сигналов удержания памяти", "Открыть сравнение удержаний памяти", "Шкала сравнения", "дельта", "В каких данных есть изменения", "Связанные сигналы", "Сводная панель сравнения", "Условия запусков", "Детали по каждому журналу", "Итог по всем сигналам", "gauge-ring", `pathLength="100"`, "old/sample.jhlog", "new/sample.jhlog", "Подробный анализ", `href="compare-math.html"`)
+	assertHTMLNotContains(t, comparePath, `<script type="application/octet-stream" data-code-problem-evidence-archive`, "Фильтр сравнительного реестра проблем кода", "Фильтр сравнительного реестра утечек памяти", `id="collection-quality"`, "Полнота записи включённых источников", "известных потерь")
 
-	assertHTMLContains(t, comparePath, "Достаточность данных кандидата", "Проверка правил на эталонных данных", "Верхние 5% кадров кандидата")
+	assertHTMLContains(t, comparePath, "p95 кадров проверяемого")
 	mathComparePath := filepath.Join(dir, "compare-math.html")
 	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{Links: ReportLinks{Main: "compare.html"}}); err != nil {
 		t.Fatalf("WriteMathCompare() error = %v", err)
 	}
 	assertCurrentReportStyle(t, mathComparePath)
-	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение операций и источников", "Реестр проблем кода кандидата", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Доля плохих состояний проверяемого прогона", "Граф связей и гипотез", "Базовый прогон · проекция внутри записи", "Проверяемый прогон · проекция внутри записи", "Сильно разные N могут означать", "Регрессия рассчитывается только для сопоставимой длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор")
+	assertHTMLContains(t, mathComparePath, "Математический анализ сравнения", "Качество сравнения", "Сетевые циклы", "Сравнение операций и источников", "Проблемы кода проверяемого прогона", `id="code-problems" class="fold code-registry-fold" open`, "Сравнение сигналов удержания памяти", "Шкала сравнения", "Шкала реестра кода", "registry-insights", "code-problem-details", "Доказательства и рекомендация", "FeedPresenter", "Шкала сигналов удержания", "Оценка удержанного размера", "Путь / контекст удержания", "Фильтр сравнительного реестра утечек памяти", "Фильтр сравнительного реестра проблем кода", "data-code-registry", "data-code-sort", "Как читать сравнение", "Критерии", "Сводка разделов", "Справка по методам", "Марковская модель состояний", "Расхождение матрицы переходов", "Доля плохих состояний проверяемого прогона", "Граф связей и гипотез", "Базовый прогон · проекция внутри записи", "Проверяемый прогон · проекция внутри записи", "Сильное различие N может означать", "Регрессия рассчитывается только для похожей длительности", "не применимо", "измерено", `data-markov-forecast="insufficient"`, `href="compare.html"`, "← Обзор", `id="data-quality"`, "Техническая справка о данных", "Достаточность данных проверяемого прогона", "Проверка правил на эталонных данных", "Полнота записи включённых источников: база 80.00%")
 
 	influencePath := filepath.Join(dir, "inspect-influence.html")
 	if err := WriteInfluenceWithOptions(influencePath, sampleInfluence(), "Граф влияния кода", ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInfluence() error = %v", err)
 	}
 	assertCurrentReportStyle(t, influencePath)
-	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Классы для проверки", "Связи между классами", "Пути для расследования", "Методы для проверки", "Показать классы для проверки", "Показать связи", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", "data-influence-view=\"packages\"", "data-influence-highlight=\"tree\"", "data-influence-selection", "data-influence-viewport", "buildNeighborhood", "expandPackage", "RuntimeCount", "StaticCount", `href="inspect.html"`, "← Обзор")
+	assertHTMLContains(t, influencePath, "Граф влияния кода", "Карта влияния", "Классы для проверки", "Связи между классами", "Пути для расследования", "Методы для проверки", "Показать классы для проверки", "Показать связи", "influence-table-fold", "Оценка", "CheckoutRepository", "CheckoutPresenter", ".influence-node.high circle", "vector-effect: non-scaling-stroke", "data-influence-view=\"packages\"", "data-influence-highlight=\"tree\"", "data-influence-selection", "data-influence-viewport", "buildNeighborhood", "expandPackage", "RuntimeCount", "StaticCount", "Сумма длительностей вызовов", "Макс. оценка удержанной памяти", "ограниченной области графа", `href="inspect.html"`, "← Обзор")
 
 	diagnosticsPath := filepath.Join(dir, "inspect-diagnostics.html")
 	if err := WriteInstrumentationDiagnosticsWithOptions(diagnosticsPath, sampleInstrumentationDiagnostics(), ReportOptions{Links: ReportLinks{Main: "inspect.html"}}); err != nil {
 		t.Fatalf("WriteInstrumentationDiagnostics() error = %v", err)
 	}
 	assertCurrentReportStyle(t, diagnosticsPath)
-	assertHTMLContains(t, diagnosticsPath, "ASM диагностика", "Сводка ASM", "Сработавшие перехватчики", "Решения сопоставителя", "Области аннотаций", "okhttp3.bridge.v3", "FeedOwner", "invalid class metadata", "Иерархия broken.Parent разрешена частично", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
+	assertHTMLContains(t, diagnosticsPath, "Диагностика ASM-хуков", "Сводка ASM", "Добавленные ASM-хуки", "Почему ASM-хук добавлен или пропущен", "Области аннотаций", "Прошли фильтр", "Исключены фильтром", "Почему методы исключены фильтром", "excluded:synthetic", "okhttp3.bridge.v3", "FeedOwner", "invalid class metadata", "Иерархия broken.Parent разрешена частично", "instrumentation-diagnostics.jsonl", `href="inspect.html"`, "← Обзор")
 
 	dependencyInjectionPath := filepath.Join(dir, "inspect-di.html")
 	if err := WriteDependencyInjectionWithOptions(
@@ -458,7 +460,7 @@ func TestWriteReports(t *testing.T) {
 		"com.app.FeedViewModel",
 		"com.app.FeedRepository",
 		"подтверждено созданным кодом",
-		"--di: #a78bfa",
+		"--di: #5BC0EB",
 		`href="inspect.html"`,
 		"← Обзор",
 	)
@@ -494,11 +496,16 @@ func TestLeakGraphSVGScopesMarkerAndGradientIDs(t *testing.T) {
 	}
 }
 
-func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *testing.T) {
+func TestInspectMovesCollectionQualityToCollapsedMathSection(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "inspect.html")
 	summary := analyze.Summary{
-		Title:             "active.jhlog",
+		Title:                "active.jhlog",
+		ProblemSchemaVersion: analyze.ProblemSchemaVersion,
+		ProblemSummary: analyze.ProblemSummary{
+			Verdict:  "incomplete",
+			Headline: "Проблем не найдено, но 1 категория не проверена полностью.",
+		},
 		LogCount:          1,
 		CollectorSessions: 1,
 		CollectorFlagsAny: uint64(jhlog.CollectorKnownMask &^ jhlog.CollectorIOTracing),
@@ -507,9 +514,41 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 			Level:   "high",
 			Notices: []string{"снимок активной сессии прочитан корректно"},
 		},
+		CategoryCoverage: []analyze.CategoryCoverage{{
+			Category:    analyze.ProblemCategoryIO,
+			Status:      "not_measured",
+			Explanation: "сборщик файловых операций отключён",
+		}},
+		AndroidComponents: &analyze.AndroidComponentAnalysis{
+			Available:      true,
+			Partial:        true,
+			PartialReasons: []string{"тестовое ограничение Android/IPC"},
+			Binder: analyze.AndroidBinderAnalysis{
+				UncorrelatableEvents:     3,
+				CorrelationDroppedEvents: 5,
+			},
+		},
+		DatabaseCoverage: analyze.DatabaseCoverage{
+			Status:                    "partial",
+			DroppedStatementEvents:    7,
+			DroppedTransactionDetails: 11,
+		},
+		DatabaseAnalysis: &analyze.DatabaseAnalysis{
+			FrequencyEstimateError: 23,
+			DroppedDBIntervals:     29,
+		},
+		WorkerAnalysis: &analyze.WorkerAnalysis{
+			MissingEnqueue: 19,
+		},
+		OperationAnalysis: &analyze.OperationAnalysis{
+			MissingFinish:             2,
+			DroppedActiveStarts:       13,
+			DroppedOperationSamples:   17,
+			CompletedContextEvictions: 31,
+		},
 		Warnings: []string{"Качество сбора: тестовое техническое предупреждение."},
 	}
-	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{Links: ReportLinks{Math: "active-math.html"}}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -517,25 +556,65 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 		t.Fatal(err)
 	}
 	html := string(data)
-	qualityIndex := strings.Index(html, `id="collection-quality"`)
-	analysisIndex := strings.Index(html, `id="analysis"`)
-	if qualityIndex < 0 || analysisIndex < 0 || qualityIndex < analysisIndex {
-		t.Fatalf("technical quality is not at report end: analysis=%d quality=%d", analysisIndex, qualityIndex)
+	for _, forbidden := range []string{
+		`id="collection-quality"`,
+		"Техническое качество сбора",
+		"тестовое техническое предупреждение",
+		"тестовое ограничение Android/IPC",
+		"Качество данных Binder",
+		"Часть измерений неполна",
+		"Анализатор достиг защитных ограничений",
+		"Полнота данных БД",
+		"не проверена полностью",
+		"Для надёжного вывода данных мало",
+		"Неполные цепочки",
+		"Часть интервалов для сопоставления не сохранена",
+		"Ограниченная история завершённых операций",
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("problem-oriented report contains %q", forbidden)
+		}
 	}
-	if strings.Contains(html, "Часть событий не попала в журнал") {
-		t.Fatal("generic collection-loss warning leaked into the problem-oriented report")
+	if !strings.Contains(html, `href="active-math.html#data-quality"`) {
+		t.Fatal("problem-oriented report does not link to the mathematical data reference")
 	}
-	if strings.Contains(html, "тестовое техническое предупреждение") {
-		t.Fatal("internal collection warning leaked into the user-facing report")
+	if !strings.Contains(html, "В записанном сценарии явных проблем не обнаружено") {
+		t.Fatal("problem-oriented report does not use a neutral no-problems headline")
 	}
-	qualitySection := html[qualityIndex:]
+
+	mathPath := filepath.Join(directory, "active-math.html")
+	if err := WriteMathInspectWithOptions(mathPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{Main: "active.html"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(mathPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mathHTML := string(data)
+	qualityIndex := strings.Index(mathHTML, `id="data-quality"`)
+	if qualityIndex < 0 {
+		t.Fatal("mathematical report misses the data-quality section")
+	}
+	qualitySection := mathHTML[qualityIndex:]
 	if !strings.Contains(qualitySection, `<details class="fold">`) ||
 		strings.Contains(qualitySection, `<details class="fold" open>`) {
 		t.Fatal("technical quality details must be collapsed by default")
 	}
 	for _, expected := range []string{
+		"Техническая справка о данных",
+		"Ограничения отдельных анализаторов",
+		"тестовое ограничение Android/IPC",
+		"без данных для связи: 3, не сохранено связей: 5",
+		"без завершения: 2",
+		"не сохранено начал операций: 13",
+		"общих замеров: 17",
+		"SQL-событий: 7, подробностей транзакций: 11",
+		"погрешность оценки частоты: 23",
+		"не сохранено интервалов БД: 29",
+		"без времени постановки в очередь (не доказывает потери событий): 19",
+		"контекстов завершённых операций: 31",
 		"Какие сборщики реально были включены",
-		"Статусы прочитаны из самого журнала",
+		"Статусы записаны в журнале",
 		"collector-capability-disabled",
 		"Типизированные I/O операции",
 		"В этом прогоне данные этого типа не собирались",
@@ -544,9 +623,93 @@ func TestInspectPlacesCollectionQualityAtTheEndInCollapsedTechnicalSection(t *te
 			t.Fatalf("technical quality misses %q", expected)
 		}
 	}
+	for _, forbidden := range []string{"контекстов: 0", "связанных сигналов: 0", "без запуска: 0"} {
+		if strings.Contains(qualitySection, forbidden) {
+			t.Fatalf("technical quality contains a zero-value detail %q", forbidden)
+		}
+	}
 }
 
-func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testing.T) {
+func TestLeakReportsDoNotRepeatCollectionLossDetails(t *testing.T) {
+	summary := analyze.Summary{
+		Warnings: []string{"Качество сбора: потеряно событий удержания: 4."},
+		MemoryLeaks: []analyze.MemoryLeakSuspect{{
+			ClassName:          "com.app.LeakyActivity",
+			Holder:             "com.app.LeakyPresenter",
+			Count:              1,
+			Score:              8,
+			Severity:           "medium",
+			DataQuality:        "degraded",
+			EvidenceConfidence: "низкая: часть входных данных потеряна",
+			QualityWarnings:    []string{"потеряно событий удержания: 4"},
+		}}}
+	leakReport := analyze.BuildLeakReport(summary)
+	directory := t.TempDir()
+	inspectPath := filepath.Join(directory, "leaks.html")
+	if err := WriteLeakInspectWithOptions(inspectPath, leakReport, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(inspectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(data)), "потер") {
+		t.Fatal("leak inspect repeats collection-loss details")
+	}
+
+	comparison := analyze.Compare(summary, summary)
+	comparePath := filepath.Join(directory, "leaks-compare.html")
+	if err := WriteLeakCompareWithOptions(comparePath, analyze.BuildLeakCompareReport(comparison), ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(comparePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(data)), "потер") {
+		t.Fatal("leak compare repeats collection-loss details")
+	}
+
+	mathComparePath := filepath.Join(directory, "math-compare.html")
+	if err := WriteMathCompareWithOptions(mathComparePath, sampleCompareMathReport(comparison, summary), ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(mathComparePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mathHTML := string(data)
+	qualityIndex := strings.Index(mathHTML, `id="data-quality"`)
+	if qualityIndex < 0 {
+		t.Fatal("mathematical comparison misses the data-quality section")
+	}
+	if strings.Contains(strings.ToLower(mathHTML[:qualityIndex]), "потер") {
+		t.Fatal("mathematical comparison repeats collection-loss details outside data-quality")
+	}
+	if !strings.Contains(strings.ToLower(mathHTML[qualityIndex:]), "потеряно событий удержания") {
+		t.Fatal("mathematical data-quality section misses collection-loss details")
+	}
+}
+
+func TestProblemActionableLimitationsExcludeAnalyzerCoverageDetails(t *testing.T) {
+	limitations := []string{
+		"Неполный жизненный цикл может занижать частоту связанных сигналов и число завершений.",
+		"Полный охват операций не доказан: превышено ограничение по числу разных значений.",
+		"включён только основной процесс: события из дополнительных процессов намеренно не собирались",
+		"список ожидаемых процессов объявлен не полностью",
+		"записано 1 из 2 ожидаемых процессов",
+		"для восстановления цепочек Binder не сохранено 3 события из-за лимита памяти",
+		"для восстановления цепочек Binder пропущено 4 события без дескриптора",
+		"Максимальный PSS не доказывает рост памяти; нужна динамика во времени.",
+	}
+
+	got := problemActionableLimitations(limitations)
+	if len(got) != 1 || got[0] != limitations[len(limitations)-1] {
+		t.Fatalf("problemActionableLimitations() = %#v", got)
+	}
+}
+
+func TestInspectRendersCollapsedLogGrowthSectionAfterAnalysis(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "inspect.html")
 	summary := analyze.Summary{
@@ -590,10 +753,10 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 		t.Fatal(err)
 	}
 	html := string(data)
-	qualityIndex := strings.Index(html, `id="collection-quality"`)
 	growthIndex := strings.Index(html, `id="log-growth"`)
-	if qualityIndex < 0 || growthIndex <= qualityIndex {
-		t.Fatalf("log growth section must be last: quality=%d growth=%d", qualityIndex, growthIndex)
+	analysisIndex := strings.Index(html, `id="analysis"`)
+	if analysisIndex < 0 || growthIndex <= analysisIndex {
+		t.Fatalf("log growth section must follow analysis: analysis=%d growth=%d", analysisIndex, growthIndex)
 	}
 	growthSection := html[growthIndex:]
 	for _, expected := range []string{
@@ -606,7 +769,7 @@ func TestInspectRendersCollapsedLogGrowthSectionAfterCollectionQuality(t *testin
 		`data-growth-session-chart`,
 		`data-growth-day-chart`,
 		`data-growth-period-insight`,
-		`по горизонтали — дата начала сессии`,
+		`по горизонтали - дата начала сессии`,
 		`сбор остановлен по лимиту`,
 		`Общий лимит часто исчерпывается`,
 		`const selected = days.filter`,
@@ -641,7 +804,7 @@ func TestInspectMakesStaleGrowthProjectionProminent(t *testing.T) {
 	}
 }
 
-func TestInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
+func TestMathInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "analysis-inputs.html")
 	summary := analyze.Summary{AnalysisInputs: analyze.AnalysisInputCompleteness{
 		Status:          "runtime_only",
@@ -649,7 +812,7 @@ func TestInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
 		Missing:         []string{"class-graph.jsonl", "instrumentation-diagnostics.jsonl"},
 		Explanation:     "доступны только runtime evidence",
 	}}
-	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+	if err := WriteMathInspectWithOptions(path, sampleMathReport(summary), ReportOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	html, err := os.ReadFile(path)
@@ -657,7 +820,7 @@ func TestInspectKeepsAnalysisInputCompletenessInTechnicalDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		`id="collection-quality"`,
+		`id="data-quality"`,
 		"Источники технического анализа",
 		"Часть углублённого анализа недоступна",
 		"class-graph.jsonl, instrumentation-diagnostics.jsonl",
@@ -1058,16 +1221,22 @@ func TestStandaloneLeakReportsLinkExplorerAndRegistry(t *testing.T) {
 	)
 }
 
+func TestLeakReportShowsUnconfirmedHPROFCount(t *testing.T) {
+	report := analyze.BuildLeakReport(analyze.Summary{MemoryLeaks: []analyze.MemoryLeakSuspect{{
+		ClassName:     "com.app.ReleasedActivity",
+		Count:         1,
+		HeapCandidate: true,
+		EvidenceKind:  analyze.RetentionEvidenceUnconfirmedHPROF,
+	}}})
+	path := filepath.Join(t.TempDir(), "report-leaks.html")
+	if err := WriteLeakInspectWithOptions(path, report, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	assertHTMLContains(t, path, "HPROF проверен", "Без пути GC root <strong>1</strong>", "путь от GC root не найден")
+}
+
 func TestLeakReportsDeferRegistryRowsWithoutTruncatingData(t *testing.T) {
 	const total = 300
-	graph := analyze.LeakGraph{
-		Title:    "Контекст удержания",
-		RootID:   "target",
-		TargetID: "target",
-		Nodes: []analyze.LeakGraphNode{{
-			ID: "target", Label: "удержанный объект", Detail: "проверить", Kind: "target",
-		}},
-	}
 	items := make([]analyze.LeakReportItem, 0, total)
 	deltas := make([]analyze.LeakDelta, 0, total)
 	for index := range total {
@@ -1080,16 +1249,13 @@ func TestLeakReportsDeferRegistryRowsWithoutTruncatingData(t *testing.T) {
 			ObjectKind:     "object",
 			Recommendation: "Проверить время жизни объекта.",
 		}
-		items = append(items, analyze.LeakReportItem{
-			Rank: index + 1, Suspect: suspect, Graph: graph,
-		})
+		items = append(items, analyze.LeakReportItem{Rank: index + 1, Suspect: suspect})
 		deltas = append(deltas, analyze.LeakDelta{
 			Status:         analyze.LeakDeltaSame,
 			StatusLabel:    "Без изменений",
 			Severity:       "medium",
 			HasCandidate:   true,
 			Candidate:      suspect,
-			Graph:          graph,
 			ScoreAfter:     suspect.Score,
 			Recommendation: suspect.Recommendation,
 		})
@@ -1127,7 +1293,7 @@ func TestLeakReportsDeferRegistryRowsWithoutTruncatingData(t *testing.T) {
 				)
 			},
 			panelTargetTail: `data-leak-target="leak-delta-299"`,
-			expectedNotice:  "Интерактивные графы дельт:</strong> показано 24 из 300",
+			expectedNotice:  "Интерактивные графы изменений:</strong> показано 24 из 300",
 		},
 	}
 	for _, test := range tests {
@@ -1197,7 +1363,7 @@ func TestCompareReportPreservesAllLogGroupsAndDefersCompleteHighCardinalityTable
 		})
 	}
 	for index := range gaugeTotal {
-		summary.Gauges = append(summary.Gauges, analyze.NamedValue{
+		summary.Gauges = append(summary.Gauges, analyze.NamedGauge{
 			Name:  fmt.Sprintf("bounded.gauge.%03d", index),
 			Value: uint64(gaugeTotal - index),
 		})
@@ -1482,6 +1648,51 @@ func TestSignalContextLabelHidesUnknownParts(t *testing.T) {
 	}
 }
 
+func TestReportValueWithoutISODateDoesNotAllocate(t *testing.T) {
+	const value = "com.app.feed.FeedPresenter.render"
+	if got := reportValue(value, "нет данных"); got != value {
+		t.Fatalf("reportValue() = %q, want %q", got, value)
+	}
+	if got, want := reportValue("build 2026-09-10", "нет данных"), "build 10.09.2026"; got != want {
+		t.Fatalf("reportValue(date) = %q, want %q", got, want)
+	}
+	if raceDetectorEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	allocations := testing.AllocsPerRun(1_000, func() {
+		if reportValue(value, "нет данных") != value {
+			t.Fatal("reportValue changed a value without an ISO date")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("reportValue without an ISO date allocates %.2f objects, want 0", allocations)
+	}
+}
+
+func TestWriteInspectReportsOmittedUICauses(t *testing.T) {
+	windows := make([]analyze.ProblemWindowStats, uiScreenCauseLimit+1)
+	for index := range windows {
+		windows[index] = analyze.ProblemWindowStats{
+			Screen: "FeedActivity", Kind: "wrapped_click", Owner: fmt.Sprintf("Click%02d.run", index),
+			Count: 1, MaxMS: uint64(index + 20),
+		}
+	}
+	path := filepath.Join(t.TempDir(), "inspect.html")
+	if err := WriteInspectWithOptions(path, analyze.Summary{
+		Screens:        []analyze.ScreenStats{{Screen: "FeedActivity", Frames: 180, JankyFrames: 30, JankRatePct: 16.7}},
+		ProblemWindows: windows,
+	}, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte("Показано карточек: 12. Исходных сигналов: 13. Объединено в цепочки или скрыто менее важных: 1.")) {
+		t.Fatal("inspect report does not disclose omitted UI causes")
+	}
+}
+
 func TestProblemLocationTextHidesUnknownAndMergesRepeatedContext(t *testing.T) {
 	locations := []analyze.ProblemLocation{
 		{Route: "POST /omicron", Owner: "unknown"},
@@ -1516,6 +1727,81 @@ func TestProblemLocationTextPreservesDistinctKnownLocations(t *testing.T) {
 	}
 	if got := problemLocationText([]analyze.ProblemLocation{{Screen: "unknown"}}); got != "точное место не определено" {
 		t.Fatalf("problemLocationText(all unknown) = %q", got)
+	}
+}
+
+func TestProblemFindingLocationTextMarksLibraryStackAsObservation(t *testing.T) {
+	finding := analyze.ProblemFinding{
+		DetectorID: "stability.main_thread_stall",
+		Where: []analyze.ProblemLocation{{
+			Owner:  "com.google.android.material.appbar.AppBarLayout",
+			Method: "com.google.android.material.appbar.AppBarLayout.<init>(AppBarLayout.java:303)",
+		}},
+	}
+
+	got := problemFindingLocationText(finding)
+	if !strings.Contains(got, "библиотечный код") || !strings.Contains(got, "AppBarLayout.<init>") {
+		t.Fatalf("library observation is not explained: %q", got)
+	}
+	if strings.Contains(got, "источник") || strings.Count(got, "com.google.android.material.appbar.AppBarLayout") != 1 {
+		t.Fatalf("library frame is presented as a source or duplicated: %q", got)
+	}
+}
+
+func TestProblemFindingLocationTextKeepsApplicationContextForLibraryStack(t *testing.T) {
+	finding := analyze.ProblemFinding{
+		DetectorID: "stability.main_thread_stall",
+		Where: []analyze.ProblemLocation{{
+			Owner:  "ru.mail.im.chat.ChatFragment.onCreateView",
+			Method: "com.google.android.material.appbar.AppBarLayout.<init>(AppBarLayout.java:303)",
+		}},
+	}
+
+	got := problemFindingLocationText(finding)
+	applicationIndex := strings.Index(got, "код приложения ru.mail.im.chat.ChatFragment.onCreateView")
+	libraryIndex := strings.Index(got, "библиотечный код com.google.android.material.appbar.AppBarLayout.<init>")
+	if applicationIndex < 0 || libraryIndex <= applicationIndex {
+		t.Fatalf("application context and library observation are not preserved in order: %q", got)
+	}
+	locations := problemDiagnosisLocations(finding.Where)
+	if len(locations) != 1 || locations[0].Scope != "точка наблюдения в библиотеке" ||
+		!strings.Contains(locations[0].Text, "код приложения ru.mail.im.chat.ChatFragment.onCreateView") {
+		t.Fatalf("diagnosis location blames the application context or loses it: %+v", locations)
+	}
+}
+
+func TestWriteInspectLabelsFrameworkStallAsObservation(t *testing.T) {
+	const frame = "com.google.android.material.appbar.AppBarLayout.<init>(AppBarLayout.java:303)"
+	summary := analyze.Summary{
+		Title: "framework-stall.jhlog",
+		ProblemSummary: analyze.ProblemSummary{
+			Total: 1,
+		},
+		Problems: []analyze.ProblemFinding{{
+			ID:         "framework-stall",
+			DetectorID: "stability.main_thread_stall",
+			Title:      "Пауза зафиксирована при создании объекта библиотеки: до 1531 мс",
+			Where: []analyze.ProblemLocation{{
+				Owner:  "com.google.android.material.appbar.AppBarLayout",
+				Method: frame,
+			}},
+		}},
+	}
+	path := filepath.Join(t.TempDir(), "report.html")
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(payload)
+	if !strings.Contains(html, "Где зафиксировано:</strong> библиотечный код ") ||
+		!strings.Contains(html, "com.google.android.material.appbar.AppBarLayout.&lt;init&gt;(AppBarLayout.java:303)") {
+		t.Fatalf("rendered report does not mark the library frame as observation")
+	}
+	if strings.Contains(html, "Где:</strong> источник com.google.android.material") {
+		t.Fatalf("rendered report still presents the library frame as a source")
 	}
 }
 
@@ -1573,7 +1859,7 @@ func TestWriteReportsHideUnknownPlaceholders(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReportWithOptions() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "неизвестная база", "неизвестный кандидат", "контекст недоступен", "нет данных")
+	assertHTMLContains(t, comparePath, "базовое устройство неизвестно", "проверяемое устройство неизвестно", "контекст недоступен", "нет данных")
 	assertHTMLNotContains(t, comparePath, "unknown unknown", "unknown build", ">unknown<", "<code>unknown</code>")
 }
 
@@ -1624,7 +1910,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	if err := WriteInspectWithOptions(inspectPath, summary, ReportOptions{Links: ReportLinks{Math: "inspect-ru-math.html"}}); err != nil {
 		t.Fatalf("WriteInspect() error = %v", err)
 	}
-	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Проблемы приложения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Все записанные сетевые маршруты", "Эвристический итог", "Подробный анализ")
+	assertHTMLContains(t, inspectPath, `<html lang="ru">`, "Проблемы приложения", "Контекст устройства", "Батарея", "3 запроса, 1 ошибка", "Все записанные сетевые маршруты", "Итог по всем сигналам", "Подробный анализ")
 	assertHTMLNotContains(t, inspectPath, "Связанные сигналы")
 
 	comparePath := filepath.Join(dir, "compare-ru.html")
@@ -1637,7 +1923,7 @@ func TestWriteReportsRussian(t *testing.T) {
 	); err != nil {
 		t.Fatalf("WriteCompareReport() error = %v", err)
 	}
-	assertHTMLContains(t, comparePath, "Изменения проблем", "Матрица регрессий", "Где изменилось", "Сравнение связанных сигналов", "Детали по каждому журналу", "Эвристический итог", "Логи базы", "λ Анализ")
+	assertHTMLContains(t, comparePath, "Изменения проблем", "Изменения ключевых показателей", "В каких данных есть изменения", "Связанные сигналы", "Детали по каждому журналу", "Итог по всем сигналам", "Логи базы", "Подробный анализ")
 }
 
 func attachProblemReport(t *testing.T, summary *analyze.Summary) {
@@ -1662,7 +1948,7 @@ func TestCollectionWindowNoticeExplainsLateRuntimeEnablement(t *testing.T) {
 			Name:  "jankhunter.runtime.enabled.reason.omicron.count",
 			Value: 1,
 		}},
-		Gauges: []analyze.NamedValue{{
+		Gauges: []analyze.NamedGauge{{
 			Name:  "jankhunter.runtime.collection_inactive_before_start_ms",
 			Value: 9 * 60_000,
 		}},
@@ -1708,7 +1994,7 @@ func TestInspectMathHeuristicExplainsMissingOwnerInsteadOfShowingUnknown(t *test
 	if strings.Contains(detail, "unknown") {
 		t.Fatalf("missing owner leaked as unknown: %s", detail)
 	}
-	for _, expected := range []string{"место запуска не записано", "инструментирован", "пакет"} {
+	for _, expected := range []string{"место запуска не записано", "asm-хуки", "пакет"} {
 		if !strings.Contains(detail, expected) {
 			t.Fatalf("missing owner explanation lacks %q: %s", expected, detail)
 		}
@@ -1830,7 +2116,12 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		MethodCount:          5,
 		IgnoredMethodCount:   1,
 		AnnotatedMethodCount: 1,
+		MethodFilterIncluded: 4,
+		MethodFilterExcluded: 1,
 		HookCount:            3,
+		MethodFilterReasons: []analyze.InstrumentationSkippedSummary{
+			{Reason: "excluded:synthetic", Count: 1},
+		},
 		SkippedMethods: []analyze.InstrumentationSkippedSummary{
 			{Reason: "constructor", Count: 2},
 		},
@@ -1847,10 +2138,15 @@ func sampleInstrumentationDiagnostics() analyze.InstrumentationDiagnostics {
 		},
 		Classes: []analyze.InstrumentationClassDiagnostic{
 			{
-				ClassName:        "com.app.FeedRepository",
-				Methods:          3,
-				AnnotatedMethods: 1,
-				HookCount:        2,
+				ClassName:            "com.app.FeedRepository",
+				Methods:              3,
+				AnnotatedMethods:     1,
+				MethodFilterIncluded: 2,
+				MethodFilterExcluded: 1,
+				HookCount:            2,
+				MethodFilterReasons: []analyze.InstrumentationSkippedSummary{
+					{Reason: "excluded:synthetic", Count: 1},
+				},
 				Hooks: []analyze.InstrumentationHookSummary{
 					{Intent: "okhttp.install_event_listener_factory", Signature: "okhttp3.builder.build.v3", Bridge: "okhttp3.bridge.v3", Method: "client()V", Count: 2},
 				},

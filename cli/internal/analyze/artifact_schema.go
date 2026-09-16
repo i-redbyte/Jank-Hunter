@@ -5,6 +5,7 @@ import "fmt"
 const (
 	ArtifactMetadataFormat           = 1
 	ClassGraphFormat                 = 1
+	LambdaCaptureFormat              = 1
 	InstrumentationDiagnosticsFormat = 1
 	DependencyInjectionCatalogFormat = 1
 	AndroidComponentCatalogFormat    = 1

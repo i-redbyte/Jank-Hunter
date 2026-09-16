@@ -148,27 +148,23 @@ func networkLoopKindToken(kind string) string {
 
 func networkLoopProbableCause(kind, route, owner string) string {
 	target := networkLoopTarget(route, owner)
-	ownerAction := ""
-	if !analysisOwnerIsKnown(owner) {
-		ownerAction = " " + missingOwnerAction()
-	}
 	switch kind {
 	case "dns":
-		return "Гипотеза для проверки: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL, кеш, OkHttp DNS и сетевой слой." + ownerAction
+		return "Гипотеза для проверки: периодическое DNS-разрешение или потеря DNS-кеша" + target + ". Проверьте TTL, кеш, OkHttp DNS и сетевой слой."
 	case "connect":
-		return "Гипотеза для проверки: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети." + ownerAction
+		return "Гипотеза для проверки: повторные попытки соединения или TLS" + target + ". Проверьте пул соединений, прокси/VPN, TLS и достижимость сети."
 	case "retry":
-		return "Гипотеза для проверки: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления." + ownerAction
+		return "Гипотеза для проверки: контур повторов или переподключений" + target + ". Проверьте задержку повторов, отмену работы и владельца обновления."
 	case "websocket":
-		return "Гипотеза для проверки: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения." + ownerAction
+		return "Гипотеза для проверки: шторм WebSocket-переподключений" + target + ". Проверьте жизненный цикл, проверку живости соединения и задержку переподключения."
 	case "failure":
-		return "Гипотеза для проверки: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и правила повторов." + ownerAction
+		return "Гипотеза для проверки: повторяющиеся сетевые ошибки" + target + ". Проверьте статус сервера, обработку IOException и правила повторов."
 	case "owner":
-		return "Гипотеза для проверки: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин и задач и подавление частых повторов." + ownerAction
+		return "Гипотеза для проверки: источник регулярно запускает сетевую работу" + target + ". Проверьте планирование корутин и задач и подавление частых повторов."
 	case "route":
-		return "Гипотеза для проверки: периодический опрос или шквал запросов" + target + ". Проверьте таймеры, запуск обновления и правила кеширования." + ownerAction
+		return "Гипотеза для проверки: периодический опрос или шквал запросов" + target + ". Проверьте таймеры, запуск обновления и правила кеширования."
 	default:
-		return "Гипотеза для проверки: повторяющаяся последовательность сетевых событий" + target + "." + ownerAction
+		return "Гипотеза для проверки: повторяющаяся последовательность сетевых событий" + target + "."
 	}
 }
 
@@ -196,6 +192,9 @@ func networkLoopPath(kind, route, owner string, motif []string, confidence float
 	}
 	nodes = append(nodes, networkLoopKindLabel(kind))
 	for _, token := range motif {
+		if strings.HasPrefix(token, "owner:") || strings.HasPrefix(token, "route:") {
+			continue
+		}
 		label := networkLoopTokenLabel(token)
 		if label != "" && !stringSliceContains(nodes, label) {
 			nodes = append(nodes, label)
@@ -239,21 +238,6 @@ func networkLoopSpecificity(loop NetworkLoopFinding) int {
 	return score
 }
 
-func uniqueMotifValue(motif []string, prefix string) string {
-	value := ""
-	for _, token := range motif {
-		if !strings.HasPrefix(token, prefix) {
-			continue
-		}
-		candidate := strings.TrimPrefix(token, prefix)
-		if value != "" && candidate != value {
-			return ""
-		}
-		value = candidate
-	}
-	return value
-}
-
 func tokenPriority(token string) int {
 	switch {
 	case token == "dns_high":
@@ -271,31 +255,6 @@ func tokenPriority(token string) int {
 	default:
 		return 6
 	}
-}
-
-func metricAwareContains(value, filter string) bool {
-	if timelineContainsFilter(value, filter) {
-		return true
-	}
-	normalized := normalizeMetricFragment(filter)
-	return normalized != "" && strings.Contains(strings.ToLower(value), normalized)
-}
-
-func normalizeMetricFragment(value string) string {
-	var b strings.Builder
-	lastUnderscore := false
-	for _, r := range strings.ToLower(value) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			lastUnderscore = false
-			continue
-		}
-		if !lastUnderscore && b.Len() > 0 {
-			b.WriteByte('_')
-			lastUnderscore = true
-		}
-	}
-	return strings.Trim(b.String(), "_")
 }
 
 func clamp01(value float64) float64 {

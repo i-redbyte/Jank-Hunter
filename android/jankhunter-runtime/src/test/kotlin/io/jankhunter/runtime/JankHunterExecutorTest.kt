@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -13,7 +14,35 @@ import org.junit.Test
 
 class JankHunterExecutorTest {
     private val callbacks: RuntimeAsyncCallbacks
-        get() = JankHunter.asyncTelemetry()
+        get() = activeExecutorTestCallbacks()
+
+    @Test
+    fun executorMayRetryTheSameCommandAfterItsFirstFailure() {
+        val retrying = Executor { command ->
+            try {
+                command.run()
+            } catch (_: IllegalStateException) {
+                command.run()
+            }
+        }
+        val executor = JankHunterExecutor(retrying, "retry", null, { 1L }, callbacks)
+        var attempts = 0
+        executor.execute {
+            attempts++
+            if (attempts == 1) error("retry this command")
+        }
+        assertEquals("SDK discarded the command before the delegate retried it", 2, attempts)
+    }
+
+    @Test
+    fun queuedTaskUsesPrimitiveStateAndTrackerPrecomputesMetricKeys() {
+        val queuedTask = Class.forName("io.jankhunter.runtime.ExecutorTaskTracker\$QueuedTask")
+        val tracker = Class.forName("io.jankhunter.runtime.ExecutorTaskTracker")
+
+        assertTrue(queuedTask.declaredFields.none { it.type == AtomicBoolean::class.java })
+        assertTrue(queuedTask.declaredFields.any { it.type == Int::class.javaPrimitiveType })
+        assertTrue(tracker.declaredFields.any { it.type.simpleName == "ExecutorMetricKeys" })
+    }
 
     @Test
     fun wrapExecutorRunsDelegateTask() {

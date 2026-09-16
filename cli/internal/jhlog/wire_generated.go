@@ -4,9 +4,9 @@ package jhlog
 
 const FormatMarker = 0x81
 const FormatMajor = 5
-const FormatMinor = 0
+const FormatMinor = 1
 const FormatPatch = 0
-const FormatVersionString = "5.0.0"
+const FormatVersionString = "5.1.0"
 const HeaderSchemaV2 uint64 = 2
 const magicSize = 11
 
@@ -49,13 +49,17 @@ const (
 	FeatureRuntimeEdgeBitPlanes      uint64 = 1 << 24
 	FeatureImplicitStableAliases     uint64 = 1 << 25
 	FeatureColumnarRuntimeEdgeTuples uint64 = 1 << 26
+	FeatureGaugeWideSum              uint64 = 1 << 27
+	FeatureHTTPFirstByte             uint64 = 1 << 28
+	FeatureUIDTraffic                uint64 = 1 << 29
+	FeatureHTTPCollectionState       uint64 = 1 << 30
 	FeatureGZIPChunks                uint64 = 1 << 0
 	FeatureDatabaseTransactionDelta  uint64 = 1 << 1
 	FeatureColumnarDatabasePages     uint64 = 1 << 2
 	FeatureSegmentDictionaryTokens   uint64 = 1 << 3
 	FeatureRuntimeNumericColumns     uint64 = 1 << 4
 	FeatureRANSMicroPageSections     uint64 = 1 << 5
-	RequiredFeatures                 uint64 = 0x7bfffff
+	RequiredFeatures                 uint64 = 0x7fbfffff
 	BestEffortFeatures               uint64 = RequiredFeatures &^ FeatureExactEventAdmission
 	OptionalFeatures                 uint64 = 0x1f
 	RawOptionalFeatures              uint64 = 0x3e
@@ -66,7 +70,7 @@ const (
 	chunkKnownFlags        = chunkFlagGZIP | chunkFlagFinal
 )
 
-var Magic = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x00, 0x00}
+var Magic = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x01, 0x00}
 var chunkMagic = [4]byte{0x4a, 0x48, 0x43, 0x31}
 var commitMagic = [4]byte{0x4a, 0x48, 0x43, 0x4d}
 
@@ -108,9 +112,26 @@ const (
 )
 
 const (
+	StallStateUnknown     StallState = 0
+	StallStateOngoing     StallState = 1
+	StallStateRecovered   StallState = 2
+	StallStateInterrupted StallState = 3
+)
+
+const (
+	WorkerStageUnknown            WorkerStage = 0
+	WorkerStageEnqueued           WorkerStage = 1
+	WorkerStageStarted            WorkerStage = 2
+	WorkerStageFinished           WorkerStage = 3
+	WorkerStageRegisteredObserved WorkerStage = 4
+)
+
+const (
 	EnvelopeHasTime       EnvelopeFlag = 1 << 0
 	EnvelopeHasThread     EnvelopeFlag = 1 << 1
 	EnvelopeHasContext    EnvelopeFlag = 1 << 2
 	EnvelopeSameContext   EnvelopeFlag = 1 << 3
 	EnvelopeHasAttributes EnvelopeFlag = 1 << 4
 )
+
+var legacyMagicV500 = []byte{0x4a, 0x48, 0x4c, 0x4f, 0x47, 0x0d, 0x0a, 0x81, 0x05, 0x00, 0x00}

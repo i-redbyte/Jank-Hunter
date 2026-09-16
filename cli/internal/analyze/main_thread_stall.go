@@ -44,13 +44,23 @@ func DiagnoseMainThreadStall(owner, stack string) MainThreadStallDiagnosis {
 	case strings.Contains(location, "arraylinkedvariables.add"), strings.Contains(location, "constraintlayout.core"):
 		return MainThreadStallDiagnosis{
 			Title:       "Пауза произошла во время работы решателя ConstraintLayout",
-			Explanation: "Пауза измерена на главном потоке, а снимок пришёлся на решатель ограничений ConstraintLayout. Метод библиотеки — место выполнения, но первопричина обычно находится в компоновке приложения: сложной системе ограничений, повторных requestLayout или многократных проходах измерения и размещения за один кадр.",
+			Explanation: "Пауза измерена на главном потоке, а снимок пришёлся на решатель ограничений ConstraintLayout. Метод библиотеки - место выполнения, но первопричина обычно находится в компоновке приложения: сложной системе ограничений, повторных requestLayout или многократных проходах измерения и размещения за один кадр.",
 			Action:      "Найдите компоновку и действие приложения, вызвавшие этот проход: запишите Perfetto/System Trace с этапами измерения и размещения View, посчитайте повторные requestLayout, упростите ограничения и иерархию, затем сравните число проходов и максимальную паузу.",
+		}
+	case IsFrameworkSymbol(stack):
+		title := "Пауза зафиксирована внутри библиотечного вызова"
+		if strings.Contains(location, ".<init>") || strings.Contains(location, "<clinit>") {
+			title = "Пауза зафиксирована при создании объекта библиотеки"
+		}
+		return MainThreadStallDiagnosis{
+			Title:       title,
+			Explanation: "Снимок стека показывает точку наблюдения внутри Android или подключённой библиотеки. Он подтверждает, где находился главный поток, но не доказывает ошибку в этом классе: задержку мог вызвать layout, тема, ресурсы, повторное создание View или код приложения выше по цепочке вызовов.",
+			Action:      "Не изменяйте библиотечный класс по этому снимку. Найдите в коде приложения layout, стиль или вызов, который создаёт этот объект, затем запишите System Trace с полной цепочкой вызовов и проверьте повторную инфляцию, requestLayout и тяжёлую работу во время создания UI.",
 		}
 	case strings.Contains(location, ".ondraw"), strings.Contains(location, ".dispatchdraw"):
 		return MainThreadStallDiagnosis{
 			Title:       "Пользовательский View блокировал отрисовку в onDraw",
-			Explanation: "Пауза главного потока измерена, а снимок стека попал в onDraw/dispatchDraw. Это делает тяжёлые вычисления, создание объектов или сложную геометрию в этом методе сильным кандидатом, но полную длительность последнего метода стека нужно подтвердить трассой.",
+			Explanation: "Пауза главного потока измерена, а снимок стека попал в onDraw/dispatchDraw. Сначала проверьте тяжёлые вычисления, создание объектов и сложную геометрию в этом методе. Точную длительность подтвердите трассой.",
 			Action:      "Откройте указанный onDraw/dispatchDraw: вынесите вычисления, не создавайте объекты на каждом кадре, кэшируйте Path/Bitmap/Shader и проверьте частоту invalidate.",
 		}
 	case strings.Contains(location, ".onmeasure"), strings.Contains(location, ".onlayout"):

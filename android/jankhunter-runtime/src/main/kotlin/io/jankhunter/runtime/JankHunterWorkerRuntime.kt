@@ -14,6 +14,10 @@ object JankHunterWorkerRuntime {
     fun classify(result: Any?): JankHunterWorkerOutcome = JankHunter.workerTelemetry().classifyResult(result)
 
     @JvmSynthetic
+    fun registeredObserved(instanceId: Long, periodic: Boolean) =
+        JankHunter.workerTelemetry().registeredObserved(instanceId, periodic)
+
+    @JvmSynthetic
     fun enqueued(instanceId: Long, periodic: Boolean) = JankHunter.workerTelemetry().enqueued(instanceId, periodic)
 
     @JvmSynthetic

@@ -1,11 +1,9 @@
 package analyze
 
 import (
-	"bufio"
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +11,7 @@ import (
 
 const (
 	androidComponentCatalogMaxRecords      = 100_000
+	androidComponentCatalogMaxFileBytes    = 256 << 20
 	androidComponentCatalogMaxLineBytes    = 1 << 20
 	androidComponentCatalogMaxEntryPoints  = 128
 	androidComponentCatalogMaxTransactions = 4_096
@@ -73,11 +72,17 @@ func LoadAndroidComponentCatalog(path string) (*AndroidComponentCatalog, error) 
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	file, err := os.Open(path)
+	input, err := openBoundedTextInput(
+		path,
+		"Android component catalog",
+		androidComponentCatalogMaxFileBytes,
+		64*1024,
+		androidComponentCatalogMaxLineBytes,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer input.Close()
 
 	catalog := &AndroidComponentCatalog{
 		Available: true,
@@ -86,20 +91,19 @@ func LoadAndroidComponentCatalog(path string) (*AndroidComponentCatalog, error) 
 		aidl:      make(map[androidAIDLTransactionKey]string),
 	}
 	classes := make(map[string]struct{})
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), androidComponentCatalogMaxLineBytes)
+	scanner := input.Scanner
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
 		if len(catalog.Components) >= androidComponentCatalogMaxRecords {
 			return nil, fmt.Errorf("%s: Android component catalog exceeds record limit %d", path, androidComponentCatalogMaxRecords)
 		}
 		var record androidComponentCatalogRecord
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
+		if err := decodeStrictJSON(line, &record); err != nil {
 			return nil, fmt.Errorf("parse Android component catalog line %d: %w", lineNumber, err)
 		}
 		entry, err := androidComponentEntry(path, record)
@@ -129,7 +133,7 @@ func LoadAndroidComponentCatalog(path string) (*AndroidComponentCatalog, error) 
 			catalog.aidl[key] = transaction.Method
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := input.Err(); err != nil {
 		return nil, err
 	}
 	sort.Slice(catalog.Components, func(i, j int) bool {
@@ -269,15 +273,25 @@ func validatedAndroidCatalogStrings(field string, values []string) ([]string, er
 }
 
 func validateAndroidCoverage(coverage string, entries, instrumented, uncovered []string) error {
-	entrySet := make(map[string]struct{}, len(entries))
+	entrySet := make(map[string]uint8, len(entries))
 	for _, value := range entries {
-		entrySet[value] = struct{}{}
+		entrySet[value] = 0
 	}
-	for _, values := range [][]string{instrumented, uncovered} {
+	for partition, values := range [...][]string{instrumented, uncovered} {
 		for _, value := range values {
-			if _, exists := entrySet[value]; !exists {
+			state, exists := entrySet[value]
+			if !exists {
 				return fmt.Errorf("coverage entry %q is absent from entryPoints", value)
 			}
+			if state != 0 {
+				return fmt.Errorf("instrumented and uncovered entry points must not overlap at %q", value)
+			}
+			entrySet[value] = uint8(partition + 1)
+		}
+	}
+	for value, state := range entrySet {
+		if state == 0 {
+			return fmt.Errorf("entry point %q is absent from instrumented and uncovered coverage", value)
 		}
 	}
 	expected := "partial"
@@ -289,9 +303,6 @@ func validateAndroidCoverage(coverage string, entries, instrumented, uncovered [
 	}
 	if coverage != expected {
 		return fmt.Errorf("coverage %q contradicts entry point coverage %q", coverage, expected)
-	}
-	if len(instrumented)+len(uncovered) != len(entries) {
-		return fmt.Errorf("instrumented and uncovered entry points must partition entryPoints")
 	}
 	return nil
 }

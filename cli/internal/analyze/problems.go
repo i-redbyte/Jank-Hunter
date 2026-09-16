@@ -23,6 +23,7 @@ const (
 	medianDurationLabel    = "Медиана длительности"
 	upperTenDurationLabel  = "Граница верхних 10% длительности"
 	upperFiveDurationLabel = "Граница верхних 5% длительности"
+	thermalMinimumSamples  = 3
 )
 
 type ProblemFinding struct {
@@ -249,10 +250,19 @@ func buildProblemReportWithCatalog(
 	cfg ProblemDetectorConfig,
 	catalog *DependencyInjectionCatalog,
 ) (ProblemReport, error) {
+	return buildProblemReportWithLambdaCaptures(summary, cfg, catalog, nil)
+}
+
+func buildProblemReportWithLambdaCaptures(
+	summary Summary,
+	cfg ProblemDetectorConfig,
+	catalog *DependencyInjectionCatalog,
+	lambdaCaptures *LambdaCaptureCatalog,
+) (ProblemReport, error) {
 	if err := validateProblemDetectorConfig(cfg); err != nil {
 		return ProblemReport{}, err
 	}
-	b := problemBuilder{summary: summary, cfg: cfg, dependencyInjection: catalog}
+	b := problemBuilder{summary: summary, cfg: cfg, dependencyInjection: catalog, lambdaCaptures: lambdaCaptures}
 	b.detectProcessExit()
 	b.detectOperations()
 	b.detectStallsAndIO()
@@ -265,6 +275,7 @@ func buildProblemReportWithCatalog(
 	b.detectSemanticWork()
 	b.detectNetwork()
 	b.detectMemory()
+	b.detectLambdaCaptures()
 	b.detectCPU()
 	b.detectRuntimeAnalysis()
 	b.detectPower()
@@ -281,7 +292,7 @@ func buildProblemReportWithCatalog(
 		Problems:  b.findings,
 		Incidents: incidents,
 		Coverage:  coverage,
-		Registry:  detectorRegistry(cfg),
+		Registry:  detectorRegistry(cfg, lambdaCaptures != nil && lambdaCaptures.Available),
 	}
 	if err := validateProblemReport(report); err != nil {
 		return ProblemReport{}, err
@@ -290,6 +301,7 @@ func buildProblemReportWithCatalog(
 }
 
 func CompareProblems(baseline, candidate Summary, cohortsComparable bool) ProblemComparison {
+	changedTiming := scheduledTimingTransitions(baseline.AsyncAnalysis, candidate.AsyncAnalysis)
 	baselineProblems := problemIncidentsOrFindings(baseline)
 	candidateProblems := problemIncidentsOrFindings(candidate)
 	before := make(map[string]ProblemFinding, len(baselineProblems))
@@ -337,6 +349,16 @@ func CompareProblems(baseline, candidate Summary, cohortsComparable bool) Proble
 		}
 		if !cohortsComparable {
 			delta.Note = "Состав прогонов различается; статус показан как наблюдаемое изменение, но не является доказанной регрессией."
+		}
+		if queueFindingUsesChangedTiming(baselineFinding, changedTiming) || queueFindingUsesChangedTiming(candidateFinding, changedTiming) {
+			delta.Comparable = false
+			delta.Status = "not_comparable"
+			baselineFinding.Status = "not_comparable"
+			candidateFinding.Status = "not_comparable"
+			if delta.Note != "" {
+				delta.Note += " "
+			}
+			delta.Note += "Старый wait_ms мог включать заданную задержку. После разделения задержки и опоздания изменение проблемы очереди не сравнивается."
 		}
 		if hasBaseline {
 			copy := baselineFinding
@@ -427,5 +449,6 @@ type problemBuilder struct {
 	summary             Summary
 	cfg                 ProblemDetectorConfig
 	dependencyInjection *DependencyInjectionCatalog
+	lambdaCaptures      *LambdaCaptureCatalog
 	findings            []ProblemFinding
 }

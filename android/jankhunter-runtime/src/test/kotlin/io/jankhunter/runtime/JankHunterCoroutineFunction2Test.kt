@@ -92,22 +92,38 @@ class JankHunterCoroutineFunction2Test {
 
         override fun recordClick(ownerName: String?, durationMs: Long, failed: Boolean) = Unit
 
-        override fun recordExecutorWait(executorName: String, ownerName: String?, waitMs: Long) = Unit
+        override fun recordExecutorQueueChanged(keys: ExecutorMetricKeys, executor: Executor, queued: Int) = Unit
 
-        override fun recordExecutorSnapshot(executorName: String, executor: Executor, queued: Int) = Unit
+        override fun recordExecutorStarted(
+            keys: ExecutorMetricKeys,
+            executor: Executor,
+            queued: Int,
+            waitMs: Long,
+            scheduled: Boolean,
+        ) = Unit
 
         override fun runExecutorTask(
-            executorName: String,
+            keys: ExecutorMetricKeys,
             ownerName: String?,
+            context: JankHunterContext?,
+            executor: Executor,
+            queued: Int,
+            waitMs: Long,
             command: Runnable,
             clock: RuntimeLongSource,
+            scheduled: Boolean,
         ) = command.run()
 
         override fun <T> callExecutorTask(
-            executorName: String,
+            keys: ExecutorMetricKeys,
             ownerName: String?,
+            context: JankHunterContext?,
+            executor: Executor,
+            queued: Int,
+            waitMs: Long,
             callable: Callable<T>,
             clock: RuntimeLongSource,
+            scheduled: Boolean,
         ): T = callable.call()
     }
 

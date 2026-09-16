@@ -77,6 +77,25 @@ class JankHunterConfig private constructor(builder: Builder) {
         return availableRuntimeFeaturesMask and enabledRuntimeFeaturesMask and mask != 0L
     }
 
+    internal fun effectiveRuntimeFeatureMask(): Long {
+        if (!enabled || !runtimeEnabled) return 0L
+        var result = availableRuntimeFeaturesMask and enabledRuntimeFeaturesMask
+        if (!runtimeCallGraphEnabled) result = result without JankHunterRuntimeFeature.CALL_GRAPH
+        if (!mainLooperDispatchMonitorEnabled) result = result without JankHunterRuntimeFeature.MAIN_LOOPER
+        if (!databaseTracingEnabled) result = result without JankHunterRuntimeFeature.SQLITE
+        if (!roomTracingEnabled) result = result without JankHunterRuntimeFeature.ROOM
+        if (!ioTracingEnabled) {
+            result = result without JankHunterRuntimeFeature.RUNTIME_IO
+            result = result without JankHunterRuntimeFeature.BYTECODE_IO
+        }
+        if (!objectWatcherEnabled) result = result without JankHunterRuntimeFeature.LIFECYCLE_LEAKS
+        if (!retainedHeapDumpEnabled) result = result without JankHunterRuntimeFeature.HEAP_DUMPS
+        if (!composeTracingEnabled) result = result without JankHunterRuntimeFeature.COMPOSE
+        if (!workerTracingEnabled) result = result without JankHunterRuntimeFeature.WORKERS
+        if (!fpsMonitorEnabled && !jankStatsEnabled) result = result without JankHunterRuntimeFeature.JANK_STATS
+        return result
+    }
+
     fun autoStartCollectors(): Boolean = autoStartCollectors
 
     fun mainThreadStallThresholdMs(): Long = mainThreadStallThresholdMs.coerceAtLeast(1L)
@@ -154,7 +173,7 @@ class JankHunterConfig private constructor(builder: Builder) {
      */
     fun exactEventCollectionEnabled(): Boolean = exactEventCollectionEnabled
 
-    fun maxQueueSize(): Int = maxQueueSize.coerceAtLeast(1)
+    fun maxQueueSize(): Int = maxQueueSize.coerceIn(1, MAX_QUEUE_SIZE)
 
     /** Maximum time a main-thread producer may wait for bounded log admission. */
     fun mainThreadAdmissionWaitMs(): Long = mainThreadAdmissionWaitMs.coerceAtLeast(0L)
@@ -176,9 +195,9 @@ class JankHunterConfig private constructor(builder: Builder) {
         return sizeMiB.coerceAtMost(Long.MAX_VALUE / BYTES_PER_MIB) * BYTES_PER_MIB
     }
 
-    fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceAtLeast(0)
+    fun maxDictionaryEntries(): Int = maxDictionaryEntries.coerceIn(0, MAX_DICTIONARY_ENTRIES)
 
-    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceAtLeast(1)
+    fun maxDictionaryValueBytes(): Int = maxDictionaryValueBytes.coerceIn(1, MAX_DICTIONARY_VALUE_BYTES)
 
     fun flushIntervalMs(): Long = flushIntervalMs.coerceAtLeast(1L)
 
@@ -497,8 +516,13 @@ class JankHunterConfig private constructor(builder: Builder) {
     companion object {
         private const val BYTES_PER_MIB = 1_048_576L
         private const val SYMBOL_NAMESPACE_BYTES = 16
+        private const val MAX_QUEUE_SIZE = 262_144
+        private const val MAX_DICTIONARY_ENTRIES = 65_536
+        private const val MAX_DICTIONARY_VALUE_BYTES = 16_384
 
         @JvmStatic
         fun builder(): Builder = Builder()
     }
+
+    private infix fun Long.without(feature: JankHunterRuntimeFeature): Long = this and feature.mask.inv()
 }

@@ -121,6 +121,7 @@ abstract class GenerateJankHunterArtifactMetadataTask : DefaultTask() {
             appendHook("lifecycleLeaks", lifecycleLeaks.getOrElse(false))
             appendHook("logSpam", logSpam.getOrElse(false))
             appendHook("classGraph", classGraph.getOrElse(false))
+            appendHook("lambdaCaptures", classGraph.getOrElse(false))
             appendHook("runtimeCallGraph", runtimeCallGraph.getOrElse(false))
             appendHook("databaseTracing", databaseTracing.getOrElse(false))
             appendHook("ioTracing", ioTracing.getOrElse(false))
@@ -166,6 +167,14 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
     val classGraphFiles: ConfigurableFileCollection = project.objects.fileCollection()
 
     @get:Internal
+    abstract val lambdaCaptureDirectory: DirectoryProperty
+
+    @get:InputFiles
+    @get:Optional
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val lambdaCaptureFiles: ConfigurableFileCollection = project.objects.fileCollection()
+
+    @get:Internal
     abstract val diagnosticsDirectory: DirectoryProperty
 
     @get:InputFiles
@@ -185,6 +194,9 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
     abstract val classGraphOutputFile: RegularFileProperty
 
     @get:OutputFile
+    abstract val lambdaCaptureOutputFile: RegularFileProperty
+
+    @get:OutputFile
     abstract val diagnosticsOutputFile: RegularFileProperty
 
     @get:OutputFile
@@ -193,6 +205,10 @@ abstract class MergeJankHunterInstrumentationArtifactsTask : DefaultTask() {
     @TaskAction
     fun merge() {
         InstrumentationArtifactFiles.mergeJsonl(classGraphDirectory.orNull?.asFile, classGraphOutputFile.get().asFile)
+        InstrumentationArtifactFiles.mergeJsonl(
+            lambdaCaptureDirectory.orNull?.asFile,
+            lambdaCaptureOutputFile.get().asFile,
+        )
         InstrumentationArtifactFiles.mergeJsonl(diagnosticsDirectory.orNull?.asFile, diagnosticsOutputFile.get().asFile)
         InstrumentationArtifactFiles.mergeJsonl(
             androidComponentCatalogDirectory.orNull?.asFile,

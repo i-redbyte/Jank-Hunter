@@ -191,7 +191,7 @@ func TestInspectDatabaseExplainsTransactionsResultsAndMeasuredPhases(t *testing.
 		"HTTP / фоновые задачи / файлы / GC", "1 / 2 / 3 / 4", "совпадение по времени",
 		"Проблемные транзакции", "SyncStore.replace", "откат", "42</strong>",
 		"Результат известен", "БД занята или заблокирована", "ожидание блокировки", "только при явном измерении",
-		"Cursor.getCount()", "beginDatabasePhase", "общая длительность не считается ожиданием блокировки",
+		"Cursor.getCount()", "beginDatabasePhase", "Общее время не считается ожиданием блокировки",
 		"Незавершённые транзакции не получают искусственную длительность",
 	} {
 		if !strings.Contains(html, expected) {
@@ -240,7 +240,7 @@ func TestInspectDatabaseExplainsOfflinePlanEvidenceWithoutOverclaimingIndex(t *t
 		"временное B-дерево",
 		`<pre class="database-sql-template"><code>SELECT value FROM message WHERE chat_id = ?`,
 		"1 из 2",
-		"неоднозначных отпечатков — 1",
+		"неоднозначных отпечатков - 1",
 		"не выполняет SQL, EXPLAIN или PRAGMA",
 		"не доказывает, что индекс нужен",
 	} {
@@ -251,7 +251,9 @@ func TestInspectDatabaseExplainsOfflinePlanEvidenceWithoutOverclaimingIndex(t *t
 }
 
 func TestInspectDatabaseCoverageExplainsEnabledCollectorWithoutEvents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "database-coverage.html")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "database-coverage.html")
+	mathPath := filepath.Join(directory, "database-coverage-math.html")
 	summary := analyze.Summary{
 		Title: "database-coverage",
 		DatabaseCoverage: analyze.DatabaseCoverage{
@@ -261,7 +263,7 @@ func TestInspectDatabaseCoverageExplainsEnabledCollectorWithoutEvents(t *testing
 			RuntimeEnabledSessions: 1, CollectorSessions: 1, InstrumentedHooks: 4,
 		},
 	}
-	if err := WriteInspectWithOptions(path, summary, ReportOptions{}); err != nil {
+	if err := WriteInspectWithOptions(path, summary, ReportOptions{Links: ReportLinks{Math: filepath.Base(mathPath)}}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -269,13 +271,28 @@ func TestInspectDatabaseCoverageExplainsEnabledCollectorWithoutEvents(t *testing
 		t.Fatal(err)
 	}
 	html := string(raw)
+	for _, forbidden := range []string{
+		"Сборщик включён и ASM hooks найдены, но SQL-вызовы не наблюдались.",
+		"Повторите целевой сценарий с обращением к базе.",
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("problem-oriented coverage report contains %q", forbidden)
+		}
+	}
+	if err := WriteMathInspectWithOptions(mathPath, sampleMathReport(summary), ReportOptions{Links: ReportLinks{Main: filepath.Base(path)}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(mathPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mathHTML := string(raw)
 	for _, expected := range []string{
 		"Сборщик включён и ASM hooks найдены, но SQL-вызовы не наблюдались.",
 		"Повторите целевой сценарий с обращением к базе.",
-		"databaseTracing.set(true)",
 	} {
-		if !strings.Contains(html, expected) {
-			t.Fatalf("coverage report does not contain %q", expected)
+		if !strings.Contains(mathHTML, expected) {
+			t.Fatalf("mathematical coverage report does not contain %q", expected)
 		}
 	}
 }
@@ -316,7 +333,7 @@ func TestCompareReportRendersDatabaseMetricsAndCanonicalStatements(t *testing.T)
 	}
 	html := string(raw)
 	for _, expected := range []string{
-		"Сравнение базы данных", "Вызовов БД в минуту",
+		"Что изменилось в базе данных", "Вызовов БД в минуту",
 		"Граница верхних 5% транзакций БД", "только по завершённым транзакциям",
 		"SELECT value FROM sample WHERE id = ?", "нормировано по длительности", "сопоставлено",
 	} {

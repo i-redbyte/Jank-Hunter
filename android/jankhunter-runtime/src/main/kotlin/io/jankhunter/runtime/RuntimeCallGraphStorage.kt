@@ -18,12 +18,22 @@ internal const val RUNTIME_GRAPH_ADD_FULL = 0
 internal const val RUNTIME_GRAPH_ADD_AGGREGATED = 1
 internal const val RUNTIME_GRAPH_ADD_PAGE_PUBLISHED = 2
 
-internal class RuntimeCallStack {
+/** Initial stack storage is reserved together with producer metadata before construction. */
+internal class RuntimeCallStack(
+    private val storageBudget: RuntimeGraphStorageBudget? = null,
+    private val nextSkippedToken: RuntimeLongSource = RuntimeLongSource { 0L },
+) {
     private var ids = LongArray(INITIAL_DEPTH)
     private var startedAtMs = LongArray(INITIAL_DEPTH)
     private var names = arrayOfNulls<String>(INITIAL_DEPTH)
     private var screens = arrayOfNulls<String>(INITIAL_DEPTH)
     private var operationIds = LongArray(INITIAL_DEPTH)
+    private var chargedBytes = if (storageBudget == null) 0L else RuntimeGraphStorageBudget.stackBytes(INITIAL_DEPTH)
+    private var skippedDepth = 0L
+    private var skippedOverflow = false
+    private var released = false
+    var skippedToken = 0L
+        private set
 
     var depth: Int = 0
         private set
@@ -48,35 +58,74 @@ internal class RuntimeCallStack {
         startedAtMs: Long,
         screen: String?,
         operationId: Long,
-    ) {
-        ensureCapacity(depth + 1)
+    ): Boolean {
+        if (released) return false
+        if (skippedDepth > 0L || !ensureCapacity(depth + 1)) {
+            if (skippedDepth == 0L) skippedToken = nextSkippedToken.getAsLong()
+            if (skippedDepth < Long.MAX_VALUE) skippedDepth++ else skippedOverflow = true
+            if (skippedToken == 0L) skippedOverflow = true
+            return false
+        }
         ids[depth] = methodId
         this.startedAtMs[depth] = startedAtMs
         names[depth] = methodName
         screens[depth] = screen
         operationIds[depth] = operationId
         depth++
+        return true
     }
 
-    fun hasCurrentMethod(): Boolean = depth > 0
+    fun hasCurrentMethod(): Boolean = depth > 0 && skippedDepth == 0L
 
-    fun currentMethodId(): Long = if (depth > 0) ids[depth - 1] else 0L
+    fun currentMethodId(): Long = if (hasCurrentMethod()) ids[depth - 1] else 0L
 
-    fun currentMethodName(): String? = if (depth > 0) names[depth - 1] else null
+    fun currentMethodName(): String? = if (hasCurrentMethod()) names[depth - 1] else null
 
-    private fun ensureCapacity(required: Int) {
-        if (required <= ids.size) return
-        val newCapacity = ids.size shl 1
-        ids = ids.copyOf(newCapacity)
-        startedAtMs = startedAtMs.copyOf(newCapacity)
-        names = names.copyOf(newCapacity)
-        screens = screens.copyOf(newCapacity)
-        operationIds = operationIds.copyOf(newCapacity)
+    private fun ensureCapacity(required: Int): Boolean {
+        if (required <= ids.size) return true
+        if (ids.size > Int.MAX_VALUE / 2) return false
+        val newCapacity = maxOf(INITIAL_DEPTH, ids.size shl 1)
+        val bytes = RuntimeGraphStorageBudget.stackBytes(newCapacity)
+        if (storageBudget != null && !storageBudget.tryReserve(bytes)) return false
+        try {
+            // Keep the old complete set if any allocation fails; the temporary set is also charged.
+            val newIds = ids.copyOf(newCapacity)
+            val newStarted = startedAtMs.copyOf(newCapacity)
+            val newNames = names.copyOf(newCapacity)
+            val newScreens = screens.copyOf(newCapacity)
+            val newOperations = operationIds.copyOf(newCapacity)
+            ids = newIds
+            startedAtMs = newStarted
+            names = newNames
+            screens = newScreens
+            operationIds = newOperations
+        } catch (failure: Throwable) {
+            storageBudget?.release(bytes)
+            throw failure
+        }
+        if (storageBudget != null) {
+            if (chargedBytes > 0L) storageBudget.release(chargedBytes)
+            chargedBytes = bytes
+        }
+        return true
+    }
+
+    fun popSkipped(token: Long): Boolean {
+        if (token >= 0L || token != skippedToken || skippedDepth == 0L) return false
+        if (!skippedOverflow) {
+            skippedDepth--
+            if (skippedDepth == 0L) skippedToken = 0L
+        }
+        return true
     }
 
     /** Returns false and discards unmatched inner frames when exits arrive out of LIFO order. */
     fun pop(methodId: Long): Boolean {
         clearPopped()
+        if (skippedDepth > 0L) {
+            reset()
+            return false
+        }
         if (depth <= 0) return false
         val top = depth - 1
         if (ids[top] == methodId) {
@@ -88,12 +137,14 @@ internal class RuntimeCallStack {
                 poppedParentName = names[depth - 1]
                 hasPoppedParent = true
             }
+            shrinkEmptyOversizedStack()
             return true
         }
         for (index in depth - 2 downTo 0) {
             if (ids[index] == methodId) {
                 clearRange(index, depth)
                 depth = index
+                shrinkEmptyOversizedStack()
                 return false
             }
         }
@@ -104,7 +155,32 @@ internal class RuntimeCallStack {
     fun reset() {
         clearRange(0, depth)
         depth = 0
+        skippedDepth = 0L
+        skippedToken = 0L
+        skippedOverflow = false
         clearPopped()
+        shrinkEmptyOversizedStack()
+    }
+
+    fun releaseStorage() {
+        if (released) return
+        released = true
+        reset()
+        discardArrays()
+    }
+
+    private fun shrinkEmptyOversizedStack() {
+        if (storageBudget != null && depth == 0 && ids.size > INITIAL_DEPTH) discardArrays()
+    }
+
+    private fun discardArrays() {
+        ids = EMPTY_LONGS
+        startedAtMs = EMPTY_LONGS
+        names = EMPTY_NAMES
+        screens = EMPTY_NAMES
+        operationIds = EMPTY_LONGS
+        if (chargedBytes > 0L) storageBudget?.release(chargedBytes)
+        chargedBytes = 0L
     }
 
     private fun capturePopped(index: Int) {
@@ -135,16 +211,22 @@ internal class RuntimeCallStack {
     }
 
     private companion object {
-        const val INITIAL_DEPTH = 64
+        const val INITIAL_DEPTH = RuntimeGraphStorageBudget.INITIAL_STACK_DEPTH
+        val EMPTY_LONGS = LongArray(0)
+        val EMPTY_NAMES = emptyArray<String?>()
     }
 }
 
-internal class RuntimeGraphAggregateBuffer(thread: Thread) {
+internal class RuntimeGraphAggregateBuffer(
+    thread: Thread,
+    private val storageBudget: RuntimeGraphStorageBudget? = null,
+) {
     val owner = WeakReference(thread)
-    private val pages = Array(RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY) { RuntimeGraphAggregatePage() }
+    private val pages = arrayOfNulls<RuntimeGraphAggregatePage>(RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY)
     private val sequencer = SpscSlotSequencer(RUNTIME_GRAPH_PAGE_QUEUE_CAPACITY)
     private val publishedLogicalEvents = AtomicLong()
     private var producerPosition = SpscSlotSequencer.NO_POSITION
+    private var producerPage: RuntimeGraphAggregatePage? = null
 
     @Volatile private var producerAttempted = 0L
     @Volatile private var producerAccepted = 0L
@@ -155,6 +237,10 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
     @Volatile var producerAdmitted = false
 
     @Volatile var rotationRequested = false
+
+    // Producer-owned, shared by rotation and capacity waits in one admission; no per-event object.
+    var admissionStartedAtNs = 0L
+    var admissionWaitNs = 0L
 
     fun recordAttempted() {
         producerAttempted = saturatingAdd(producerAttempted, 1L)
@@ -202,12 +288,13 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
         publishedLogicalEvents.addAndGet(page.logicalEventCount())
         sequencer.publish(producerPosition)
         producerPosition = SpscSlotSequencer.NO_POSITION
+        producerPage = null
         return true
     }
 
     fun tryClaimConsumer(): Long = sequencer.tryClaimConsumer()
 
-    fun pageAt(position: Long): RuntimeGraphAggregatePage = pages[sequencer.slotIndex(position)]
+    fun pageAt(position: Long): RuntimeGraphAggregatePage = checkNotNull(pages[sequencer.slotIndex(position)])
 
     fun release(position: Long) {
         val page = pageAt(position)
@@ -229,9 +316,10 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
     }
 
     fun clear() {
-        pages.forEach(RuntimeGraphAggregatePage::clear)
+        pages.forEach { it?.clear() }
         publishedLogicalEvents.set(0L)
         producerPosition = SpscSlotSequencer.NO_POSITION
+        producerPage = null
         producerWaiting = false
         producerActive = false
         producerAdmitted = false
@@ -240,21 +328,51 @@ internal class RuntimeGraphAggregateBuffer(thread: Thread) {
         producerAccepted = 0L
     }
 
+    /** Consumer owns all slots after producer quiescence. Detached pages carry no labels. */
+    fun releaseStorage() {
+        clear()
+        for (index in pages.indices) {
+            val page = pages[index] ?: continue
+            pages[index] = null
+            storageBudget?.recyclePage(page)
+        }
+    }
+
+    /** Called inside the existing rotation handshake, never alongside a producer mutation. */
+    fun trimEmptyPages() {
+        if (storageBudget == null) return
+        for (index in pages.indices) {
+            val page = pages[index] ?: continue
+            if (page === producerPage || page.size != 0) continue
+            pages[index] = null
+            storageBudget.recyclePage(page)
+        }
+    }
+
     private fun ensureActivePage(): Boolean {
         if (producerPosition != SpscSlotSequencer.NO_POSITION) return true
         val position = sequencer.tryClaimProducer()
         if (position == SpscSlotSequencer.NO_POSITION) return false
+        val slot = sequencer.slotIndex(position)
+        // This unpublished slot belongs exclusively to its producer; release/acquire publication
+        // makes both the page reference and its payload visible to the consumer.
+        if (pages[slot] == null) {
+            pages[slot] = if (storageBudget == null) RuntimeGraphAggregatePage()
+                else storageBudget.acquirePage() ?: return false
+        }
         producerPosition = position
+        producerPage = pages[slot]
         return true
     }
 
     private fun activePage(): RuntimeGraphAggregatePage {
-        check(producerPosition != SpscSlotSequencer.NO_POSITION) { "Runtime graph producer page is not claimed" }
-        return pageAt(producerPosition)
+        return checkNotNull(producerPage) { "Runtime graph producer page is not claimed" }
     }
 }
 
 internal class RuntimeGraphAggregatePage {
+    // Only a detached, empty page may participate in its session's bounded recycle list.
+    var recycledNext: RuntimeGraphAggregatePage? = null
     private val states = ByteArray(TABLE_CAPACITY)
     private val hashes = IntArray(TABLE_CAPACITY)
     val callers = LongArray(TABLE_CAPACITY)

@@ -1,10 +1,22 @@
 package io.jankhunter.runtime.internal.system
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class MainThreadDispatchTrackerTest {
+    @Test
+    fun dispatchStartUsesPrimitiveTrackerState() {
+        assertFalse(
+            MainThreadDispatchTracker::class.java.declaredClasses.any { it.simpleName == "DispatchStart" },
+        )
+        assertEquals(
+            Long::class.javaPrimitiveType,
+            MainThreadDispatchTracker::class.java.getDeclaredField("currentStartMs").type,
+        )
+    }
+
     @Test
     fun emitsDurationAndSourceAfterDispatchEnd() {
         var now = 1_000L

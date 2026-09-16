@@ -52,6 +52,13 @@ class JankHunterHooksTest {
             "wrapRunnable" to arrayOf(Runnable::class.java, String::class.java),
             "wrapCallable" to arrayOf(Callable::class.java, String::class.java),
             "wrapCoroutineBlock" to arrayOf(Function2::class.java, String::class.java),
+            "enterCoroutineSegment" to arrayOf(Any::class.java, String::class.java),
+            "exitCoroutineSegment" to arrayOf(
+                java.lang.Long.TYPE,
+                Any::class.java,
+                Any::class.java,
+                Throwable::class.java,
+            ),
             "wrapClickListener" to arrayOf(View.OnClickListener::class.java, String::class.java),
             "wrapHandlerRunnable" to arrayOf(
                 Handler::class.java,
@@ -98,6 +105,8 @@ class JankHunterHooksTest {
         assertSame(callable, wrappedCallable)
         assertEquals(0, calls.get())
         assertEquals(0L, JankHunterHooks.enterMethod(0L, "test.Owner.call"))
+        assertEquals(0L, JankHunterHooks.enterCoroutineSegment(Any(), "test.Owner.call"))
+        JankHunterHooks.exitCoroutineSegment(0L, Any(), Unit, null)
         assertEquals(0L, JankHunterHooks.workerInstanceId(UUID(1L, 2L)))
         JankHunterHooks.recordMethodCall(0L, "test.Owner.call")
         JankHunterHooks.exitMethod(0L, 0L)

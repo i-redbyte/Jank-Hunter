@@ -71,12 +71,44 @@ type codeProblemKey struct {
 }
 
 func BuildCodeProblemRegistry(summary Summary) []CodeProblemStats {
+	return BuildCodeProblemRegistryWithLambdaCaptures(summary, nil)
+}
+
+func BuildCodeProblemRegistryWithLambdaCaptures(summary Summary, captures *LambdaCaptureCatalog) []CodeProblemStats {
 	builder := codeProblemBuilder{items: map[codeProblemKey]*codeProblemAccumulator{}}
 	builder.addProblemWindows(summary.ProblemWindows)
 	builder.addMemoryLeaks(summary.MemoryLeaks)
 	builder.addLogSpam(summary.LogSpam)
 	builder.addRuntimeCalls(summary.RuntimeCalls)
+	builder.addLambdaCaptures(captures, summary.MemoryLeaks)
 	return builder.finish()
+}
+
+func (b *codeProblemBuilder) addLambdaCaptures(catalog *LambdaCaptureCatalog, memoryLeaks []MemoryLeakSuspect) {
+	if catalog == nil || !catalog.Available {
+		return
+	}
+	heapEvidence := buildLambdaHeapEvidenceIndex(memoryLeaks)
+	for _, capture := range catalog.Captures {
+		for _, risk := range lambdaCaptureRisks(capture, heapEvidence) {
+			className, method := codeLocationFromOwner(capture.Owner)
+			if className == "" {
+				continue
+			}
+			item := b.item(className, method, capture.Owner)
+			item.addCategory(codeCategoryLifecycle)
+			if risk.detector == "memory.lambda_capture" {
+				item.addCategory(codeCategoryMemory)
+			}
+			priority := investigationPriority(risk.priority)
+			item.addSignal(CodeProblemSignal{
+				Name: risk.title, Category: categoryForLambdaRisk(risk),
+				Severity: severityForPriority(priority),
+				Score:    float64(priority) / 5,
+				Detail:   risk.detail,
+			})
+		}
+	}
 }
 
 type codeProblemBuilder struct {
@@ -92,7 +124,7 @@ func (b *codeProblemBuilder) addLogSpam(spamRows []LogSpamStats) {
 		item := b.item(className, method, spam.Owner)
 		item.runtimeEvidence = true
 		item.addCategory(codeCategoryLogSpam)
-		item.logSpam += spam.Count
+		item.logSpam = saturatingUint64Sum(item.logSpam, spam.Count)
 		item.addContextSignal(spam.Screen, spam.Operation, "", CodeProblemSignal{
 			Name:     "Спам логами",
 			Category: codeCategoryLogs,
@@ -116,7 +148,7 @@ func (b *codeProblemBuilder) addProblemWindows(windows []ProblemWindowStats) {
 		}
 		item := b.item(className, method, window.Owner)
 		item.runtimeEvidence = true
-		item.problems += window.Count
+		item.problems = saturatingUint64Sum(item.problems, window.Count)
 		item.maxMS = maxUint64(item.maxMS, window.MaxMS)
 		category := categoryForProblemKind(window.Kind)
 		for _, category := range extraCategoriesForProblemKind(window.Kind) {
@@ -149,27 +181,40 @@ func (b *codeProblemBuilder) addMemoryLeaks(leaks []MemoryLeakSuspect) {
 			continue
 		}
 		item := b.item(className, method, target)
-		item.runtimeEvidence = leak.TimeOnlyCount+leak.AfterExplicitGCCount > 0
+		item.runtimeEvidence = item.runtimeEvidence || leak.TimeOnlyCount > 0 || leak.AfterExplicitGCCount > 0
 		item.addCategory(codeCategoryLifecycle)
 		if leak.EstimatedRetainedKB >= 4*1024 || leak.RetainedObjectCount >= 3 {
 			item.addCategory(codeCategoryOOM)
 		}
-		item.retained += leak.Count
-		item.memoryKB += leak.EstimatedRetainedKB
+		item.retained = saturatingUint64Sum(item.retained, leak.Count)
+		// Retained subtrees can overlap, so summing estimates would exaggerate memory pressure.
+		item.memoryKB = maxUint64(item.memoryKB, leak.EstimatedRetainedKB)
 		item.maxMS = maxUint64(item.maxMS, leak.MaxAgeMS)
+		evidenceLabel := leak.EvidenceLabel
+		if evidenceLabel == "" {
+			evidenceLabel = retainedEvidenceLabel(leak.EvidenceKind)
+		}
+		holder := leak.Holder
+		if holder == "" {
+			holder = "не определён"
+		}
+		holderQuality := leak.HolderQuality
+		if holderQuality == "" {
+			holderQuality = "не определена"
+		}
 		detail := fmt.Sprintf(
-			"Наблюдался достижимый %s; уровень: %s; держатель: %s; качество привязки: %s. %s.",
+			"Объект %s остался в памяти; основание: %s; вероятный держатель: %s; точность определения держателя: %s. %s.",
 			leak.ClassName,
-			leak.EvidenceKind,
-			leak.Holder,
-			leak.HolderQuality,
+			evidenceLabel,
+			holder,
+			holderQuality,
 			retainedEvidenceMeaning(leak.EvidenceKind),
 		)
 		if leak.ObjectKind != "" {
 			detail += " Тип: " + leak.ObjectKind + "."
 		}
 		if leak.LeakPattern != "" {
-			detail += " Паттерн: " + leak.LeakPattern + "."
+			detail += " Тип утечки: " + leak.LeakPattern + "."
 		}
 		if leak.HeapEvidence {
 			detail += " Дамп памяти подтвердил путь до корня GC"
@@ -212,8 +257,8 @@ func (b *codeProblemBuilder) addRuntimeCallEndpoint(owner string, call RuntimeCa
 	}
 	item := b.item(className, method, owner)
 	item.runtimeEvidence = true
-	item.runtimeCalls += call.Count
-	item.runtimeMS += call.TotalMS
+	item.runtimeCalls = saturatingUint64Sum(item.runtimeCalls, call.Count)
+	item.runtimeMS = saturatingUint64Sum(item.runtimeMS, call.TotalMS)
 	item.maxMS = maxUint64(item.maxMS, call.MaxMS)
 	if call.MaxMS >= 700 && likelyMainThreadOwner(owner) {
 		item.addCategory(codeCategoryANR)
@@ -334,8 +379,8 @@ func (a *codeProblemAccumulator) addSignal(signal CodeProblemSignal) {
 		a.signals = append(a.signals, signal)
 	} else {
 		existing.Score += signal.Score
-		existing.Count += signal.Count
-		existing.TotalMS += signal.TotalMS
+		existing.Count = saturatingUint64Sum(existing.Count, signal.Count)
+		existing.TotalMS = saturatingUint64Sum(existing.TotalMS, signal.TotalMS)
 		existing.MaxMS = maxUint64(existing.MaxMS, signal.MaxMS)
 		existing.Value = maxUint64(existing.Value, signal.Value)
 		if signal.Detail != "" && !strings.Contains(existing.Detail, signal.Detail) {
@@ -466,7 +511,7 @@ func sortCodeProblemValues(values []string) []string {
 
 func codeProblemContextEvidence(observation *codeProblemContextAccumulator, signals []string) string {
 	if observation == nil {
-		return "Контекст зафиксирован без агрегированных метрик."
+		return "Контекст записан без объединённых метрик."
 	}
 	var builder strings.Builder
 	builder.Grow(96 + len(signals)*16)
@@ -576,7 +621,7 @@ func codeProblemEvidence(a *codeProblemAccumulator) string {
 		{label: "медленных кадров=", value: a.uiJank},
 		{label: "логов=", value: a.logSpam},
 		{label: "удержано=", value: a.retained},
-		{label: "память=", value: a.memoryKB, suffix: " КБ"},
+		{label: "макс. оценка памяти=", value: a.memoryKB, suffix: " КБ"},
 		{label: "вызовов=", value: a.runtimeCalls},
 		{label: "макс=", value: a.maxMS, suffix: " мс"},
 	}
@@ -645,7 +690,9 @@ func problemKindForCodeProblem(kind string) string {
 	case "wrapped_callable":
 		return "Долгая Callable-задача"
 	case "wrapped_coroutine":
-		return "Долгая корутинная задача"
+		return "Долгая корутинная задача по полной длительности"
+	case "wrapped_coroutine_active":
+		return "Долгое активное выполнение корутинной задачи"
 	case "wrapped_executor":
 		return "Долгая executor-задача"
 	case "wrapped_click":
@@ -682,7 +729,7 @@ func categoryForProblemKind(kind string) string {
 		return codeCategoryMemory
 	case "log_spam":
 		return codeCategoryLogs
-	case "wrapped_runnable", "wrapped_callable", "wrapped_coroutine", "wrapped_executor":
+	case "wrapped_runnable", "wrapped_callable", "wrapped_coroutine", "wrapped_coroutine_active", "wrapped_executor":
 		return codeCategoryRuntime
 	default:
 		return codeCategoryRuntime

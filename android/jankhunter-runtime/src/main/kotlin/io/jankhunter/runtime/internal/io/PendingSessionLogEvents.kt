@@ -57,6 +57,8 @@ internal class PendingDeviceContextEvent(
     private val totalStorageKb: Long,
     private val networkVpn: Boolean,
     private val foreground: Boolean,
+    private val trafficUidPlusOne: Long,
+    private val trafficKnownFlags: Int,
 ) : PendingLogEvent(Jhlog.TYPE_DEVICE_CONTEXT, producerContext) {
     override fun writePayload(writer: BinaryLogWriter) {
         writer.context(
@@ -75,6 +77,8 @@ internal class PendingDeviceContextEvent(
             totalStorageKb,
             networkVpn,
             foreground,
+            trafficUidPlusOne,
+            trafficKnownFlags,
         )
     }
 }
@@ -139,9 +143,11 @@ internal class PendingStallEvent(
     private val stackHint: String?,
     private val durationMs: Long,
     private val foreground: Boolean,
+    private val incidentId: Long,
+    private val state: Long,
 ) : PendingLogEvent(Jhlog.TYPE_STALL, producerContext) {
     override fun writePayload(writer: BinaryLogWriter) {
-        writer.stall(screen, owner, stackHint, durationMs, foreground)
+        writer.stall(screen, owner, stackHint, durationMs, foreground, incidentId, state)
     }
 }
 

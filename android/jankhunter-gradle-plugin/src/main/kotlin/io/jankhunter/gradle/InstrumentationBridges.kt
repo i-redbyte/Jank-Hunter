@@ -6,6 +6,7 @@ internal data class VersionedBridgeSignature(
     val owners: Set<String>,
     val names: Set<String>,
     val roles: Map<ArgumentRole, Int> = emptyMap(),
+    val exactDescriptors: Set<String>? = null,
     private val descriptorMatcher: (MethodCall) -> Boolean,
 ) {
     fun matches(call: MethodCall): Boolean {
@@ -26,6 +27,7 @@ internal data class VersionedBridgeSignature(
                 owners = spec.owners,
                 names = spec.names,
                 roles = spec.roles,
+                exactDescriptors = spec.descriptors,
                 descriptorMatcher = { call -> call.descriptor in spec.descriptors },
             )
         }
@@ -566,6 +568,7 @@ private object AndroidViewInteractionOperationBridge : VersionedInstrumentationB
             owners = setOf("android/view/View"),
             names = setOf("setOnClickListener"),
             roles = mapOf(ArgumentRole.Listener to 0),
+            exactDescriptors = setOf("(Landroid/view/View\$OnClickListener;)V"),
             descriptorMatcher = { call ->
                 call.descriptor == "(Landroid/view/View\$OnClickListener;)V"
             },
@@ -619,6 +622,7 @@ private fun logSpamSignatures(
             intent = HookIntent.LogSpam(source, level),
             owners = setOf(owner),
             names = setOf(name),
+            exactDescriptors = descriptors,
             descriptorMatcher = { call -> call.descriptor in descriptors },
         )
     }

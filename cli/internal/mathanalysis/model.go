@@ -1,6 +1,7 @@
 package mathanalysis
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -8,9 +9,11 @@ import (
 )
 
 type MathReport struct {
+	CollectionLimits    []CollectionLimit
 	Title               string
 	SourcePaths         []string
 	IndependentRunCount int
+	TimelineGroupCount  int
 	Summary             analyze.Summary
 	Sections            []MathSection
 	Findings            []Finding
@@ -28,6 +31,7 @@ type MathReport struct {
 }
 
 type CompareMathReport struct {
+	CollectionLimits  []CollectionLimit
 	Title             string
 	BaselinePaths     []string
 	CandidatePaths    []string
@@ -52,6 +56,21 @@ type MathSection struct {
 	Findings []Finding
 }
 
+// CollectionLimit describes unavailable derived analysis, independently of SDK event delivery.
+type CollectionLimit struct {
+	Work           *SpectralWorkLimit `json:"Work,omitempty"`
+	Component      string
+	LimitBytes     uint64
+	ReservedBytes  uint64
+	RequestedBytes uint64
+}
+
+type SpectralWorkLimit struct {
+	LimitOperations     uint64
+	ConsumedOperations  uint64
+	RequestedOperations uint64
+}
+
 type Finding struct {
 	Severity       string
 	Title          string
@@ -61,34 +80,38 @@ type Finding struct {
 }
 
 type TimelineBucket struct {
-	StartMS            uint64
-	EndMS              uint64
-	HasObservation     bool
-	HTTPCount          int
-	HTTPFailed         int
-	HTTPAvgDurationMS  uint64
-	HTTPP95DurationMS  uint64
-	DNSCount           int
-	DNSDurationMS      uint64
-	ConnectCount       int
-	ConnectDurationMS  uint64
-	TTFBMS             uint64
-	HasTTFB            bool
-	UIFrames           uint64
-	UIJankyFrames      uint64
-	StallCount         int
-	StallMaxMS         uint64
-	MemoryPSSKB        uint64
-	HasMemoryPSS       bool
-	AvailableMemoryKB  uint64
-	HasAvailableMemory bool
-	TrafficRxBytes     uint64
-	TrafficTxBytes     uint64
-	HasTrafficSample   bool
-	RouteSample        string
-	OwnerSample        string
-	ScreenSample       string
-	NetworkSample      string
+	HTTPCountState        string                 `json:",omitempty"`
+	HTTPRouteObservations []HTTPRouteObservation `json:",omitempty"`
+	StartMS               uint64
+	EndMS                 uint64
+	HasObservation        bool
+	HTTPCount             int
+	HTTPFailed            int
+	HTTPAvgDurationMS     uint64
+	HTTPP95DurationMS     uint64
+	DNSCount              int
+	DNSDurationMS         uint64
+	ConnectCount          int
+	ConnectDurationMS     uint64
+	TTFBMS                uint64
+	HasTTFB               bool
+	UIFrames              uint64
+	UIJankyFrames         uint64
+	StallCount            int
+	StallMaxMS            uint64
+	MemoryPSSKB           uint64
+	HasMemoryPSS          bool
+	AvailableMemoryKB     uint64
+	HasAvailableMemory    bool
+	TrafficRxBytes        uint64
+	TrafficTxBytes        uint64
+	HasTrafficSample      bool
+	TrafficRXKnown        bool
+	TrafficTXKnown        bool
+	RouteSample           string
+	OwnerSample           string
+	ScreenSample          string
+	NetworkSample         string
 }
 
 type Series struct {
@@ -211,16 +234,18 @@ type SpectralPeak struct {
 }
 
 type NetworkLoopFinding struct {
-	Route         string
-	Owner         string
-	PeriodMS      uint64
-	Confidence    float64
-	Motif         []string
-	FirstMS       uint64
-	LastMS        uint64
-	BurnScore     float64
-	ProbableCause string
-	Path          GraphPath
+	RouteAttributionStatus string
+	OwnerAttributionStatus string
+	Route                  string
+	Owner                  string
+	PeriodMS               uint64
+	Confidence             float64
+	Motif                  []string
+	FirstMS                uint64
+	LastMS                 uint64
+	BurnScore              float64
+	ProbableCause          string
+	Path                   GraphPath
 }
 
 type NetworkLoopDelta struct {
@@ -279,6 +304,7 @@ type MarkovModel struct {
 	TransitionEventCount    int
 	BadEpisodeCount         int
 	IndependentRunCount     int
+	TimelineGroupCount      int
 	SequenceComparable      bool
 	Confidence              string
 	ConfidenceReason        string
@@ -422,15 +448,25 @@ type GraphPath struct {
 func AnalyzeInspectWithSummary(paths []string, options analyze.Options, summary analyze.Summary) (MathReport, error) {
 	inputs, err := analyzeMathInputs(paths, options)
 	if err != nil {
+		var exhausted *collectionBudgetError
+		if errors.As(err, &exhausted) {
+			return unavailableMathReport(paths, summary, exhausted.limit), nil
+		}
 		return MathReport{}, err
 	}
 	robustStats := summarizeRobustSamples(inputs.RobustSamples)
 	changePoints := detectChangePoints(inputs.Timeline)
-	periodic, spectral := buildPeriodicAnalysisWithRouteDefinitions(inputs.Timeline, inputs.Scale, inputs.RouteDefinitions)
-	integralScores := computeIntegralScoresForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.IndependentRuns)
-	markov := buildMarkovModelForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.IndependentRuns)
-	causalGraph := buildCausalGraph(inputs.Timeline, inputs.NetworkLoops, markov)
-	return buildInspectReport(summary, paths, inputs.IndependentRuns, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
+	periodic, spectral := buildPeriodicAnalysisWithBudget(inputs.Timeline, inputs.Scale, inputs.RouteDefinitions, inputs.budget)
+	if inputs.budget.failure != nil {
+		return unavailableMathReport(paths, summary, inputs.budget.failure.limit), nil
+	}
+	integralScores := computeIntegralScoresForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.TimelineGroups)
+	markov := buildMarkovModelForRuns(inputs.Timeline, inputs.NetworkLoops, inputs.TimelineGroups)
+	causalGraph := buildCausalGraphWithBudget(inputs.Timeline, inputs.NetworkLoops, markov, inputs.budget)
+	if inputs.budget.failure != nil {
+		return unavailableMathReport(paths, summary, inputs.budget.failure.limit), nil
+	}
+	return buildInspectReport(summary, paths, inputs.TimelineGroups, inputs.Timeline, inputs.Series, robustStats, changePoints, periodic, spectral, inputs.NetworkLoops, integralScores, markov, causalGraph), nil
 }
 
 func AnalyzeCompareWithSummaries(
@@ -449,12 +485,21 @@ func AnalyzeCompareWithSummaries(
 		candidateOptions.HeapEvidence = options.CandidateHeapEvidence
 	}
 
-	baselineInputs, err := analyzeMathInputs(baselinePaths, baselineOptions)
+	budget := newCollectionBudgetWithWork(options.MathMemoryLimitBytes, options.MathSpectralWorkLimitOperations)
+	baselineInputs, err := analyzeMathInputsWithBudget(baselinePaths, baselineOptions, budget)
 	if err != nil {
+		var exhausted *collectionBudgetError
+		if errors.As(err, &exhausted) {
+			return unavailableCompareMathReport(baselinePaths, candidatePaths, baselineSummary, candidateSummary, exhausted.limit), nil
+		}
 		return CompareMathReport{}, err
 	}
-	candidateInputs, err := analyzeMathInputs(candidatePaths, candidateOptions)
+	candidateInputs, err := analyzeMathInputsWithBudget(candidatePaths, candidateOptions, budget)
 	if err != nil {
+		var exhausted *collectionBudgetError
+		if errors.As(err, &exhausted) {
+			return unavailableCompareMathReport(baselinePaths, candidatePaths, baselineSummary, candidateSummary, exhausted.limit), nil
+		}
 		return CompareMathReport{}, err
 	}
 
@@ -464,20 +509,29 @@ func AnalyzeCompareWithSummaries(
 	baselineChangePoints := detectChangePoints(baselineInputs.Timeline)
 	candidateChangePoints := detectChangePoints(candidateInputs.Timeline)
 	changeDeltas := compareChangePoints(baselineChangePoints, candidateChangePoints)
-	baselinePeriodic, baselineSpectral := buildPeriodicAnalysisWithRouteDefinitions(baselineInputs.Timeline, baselineInputs.Scale, baselineInputs.RouteDefinitions)
-	candidatePeriodic, candidateSpectral := buildPeriodicAnalysisWithRouteDefinitions(candidateInputs.Timeline, candidateInputs.Scale, candidateInputs.RouteDefinitions)
+	baselinePeriodic, baselineSpectral := buildPeriodicAnalysisWithBudget(baselineInputs.Timeline, baselineInputs.Scale, baselineInputs.RouteDefinitions, budget)
+	candidatePeriodic, candidateSpectral := buildPeriodicAnalysisWithBudget(candidateInputs.Timeline, candidateInputs.Scale, candidateInputs.RouteDefinitions, budget)
+	if budget.failure != nil {
+		return unavailableCompareMathReport(baselinePaths, candidatePaths, baselineSummary, candidateSummary, budget.failure.limit), nil
+	}
 	networkLoopDeltas := compareNetworkLoops(baselineInputs.NetworkLoops, candidateInputs.NetworkLoops)
-	baselineIntegralScores := computeIntegralScoresForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.IndependentRuns)
-	candidateIntegralScores := computeIntegralScoresForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.IndependentRuns)
+	baselineIntegralScores := computeIntegralScoresForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.TimelineGroups)
+	candidateIntegralScores := computeIntegralScoresForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.TimelineGroups)
 	integralDeltas := compareIntegralScores(baselineIntegralScores, candidateIntegralScores)
-	baselineMarkov := buildMarkovModelForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.IndependentRuns)
-	candidateMarkov := buildMarkovModelForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.IndependentRuns)
+	baselineMarkov := buildMarkovModelForRuns(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineInputs.TimelineGroups)
+	candidateMarkov := buildMarkovModelForRuns(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateInputs.TimelineGroups)
 	markovDeltas := compareMarkovModels(baselineMarkov, candidateMarkov)
-	baselineCausalGraph := buildCausalGraph(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineMarkov)
-	candidateCausalGraph := buildCausalGraph(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateMarkov)
-	causalDeltas := compareCausalGraphs(baselineCausalGraph, candidateCausalGraph)
-	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineInputs.IndependentRuns, baselineInputs.Timeline, baselineInputs.Series, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineInputs.NetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
-	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateInputs.IndependentRuns, candidateInputs.Timeline, candidateInputs.Series, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateInputs.NetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
+	baselineCausalGraph := buildCausalGraphWithBudget(baselineInputs.Timeline, baselineInputs.NetworkLoops, baselineMarkov, budget)
+	candidateCausalGraph := buildCausalGraphWithBudget(candidateInputs.Timeline, candidateInputs.NetworkLoops, candidateMarkov, budget)
+	if budget.failure != nil {
+		return unavailableCompareMathReport(baselinePaths, candidatePaths, baselineSummary, candidateSummary, budget.failure.limit), nil
+	}
+	causalDeltas := compareCausalGraphsWithBudget(baselineCausalGraph, candidateCausalGraph, budget)
+	if budget.failure != nil {
+		return unavailableCompareMathReport(baselinePaths, candidatePaths, baselineSummary, candidateSummary, budget.failure.limit), nil
+	}
+	baseline := buildInspectReport(baselineSummary, baselinePaths, baselineInputs.TimelineGroups, baselineInputs.Timeline, baselineInputs.Series, baselineRobustStats, baselineChangePoints, baselinePeriodic, baselineSpectral, baselineInputs.NetworkLoops, baselineIntegralScores, baselineMarkov, baselineCausalGraph)
+	candidate := buildInspectReport(candidateSummary, candidatePaths, candidateInputs.TimelineGroups, candidateInputs.Timeline, candidateInputs.Series, candidateRobustStats, candidateChangePoints, candidatePeriodic, candidateSpectral, candidateInputs.NetworkLoops, candidateIntegralScores, candidateMarkov, candidateCausalGraph)
 	comparison := analyze.Compare(baselineSummary, candidateSummary)
 
 	findings := compareFindings(comparison)
@@ -499,12 +553,15 @@ func AnalyzeCompareWithSummaries(
 	}, nil
 }
 
-func buildInspectReport(summary analyze.Summary, paths []string, independentRunCount int, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) MathReport {
-	findings := dataQualityFindingsForRuns(summary, independentRunCount)
+func buildInspectReport(summary analyze.Summary, paths []string, timelineGroupCount int, timeline []TimelineBucket, series []Series, robustStats []RobustStat, changePoints []ChangePoint, periodic []PeriodicSignal, spectral []SpectralPeak, networkLoops []NetworkLoopFinding, integralScores []IntegralScore, markov MarkovModel, causalGraph CausalGraph) MathReport {
+	findings := dataQualityFindingsForRuns(summary, timelineGroupCount)
+	acquisition := analyze.AcquisitionEvidenceFor(summary)
+	markov.IndependentRunCount = acquisition.IndependentGroups
 	return MathReport{
 		Title:               titleFromPaths(paths),
 		SourcePaths:         append([]string(nil), paths...),
-		IndependentRunCount: normalizedRunCount(independentRunCount),
+		IndependentRunCount: acquisition.IndependentGroups,
+		TimelineGroupCount:  normalizedRunCount(timelineGroupCount),
 		Summary:             summary,
 		Findings:            findings,
 		Timeline:            timeline,
@@ -529,14 +586,25 @@ func titleFromPaths(paths []string) string {
 	return strings.Join(paths, ", ")
 }
 
-func dataQualityFindingsForRuns(summary analyze.Summary, independentRunCount int) []Finding {
+func unavailableMathReport(paths []string, summary analyze.Summary, limit CollectionLimit) MathReport {
+	return MathReport{Title: titleFromPaths(paths), SourcePaths: append([]string(nil), paths...), Summary: summary, CollectionLimits: []CollectionLimit{limit}}
+}
+
+func unavailableCompareMathReport(baselinePaths, candidatePaths []string, baseline, candidate analyze.Summary, limit CollectionLimit) CompareMathReport {
+	return CompareMathReport{Title: "базовый прогон против проверяемого", BaselinePaths: append([]string(nil), baselinePaths...),
+		CandidatePaths: append([]string(nil), candidatePaths...), Baseline: unavailableMathReport(baselinePaths, baseline, limit),
+		Candidate: unavailableMathReport(candidatePaths, candidate, limit), Comparison: analyze.Compare(baseline, candidate), CollectionLimits: []CollectionLimit{limit}}
+}
+
+func dataQualityFindingsForRuns(summary analyze.Summary, timelineGroupCount int) []Finding {
 	findings := warningFindings("", summary.Warnings, "Проверьте целостность входных .jhlog и фильтры команды перед тем, как доверять математическим выводам.")
-	if normalizedRunCount(independentRunCount) > 1 {
+	findings = append(findings, heapInformationFindings("", summary)...)
+	if normalizedRunCount(timelineGroupCount) > 1 {
 		findings = append(findings, Finding{
 			Severity:       "medium",
-			Title:          "Объединены независимые прогоны",
-			Detail:         fmt.Sprintf("Количество независимых прогонов: %d. Они совмещены по относительному времени от начала каждого прогона, поэтому временная шкала описывает общий профиль сценария, а не одну непрерывную историю. Устойчивые распределения используют все реальные наблюдения. Марковский прогноз отключён, потому что переходы между объединёнными интервалами нельзя честно считать будущей траекторией одного запуска.", normalizedRunCount(independentRunCount)),
-			Recommendation: "Для анализа последовательности состояний и прогноза откройте каждый прогон отдельно. Для сравнения агрегатов используйте одинаковое число повторов одного и того же сценария.",
+			Title:          "Объединены отдельные временные шкалы",
+			Detail:         fmt.Sprintf("Качество сбора: количество совмещённых временных шкал: %d. Они совмещены по относительному времени от начала каждого прогона, поэтому временная шкала описывает общий профиль сценария, а не одну непрерывную историю. Устойчивые распределения используют все реальные наблюдения. Марковский прогноз отключён, потому что переходы между объединёнными интервалами нельзя честно считать будущей траекторией одного запуска.", normalizedRunCount(timelineGroupCount)),
+			Recommendation: "Для анализа последовательности состояний откройте каждый прогон отдельно. Для сравнения объединённых результатов используйте одинаковое число повторов одного сценария.",
 		})
 	}
 	switch {
@@ -576,6 +644,8 @@ func compareFindings(comparison analyze.Comparison) []Finding {
 	}
 	findings = append(findings, warningFindings("Базовый прогон", comparison.Baseline.Warnings, "Проверьте целостность журналов базового прогона перед выводом об ухудшении.")...)
 	findings = append(findings, warningFindings("Проверяемый прогон", comparison.Candidate.Warnings, "Проверьте целостность журналов проверяемого прогона перед выводом об ухудшении.")...)
+	findings = append(findings, heapInformationFindings("Базовый прогон", comparison.Baseline)...)
+	findings = append(findings, heapInformationFindings("Проверяемый прогон", comparison.Candidate)...)
 	if len(findings) == 0 {
 		findings = append(findings, Finding{
 			Severity: "ok",
@@ -616,11 +686,14 @@ func isInternalCollectionWarning(warning string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(warning))
 	for _, marker := range [...]string{
 		"качество сбора:",
-		"ограниченные runtime-реестры",
-		"writer отклонил",
-		"admission lock",
+		"переполненные внутренние списки событий",
+		"writer " + "отклонил",
+		"admission " + "lock",
+		"модуль записи отклонил",
+		"при строгой записи поток ожидал",
 		"реестр prepared statement вытеснил",
-		"элементов evidence",
+		"элементов " + "evidence",
+		"сборщики во время выполнения потеряли",
 	} {
 		if strings.Contains(normalized, marker) {
 			return true
@@ -634,9 +707,10 @@ func warningRecommendation(warning string, fallback string) string {
 	case strings.Contains(warning, "ASM-диагностика не передана"):
 		return "Передайте в CLI артефакт ASM-диагностики через --instrumentation-diagnostics <path>/instrumentation-diagnostics.jsonl. Если файла нет, пересоберите приложение после интеграции Jank Hunter, проверьте namespace модуля и при необходимости includePackages, затем повторите inspect/compare."
 	case strings.Contains(warning, "ASM-диагностика пустая"):
-		return "Пересоберите Android-модуль с включенным instrumentation, проверьте include/exclude пакетов и убедитесь, что Gradle-задача действительно создала instrumentation-diagnostics.jsonl."
-	case strings.Contains(warning, "ASM прошел по классам, но не нашел hooks"):
-		return "Проверьте include/exclude пакетов, включенные bridge-флаги и версии библиотек. После пересборки передайте свежий instrumentation-diagnostics.jsonl в CLI."
+		return "Пересоберите Android-модуль с включёнными ASM-хуками, проверьте списки включённых и исключённых пакетов и убедитесь, что Gradle-задача создала instrumentation-diagnostics.jsonl."
+	case strings.Contains(warning, "ASM проверил классы, но не нашёл ASM-хуки") ||
+		strings.Contains(warning, "ASM "+"прошел по классам, но не нашел "+"hooks"):
+		return "Проверьте includePackages, excludePackages, включённые адаптеры и версии библиотек. После пересборки передайте свежий instrumentation-diagnostics.jsonl в CLI."
 	default:
 		return fallback
 	}
@@ -814,4 +888,18 @@ func sectionStatus(findings []Finding) string {
 		}
 	}
 	return "ok"
+}
+
+func heapInformationFindings(prefix string, summary analyze.Summary) []Finding {
+	var findings []Finding
+	for _, d := range summary.HeapDiagnostics {
+		if d.Informational() {
+			title := "Сведения о подключении HPROF"
+			if prefix != "" {
+				title = prefix + ": " + title
+			}
+			findings = append(findings, Finding{Severity: "ok", Title: title, Detail: d.Message})
+		}
+	}
+	return findings
 }

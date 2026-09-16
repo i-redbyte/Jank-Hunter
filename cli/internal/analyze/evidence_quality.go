@@ -59,6 +59,9 @@ func BuildEvidenceQualityVector(summary Summary) EvidenceQualityVector {
 func transportEvidenceQuality(quality CollectionQuality) EvidenceQualityDimension {
 	result := EvidenceQualityDimension{ID: "transport", Label: "Транспорт и целостность", Status: EvidenceQualityComplete}
 	switch {
+	case quality.DiagnosticCompletenessPercent < 0:
+		result.Status = EvidenceQualityInsufficient
+		result.Explanation = quality.DiagnosticCompletenessExplanation
 	case !quality.ExactAdmission:
 		result.Status = EvidenceQualityInsufficient
 		result.Explanation = "Выбранный режим доставки не позволяет подтвердить полноту событий до очереди."
@@ -183,10 +186,10 @@ func analysisEvidenceQuality(inputs AnalysisInputCompleteness) EvidenceQualityDi
 		result.Explanation = "Полнота аналитических входов не рассчитана."
 	case inputs.RuntimeEvidence:
 		result.Status = EvidenceQualityDegraded
-		result.Explanation = "Данные выполнения доступны, но отсутствует часть артефактов сборки; статические пути и диагностика инструментирования могут быть неполными."
+		result.Explanation = "Данные выполнения доступны, но части артефактов сборки нет. Статические пути и диагностика ASM могут быть неполными."
 	default:
 		result.Status = EvidenceQualityInsufficient
-		result.Explanation = "Нет обязательных данных выполнения или артефактов сборки; часть причин нельзя локализовать до кода."
+		result.Explanation = "Нет обязательных данных выполнения или артефактов сборки. Для части проблем нельзя указать точное место в коде."
 	}
 	return result
 }

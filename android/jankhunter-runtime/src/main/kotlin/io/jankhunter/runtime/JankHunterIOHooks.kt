@@ -9,83 +9,169 @@ import java.nio.channels.FileChannel
 object JankHunterIOHooks {
     @JvmStatic
     fun readFileBytes(file: File, sourceId: Long, sourceName: String): ByteArray {
-        if (!ioTelemetry().isEnabled()) return file.readBytes()
+        val telemetry = ioTelemetry()
+        if (!telemetry.isEnabled()) return file.readBytes()
         val startedAt = SystemClock.elapsedRealtimeNanos()
         return try {
             file.readBytes().also { bytes ->
-                record(JankHunterIOOperation.FILE_READ, startedAt, bytes.size.toLong(), JankHunterIOOutcome.SUCCESS, sourceId, sourceName)
+                record(
+                    telemetry,
+                    JankHunterIOOperation.FILE_READ,
+                    startedAt,
+                    bytes.size.toLong(),
+                    JankHunterIOOutcome.SUCCESS,
+                    sourceId,
+                    sourceName,
+                )
             }
         } catch (failure: Throwable) {
-            record(JankHunterIOOperation.FILE_READ, startedAt, UNKNOWN_BYTES, JankHunterIOOutcome.FAILURE, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_READ,
+                startedAt,
+                UNKNOWN_BYTES,
+                JankHunterIOOutcome.FAILURE,
+                sourceId,
+                sourceName,
+            )
             throw failure
         }
     }
 
     @JvmStatic
     fun writeFileBytes(file: File, bytes: ByteArray, sourceId: Long, sourceName: String) {
-        if (!ioTelemetry().isEnabled()) {
+        val telemetry = ioTelemetry()
+        if (!telemetry.isEnabled()) {
             file.writeBytes(bytes)
             return
         }
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             file.writeBytes(bytes)
-            record(JankHunterIOOperation.FILE_WRITE, startedAt, bytes.size.toLong(), JankHunterIOOutcome.SUCCESS, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_WRITE,
+                startedAt,
+                bytes.size.toLong(),
+                JankHunterIOOutcome.SUCCESS,
+                sourceId,
+                sourceName,
+            )
         } catch (failure: Throwable) {
-            record(JankHunterIOOperation.FILE_WRITE, startedAt, bytes.size.toLong(), JankHunterIOOutcome.FAILURE, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_WRITE,
+                startedAt,
+                bytes.size.toLong(),
+                JankHunterIOOutcome.FAILURE,
+                sourceId,
+                sourceName,
+            )
             throw failure
         }
     }
 
     @JvmStatic
     fun appendFileBytes(file: File, bytes: ByteArray, sourceId: Long, sourceName: String) {
-        if (!ioTelemetry().isEnabled()) {
+        val telemetry = ioTelemetry()
+        if (!telemetry.isEnabled()) {
             file.appendBytes(bytes)
             return
         }
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             file.appendBytes(bytes)
-            record(JankHunterIOOperation.FILE_WRITE, startedAt, bytes.size.toLong(), JankHunterIOOutcome.SUCCESS, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_WRITE,
+                startedAt,
+                bytes.size.toLong(),
+                JankHunterIOOutcome.SUCCESS,
+                sourceId,
+                sourceName,
+            )
         } catch (failure: Throwable) {
-            record(JankHunterIOOperation.FILE_WRITE, startedAt, bytes.size.toLong(), JankHunterIOOutcome.FAILURE, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_WRITE,
+                startedAt,
+                bytes.size.toLong(),
+                JankHunterIOOutcome.FAILURE,
+                sourceId,
+                sourceName,
+            )
             throw failure
         }
     }
 
     @JvmStatic
     fun syncFileDescriptor(descriptor: FileDescriptor, sourceId: Long, sourceName: String) {
-        if (!ioTelemetry().isEnabled()) {
+        val telemetry = ioTelemetry()
+        if (!telemetry.isEnabled()) {
             descriptor.sync()
             return
         }
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             descriptor.sync()
-            record(JankHunterIOOperation.FILE_SYNC, startedAt, UNKNOWN_BYTES, JankHunterIOOutcome.SUCCESS, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_SYNC,
+                startedAt,
+                UNKNOWN_BYTES,
+                JankHunterIOOutcome.SUCCESS,
+                sourceId,
+                sourceName,
+            )
         } catch (failure: Throwable) {
-            record(JankHunterIOOperation.FILE_SYNC, startedAt, UNKNOWN_BYTES, JankHunterIOOutcome.FAILURE, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_SYNC,
+                startedAt,
+                UNKNOWN_BYTES,
+                JankHunterIOOutcome.FAILURE,
+                sourceId,
+                sourceName,
+            )
             throw failure
         }
     }
 
     @JvmStatic
     fun forceFileChannel(channel: FileChannel, metadata: Boolean, sourceId: Long, sourceName: String) {
-        if (!ioTelemetry().isEnabled()) {
+        val telemetry = ioTelemetry()
+        if (!telemetry.isEnabled()) {
             channel.force(metadata)
             return
         }
         val startedAt = SystemClock.elapsedRealtimeNanos()
         try {
             channel.force(metadata)
-            record(JankHunterIOOperation.FILE_SYNC, startedAt, UNKNOWN_BYTES, JankHunterIOOutcome.SUCCESS, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_SYNC,
+                startedAt,
+                UNKNOWN_BYTES,
+                JankHunterIOOutcome.SUCCESS,
+                sourceId,
+                sourceName,
+            )
         } catch (failure: Throwable) {
-            record(JankHunterIOOperation.FILE_SYNC, startedAt, UNKNOWN_BYTES, JankHunterIOOutcome.FAILURE, sourceId, sourceName)
+            record(
+                telemetry,
+                JankHunterIOOperation.FILE_SYNC,
+                startedAt,
+                UNKNOWN_BYTES,
+                JankHunterIOOutcome.FAILURE,
+                sourceId,
+                sourceName,
+            )
             throw failure
         }
     }
 
     private fun record(
+        telemetry: RuntimeIOTelemetry,
         operation: JankHunterIOOperation,
         startedAt: Long,
         bytes: Long,
@@ -93,7 +179,7 @@ object JankHunterIOHooks {
         sourceId: Long,
         sourceName: String,
     ) {
-        ioTelemetry().recordAutomatic(
+        telemetry.recordAutomatic(
             operation,
             SystemClock.elapsedRealtimeNanos() - startedAt,
             bytes,

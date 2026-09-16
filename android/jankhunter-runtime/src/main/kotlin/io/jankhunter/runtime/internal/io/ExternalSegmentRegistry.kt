@@ -44,7 +44,7 @@ internal class ExternalSegmentRegistry(
     }
 
     private fun <T> locked(block: () -> T): T {
-        if (!directory.isDirectory && !directory.mkdirs()) {
+        if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Cannot create Jank Hunter external segment registry directory: $directory")
         }
         return CrossProcessFileLocks.withDirectoryLock(directory, lockFileName, block)

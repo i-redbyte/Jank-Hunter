@@ -124,7 +124,7 @@ class RuntimeDeadCodeArchitectureTest {
         assertTrue("admissionLock" !in asyncFields)
         assertTrue("worker" !in asyncFields)
 
-        val graphFields = RuntimeCallGraph::class.java.declaredFields
+        val graphFields = RuntimeCallGraphSession::class.java.declaredFields
             .associateBy({ field -> field.name }, { field -> field.type.simpleName })
         assertEquals("RuntimeGraphProducer", graphFields["producer"])
         assertEquals("RuntimeGraphConsumer", graphFields["consumer"])
@@ -183,7 +183,7 @@ class RuntimeDeadCodeArchitectureTest {
         val asyncMethods = Class.forName("io.jankhunter.runtime.internal.io.AsyncLogWriter")
             .declaredMethods
             .mapTo(HashSet(), java.lang.reflect.Method::getName)
-        val graphMethods = RuntimeCallGraph::class.java.declaredMethods
+        val graphMethods = RuntimeCallGraphSession::class.java.declaredMethods
             .mapTo(HashSet(), java.lang.reflect.Method::getName)
 
         assertTrue("Async writer role forwarders remain: ${asyncMethods intersect asyncForwarders}",
@@ -268,10 +268,10 @@ class RuntimeDeadCodeArchitectureTest {
 
     @Test
     fun runtimeHookPublicationUsesPerProducerAdmissionWithoutGlobalAtomicContention() {
-        val transportFields = RuntimeHookEventTransport::class.java.declaredFields
+        val transportFields = RuntimeHookEventSession::class.java.declaredFields
             .mapTo(HashSet()) { field -> field.name }
         val eventBufferFields = Class.forName(
-            "io.jankhunter.runtime.RuntimeHookEventTransport\$EventBuffer",
+            "io.jankhunter.runtime.RuntimeHookEventSession\$EventBuffer",
         ).declaredFields.mapTo(HashSet()) { field -> field.name }
 
         assertTrue("publisherState" !in transportFields)

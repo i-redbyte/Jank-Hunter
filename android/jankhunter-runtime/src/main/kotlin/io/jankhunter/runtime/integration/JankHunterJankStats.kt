@@ -1,165 +1,77 @@
 package io.jankhunter.runtime.integration
 
 import android.view.Window
-import io.jankhunter.runtime.BoundedWeakIdentityCache
-import io.jankhunter.runtime.RuntimeHookFailureTracker
 import io.jankhunter.runtime.RuntimeHookFailureReason
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Method
-import java.lang.reflect.Proxy
+import io.jankhunter.runtime.RuntimeHookFailureTracker
+import io.jankhunter.runtime.RuntimeHookGuard
 
-/** Reflection-only bridge into the optional AndroidX JankStats dependency. */
+/** Checks the optional dependency before loading the typed AndroidX integration. */
 internal object JankHunterJankStats {
-    private val frameAccessors = BoundedWeakIdentityCache<Class<*>, FrameAccessors>(MAX_FRAME_TYPES)
-    private val reflectionBridge by lazy(LazyThreadSafetyMode.PUBLICATION, ::loadReflectionBridge)
+    private val dependencyAvailable by lazy(LazyThreadSafetyMode.PUBLICATION, ::isDependencyAvailable)
 
-    fun install(
-        window: Window?,
-        onFrame: (FrameData) -> Unit,
-    ): Handle? {
-        if (window == null) return null
-        val bridge = reflectionBridge ?: return null
-
+    fun install(window: Window?, onFrame: FrameListener): Handle? {
+        if (window == null || !dependencyAvailable) return null
+        var callback: JankStatsFrameCallback? = null
         return try {
-            val proxy = Proxy.newProxyInstance(
-                bridge.listenerClass.classLoader,
-                arrayOf(bridge.listenerClass),
-            ) { _, method, args ->
-                if (method.name == "onFrame" && args?.isNotEmpty() == true) {
-                    try {
-                        args[0]?.let(::readFrameData)?.let(onFrame)
-                    } catch (throwable: Throwable) {
-                        throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
-                    }
-                }
-                null
-            }
-
-            val instance = bridge.createAndTrack.invoke(null, window, proxy)
-            if (instance == null) {
-                RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
-                return null
-            }
-            Handle(instance)
+            val frameCallback = JankStatsFrameCallback(onFrame)
+            callback = frameCallback
+            Handle(JankStatsTrackingControl(window, frameCallback))
         } catch (throwable: Throwable) {
-            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_INSTALL)
+            callback?.close()
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
             null
         }
     }
 
-    internal class Handle(
-        private val instance: Any,
-    ) {
-        @Volatile
-        private var installed = true
+    internal fun createFrameListener(onFrame: FrameListener): Any? {
+        if (!dependencyAvailable) return null
+        return JankStatsFrameCallback(onFrame)
+    }
+
+    internal class Handle(control: TrackingControl) {
+        private var control: TrackingControl? = control
 
         @Synchronized
         fun setTrackingEnabled(enabled: Boolean) {
-            if (!installed) return
-            try {
-                instance.javaClass
-                    .getMethod("setTrackingEnabled", Boolean::class.javaPrimitiveType)
-                    .invoke(instance, enabled)
-            } catch (throwable: Throwable) {
-                throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_CONTROL)
-            }
+            val active = control ?: return
+            RuntimeHookGuard.run(RuntimeHookFailureReason.JANKSTATS_CONTROL) { active.setTrackingEnabled(enabled) }
         }
 
         @Synchronized
         fun uninstall() {
-            if (!installed) return
-            setTrackingEnabled(false)
-            installed = false
+            val active = control ?: return
+            control = null
+            try {
+                RuntimeHookGuard.run(RuntimeHookFailureReason.JANKSTATS_CONTROL) { active.setTrackingEnabled(false) }
+            } finally {
+                active.close()
+            }
         }
     }
 
-    internal data class FrameData(
-        val isJank: Boolean,
-        val durationNanos: Long,
-    )
-
-    private fun readFrameData(frameData: Any): FrameData {
-        val type = frameData.javaClass
-        val accessors = frameAccessors.getOrPut(type) {
-            FrameAccessors(
-                isJank = type.methodOrNull("isJank"),
-                durationNanos = type.methodOrNull("getFrameDurationUiNanos"),
-            )
-        }
-        return FrameData(
-            isJank = (accessors.isJank.safeInvoke(frameData) as? Boolean) == true,
-            durationNanos = (accessors.durationNanos.safeInvoke(frameData) as? Long) ?: 0L,
-        )
+    internal interface TrackingControl : AutoCloseable {
+        fun setTrackingEnabled(enabled: Boolean)
     }
 
-    private data class FrameAccessors(
-        val isJank: Method?,
-        val durationNanos: Method?,
-    )
+    internal fun interface FrameListener {
+        fun onFrame(isJank: Boolean, durationNanos: Long)
+    }
 
-    private fun Class<*>.methodOrNull(name: String): Method? {
+    private fun isDependencyAvailable(): Boolean {
         return try {
-            getMethod(name)
-        } catch (throwable: Throwable) {
-            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
-            null
-        }
-    }
-
-    private fun Method?.safeInvoke(target: Any): Any? {
-        return try {
-            this?.invoke(target)
-        } catch (throwable: Throwable) {
-            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_FRAME)
-            null
-        }
-    }
-
-    private fun loadReflectionBridge(): ReflectionBridge? {
-        return try {
-            val jankStatsClass = Class.forName("androidx.metrics.performance.JankStats")
-            val listenerClass = Class.forName("androidx.metrics.performance.JankStats\$OnFrameListener")
-            ReflectionBridge(
-                listenerClass = listenerClass,
-                createAndTrack = jankStatsClass.getMethod(
-                    "createAndTrack",
-                    Window::class.java,
-                    listenerClass,
-                ),
-            )
+            Class.forName("androidx.metrics.performance.JankStats")
+            true
         } catch (_: ClassNotFoundException) {
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
-            null
+            false
         } catch (_: NoClassDefFoundError) {
             RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_DEPENDENCY_MISSING)
-            null
+            false
         } catch (throwable: Throwable) {
-            throwable.recordOrRethrow(RuntimeHookFailureReason.JANKSTATS_INSTALL)
-            null
+            RuntimeHookGuard.rethrowFatal(throwable)
+            RuntimeHookFailureTracker.record(RuntimeHookFailureReason.JANKSTATS_INSTALL)
+            false
         }
     }
-
-    private data class ReflectionBridge(
-        val listenerClass: Class<*>,
-        val createAndTrack: Method,
-    )
-
-    private fun Throwable.recordOrRethrow(reason: RuntimeHookFailureReason) {
-        val fatal = when (this) {
-            is VirtualMachineError,
-            is ThreadDeath -> this
-            is InvocationTargetException -> targetException?.let { target ->
-                when (target) {
-                    is VirtualMachineError,
-                    is ThreadDeath -> target
-                    else -> null
-                }
-            }
-            else -> null
-        }
-        if (fatal != null) throw fatal
-        RuntimeHookFailureTracker.record(reason)
-    }
-
-    private const val MAX_FRAME_TYPES = 4
 }

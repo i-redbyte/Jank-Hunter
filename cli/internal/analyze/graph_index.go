@@ -103,81 +103,111 @@ func (i *ClassGraphIndex) StronglyConnectedComponents(limit int) []InfluenceCycl
 	if i == nil || limit == 0 {
 		return nil
 	}
-	index := 0
-	stack := []string{}
-	onStack := map[string]bool{}
-	indexes := map[string]int{}
-	lowLinks := map[string]int{}
-	cycles := []InfluenceCycle{}
-
-	var visit func(string)
-	visit = func(node string) {
-		indexes[node] = index
-		lowLinks[node] = index
-		index++
-		stack = append(stack, node)
-		onStack[node] = true
-
-		for _, edgeIndex := range i.outgoing[node] {
-			edge := i.edges[edgeIndex]
-			next := edge.To
-			if _, seen := indexes[next]; !seen {
-				visit(next)
-				if lowLinks[next] < lowLinks[node] {
-					lowLinks[node] = lowLinks[next]
+	finishOrder := i.depthFirstFinishOrder()
+	componentByNode := make(map[string]uint32, len(finishOrder))
+	cycles := make([]InfluenceCycle, 0, boundedResultCapacity(limit))
+	var componentID uint32
+	for orderIndex := len(finishOrder) - 1; orderIndex >= 0; orderIndex-- {
+		root := finishOrder[orderIndex]
+		if componentByNode[root] != 0 {
+			continue
+		}
+		componentID++
+		component := i.collectReverseComponent(root, componentID, componentByNode)
+		if len(component) <= 1 {
+			continue
+		}
+		sort.Strings(component)
+		var weight uint64
+		for _, node := range component {
+			for _, edgeIndex := range i.outgoing[node] {
+				edge := i.edges[edgeIndex]
+				if componentByNode[edge.To] == componentID {
+					weight = saturatingUint64Sum(weight, edge.Count)
 				}
-			} else if onStack[next] && indexes[next] < lowLinks[node] {
-				lowLinks[node] = indexes[next]
 			}
 		}
+		cycles = retainTopInfluenceCycle(cycles, InfluenceCycle{Nodes: component, Weight: weight}, limit)
+	}
+	sortInfluenceCycles(cycles)
+	return cycles
+}
 
-		if lowLinks[node] != indexes[node] {
-			return
+type graphDFSFrame struct {
+	node          string
+	nextEdgeIndex int
+}
+
+func (i *ClassGraphIndex) depthFirstFinishOrder() []string {
+	visited := make(map[string]struct{}, len(i.outgoing)+len(i.incoming))
+	finishOrder := make([]string, 0, len(i.outgoing)+len(i.incoming))
+	stack := make([]graphDFSFrame, 0, 64)
+	for root := range i.outgoing {
+		if _, seen := visited[root]; seen {
+			continue
 		}
-		component := []string{}
-		for {
-			last := stack[len(stack)-1]
+		visited[root] = struct{}{}
+		stack = append(stack, graphDFSFrame{node: root})
+		for len(stack) > 0 {
+			frame := &stack[len(stack)-1]
+			edges := i.outgoing[frame.node]
+			if frame.nextEdgeIndex < len(edges) {
+				next := i.edges[edges[frame.nextEdgeIndex]].To
+				frame.nextEdgeIndex++
+				if _, seen := visited[next]; !seen {
+					visited[next] = struct{}{}
+					stack = append(stack, graphDFSFrame{node: next})
+				}
+				continue
+			}
+			finishOrder = append(finishOrder, frame.node)
 			stack = stack[:len(stack)-1]
-			onStack[last] = false
-			component = append(component, last)
-			if last == node {
-				break
-			}
-		}
-		if len(component) > 1 {
-			sort.Strings(component)
-			componentSet := map[string]struct{}{}
-			for _, item := range component {
-				componentSet[item] = struct{}{}
-			}
-			var weight uint64
-			for _, item := range component {
-				for _, edgeIndex := range i.outgoing[item] {
-					edge := i.edges[edgeIndex]
-					if _, inside := componentSet[edge.To]; inside {
-						weight = saturatingUint64Sum(weight, edge.Count)
-					}
-				}
-			}
-			cycles = append(cycles, InfluenceCycle{Nodes: component, Weight: weight})
 		}
 	}
+	return finishOrder
+}
 
-	for node := range i.outgoing {
-		if _, seen := indexes[node]; !seen {
-			visit(node)
+func (i *ClassGraphIndex) collectReverseComponent(
+	root string,
+	componentID uint32,
+	componentByNode map[string]uint32,
+) []string {
+	component := make([]string, 0, 4)
+	stack := []string{root}
+	componentByNode[root] = componentID
+	for len(stack) > 0 {
+		lastIndex := len(stack) - 1
+		node := stack[lastIndex]
+		stack = stack[:lastIndex]
+		component = append(component, node)
+		for _, edgeIndex := range i.incoming[node] {
+			previous := i.edges[edgeIndex].From
+			if componentByNode[previous] == 0 {
+				componentByNode[previous] = componentID
+				stack = append(stack, previous)
+			}
 		}
 	}
+	return component
+}
+
+func retainTopInfluenceCycle(cycles []InfluenceCycle, candidate InfluenceCycle, limit int) []InfluenceCycle {
+	cycles = append(cycles, candidate)
+	if limit < 0 || len(cycles) <= limit {
+		return cycles
+	}
+	sortInfluenceCycles(cycles)
+	cycles[limit] = InfluenceCycle{}
+	return cycles[:limit]
+}
+
+func sortInfluenceCycles(cycles []InfluenceCycle) {
 	sort.Slice(cycles, func(a, b int) bool {
 		if cycles[a].Weight == cycles[b].Weight {
-			return stringsKey(cycles[a].Nodes) < stringsKey(cycles[b].Nodes)
+			return compareStringSlices(cycles[a].Nodes, cycles[b].Nodes) < 0
 		}
 		return cycles[a].Weight > cycles[b].Weight
 	})
-	if limit > 0 && len(cycles) > limit {
-		return cycles[:limit]
-	}
-	return cycles
 }
 
 func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map[string]struct{}, limit int) []InfluencePath {
@@ -206,21 +236,66 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 	})
 	type candidate struct {
 		nodes         []string
+		key           string
 		weight        float64
 		runtimeTarget bool
 	}
 	type state struct {
-		node  string
-		edges []ClassGraphEdge
+		node        string
+		edgeIndexes [maxHotPathDepth]uint32
+		depth       uint8
 	}
-	candidates := []candidate{}
+	candidates := make([]candidate, 0, boundedResultCapacity(limit))
+	candidateComesBefore := func(left candidate, right candidate) bool {
+		if left.weight == right.weight {
+			return left.key < right.key
+		}
+		return left.weight > right.weight
+	}
+	worstCandidateWeight := func() float64 {
+		worst := math.Inf(1)
+		for _, item := range candidates {
+			if item.weight < worst {
+				worst = item.weight
+			}
+		}
+		return worst
+	}
+	retainCandidate := func(next candidate) {
+		if limit < 0 {
+			candidates = append(candidates, next)
+			return
+		}
+		for index := range candidates {
+			if candidates[index].key == next.key {
+				if candidateComesBefore(next, candidates[index]) {
+					candidates[index] = next
+				}
+				return
+			}
+		}
+		if len(candidates) < limit {
+			candidates = append(candidates, next)
+			return
+		}
+		worstIndex := 0
+		for index := 1; index < len(candidates); index++ {
+			if candidateComesBefore(candidates[worstIndex], candidates[index]) {
+				worstIndex = index
+			}
+		}
+		if candidateComesBefore(next, candidates[worstIndex]) {
+			candidates[worstIndex] = next
+		}
+	}
 	for _, src := range sources {
 		queue := []state{{node: src.className}}
+		queueCursor := 0
 		seenDepth := map[string]int{src.className: 0}
-		for len(queue) > 0 {
-			current := queue[0]
-			queue = queue[1:]
-			if len(current.edges) >= 4 {
+		for queueCursor < len(queue) {
+			current := queue[queueCursor]
+			queueCursor++
+			if current.depth >= maxHotPathDepth {
 				continue
 			}
 			for _, edgeIndex := range i.outgoing[current.node] {
@@ -228,8 +303,11 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 				if edge.To == src.className {
 					continue
 				}
-				nextEdges := append(append([]ClassGraphEdge{}, current.edges...), edge)
-				depth := len(nextEdges)
+				next := current
+				next.node = edge.To
+				next.edgeIndexes[current.depth] = edgeIndex
+				next.depth++
+				depth := int(next.depth)
 				if previousDepth, seen := seenDepth[edge.To]; seen && previousDepth <= depth {
 					continue
 				}
@@ -237,32 +315,37 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 				_, runtimeTarget := runtimeTargets[edge.To]
 				targetScore := scores[edge.To]
 				if runtimeTarget || targetScore > 0 {
-					candidates = append(candidates, candidate{
-						nodes:         pathNodes(nextEdges),
-						weight:        hotPathWeight(nextEdges, src.score, targetScore, runtimeTarget),
-						runtimeTarget: runtimeTarget,
-					})
+					weight := hotPathWeight(i.edges, next.edgeIndexes[:next.depth], src.score, targetScore, runtimeTarget)
+					if limit < 0 || len(candidates) < limit || weight >= worstCandidateWeight() {
+						nodes := make([]string, depth+1)
+						nodes[0] = src.className
+						for pathIndex, pathEdgeIndex := range next.edgeIndexes[:next.depth] {
+							nodes[pathIndex+1] = i.edges[pathEdgeIndex].To
+						}
+						retainCandidate(candidate{
+							nodes:         nodes,
+							key:           stringsKey(nodes),
+							weight:        weight,
+							runtimeTarget: runtimeTarget,
+						})
+					}
 				}
-				if depth < 4 {
-					queue = append(queue, state{node: edge.To, edges: nextEdges})
+				if depth < maxHotPathDepth {
+					queue = append(queue, next)
 				}
 			}
 		}
 	}
 	sort.Slice(candidates, func(a, b int) bool {
-		if candidates[a].weight == candidates[b].weight {
-			return stringsKey(candidates[a].nodes) < stringsKey(candidates[b].nodes)
-		}
-		return candidates[a].weight > candidates[b].weight
+		return candidateComesBefore(candidates[a], candidates[b])
 	})
 	seen := map[string]struct{}{}
 	out := []InfluencePath{}
 	for _, candidate := range candidates {
-		key := stringsKey(candidate.nodes)
-		if _, ok := seen[key]; ok {
+		if _, ok := seen[candidate.key]; ok {
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[candidate.key] = struct{}{}
 		out = append(out, InfluencePath{
 			Nodes:         candidate.nodes,
 			Weight:        math.Round(candidate.weight*10) / 10,
@@ -274,6 +357,16 @@ func (i *ClassGraphIndex) HotPaths(scores map[string]float64, runtimeTargets map
 		}
 	}
 	return out
+}
+
+const maxHotPathDepth = 4
+const maxPreallocatedGraphResults = 64
+
+func boundedResultCapacity(limit int) int {
+	if limit > 0 {
+		return min(limit, maxPreallocatedGraphResults)
+	}
+	return 0
 }
 
 func (i *MethodGraphIndex) HotMethods(scores map[string]float64, runtimeTargets map[string]struct{}, limit int) []InfluenceMethod {
@@ -402,28 +495,35 @@ func normalizeGraphMethodName(value string) string {
 	return value
 }
 
-func pathNodes(edges []ClassGraphEdge) []string {
-	if len(edges) == 0 {
-		return nil
-	}
-	nodes := []string{edges[0].From}
-	for _, edge := range edges {
-		if len(nodes) == 0 || nodes[len(nodes)-1] != edge.To {
-			nodes = append(nodes, edge.To)
-		}
-	}
-	return nodes
-}
-
 func stringsKey(values []string) string {
-	key := ""
+	if len(values) == 0 {
+		return ""
+	}
+	length := len(values) - 1
+	for _, value := range values {
+		length += len(value)
+	}
+	buffer := make([]byte, 0, length)
 	for index, value := range values {
 		if index > 0 {
-			key += "\x00"
+			buffer = append(buffer, 0)
 		}
-		key += value
+		buffer = append(buffer, value...)
 	}
-	return key
+	return string(buffer)
+}
+
+func compareStringSlices(left []string, right []string) int {
+	commonLength := min(len(left), len(right))
+	for index := 0; index < commonLength; index++ {
+		if left[index] < right[index] {
+			return -1
+		}
+		if left[index] > right[index] {
+			return 1
+		}
+	}
+	return len(left) - len(right)
 }
 
 func hotPathReason(runtimeTarget bool) string {
@@ -433,15 +533,21 @@ func hotPathReason(runtimeTarget bool) string {
 	return "сильная статическая связь рядом с проблемной зоной"
 }
 
-func hotPathWeight(edges []ClassGraphEdge, sourceScore float64, targetScore float64, runtimeTarget bool) float64 {
+func hotPathWeight(
+	edges []ClassGraphEdge,
+	edgeIndexes []uint32,
+	sourceScore float64,
+	targetScore float64,
+	runtimeTarget bool,
+) float64 {
 	var edgeWeight float64
-	for _, edge := range edges {
-		edgeWeight += math.Log1p(float64(edge.Count))
+	for _, edgeIndex := range edgeIndexes {
+		edgeWeight += math.Log1p(float64(edges[edgeIndex].Count))
 	}
 	if edgeWeight == 0 {
 		edgeWeight = 1
 	}
-	depthPenalty := 1 / math.Sqrt(float64(len(edges)))
+	depthPenalty := 1 / math.Sqrt(float64(len(edgeIndexes)))
 	weight := edgeWeight * depthPenalty * (1 + sourceScore*0.25 + targetScore*0.75)
 	if runtimeTarget {
 		weight *= 1.35

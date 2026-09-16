@@ -52,7 +52,7 @@ func buildMarkovModel(timeline []TimelineBucket, loops []NetworkLoopFinding) Mar
 		ObservationCoverage:     coverage,
 		TransitionEventCount:    markovTransitionEventCount(transitions),
 		BadEpisodeCount:         badEpisodes,
-		IndependentRunCount:     1,
+		TimelineGroupCount:      1,
 		SequenceComparable:      true,
 		Confidence:              confidence,
 		ConfidenceReason:        confidenceReason,
@@ -75,8 +75,8 @@ func buildMarkovModel(timeline []TimelineBucket, loops []NetworkLoopFinding) Mar
 
 func buildMarkovModelForRuns(timeline []TimelineBucket, loops []NetworkLoopFinding, runCount int) MarkovModel {
 	model := buildMarkovModel(timeline, loops)
-	model.IndependentRunCount = normalizedRunCount(runCount)
-	if model.IndependentRunCount == 1 {
+	model.TimelineGroupCount = normalizedRunCount(runCount)
+	if model.TimelineGroupCount == 1 {
 		return model
 	}
 	model.SequenceComparable = false
@@ -92,14 +92,14 @@ func buildMarkovModelForRuns(timeline []TimelineBucket, loops []NetworkLoopFindi
 	model.StickyStates = nil
 	model.ContextStickyStates = nil
 	model.Confidence = "low"
-	model.ConfidenceReason = fmt.Sprintf("объединены независимые прогоны: %d; состояния описывают позицию внутри общего сценария, а не хронологию одного запуска", model.IndependentRunCount)
+	model.ConfidenceReason = fmt.Sprintf("Качество сбора: объединены временные шкалы: %d; состояния описывают позицию внутри общего сценария, а не хронологию одного запуска", model.TimelineGroupCount)
 	model.Forecast = MarkovForecast{
 		Direction:        markovForecastInsufficient,
-		Label:            "Прогноз для объединённых прогонов отключён",
+		Label:            "Прогноз отключён",
 		Severity:         "medium",
 		Confidence:       "low",
 		ConfidenceReason: model.ConfidenceReason,
-		Summary:          "Состояния разных запусков совмещены по относительному времени. Из такой агрегированной последовательности нельзя честно предсказывать, что произойдёт дальше в одном запуске.",
+		Summary:          "Качество сбора: Состояния разных запусков совмещены по относительному времени. По такой объединённой последовательности нельзя честно предсказывать продолжение одного запуска.",
 	}
 	return model
 }
@@ -115,9 +115,13 @@ func classifyMarkovStates(timeline []TimelineBucket, loops []NetworkLoopFinding)
 			continue
 		}
 		state, reason, contributors := classifyMarkovBucket(bucket, loops, pssFloor)
+		if state == markovHealthy && bucket.HTTPCountState != "" && !httpCountPresent(bucket) {
+			previousBad = false
+			continue
+		}
 		if state == markovHealthy && previousBad {
 			state = markovRecovering
-			reason = "первое спокойное окно после деградации"
+			reason = "первое спокойное окно после ухудшения"
 			contributors = []MarkovSymptomWeight{{
 				State:  markovRecovering,
 				Weight: 1,
@@ -143,7 +147,7 @@ func classifyMarkovStates(timeline []TimelineBucket, loops []NetworkLoopFinding)
 func classifyMarkovBucket(bucket TimelineBucket, loops []NetworkLoopFinding, pssFloor uint64) (string, string, []MarkovSymptomWeight) {
 	contributors := markovBucketContributors(bucket, loops, pssFloor)
 	if len(contributors) == 0 {
-		return markovHealthy, "в доступных сигналах нет выраженной деградации", nil
+		return markovHealthy, "в доступных сигналах нет выраженного ухудшения", nil
 	}
 	state := markovDominantState(contributors)
 	for _, contributor := range contributors {
@@ -454,7 +458,7 @@ func markovExpectedRecoveryMS(states []MarkovBucketState) (float64, bool) {
 		}
 		var duration uint64
 		for {
-			duration += markovStateDurationMS(states[index])
+			duration = saturatingAddUint64(duration, markovStateDurationMS(states[index]))
 			if index+1 >= len(states) || !markovStatesAdjacent(states[index], states[index+1]) || !markovIsBadState(states[index+1].State) {
 				break
 			}
@@ -505,7 +509,7 @@ func markovTransitionEventCount(transitions []MarkovTransition) int {
 func markovTotalDurationMS(states []MarkovBucketState) uint64 {
 	var duration uint64
 	for _, state := range states {
-		duration += markovStateDurationMS(state)
+		duration = saturatingAddUint64(duration, markovStateDurationMS(state))
 	}
 	return duration
 }
@@ -514,7 +518,7 @@ func markovBadStateDurationMS(states []MarkovBucketState) uint64 {
 	var duration uint64
 	for _, state := range states {
 		if markovIsBadState(state.State) {
-			duration += markovStateDurationMS(state)
+			duration = saturatingAddUint64(duration, markovStateDurationMS(state))
 		}
 	}
 	return duration
@@ -544,7 +548,7 @@ func markovStateExposures(states []MarkovBucketState) []MarkovStateExposure {
 			byState[state.State] = exposure
 		}
 		exposure.Windows++
-		exposure.DurationMS += markovStateDurationMS(state)
+		exposure.DurationMS = saturatingAddUint64(exposure.DurationMS, markovStateDurationMS(state))
 	}
 	out := make([]MarkovStateExposure, 0, len(byState))
 	for _, exposure := range byState {
@@ -668,4 +672,13 @@ func markovContextLabel(state MarkovBucketState) string {
 		parts = append(parts, "сеть "+state.Network)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// Older externally constructed models only had IndependentRunCount. Preserve
+// their conservative overlay guard; new models keep chronology and replication apart.
+func markovTimelineGroups(model MarkovModel) int {
+	if model.TimelineGroupCount > 0 {
+		return model.TimelineGroupCount
+	}
+	return normalizedRunCount(model.IndependentRunCount)
 }

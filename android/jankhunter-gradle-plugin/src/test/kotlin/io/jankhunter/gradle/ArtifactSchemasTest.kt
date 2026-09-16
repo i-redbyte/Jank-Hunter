@@ -15,6 +15,7 @@ class ArtifactSchemasTest {
         assertTrue(path.endsWith(ArtifactSchemas.instrumentationLayoutFingerprint))
         assertFalse(path.contains("owner-map"))
         assertTrue(path.contains("class-graph-v${ArtifactSchemas.CLASS_GRAPH_FORMAT}"))
+        assertTrue(path.contains("lambda-captures-v${ArtifactSchemas.LAMBDA_CAPTURE_FORMAT}"))
         assertTrue(path.contains("diagnostics-v${ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT}"))
         assertTrue(path.contains("dependency-injection-v${ArtifactSchemas.DEPENDENCY_INJECTION_CATALOG_FORMAT}"))
         assertTrue(path.contains("android-components-v${ArtifactSchemas.ANDROID_COMPONENT_CATALOG_FORMAT}"))
@@ -25,6 +26,7 @@ class ArtifactSchemasTest {
         val current = fingerprint()
 
         assertNotEquals(current, fingerprint(classGraph = ArtifactSchemas.CLASS_GRAPH_FORMAT + 1))
+        assertNotEquals(current, fingerprint(lambdaCaptures = ArtifactSchemas.LAMBDA_CAPTURE_FORMAT + 1))
         assertNotEquals(
             current,
             fingerprint(diagnostics = ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT + 1),
@@ -42,12 +44,14 @@ class ArtifactSchemasTest {
 
     private fun fingerprint(
         classGraph: Int = ArtifactSchemas.CLASS_GRAPH_FORMAT,
+        lambdaCaptures: Int = ArtifactSchemas.LAMBDA_CAPTURE_FORMAT,
         diagnostics: Int = ArtifactSchemas.INSTRUMENTATION_DIAGNOSTICS_FORMAT,
         dependencyInjection: Int = ArtifactSchemas.DEPENDENCY_INJECTION_CATALOG_FORMAT,
         androidComponents: Int = ArtifactSchemas.ANDROID_COMPONENT_CATALOG_FORMAT,
     ): String {
         return ArtifactSchemas.instrumentationLayoutFingerprint(
             classGraphFormat = classGraph,
+            lambdaCaptureFormat = lambdaCaptures,
             instrumentationDiagnosticsFormat = diagnostics,
             dependencyInjectionCatalogFormat = dependencyInjection,
             androidComponentCatalogFormat = androidComponents,

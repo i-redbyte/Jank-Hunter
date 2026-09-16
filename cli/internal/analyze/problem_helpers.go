@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -114,7 +115,7 @@ func problemConfidence(summary Summary, sample, minimum uint64, direct bool) (st
 	if collectionEvidenceDegraded(summary.CollectionQuality) {
 		confidence = "low"
 		reasons = append(reasons, "Охват измерений неполный, поэтому абсолютные количества считаются нижней оценкой.")
-		limits = append(limits, "Используйте сохранённые места в коде для локализации, а частоту проблемы подтвердите повторным прогоном.")
+		limits = append(limits, "Используйте записанные места вызова, чтобы найти код. Частоту проблемы подтвердите повторным прогоном.")
 	} else if confidence == "high" && !summary.AnalysisInputs.Complete {
 		confidence = "medium"
 		reasons = append(reasons, "Не все дополнительные материалы для анализа доступны.")
@@ -150,13 +151,22 @@ func locationBreadth(where []ProblemLocation) int {
 	return min(10, max(1, len(seen)*2))
 }
 func appendUniqueLocation(values []ProblemLocation, value ProblemLocation) []ProblemLocation {
-	key := locationKey(value)
 	for _, item := range values {
-		if locationKey(item) == key {
+		if sameProblemLocation(item, value) {
 			return values
 		}
 	}
 	return append(values, value)
+}
+
+func sameProblemLocation(left, right ProblemLocation) bool {
+	return strings.EqualFold(left.Process, right.Process) &&
+		strings.EqualFold(left.Screen, right.Screen) &&
+		strings.EqualFold(left.Operation, right.Operation) &&
+		strings.EqualFold(left.Route, right.Route) &&
+		strings.EqualFold(left.Owner, right.Owner) &&
+		strings.EqualFold(left.Class, right.Class) &&
+		strings.EqualFold(left.Method, right.Method)
 }
 
 func networkProblemLocations(summary Summary) map[string][]ProblemLocation {
@@ -250,6 +260,40 @@ func boolScore(value bool, score int) int {
 	return 0
 }
 func clamp(v, low, high int) int { return min(high, max(low, v)) }
+
+func boundedUint64RatioScore(value, divisor uint64, base, multiplier, maximum int) int {
+	if maximum <= base {
+		return maximum
+	}
+	if divisor == 0 || multiplier <= 0 {
+		return clamp(base, 0, maximum)
+	}
+	ratioAtMaximum := uint64((maximum - base + multiplier - 1) / multiplier)
+	ratio := value / divisor
+	if ratio >= ratioAtMaximum {
+		return maximum
+	}
+	return clamp(base+int(ratio)*multiplier, 0, maximum)
+}
+
+func boundedUint64Score(value uint64, base, multiplier, maximum int) int {
+	return boundedUint64RatioScore(value, 1, base, multiplier, maximum)
+}
+
+func boundedFloatRatioScore(value, divisor float64, base, multiplier, maximum int) int {
+	if maximum <= base {
+		return maximum
+	}
+	if divisor <= 0 || math.IsNaN(value) || value <= 0 || multiplier <= 0 {
+		return clamp(base, 0, maximum)
+	}
+	ratio := value / divisor
+	ratioAtMaximum := float64(maximum-base+multiplier-1) / float64(multiplier)
+	if math.IsInf(ratio, 1) || ratio >= ratioAtMaximum {
+		return maximum
+	}
+	return clamp(base+int(ratio)*multiplier, 0, maximum)
+}
 func nonEmptyStrings(values ...string) []string {
 	out := []string{}
 	for _, value := range values {
@@ -259,7 +303,8 @@ func nonEmptyStrings(values ...string) []string {
 	}
 	return out
 }
-func namedValue(values []NamedValue, name string) (uint64, bool) {
+
+func namedGaugeValue(values []NamedGauge, name string) (uint64, bool) {
 	for _, value := range values {
 		if value.Name == name {
 			return value.Value, true
@@ -267,7 +312,22 @@ func namedValue(values []NamedValue, name string) (uint64, bool) {
 	}
 	return 0, false
 }
-func hasNamedPrefix(values []NamedValue, prefix string) bool {
+
+func namedGaugeMeasurement(values []NamedGauge, name string) (NamedGauge, uint64, bool) {
+	for _, value := range values {
+		if value.Name != name {
+			continue
+		}
+		samples := value.sampleCount
+		if samples == 0 {
+			samples = 1
+		}
+		return value, samples, true
+	}
+	return NamedGauge{}, 0, false
+}
+
+func hasGaugePrefix(values []NamedGauge, prefix string) bool {
 	for _, value := range values {
 		if strings.HasPrefix(value.Name, prefix) {
 			return true
@@ -375,13 +435,13 @@ func networkFactors(route RouteStats, slow, failed, storm bool) []string {
 		out = append(out, "Высокий секундный пик завершений")
 	}
 	if phase, ok := dominantHTTPPhase(route.Phases); ok {
-		out = append(out, fmt.Sprintf("Доминирующая измеренная фаза — %s, граница верхних 5%% %d мс", httpPhaseProblemLabel(phase.Name), phase.P95MS))
+		out = append(out, fmt.Sprintf("Доминирующая измеренная фаза - %s, граница верхних 5%% %d мс", httpPhaseProblemLabel(phase.Name), phase.P95MS))
 	}
 	if route.Retries > 0 {
 		out = append(out, fmt.Sprintf("%d дополнительных попыток запроса без учёта перенаправлений", route.Retries))
 	}
 	if route.ConnectFailures > 0 || route.TLSFailures > 0 {
-		out = append(out, fmt.Sprintf("Ошибки попыток соединения: обычное соединение — %d, защищённое TLS-соединение — %d", route.ConnectFailures, route.TLSFailures))
+		out = append(out, fmt.Sprintf("Ошибки попыток соединения: обычное соединение - %d, защищённое TLS-соединение - %d", route.ConnectFailures, route.TLSFailures))
 	}
 	return out
 }
@@ -401,10 +461,10 @@ func networkWhat(route RouteStats, failures, count uint64, slow, storm bool, min
 		parts = append(parts, fmt.Sprintf("с ошибкой завершилось %s", russianRequestCount(failures)))
 	}
 	if storm {
-		parts = append(parts, fmt.Sprintf("в пике завершалось %d запросов в секунду — это выше допустимого уровня", route.PeakRequestsPerSecond))
+		parts = append(parts, fmt.Sprintf("в пике завершалось %s запросов в секунду - это выше допустимого уровня", FormatRollingPeak(route.PeakRequestsPerSecond, route.BurstEstimateStatus)))
 	}
 	if phase, ok := dominantHTTPPhase(route.Phases); ok {
-		parts = append(parts, fmt.Sprintf("самая длинная фаза среди верхних 5%% задержек — %s (%d мс)", httpPhaseProblemLabel(phase.Name), phase.P95MS))
+		parts = append(parts, fmt.Sprintf("самая длинная фаза среди верхних 5%% задержек - %s (%d мс)", httpPhaseProblemLabel(phase.Name), phase.P95MS))
 	}
 	if route.Retries > 0 {
 		parts = append(parts, fmt.Sprintf("зафиксировано %d повторных попыток без учета редиректов", route.Retries))

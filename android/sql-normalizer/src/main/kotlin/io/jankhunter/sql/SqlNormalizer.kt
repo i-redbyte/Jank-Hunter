@@ -28,18 +28,14 @@ internal object SqlNormalizer {
                     index = skipBlockComment(value, index + 2, end)
                     pendingSpace = result.isNotEmpty()
                 }
-                character == '\'' -> {
+                character == '\'' || character == '"' -> {
+                    // SQLite DQS can interpret a double-quoted token as a string literal.
+                    // Without the schema, retaining it as an identifier can expose user data.
                     appendSpace(result, pendingSpace)
                     appendPlaceholder(result)
                     pendingSpace = false
                     listMode = LIST_NONE
-                    index = skipQuoted(value, index + 1, end, '\'', '\'')
-                }
-                character == '"' -> {
-                    appendSpace(result, pendingSpace)
-                    pendingSpace = false
-                    listMode = LIST_NONE
-                    index = appendQuotedIdentifier(result, value, index, end, '"', '"')
+                    index = skipQuoted(value, index + 1, end, character, character)
                 }
                 character == '`' -> {
                     appendSpace(result, pendingSpace)

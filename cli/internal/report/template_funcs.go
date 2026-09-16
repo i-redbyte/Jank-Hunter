@@ -12,6 +12,14 @@ import (
 
 func reportTemplateFuncs() template.FuncMap {
 	return template.FuncMap{
+		"rollingPeak":         analyze.FormatRollingPeak,
+		"acquisitionEvidence": analyze.AcquisitionEvidenceFor,
+		"mathNarrative": func(value string) string {
+			if isInternalCollectionLimitation(value) {
+				return "Не рассчитывается."
+			}
+			return value
+		},
 		"reportCSS": func(includeMath bool) template.CSS {
 			return template.CSS(reportStylesheet(includeMath))
 		},
@@ -138,6 +146,7 @@ func reportTemplateFuncs() template.FuncMap {
 		"rowLimitNote":                    rowLimitNote,
 		"leakObjectKindOptions":           leakObjectKindOptions,
 		"leakObjectKindLabel":             leakObjectKindLabel,
+		"leakGraph":                       analyze.BuildLeakGraph,
 		"leakGraphSVG":                    leakGraphSVG,
 		"leakModeLabel":                   leakModeLabel,
 		"leakDeltaStatusClass":            leakDeltaStatusClass,
@@ -166,10 +175,14 @@ func reportTemplateFuncs() template.FuncMap {
 		},
 		"problemCategoryLabel":          problemCategoryLabel,
 		"problemCoverageStatusLabel":    problemCoverageStatusLabel,
+		"problemReportHeadline":         problemReportHeadline,
+		"problemReportVerdict":          problemReportVerdict,
+		"problemReportVerdictText":      problemReportVerdictText,
 		"evidenceQualityStatusLabel":    evidenceQualityStatusLabel,
 		"problemStatusLabel":            problemStatusLabel,
 		"problemClaimLabel":             problemClaimLabel,
 		"problemLocationText":           problemLocationText,
+		"problemFindingLocationText":    problemFindingLocationText,
 		"problemEvidenceLabel":          problemEvidenceLabel,
 		"problemEvidenceHelp":           problemEvidenceHelp,
 		"problemEvidenceDisplay":        problemEvidenceDisplay,
@@ -193,9 +206,16 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return analyze.ProblemFinding{}
 		},
-		"problemDiagnosisData":              problemDiagnosisData,
-		"problemDeltaDiagnosisData":         problemDeltaDiagnosisData,
-		"problemOrientedCollectionWarnings": problemOrientedCollectionWarnings,
+		"problemDiagnosisData":      problemDiagnosisData,
+		"problemDeltaDiagnosisData": problemDeltaDiagnosisData,
+		"problemOrientedWarnings":   problemOrientedWarnings,
+		"reportGenerationWarnings":  reportGenerationWarnings,
+		"heapInformation":           heapInformation,
+		"dataQualityNotices":        dataQualityNotices,
+		"dataQualityAnalyzerNotes":  dataQualityAnalyzerNotes,
+		"conciseEvidenceConfidence": conciseEvidenceConfidence,
+		"heapClassConfidence":       heapClassConfidence,
+		"heapClassSize":             heapClassSize,
 		"priorityWidth": func(value int) template.CSS {
 			return template.CSS(fmt.Sprintf("width:%d%%", min(100, max(0, value))))
 		},
@@ -227,7 +247,7 @@ func reportTemplateFuncs() template.FuncMap {
 		"asyncKindLabel":             asyncKindLabel,
 		"hundredths":                 hundredths,
 		"humanBytesPerSecond":        humanBytesPerSecond,
-		"ordinaryRuntimeCalls":       ordinaryRuntimeCalls,
+		"ordinaryRuntimeCallView":    ordinaryRuntimeCallViewFor,
 		"operationContextInsights":   operationContextInsights,
 		"customMetricInsights":       customMetricInsights,
 		"primaryCategoryCoverage":    primaryCategoryCoverage,
@@ -295,6 +315,9 @@ func reportTemplateFuncs() template.FuncMap {
 			}
 			return float64(jankyFrames) * 100 / float64(frames)
 		},
+		"networkLoopAttributionExplanation": mathanalysis.NetworkLoopAttributionExplanation,
+		"httpCountValue":                    httpCountValue,
+		"httpCountCoverageExplanation":      mathanalysis.HTTPCountCoverageExplanation,
 		"motifText": func(tokens []string) string {
 			return mathanalysis.NetworkLoopMotifText(tokens)
 		},
@@ -414,7 +437,7 @@ func operationStatusLabel(value string) string {
 	case "stable":
 		return "без заметного изменения"
 	case "new":
-		return "есть только в кандидате"
+		return "есть только в проверяемом прогоне"
 	case "removed":
 		return "есть только в базе"
 	case "insufficient_data":
@@ -429,7 +452,7 @@ func databaseCompareStatusLabel(value string) string {
 	case "compared":
 		return "сопоставлено"
 	case "new":
-		return "только в кандидате"
+		return "только в проверяемом прогоне"
 	case "removed":
 		return "только в базе"
 	case "insufficient_data":

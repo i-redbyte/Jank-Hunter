@@ -155,9 +155,18 @@ func (p *hprofParser) parseStringRecord(reader *hprofReader, length uint32) erro
 	if _, err := io.ReadFull(reader, data); err != nil {
 		return fmt.Errorf("read HPROF string payload: %w", err)
 	}
-	p.strings[id] = strings.ReplaceAll(string(data), "/", ".")
+	p.strings[id] = normalizeHprofString(data)
 	p.stringBytes = totalStringBytes
 	return nil
+}
+
+func normalizeHprofString(data []byte) string {
+	for index, value := range data {
+		if value == '/' {
+			data[index] = '.'
+		}
+	}
+	return string(data)
 }
 
 func (p *hprofParser) parseLoadClassRecord(reader *hprofReader) error {

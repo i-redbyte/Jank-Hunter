@@ -8,9 +8,36 @@ import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RetainedHeapDumperTest {
+    @Test
+    fun fatalDumpFailureIsPropagatedAndReleasesTheReservation() {
+        val directory = tempDir()
+        val fatal = OutOfMemoryError("synthetic dump failure")
+        var failing = true
+        val dumper = RetainedHeapDumper(
+            directory, minIntervalMs = 0L, maxDumpCount = 1,
+            clock = { 1_000L }, wallClock = { 10L },
+            dumpHprof = { path ->
+                if (failing) throw fatal
+                File(path).writeText("recovered")
+            },
+        )
+        try {
+            assertSame(fatal, assertThrows(OutOfMemoryError::class.java) {
+                dumper.maybeDump("Owner", null, 1_000L, 1L)
+            })
+            assertTrue(directory.listFiles().isNullOrEmpty())
+            failing = false
+            assertTrue(dumper.maybeDump("Owner", null, 1_000L, 1L) is RetainedHeapDumper.Result.Dumped)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun boundsManagedHprofFilesAcrossDumperInstancesAndPreservesForeignFiles() {
         val directory = tempDir()

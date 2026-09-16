@@ -118,7 +118,7 @@ func decodeCorePayload(
 		if err != nil {
 			return err
 		}
-		if collectorFlags&^uint64(CollectorKnownMask) != 0 {
+		if collectorFlags&^uint64(CollectorKnownMask) != 0 || (segmentState.legacyHTTPCollectionState && collectorFlags&uint64(CollectorHTTP) != 0) {
 			return fmt.Errorf("unsupported collector flags 0x%x", collectorFlags)
 		}
 		event.Session = &SessionEvent{
@@ -164,6 +164,20 @@ func decodeCorePayload(
 			NetworkValidated: event.Flags&uint64(FlagNetworkValidated) != 0,
 			NetworkVPN:       event.Flags&uint64(FlagNetworkVPN) != 0,
 		}
+		if !segmentState.legacyUIDTraffic {
+			provenance, err := readPayloadValues(reader, valueScratch, "traffic UID plus one", "traffic known flags")
+			if err != nil {
+				return err
+			}
+			if provenance[0] > 1<<31 || provenance[1] > 3 {
+				return fmt.Errorf("invalid traffic provenance UID=%d flags=%d", provenance[0], provenance[1])
+			}
+			event.Context.TrafficUIDPlusOne, event.Context.TrafficKnownFlags = uint32(provenance[0]), uint8(provenance[1])
+		}
+		if err := validateTrafficProvenance(event.Context, segmentState.legacyUIDTraffic); err != nil {
+			return err
+		}
+
 	case EventUIWindow:
 		values, err := readPayloadValues(reader, valueScratch, "window", "frames", "jank", "source", "frame deadline")
 		if err != nil {
@@ -205,6 +219,20 @@ func decodeCorePayload(
 		}
 		event.Stall = &StallEvent{
 			StackRef: stack, DurationMS: duration,
+		}
+		if !segmentState.legacyStall {
+			values, err := readPayloadValues(reader, valueScratch, "incident ID", "stall state")
+			if err != nil {
+				return err
+			}
+			if values[1] > uint64(StallStateInterrupted) {
+				return fmt.Errorf("unsupported stall state %d", values[1])
+			}
+			event.Stall.IncidentID = values[0]
+			event.Stall.State = StallState(values[1])
+		}
+		if err := validateStallLifecycle(event.Stall); err != nil {
+			return err
 		}
 	case EventMemory:
 		values, err := readPayloadValues(reader, valueScratch, "PSS", "Java heap", "native heap")
@@ -252,10 +280,25 @@ func decodeCorePayload(
 		if values[4] > uint64(MetricModeBooleanRate) {
 			return fmt.Errorf("unsupported metric mode %d", values[4])
 		}
-		if values[3] > values[2] {
+		var sumHigh uint64
+		if event.Type == EventGauge && !segmentState.legacyGaugeSum {
+			sumHigh, err = readPayloadValue(reader, "sum high")
+			if err != nil {
+				return err
+			}
+			if sumHigh >= values[1] {
+				return fmt.Errorf("metric sum exceeds count times uint64 maximum")
+			}
+		}
+		mode := MetricMode(values[4])
+		if mode != MetricModeLast && mode != MetricModeState && sumHigh == 0 && values[3] > values[2] {
 			return fmt.Errorf("metric max %d exceeds sum %d", values[3], values[2])
 		}
-		event.Metric = &MetricEvent{MetricRef: metricRef, Value: values[0], Count: values[1], Sum: values[2], Max: values[3], Mode: MetricMode(values[4])}
+		if sumHigh != 0 && (mode == MetricModeLast || mode == MetricModeState) {
+			return fmt.Errorf("state metric cannot have an additive wide sum")
+		}
+		event.Metric = &MetricEvent{MetricRef: metricRef, Value: values[0], Count: values[1], Sum: values[2], SumHigh: sumHigh, Max: values[3], Mode: mode}
+
 	case EventLogSpam:
 		sourceRef, err := readPayloadRef(reader, symbolNamespace, segmentState, "log source")
 		if err != nil {

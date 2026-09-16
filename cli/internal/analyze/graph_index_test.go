@@ -257,6 +257,39 @@ func TestDefaultHotPathSearchDoesNotStopAtFormerExplorationLimit(t *testing.T) {
 	}
 }
 
+func TestHotPathSearchKeepsOnlyBoundedCandidateStorage(t *testing.T) {
+	const candidateCount = 2_000
+	edges := make([]ClassGraphEdge, 0, candidateCount)
+	runtimeTargets := make(map[string]struct{}, candidateCount)
+	for index := range candidateCount {
+		target := fmt.Sprintf("feature.Target%04d", index)
+		edges = append(edges, ClassGraphEdge{
+			From:  "feature.Source",
+			To:    target,
+			Count: uint64(candidateCount - index),
+		})
+		runtimeTargets[target] = struct{}{}
+	}
+	index := NewClassGraphIndex(edges)
+	scores := map[string]float64{"feature.Source": 10}
+
+	allocations := testing.AllocsPerRun(5, func() {
+		paths := index.HotPaths(scores, runtimeTargets, 8)
+		if len(paths) != 8 {
+			t.Fatalf("hot path count = %d, want 8", len(paths))
+		}
+	})
+	if allocations > 500 {
+		t.Fatalf("HotPaths() allocated %.0f objects for %d candidates; candidate storage must stay bounded", allocations, candidateCount)
+	}
+}
+
+func TestGraphResultCapacityDoesNotTrustUnboundedLimit(t *testing.T) {
+	if capacity := boundedResultCapacity(1_000_000); capacity != maxPreallocatedGraphResults {
+		t.Fatalf("preallocated result capacity = %d, want %d", capacity, maxPreallocatedGraphResults)
+	}
+}
+
 func assertGraphEdge(t *testing.T, edges []ClassGraphEdge, from string, to string) {
 	t.Helper()
 	for _, edge := range edges {

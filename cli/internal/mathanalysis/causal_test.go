@@ -1,6 +1,9 @@
 package mathanalysis
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestShortestGraphPathUsesLowerCostRoute(t *testing.T) {
 	nodes := map[string]CausalNode{
@@ -50,6 +53,28 @@ func TestShortestGraphPathChoosesStableLexicographicEqualCostRoute(t *testing.T)
 			t.Fatalf("iteration %d: path.Nodes = %v, want %v", iteration, got, want)
 		}
 		assertFloat(t, path.Cost, 2)
+	}
+}
+
+func TestCausalShortestPathsRunOneSearchPerSymptom(t *testing.T) {
+	const ownerCount = 512
+	nodes := make([]CausalNode, 0, ownerCount+1)
+	nodes = append(nodes, CausalNode{ID: "symptom:jank", Label: "симптом", Kind: "symptom"})
+	edges := make([]CausalEdge, 0, ownerCount)
+	for index := range ownerCount {
+		id := fmt.Sprintf("owner:%04d", index)
+		nodes = append(nodes, CausalNode{ID: id, Label: id, Kind: "owner"})
+		edges = append(edges, CausalEdge{From: "symptom:jank", To: id, Weight: 1})
+	}
+
+	if paths := causalShortestPaths(nodes, edges); len(paths) != 6 {
+		t.Fatalf("causalShortestPaths() returned %d paths, want 6", len(paths))
+	}
+	allocations := testing.AllocsPerRun(3, func() {
+		causalShortestPaths(nodes, edges)
+	})
+	if allocations > 5_000 {
+		t.Fatalf("causal shortest paths allocate %.0f objects, want one bounded search per symptom", allocations)
 	}
 }
 

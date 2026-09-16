@@ -44,8 +44,8 @@ func markovSummary(model MarkovModel) string {
 	if len(model.States) < 2 {
 		return "Недостаточно временных интервалов для матрицы переходов состояний."
 	}
-	if normalizedRunCount(model.IndependentRunCount) > 1 {
-		return fmt.Sprintf("Независимых прогонов: %d; относительных временных интервалов: %d. Состояния описывают общий профиль сценария; прогноз и выводы о хронологической траектории отключены.", normalizedRunCount(model.IndependentRunCount), len(model.States))
+	if markovTimelineGroups(model) > 1 {
+		return fmt.Sprintf("Профиль состояний по относительному времени: %d интервалов.", len(model.States))
 	}
 	recovery := "завершённое восстановление не наблюдалось"
 	if model.HasRecoveryProbability {
@@ -54,7 +54,7 @@ func markovSummary(model MarkovModel) string {
 	if model.HasExpectedRecovery {
 		recovery += fmt.Sprintf(" за %.1f интервала / %.0f мс", model.ExpectedRecoveryWindows, model.ExpectedRecoveryMS)
 	}
-	return fmt.Sprintf("Измерено %d из %d временных интервалов, переходов=%d, типов переходов=%d. Плохие состояния занимали %.1f%% измеренного времени; входов из нормального состояния — %d; %s. Уверенность %s.", len(model.States), model.TimelineBucketCount, model.TransitionEventCount, len(model.Transitions), model.BadStateExposure*100, model.HealthyToBadCount, recovery, markovConfidenceLabel(model.Confidence))
+	return fmt.Sprintf("Измерено %d из %d интервалов; переходов %d, их типов %d. Плохие состояния занимали %.1f%% измеренного времени; переходов из нормального состояния %d; %s. Надёжность %s.", len(model.States), model.TimelineBucketCount, model.TransitionEventCount, len(model.Transitions), model.BadStateExposure*100, model.HealthyToBadCount, recovery, markovConfidenceLabel(model.Confidence))
 }
 
 func markovFindings(model MarkovModel) []Finding {
@@ -66,11 +66,11 @@ func markovFindings(model MarkovModel) []Finding {
 			Recommendation: "Нужны хотя бы два временных интервала сценария.",
 		}}
 	}
-	if normalizedRunCount(model.IndependentRunCount) > 1 {
+	if markovTimelineGroups(model) > 1 {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Марковская последовательность объединяет разные прогоны",
-			Detail:         markovSummary(model),
+			Title:          "Марковская последовательность объединяет разные временные шкалы",
+			Detail:         "Качество сбора: " + model.ConfidenceReason,
 			Recommendation: "Откройте отдельный прогон, если нужен прогноз или анализ переходов по времени. В объединённом отчёте используйте состояния только как профиль проблем по позиции сценария.",
 		}}
 	}
@@ -85,7 +85,7 @@ func markovFindings(model MarkovModel) []Finding {
 	if model.Confidence == "low" {
 		return []Finding{{
 			Severity:       "medium",
-			Title:          "Низкая уверенность марковской модели",
+			Title:          "Низкая надёжность модели состояний",
 			Detail:         model.ConfidenceReason + ". " + markovSummary(model),
 			Recommendation: "Соберите более длинный одиночный прогон. Повторы анализируйте отдельно или сопоставляйте попарно, чтобы не смешивать последовательности состояний.",
 		}}
@@ -102,7 +102,7 @@ func markovFindings(model MarkovModel) []Finding {
 		if markovIsBadState(sticky.State) && sticky.Probability >= 0.5 {
 			return []Finding{{
 				Severity:       markovStatus(model),
-				Title:          "Найдено липкое плохое состояние",
+				Title:          "Плохое состояние долго не заканчивается",
 				Detail:         fmt.Sprintf("%s повторяется само в себя с вероятностью %.1f%%.", MarkovStateLabel(sticky.State), sticky.Probability*100),
 				Recommendation: "Посмотрите соседние временные интервалы, место запуска и маршрут: повторение плохого состояния обычно означает повторяющуюся работу или отсутствие задержки повторов.",
 			}}
@@ -112,7 +112,7 @@ func markovFindings(model MarkovModel) []Finding {
 		if markovIsBadState(sticky.State) && sticky.Probability >= 0.5 {
 			return []Finding{{
 				Severity:       markovStatus(model),
-				Title:          "Липкое плохое состояние привязано к контексту",
+				Title:          "Найден контекст долгого плохого состояния",
 				Detail:         fmt.Sprintf("%s повторяется в контексте %s с вероятностью %.1f%%.", MarkovStateLabel(sticky.State), sticky.Context, sticky.Probability*100),
 				Recommendation: "Проверьте место запуска, маршрут и экран рядом с этим контекстом: повторение плохого состояния часто указывает на повторяющуюся работу без задержки повторов или очистки.",
 			}}

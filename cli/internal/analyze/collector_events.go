@@ -62,6 +62,7 @@ type runtimeCallKey struct {
 }
 
 type retentionDataQuality struct {
+	heapNotesBySource      map[string][]string
 	runtimeLoss            uint64
 	runtimeMayBeIncomplete bool
 	dictionaryDegraded     bool
@@ -80,18 +81,21 @@ func normalizeFilter(filter Filter) Filter {
 	}
 }
 
-func filterActive(filter Filter) bool {
-	return filter.RouteContains != "" ||
-		filter.ScreenContains != "" ||
-		filter.OwnerContains != "" ||
-		filter.ClassContains != ""
-}
+func filterActive(filter Filter) bool { return filter.Active() }
 
 func containsFilter(value string, needle string) bool {
 	if needle == "" {
 		return true
 	}
-	return strings.Contains(strings.ToLower(value), needle)
+	if len(needle) > len(value) {
+		return false
+	}
+	for start := 0; start+len(needle) <= len(value); start++ {
+		if strings.EqualFold(value[start:start+len(needle)], needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAnyFilter(needle string, values ...string) bool {
@@ -115,22 +119,7 @@ func (c *collector) eventContext(screenOverride, ownerOverride string) SignalCon
 }
 
 func (c *collector) matchesFilters(route string, context SignalContextStats, classCandidates []string, ownerCandidates ...string) bool {
-	if !containsFilter(route, c.filter.RouteContains) {
-		return false
-	}
-	if !containsFilter(context.Screen, c.filter.ScreenContains) {
-		return false
-	}
-	if c.filter.ClassContains != "" && !containsAnyFilter(c.filter.ClassContains, classCandidates...) {
-		return false
-	}
-	if c.filter.OwnerContains != "" {
-		candidates := append([]string{context.Owner}, ownerCandidates...)
-		if !containsAnyFilter(c.filter.OwnerContains, candidates...) {
-			return false
-		}
-	}
-	return true
+	return c.filter.Matches(route, context.Screen, context.Owner, classCandidates, ownerCandidates...)
 }
 
 func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
@@ -176,7 +165,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 	}
 	if event.Operation != nil {
 		c.operationAnalysis.recordLifecycle(dict, event, c.currentAttrScreen, c.filter)
-	} else if event.Database == nil && event.DatabaseTransaction == nil {
+	} else if event.Database == nil && event.DatabaseTransaction == nil && event.Stall == nil {
 		c.operationAnalysis.recordSignal(event, c.currentOperationID, c.currentAttrOwner)
 	}
 	switch {
@@ -213,13 +202,13 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		c.currentCohortDirty = true
 		c.summary.DeviceRootKnown = true
 		c.summary.DeviceRooted = event.Session.DeviceRooted
-		c.appVersions[c.currentAppVersion]++
-		c.builds[c.currentBuild]++
-		c.devices[c.currentDevice]++
-		c.sdks[c.currentSDK]++
-		c.processSamples[c.currentProcess]++
+		c.addEnvironmentObservation(0, c.currentAppVersion, c.appVersions)
+		c.addEnvironmentObservation(1, c.currentBuild, c.builds)
+		c.addEnvironmentObservation(2, c.currentDevice, c.devices)
+		c.addEnvironmentObservation(3, c.currentSDK, c.sdks)
+		c.addEnvironmentObservation(4, c.currentProcess, c.processSamples)
 	case event.HTTP != nil:
-		route := attrValue(jhlog.ResolveSymbol(dict, event.HTTP.RouteRef))
+		route := attrValue(c.resolveSymbol(dict, event.HTTP.RouteRef))
 		service := attrValue(jhlog.ResolveSymbol(dict, event.HTTP.ServiceRef))
 		initiator := attrValue(c.resolveOwnerRef(dict, event.HTTP.InitiatorRef))
 		owner := c.currentAttrOwner
@@ -242,7 +231,6 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.networkRoutes[route] = routeStats
 		}
 		routeStats.add(event.HTTP, event.Flags, c.currentLogIndex, event.TimeMS, true)
-		routeStats.burst.add(c.currentLogIndex, event.TimeMS)
 		if routeStats.ownerSample == "" || routeStats.ownerSample == "unknown" {
 			routeStats.ownerSample = firstKnown(initiator, owner)
 		}
@@ -414,32 +402,32 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			c.screenStats[screen] = stats
 		}
 		stats.WindowCount++
-		stats.WindowMS += event.UIWindow.WindowMS
-		stats.Frames += event.UIWindow.FrameCount
-		stats.JankyFrames += event.UIWindow.JankCount
+		stats.WindowMS = saturatingUint64Sum(stats.WindowMS, event.UIWindow.WindowMS)
+		stats.Frames = saturatingUint64Sum(stats.Frames, event.UIWindow.FrameCount)
+		stats.JankyFrames = saturatingUint64Sum(stats.JankyFrames, event.UIWindow.JankCount)
 		if fpsWindowReliable(event.UIWindow) {
 			windowFPS := fps(event.UIWindow.FrameCount, event.UIWindow.WindowMS)
-			stats.FPSMeasuredFrames += event.UIWindow.FrameCount
-			stats.FPSMeasuredWindowMS += event.UIWindow.WindowMS
+			stats.FPSMeasuredFrames = saturatingUint64Sum(stats.FPSMeasuredFrames, event.UIWindow.FrameCount)
+			stats.FPSMeasuredWindowMS = saturatingUint64Sum(stats.FPSMeasuredWindowMS, event.UIWindow.WindowMS)
 			stats.FPSMeasuredWindowCount++
 			if stats.MinFPS == 0 || windowFPS < stats.MinFPS {
 				stats.MinFPS = windowFPS
 			}
-			c.summary.UIFPSMeasuredFrames += event.UIWindow.FrameCount
-			c.summary.UIFPSMeasuredWindowMS += event.UIWindow.WindowMS
+			c.summary.UIFPSMeasuredFrames = saturatingUint64Sum(c.summary.UIFPSMeasuredFrames, event.UIWindow.FrameCount)
+			c.summary.UIFPSMeasuredWindowMS = saturatingUint64Sum(c.summary.UIFPSMeasuredWindowMS, event.UIWindow.WindowMS)
 			c.summary.UIFPSMeasuredWindowCount++
 			if c.summary.UIMinFPS == 0 || windowFPS < c.summary.UIMinFPS {
 				c.summary.UIMinFPS = windowFPS
 			}
 		}
 		mergeFrameWindow(stats, event.UIWindow)
-		c.summary.UIFrames += event.UIWindow.FrameCount
-		c.summary.UIJank += event.UIWindow.JankCount
-		c.summary.UIWindowMS += event.UIWindow.WindowMS
+		c.summary.UIFrames = saturatingUint64Sum(c.summary.UIFrames, event.UIWindow.FrameCount)
+		c.summary.UIJank = saturatingUint64Sum(c.summary.UIJank, event.UIWindow.JankCount)
+		c.summary.UIWindowMS = saturatingUint64Sum(c.summary.UIWindowMS, event.UIWindow.WindowMS)
 		contextStats := c.ensureSignalContext(c.contextKey(screen, ""))
 		contextStats.UIWindows++
-		contextStats.UIFrames += event.UIWindow.FrameCount
-		contextStats.UIJank += event.UIWindow.JankCount
+		contextStats.UIFrames = saturatingUint64Sum(contextStats.UIFrames, event.UIWindow.FrameCount)
+		contextStats.UIJank = saturatingUint64Sum(contextStats.UIJank, event.UIWindow.JankCount)
 		problem := event.Flags&uint64(jhlog.FlagUIProblem) != 0
 		if problem {
 			c.addProblemWindow(
@@ -451,30 +439,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			)
 		}
 	case event.Stall != nil:
-		owner := c.currentAttrOwner
-		stack := jhlog.ResolveSymbol(dict, event.Stall.StackRef)
-		if c.isHeapDumpStall(event.TimeMS, owner) {
-			owner = "jankhunter.heap_dump"
-		}
-		context := c.eventContext("", owner)
-		if !c.matchesFilters("", context, nil, owner) {
-			return
-		}
-		c.databaseCorrelation.addStall(databaseTimelineContext{
-			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
-		}, event)
-		c.markCohort()
-		c.summary.StallCount++
-		if event.Stall.DurationMS > c.summary.StallMaxMS {
-			c.summary.StallMaxMS = event.Stall.DurationMS
-		}
-		addOwner(c.ownerStats, owner, "main_thread_stall", event.Stall.DurationMS, stack)
-		contextStats := c.ensureSignalContext(signalContextKeyFromStats(context))
-		contextStats.StallCount++
-		if event.Stall.DurationMS > contextStats.StallMaxMS {
-			contextStats.StallMaxMS = event.Stall.DurationMS
-		}
-		c.addProblemWindow(context, "main_thread_stall", event.Stall.DurationMS, 1, event.Stall.DurationMS)
+		c.addStallObservation(dict, event)
 	case event.Context != nil:
 		c.summary.ContextCount++
 		c.currentNetwork = jhlog.NetworkName(event.Context.Network)
@@ -499,7 +464,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 		if event.Context.LowMemory {
 			c.summary.LowMemoryCount++
 		}
-		c.recordTraffic(event.Context.RxBytes, event.Context.TxBytes)
+		c.recordTraffic(event.Context, event.TimeMS)
 		c.networkSamples[c.currentNetwork]++
 	case event.Memory != nil:
 		context := c.eventContext("", "")
@@ -575,7 +540,7 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			ioEventEndUS(event),
 		)
 	case event.Retained != nil:
-		className := c.deobfuscate(jhlog.ResolveSymbol(dict, event.Retained.ClassRef))
+		className := c.resolveOwnerRef(dict, event.Retained.ClassRef)
 		holder := c.resolveOwnerRef(dict, event.Retained.HolderRef)
 		context := c.eventContext("", "")
 		owner := context.Owner
@@ -584,17 +549,18 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			return
 		}
 		c.markCohort()
-		c.summary.Retained += event.Retained.Count
+		c.summary.Retained = saturatingUint64Sum(c.summary.Retained, event.Retained.Count)
 		stats := c.retainedClasses[className]
 		if stats == nil {
 			stats = &retainedClassStats{}
 			c.retainedClasses[className] = stats
 		}
-		stats.count += event.Retained.Count
+		stats.count = saturatingUint64Sum(stats.count, event.Retained.Count)
 		if event.Retained.AgeMS > stats.maxAgeMs {
 			stats.maxAgeMs = event.Retained.AgeMS
 		}
-		c.retainedAgeBuckets[retainedAgeBucket(event.Retained.AgeMS)] += event.Retained.Count
+		ageBucket := retainedAgeBucket(event.Retained.AgeMS)
+		c.retainedAgeBuckets[ageBucket] = saturatingUint64Sum(c.retainedAgeBuckets[ageBucket], event.Retained.Count)
 		c.addMemoryLeakSuspect(
 			className,
 			holder,
@@ -630,9 +596,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			}
 			c.logSpamStats[logKey] = stats
 		}
-		stats.Count += event.LogSpam.Count
+		stats.Count = saturatingUint64Sum(stats.Count, event.LogSpam.Count)
 		contextStats := c.ensureSignalContext(key)
-		contextStats.LogSpam += event.LogSpam.Count
+		contextStats.LogSpam = saturatingUint64Sum(contextStats.LogSpam, event.LogSpam.Count)
 		if event.LogSpam.Count >= canonicalLogSpamCount {
 			c.addProblemWindow(
 				context,
@@ -671,17 +637,14 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			}
 			c.runtimeCallStats[callKey] = stats
 		}
-		stats.Count += event.RuntimeCall.Count
-		stats.TotalMS += event.RuntimeCall.TotalMS
+		stats.Count = saturatingUint64Sum(stats.Count, event.RuntimeCall.Count)
+		stats.TotalMS = saturatingUint64Sum(stats.TotalMS, event.RuntimeCall.TotalMS)
 		if event.RuntimeCall.MaxMS > stats.MaxMS {
 			stats.MaxMS = event.RuntimeCall.MaxMS
 		}
 	case event.Metric != nil:
 		c.markCohort()
-		name := jhlog.ResolveSymbol(dict, event.Metric.MetricRef)
-		if event.Type == jhlog.EventCounter && event.Metric.MetricRef.Stable {
-			name = c.resolveOwnerRef(dict, event.Metric.MetricRef)
-		}
+		name := c.resolveSymbol(dict, event.Metric.MetricRef)
 		context := c.eventContext("", "")
 		c.databaseCorrelation.addGC(databaseTimelineContext{
 			screen: context.Screen, operation: context.Operation, operationID: c.currentOperationID,
@@ -694,9 +657,9 @@ func (c *collector) add(dict map[uint64]string, event jhlog.Event) {
 			if mode == jhlog.MetricModeUnknown {
 				mode = metricModeForGauge(name)
 			}
-			c.gauge(name).add(event.Metric.Value, event.Metric.Count, event.Metric.Sum, event.Metric.Max, mode)
+			c.gauge(name).add(event.Metric.Value, event.Metric.Count, event.Metric.Sum, event.Metric.Max, mode, event.Metric.SumHigh)
 		} else {
-			c.counterValues[name] += event.Metric.Value
+			c.counterValues[name] = saturatingUint64Sum(c.counterValues[name], event.Metric.Value)
 		}
 		if c.workerCorrelationOn {
 			c.recordWorkerMetric(name, event)
@@ -714,7 +677,7 @@ func (c *collector) isHeapDumpStall(eventTimeMS uint64, owner string) bool {
 	return eventTimeMS-c.lastHeapDumpMS <= heapDumpStallAttributionWindowMS
 }
 
-func (c *collector) markCohort() {
+func (c *collector) cohortKey() string {
 	if c.currentCohortDirty {
 		c.currentCohortKey = fmt.Sprintf(
 			"app=%s build=%s sdk=%s device=%s process=%s network=%s root=%s",
@@ -728,15 +691,23 @@ func (c *collector) markCohort() {
 		)
 		c.currentCohortDirty = false
 	}
-	c.cohortSamples[c.currentCohortKey]++
+	return c.currentCohortKey
+}
+
+func (c *collector) markCohort() {
+	c.cohortSamples[c.cohortKey()]++
 }
 
 func (c *collector) resolveOwnerRef(dict map[uint64]string, ref jhlog.SymbolRef) string {
+	return c.deobfuscate(c.resolveSymbol(dict, ref))
+}
+
+func (c *collector) resolveSymbol(dict map[uint64]string, ref jhlog.SymbolRef) string {
 	if !ref.Stable {
-		return c.deobfuscate(jhlog.ResolveSymbol(dict, ref))
+		return jhlog.ResolveSymbol(dict, ref)
 	}
 	if embedded := c.stableSymbols.embedded[ref.ID]; embedded != "" {
-		return c.deobfuscate(embedded)
+		return embedded
 	}
 	canonical := jhlog.ResolveSymbol(dict, ref)
 	c.stableSymbols.unresolved[canonical] = struct{}{}
@@ -809,11 +780,11 @@ func (c *collector) addProblemWindow(context SignalContextStats, kind string, wi
 		c.problemStats[problemKey] = stats
 	}
 	stats.Windows++
-	stats.Count += count
-	stats.TotalWindowMS += windowMS
+	stats.Count = saturatingUint64Sum(stats.Count, count)
+	stats.TotalWindowMS = saturatingUint64Sum(stats.TotalWindowMS, windowMS)
 	stats.MaxMS = maxUint64(stats.MaxMS, maxMS)
 	contextStats := c.ensureSignalContext(key)
-	contextStats.ProblemCount += count
+	contextStats.ProblemCount = saturatingUint64Sum(contextStats.ProblemCount, count)
 	contextStats.ProblemMaxMS = maxUint64(contextStats.ProblemMaxMS, maxMS)
 }
 
@@ -862,13 +833,13 @@ func (c *collector) addMemoryLeakSuspect(
 		}
 		c.memoryLeakStats[key] = stats
 	}
-	stats.count += count
+	stats.count = saturatingUint64Sum(stats.count, count)
 	if runtimeSignal {
 		switch evidence.Effective() {
 		case jhlog.RetentionEvidenceAfterExplicitGC:
-			stats.afterExplicitGCCount += count
+			stats.afterExplicitGCCount = saturatingUint64Sum(stats.afterExplicitGCCount, count)
 		default:
-			stats.timeOnlyCount += count
+			stats.timeOnlyCount = saturatingUint64Sum(stats.timeOnlyCount, count)
 		}
 	}
 	if ageMs > stats.maxAgeMs {
@@ -880,9 +851,15 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 	if c.heap == nil {
 		return
 	}
+	knownClasses := make(map[string]struct{}, len(c.memoryLeakStats))
+	for _, stats := range c.memoryLeakStats {
+		if stats != nil {
+			knownClasses[stats.className] = struct{}{}
+		}
+	}
 	for _, leak := range c.heap.Leaks {
 		className := attrValue(c.deobfuscate(leak.ClassName))
-		if className == "unknown" || c.hasMemoryLeakClass(className) {
+		if _, exists := knownClasses[className]; className == "unknown" || exists {
 			continue
 		}
 		count := leak.RetainedObjectCount
@@ -902,23 +879,14 @@ func (c *collector) addHeapOnlyMemoryLeaks() {
 			jhlog.RetentionEvidenceUnknown,
 			false,
 		)
-		c.summary.Retained += count
+		c.summary.Retained = saturatingUint64Sum(c.summary.Retained, count)
 		stats := c.retainedClasses[className]
 		if stats == nil {
 			stats = &retainedClassStats{}
 			c.retainedClasses[className] = stats
 		}
-		stats.count += count
+		stats.count = saturatingUint64Sum(stats.count, count)
 	}
-}
-
-func (c *collector) hasMemoryLeakClass(className string) bool {
-	for _, stats := range c.memoryLeakStats {
-		if stats != nil && stats.className == className {
-			return true
-		}
-	}
-	return false
 }
 
 func firstKnown(values ...string) string {

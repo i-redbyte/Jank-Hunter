@@ -37,6 +37,7 @@ func (a *ioAggregate) finalize() IOStats {
 	a.stats.BytesPerSecond = bytesPerSecond(a.stats.Bytes, a.stats.KnownByteDurationUS)
 	a.stats.PeakOperationsPerSecond = a.burst.peak
 	a.stats.PeakWindowStartMS = a.burst.peakWindowStartMS
+	a.stats.BurstEstimateStatus = a.burst.status()
 	return a.stats
 }
 
@@ -51,7 +52,6 @@ type ioAnalysisAccumulator struct {
 	bytes                uint64
 	totalDurationUS      uint64
 	durations            uint64SampleSet
-	burst                ioBurstAccumulator
 	intervals            []ioInterval
 }
 
@@ -64,7 +64,6 @@ func (a *ioAnalysisAccumulator) add(
 	a.operations++
 	a.totalDurationUS = saturatingUint64Sum(a.totalDurationUS, event.DurationUS)
 	a.durations.add(event.DurationUS)
-	a.burst.add(logIndex, endUS/1_000)
 	if event.Outcome == jhlog.IOOutcomeFailure {
 		a.failures++
 	}
@@ -91,7 +90,8 @@ func (a *ioAnalysisAccumulator) finalize(calls []IOStats) *IOAnalysis {
 	if a.operations == 0 {
 		return nil
 	}
-	maxConcurrency, peakConcurrencyAtUS := maxIOConcurrency(a.intervals)
+	var burst routeBurstAccumulator
+	maxConcurrency, peakConcurrencyAtUS := scanIOIntervals(a.intervals, &burst)
 	sources := make(map[string]struct{}, len(calls))
 	for _, call := range calls {
 		if !isUnknownAnalysisValue(call.Source) {
@@ -105,8 +105,9 @@ func (a *ioAnalysisAccumulator) finalize(calls []IOStats) *IOAnalysis {
 		KnownByteDurationUS: a.knownByteDurationUS, Bytes: a.bytes, TotalDurationUS: a.totalDurationUS,
 		P50DurationUS: a.durations.percentile(0.50), P95DurationUS: a.durations.percentile(0.95),
 		MaxDurationUS: a.durations.max, BytesPerSecond: bytesPerSecond(a.bytes, a.knownByteDurationUS),
-		PeakOperationsPerSecond: a.burst.peak, PeakWindowStartMS: a.burst.peakWindowStartMS,
-		MaxConcurrency: maxConcurrency, PeakConcurrencyAtMS: peakConcurrencyAtUS / 1_000,
+		PeakOperationsPerSecond: burst.peak, PeakWindowStartMS: burst.peakWindowStartMS,
+		BurstEstimateStatus: burst.status(),
+		MaxConcurrency:      maxConcurrency, PeakConcurrencyAtMS: peakConcurrencyAtUS / 1_000,
 		SourceCount: len(sources), Calls: calls,
 	}
 }
@@ -118,6 +119,13 @@ type ioInterval struct {
 }
 
 func maxIOConcurrency(intervals []ioInterval) (uint64, uint64) {
+	return scanIOIntervals(intervals, nil)
+}
+
+// Start-sorted intervals let the existing end-time heap emit completions in order:
+// every future interval ends no earlier than its start. This reuses stored intervals
+// for an exact rolling peak without a second sort or an extra timestamp array.
+func scanIOIntervals(intervals []ioInterval, completions *routeBurstAccumulator) (uint64, uint64) {
 	if len(intervals) == 0 {
 		return 0, 0
 	}
@@ -136,11 +144,26 @@ func maxIOConcurrency(intervals []ioInterval) (uint64, uint64) {
 	var peakAtUS uint64
 	for _, interval := range intervals {
 		if interval.logIndex != currentLog {
+			if completions != nil {
+				for len(ends) > 0 {
+					completions.add(currentLog, ends[0]/1_000)
+					ends = popUint64MinHeap(ends)
+				}
+			}
 			ends = ends[:0]
 			currentLog = interval.logIndex
 		}
 		for len(ends) > 0 && ends[0] <= interval.startUS {
+			if completions != nil {
+				completions.add(currentLog, ends[0]/1_000)
+			}
 			ends = popUint64MinHeap(ends)
+		}
+		if interval.endUS == interval.startUS {
+			if completions != nil {
+				completions.add(currentLog, interval.endUS/1_000)
+			}
+			continue
 		}
 		ends = pushUint64MinHeap(ends, interval.endUS)
 		if uint64(len(ends)) > peak {
@@ -148,41 +171,16 @@ func maxIOConcurrency(intervals []ioInterval) (uint64, uint64) {
 			peakAtUS = interval.startUS
 		}
 	}
+	if completions != nil {
+		for len(ends) > 0 {
+			completions.add(currentLog, ends[0]/1_000)
+			ends = popUint64MinHeap(ends)
+		}
+	}
 	return peak, peakAtUS
 }
 
-type ioBurstAccumulator struct {
-	logIndex          uint64
-	timesMS           []uint64
-	head              int
-	peak              uint64
-	peakWindowStartMS uint64
-}
-
-func (a *ioBurstAccumulator) add(logIndex, endMS uint64) {
-	if a.logIndex != logIndex || len(a.timesMS) > a.head && endMS < a.timesMS[len(a.timesMS)-1] {
-		a.logIndex = logIndex
-		a.timesMS = a.timesMS[:0]
-		a.head = 0
-	}
-	cutoff := uint64(0)
-	if endMS >= 1_000 {
-		cutoff = endMS - 1_000
-		for a.head < len(a.timesMS) && a.timesMS[a.head] <= cutoff {
-			a.head++
-		}
-	}
-	a.timesMS = append(a.timesMS, endMS)
-	count := uint64(len(a.timesMS) - a.head)
-	if count > a.peak {
-		a.peak = count
-		a.peakWindowStartMS = a.timesMS[a.head]
-	}
-	if a.head >= 1_024 && a.head*2 >= len(a.timesMS) {
-		a.timesMS = append(a.timesMS[:0], a.timesMS[a.head:]...)
-		a.head = 0
-	}
-}
+type ioBurstAccumulator = routeBurstAccumulator
 
 func bytesPerSecond(bytes, durationUS uint64) uint64 {
 	if bytes == 0 || durationUS == 0 {

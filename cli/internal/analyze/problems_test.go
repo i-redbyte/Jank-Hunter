@@ -3,6 +3,7 @@ package analyze
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,18 @@ import (
 )
 
 var benchmarkProblemReport ProblemReport
+
+func TestPriorityScoreHelpersSaturateBeforeIntegerConversion(t *testing.T) {
+	if got := boundedUint64RatioScore(math.MaxUint64, 1, 8, 4, 25); got != 25 {
+		t.Fatalf("bounded uint64 ratio score = %d, want 25", got)
+	}
+	if got := boundedUint64Score(math.MaxUint64, 5, 3, 20); got != 20 {
+		t.Fatalf("bounded uint64 score = %d, want 20", got)
+	}
+	if got := boundedFloatRatioScore(math.Inf(1), 1, 8, 4, 25); got != 25 {
+		t.Fatalf("bounded float ratio score = %d, want 25", got)
+	}
+}
 
 func TestProblemEngineBuildsCompoundNetworkFinding(t *testing.T) {
 	summary := completeProblemFixture()
@@ -156,7 +169,7 @@ func TestProblemEngineAttachesSampledStackAndSpecificActionToMainThreadStall(t *
 	if !strings.Contains(finding.Title, "создания DI-компонента") {
 		t.Fatalf("stall title does not explain the localized mechanism: %q", finding.Title)
 	}
-	if finding.Why.ClaimLevel != "correlated" || !strings.Contains(finding.Why.Summary, "снимок стека") {
+	if finding.Why.ClaimLevel != "correlated" || !strings.Contains(strings.ToLower(finding.Why.Summary), "снимок стека") {
 		t.Fatalf("stall causal boundary is not explicit: %+v", finding.Why)
 	}
 	if len(finding.Recommendations) == 0 || !strings.Contains(finding.Recommendations[0].Action, "предоставления зависимостей") {
@@ -168,6 +181,44 @@ func TestProblemEngineAttachesSampledStackAndSpecificActionToMainThreadStall(t *
 	coverage := categoryCoverageByID(report.Coverage, ProblemCategoryDependencyInjection)
 	if coverage == nil || coverage.Label != "DI" || coverage.FindingCount != 1 {
 		t.Fatalf("DI coverage = %+v", coverage)
+	}
+}
+
+func TestProblemEngineTreatsFrameworkStallFrameAsObservation(t *testing.T) {
+	const owner = "com.google.android.material.appbar.AppBarLayout"
+	const stack = owner + ".<init>(AppBarLayout.java:303)"
+	summary := Summary{
+		DurationMS:        60_000,
+		CollectionQuality: CollectionQuality{Complete: true},
+		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
+		ProblemWindows: []ProblemWindowStats{{
+			Owner: owner, Kind: "main_thread_stall", Windows: 1, Count: 1,
+			MaxMS: 1_531, TotalWindowMS: 1_531,
+		}},
+		Owners: []OwnerStats{{
+			Owner: owner, Kind: "main_thread_stall", Count: 1, MaxMS: 1_531, StackHint: stack,
+		}},
+	}
+
+	report, err := BuildProblemReport(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := findingByDetector(report.Problems, "stability.main_thread_stall")
+	if finding == nil {
+		t.Fatalf("main-thread stall finding missing: %+v", report.Problems)
+	}
+	if !strings.Contains(finding.Title, "объекта библиотеки") {
+		t.Fatalf("framework frame was presented as the root cause: %q", finding.Title)
+	}
+	if !strings.Contains(finding.Why.Summary, "не доказывает дефект") {
+		t.Fatalf("framework evidence boundary is missing: %+v", finding.Why)
+	}
+	if len(finding.Recommendations) == 0 || !strings.Contains(finding.Recommendations[0].Action, "layout") {
+		t.Fatalf("application-side investigation is missing: %+v", finding.Recommendations)
+	}
+	if !warningsContain(finding.Limitations, "вызывающего метода приложения") {
+		t.Fatalf("missing caller is not disclosed: %+v", finding.Limitations)
 	}
 }
 
@@ -461,7 +512,9 @@ func TestProblemEngineUsesPlainRussianForResourceFindings(t *testing.T) {
 		AvailMemoryMinKB:  128_000,
 		CollectionQuality: CollectionQuality{Complete: true},
 		AnalysisInputs:    AnalysisInputCompleteness{Complete: true, RuntimeEvidence: true},
-		Gauges:            []NamedValue{{Name: "process.cpu.core_percent_x100", Value: 8_500}},
+		Gauges: []NamedGauge{{
+			Name: "process.cpu.core_percent_x100", Value: 8_500,
+		}},
 	}
 
 	report, err := BuildProblemReport(summary)
@@ -1316,7 +1369,10 @@ func completeProblemFixture() Summary {
 			{Screen: "Settings", Frames: 400, JankyFrames: 2, JankRatePct: 0.5, WindowCount: 2, FrameP95MS: 14, FrameSource: "jankstats", FrameDeadlineUS: 16_667, FrameDeadlineStatus: "consistent", FrameDistributionState: "mergeable_histogram_v2"},
 		},
 		LogSpam: []LogSpamStats{{Screen: "Feed", Owner: "FeedPresenter.render", Source: "Log", Level: "D", Count: 500}},
-		Gauges:  []NamedValue{{Name: "process.cpu.core_percent_x100", Value: 8_500}, {Name: "device.thermal.status", Value: 3}},
+		Gauges: []NamedGauge{
+			{Name: "process.cpu.core_percent_x100", Value: 8_500},
+			{Name: "device.thermal.status", Value: 3},
+		},
 	}
 }
 

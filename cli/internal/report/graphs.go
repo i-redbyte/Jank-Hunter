@@ -27,6 +27,8 @@ func leakGraphSVG(namespace string, graph analyze.LeakGraph) template.HTML {
 		edgeInset     = 14.0
 		retainedGapX  = 24.0
 		retainedBandY = 112.0
+		retainedGapY  = 76.0
+		bottomY       = 48.0
 	)
 	mainNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
 	retainedNodes := make([]analyze.LeakGraphNode, 0, len(graph.Nodes))
@@ -40,21 +42,37 @@ func leakGraphSVG(namespace string, graph analyze.LeakGraph) template.HTML {
 	if len(mainNodes) == 0 {
 		mainNodes = graph.Nodes
 	}
-	cols := len(mainNodes)
-	if cols < 1 {
-		cols = 1
-	}
-	if cols > maxCols {
-		cols = maxCols
-	}
-	width := math.Max(1080, leftX*2+float64(cols)*nodeW+float64(cols-1)*gapX)
-	mainRows := math.Ceil(float64(len(mainNodes)) / maxCols)
-	if mainRows < 1 {
-		mainRows = 1
-	}
-	retainedRows := math.Ceil(float64(len(retainedNodes)) / 3)
-	height := math.Max(minH, topY+mainRows*bandY+nodeH+96+retainedRows*retainedBandY)
+	mainCols := boundedGraphColumns(len(mainNodes), maxCols)
+	retainedCols := boundedGraphColumns(len(retainedNodes), maxCols)
+	mainWidth := float64(mainCols)*nodeW + float64(mainCols-1)*gapX
+	retainedWidth := float64(retainedCols)*nodeW + float64(retainedCols-1)*retainedGapX
+	width := math.Max(1080, leftX*2+math.Max(mainWidth, retainedWidth))
+	mainRows := graphRows(len(mainNodes), mainCols)
+	mainBottom := topY + float64(mainRows-1)*bandY + nodeH
 	positions := map[string]graphPoint{}
+	for index, node := range mainNodes {
+		x := leftX + float64(index%mainCols)*(nodeW+gapX)
+		y := topY + float64(index/mainCols)*bandY
+		positions[node.ID] = graphPoint{x: x, y: y}
+	}
+	target := positions[graph.TargetID]
+	if graph.TargetID == "" {
+		target = positions[mainNodes[len(mainNodes)-1].ID]
+	}
+	retainedTop := math.Max(mainBottom+retainedGapY, target.y+nodeH+retainedGapY)
+	retainedLeft := math.Max(leftX, (width-retainedWidth)/2)
+	for index, node := range retainedNodes {
+		col := index % retainedCols
+		row := index / retainedCols
+		x := retainedLeft + float64(col)*(nodeW+retainedGapX)
+		y := retainedTop + float64(row)*retainedBandY
+		positions[node.ID] = graphPoint{x: x, y: y}
+	}
+	height := math.Max(minH, mainBottom+bottomY)
+	if len(retainedNodes) > 0 {
+		retainedRows := graphRows(len(retainedNodes), retainedCols)
+		height = math.Max(height, retainedTop+float64(retainedRows-1)*retainedBandY+nodeH+bottomY)
+	}
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `<svg class="leak-graph-svg" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s">`, width, height, template.HTMLEscapeString(graph.Title))
 	scope := graphClass(firstNonEmpty(namespace, "leak-graph"))
@@ -63,27 +81,11 @@ func leakGraphSVG(namespace string, graph analyze.LeakGraph) template.HTML {
 	gradientID := "leak-edge-gradient-" + scope + "-" + identity
 	fmt.Fprintf(
 		&builder,
-		`<defs><linearGradient id="%s" x1="0" x2="1"><stop offset="0" stop-color="#6ff7ff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#6ff7ff" opacity="0.88"/></marker></defs>`,
+		`<defs><linearGradient id="%s" x1="0" x2="1"><stop offset="0" stop-color="#5BC0EB"/><stop offset="1" stop-color="#F4D35E"/></linearGradient><marker id="%s" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" overflow="visible"><path d="M0,0 L12,6 L0,12 Z" fill="#5BC0EB" opacity="0.9"/></marker></defs>`,
 		template.HTMLEscapeString(gradientID),
 		template.HTMLEscapeString(arrowID),
 	)
 	fmt.Fprintf(&builder, `<text x="32" y="30" class="leak-graph-title">%s</text>`, template.HTMLEscapeString(graph.Title))
-	for index, node := range mainNodes {
-		x := leftX + float64(index%maxCols)*(nodeW+gapX)
-		y := topY + float64(index/maxCols)*bandY
-		positions[node.ID] = graphPoint{x: x, y: y}
-	}
-	target := positions[graph.TargetID]
-	if graph.TargetID == "" {
-		target = positions[mainNodes[len(mainNodes)-1].ID]
-	}
-	for index, node := range retainedNodes {
-		col := index % 3
-		row := index / 3
-		x := math.Min(width-nodeW-leftX, math.Max(leftX, target.x-150+float64(col)*(nodeW+retainedGapX)))
-		y := target.y + nodeH + 76 + float64(row)*retainedBandY
-		positions[node.ID] = graphPoint{x: x, y: y}
-	}
 	for _, edge := range graph.Edges {
 		from, okFrom := positions[edge.From]
 		to, okTo := positions[edge.To]
@@ -180,6 +182,23 @@ func leakGraphSVG(namespace string, graph analyze.LeakGraph) template.HTML {
 	}
 	builder.WriteString(`</svg>`)
 	return template.HTML(builder.String())
+}
+
+func boundedGraphColumns(nodeCount, maximum int) int {
+	if nodeCount < 1 {
+		return 1
+	}
+	if nodeCount < maximum {
+		return nodeCount
+	}
+	return maximum
+}
+
+func graphRows(nodeCount, columns int) int {
+	if nodeCount < 1 || columns < 1 {
+		return 1
+	}
+	return (nodeCount + columns - 1) / columns
 }
 
 func graphClass(value string) string {
@@ -408,7 +427,7 @@ func causalGraphSVG(graph mathanalysis.CausalGraph) template.HTML {
 			continue
 		}
 		opacity := 0.28 + clampPct(edge.Confidence*100)/140
-		fmt.Fprintf(&out, `<line class="causal-edge" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f"><title>%s ↔ %s · %s · уверенность %.2f</title></line>`,
+		fmt.Fprintf(&out, `<line class="causal-edge" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" opacity="%.2f"><title>%s ↔ %s · %s · надёжность %.2f</title></line>`,
 			from.x+112, from.y+24, to.x, to.y+24, opacity,
 			template.HTMLEscapeString(edge.FromLabel),
 			template.HTMLEscapeString(edge.ToLabel),

@@ -1,10 +1,8 @@
 package analyze
 
 import (
-	"bufio"
-	"encoding/json"
+	"bytes"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 )
@@ -96,24 +94,29 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	file, err := os.Open(path)
+	input, err := openBoundedTextInput(
+		path,
+		"DI catalog",
+		dependencyInjectionMaxFileBytes,
+		64*1024,
+		dependencyInjectionMaxLineBytes,
+	)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer input.Close()
 
 	classRecords := map[string]DependencyInjectionClass{}
 	edgeRecords := map[string]DependencyInjectionEdge{}
 	var variant string
 	metadataSeen := false
 	recordCount := 0
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), dependencyInjectionMaxLineBytes)
+	scanner := input.Scanner
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
 			continue
 		}
 		recordCount++
@@ -121,7 +124,7 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 			return nil, fmt.Errorf("%s: DI catalog exceeds the record limit %d", path, dependencyInjectionMaxRecords)
 		}
 		var record dependencyInjectionRecord
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
+		if err := decodeStrictJSON(line, &record); err != nil {
 			return nil, fmt.Errorf("parse DI catalog line %d: %w", lineNumber, err)
 		}
 		if err := validateArtifactFormat(path, "dependency injection catalog", record.Format, DependencyInjectionCatalogFormat); err != nil {
@@ -129,6 +132,9 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 		}
 		if recordCount == 1 && record.Kind != "metadata" {
 			return nil, fmt.Errorf("parse DI catalog line %d: metadata must be the first record", lineNumber)
+		}
+		if err := validateDependencyInjectionRecordShape(record); err != nil {
+			return nil, fmt.Errorf("parse DI catalog line %d: %w", lineNumber, err)
 		}
 		switch record.Kind {
 		case "metadata":
@@ -166,7 +172,7 @@ func LoadDependencyInjectionCatalog(path string) (*DependencyInjectionCatalog, e
 			return nil, fmt.Errorf("parse DI catalog line %d: unsupported record kind %q", lineNumber, record.Kind)
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := input.Err(); err != nil {
 		return nil, err
 	}
 	if !metadataSeen {
@@ -279,6 +285,9 @@ func BuildDependencyInjectionReport(catalog *DependencyInjectionCatalog, summary
 }
 
 func validateDependencyInjectionMetadata(record dependencyInjectionRecord) error {
+	if err := validateDependencyInjectionText("variant", record.Variant, true); err != nil {
+		return err
+	}
 	if record.Semantics != "build_time_di" {
 		return fmt.Errorf("unsupported DI semantics %q", record.Semantics)
 	}
@@ -294,7 +303,48 @@ func validateDependencyInjectionMetadata(record dependencyInjectionRecord) error
 	return nil
 }
 
+func validateDependencyInjectionRecordShape(record dependencyInjectionRecord) error {
+	switch record.Kind {
+	case "metadata":
+		if record.Name != "" || record.Framework != "" || len(record.Roles) != 0 || record.Generated ||
+			len(record.Scopes) != 0 || len(record.Components) != 0 || record.Consumer != "" ||
+			record.Dependency != "" || record.InjectionKind != "" || record.Site != "" ||
+			len(record.Qualifiers) != 0 || record.Resolution != "" {
+			return fmt.Errorf("metadata record contains class or edge fields")
+		}
+	case "class":
+		if record.Variant != "" || record.Semantics != "" || record.EdgeDirection != "" ||
+			record.RuntimeTracing != nil || record.AffectsScore != nil || record.Consumer != "" ||
+			record.Dependency != "" || record.InjectionKind != "" || record.Site != "" ||
+			len(record.Qualifiers) != 0 || record.Resolution != "" {
+			return fmt.Errorf("class record contains metadata or edge fields")
+		}
+	case "edge":
+		if record.Variant != "" || record.Semantics != "" || record.EdgeDirection != "" ||
+			record.RuntimeTracing != nil || record.AffectsScore != nil || record.Name != "" ||
+			len(record.Roles) != 0 || record.Generated || len(record.Scopes) != 0 ||
+			len(record.Components) != 0 {
+			return fmt.Errorf("edge record contains metadata or class fields")
+		}
+	default:
+		return fmt.Errorf("unsupported record kind %q", record.Kind)
+	}
+	return nil
+}
+
 func dependencyInjectionClassFromRecord(record dependencyInjectionRecord) (DependencyInjectionClass, error) {
+	if err := validateDependencyInjectionText("name", record.Name, true); err != nil {
+		return DependencyInjectionClass{}, err
+	}
+	if err := validateDependencyInjectionStrings("roles", record.Roles); err != nil {
+		return DependencyInjectionClass{}, err
+	}
+	if err := validateDependencyInjectionStrings("scopes", record.Scopes); err != nil {
+		return DependencyInjectionClass{}, err
+	}
+	if err := validateDependencyInjectionStrings("components", record.Components); err != nil {
+		return DependencyInjectionClass{}, err
+	}
 	name := normalizeClassName(record.Name)
 	if name == "" {
 		return DependencyInjectionClass{}, fmt.Errorf("DI class name is empty")
@@ -313,6 +363,27 @@ func dependencyInjectionClassFromRecord(record dependencyInjectionRecord) (Depen
 }
 
 func dependencyInjectionEdgeFromRecord(record dependencyInjectionRecord) (DependencyInjectionEdge, error) {
+	if err := validateDependencyInjectionText("consumer", record.Consumer, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionText("dependency", record.Dependency, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionText("framework", record.Framework, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionText("injectionKind", record.InjectionKind, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionText("site", record.Site, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionText("resolution", record.Resolution, true); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
+	if err := validateDependencyInjectionStrings("qualifiers", record.Qualifiers); err != nil {
+		return DependencyInjectionEdge{}, err
+	}
 	edge := DependencyInjectionEdge{
 		Consumer:      normalizeClassName(record.Consumer),
 		Dependency:    normalizeClassName(record.Dependency),
@@ -338,6 +409,28 @@ func dependencyInjectionEdgeFromRecord(record dependencyInjectionRecord) (Depend
 		return DependencyInjectionEdge{}, fmt.Errorf("unsupported DI resolution %q", edge.Resolution)
 	}
 	return edge, nil
+}
+
+func validateDependencyInjectionStrings(field string, values []string) error {
+	if len(values) > dependencyInjectionMaxStrings {
+		return fmt.Errorf("%s exceed limit %d", field, dependencyInjectionMaxStrings)
+	}
+	for index, value := range values {
+		if err := validateDependencyInjectionText(fmt.Sprintf("%s[%d]", field, index), value, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDependencyInjectionText(field, value string, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(value) > dependencyInjectionMaxTextBytes {
+		return fmt.Errorf("%s exceeds %d bytes", field, dependencyInjectionMaxTextBytes)
+	}
+	return nil
 }
 
 func dependencyInjectionObservedClasses(summary Summary) map[string]map[string]struct{} {
@@ -573,6 +666,9 @@ func dependencyInjectionFrameworkPresent(values []DependencyInjectionFrameworkSu
 }
 
 const (
+	dependencyInjectionMaxFileBytes = 512 << 20
 	dependencyInjectionMaxLineBytes = 4 * 1024 * 1024
 	dependencyInjectionMaxRecords   = 250_000
+	dependencyInjectionMaxStrings   = 4_096
+	dependencyInjectionMaxTextBytes = 65_535
 )

@@ -49,6 +49,39 @@ class InstrumentationMatcherTest {
     }
 
     @Test
+    fun staticMatcherKeepsJankHunterHelpersOutsideWholeApplicationInstrumentation() {
+        val excludedHelpers = listOf(
+            "io.jankhunter.okhttp3.JankHunterOkHttp3",
+            "io.jankhunter.runtime.JankHunterHooks",
+            "io.jankhunter.workmanager.WorkerTelemetry",
+        )
+
+        excludedHelpers.forEach { className ->
+            assertFalse(
+                className,
+                InstrumentationMatcher.matchesNormalizedClassName(
+                    normalizedClassName = className,
+                    includePackages = emptySet(),
+                    excludePackages = emptySet(),
+                    includeWholeApplication = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun staticMatcherDoesNotExcludePackagesThatOnlyShareANamePrefix() {
+        assertTrue(
+            InstrumentationMatcher.matchesNormalizedClassName(
+                normalizedClassName = "io.jankhunter.okhttp3extra.ApplicationClient",
+                includePackages = emptySet(),
+                excludePackages = emptySet(),
+                includeWholeApplication = true,
+            ),
+        )
+    }
+
+    @Test
     fun honorsIncludeAndExcludePackages() {
         val matcher = InstrumentationMatcher(
             includePackages = listOf("com.example"),

@@ -132,7 +132,9 @@ public final class JankHunterHttpEvent {
     public int getFailurePhase() { return failurePhase; }
     public int getFailureKind() { return failureKind; }
     public int getProtocol() { return protocol; }
+    /** Observed response body bytes; HTTP_BODY_TOTALS marks a whole-Call sum, whose exactness requires HTTP_RESPONSE_BYTES_KNOWN. */
     public long getResponseBodyBytes() { return responseBodyBytes; }
+    /** Observed request body bytes; HTTP_BODY_TOTALS marks a whole-Call sum, whose exactness requires HTTP_REQUEST_BYTES_KNOWN. */
     public long getRequestBodyBytes() { return requestBodyBytes; }
     public int getAttempts() { return attempts; }
     public int getDnsAttempts() { return dnsAttempts; }

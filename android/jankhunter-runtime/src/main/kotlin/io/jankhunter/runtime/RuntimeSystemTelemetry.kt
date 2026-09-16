@@ -9,6 +9,38 @@ internal class RuntimeSystemTelemetry(
     private val sampling: RuntimeSamplingService,
     private val hookEvents: RuntimeHookEventTransport,
 ) {
+    fun bindFrameCallbacks(delegate: RuntimeCollectorCallbacks): RuntimeCollectorCallbacks {
+        val writer = access.writer
+        val thresholdMs = access.config?.uiWindowP95ThresholdMs() ?: DEFAULT_UI_WINDOW_P95_THRESHOLD_MS
+        return object : RuntimeCollectorCallbacks by delegate {
+            override fun bindFrameCallbacks(): RuntimeCollectorCallbacks = this
+
+            override fun recordUiWindow(
+                screen: String?, windowMs: Long, frameCount: Long, jankCount: Long, p95Ms: Long,
+                source: Long, frameDeadlineUs: Long, frameDurationBuckets: LongArray,
+            ) {
+                var owner: String? = null
+                var operationId = 0L
+                if (access.writer === writer) {
+                    owner = contexts.capturedOwner(null)
+                    operationId = contexts.currentOperationId()
+                    if (access.writer !== writer) {
+                        owner = null
+                        operationId = 0L
+                    }
+                }
+                // A late partial window retains its screen, never another runtime's owner/operation.
+                writer?.updateProducerContext(screen, owner, operationId)
+                writer?.uiWindow(
+                    screen, windowMs, frameCount, jankCount, source, frameDeadlineUs, frameDurationBuckets,
+                    // FpsMonitor admits frames only while its window is visible and seals before hiding it.
+                    foreground = true,
+                    flags = UiWindowClassifier.flags(jankCount, p95Ms, thresholdMs),
+                )
+            }
+        }
+    }
+
     fun recordMemory(pssKb: Long, javaHeapKb: Long, nativeHeapKb: Long) {
         if (!sampling.shouldRecordMemory(pssKb, javaHeapKb, nativeHeapKb)) return
         access.ensureContextRecorded()
@@ -30,6 +62,8 @@ internal class RuntimeSystemTelemetry(
         freeStorageKb: Long,
         totalStorageKb: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ) {
         if (!sampling.shouldRecordContext(
                 networkKind,
@@ -41,6 +75,8 @@ internal class RuntimeSystemTelemetry(
                 rxBytes,
                 txBytes,
                 networkVpn,
+                trafficUidPlusOne,
+                trafficKnownFlags,
             )
         ) {
             return
@@ -62,6 +98,8 @@ internal class RuntimeSystemTelemetry(
             totalStorageKb,
             networkVpn,
             foreground = access.isUiVisible(),
+            trafficUidPlusOne = trafficUidPlusOne,
+            trafficKnownFlags = trafficKnownFlags,
         )
     }
 

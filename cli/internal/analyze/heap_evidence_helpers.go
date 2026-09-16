@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const defaultHeapLeakPattern = "Сильная цепочка от корня GC удерживает объект"
+
 func betterHeapLeak(candidate, current HeapLeakEvidence) bool {
 	if current.ClassName == "" {
 		return true
@@ -59,7 +61,7 @@ func heapLeakActionabilityScore(leak HeapLeakEvidence) int {
 	case "jni", "monitor":
 		score += 2
 	}
-	if leak.LeakPattern != "" && leak.LeakPattern != "Сильная цепочка от корня GC удерживает объект" {
+	if leak.LeakPattern != "" && leak.LeakPattern != defaultHeapLeakPattern {
 		score += 4
 	}
 	if len(leak.ReferenceMatchers) > 0 {
@@ -147,7 +149,19 @@ func heapRootLabel(path []HeapPathElement) string {
 	if strings.HasPrefix(path[0].ClassName, "GC root: ") {
 		return strings.TrimPrefix(path[0].ClassName, "GC root: ")
 	}
-	return path[0].Kind
+	return ""
+}
+
+func heapReferencePathState(path []HeapPathElement) HeapPathState {
+	for _, step := range path {
+		if step.Kind == "truncated" {
+			return HeapPathTruncated
+		}
+	}
+	if len(path) >= 2 && heapRootLabel(path) != "" {
+		return HeapPathComplete
+	}
+	return HeapPathUnknown
 }
 
 func heapRootCategory(root string) string {
@@ -202,6 +216,7 @@ func heapEvidenceConfidence(exact bool, matchers []string) string {
 
 func heapReferenceMatchers(path []HeapPathElement) []string {
 	var out []string
+	fieldOwner := ""
 	for _, step := range path {
 		className := strings.ToLower(strings.TrimPrefix(step.ClassName, "GC root: "))
 		fieldName := strings.ToLower(step.FieldName)
@@ -224,6 +239,16 @@ func heapReferenceMatchers(path []HeapPathElement) []string {
 			strings.Contains(fieldName, "continuation") {
 			out = append(out, "kotlin.coroutines")
 		}
+		if fieldName == "$receiver" || strings.HasPrefix(fieldName, "arg$") ||
+			strings.HasPrefix(fieldName, "f$") || fieldName == "this$0" && isKotlinLambdaClassName(fieldOwner) {
+			out = append(out, "kotlin.lambda_capture")
+		}
+		if len(fieldName) >= 3 && strings.Contains("lijdzfbcs", fieldName[:1]) && fieldName[1] == '$' {
+			if isKotlinLambdaClassName(fieldOwner) {
+				out = append(out, "kotlin.lambda_capture")
+			}
+			out = append(out, "kotlin.coroutine_spill")
+		}
 		if strings.Contains(className, "textline") {
 			out = append(out, "android.text_line_pool")
 		}
@@ -242,8 +267,29 @@ func heapReferenceMatchers(path []HeapPathElement) []string {
 		if strings.Contains(fieldName, "mcontext") || strings.HasSuffix(fieldName, ".context") {
 			out = append(out, "context_reference")
 		}
+		fieldOwner = className
 	}
 	return uniqueStrings(out)
+}
+
+func isKotlinLambdaClassName(className string) bool {
+	if strings.Contains(className, "$$externalsyntheticlambda") || strings.Contains(className, "$r8$lambda$") ||
+		strings.Contains(className, "$lambda$") {
+		return true
+	}
+	lastDollar := strings.LastIndexByte(className, '$')
+	if lastDollar <= 0 || lastDollar == len(className)-1 {
+		return false
+	}
+	if strings.LastIndexByte(className[:lastDollar], '$') < 0 {
+		return false
+	}
+	for index := lastDollar + 1; index < len(className); index++ {
+		if className[index] < '0' || className[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func heapLeakPattern(className, holder, holderField, rootCategory string, path []HeapPathElement) string {
@@ -277,7 +323,7 @@ func heapLeakPattern(className, holder, holderField, rootCategory string, path [
 	case pathContainsClass(path, "kotlinx.coroutines") || pathContainsClass(path, "java.util.concurrent"):
 		return "Корутина или задача исполнителя удерживает объект"
 	default:
-		return "Сильная цепочка от корня GC удерживает объект"
+		return defaultHeapLeakPattern
 	}
 }
 

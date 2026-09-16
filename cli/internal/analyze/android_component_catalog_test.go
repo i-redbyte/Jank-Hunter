@@ -53,6 +53,28 @@ func TestLoadAndroidComponentCatalogRejectsInvalidStableID(t *testing.T) {
 	}
 }
 
+func TestLoadAndroidComponentCatalogRejectsUnknownFields(t *testing.T) {
+	path := writeAndroidComponentCatalogFixture(t,
+		`{"format":1,"class":"com.example.SyncService","componentId":"stable:0x0000000000000011","kind":"service","abstract":false,"coverage":"full","entryPoints":[],"instrumentedEntryPoints":[],"uncoveredEntryPoints":[],"transactions":[],"componentStableId":"typo"}`+"\n",
+	)
+
+	_, err := LoadAndroidComponentCatalog(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v, want strict schema rejection", err)
+	}
+}
+
+func TestLoadAndroidComponentCatalogRejectsOverlappingCoveragePartitions(t *testing.T) {
+	path := writeAndroidComponentCatalogFixture(t,
+		`{"format":1,"class":"com.example.SyncService","componentId":"stable:0x0000000000000011","kind":"service","abstract":false,"coverage":"partial","entryPoints":["onCreate()V","onStartCommand()I"],"instrumentedEntryPoints":["onCreate()V"],"uncoveredEntryPoints":["onCreate()V"],"transactions":[]}`+"\n",
+	)
+
+	_, err := LoadAndroidComponentCatalog(path)
+	if err == nil || !strings.Contains(err.Error(), "must not overlap") {
+		t.Fatalf("error = %v, want overlapping coverage rejection", err)
+	}
+}
+
 func writeAndroidComponentCatalogFixture(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "android-components-catalog.jsonl")

@@ -16,6 +16,8 @@ internal interface RuntimeSamplingStrategy {
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ): Boolean
 }
 
@@ -33,6 +35,8 @@ internal data object AlwaysRecordRuntimeSamplingStrategy : RuntimeSamplingStrate
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long,
+        trafficKnownFlags: Int,
     ): Boolean = true
 }
 
@@ -57,6 +61,8 @@ internal class AdaptiveRuntimeSamplingStrategy(
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long,
+        trafficKnownFlags: Int,
     ): Boolean {
         return sampler.shouldRecordContext(
             nowMs,
@@ -69,6 +75,8 @@ internal class AdaptiveRuntimeSamplingStrategy(
             rxBytes,
             txBytes,
             networkVpn,
+            trafficUidPlusOne,
+            trafficKnownFlags,
         )
     }
 }
@@ -108,6 +116,8 @@ internal class RuntimeSamplingService(
         rxBytes: Long,
         txBytes: Long,
         networkVpn: Boolean,
+        trafficUidPlusOne: Long = 0L,
+        trafficKnownFlags: Int = 0,
     ): Boolean {
         return strategy.shouldRecordContext(
             nowMs.getAsLong(),
@@ -120,6 +130,8 @@ internal class RuntimeSamplingService(
             rxBytes,
             txBytes,
             networkVpn,
+            trafficUidPlusOne,
+            trafficKnownFlags,
         )
     }
 }

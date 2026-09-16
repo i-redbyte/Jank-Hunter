@@ -11,7 +11,7 @@ func markovConfidence(states []MarkovBucketState, transitions []MarkovTransition
 	case sampleCount < 4 || transitionCount < 3:
 		return "low", fmt.Sprintf("окон=%d, переходов=%d: вероятности будут скачкообразными", sampleCount, transitionCount)
 	case badEpisodes == 0 && sampleCount >= 10:
-		return "high", fmt.Sprintf("окон=%d, плохих эпизодов нет: вывод об отсутствии деградации устойчивее", sampleCount)
+		return "high", fmt.Sprintf("окон=%d, плохих эпизодов нет: вывод об отсутствии ухудшения надёжнее", sampleCount)
 	case badEpisodes == 0:
 		return "medium", fmt.Sprintf("окон=%d, плохих эпизодов нет: для спокойного сценария данных достаточно, для метрик восстановления нет", sampleCount)
 	case sampleCount < 10 || badEpisodes < 2:

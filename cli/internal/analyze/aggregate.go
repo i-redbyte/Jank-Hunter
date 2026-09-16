@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
 	"github.com/i-redbyte/jank-hunter/cli/internal/jhlog"
+	"github.com/i-redbyte/jank-hunter/cli/internal/traffic"
 )
 
 const (
@@ -29,8 +29,8 @@ var runtimeQualityCounterWarnings = []qualityCounterWarning{
 	{"jankhunter.events_dropped.count", "очередь записи не приняла события"},
 	{"jankhunter.writer_io_error.count", "при записи возникли ошибки"},
 	{"jankhunter.writer_event_lost_on_io.count", "после ошибки записи события не сохранились"},
-	{"jankhunter.metric_aggregation.dropped.count", "агрегатор метрик отбросил ключи из-за лимита кардинальности"},
-	{"jankhunter.log_spam.dropped_keys.count", "агрегатор спама логами отбросил ключи из-за лимита кардинальности"},
+	{"jankhunter.metric_aggregation.dropped.count", "сборщик метрик отбросил ключи из-за ограничения их количества"},
+	{"jankhunter.log_spam.dropped_keys.count", "сборщик лишних логов отбросил ключи из-за ограничения их количества"},
 	{"jankhunter.runtime_call_graph.dropped.count", "граф вызовов во время выполнения не сохранил связи из-за лимита или рассинхронизации стека"},
 	{"jankhunter.handler_wrapper.dropped_entries.count", "реестр Handler-оберток отбросил записи из-за лимита"},
 	{"jankhunter.handler_wrapper.dropped_wrappers.count", "реестр обёрток Handler не сохранил обёртку из-за лимита"},
@@ -39,25 +39,26 @@ var runtimeQualityCounterWarnings = []qualityCounterWarning{
 
 func InspectFilesWithOptions(title string, paths []string, options Options) (Summary, error) {
 	collector := newCollector(title, len(paths), options)
-	inputs, err := orderedSessionInputs(paths)
+	inputs, err := OrderedSessionInputs(paths)
 	if err != nil {
 		return Summary{}, err
 	}
+	collector.prepareAcquisitionGroups(inputs)
 	for index, input := range inputs {
-		continuation := index > 0 && sameSession(inputs[index-1].header, input.header)
-		completesSession := index+1 == len(inputs) || !sameSession(input.header, inputs[index+1].header)
-		collector.startSegment(input.header, continuation)
+		continuation := index > 0 && sameSession(inputs[index-1].Header, input.Header)
+		completesSession := index+1 == len(inputs) || !sameSession(input.Header, inputs[index+1].Header)
+		collector.startSegment(input.Header, continuation)
 		if !continuation {
-			collector.operationAnalysis.startLog(input.header)
+			collector.operationAnalysis.startLog(input.Header)
 		}
 		lastDictSize := 0
-		result, err := jhlog.StreamFileWithResult(input.path, func(event jhlog.Event, dict map[uint64]string) error {
+		result, err := jhlog.StreamFileWithResult(input.Path, func(event jhlog.Event, dict map[uint64]string) error {
 			if len(dict) > lastDictSize {
 				collector.summary.Dictionary += len(dict) - lastDictSize
 				lastDictSize = len(dict)
 			}
 			collector.add(dict, event)
-			return nil
+			return collector.stallLifecycleError
 		})
 		if err != nil {
 			return Summary{}, err
@@ -70,6 +71,7 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 		); err != nil {
 			return Summary{}, err
 		}
+		collector.trafficTracker.EndSegment(result)
 		collector.addSegmentStreamResult(result, completesSession)
 		if completesSession {
 			collector.finishLog()
@@ -84,26 +86,26 @@ func InspectFilesWithOptions(title string, paths []string, options Options) (Sum
 	return collector.finish(), nil
 }
 
-type sessionInput struct {
-	path   string
-	header jhlog.SegmentHeader
+type SessionInput struct {
+	Path   string
+	Header jhlog.SegmentHeader
 }
 
-// orderedSessionInputs keeps independent sessions in the caller's first-seen order while
+// OrderedSessionInputs keeps independent sessions in the caller's first-seen order while
 // restoring the only valid order inside a rotated session. filepath.Glob is lexical, where
 // "0-1.jhlog" precedes "0.jhlog", so consuming paths directly loses the session metadata that
 // segment zero establishes for all successors.
-func orderedSessionInputs(paths []string) ([]sessionInput, error) {
-	groups := make([][]sessionInput, 0, len(paths))
+func OrderedSessionInputs(paths []string) ([]SessionInput, error) {
+	groups := make([][]SessionInput, 0, len(paths))
 	groupBySession := make(map[jhlog.ID128]int, len(paths))
 	for _, path := range paths {
 		header, err := jhlog.ReadSessionHeader(path)
 		if err != nil {
 			return nil, err
 		}
-		input := sessionInput{path: path, header: header}
+		input := SessionInput{Path: path, Header: header}
 		if header.SessionID.IsZero() {
-			groups = append(groups, []sessionInput{input})
+			groups = append(groups, []SessionInput{input})
 			continue
 		}
 		groupIndex, exists := groupBySession[header.SessionID]
@@ -115,10 +117,10 @@ func orderedSessionInputs(paths []string) ([]sessionInput, error) {
 		groups[groupIndex] = append(groups[groupIndex], input)
 	}
 
-	ordered := make([]sessionInput, 0, len(paths))
+	ordered := make([]SessionInput, 0, len(paths))
 	for _, group := range groups {
 		sort.SliceStable(group, func(i, j int) bool {
-			return group[i].header.SegmentIndex < group[j].header.SegmentIndex
+			return group[i].Header.SegmentIndex < group[j].Header.SegmentIndex
 		})
 		ordered = append(ordered, group...)
 	}
@@ -132,19 +134,12 @@ func sameSession(left, right jhlog.SegmentHeader) bool {
 // ReadArtifactMetadataNamespace validates the compact build identity used to match optional
 // diagnostics and class-graph artifacts to their self-contained logs.
 func ReadArtifactMetadataNamespace(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if info.IsDir() || info.Size() <= 0 || info.Size() > maxArtifactMetadataBytes {
-		return nil, fmt.Errorf("%s: artifact metadata size must be between 1 and %d bytes", path, maxArtifactMetadataBytes)
-	}
-	data, err := os.ReadFile(path)
+	data, err := readBoundedFile(path, "artifact metadata", maxArtifactMetadataBytes)
 	if err != nil {
 		return nil, err
 	}
 	var metadata artifactMetadataRecord
-	if err := decodeArtifactMetadataRecord(data, &metadata); err != nil {
+	if err := decodeStrictJSON(data, &metadata); err != nil {
 		return nil, fmt.Errorf("%s: parse artifact metadata: %w", path, err)
 	}
 	if err := validateArtifactFormat(path, "artifact metadata", metadata.Format, ArtifactMetadataFormat); err != nil {
@@ -176,7 +171,7 @@ type artifactMetadataRecord struct {
 	ExcludePackages          []string        `json:"excludePackages"`
 }
 
-func decodeArtifactMetadataRecord(data []byte, target any) error {
+func decodeStrictJSON(data []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -242,6 +237,7 @@ type httpAggregate struct {
 	reusedConnections  int
 	knownRequestBytes  int
 	knownResponseBytes int
+	legacyTTFB         int
 	attempts           uint64
 	dnsAttempts        uint64
 	connectAttempts    uint64
@@ -256,7 +252,6 @@ type httpAggregate struct {
 	serviceSample      string
 	initiatorSample    string
 	intervals          []httpInterval
-	burst              routeBurstAccumulator
 }
 
 type webSocketKey struct {
@@ -388,6 +383,9 @@ func (s *webSocketAggregate) activeAtEnd() uint64 {
 
 func (s *httpAggregate) add(event *jhlog.HTTPEvent, flags uint64, logIndex, endMS uint64, retainInterval bool) {
 	s.count++
+	if flags&uint64(jhlog.FlagHTTPTTFBObserved) == 0 {
+		s.legacyTTFB++
+	}
 	s.durations.add(event.DurationMS)
 	s.durationTotal = saturatingUint64Sum(s.durationTotal, event.DurationMS)
 	phaseValues := [...]uint64{
@@ -400,7 +398,7 @@ func (s *httpAggregate) add(event *jhlog.HTTPEvent, flags uint64, logIndex, endM
 		event.ResponseMS,
 	}
 	for index, value := range phaseValues {
-		if value == 0 {
+		if index == 5 && !jhlog.HasObservedHTTPFirstByte(flags) || index != 5 && value == 0 {
 			continue
 		}
 		s.phases[index].add(value)
@@ -431,10 +429,13 @@ func (s *httpAggregate) add(event *jhlog.HTTPEvent, flags uint64, logIndex, endM
 	if flags&uint64(jhlog.FlagHTTPReusedConnection) != 0 {
 		s.reusedConnections++
 	}
-	if flags&uint64(jhlog.FlagHTTPRequestBytesKnown) != 0 {
+	// Before HTTP_BODY_TOTALS, the SDK overwrote byte counts at each exchange.
+	// Keep those observed bytes as lower bounds, but never mark a multi-exchange total exact.
+	bodyTotalsComparable := flags&uint64(jhlog.FlagHTTPBodyTotals) != 0 || (event.Attempts <= 1 && event.Redirects == 0)
+	if bodyTotalsComparable && flags&uint64(jhlog.FlagHTTPRequestBytesKnown) != 0 {
 		s.knownRequestBytes++
 	}
-	if flags&uint64(jhlog.FlagHTTPResponseBytesKnown) != 0 {
+	if bodyTotalsComparable && flags&uint64(jhlog.FlagHTTPResponseBytesKnown) != 0 {
 		s.knownResponseBytes++
 	}
 	s.attempts = saturatingUint64Sum(s.attempts, uint64(event.Attempts))
@@ -488,6 +489,7 @@ type collectorInputState struct {
 	filter              Filter
 	nameMap             *NameMapping
 	classGraph          *ClassGraph
+	lambdaCaptures      *LambdaCaptureCatalog
 	diagnostics         *InstrumentationDiagnostics
 	dependencyInjection *DependencyInjectionCatalog
 	heap                *HeapEvidence
@@ -498,25 +500,21 @@ type collectorInputState struct {
 }
 
 type collectorTimelineState struct {
-	seenEvent           bool
-	firstTime           uint64
-	lastTime            uint64
-	logSeen             bool
-	logFirst            uint64
-	logLast             uint64
-	logsWithEvents      int
-	totalLogDurationMS  uint64
-	logTrafficSeen      bool
-	logTrafficFirstRx   uint64
-	logTrafficFirstTx   uint64
-	logTrafficLastRx    uint64
-	logTrafficLastTx    uint64
-	totalTrafficRxBytes uint64
-	totalTrafficTxBytes uint64
-	lastHeapDumpMS      uint64
+	seenEvent          bool
+	firstTime          uint64
+	lastTime           uint64
+	logSeen            bool
+	logFirst           uint64
+	logLast            uint64
+	logsWithEvents     int
+	totalLogDurationMS uint64
+	trafficTracker     traffic.Tracker
+	trafficRanges      [2][]traffic.Interval
+	lastHeapDumpMS     uint64
 }
 
 type collectorQualityState struct {
+	acquisition        *acquisitionGroups
 	dictionaryOverflow int
 	qualitySnapshots   map[string]segmentQualityState
 	streamResults      []jhlog.StreamResult
@@ -524,6 +522,10 @@ type collectorQualityState struct {
 }
 
 type collectorDomainState struct {
+	environmentSeen      map[environmentObservation]struct{}
+	pendingStalls        map[uint64]stallObservation
+	stallTracker         jhlog.StallTracker
+	stallLifecycleError  error
 	networkTotals        httpAggregate
 	networkRoutes        map[string]*httpAggregate
 	networkCalls         map[networkCallKey]*httpAggregate
@@ -571,6 +573,7 @@ type collectorSignalState struct {
 }
 
 type collectorSessionState struct {
+	currentAcquisition int
 	currentAppVersion  string
 	currentBuild       string
 	currentDevice      string
@@ -613,6 +616,7 @@ func newCollector(title string, logCount int, options Options) *collector {
 			filter:              normalizeFilter(options.Filter),
 			nameMap:             options.ObfuscationMap,
 			classGraph:          DeobfuscateClassGraph(options.ClassGraph, options.ObfuscationMap),
+			lambdaCaptures:      DeobfuscateLambdaCaptureCatalog(options.LambdaCaptures, options.ObfuscationMap),
 			diagnostics:         options.InstrumentationDiagnostics,
 			dependencyInjection: options.DependencyInjectionCatalog,
 			heap:                DeobfuscateHeapEvidence(options.HeapEvidence, options.ObfuscationMap),
@@ -689,7 +693,10 @@ func (c *collector) startLog(header jhlog.SegmentHeader) {
 }
 
 func (c *collector) startSegment(header jhlog.SegmentHeader, continuation bool) {
+	c.trafficTracker.StartSegment(header)
 	if !continuation {
+		c.stallTracker.Reset()
+		clear(c.pendingStalls)
 		c.currentLogIndex++
 		c.resetSessionContext()
 		c.databaseCorrelation.startLog(header, c.currentLogIndex)
@@ -698,11 +705,13 @@ func (c *collector) startSegment(header jhlog.SegmentHeader, continuation bool) 
 		c.logSeen = false
 		c.logFirst = 0
 		c.logLast = 0
-		c.logTrafficSeen = false
-		c.logTrafficFirstRx = 0
-		c.logTrafficFirstTx = 0
-		c.logTrafficLastRx = 0
-		c.logTrafficLastTx = 0
+
+	}
+	c.currentAcquisition = -int(c.currentLogIndex)
+	if c.acquisition != nil {
+		if node, ok := c.acquisition.runs[header.RunID]; ok {
+			c.currentAcquisition = c.acquisition.find(node) + 1
+		}
 	}
 	c.currentProcess = firstNonEmpty(header.ProcessName, "unknown")
 	c.currentProcessID = header.ProcessInstanceID
@@ -735,6 +744,7 @@ func (c *collector) resetSessionContext() {
 }
 
 func (c *collector) finishLog() {
+	c.flushPendingStalls()
 	if !c.logSeen {
 		return
 	}
@@ -742,20 +752,6 @@ func (c *collector) finishLog() {
 	if c.logLast >= c.logFirst {
 		c.totalLogDurationMS += c.logLast - c.logFirst
 	}
-	if c.logTrafficSeen {
-		c.totalTrafficRxBytes += counterDelta(c.logTrafficFirstRx, c.logTrafficLastRx)
-		c.totalTrafficTxBytes += counterDelta(c.logTrafficFirstTx, c.logTrafficLastTx)
-	}
-}
-
-func (c *collector) recordTraffic(rxBytes, txBytes uint64) {
-	if !c.logTrafficSeen {
-		c.logTrafficSeen = true
-		c.logTrafficFirstRx = rxBytes
-		c.logTrafficFirstTx = txBytes
-	}
-	c.logTrafficLastRx = rxBytes
-	c.logTrafficLastTx = txBytes
 }
 
 func (c *collector) resetAttribution() {
@@ -774,6 +770,7 @@ func (c *collector) addSegmentStreamResult(result jhlog.StreamResult, completesS
 		c.workerCollectorState.finishLog(c.currentLogIndex, result)
 	}
 	segment := CollectionSegment{
+		HTTPCollectionStateKnown:         result.Header.RequiredFeatures&jhlog.FeatureHTTPCollectionState != 0,
 		Source:                           result.Source,
 		Status:                           string(result.Status),
 		Sealed:                           result.Sealed,
@@ -803,9 +800,6 @@ func (c *collector) addSegmentStreamResult(result jhlog.StreamResult, completesS
 	if result.SegmentEnd != nil {
 		segment.EndReason = result.SegmentEnd.Reason.String()
 		segment.EndReasonCode = uint64(result.SegmentEnd.Reason)
-		if warning := segmentEndWarning(result.Source, result.SegmentEnd.Reason); warning != "" {
-			c.summary.Warnings = append(c.summary.Warnings, warning)
-		}
 	}
 	if result.LatestQuality != nil {
 		segment.QualitySequence = result.LatestQuality.Sequence
@@ -1029,19 +1023,6 @@ func validateChainIdentity(expected, actual jhlog.SegmentHeader, source string) 
 	}
 }
 
-func segmentEndWarning(source string, reason jhlog.SegmentEndReason) string {
-	switch reason {
-	case jhlog.SegmentEndNormal, jhlog.SegmentEndShutdown, jhlog.SegmentEndRotation:
-		return ""
-	case jhlog.SegmentEndSizeLimit:
-		return "Качество сбора: " + sizeLimitCollectionReason(source) + "."
-	case jhlog.SegmentEndIOError:
-		return fmt.Sprintf("Качество сбора: сегмент %q завершён из-за ошибки ввода-вывода; часть событий могла не попасть в .jhlog.", source)
-	default:
-		return fmt.Sprintf("Качество сбора: сегмент %q завершён с неизвестной причиной %d; данные прочитаны, но CLI не может подтвердить штатность завершения.", source, uint64(reason))
-	}
-}
-
 func sizeLimitCollectionReason(source string) string {
 	return fmt.Sprintf("session-файл %s достиг лимита размера; сбор завершён раньше запрошенного, поэтому события после лимита отсутствуют", source)
 }
@@ -1068,7 +1049,7 @@ func (c *collector) applyAttribution(dict map[uint64]string, context jhlog.Attri
 	if !context.Present {
 		return
 	}
-	c.currentAttrScreen = attrValue(jhlog.ResolveSymbol(dict, context.Screen))
+	c.currentAttrScreen = attrValue(c.resolveOwnerRef(dict, context.Screen))
 	c.currentAttrOwner = attrValue(c.resolveOwnerRef(dict, context.Owner))
 	c.currentOperationID = context.OperationID
 }

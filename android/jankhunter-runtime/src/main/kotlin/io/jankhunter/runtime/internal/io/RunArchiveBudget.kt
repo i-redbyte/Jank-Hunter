@@ -162,7 +162,9 @@ internal class RunArchiveBudget private constructor(
         ): RunArchiveBudget {
             require(limitBytes > 0L && limitBytes < Long.MAX_VALUE) { "archive budget must be finite and positive" }
             require(isCanonicalRunId(runId)) { "archive budget run ID must be canonical" }
-            if (!directory.isDirectory && !directory.mkdirs()) throw IOException("Cannot create Jank Hunter metadata directory")
+            if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) {
+                throw IOException("Cannot create Jank Hunter metadata directory")
+            }
             val processLock = CrossProcessFileLocks.acquireProcessLock(directory, DIRECTORY_LOCK_FILE)
             val stateFile = File(directory, "$STATE_FILE_PREFIX$runId$STATE_FILE_SUFFIX")
             return try {

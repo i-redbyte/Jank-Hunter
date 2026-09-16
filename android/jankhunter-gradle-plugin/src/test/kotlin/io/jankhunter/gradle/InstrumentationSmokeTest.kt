@@ -20,6 +20,15 @@ import org.objectweb.asm.util.CheckClassAdapter
 
 class InstrumentationSmokeTest {
     @Test
+    fun handlerCancellationAndLookupKeepOnePlatformLinearizationPoint() {
+        val instrumented = instrument(mixedHookFixture(), okHttpHelperAvailable = true)
+        for (name in listOf("removeCallbacks", "removeCallbacksAndMessages", "hasCallbacks")) {
+            assertEquals("instrumentation repeats Handler.$name", 1,
+                countMethodCalls(instrumented, "exercise", "android/os/Handler", name))
+        }
+    }
+
+    @Test
     fun instrumentsMixedAndroidSdkCallSitesIntoVerifiableBytecode() {
         val instrumented = instrument(mixedHookFixture(), okHttpHelperAvailable = true)
         val verifierDiagnostics = java.io.StringWriter()
@@ -32,10 +41,10 @@ class InstrumentationSmokeTest {
 
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "startAnnotatedOperation")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "finishAnnotatedOperation")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "onHandlerPostResult")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "handlerWrappers")))
-        assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "clearHandlerWrappers")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "handlerWrappers")))
+        assertFalse(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "clearHandlerWrappers")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapRunnable")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapCoroutineBlock")))
         assertTrue(calls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapClickListener")))
@@ -51,7 +60,7 @@ class InstrumentationSmokeTest {
         assertTrue(calls.contains(Call("android/os/Handler", "post")))
         assertEquals(1, countMethodCalls(instrumented, "exercise", "android/os/Handler", "post"))
         assertEquals(
-            2,
+            1,
             countMethodCalls(
                 instrumented,
                 "exercise",
@@ -303,7 +312,7 @@ class InstrumentationSmokeTest {
         val constructorCalls = methodCalls(instrumented, "<init>")
         val classInitializerCalls = methodCalls(instrumented, "<clinit>")
 
-        assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "wrapHandlerRunnable")))
+        assertTrue(constructorCalls.contains(Call("io/jankhunter/runtime/JankHunterHooks", "onHandlerPostResult")))
         assertEquals(1, countMethodCalls(instrumented, "<init>", "android/os/Handler", "post"))
         setOf("recordMethodCall", "enterMethod", "exitMethod", "startAnnotatedOperation", "finishAnnotatedOperation")
             .forEach { expected ->
